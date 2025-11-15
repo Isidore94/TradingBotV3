@@ -32,11 +32,13 @@ init(autoreset=True)
 ##########################################
 # Adjustable Parameters
 ##########################################
-LONGS_FILENAME = "longs.txt"
-SHORTS_FILENAME = "shorts.txt"
-BOUNCE_LOG_FILENAME = "bouncers.txt"
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
+LOG_DIR = ROOT_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LONGS_FILENAME = "longs.txt"
+SHORTS_FILENAME = "shorts.txt"
+BOUNCE_LOG_FILENAME = LOG_DIR / "bouncers.txt"
 INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
 ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
@@ -107,7 +109,7 @@ def read_tickers(file_path):
 
 def reset_log_files():
     files_to_reset = ["trading_bot.log", BOUNCE_LOG_FILENAME]
-    
+
     for log_file_path in files_to_reset:
         try:
             # Check if file exists before attempting to remove it
@@ -1486,6 +1488,7 @@ class BounceBot(EWrapper, EClient):
                 trade_dt = datetime.now()
             trade_date_str = trade_dt.strftime("%Y-%m-%d")
 
+            BOUNCE_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
             with open(BOUNCE_LOG_FILENAME, "a") as f:
                 f.write(f"{timestamp} | {symbol} | {bounce_types_str} | {direction}\n")
 
