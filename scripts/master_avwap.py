@@ -22,6 +22,18 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 OUTPUT_DIR = ROOT_DIR / "output"
 LOG_DIR = ROOT_DIR / "logs"
+AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
+AVWAP_CSV_COLUMNS = [
+    "symbol",
+    "trade_date",
+    "side",
+    "anchor_type",
+    "anchor_date",
+    "signal_type",
+    "avwap_price",
+    "band_price",
+    "stdev",
+]
 
 for d in (DATA_DIR, OUTPUT_DIR, LOG_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -305,6 +317,17 @@ def calc_anchored_vwap_bands(df: pd.DataFrame, anchor_idx: int):
     }
     return final_vwap, final_stdev, bands
 
+
+def _to_float(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    return float(value)
+
 # ============================================================================
 # ATR + BOUNCE / CROSS LOGIC
 # ============================================================================
@@ -488,6 +511,7 @@ def run_master():
 
     today_run = datetime.now().date()
     events_for_output = []
+    csv_rows = []
     ai_state = {
         "run_timestamp": datetime.now().isoformat(timespec="seconds"),
         "run_date": today_run.isoformat(),
@@ -529,6 +553,22 @@ def run_master():
         symbol_multi_day = []
         current_anchor_meta = None
         prev_anchor_meta = None
+        symbol_signal_info = {}
+
+        def add_signal(event_name, anchor_type, anchor_date, avwap_value, stdev_value, band_value):
+            symbol_events_today.append(event_name)
+            if event_name not in symbol_signal_info:
+                symbol_signal_info[event_name] = {
+                    "symbol": sym,
+                    "trade_date": last_trade_date.isoformat(),
+                    "side": side,
+                    "anchor_type": anchor_type,
+                    "anchor_date": anchor_date,
+                    "signal_type": event_name,
+                    "avwap_price": _to_float(avwap_value),
+                    "band_price": _to_float(band_value),
+                    "stdev": _to_float(stdev_value),
+                }
 
         # Current earnings AVWAP
         if curr_iso:
@@ -549,18 +589,18 @@ def run_master():
                     # position relative to bands
                     if side == "LONG":
                         if close > bands_c["UPPER_3"]:
-                            symbol_events_today.append("UPPER_3")
+                            add_signal("UPPER_3", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["UPPER_3"])
                         elif close > bands_c["UPPER_2"]:
-                            symbol_events_today.append("UPPER_2")
+                            add_signal("UPPER_2", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["UPPER_2"])
                         elif close > bands_c["UPPER_1"]:
-                            symbol_events_today.append("UPPER_1")
+                            add_signal("UPPER_1", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["UPPER_1"])
                     else:
                         if close < bands_c["LOWER_3"]:
-                            symbol_events_today.append("LOWER_3")
+                            add_signal("LOWER_3", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["LOWER_3"])
                         elif close < bands_c["LOWER_2"]:
-                            symbol_events_today.append("LOWER_2")
+                            add_signal("LOWER_2", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["LOWER_2"])
                         elif close < bands_c["LOWER_1"]:
-                            symbol_events_today.append("LOWER_1")
+                            add_signal("LOWER_1", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["LOWER_1"])
 
                     # crosses (current)
                     for k in (1, 2, 3):
@@ -570,14 +610,14 @@ def run_master():
                                 continue
                             if cross_up_through_level(df, lvl):
                                 lbl = f"CROSS_UP_UPPER_{k}"
-                                symbol_events_today.append(lbl)
+                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
                         else:
                             lvl = bands_c.get(f"LOWER_{k}")
                             if lvl is None:
                                 continue
                             if cross_down_through_level(df, lvl):
                                 lbl = f"CROSS_DOWN_LOWER_{k}"
-                                symbol_events_today.append(lbl)
+                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
 
                     # bounces (current)
                     if side == "LONG":
@@ -589,7 +629,7 @@ def run_master():
                         ]
                         for lbl, lvl in bounce_tests:
                             if bounce_up_at_level(df, lvl):
-                                symbol_events_today.append(lbl)
+                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
                     else:
                         bounce_tests = [
                             ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
@@ -599,7 +639,7 @@ def run_master():
                         ]
                         for lbl, lvl in bounce_tests:
                             if bounce_down_at_level(df, lvl):
-                                symbol_events_today.append(lbl)
+                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
 
                 else:
                     logging.warning(f"{sym}: invalid current AVWAP / bands.")
@@ -624,10 +664,10 @@ def run_master():
                     # previous bounces
                     if side == "LONG":
                         if bounce_up_at_level(df, bands_p.get("UPPER_1")):
-                            symbol_events_today.append("PREV_BOUNCE_UPPER_1")
+                            add_signal("PREV_BOUNCE_UPPER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("UPPER_1"))
                     else:
                         if bounce_down_at_level(df, bands_p.get("LOWER_1")):
-                            symbol_events_today.append("PREV_BOUNCE_LOWER_1")
+                            add_signal("PREV_BOUNCE_LOWER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("LOWER_1"))
 
                     # previous crosses
                     if side == "LONG":
@@ -636,14 +676,14 @@ def run_master():
                             if lvl is None:
                                 continue
                             if cross_up_through_level(df, lvl):
-                                symbol_events_today.append(f"PREV_CROSS_UPPER_{k}")
+                                add_signal(f"PREV_CROSS_UPPER_{k}", "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
                     else:
                         for k in (1, 2, 3):
                             lvl = bands_p.get(f"LOWER_{k}")
                             if lvl is None:
                                 continue
                             if cross_down_through_level(df, lvl):
-                                symbol_events_today.append(f"PREV_CROSS_LOWER_{k}")
+                                add_signal(f"PREV_CROSS_LOWER_{k}", "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
                 else:
                     logging.warning(f"{sym}: invalid previous AVWAP / bands.")
             else:
@@ -662,6 +702,11 @@ def run_master():
 
         # include multi-day patterns as events as well
         full_event_list = symbol_events_today + symbol_multi_day
+
+        for lbl in symbol_events_today:
+            record = symbol_signal_info.get(lbl)
+            if record:
+                csv_rows.append(record)
 
         # record in history
         entry = {
@@ -708,6 +753,18 @@ def run_master():
         )
 
     ib.disconnect()
+
+    if csv_rows:
+        df_signals = pd.DataFrame(csv_rows)
+        df_signals = df_signals.reindex(columns=AVWAP_CSV_COLUMNS)
+        df_signals.sort_values(["trade_date", "symbol", "signal_type"], inplace=True)
+    else:
+        df_signals = pd.DataFrame(columns=AVWAP_CSV_COLUMNS)
+
+    df_signals.to_csv(AVWAP_SIGNALS_FILE, index=False)
+    logging.info(
+        f"Wrote {len(df_signals)} AVWAP signals to {AVWAP_SIGNALS_FILE}"
+    )
 
     # trim history to last N days
     trim_history(history)

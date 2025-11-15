@@ -2,6 +2,8 @@
 
 import os
 import sys
+import csv
+from pathlib import Path
 # Suppress Tk deprecation warnings on macOS
 os.environ["TK_SILENCE_DEPRECATION"] = "1"
 
@@ -33,6 +35,9 @@ init(autoreset=True)
 LONGS_FILENAME = "longs.txt"
 SHORTS_FILENAME = "shorts.txt"
 BOUNCE_LOG_FILENAME = "bouncers.txt"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT_DIR / "data"
+INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
 ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
@@ -1464,15 +1469,48 @@ class BounceBot(EWrapper, EClient):
     
     def log_bounce_to_file(self, symbol, direction, levels, bounce_candle, current_candle, threshold):
         try:
-            # Get only the time portion without the date
             timestamp = datetime.now().strftime("%H:%M:%S")
+            bounce_types_list = list(levels.keys())
+            bounce_types_str = ", ".join(bounce_types_list)
+
+            candle_time = str(current_candle.get("time", "")).strip() if current_candle is not None else ""
+            trade_dt = None
+            if candle_time:
+                for fmt in ("%Y%m%d  %H:%M:%S", "%Y%m%d %H:%M:%S"):
+                    try:
+                        trade_dt = datetime.strptime(candle_time, fmt)
+                        break
+                    except ValueError:
+                        continue
+            if trade_dt is None:
+                trade_dt = datetime.now()
+            trade_date_str = trade_dt.strftime("%Y-%m-%d")
+
             with open(BOUNCE_LOG_FILENAME, "a") as f:
-                # Get the bounce types from the levels dictionary keys
-                bounce_types = ", ".join(levels.keys())
-                # Write the essential information with time only (no date)
-                f.write(f"{timestamp} | {symbol} | {bounce_types} | {direction}\n")
-                
-            logging.info(f"Simplified bounce details for {symbol} logged to {BOUNCE_LOG_FILENAME}")
+                f.write(f"{timestamp} | {symbol} | {bounce_types_str} | {direction}\n")
+
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            file_exists = INTRADAY_BOUNCES_CSV.exists()
+            with INTRADAY_BOUNCES_CSV.open("a", newline="") as csvfile:
+                writer = csv.DictWriter(
+                    csvfile,
+                    fieldnames=["time_local", "trade_date", "symbol", "direction", "bounce_types"],
+                )
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(
+                    {
+                        "time_local": timestamp,
+                        "trade_date": trade_date_str,
+                        "symbol": symbol,
+                        "direction": direction,
+                        "bounce_types": ", ".join(bounce_types_list),
+                    }
+                )
+
+            logging.info(
+                f"Simplified bounce details for {symbol} logged to {BOUNCE_LOG_FILENAME}"
+            )
         except Exception as e:
             logging.error(f"Error logging bounce to file: {e}")
 
