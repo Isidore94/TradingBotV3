@@ -24,6 +24,7 @@ OUTPUT_DIR = ROOT_DIR / "output"
 LOG_DIR = ROOT_DIR / "logs"
 AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
 AVWAP_CSV_COLUMNS = [
+    "run_date",
     "symbol",
     "trade_date",
     "side",
@@ -559,6 +560,7 @@ def run_master():
             symbol_events_today.append(event_name)
             if event_name not in symbol_signal_info:
                 symbol_signal_info[event_name] = {
+                    "run_date": today_run.isoformat(),
                     "symbol": sym,
                     "trade_date": last_trade_date.isoformat(),
                     "side": side,
@@ -757,14 +759,25 @@ def run_master():
     if csv_rows:
         df_signals = pd.DataFrame(csv_rows)
         df_signals = df_signals.reindex(columns=AVWAP_CSV_COLUMNS)
-        df_signals.sort_values(["trade_date", "symbol", "signal_type"], inplace=True)
-    else:
-        df_signals = pd.DataFrame(columns=AVWAP_CSV_COLUMNS)
+        df_signals.sort_values(["run_date", "trade_date", "symbol", "signal_type"], inplace=True)
 
-    df_signals.to_csv(AVWAP_SIGNALS_FILE, index=False)
-    logging.info(
-        f"Wrote {len(df_signals)} AVWAP signals to {AVWAP_SIGNALS_FILE}"
-    )
+        write_header = (
+            not AVWAP_SIGNALS_FILE.exists()
+            or AVWAP_SIGNALS_FILE.stat().st_size == 0
+        )
+        df_signals.to_csv(
+            AVWAP_SIGNALS_FILE,
+            mode="a",
+            index=False,
+            header=write_header,
+        )
+        logging.info(
+            f"Appended {len(df_signals)} AVWAP signals to {AVWAP_SIGNALS_FILE}"
+        )
+    else:
+        logging.info(
+            f"No AVWAP signals generated for {today_run.isoformat()}; nothing appended."
+        )
 
     # trim history to last N days
     trim_history(history)
