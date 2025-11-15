@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""Consolidate AVWAP signals and intraday bounce logs into a single daily snapshot.
+
+This helper script reads the AVWAP signal CSV produced by ``master_avwap.py`` and the
+bounce log written by ``bounce_bot.py``.  The data are filtered to the current date,
+combined on ``symbol`` + ``side`` and written to ``data/ai_snapshot_YYYYMMDD.csv``.
+
+Running this periodically means the AI coach only needs to ingest one file per day.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+from collections import OrderedDict
+from datetime import date, datetime
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+
+import pandas as pd
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT_DIR / "data"
+LOG_DIR = ROOT_DIR / "logs"
+AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
+BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build a consolidated AI snapshot.")
+    parser.add_argument(
+        "--date",
+        dest="target_date",
+        type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(),
+        default=date.today(),
+        help="Date (YYYY-MM-DD) to consolidate. Defaults to today.",
+    )
+    return parser.parse_args()
+
+
+def _format_float(value: Optional[float]) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return f"{float(value):.4f}".rstrip("0").rstrip(".")
+
+
+def _clean_str(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except TypeError:
+        pass
+    return str(value)
+
+
+def load_avwap_signals(target_date: date) -> pd.DataFrame:
+    if not AVWAP_SIGNALS_FILE.exists():
+        return pd.DataFrame(columns=[
+            "symbol",
+            "trade_date",
+            "side",
+            "anchor_type",
+            "anchor_date",
+            "signal_type",
+            "avwap_price",
+            "band_price",
+            "stdev",
+        ])
+
+    df = pd.read_csv(AVWAP_SIGNALS_FILE, dtype=str)
+
+    if "trade_date" not in df.columns:
+        return pd.DataFrame(columns=df.columns)
+
+    # The CSV stores numeric fields; convert them after filtering to keep strings intact.
+    df["trade_date"] = df["trade_date"].astype(str)
+    df = df[df["trade_date"] == target_date.isoformat()].copy()
+
+    if df.empty:
+        return df
+
+    # Normalise casing and convert numeric columns.
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].astype(str).str.upper()
+    df["side"] = df["side"].astype(str).str.upper()
+
+    for col in ("avwap_price", "band_price", "stdev"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
+
+
+def summarise_signals(df: pd.DataFrame, target_date: date) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "symbol",
+            "side",
+            "trade_date",
+            "avwap_signal_count",
+            "avwap_signals",
+            "avwap_anchor_types",
+            "avwap_details",
+        ])
+
+    records: List[Dict[str, str]] = []
+    for (symbol, side), group in df.groupby(["symbol", "side"], sort=True):
+        signal_values = []
+        for value in group["signal_type"]:
+            cleaned = _clean_str(value)
+            if cleaned:
+                signal_values.append(cleaned)
+        signal_names = list(OrderedDict.fromkeys(signal_values))
+
+        anchor_values = []
+        for value in group["anchor_type"]:
+            cleaned = _clean_str(value)
+            if cleaned:
+                anchor_values.append(cleaned)
+        anchor_types = list(OrderedDict.fromkeys(anchor_values))
+
+        detail_bits: List[str] = []
+        for _, row in group.iterrows():
+            signal = _clean_str(row.get("signal_type")) or "?"
+            anchor = _clean_str(row.get("anchor_type"))
+            anchor_date = _clean_str(row.get("anchor_date"))
+            detail = (
+                f"{signal}"
+                f" [{anchor}:{anchor_date},"
+                f" avwap={_format_float(row.get('avwap_price'))},"
+                f" band={_format_float(row.get('band_price'))},"
+                f" stdev={_format_float(row.get('stdev'))}]"
+            )
+            detail_bits.append(detail)
+
+        records.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "trade_date": target_date.isoformat(),
+                "avwap_signal_count": len(group),
+                "avwap_signals": "; ".join(signal_names),
+                "avwap_anchor_types": "; ".join(anchor_types),
+                "avwap_details": "; ".join(detail_bits),
+            }
+        )
+
+    return pd.DataFrame.from_records(records)
+
+
+BOUNCE_LINE_REGEX = re.compile(
+    r"^\s*(?P<ts>[^|]+?)\s*\|\s*(?P<symbol>[^|]+?)\s*\|\s*(?P<types>[^|]*)\s*\|\s*(?P<direction>[^|]+?)\s*$"
+)
+
+
+def _parse_time_fragment(fragment: str, target_date: date) -> Optional[datetime]:
+    fragment = fragment.strip()
+    if not fragment:
+        return None
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%m/%d/%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(fragment, fmt)
+        except ValueError:
+            continue
+
+    try:
+        parsed_time = datetime.strptime(fragment, "%H:%M:%S").time()
+        return datetime.combine(target_date, parsed_time)
+    except ValueError:
+        return None
+
+
+def load_bounce_events(target_date: date) -> List[Dict[str, object]]:
+    if not BOUNCE_LOG_FILE.exists():
+        return []
+
+    events: List[Dict[str, object]] = []
+    with open(BOUNCE_LOG_FILE, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            match = BOUNCE_LINE_REGEX.match(line)
+            if not match:
+                continue
+
+            timestamp_raw = match.group("ts")
+            when = _parse_time_fragment(timestamp_raw, target_date)
+            if when is None:
+                continue
+
+            if when.date() != target_date:
+                continue
+
+            symbol = match.group("symbol").strip().upper()
+            direction = match.group("direction").strip().upper()
+            if direction not in {"LONG", "SHORT"}:
+                direction = direction.capitalize()
+                if direction.upper() not in {"LONG", "SHORT"}:
+                    continue
+                direction = direction.upper()
+
+            bounce_types_raw = match.group("types").strip()
+            bounce_types = [bt.strip() for bt in bounce_types_raw.split(",") if bt.strip()]
+
+            events.append(
+                {
+                    "timestamp": when,
+                    "symbol": symbol,
+                    "side": direction,
+                    "bounce_types_raw": bounce_types_raw,
+                    "bounce_types": bounce_types,
+                }
+            )
+
+    return events
+
+
+def summarise_bounces(events: Iterable[Dict[str, object]], target_date: date) -> pd.DataFrame:
+    grouped: Dict[Tuple[str, str], Dict[str, object]] = {}
+
+    for event in events:
+        key = (event["symbol"], event["side"])
+        bucket = grouped.setdefault(
+            key,
+            {
+                "symbol": event["symbol"],
+                "side": event["side"],
+                "trade_date": target_date.isoformat(),
+                "bounce_count": 0,
+                "bounce_types": OrderedDict(),
+                "bounce_events": [],
+                "latest_bounce_time": None,
+            },
+        )
+
+        bucket["bounce_count"] += 1
+        if event["bounce_types"]:
+            for bt in event["bounce_types"]:
+                bucket["bounce_types"].setdefault(bt, None)
+
+        ts: datetime = event["timestamp"]
+        bucket["bounce_events"].append(
+            f"{ts.strftime('%H:%M:%S')} [{event['bounce_types_raw'] or 'n/a'}]"
+        )
+        if not bucket["latest_bounce_time"] or ts > bucket["latest_bounce_time"]:
+            bucket["latest_bounce_time"] = ts
+
+    if not grouped:
+        return pd.DataFrame(columns=[
+            "symbol",
+            "side",
+            "trade_date",
+            "bounce_count",
+            "bounce_types",
+            "latest_bounce_time",
+            "bounce_events",
+        ])
+
+    records: List[Dict[str, object]] = []
+    for bucket in grouped.values():
+        records.append(
+            {
+                "symbol": bucket["symbol"],
+                "side": bucket["side"],
+                "trade_date": bucket["trade_date"],
+                "bounce_count": bucket["bounce_count"],
+                "bounce_types": "; ".join(bucket["bounce_types"].keys()),
+                "latest_bounce_time": (
+                    bucket["latest_bounce_time"].strftime("%H:%M:%S")
+                    if bucket["latest_bounce_time"]
+                    else ""
+                ),
+                "bounce_events": "; ".join(bucket["bounce_events"]),
+            }
+        )
+
+    return pd.DataFrame.from_records(records)
+
+
+def main() -> None:
+    args = _parse_args()
+    target_date: date = args.target_date
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    signals_df = load_avwap_signals(target_date)
+    signals_summary = summarise_signals(signals_df, target_date)
+
+    bounce_events = load_bounce_events(target_date)
+    bounces_summary = summarise_bounces(bounce_events, target_date)
+
+    merged = pd.merge(
+        signals_summary,
+        bounces_summary,
+        on=["symbol", "side", "trade_date"],
+        how="outer",
+        sort=True,
+        suffixes=("_avwap", "_bounce"),
+    )
+
+    merged.insert(0, "snapshot_date", target_date.isoformat())
+    merged.sort_values(["symbol", "side"], inplace=True)
+    merged.reset_index(drop=True, inplace=True)
+
+    output_path = DATA_DIR / f"ai_snapshot_{target_date.strftime('%Y%m%d')}.csv"
+    merged.to_csv(output_path, index=False)
+
+    print(f"Wrote {len(merged)} rows to {output_path}")
+
+
+if __name__ == "__main__":
+    main()
