@@ -19,3 +19,7 @@ pip install -r requirements.txt
 
 python scripts/master_avwap.py   # run daily AVWAP engine
 python scripts/bounce_bot.py --use_gui  # run intraday bounce bot
+
+# Reset the repository to a clean default state
+python scripts/tidy_workspace.py
+```
