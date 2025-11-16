@@ -6,6 +6,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import mean
 
 import requests
 import pandas as pd
@@ -46,6 +47,7 @@ CURRENT_CACHE_FILE = DATA_DIR / "earnings_cache.json"
 PREV_CACHE_FILE = DATA_DIR / "prev_earnings_cache.json"
 HISTORY_FILE = DATA_DIR / "master_avwap_history.json"
 AI_STATE_FILE = DATA_DIR / "master_avwap_ai_state.json"
+D1_FEATURES_FILE = DATA_DIR / "d1_features.csv"
 OUTPUT_FILE = OUTPUT_DIR / "master_avwap_events.txt"
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
@@ -121,6 +123,64 @@ def load_json(path: Path, default):
 def save_json(path: Path, obj):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
+
+
+def compute_atr_from_ohlc(daily_rows, last_trade_date, length=ATR_LENGTH):
+    target = last_trade_date.isoformat()
+    relevant = [row for row in daily_rows if row["date"] <= target]
+    if not relevant:
+        return None
+
+    relevant = relevant[-length:]
+    trs = []
+    prev_close = None
+    for row in relevant:
+        high = float(row["high"])
+        low = float(row["low"])
+        close = float(row["close"])
+        if prev_close is None:
+            tr = high - low
+        else:
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+        prev_close = close
+
+    if not trs:
+        return None
+    return sum(trs) / len(trs)
+
+
+def compute_trend_label_20d(daily_rows, last_trade_date):
+    target = last_trade_date.isoformat()
+    closes = [float(row["close"]) for row in daily_rows if row["date"] <= target]
+    if len(closes) < 20:
+        return "SIDEWAYS"
+
+    short = closes[-5:]
+    long = closes[-20:-5]
+    if not long:
+        return "SIDEWAYS"
+
+    short_avg = mean(short)
+    long_avg = mean(long)
+    if long_avg == 0:
+        return "SIDEWAYS"
+
+    diff_pct = (short_avg - long_avg) / long_avg * 100
+    threshold = 1.0
+    if diff_pct > threshold:
+        return "UP"
+    if diff_pct < -threshold:
+        return "DOWN"
+    return "SIDEWAYS"
+
+
+def get_last_daily_row_for_date(daily_rows, last_trade_date):
+    target = last_trade_date.isoformat()
+    for row in reversed(daily_rows):
+        if row["date"] == target:
+            return row
+    return None
 
 # ============================================================================
 # EARNINGS FETCH (NASDAQ + YFINANCE FALLBACK)
@@ -513,6 +573,7 @@ def run_master():
     today_run = datetime.now().date()
     events_for_output = []
     csv_rows = []
+    feature_rows = []
     ai_state = {
         "run_timestamp": datetime.now().isoformat(timespec="seconds"),
         "run_date": today_run.isoformat(),
@@ -738,7 +799,42 @@ def run_master():
                 "volume": float(row["volume"]),
             })
 
-        ai_state["symbols"][sym] = {
+        last_row = get_last_daily_row_for_date(daily_ohlc, last_trade_date)
+        last_close = float(last_row["close"]) if last_row else None
+        last_volume = float(last_row["volume"]) if last_row else None
+
+        atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
+        trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
+        has_bounce_event_today = bool(symbol_events_today)
+
+        current_vwap = current_anchor_meta.get("vwap") if current_anchor_meta else None
+        current_upper_1 = (
+            current_anchor_meta.get("bands", {}).get("UPPER_1")
+            if current_anchor_meta else None
+        )
+        current_lower_1 = (
+            current_anchor_meta.get("bands", {}).get("LOWER_1")
+            if current_anchor_meta else None
+        )
+
+        def _distance(level):
+            if last_close is None or level is None:
+                return None
+            return last_close - level
+
+        def _pct(level):
+            if last_close is None or level is None or level == 0:
+                return None
+            return (last_close - level) / level * 100
+
+        dist_vwap = _distance(current_vwap)
+        pct_vwap = _pct(current_vwap)
+        dist_upper_1 = _distance(current_upper_1)
+        pct_upper_1 = _pct(current_upper_1)
+        dist_lower_1 = _distance(current_lower_1)
+        pct_lower_1 = _pct(current_lower_1)
+
+        symbol_entry = {
             "side": side,
             "last_trade_date": last_trade_date.isoformat(),
             "current_anchor": current_anchor_meta,
@@ -747,7 +843,41 @@ def run_master():
             "multi_day_patterns": symbol_multi_day,
             "events_all_for_day": full_event_list,
             "daily_ohlc": daily_ohlc,
+            "last_close": last_close,
+            "last_volume": last_volume,
+            "atr20": atr20,
+            "distance_from_current_vwap": dist_vwap,
+            "pct_from_current_vwap": pct_vwap,
+            "distance_from_current_upper_1": dist_upper_1,
+            "pct_from_current_upper_1": pct_upper_1,
+            "distance_from_current_lower_1": dist_lower_1,
+            "pct_from_current_lower_1": pct_lower_1,
+            "trend_20d": trend_label,
+            "has_bounce_event_today": has_bounce_event_today,
         }
+
+        ai_state["symbols"][sym] = symbol_entry
+
+        feature_rows.append({
+            "symbol": sym,
+            "side": side,
+            "last_trade_date": last_trade_date.isoformat(),
+            "last_close": last_close,
+            "last_volume": last_volume,
+            "atr20": atr20,
+            "current_anchor_date": current_anchor_meta.get("date") if current_anchor_meta else None,
+            "current_anchor_vwap": current_vwap,
+            "current_anchor_stdev": current_anchor_meta.get("stdev") if current_anchor_meta else None,
+            "distance_from_current_vwap": dist_vwap,
+            "pct_from_current_vwap": pct_vwap,
+            "distance_from_current_upper_1": dist_upper_1,
+            "pct_from_current_upper_1": pct_upper_1,
+            "distance_from_current_lower_1": dist_lower_1,
+            "pct_from_current_lower_1": pct_lower_1,
+            "trend_20d": trend_label,
+            "has_bounce_event_today": has_bounce_event_today,
+            "events_today": ";".join(symbol_events_today),
+        })
 
         logging.info(
             f"{sym}: events_today={symbol_events_today}, "
@@ -787,6 +917,30 @@ def run_master():
         for s, d, lbl, side in events_for_output:
             f.write(f"{s},{d},{lbl},{side}\n")
         f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
+
+    feature_columns = [
+        "symbol",
+        "side",
+        "last_trade_date",
+        "last_close",
+        "last_volume",
+        "atr20",
+        "current_anchor_date",
+        "current_anchor_vwap",
+        "current_anchor_stdev",
+        "distance_from_current_vwap",
+        "pct_from_current_vwap",
+        "distance_from_current_upper_1",
+        "pct_from_current_upper_1",
+        "distance_from_current_lower_1",
+        "pct_from_current_lower_1",
+        "trend_20d",
+        "has_bounce_event_today",
+        "events_today",
+    ]
+
+    df_features = pd.DataFrame(feature_rows, columns=feature_columns)
+    df_features.to_csv(D1_FEATURES_FILE, index=False)
 
     save_json(CURRENT_CACHE_FILE, curr_cache)
     save_json(PREV_CACHE_FILE, prev_cache)
