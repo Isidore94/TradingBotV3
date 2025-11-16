@@ -14,6 +14,18 @@ TRADES_PATH = DATA_DIR / "trades_history.csv"
 
 
 OUTCOME_COLUMNS = ["realized_rr", "hit_target", "stopped_out", "days_held", "outcome_label"]
+TRADE_LOG_COLUMNS = [
+    "example_id",
+    "symbol",
+    "side",
+    "trade_date",
+    "entry_price",
+    "stop_price",
+    "target_1",
+    "conviction_score",
+    "exit_price",
+    "exit_date",
+]
 
 
 def ensure_columns(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
@@ -36,6 +48,18 @@ def normalize_string(series: pd.Series) -> pd.Series:
 def parse_dates(series: pd.Series) -> pd.Series:
     parsed = pd.to_datetime(series, errors="coerce")
     return parsed.dt.date
+
+
+def ensure_trade_log_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for column in TRADE_LOG_COLUMNS:
+        if column not in df.columns:
+            df[column] = ""
+    return df
+
+
+def to_numeric(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce")
 
 
 def is_taken(value: Any) -> bool:
@@ -93,64 +117,48 @@ def main() -> None:
     master_df = pd.read_parquet(MASTER_PATH)
     master_df = ensure_columns(master_df, OUTCOME_COLUMNS)
 
-    trades_df = pd.read_csv(
-        TRADES_PATH,
-        dtype={
-            "symbol": str,
-            "side": str,
-            "entry_price": float,
-            "exit_price": float,
-            "stop_price": float,
-            "quantity": float,
-        },
-        parse_dates=["entry_date", "exit_date"],
-    )
+    trades_df = pd.read_csv(TRADES_PATH, dtype=str)
+    trades_df = ensure_trade_log_columns(trades_df)
 
-    master_df["symbol_norm"] = normalize_string(get_column(master_df, "symbol"))
-    master_df["side_norm"] = normalize_string(get_column(master_df, "side"))
-    master_df["trade_date_norm"] = parse_dates(get_column(master_df, "trade_date"))
-
+    trades_df["example_id"] = trades_df["example_id"].fillna("").astype(str).str.strip()
     trades_df["symbol_norm"] = normalize_string(trades_df["symbol"])
     trades_df["side_norm"] = normalize_string(trades_df["side"])
-    trades_df["entry_date_norm"] = trades_df["entry_date"].dt.date
-    trades_df["exit_date_norm"] = trades_df["exit_date"].dt.date
+    trades_df["entry_price_val"] = to_numeric(trades_df["entry_price"])
+    trades_df["stop_price_val"] = to_numeric(trades_df["stop_price"])
+    trades_df["exit_price_val"] = to_numeric(trades_df["exit_price"])
 
-    trades_df = trades_df.sort_values(["entry_date_norm", "exit_date_norm"]).reset_index(drop=True)
+    entry_date_source = trades_df["trade_date"].where(
+        trades_df["trade_date"].astype(str).str.strip() != "",
+        trades_df.get("entry_date", trades_df["trade_date"]),
+    )
+    trades_df["entry_date_norm"] = parse_dates(entry_date_source)
+    trades_df["exit_date_norm"] = parse_dates(trades_df["exit_date"])
+
+    completed_trades = trades_df[
+        (trades_df["example_id"] != "")
+        & trades_df["exit_date_norm"].notna()
+        & trades_df["exit_price_val"].notna()
+    ].copy()
+
+    completed_trades = completed_trades.sort_values(
+        ["exit_date_norm", "entry_date_norm"]
+    ).reset_index(drop=True)
 
     taken_mask = get_column(master_df, "taken").apply(is_taken)
     rr_empty_mask = master_df["realized_rr"].apply(is_empty)
-    candidate_mask = taken_mask & rr_empty_mask
+    candidate_indices = master_df.index[(taken_mask & rr_empty_mask)].tolist()
 
-    candidate_indices = master_df.index[candidate_mask].tolist()
     matched_count = 0
-    used_trade_indices: set[int] = set()
+    trade_lookup: dict[str, pd.Series] = {
+        row["example_id"]: row for _, row in completed_trades.iterrows()
+    }
 
     for idx in candidate_indices:
-        symbol = master_df.at[idx, "symbol_norm"]
-        side = master_df.at[idx, "side_norm"]
-        trade_date = master_df.at[idx, "trade_date_norm"]
-
-        if pd.isna(trade_date):
+        example_id = str(master_df.at[idx, "example_id"]).strip()
+        if not example_id or example_id not in trade_lookup:
             continue
 
-        matches = trades_df[
-            (trades_df["symbol_norm"] == symbol)
-            & (trades_df["side_norm"] == side)
-            & (trades_df["entry_date_norm"] == trade_date)
-        ]
-        matches = matches[~matches.index.isin(used_trade_indices)]
-
-        if matches.empty:
-            continue
-
-        if len(matches) > 1:
-            print(
-                "Warning: Multiple trades matched setup for symbol"
-                f" {symbol} on {trade_date}. Using the first match."
-            )
-
-        trade_row = matches.iloc[0]
-        used_trade_indices.add(trade_row.name)
+        trade_row = trade_lookup.pop(example_id)
 
         entry_date = trade_row["entry_date_norm"]
         exit_date = trade_row["exit_date_norm"]
@@ -158,21 +166,28 @@ def main() -> None:
         if pd.isna(entry_date) or pd.isna(exit_date):
             continue
 
-        if trade_row["side_norm"] not in {"LONG", "SHORT"}:
+        side_series = normalize_string(pd.Series([trade_row["side"]]))
+        fallback_side = normalize_string(pd.Series([master_df.at[idx, "side"]]))
+        side = (side_series.iloc[0] or fallback_side.iloc[0]).upper()
+
+        if side not in {"LONG", "SHORT"}:
             continue
 
-        if trade_row["side_norm"] == "LONG":
-            risk_per_share = trade_row["entry_price"] - trade_row["stop_price"]
-            pnl_per_share = trade_row["exit_price"] - trade_row["entry_price"]
+        entry_price = trade_row["entry_price_val"]
+        stop_price = trade_row["stop_price_val"]
+        exit_price = trade_row["exit_price_val"]
+
+        if any(pd.isna(x) for x in [entry_price, stop_price, exit_price]):
+            continue
+
+        if side == "LONG":
+            risk_per_share = entry_price - stop_price
+            pnl_per_share = exit_price - entry_price
         else:
-            risk_per_share = trade_row["stop_price"] - trade_row["entry_price"]
-            pnl_per_share = trade_row["entry_price"] - trade_row["exit_price"]
+            risk_per_share = stop_price - entry_price
+            pnl_per_share = entry_price - exit_price
 
         if risk_per_share is None or risk_per_share <= 0:
-            print(
-                "Warning: Non-positive risk for symbol"
-                f" {symbol} on {trade_date}. Skipping outcome calculation."
-            )
             continue
 
         realized_rr = pnl_per_share / risk_per_share
@@ -188,8 +203,6 @@ def main() -> None:
         master_df.at[idx, "outcome_label"] = outcome["outcome_label"]
 
         matched_count += 1
-
-    master_df = master_df.drop(columns=["symbol_norm", "side_norm", "trade_date_norm"], errors="ignore")
 
     master_df.to_parquet(MASTER_PATH, index=False)
 
