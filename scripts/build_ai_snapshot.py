@@ -2,8 +2,10 @@
 """Consolidate AVWAP signals and intraday bounce logs into a single daily snapshot.
 
 This helper script reads the AVWAP signal CSV produced by ``master_avwap.py`` and the
-bounce log written by ``bounce_bot.py``.  The data are filtered to the current date,
-combined on ``symbol`` + ``side`` and written to ``data/ai_snapshot_YYYYMMDD.csv``.
+intraday bounce table (``data/intraday_bounces.csv``) if available.  When the structured
+CSV is missing it falls back to the legacy ``logs/bouncers.txt`` output.  The data are
+filtered to the current date, combined on ``symbol`` + ``side`` and written to
+``data/ai_snapshot_YYYYMMDD.csv``.
 
 Running this periodically means the AI coach only needs to ingest one file per day.
 """
@@ -24,6 +26,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 LOG_DIR = ROOT_DIR / "logs"
 AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
+INTRADAY_BOUNCES_FILE = DATA_DIR / "intraday_bounces.csv"
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
 EMA_WINDOWS = (8, 15, 21)
 SMA_WINDOWS = (20, 50, 100, 200)
@@ -202,7 +205,66 @@ def _parse_time_fragment(fragment: str, target_date: date) -> Optional[datetime]
         return None
 
 
-def load_bounce_events(target_date: date) -> List[Dict[str, object]]:
+def _parse_csv_bounce_time(row: pd.Series, target_date: date) -> Optional[datetime]:
+    time_str = _clean_str(row.get("time_local"))
+    if time_str:
+        parsed = _parse_time_fragment(time_str, target_date)
+        if parsed:
+            return parsed
+    # Fall back to full timestamp parsing if available.
+    raw_timestamp = _clean_str(row.get("timestamp"))
+    if raw_timestamp:
+        parsed = _parse_time_fragment(raw_timestamp, target_date)
+        if parsed:
+            return parsed
+    # As a last resort, just return midnight of the trade date so the row is kept.
+    return datetime.combine(target_date, datetime.min.time())
+
+
+def load_bounce_events_from_csv(target_date: date) -> List[Dict[str, object]]:
+    if not INTRADAY_BOUNCES_FILE.exists():
+        return []
+
+    df = pd.read_csv(INTRADAY_BOUNCES_FILE, dtype=str)
+    if df.empty:
+        return []
+
+    df["trade_date"] = pd.to_datetime(df.get("trade_date"), errors="coerce").dt.date
+    df = df[df["trade_date"] == target_date]
+    if df.empty:
+        return []
+
+    events: List[Dict[str, object]] = []
+    for _, row in df.iterrows():
+        symbol = _normalise_symbol(row.get("symbol"))
+        if not symbol:
+            continue
+
+        direction = _clean_str(row.get("direction")).upper()
+        if direction not in {"LONG", "SHORT"}:
+            continue
+
+        bounce_types_raw = _clean_str(row.get("bounce_types"))
+        bounce_types = [bt.strip() for bt in bounce_types_raw.split(",") if bt.strip()]
+
+        timestamp = _parse_csv_bounce_time(row, target_date)
+        if timestamp is None:
+            continue
+
+        events.append(
+            {
+                "timestamp": timestamp,
+                "symbol": symbol,
+                "side": direction,
+                "bounce_types_raw": bounce_types_raw,
+                "bounce_types": bounce_types,
+            }
+        )
+
+    return events
+
+
+def load_bounce_events_from_log(target_date: date) -> List[Dict[str, object]]:
     if not BOUNCE_LOG_FILE.exists():
         return []
 
@@ -247,6 +309,13 @@ def load_bounce_events(target_date: date) -> List[Dict[str, object]]:
             )
 
     return events
+
+
+def load_bounce_events(target_date: date) -> List[Dict[str, object]]:
+    events = load_bounce_events_from_csv(target_date)
+    if events:
+        return events
+    return load_bounce_events_from_log(target_date)
 
 
 def summarise_bounces(events: Iterable[Dict[str, object]], target_date: date) -> pd.DataFrame:

@@ -81,14 +81,20 @@ def load_inputs() -> Tuple[pd.DataFrame | None, pd.DataFrame | None]:
     if not AVWAP_SIGNALS_FILE.exists():
         logging.warning("AVWAP signals file not found at %s; exiting.", AVWAP_SIGNALS_FILE)
         return None, None
-    if not INTRADAY_BOUNCES_FILE.exists():
-        logging.warning(
-            "Intraday bounces file not found at %s; exiting.", INTRADAY_BOUNCES_FILE
-        )
-        return None, None
 
     avwap_df = pd.read_csv(AVWAP_SIGNALS_FILE)
-    bounce_df = pd.read_csv(INTRADAY_BOUNCES_FILE)
+
+    if INTRADAY_BOUNCES_FILE.exists():
+        bounce_df = pd.read_csv(INTRADAY_BOUNCES_FILE)
+    else:
+        logging.info(
+            "Intraday bounces file not found at %s; continuing without bounce context.",
+            INTRADAY_BOUNCES_FILE,
+        )
+        bounce_df = pd.DataFrame(
+            columns=["symbol", "trade_date", "direction", "bounce_types", "time_local"]
+        )
+
     return avwap_df, bounce_df
 
 
