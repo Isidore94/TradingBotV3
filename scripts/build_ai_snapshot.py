@@ -12,11 +12,12 @@ from __future__ import annotations
 import argparse
 import re
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
+import yfinance as yf
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -24,6 +25,13 @@ DATA_DIR = ROOT_DIR / "data"
 LOG_DIR = ROOT_DIR / "logs"
 AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
+EMA_WINDOWS = (8, 15, 21)
+SMA_WINDOWS = (20, 50, 100, 200)
+LOOKBACK_DAYS = 400
+INDICATOR_COLUMNS = [
+    *(f"ema_{span}" for span in EMA_WINDOWS),
+    *(f"sma_{window}" for window in SMA_WINDOWS),
+]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -53,6 +61,27 @@ def _clean_str(value: object) -> str:
     except TypeError:
         pass
     return str(value)
+
+
+def _normalise_symbol(value: object) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().upper()
+    return cleaned or None
+
+
+def _safe_float(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def load_avwap_signals(target_date: date) -> pd.DataFrame:
@@ -282,6 +311,74 @@ def summarise_bounces(events: Iterable[Dict[str, object]], target_date: date) ->
     return pd.DataFrame.from_records(records)
 
 
+def load_indicator_snapshot(
+    symbols: Iterable[object], target_date: date
+) -> Dict[str, Dict[str, Optional[float]]]:
+    cleaned_symbols = sorted(
+        {
+            sym
+            for sym in (_normalise_symbol(symbol) for symbol in symbols)
+            if sym is not None
+        }
+    )
+
+    if not cleaned_symbols:
+        return {}
+
+    start_date = target_date - timedelta(days=LOOKBACK_DAYS)
+    end_date = target_date + timedelta(days=1)
+
+    indicator_rows: Dict[str, Dict[str, Optional[float]]] = {}
+
+    for symbol in cleaned_symbols:
+        try:
+            history = yf.download(
+                symbol,
+                start=start_date.isoformat(),
+                end=end_date.isoformat(),
+                progress=False,
+                auto_adjust=False,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"Warning: failed to download daily history for {symbol}: {exc}")
+            continue
+
+        if history.empty:
+            print(f"Warning: no daily history returned for {symbol}")
+            continue
+
+        history.index = pd.to_datetime(history.index).tz_localize(None)
+        lower = history.rename(columns=str.lower)
+
+        if "close" not in lower.columns:
+            print(f"Warning: close prices missing for {symbol}")
+            continue
+
+        close_prices = lower["close"]
+        for span in EMA_WINDOWS:
+            lower[f"ema_{span}"] = close_prices.ewm(span=span, adjust=False).mean()
+        for window in SMA_WINDOWS:
+            lower[f"sma_{window}"] = close_prices.rolling(window).mean()
+
+        target_ts = pd.Timestamp(target_date)
+        if target_ts not in lower.index:
+            print(
+                f"Warning: {symbol} missing {target_date.isoformat()} candle;"
+                " indicators unavailable"
+            )
+            continue
+
+        price_row = lower.loc[target_ts]
+        if isinstance(price_row, pd.DataFrame):
+            price_row = price_row.iloc[-1]
+
+        indicator_rows[symbol] = {
+            column: _safe_float(price_row.get(column)) for column in INDICATOR_COLUMNS
+        }
+
+    return indicator_rows
+
+
 def main() -> None:
     args = _parse_args()
     target_date: date = args.target_date
@@ -303,6 +400,21 @@ def main() -> None:
         sort=True,
         suffixes=("_avwap", "_bounce"),
     )
+
+    for column in INDICATOR_COLUMNS:
+        merged[column] = pd.Series([None] * len(merged), dtype=float)
+
+    if not merged.empty:
+        indicator_lookup = load_indicator_snapshot(merged["symbol"], target_date)
+
+        def _indicator_value(symbol: object, column: str) -> Optional[float]:
+            cleaned = _normalise_symbol(symbol)
+            if cleaned is None:
+                return None
+            return indicator_lookup.get(cleaned, {}).get(column)
+
+        for column in INDICATOR_COLUMNS:
+            merged[column] = merged["symbol"].map(lambda sym, col=column: _indicator_value(sym, col))
 
     merged.insert(0, "snapshot_date", target_date.isoformat())
     merged.sort_values(["symbol", "side"], inplace=True)
