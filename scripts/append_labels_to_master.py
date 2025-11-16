@@ -108,10 +108,26 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--path",
-        required=True,
-        help="Path to the labeled CSV created from data/labeling/to_label_YYYYMMDD.csv",
+        help=(
+            "Path to the labeled CSV created from data/labeling/to_label_YYYYMMDD.csv. "
+            "If omitted, the script will auto-select the newest to_label_*.csv file."
+        ),
     )
     return parser.parse_args()
+
+
+def find_latest_label_file() -> Path | None:
+    """Return the newest to_label_*.csv under the labeling directory, if any."""
+
+    if not LABEL_DIR.exists():
+        return None
+
+    candidates = sorted(
+        LABEL_DIR.glob("to_label_*.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
 
 
 def normalize_trade_date(value: str) -> str:
@@ -159,7 +175,18 @@ def load_master_dataframe() -> pd.DataFrame:
 
 def main() -> None:
     args = parse_args()
-    csv_path = Path(args.path).expanduser()
+    if args.path:
+        csv_path = Path(args.path).expanduser()
+    else:
+        latest_file = find_latest_label_file()
+        if latest_file is None:
+            print(
+                "No labeled CSV provided and none were found in data/labeling/to_label_*.csv",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        csv_path = latest_file
+        print(f"No --path provided. Using latest label file: {csv_path}")
 
     if not csv_path.exists():
         print(f"Labeled CSV not found: {csv_path}", file=sys.stderr)
