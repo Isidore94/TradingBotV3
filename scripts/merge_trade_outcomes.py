@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable
 
 import pandas as pd
+from pandas.errors import EmptyDataError
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
