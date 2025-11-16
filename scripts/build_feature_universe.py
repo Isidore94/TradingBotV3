@@ -67,14 +67,30 @@ def setup_logging() -> None:
 
 
 def to_float(value):
+    """Best-effort conversion helper that tolerates pandas containers."""
+
     if value is None:
         return None
+
+    # yfinance occasionally returns pandas Series objects even when we expect a
+    # scalar (for example when the index contains duplicate timestamps).  In
+    # that scenario ``Series.get`` yields a Series and calling ``pd.isna`` on it
+    # raises ``ValueError`` because the truthiness of a Series is ambiguous.
+    if isinstance(value, pd.Series):
+        if value.empty:
+            return None
+        value = value.iloc[-1]
+
     try:
         if pd.isna(value):
             return None
     except TypeError:
         pass
-    return float(value)
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def load_inputs() -> Tuple[pd.DataFrame | None, pd.DataFrame | None]:
