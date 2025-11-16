@@ -54,7 +54,7 @@ HEADERS = {
     "Accept": "application/json, text/plain, */*"
 }
 
-MAX_LOOKBACK_DAYS = 250       # Nasdaq earnings scan window
+MAX_LOOKBACK_DAYS = 130       # Nasdaq earnings scan window
 RECENT_DAYS = 10              # if earnings < RECENT_DAYS, use prior one for "current"
 ATR_LENGTH = 20
 ATR_MULT = 0.05               # eps / push = 0.05 * ATR(20)
