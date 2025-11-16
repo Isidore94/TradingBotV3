@@ -211,10 +211,7 @@ def load_master_dataframe() -> pd.DataFrame:
 
 def load_trade_log() -> pd.DataFrame:
     if TRADE_LOG_PATH.exists():
-        try:
-            trade_df = pd.read_csv(TRADE_LOG_PATH, dtype=str)
-        except EmptyDataError:
-            trade_df = pd.DataFrame(columns=TRADE_LOG_COLUMNS)
+        trade_df = pd.read_csv(TRADE_LOG_PATH, dtype=str)
         trade_df = ensure_trade_log(trade_df)
     else:
         trade_df = pd.DataFrame(columns=TRADE_LOG_COLUMNS)
