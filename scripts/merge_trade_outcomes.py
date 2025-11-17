@@ -118,13 +118,7 @@ def main() -> None:
     master_df = pd.read_parquet(MASTER_PATH)
     master_df = ensure_columns(master_df, OUTCOME_COLUMNS)
 
-    try:
-        trades_df = pd.read_csv(TRADES_PATH, dtype=str)
-    except EmptyDataError:
-        print(
-            "Trades history file is empty; nothing to merge.",
-        )
-        return
+    trades_df = pd.read_csv(TRADES_PATH, dtype=str)
     trades_df = ensure_trade_log_columns(trades_df)
 
     trades_df["example_id"] = trades_df["example_id"].fillna("").astype(str).str.strip()
