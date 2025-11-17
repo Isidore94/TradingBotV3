@@ -24,17 +24,19 @@ LABEL_COLUMNS: List[str] = [
 
 
 def ensure_label_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Return DataFrame with label columns appended, preserving existing data."""
+    """Return DataFrame with label columns inserted at the start."""
     existing_columns = list(df.columns)
-    missing_columns: List[str] = []
 
+    # Add missing label columns so downstream labeling never fails.
     for column in LABEL_COLUMNS:
         if column not in df.columns:
-            missing_columns.append(column)
             df[column] = ""
 
-    # Ensure label columns are at end and existing order preserved
-    ordered_columns = existing_columns + [col for col in LABEL_COLUMNS if col in missing_columns]
+    # Re-order columns: label columns first (in defined order) followed by
+    # whatever existed before, preserving their original order.
+    ordered_columns = LABEL_COLUMNS + [
+        column for column in existing_columns if column not in LABEL_COLUMNS
+    ]
     df = df[ordered_columns]
     return df
 

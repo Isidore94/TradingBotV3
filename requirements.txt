@@ -1,0 +1,8 @@
+colorama
+ibapi
+joblib
+pandas
+pyarrow
+requests
+scikit-learn
+yfinance
