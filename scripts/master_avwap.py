@@ -37,6 +37,16 @@ AVWAP_CSV_COLUMNS = [
     "stdev",
 ]
 
+EVENT_LEVEL_SORT_ORDER = [
+    "UPPER_1",
+    "UPPER_2",
+    "UPPER_3",
+    "VWAP",
+    "LOWER_1",
+    "LOWER_2",
+    "LOWER_3",
+]
+
 for d in (DATA_DIR, OUTPUT_DIR, LOG_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
@@ -514,6 +524,34 @@ def compute_multi_day_patterns(symbol, side, today_events, prev_events):
     # dedupe
     return sorted(set(patterns))
 
+
+def sort_events_for_output(events):
+    """Sort events so similar types are grouped in the output file."""
+
+    def group_rank(label: str) -> int:
+        if label.startswith("PREV_"):
+            return 0  # previous AVWAP crosses/bounces first
+        if label.startswith("MD_"):
+            return 2  # multi-day patterns last
+        return 1
+
+    def level_rank(label: str) -> int:
+        for idx, token in enumerate(EVENT_LEVEL_SORT_ORDER):
+            if token in label:
+                return idx
+        return len(EVENT_LEVEL_SORT_ORDER)
+
+    return sorted(
+        events,
+        key=lambda e: (
+            group_rank(e[2]),      # prev vs current vs multi-day
+            level_rank(e[2]),      # e.g. all UPPER_1 before UPPER_2
+            e[0],                  # alphabetical within a level by symbol
+            e[2],                  # stable ordering for identical symbols
+            e[1],
+        ),
+    )
+
 # ============================================================================
 # MAIN MASTER RUN
 # ============================================================================
@@ -912,9 +950,10 @@ def run_master():
     # trim history to last N days
     trim_history(history)
 
-    # write human-readable events file
+    # write human-readable events file (grouped for easier scanning)
+    sorted_events = sort_events_for_output(events_for_output)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        for s, d, lbl, side in events_for_output:
+        for s, d, lbl, side in sorted_events:
             f.write(f"{s},{d},{lbl},{side}\n")
         f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
 
