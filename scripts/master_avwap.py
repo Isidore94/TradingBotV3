@@ -569,39 +569,44 @@ def run_master():
     prev_cache = load_json(PREV_CACHE_FILE, default={})
     history = load_history()
 
-    need_curr = [s for s in symbols if s not in curr_cache]
-    need_prev = [s for s in symbols if s not in prev_cache]
+    logging.info(f"Refreshing earnings anchors for {len(symbols)} symbols…")
+    all_dates = collect_earnings_dates(symbols)
+    refreshed_curr = 0
+    refreshed_prev = 0
+    missing_anchors = []
 
-    if need_curr or need_prev:
-        logging.info(f"Fetching earnings history for {len(set(need_curr+need_prev))} symbols (Nasdaq)…")
-        all_dates = collect_earnings_dates(list(set(need_curr + need_prev)))
-    else:
-        all_dates = {}
-
-    # fill current cache
-    for sym in need_curr:
-        dates = all_dates.get(sym, [])
-        if not dates:
-            # try yfinance fallback
-            dates = yf_earnings_dates(sym)
-        if not dates:
-            continue
-        anchor = pick_current_earnings_anchor(dates)
-        if anchor:
-            curr_cache[sym] = anchor.isoformat()
-            logging.info(f"{sym}: current anchor -> {anchor}")
-
-    # fill previous cache
-    for sym in need_prev:
+    for sym in symbols:
         dates = all_dates.get(sym, [])
         if not dates:
             dates = yf_earnings_dates(sym)
+
         if not dates:
+            missing_anchors.append(sym)
             continue
-        anchor = pick_previous_earnings_anchor(dates)
-        if anchor:
-            prev_cache[sym] = anchor.isoformat()
-            logging.info(f"{sym}: previous anchor -> {anchor}")
+
+        current_anchor = pick_current_earnings_anchor(dates)
+        if current_anchor:
+            curr_iso = current_anchor.isoformat()
+            if curr_cache.get(sym) != curr_iso:
+                curr_cache[sym] = curr_iso
+                refreshed_curr += 1
+                logging.info(f"{sym}: current anchor -> {current_anchor}")
+
+        previous_anchor = pick_previous_earnings_anchor(dates)
+        if previous_anchor:
+            prev_iso = previous_anchor.isoformat()
+            if prev_cache.get(sym) != prev_iso:
+                prev_cache[sym] = prev_iso
+                refreshed_prev += 1
+                logging.info(f"{sym}: previous anchor -> {previous_anchor}")
+
+    if missing_anchors:
+        logging.warning(
+            "No earnings data found for: " + ", ".join(sorted(missing_anchors))
+        )
+    logging.info(
+        f"Earnings anchors refreshed (current: {refreshed_curr}, previous: {refreshed_prev})."
+    )
 
     ib = IBApi()
     ib.connect("127.0.0.1", 7496, clientId=1003)
