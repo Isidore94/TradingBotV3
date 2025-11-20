@@ -690,25 +690,12 @@ def run_master():
                         "stdev": float(sd_c),
                         "bands": {k: float(v) for k, v in bands_c.items()}
                     }
-                    close = float(df["close"].iloc[-1])
-
-                    # position relative to bands
-                    if side == "LONG":
-                        if close > bands_c["UPPER_3"]:
-                            add_signal("UPPER_3", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["UPPER_3"])
-                        elif close > bands_c["UPPER_2"]:
-                            add_signal("UPPER_2", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["UPPER_2"])
-                        elif close > bands_c["UPPER_1"]:
-                            add_signal("UPPER_1", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["UPPER_1"])
-                    else:
-                        if close < bands_c["LOWER_3"]:
-                            add_signal("LOWER_3", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["LOWER_3"])
-                        elif close < bands_c["LOWER_2"]:
-                            add_signal("LOWER_2", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["LOWER_2"])
-                        elif close < bands_c["LOWER_1"]:
-                            add_signal("LOWER_1", "CURRENT", curr_iso, vwap_c, sd_c, bands_c["LOWER_1"])
-
                     # crosses (current)
+                    if side == "LONG" and cross_up_through_level(df, vwap_c):
+                        add_signal("CROSS_UP_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
+                    if side == "SHORT" and cross_down_through_level(df, vwap_c):
+                        add_signal("CROSS_DOWN_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
+
                     for k in (1, 2, 3):
                         if side == "LONG":
                             lvl = bands_c.get(f"UPPER_{k}")
@@ -771,11 +758,20 @@ def run_master():
                     if side == "LONG":
                         if bounce_up_at_level(df, bands_p.get("UPPER_1")):
                             add_signal("PREV_BOUNCE_UPPER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("UPPER_1"))
+                        if bounce_up_at_level(df, vwap_p):
+                            add_signal("PREV_BOUNCE_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
                     else:
                         if bounce_down_at_level(df, bands_p.get("LOWER_1")):
                             add_signal("PREV_BOUNCE_LOWER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("LOWER_1"))
+                        if bounce_down_at_level(df, vwap_p):
+                            add_signal("PREV_BOUNCE_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
 
                     # previous crosses
+                    if side == "LONG" and cross_up_through_level(df, vwap_p):
+                        add_signal("PREV_CROSS_UP_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+                    if side == "SHORT" and cross_down_through_level(df, vwap_p):
+                        add_signal("PREV_CROSS_DOWN_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+
                     if side == "LONG":
                         for k in (1, 2, 3):
                             lvl = bands_p.get(f"UPPER_{k}")
