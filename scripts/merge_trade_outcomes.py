@@ -26,6 +26,7 @@ TRADE_LOG_COLUMNS = [
     "conviction_score",
     "exit_price",
     "exit_date",
+    "exit_notes",
 ]
 
 

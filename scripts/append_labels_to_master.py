@@ -114,6 +114,7 @@ TRADE_LOG_COLUMNS: List[str] = [
     "conviction_score",
     "exit_price",
     "exit_date",
+    "exit_notes",
 ]
 
 
@@ -239,6 +240,7 @@ def build_trade_log_entries(taken_df: pd.DataFrame, existing_ids: set[str]) -> p
                 "conviction_score": str(row.get("conviction_score", "")).strip(),
                 "exit_price": "",
                 "exit_date": "",
+                "exit_notes": "",
             }
         )
 
