@@ -1,25 +1,47 @@
 # TradingBotV3
 
-Scripts:
-- `scripts/master_avwap.py` – daily AVWAP + previous-AVWAP engine.
-- `scripts/bounce_bot.py` – intraday 5-minute bounce detector.
+## Prerequisites
+- Python 3.10+.
+- [Interactive Brokers TWS or IB Gateway](https://www.interactivebrokers.com/en/trading/ib-api.php) running locally with API access enabled on `127.0.0.1:7496`.
+- A working GUI environment if you plan to use the Tkinter UI in `bounce_bot.py` or the PyQt5 interface in `TickerMover.py`.
 
-Inputs:
-- `longs.txt`
-- `shorts.txt`
-
-Outputs:
-- `output/master_avwap_events.txt`
-- `output/bouncers.txt`
-
-Basic usage:
+Install Python dependencies:
 
 ```bash
 pip install -r requirements.txt
-
-python scripts/master_avwap.py   # run daily AVWAP engine
-python scripts/bounce_bot.py --use_gui  # run intraday bounce bot
-
-# Reset the repository to a clean default state
-python scripts/tidy_workspace.py
 ```
+
+## Required inputs
+- `longs.txt` – one ticker per line for long-side scanning.
+- `shorts.txt` – one ticker per line for short-side scanning.
+
+These files should live in the repository root. The scripts will create any missing `data`, `logs`, and `output` directories at runtime.
+
+## Running the bots
+- Daily AVWAP/previous-AVWAP engine:
+
+  ```bash
+  python scripts/master_avwap.py
+  ```
+
+  Generates `output/master_avwap_events.txt` and logs to `logs/`.
+
+- Intraday 5-minute bounce detector (with optional GUI):
+
+  ```bash
+  python scripts/bounce_bot.py --use_gui
+  ```
+
+  Writes detected bouncers to `output/bouncers.txt` and `data/intraday_bounces.csv`.
+
+Ensure your IB session is connected before launching either bot so that market data requests succeed.
+
+## Maintenance tools
+To reset generated artifacts to the repository's default state, use the intentionally tucked-away maintenance script:
+
+```bash
+python maintenance/tidy_workspace.py --dry-run  # inspect what would be removed
+python maintenance/tidy_workspace.py            # perform the cleanup
+```
+
+It is kept outside the `scripts/` directory to avoid accidental execution.
