@@ -24,6 +24,7 @@ DATA_DIR = ROOT_DIR / "data"
 OUTPUT_DIR = ROOT_DIR / "output"
 LOG_DIR = ROOT_DIR / "logs"
 AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
+EVENT_TICKERS_FILE = OUTPUT_DIR / "master_avwap_event_tickers.txt"
 AVWAP_CSV_COLUMNS = [
     "run_date",
     "symbol",
@@ -957,6 +958,11 @@ def run_master():
         for s, d, lbl, side in sorted_events:
             f.write(f"{s},{d},{lbl},{side}\n")
         f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
+
+    # write unique ticker list for easy import into TradingView
+    event_tickers = sorted({s for s, _, _, _ in sorted_events})
+    with open(EVENT_TICKERS_FILE, "w", encoding="utf-8") as f:
+        f.write(",".join(event_tickers))
 
     feature_columns = [
         "symbol",
