@@ -2,6 +2,7 @@ colorama
 ibapi
 joblib
 pandas
+PyQt5
 pyarrow
 requests
 scikit-learn
