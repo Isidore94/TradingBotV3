@@ -447,7 +447,7 @@ def bounce_up_at_level(df: pd.DataFrame, level: float) -> bool:
 def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
     if level is None or pd.isna(level) or len(df) < ATR_LENGTH + 3:
         return False
-    atr = get_attr20(df)
+    atr = get_atr20(df)
     if atr is None:
         return False
     eps = ATR_MULT * atr
@@ -459,4 +459,589 @@ def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
     return bool(touched and rejected and confirm)
 
 def cross_up_through_level(df: pd.DataFrame, level: float) -> bool:
-    if level is None or pd.isna(level) or len(df) < ATR_LENGTH_
+    if level is None or pd.isna(level) or len(df) < ATR_LENGTH + 3:
+        return False
+    atr = get_atr20(df)
+    if atr is None:
+        return False
+    eps = ATR_MULT * atr
+    push = ATR_MULT * atr
+    B, C = df.iloc[-2], df.iloc[-1]
+    below_then_above = (
+        B["close"] <= level - eps and
+        C["close"] >= level + push and
+        C["close"] > B["close"]
+    )
+    return bool(below_then_above)
+
+def cross_down_through_level(df: pd.DataFrame, level: float) -> bool:
+    if level is None or pd.isna(level) or len(df) < ATR_LENGTH + 3:
+        return False
+    atr = get_atr20(df)
+    if atr is None:
+        return False
+    eps = ATR_MULT * atr
+    push = ATR_MULT * atr
+    B, C = df.iloc[-2], df.iloc[-1]
+    above_then_below = (
+        B["close"] >= level + eps and
+        C["close"] <= level - push and
+        C["close"] < B["close"]
+    )
+    return bool(above_then_below)
+
+# ============================================================================
+# MULTI-DAY PATTERNS
+# ============================================================================
+
+def load_history():
+    return load_json(HISTORY_FILE, default={})
+
+def save_history(history):
+    save_json(HISTORY_FILE, history)
+
+def trim_history(history):
+    today = datetime.now().date()
+    cutoff = today - timedelta(days=HISTORY_DAYS_TO_KEEP)
+    for sym, entries in list(history.items()):
+        new_entries = [e for e in entries
+                       if datetime.fromisoformat(e["date"]).date() >= cutoff]
+        history[sym] = new_entries
+
+def compute_multi_day_patterns(symbol, side, today_events, prev_events):
+    patterns = []
+    prev_set = set(prev_events or [])
+    today_set = set(today_events or [])
+
+    for e_prev in prev_set:
+        # focus on bounce-type prior events
+        if not (e_prev.startswith("PREV_BOUNCE_") or e_prev.startswith("BOUNCE_")):
+            continue
+        for e_today in today_set:
+            if side == "LONG" and e_today.startswith("CROSS_UP_"):
+                patterns.append(f"MD_{e_prev}_TO_{e_today}")
+            elif side == "SHORT" and e_today.startswith("CROSS_DOWN_"):
+                patterns.append(f"MD_{e_prev}_TO_{e_today}")
+    # dedupe
+    return sorted(set(patterns))
+
+
+def sort_events_for_output(events):
+    """Sort events by date first, then by event type for easy copy/paste."""
+
+    return sorted(
+        events,
+        key=lambda e: (
+            e[1],   # evaluation date
+            e[3],   # event label / type
+            e[0],   # symbol
+            e[4],   # side
+            e[2],   # display date string for stability
+        ),
+    )
+
+# ============================================================================
+# MAIN MASTER RUN
+# ============================================================================
+
+def run_master(lookback_days: int = 0):
+    longs = load_tickers(LONGS_FILE)
+    shorts = load_tickers(SHORTS_FILE)
+    symbols = sorted(set(longs + shorts))
+
+    if not symbols:
+        logging.warning("No symbols found in longs/shorts lists.")
+        return
+
+    curr_cache = load_json(CURRENT_CACHE_FILE, default={})
+    prev_cache = load_json(PREV_CACHE_FILE, default={})
+    history = load_history()
+
+    logging.info(f"Refreshing earnings anchors for {len(symbols)} symbols…")
+    all_dates = collect_earnings_dates(symbols)
+    refreshed_curr = 0
+    refreshed_prev = 0
+    missing_anchors = []
+
+    for sym in symbols:
+        dates = all_dates.get(sym, [])
+        if not dates:
+            dates = yf_earnings_dates(sym)
+
+        if not dates:
+            missing_anchors.append(sym)
+            continue
+
+        current_anchor = pick_current_earnings_anchor(dates)
+        if current_anchor:
+            curr_iso = current_anchor.isoformat()
+            if curr_cache.get(sym) != curr_iso:
+                curr_cache[sym] = curr_iso
+                refreshed_curr += 1
+                logging.info(f"{sym}: current anchor -> {current_anchor}")
+
+        previous_anchor = pick_previous_earnings_anchor(dates)
+        if previous_anchor:
+            prev_iso = previous_anchor.isoformat()
+            if prev_cache.get(sym) != prev_iso:
+                prev_cache[sym] = prev_iso
+                refreshed_prev += 1
+                logging.info(f"{sym}: previous anchor -> {previous_anchor}")
+
+    if missing_anchors:
+        logging.warning(
+            "No earnings data found for: " + ", ".join(sorted(missing_anchors))
+        )
+    logging.info(
+        f"Earnings anchors refreshed (current: {refreshed_curr}, previous: {refreshed_prev})."
+    )
+
+    ib = IBApi()
+    ib.connect("127.0.0.1", 7496, clientId=1003)
+    threading.Thread(target=ib.run, daemon=True).start()
+    time.sleep(1.5)
+
+    run_timestamp = datetime.now()
+    today_run = run_timestamp.date()
+    evaluation_dates = [
+        today_run - timedelta(days=delta)
+        for delta in range(lookback_days, 0, -1)
+    ] or [today_run]
+
+    logging.info(
+        "Evaluating AVWAP signals for dates: "
+        + ", ".join(d.isoformat() for d in evaluation_dates)
+    )
+
+    events_for_output = []
+    csv_rows = []
+    feature_rows = []
+    ai_state = {
+        "run_timestamp": run_timestamp.isoformat(timespec="seconds"),
+        "run_date": today_run.isoformat(),
+        "evaluation_dates": [d.isoformat() for d in evaluation_dates],
+        "symbols": {},
+    }
+
+    for sym in symbols:
+        side = "LONG" if sym in longs else "SHORT"
+        curr_iso = curr_cache.get(sym)
+        prev_iso = prev_cache.get(sym)
+
+        if not curr_iso and not prev_iso:
+            logging.warning(f"{sym}: no earnings anchors available.")
+            continue
+
+        # Determine days needed for a single daily fetch
+        days_needed = ATR_LENGTH + 5
+        anchor_dates = []
+        if curr_iso:
+            anchor_dates.append(datetime.fromisoformat(curr_iso).date())
+        if prev_iso:
+            anchor_dates.append(datetime.fromisoformat(prev_iso).date())
+
+        if anchor_dates:
+            max_span = max((today_run - d).days for d in anchor_dates)
+            days_needed = max(days_needed, max_span + 5)
+
+        days_needed = max(days_needed, lookback_days + ATR_LENGTH + 5)
+
+        df = fetch_daily_bars(ib, sym, days_needed)
+        if df.empty:
+            logging.warning(f"{sym}: no daily bars returned.")
+            continue
+
+        df.rename(columns={"time": "date"}, inplace=True)
+        df["datetime"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
+        df = df.dropna(subset=["datetime"])  # drop bad rows
+        df = df.sort_values("datetime").reset_index(drop=True)
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+
+        ai_state["symbols"].setdefault(sym, {})
+
+        for eval_date in evaluation_dates:
+            df_eval = df[df["datetime"].dt.date <= eval_date]
+            if df_eval.empty:
+                logging.warning(f"{sym}: no daily bars up to {eval_date}")
+                continue
+
+            last_trade_date = df_eval["datetime"].iloc[-1].date()
+            dstr = df_eval["datetime"].iloc[-1].strftime("%m/%d")
+
+            if last_trade_date != eval_date:
+                logging.warning(
+                    f"{sym}: last trade date {last_trade_date} != target {eval_date}, skipping"
+                )
+                continue
+
+            logging.info(
+                f"→ Processing {sym} ({side}) with {len(df_eval)} daily bars; target date {last_trade_date}"
+            )
+
+            df_loop = df_eval.copy()
+
+            symbol_events_today = []
+            symbol_multi_day = []
+            current_anchor_meta = None
+            prev_anchor_meta = None
+            symbol_signal_info = {}
+
+            def add_signal(event_name, anchor_type, anchor_date, avwap_value, stdev_value, band_value):
+                symbol_events_today.append(event_name)
+                if event_name not in symbol_signal_info:
+                    symbol_signal_info[event_name] = {
+                        "run_date": eval_date.isoformat(),
+                        "symbol": sym,
+                        "trade_date": last_trade_date.isoformat(),
+                        "side": side,
+                        "anchor_type": anchor_type,
+                        "anchor_date": anchor_date,
+                        "signal_type": event_name,
+                        "avwap_price": _to_float(avwap_value),
+                        "band_price": _to_float(band_value),
+                        "stdev": _to_float(stdev_value),
+                    }
+
+            # Current earnings AVWAP
+            if curr_iso:
+                curr_date = datetime.fromisoformat(curr_iso).date()
+                idxs = df_loop.index[df_loop["datetime"].dt.date == curr_date]
+                if not idxs.empty:
+                    anchor_idx = int(idxs[0])
+                    vwap_c, sd_c, bands_c = calc_anchored_vwap_bands(df_loop, anchor_idx)
+                    if pd.notna(vwap_c) and bands_c:
+                        current_anchor_meta = {
+                            "date": curr_iso,
+                            "vwap": float(vwap_c),
+                            "stdev": float(sd_c),
+                            "bands": {k: float(v) for k, v in bands_c.items()}
+                        }
+                        # crosses (current)
+                        if side == "LONG" and cross_up_through_level(df_loop, vwap_c):
+                            add_signal("CROSS_UP_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
+                        if side == "SHORT" and cross_down_through_level(df_loop, vwap_c):
+                            add_signal("CROSS_DOWN_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
+
+                        for k in (1, 2, 3):
+                            if side == "LONG":
+                                lvl = bands_c.get(f"UPPER_{k}")
+                                if lvl is None:
+                                    continue
+                                if cross_up_through_level(df_loop, lvl):
+                                    lbl = f"CROSS_UP_UPPER_{k}"
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+                            else:
+                                lvl = bands_c.get(f"LOWER_{k}")
+                                if lvl is None:
+                                    continue
+                                if cross_down_through_level(df_loop, lvl):
+                                    lbl = f"CROSS_DOWN_LOWER_{k}"
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+
+                        # bounces (current)
+                        if side == "LONG":
+                            bounce_tests = [
+                                ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
+                                ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                                ("BOUNCE_VWAP", vwap_c),
+                                ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                            ]
+                            for lbl, lvl in bounce_tests:
+                                if bounce_up_at_level(df_loop, lvl):
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+                        else:
+                            bounce_tests = [
+                                ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
+                                ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                                ("BOUNCE_VWAP", vwap_c),
+                                ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                            ]
+                            for lbl, lvl in bounce_tests:
+                                if bounce_down_at_level(df_loop, lvl):
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+
+                    else:
+                        logging.warning(f"{sym}: invalid current AVWAP / bands.")
+                else:
+                    logging.warning(f"{sym}: no candle on current earnings date {curr_date}.")
+
+            # Previous earnings AVWAP
+            if prev_iso:
+                prev_date = datetime.fromisoformat(prev_iso).date()
+                idxs = df_loop.index[df_loop["datetime"].dt.date == prev_date]
+                if not idxs.empty:
+                    anchor_idx = int(idxs[0])
+                    vwap_p, sd_p, bands_p = calc_anchored_vwap_bands(df_loop, anchor_idx)
+                    if pd.notna(vwap_p) and bands_p:
+                        prev_anchor_meta = {
+                            "date": prev_iso,
+                            "vwap": float(vwap_p),
+                            "stdev": float(sd_p),
+                            "bands": {k: float(v) for k, v in bands_p.items()}
+                        }
+
+                        # previous bounces
+                        if side == "LONG":
+                            if bounce_up_at_level(df_loop, bands_p.get("UPPER_1")):
+                                add_signal("PREV_BOUNCE_UPPER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("UPPER_1"))
+                            if bounce_up_at_level(df_loop, vwap_p):
+                                add_signal("PREV_BOUNCE_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+                        else:
+                            if bounce_down_at_level(df_loop, bands_p.get("LOWER_1")):
+                                add_signal("PREV_BOUNCE_LOWER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("LOWER_1"))
+                            if bounce_down_at_level(df_loop, vwap_p):
+                                add_signal("PREV_BOUNCE_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+
+                        # previous crosses
+                        if side == "LONG" and cross_up_through_level(df_loop, vwap_p):
+                            add_signal("PREV_CROSS_UP_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+                        if side == "SHORT" and cross_down_through_level(df_loop, vwap_p):
+                            add_signal("PREV_CROSS_DOWN_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+
+                        if side == "LONG":
+                            for k in (1, 2, 3):
+                                lvl = bands_p.get(f"UPPER_{k}")
+                                if lvl is None:
+                                    continue
+                                if cross_up_through_level(df_loop, lvl):
+                                    add_signal(f"PREV_CROSS_UPPER_{k}", "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
+                        else:
+                            for k in (1, 2, 3):
+                                lvl = bands_p.get(f"LOWER_{k}")
+                                if lvl is None:
+                                    continue
+                                if cross_down_through_level(df_loop, lvl):
+                                    add_signal(f"PREV_CROSS_LOWER_{k}", "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
+                    else:
+                        logging.warning(f"{sym}: invalid previous AVWAP / bands.")
+                else:
+                    logging.warning(f"{sym}: no candle on previous earnings date {prev_date}.")
+
+            # dedupe and sort events for consistency
+            symbol_events_today = sorted(set(symbol_events_today))
+
+            # multi-day pattern detection
+            prev_entries = history.get(sym, [])
+            prev_events = prev_entries[-1]["events"] if prev_entries else []
+            md_patterns = compute_multi_day_patterns(sym, side,
+                                                     symbol_events_today,
+                                                     prev_events)
+            symbol_multi_day = md_patterns
+
+            # include multi-day patterns as events as well
+            full_event_list = symbol_events_today + symbol_multi_day
+
+            for lbl in symbol_events_today:
+                record = symbol_signal_info.get(lbl)
+                if record:
+                    csv_rows.append(record)
+
+            # record in history
+            entry = {
+                "date": eval_date.isoformat(),
+                "side": side,
+                "events": full_event_list
+            }
+            history.setdefault(sym, []).append(entry)
+
+            # append to output lines
+            for lbl in full_event_list:
+                events_for_output.append((sym, eval_date, dstr, lbl, side))
+
+            # prepare daily OHLC slice for AI (recent window only)
+            df_recent = df_loop.tail(60).copy()
+            daily_ohlc = []
+            for _, row in df_recent.iterrows():
+                if pd.isna(row["datetime"]):
+                    continue
+                daily_ohlc.append({
+                    "date": row["datetime"].date().isoformat(),
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": float(row["volume"]),
+                })
+
+            last_row = get_last_daily_row_for_date(daily_ohlc, last_trade_date)
+            last_close = float(last_row["close"]) if last_row else None
+            last_volume = float(last_row["volume"]) if last_row else None
+
+            atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
+            trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
+            has_bounce_event_today = bool(symbol_events_today)
+
+            current_vwap = current_anchor_meta.get("vwap") if current_anchor_meta else None
+            current_upper_1 = (
+                current_anchor_meta.get("bands", {}).get("UPPER_1")
+                if current_anchor_meta else None
+            )
+            current_lower_1 = (
+                current_anchor_meta.get("bands", {}).get("LOWER_1")
+                if current_anchor_meta else None
+            )
+
+            def _distance(level):
+                if last_close is None or level is None:
+                    return None
+                return last_close - level
+
+            def _pct(level):
+                if last_close is None or level is None or level == 0:
+                    return None
+                return (last_close - level) / level * 100
+
+            dist_vwap = _distance(current_vwap)
+            pct_vwap = _pct(current_vwap)
+            dist_upper_1 = _distance(current_upper_1)
+            pct_upper_1 = _pct(current_upper_1)
+            dist_lower_1 = _distance(current_lower_1)
+            pct_lower_1 = _pct(current_lower_1)
+
+            symbol_entry = {
+                "side": side,
+                "last_trade_date": last_trade_date.isoformat(),
+                "current_anchor": current_anchor_meta,
+                "previous_anchor": prev_anchor_meta,
+                "events_today": symbol_events_today,
+                "multi_day_patterns": symbol_multi_day,
+                "events_all_for_day": full_event_list,
+                "daily_ohlc": daily_ohlc,
+                "last_close": last_close,
+                "last_volume": last_volume,
+                "atr20": atr20,
+                "distance_from_current_vwap": dist_vwap,
+                "pct_from_current_vwap": pct_vwap,
+                "distance_from_current_upper_1": dist_upper_1,
+                "pct_from_current_upper_1": pct_upper_1,
+                "distance_from_current_lower_1": dist_lower_1,
+                "pct_from_current_lower_1": pct_lower_1,
+                "trend_20d": trend_label,
+                "has_bounce_event_today": has_bounce_event_today,
+            }
+
+            ai_state["symbols"][sym][last_trade_date.isoformat()] = symbol_entry
+
+            feature_rows.append({
+                "symbol": sym,
+                "side": side,
+                "last_trade_date": last_trade_date.isoformat(),
+                "last_close": last_close,
+                "last_volume": last_volume,
+                "atr20": atr20,
+                "current_anchor_date": current_anchor_meta.get("date") if current_anchor_meta else None,
+                "current_anchor_vwap": current_vwap,
+                "current_anchor_stdev": current_anchor_meta.get("stdev") if current_anchor_meta else None,
+                "distance_from_current_vwap": dist_vwap,
+                "pct_from_current_vwap": pct_vwap,
+                "distance_from_current_upper_1": dist_upper_1,
+                "pct_from_current_upper_1": pct_upper_1,
+                "distance_from_current_lower_1": dist_lower_1,
+                "pct_from_current_lower_1": pct_lower_1,
+                "trend_20d": trend_label,
+                "has_bounce_event_today": has_bounce_event_today,
+                "events_today": ";".join(symbol_events_today),
+            })
+
+            logging.info(
+                f"{sym} ({eval_date}): events_today={symbol_events_today}, "
+                f"multi_day={symbol_multi_day}"
+            )
+
+    ib.disconnect()
+
+    if csv_rows:
+        df_signals = pd.DataFrame(csv_rows)
+        df_signals = df_signals.reindex(columns=AVWAP_CSV_COLUMNS)
+        df_signals.sort_values(["run_date", "trade_date", "symbol", "signal_type"], inplace=True)
+
+        write_header = (
+            not AVWAP_SIGNALS_FILE.exists()
+            or AVWAP_SIGNALS_FILE.stat().st_size == 0
+        )
+        df_signals.to_csv(
+            AVWAP_SIGNALS_FILE,
+            mode="a",
+            index=False,
+            header=write_header,
+        )
+        logging.info(
+            f"Appended {len(df_signals)} AVWAP signals to {AVWAP_SIGNALS_FILE}"
+        )
+    else:
+        logging.info(
+            f"No AVWAP signals generated for {today_run.isoformat()}; nothing appended."
+        )
+
+    # trim history to last N days
+    trim_history(history)
+
+    # write human-readable events file (grouped for easier scanning)
+    sorted_events = sort_events_for_output(events_for_output)
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        for s, eval_date, d, lbl, side in sorted_events:
+            f.write(f"{s},{d},{lbl},{side}\n")
+        f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
+
+    # write unique ticker list for easy import into TradingView
+    event_tickers = sorted({s for s, _, _, _, _ in sorted_events})
+    with open(EVENT_TICKERS_FILE, "w", encoding="utf-8") as f:
+        f.write(",".join(event_tickers))
+
+    feature_columns = [
+        "symbol",
+        "side",
+        "last_trade_date",
+        "last_close",
+        "last_volume",
+        "atr20",
+        "current_anchor_date",
+        "current_anchor_vwap",
+        "current_anchor_stdev",
+        "distance_from_current_vwap",
+        "pct_from_current_vwap",
+        "distance_from_current_upper_1",
+        "pct_from_current_upper_1",
+        "distance_from_current_lower_1",
+        "pct_from_current_lower_1",
+        "trend_20d",
+        "has_bounce_event_today",
+        "events_today",
+    ]
+
+    df_features = pd.DataFrame(feature_rows, columns=feature_columns)
+    df_features.to_csv(D1_FEATURES_FILE, index=False)
+
+    save_json(CURRENT_CACHE_FILE, curr_cache)
+    save_json(PREV_CACHE_FILE, prev_cache)
+    save_history(history)
+    save_json(AI_STATE_FILE, ai_state)
+
+    logging.info(
+        f"Master AVWAP run complete. "
+        f"Events: {OUTPUT_FILE}, AI state: {AI_STATE_FILE}, history: {HISTORY_FILE}"
+    )
+
+# ============================================================================
+# ENTRYPOINT
+# ============================================================================
+
+if __name__ == "__main__":
+    try:
+        user_input = input(
+            "Enter number of days to look back (0 = today only): "
+        ).strip()
+        days_back = int(user_input) if user_input else 0
+    except ValueError:
+        logging.warning("Invalid input; defaulting to 0 days back.")
+        days_back = 0
+
+    if days_back < 0:
+        logging.warning("Negative lookback not allowed; defaulting to 0.")
+        days_back = 0
+
+    run_master(days_back)
