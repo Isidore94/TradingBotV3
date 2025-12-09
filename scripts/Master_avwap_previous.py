@@ -1,9 +1,3 @@
-diff --git a/scripts/Master_avwap_previous.py b/scripts/Master_avwap_previous.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..4f1e0ac5f27ed48c4f2f7d1d524b6de2211f192a
---- /dev/null
-+++ b/scripts/Master_avwap_previous.py
-@@ -0,0 +1,1047 @@
 #!/usr/bin/env python3
 import os
 import time
