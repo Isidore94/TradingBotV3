@@ -4,6 +4,7 @@ import time
 import json
 import logging
 import threading
+import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean
@@ -56,6 +57,7 @@ SHORTS_FILE = ROOT_DIR / "shorts.txt"
 
 CURRENT_CACHE_FILE = DATA_DIR / "earnings_cache.json"
 PREV_CACHE_FILE = DATA_DIR / "prev_earnings_cache.json"
+EARNINGS_DATES_CACHE_FILE = DATA_DIR / "earnings_dates_cache.json"
 HISTORY_FILE = DATA_DIR / "master_avwap_history.json"
 AI_STATE_FILE = DATA_DIR / "master_avwap_ai_state.json"
 D1_FEATURES_FILE = DATA_DIR / "d1_features.csv"
@@ -134,6 +136,14 @@ def load_json(path: Path, default):
 def save_json(path: Path, obj):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
+
+
+def load_earnings_date_cache():
+    return load_json(EARNINGS_DATES_CACHE_FILE, default={"refreshed_on": None, "data": {}})
+
+
+def save_earnings_date_cache(cache_obj):
+    save_json(EARNINGS_DATES_CACHE_FILE, cache_obj)
 
 
 def compute_atr_from_ohlc(daily_rows, last_trade_date, length=ATR_LENGTH):
@@ -273,6 +283,29 @@ def yf_earnings_dates(symbol: str):
     except Exception as e:
         logging.warning(f"{symbol}: yfinance earnings lookup failed: {e}")
         return []
+
+
+def load_or_refresh_earnings(symbols):
+    """
+    Refresh earnings dates at most once per day. Subsequent runs reuse the
+    cache unless new symbols are added.
+    """
+    cache = load_earnings_date_cache()
+    cached_date = cache.get("refreshed_on")
+    cached_data = cache.get("data", {})
+
+    today_iso = datetime.now().date().isoformat()
+    missing_symbols = [s for s in symbols if s not in cached_data]
+    cache_stale = cached_date != today_iso
+
+    if cache_stale or missing_symbols:
+        logging.info("Refreshing earnings date cache from Nasdaq (once per day)…")
+        earnings_data = collect_earnings_dates(symbols)
+        cache = {"refreshed_on": today_iso, "data": earnings_data}
+        save_earnings_date_cache(cache)
+        return earnings_data
+
+    return {sym: cached_data.get(sym, []) for sym in symbols}
 
 # ============================================================================
 # IBKR API
@@ -570,16 +603,22 @@ def run_master():
     prev_cache = load_json(PREV_CACHE_FILE, default={})
     history = load_history()
 
+    earnings_data = load_or_refresh_earnings(symbols)
+    today_iso = datetime.now().date().isoformat()
+    earnings_cache_updated = False
+
     logging.info(f"Refreshing earnings anchors for {len(symbols)} symbols…")
-    all_dates = collect_earnings_dates(symbols)
     refreshed_curr = 0
     refreshed_prev = 0
     missing_anchors = []
 
     for sym in symbols:
-        dates = all_dates.get(sym, [])
+        dates = earnings_data.get(sym, [])
         if not dates:
             dates = yf_earnings_dates(sym)
+            if dates:
+                earnings_data[sym] = dates
+                earnings_cache_updated = True
 
         if not dates:
             missing_anchors.append(sym)
@@ -600,6 +639,9 @@ def run_master():
                 prev_cache[sym] = prev_iso
                 refreshed_prev += 1
                 logging.info(f"{sym}: previous anchor -> {previous_anchor}")
+
+    if earnings_cache_updated:
+        save_earnings_date_cache({"refreshed_on": today_iso, "data": earnings_data})
 
     if missing_anchors:
         logging.warning(
@@ -1002,5 +1044,29 @@ def run_master():
 # ENTRYPOINT
 # ============================================================================
 
+
+def main():
+    parser = argparse.ArgumentParser(description="Run Master AVWAP scanner")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single scan and exit (no hourly loop).",
+    )
+    args = parser.parse_args()
+
+    if args.once:
+        run_master()
+        return
+
+    logging.info("Starting hourly Master AVWAP loop (once per hour)…")
+    while True:
+        start = time.time()
+        run_master()
+        elapsed = time.time() - start
+        sleep_seconds = max(0, 3600 - elapsed)
+        logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run…")
+        time.sleep(sleep_seconds)
+
+
 if __name__ == "__main__":
-    run_master()
+    main()
