@@ -41,18 +41,20 @@ TEXT_COLOR = "#E0E0E0"
 # UI Widgets
 # ──────────────────────────────────────────────────────────────────────────────
 class TickerWidget(QFrame):
-    def __init__(self, ticker, parent=None):
+    def __init__(self, ticker, highlight=False, parent=None):
         super().__init__(parent)
         self.ticker = ticker
         self.setFrameShape(QFrame.StyledPanel)
+        border_color = "#22AA66" if highlight else "#555"
         self.setStyleSheet(
             f"background-color:{DARK_GREY};"
             f"color:{TEXT_COLOR};"
-            "border:1px solid #555;"
+            f"border:1px solid {border_color};"
         )
         layout = QVBoxLayout()
         lbl = QLabel(ticker)
-        lbl.setStyleSheet(f"color:{TEXT_COLOR};font-size:10pt;")
+        font_weight = "bold" if highlight else "normal"
+        lbl.setStyleSheet(f"color:{TEXT_COLOR};font-size:10pt;font-weight:{font_weight};")
         layout.addWidget(lbl)
         self.setLayout(layout)
 
@@ -73,8 +75,12 @@ class TickerListWidget(QScrollArea):
             w.deleteLater()
         self.widgets.clear()
         for t in tickers:
-            if t.strip():
-                w = TickerWidget(t, self)
+            if isinstance(t, tuple):
+                text, highlight = t
+            else:
+                text, highlight = t, False
+            if text.strip():
+                w = TickerWidget(text, highlight=highlight, parent=self)
                 self.layout.addWidget(w)
                 self.widgets.append(w)
 
@@ -254,6 +260,8 @@ class MainWindow(QWidget):
         self.timer.start(1000)
 
         self.last_save = 0
+        self.last_run_marker = None
+        self.seen_events = set()
         self.load_tickers(force=True)
         self.update_clock()
 
@@ -274,7 +282,27 @@ class MainWindow(QWidget):
         except Exception:
             return
         if self.newest_at_top:
-            self.list_widget.set_tickers(list(reversed(lines)))
+            if self.filename == MASTER_EVENTS_FILE:
+                run_markers = [l for l in lines if l.lower().startswith("run completed")]
+                marker = run_markers[-1] if run_markers else None
+                if marker != self.last_run_marker:
+                    self.last_run_marker = marker
+                    self.seen_events.clear()
+
+                display_lines = []
+                for line in lines:
+                    if line.lower().startswith("run completed"):
+                        continue
+                    parsed = _parse_master_event_line(line)
+                    highlight = False
+                    if parsed:
+                        _, _, level, side = parsed
+                        highlight = self._should_flag_event(level, side) and line not in self.seen_events
+                        self.seen_events.add(line)
+                    display_lines.append((line, highlight))
+                self.list_widget.set_tickers(list(reversed(display_lines)))
+            else:
+                self.list_widget.set_tickers(list(reversed(lines)))
         else:
             content = "\n".join(lines)
             if content != self.text_edit.toPlainText():
@@ -295,6 +323,27 @@ class MainWindow(QWidget):
             pass
 
     # ───── copy helpers ─────
+    def _should_flag_event(self, level: str, side: str) -> bool:
+        normalized = level.replace("PREV_", "")
+        side = side.upper()
+
+        if normalized.startswith("CROSS_"):
+            if "VWAP" in normalized:
+                return True
+            if side == "LONG" and normalized.startswith("CROSS_UP_UPPER_1"):
+                return True
+            if side == "SHORT" and normalized.startswith("CROSS_DOWN_LOWER_1"):
+                return True
+
+        if normalized.startswith("BOUNCE_"):
+            if normalized == "BOUNCE_VWAP":
+                return True
+            if side == "LONG" and "UPPER_1" in normalized:
+                return True
+            if side == "SHORT" and "LOWER_1" in normalized:
+                return True
+        return False
+
     def copy_tickers(self):
         if self.newest_at_top:
             content = "\n".join(self.list_widget.get_tickers())
