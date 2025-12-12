@@ -171,6 +171,16 @@ class MainWindow(QWidget):
             xbtn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
             btn_row.addWidget(xbtn)
 
+            xup_btn = QPushButton("Copy Cross Ups")
+            xup_btn.clicked.connect(lambda: self.copy_crosses_by_direction("UP"))
+            xup_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            btn_row.addWidget(xup_btn)
+
+            xdn_btn = QPushButton("Copy Cross Downs")
+            xdn_btn.clicked.connect(lambda: self.copy_crosses_by_direction("DOWN"))
+            xdn_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            btn_row.addWidget(xdn_btn)
+
             vwap_btn = QPushButton("Copy VWAP")
             vwap_btn.clicked.connect(self.copy_vwap)
             vwap_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
@@ -196,6 +206,21 @@ class MainWindow(QWidget):
             bb.clicked.connect(self.copy_bounces)
             bb.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
             btn_row.addWidget(bb)
+
+            bvu = QPushButton("Copy Bounce Upper")
+            bvu.clicked.connect(lambda: self.copy_bounces_by_level("UPPER"))
+            bvu.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            btn_row.addWidget(bvu)
+
+            bvl = QPushButton("Copy Bounce Lower")
+            bvl.clicked.connect(lambda: self.copy_bounces_by_level("LOWER"))
+            bvl.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            btn_row.addWidget(bvl)
+
+            bvv = QPushButton("Copy Bounce VWAP")
+            bvv.clicked.connect(lambda: self.copy_bounces_by_level("VWAP"))
+            bvv.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            btn_row.addWidget(bvv)
 
             cur_btn = QPushButton("Copy Current")
             cur_btn.clicked.connect(lambda: self.copy_avwap_by_scope("current"))
@@ -297,6 +322,19 @@ class MainWindow(QWidget):
                 keep.append(original)
         QApplication.clipboard().setText("\n".join(keep))
 
+    def copy_crosses_by_direction(self, direction: str):
+        direction = direction.upper()
+        if direction not in {"UP", "DOWN"}:
+            return
+        rows = self._visible_master_rows()
+        keep = []
+        prefix = f"CROSS_{direction}_"
+        for original, (_, _, level, _) in rows:
+            normalized = level.replace("PREV_", "")
+            if normalized.startswith(prefix):
+                keep.append(original)
+        QApplication.clipboard().setText("\n".join(keep))
+
     # Copy VWAP taps
     def copy_vwap(self):
         rows = self._visible_master_rows()
@@ -320,6 +358,22 @@ class MainWindow(QWidget):
         keep = []
         for original, (_, _, level, _) in rows:
             if level.startswith("BOUNCE_") or level.startswith("PREV_BOUNCE_"):
+                keep.append(original)
+        QApplication.clipboard().setText("\n".join(keep))
+
+    def copy_bounces_by_level(self, target_level: str):
+        target_level = target_level.upper()
+        rows = self._visible_master_rows()
+        keep = []
+        for original, (_, _, level, _) in rows:
+            normalized = level.replace("PREV_", "")
+            if not normalized.startswith("BOUNCE_"):
+                continue
+            if target_level == "VWAP" and normalized == "BOUNCE_VWAP":
+                keep.append(original)
+            elif target_level == "UPPER" and "BOUNCE_UPPER" in normalized:
+                keep.append(original)
+            elif target_level == "LOWER" and "BOUNCE_LOWER" in normalized:
                 keep.append(original)
         QApplication.clipboard().setText("\n".join(keep))
 
