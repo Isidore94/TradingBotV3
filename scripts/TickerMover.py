@@ -4,6 +4,7 @@
 import sys
 import os
 import re
+import json
 from datetime import datetime
 
 from PyQt5.QtWidgets import (
@@ -20,6 +21,7 @@ SHORTS_FILE        = "shorts.txt"
 LONGS_FILE         = "longs.txt"
 BOUNCERS_FILE      = "bouncers.txt"  # legacy live bouncer feed (HH:MM:SS | SYM | types | side)
 MASTER_EVENTS_FILE = os.path.join("output", "master_avwap_events.txt")
+MASTER_POSITIONS_FILE = os.path.join("output", "master_positions.json")
 
 # Files that can be opened via "Start New Instance"
 # Order: start with shorts, then open others
@@ -28,6 +30,7 @@ FILE_LIST = [
     LONGS_FILE,
     BOUNCERS_FILE,
     MASTER_EVENTS_FILE,
+    MASTER_POSITIONS_FILE,
 ]
 
 next_file_index = 1
@@ -36,6 +39,12 @@ windows = []
 # Theme
 DARK_GREY  = "#2D2D2D"
 TEXT_COLOR = "#E0E0E0"
+POSITION_BAND_GROUPS = {
+    "VWAP": ["VWAP"],
+    "1SD": ["UPPER_1", "LOWER_1"],
+    "2SD": ["UPPER_2", "LOWER_2"],
+    "3SD": ["UPPER_3", "LOWER_3"],
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UI Widgets
@@ -132,6 +141,7 @@ class MainWindow(QWidget):
             BOUNCERS_FILE,
             MASTER_EVENTS_FILE,
         )
+        self.positions_by_scope = {"current": {}, "previous": {}}
 
         self.setWindowTitle(f"TickerMover — {os.path.basename(filename)}")
         self.resize(560, 420)
@@ -156,6 +166,8 @@ class MainWindow(QWidget):
             layout.addWidget(self.list_widget)
         else:
             self.text_edit = DragDropTextEdit(self)
+            if self.filename == MASTER_POSITIONS_FILE:
+                self.text_edit.setReadOnly(True)
             font = self.text_edit.font()
             font.setPointSize(int(font.pointSize() * 0.67))
             self.text_edit.setFont(font)
@@ -206,38 +218,6 @@ class MainWindow(QWidget):
             b3.clicked.connect(lambda: self.copy_sd_band(3))
             b3.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
             btn_row.addWidget(b3)
-
-            # NEW: Copy all bounce-style signals (BOUNCE_* and PREV_BOUNCE_*)
-            bb = QPushButton("Copy Bounces")
-            bb.clicked.connect(self.copy_bounces)
-            bb.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
-            btn_row.addWidget(bb)
-
-            bvu = QPushButton("Copy Bounce Upper")
-            bvu.clicked.connect(lambda: self.copy_bounces_by_level("UPPER"))
-            bvu.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
-            btn_row.addWidget(bvu)
-
-            bvl = QPushButton("Copy Bounce Lower")
-            bvl.clicked.connect(lambda: self.copy_bounces_by_level("LOWER"))
-            bvl.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
-            btn_row.addWidget(bvl)
-
-            bvv = QPushButton("Copy Bounce VWAP")
-            bvv.clicked.connect(lambda: self.copy_bounces_by_level("VWAP"))
-            bvv.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
-            btn_row.addWidget(bvv)
-
-            cur_btn = QPushButton("Copy Current")
-            cur_btn.clicked.connect(lambda: self.copy_avwap_by_scope("current"))
-            cur_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
-            btn_row.addWidget(cur_btn)
-
-            prev_btn = QPushButton("Copy Previous")
-            prev_btn.clicked.connect(lambda: self.copy_avwap_by_scope("previous"))
-            prev_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
-            btn_row.addWidget(prev_btn)
-
             # Dynamic per-event-type buttons for TC2000/TradingView pasting
             self.event_btn_container = QWidget()
             self.event_btn_layout = QGridLayout()
@@ -247,6 +227,8 @@ class MainWindow(QWidget):
             self.event_btn_container.setLayout(self.event_btn_layout)
             self.event_buttons = {}
             self.event_levels = []
+        elif self.filename == MASTER_POSITIONS_FILE:
+            self._add_position_buttons(btn_row)
 
         layout.addLayout(btn_row)
 
@@ -289,6 +271,25 @@ class MainWindow(QWidget):
 
     # ───── file <-> view ─────
     def load_tickers(self, force=False):
+        if self.filename == MASTER_POSITIONS_FILE:
+            try:
+                with open(self.filename, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+
+            pretty = json.dumps(data, indent=2)
+            self.positions_by_scope = {
+                "current": data.get("current", {}),
+                "previous": data.get("previous", {}),
+            }
+
+            if pretty != self.text_edit.toPlainText():
+                self.text_edit.textChanged.disconnect()
+                self.text_edit.setPlainText(pretty)
+                self.text_edit.textChanged.connect(self.text_edit.on_text_changed)
+            return
+
         try:
             with open(self.filename, "r", encoding="utf-8", errors="ignore") as f:
                 lines = [l.strip() for l in f if l.strip()]
@@ -416,6 +417,24 @@ class MainWindow(QWidget):
                 symbols.append(sym)
         QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
+    def _add_position_buttons(self, layout):
+        btn_specs = [
+            ("Copy Current VWAP", "current", "VWAP"),
+            ("Copy Current 1SD", "current", "1SD"),
+            ("Copy Current 2SD", "current", "2SD"),
+            ("Copy Current 3SD", "current", "3SD"),
+            ("Copy Previous VWAP", "previous", "VWAP"),
+            ("Copy Previous 1SD", "previous", "1SD"),
+            ("Copy Previous 2SD", "previous", "2SD"),
+            ("Copy Previous 3SD", "previous", "3SD"),
+        ]
+
+        for label, scope, band in btn_specs:
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _, s=scope, b=band: self.copy_positions(s, b))
+            btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            layout.addWidget(btn)
+
     def copy_events_by_level(self, level: str):
         rows = self._visible_master_rows()
         symbols = [sym for _, (sym, _, lvl, _) in rows if lvl == level]
@@ -457,6 +476,20 @@ class MainWindow(QWidget):
                 symbols.append(sym)
         QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
+    def copy_positions(self, scope: str, band_group: str):
+        scope = scope.lower()
+        band_group = band_group.upper()
+        group_levels = POSITION_BAND_GROUPS.get(band_group)
+        if not group_levels:
+            return
+
+        scope_data = self.positions_by_scope.get(scope, {}) if scope in self.positions_by_scope else {}
+        symbols = []
+        for level in group_levels:
+            symbols.extend(scope_data.get(level, []))
+
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
+
     def _refresh_event_buttons(self):
         if self.filename != MASTER_EVENTS_FILE:
             return
@@ -464,7 +497,7 @@ class MainWindow(QWidget):
         rows = self._visible_master_rows()
         levels = sorted({
             level for _, (_, _, level, _) in rows
-            if level.replace("PREV_", "").startswith(("CROSS_", "BOUNCE_"))
+            if level.replace("PREV_", "").startswith("CROSS_")
         })
         if levels == getattr(self, "event_levels", []):
             return
