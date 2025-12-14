@@ -25,6 +25,7 @@ OUTPUT_DIR = ROOT_DIR / "output"
 LOG_DIR = ROOT_DIR / "logs"
 AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
 EVENT_TICKERS_FILE = OUTPUT_DIR / "master_avwap_event_tickers.txt"
+MASTER_POSITIONS_FILE = OUTPUT_DIR / "master_positions.json"
 AVWAP_CSV_COLUMNS = [
     "run_date",
     "symbol",
@@ -72,6 +73,15 @@ RECENT_DAYS = 10              # if earnings < RECENT_DAYS, use prior one for "cu
 ATR_LENGTH = 20
 ATR_MULT = 0.05               # eps / push = 0.05 * ATR(20)
 HISTORY_DAYS_TO_KEEP = 20     # multi-day context window
+POSITION_LEVELS = [
+    "VWAP",
+    "UPPER_1",
+    "UPPER_2",
+    "UPPER_3",
+    "LOWER_1",
+    "LOWER_2",
+    "LOWER_3",
+]
 
 # ============================================================================
 # LOGGING
@@ -400,6 +410,45 @@ def _to_float(value):
         pass
     return float(value)
 
+
+def classify_position_by_band(last_close: float, anchor_meta: dict):
+    """Return the band label the last_close sits above (or at)."""
+    if last_close is None or not anchor_meta:
+        return None
+
+    bands = anchor_meta.get("bands", {}) if anchor_meta else {}
+
+    level_points = []
+    for name, level in [
+        ("LOWER_3", bands.get("LOWER_3")),
+        ("LOWER_2", bands.get("LOWER_2")),
+        ("LOWER_1", bands.get("LOWER_1")),
+        ("VWAP", anchor_meta.get("vwap")),
+        ("UPPER_1", bands.get("UPPER_1")),
+        ("UPPER_2", bands.get("UPPER_2")),
+        ("UPPER_3", bands.get("UPPER_3")),
+    ]:
+        if level is None:
+            continue
+        try:
+            if pd.isna(level):
+                continue
+        except TypeError:
+            pass
+        level_points.append((name, float(level)))
+
+    if not level_points:
+        return None
+
+    level_points.sort(key=lambda x: x[1])
+    category = level_points[0][0]
+    for name, level in level_points:
+        if last_close >= level:
+            category = name
+        else:
+            break
+    return category
+
 # ============================================================================
 # ATR + BOUNCE / CROSS LOGIC
 # ============================================================================
@@ -616,6 +665,10 @@ def run_master(lookback_days: int = 0):
     events_for_output = []
     csv_rows = []
     feature_rows = []
+    positions = {
+        "current": {lvl: [] for lvl in POSITION_LEVELS},
+        "previous": {lvl: [] for lvl in POSITION_LEVELS},
+    }
     ai_state = {
         "run_timestamp": run_timestamp.isoformat(timespec="seconds"),
         "run_date": today_run.isoformat(),
@@ -902,6 +955,15 @@ def run_master(lookback_days: int = 0):
             dist_lower_1 = _distance(current_lower_1)
             pct_lower_1 = _pct(current_lower_1)
 
+            if eval_date == today_run:
+                current_position = classify_position_by_band(last_close, current_anchor_meta)
+                if current_position:
+                    positions["current"].setdefault(current_position, []).append(sym)
+
+                previous_position = classify_position_by_band(last_close, prev_anchor_meta)
+                if previous_position:
+                    positions["previous"].setdefault(previous_position, []).append(sym)
+
             symbol_entry = {
                 "side": side,
                 "last_trade_date": last_trade_date.isoformat(),
@@ -1015,6 +1077,22 @@ def run_master(lookback_days: int = 0):
 
     df_features = pd.DataFrame(feature_rows, columns=feature_columns)
     df_features.to_csv(D1_FEATURES_FILE, index=False)
+
+    positions_payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "levels": POSITION_LEVELS,
+        "current": {
+            lvl: sorted(set(positions["current"].get(lvl, [])))
+            for lvl in POSITION_LEVELS
+        },
+        "previous": {
+            lvl: sorted(set(positions["previous"].get(lvl, [])))
+            for lvl in POSITION_LEVELS
+        },
+    }
+
+    with open(MASTER_POSITIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(positions_payload, f, indent=2)
 
     save_json(CURRENT_CACHE_FILE, curr_cache)
     save_json(PREV_CACHE_FILE, prev_cache)
