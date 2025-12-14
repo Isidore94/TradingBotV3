@@ -360,10 +360,11 @@ class MainWindow(QWidget):
 
     def copy_tickers(self):
         if self.newest_at_top:
-            content = "\n".join(self.list_widget.get_tickers())
+            lines = self.list_widget.get_tickers()
         else:
-            content = self.text_edit.toPlainText()
-        QApplication.clipboard().setText(content)
+            lines = self.text_edit.toPlainText().splitlines()
+        symbols = _collect_symbols(lines)
+        QApplication.clipboard().setText(_format_symbols(symbols))
 
     # visible master events rows (for MASTER_EVENTS_FILE window)
     def _visible_master_rows(self):
@@ -379,89 +380,92 @@ class MainWindow(QWidget):
     # Copy crossers only (unchanged)
     def copy_crossers(self):
         rows = self._visible_master_rows()
-        keep = []
-        for original, (_, _, level, _) in rows:
+        symbols = []
+        for _, (sym, _, level, _) in rows:
             if level.startswith("CROSS_UP_") or level.startswith("CROSS_DOWN_"):
-                keep.append(original)
-        QApplication.clipboard().setText("\n".join(keep))
+                symbols.append(sym)
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     def copy_crosses_by_direction(self, direction: str):
         direction = direction.upper()
         if direction not in {"UP", "DOWN"}:
             return
         rows = self._visible_master_rows()
-        keep = []
+        symbols = []
         prefix = f"CROSS_{direction}_"
-        for original, (_, _, level, _) in rows:
+        for _, (sym, _, level, _) in rows:
             normalized = level.replace("PREV_", "")
             if normalized.startswith(prefix):
-                keep.append(original)
-        QApplication.clipboard().setText("\n".join(keep))
+                symbols.append(sym)
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     # Copy VWAP taps
     def copy_vwap(self):
         rows = self._visible_master_rows()
-        keep = [original for original, (_, _, level, _) in rows if level == "VWAP"]
-        QApplication.clipboard().setText("\n".join(keep))
+        symbols = [sym for _, (sym, _, level, _) in rows if level == "VWAP"]
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     # Copy Nσ band proximity (UPPER_n / LOWER_n exact)
     def copy_sd_band(self, n: int):
         target_upper = f"UPPER_{n}"
         target_lower = f"LOWER_{n}"
         rows = self._visible_master_rows()
-        keep = []
-        for original, (_, _, level, _) in rows:
+        symbols = []
+        for _, (sym, _, level, _) in rows:
             if level == target_upper or level == target_lower:
-                keep.append(original)
-        QApplication.clipboard().setText("\n".join(keep))
+                symbols.append(sym)
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     def copy_events_by_level(self, level: str):
         rows = self._visible_master_rows()
-        keep = [original for original, (_, _, lvl, _) in rows if lvl == level]
-        QApplication.clipboard().setText("\n".join(keep))
+        symbols = [sym for _, (sym, _, lvl, _) in rows if lvl == level]
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     # NEW: Copy all bounce signals from master_avwap_events
     def copy_bounces(self):
         rows = self._visible_master_rows()
-        keep = []
-        for original, (_, _, level, _) in rows:
+        symbols = []
+        for _, (sym, _, level, _) in rows:
             if level.startswith("BOUNCE_") or level.startswith("PREV_BOUNCE_"):
-                keep.append(original)
-        QApplication.clipboard().setText("\n".join(keep))
+                symbols.append(sym)
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     def copy_bounces_by_level(self, target_level: str):
         target_level = target_level.upper()
         rows = self._visible_master_rows()
-        keep = []
-        for original, (_, _, level, _) in rows:
+        symbols = []
+        for _, (sym, _, level, _) in rows:
             normalized = level.replace("PREV_", "")
             if not normalized.startswith("BOUNCE_"):
                 continue
             if target_level == "VWAP" and normalized == "BOUNCE_VWAP":
-                keep.append(original)
+                symbols.append(sym)
             elif target_level == "UPPER" and "BOUNCE_UPPER" in normalized:
-                keep.append(original)
+                symbols.append(sym)
             elif target_level == "LOWER" and "BOUNCE_LOWER" in normalized:
-                keep.append(original)
-        QApplication.clipboard().setText("\n".join(keep))
+                symbols.append(sym)
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     def copy_avwap_by_scope(self, scope: str):
         scope = scope.lower()
         rows = self._visible_master_rows()
-        keep = []
-        for original, (_, _, level, _) in rows:
+        symbols = []
+        for _, (sym, _, level, _) in rows:
             if scope == "current" and not level.startswith("PREV_"):
-                keep.append(original)
+                symbols.append(sym)
             elif scope == "previous" and level.startswith("PREV_"):
-                keep.append(original)
-        QApplication.clipboard().setText("\n".join(keep))
+                symbols.append(sym)
+        QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
     def _refresh_event_buttons(self):
         if self.filename != MASTER_EVENTS_FILE:
             return
 
         rows = self._visible_master_rows()
-        levels = sorted({level for _, (_, _, level, _) in rows})
+        levels = sorted({
+            level for _, (_, _, level, _) in rows
+            if level.replace("PREV_", "").startswith(("CROSS_", "BOUNCE_"))
+        })
         if levels == getattr(self, "event_levels", []):
             return
 
@@ -528,6 +532,36 @@ def _parse_master_event_line(line: str):
     if side not in ("LONG", "SHORT"):
         return None
     return sym, mmdd, level, side
+
+
+def _dedupe(items):
+    seen = set()
+    out = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _format_symbols(symbols):
+    return ", ".join(symbols)
+
+
+def _collect_symbols(lines):
+    symbols = []
+    for line in lines:
+        parsed = _parse_master_event_line(line)
+        sym = None
+        if parsed:
+            sym = parsed[0]
+        else:
+            match = re.search(SYMBOL_RE, line.upper())
+            if match:
+                sym = match.group(0)
+        if sym:
+            symbols.append(sym)
+    return _dedupe(symbols)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main
