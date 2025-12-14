@@ -189,6 +189,11 @@ class MainWindow(QWidget):
             xbtn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
             btn_row.addWidget(xbtn)
 
+            bbtn = QPushButton("Copy Bouncers")
+            bbtn.clicked.connect(self.copy_bounces)
+            bbtn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            btn_row.addWidget(bbtn)
+
             xup_btn = QPushButton("Copy Cross Ups")
             xup_btn.clicked.connect(lambda: self.copy_crosses_by_direction("UP"))
             xup_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
@@ -497,7 +502,7 @@ class MainWindow(QWidget):
         rows = self._visible_master_rows()
         levels = sorted({
             level for _, (_, _, level, _) in rows
-            if level.replace("PREV_", "").startswith("CROSS_")
+            if level.replace("PREV_", "").startswith(("CROSS_", "BOUNCE_"))
         })
         if levels == getattr(self, "event_levels", []):
             return
