@@ -74,6 +74,7 @@ MAX_LOOKBACK_DAYS = 130       # Nasdaq earnings scan window
 RECENT_DAYS = 10              # if earnings < RECENT_DAYS, use prior one for "current"
 ATR_LENGTH = 20
 ATR_MULT = 0.05               # eps / push = 0.05 * ATR(20)
+BOUNCE_ATR_TOL_PCT = 0.001    # 0.1% of ATR(20) distance allowance for bounces
 HISTORY_DAYS_TO_KEEP = 20     # multi-day context window
 POSITION_LEVELS = [
     "VWAP",
@@ -518,10 +519,10 @@ def bounce_up_at_level(df: pd.DataFrame, level: float) -> bool:
     atr = get_atr20(df)
     if atr is None:
         return False
-    eps = ATR_MULT * atr
+    eps = BOUNCE_ATR_TOL_PCT * atr
     push = ATR_MULT * atr
     B, C = df.iloc[-2], df.iloc[-1]
-    touched = B.low <= level + eps
+    touched = abs(B.low - level) <= eps
     reclaimed = B.close >= level
     confirm = C.close > B.close and C.close >= level + push
     return bool(touched and reclaimed and confirm)
@@ -532,10 +533,10 @@ def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
     atr = get_atr20(df)
     if atr is None:
         return False
-    eps = ATR_MULT * atr
+    eps = BOUNCE_ATR_TOL_PCT * atr
     push = ATR_MULT * atr
     B, C = df.iloc[-2], df.iloc[-1]
-    touched = B.high >= level - eps
+    touched = abs(B.high - level) <= eps
     rejected = B.close <= level
     confirm = C.close < B.close and C.close <= level - push
     return bool(touched and rejected and confirm)
