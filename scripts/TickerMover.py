@@ -8,7 +8,7 @@ from datetime import datetime
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QTextEdit, QVBoxLayout, QPushButton,
-    QMessageBox, QLabel, QScrollArea, QFrame, QHBoxLayout
+    QMessageBox, QLabel, QScrollArea, QFrame, QHBoxLayout, QGridLayout
 )
 from PyQt5.QtCore import Qt, QFileSystemWatcher, QTimer, QDateTime
 from PyQt5.QtGui import QPalette, QColor
@@ -238,7 +238,20 @@ class MainWindow(QWidget):
             prev_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
             btn_row.addWidget(prev_btn)
 
+            # Dynamic per-event-type buttons for TC2000/TradingView pasting
+            self.event_btn_container = QWidget()
+            self.event_btn_layout = QGridLayout()
+            self.event_btn_layout.setContentsMargins(0, 0, 0, 0)
+            self.event_btn_layout.setHorizontalSpacing(6)
+            self.event_btn_layout.setVerticalSpacing(6)
+            self.event_btn_container.setLayout(self.event_btn_layout)
+            self.event_buttons = {}
+            self.event_levels = []
+
         layout.addLayout(btn_row)
+
+        if self.filename == MASTER_EVENTS_FILE:
+            layout.addWidget(self.event_btn_container)
 
         # Start New Instance button for editable files
         if not self.newest_at_top:
@@ -301,6 +314,7 @@ class MainWindow(QWidget):
                         self.seen_events.add(line)
                     display_lines.append((line, highlight))
                 self.list_widget.set_tickers(list(reversed(display_lines)))
+                self._refresh_event_buttons()
             else:
                 self.list_widget.set_tickers(list(reversed(lines)))
         else:
@@ -401,6 +415,11 @@ class MainWindow(QWidget):
                 keep.append(original)
         QApplication.clipboard().setText("\n".join(keep))
 
+    def copy_events_by_level(self, level: str):
+        rows = self._visible_master_rows()
+        keep = [original for original, (_, _, lvl, _) in rows if lvl == level]
+        QApplication.clipboard().setText("\n".join(keep))
+
     # NEW: Copy all bounce signals from master_avwap_events
     def copy_bounces(self):
         rows = self._visible_master_rows()
@@ -436,6 +455,32 @@ class MainWindow(QWidget):
             elif scope == "previous" and level.startswith("PREV_"):
                 keep.append(original)
         QApplication.clipboard().setText("\n".join(keep))
+
+    def _refresh_event_buttons(self):
+        if self.filename != MASTER_EVENTS_FILE:
+            return
+
+        rows = self._visible_master_rows()
+        levels = sorted({level for _, (_, _, level, _) in rows})
+        if levels == getattr(self, "event_levels", []):
+            return
+
+        for btn in getattr(self, "event_buttons", {}).values():
+            self.event_btn_layout.removeWidget(btn)
+            btn.deleteLater()
+        self.event_buttons = {}
+
+        columns = 3
+        for idx, level in enumerate(levels):
+            btn = QPushButton(f"Copy {level}")
+            btn.clicked.connect(lambda _, lvl=level: self.copy_events_by_level(lvl))
+            btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+            row = idx // columns
+            col = idx % columns
+            self.event_btn_layout.addWidget(btn, row, col)
+            self.event_buttons[level] = btn
+
+        self.event_levels = levels
 
     def start_new_instance(self):
         global next_file_index
