@@ -65,10 +65,32 @@ def load_tickers_from_file(path: str):
 
 # ── Earnings Date Cache ─────────────────────────────────────────
 def load_earnings_cache():
+    def normalize_entry(entry):
+        """Normalize cache entry to a dict with sorted date list."""
+        if isinstance(entry, str):
+            dates = [entry]
+            return {"dates": sorted(set(dates), reverse=True)}
+
+        if isinstance(entry, dict):
+            dates = entry.get("dates") or []
+            if isinstance(dates, str):
+                dates = [dates]
+            dates = [d for d in dates if isinstance(d, str)]
+            dates = sorted(set(dates), reverse=True)
+            out = {"dates": dates}
+            if entry.get("current"):
+                out["current"] = entry.get("current")
+            if entry.get("previous"):
+                out["previous"] = entry.get("previous")
+            return out
+
+        return {"dates": []}
+
     if os.path.exists(EARNINGS_CACHE_FILE):
         with open(EARNINGS_CACHE_FILE, "r", encoding="utf-8") as f:
             try:
-                return json.load(f)
+                raw = json.load(f)
+                return {sym: normalize_entry(val) for sym, val in raw.items()}
             except json.JSONDecodeError:
                 logging.warning("Earnings cache file is corrupt; starting fresh.")
                 return {}
@@ -123,6 +145,29 @@ def select_best_date(dates):
         return datetime.fromisoformat(dates[1]).date()
     return most
 
+
+def pick_current_earnings_anchor(dates):
+    """
+    Dates: ISO strings desc (most recent first).
+    If the most recent earnings date is within RECENT_DAYS, use the second
+    most recent to avoid fresh-gap ambiguity; otherwise use the most recent.
+    """
+    if not dates:
+        return None
+
+    today = datetime.now().date()
+    first_date = datetime.fromisoformat(dates[0]).date()
+    if (today - first_date).days <= RECENT_DAYS and len(dates) > 1:
+        return datetime.fromisoformat(dates[1]).date()
+    return first_date
+
+
+def pick_previous_earnings_anchor(dates):
+    """Second most recent past earnings date, if available."""
+    if len(dates) < 2:
+        return None
+    return datetime.fromisoformat(dates[1]).date()
+
 # ── yfinance fallback ───────────────────────────────────────────
 def get_anchor_date(symbol: str, cache: dict):
     try:
@@ -138,6 +183,21 @@ def get_anchor_date(symbol: str, cache: dict):
     except Exception as e:
         logging.warning(f"yfinance lookup failed for {symbol}: {e}")
     return None
+
+
+def get_anchor_dates(symbol: str):
+    """Return list of past earnings dates (ISO strings) via yfinance fallback."""
+    try:
+        t = yf.Ticker(symbol)
+        ed = t.get_earnings_dates(limit=8)
+        ed.index = ed.index.tz_localize(None)
+        past = ed[ed.index < pd.Timestamp.today().tz_localize(None)]
+        if not past.empty:
+            sorted_past = sorted(past.index, reverse=True)
+            return [d.date().isoformat() for d in sorted_past]
+    except Exception as e:
+        logging.warning(f"yfinance lookup failed for {symbol}: {e}")
+    return []
 
 # ── IBKR API Wrapper ────────────────────────────────────────────
 class IBApi(EWrapper, EClient):
@@ -333,7 +393,9 @@ def detect_bounces_for_symbol(sym: str,
                               vwap: float,
                               bands: dict,
                               is_long: bool,
-                              is_short: bool):
+                              is_short: bool,
+                              prefix: str = "",
+                              atr: float | None = None):
     """
     Longs:
       - BOUNCE_LOWER_2, BOUNCE_LOWER_1, BOUNCE_VWAP, BOUNCE_UPPER_1
@@ -345,7 +407,9 @@ def detect_bounces_for_symbol(sym: str,
     if df is None or df.empty or len(df) < ATR_LENGTH + 3:
         return results
 
-    atr = get_atr20(df)
+    label_prefix = f"{prefix}_" if prefix else ""
+
+    atr = atr if atr is not None else get_atr20(df)
     if atr is None:
         return results
 
@@ -360,25 +424,25 @@ def detect_bounces_for_symbol(sym: str,
     # Longs
     if is_long:
         if l2 is not None and bounce_up_at_level(df, l2, atr):
-            results.append((sym, dstr, "BOUNCE_LOWER_2", "LONG"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_LOWER_2", "LONG"))
         if l1 is not None and bounce_up_at_level(df, l1, atr):
-            results.append((sym, dstr, "BOUNCE_LOWER_1", "LONG"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_LOWER_1", "LONG"))
         if vwap is not None and not pd.isna(vwap) and bounce_up_at_level(df, vwap, atr):
-            results.append((sym, dstr, "BOUNCE_VWAP", "LONG"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_VWAP", "LONG"))
         if u1 is not None and bounce_up_at_level(df, u1, atr):
-            results.append((sym, dstr, "BOUNCE_UPPER_1", "LONG"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_UPPER_1", "LONG"))
 
     # Shorts
     if is_short:
         if u2 is not None and bounce_down_at_level(df, u2, atr):
-            results.append((sym, dstr, "BOUNCE_UPPER_2", "SHORT"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_UPPER_2", "SHORT"))
         if u1 is not None and bounce_down_at_level(df, u1, atr):
-            results.append((sym, dstr, "BOUNCE_UPPER_1", "SHORT"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_UPPER_1", "SHORT"))
         if vwap is not None and not pd.isna(vwap) and bounce_down_at_level(df, vwap, atr):
-            results.append((sym, dstr, "BOUNCE_VWAP", "SHORT"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_VWAP", "SHORT"))
         # LOWER_1 as resistance after breakdown
         if l1 is not None and bounce_down_at_level(df, l1, atr):
-            results.append((sym, dstr, "BOUNCE_LOWER_1", "SHORT"))
+            results.append((sym, dstr, f"{label_prefix}BOUNCE_LOWER_1", "SHORT"))
 
     return results
 
@@ -395,14 +459,14 @@ def run_once():
     cache = load_earnings_cache()
 
     # Fill cache via Nasdaq for uncached
-    uncached = [s for s in symbols if s not in cache]
+    uncached = [s for s in symbols if s not in cache or not cache[s].get("dates")]
     if uncached:
         logging.info(f"Fetching earnings for {len(uncached)} uncached symbols…")
         all_dates = collect_earnings_dates(uncached)
         for s, dates in all_dates.items():
-            bd = select_best_date(dates)
-            if bd:
-                cache[s] = bd.isoformat()
+            past_dates = sorted(dates, reverse=True)
+            if past_dates:
+                cache[s] = {"dates": past_dates}
 
     # IB connection
     ib = IBApi()
@@ -420,28 +484,50 @@ def run_once():
     cross_ups_long = []
     cross_downs_short = []
     bounces = []
+    previous_crosses = []
+    previous_bounces = []
 
     for sym in symbols:
         is_long = sym in longs
         is_short = sym in shorts
         logging.info(f"→ Processing {sym} ({'LONG' if is_long else 'SHORT' if is_short else 'NA'})")
 
-        # Anchor date from cache or yfinance
-        ed_str = cache.get(sym)
-        ed = datetime.fromisoformat(ed_str).date() if ed_str else get_anchor_date(sym, cache)
-        if not ed:
+        # Anchor dates from cache or yfinance
+        cache_entry = cache.get(sym, {})
+        dates = cache_entry.get("dates", [])
+        if not dates:
+            dates = get_anchor_dates(sym)
+            if dates:
+                cache[sym] = {"dates": dates}
+
+        if not dates:
             logging.warning(f"No earnings date for {sym}")
             continue
 
-        days = max(ATR_LENGTH + 3, (today - ed).days + 3)
+        dates = sorted(set(dates), reverse=True)
+        current_anchor = pick_current_earnings_anchor(dates)
+        previous_anchor = pick_previous_earnings_anchor(dates)
+
+        cache[sym] = {"dates": dates}
+        if current_anchor:
+            cache[sym]["current"] = current_anchor.isoformat()
+        if previous_anchor:
+            cache[sym]["previous"] = previous_anchor.isoformat()
+
+        anchors = [d for d in (current_anchor, previous_anchor) if d]
+        if not anchors:
+            logging.warning(f"No valid anchors for {sym}")
+            continue
+
+        days = max(ATR_LENGTH + 3, max((today - d).days for d in anchors) + 3)
         df = fetch_daily_bars(ib, sym, days)
         if df.empty:
             logging.warning(f"No price data for {sym}")
             continue
 
-        idxs = df.index[df["datetime"].dt.date == ed]
+        idxs = df.index[df["datetime"].dt.date == current_anchor]
         if idxs.empty:
-            logging.warning(f"No candle on earnings date {ed} for {sym}")
+            logging.warning(f"No candle on earnings date {current_anchor} for {sym}")
             continue
         anchor_idx = int(idxs[0])
 
@@ -458,6 +544,7 @@ def run_once():
         last_date = last_row["datetime"].date()
         close     = last_row["close"]
         dstr      = last_date.strftime("%m/%d")
+        atr       = get_atr20(df)
 
         # ── Tier classification ────────────────────────────────
         if is_long:
@@ -515,8 +602,51 @@ def run_once():
 
         # ── ATR-based Bounce Detection ─────────────────────────
         if OUTPUT_BOUNCES and (is_long or is_short):
-            sym_bounces = detect_bounces_for_symbol(sym, df, vwap, bands, is_long, is_short)
+            sym_bounces = detect_bounces_for_symbol(sym, df, vwap, bands, is_long, is_short, atr=atr)
             bounces.extend(sym_bounces)
+
+        # ── Previous anchor AVWAP / bands ─────────────────────
+        if previous_anchor:
+            prev_idxs = df.index[df["datetime"].dt.date == previous_anchor]
+            if prev_idxs.empty:
+                logging.warning(f"No candle on previous earnings date {previous_anchor} for {sym}")
+            else:
+                prev_vwap, prev_sd, prev_bands = calc_anchored_vwap_bands(df, int(prev_idxs[0]))
+                if pd.isna(prev_vwap) or pd.isna(prev_sd) or not prev_bands:
+                    logging.warning(f"NaN previous bands for {sym}, skipping previous checks.")
+                else:
+                    if len(df) >= 2:
+                        prev_close_val = df.iloc[-2]["close"]
+                        curr_close_val = df.iloc[-1]["close"]
+
+                        if is_long:
+                            if pd.notna(prev_vwap) and prev_close_val <= prev_vwap < curr_close_val:
+                                previous_crosses.append((sym, dstr, "PREV_CROSS_UP_VWAP", "LONG"))
+                            for k in (1, 2, 3):
+                                lvl = prev_bands.get(f"UPPER_{k}")
+                                if pd.notna(lvl) and prev_close_val <= lvl < curr_close_val:
+                                    previous_crosses.append((sym, dstr, f"PREV_CROSS_UPPER_{k}", "LONG"))
+
+                        if is_short:
+                            if pd.notna(prev_vwap) and prev_close_val >= prev_vwap > curr_close_val:
+                                previous_crosses.append((sym, dstr, "PREV_CROSS_DOWN_VWAP", "SHORT"))
+                            for k in (1, 2, 3):
+                                lvl = prev_bands.get(f"LOWER_{k}")
+                                if pd.notna(lvl) and prev_close_val >= lvl > curr_close_val:
+                                    previous_crosses.append((sym, dstr, f"PREV_CROSS_LOWER_{k}", "SHORT"))
+
+                    if OUTPUT_BOUNCES and (is_long or is_short):
+                        sym_prev_bounces = detect_bounces_for_symbol(
+                            sym,
+                            df,
+                            prev_vwap,
+                            prev_bands,
+                            is_long,
+                            is_short,
+                            prefix="PREV",
+                            atr=atr,
+                        )
+                        previous_bounces.extend(sym_prev_bounces)
 
     # ── Writer: LONGS first then SHORTS ─────────────────────────
     def write_category(f, items):
@@ -549,8 +679,13 @@ def run_once():
         if OUTPUT_CROSS_DOWNS_SHORT:
             write_category(f, cross_downs_short)
             f.write("\n")
+        if OUTPUT_CROSS_UPS_LONG or OUTPUT_CROSS_DOWNS_SHORT:
+            write_category(f, previous_crosses)
+            f.write("\n")
         if OUTPUT_BOUNCES:
             write_category(f, bounces)
+            f.write("\n")
+            write_category(f, previous_bounces)
             f.write("\n")
         f.write(f"Run completed at {datetime.now().strftime('%H:%M:%S')}\n")
 
