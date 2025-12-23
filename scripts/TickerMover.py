@@ -399,9 +399,11 @@ class MainWindow(QWidget):
         rows = self._visible_master_rows()
         symbols = []
         prefix = f"CROSS_{direction}_"
-        for _, (sym, _, level, _) in rows:
+        for _, (sym, _, level, side) in rows:
             normalized = level.replace("PREV_", "")
             if normalized.startswith(prefix):
+                symbols.append(sym)
+            elif level == "VWAP" and ((direction == "UP" and side == "LONG") or (direction == "DOWN" and side == "SHORT")):
                 symbols.append(sym)
         QApplication.clipboard().setText(_format_symbols(_dedupe(symbols)))
 
