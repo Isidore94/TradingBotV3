@@ -353,44 +353,84 @@ def create_contract(symbol: str) -> Contract:
     c.currency = "USD"
     return c
 
-def fetch_daily_bars(ib: IBApi, symbol: str, days: int) -> pd.DataFrame:
-    reqId = int(time.time() * 1000) % (2**31 - 1)
-    ib.data[reqId] = []
-    ib.ready[reqId] = False
+def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
+    """Fetch daily OHLCV bars from Yahoo Finance."""
 
-    if days > 365:
-        dur = f"{max(1, days // 365)} Y"
-    else:
-        dur = f"{max(2, days)} D"
+    period = f"{max(days, ATR_LENGTH + 5)}d"
+    try:
+        df = yf.download(symbol, period=period, interval="1d", auto_adjust=False, progress=False)
+    except Exception as e:
+        logging.error(f"{symbol}: failed to download daily bars from Yahoo: {e}")
+        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
 
-    ib.reqHistoricalData(
-        reqId,
-        create_contract(symbol),
-        "",
-        dur,
-        "1 day",
-        "TRADES",
-        1,
-        1,
-        False,
-        []
+    if df is None or df.empty:
+        logging.warning(f"{symbol}: no daily data returned from Yahoo.")
+        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+
+    df = df.reset_index()
+    date_col = "Date" if "Date" in df.columns else df.columns[0]
+    df.rename(
+        columns={
+            date_col: "datetime",
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Adj Close": "adj_close",
+            "Volume": "volume",
+        },
+        inplace=True,
     )
 
-    for _ in range(60):
-        if ib.ready.get(reqId):
-            break
-        time.sleep(0.5)
+    df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
+    df = df.dropna(subset=["open", "high", "low", "close", "volume"])
+    df = df.sort_values("datetime")
+    return df[["datetime", "open", "high", "low", "close", "volume"]]
 
-    bars = ib.data.pop(reqId, [])
-    ib.ready.pop(reqId, None)
 
-    df = pd.DataFrame(bars)
-    if df.empty:
-        return df
+def fetch_daily_bars(ib: IBApi, symbol: str, days: int) -> pd.DataFrame:
+    # Try IBKR first
+    try:
+        reqId = int(time.time() * 1000) % (2**31 - 1)
+        ib.data[reqId] = []
+        ib.ready[reqId] = False
 
-    df["datetime"] = pd.to_datetime(df["time"], format="%Y%m%d", errors="coerce")
-    df = df.sort_values("datetime").reset_index(drop=True)
-    return df
+        if days > 365:
+            dur = f"{max(1, days // 365)} Y"
+        else:
+            dur = f"{max(2, days)} D"
+
+        ib.reqHistoricalData(
+            reqId,
+            create_contract(symbol),
+            "",
+            dur,
+            "1 day",
+            "TRADES",
+            1,
+            1,
+            False,
+            []
+        )
+
+        for _ in range(60):
+            if ib.ready.get(reqId):
+                break
+            time.sleep(0.5)
+
+        bars = ib.data.pop(reqId, [])
+        ib.ready.pop(reqId, None)
+
+        df = pd.DataFrame(bars)
+        if not df.empty:
+            df["datetime"] = pd.to_datetime(df["time"], format="%Y%m%d", errors="coerce")
+            df = df.sort_values("datetime").reset_index(drop=True)
+            return df
+        logging.warning(f"{symbol}: no daily bars returned from IBKR, falling back to Yahoo.")
+    except Exception as e:
+        logging.error(f"{symbol}: IBKR daily fetch failed ({e}), falling back to Yahoo.")
+
+    return fetch_daily_bars_from_yahoo(symbol, days)
 
 # ============================================================================
 # AVWAP CALCULATION
