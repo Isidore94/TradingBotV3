@@ -11,6 +11,13 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
+## Repository layout
+- `scripts/` – Intraday and daily-running bots ready for out-of-the-box use (`master_avwap.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
+- `ai/` – Offline labeling, journaling, and model-training utilities kept separate from the live scripts.
+- `maintenance/` – Workspace cleanup helpers that are intentionally outside the main script directory.
+- `data/`, `logs/`, `output/` – Generated artifacts. These are created as needed by the scripts.
+- `longs.txt`, `shorts.txt` – Input watchlists consumed by the scanners.
+
 ## Required inputs
 - `longs.txt` – one ticker per line for long-side scanning.
 - `shorts.txt` – one ticker per line for short-side scanning.
