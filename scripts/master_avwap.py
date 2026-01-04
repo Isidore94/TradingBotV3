@@ -730,6 +730,12 @@ def run_master():
         "current": {lvl: [] for lvl in POSITION_LEVELS},
         "previous": {lvl: [] for lvl in POSITION_LEVELS},
     }
+    range_buckets = {
+        "long_avwap_to_upper_1": [],
+        "long_upper_1_to_upper_2": [],
+        "short_avwap_to_lower_1": [],
+        "short_lower_1_to_lower_2": [],
+    }
     ai_state = {
         "run_timestamp": datetime.now().isoformat(timespec="seconds"),
         "run_date": today_run.isoformat(),
@@ -966,8 +972,16 @@ def run_master():
             current_anchor_meta.get("bands", {}).get("UPPER_1")
             if current_anchor_meta else None
         )
+        current_upper_2 = (
+            current_anchor_meta.get("bands", {}).get("UPPER_2")
+            if current_anchor_meta else None
+        )
         current_lower_1 = (
             current_anchor_meta.get("bands", {}).get("LOWER_1")
+            if current_anchor_meta else None
+        )
+        current_lower_2 = (
+            current_anchor_meta.get("bands", {}).get("LOWER_2")
             if current_anchor_meta else None
         )
 
@@ -987,6 +1001,23 @@ def run_master():
         pct_upper_1 = _pct(current_upper_1)
         dist_lower_1 = _distance(current_lower_1)
         pct_lower_1 = _pct(current_lower_1)
+
+        def _between(level_a, level_b):
+            if last_close is None or level_a is None or level_b is None:
+                return False
+            low, high = sorted([level_a, level_b])
+            return low <= last_close <= high
+
+        if side == "LONG":
+            if _between(current_vwap, current_upper_1):
+                range_buckets["long_avwap_to_upper_1"].append(sym)
+            if _between(current_upper_1, current_upper_2):
+                range_buckets["long_upper_1_to_upper_2"].append(sym)
+        else:
+            if _between(current_lower_1, current_vwap):
+                range_buckets["short_avwap_to_lower_1"].append(sym)
+            if _between(current_lower_2, current_lower_1):
+                range_buckets["short_lower_1_to_lower_2"].append(sym)
 
         current_position = classify_position_by_band(last_close, current_anchor_meta)
         if current_position:
@@ -1079,10 +1110,36 @@ def run_master():
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         for s, d, lbl, side in sorted_events:
             f.write(f"{s},{d},{lbl},{side}\n")
+
+        def _write_range_line(label, tickers):
+            items = ", ".join(sorted(set(tickers))) if tickers else "None"
+            f.write(f"{label}: {items}\n")
+
+        f.write("\nPrice ranges (current anchors):\n")
+        _write_range_line(
+            "Longs between AVWAP and UPPER_1",
+            range_buckets["long_avwap_to_upper_1"],
+        )
+        _write_range_line(
+            "Longs between UPPER_1 and UPPER_2",
+            range_buckets["long_upper_1_to_upper_2"],
+        )
+        _write_range_line(
+            "Shorts between AVWAP and LOWER_1",
+            range_buckets["short_avwap_to_lower_1"],
+        )
+        _write_range_line(
+            "Shorts between LOWER_1 and LOWER_2",
+            range_buckets["short_lower_1_to_lower_2"],
+        )
         f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
 
     # write unique ticker list for easy import into TradingView
-    event_tickers = sorted({s for s, _, _, _ in sorted_events})
+    range_tickers = set()
+    for symbols_in_range in range_buckets.values():
+        range_tickers.update(symbols_in_range)
+
+    event_tickers = sorted({s for s, _, _, _ in sorted_events} | range_tickers)
     with open(EVENT_TICKERS_FILE, "w", encoding="utf-8") as f:
         f.write(",".join(event_tickers))
 
