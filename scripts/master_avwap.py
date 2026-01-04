@@ -1174,14 +1174,49 @@ def run_master():
         )
         f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
 
-    # write unique ticker list for easy import into TradingView
-    range_tickers = set()
-    for symbols_in_range in range_buckets.values():
-        range_tickers.update(symbols_in_range)
+    # write grouped ticker lists for easy copy/paste into TradingView/TC2000
+    event_buckets = {}
+    for sym, _, lbl, side in sorted_events:
+        event_buckets.setdefault(lbl, {"LONG": [], "SHORT": []})[side].append(sym)
 
-    event_tickers = sorted({s for s, _, _, _ in sorted_events} | range_tickers)
+    def _event_label_sort_key(label: str):
+        def group_rank(lbl: str) -> int:
+            if lbl.startswith("PREV_"):
+                return 0
+            if lbl.startswith("MD_"):
+                return 2
+            return 1
+
+        def level_rank(lbl: str) -> int:
+            for idx, token in enumerate(EVENT_LEVEL_SORT_ORDER):
+                if token in lbl:
+                    return idx
+            return len(EVENT_LEVEL_SORT_ORDER)
+
+        return (group_rank(label), level_rank(label), label)
+
+    def _fmt_items(values):
+        return ", ".join(sorted(set(values))) if values else "None"
+
     with open(EVENT_TICKERS_FILE, "w", encoding="utf-8") as f:
-        f.write(",".join(event_tickers))
+        f.write("AVWAP crosses and bounces by event type\n")
+        for lbl in sorted(event_buckets.keys(), key=_event_label_sort_key):
+            for side in ("LONG", "SHORT"):
+                tickers = sorted(set(event_buckets[lbl][side]))
+                if not tickers:
+                    continue
+                display_label = lbl.capitalize()
+                f.write(f"{display_label}, {side.capitalize()}: {', '.join(tickers)}\n")
+
+        f.write("\nPrice ranges (current anchors)\n")
+        range_labels = [
+            ("Longs between AVWAP and UPPER_1", "long_avwap_to_upper_1"),
+            ("Longs between UPPER_1 and UPPER_2", "long_upper_1_to_upper_2"),
+            ("Shorts between AVWAP and LOWER_1", "short_avwap_to_lower_1"),
+            ("Shorts between LOWER_1 and LOWER_2", "short_lower_1_to_lower_2"),
+        ]
+        for label, key in range_labels:
+            f.write(f"{label}: {_fmt_items(range_buckets[key])}\n")
 
     feature_columns = [
         "symbol",
