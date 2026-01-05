@@ -36,8 +36,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 LOG_DIR = ROOT_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-LONGS_FILENAME = "longs.txt"
-SHORTS_FILENAME = "shorts.txt"
+LONGS_FILENAME = ROOT_DIR / "longs.txt"
+SHORTS_FILENAME = ROOT_DIR / "shorts.txt"
 BOUNCE_LOG_FILENAME = LOG_DIR / "bouncers.txt"
 INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
 ATR_PERIOD = 20
