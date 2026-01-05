@@ -409,22 +409,25 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
 
     df = df.reset_index()
+
+    # Handle potential MultiIndex columns (e.g., when yfinance returns columns like
+    # ('Open', 'SPGI')) by flattening to the last element of the tuple and then
+    # normalising to lowercase for easier downstream handling.
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[-1] if isinstance(c, tuple) else c for c in df.columns]
+
     date_col = "Date" if "Date" in df.columns else df.columns[0]
-    df.rename(
-        columns={
-            date_col: "datetime",
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Adj Close": "adj_close",
-            "Volume": "volume",
-        },
-        inplace=True,
-    )
+    df.rename(columns={date_col: "datetime"}, inplace=True)
+    df.rename(columns={c: c.lower() for c in df.columns}, inplace=True)
+
+    required = {"open", "high", "low", "close", "volume"}
+    missing = required - set(df.columns)
+    if missing:
+        logging.error(f"{symbol}: missing expected columns from Yahoo response: {sorted(missing)}")
+        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
 
     df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
-    df = df.dropna(subset=["open", "high", "low", "close", "volume"])
+    df = df.dropna(subset=list(required))
     df = df.sort_values("datetime")
     return df[["datetime", "open", "high", "low", "close", "volume"]]
 
@@ -852,7 +855,7 @@ def run_master():
         last_trade_date = df["datetime"].iloc[-1].date()
         dstr = df["datetime"].iloc[-1].strftime("%m/%d")
 
-        logging.info(f"→ Processing {sym} ({side}) with {len(df)} daily bars; last date {last_trade_date}")
+        logging.info(f"-> Processing {sym} ({side}) with {len(df)} daily bars; last date {last_trade_date}")
 
         symbol_events_today = []
         symbol_multi_day = []
