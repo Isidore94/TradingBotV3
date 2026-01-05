@@ -218,23 +218,35 @@ def fetch_earnings_for_date(date_str: str):
         time.sleep(0.3)
         return []
 
-def collect_earnings_dates(symbols):
+def collect_earnings_dates(symbols, fetch_fn=fetch_earnings_for_date, base_sleep=0.5):
     """
     Return dict: sym -> sorted list of past earnings dates (YYYY-MM-DD), most recent first.
+
+    Short-circuits once every symbol has at least one earnings date, and reduces
+    throttle after the first discovery to speed up remaining lookups.
     """
     symbol_dates = {sym: [] for sym in symbols}
     today = datetime.now().date()
+    pending = set(symbols)
 
     for delta in range(MAX_LOOKBACK_DAYS):
         date = today - timedelta(days=delta)
-        rows = fetch_earnings_for_date(date.isoformat())
-        time.sleep(0.5)  # throttle
+        rows = fetch_fn(date.isoformat())
         for row in rows:
             sym = row.get("symbol", "").upper()
             if sym in symbol_dates:
                 ds = date.isoformat()
                 if ds not in symbol_dates[sym]:
                     symbol_dates[sym].append(ds)
+                    pending.discard(sym)
+
+        if not pending:
+            logging.info("Collected earnings dates for all symbols; stopping early.")
+            break
+
+        sleep_duration = base_sleep if len(pending) == len(symbols) else min(base_sleep, 0.2)
+        if sleep_duration:
+            time.sleep(sleep_duration)
 
     for sym, dates in symbol_dates.items():
         past = [d for d in dates
@@ -243,6 +255,35 @@ def collect_earnings_dates(symbols):
         symbol_dates[sym] = past
 
     return symbol_dates
+
+
+def dry_run_collect_earnings_dates_short_circuit():
+    """
+    Dry-run helper to validate collect_earnings_dates short-circuits once all
+    symbols have an earnings date. Uses a mocked fetch to avoid network calls.
+    """
+    symbols = ["AAA", "BBB", "CCC"]
+    today = datetime.now().date()
+
+    schedule = {
+        today.isoformat(): [{"symbol": "AAA"}],
+        (today - timedelta(days=1)).isoformat(): [{"symbol": "BBB"}],
+        (today - timedelta(days=2)).isoformat(): [{"symbol": "CCC"}],
+        (today - timedelta(days=3)).isoformat(): [{"symbol": "AAA"}],
+    }
+
+    calls = []
+
+    def mock_fetch(date_str: str):
+        calls.append(date_str)
+        return schedule.get(date_str, [])
+
+    results = collect_earnings_dates(symbols, fetch_fn=mock_fetch, base_sleep=0)
+
+    assert len(calls) == 3, f"Expected 3 fetches before short-circuiting, got {len(calls)}"
+    assert all(results[sym] for sym in symbols), f"Missing earnings data for: {results}"
+
+    return {"calls": calls, "results": results}
 
 def pick_current_earnings_anchor(dates):
     """
