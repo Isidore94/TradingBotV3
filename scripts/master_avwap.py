@@ -609,14 +609,15 @@ def bounce_up_at_level(df: pd.DataFrame, level: float) -> bool:
 
     # Same-day touch-and-reclaim (bounce happens on latest bar)
     touched_today = abs(C.low - level) <= eps
-    confirm_today = C.close >= level + push
-    if touched_today and confirm_today:
+    confirm_today = C.close >= level
+    confirm_push_today = C.close >= level + push
+    if touched_today and (confirm_today or confirm_push_today):
         return True
 
     # Two-day pattern: yesterday touched/reclaimed, today confirms follow-through
     touched = abs(B.low - level) <= eps
     reclaimed = B.close >= level
-    confirm = C.close > B.close and C.close >= level + push
+    confirm = C.close > B.close and (C.close >= level or C.close >= level + push)
     return bool(touched and reclaimed and confirm)
 
 def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
@@ -631,14 +632,15 @@ def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
 
     # Same-day touch-and-reject (bounce happens on latest bar)
     touched_today = abs(C.high - level) <= eps
-    confirm_today = C.close <= level - push
-    if touched_today and confirm_today:
+    confirm_today = C.close <= level
+    confirm_push_today = C.close <= level - push
+    if touched_today and (confirm_today or confirm_push_today):
         return True
 
     # Two-day pattern: yesterday touched/rejected, today confirms follow-through
     touched = abs(B.high - level) <= eps
     rejected = B.close <= level
-    confirm = C.close < B.close and C.close <= level - push
+    confirm = C.close < B.close and (C.close <= level or C.close <= level - push)
     return bool(touched and rejected and confirm)
 
 def cross_up_through_level(df: pd.DataFrame, level: float) -> bool:
@@ -918,18 +920,26 @@ def run_master():
                     # bounces (current)
                     if side == "LONG":
                         bounce_tests = [
-                            ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
                             ("BOUNCE_VWAP", vwap_c),
+                            ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                            ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
+                            ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
                             ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                            ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
+                            ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
                         ]
                         for lbl, lvl in bounce_tests:
                             if bounce_up_at_level(df, lvl):
                                 add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
                     else:
                         bounce_tests = [
-                            ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
                             ("BOUNCE_VWAP", vwap_c),
+                            ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                            ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
+                            ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
                             ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                            ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
+                            ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
                         ]
                         for lbl, lvl in bounce_tests:
                             if bounce_down_at_level(df, lvl):
@@ -957,19 +967,31 @@ def run_master():
 
                     # previous bounces
                     if side == "LONG":
-                        if bounce_up_at_level(df, bands_p.get("LOWER_1")):
-                            add_signal("PREV_BOUNCE_LOWER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("LOWER_1"))
-                        if bounce_up_at_level(df, bands_p.get("UPPER_1")):
-                            add_signal("PREV_BOUNCE_UPPER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("UPPER_1"))
-                        if bounce_up_at_level(df, vwap_p):
-                            add_signal("PREV_BOUNCE_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+                        prev_bounce_tests = [
+                            ("PREV_BOUNCE_VWAP", vwap_p),
+                            ("PREV_BOUNCE_LOWER_1", bands_p.get("LOWER_1")),
+                            ("PREV_BOUNCE_LOWER_2", bands_p.get("LOWER_2")),
+                            ("PREV_BOUNCE_LOWER_3", bands_p.get("LOWER_3")),
+                            ("PREV_BOUNCE_UPPER_1", bands_p.get("UPPER_1")),
+                            ("PREV_BOUNCE_UPPER_2", bands_p.get("UPPER_2")),
+                            ("PREV_BOUNCE_UPPER_3", bands_p.get("UPPER_3")),
+                        ]
+                        for lbl, lvl in prev_bounce_tests:
+                            if bounce_up_at_level(df, lvl):
+                                add_signal(lbl, "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
                     else:
-                        if bounce_down_at_level(df, bands_p.get("UPPER_1")):
-                            add_signal("PREV_BOUNCE_UPPER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("UPPER_1"))
-                        if bounce_down_at_level(df, bands_p.get("LOWER_1")):
-                            add_signal("PREV_BOUNCE_LOWER_1", "PREVIOUS", prev_iso, vwap_p, sd_p, bands_p.get("LOWER_1"))
-                        if bounce_down_at_level(df, vwap_p):
-                            add_signal("PREV_BOUNCE_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
+                        prev_bounce_tests = [
+                            ("PREV_BOUNCE_VWAP", vwap_p),
+                            ("PREV_BOUNCE_UPPER_1", bands_p.get("UPPER_1")),
+                            ("PREV_BOUNCE_UPPER_2", bands_p.get("UPPER_2")),
+                            ("PREV_BOUNCE_UPPER_3", bands_p.get("UPPER_3")),
+                            ("PREV_BOUNCE_LOWER_1", bands_p.get("LOWER_1")),
+                            ("PREV_BOUNCE_LOWER_2", bands_p.get("LOWER_2")),
+                            ("PREV_BOUNCE_LOWER_3", bands_p.get("LOWER_3")),
+                        ]
+                        for lbl, lvl in prev_bounce_tests:
+                            if bounce_down_at_level(df, lvl):
+                                add_signal(lbl, "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
 
                     # previous crosses
                     if side == "LONG" and cross_up_through_level(df, vwap_p):
