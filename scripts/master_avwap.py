@@ -63,6 +63,7 @@ HISTORY_FILE = DATA_DIR / "master_avwap_history.json"
 AI_STATE_FILE = DATA_DIR / "master_avwap_ai_state.json"
 D1_FEATURES_FILE = DATA_DIR / "d1_features.csv"
 OUTPUT_FILE = OUTPUT_DIR / "master_avwap_events.txt"
+STDEV_RANGE_FILE = OUTPUT_DIR / "master_avwap_stdev2_3.txt"
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
 HEADERS = {
@@ -738,6 +739,42 @@ def sort_events_for_output(events):
         ),
     )
 
+
+def closes_between_bands(
+    df: pd.DataFrame,
+    lower: float,
+    upper: float,
+    min_days: int = 4,
+) -> bool:
+    if df is None or df.empty or lower is None or upper is None or min_days <= 0:
+        return False
+    if len(df) < min_days:
+        return False
+    low, high = sorted([lower, upper])
+    recent = df.tail(min_days)
+    closes = recent["close"].tolist()
+    if any(pd.isna(value) for value in closes):
+        return False
+    return all(low <= float(value) <= high for value in closes)
+
+
+def write_stdev_range_report(path: Path, range_hits: dict, cross_hits: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("AVWAP 2nd-3rd stdev multi-day range + 2nd stdev crosses\n")
+        f.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        long_range = ", ".join(sorted(set(range_hits.get("long", [])))) or "None"
+        short_range = ", ".join(sorted(set(range_hits.get("short", [])))) or "None"
+        f.write("Traded between 2nd and 3rd stdev for >= 4 days (current anchors)\n")
+        f.write(f"Longs (UPPER_2 to UPPER_3): {long_range}\n")
+        f.write(f"Shorts (LOWER_3 to LOWER_2): {short_range}\n\n")
+
+        long_cross = ", ".join(sorted(set(cross_hits.get("long", [])))) or "None"
+        short_cross = ", ".join(sorted(set(cross_hits.get("short", [])))) or "None"
+        f.write("Crosses through 2nd stdev (current anchors)\n")
+        f.write(f"Longs crossing up UPPER_2: {long_cross}\n")
+        f.write(f"Shorts crossing down LOWER_2: {short_cross}\n")
+
 # ============================================================================
 # MAIN MASTER RUN
 # ============================================================================
@@ -822,6 +859,8 @@ def run_master():
         "short_avwap_to_lower_1": [],
         "short_lower_1_to_lower_2": [],
     }
+    stdev_range_hits = {"long": [], "short": []}
+    stdev_cross_hits = {"long": [], "short": []}
     ai_state = {
         "run_timestamp": datetime.now().isoformat(timespec="seconds"),
         "run_date": today_run.isoformat(),
@@ -1082,12 +1121,20 @@ def run_master():
             current_anchor_meta.get("bands", {}).get("UPPER_2")
             if current_anchor_meta else None
         )
+        current_upper_3 = (
+            current_anchor_meta.get("bands", {}).get("UPPER_3")
+            if current_anchor_meta else None
+        )
         current_lower_1 = (
             current_anchor_meta.get("bands", {}).get("LOWER_1")
             if current_anchor_meta else None
         )
         current_lower_2 = (
             current_anchor_meta.get("bands", {}).get("LOWER_2")
+            if current_anchor_meta else None
+        )
+        current_lower_3 = (
+            current_anchor_meta.get("bands", {}).get("LOWER_3")
             if current_anchor_meta else None
         )
 
@@ -1124,6 +1171,18 @@ def run_master():
                 range_buckets["short_avwap_to_lower_1"].append(sym)
             if _between(current_lower_2, current_lower_1):
                 range_buckets["short_lower_1_to_lower_2"].append(sym)
+
+        if current_anchor_meta:
+            if side == "LONG":
+                if closes_between_bands(df, current_upper_2, current_upper_3, 4):
+                    stdev_range_hits["long"].append(sym)
+                if cross_up_through_level(df, current_upper_2):
+                    stdev_cross_hits["long"].append(sym)
+            else:
+                if closes_between_bands(df, current_lower_3, current_lower_2, 4):
+                    stdev_range_hits["short"].append(sym)
+                if cross_down_through_level(df, current_lower_2):
+                    stdev_cross_hits["short"].append(sym)
 
         current_position = classify_position_by_band(last_close, current_anchor_meta)
         if current_position:
@@ -1283,6 +1342,8 @@ def run_master():
         ]
         for label, key in range_labels:
             f.write(f"{label}: {_fmt_items(range_buckets[key])}\n")
+
+    write_stdev_range_report(STDEV_RANGE_FILE, stdev_range_hits, stdev_cross_hits)
 
     feature_columns = [
         "symbol",
