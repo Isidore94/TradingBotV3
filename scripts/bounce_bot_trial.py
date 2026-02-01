@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+
+from ibapi.client import EClient
+from ibapi.contract import Contract
+from ibapi.wrapper import EWrapper
 
 
 @dataclass
@@ -19,8 +24,53 @@ class Tc2000VwapResult:
     eod_vwap_series: pd.Series
 
 
-def _parse_bars(csv_path: Path) -> pd.DataFrame:
-    df = pd.read_csv(csv_path)
+class IbHistoricalClient(EWrapper, EClient):
+    def __init__(self) -> None:
+        EClient.__init__(self, self)
+        self._data: list[dict[str, float | int | str]] = []
+        self._data_ready = threading.Event()
+        self._connected = threading.Event()
+        self._errors: list[str] = []
+
+    def nextValidId(self, orderId: int) -> None:
+        self._connected.set()
+
+    def error(self, reqId: int, errorCode: int, errorString: str) -> None:
+        self._errors.append(f"ReqId={reqId} Code={errorCode} Msg={errorString}")
+
+    def historicalData(self, reqId: int, bar) -> None:
+        self._data.append(
+            {
+                "time": bar.date,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume,
+            }
+        )
+
+    def historicalDataEnd(self, reqId: int, start: str, end: str) -> None:
+        self._data_ready.set()
+
+    def wait_for_connection(self, timeout: float) -> bool:
+        return self._connected.wait(timeout=timeout)
+
+    def wait_for_data(self, timeout: float) -> bool:
+        return self._data_ready.wait(timeout=timeout)
+
+    def consume_data(self) -> list[dict[str, float | int | str]]:
+        return list(self._data)
+
+    def consume_errors(self) -> list[str]:
+        return list(self._errors)
+
+
+def _bars_to_dataframe(bars: list[dict[str, float | int | str]]) -> pd.DataFrame:
+    if not bars:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(bars)
     required = {"time", "open", "high", "low", "close", "volume"}
     missing = required - set(df.columns)
     if missing:
@@ -47,6 +97,63 @@ def _parse_bars(csv_path: Path) -> pd.DataFrame:
         df["open"] + df["high"] + df["low"] + df["close"]
     ) / 4.0
     return df
+
+
+def _create_stock_contract(symbol: str) -> Contract:
+    contract = Contract()
+    contract.symbol = symbol
+    contract.secType = "STK"
+    contract.exchange = "SMART"
+    contract.currency = "USD"
+    return contract
+
+
+def _fetch_ib_bars(
+    symbol: str,
+    host: str,
+    port: int,
+    client_id: int,
+    duration: str,
+    bar_size: str,
+    use_rth: int,
+    timeout: float,
+) -> list[dict[str, float | int | str]]:
+    client = IbHistoricalClient()
+    client.connect(host, port, clientId=client_id)
+    api_thread = threading.Thread(target=client.run, daemon=True)
+    api_thread.start()
+
+    if not client.wait_for_connection(timeout):
+        client.disconnect()
+        raise RuntimeError("Timed out waiting for IB API connection.")
+
+    req_id = 1001
+    contract = _create_stock_contract(symbol)
+    client.reqHistoricalData(
+        reqId=req_id,
+        contract=contract,
+        endDateTime="",
+        durationStr=duration,
+        barSizeSetting=bar_size,
+        whatToShow="TRADES",
+        useRTH=use_rth,
+        formatDate=1,
+        keepUpToDate=False,
+        chartOptions=[],
+    )
+
+    if not client.wait_for_data(timeout):
+        client.disconnect()
+        raise RuntimeError("Timed out waiting for IB historical data.")
+
+    client.disconnect()
+    errors = client.consume_errors()
+    if errors:
+        print("IB API warnings/errors:")
+        for message in errors:
+            print(f" - {message}")
+
+    return client.consume_data()
 
 
 def _warn_if_not_five_minute_bars(df: pd.DataFrame) -> None:
@@ -128,7 +235,46 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Trial TC2000-style VWAP calculations using 5-minute bars."
     )
-    parser.add_argument("csv", type=Path, help="CSV file with time/open/high/low/close/volume columns")
+    parser.add_argument("symbol", help="Ticker symbol to request from IB.")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="IB Gateway/TWS host (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=7496,
+        help="IB Gateway/TWS port (default: 7496).",
+    )
+    parser.add_argument(
+        "--client-id",
+        type=int,
+        default=125,
+        help="IB API client id (default: 125).",
+    )
+    parser.add_argument(
+        "--duration",
+        default="5 D",
+        help="IB duration string for historical data (default: 5 D).",
+    )
+    parser.add_argument(
+        "--bar-size",
+        default="5 mins",
+        help="IB bar size setting (default: 5 mins).",
+    )
+    parser.add_argument(
+        "--use-rth",
+        type=int,
+        default=1,
+        help="Use regular trading hours (1=yes, 0=no). Default 1.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=20.0,
+        help="Seconds to wait for IB connection/data (default: 20).",
+    )
     parser.add_argument(
         "--out",
         type=Path,
@@ -136,7 +282,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    df = _parse_bars(args.csv)
+    bars = _fetch_ib_bars(
+        symbol=args.symbol,
+        host=args.host,
+        port=args.port,
+        client_id=args.client_id,
+        duration=args.duration,
+        bar_size=args.bar_size,
+        use_rth=args.use_rth,
+        timeout=args.timeout,
+    )
+    df = _bars_to_dataframe(bars)
+    if df.empty:
+        raise RuntimeError("No historical bars returned from IB.")
     _warn_if_not_five_minute_bars(df)
     result = calculate_tc2000_vwaps(df)
 
