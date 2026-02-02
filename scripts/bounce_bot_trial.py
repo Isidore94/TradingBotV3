@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import threading
-from datetime import timedelta
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,10 +18,11 @@ from ibapi.wrapper import EWrapper
 @dataclass
 class Tc2000VwapResult:
     current_vwap: float | None
-    previous_vwap: float | None
-    previous_anchor_vwap: float | None
+    previous_day_vwap: float | None
+    eod_avwap: float | None
     current_vwap_series: pd.Series
-    previous_anchor_vwap_series: pd.Series
+    previous_day_vwap_series: pd.Series
+    eod_avwap_series: pd.Series
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -205,6 +205,7 @@ def calculate_tc2000_vwaps(df: pd.DataFrame) -> Tc2000VwapResult:
             None,
             pd.Series([], dtype=float),
             pd.Series([], dtype=float),
+            pd.Series([], dtype=float),
         )
 
     unique_dates = sorted(df["datetime"].dt.date.unique())
@@ -217,30 +218,35 @@ def calculate_tc2000_vwaps(df: pd.DataFrame) -> Tc2000VwapResult:
     current_vwap_series = _calculate_vwap_series(today_df)
     current_vwap = current_vwap_series.iloc[-1] if not current_vwap_series.empty else None
 
-    previous_vwap_series = _calculate_vwap_series(previous_df)
-    previous_vwap = previous_vwap_series.iloc[-1] if not previous_vwap_series.empty else None
-
-    yesterday_date = current_date - timedelta(days=1)
-    yesterday_df = df[df["datetime"].dt.date == yesterday_date]
-
-    if yesterday_df.empty:
-        previous_anchor_vwap_series = current_vwap_series.copy()
-        previous_anchor_vwap = current_vwap
+    if previous_df.empty:
+        previous_day_vwap_series = current_vwap_series.copy()
+        previous_day_vwap = current_vwap
+        eod_avwap_series = current_vwap_series.copy()
+        eod_avwap = current_vwap
     else:
-        anchored_df = pd.concat([yesterday_df.tail(1), today_df])
-        previous_anchor_vwap_series = _calculate_vwap_series(anchored_df)
-        previous_anchor_vwap = (
-            previous_anchor_vwap_series.iloc[-1]
-            if not previous_anchor_vwap_series.empty
+        previous_day_df = pd.concat([previous_df, today_df])
+        previous_day_vwap_series = _calculate_vwap_series(previous_day_df)
+        previous_day_vwap = (
+            previous_day_vwap_series.iloc[-1]
+            if not previous_day_vwap_series.empty
+            else None
+        )
+
+        eod_anchor_df = pd.concat([previous_df.tail(1), today_df])
+        eod_avwap_series = _calculate_vwap_series(eod_anchor_df)
+        eod_avwap = (
+            eod_avwap_series.iloc[-1]
+            if not eod_avwap_series.empty
             else None
         )
 
     return Tc2000VwapResult(
         current_vwap=current_vwap,
-        previous_vwap=previous_vwap,
-        previous_anchor_vwap=previous_anchor_vwap,
+        previous_day_vwap=previous_day_vwap,
+        eod_avwap=eod_avwap,
         current_vwap_series=current_vwap_series,
-        previous_anchor_vwap_series=previous_anchor_vwap_series,
+        previous_day_vwap_series=previous_day_vwap_series,
+        eod_avwap_series=eod_avwap_series,
     )
 
 
@@ -248,16 +254,19 @@ def _attach_series(
     df: pd.DataFrame,
     today_df: pd.DataFrame,
     current_vwap_series: pd.Series,
-    previous_anchor_vwap_series: pd.Series,
-    previous_vwap: float | None,
+    previous_day_vwap_series: pd.Series,
+    eod_avwap_series: pd.Series,
 ) -> pd.DataFrame:
     output = today_df.copy()
     output["tc2000_vwap"] = current_vwap_series.to_list()
-    if not previous_anchor_vwap_series.empty:
-        output["tc2000_previous_avwap"] = previous_anchor_vwap_series.tail(len(today_df)).to_list()
+    if not previous_day_vwap_series.empty:
+        output["tc2000_previous_day_vwap"] = previous_day_vwap_series.tail(len(today_df)).to_list()
     else:
-        output["tc2000_previous_avwap"] = None
-    output["tc2000_previous_vwap"] = previous_vwap
+        output["tc2000_previous_day_vwap"] = None
+    if not eod_avwap_series.empty:
+        output["tc2000_eod_avwap"] = eod_avwap_series.tail(len(today_df)).to_list()
+    else:
+        output["tc2000_eod_avwap"] = None
     output = output.drop(columns=["typical_price"]) if "typical_price" in output.columns else output
     return output
 
@@ -347,8 +356,8 @@ def main() -> None:
 
         print(f"TC2000 VWAP snapshot ({symbol})")
         print(f"Current VWAP: {result.current_vwap}")
-        print(f"Previous Day VWAP (EOD): {result.previous_vwap}")
-        print(f"Previous Day AVWAP (continued): {result.previous_anchor_vwap}")
+        print(f"Previous Day VWAP: {result.previous_day_vwap}")
+        print(f"EOD AVWAP: {result.eod_avwap}")
 
         if args.out:
             current_date = df["datetime"].dt.date.iloc[-1]
@@ -357,8 +366,8 @@ def main() -> None:
                 df,
                 today_df,
                 result.current_vwap_series,
-                result.previous_anchor_vwap_series,
-                result.previous_vwap,
+                result.previous_day_vwap_series,
+                result.eod_avwap_series,
             )
             output_path = args.out
             if multiple_symbols:
