@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import threading
+from datetime import timedelta
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -219,11 +220,14 @@ def calculate_tc2000_vwaps(df: pd.DataFrame) -> Tc2000VwapResult:
     previous_vwap_series = _calculate_vwap_series(previous_df)
     previous_vwap = previous_vwap_series.iloc[-1] if not previous_vwap_series.empty else None
 
-    if previous_df.empty:
-        previous_anchor_vwap_series = pd.Series([], dtype=float)
-        previous_anchor_vwap = None
+    yesterday_date = current_date - timedelta(days=1)
+    yesterday_df = df[df["datetime"].dt.date == yesterday_date]
+
+    if yesterday_df.empty:
+        previous_anchor_vwap_series = current_vwap_series.copy()
+        previous_anchor_vwap = current_vwap
     else:
-        anchored_df = pd.concat([previous_df.tail(1), today_df])
+        anchored_df = pd.concat([yesterday_df.tail(1), today_df])
         previous_anchor_vwap_series = _calculate_vwap_series(anchored_df)
         previous_anchor_vwap = (
             previous_anchor_vwap_series.iloc[-1]
