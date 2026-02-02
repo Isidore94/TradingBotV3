@@ -263,372 +263,231 @@ class BounceBot(EWrapper, EClient):
         return vwap
     
     def calculate_vwap_with_stdev_bands(self, df, band_mult=1.0):
-        if df.empty or ('volume' not in df) or (df['volume'].sum() == 0):
+        prepared_df = self._prepare_vwap_frame(df)
+        if prepared_df.empty:
             return None, None, None
-        
-        df = df.copy()
-        
-        # TC2000 style typical price calculation
-        df["typical"] = (df["high"] + df["low"] + df["open"] + df["close"]) / 4
-        
-        # Calculate cumulative values
-        df["vol_times_price"] = df["typical"] * df["volume"]
-        cum_vol = df["volume"].cumsum()
-        cum_vol_price = df["vol_times_price"].cumsum()
-        
-        # Calculate VWAP for each point
-        df["vwap"] = cum_vol_price / cum_vol
-        
-        # TradingView-style standard deviation calculation
-        # Calculate squared deviation from VWAP
-        df["sq_dev"] = ((df["typical"] - df["vwap"]) ** 2) * df["volume"]
-        
-        # Calculate standard deviation at each point (TradingView style)
-        cum_sq_dev = df["sq_dev"].cumsum()
-        df["stdev"] = (cum_sq_dev / cum_vol).apply(lambda x: math.sqrt(x) if x > 0 else 0)
-        
-        # Get final values
-        vwap = df["vwap"].iloc[-1]
-        stdev = df["stdev"].iloc[-1]
-        
-        # Calculate bands with specified multiplier
-        upper_band = vwap + stdev * band_mult
-        lower_band = vwap - stdev * band_mult
-        
-        if LOGGING_MODE:
-            logging.debug(f"Standard VWAP calculation: VWAP={vwap:.4f}, StdDev={stdev:.4f}")
+
+        current_date = prepared_df["datetime"].iloc[-1].date()
+        today_df = prepared_df[prepared_df["datetime"].dt.date == current_date]
+        vwap, upper_band, lower_band = self._calculate_vwap_bands(today_df, band_mult=band_mult)
+
+        if LOGGING_MODE and vwap is not None:
+            logging.debug(f"Standard VWAP calculation: VWAP={vwap:.4f}")
             logging.debug(f"Standard VWAP bands: Upper({band_mult}x)={upper_band:.4f}, Lower({band_mult}x)={lower_band:.4f}")
-        
+
         return vwap, upper_band, lower_band
 
 
 
 
-    def calculate_standard_vwap(self, df):
+    def _prepare_vwap_frame(self, df):
         if df.empty:
-            return None
-            
-        # Create a copy to avoid modifying the original dataframe
+            return pd.DataFrame()
+
         df_copy = df.copy()
-        
-        # Convert time to datetime properly
-        try:
-            df_copy["datetime"] = pd.to_datetime(df_copy["time"], format="%Y%m%d  %H:%M:%S", errors="coerce")
-            # Check if conversion was successful
-            if df_copy["datetime"].isna().all():
-                logging.error("Failed to convert time to datetime for standard VWAP")
-                return None
-        except Exception as e:
-            logging.error(f"Error in datetime conversion for standard VWAP: {e}")
+        df_copy["datetime"] = pd.to_datetime(
+            df_copy["time"],
+            format="%Y%m%d  %H:%M:%S",
+            errors="coerce",
+        )
+        if df_copy["datetime"].isna().all():
+            df_copy["datetime"] = pd.to_datetime(df_copy["time"], errors="coerce")
+        if df_copy["datetime"].isna().all():
+            logging.error("Failed to convert time to datetime for VWAP calculation")
+            return pd.DataFrame()
+
+        df_copy = df_copy.sort_values("datetime").reset_index(drop=True)
+        df_copy["typical_price"] = (
+            df_copy["high"] + df_copy["low"] + df_copy["open"] + df_copy["close"]
+        ) / 4.0
+        return df_copy
+
+    def _calculate_vwap_value(self, df):
+        if df.empty or df["volume"].sum() == 0:
             return None
-        
-        # Filter for today's data only
-        current_date = df_copy["datetime"].iloc[-1].date()
-        today_df = df_copy[df_copy["datetime"].dt.date == current_date]
-        
+
+        vol_price = df["typical_price"] * df["volume"]
+        return vol_price.sum() / df["volume"].sum()
+
+    def _calculate_vwap_bands(self, df, band_mult=1.0):
+        if df.empty or df["volume"].sum() == 0:
+            return None, None, None
+
+        df = df.copy()
+        df["vol_times_price"] = df["typical_price"] * df["volume"]
+        cum_vol = df["volume"].cumsum()
+        cum_vol_price = df["vol_times_price"].cumsum()
+        df["vwap"] = cum_vol_price / cum_vol
+
+        df["sq_dev"] = ((df["typical_price"] - df["vwap"]) ** 2) * df["volume"]
+        cum_sq_dev = df["sq_dev"].cumsum()
+        df["stdev"] = (cum_sq_dev / cum_vol).apply(lambda x: math.sqrt(x) if x > 0 else 0)
+
+        vwap = df["vwap"].iloc[-1]
+        stdev = df["stdev"].iloc[-1]
+        upper_band = vwap + stdev * band_mult
+        lower_band = vwap - stdev * band_mult
+        return vwap, upper_band, lower_band
+
+    def calculate_standard_vwap(self, df):
+        prepared_df = self._prepare_vwap_frame(df)
+        if prepared_df.empty:
+            return None
+
+        current_date = prepared_df["datetime"].iloc[-1].date()
+        today_df = prepared_df[prepared_df["datetime"].dt.date == current_date]
         if today_df.empty:
             logging.warning("No today's data available for standard VWAP calculation")
             return None
-        
-        # Debug log the date range
+
         logging.debug(f"Standard VWAP using data from {current_date} only")
         logging.debug(f"Today's data count: {len(today_df)}")
-        
-        # TC2000 style typical price calculation
-        today_df["typical_price"] = (today_df["high"] + today_df["low"] + 
-                                    today_df["open"] + today_df["close"]) / 4.0
-        
-        # Check if we have volume
-        if today_df["volume"].sum() == 0:
-            logging.warning("No volume data for standard VWAP calculation")
-            return None
-            
-        # Calculate VWAP
-        cum_vol_price = (today_df["typical_price"] * today_df["volume"]).sum()
-        cum_vol = today_df["volume"].sum()
-        standard_vwap = cum_vol_price / cum_vol
-        
-        return standard_vwap
+
+        return self._calculate_vwap_value(today_df)
 
     def calculate_dynamic_vwap(self, df):
-        if df.empty:
+        prepared_df = self._prepare_vwap_frame(df)
+        if prepared_df.empty:
             return None
-            
-        # Create a copy to avoid modifying the original dataframe
-        df_copy = df.copy()
-        
-        # Convert time to datetime properly
-        try:
-            df_copy["datetime"] = pd.to_datetime(df_copy["time"], format="%Y%m%d  %H:%M:%S", errors="coerce")
-            # Check if conversion was successful
-            if df_copy["datetime"].isna().all():
-                logging.error("Failed to convert time to datetime for dynamic VWAP")
-                return None
-        except Exception as e:
-            logging.error(f"Error in datetime conversion for dynamic VWAP: {e}")
-            return None
-        
-        # Get today and yesterday dates
-        current_date = df_copy["datetime"].iloc[-1].date()
-        yesterday_date = current_date - timedelta(days=1)
-        
-        # Filter for today's and yesterday's data
-        today_df = df_copy[df_copy["datetime"].dt.date == current_date]
-        yesterday_df = df_copy[df_copy["datetime"].dt.date == yesterday_date]
-        
-        # Debug log
-        logging.debug(f"Dynamic VWAP using data from {yesterday_date} and {current_date}")
-        logging.debug(f"Yesterday's data count: {len(yesterday_df)}, Today's data count: {len(today_df)}")
-        
-        # Skip calculation if no yesterday's data
-        if yesterday_df.empty:
-            logging.warning("No yesterday's data for dynamic VWAP, falling back to standard VWAP")
-            return self.calculate_standard_vwap(df)
-        
-        # Combine yesterday and today's data
-        combined_df = pd.concat([yesterday_df, today_df])
-        
-        if combined_df.empty or combined_df["volume"].sum() == 0:
-            logging.warning("Insufficient data for dynamic VWAP calculation")
-            return None
-        
-        # TC2000 style typical price calculation
-        combined_df["typical_price"] = (combined_df["high"] + combined_df["low"] + 
-                                    combined_df["open"] + combined_df["close"]) / 4.0
-        
-        # Calculate VWAP
-        cum_vol_price = (combined_df["typical_price"] * combined_df["volume"]).sum()
-        cum_vol = combined_df["volume"].sum()
-        dynamic_vwap = cum_vol_price / cum_vol
-        
-        return dynamic_vwap
+
+        unique_dates = sorted(prepared_df["datetime"].dt.date.unique())
+        current_date = unique_dates[-1]
+        previous_date = unique_dates[-2] if len(unique_dates) > 1 else None
+
+        today_df = prepared_df[prepared_df["datetime"].dt.date == current_date]
+        previous_df = (
+            prepared_df[prepared_df["datetime"].dt.date == previous_date]
+            if previous_date
+            else pd.DataFrame()
+        )
+
+        logging.debug(
+            f"Dynamic VWAP using data from {previous_date} and {current_date}"
+        )
+        logging.debug(
+            f"Previous day data count: {len(previous_df)}, Today's data count: {len(today_df)}"
+        )
+
+        combined_df = (
+            pd.concat([previous_df, today_df])
+            if not previous_df.empty
+            else today_df
+        )
+        return self._calculate_vwap_value(combined_df)
 
     def calculate_eod_vwap(self, df):
-        if df.empty:
+        prepared_df = self._prepare_vwap_frame(df)
+        if prepared_df.empty:
             return None
-            
-        # Create a copy to avoid modifying the original dataframe
-        df_copy = df.copy()
-        
-        # Convert time to datetime properly
-        try:
-            df_copy["datetime"] = pd.to_datetime(df_copy["time"], format="%Y%m%d  %H:%M:%S", errors="coerce")
-            # Check if conversion was successful
-            if df_copy["datetime"].isna().all():
-                logging.error("Failed to convert time to datetime for EOD VWAP")
-                return None
-        except Exception as e:
-            logging.error(f"Error in datetime conversion for EOD VWAP: {e}")
-            return None
-        
-        # Get today and yesterday dates
-        current_date = df_copy["datetime"].iloc[-1].date()
-        yesterday_date = current_date - timedelta(days=1)
-        
-        # Filter for today's data
-        today_df = df_copy[df_copy["datetime"].dt.date == current_date]
-        
-        # Get only the last candle from yesterday
-        yesterday_df = df_copy[df_copy["datetime"].dt.date == yesterday_date]
-        
-        # Debug log
-        logging.debug(f"EOD VWAP using data from {current_date} and last candle from {yesterday_date}")
-        logging.debug(f"Yesterday's data count: {len(yesterday_df)}, Today's data count: {len(today_df)}")
-        
-        if yesterday_df.empty:
-            logging.warning("No yesterday's data for EOD VWAP, falling back to standard VWAP")
-            return self.calculate_standard_vwap(df)
-        
-        # Get last candle from yesterday
-        last_candle_yesterday = yesterday_df.iloc[[-1]]
-        
-        # Combine the last candle from yesterday with today's data
-        eod_df = pd.concat([last_candle_yesterday, today_df])
-        
-        if eod_df.empty or eod_df["volume"].sum() == 0:
-            logging.warning("Insufficient data for EOD VWAP calculation")
-            return None
-        
-        # TC2000 style typical price calculation
-        eod_df["typical_price"] = (eod_df["high"] + eod_df["low"] + 
-                                eod_df["open"] + eod_df["close"]) / 4.0
-        
-        # Calculate VWAP
-        cum_vol_price = (eod_df["typical_price"] * eod_df["volume"]).sum()
-        cum_vol = eod_df["volume"].sum()
-        eod_vwap = cum_vol_price / cum_vol
-        
-        return eod_vwap
+
+        unique_dates = sorted(prepared_df["datetime"].dt.date.unique())
+        current_date = unique_dates[-1]
+        previous_date = unique_dates[-2] if len(unique_dates) > 1 else None
+
+        today_df = prepared_df[prepared_df["datetime"].dt.date == current_date]
+        previous_df = (
+            prepared_df[prepared_df["datetime"].dt.date == previous_date]
+            if previous_date
+            else pd.DataFrame()
+        )
+
+        logging.debug(
+            f"EOD VWAP using data from {current_date} and last candle from {previous_date}"
+        )
+        logging.debug(
+            f"Previous day data count: {len(previous_df)}, Today's data count: {len(today_df)}"
+        )
+
+        if previous_df.empty:
+            return self._calculate_vwap_value(today_df)
+
+        eod_df = pd.concat([previous_df.tail(1), today_df])
+        return self._calculate_vwap_value(eod_df)
     
     def calculate_dynamic_vwap_with_stdev_bands(self, df, band_mult=1.0):
-        if df.empty:
+        prepared_df = self._prepare_vwap_frame(df)
+        if prepared_df.empty:
             return None, None, None
-                
-        # Create a copy to avoid modifying the original dataframe
-        df_copy = df.copy()
-        
-        # Convert time to datetime properly
-        try:
-            df_copy["datetime"] = pd.to_datetime(df_copy["time"], format="%Y%m%d  %H:%M:%S", errors="coerce")
-            if df_copy["datetime"].isna().all():
-                logging.error("Failed to convert time to datetime for dynamic VWAP bands")
-                return None, None, None
-        except Exception as e:
-            logging.error(f"Error in datetime conversion for dynamic VWAP bands: {e}")
-            return None, None, None
-        
-        # Get unique dates in the data, sorted in ascending order
-        unique_dates = sorted(df_copy["datetime"].dt.date.unique())
-        
-        if len(unique_dates) < 2:
-            # Only log warning once per symbol to avoid spam
-            symbol_key = f"dynamic_vwap_insufficient_dates"
-            if symbol_key not in self.warned_symbols:
-                logging.warning("Insufficient trading days for dynamic VWAP bands calculation")
-                self.warned_symbols.add(symbol_key)
-            return None, None, None
-        
-        # The last date is today, the second-to-last date is the previous trading day
+
+        unique_dates = sorted(prepared_df["datetime"].dt.date.unique())
         current_date = unique_dates[-1]
-        previous_trading_date = unique_dates[-2]
-        
-        # Filter for today's and previous trading day's data
-        today_df = df_copy[df_copy["datetime"].dt.date == current_date]
-        prev_day_df = df_copy[df_copy["datetime"].dt.date == previous_trading_date]
-        
-        if prev_day_df.empty:
-            # Only log warning once per symbol to avoid spam
+        previous_date = unique_dates[-2] if len(unique_dates) > 1 else None
+
+        today_df = prepared_df[prepared_df["datetime"].dt.date == current_date]
+        prev_day_df = (
+            prepared_df[prepared_df["datetime"].dt.date == previous_date]
+            if previous_date
+            else pd.DataFrame()
+        )
+
+        if prev_day_df.empty and previous_date:
             symbol_key = f"dynamic_vwap_{current_date}"
             if symbol_key not in self.warned_symbols:
-                logging.warning(f"No previous trading day data for dynamic VWAP bands (looking for {previous_trading_date})")
+                logging.warning(
+                    f"No previous trading day data for dynamic VWAP bands (looking for {previous_date})"
+                )
                 self.warned_symbols.add(symbol_key)
-            return None, None, None
-        
-        # Combine previous trading day and today's data
-        combined_df = pd.concat([prev_day_df, today_df])
-        
-        if combined_df.empty or combined_df["volume"].sum() == 0:
-            logging.warning("Insufficient data for dynamic VWAP bands calculation")
-            return None, None, None
-        
-        # Calculate typical price
-        combined_df["typical"] = (combined_df["high"] + combined_df["low"] + 
-                            combined_df["open"] + combined_df["close"]) / 4
-        
-        # Calculate cumulative values
-        combined_df["vol_times_price"] = combined_df["typical"] * combined_df["volume"]
-        cum_vol = combined_df["volume"].cumsum()
-        cum_vol_price = combined_df["vol_times_price"].cumsum()
-        
-        # Calculate VWAP for each point
-        combined_df["vwap"] = cum_vol_price / cum_vol
-        
-        # TradingView-style standard deviation calculation
-        combined_df["sq_dev"] = ((combined_df["typical"] - combined_df["vwap"]) ** 2) * combined_df["volume"]
-        cum_sq_dev = combined_df["sq_dev"].cumsum()
-        combined_df["stdev"] = (cum_sq_dev / cum_vol).apply(lambda x: math.sqrt(x) if x > 0 else 0)
-        
-        # Get final values
-        dynamic_vwap = combined_df["vwap"].iloc[-1]
-        stdev = combined_df["stdev"].iloc[-1]
-        
-        # Calculate bands with specified multiplier
-        upper_band = dynamic_vwap + stdev * band_mult
-        lower_band = dynamic_vwap - stdev * band_mult
-        
-        if LOGGING_MODE:
-            logging.debug(f"Dynamic VWAP calculation: VWAP={dynamic_vwap:.4f}, StdDev={stdev:.4f}")
-            logging.debug(f"Dynamic VWAP bands: Upper({band_mult}x)={upper_band:.4f}, Lower({band_mult}x)={lower_band:.4f}")
-        
+
+        combined_df = (
+            pd.concat([prev_day_df, today_df])
+            if not prev_day_df.empty
+            else today_df
+        )
+        dynamic_vwap, upper_band, lower_band = self._calculate_vwap_bands(
+            combined_df,
+            band_mult=band_mult,
+        )
+
+        if LOGGING_MODE and dynamic_vwap is not None:
+            logging.debug(f"Dynamic VWAP calculation: VWAP={dynamic_vwap:.4f}")
+            logging.debug(
+                f"Dynamic VWAP bands: Upper({band_mult}x)={upper_band:.4f}, Lower({band_mult}x)={lower_band:.4f}"
+            )
+
         return dynamic_vwap, upper_band, lower_band
 
 
 
     def calculate_eod_vwap_with_stdev_bands(self, df, band_mult=1.0):
-        if df.empty:
+        prepared_df = self._prepare_vwap_frame(df)
+        if prepared_df.empty:
             return None, None, None
-                
-        # Create a copy to avoid modifying the original dataframe
-        df_copy = df.copy()
-        
-        # Convert time to datetime properly
-        try:
-            df_copy["datetime"] = pd.to_datetime(df_copy["time"], format="%Y%m%d  %H:%M:%S", errors="coerce")
-            if df_copy["datetime"].isna().all():
-                logging.error("Failed to convert time to datetime for EOD VWAP bands")
-                return None, None, None
-        except Exception as e:
-            logging.error(f"Error in datetime conversion for EOD VWAP bands: {e}")
-            return None, None, None
-        
-        # Get unique dates in the data, sorted in ascending order
-        unique_dates = sorted(df_copy["datetime"].dt.date.unique())
-        
-        if len(unique_dates) < 2:
-            # Only log warning once per symbol to avoid spam
-            symbol_key = f"eod_vwap_insufficient_dates"
-            if symbol_key not in self.warned_symbols:
-                logging.warning("Insufficient trading days for EOD VWAP bands calculation")
-                self.warned_symbols.add(symbol_key)
-            return None, None, None
-        
-        # The last date is today, the second-to-last date is the previous trading day
+
+        unique_dates = sorted(prepared_df["datetime"].dt.date.unique())
         current_date = unique_dates[-1]
-        previous_trading_date = unique_dates[-2]
-        
-        # Filter for today's data
-        today_df = df_copy[df_copy["datetime"].dt.date == current_date]
-        
-        # Get only the last candle from the previous trading day
-        prev_day_df = df_copy[df_copy["datetime"].dt.date == previous_trading_date]
-        
-        if prev_day_df.empty:
-            # Only log warning once per symbol to avoid spam
+        previous_date = unique_dates[-2] if len(unique_dates) > 1 else None
+
+        today_df = prepared_df[prepared_df["datetime"].dt.date == current_date]
+        prev_day_df = (
+            prepared_df[prepared_df["datetime"].dt.date == previous_date]
+            if previous_date
+            else pd.DataFrame()
+        )
+
+        if prev_day_df.empty and previous_date:
             symbol_key = f"eod_vwap_{current_date}"
             if symbol_key not in self.warned_symbols:
-                logging.warning(f"No previous trading day data for EOD VWAP bands (looking for {previous_trading_date})")
+                logging.warning(
+                    f"No previous trading day data for EOD VWAP bands (looking for {previous_date})"
+                )
                 self.warned_symbols.add(symbol_key)
-            return None, None, None
-        
-        # Get last candle from previous trading day
-        last_candle_prev = prev_day_df.iloc[[-1]]
-        
-        # Combine the last candle from previous trading day with today's data
-        eod_df = pd.concat([last_candle_prev, today_df])
-        
-        if eod_df.empty or eod_df["volume"].sum() == 0:
-            logging.warning("Insufficient data for EOD VWAP bands calculation")
-            return None, None, None
-        
-        # Calculate typical price
-        eod_df["typical"] = (eod_df["high"] + eod_df["low"] + 
-                        eod_df["open"] + eod_df["close"]) / 4
-        
-        # Calculate cumulative values
-        eod_df["vol_times_price"] = eod_df["typical"] * eod_df["volume"]
-        cum_vol = eod_df["volume"].cumsum()
-        cum_vol_price = eod_df["vol_times_price"].cumsum()
-        
-        # Calculate VWAP for each point
-        eod_df["vwap"] = cum_vol_price / cum_vol
-        
-        # TradingView-style standard deviation calculation
-        eod_df["sq_dev"] = ((eod_df["typical"] - eod_df["vwap"]) ** 2) * eod_df["volume"]
-        cum_sq_dev = eod_df["sq_dev"].cumsum()
-        eod_df["stdev"] = (cum_sq_dev / cum_vol).apply(lambda x: math.sqrt(x) if x > 0 else 0)
-        
-        # Get final values
-        eod_vwap = eod_df["vwap"].iloc[-1]
-        stdev = eod_df["stdev"].iloc[-1]
-        
-        # Calculate bands with specified multiplier
-        upper_band = eod_vwap + stdev * band_mult
-        lower_band = eod_vwap - stdev * band_mult
-        
-        if LOGGING_MODE:
-            logging.debug(f"EOD VWAP calculation: VWAP={eod_vwap:.4f}, StdDev={stdev:.4f}")
-            logging.debug(f"EOD VWAP bands: Upper({band_mult}x)={upper_band:.4f}, Lower({band_mult}x)={lower_band:.4f}")
-        
+
+        eod_df = (
+            pd.concat([prev_day_df.tail(1), today_df])
+            if not prev_day_df.empty
+            else today_df
+        )
+        eod_vwap, upper_band, lower_band = self._calculate_vwap_bands(
+            eod_df,
+            band_mult=band_mult,
+        )
+
+        if LOGGING_MODE and eod_vwap is not None:
+            logging.debug(f"EOD VWAP calculation: VWAP={eod_vwap:.4f}")
+            logging.debug(
+                f"EOD VWAP bands: Upper({band_mult}x)={upper_band:.4f}, Lower({band_mult}x)={lower_band:.4f}"
+            )
+
         return eod_vwap, upper_band, lower_band
 
 
@@ -1079,36 +938,33 @@ class BounceBot(EWrapper, EClient):
             return
         
         # 1. Calculate Standard VWAP (today only)
-        standard_vwap = None
-        if not today_df.empty and today_df["volume"].sum() > 0:
-            today_df["typical"] = (today_df["high"] + today_df["low"] + today_df["open"] + today_df["close"]) / 4
-            standard_vwap = (today_df["typical"] * today_df["volume"]).sum() / today_df["volume"].sum()
-            logging.debug(f"{symbol}: Standard VWAP calculated from {len(today_df)} today's bars = {standard_vwap:.4f}")
-        
+        standard_vwap = self.calculate_standard_vwap(df)
+        if standard_vwap is not None:
+            logging.debug(
+                f"{symbol}: Standard VWAP calculated from {len(today_df)} today's bars = {standard_vwap:.4f}"
+            )
+
         # 2. Calculate Dynamic VWAP (previous trading day + today)
-        dynamic_vwap = None
-        if not prev_day_df.empty and not today_df.empty:
-            combined_df = pd.concat([prev_day_df, today_df])
-            if combined_df["volume"].sum() > 0:
-                combined_df["typical"] = (combined_df["high"] + combined_df["low"] + combined_df["open"] + combined_df["close"]) / 4
-                dynamic_vwap = (combined_df["typical"] * combined_df["volume"]).sum() / combined_df["volume"].sum()
-                logging.debug(f"{symbol}: Dynamic VWAP calculated from {len(combined_df)} bars (previous day + today) = {dynamic_vwap:.4f}")
-        else:
-            logging.debug(f"{symbol}: No previous day data, Dynamic VWAP calculation skipped")
-            # Don't fall back to standard VWAP
-        
+        dynamic_vwap = self.calculate_dynamic_vwap(df)
+        if dynamic_vwap is not None and not prev_day_df.empty:
+            logging.debug(
+                f"{symbol}: Dynamic VWAP calculated from {len(prev_day_df) + len(today_df)} bars (previous day + today) = {dynamic_vwap:.4f}"
+            )
+        elif dynamic_vwap is not None:
+            logging.debug(
+                f"{symbol}: Dynamic VWAP calculated from today's bars only = {dynamic_vwap:.4f}"
+            )
+
         # 3. Calculate EOD VWAP (previous trading day's last candle + today)
-        eod_vwap = None
-        if not prev_day_df.empty and not today_df.empty:
-            last_candle_prev = prev_day_df.iloc[[-1]]
-            eod_df = pd.concat([last_candle_prev, today_df])
-            if eod_df["volume"].sum() > 0:
-                eod_df["typical"] = (eod_df["high"] + eod_df["low"] + eod_df["open"] + eod_df["close"]) / 4
-                eod_vwap = (eod_df["typical"] * eod_df["volume"]).sum() / eod_df["volume"].sum()
-                logging.debug(f"{symbol}: EOD VWAP calculated from {len(eod_df)} bars (prev day's last + today) = {eod_vwap:.4f}")
-        else:
-            logging.debug(f"{symbol}: No previous day data, EOD VWAP calculation skipped")
-            # Don't fall back to standard VWAP
+        eod_vwap = self.calculate_eod_vwap(df)
+        if eod_vwap is not None and not prev_day_df.empty:
+            logging.debug(
+                f"{symbol}: EOD VWAP calculated from {len(today_df) + 1} bars (prev day's last + today) = {eod_vwap:.4f}"
+            )
+        elif eod_vwap is not None:
+            logging.debug(
+                f"{symbol}: EOD VWAP calculated from today's bars only = {eod_vwap:.4f}"
+            )
         
         # 4. Get previous day extremes
         prev_high = prev_day_df["high"].max() if not prev_day_df.empty else None
