@@ -223,7 +223,7 @@ def calculate_tc2000_vwaps(df: pd.DataFrame) -> Tc2000VwapResult:
         previous_anchor_vwap_series = pd.Series([], dtype=float)
         previous_anchor_vwap = None
     else:
-        anchored_df = pd.concat([previous_df, today_df])
+        anchored_df = pd.concat([previous_df.tail(1), today_df])
         previous_anchor_vwap_series = _calculate_vwap_series(anchored_df)
         previous_anchor_vwap = (
             previous_anchor_vwap_series.iloc[-1]
