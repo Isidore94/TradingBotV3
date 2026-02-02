@@ -19,9 +19,27 @@ from ibapi.wrapper import EWrapper
 class Tc2000VwapResult:
     current_vwap: float | None
     previous_vwap: float | None
-    eod_vwap: float | None
+    previous_anchor_vwap: float | None
     current_vwap_series: pd.Series
-    eod_vwap_series: pd.Series
+    previous_anchor_vwap_series: pd.Series
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+LONGS_FILENAME = ROOT_DIR / "longs.txt"
+SHORTS_FILENAME = ROOT_DIR / "shorts.txt"
+
+
+def read_tickers(file_path: Path) -> list[str]:
+    if not file_path.exists():
+        print(f"Warning: {file_path} does not exist.")
+        return []
+    with file_path.open("r") as file_handle:
+        tickers = [
+            line.strip().upper()
+            for line in file_handle
+            if line.strip() and "Symbols from TC2000" not in line
+        ]
+    return tickers
 
 
 class IbHistoricalClient(EWrapper, EClient):
@@ -180,7 +198,13 @@ def _calculate_vwap_series(df: pd.DataFrame) -> pd.Series:
 
 def calculate_tc2000_vwaps(df: pd.DataFrame) -> Tc2000VwapResult:
     if df.empty:
-        return Tc2000VwapResult(None, None, None, pd.Series([], dtype=float), pd.Series([], dtype=float))
+        return Tc2000VwapResult(
+            None,
+            None,
+            None,
+            pd.Series([], dtype=float),
+            pd.Series([], dtype=float),
+        )
 
     unique_dates = sorted(df["datetime"].dt.date.unique())
     current_date = unique_dates[-1]
@@ -196,20 +220,23 @@ def calculate_tc2000_vwaps(df: pd.DataFrame) -> Tc2000VwapResult:
     previous_vwap = previous_vwap_series.iloc[-1] if not previous_vwap_series.empty else None
 
     if previous_df.empty:
-        eod_vwap_series = pd.Series([], dtype=float)
-        eod_vwap = None
+        previous_anchor_vwap_series = pd.Series([], dtype=float)
+        previous_anchor_vwap = None
     else:
-        last_prev_bar = previous_df.iloc[[-1]]
-        eod_df = pd.concat([last_prev_bar, today_df])
-        eod_vwap_series = _calculate_vwap_series(eod_df)
-        eod_vwap = eod_vwap_series.iloc[-1] if not eod_vwap_series.empty else None
+        anchored_df = pd.concat([previous_df, today_df])
+        previous_anchor_vwap_series = _calculate_vwap_series(anchored_df)
+        previous_anchor_vwap = (
+            previous_anchor_vwap_series.iloc[-1]
+            if not previous_anchor_vwap_series.empty
+            else None
+        )
 
     return Tc2000VwapResult(
         current_vwap=current_vwap,
         previous_vwap=previous_vwap,
-        eod_vwap=eod_vwap,
+        previous_anchor_vwap=previous_anchor_vwap,
         current_vwap_series=current_vwap_series,
-        eod_vwap_series=eod_vwap_series,
+        previous_anchor_vwap_series=previous_anchor_vwap_series,
     )
 
 
@@ -217,16 +244,16 @@ def _attach_series(
     df: pd.DataFrame,
     today_df: pd.DataFrame,
     current_vwap_series: pd.Series,
-    eod_vwap_series: pd.Series,
+    previous_anchor_vwap_series: pd.Series,
     previous_vwap: float | None,
 ) -> pd.DataFrame:
     output = today_df.copy()
     output["tc2000_vwap"] = current_vwap_series.to_list()
-    if not eod_vwap_series.empty:
-        output["tc2000_eod_avwap"] = eod_vwap_series.iloc[1:].to_list()
+    if not previous_anchor_vwap_series.empty:
+        output["tc2000_previous_avwap"] = previous_anchor_vwap_series.tail(len(today_df)).to_list()
     else:
-        output["tc2000_eod_avwap"] = None
-    output["tc2000_previous_avwap"] = previous_vwap
+        output["tc2000_previous_avwap"] = None
+    output["tc2000_previous_vwap"] = previous_vwap
     output = output.drop(columns=["typical_price"]) if "typical_price" in output.columns else output
     return output
 
@@ -235,7 +262,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Trial TC2000-style VWAP calculations using 5-minute bars."
     )
-    parser.add_argument("symbol", help="Ticker symbol to request from IB.")
+    parser.add_argument(
+        "symbols",
+        nargs="*",
+        help="Optional ticker symbols to request from IB (defaults to longs.txt + shorts.txt).",
+    )
     parser.add_argument(
         "--host",
         default="127.0.0.1",
@@ -282,39 +313,55 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    bars = _fetch_ib_bars(
-        symbol=args.symbol,
-        host=args.host,
-        port=args.port,
-        client_id=args.client_id,
-        duration=args.duration,
-        bar_size=args.bar_size,
-        use_rth=args.use_rth,
-        timeout=args.timeout,
-    )
-    df = _bars_to_dataframe(bars)
-    if df.empty:
-        raise RuntimeError("No historical bars returned from IB.")
-    _warn_if_not_five_minute_bars(df)
-    result = calculate_tc2000_vwaps(df)
+    symbols = [symbol.upper() for symbol in args.symbols if symbol.strip()]
+    if not symbols:
+        symbols = sorted(set(read_tickers(LONGS_FILENAME) + read_tickers(SHORTS_FILENAME)))
 
-    print("TC2000 VWAP snapshot")
-    print(f"Current VWAP: {result.current_vwap}")
-    print(f"Previous Day VWAP: {result.previous_vwap}")
-    print(f"EOD AVWAP (last prev bar + today): {result.eod_vwap}")
+    if not symbols:
+        raise RuntimeError("No symbols provided and longs/shorts files are empty.")
 
-    if args.out:
-        current_date = df["datetime"].dt.date.iloc[-1]
-        today_df = df[df["datetime"].dt.date == current_date]
-        output = _attach_series(
-            df,
-            today_df,
-            result.current_vwap_series,
-            result.eod_vwap_series,
-            result.previous_vwap,
+    multiple_symbols = len(symbols) > 1
+    if args.out and multiple_symbols and args.out.suffix:
+        raise ValueError("When requesting multiple symbols, --out must be a directory path.")
+
+    for symbol in symbols:
+        bars = _fetch_ib_bars(
+            symbol=symbol,
+            host=args.host,
+            port=args.port,
+            client_id=args.client_id,
+            duration=args.duration,
+            bar_size=args.bar_size,
+            use_rth=args.use_rth,
+            timeout=args.timeout,
         )
-        output.to_csv(args.out, index=False)
-        print(f"Wrote {len(output)} rows to {args.out}")
+        df = _bars_to_dataframe(bars)
+        if df.empty:
+            raise RuntimeError(f"No historical bars returned from IB for {symbol}.")
+        _warn_if_not_five_minute_bars(df)
+        result = calculate_tc2000_vwaps(df)
+
+        print(f"TC2000 VWAP snapshot ({symbol})")
+        print(f"Current VWAP: {result.current_vwap}")
+        print(f"Previous Day VWAP (EOD): {result.previous_vwap}")
+        print(f"Previous Day AVWAP (continued): {result.previous_anchor_vwap}")
+
+        if args.out:
+            current_date = df["datetime"].dt.date.iloc[-1]
+            today_df = df[df["datetime"].dt.date == current_date]
+            output = _attach_series(
+                df,
+                today_df,
+                result.current_vwap_series,
+                result.previous_anchor_vwap_series,
+                result.previous_vwap,
+            )
+            output_path = args.out
+            if multiple_symbols:
+                output_path.mkdir(parents=True, exist_ok=True)
+                output_path = output_path / f"{symbol}_tc2000_vwap.csv"
+            output.to_csv(output_path, index=False)
+            print(f"Wrote {len(output)} rows to {output_path}")
 
 
 if __name__ == "__main__":
