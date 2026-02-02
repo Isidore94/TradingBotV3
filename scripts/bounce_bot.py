@@ -1057,6 +1057,21 @@ class BounceBot(EWrapper, EClient):
                 if current_time > bounce_time:
                     logging.debug(f"{symbol}: Checking confirmation - Bounce time: {bounce_time}, Current time: {current_time}")
                     current_candle = today_df.iloc[-1]
+                    bounce_data["candles_waited"] += 1
+                    candles_waited = bounce_data["candles_waited"]
+
+                    if direction == "long" and current_candle["close"] < bounce_candle["low"]:
+                        logging.debug(
+                            f"{symbol}: Invalidating long bounce candidate - close {current_candle['close']:.2f} below bounce low {bounce_candle['low']:.2f}"
+                        )
+                        self.bounce_candidates.pop(symbol)
+                        return
+                    if direction == "short" and current_candle["close"] > bounce_candle["high"]:
+                        logging.debug(
+                            f"{symbol}: Invalidating short bounce candidate - close {current_candle['close']:.2f} above bounce high {bounce_candle['high']:.2f}"
+                        )
+                        self.bounce_candidates.pop(symbol)
+                        return
                     
                     # For longs: confirm if the current candle's high is greater than the bounce candle's high
                     if direction == "long" and current_candle["high"] > bounce_candle["high"]:
@@ -1098,6 +1113,12 @@ class BounceBot(EWrapper, EClient):
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
                     else:
+                        if candles_waited >= 3:
+                            logging.debug(
+                                f"{symbol}: Removing bounce candidate after {candles_waited} candles without confirmation"
+                            )
+                            self.bounce_candidates.pop(symbol)
+                            return
                         # Remove stale candidates after a certain time period (e.g., 4 hours)
                         detection_time = bounce_data["detection_time"]
                         if (datetime.now() - detection_time).total_seconds() > 14400:  # 4 hours in seconds
@@ -1114,7 +1135,8 @@ class BounceBot(EWrapper, EClient):
             self.bounce_candidates[symbol] = {
                 "levels": candidate_info["levels"],
                 "bounce_candle": candidate_info["candle"],
-                "detection_time": datetime.now()
+                "detection_time": datetime.now(),
+                "candles_waited": 0
             }
 
                         # In the evaluate_bounce_candidate function, where price approaching is logged:
