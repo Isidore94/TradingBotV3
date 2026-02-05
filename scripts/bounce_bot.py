@@ -11,6 +11,7 @@ import math
 import time
 import threading
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import zoneinfo
 import queue
@@ -62,8 +63,19 @@ LOG_PRICE_APPROACHING = True
 USE_GUI = True  # New parameter to toggle GUI on/off
 
 # Connection & Request settings
-MAX_CONCURRENT_REQUESTS = 4
+MAX_CONCURRENT_REQUESTS = 1
 REQUEST_DELAY = 0.1  # seconds between IB historical data requests
+
+# RRS (Real Relative Strength) settings
+RRS_DEFAULT_THRESHOLD = 2.0
+RRS_LENGTH = 12
+RRS_TIMEOUT = 3.0
+RRS_TIMEFRAMES = {
+    "5m": {"label": "5 min", "bar_size": "5 mins", "duration": "5 D", "minutes": 5},
+    "15m": {"label": "15 min", "bar_size": "15 mins", "duration": "5 D", "minutes": 15},
+    "30m": {"label": "30 min", "bar_size": "30 mins", "duration": "5 D", "minutes": 30},
+    "1h": {"label": "1 hour", "bar_size": "1 hour", "duration": "5 D", "minutes": 60},
+}
 
 ##########################################
 # Logging Filter
@@ -126,6 +138,145 @@ def reset_log_files():
             print(f"Error resetting log file {log_file_path}: {e}")
 
 
+@dataclass(frozen=True)
+class IbBar:
+    dt: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+def _parse_ib_bar_datetime(value):
+    text = str(value).strip()
+    for fmt in ("%Y%m%d  %H:%M:%S", "%Y%m%d %H:%M:%S", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _bars_to_ib(bars):
+    ib_bars = []
+    for bar in bars:
+        dt = _parse_ib_bar_datetime(bar.get("time"))
+        if dt is None:
+            continue
+        ib_bars.append(
+            IbBar(
+                dt=dt,
+                open=float(bar.get("open", 0.0)),
+                high=float(bar.get("high", 0.0)),
+                low=float(bar.get("low", 0.0)),
+                close=float(bar.get("close", 0.0)),
+            )
+        )
+    return ib_bars
+
+
+def _dedupe_bars(bars):
+    by_dt = {}
+    for bar in bars:
+        by_dt[bar.dt] = bar
+    return sorted(by_dt.values(), key=lambda b: b.dt)
+
+
+def _align_bars_with_map(symbol_bars, spy_by_dt):
+    if not symbol_bars or not spy_by_dt:
+        return [], []
+    sym_by_dt = {bar.dt: bar for bar in symbol_bars}
+    common = sorted(sym_by_dt.keys() & spy_by_dt.keys())
+    if not common:
+        return [], []
+    return [sym_by_dt[dt] for dt in common], [spy_by_dt[dt] for dt in common]
+
+
+def _aggregate_bars_timeframe(bars, timeframe_minutes):
+    if timeframe_minutes <= 5:
+        return list(bars)
+    expected = max(1, timeframe_minutes // 5)
+    buckets = {}
+    order = []
+    counts = {}
+    for bar in bars:
+        dt = bar.dt
+        market_open = dt.replace(hour=6, minute=30, second=0, microsecond=0)
+        minutes_since = int((dt - market_open).total_seconds() // 60)
+        if minutes_since < 0:
+            bucket_minute = (dt.minute // timeframe_minutes) * timeframe_minutes
+            bucket_start = dt.replace(minute=bucket_minute, second=0, microsecond=0)
+        else:
+            bucket_index = minutes_since // timeframe_minutes
+            bucket_start = market_open + timedelta(minutes=bucket_index * timeframe_minutes)
+        if bucket_start not in buckets:
+            buckets[bucket_start] = IbBar(
+                dt=bucket_start,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+            )
+            counts[bucket_start] = 1
+            order.append(bucket_start)
+        else:
+            agg = buckets[bucket_start]
+            buckets[bucket_start] = IbBar(
+                dt=agg.dt,
+                open=agg.open,
+                high=max(agg.high, bar.high),
+                low=min(agg.low, bar.low),
+                close=bar.close,
+            )
+            counts[bucket_start] += 1
+
+    if not order:
+        return []
+
+    result = []
+    last_bucket = order[-1]
+    for bucket in order:
+        if bucket == last_bucket and counts.get(bucket, 0) < expected:
+            continue
+        result.append(buckets[bucket])
+    return result
+
+
+def _wilder_atr_last(bars, length):
+    if len(bars) < length + 1:
+        return None
+    true_ranges = []
+    for idx in range(1, len(bars)):
+        high = bars[idx].high
+        low = bars[idx].low
+        prev_close = bars[idx - 1].close
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(tr)
+    if len(true_ranges) < length:
+        return None
+    atr = sum(true_ranges[:length]) / float(length)
+    for tr in true_ranges[length:]:
+        atr = ((atr * (length - 1)) + tr) / float(length)
+    return atr if atr > 0 else None
+
+
+def real_relative_strength(symbol_bars, spy_bars, length=RRS_LENGTH):
+    if not symbol_bars or not spy_bars:
+        return None, None
+    min_bars = length + 2
+    if len(symbol_bars) < min_bars or len(spy_bars) < min_bars:
+        return None, None
+    sym_move = symbol_bars[-1].close - symbol_bars[-1 - length].close
+    spy_move = spy_bars[-1].close - spy_bars[-1 - length].close
+    sym_atr = _wilder_atr_last(symbol_bars[:-1], length)
+    spy_atr = _wilder_atr_last(spy_bars[:-1], length)
+    if sym_atr is None or spy_atr is None or sym_atr == 0 or spy_atr == 0:
+        return None, None
+    power_index = spy_move / spy_atr
+    rrs = (sym_move - (power_index * sym_atr)) / sym_atr
+    return rrs, power_index
+
+
 ##########################################
 # Request Queue Class
 ##########################################
@@ -163,6 +314,13 @@ class BounceBot(EWrapper, EClient):
         EClient.__init__(self, self)
         self.connection_status = False
         self.reqIdCount = 1000
+        self.data_lock = threading.Lock()
+        self.reqId_lock = threading.Lock()
+        self.connect_lock = threading.Lock()
+        self.ib_host = None
+        self.ib_port = None
+        self.ib_client_id = None
+        self.api_thread = None
 
         self.data = {}
         self.data_ready_events = {}
@@ -180,11 +338,23 @@ class BounceBot(EWrapper, EClient):
         # Add this to track which symbols we've already warned about
         self.warned_symbols = set()
 
+        # RRS settings (thread-safe for GUI updates)
+        self.rrs_lock = threading.Lock()
+        self.rrs_threshold = RRS_DEFAULT_THRESHOLD
+        self.rrs_length = RRS_LENGTH
+        self.rrs_timeframe_key = "5m"
+        self.rrs_bar_size = RRS_TIMEFRAMES[self.rrs_timeframe_key]["bar_size"]
+        self.rrs_duration = RRS_TIMEFRAMES[self.rrs_timeframe_key]["duration"]
+
+        # Cache latest 5-minute bars per symbol for reuse (RRS)
+        self.latest_bars = {}
+
 
     def getReqId(self):
-        reqId = self.reqIdCount
-        self.reqIdCount += 1
-        return reqId
+        with self.reqId_lock:
+            reqId = self.reqIdCount
+            self.reqIdCount += 1
+            return reqId
 
     def create_stock_contract(self, symbol):
         logging.debug(f"Creating contract for symbol: {symbol}")
@@ -195,15 +365,184 @@ class BounceBot(EWrapper, EClient):
         contract.currency = "USD"
         return contract
 
+    def set_connection_info(self, host, port, client_id):
+        self.ib_host = host
+        self.ib_port = port
+        self.ib_client_id = client_id
+
+    def _ensure_api_thread(self):
+        if self.api_thread is None or not self.api_thread.is_alive():
+            self.api_thread = threading.Thread(target=self.run, daemon=True)
+            self.api_thread.start()
+
+    def ensure_connected(self, timeout=10):
+        if self.connection_status:
+            return True
+        if self.ib_host is None or self.ib_port is None or self.ib_client_id is None:
+            logging.error("IB connection info not set.")
+            return False
+        with self.connect_lock:
+            if self.connection_status:
+                return True
+            try:
+                try:
+                    self.disconnect()
+                except Exception:
+                    pass
+                self.connect(self.ib_host, self.ib_port, clientId=self.ib_client_id)
+                self._ensure_api_thread()
+                start = time.time()
+                while not self.connection_status and time.time() - start < timeout:
+                    time.sleep(0.2)
+                if not self.connection_status:
+                    logging.error("Failed to reconnect to IB within timeout.")
+                    return False
+                logging.info("Reconnected to IB.")
+                return True
+            except Exception as e:
+                logging.exception(f"Reconnect error: {e}")
+                return False
+
+    def set_rrs_threshold(self, value):
+        with self.rrs_lock:
+            self.rrs_threshold = float(value)
+
+    def set_rrs_timeframe(self, key):
+        if key not in RRS_TIMEFRAMES:
+            return
+        with self.rrs_lock:
+            self.rrs_timeframe_key = key
+            self.rrs_bar_size = RRS_TIMEFRAMES[key]["bar_size"]
+            self.rrs_duration = RRS_TIMEFRAMES[key]["duration"]
+
+    def get_rrs_settings(self):
+        with self.rrs_lock:
+            return (
+                self.rrs_threshold,
+                self.rrs_bar_size,
+                self.rrs_duration,
+                self.rrs_length,
+                self.rrs_timeframe_key,
+            )
+
+    def request_historical_bars(self, symbol, duration, bar_size, timeout=RRS_TIMEOUT):
+        if not self.ensure_connected():
+            logging.warning("Not connected to IB; skipping historical request.")
+            return None
+        reqId = self.getReqId()
+        with self.data_lock:
+            self.data[reqId] = []
+            self.data_ready_events[reqId] = threading.Event()
+        contract = self.create_stock_contract(symbol)
+        self.reqHistoricalData(
+            reqId=reqId,
+            contract=contract,
+            endDateTime="",
+            durationStr=duration,
+            barSizeSetting=bar_size,
+            whatToShow="TRADES",
+            useRTH=1,
+            formatDate=1,
+            keepUpToDate=False,
+            chartOptions=[]
+        )
+        if not self.data_ready_events[reqId].wait(timeout=timeout):
+            with self.data_lock:
+                del self.data_ready_events[reqId]
+                self.data.pop(reqId, None)
+            logging.warning(f"{symbol}: Timeout waiting for RRS data.")
+            return None
+        with self.data_lock:
+            bars = self.data.get(reqId, [])
+            del self.data_ready_events[reqId]
+            self.data.pop(reqId, None)
+        return bars
+
+    def get_cached_5m_bars(self, symbol):
+        bars = self.latest_bars.get(symbol)
+        if bars:
+            return bars
+        bars_raw = self.request_historical_bars(symbol, "5 D", "5 mins", timeout=RRS_TIMEOUT)
+        if not bars_raw:
+            return []
+        bars_ib = _dedupe_bars(_bars_to_ib(bars_raw))
+        self.latest_bars[symbol] = bars_ib
+        return bars_ib
+
+    def run_rrs_scan(self):
+        threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
+        timeframe_minutes = RRS_TIMEFRAMES[timeframe_key]["minutes"]
+        if self.gui_callback:
+            self.gui_callback(f"RRS scan running ({RRS_TIMEFRAMES[timeframe_key]['label']})...", "rrs_status")
+
+        spy_5m = self.get_cached_5m_bars("SPY")
+        if not spy_5m:
+            if self.gui_callback:
+                self.gui_callback("RRS scan: SPY data unavailable.", "rrs_status")
+            return
+
+        spy_bars = (
+            spy_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(spy_5m, timeframe_minutes)
+        )
+        spy_by_dt = {bar.dt: bar for bar in spy_bars}
+
+        results = []
+        all_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
+        for symbol in all_symbols:
+            sym_5m = self.get_cached_5m_bars(symbol)
+            if not sym_5m:
+                continue
+            sym_bars = (
+                sym_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sym_5m, timeframe_minutes)
+            )
+            aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt)
+            rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
+            if rrs_value is None:
+                continue
+            if symbol in self.longs and rrs_value >= threshold:
+                results.append(("RS", symbol, rrs_value, power_index))
+            elif symbol in self.shorts and rrs_value <= -threshold:
+                results.append(("RW", symbol, rrs_value, power_index))
+
+        rs_results = sorted([r for r in results if r[0] == "RS"], key=lambda r: -r[2])
+        rw_results = sorted([r for r in results if r[0] == "RW"], key=lambda r: r[2])
+        ordered_results = rs_results + rw_results
+
+        snapshot = {
+            "timestamp": datetime.now(),
+            "threshold": threshold,
+            "timeframe_key": timeframe_key,
+            "results": ordered_results,
+        }
+        if self.gui_callback:
+            self.gui_callback(snapshot, "rrs_snapshot")
+            self.gui_callback(f"RRS scan complete ({len(ordered_results)} matches)", "rrs_status")
+
+    def has_minimum_candles_completed(self, required=CONSECUTIVE_CANDLES):
+        now = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
+        market_open = now.replace(hour=6, minute=30, second=0, microsecond=0)
+        if now < market_open:
+            return False
+        elapsed = (now - market_open).total_seconds()
+        return elapsed >= required * 300
+
     def nextValidId(self, orderId):
         self.connection_status = True
         logging.info(f"Connected to IB API. NextValidId={orderId}")
 
     def error(self, reqId, errorCode, errorString):
         logging.error(f"IB Error. ReqId={reqId}, Code={errorCode}, Msg={errorString}")
+        if errorCode in (504, 1100) or "not connected" in errorString.lower():
+            self.connection_status = False
+        elif errorCode in (1101, 1102):
+            self.connection_status = True
+
+    def connectionClosed(self):
+        self.connection_status = False
+        logging.warning("IB connection closed.")
 
     def historicalData(self, reqId, bar):
-        with threading.Lock():
+        with self.data_lock:
             if reqId not in self.data:
                 self.data[reqId] = []
             self.data[reqId].append({
@@ -218,8 +557,9 @@ class BounceBot(EWrapper, EClient):
 
     def historicalDataEnd(self, reqId: int, start: str, end: str):
         logging.debug(f"Historical data end: ReqId={reqId}, Start={start}, End={end}. Total bars: {len(self.data.get(reqId, []))}")
-        if reqId in self.data_ready_events:
-            self.data_ready_events[reqId].set()
+        with self.data_lock:
+            if reqId in self.data_ready_events:
+                self.data_ready_events[reqId].set()
 
     def calculate_atr(self, df_daily, period=ATR_PERIOD):
         # Calculate True Range
@@ -900,6 +1240,9 @@ class BounceBot(EWrapper, EClient):
         
         # Clean up
         del self.data_ready_events[five_day_reqId]
+
+        # Cache 5-minute bars for RRS reuse
+        self.latest_bars[symbol] = _dedupe_bars(_bars_to_ib(all_bars))
         
         # Convert to DataFrame
         df = pd.DataFrame(all_bars)
@@ -1162,6 +1505,9 @@ class BounceBot(EWrapper, EClient):
 
 
     def check_removal_conditions(self):
+        if not self.has_minimum_candles_completed():
+            logging.info("Skipping removal conditions until 6 completed 5-minute candles.")
+            return
         for file_name, direction in [(LONGS_FILENAME, "long"), (SHORTS_FILENAME, "short")]:
             tickers = read_tickers(file_name)
             for symbol in tickers:
@@ -1221,6 +1567,10 @@ class BounceBot(EWrapper, EClient):
         
         while True:
             try:
+                if not self.ensure_connected():
+                    logging.warning("IB not connected; retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
                 # Reset warning cache daily
                 current_date = datetime.now().date()
                 if current_date != last_warning_reset:
@@ -1232,6 +1582,7 @@ class BounceBot(EWrapper, EClient):
                 self.shorts = read_tickers(SHORTS_FILENAME)
                 self.alerted_symbols.clear()
                 self.symbol_metrics = {}
+                self.latest_bars = {}
                 self.build_atr_cache()
                 all_symbols = set(self.longs + self.shorts)
                 for sym in all_symbols:
@@ -1239,6 +1590,7 @@ class BounceBot(EWrapper, EClient):
                         continue
                     self.request_and_detect_bounce(sym)
                 self.check_removal_conditions()
+                self.run_rrs_scan()
                 wait_for_candle_close()
                 if self.gui_callback:
                     self.gui_callback("Candle has closed", "candle_line")
@@ -1418,8 +1770,10 @@ def run_bot_with_gui(gui_callback):
     logging.getLogger("ibapi.client").addFilter(HistoricalDataFilter())
 
     bot = BounceBot(gui_callback=gui_callback)
+    bot.set_connection_info("127.0.0.1", 7496, 125)
     bot.connect("127.0.0.1", 7496, clientId=125)
     api_thread = threading.Thread(target=bot.run, daemon=True)
+    bot.api_thread = api_thread
     api_thread.start()
     while not bot.connection_status:
         time.sleep(1)
@@ -1437,12 +1791,15 @@ def run_bot_with_gui(gui_callback):
 def start_gui():
     bounce_queue = queue.Queue()
     approaching_queue = queue.Queue()
+    rrs_queue = queue.Queue()
     # Replace light_grey with dark_grey
     dark_grey = "#2E2E2E"  # Dark grey color code
     text_color = "#E0E0E0"  # Light text color for dark background
 
     def gui_callback(message, tag):
-        if tag == "approaching" or tag.startswith("approaching_"):
+        if tag.startswith("rrs"):
+            rrs_queue.put((message, tag))
+        elif tag == "approaching" or tag.startswith("approaching_"):
             approaching_queue.put((message, tag))
         elif tag == "candle_line":
             bounce_queue.put((message, tag))
@@ -1463,10 +1820,14 @@ def start_gui():
     frame = tk.Frame(root, padx=10, pady=10, bg=dark_grey)
     frame.pack(fill=tk.BOTH, expand=True)
 
+    content_pane = tk.PanedWindow(frame, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=dark_grey)
+    content_pane.pack(fill=tk.BOTH, expand=True)
+
+    alerts_frame = tk.Frame(content_pane, bg=dark_grey)
     text_area = scrolledtext.ScrolledText(
-        frame, 
-        wrap=tk.WORD, 
-        width=80, 
+        alerts_frame,
+        wrap=tk.WORD,
+        width=80,
         height=30,
         font=('Courier', 12),
         state='disabled',
@@ -1474,6 +1835,7 @@ def start_gui():
         fg=text_color  # Add text color
     )
     text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    content_pane.add(alerts_frame, stretch="always")
 
     # Configure tags with new color scheme
     text_area.tag_config("green", foreground="#50FA7B", font=('Courier', 12))  # Green for long message text
@@ -1514,6 +1876,82 @@ def start_gui():
     approaching_text.tag_config("approaching_green", foreground="#50FA7B", font=('Courier', 12))
     approaching_text.tag_config("approaching_red", foreground="#FF5555", font=('Courier', 12))
     approaching_text.tag_config("candle_line", foreground="#BD93F9", overstrike=1)          # Purple
+
+    # Create RRS panel inside main window
+    rrs_container = tk.Frame(content_pane, bg=dark_grey)
+    content_pane.add(rrs_container, stretch="always")
+
+    rrs_controls = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
+    rrs_controls.pack(fill=tk.X)
+
+    rrs_status_var = tk.StringVar(value="RRS ready")
+    rrs_status_label = tk.Label(rrs_controls, textvariable=rrs_status_var, fg=text_color, bg=dark_grey)
+    rrs_status_label.pack(side=tk.LEFT, padx=(0, 10))
+
+    rrs_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
+
+    def on_rrs_threshold_change(*_):
+        bot_instance.set_rrs_threshold(rrs_threshold_var.get())
+
+    rrs_threshold_var.trace_add("write", on_rrs_threshold_change)
+
+    rrs_scale = tk.Scale(
+        rrs_controls,
+        from_=0.0,
+        to=5.0,
+        resolution=0.1,
+        orient=tk.HORIZONTAL,
+        label="RRS Sensitivity",
+        variable=rrs_threshold_var,
+        length=220,
+        bg=dark_grey,
+        fg=text_color,
+        highlightthickness=0,
+    )
+    rrs_scale.pack(side=tk.LEFT, padx=(0, 10))
+
+    timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
+
+    def on_timeframe_change() -> None:
+        bot_instance.set_rrs_timeframe(timeframe_var.get())
+
+    for key in ("5m", "15m", "30m", "1h"):
+        label = RRS_TIMEFRAMES[key]["label"]
+        btn = tk.Radiobutton(
+            rrs_controls,
+            text=label,
+            variable=timeframe_var,
+            value=key,
+            indicatoron=0,
+            command=on_timeframe_change,
+            padx=6,
+            pady=2,
+            bg=dark_grey,
+            fg=text_color,
+            selectcolor="#444444",
+            activebackground="#444444",
+            activeforeground=text_color,
+        )
+        btn.pack(side=tk.LEFT, padx=2)
+
+    rrs_frame = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
+    rrs_frame.pack(fill=tk.BOTH, expand=True)
+
+    rrs_text = scrolledtext.ScrolledText(
+        rrs_frame,
+        wrap=tk.NONE,
+        width=80,
+        height=30,
+        font=('Courier', 11),
+        state='disabled',
+        bg=dark_grey,
+        fg=text_color
+    )
+    rrs_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    rrs_text.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
+    rrs_text.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
+    rrs_text.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
 
 
     button_frame = tk.Frame(frame, bg=dark_grey)  # Add background color to button frame
@@ -1634,6 +2072,51 @@ def start_gui():
                 break
         root.after(100, process_approaching_queue)
 
+    def render_rrs_snapshot(snapshot):
+        threshold = snapshot.get("threshold", RRS_DEFAULT_THRESHOLD)
+        timeframe_key = snapshot.get("timeframe_key", "5m")
+        timeframe_label = RRS_TIMEFRAMES.get(timeframe_key, {}).get("label", timeframe_key)
+        results = snapshot.get("results", [])
+        timestamp = snapshot.get("timestamp", datetime.now())
+
+        rrs_text.config(state='normal')
+        rrs_text.delete("1.0", tk.END)
+
+        header = (
+            f"Last scan: {timestamp.strftime('%H:%M:%S')}   "
+            f"Timeframe: {timeframe_label}   "
+            f"Threshold: {threshold:.2f}\n"
+            "SYMBOL  SIDE  RRS    POWER\n"
+            "--------------------------\n"
+        )
+        rrs_text.insert(tk.END, header, "rrs_hdr")
+
+        if not results:
+            rrs_text.insert(tk.END, "No symbols flagged.\n")
+        else:
+            for signal, symbol, rrs_value, power in results:
+                rrs_str = f"{rrs_value:+.2f}" if rrs_value is not None else "n/a"
+                power_str = f"{power:.2f}" if power is not None else "n/a"
+                line = f"{symbol:<6}  {signal:<4}  {rrs_str:<6}  {power_str:>6}\n"
+                tag = "rrs_rs" if signal == "RS" else "rrs_rw"
+                rrs_text.insert(tk.END, line, tag)
+
+        rrs_text.config(state='disabled')
+        rrs_text.see("1.0")
+
+    def process_rrs_queue():
+        while True:
+            try:
+                msg, tag = rrs_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if tag == "rrs_status":
+                rrs_status_var.set(str(msg))
+            elif tag == "rrs_snapshot":
+                render_rrs_snapshot(msg)
+        root.after(150, process_rrs_queue)
+
 
     def on_closing():
         bot_instance.disconnect()
@@ -1644,6 +2127,7 @@ def start_gui():
     
     process_bounce_queue()
     process_approaching_queue()
+    process_rrs_queue()
     root.mainloop()
 
 
