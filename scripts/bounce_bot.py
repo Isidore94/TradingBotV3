@@ -41,6 +41,7 @@ LONGS_FILENAME = ROOT_DIR / "longs.txt"
 SHORTS_FILENAME = ROOT_DIR / "shorts.txt"
 BOUNCE_LOG_FILENAME = LOG_DIR / "bouncers.txt"
 INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
+STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_strength_extremes.csv"
 ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
@@ -48,7 +49,9 @@ CHECK_CONSECUTIVE_CANDLES = True  # Parameter to enable/disable this check
 CHECK_BOUNCE_VVWAP = True
 CHECK_BOUNCE_DYNAMIC_VVWAP = True
 CHECK_BOUNCE_EOD_VWAP = True 
-CHECK_BOUNCE_21_EMA = True
+CHECK_BOUNCE_8_EMA = True
+CHECK_BOUNCE_15_EMA = True
+CHECK_BOUNCE_21_EMA = False
 CHECK_BOUNCE_10_CANDLE = False
 CHECK_BOUNCE_PREV_DAY_HIGH = True
 CHECK_BOUNCE_PREV_DAY_LOW = True
@@ -68,6 +71,8 @@ BOUNCE_TYPE_DEFAULTS = {
     "vwap": CHECK_BOUNCE_VVWAP,
     "dynamic_vwap": CHECK_BOUNCE_DYNAMIC_VVWAP,
     "eod_vwap": CHECK_BOUNCE_EOD_VWAP,
+    "ema_8": CHECK_BOUNCE_8_EMA,
+    "ema_15": CHECK_BOUNCE_15_EMA,
     "ema_21": CHECK_BOUNCE_21_EMA,
     "vwap_upper_band": CHECK_BOUNCE_VWAP_UPPER_BAND,
     "vwap_lower_band": CHECK_BOUNCE_VWAP_LOWER_BAND,
@@ -84,6 +89,8 @@ BOUNCE_TYPE_LABELS = {
     "vwap": "Std VWAP",
     "dynamic_vwap": "Dynamic VWAP",
     "eod_vwap": "EOD VWAP",
+    "ema_8": "8 EMA",
+    "ema_15": "15 EMA",
     "ema_21": "21 EMA",
     "vwap_upper_band": "VWAP 1SD Upper",
     "vwap_lower_band": "VWAP 1SD Lower",
@@ -109,6 +116,7 @@ RRS_TIMEFRAMES = {
     "30m": {"label": "30 min", "bar_size": "30 mins", "duration": "5 D", "minutes": 30},
     "1h": {"label": "1 hour", "bar_size": "1 hour", "duration": "5 D", "minutes": 60},
 }
+SCAN_EXTREME_COUNT = 5
 
 ##########################################
 # Logging Filter
@@ -381,6 +389,7 @@ class BounceBot(EWrapper, EClient):
 
         # Cache latest 5-minute bars per symbol for reuse (RRS)
         self.latest_bars = {}
+        self.latest_scan_extremes = {}
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
 
@@ -511,15 +520,19 @@ class BounceBot(EWrapper, EClient):
         self.latest_bars[symbol] = bars_ib
         return bars_ib
 
-    def run_rrs_scan(self):
+    def run_rrs_scan(self, timeframe_key_override=None, emit_gui=True):
         threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
+        if timeframe_key_override in RRS_TIMEFRAMES:
+            timeframe_key = timeframe_key_override
+            bar_size = RRS_TIMEFRAMES[timeframe_key]["bar_size"]
+            duration = RRS_TIMEFRAMES[timeframe_key]["duration"]
         timeframe_minutes = RRS_TIMEFRAMES[timeframe_key]["minutes"]
-        if self.gui_callback:
+        if emit_gui and self.gui_callback:
             self.gui_callback(f"RRS scan running ({RRS_TIMEFRAMES[timeframe_key]['label']})...", "rrs_status")
 
         spy_5m = self.get_cached_5m_bars("SPY")
         if not spy_5m:
-            if self.gui_callback:
+            if emit_gui and self.gui_callback:
                 self.gui_callback("RRS scan: SPY data unavailable.", "rrs_status")
             return
 
@@ -529,6 +542,7 @@ class BounceBot(EWrapper, EClient):
         spy_by_dt = {bar.dt: bar for bar in spy_bars}
 
         results = []
+        all_scores = []
         all_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
         for symbol in all_symbols:
             sym_5m = self.get_cached_5m_bars(symbol)
@@ -541,10 +555,17 @@ class BounceBot(EWrapper, EClient):
             rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
             if rrs_value is None:
                 continue
+            all_scores.append((symbol, rrs_value, power_index))
             if symbol in self.longs and rrs_value >= threshold:
                 results.append(("RS", symbol, rrs_value, power_index))
             elif symbol in self.shorts and rrs_value <= -threshold:
                 results.append(("RW", symbol, rrs_value, power_index))
+
+        strongest = sorted(all_scores, key=lambda row: row[1], reverse=True)[:SCAN_EXTREME_COUNT]
+        weakest = sorted(all_scores, key=lambda row: row[1])[:SCAN_EXTREME_COUNT]
+        self.latest_scan_extremes[timeframe_key] = strongest + weakest
+        if strongest or weakest:
+            self._log_scan_extremes(timeframe_key, strongest, weakest)
 
         rs_results = sorted([r for r in results if r[0] == "RS"], key=lambda r: -r[2])
         rw_results = sorted([r for r in results if r[0] == "RW"], key=lambda r: r[2])
@@ -556,9 +577,44 @@ class BounceBot(EWrapper, EClient):
             "timeframe_key": timeframe_key,
             "results": ordered_results,
         }
-        if self.gui_callback:
+        if emit_gui and self.gui_callback:
             self.gui_callback(snapshot, "rrs_snapshot")
-            self.gui_callback(f"RRS scan complete ({len(ordered_results)} matches)", "rrs_status")
+            self.gui_callback(
+                f"RRS scan complete ({len(ordered_results)} matches, {len(strongest)} strongest, {len(weakest)} weakest logged)",
+                "rrs_status",
+            )
+
+    def _log_scan_extremes(self, timeframe_key, strongest, weakest):
+        timestamp_local = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
+        STRENGTH_SCAN_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not STRENGTH_SCAN_LOG_FILENAME.exists()
+        with open(STRENGTH_SCAN_LOG_FILENAME, "a", newline="") as csvfile:
+            writer = csv.DictWriter(
+                csvfile,
+                fieldnames=["timestamp_local", "timeframe", "bucket", "symbol", "rrs", "power_index"],
+            )
+            if write_header:
+                writer.writeheader()
+            for bucket, items in (("strongest", strongest), ("weakest", weakest)):
+                for symbol, rrs_value, power_index in items:
+                    writer.writerow(
+                        {
+                            "timestamp_local": timestamp_local.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                            "timeframe": timeframe_key,
+                            "bucket": bucket,
+                            "symbol": symbol,
+                            "rrs": f"{rrs_value:.4f}",
+                            "power_index": (
+                                f"{power_index:.4f}" if power_index is not None else ""
+                            ),
+                        }
+                    )
+
+    def get_monitored_extreme_symbols(self):
+        symbols = set()
+        for entries in self.latest_scan_extremes.values():
+            symbols.update(item[0] for item in entries)
+        return symbols
 
     def has_minimum_candles_completed(self, required=CONSECUTIVE_CANDLES):
         now = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
@@ -1066,6 +1122,8 @@ class BounceBot(EWrapper, EClient):
             std_vwap_str = f"{metrics.get('std_vwap'):.4f}" if metrics.get('std_vwap') is not None else "None"
             dynamic_vwap_str = f"{metrics.get('dynamic_vwap'):.4f}" if metrics.get('dynamic_vwap') is not None else "None"
             eod_vwap_str = f"{metrics.get('eod_vwap'):.4f}" if metrics.get('eod_vwap') is not None else "None"
+            ema_8_str = f"{metrics.get('ema_8'):.4f}" if metrics.get('ema_8') is not None else "None"
+            ema_15_str = f"{metrics.get('ema_15'):.4f}" if metrics.get('ema_15') is not None else "None"
             ema_21_str = f"{metrics.get('ema_21'):.4f}" if metrics.get('ema_21') is not None else "None"
             upper_band_str = f"{metrics.get('vwap_1stdev_upper'):.4f}" if metrics.get('vwap_1stdev_upper') is not None else "None"
             lower_band_str = f"{metrics.get('vwap_1stdev_lower'):.4f}" if metrics.get('vwap_1stdev_lower') is not None else "None"
@@ -1074,7 +1132,7 @@ class BounceBot(EWrapper, EClient):
             eod_upper_str = f"{metrics.get('eod_vwap_1stdev_upper'):.4f}" if metrics.get('eod_vwap_1stdev_upper') is not None else "None"
             eod_lower_str = f"{metrics.get('eod_vwap_1stdev_lower'):.4f}" if metrics.get('eod_vwap_1stdev_lower') is not None else "None"
             
-            logging.debug(f"{symbol} evaluation using - Std VWAP: {std_vwap_str}, Dynamic VWAP: {dynamic_vwap_str}, EOD VWAP: {eod_vwap_str}, EMA21: {ema_21_str}")
+            logging.debug(f"{symbol} evaluation using - Std VWAP: {std_vwap_str}, Dynamic VWAP: {dynamic_vwap_str}, EOD VWAP: {eod_vwap_str}, EMA8: {ema_8_str}, EMA15: {ema_15_str}, EMA21: {ema_21_str}")
             logging.debug(f"{symbol} bands - Std 1SD Upper: {upper_band_str}, Std 1SD Lower: {lower_band_str}")
             logging.debug(f"{symbol} dyn bands - Dynamic 1SD Upper: {dynamic_upper_str}, Dynamic 1SD Lower: {dynamic_lower_str}")
             logging.debug(f"{symbol} eod bands - EOD 1SD Upper: {eod_upper_str}, EOD 1SD Lower: {eod_lower_str}")
@@ -1169,29 +1227,41 @@ class BounceBot(EWrapper, EClient):
                     ref_levels["eod_vwap"] = metrics.get("eod_vwap")
                     logging.debug(f"{symbol}: EOD VWAP SHORT bounce candidate found. EOD VWAP: {metrics.get('eod_vwap'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
-        # Check for 21 EMA bounces (must also be on the correct side of standard VWAP)
-        if self.is_bounce_type_enabled("ema_21") and metrics.get("ema_21") is not None and metrics.get("std_vwap") is not None:
-            if check_consecutive_respect(metrics.get("ema_21"), "21 EMA"):
-                if direction == "long":
-                    is_above_vwap = current_candle_data["close"] > metrics.get("std_vwap")
-                    clean_bounce = (
-                        abs(current_candle_data["low"] - metrics.get("ema_21")) <= threshold
-                        and current_candle_data["close"] > current_candle_data["open"]
-                        and current_candle_data["close"] > metrics.get("ema_21")
+        # Check EMA bounces (must also be on the correct side of standard VWAP)
+        for ema_key, ema_label in (("ema_8", "8 EMA"), ("ema_15", "15 EMA"), ("ema_21", "21 EMA")):
+            if not self.is_bounce_type_enabled(ema_key):
+                continue
+            ema_value = metrics.get(ema_key)
+            std_vwap = metrics.get("std_vwap")
+            if ema_value is None or std_vwap is None:
+                continue
+            if not check_consecutive_respect(ema_value, ema_label):
+                continue
+
+            if direction == "long":
+                is_above_vwap = current_candle_data["close"] > std_vwap
+                clean_bounce = (
+                    abs(current_candle_data["low"] - ema_value) <= threshold
+                    and current_candle_data["close"] > current_candle_data["open"]
+                    and current_candle_data["close"] > ema_value
+                )
+                if is_above_vwap and clean_bounce:
+                    ref_levels[ema_key] = ema_value
+                    logging.debug(
+                        f"{symbol}: {ema_label} LONG bounce candidate found. {ema_label}: {ema_value:.2f}, Std VWAP: {std_vwap:.2f}"
                     )
-                    if is_above_vwap and clean_bounce:
-                        ref_levels["ema_21"] = metrics.get("ema_21")
-                        logging.debug(f"{symbol}: 21 EMA LONG bounce candidate found. EMA21: {metrics.get('ema_21'):.2f}, Std VWAP: {metrics.get('std_vwap'):.2f}")
-                elif direction == "short":
-                    is_below_vwap = current_candle_data["close"] < metrics.get("std_vwap")
-                    clean_bounce = (
-                        abs(current_candle_data["high"] - metrics.get("ema_21")) <= threshold
-                        and current_candle_data["close"] < current_candle_data["open"]
-                        and current_candle_data["close"] < metrics.get("ema_21")
+            elif direction == "short":
+                is_below_vwap = current_candle_data["close"] < std_vwap
+                clean_bounce = (
+                    abs(current_candle_data["high"] - ema_value) <= threshold
+                    and current_candle_data["close"] < current_candle_data["open"]
+                    and current_candle_data["close"] < ema_value
+                )
+                if is_below_vwap and clean_bounce:
+                    ref_levels[ema_key] = ema_value
+                    logging.debug(
+                        f"{symbol}: {ema_label} SHORT bounce candidate found. {ema_label}: {ema_value:.2f}, Std VWAP: {std_vwap:.2f}"
                     )
-                    if is_below_vwap and clean_bounce:
-                        ref_levels["ema_21"] = metrics.get("ema_21")
-                        logging.debug(f"{symbol}: 21 EMA SHORT bounce candidate found. EMA21: {metrics.get('ema_21'):.2f}, Std VWAP: {metrics.get('std_vwap'):.2f}")
 
         # Check for VWAP upper band bounces for longs
         if self.is_bounce_type_enabled("vwap_upper_band") and direction == "long" and metrics.get("vwap_1stdev_upper") is not None:
@@ -1382,10 +1452,17 @@ class BounceBot(EWrapper, EClient):
         
         logging.debug(f"{symbol}: Previous day high = {prev_high}, low = {prev_low}")
 
-        # 5. Calculate 21 EMA (today only)
+        # 5. Calculate short EMAs (today only)
+        ema_8 = None
+        ema_15 = None
         ema_21 = None
-        if not today_df.empty and len(today_df) >= 21:
-            ema_21 = today_df["close"].ewm(span=21, adjust=False).mean().iloc[-1]
+        if not today_df.empty:
+            if len(today_df) >= 8:
+                ema_8 = today_df["close"].ewm(span=8, adjust=False).mean().iloc[-1]
+            if len(today_df) >= 15:
+                ema_15 = today_df["close"].ewm(span=15, adjust=False).mean().iloc[-1]
+            if len(today_df) >= 21:
+                ema_21 = today_df["close"].ewm(span=21, adjust=False).mean().iloc[-1]
 
         # 6. Get current price
         current_price = today_df["close"].iloc[-1] if not today_df.empty else None
@@ -1427,6 +1504,8 @@ class BounceBot(EWrapper, EClient):
             "dynamic_vwap_1stdev_lower": dynamic_lower_band,
             "eod_vwap_1stdev_upper": eod_upper_band,
             "eod_vwap_1stdev_lower": eod_lower_band,
+            "ema_8": ema_8,
+            "ema_15": ema_15,
             "ema_21": ema_21
         }
 
@@ -1658,13 +1737,31 @@ class BounceBot(EWrapper, EClient):
                 self.symbol_metrics = {}
                 self.latest_bars = {}
                 self.build_atr_cache()
+
+                # Log strongest/weakest names for key intraday timeframes each cycle.
+                for timeframe_key in ("5m", "15m", "1h"):
+                    self.run_rrs_scan(timeframe_key_override=timeframe_key, emit_gui=False)
+                # Keep the GUI view synced with user-selected RRS timeframe.
+                self.run_rrs_scan()
+
+                monitored_symbols = self.get_monitored_extreme_symbols()
+                logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
                 all_symbols = set(self.longs + self.shorts)
-                for sym in all_symbols:
+                processed_symbols = set()
+
+                # 1) Prioritize strongest/weakest names first.
+                for sym in sorted(monitored_symbols):
+                    if sym not in all_symbols or self.atr_cache.get(sym) is None:
+                        continue
+                    self.request_and_detect_bounce(sym)
+                    processed_symbols.add(sym)
+
+                # 2) Then run the same bounce checks on the rest of the universe.
+                for sym in sorted(all_symbols - processed_symbols):
                     if self.atr_cache.get(sym) is None:
                         continue
                     self.request_and_detect_bounce(sym)
                 self.check_removal_conditions()
-                self.run_rrs_scan()
                 wait_for_candle_close()
                 if self.gui_callback:
                     self.gui_callback("Candle has closed", "candle_line")
@@ -2053,6 +2150,8 @@ def start_gui():
         "vwap",
         "dynamic_vwap",
         "eod_vwap",
+        "ema_8",
+        "ema_15",
         "ema_21",
         "vwap_upper_band",
         "vwap_lower_band",
