@@ -1747,7 +1747,17 @@ class BounceBot(EWrapper, EClient):
                 monitored_symbols = self.get_monitored_extreme_symbols()
                 logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
                 all_symbols = set(self.longs + self.shorts)
-                for sym in all_symbols:
+                processed_symbols = set()
+
+                # 1) Prioritize strongest/weakest names first.
+                for sym in sorted(monitored_symbols):
+                    if sym not in all_symbols or self.atr_cache.get(sym) is None:
+                        continue
+                    self.request_and_detect_bounce(sym)
+                    processed_symbols.add(sym)
+
+                # 2) Then run the same bounce checks on the rest of the universe.
+                for sym in sorted(all_symbols - processed_symbols):
                     if self.atr_cache.get(sym) is None:
                         continue
                     if monitored_symbols and sym not in monitored_symbols:
