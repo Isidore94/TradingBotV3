@@ -1,0 +1,13 @@
+{
+  "basic-materials": "XLB",
+  "communication-services": "XLC",
+  "consumer-cyclical": "XLY",
+  "consumer-defensive": "XLP",
+  "energy": "XLE",
+  "financial-services": "XLF",
+  "healthcare": "XLV",
+  "industrials": "XLI",
+  "real-estate": "XLRE",
+  "technology": "XLK",
+  "utilities": "XLU"
+}
