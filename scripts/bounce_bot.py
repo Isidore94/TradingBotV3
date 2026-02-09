@@ -1368,7 +1368,7 @@ class BounceBot(EWrapper, EClient):
 
 
 
-    def evaluate_bounce_candidate(self, symbol, df):
+    def evaluate_bounce_candidate(self, symbol, df, allowed_bounce_types=None):
         if len(df) < 10:
             return None
 
@@ -1448,6 +1448,10 @@ class BounceBot(EWrapper, EClient):
 
         # Initialize dictionary for reference levels that triggered bounce condition
         ref_levels = {}
+        allowed_types = set(allowed_bounce_types) if allowed_bounce_types is not None else None
+
+        def bounce_type_allowed(bounce_type):
+            return allowed_types is None or bounce_type in allowed_types
 
         # Function to check if a candle respects a level based on direction
         def respects_level(candle, level_value, direction, threshold):
@@ -1483,7 +1487,7 @@ class BounceBot(EWrapper, EClient):
             return level_respected
 
         # Check for 10-candle bounce if enabled
-        if self.is_bounce_type_enabled("10_candle") and len(df) >= 11:
+        if bounce_type_allowed("10_candle") and self.is_bounce_type_enabled("10_candle") and len(df) >= 11:
             if direction == "long":
                 # For longs, check if current candle creates a new lowest low
                 last_10_candles = df.iloc[-11:-1].copy()  # Exclude current candle
@@ -1504,7 +1508,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: 10-candle SHORT bounce candidate found. New high: {current_candle_data['high']:.2f}, Previous highest: {highest_high_prev:.2f}")
 
         # Check for standard VWAP bounces if enabled
-        if self.is_bounce_type_enabled("vwap") and metrics.get("std_vwap") is not None:
+        if bounce_type_allowed("vwap") and self.is_bounce_type_enabled("vwap") and metrics.get("std_vwap") is not None:
             # Check if price respected standard VWAP for consecutive candles
             if check_consecutive_respect(metrics.get("std_vwap"), "Standard VWAP"):
                 if direction == "long" and abs(current_candle_data["low"] - metrics.get("std_vwap")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -1515,7 +1519,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: Standard VWAP SHORT bounce candidate found. VWAP: {metrics.get('std_vwap'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for Dynamic VWAP bounces if enabled
-        if self.is_bounce_type_enabled("dynamic_vwap") and metrics.get("dynamic_vwap") is not None:
+        if bounce_type_allowed("dynamic_vwap") and self.is_bounce_type_enabled("dynamic_vwap") and metrics.get("dynamic_vwap") is not None:
             # Check if price respected dynamic VWAP for consecutive candles
             if check_consecutive_respect(metrics.get("dynamic_vwap"), "Dynamic VWAP"):
                 if direction == "long" and abs(current_candle_data["low"] - metrics.get("dynamic_vwap")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -1526,7 +1530,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: Dynamic VWAP SHORT bounce candidate found. DVWAP: {metrics.get('dynamic_vwap'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for EOD VWAP bounces if enabled
-        if self.is_bounce_type_enabled("eod_vwap") and metrics.get("eod_vwap") is not None:
+        if bounce_type_allowed("eod_vwap") and self.is_bounce_type_enabled("eod_vwap") and metrics.get("eod_vwap") is not None:
             # Check if price respected EOD VWAP for consecutive candles
             if check_consecutive_respect(metrics.get("eod_vwap"), "EOD VWAP"):
                 if direction == "long" and abs(current_candle_data["low"] - metrics.get("eod_vwap")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -1538,7 +1542,7 @@ class BounceBot(EWrapper, EClient):
 
         # Check EMA bounces (must also be on the correct side of standard VWAP)
         for ema_key, ema_label in (("ema_8", "8 EMA"), ("ema_15", "15 EMA"), ("ema_21", "21 EMA")):
-            if not self.is_bounce_type_enabled(ema_key):
+            if not bounce_type_allowed(ema_key) or not self.is_bounce_type_enabled(ema_key):
                 continue
             ema_value = metrics.get(ema_key)
             std_vwap = metrics.get("std_vwap")
@@ -1573,7 +1577,7 @@ class BounceBot(EWrapper, EClient):
                     )
 
         # Check for VWAP upper band bounces for longs
-        if self.is_bounce_type_enabled("vwap_upper_band") and direction == "long" and metrics.get("vwap_1stdev_upper") is not None:
+        if bounce_type_allowed("vwap_upper_band") and self.is_bounce_type_enabled("vwap_upper_band") and direction == "long" and metrics.get("vwap_1stdev_upper") is not None:
             # Check if price respected upper band for consecutive candles
             if check_consecutive_respect(metrics.get("vwap_1stdev_upper"), "VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -1581,7 +1585,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for VWAP lower band bounces for shorts
-        if self.is_bounce_type_enabled("vwap_lower_band") and direction == "short" and metrics.get("vwap_1stdev_lower") is not None:
+        if bounce_type_allowed("vwap_lower_band") and self.is_bounce_type_enabled("vwap_lower_band") and direction == "short" and metrics.get("vwap_1stdev_lower") is not None:
             # Check if price respected lower band for consecutive candles
             if check_consecutive_respect(metrics.get("vwap_1stdev_lower"), "VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
@@ -1589,7 +1593,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for Dynamic VWAP upper band bounces for longs
-        if self.is_bounce_type_enabled("dynamic_vwap_upper_band") and direction == "long" and metrics.get("dynamic_vwap_1stdev_upper") is not None:
+        if bounce_type_allowed("dynamic_vwap_upper_band") and self.is_bounce_type_enabled("dynamic_vwap_upper_band") and direction == "long" and metrics.get("dynamic_vwap_1stdev_upper") is not None:
             # Check if price respected upper band for consecutive candles
             if check_consecutive_respect(metrics.get("dynamic_vwap_1stdev_upper"), "Dynamic VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("dynamic_vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -1597,7 +1601,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: Dynamic VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('dynamic_vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for Dynamic VWAP lower band bounces for shorts
-        if self.is_bounce_type_enabled("dynamic_vwap_lower_band") and direction == "short" and metrics.get("dynamic_vwap_1stdev_lower") is not None:
+        if bounce_type_allowed("dynamic_vwap_lower_band") and self.is_bounce_type_enabled("dynamic_vwap_lower_band") and direction == "short" and metrics.get("dynamic_vwap_1stdev_lower") is not None:
             # Check if price respected lower band for consecutive candles
             if check_consecutive_respect(metrics.get("dynamic_vwap_1stdev_lower"), "Dynamic VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("dynamic_vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
@@ -1605,7 +1609,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: Dynamic VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('dynamic_vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for EOD VWAP upper band bounces for longs
-        if self.is_bounce_type_enabled("eod_vwap_upper_band") and direction == "long" and metrics.get("eod_vwap_1stdev_upper") is not None:
+        if bounce_type_allowed("eod_vwap_upper_band") and self.is_bounce_type_enabled("eod_vwap_upper_band") and direction == "long" and metrics.get("eod_vwap_1stdev_upper") is not None:
             # Check if price respected upper band for consecutive candles
             if check_consecutive_respect(metrics.get("eod_vwap_1stdev_upper"), "EOD VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("eod_vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -1613,7 +1617,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: EOD VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('eod_vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for EOD VWAP lower band bounces for shorts
-        if self.is_bounce_type_enabled("eod_vwap_lower_band") and direction == "short" and metrics.get("eod_vwap_1stdev_lower") is not None:
+        if bounce_type_allowed("eod_vwap_lower_band") and self.is_bounce_type_enabled("eod_vwap_lower_band") and direction == "short" and metrics.get("eod_vwap_1stdev_lower") is not None:
             # Check if price respected lower band for consecutive candles
             if check_consecutive_respect(metrics.get("eod_vwap_1stdev_lower"), "EOD VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("eod_vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
@@ -1621,7 +1625,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: EOD VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('eod_vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for previous day high/low bounces if enabled
-        if direction == "long" and self.is_bounce_type_enabled("prev_day_high") and metrics.get("prev_high") is not None:
+        if direction == "long" and bounce_type_allowed("prev_day_high") and self.is_bounce_type_enabled("prev_day_high") and metrics.get("prev_high") is not None:
             # Check if price respected previous day high for consecutive candles
             if check_consecutive_respect(metrics.get("prev_high"), "Previous Day High"):
                 # Only consider bounce if price respected the level all day
@@ -1629,7 +1633,7 @@ class BounceBot(EWrapper, EClient):
                     ref_levels["prev_day_high"] = metrics.get("prev_high")
                     logging.debug(f"{symbol}: Previous Day High LONG bounce candidate found. Prev High: {metrics.get('prev_high'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
-        elif direction == "short" and self.is_bounce_type_enabled("prev_day_low") and metrics.get("prev_low") is not None:
+        elif direction == "short" and bounce_type_allowed("prev_day_low") and self.is_bounce_type_enabled("prev_day_low") and metrics.get("prev_low") is not None:
             # Check if price respected previous day low for consecutive candles
             if check_consecutive_respect(metrics.get("prev_low"), "Previous Day Low"):
                 # Only consider bounce if price respected the level all day
@@ -1642,7 +1646,7 @@ class BounceBot(EWrapper, EClient):
 
 
 
-    def request_and_detect_bounce(self, symbol):
+    def request_and_detect_bounce(self, symbol, allowed_bounce_types=None):
         # Only scan within market hours (if enabled)
         if not SCAN_OUTSIDE_MARKET_HOURS:
             current_time = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
@@ -1845,7 +1849,7 @@ class BounceBot(EWrapper, EClient):
 
         # Continue with evaluating bounce candidates
         direction = "long" if symbol in self.longs else "short"
-        candidate_info = self.evaluate_bounce_candidate(symbol, df)
+        candidate_info = self.evaluate_bounce_candidate(symbol, df, allowed_bounce_types=allowed_bounce_types)
 
         
         # STEP 1: First check if we have an existing bounce candidate to confirm
@@ -2057,21 +2061,23 @@ class BounceBot(EWrapper, EClient):
                 logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
                 all_symbols = set(self.longs + self.shorts)
                 processed_symbols = set()
+                enabled_bounce_types = {
+                    bounce_type for bounce_type, enabled in self.bounce_type_toggles.items() if enabled
+                }
+                non_ema_extreme_bounce_types = enabled_bounce_types - {"ema_8", "ema_15"}
 
                 # 1) Prioritize strongest/weakest names first.
                 for sym in sorted(monitored_symbols):
                     if sym not in all_symbols or self.atr_cache.get(sym) is None:
                         continue
-                    self.request_and_detect_bounce(sym)
+                    self.request_and_detect_bounce(sym, allowed_bounce_types=enabled_bounce_types)
                     processed_symbols.add(sym)
 
-                # 2) Then run the same bounce checks on the rest of the universe.
+                # 2) Then scan all remaining symbols for non-EMA-8/15 bounce types.
                 for sym in sorted(all_symbols - processed_symbols):
                     if self.atr_cache.get(sym) is None:
                         continue
-                    if monitored_symbols and sym not in monitored_symbols:
-                        continue
-                    self.request_and_detect_bounce(sym)
+                    self.request_and_detect_bounce(sym, allowed_bounce_types=non_ema_extreme_bounce_types)
                 self.check_removal_conditions()
                 wait_for_candle_close()
                 if self.gui_callback:
