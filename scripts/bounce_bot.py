@@ -3,6 +3,8 @@
 import os
 import sys
 import csv
+import json
+import re
 from pathlib import Path
 # Suppress Tk deprecation warnings on macOS
 os.environ["TK_SILENCE_DEPRECATION"] = "1"
@@ -20,6 +22,7 @@ from tkinter import scrolledtext
 import tkinter.font as tkFont
 
 import pandas as pd
+import yfinance as yf
 
 # IB API imports
 from ibapi.client import EClient
@@ -36,12 +39,17 @@ init(autoreset=True)
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 LOG_DIR = ROOT_DIR / "logs"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LONGS_FILENAME = ROOT_DIR / "longs.txt"
 SHORTS_FILENAME = ROOT_DIR / "shorts.txt"
 BOUNCE_LOG_FILENAME = LOG_DIR / "bouncers.txt"
 INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
 STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_strength_extremes.csv"
+GROUP_STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_group_strength_extremes.csv"
+SECTOR_ETF_MAP_FILENAME = DATA_DIR / "sector_etf_map.json"
+INDUSTRY_ETF_MAP_FILENAME = DATA_DIR / "industry_etf_map.json"
+SYMBOL_CLASSIFICATION_CACHE_FILENAME = DATA_DIR / "symbol_classification.csv"
 ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
@@ -117,6 +125,118 @@ RRS_TIMEFRAMES = {
     "1h": {"label": "1 hour", "bar_size": "1 hour", "duration": "5 D", "minutes": 60},
 }
 SCAN_EXTREME_COUNT = 5
+GROUP_STRENGTH_TIMEFRAMES = {
+    "D1": {"bar_size": "1 day", "duration": "6 M"},
+    "H1": {"bar_size": "1 hour", "duration": "5 D"},
+    "M5": {"bar_size": "5 mins", "duration": "5 D"},
+}
+DEFAULT_SECTOR_ETF_MAP = {
+    "communication-services": "XLC",
+    "consumer-cyclical": "XLY",
+    "consumer-defensive": "XLP",
+    "energy": "XLE",
+    "financial-services": "XLF",
+    "healthcare": "XLV",
+    "industrials": "XLI",
+    "basic-materials": "XLB",
+    "real-estate": "XLRE",
+    "technology": "XLK",
+    "utilities": "XLU",
+}
+
+
+def utc_now_iso():
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def slugify_key(value):
+    if value is None:
+        return ""
+    text = re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower())
+    return text.strip("-")
+
+
+def load_sector_etf_map():
+    SECTOR_ETF_MAP_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+    if not SECTOR_ETF_MAP_FILENAME.exists():
+        with open(SECTOR_ETF_MAP_FILENAME, "w") as fh:
+            json.dump(DEFAULT_SECTOR_ETF_MAP, fh, indent=2, sort_keys=True)
+    try:
+        with open(SECTOR_ETF_MAP_FILENAME, "r") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return {str(k): str(v).upper() for k, v in data.items() if v}
+    except Exception as exc:
+        logging.warning(f"Failed loading sector ETF map: {exc}")
+    return dict(DEFAULT_SECTOR_ETF_MAP)
+
+
+def _load_industry_etf_map_file():
+    INDUSTRY_ETF_MAP_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+    default_map = {"version": 1, "updated_utc": utc_now_iso(), "yahoo_industryKey_to_ref": {}}
+    if not INDUSTRY_ETF_MAP_FILENAME.exists():
+        with open(INDUSTRY_ETF_MAP_FILENAME, "w") as fh:
+            json.dump(default_map, fh, indent=2, sort_keys=True)
+        return default_map
+    try:
+        with open(INDUSTRY_ETF_MAP_FILENAME, "r") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data.setdefault("version", 1)
+    data.setdefault("updated_utc", utc_now_iso())
+    data.setdefault("yahoo_industryKey_to_ref", {})
+    return data
+
+
+def load_and_update_industry_etf_map(industryKey, sectorKey, industry_name, sector_name):
+    data = _load_industry_etf_map_file()
+    refs = data.setdefault("yahoo_industryKey_to_ref", {})
+    now = utc_now_iso()
+    key = (industryKey or "").strip()
+    if key:
+        entry = refs.get(key)
+        if not isinstance(entry, dict):
+            entry = {
+                "sectorKey": sectorKey or "",
+                "industry": industry_name or "",
+                "sector": sector_name or "",
+                "etf": None,
+                "first_seen_utc": now,
+                "last_seen_utc": now,
+                "seen_count": 1,
+            }
+        else:
+            entry["sectorKey"] = entry.get("sectorKey") or (sectorKey or "")
+            entry["industry"] = entry.get("industry") or (industry_name or "")
+            entry["sector"] = entry.get("sector") or (sector_name or "")
+            entry["etf"] = entry.get("etf") if entry.get("etf") else None
+            entry["first_seen_utc"] = entry.get("first_seen_utc") or now
+            entry["last_seen_utc"] = now
+            entry["seen_count"] = int(entry.get("seen_count", 0) or 0) + 1
+        refs[key] = entry
+        data["updated_utc"] = now
+        with open(INDUSTRY_ETF_MAP_FILENAME, "w") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+    return data
+
+
+def resolve_sector_etf(sectorKey, sector_map=None):
+    key = (sectorKey or "").strip()
+    mapping = sector_map if isinstance(sector_map, dict) else load_sector_etf_map()
+    return mapping.get(key, "SPY")
+
+
+def resolve_industry_ref_etf(industryKey, sectorKey):
+    if industryKey:
+        data = _load_industry_etf_map_file()
+        entry = data.get("yahoo_industryKey_to_ref", {}).get(industryKey, {})
+        etf = (entry.get("etf") or "").strip().upper() if isinstance(entry, dict) else ""
+        if etf:
+            return etf
+    return resolve_sector_etf(sectorKey)
 
 ##########################################
 # Logging Filter
@@ -390,8 +510,14 @@ class BounceBot(EWrapper, EClient):
         # Cache latest 5-minute bars per symbol for reuse (RRS)
         self.latest_bars = {}
         self.latest_scan_extremes = {}
+        self.latest_group_extremes = {}
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
+
+        self.sector_etf_map = load_sector_etf_map()
+        self.industry_map_data = _load_industry_etf_map_file()
+        self.symbol_classification_cache = {}
+        self._load_symbol_classification_cache()
 
 
     def getReqId(self):
@@ -476,6 +602,93 @@ class BounceBot(EWrapper, EClient):
                 self.rrs_timeframe_key,
             )
 
+    def _load_symbol_classification_cache(self):
+        if not SYMBOL_CLASSIFICATION_CACHE_FILENAME.exists():
+            return
+        try:
+            with open(SYMBOL_CLASSIFICATION_CACHE_FILENAME, "r", newline="") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    symbol = (row.get("symbol") or "").strip().upper()
+                    if symbol:
+                        self.symbol_classification_cache[symbol] = {
+                            "symbol": symbol,
+                            "sectorKey": row.get("sectorKey", ""),
+                            "industryKey": row.get("industryKey", ""),
+                            "sector": row.get("sector", ""),
+                            "industry": row.get("industry", ""),
+                            "updated_utc": row.get("updated_utc", ""),
+                        }
+        except Exception as exc:
+            logging.warning(f"Failed loading symbol classification cache: {exc}")
+
+    def _write_symbol_classification_cache(self):
+        SYMBOL_CLASSIFICATION_CACHE_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+        with open(SYMBOL_CLASSIFICATION_CACHE_FILENAME, "w", newline="") as fh:
+            fieldnames = ["symbol", "sectorKey", "industryKey", "sector", "industry", "updated_utc"]
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            for symbol in sorted(self.symbol_classification_cache):
+                writer.writerow(self.symbol_classification_cache[symbol])
+
+    def _fetch_symbol_classification(self, symbol):
+        sector_name = ""
+        industry_name = ""
+        sector_key = ""
+        industry_key = ""
+        try:
+            info = yf.Ticker(symbol).get_info()
+            sector_name = (info.get("sectorDisp") or info.get("sector") or "").strip()
+            industry_name = (info.get("industryDisp") or info.get("industry") or "").strip()
+            sector_key = (info.get("sectorKey") or "").strip()
+            industry_key = (info.get("industryKey") or "").strip()
+        except Exception as exc:
+            logging.warning(f"Yahoo classification failed for {symbol}: {exc}")
+        if not sector_key:
+            sector_key = slugify_key(sector_name)
+        if not industry_key:
+            industry_key = slugify_key(industry_name)
+        return {
+            "symbol": symbol,
+            "sectorKey": sector_key,
+            "industryKey": industry_key,
+            "sector": sector_name,
+            "industry": industry_name,
+            "updated_utc": utc_now_iso(),
+        }
+
+    def get_symbol_classification(self, symbol):
+        symbol = (symbol or "").strip().upper()
+        if not symbol:
+            return None
+        cached = self.symbol_classification_cache.get(symbol)
+        if cached is not None:
+            return cached
+        row = self._fetch_symbol_classification(symbol)
+        self.symbol_classification_cache[symbol] = row
+        self._write_symbol_classification_cache()
+        if row.get("industryKey"):
+            self.industry_map_data = load_and_update_industry_etf_map(
+                row.get("industryKey"),
+                row.get("sectorKey"),
+                row.get("industry"),
+                row.get("sector"),
+            )
+        return row
+
+    def _get_cached_bars(self, symbol, duration, bar_size):
+        key = f"{symbol}|{duration}|{bar_size}"
+        bars = self.latest_bars.get(key)
+        if bars:
+            return bars
+        bars_raw = self.request_historical_bars(symbol, duration, bar_size, timeout=RRS_TIMEOUT)
+        if not bars_raw:
+            return []
+        bars_ib = _dedupe_bars(_bars_to_ib(bars_raw))
+        self.latest_bars[key] = bars_ib
+        self.latest_bars.setdefault(symbol, bars_ib)
+        return bars_ib
+
     def request_historical_bars(self, symbol, duration, bar_size, timeout=RRS_TIMEOUT):
         if not self.ensure_connected():
             logging.warning("Not connected to IB; skipping historical request.")
@@ -510,15 +723,7 @@ class BounceBot(EWrapper, EClient):
         return bars
 
     def get_cached_5m_bars(self, symbol):
-        bars = self.latest_bars.get(symbol)
-        if bars:
-            return bars
-        bars_raw = self.request_historical_bars(symbol, "5 D", "5 mins", timeout=RRS_TIMEOUT)
-        if not bars_raw:
-            return []
-        bars_ib = _dedupe_bars(_bars_to_ib(bars_raw))
-        self.latest_bars[symbol] = bars_ib
-        return bars_ib
+        return self._get_cached_bars(symbol, "5 D", "5 mins")
 
     def run_rrs_scan(self, timeframe_key_override=None, emit_gui=True):
         threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
@@ -536,21 +741,19 @@ class BounceBot(EWrapper, EClient):
                 self.gui_callback("RRS scan: SPY data unavailable.", "rrs_status")
             return
 
-        spy_bars = (
-            spy_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(spy_5m, timeframe_minutes)
-        )
+        spy_bars = spy_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(spy_5m, timeframe_minutes)
         spy_by_dt = {bar.dt: bar for bar in spy_bars}
 
         results = []
+        sector_results = []
+        industry_results = []
         all_scores = []
         all_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
         for symbol in all_symbols:
             sym_5m = self.get_cached_5m_bars(symbol)
             if not sym_5m:
                 continue
-            sym_bars = (
-                sym_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sym_5m, timeframe_minutes)
-            )
+            sym_bars = sym_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sym_5m, timeframe_minutes)
             aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt)
             rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
             if rrs_value is None:
@@ -560,6 +763,43 @@ class BounceBot(EWrapper, EClient):
                 results.append(("RS", symbol, rrs_value, power_index))
             elif symbol in self.shorts and rrs_value <= -threshold:
                 results.append(("RW", symbol, rrs_value, power_index))
+
+            classification = self.get_symbol_classification(symbol)
+            if not classification:
+                continue
+            sector_key = classification.get("sectorKey", "")
+            industry_key = classification.get("industryKey", "")
+            if industry_key:
+                self.industry_map_data = load_and_update_industry_etf_map(
+                    industry_key,
+                    sector_key,
+                    classification.get("industry", ""),
+                    classification.get("sector", ""),
+                )
+
+            sector_etf = resolve_sector_etf(sector_key, self.sector_etf_map)
+            sec_5m = self.get_cached_5m_bars(sector_etf)
+            if sec_5m:
+                sec_bars = sec_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sec_5m, timeframe_minutes)
+                aligned_sym_sec, aligned_sec = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in sec_bars})
+                sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
+                if sec_rrs is not None:
+                    if symbol in self.longs and sec_rrs >= threshold:
+                        sector_results.append(("RS", symbol, sec_rrs, sec_power))
+                    elif symbol in self.shorts and sec_rrs <= -threshold:
+                        sector_results.append(("RW", symbol, sec_rrs, sec_power))
+
+            industry_ref = resolve_industry_ref_etf(industry_key, sector_key)
+            ind_5m = self.get_cached_5m_bars(industry_ref)
+            if ind_5m:
+                ind_bars = ind_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(ind_5m, timeframe_minutes)
+                aligned_sym_ind, aligned_ind = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in ind_bars})
+                ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
+                if ind_rrs is not None:
+                    if symbol in self.longs and ind_rrs >= threshold:
+                        industry_results.append(("RS", symbol, ind_rrs, ind_power))
+                    elif symbol in self.shorts and ind_rrs <= -threshold:
+                        industry_results.append(("RW", symbol, ind_rrs, ind_power))
 
         strongest = sorted(all_scores, key=lambda row: row[1], reverse=True)[:SCAN_EXTREME_COUNT]
         weakest = sorted(all_scores, key=lambda row: row[1])[:SCAN_EXTREME_COUNT]
@@ -571,18 +811,87 @@ class BounceBot(EWrapper, EClient):
         rw_results = sorted([r for r in results if r[0] == "RW"], key=lambda r: r[2])
         ordered_results = rs_results + rw_results
 
+        def _ordered(rows):
+            rs = sorted([r for r in rows if r[0] == "RS"], key=lambda r: -r[2])
+            rw = sorted([r for r in rows if r[0] == "RW"], key=lambda r: r[2])
+            return rs + rw
+
         snapshot = {
             "timestamp": datetime.now(),
             "threshold": threshold,
             "timeframe_key": timeframe_key,
             "results": ordered_results,
+            "results_sector": _ordered(sector_results),
+            "results_industry": _ordered(industry_results),
+            "group_strength": self.compute_group_strengths(),
         }
         if emit_gui and self.gui_callback:
             self.gui_callback(snapshot, "rrs_snapshot")
             self.gui_callback(
-                f"RRS scan complete ({len(ordered_results)} matches, {len(strongest)} strongest, {len(weakest)} weakest logged)",
+                f"RRS scan complete ({len(ordered_results)} SPY, {len(snapshot['results_sector'])} sector, {len(snapshot['results_industry'])} industry refs)",
                 "rrs_status",
             )
+
+    def compute_group_strengths(self):
+        results = {}
+        industry_refs = self.industry_map_data.get("yahoo_industryKey_to_ref", {})
+        industry_etfs = sorted({(v.get("etf") or "").strip().upper() for v in industry_refs.values() if isinstance(v, dict) and (v.get("etf") or "").strip()})
+        for tf_key, tf in GROUP_STRENGTH_TIMEFRAMES.items():
+            spy = self._get_cached_bars("SPY", tf["duration"], tf["bar_size"])
+            if not spy:
+                continue
+            spy_by_dt = {bar.dt: bar for bar in spy}
+            sectors = []
+            for sector_key, etf in sorted(self.sector_etf_map.items()):
+                bars = self._get_cached_bars(etf, tf["duration"], tf["bar_size"])
+                if not bars:
+                    continue
+                aligned_etf, aligned_spy = _align_bars_with_map(bars, spy_by_dt)
+                rrs, power = real_relative_strength(aligned_etf, aligned_spy, length=self.rrs_length)
+                if rrs is not None:
+                    sectors.append({"group_key": sector_key, "etf": etf, "rrs": rrs, "power_index": power})
+            industries = []
+            for etf in industry_etfs:
+                bars = self._get_cached_bars(etf, tf["duration"], tf["bar_size"])
+                if not bars:
+                    continue
+                aligned_etf, aligned_spy = _align_bars_with_map(bars, spy_by_dt)
+                rrs, power = real_relative_strength(aligned_etf, aligned_spy, length=self.rrs_length)
+                if rrs is not None:
+                    industries.append({"group_key": etf, "etf": etf, "rrs": rrs, "power_index": power})
+            results[tf_key] = {
+                "sectors": sorted(sectors, key=lambda x: x["rrs"], reverse=True),
+                "industries": sorted(industries, key=lambda x: x["rrs"], reverse=True),
+            }
+        self.latest_group_extremes = results
+        self._log_group_strength_extremes(results)
+        return results
+
+    def _log_group_strength_extremes(self, grouped):
+        timestamp_local = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d %H:%M:%S %Z")
+        GROUP_STRENGTH_SCAN_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not GROUP_STRENGTH_SCAN_LOG_FILENAME.exists()
+        with open(GROUP_STRENGTH_SCAN_LOG_FILENAME, "a", newline="") as csvfile:
+            writer = csv.DictWriter(
+                csvfile,
+                fieldnames=["timestamp_local", "timeframe", "group_type", "group_key", "etf", "rrs", "power_index"],
+            )
+            if write_header:
+                writer.writeheader()
+            for timeframe, payload in grouped.items():
+                for group_type, items in (("sector", payload.get("sectors", [])), ("industry", payload.get("industries", []))):
+                    top = items[:SCAN_EXTREME_COUNT]
+                    bottom = list(reversed(items[-SCAN_EXTREME_COUNT:])) if len(items) > SCAN_EXTREME_COUNT else []
+                    for item in top + bottom:
+                        writer.writerow({
+                            "timestamp_local": timestamp_local,
+                            "timeframe": timeframe,
+                            "group_type": group_type,
+                            "group_key": item.get("group_key", ""),
+                            "etf": item.get("etf", ""),
+                            "rrs": f"{item.get('rrs', 0.0):.4f}",
+                            "power_index": f"{item.get('power_index', 0.0):.4f}",
+                        })
 
     def _log_scan_extremes(self, timeframe_key, strongest, weakest):
         timestamp_local = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
@@ -2110,21 +2419,61 @@ def start_gui():
     rrs_frame = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
     rrs_frame.pack(fill=tk.BOTH, expand=True)
 
-    rrs_text = scrolledtext.ScrolledText(
+    rrs_main_text = scrolledtext.ScrolledText(
         rrs_frame,
         wrap=tk.NONE,
         width=80,
-        height=30,
+        height=12,
         font=('Courier', 11),
         state='disabled',
         bg=dark_grey,
         fg=text_color
     )
-    rrs_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    rrs_main_text.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
 
-    rrs_text.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
-    rrs_text.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
-    rrs_text.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
+    rrs_compare_frame = tk.Frame(rrs_frame, bg=dark_grey)
+    rrs_compare_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    industry_col = tk.LabelFrame(rrs_compare_frame, text="RS/RW vs Industry Ref", bg=dark_grey, fg=text_color)
+    industry_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+    sector_col = tk.LabelFrame(rrs_compare_frame, text="RS/RW vs Sector", bg=dark_grey, fg=text_color)
+    sector_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
+
+    industry_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
+    sector_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
+
+    tk.Scale(industry_col, from_=0.0, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, label="Sensitivity",
+             variable=industry_threshold_var, length=180, bg=dark_grey, fg=text_color, highlightthickness=0).pack(fill=tk.X, padx=4)
+    tk.Scale(sector_col, from_=0.0, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, label="Sensitivity",
+             variable=sector_threshold_var, length=180, bg=dark_grey, fg=text_color, highlightthickness=0).pack(fill=tk.X, padx=4)
+
+    industry_timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
+    sector_timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
+
+    industry_tf = tk.Frame(industry_col, bg=dark_grey)
+    industry_tf.pack(fill=tk.X)
+    sector_tf = tk.Frame(sector_col, bg=dark_grey)
+    sector_tf.pack(fill=tk.X)
+    for key in ("5m", "15m", "30m", "1h"):
+        for parent, var in ((industry_tf, industry_timeframe_var), (sector_tf, sector_timeframe_var)):
+            tk.Radiobutton(parent, text=key, variable=var, value=key, indicatoron=0, padx=4, pady=1,
+                           bg=dark_grey, fg=text_color, selectcolor="#444444", activebackground="#444444",
+                           activeforeground=text_color).pack(side=tk.LEFT, padx=1)
+
+    industry_text = scrolledtext.ScrolledText(industry_col, wrap=tk.NONE, width=45, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
+    industry_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    sector_text = scrolledtext.ScrolledText(sector_col, wrap=tk.NONE, width=45, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
+    sector_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+    group_frame = tk.LabelFrame(rrs_frame, text="Top Industries/Sectors", bg=dark_grey, fg=text_color)
+    group_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    group_text = scrolledtext.ScrolledText(group_frame, wrap=tk.NONE, width=90, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
+    group_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+    for widget in (rrs_main_text, industry_text, sector_text, group_text):
+        widget.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
+        widget.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
+        widget.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
 
 
     button_frame = tk.Frame(frame, bg=dark_grey)  # Add background color to button frame
@@ -2303,32 +2652,54 @@ def start_gui():
         timeframe_key = snapshot.get("timeframe_key", "5m")
         timeframe_label = RRS_TIMEFRAMES.get(timeframe_key, {}).get("label", timeframe_key)
         results = snapshot.get("results", [])
+        sector_results = snapshot.get("results_sector", [])
+        industry_results = snapshot.get("results_industry", [])
+        group_strength = snapshot.get("group_strength", {})
         timestamp = snapshot.get("timestamp", datetime.now())
 
-        rrs_text.config(state='normal')
-        rrs_text.delete("1.0", tk.END)
+        def render_table(widget, title, rows, local_threshold):
+            selected_tf = timeframe_key
+            if title.startswith("RS/RW vs Industry"):
+                selected_tf = industry_timeframe_var.get()
+            elif title.startswith("RS/RW vs Sector"):
+                selected_tf = sector_timeframe_var.get()
+            widget.config(state='normal')
+            widget.delete("1.0", tk.END)
+            widget.insert(tk.END, f"{title}  TF:{selected_tf}  Threshold:{local_threshold:.2f}\n", "rrs_hdr")
+            widget.insert(tk.END, "SYMBOL  SIDE  RRS    POWER\n")
+            widget.insert(tk.END, "--------------------------\n")
+            filtered = [r for r in rows if abs(r[2]) >= local_threshold]
+            if not filtered:
+                widget.insert(tk.END, "No symbols flagged.\n")
+            for signal, symbol, rrs_value, power in filtered:
+                line = f"{symbol:<6}  {signal:<4}  {rrs_value:+.2f}  {power if power is not None else 0:>6.2f}\n"
+                widget.insert(tk.END, line, "rrs_rs" if signal == "RS" else "rrs_rw")
+            widget.config(state='disabled')
+            widget.see("1.0")
 
-        header = (
-            f"Last scan: {timestamp.strftime('%H:%M:%S')}   "
-            f"Timeframe: {timeframe_label}   "
-            f"Threshold: {threshold:.2f}\n"
-            "SYMBOL  SIDE  RRS    POWER\n"
-            "--------------------------\n"
-        )
-        rrs_text.insert(tk.END, header, "rrs_hdr")
+        render_table(rrs_main_text, "RS/RW vs SPY", results, threshold)
+        render_table(industry_text, "RS/RW vs Industry Ref", industry_results, industry_threshold_var.get())
+        render_table(sector_text, "RS/RW vs Sector", sector_results, sector_threshold_var.get())
 
-        if not results:
-            rrs_text.insert(tk.END, "No symbols flagged.\n")
-        else:
-            for signal, symbol, rrs_value, power in results:
-                rrs_str = f"{rrs_value:+.2f}" if rrs_value is not None else "n/a"
-                power_str = f"{power:.2f}" if power is not None else "n/a"
-                line = f"{symbol:<6}  {signal:<4}  {rrs_str:<6}  {power_str:>6}\n"
-                tag = "rrs_rs" if signal == "RS" else "rrs_rw"
-                rrs_text.insert(tk.END, line, tag)
-
-        rrs_text.config(state='disabled')
-        rrs_text.see("1.0")
+        group_text.config(state='normal')
+        group_text.delete("1.0", tk.END)
+        group_text.insert(tk.END, f"Last scan: {timestamp.strftime('%H:%M:%S')}   Timeframe: {timeframe_label}\n", "rrs_hdr")
+        for tf in ("D1", "H1", "M5"):
+            payload = group_strength.get(tf, {})
+            sectors = payload.get("sectors", [])
+            industries = payload.get("industries", [])
+            group_text.insert(tk.END, f"\n[{tf}] Sectors\n", "rrs_hdr")
+            for item in sectors[:SCAN_EXTREME_COUNT]:
+                group_text.insert(tk.END, f"  + {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rs")
+            for item in list(reversed(sectors[-SCAN_EXTREME_COUNT:])):
+                group_text.insert(tk.END, f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rw")
+            group_text.insert(tk.END, f"[{tf}] Industries\n", "rrs_hdr")
+            for item in industries[:SCAN_EXTREME_COUNT]:
+                group_text.insert(tk.END, f"  + {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rs")
+            for item in list(reversed(industries[-SCAN_EXTREME_COUNT:])):
+                group_text.insert(tk.END, f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rw")
+        group_text.config(state='disabled')
+        group_text.see("1.0")
 
     def process_rrs_queue():
         while True:
