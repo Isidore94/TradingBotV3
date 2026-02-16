@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import queue
+import re
 import sys
 import threading
 import tkinter as tk
@@ -54,7 +55,9 @@ class ConsolidatedTradingGUI:
         left.add(avwap_root, stretch="always", minsize=600)
 
         watch_frame = tk.LabelFrame(left, text="TickerMover Watchlists", bg=DARK_GREY, fg=TEXT_COLOR, padx=8, pady=8)
-        left.add(watch_frame, stretch="always", minsize=250)
+        # Keep watchlists visible, but don't let this section aggressively consume
+        # height on very large monitors.
+        left.add(watch_frame, stretch="never", minsize=150, height=220)
 
         # Right: Bounce RRS panel with extra vertical room.
         right = tk.Frame(main, bg=DARK_GREY)
@@ -79,15 +82,55 @@ class ConsolidatedTradingGUI:
         self.longs_text = scrolledtext.ScrolledText(longs_panel, wrap=tk.NONE, font=("Courier", 11), bg="#222", fg=TEXT_COLOR)
         self.longs_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.longs_text.bind("<Double-Button-1>", lambda e: self._pick_symbol_from_text(self.longs_text))
+        self._configure_drop_target(self.longs_text, LONGS_FILE)
         lists.add(longs_panel, stretch="always")
 
         shorts_panel = tk.LabelFrame(lists, text="shorts.txt", bg=DARK_GREY, fg=TEXT_COLOR)
         self.shorts_text = scrolledtext.ScrolledText(shorts_panel, wrap=tk.NONE, font=("Courier", 11), bg="#222", fg=TEXT_COLOR)
         self.shorts_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.shorts_text.bind("<Double-Button-1>", lambda e: self._pick_symbol_from_text(self.shorts_text))
+        self._configure_drop_target(self.shorts_text, SHORTS_FILE)
         lists.add(shorts_panel, stretch="always")
 
         self._apply_dark_widget_theme()
+
+    def _configure_drop_target(self, widget: scrolledtext.ScrolledText, destination: Path):
+        """Register text widgets as drop targets (best effort) for TC2000 symbols."""
+        # tkdnd uses Tk's DND package; if unavailable we silently skip.
+        try:
+            self.root.tk.call("package", "require", "tkdnd")
+            widget.drop_target_register("DND_Text")
+            widget.dnd_bind("<<Drop>>", lambda event, p=destination: self._handle_symbol_drop(event, p))
+        except tk.TclError:
+            return
+
+    def _handle_symbol_drop(self, event, destination: Path):
+        raw = getattr(event, "data", "") or ""
+        symbols = self._extract_symbols(raw)
+        if symbols:
+            self._append_symbols_to_file(destination, symbols)
+            self.refresh_watchlists()
+        return "break"
+
+    def _extract_symbols(self, raw: str) -> list[str]:
+        # Accept drops like "AAPL", "AAPL\nMSFT", or TC2000 style rows with
+        # pipes/tabs. Only keep all-caps ticker-like tokens.
+        candidates = re.split(r"[\s,;|{}\t\n\r]+", raw.upper())
+        return [c for c in candidates if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", c)]
+
+    def _append_symbols_to_file(self, path: Path, symbols: list[str]):
+        existing = []
+        if path.exists():
+            existing = [ln.strip().upper() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+        changed = False
+        for sym in symbols:
+            if sym not in existing:
+                existing.append(sym)
+                changed = True
+
+        if changed:
+            path.write_text("\n".join(existing) + "\n", encoding="utf-8")
 
     def _configure_theme(self):
         style = ttk.Style(self.root)
@@ -232,12 +275,7 @@ class ConsolidatedTradingGUI:
             messagebox.showwarning("Missing symbol", "Select or type a symbol first.")
             return
 
-        existing = []
-        if path.exists():
-            existing = [ln.strip().upper() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        if symbol not in existing:
-            existing.append(symbol)
-            path.write_text("\n".join(existing) + "\n", encoding="utf-8")
+        self._append_symbols_to_file(path, [symbol])
         self.refresh_watchlists()
 
     def load_symbol_into_avwap(self):
