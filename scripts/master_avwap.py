@@ -1241,7 +1241,7 @@ def _build_anchor_levels(df: pd.DataFrame, anchor_date_iso: str):
     return float(avwap), float(stdev), {k: float(v) for k, v in bands.items()}
 
 
-def run_anchor_watchlist_scan() -> list[dict]:
+def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
     ensure_anchor_file()
     ensure_previous_gap_file()
 
@@ -1259,10 +1259,11 @@ def run_anchor_watchlist_scan() -> list[dict]:
                 frame[col] = ""
         frame["side"] = frame["side"].apply(normalize_side)
 
-    current_df = _archive_expired_anchor_rows(current_df, today_run)
-    current_df = current_df[EARNINGS_ANCHOR_COLUMNS] if not current_df.empty else pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS)
-    current_df.to_csv(EARNINGS_ANCHORS_FILE, index=False)
-    previous_df = pd.read_csv(PREVIOUS_GAP_UPS_FILE)
+    if archive_expired:
+        current_df = _archive_expired_anchor_rows(current_df, today_run)
+        current_df = current_df[EARNINGS_ANCHOR_COLUMNS] if not current_df.empty else pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS)
+        current_df.to_csv(EARNINGS_ANCHORS_FILE, index=False)
+        previous_df = pd.read_csv(PREVIOUS_GAP_UPS_FILE)
 
     all_rows = []
     if not current_df.empty:
@@ -1399,7 +1400,7 @@ def run_anchor_watchlist_scan() -> list[dict]:
 
 def _run_anchor_watchlist_scan_safe():
     try:
-        anchor_events = run_anchor_watchlist_scan()
+        anchor_events = run_anchor_watchlist_scan(archive_expired=False)
         logging.info(f"Anchor watchlist AVWAP scan complete. Events: {len(anchor_events)}")
     except Exception as exc:
         logging.exception(f"Anchor watchlist scan failed: {exc}")
@@ -2412,7 +2413,7 @@ def main():
         scan_last_session_earnings_for_anchors()
 
     if args.anchor_scan:
-        run_anchor_watchlist_scan()
+        run_anchor_watchlist_scan(archive_expired=True)
 
     if args.once:
         run_master()
