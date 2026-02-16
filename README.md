@@ -13,7 +13,6 @@ pip install -r requirements.txt
 
 ## Repository layout
 - `scripts/` – Intraday and daily-running bots ready for out-of-the-box use (`master_avwap.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
-- `ai/` – Offline labeling, journaling, and model-training utilities kept separate from the live scripts.
 - `maintenance/` – Workspace cleanup helpers that are intentionally outside the main script directory.
 - `data/`, `logs/`, `output/` – Generated artifacts. These are created as needed by the scripts.
 - `longs.txt`, `shorts.txt` – Input watchlists consumed by the scanners.
@@ -39,7 +38,7 @@ These files should live in the repository root. The scripts will create any miss
   python scripts/bounce_bot.py --use_gui
   ```
 
-  Writes detected bouncers to `output/bouncers.txt` and `data/intraday_bounces.csv`.
+  Writes detected bouncers to `logs/bouncers.txt` and `data/intraday_bounces.csv`.
 
 Ensure your IB session is connected before launching either bot so that market data requests succeed.
 
@@ -52,3 +51,7 @@ python maintenance/tidy_workspace.py            # perform the cleanup
 ```
 
 It is kept outside the `scripts/` directory to avoid accidental execution.
+
+## Notes
+- AI training/labeling scripts were removed from this repository.
+- Bounce logs and runtime bot logs are written under `logs/`.

@@ -44,6 +44,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 LONGS_FILENAME = ROOT_DIR / "longs.txt"
 SHORTS_FILENAME = ROOT_DIR / "shorts.txt"
 BOUNCE_LOG_FILENAME = LOG_DIR / "bouncers.txt"
+TRADING_BOT_LOG_FILENAME = LOG_DIR / "trading_bot.log"
 INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
 STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_strength_extremes.csv"
 GROUP_STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_group_strength_extremes.csv"
@@ -321,7 +322,7 @@ def read_tickers(file_path):
     return tickers
 
 def reset_log_files():
-    files_to_reset = ["trading_bot.log", BOUNCE_LOG_FILENAME]
+    files_to_reset = [TRADING_BOT_LOG_FILENAME, BOUNCE_LOG_FILENAME]
 
     for log_file_path in files_to_reset:
         try:
@@ -2573,7 +2574,7 @@ def run_bot_with_gui(gui_callback):
     console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     console_handler.setFormatter(console_formatter)
 
-    file_handler = logging.FileHandler("trading_bot.log", mode="a")
+    file_handler = logging.FileHandler(TRADING_BOT_LOG_FILENAME, mode="a")
     file_handler.setLevel(logging.INFO)
     file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(file_formatter)
@@ -3275,7 +3276,7 @@ if __name__ == "__main__":
             console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
             console_handler.setFormatter(console_formatter)
 
-            file_handler = logging.FileHandler("trading_bot.log", mode="a")
+            file_handler = logging.FileHandler(TRADING_BOT_LOG_FILENAME, mode="a")
             file_handler.setLevel(logging.INFO)
             file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
             file_handler.setFormatter(file_formatter)

@@ -19,7 +19,7 @@ from PyQt5.QtGui import QPalette, QColor
 # ──────────────────────────────────────────────────────────────────────────────
 SHORTS_FILE        = "shorts.txt"
 LONGS_FILE         = "longs.txt"
-BOUNCERS_FILE      = "bouncers.txt"  # legacy live bouncer feed (HH:MM:SS | SYM | types | side)
+BOUNCERS_FILE      = os.path.join("logs", "bouncers.txt")  # legacy live bouncer feed (HH:MM:SS | SYM | types | side)
 MASTER_EVENTS_FILE = os.path.join("output", "master_avwap_events.txt")
 MASTER_POSITIONS_FILE = os.path.join("output", "master_positions.json")
 
