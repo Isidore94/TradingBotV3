@@ -19,6 +19,8 @@ from master_avwap import LONGS_FILE, SHORTS_FILE, MasterAvwapGUI
 
 DARK_GREY = "#2E2E2E"
 TEXT_COLOR = "#E0E0E0"
+PANEL_GREY = "#3A3A3A"
+INPUT_GREY = "#252525"
 
 
 class ConsolidatedTradingGUI:
@@ -26,6 +28,9 @@ class ConsolidatedTradingGUI:
         self.root = root
         self.root.title("Consolidated Trading GUI")
         self.root.geometry("1800x980")
+        self.root.configure(bg=DARK_GREY)
+
+        self._configure_theme()
 
         self.rrs_queue: queue.Queue = queue.Queue()
         self.bot_instance = None
@@ -40,20 +45,23 @@ class ConsolidatedTradingGUI:
         main = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=DARK_GREY)
         main.pack(fill=tk.BOTH, expand=True)
 
-        # Left: full Master AVWAP GUI embedded intact.
-        avwap_root = ttk.Frame(main)
-        self.avwap_gui = MasterAvwapGUI(avwap_root, standalone=False)
-        main.add(avwap_root, stretch="always", minsize=980)
+        # Left: Master AVWAP + TickerMover watchlists stacked vertically.
+        left = tk.PanedWindow(main, orient=tk.VERTICAL, sashrelief=tk.RAISED, bg=DARK_GREY)
+        main.add(left, stretch="always", minsize=980)
 
-        # Right: Bounce RRS + longs/shorts text displays.
+        avwap_root = ttk.Frame(left)
+        self.avwap_gui = MasterAvwapGUI(avwap_root, standalone=False)
+        left.add(avwap_root, stretch="always", minsize=600)
+
+        watch_frame = tk.LabelFrame(left, text="TickerMover Watchlists", bg=DARK_GREY, fg=TEXT_COLOR, padx=8, pady=8)
+        left.add(watch_frame, stretch="always", minsize=250)
+
+        # Right: Bounce RRS panel with extra vertical room.
         right = tk.Frame(main, bg=DARK_GREY)
         main.add(right, stretch="always", minsize=700)
 
         self.rrs_panel = create_rrs_confirmed_panel(right, bot_instance=self._bot_proxy(), dark_grey=DARK_GREY, text_color=TEXT_COLOR)
         self.rrs_panel["container"].pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-
-        watch_frame = tk.LabelFrame(right, text="TickerMover Watchlists", bg=DARK_GREY, fg=TEXT_COLOR, padx=8, pady=8)
-        watch_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
         controls = tk.Frame(watch_frame, bg=DARK_GREY)
         controls.pack(fill=tk.X)
@@ -78,6 +86,76 @@ class ConsolidatedTradingGUI:
         self.shorts_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.shorts_text.bind("<Double-Button-1>", lambda e: self._pick_symbol_from_text(self.shorts_text))
         lists.add(shorts_panel, stretch="always")
+
+        self._apply_dark_widget_theme()
+
+    def _configure_theme(self):
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+
+        self.root.option_add("*Background", DARK_GREY)
+        self.root.option_add("*Foreground", TEXT_COLOR)
+        self.root.option_add("*Label*Background", DARK_GREY)
+        self.root.option_add("*Entry*Background", INPUT_GREY)
+        self.root.option_add("*Entry*Foreground", TEXT_COLOR)
+        self.root.option_add("*Text*Background", INPUT_GREY)
+        self.root.option_add("*Text*Foreground", TEXT_COLOR)
+
+        style.configure(".", background=DARK_GREY, foreground=TEXT_COLOR)
+        style.configure("TFrame", background=DARK_GREY)
+        style.configure("TLabel", background=DARK_GREY, foreground=TEXT_COLOR)
+        style.configure("TButton", background=PANEL_GREY, foreground=TEXT_COLOR)
+        style.map("TButton", background=[("active", "#4A4A4A")])
+        style.configure("TEntry", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+        style.configure("TSpinbox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+        style.configure("TCombobox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+        style.configure("TNotebook", background=DARK_GREY, borderwidth=0)
+        style.configure("TNotebook.Tab", background=PANEL_GREY, foreground=TEXT_COLOR)
+        style.map("TNotebook.Tab", background=[("selected", "#4A4A4A")])
+        style.configure("TLabelframe", background=DARK_GREY, foreground=TEXT_COLOR)
+        style.configure("TLabelframe.Label", background=DARK_GREY, foreground=TEXT_COLOR)
+        style.configure("Treeview", background=INPUT_GREY, fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+        style.map("Treeview", background=[("selected", "#4A4A4A")], foreground=[("selected", TEXT_COLOR)])
+        style.configure("Treeview.Heading", background=PANEL_GREY, foreground=TEXT_COLOR)
+        style.configure("Horizontal.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
+        style.configure("Vertical.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
+
+    def _apply_dark_widget_theme(self):
+        dark_defaults = {
+            "bg": DARK_GREY,
+            "fg": TEXT_COLOR,
+            "insertbackground": TEXT_COLOR,
+            "highlightbackground": DARK_GREY,
+            "highlightcolor": PANEL_GREY,
+            "selectbackground": "#4A4A4A",
+            "selectforeground": TEXT_COLOR,
+        }
+        input_overrides = {"bg": INPUT_GREY, "fg": TEXT_COLOR}
+
+        def _apply(widget):
+            for key, val in dark_defaults.items():
+                try:
+                    widget.configure(**{key: val})
+                except tk.TclError:
+                    pass
+
+            if isinstance(widget, (tk.Text, tk.Listbox, tk.Entry, tk.Spinbox)):
+                for key, val in input_overrides.items():
+                    try:
+                        widget.configure(**{key: val})
+                    except tk.TclError:
+                        pass
+
+            if isinstance(widget, tk.Button):
+                try:
+                    widget.configure(bg=PANEL_GREY, activebackground="#4A4A4A", relief=tk.RAISED)
+                except tk.TclError:
+                    pass
+
+            for child in widget.winfo_children():
+                _apply(child)
+
+        _apply(self.root)
 
     def _bot_proxy(self):
         outer = self
