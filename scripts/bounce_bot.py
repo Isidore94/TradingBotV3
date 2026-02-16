@@ -14,7 +14,7 @@ import time
 import threading
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import zoneinfo
 import queue
 import tkinter as tk
@@ -57,6 +57,8 @@ CHECK_CONSECUTIVE_CANDLES = True  # Parameter to enable/disable this check
 CHECK_BOUNCE_VVWAP = True
 CHECK_BOUNCE_DYNAMIC_VVWAP = True
 CHECK_BOUNCE_EOD_VWAP = True 
+CHECK_BOUNCE_VWAP_EOD_CONFLUENCE = True
+CHECK_BOUNCE_IMPULSE_RETEST_VWAP_EOD = True
 CHECK_BOUNCE_8_EMA = True
 CHECK_BOUNCE_15_EMA = True
 CHECK_BOUNCE_21_EMA = False
@@ -73,12 +75,29 @@ LOGGING_MODE = True
 SCAN_OUTSIDE_MARKET_HOURS = True
 LOG_PRICE_APPROACHING = True
 USE_GUI = True  # New parameter to toggle GUI on/off
+RECLAIM_LOOKBACK_CANDLES = 3
+CONFLUENCE_MAX_SPREAD_ATR = 0.25
+IMPULSE_LOOKBACK_BARS = 12
+IMPULSE_MAX_BARS = 6
+IMPULSE_MIN_ATR = 0.8
+IMPULSE_INTRADAY_ATR_PERIOD = 14
+IMPULSE_RETRACE_MIN_FRAC = 0.05
+IMPULSE_RETRACE_MAX_FRAC = 0.90
+IMPULSE_RETEST_MAX_BARS = 8
+IMPULSE_RETEST_PIERCE_ATR = 0.40
+IMPULSE_RETEST_CLOSE_BUFFER_ATR = 0.02
+IMPULSE_CHOP_LOOKBACK_BARS = 8
+IMPULSE_MAX_NEAR_BARS = 6
+IMPULSE_LEVEL_BAND_ATR = 0.14
+IMPULSE_MAX_CROSSES = 2
 
 BOUNCE_TYPE_DEFAULTS = {
     "10_candle": CHECK_BOUNCE_10_CANDLE,
     "vwap": CHECK_BOUNCE_VVWAP,
     "dynamic_vwap": CHECK_BOUNCE_DYNAMIC_VVWAP,
     "eod_vwap": CHECK_BOUNCE_EOD_VWAP,
+    "vwap_eod_confluence": CHECK_BOUNCE_VWAP_EOD_CONFLUENCE,
+    "impulse_retest_vwap_eod": CHECK_BOUNCE_IMPULSE_RETEST_VWAP_EOD,
     "ema_8": CHECK_BOUNCE_8_EMA,
     "ema_15": CHECK_BOUNCE_15_EMA,
     "ema_21": CHECK_BOUNCE_21_EMA,
@@ -97,6 +116,8 @@ BOUNCE_TYPE_LABELS = {
     "vwap": "Std VWAP",
     "dynamic_vwap": "Dynamic VWAP",
     "eod_vwap": "EOD VWAP",
+    "vwap_eod_confluence": "VWAP+EOD Confluence",
+    "impulse_retest_vwap_eod": "Impulse Retest VWAP/EOD",
     "ema_8": "8 EMA",
     "ema_15": "15 EMA",
     "ema_21": "21 EMA",
@@ -146,7 +167,7 @@ DEFAULT_SECTOR_ETF_MAP = {
 
 
 def utc_now_iso():
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def slugify_key(value):
@@ -165,7 +186,15 @@ def load_sector_etf_map():
         with open(SECTOR_ETF_MAP_FILENAME, "r") as fh:
             data = json.load(fh)
         if isinstance(data, dict):
-            return {str(k): str(v).upper() for k, v in data.items() if v}
+            normalized = {}
+            for k, v in data.items():
+                if not v:
+                    continue
+                key = slugify_key(k)
+                if key:
+                    normalized[key] = str(v).strip().upper()
+            if normalized:
+                return normalized
     except Exception as exc:
         logging.warning(f"Failed loading sector ETF map: {exc}")
     return dict(DEFAULT_SECTOR_ETF_MAP)
@@ -226,7 +255,18 @@ def load_and_update_industry_etf_map(industryKey, sectorKey, industry_name, sect
 def resolve_sector_etf(sectorKey, sector_map=None):
     key = (sectorKey or "").strip()
     mapping = sector_map if isinstance(sector_map, dict) else load_sector_etf_map()
-    return mapping.get(key, "SPY")
+    if not key:
+        return "SPY"
+    candidates = [
+        key,
+        key.lower(),
+        key.replace("_", "-").lower(),
+        slugify_key(key),
+    ]
+    for candidate in candidates:
+        if candidate and candidate in mapping:
+            return mapping[candidate]
+    return "SPY"
 
 
 def resolve_industry_ref_etf(industryKey, sectorKey):
@@ -485,6 +525,8 @@ class BounceBot(EWrapper, EClient):
 
         self.data = {}
         self.data_ready_events = {}
+        self.reqid_to_symbol = {}
+        self.invalid_security_symbols = set()
 
         self.longs = read_tickers(LONGS_FILENAME)
         self.shorts = read_tickers(SHORTS_FILENAME)
@@ -611,10 +653,12 @@ class BounceBot(EWrapper, EClient):
                 for row in reader:
                     symbol = (row.get("symbol") or "").strip().upper()
                     if symbol:
+                        sector_key = slugify_key(row.get("sectorKey") or row.get("sector") or "")
+                        industry_key = slugify_key(row.get("industryKey") or row.get("industry") or "")
                         self.symbol_classification_cache[symbol] = {
                             "symbol": symbol,
-                            "sectorKey": row.get("sectorKey", ""),
-                            "industryKey": row.get("industryKey", ""),
+                            "sectorKey": sector_key,
+                            "industryKey": industry_key,
                             "sector": row.get("sector", ""),
                             "industry": row.get("industry", ""),
                             "updated_utc": row.get("updated_utc", ""),
@@ -644,10 +688,8 @@ class BounceBot(EWrapper, EClient):
             industry_key = (info.get("industryKey") or "").strip()
         except Exception as exc:
             logging.warning(f"Yahoo classification failed for {symbol}: {exc}")
-        if not sector_key:
-            sector_key = slugify_key(sector_name)
-        if not industry_key:
-            industry_key = slugify_key(industry_name)
+        sector_key = slugify_key(sector_key or sector_name)
+        industry_key = slugify_key(industry_key or industry_name)
         return {
             "symbol": symbol,
             "sectorKey": sector_key,
@@ -690,6 +732,9 @@ class BounceBot(EWrapper, EClient):
         return bars_ib
 
     def request_historical_bars(self, symbol, duration, bar_size, timeout=RRS_TIMEOUT):
+        if symbol in self.invalid_security_symbols:
+            logging.debug(f"{symbol}: Skipping historical request due to prior IB security-definition failure.")
+            return None
         if not self.ensure_connected():
             logging.warning("Not connected to IB; skipping historical request.")
             return None
@@ -697,6 +742,7 @@ class BounceBot(EWrapper, EClient):
         with self.data_lock:
             self.data[reqId] = []
             self.data_ready_events[reqId] = threading.Event()
+            self.reqid_to_symbol[reqId] = symbol
         contract = self.create_stock_contract(symbol)
         self.reqHistoricalData(
             reqId=reqId,
@@ -714,12 +760,14 @@ class BounceBot(EWrapper, EClient):
             with self.data_lock:
                 del self.data_ready_events[reqId]
                 self.data.pop(reqId, None)
+                self.reqid_to_symbol.pop(reqId, None)
             logging.warning(f"{symbol}: Timeout waiting for RRS data.")
             return None
         with self.data_lock:
             bars = self.data.get(reqId, [])
             del self.data_ready_events[reqId]
             self.data.pop(reqId, None)
+            self.reqid_to_symbol.pop(reqId, None)
         return bars
 
     def get_cached_5m_bars(self, symbol):
@@ -939,6 +987,13 @@ class BounceBot(EWrapper, EClient):
 
     def error(self, reqId, errorCode, errorString):
         logging.error(f"IB Error. ReqId={reqId}, Code={errorCode}, Msg={errorString}")
+        if errorCode == 200:
+            with self.data_lock:
+                symbol = self.reqid_to_symbol.get(reqId)
+                if symbol:
+                    self.invalid_security_symbols.add(symbol)
+                if reqId in self.data_ready_events:
+                    self.data_ready_events[reqId].set()
         if errorCode in (504, 1100) or "not connected" in errorString.lower():
             self.connection_status = False
         elif errorCode in (1101, 1102):
@@ -1425,6 +1480,28 @@ class BounceBot(EWrapper, EClient):
             # We can still continue without the consecutive check if it's disabled
             if CHECK_CONSECUTIVE_CANDLES:
                 return None
+
+        # Estimate intraday ATR from today's 5-minute candles for impulse sizing.
+        intraday_impulse_atr = None
+        try:
+            if len(today_df) >= 3:
+                intraday_df = today_df[["high", "low", "close"]].copy()
+                intraday_df["prev_close"] = intraday_df["close"].shift(1)
+                tr_components = pd.concat(
+                    [
+                        (intraday_df["high"] - intraday_df["low"]).abs(),
+                        (intraday_df["high"] - intraday_df["prev_close"]).abs(),
+                        (intraday_df["low"] - intraday_df["prev_close"]).abs(),
+                    ],
+                    axis=1,
+                )
+                intraday_df["tr"] = tr_components.max(axis=1)
+                lookback = min(IMPULSE_INTRADAY_ATR_PERIOD, len(intraday_df))
+                intraday_impulse_atr = float(intraday_df["tr"].tail(lookback).mean())
+                if intraday_impulse_atr <= 0 or math.isnan(intraday_impulse_atr):
+                    intraday_impulse_atr = None
+        except Exception:
+            intraday_impulse_atr = None
         
         # Log the metrics being used for evaluation
         if LOGGING_MODE:
@@ -1448,10 +1525,171 @@ class BounceBot(EWrapper, EClient):
 
         # Initialize dictionary for reference levels that triggered bounce condition
         ref_levels = {}
+        triggered_levels = []
         allowed_types = set(allowed_bounce_types) if allowed_bounce_types is not None else None
 
         def bounce_type_allowed(bounce_type):
             return allowed_types is None or bounce_type in allowed_types
+
+        def mark_trigger(level_name):
+            if level_name not in triggered_levels:
+                triggered_levels.append(level_name)
+
+        def is_touch_reject(level_value):
+            if level_value is None:
+                return False
+            interacted = (
+                current_candle_data["high"] >= (level_value - threshold)
+                and current_candle_data["low"] <= (level_value + threshold)
+            )
+            if direction == "long":
+                return (
+                    interacted
+                    and current_candle_data["close"] >= (level_value - threshold)
+                    and current_candle_data["close"] > current_candle_data["open"]
+                )
+            return (
+                interacted
+                and current_candle_data["close"] <= (level_value + threshold)
+                and current_candle_data["close"] < current_candle_data["open"]
+            )
+
+        def is_recent_reclaim(level_value, level_name):
+            if level_value is None or len(today_df) < 2:
+                return False
+            lookback = min(RECLAIM_LOOKBACK_CANDLES, len(today_df) - 1)
+            previous_candles = today_df.iloc[-(lookback + 1):-1]
+            if previous_candles.empty:
+                return False
+
+            if direction == "long":
+                was_below = (previous_candles["close"] <= (level_value + threshold)).any()
+                reclaimed_now = (
+                    current_candle_data["close"] > level_value
+                    and current_candle_data["high"] >= (level_value - threshold)
+                    and current_candle_data["low"] <= (level_value + threshold)
+                    and current_candle_data["close"] > current_candle_data["open"]
+                )
+            else:
+                was_above = (previous_candles["close"] >= (level_value - threshold)).any()
+                reclaimed_now = (
+                    current_candle_data["close"] < level_value
+                    and current_candle_data["high"] >= (level_value - threshold)
+                    and current_candle_data["low"] <= (level_value + threshold)
+                    and current_candle_data["close"] < current_candle_data["open"]
+                )
+                was_below = was_above
+
+            reclaimed = bool(was_below and reclaimed_now)
+            if reclaimed:
+                logging.debug(
+                    f"{symbol}: {level_name} reclaim detected within last {lookback} candles"
+                )
+            return reclaimed
+
+        def has_impulse_retest_structure():
+            prior_candles = today_df.iloc[:-1].copy().reset_index(drop=True)
+            if len(prior_candles) < 4:
+                return False
+            window = prior_candles.tail(IMPULSE_LOOKBACK_BARS).reset_index(drop=True)
+            if len(window) < 4:
+                return False
+
+            if direction == "long":
+                start_pos = int(window["low"].idxmin())
+                if start_pos >= len(window) - 1:
+                    return False
+                tail = window.iloc[start_pos:]
+                end_pos = int(tail["high"].idxmax())
+                if end_pos < start_pos or end_pos >= len(window):
+                    return False
+                impulse_low = float(window.iloc[start_pos]["low"])
+                impulse_high = float(window.iloc[end_pos]["high"])
+                retrace = impulse_high - float(current_candle_data["low"])
+            else:
+                start_pos = int(window["high"].idxmax())
+                if start_pos >= len(window) - 1:
+                    return False
+                tail = window.iloc[start_pos:]
+                end_pos = int(tail["low"].idxmin())
+                if end_pos < start_pos or end_pos >= len(window):
+                    return False
+                impulse_high = float(window.iloc[start_pos]["high"])
+                impulse_low = float(window.iloc[end_pos]["low"])
+                retrace = float(current_candle_data["high"]) - impulse_low
+
+            impulse_size = impulse_high - impulse_low
+            if impulse_size <= 0:
+                return False
+            impulse_atr_reference = intraday_impulse_atr if intraday_impulse_atr is not None else atr
+            if impulse_size < (IMPULSE_MIN_ATR * impulse_atr_reference):
+                return False
+
+            bars_in_leg = end_pos - start_pos + 1
+            if bars_in_leg > IMPULSE_MAX_BARS:
+                return False
+
+            window_start_in_prior = len(prior_candles) - len(window)
+            end_pos_global = window_start_in_prior + end_pos
+            bars_since_end = len(prior_candles) - 1 - end_pos_global
+            if bars_since_end > IMPULSE_RETEST_MAX_BARS:
+                return False
+
+            retrace_frac = retrace / impulse_size
+            if retrace_frac < IMPULSE_RETRACE_MIN_FRAC or retrace_frac > IMPULSE_RETRACE_MAX_FRAC:
+                return False
+
+            logging.debug(
+                f"{symbol}: Impulse/retest structure accepted. "
+                f"Impulse={impulse_size:.4f}, BarsInLeg={bars_in_leg}, "
+                f"BarsSinceImpulse={bars_since_end}, RetraceFrac={retrace_frac:.3f}"
+            )
+            return True
+
+        def is_compressed_around_levels(level_low, level_high):
+            if level_low is None or level_high is None:
+                return False
+            prior = today_df.iloc[-(IMPULSE_CHOP_LOOKBACK_BARS + 1):-1].copy()
+            if prior.empty:
+                return False
+
+            band = IMPULSE_LEVEL_BAND_ATR * atr
+            near_mask = prior["close"].between(level_low - band, level_high + band)
+            near_count = int(near_mask.sum())
+            if near_count > IMPULSE_MAX_NEAR_BARS:
+                logging.debug(
+                    f"{symbol}: Rejecting impulse retest due to compression near VWAP/EOD. "
+                    f"NearBars={near_count}, MaxNearBars={IMPULSE_MAX_NEAR_BARS}"
+                )
+                return True
+
+            states = []
+            upper = level_high + band
+            lower = level_low - band
+            for close_val in prior["close"]:
+                if close_val > upper:
+                    states.append(1)
+                elif close_val < lower:
+                    states.append(-1)
+                else:
+                    states.append(0)
+
+            crosses = 0
+            prev_state = 0
+            for state in states:
+                if state == 0:
+                    continue
+                if prev_state != 0 and state != prev_state:
+                    crosses += 1
+                prev_state = state
+
+            if crosses > IMPULSE_MAX_CROSSES:
+                logging.debug(
+                    f"{symbol}: Rejecting impulse retest due to repeated level crossing. "
+                    f"Crosses={crosses}, MaxCrosses={IMPULSE_MAX_CROSSES}"
+                )
+                return True
+            return False
 
         # Function to check if a candle respects a level based on direction
         def respects_level(candle, level_value, direction, threshold):
@@ -1496,6 +1734,7 @@ class BounceBot(EWrapper, EClient):
                 # Bounce condition: current candle creates a new low and closes above the open
                 if current_candle_data["low"] < lowest_low_prev and current_candle_data["close"] > current_candle_data["open"]:
                     ref_levels["10_candle_low"] = current_candle_data["low"]
+                    mark_trigger("10_candle_low")
                     logging.debug(f"{symbol}: 10-candle LONG bounce candidate found. New low: {current_candle_data['low']:.2f}, Previous lowest: {lowest_low_prev:.2f}")
             else:
                 # For shorts, check if current candle creates a new highest high
@@ -1505,40 +1744,114 @@ class BounceBot(EWrapper, EClient):
                 # Bounce condition: current candle creates a new high and closes below the open
                 if current_candle_data["high"] > highest_high_prev and current_candle_data["close"] < current_candle_data["open"]:
                     ref_levels["10_candle_high"] = current_candle_data["high"]
+                    mark_trigger("10_candle_high")
                     logging.debug(f"{symbol}: 10-candle SHORT bounce candidate found. New high: {current_candle_data['high']:.2f}, Previous highest: {highest_high_prev:.2f}")
 
         # Check for standard VWAP bounces if enabled
         if bounce_type_allowed("vwap") and self.is_bounce_type_enabled("vwap") and metrics.get("std_vwap") is not None:
+            std_vwap = metrics.get("std_vwap")
             # Check if price respected standard VWAP for consecutive candles
-            if check_consecutive_respect(metrics.get("std_vwap"), "Standard VWAP"):
-                if direction == "long" and abs(current_candle_data["low"] - metrics.get("std_vwap")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
-                    ref_levels["vwap"] = metrics.get("std_vwap")
-                    logging.debug(f"{symbol}: Standard VWAP LONG bounce candidate found. VWAP: {metrics.get('std_vwap'):.2f}, Current Low: {current_candle_data['low']:.2f}")
-                elif direction == "short" and abs(current_candle_data["high"] - metrics.get("std_vwap")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
-                    ref_levels["vwap"] = metrics.get("std_vwap")
-                    logging.debug(f"{symbol}: Standard VWAP SHORT bounce candidate found. VWAP: {metrics.get('std_vwap'):.2f}, Current High: {current_candle_data['high']:.2f}")
+            respected = check_consecutive_respect(std_vwap, "Standard VWAP")
+            reclaim = is_recent_reclaim(std_vwap, "Standard VWAP")
+            if (respected and is_touch_reject(std_vwap)) or reclaim:
+                ref_levels["vwap"] = std_vwap
+                mark_trigger("vwap")
+                logging.debug(
+                    f"{symbol}: Standard VWAP bounce candidate found ({'reclaim' if reclaim else 'touch/reject'}). "
+                    f"VWAP: {std_vwap:.2f}, Close: {current_candle_data['close']:.2f}"
+                )
 
         # Check for Dynamic VWAP bounces if enabled
         if bounce_type_allowed("dynamic_vwap") and self.is_bounce_type_enabled("dynamic_vwap") and metrics.get("dynamic_vwap") is not None:
+            dynamic_vwap = metrics.get("dynamic_vwap")
             # Check if price respected dynamic VWAP for consecutive candles
-            if check_consecutive_respect(metrics.get("dynamic_vwap"), "Dynamic VWAP"):
-                if direction == "long" and abs(current_candle_data["low"] - metrics.get("dynamic_vwap")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
-                    ref_levels["dynamic_vwap"] = metrics.get("dynamic_vwap")
-                    logging.debug(f"{symbol}: Dynamic VWAP LONG bounce candidate found. DVWAP: {metrics.get('dynamic_vwap'):.2f}, Current Low: {current_candle_data['low']:.2f}")
-                elif direction == "short" and abs(current_candle_data["high"] - metrics.get("dynamic_vwap")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
-                    ref_levels["dynamic_vwap"] = metrics.get("dynamic_vwap")
-                    logging.debug(f"{symbol}: Dynamic VWAP SHORT bounce candidate found. DVWAP: {metrics.get('dynamic_vwap'):.2f}, Current High: {current_candle_data['high']:.2f}")
+            respected = check_consecutive_respect(dynamic_vwap, "Dynamic VWAP")
+            reclaim = is_recent_reclaim(dynamic_vwap, "Dynamic VWAP")
+            if (respected and is_touch_reject(dynamic_vwap)) or reclaim:
+                ref_levels["dynamic_vwap"] = dynamic_vwap
+                mark_trigger("dynamic_vwap")
+                logging.debug(
+                    f"{symbol}: Dynamic VWAP bounce candidate found ({'reclaim' if reclaim else 'touch/reject'}). "
+                    f"DVWAP: {dynamic_vwap:.2f}, Close: {current_candle_data['close']:.2f}"
+                )
 
         # Check for EOD VWAP bounces if enabled
         if bounce_type_allowed("eod_vwap") and self.is_bounce_type_enabled("eod_vwap") and metrics.get("eod_vwap") is not None:
+            eod_vwap = metrics.get("eod_vwap")
             # Check if price respected EOD VWAP for consecutive candles
-            if check_consecutive_respect(metrics.get("eod_vwap"), "EOD VWAP"):
-                if direction == "long" and abs(current_candle_data["low"] - metrics.get("eod_vwap")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
-                    ref_levels["eod_vwap"] = metrics.get("eod_vwap")
-                    logging.debug(f"{symbol}: EOD VWAP LONG bounce candidate found. EOD VWAP: {metrics.get('eod_vwap'):.2f}, Current Low: {current_candle_data['low']:.2f}")
-                elif direction == "short" and abs(current_candle_data["high"] - metrics.get("eod_vwap")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
-                    ref_levels["eod_vwap"] = metrics.get("eod_vwap")
-                    logging.debug(f"{symbol}: EOD VWAP SHORT bounce candidate found. EOD VWAP: {metrics.get('eod_vwap'):.2f}, Current High: {current_candle_data['high']:.2f}")
+            respected = check_consecutive_respect(eod_vwap, "EOD VWAP")
+            reclaim = is_recent_reclaim(eod_vwap, "EOD VWAP")
+            if (respected and is_touch_reject(eod_vwap)) or reclaim:
+                ref_levels["eod_vwap"] = eod_vwap
+                mark_trigger("eod_vwap")
+                logging.debug(
+                    f"{symbol}: EOD VWAP bounce candidate found ({'reclaim' if reclaim else 'touch/reject'}). "
+                    f"EOD VWAP: {eod_vwap:.2f}, Close: {current_candle_data['close']:.2f}"
+                )
+
+        if (
+            bounce_type_allowed("vwap_eod_confluence")
+            and self.is_bounce_type_enabled("vwap_eod_confluence")
+        ):
+            std_vwap = metrics.get("std_vwap")
+            eod_vwap = metrics.get("eod_vwap")
+            if std_vwap is not None and eod_vwap is not None:
+                level_spread = abs(std_vwap - eod_vwap)
+                max_allowed_spread = CONFLUENCE_MAX_SPREAD_ATR * atr
+                if level_spread <= max_allowed_spread:
+                    confluence_level = max(std_vwap, eod_vwap) if direction == "long" else min(std_vwap, eod_vwap)
+                    if is_touch_reject(confluence_level) or is_recent_reclaim(confluence_level, "VWAP+EOD Confluence"):
+                        ref_levels["vwap_eod_confluence"] = confluence_level
+                        mark_trigger("vwap_eod_confluence")
+                        ref_levels.setdefault("vwap", std_vwap)
+                        ref_levels.setdefault("eod_vwap", eod_vwap)
+                        logging.debug(
+                            f"{symbol}: VWAP+EOD confluence bounce candidate found. "
+                            f"Spread: {level_spread:.4f} (max {max_allowed_spread:.4f})"
+                        )
+
+        if (
+            bounce_type_allowed("impulse_retest_vwap_eod")
+            and self.is_bounce_type_enabled("impulse_retest_vwap_eod")
+        ):
+            std_vwap = metrics.get("std_vwap")
+            eod_vwap = metrics.get("eod_vwap")
+            ema_21 = metrics.get("ema_21")
+            if std_vwap is not None and eod_vwap is not None:
+                level_low = min(std_vwap, eod_vwap)
+                level_high = max(std_vwap, eod_vwap)
+                grace = IMPULSE_RETEST_PIERCE_ATR * atr
+                close_buffer = IMPULSE_RETEST_CLOSE_BUFFER_ATR * atr
+                compression_low = min(level_low, ema_21) if ema_21 is not None else level_low
+                compression_high = max(level_high, ema_21) if ema_21 is not None else level_high
+
+                interacted_zone = (
+                    current_candle_data["high"] >= (level_low - grace)
+                    and current_candle_data["low"] <= (level_high + grace)
+                )
+                if direction == "long":
+                    recovered_side = (
+                        current_candle_data["close"] >= (level_high - close_buffer)
+                        and current_candle_data["close"] > current_candle_data["open"]
+                    )
+                else:
+                    recovered_side = (
+                        current_candle_data["close"] <= (level_low + close_buffer)
+                        and current_candle_data["close"] < current_candle_data["open"]
+                    )
+
+                if interacted_zone and recovered_side and has_impulse_retest_structure():
+                    if not is_compressed_around_levels(compression_low, compression_high):
+                        ref_levels["impulse_retest_vwap_eod"] = (level_low + level_high) / 2.0
+                        mark_trigger("impulse_retest_vwap_eod")
+                        ref_levels.setdefault("vwap", std_vwap)
+                        ref_levels.setdefault("eod_vwap", eod_vwap)
+                        if ema_21 is not None:
+                            ref_levels.setdefault("ema_21", ema_21)
+                        logging.debug(
+                            f"{symbol}: Impulse retest VWAP/EOD candidate found. "
+                            f"ZoneLow={level_low:.4f}, ZoneHigh={level_high:.4f}, Grace={grace:.4f}"
+                        )
 
         # Check EMA bounces (must also be on the correct side of standard VWAP)
         for ema_key, ema_label in (("ema_8", "8 EMA"), ("ema_15", "15 EMA"), ("ema_21", "21 EMA")):
@@ -1560,6 +1873,7 @@ class BounceBot(EWrapper, EClient):
                 )
                 if is_above_vwap and clean_bounce:
                     ref_levels[ema_key] = ema_value
+                    mark_trigger(ema_key)
                     logging.debug(
                         f"{symbol}: {ema_label} LONG bounce candidate found. {ema_label}: {ema_value:.2f}, Std VWAP: {std_vwap:.2f}"
                     )
@@ -1572,6 +1886,7 @@ class BounceBot(EWrapper, EClient):
                 )
                 if is_below_vwap and clean_bounce:
                     ref_levels[ema_key] = ema_value
+                    mark_trigger(ema_key)
                     logging.debug(
                         f"{symbol}: {ema_label} SHORT bounce candidate found. {ema_label}: {ema_value:.2f}, Std VWAP: {std_vwap:.2f}"
                     )
@@ -1582,6 +1897,7 @@ class BounceBot(EWrapper, EClient):
             if check_consecutive_respect(metrics.get("vwap_1stdev_upper"), "VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
                     ref_levels["vwap_upper_band"] = metrics.get("vwap_1stdev_upper")
+                    mark_trigger("vwap_upper_band")
                     logging.debug(f"{symbol}: VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for VWAP lower band bounces for shorts
@@ -1590,6 +1906,7 @@ class BounceBot(EWrapper, EClient):
             if check_consecutive_respect(metrics.get("vwap_1stdev_lower"), "VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
                     ref_levels["vwap_lower_band"] = metrics.get("vwap_1stdev_lower")
+                    mark_trigger("vwap_lower_band")
                     logging.debug(f"{symbol}: VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for Dynamic VWAP upper band bounces for longs
@@ -1598,6 +1915,7 @@ class BounceBot(EWrapper, EClient):
             if check_consecutive_respect(metrics.get("dynamic_vwap_1stdev_upper"), "Dynamic VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("dynamic_vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
                     ref_levels["dynamic_vwap_upper_band"] = metrics.get("dynamic_vwap_1stdev_upper")
+                    mark_trigger("dynamic_vwap_upper_band")
                     logging.debug(f"{symbol}: Dynamic VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('dynamic_vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for Dynamic VWAP lower band bounces for shorts
@@ -1606,6 +1924,7 @@ class BounceBot(EWrapper, EClient):
             if check_consecutive_respect(metrics.get("dynamic_vwap_1stdev_lower"), "Dynamic VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("dynamic_vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
                     ref_levels["dynamic_vwap_lower_band"] = metrics.get("dynamic_vwap_1stdev_lower")
+                    mark_trigger("dynamic_vwap_lower_band")
                     logging.debug(f"{symbol}: Dynamic VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('dynamic_vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for EOD VWAP upper band bounces for longs
@@ -1614,6 +1933,7 @@ class BounceBot(EWrapper, EClient):
             if check_consecutive_respect(metrics.get("eod_vwap_1stdev_upper"), "EOD VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("eod_vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
                     ref_levels["eod_vwap_upper_band"] = metrics.get("eod_vwap_1stdev_upper")
+                    mark_trigger("eod_vwap_upper_band")
                     logging.debug(f"{symbol}: EOD VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('eod_vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for EOD VWAP lower band bounces for shorts
@@ -1622,6 +1942,7 @@ class BounceBot(EWrapper, EClient):
             if check_consecutive_respect(metrics.get("eod_vwap_1stdev_lower"), "EOD VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("eod_vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
                     ref_levels["eod_vwap_lower_band"] = metrics.get("eod_vwap_1stdev_lower")
+                    mark_trigger("eod_vwap_lower_band")
                     logging.debug(f"{symbol}: EOD VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('eod_vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for previous day high/low bounces if enabled
@@ -1631,6 +1952,7 @@ class BounceBot(EWrapper, EClient):
                 # Only consider bounce if price respected the level all day
                 if abs(current_candle_data["low"] - metrics.get("prev_high")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
                     ref_levels["prev_day_high"] = metrics.get("prev_high")
+                    mark_trigger("prev_day_high")
                     logging.debug(f"{symbol}: Previous Day High LONG bounce candidate found. Prev High: {metrics.get('prev_high'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         elif direction == "short" and bounce_type_allowed("prev_day_low") and self.is_bounce_type_enabled("prev_day_low") and metrics.get("prev_low") is not None:
@@ -1639,10 +1961,15 @@ class BounceBot(EWrapper, EClient):
                 # Only consider bounce if price respected the level all day
                 if abs(current_candle_data["high"] - metrics.get("prev_low")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
                     ref_levels["prev_day_low"] = metrics.get("prev_low")
+                    mark_trigger("prev_day_low")
                     logging.debug(f"{symbol}: Previous Day Low SHORT bounce candidate found. Prev Low: {metrics.get('prev_low'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Return None if no reference levels were found, otherwise return the details
-        return {"levels": ref_levels, "candle": current_candle_data} if ref_levels else None
+        return {
+            "levels": ref_levels,
+            "triggered_levels": triggered_levels,
+            "candle": current_candle_data
+        } if ref_levels else None
 
 
 
@@ -1885,7 +2212,7 @@ class BounceBot(EWrapper, EClient):
                     # For longs: confirm if the current candle's high is greater than the bounce candle's high
                     if direction == "long" and current_candle["high"] > bounce_candle["high"]:
                         levels = bounce_data["levels"]
-                        levels_list = list(levels.keys())
+                        levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
                         bounce_msg = f"{symbol}: Bounce confirmed (long) from {levels_list}"
                         if self.gui_callback:
                             self.gui_callback(bounce_msg, "green")
@@ -1905,7 +2232,7 @@ class BounceBot(EWrapper, EClient):
                     # For shorts: confirm if the current candle's low is less than the bounce candle's low
                     elif direction == "short" and current_candle["low"] < bounce_candle["low"]:
                         levels = bounce_data["levels"]
-                        levels_list = list(levels.keys())
+                        levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
                         bounce_msg = f"{symbol}: Bounce confirmed (short) from {levels_list}"
                         if self.gui_callback:
                             self.gui_callback(bounce_msg, "red")
@@ -1943,6 +2270,7 @@ class BounceBot(EWrapper, EClient):
         if candidate_info and symbol not in self.bounce_candidates:
             self.bounce_candidates[symbol] = {
                 "levels": candidate_info["levels"],
+                "triggered_levels": candidate_info.get("triggered_levels", []),
                 "bounce_candle": candidate_info["candle"],
                 "detection_time": datetime.now(),
                 "candles_waited": 0
@@ -1951,7 +2279,9 @@ class BounceBot(EWrapper, EClient):
                         # In the evaluate_bounce_candidate function, where price approaching is logged:
             if LOG_PRICE_APPROACHING:
                 # Filter out 10-candle levels for approaching alerts
-                approaching_levels = {k: v for k, v in candidate_info["levels"].items() 
+                display_level_names = set(candidate_info.get("triggered_levels", candidate_info["levels"].keys()))
+                approaching_levels = {k: v for k, v in candidate_info["levels"].items()
+                                    if k in display_level_names
                                     if "10_candle" not in k}
                 
                 # Only show approaching alert if there are non-10-candle levels
@@ -1965,9 +2295,6 @@ class BounceBot(EWrapper, EClient):
                     if self.gui_callback:
                         direction_tag = "approaching_green" if direction == "long" else "approaching_red"
                         self.gui_callback(approaching_msg, direction_tag)
-
-                    
-                    self.log_symbol(symbol, f"Price approaching levels - {level_details}", "approaching")
 
 
     def check_removal_conditions(self):
@@ -2507,6 +2834,8 @@ def start_gui():
         "vwap",
         "dynamic_vwap",
         "eod_vwap",
+        "vwap_eod_confluence",
+        "impulse_retest_vwap_eod",
         "ema_8",
         "ema_15",
         "ema_21",
