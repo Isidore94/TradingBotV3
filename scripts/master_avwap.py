@@ -440,6 +440,38 @@ def get_last_market_session_date() -> date | None:
     return idx[-1].date()
 
 
+def get_recent_market_session_dates(lookback_days: int = 1):
+    lookback_days = max(1, int(lookback_days))
+    period_days = max(10, lookback_days * 4)
+    try:
+        benchmark = yf.download(
+            "SPY",
+            period=f"{period_days}d",
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception as exc:
+        logging.error(f"Failed to determine recent market sessions from Yahoo: {exc}")
+        return []
+
+    if benchmark is None or benchmark.empty:
+        return []
+
+    idx = benchmark.index.tz_localize(None) if getattr(benchmark.index, "tz", None) is not None else benchmark.index
+    unique_dates = []
+    seen = set()
+    for ts in reversed(idx):
+        session_date = ts.date()
+        if session_date in seen:
+            continue
+        seen.add(session_date)
+        unique_dates.append(session_date)
+        if len(unique_dates) >= lookback_days:
+            break
+    return unique_dates
+
+
 
 def fetch_earnings_calendar_rows(date_obj):
     rows = fetch_earnings_for_date(date_obj.isoformat())
@@ -627,33 +659,35 @@ def append_anchor_candidates(candidates, path: Path = EARNINGS_ANCHORS_FILE):
 
 
 
-def scan_last_session_earnings_for_anchors():
-    last_session = get_last_market_session_date()
-    if last_session is None:
-        logging.error("Could not determine last market session. Earnings anchor scan aborted.")
+def scan_last_session_earnings_for_anchors(lookback_days: int = 1):
+    sessions = get_recent_market_session_dates(lookback_days)
+    if not sessions:
+        logging.error("Could not determine market session dates. Earnings anchor scan aborted.")
         return []
 
-    rows = fetch_earnings_calendar_rows(last_session)
-    logging.info(f"Found {len(rows)} raw earnings rows for {last_session.isoformat()}.")
-
     candidates = []
-    for row in rows:
-        symbol = str(row.get("symbol", "")).upper().strip()
-        if not symbol:
-            continue
+    for session in sessions:
+        rows = fetch_earnings_calendar_rows(session)
+        logging.info(f"Found {len(rows)} raw earnings rows for {session.isoformat()}.")
 
-        release_session = infer_release_session(row)
-        candidate = evaluate_earnings_gap_candidate(symbol, last_session, release_session)
-        if candidate:
-            candidates.append(candidate)
-            logging.info(
-                f"{symbol}: qualified (anchor={candidate.anchor_date}, gap={candidate.gap_date}, "
-                f"gap_atr={candidate.gap_atr_multiple})."
-            )
+        for row in rows:
+            symbol = str(row.get("symbol", "")).upper().strip()
+            if not symbol:
+                continue
+
+            release_session = infer_release_session(row)
+            candidate = evaluate_earnings_gap_candidate(symbol, session, release_session)
+            if candidate:
+                candidates.append(candidate)
+                logging.info(
+                    f"{symbol}: qualified (anchor={candidate.anchor_date}, gap={candidate.gap_date}, "
+                    f"gap_atr={candidate.gap_atr_multiple})."
+                )
 
     added = append_anchor_candidates(candidates)
     logging.info(
-        f"Earnings gap anchor scan complete. Qualified={len(candidates)}, newly_added={added}, "
+        f"Earnings gap anchor scan complete. Sessions={len(sessions)}, qualified={len(candidates)}, "
+        f"newly_added={added}, "
         f"file={EARNINGS_ANCHORS_FILE}"
     )
     return candidates
@@ -1702,26 +1736,45 @@ class MasterAvwapGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Master AVWAP Manager")
-        self.root.geometry("1100x680")
+        self.root.geometry("1200x760")
 
         self.status_var = tk.StringVar(value="Ready")
         self.ticker_var = tk.StringVar()
         self.anchor_var = tk.StringVar()
         self.notes_var = tk.StringVar()
+        self.earnings_lookback_var = tk.IntVar(value=1)
 
         self._build_layout()
         self.refresh_table()
+        self.refresh_avwap_output_view()
 
     def _build_layout(self):
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill="x", padx=10, pady=8)
 
+        ttk.Label(toolbar, text="Earnings lookback days:").pack(side="left", padx=(0, 4))
+        lookback_spin = ttk.Spinbox(
+            toolbar,
+            from_=1,
+            to=20,
+            width=4,
+            textvariable=self.earnings_lookback_var,
+        )
+        lookback_spin.pack(side="left", padx=(0, 10))
+
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run AVWAP Scan Once", command=self.run_master_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh Table", command=self.refresh_table).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
 
-        form = ttk.LabelFrame(self.root, text="Manual Anchor Entry")
-        form.pack(fill="x", padx=10, pady=(0, 8))
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=8)
+
+        anchors_tab = ttk.Frame(self.notebook)
+        self.notebook.add(anchors_tab, text="Earnings Anchors")
+
+        form = ttk.LabelFrame(anchors_tab, text="Manual Anchor Entry")
+        form.pack(fill="x", padx=0, pady=(0, 8))
 
         ttk.Label(form, text="Ticker").grid(row=0, column=0, padx=6, pady=6, sticky="w")
         ttk.Entry(form, textvariable=self.ticker_var, width=12).grid(row=0, column=1, padx=6, pady=6, sticky="w")
@@ -1732,8 +1785,8 @@ class MasterAvwapGUI:
         ttk.Button(form, text="Add Manual Entry", command=self.add_manual_entry).grid(row=0, column=6, padx=8, pady=6)
         form.columnconfigure(5, weight=1)
 
-        table_frame = ttk.Frame(self.root)
-        table_frame.pack(fill="both", expand=True, padx=10, pady=8)
+        table_frame = ttk.Frame(anchors_tab)
+        table_frame.pack(fill="both", expand=True, padx=0, pady=0)
 
         self.table = ttk.Treeview(table_frame, columns=EARNINGS_ANCHOR_COLUMNS, show="headings")
         for col in EARNINGS_ANCHOR_COLUMNS:
@@ -1747,10 +1800,49 @@ class MasterAvwapGUI:
         self.table.pack(side="left", fill="both", expand=True)
         yscroll.pack(side="right", fill="y")
 
+        avwap_tab = ttk.Frame(self.notebook)
+        self.notebook.add(avwap_tab, text="AVWAP Scan Output")
+
+        self.avwap_text = tk.Text(avwap_tab, wrap="word", font=("Courier New", 10))
+        self.avwap_text.pack(side="left", fill="both", expand=True)
+        output_scroll = ttk.Scrollbar(avwap_tab, orient="vertical", command=self.avwap_text.yview)
+        self.avwap_text.configure(yscrollcommand=output_scroll.set)
+        output_scroll.pack(side="right", fill="y")
+
         status = ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w")
         status.pack(fill="x", padx=10, pady=(0, 10))
 
-    def _run_background(self, target, running_msg, done_msg):
+    def _read_text_file(self, path: Path):
+        if not path.exists():
+            return f"[Missing file] {path.name}"
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            return f"[Error reading {path.name}] {exc}"
+
+    def refresh_avwap_output_view(self):
+        top_section = self._read_text_file(EVENT_TICKERS_FILE)
+        bottom_section = self._read_text_file(STDEV_RANGE_FILE)
+
+        combined = (
+            "MASTER AVWAP EVENT TICKERS\n"
+            + "=" * 80
+            + "\n"
+            + (top_section or "No event tickers output yet.")
+            + "\n\n"
+            + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
+            + "=" * 80
+            + "\n"
+            + (bottom_section or "No stdev output yet.")
+            + "\n"
+        )
+
+        self.avwap_text.configure(state="normal")
+        self.avwap_text.delete("1.0", tk.END)
+        self.avwap_text.insert("1.0", combined)
+        self.avwap_text.configure(state="normal")
+
+    def _run_background(self, target, running_msg, done_msg, done_callback=None):
         self.status_var.set(running_msg)
 
         def _task():
@@ -1758,6 +1850,8 @@ class MasterAvwapGUI:
                 target()
                 self.root.after(0, lambda: self.status_var.set(done_msg))
                 self.root.after(0, self.refresh_table)
+                if done_callback:
+                    self.root.after(0, done_callback)
             except Exception as exc:
                 logging.exception("GUI background task failed")
                 self.root.after(0, lambda: self.status_var.set(f"Error: {exc}"))
@@ -1765,17 +1859,27 @@ class MasterAvwapGUI:
         threading.Thread(target=_task, daemon=True).start()
 
     def run_earnings_scan(self):
+        try:
+            lookback_days = max(1, int(self.earnings_lookback_var.get()))
+        except Exception:
+            lookback_days = 1
+            self.earnings_lookback_var.set(1)
+
+        self.notebook.select(0)
         self._run_background(
-            scan_last_session_earnings_for_anchors,
-            "Running earnings gap anchor scan...",
+            lambda: scan_last_session_earnings_for_anchors(lookback_days=lookback_days),
+            f"Running earnings gap anchor scan (last {lookback_days} session(s))...",
             "Earnings gap anchor scan complete.",
+            done_callback=lambda: self.notebook.select(0),
         )
 
     def run_master_once(self):
+        self.notebook.select(1)
         self._run_background(
             run_master,
             "Running full Master AVWAP scan...",
             "Master AVWAP scan complete.",
+            done_callback=self.refresh_avwap_output_view,
         )
 
     def refresh_table(self):
@@ -1829,7 +1933,6 @@ class MasterAvwapGUI:
         else:
             self.status_var.set(f"Manual entry added: {ticker} {anchor_date}")
         self.refresh_table()
-
 
 def launch_gui():
     if tk is None or ttk is None:
