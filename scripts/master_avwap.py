@@ -380,6 +380,7 @@ def load_or_refresh_earnings(symbols):
 
 EARNINGS_ANCHOR_COLUMNS = [
     "ticker",
+    "side",
     "anchor_date",
     "gap_date",
     "earnings_date",
@@ -391,6 +392,24 @@ EARNINGS_ANCHOR_COLUMNS = [
     "notes",
     "source",
     "created_at",
+]
+
+PREVIOUS_GAP_UPS_FILE = OUTPUT_DIR / "previous_gap_ups.csv"
+ANCHOR_AVWAP_OUTPUT_FILE = OUTPUT_DIR / "master_anchor_avwap_events.txt"
+ANCHOR_AVWAP_SIGNALS_FILE = OUTPUT_DIR / "master_anchor_avwap_signals.csv"
+ANCHOR_AVWAP_SIGNAL_COLUMNS = [
+    "run_date",
+    "trade_date",
+    "ticker",
+    "list_name",
+    "side",
+    "anchor_date",
+    "gap_date",
+    "event",
+    "avwap",
+    "stdev",
+    "level_name",
+    "level_price",
 ]
 
 
@@ -405,15 +424,55 @@ class EarningsGapAnchorCandidate:
     price: float
     avg_volume20: int
     market_cap: int
+    side: str = "LONG"
     notes: str = ""
     source: str = "program"
 
 
 
 def ensure_anchor_file(path: Path = EARNINGS_ANCHORS_FILE):
-    if path.exists():
+    if not path.exists():
+        pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS).to_csv(path, index=False)
         return
-    pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS).to_csv(path, index=False)
+
+    df = pd.read_csv(path)
+    updated = False
+    for col in EARNINGS_ANCHOR_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+            updated = True
+
+    if "side" in df.columns:
+        normalized = df["side"].fillna("").astype(str).str.upper().replace({"": "LONG"})
+        if not normalized.equals(df["side"]):
+            df["side"] = normalized
+            updated = True
+
+    if updated:
+        df[EARNINGS_ANCHOR_COLUMNS].to_csv(path, index=False)
+
+
+def ensure_previous_gap_file(path: Path = PREVIOUS_GAP_UPS_FILE):
+    columns = EARNINGS_ANCHOR_COLUMNS + ["archived_at"]
+    if not path.exists():
+        pd.DataFrame(columns=columns).to_csv(path, index=False)
+        return
+
+    df = pd.read_csv(path)
+    updated = False
+    for col in columns:
+        if col not in df.columns:
+            df[col] = ""
+            updated = True
+
+    if "side" in df.columns:
+        normalized = df["side"].fillna("").astype(str).str.upper().replace({"": "LONG"})
+        if not normalized.equals(df["side"]):
+            df["side"] = normalized
+            updated = True
+
+    if updated:
+        df[columns].to_csv(path, index=False)
 
 
 
@@ -612,6 +671,7 @@ def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session:
     return EarningsGapAnchorCandidate(
         ticker=symbol,
         anchor_date=anchor_row["trade_date"].isoformat(),
+        side="LONG",
         gap_date=gap_row["trade_date"].isoformat(),
         earnings_date=earnings_date.isoformat(),
         release_session=release_session,
@@ -646,6 +706,7 @@ def append_anchor_candidates(candidates, path: Path = EARNINGS_ANCHORS_FILE):
         if key in existing_keys:
             continue
         row = asdict(candidate)
+        row["side"] = normalize_side(row.get("side", "LONG"))
         row["created_at"] = now_iso
         new_rows.append(row)
 
@@ -653,6 +714,7 @@ def append_anchor_candidates(candidates, path: Path = EARNINGS_ANCHORS_FILE):
         return 0
 
     combined = pd.concat([existing, pd.DataFrame(new_rows)], ignore_index=True)
+    combined["side"] = combined["side"].apply(normalize_side)
     combined = combined[EARNINGS_ANCHOR_COLUMNS]
     combined.to_csv(path, index=False)
     return len(new_rows)
@@ -861,6 +923,11 @@ def _to_float(value):
     except TypeError:
         pass
     return float(value)
+
+
+def normalize_side(value: str) -> str:
+    raw = str(value or "").strip().upper()
+    return "SHORT" if raw == "SHORT" else "LONG"
 
 
 def classify_position_by_band(last_close: float, anchor_meta: dict):
@@ -1108,9 +1175,230 @@ def write_stdev_range_report(path: Path, range_hits: dict, cross_hits: dict) -> 
         f.write(f"Longs crossing up UPPER_2: {long_cross}\n")
         f.write(f"Shorts crossing down LOWER_2: {short_cross}\n")
 
+
+
+def _archive_expired_anchor_rows(df_current: pd.DataFrame, today_run: date) -> pd.DataFrame:
+    ensure_previous_gap_file()
+    if df_current.empty:
+        return df_current
+
+    keep_rows = []
+    moved_rows = []
+    for _, row in df_current.iterrows():
+        gap_date_str = str(row.get("gap_date", "")).strip()
+        if not gap_date_str:
+            keep_rows.append(row)
+            continue
+        try:
+            gap_date = datetime.fromisoformat(gap_date_str).date()
+        except ValueError:
+            keep_rows.append(row)
+            continue
+
+        age_days = (today_run - gap_date).days
+        if age_days > 15:
+            row_dict = row.to_dict()
+            row_dict["side"] = normalize_side(row_dict.get("side", "LONG"))
+            row_dict["archived_at"] = datetime.now().isoformat(timespec="seconds")
+            moved_rows.append(row_dict)
+        else:
+            keep_rows.append(row)
+
+    if moved_rows:
+        prev_df = pd.read_csv(PREVIOUS_GAP_UPS_FILE)
+        if prev_df.empty:
+            prev_df = pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS + ["archived_at"])
+        prev_df = pd.concat([prev_df, pd.DataFrame(moved_rows)], ignore_index=True)
+        prev_df["side"] = prev_df["side"].apply(normalize_side)
+        prev_df = prev_df[EARNINGS_ANCHOR_COLUMNS + ["archived_at"]]
+        prev_df.to_csv(PREVIOUS_GAP_UPS_FILE, index=False)
+
+    if keep_rows:
+        kept_df = pd.DataFrame(keep_rows)
+    else:
+        kept_df = pd.DataFrame(columns=df_current.columns)
+    return kept_df
+
+
+def _build_anchor_levels(df: pd.DataFrame, anchor_date_iso: str):
+    try:
+        anchor_date = datetime.fromisoformat(anchor_date_iso).date()
+    except ValueError:
+        return None
+
+    idxs = df.index[df["datetime"].dt.date == anchor_date]
+    if idxs.empty:
+        return None
+    anchor_idx = int(idxs[0])
+    avwap, stdev, bands = calc_anchored_vwap_bands(df, anchor_idx)
+    if pd.isna(avwap) or not bands:
+        return None
+    return float(avwap), float(stdev), {k: float(v) for k, v in bands.items()}
+
+
+def run_anchor_watchlist_scan() -> list[dict]:
+    ensure_anchor_file()
+    ensure_previous_gap_file()
+
+    today_run = datetime.now().date()
+    current_df = pd.read_csv(EARNINGS_ANCHORS_FILE)
+    previous_df = pd.read_csv(PREVIOUS_GAP_UPS_FILE)
+
+    if current_df.empty and previous_df.empty:
+        ANCHOR_AVWAP_OUTPUT_FILE.write_text("No anchor watchlist rows to process.\n", encoding="utf-8")
+        return []
+
+    for frame in (current_df, previous_df):
+        for col in EARNINGS_ANCHOR_COLUMNS:
+            if col not in frame.columns:
+                frame[col] = ""
+        frame["side"] = frame["side"].apply(normalize_side)
+
+    current_df = _archive_expired_anchor_rows(current_df, today_run)
+    current_df = current_df[EARNINGS_ANCHOR_COLUMNS] if not current_df.empty else pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS)
+    current_df.to_csv(EARNINGS_ANCHORS_FILE, index=False)
+    previous_df = pd.read_csv(PREVIOUS_GAP_UPS_FILE)
+
+    all_rows = []
+    if not current_df.empty:
+        temp = current_df.copy()
+        temp["list_name"] = "active_gap_ups"
+        all_rows.append(temp)
+    if not previous_df.empty:
+        temp = previous_df.copy()
+        temp["list_name"] = "previous_gap_ups"
+        all_rows.append(temp)
+
+    merged = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
+    if merged.empty:
+        ANCHOR_AVWAP_OUTPUT_FILE.write_text("No anchor watchlist rows to process.\n", encoding="utf-8")
+        return []
+
+    ib = IBApi()
+    ib.connect("127.0.0.1", 7496, clientId=1004)
+    threading.Thread(target=ib.run, daemon=True).start()
+    time.sleep(1.0)
+
+    events = []
+    signal_rows = []
+
+    for _, row in merged.iterrows():
+        ticker = str(row.get("ticker", "")).strip().upper()
+        side = normalize_side(row.get("side", "LONG"))
+        anchor_date_iso = str(row.get("anchor_date", "")).strip()
+        if not ticker or not anchor_date_iso:
+            continue
+
+        days_needed = ATR_LENGTH + 30
+        try:
+            anchor_date = datetime.fromisoformat(anchor_date_iso).date()
+            days_needed = max(days_needed, (today_run - anchor_date).days + 10)
+        except ValueError:
+            pass
+
+        df = fetch_daily_bars(ib, ticker, days_needed)
+        if df.empty:
+            continue
+
+        levels = _build_anchor_levels(df, anchor_date_iso)
+        if not levels:
+            continue
+        avwap, stdev, bands = levels
+        last_trade_date = df["datetime"].iloc[-1].date().isoformat()
+
+        named_levels = {
+            "AVWAP": avwap,
+            "UPPER_1": bands.get("UPPER_1"),
+            "LOWER_1": bands.get("LOWER_1"),
+            "UPPER_2": bands.get("UPPER_2"),
+            "LOWER_2": bands.get("LOWER_2"),
+        }
+
+        def add_anchor_event(name: str, level_name: str):
+            level_price = named_levels.get(level_name)
+            events.append({
+                "ticker": ticker,
+                "list_name": row.get("list_name", ""),
+                "side": side,
+                "anchor_date": anchor_date_iso,
+                "gap_date": str(row.get("gap_date", "")),
+                "event": name,
+                "trade_date": last_trade_date,
+                "level_name": level_name,
+                "level_price": _to_float(level_price),
+                "avwap": _to_float(avwap),
+                "stdev": _to_float(stdev),
+            })
+
+        if side == "LONG":
+            if bounce_up_at_level(df, avwap):
+                add_anchor_event("BOUNCE_UP_AVWAP", "AVWAP")
+            if bounce_up_at_level(df, bands.get("LOWER_1")):
+                add_anchor_event("BOUNCE_UP_LOWER_1", "LOWER_1")
+            if bounce_up_at_level(df, bands.get("UPPER_1")):
+                add_anchor_event("BOUNCE_UP_UPPER_1", "UPPER_1")
+            if cross_up_through_level(df, bands.get("UPPER_1")):
+                add_anchor_event("CROSS_UP_UPPER_1", "UPPER_1")
+            if cross_down_through_level(df, bands.get("LOWER_1")):
+                add_anchor_event("CROSS_DOWN_LOWER_1", "LOWER_1")
+        else:
+            if bounce_down_at_level(df, avwap):
+                add_anchor_event("BOUNCE_DOWN_AVWAP", "AVWAP")
+            if bounce_down_at_level(df, bands.get("UPPER_1")):
+                add_anchor_event("BOUNCE_DOWN_UPPER_1", "UPPER_1")
+            if bounce_down_at_level(df, bands.get("LOWER_1")):
+                add_anchor_event("BOUNCE_DOWN_LOWER_1", "LOWER_1")
+            if cross_down_through_level(df, bands.get("LOWER_1")):
+                add_anchor_event("CROSS_DOWN_LOWER_1", "LOWER_1")
+            if cross_up_through_level(df, bands.get("UPPER_1")):
+                add_anchor_event("CROSS_UP_UPPER_1", "UPPER_1")
+
+    ib.disconnect()
+
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    if events:
+        lines = [f"Anchor AVWAP events generated at {now_iso}", "=" * 80]
+        for item in sorted(events, key=lambda x: (x["ticker"], x["event"])):
+            lines.append(
+                f"{item['ticker']} [{item['list_name']}] {item['side']} {item['event']} "
+                f"anchor={item['anchor_date']} gap={item['gap_date']} trade_date={item['trade_date']}"
+            )
+            signal_rows.append({
+                "run_date": today_run.isoformat(),
+                "trade_date": item["trade_date"],
+                "ticker": item["ticker"],
+                "list_name": item["list_name"],
+                "side": item["side"],
+                "anchor_date": item["anchor_date"],
+                "gap_date": item["gap_date"],
+                "event": item["event"],
+                "avwap": item["avwap"],
+                "stdev": item["stdev"],
+                "level_name": item["level_name"],
+                "level_price": item["level_price"],
+            })
+        ANCHOR_AVWAP_OUTPUT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    else:
+        ANCHOR_AVWAP_OUTPUT_FILE.write_text(f"Anchor AVWAP scan completed at {now_iso}. No events.\n", encoding="utf-8")
+
+    if signal_rows:
+        df_signals = pd.DataFrame(signal_rows, columns=ANCHOR_AVWAP_SIGNAL_COLUMNS)
+        write_header = (not ANCHOR_AVWAP_SIGNALS_FILE.exists()) or ANCHOR_AVWAP_SIGNALS_FILE.stat().st_size == 0
+        df_signals.to_csv(ANCHOR_AVWAP_SIGNALS_FILE, mode="a", index=False, header=write_header)
+
+    return events
+
 # ============================================================================
 # MAIN MASTER RUN
 # ============================================================================
+
+def _run_anchor_watchlist_scan_safe():
+    try:
+        anchor_events = run_anchor_watchlist_scan()
+        logging.info(f"Anchor watchlist AVWAP scan complete. Events: {len(anchor_events)}")
+    except Exception as exc:
+        logging.exception(f"Anchor watchlist scan failed: {exc}")
+
 
 def run_master():
     longs = load_tickers(LONGS_FILE)
@@ -1118,7 +1406,8 @@ def run_master():
     symbols = sorted(set(longs + shorts))
 
     if not symbols:
-        logging.warning("No symbols found in longs/shorts lists.")
+        logging.warning("No symbols found in longs/shorts lists. Running anchor-watchlist scan only.")
+        _run_anchor_watchlist_scan_safe()
         return
 
     curr_cache = load_json(CURRENT_CACHE_FILE, default={})
@@ -1723,6 +2012,8 @@ def run_master():
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
 
+    _run_anchor_watchlist_scan_safe()
+
     logging.info(
         f"Master AVWAP run complete. "
         f"Events: {OUTPUT_FILE}, AI state: {AI_STATE_FILE}, history: {HISTORY_FILE}"
@@ -1743,12 +2034,14 @@ class MasterAvwapGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.ticker_var = tk.StringVar()
         self.anchor_var = tk.StringVar()
+        self.side_var = tk.StringVar(value="LONG")
         self.notes_var = tk.StringVar()
         self.earnings_lookback_var = tk.IntVar(value=1)
 
         self._build_layout()
         self.refresh_table()
         self.refresh_avwap_output_view()
+        self.refresh_anchor_output_view()
 
     def _build_layout(self):
         toolbar = ttk.Frame(self.root)
@@ -1768,6 +2061,7 @@ class MasterAvwapGUI:
         ttk.Button(toolbar, text="Run AVWAP Scan Once", command=self.run_master_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh Table", command=self.refresh_table).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=8)
@@ -1782,10 +2076,14 @@ class MasterAvwapGUI:
         ttk.Entry(form, textvariable=self.ticker_var, width=12).grid(row=0, column=1, padx=6, pady=6, sticky="w")
         ttk.Label(form, text="Anchor Date (YYYY-MM-DD)").grid(row=0, column=2, padx=6, pady=6, sticky="w")
         ttk.Entry(form, textvariable=self.anchor_var, width=16).grid(row=0, column=3, padx=6, pady=6, sticky="w")
-        ttk.Label(form, text="Notes").grid(row=0, column=4, padx=6, pady=6, sticky="w")
-        ttk.Entry(form, textvariable=self.notes_var, width=40).grid(row=0, column=5, padx=6, pady=6, sticky="we")
-        ttk.Button(form, text="Add Manual Entry", command=self.add_manual_entry).grid(row=0, column=6, padx=8, pady=6)
-        form.columnconfigure(5, weight=1)
+        ttk.Label(form, text="Side").grid(row=0, column=4, padx=6, pady=6, sticky="w")
+        ttk.Combobox(form, textvariable=self.side_var, values=("LONG", "SHORT"), width=8, state="readonly").grid(row=0, column=5, padx=6, pady=6, sticky="w")
+        ttk.Label(form, text="Notes").grid(row=0, column=6, padx=6, pady=6, sticky="w")
+        ttk.Entry(form, textvariable=self.notes_var, width=32).grid(row=0, column=7, padx=6, pady=6, sticky="we")
+        ttk.Button(form, text="Add Manual Entry", command=self.add_manual_entry).grid(row=0, column=8, padx=8, pady=6)
+        ttk.Button(form, text="Set Side on Selected", command=self.set_selected_anchor_side).grid(row=0, column=9, padx=8, pady=6)
+        ttk.Button(form, text="Delete Selected", command=self.delete_selected_anchor).grid(row=0, column=10, padx=8, pady=6)
+        form.columnconfigure(7, weight=1)
 
         table_frame = ttk.Frame(anchors_tab)
         table_frame.pack(fill="both", expand=True, padx=0, pady=0)
@@ -1810,6 +2108,14 @@ class MasterAvwapGUI:
         output_scroll = ttk.Scrollbar(avwap_tab, orient="vertical", command=self.avwap_text.yview)
         self.avwap_text.configure(yscrollcommand=output_scroll.set)
         output_scroll.pack(side="right", fill="y")
+
+        anchor_scan_tab = ttk.Frame(self.notebook)
+        self.notebook.add(anchor_scan_tab, text="Anchor AVWAP Output")
+        self.anchor_scan_text = tk.Text(anchor_scan_tab, wrap="word", font=("Courier New", 10))
+        self.anchor_scan_text.pack(side="left", fill="both", expand=True)
+        anchor_output_scroll = ttk.Scrollbar(anchor_scan_tab, orient="vertical", command=self.anchor_scan_text.yview)
+        self.anchor_scan_text.configure(yscrollcommand=anchor_output_scroll.set)
+        anchor_output_scroll.pack(side="right", fill="y")
 
         status = ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w")
         status.pack(fill="x", padx=10, pady=(0, 10))
@@ -1843,6 +2149,13 @@ class MasterAvwapGUI:
         self.avwap_text.delete("1.0", tk.END)
         self.avwap_text.insert("1.0", combined)
         self.avwap_text.configure(state="normal")
+
+    def refresh_anchor_output_view(self):
+        text = self._read_text_file(ANCHOR_AVWAP_OUTPUT_FILE)
+        self.anchor_scan_text.configure(state="normal")
+        self.anchor_scan_text.delete("1.0", tk.END)
+        self.anchor_scan_text.insert("1.0", text or "No anchor AVWAP output yet.")
+        self.anchor_scan_text.configure(state="normal")
 
     def _run_background(self, target, running_msg, done_msg, done_callback=None):
         self.status_var.set(running_msg)
@@ -1881,7 +2194,16 @@ class MasterAvwapGUI:
             run_master,
             "Running full Master AVWAP scan...",
             "Master AVWAP scan complete.",
-            done_callback=self.refresh_avwap_output_view,
+            done_callback=lambda: (self.refresh_avwap_output_view(), self.refresh_anchor_output_view()),
+        )
+
+    def run_anchor_scan_once(self):
+        self.notebook.select(2)
+        self._run_background(
+            run_anchor_watchlist_scan,
+            "Running anchor watchlist AVWAP scan...",
+            "Anchor watchlist AVWAP scan complete.",
+            done_callback=self.refresh_anchor_output_view,
         )
 
     def refresh_table(self):
@@ -1898,9 +2220,65 @@ class MasterAvwapGUI:
         for _, row in df.iterrows():
             self.table.insert("", "end", values=[row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS])
 
+    def set_selected_anchor_side(self):
+        selected = self.table.selection()
+        if not selected:
+            self.status_var.set("No row selected to update side.")
+            return
+
+        values = self.table.item(selected[0], "values")
+        if not values:
+            return
+
+        ticker = str(values[0]).upper().strip()
+        anchor_date = str(values[2]).strip()
+        side = normalize_side(self.side_var.get())
+
+        ensure_anchor_file()
+        df = pd.read_csv(EARNINGS_ANCHORS_FILE)
+        mask = (df["ticker"].astype(str).str.upper() == ticker) & (df["anchor_date"].astype(str) == anchor_date)
+        if not mask.any():
+            self.status_var.set(f"Entry not found: {ticker} {anchor_date}")
+            return
+
+        df.loc[mask, "side"] = side
+        df.to_csv(EARNINGS_ANCHORS_FILE, index=False)
+        self.status_var.set(f"Updated side for {ticker} {anchor_date} -> {side}")
+        self.refresh_table()
+
+    def delete_selected_anchor(self):
+        selected = self.table.selection()
+        if not selected:
+            self.status_var.set("No row selected to delete.")
+            return
+
+        values = self.table.item(selected[0], "values")
+        if not values:
+            return
+
+        ticker = str(values[0]).upper().strip()
+        anchor_date = str(values[2]).strip()
+
+        ensure_anchor_file()
+        df = pd.read_csv(EARNINGS_ANCHORS_FILE)
+        before = len(df)
+        if before == 0:
+            return
+
+        mask = ~((df["ticker"].astype(str).str.upper() == ticker) & (df["anchor_date"].astype(str) == anchor_date))
+        df = df[mask]
+        if len(df) == before:
+            self.status_var.set(f"Entry not found: {ticker} {anchor_date}")
+            return
+
+        df.to_csv(EARNINGS_ANCHORS_FILE, index=False)
+        self.status_var.set(f"Deleted anchor entry: {ticker} {anchor_date}")
+        self.refresh_table()
+
     def add_manual_entry(self):
         ticker = self.ticker_var.get().strip().upper()
         anchor_date = self.anchor_var.get().strip()
+        side = normalize_side(self.side_var.get())
         notes = self.notes_var.get().strip()
 
         if not ticker or not anchor_date:
@@ -1918,6 +2296,7 @@ class MasterAvwapGUI:
         manual_candidate = EarningsGapAnchorCandidate(
             ticker=ticker,
             anchor_date=anchor_date,
+            side=side,
             gap_date="",
             earnings_date="",
             release_session="manual",
@@ -1962,10 +2341,14 @@ def main():
         help="Scan the last market session for earnings gap anchors and update data file.",
     )
     parser.add_argument("--gui", action="store_true", help="Launch the Master AVWAP management GUI.")
+    parser.add_argument("--anchor-scan", action="store_true", help="Run only the anchor watchlist AVWAP scan.")
     args = parser.parse_args()
 
     if args.scan_earnings:
         scan_last_session_earnings_for_anchors()
+
+    if args.anchor_scan:
+        run_anchor_watchlist_scan()
 
     if args.once:
         run_master()
@@ -1981,7 +2364,7 @@ def main():
             logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run…")
             time.sleep(sleep_seconds)
 
-    if args.gui or (not args.once and not args.loop and not args.scan_earnings):
+    if args.gui or (not args.once and not args.loop and not args.scan_earnings and not args.anchor_scan):
         launch_gui()
 
 
