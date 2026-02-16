@@ -2603,6 +2603,180 @@ def run_bot_with_gui(gui_callback):
 # Find and replace the light_grey variable definition with dark theme colors
 # Around line 677 in the start_gui() function
 
+def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_color="#E0E0E0"):
+    """Create the BounceBot RS/RW confirmed screen (industry + sector) inside `parent`."""
+    rrs_container = tk.Frame(parent, bg=dark_grey)
+
+    rrs_controls = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
+    rrs_controls.pack(fill=tk.X)
+
+    rrs_status_var = tk.StringVar(value="RRS ready")
+    tk.Label(rrs_controls, textvariable=rrs_status_var, fg=text_color, bg=dark_grey).pack(side=tk.LEFT, padx=(0, 10))
+
+    rrs_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
+
+    def on_rrs_threshold_change(*_):
+        bot_instance.set_rrs_threshold(rrs_threshold_var.get())
+
+    rrs_threshold_var.trace_add("write", on_rrs_threshold_change)
+
+    tk.Scale(
+        rrs_controls,
+        from_=0.0,
+        to=5.0,
+        resolution=0.1,
+        orient=tk.HORIZONTAL,
+        label="RRS Sensitivity",
+        variable=rrs_threshold_var,
+        length=220,
+        bg=dark_grey,
+        fg=text_color,
+        highlightthickness=0,
+    ).pack(side=tk.LEFT, padx=(0, 10))
+
+    timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
+
+    def on_timeframe_change() -> None:
+        bot_instance.set_rrs_timeframe(timeframe_var.get())
+
+    for key in ("5m", "15m", "30m", "1h"):
+        label = RRS_TIMEFRAMES[key]["label"]
+        tk.Radiobutton(
+            rrs_controls,
+            text=label,
+            variable=timeframe_var,
+            value=key,
+            indicatoron=0,
+            command=on_timeframe_change,
+            padx=6,
+            pady=2,
+            bg=dark_grey,
+            fg=text_color,
+            selectcolor="#444444",
+            activebackground="#444444",
+            activeforeground=text_color,
+        ).pack(side=tk.LEFT, padx=2)
+
+    rrs_frame = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
+    rrs_frame.pack(fill=tk.BOTH, expand=True)
+
+    rrs_main_text = scrolledtext.ScrolledText(
+        rrs_frame,
+        wrap=tk.NONE,
+        width=80,
+        height=12,
+        font=('Courier', 11),
+        state='disabled',
+        bg=dark_grey,
+        fg=text_color,
+    )
+    rrs_main_text.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+
+    rrs_compare_frame = tk.Frame(rrs_frame, bg=dark_grey)
+    rrs_compare_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    industry_col = tk.LabelFrame(rrs_compare_frame, text="RS/RW vs Industry Ref", bg=dark_grey, fg=text_color)
+    industry_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+    sector_col = tk.LabelFrame(rrs_compare_frame, text="RS/RW vs Sector", bg=dark_grey, fg=text_color)
+    sector_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
+
+    industry_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
+    sector_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
+
+    tk.Scale(industry_col, from_=0.0, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, label="Sensitivity",
+             variable=industry_threshold_var, length=180, bg=dark_grey, fg=text_color, highlightthickness=0).pack(fill=tk.X, padx=4)
+    tk.Scale(sector_col, from_=0.0, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, label="Sensitivity",
+             variable=sector_threshold_var, length=180, bg=dark_grey, fg=text_color, highlightthickness=0).pack(fill=tk.X, padx=4)
+
+    industry_timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
+    sector_timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
+
+    industry_tf = tk.Frame(industry_col, bg=dark_grey)
+    industry_tf.pack(fill=tk.X)
+    sector_tf = tk.Frame(sector_col, bg=dark_grey)
+    sector_tf.pack(fill=tk.X)
+    for key in ("5m", "15m", "30m", "1h"):
+        for parent_tf, var in ((industry_tf, industry_timeframe_var), (sector_tf, sector_timeframe_var)):
+            tk.Radiobutton(parent_tf, text=key, variable=var, value=key, indicatoron=0, padx=4, pady=1,
+                           bg=dark_grey, fg=text_color, selectcolor="#444444", activebackground="#444444",
+                           activeforeground=text_color).pack(side=tk.LEFT, padx=1)
+
+    industry_text = scrolledtext.ScrolledText(industry_col, wrap=tk.NONE, width=45, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
+    industry_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    sector_text = scrolledtext.ScrolledText(sector_col, wrap=tk.NONE, width=45, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
+    sector_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+    group_frame = tk.LabelFrame(rrs_frame, text="Top Industries/Sectors", bg=dark_grey, fg=text_color)
+    group_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    group_text = scrolledtext.ScrolledText(group_frame, wrap=tk.NONE, width=90, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
+    group_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+    for widget in (rrs_main_text, industry_text, sector_text, group_text):
+        widget.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
+        widget.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
+        widget.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
+
+    def render_rrs_snapshot(snapshot):
+        threshold = snapshot.get("threshold", RRS_DEFAULT_THRESHOLD)
+        timeframe_key = snapshot.get("timeframe_key", "5m")
+        timeframe_label = RRS_TIMEFRAMES.get(timeframe_key, {}).get("label", timeframe_key)
+        results = snapshot.get("results", [])
+        sector_results = snapshot.get("results_sector", [])
+        industry_results = snapshot.get("results_industry", [])
+        group_strength = snapshot.get("group_strength", {})
+        timestamp = snapshot.get("timestamp", datetime.now())
+
+        def render_table(widget, title, rows, local_threshold):
+            selected_tf = timeframe_key
+            if title.startswith("RS/RW vs Industry"):
+                selected_tf = industry_timeframe_var.get()
+            elif title.startswith("RS/RW vs Sector"):
+                selected_tf = sector_timeframe_var.get()
+            widget.config(state='normal')
+            widget.delete("1.0", tk.END)
+            widget.insert(tk.END, f"{title}  TF:{selected_tf}  Threshold:{local_threshold:.2f}\n", "rrs_hdr")
+            widget.insert(tk.END, "SYMBOL  SIDE  RRS    POWER\n")
+            widget.insert(tk.END, "--------------------------\n")
+            filtered = [r for r in rows if abs(r[2]) >= local_threshold]
+            if not filtered:
+                widget.insert(tk.END, "No symbols flagged.\n")
+            for signal, symbol, rrs_value, power in filtered:
+                line = f"{symbol:<6}  {signal:<4}  {rrs_value:+.2f}  {power if power is not None else 0:>6.2f}\n"
+                widget.insert(tk.END, line, "rrs_rs" if signal == "RS" else "rrs_rw")
+            widget.config(state='disabled')
+            widget.see("1.0")
+
+        render_table(rrs_main_text, "RS/RW vs SPY", results, threshold)
+        render_table(industry_text, "RS/RW vs Industry Ref", industry_results, industry_threshold_var.get())
+        render_table(sector_text, "RS/RW vs Sector", sector_results, sector_threshold_var.get())
+
+        group_text.config(state='normal')
+        group_text.delete("1.0", tk.END)
+        group_text.insert(tk.END, f"Last scan: {timestamp.strftime('%H:%M:%S')}   Timeframe: {timeframe_label}\n", "rrs_hdr")
+        for tf in ("D1", "H1", "M5"):
+            payload = group_strength.get(tf, {})
+            sectors = payload.get("sectors", [])
+            industries = payload.get("industries", [])
+            group_text.insert(tk.END, f"\n[{tf}] Sectors\n", "rrs_hdr")
+            for item in sectors[:SCAN_EXTREME_COUNT]:
+                group_text.insert(tk.END, f"  + {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rs")
+            for item in list(reversed(sectors[-SCAN_EXTREME_COUNT:])):
+                group_text.insert(tk.END, f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rw")
+            group_text.insert(tk.END, f"[{tf}] Industries\n", "rrs_hdr")
+            for item in industries[:SCAN_EXTREME_COUNT]:
+                group_text.insert(tk.END, f"  + {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rs")
+            for item in list(reversed(industries[-SCAN_EXTREME_COUNT:])):
+                group_text.insert(tk.END, f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rw")
+        group_text.config(state='disabled')
+        group_text.see("1.0")
+
+    return {
+        "container": rrs_container,
+        "rrs_status_var": rrs_status_var,
+        "render_rrs_snapshot": render_rrs_snapshot,
+    }
+
+
 def start_gui():
     bounce_queue = queue.Queue()
     approaching_queue = queue.Queue()

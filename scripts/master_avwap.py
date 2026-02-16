@@ -1733,10 +1733,12 @@ def run_master():
 # ============================================================================
 
 class MasterAvwapGUI:
-    def __init__(self, root):
+    def __init__(self, root, standalone=True):
         self.root = root
-        self.root.title("Master AVWAP Manager")
-        self.root.geometry("1200x760")
+        self.standalone = standalone
+        if standalone:
+            self.root.title("Master AVWAP Manager")
+            self.root.geometry("1200x760")
 
         self.status_var = tk.StringVar(value="Ready")
         self.ticker_var = tk.StringVar()
@@ -1941,7 +1943,7 @@ def launch_gui():
 
     ensure_anchor_file()
     root = tk.Tk()
-    MasterAvwapGUI(root)
+    MasterAvwapGUI(root, standalone=True)
     root.mainloop()
 
 
