@@ -5,9 +5,18 @@ import json
 import logging
 import threading
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from statistics import mean
+from dataclasses import dataclass, asdict
+
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+except Exception:
+    tk = None
+    ttk = None
+    messagebox = None
 
 import requests
 import pandas as pd
@@ -64,6 +73,7 @@ AI_STATE_FILE = DATA_DIR / "master_avwap_ai_state.json"
 D1_FEATURES_FILE = DATA_DIR / "d1_features.csv"
 OUTPUT_FILE = OUTPUT_DIR / "master_avwap_events.txt"
 STDEV_RANGE_FILE = OUTPUT_DIR / "master_avwap_stdev2_3.txt"
+EARNINGS_ANCHORS_FILE = DATA_DIR / "earnings_avwap_anchors.csv"
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
 HEADERS = {
@@ -77,6 +87,10 @@ ATR_LENGTH = 20
 ATR_MULT = 0.05               # eps / push = 0.05 * ATR(20)
 BOUNCE_ATR_TOL_PCT = 0.001    # 0.1% of ATR(20) distance allowance for bounces
 HISTORY_DAYS_TO_KEEP = 20     # multi-day context window
+MIN_AVG_VOLUME_20D = 1_000_000
+MIN_PRICE = 5.0
+MIN_MARKET_CAP = 1_000_000_000
+MIN_GAP_ATR_MULTIPLE = 1.0
 POSITION_LEVELS = [
     "VWAP",
     "UPPER_1",
@@ -359,6 +373,291 @@ def load_or_refresh_earnings(symbols):
         return earnings_data
 
     return {sym: cached_data.get(sym, []) for sym in symbols}
+
+# ============================================================================
+# EARNINGS GAP-ANCHOR SCANNER (D1 FOUNDATION)
+# ============================================================================
+
+EARNINGS_ANCHOR_COLUMNS = [
+    "ticker",
+    "anchor_date",
+    "gap_date",
+    "earnings_date",
+    "release_session",
+    "gap_atr_multiple",
+    "price",
+    "avg_volume20",
+    "market_cap",
+    "notes",
+    "source",
+    "created_at",
+]
+
+
+@dataclass
+class EarningsGapAnchorCandidate:
+    ticker: str
+    anchor_date: str
+    gap_date: str
+    earnings_date: str
+    release_session: str
+    gap_atr_multiple: float
+    price: float
+    avg_volume20: int
+    market_cap: int
+    notes: str = ""
+    source: str = "program"
+
+
+
+def ensure_anchor_file(path: Path = EARNINGS_ANCHORS_FILE):
+    if path.exists():
+        return
+    pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS).to_csv(path, index=False)
+
+
+
+def infer_release_session(row: dict) -> str:
+    blob = " ".join(str(v) for v in row.values() if v is not None).lower()
+    if any(token in blob for token in ["after market close", "after close", "amc", "post-market"]):
+        return "amc"
+    if any(token in blob for token in ["before market open", "before open", "bmo", "pre-market"]):
+        return "bmo"
+    return "unknown"
+
+
+
+def get_last_market_session_date() -> date | None:
+    try:
+        benchmark = yf.download("SPY", period="10d", interval="1d", progress=False, auto_adjust=False)
+    except Exception as exc:
+        logging.error(f"Failed to determine last market session from Yahoo: {exc}")
+        return None
+
+    if benchmark is None or benchmark.empty:
+        return None
+    idx = benchmark.index.tz_localize(None) if getattr(benchmark.index, "tz", None) is not None else benchmark.index
+    return idx[-1].date()
+
+
+
+def fetch_earnings_calendar_rows(date_obj):
+    rows = fetch_earnings_for_date(date_obj.isoformat())
+    cleaned = []
+    for row in rows:
+        symbol = str(row.get("symbol", "")).upper().strip()
+        if not symbol or "^" in symbol or "/" in symbol:
+            continue
+        cleaned.append(row)
+    return cleaned
+
+
+
+def _get_info_with_fallbacks(ticker_obj):
+    info = {}
+    try:
+        info = ticker_obj.get_info() or {}
+    except Exception:
+        try:
+            info = ticker_obj.info or {}
+        except Exception:
+            info = {}
+    return info
+
+
+
+def has_weekly_options(symbol: str) -> bool:
+    try:
+        tkr = yf.Ticker(symbol)
+        expirations = [pd.Timestamp(d).date() for d in (tkr.options or [])]
+    except Exception:
+        return False
+
+    expirations = sorted(set(expirations))
+    if len(expirations) < 2:
+        return False
+
+    for prev, curr in zip(expirations, expirations[1:]):
+        if (curr - prev).days <= 8:
+            return True
+    return False
+
+
+
+def _coerce_float(value):
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+
+def _coerce_int(value):
+    v = _coerce_float(value)
+    if v is None:
+        return None
+    return int(v)
+
+
+
+def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session: str):
+    tkr = yf.Ticker(symbol)
+    try:
+        hist = tkr.history(period="4mo", interval="1d", auto_adjust=False)
+    except Exception as exc:
+        logging.warning(f"{symbol}: failed history download for earnings scan ({exc})")
+        return None
+
+    if hist is None or hist.empty or len(hist) < ATR_LENGTH + 5:
+        return None
+
+    hist = hist.copy()
+    if getattr(hist.index, "tz", None) is not None:
+        hist.index = hist.index.tz_localize(None)
+
+    hist = hist.rename(columns={c: c.lower() for c in hist.columns})
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col not in hist.columns:
+            return None
+
+    df = hist.reset_index().rename(columns={"Date": "datetime", "date": "datetime"})
+    if "datetime" not in df.columns:
+        first_col = df.columns[0]
+        df = df.rename(columns={first_col: "datetime"})
+    df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
+    df = df.sort_values("datetime").reset_index(drop=True)
+    df["trade_date"] = df["datetime"].dt.date
+
+    earnings_idx = df.index[df["trade_date"] == earnings_date]
+    if earnings_idx.empty:
+        return None
+
+    release_session = (release_session or "unknown").lower()
+    if release_session == "amc":
+        gap_idx = int(earnings_idx[0]) + 1
+    else:
+        gap_idx = int(earnings_idx[0])
+
+    if gap_idx <= 0 or gap_idx >= len(df):
+        return None
+
+    gap_row = df.iloc[gap_idx]
+    anchor_row = df.iloc[gap_idx - 1]
+    pre_gap = df.iloc[:gap_idx + 1]
+
+    atr20 = get_atr20(pre_gap[["open", "high", "low", "close", "volume"]], ATR_LENGTH)
+    if atr20 is None or atr20 <= 0:
+        return None
+
+    prev_close = float(anchor_row["close"])
+    gap_open = float(gap_row["open"])
+    gap_size = abs(gap_open - prev_close)
+    gap_atr_multiple = gap_size / atr20
+
+    avg_vol_20 = int(pre_gap["volume"].tail(20).mean()) if len(pre_gap) >= 20 else 0
+    last_price = float(gap_row["close"])
+
+    info = _get_info_with_fallbacks(tkr)
+    market_cap = _coerce_int(
+        info.get("marketCap")
+        or info.get("market_cap")
+        or getattr(getattr(tkr, "fast_info", {}), "get", lambda *_: None)("marketCap")
+    )
+
+    if last_price < MIN_PRICE:
+        return None
+    if avg_vol_20 < MIN_AVG_VOLUME_20D:
+        return None
+    if market_cap is None or market_cap < MIN_MARKET_CAP:
+        return None
+    if not has_weekly_options(symbol):
+        return None
+    if gap_atr_multiple < MIN_GAP_ATR_MULTIPLE:
+        return None
+
+    return EarningsGapAnchorCandidate(
+        ticker=symbol,
+        anchor_date=anchor_row["trade_date"].isoformat(),
+        gap_date=gap_row["trade_date"].isoformat(),
+        earnings_date=earnings_date.isoformat(),
+        release_session=release_session,
+        gap_atr_multiple=round(gap_atr_multiple, 3),
+        price=round(last_price, 3),
+        avg_volume20=avg_vol_20,
+        market_cap=market_cap,
+    )
+
+
+
+def append_anchor_candidates(candidates, path: Path = EARNINGS_ANCHORS_FILE):
+    ensure_anchor_file(path)
+    existing = pd.read_csv(path)
+    if existing.empty:
+        existing = pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS)
+
+    for col in EARNINGS_ANCHOR_COLUMNS:
+        if col not in existing.columns:
+            existing[col] = ""
+
+    existing_keys = {
+        (str(r["ticker"]).upper(), str(r["anchor_date"]))
+        for _, r in existing.iterrows()
+        if str(r.get("ticker", "")).strip() and str(r.get("anchor_date", "")).strip()
+    }
+
+    new_rows = []
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    for candidate in candidates:
+        key = (candidate.ticker.upper(), candidate.anchor_date)
+        if key in existing_keys:
+            continue
+        row = asdict(candidate)
+        row["created_at"] = now_iso
+        new_rows.append(row)
+
+    if not new_rows:
+        return 0
+
+    combined = pd.concat([existing, pd.DataFrame(new_rows)], ignore_index=True)
+    combined = combined[EARNINGS_ANCHOR_COLUMNS]
+    combined.to_csv(path, index=False)
+    return len(new_rows)
+
+
+
+def scan_last_session_earnings_for_anchors():
+    last_session = get_last_market_session_date()
+    if last_session is None:
+        logging.error("Could not determine last market session. Earnings anchor scan aborted.")
+        return []
+
+    rows = fetch_earnings_calendar_rows(last_session)
+    logging.info(f"Found {len(rows)} raw earnings rows for {last_session.isoformat()}.")
+
+    candidates = []
+    for row in rows:
+        symbol = str(row.get("symbol", "")).upper().strip()
+        if not symbol:
+            continue
+
+        release_session = infer_release_session(row)
+        candidate = evaluate_earnings_gap_candidate(symbol, last_session, release_session)
+        if candidate:
+            candidates.append(candidate)
+            logging.info(
+                f"{symbol}: qualified (anchor={candidate.anchor_date}, gap={candidate.gap_date}, "
+                f"gap_atr={candidate.gap_atr_multiple})."
+            )
+
+    added = append_anchor_candidates(candidates)
+    logging.info(
+        f"Earnings gap anchor scan complete. Qualified={len(candidates)}, newly_added={added}, "
+        f"file={EARNINGS_ANCHORS_FILE}"
+    )
+    return candidates
+
 
 # ============================================================================
 # IBKR API
@@ -1396,31 +1695,189 @@ def run_master():
     )
 
 # ============================================================================
+# GUI
+# ============================================================================
+
+class MasterAvwapGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Master AVWAP Manager")
+        self.root.geometry("1100x680")
+
+        self.status_var = tk.StringVar(value="Ready")
+        self.ticker_var = tk.StringVar()
+        self.anchor_var = tk.StringVar()
+        self.notes_var = tk.StringVar()
+
+        self._build_layout()
+        self.refresh_table()
+
+    def _build_layout(self):
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(fill="x", padx=10, pady=8)
+
+        ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Run AVWAP Scan Once", command=self.run_master_once).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Refresh Table", command=self.refresh_table).pack(side="left", padx=4)
+
+        form = ttk.LabelFrame(self.root, text="Manual Anchor Entry")
+        form.pack(fill="x", padx=10, pady=(0, 8))
+
+        ttk.Label(form, text="Ticker").grid(row=0, column=0, padx=6, pady=6, sticky="w")
+        ttk.Entry(form, textvariable=self.ticker_var, width=12).grid(row=0, column=1, padx=6, pady=6, sticky="w")
+        ttk.Label(form, text="Anchor Date (YYYY-MM-DD)").grid(row=0, column=2, padx=6, pady=6, sticky="w")
+        ttk.Entry(form, textvariable=self.anchor_var, width=16).grid(row=0, column=3, padx=6, pady=6, sticky="w")
+        ttk.Label(form, text="Notes").grid(row=0, column=4, padx=6, pady=6, sticky="w")
+        ttk.Entry(form, textvariable=self.notes_var, width=40).grid(row=0, column=5, padx=6, pady=6, sticky="we")
+        ttk.Button(form, text="Add Manual Entry", command=self.add_manual_entry).grid(row=0, column=6, padx=8, pady=6)
+        form.columnconfigure(5, weight=1)
+
+        table_frame = ttk.Frame(self.root)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=8)
+
+        self.table = ttk.Treeview(table_frame, columns=EARNINGS_ANCHOR_COLUMNS, show="headings")
+        for col in EARNINGS_ANCHOR_COLUMNS:
+            self.table.heading(col, text=col)
+            width = 120 if col not in {"notes"} else 260
+            self.table.column(col, width=width, anchor="w")
+
+        yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
+        self.table.configure(yscrollcommand=yscroll.set)
+
+        self.table.pack(side="left", fill="both", expand=True)
+        yscroll.pack(side="right", fill="y")
+
+        status = ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w")
+        status.pack(fill="x", padx=10, pady=(0, 10))
+
+    def _run_background(self, target, running_msg, done_msg):
+        self.status_var.set(running_msg)
+
+        def _task():
+            try:
+                target()
+                self.root.after(0, lambda: self.status_var.set(done_msg))
+                self.root.after(0, self.refresh_table)
+            except Exception as exc:
+                logging.exception("GUI background task failed")
+                self.root.after(0, lambda: self.status_var.set(f"Error: {exc}"))
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def run_earnings_scan(self):
+        self._run_background(
+            scan_last_session_earnings_for_anchors,
+            "Running earnings gap anchor scan...",
+            "Earnings gap anchor scan complete.",
+        )
+
+    def run_master_once(self):
+        self._run_background(
+            run_master,
+            "Running full Master AVWAP scan...",
+            "Master AVWAP scan complete.",
+        )
+
+    def refresh_table(self):
+        ensure_anchor_file()
+        df = pd.read_csv(EARNINGS_ANCHORS_FILE)
+
+        for item in self.table.get_children():
+            self.table.delete(item)
+
+        if df.empty:
+            return
+
+        df = df.fillna("")
+        for _, row in df.iterrows():
+            self.table.insert("", "end", values=[row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS])
+
+    def add_manual_entry(self):
+        ticker = self.ticker_var.get().strip().upper()
+        anchor_date = self.anchor_var.get().strip()
+        notes = self.notes_var.get().strip()
+
+        if not ticker or not anchor_date:
+            if messagebox:
+                messagebox.showerror("Missing data", "Ticker and anchor date are required.")
+            return
+
+        try:
+            datetime.fromisoformat(anchor_date)
+        except ValueError:
+            if messagebox:
+                messagebox.showerror("Invalid date", "Anchor date must be in YYYY-MM-DD format.")
+            return
+
+        manual_candidate = EarningsGapAnchorCandidate(
+            ticker=ticker,
+            anchor_date=anchor_date,
+            gap_date="",
+            earnings_date="",
+            release_session="manual",
+            gap_atr_multiple=0.0,
+            price=0.0,
+            avg_volume20=0,
+            market_cap=0,
+            notes=notes,
+            source="manual",
+        )
+
+        added = append_anchor_candidates([manual_candidate])
+        if added == 0:
+            self.status_var.set(f"Entry already exists: {ticker} {anchor_date}")
+        else:
+            self.status_var.set(f"Manual entry added: {ticker} {anchor_date}")
+        self.refresh_table()
+
+
+def launch_gui():
+    if tk is None or ttk is None:
+        logging.error("tkinter is unavailable in this Python environment; cannot launch GUI.")
+        return
+
+    ensure_anchor_file()
+    root = tk.Tk()
+    MasterAvwapGUI(root)
+    root.mainloop()
+
+
+# ============================================================================
 # ENTRYPOINT
 # ============================================================================
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run Master AVWAP scanner")
+    parser.add_argument("--once", action="store_true", help="Run a single AVWAP scan and exit.")
+    parser.add_argument("--loop", action="store_true", help="Run AVWAP scan in hourly loop.")
     parser.add_argument(
-        "--once",
+        "--scan-earnings",
         action="store_true",
-        help="Run a single scan and exit (no hourly loop).",
+        help="Scan the last market session for earnings gap anchors and update data file.",
     )
+    parser.add_argument("--gui", action="store_true", help="Launch the Master AVWAP management GUI.")
     args = parser.parse_args()
+
+    if args.scan_earnings:
+        scan_last_session_earnings_for_anchors()
 
     if args.once:
         run_master()
         return
 
-    logging.info("Starting hourly Master AVWAP loop (once per hour)…")
-    while True:
-        start = time.time()
-        run_master()
-        elapsed = time.time() - start
-        sleep_seconds = max(0, 3600 - elapsed)
-        logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run…")
-        time.sleep(sleep_seconds)
+    if args.loop:
+        logging.info("Starting hourly Master AVWAP loop (once per hour)…")
+        while True:
+            start = time.time()
+            run_master()
+            elapsed = time.time() - start
+            sleep_seconds = max(0, 3600 - elapsed)
+            logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run…")
+            time.sleep(sleep_seconds)
+
+    if args.gui or (not args.once and not args.loop and not args.scan_earnings):
+        launch_gui()
 
 
 if __name__ == "__main__":
