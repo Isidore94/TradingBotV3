@@ -2036,7 +2036,15 @@ class MasterAvwapGUI:
             self.root.title("Master AVWAP Manager")
             self.root.geometry("1200x760")
 
-        self.root.configure(bg=GUI_DARK_BG)
+        # Embedded mode may pass a ttk container (e.g. ttk.Frame), which
+        # does not expose a `bg`/`background` configure option.
+        try:
+            self.root.configure(bg=GUI_DARK_BG)
+        except tk.TclError:
+            try:
+                self.root.configure(background=GUI_DARK_BG)
+            except tk.TclError:
+                pass
         self._configure_dark_theme()
 
         self.status_var = tk.StringVar(value="Ready")
