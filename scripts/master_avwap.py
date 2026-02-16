@@ -101,6 +101,11 @@ POSITION_LEVELS = [
     "LOWER_3",
 ]
 
+GUI_DARK_BG = "#2E2E2E"
+GUI_DARK_PANEL = "#3A3A3A"
+GUI_DARK_INPUT = "#252525"
+GUI_DARK_TEXT = "#E0E0E0"
+
 # ============================================================================
 # LOGGING
 # ============================================================================
@@ -2031,6 +2036,9 @@ class MasterAvwapGUI:
             self.root.title("Master AVWAP Manager")
             self.root.geometry("1200x760")
 
+        self.root.configure(bg=GUI_DARK_BG)
+        self._configure_dark_theme()
+
         self.status_var = tk.StringVar(value="Ready")
         self.ticker_var = tk.StringVar()
         self.anchor_var = tk.StringVar()
@@ -2042,6 +2050,52 @@ class MasterAvwapGUI:
         self.refresh_table()
         self.refresh_avwap_output_view()
         self.refresh_anchor_output_view()
+
+    def _configure_dark_theme(self):
+        style = ttk.Style(self.root)
+
+        try:
+            current_theme = style.theme_use()
+            if current_theme == "default":
+                style.theme_use("clam")
+        except Exception:
+            pass
+
+        self.root.option_add("*Background", GUI_DARK_BG)
+        self.root.option_add("*Foreground", GUI_DARK_TEXT)
+        self.root.option_add("*Entry*Background", GUI_DARK_INPUT)
+        self.root.option_add("*Entry*Foreground", GUI_DARK_TEXT)
+        self.root.option_add("*Text*Background", GUI_DARK_INPUT)
+        self.root.option_add("*Text*Foreground", GUI_DARK_TEXT)
+
+        style.configure(".", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
+        style.configure("TFrame", background=GUI_DARK_BG)
+        style.configure("TLabel", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
+        style.configure("TButton", background=GUI_DARK_PANEL, foreground=GUI_DARK_TEXT)
+        style.map("TButton", background=[("active", "#4A4A4A")])
+        style.configure("TEntry", fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
+        style.configure("TSpinbox", fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
+        style.configure("TCombobox", fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
+        style.configure("TNotebook", background=GUI_DARK_BG, borderwidth=0)
+        style.configure("TNotebook.Tab", background=GUI_DARK_PANEL, foreground=GUI_DARK_TEXT)
+        style.map("TNotebook.Tab", background=[("selected", "#4A4A4A")])
+        style.configure("TLabelframe", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
+        style.configure("TLabelframe.Label", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
+        style.configure("Treeview", background=GUI_DARK_INPUT, fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
+        style.map("Treeview", background=[("selected", "#4A4A4A")], foreground=[("selected", GUI_DARK_TEXT)])
+        style.configure("Treeview.Heading", background=GUI_DARK_PANEL, foreground=GUI_DARK_TEXT)
+
+    def _apply_dark_theme_to_text_widgets(self):
+        for widget in (self.avwap_text, self.anchor_scan_text):
+            widget.configure(
+                bg=GUI_DARK_INPUT,
+                fg=GUI_DARK_TEXT,
+                insertbackground=GUI_DARK_TEXT,
+                selectbackground="#4A4A4A",
+                selectforeground=GUI_DARK_TEXT,
+                highlightbackground=GUI_DARK_BG,
+                highlightcolor=GUI_DARK_PANEL,
+            )
 
     def _build_layout(self):
         toolbar = ttk.Frame(self.root)
@@ -2116,6 +2170,8 @@ class MasterAvwapGUI:
         anchor_output_scroll = ttk.Scrollbar(anchor_scan_tab, orient="vertical", command=self.anchor_scan_text.yview)
         self.anchor_scan_text.configure(yscrollcommand=anchor_output_scroll.set)
         anchor_output_scroll.pack(side="right", fill="y")
+
+        self._apply_dark_theme_to_text_widgets()
 
         status = ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w")
         status.pack(fill="x", padx=10, pady=(0, 10))
