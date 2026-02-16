@@ -21,7 +21,7 @@ PRESERVED_FILENAMES = {".gitkeep"}
 # Individual generated artifacts that should be removed if present.
 FILES_TO_DELETE = (
     Path("output") / "master_avwap_events.txt",
-    Path("output") / "bouncers.txt",
+    Path("logs") / "bouncers.txt",
 )
 
 
