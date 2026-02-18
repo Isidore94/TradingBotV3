@@ -556,6 +556,8 @@ class BounceBot(EWrapper, EClient):
         self.latest_group_extremes = {}
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
+        self.scanning_enabled = True
+        self.scanning_lock = threading.Lock()
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -622,6 +624,18 @@ class BounceBot(EWrapper, EClient):
 
     def is_bounce_type_enabled(self, bounce_type):
         return self.bounce_type_toggles.get(bounce_type, False)
+
+    def set_scanning_enabled(self, enabled):
+        with self.scanning_lock:
+            self.scanning_enabled = bool(enabled)
+        state = "enabled" if self.scanning_enabled else "paused"
+        logging.info(f"Scanning {state}.")
+        if self.gui_callback:
+            self.gui_callback(f"Scanning {state}.", "blue")
+
+    def is_scanning_enabled(self):
+        with self.scanning_lock:
+            return self.scanning_enabled
 
     def set_rrs_threshold(self, value):
         with self.rrs_lock:
@@ -2361,6 +2375,10 @@ class BounceBot(EWrapper, EClient):
         
         while True:
             try:
+                if not self.is_scanning_enabled():
+                    time.sleep(0.5)
+                    continue
+
                 if not self.ensure_connected():
                     logging.warning("IB not connected; retrying in 5 seconds...")
                     time.sleep(5)
@@ -2396,6 +2414,8 @@ class BounceBot(EWrapper, EClient):
 
                 # 1) Prioritize strongest/weakest names first.
                 for sym in sorted(monitored_symbols):
+                    if not self.is_scanning_enabled():
+                        break
                     if sym not in all_symbols or self.atr_cache.get(sym) is None:
                         continue
                     self.request_and_detect_bounce(sym, allowed_bounce_types=enabled_bounce_types)
@@ -2403,9 +2423,15 @@ class BounceBot(EWrapper, EClient):
 
                 # 2) Then scan all remaining symbols for non-EMA-8/15 bounce types.
                 for sym in sorted(all_symbols - processed_symbols):
+                    if not self.is_scanning_enabled():
+                        break
                     if self.atr_cache.get(sym) is None:
                         continue
                     self.request_and_detect_bounce(sym, allowed_bounce_types=non_ema_extreme_bounce_types)
+
+                if not self.is_scanning_enabled():
+                    continue
+
                 self.check_removal_conditions()
                 wait_for_candle_close()
                 if self.gui_callback:
@@ -2587,13 +2613,14 @@ def run_bot_with_gui(gui_callback):
 
     bot = BounceBot(gui_callback=gui_callback)
     bot.set_connection_info("127.0.0.1", 7496, 125)
-    bot.connect("127.0.0.1", 7496, clientId=125)
+    try:
+        bot.connect("127.0.0.1", 7496, clientId=125)
+    except Exception as exc:
+        logging.warning(f"Initial IB connection attempt failed: {exc}")
     api_thread = threading.Thread(target=bot.run, daemon=True)
     bot.api_thread = api_thread
     api_thread.start()
-    while not bot.connection_status:
-        time.sleep(1)
-    logging.info("BounceBot is connected. Starting strategy loop...")
+    logging.info("Starting strategy loop (connection will auto-retry until IB is available)...")
     strategy_thread = threading.Thread(target=bot.run_strategy, daemon=True)
     strategy_thread.start()
     return bot
@@ -3080,6 +3107,24 @@ def start_gui():
         padx=10
     )
     dvwap2_button.pack(side=tk.LEFT, padx=5)
+
+    scanning_button_text = tk.StringVar(
+        value="Stop Scanning" if bot_instance.is_scanning_enabled() else "Start Scanning"
+    )
+
+    def toggle_scanning():
+        new_state = not bot_instance.is_scanning_enabled()
+        bot_instance.set_scanning_enabled(new_state)
+        scanning_button_text.set("Stop Scanning" if new_state else "Start Scanning")
+
+    scanning_button = tk.Button(
+        button_frame,
+        textvariable=scanning_button_text,
+        command=toggle_scanning,
+        relief=tk.RAISED,
+        padx=10,
+    )
+    scanning_button.pack(side=tk.LEFT, padx=5)
 
     def process_bounce_queue():
         while True:
