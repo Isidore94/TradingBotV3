@@ -2082,19 +2082,65 @@ class MasterAvwapGUI:
         style.configure(".", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
         style.configure("TFrame", background=GUI_DARK_BG)
         style.configure("TLabel", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
+
         style.configure("TButton", background=GUI_DARK_PANEL, foreground=GUI_DARK_TEXT)
-        style.map("TButton", background=[("active", "#4A4A4A")])
+        style.map(
+            "TButton",
+            background=[("active", "#4A4A4A"), ("disabled", GUI_DARK_PANEL)],
+            foreground=[("disabled", "#9AA0A6")],
+        )
+
         style.configure("TEntry", fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
+        style.map(
+            "TEntry",
+            fieldbackground=[("readonly", GUI_DARK_INPUT), ("disabled", GUI_DARK_PANEL)],
+            foreground=[("readonly", GUI_DARK_TEXT), ("disabled", "#9AA0A6")],
+        )
+
         style.configure("TSpinbox", fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
+        style.map(
+            "TSpinbox",
+            fieldbackground=[("readonly", GUI_DARK_INPUT), ("disabled", GUI_DARK_PANEL)],
+            foreground=[("readonly", GUI_DARK_TEXT), ("disabled", "#9AA0A6")],
+        )
+
         style.configure("TCombobox", fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", GUI_DARK_INPUT), ("disabled", GUI_DARK_PANEL)],
+            foreground=[("readonly", GUI_DARK_TEXT), ("disabled", "#9AA0A6")],
+        )
+
         style.configure("TNotebook", background=GUI_DARK_BG, borderwidth=0)
         style.configure("TNotebook.Tab", background=GUI_DARK_PANEL, foreground=GUI_DARK_TEXT)
         style.map("TNotebook.Tab", background=[("selected", "#4A4A4A")])
         style.configure("TLabelframe", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
         style.configure("TLabelframe.Label", background=GUI_DARK_BG, foreground=GUI_DARK_TEXT)
-        style.configure("Treeview", background=GUI_DARK_INPUT, fieldbackground=GUI_DARK_INPUT, foreground=GUI_DARK_TEXT)
-        style.map("Treeview", background=[("selected", "#4A4A4A")], foreground=[("selected", GUI_DARK_TEXT)])
-        style.configure("Treeview.Heading", background=GUI_DARK_PANEL, foreground=GUI_DARK_TEXT)
+
+        # Use explicit style names so Treeview + heading colors are stable on
+        # Windows where the default native theme can ignore generic style keys.
+        style.configure(
+            "Dark.Treeview",
+            background=GUI_DARK_INPUT,
+            fieldbackground=GUI_DARK_INPUT,
+            foreground=GUI_DARK_TEXT,
+            bordercolor=GUI_DARK_BG,
+            rowheight=24,
+        )
+        style.map(
+            "Dark.Treeview",
+            background=[("selected", "#4A4A4A")],
+            foreground=[("selected", GUI_DARK_TEXT)],
+        )
+        style.configure(
+            "Dark.Treeview.Heading",
+            background=GUI_DARK_PANEL,
+            foreground=GUI_DARK_TEXT,
+            relief="flat",
+        )
+        style.map("Dark.Treeview.Heading", background=[("active", "#4A4A4A")])
+
+        style.configure("Vertical.TScrollbar", background=GUI_DARK_PANEL, troughcolor=GUI_DARK_BG)
 
     def _apply_dark_theme_to_text_widgets(self):
         for widget in (self.avwap_text, self.anchor_scan_text):
@@ -2153,7 +2199,7 @@ class MasterAvwapGUI:
         table_frame = ttk.Frame(anchors_tab)
         table_frame.pack(fill="both", expand=True, padx=0, pady=0)
 
-        self.table = ttk.Treeview(table_frame, columns=EARNINGS_ANCHOR_COLUMNS, show="headings")
+        self.table = ttk.Treeview(table_frame, columns=EARNINGS_ANCHOR_COLUMNS, show="headings", style="Dark.Treeview")
         for col in EARNINGS_ANCHOR_COLUMNS:
             self.table.heading(col, text=col)
             width = 120 if col not in {"notes"} else 260
