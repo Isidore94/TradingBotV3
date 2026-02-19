@@ -104,7 +104,9 @@ POSITION_LEVELS = [
 GUI_DARK_BG = "#2E2E2E"
 GUI_DARK_PANEL = "#3A3A3A"
 GUI_DARK_INPUT = "#252525"
-GUI_DARK_TEXT = "#E0E0E0"
+# Softer light-gray text improves readability on platforms where pure white
+# foreground can appear blown out against themed widget backgrounds.
+GUI_DARK_TEXT = "#C7CDD4"
 
 # ============================================================================
 # LOGGING
