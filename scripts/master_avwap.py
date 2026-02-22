@@ -91,6 +91,7 @@ MIN_AVG_VOLUME_20D = 1_000_000
 MIN_PRICE = 5.0
 MIN_MARKET_CAP = 1_000_000_000
 MIN_GAP_ATR_MULTIPLE = 1.0
+RECENT_EARNINGS_SESSION_BLOCK = 12  # skip current AVWAPE events if last earnings is this recent
 POSITION_LEVELS = [
     "VWAP",
     "UPPER_1",
@@ -235,6 +236,21 @@ def get_last_daily_row_for_date(daily_rows, last_trade_date):
         if row["date"] == target:
             return row
     return None
+
+
+def sessions_since_date(df: pd.DataFrame, event_date: date) -> int | None:
+    """
+    Count trading-session candles from event_date (exclusive) through the latest
+    available bar in df. Returns None if event_date is not present in df.
+    """
+    if df.empty or "datetime" not in df:
+        return None
+
+    session_dates = df["datetime"].dt.date
+    if event_date not in set(session_dates.tolist()):
+        return None
+
+    return int((session_dates > event_date).sum())
 
 # ============================================================================
 # EARNINGS FETCH (NASDAQ + YFINANCE FALLBACK)
@@ -1533,6 +1549,24 @@ def run_master():
         current_anchor_meta = None
         prev_anchor_meta = None
         symbol_signal_info = {}
+        skip_current_events = False
+
+        recent_earnings_dates = earnings_data.get(sym, [])
+        if recent_earnings_dates:
+            try:
+                last_earnings_date = datetime.fromisoformat(recent_earnings_dates[0]).date()
+                sessions_since_last_earnings = sessions_since_date(df, last_earnings_date)
+                if (
+                    sessions_since_last_earnings is not None
+                    and sessions_since_last_earnings <= RECENT_EARNINGS_SESSION_BLOCK
+                ):
+                    skip_current_events = True
+                    logging.info(
+                        f"{sym}: skipping CURRENT AVWAPE events; last earnings {last_earnings_date} "
+                        f"was {sessions_since_last_earnings} session(s) ago (<= {RECENT_EARNINGS_SESSION_BLOCK})."
+                    )
+            except ValueError:
+                logging.warning(f"{sym}: invalid recent earnings date format: {recent_earnings_dates[0]}")
 
         def add_signal(event_name, anchor_type, anchor_date, avwap_value, stdev_value, band_value):
             symbol_events_today.append(event_name)
@@ -1564,55 +1598,56 @@ def run_master():
                         "stdev": float(sd_c),
                         "bands": {k: float(v) for k, v in bands_c.items()}
                     }
-                    # crosses (current)
-                    if side == "LONG" and cross_up_through_level(df, vwap_c):
-                        add_signal("CROSS_UP_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
-                    if side == "SHORT" and cross_down_through_level(df, vwap_c):
-                        add_signal("CROSS_DOWN_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
+                    if not skip_current_events:
+                        # crosses (current)
+                        if side == "LONG" and cross_up_through_level(df, vwap_c):
+                            add_signal("CROSS_UP_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
+                        if side == "SHORT" and cross_down_through_level(df, vwap_c):
+                            add_signal("CROSS_DOWN_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
 
-                    for k in (1, 2, 3):
+                        for k in (1, 2, 3):
+                            if side == "LONG":
+                                lvl = bands_c.get(f"UPPER_{k}")
+                                if lvl is None:
+                                    continue
+                                if cross_up_through_level(df, lvl):
+                                    lbl = f"CROSS_UP_UPPER_{k}"
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+                            else:
+                                lvl = bands_c.get(f"LOWER_{k}")
+                                if lvl is None:
+                                    continue
+                                if cross_down_through_level(df, lvl):
+                                    lbl = f"CROSS_DOWN_LOWER_{k}"
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+
+                        # bounces (current)
                         if side == "LONG":
-                            lvl = bands_c.get(f"UPPER_{k}")
-                            if lvl is None:
-                                continue
-                            if cross_up_through_level(df, lvl):
-                                lbl = f"CROSS_UP_UPPER_{k}"
-                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+                            bounce_tests = [
+                                ("BOUNCE_VWAP", vwap_c),
+                                ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                                ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
+                                ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
+                                ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                                ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
+                                ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
+                            ]
+                            for lbl, lvl in bounce_tests:
+                                if bounce_up_at_level(df, lvl):
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
                         else:
-                            lvl = bands_c.get(f"LOWER_{k}")
-                            if lvl is None:
-                                continue
-                            if cross_down_through_level(df, lvl):
-                                lbl = f"CROSS_DOWN_LOWER_{k}"
-                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
-
-                    # bounces (current)
-                    if side == "LONG":
-                        bounce_tests = [
-                            ("BOUNCE_VWAP", vwap_c),
-                            ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
-                            ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
-                            ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
-                            ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
-                            ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
-                            ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
-                        ]
-                        for lbl, lvl in bounce_tests:
-                            if bounce_up_at_level(df, lvl):
-                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
-                    else:
-                        bounce_tests = [
-                            ("BOUNCE_VWAP", vwap_c),
-                            ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
-                            ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
-                            ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
-                            ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
-                            ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
-                            ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
-                        ]
-                        for lbl, lvl in bounce_tests:
-                            if bounce_down_at_level(df, lvl):
-                                add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+                            bounce_tests = [
+                                ("BOUNCE_VWAP", vwap_c),
+                                ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                                ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
+                                ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
+                                ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                                ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
+                                ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
+                            ]
+                            for lbl, lvl in bounce_tests:
+                                if bounce_down_at_level(df, lvl):
+                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
 
                 else:
                     logging.warning(f"{sym}: invalid current AVWAP / bands.")
