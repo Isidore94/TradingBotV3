@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified GUI for AVWAP manager + BounceBot RRS panel."""
+"""Unified GUI for Master AVWAP and BounceBot RRS controls."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
+from typing import Any, Callable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -33,9 +34,10 @@ class ConsolidatedTradingGUI:
         self._configure_theme()
 
         self.rrs_queue: queue.Queue = queue.Queue()
-        self.bot_instance = None
+        self.bot_controller = BounceBotController(self.rrs_queue)
+        self._queue_after_id = None
         self._build_layout()
-        self._start_bounce_rrs_feed()
+        self.bot_controller.start()
         self._process_rrs_queue()
 
     def _build_layout(self):
@@ -47,9 +49,16 @@ class ConsolidatedTradingGUI:
         main.add(top, stretch="always", minsize=620)
 
         bottom = tk.Frame(main, bg=DARK_GREY)
+        controls = ttk.Frame(bottom)
+        controls.pack(fill=tk.X, padx=8, pady=(8, 2))
+
+        ttk.Label(controls, text="BounceBot:").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(controls, textvariable=self.bot_controller.status_var).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Reconnect", command=self.bot_controller.restart).pack(side=tk.RIGHT)
+
         self.rrs_panel = create_rrs_confirmed_panel(
             bottom,
-            bot_instance=self._bot_proxy(),
+            bot_instance=self.bot_controller.gui_proxy,
             dark_grey=DARK_GREY,
             text_color=TEXT_COLOR,
         )
@@ -126,41 +135,6 @@ class ConsolidatedTradingGUI:
 
         _apply(self.root)
 
-    def _bot_proxy(self):
-        outer = self
-
-        class _Proxy:
-            rrs_threshold = 2.0
-            rrs_timeframe_key = "5m"
-
-            def set_rrs_threshold(self, value):
-                self.rrs_threshold = float(value)
-                if outer.bot_instance:
-                    outer.bot_instance.set_rrs_threshold(value)
-
-            def set_rrs_timeframe(self, key):
-                self.rrs_timeframe_key = key
-                if outer.bot_instance:
-                    outer.bot_instance.set_rrs_timeframe(key)
-
-        self.bot_proxy = _Proxy()
-        return self.bot_proxy
-
-    def _start_bounce_rrs_feed(self):
-        def gui_callback(message, tag):
-            if tag.startswith("rrs"):
-                self.rrs_queue.put((message, tag))
-
-        def run_bot():
-            try:
-                self.bot_instance = run_bot_with_gui(gui_callback)
-                self.bot_proxy.rrs_threshold = self.bot_instance.rrs_threshold
-                self.bot_proxy.rrs_timeframe_key = self.bot_instance.rrs_timeframe_key
-            except Exception as exc:
-                self.rrs_queue.put((f"BounceBot start failed: {exc}", "rrs_status"))
-
-        threading.Thread(target=run_bot, daemon=True).start()
-
     def _process_rrs_queue(self):
         while True:
             try:
@@ -173,14 +147,87 @@ class ConsolidatedTradingGUI:
             elif tag == "rrs_snapshot":
                 self.rrs_panel["render_rrs_snapshot"](msg)
 
-        self.root.after(150, self._process_rrs_queue)
+        self._queue_after_id = self.root.after(150, self._process_rrs_queue)
 
     def on_close(self):
         try:
-            if self.bot_instance:
-                self.bot_instance.disconnect()
+            if self._queue_after_id:
+                self.root.after_cancel(self._queue_after_id)
+            self.bot_controller.stop()
         finally:
             self.root.destroy()
+
+
+class BounceBotController:
+    """Lifecycle + GUI bridge for BounceBot in the consolidated window."""
+
+    class GUIProxy:
+        def __init__(self, controller: "BounceBotController"):
+            self._controller = controller
+            self.rrs_threshold = 2.0
+            self.rrs_timeframe_key = "5m"
+
+        def set_rrs_threshold(self, value: float) -> None:
+            self.rrs_threshold = float(value)
+            self._controller._forward_call("set_rrs_threshold", value)
+
+        def set_rrs_timeframe(self, key: str) -> None:
+            self.rrs_timeframe_key = key
+            self._controller._forward_call("set_rrs_timeframe", key)
+
+    def __init__(self, rrs_queue: queue.Queue):
+        self.rrs_queue = rrs_queue
+        self.status_var = tk.StringVar(value="starting...")
+        self.bot_instance = None
+        self._lock = threading.Lock()
+        self.gui_proxy = self.GUIProxy(self)
+
+    def _forward_call(self, method_name: str, *args: Any) -> None:
+        with self._lock:
+            bot = self.bot_instance
+        if bot:
+            getattr(bot, method_name)(*args)
+
+    def _emit(self, message: str, tag: str = "rrs_status") -> None:
+        self.rrs_queue.put((message, tag))
+        self.status_var.set(message)
+
+    def _make_callback(self) -> Callable[[Any, str], None]:
+        def gui_callback(message, tag):
+            if tag.startswith("rrs"):
+                self.rrs_queue.put((message, tag))
+
+        return gui_callback
+
+    def start(self) -> None:
+        def run_bot() -> None:
+            self._emit("connecting")
+            try:
+                bot = run_bot_with_gui(self._make_callback())
+                with self._lock:
+                    self.bot_instance = bot
+                self.gui_proxy.rrs_threshold = bot.rrs_threshold
+                self.gui_proxy.rrs_timeframe_key = bot.rrs_timeframe_key
+                self._emit("connected")
+            except Exception as exc:
+                self._emit(f"start failed: {exc}")
+
+        threading.Thread(target=run_bot, daemon=True).start()
+
+    def restart(self) -> None:
+        self.stop()
+        self.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            bot = self.bot_instance
+            self.bot_instance = None
+        if bot:
+            try:
+                bot.disconnect()
+            except Exception:
+                pass
+        self._emit("stopped")
 
 
 def launch():
