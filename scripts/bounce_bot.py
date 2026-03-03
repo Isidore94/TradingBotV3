@@ -46,6 +46,7 @@ SHORTS_FILENAME = ROOT_DIR / "shorts.txt"
 BOUNCE_LOG_FILENAME = LOG_DIR / "bouncers.txt"
 TRADING_BOT_LOG_FILENAME = LOG_DIR / "trading_bot.log"
 INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
+MASTER_AVWAP_SIGNALS_FILENAME = DATA_DIR / "avwap_signals.csv"
 STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_strength_extremes.csv"
 GROUP_STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_group_strength_extremes.csv"
 SECTOR_ETF_MAP_FILENAME = DATA_DIR / "sector_etf_map.json"
@@ -321,6 +322,18 @@ def read_tickers(file_path):
     logging.debug(f"Loaded tickers from {file_path}: {tickers}")
     return tickers
 
+
+def _parse_iso_date_safe(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+
 def reset_log_files():
     files_to_reset = [TRADING_BOT_LOG_FILENAME, BOUNCE_LOG_FILENAME]
 
@@ -559,6 +572,9 @@ class BounceBot(EWrapper, EClient):
         self.scanning_enabled = True
         self.scanning_lock = threading.Lock()
 
+        self.master_avwap_events = {}
+        self.master_avwap_last_scan_date = None
+
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
         self.symbol_classification_cache = {}
@@ -636,6 +652,123 @@ class BounceBot(EWrapper, EClient):
     def is_scanning_enabled(self):
         with self.scanning_lock:
             return self.scanning_enabled
+
+    def _normalize_master_avwap_event_row(self, row):
+        signal_type = (row.get("signal_type") or "").strip().upper()
+        if not signal_type:
+            return None
+        if "BETWEEN" in signal_type:
+            return None
+        if not (signal_type.startswith("CROSS") or signal_type.startswith("BOUNCE")):
+            return None
+
+        symbol = (row.get("symbol") or "").strip().upper()
+        if not symbol:
+            return None
+
+        trade_date = _parse_iso_date_safe(row.get("trade_date"))
+        if trade_date is None:
+            return None
+
+        level = signal_type
+        for prefix in ("CROSS_UP_", "CROSS_DOWN_", "BOUNCE_"):
+            if signal_type.startswith(prefix) and len(signal_type) > len(prefix):
+                level = signal_type[len(prefix):]
+                break
+
+        return {
+            "symbol": symbol,
+            "trade_date": trade_date,
+            "signal_type": signal_type,
+            "anchor_type": (row.get("anchor_type") or "").strip().upper() or "UNKNOWN",
+            "anchor_date": (row.get("anchor_date") or "").strip(),
+            "side": (row.get("side") or "").strip().upper(),
+            "level": level,
+        }
+
+    def load_master_avwap_events_today(self):
+        """
+        Load today's NEW cross/bounce events from master_avwap signal output.
+        Keeps parsing generic so new signal/level names continue to work.
+        """
+        if not MASTER_AVWAP_SIGNALS_FILENAME.exists():
+            self.master_avwap_events = {}
+            self.master_avwap_last_scan_date = datetime.now().date()
+            return
+
+        try:
+            with open(MASTER_AVWAP_SIGNALS_FILENAME, "r", newline="") as fh:
+                reader = csv.DictReader(fh)
+                rows = list(reader)
+        except Exception as exc:
+            logging.warning(f"Failed reading master AVWAP signals file: {exc}")
+            self.master_avwap_events = {}
+            return
+
+        today = datetime.now().date()
+        events_map = {}
+        for row in rows:
+            normalized = self._normalize_master_avwap_event_row(row)
+            if not normalized:
+                continue
+            if normalized["trade_date"] != today:
+                continue
+
+            symbol = normalized["symbol"]
+            events_map.setdefault(symbol, []).append(normalized)
+
+        self.master_avwap_events = events_map
+        self.master_avwap_last_scan_date = today
+
+    def _build_master_avwap_active_level_map(self):
+        active_levels = {}
+        for symbol, events in self.master_avwap_events.items():
+            levels = set()
+            for event in events:
+                signal = event.get("signal_type", "")
+                if signal.startswith("CROSS") or signal.startswith("BOUNCE"):
+                    levels.add(event.get("level") or signal)
+            if levels:
+                active_levels[symbol] = sorted(levels)
+        return active_levels
+
+    def update_watchlists_from_master_avwap(self):
+        self.load_master_avwap_events_today()
+        active_level_map = self._build_master_avwap_active_level_map()
+        event_symbols = set(active_level_map)
+        if not event_symbols:
+            logging.info("Master AVWAP: no new cross/bounce events for today.")
+            return
+
+        current_longs = set(self.longs)
+        current_shorts = set(self.shorts)
+        monitored = current_longs | current_shorts
+        matched_symbols = sorted(event_symbols & monitored)
+        if not matched_symbols:
+            logging.info(
+                "Master AVWAP: today's event symbols do not intersect bounce bot watchlists."
+            )
+            return
+
+        for symbol in matched_symbols:
+            levels = active_level_map.get(symbol, [])
+            side = "LONG" if symbol in current_longs else "SHORT"
+            msg = f"MASTER_AVWAP_ACTIVE_EVENT: {symbol} ({side}) levels={levels}"
+            self.log_symbol(symbol, msg)
+            if self.gui_callback:
+                gui_tag = "green" if side == "LONG" else "red"
+                self.gui_callback(msg, gui_tag)
+
+        keep = set(matched_symbols)
+        if keep != monitored:
+            filtered_longs = [s for s in self.longs if s in keep]
+            filtered_shorts = [s for s in self.shorts if s in keep]
+            self.longs = filtered_longs
+            self.shorts = filtered_shorts
+            logging.info(
+                "Master AVWAP filter active: reduced universe to %d symbol(s) with today's new events.",
+                len(keep),
+            )
 
     def set_rrs_threshold(self, value):
         with self.rrs_lock:
@@ -2392,6 +2525,7 @@ class BounceBot(EWrapper, EClient):
                 
                 self.longs = read_tickers(LONGS_FILENAME)
                 self.shorts = read_tickers(SHORTS_FILENAME)
+                self.update_watchlists_from_master_avwap()
                 self.alerted_symbols.clear()
                 self.symbol_metrics = {}
                 self.latest_bars = {}
