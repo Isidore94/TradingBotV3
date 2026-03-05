@@ -54,6 +54,7 @@ class ConsolidatedTradingGUI:
 
         ttk.Label(controls, text="BounceBot:").pack(side=tk.LEFT, padx=(0, 6))
         ttk.Label(controls, textvariable=self.bot_controller.status_var).pack(side=tk.LEFT)
+        ttk.Label(controls, textvariable=self.bot_controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Button(controls, text="Reconnect", command=self.bot_controller.restart).pack(side=tk.RIGHT)
 
         self.rrs_panel = create_rrs_confirmed_panel(
@@ -147,6 +148,7 @@ class ConsolidatedTradingGUI:
             elif tag == "rrs_snapshot":
                 self.rrs_panel["render_rrs_snapshot"](msg)
 
+        self.bot_controller.refresh_active_bounces()
         self._queue_after_id = self.root.after(150, self._process_rrs_queue)
 
     def on_close(self):
@@ -178,6 +180,7 @@ class BounceBotController:
     def __init__(self, rrs_queue: queue.Queue):
         self.rrs_queue = rrs_queue
         self.status_var = tk.StringVar(value="starting...")
+        self.active_bounce_var = tk.StringVar(value="active bounces: 0")
         self.bot_instance = None
         self._lock = threading.Lock()
         self.gui_proxy = self.GUIProxy(self)
@@ -191,6 +194,17 @@ class BounceBotController:
     def _emit(self, message: str, tag: str = "rrs_status") -> None:
         self.rrs_queue.put((message, tag))
         self.status_var.set(message)
+
+    def refresh_active_bounces(self) -> None:
+        """Pull active Master AVWAP bounce symbols from BounceBot and show count in GUI."""
+        with self._lock:
+            bot = self.bot_instance
+        if not bot:
+            self.active_bounce_var.set("active bounces: 0")
+            return
+        active_bounces = bot.find_active_master_avwap_bounces()
+        count = len(active_bounces)
+        self.active_bounce_var.set(f"active bounces: {count}")
 
     def _make_callback(self) -> Callable[[Any, str], None]:
         def gui_callback(message, tag):
@@ -208,6 +222,7 @@ class BounceBotController:
                     self.bot_instance = bot
                 self.gui_proxy.rrs_threshold = bot.rrs_threshold
                 self.gui_proxy.rrs_timeframe_key = bot.rrs_timeframe_key
+                self.refresh_active_bounces()
                 self._emit("connected")
             except Exception as exc:
                 self._emit(f"start failed: {exc}")

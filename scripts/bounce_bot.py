@@ -574,6 +574,7 @@ class BounceBot(EWrapper, EClient):
 
         self.master_avwap_events = {}
         self.master_avwap_last_scan_date = None
+        self.emitted_master_avwap_events = set()
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -731,6 +732,30 @@ class BounceBot(EWrapper, EClient):
             if levels:
                 active_levels[symbol] = sorted(levels)
         return active_levels
+    def find_active_master_avwap_bounces(self):
+        self.load_master_avwap_events_today()
+        active = {}
+        for symbol, events in self.master_avwap_events.items():
+            bounce_levels = sorted(
+                {
+                    event.get("level") or event.get("signal_type")
+                    for event in events
+                    if str(event.get("signal_type", "")).startswith("BOUNCE")
+                }
+            )
+            if bounce_levels:
+                active[symbol] = bounce_levels
+        return active
+
+    def _master_avwap_event_key(self, event):
+        return (
+            event.get("symbol"),
+            event.get("trade_date"),
+            event.get("signal_type"),
+            event.get("anchor_type"),
+            event.get("anchor_date"),
+        )
+
 
     def update_watchlists_from_master_avwap(self):
         self.load_master_avwap_events_today()
@@ -753,11 +778,28 @@ class BounceBot(EWrapper, EClient):
         for symbol in matched_symbols:
             levels = active_level_map.get(symbol, [])
             side = "LONG" if symbol in current_longs else "SHORT"
-            msg = f"MASTER_AVWAP_ACTIVE_EVENT: {symbol} ({side}) levels={levels}"
-            self.log_symbol(symbol, msg)
-            if self.gui_callback:
-                gui_tag = "green" if side == "LONG" else "red"
-                self.gui_callback(msg, gui_tag)
+            symbol_events = self.master_avwap_events.get(symbol, [])
+            newly_emitted = 0
+            for event in symbol_events:
+                event_key = self._master_avwap_event_key(event)
+                if event_key in self.emitted_master_avwap_events:
+                    continue
+                self.emitted_master_avwap_events.add(event_key)
+                newly_emitted += 1
+                signal_type = event.get("signal_type", "")
+                msg = f"MASTER_AVWAP_EVENT: {symbol} ({side}) {signal_type}"
+                self.log_symbol(symbol, msg)
+                if self.gui_callback:
+                    gui_tag = "green" if side == "LONG" else "red"
+                    self.gui_callback(msg, gui_tag)
+
+            if newly_emitted == 0:
+                continue
+
+            summary_msg = (
+                f"MASTER_AVWAP_ACTIVE_EVENT: {symbol} ({side}) levels={levels} new_events={newly_emitted}"
+            )
+            logging.info(summary_msg)
 
         keep = set(matched_symbols)
         if keep != monitored:
@@ -2520,6 +2562,7 @@ class BounceBot(EWrapper, EClient):
                 current_date = datetime.now().date()
                 if current_date != last_warning_reset:
                     self.warned_symbols.clear()
+                    self.emitted_master_avwap_events.clear()
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
                 

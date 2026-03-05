@@ -92,6 +92,8 @@ MIN_PRICE = 5.0
 MIN_MARKET_CAP = 1_000_000_000
 MIN_GAP_ATR_MULTIPLE = 1.0
 RECENT_EARNINGS_SESSION_BLOCK = 12  # skip current AVWAPE events if last earnings is this recent
+STDEV_RECENT_EARNINGS_BLOCK = 7      # skip stdev 2-3 scan when earnings is too recent
+BOUNCE_LEVEL_ATR_TOL_PCT = 0.12      # 12% ATR proximity threshold for level touch/bounce
 POSITION_LEVELS = [
     "VWAP",
     "UPPER_1",
@@ -1027,7 +1029,7 @@ def bounce_up_at_level(df: pd.DataFrame, level: float) -> bool:
     atr = get_atr20(df)
     if atr is None:
         return False
-    eps = BOUNCE_ATR_TOL_PCT * atr
+    eps = max(BOUNCE_ATR_TOL_PCT * atr, BOUNCE_LEVEL_ATR_TOL_PCT * atr)
     push = ATR_MULT * atr
     B, C = df.iloc[-2], df.iloc[-1]
 
@@ -1050,7 +1052,7 @@ def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
     atr = get_atr20(df)
     if atr is None:
         return False
-    eps = BOUNCE_ATR_TOL_PCT * atr
+    eps = max(BOUNCE_ATR_TOL_PCT * atr, BOUNCE_LEVEL_ATR_TOL_PCT * atr)
     push = ATR_MULT * atr
     B, C = df.iloc[-2], df.iloc[-1]
 
@@ -1183,7 +1185,7 @@ def closes_between_bands(
 
 def write_stdev_range_report(path: Path, range_hits: dict, cross_hits: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
-        f.write("AVWAP 2nd-3rd stdev multi-day range + 2nd stdev crosses\n")
+        f.write("AVWAP 2nd-3rd stdev multi-day range + 2nd stdev crosses/bounces\n")
         f.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
         long_range = ", ".join(sorted(set(range_hits.get("long", [])))) or "None"
@@ -1194,9 +1196,9 @@ def write_stdev_range_report(path: Path, range_hits: dict, cross_hits: dict) -> 
 
         long_cross = ", ".join(sorted(set(cross_hits.get("long", [])))) or "None"
         short_cross = ", ".join(sorted(set(cross_hits.get("short", [])))) or "None"
-        f.write("Crosses through 2nd stdev (current anchors)\n")
-        f.write(f"Longs crossing up UPPER_2: {long_cross}\n")
-        f.write(f"Shorts crossing down LOWER_2: {short_cross}\n")
+        f.write("Crosses/bounces through 2nd stdev (current anchors)\n")
+        f.write(f"Longs crossing/bouncing at UPPER_2: {long_cross}\n")
+        f.write(f"Shorts crossing/bouncing at LOWER_2: {short_cross}\n")
 
 
 
@@ -1838,16 +1840,45 @@ def run_master():
                 range_buckets["short_lower_1_to_lower_2"].append(sym)
 
         if current_anchor_meta:
-            if side == "LONG":
-                if closes_between_bands(df, current_upper_2, current_upper_3, 4):
-                    stdev_range_hits["long"].append(sym)
-                if cross_up_through_level(df, current_upper_2):
-                    stdev_cross_hits["long"].append(sym)
-            else:
-                if closes_between_bands(df, current_lower_3, current_lower_2, 4):
-                    stdev_range_hits["short"].append(sym)
-                if cross_down_through_level(df, current_lower_2):
-                    stdev_cross_hits["short"].append(sym)
+            stdev_blocked_by_recent_earnings = False
+            if recent_earnings_dates:
+                try:
+                    stdev_last_earnings = datetime.fromisoformat(recent_earnings_dates[0]).date()
+                    stdev_sessions_since = sessions_since_date(df, stdev_last_earnings)
+                    stdev_blocked_by_recent_earnings = (
+                        stdev_sessions_since is not None
+                        and stdev_sessions_since <= STDEV_RECENT_EARNINGS_BLOCK
+                    )
+                except ValueError:
+                    stdev_blocked_by_recent_earnings = False
+
+            if not stdev_blocked_by_recent_earnings:
+                if side == "LONG":
+                    if (
+                        current_upper_2 is not None
+                        and current_upper_3 is not None
+                        and last_close is not None
+                        and last_close >= current_upper_2
+                        and closes_between_bands(df, current_upper_2, current_upper_3, 4)
+                    ):
+                        stdev_range_hits["long"].append(sym)
+                    if current_upper_2 is not None and cross_up_through_level(df, current_upper_2):
+                        stdev_cross_hits["long"].append(sym)
+                    if current_upper_2 is not None and bounce_up_at_level(df, current_upper_2):
+                        stdev_cross_hits["long"].append(f"{sym} (bounce)")
+                else:
+                    if (
+                        current_lower_2 is not None
+                        and current_lower_3 is not None
+                        and last_close is not None
+                        and last_close <= current_lower_2
+                        and closes_between_bands(df, current_lower_3, current_lower_2, 4)
+                    ):
+                        stdev_range_hits["short"].append(sym)
+                    if current_lower_2 is not None and cross_down_through_level(df, current_lower_2):
+                        stdev_cross_hits["short"].append(sym)
+                    if current_lower_2 is not None and bounce_down_at_level(df, current_lower_2):
+                        stdev_cross_hits["short"].append(f"{sym} (bounce)")
 
         current_position = classify_position_by_band(last_close, current_anchor_meta)
         if current_position:
