@@ -7,8 +7,9 @@ import queue
 import sys
 import threading
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
-from tkinter import ttk
+from tkinter import scrolledtext, ttk
 from typing import Any, Callable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -34,7 +35,8 @@ class ConsolidatedTradingGUI:
         self._configure_theme()
 
         self.rrs_queue: queue.Queue = queue.Queue()
-        self.bot_controller = BounceBotController(self.rrs_queue)
+        self.bounce_queue: queue.Queue = queue.Queue()
+        self.bot_controller = BounceBotController(self.rrs_queue, self.bounce_queue)
         self._queue_after_id = None
         self._build_layout()
         self.bot_controller.start()
@@ -57,13 +59,19 @@ class ConsolidatedTradingGUI:
         ttk.Label(controls, textvariable=self.bot_controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Button(controls, text="Reconnect", command=self.bot_controller.restart).pack(side=tk.RIGHT)
 
+        content_pane = tk.PanedWindow(bottom, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=DARK_GREY)
+        content_pane.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        self.alerts_panel = self._create_alerts_panel(content_pane)
+        content_pane.add(self.alerts_panel["container"], stretch="always", minsize=420)
+
         self.rrs_panel = create_rrs_confirmed_panel(
-            bottom,
+            content_pane,
             bot_instance=self.bot_controller.gui_proxy,
             dark_grey=DARK_GREY,
             text_color=TEXT_COLOR,
         )
-        self.rrs_panel["container"].pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        content_pane.add(self.rrs_panel["container"], stretch="always", minsize=420)
         main.add(bottom, stretch="always", minsize=320)
 
         self._apply_dark_widget_theme()
@@ -98,6 +106,60 @@ class ConsolidatedTradingGUI:
         style.configure("Treeview.Heading", background=PANEL_GREY, foreground=TEXT_COLOR)
         style.configure("Horizontal.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
         style.configure("Vertical.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
+
+    def _create_alerts_panel(self, parent: tk.Misc) -> dict[str, Any]:
+        alerts_container = tk.Frame(parent, bg=DARK_GREY)
+
+        header = ttk.Label(alerts_container, text="BounceBot Alerts")
+        header.pack(anchor="w", padx=8, pady=(8, 2))
+
+        text_area = scrolledtext.ScrolledText(
+            alerts_container,
+            wrap=tk.WORD,
+            width=70,
+            height=18,
+            font=("Courier", 11),
+            state="disabled",
+            bg=INPUT_GREY,
+            fg=TEXT_COLOR,
+        )
+        text_area.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        text_area.tag_config("green", foreground="#50FA7B", font=("Courier", 11))
+        text_area.tag_config("red", foreground="#FF5555", font=("Courier", 11))
+        text_area.tag_config("pink_symbol", foreground="#FF79C6", font=("Courier", 11, "bold"))
+        text_area.tag_config("orange_symbol", foreground="#FFB86C", font=("Courier", 11, "bold"))
+        text_area.tag_config("blue", foreground="#8BE9FD", font=("Courier", 11))
+        text_area.tag_config("candle_line", foreground="#BD93F9", overstrike=1)
+
+        return {"container": alerts_container, "text": text_area}
+
+    def _append_alert(self, msg: str, tag: str) -> None:
+        text_area = self.alerts_panel["text"]
+        text_area.config(state="normal")
+        timestamp = datetime.now().strftime("%H:%M:%S")
+
+        if "Bounce confirmed" in msg:
+            parts = msg.split(":", 1)
+            if len(parts) == 2:
+                symbol = parts[0].strip()
+                rest = ":" + parts[1]
+                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                if "(long)" in rest:
+                    text_area.insert(tk.END, symbol, "pink_symbol")
+                    text_area.insert(tk.END, rest + "\n", "green")
+                elif "(short)" in rest:
+                    text_area.insert(tk.END, symbol, "orange_symbol")
+                    text_area.insert(tk.END, rest + "\n", "red")
+                else:
+                    text_area.insert(tk.END, f"{msg}\n", tag)
+            else:
+                text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+        else:
+            text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+
+        text_area.config(state="disabled")
+        text_area.see(tk.END)
 
     def _apply_dark_widget_theme(self):
         dark_defaults = {
@@ -148,6 +210,14 @@ class ConsolidatedTradingGUI:
             elif tag == "rrs_snapshot":
                 self.rrs_panel["render_rrs_snapshot"](msg)
 
+        while True:
+            try:
+                msg, tag = self.bounce_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            self._append_alert(str(msg), str(tag))
+
         self.bot_controller.refresh_active_bounces()
         self._queue_after_id = self.root.after(150, self._process_rrs_queue)
 
@@ -177,8 +247,9 @@ class BounceBotController:
             self.rrs_timeframe_key = key
             self._controller._forward_call("set_rrs_timeframe", key)
 
-    def __init__(self, rrs_queue: queue.Queue):
+    def __init__(self, rrs_queue: queue.Queue, bounce_queue: queue.Queue):
         self.rrs_queue = rrs_queue
+        self.bounce_queue = bounce_queue
         self.status_var = tk.StringVar(value="starting...")
         self.active_bounce_var = tk.StringVar(value="active bounces: 0")
         self.bot_instance = None
@@ -210,6 +281,12 @@ class BounceBotController:
         def gui_callback(message, tag):
             if tag.startswith("rrs"):
                 self.rrs_queue.put((message, tag))
+            elif tag == "approaching" or tag.startswith("approaching_"):
+                return
+            elif tag == "blue" and "removed from" in str(message):
+                return
+            else:
+                self.bounce_queue.put((message, tag))
 
         return gui_callback
 
