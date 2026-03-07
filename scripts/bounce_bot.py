@@ -3564,7 +3564,284 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
     }
 
 
-def start_gui():
+def choose_gui_mode():
+    selection = {"mode": "full"}
+    picker = tk.Tk()
+    picker.title("BounceBot Mode")
+    picker.geometry("360x160")
+    picker.configure(bg="#2E2E2E")
+    picker.resizable(False, False)
+
+    tk.Label(
+        picker,
+        text="Choose BounceBot startup mode",
+        bg="#2E2E2E",
+        fg="#E0E0E0",
+        font=("Arial", 12, "bold"),
+    ).pack(pady=(18, 10))
+
+    tk.Label(
+        picker,
+        text="Full mode keeps the RS/RW panels.\nLightweight mode keeps alerts and core bounce controls only.",
+        bg="#2E2E2E",
+        fg="#E0E0E0",
+        justify=tk.CENTER,
+    ).pack(pady=(0, 14))
+
+    button_row = tk.Frame(picker, bg="#2E2E2E")
+    button_row.pack()
+
+    def select_mode(mode):
+        selection["mode"] = mode
+        picker.destroy()
+
+    tk.Button(button_row, text="Full", width=12, command=lambda: select_mode("full")).pack(side=tk.LEFT, padx=8)
+    tk.Button(button_row, text="Lightweight", width=12, command=lambda: select_mode("lightweight")).pack(side=tk.LEFT, padx=8)
+
+    picker.protocol("WM_DELETE_WINDOW", lambda: select_mode("full"))
+    picker.mainloop()
+    return selection["mode"]
+
+
+def append_alert_message(text_area, msg, tag, timestamp):
+    if "Bounce confirmed" in msg:
+        parts = msg.split(":", 1)
+        if len(parts) == 2:
+            symbol = parts[0].strip()
+            rest = ":" + parts[1]
+            if "(long)" in rest:
+                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                text_area.insert(tk.END, symbol, "pink_symbol")
+                text_area.insert(tk.END, rest + "\n", "green")
+            elif "(short)" in rest:
+                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                text_area.insert(tk.END, symbol, "orange_symbol")
+                text_area.insert(tk.END, rest + "\n", "red")
+            else:
+                text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+        else:
+            text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+    elif "Price approaching levels" in msg:
+        parts = msg.split(":", 1)
+        if len(parts) == 2:
+            symbol = parts[0].strip()
+            rest = ":" + parts[1]
+            if "(long)" in rest:
+                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                text_area.insert(tk.END, symbol, "pink_symbol")
+                text_area.insert(tk.END, rest + "\n", "approaching_green")
+            elif "(short)" in rest:
+                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                text_area.insert(tk.END, symbol, "orange_symbol")
+                text_area.insert(tk.END, rest + "\n", "approaching_red")
+            else:
+                text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+        else:
+            text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+    else:
+        text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+
+
+def configure_alert_tags(text_area, font_size=12):
+    text_area.tag_config("green", foreground="#50FA7B", font=("Courier", font_size))
+    text_area.tag_config("red", foreground="#FF5555", font=("Courier", font_size))
+    text_area.tag_config("pink_symbol", foreground="#FF79C6", font=("Courier", font_size, "bold"))
+    text_area.tag_config("orange_symbol", foreground="#FFB86C", font=("Courier", font_size, "bold"))
+    text_area.tag_config("blue", foreground="#8BE9FD", font=("Courier", font_size))
+    text_area.tag_config("candle_line", foreground="#BD93F9", overstrike=1)
+    text_area.tag_config("approaching", foreground="#FF79C6", font=("Courier", font_size))
+    text_area.tag_config("approaching_green", foreground="#50FA7B", font=("Courier", font_size))
+    text_area.tag_config("approaching_red", foreground="#FF5555", font=("Courier", font_size))
+
+
+def start_lightweight_gui():
+    bounce_queue = queue.Queue()
+    dark_grey = "#2E2E2E"
+    text_color = "#E0E0E0"
+    input_grey = "#252525"
+    panel_grey = "#3A3A3A"
+
+    def gui_callback(message, tag):
+        if tag.startswith("rrs"):
+            return
+        if tag == "approaching" or tag.startswith("approaching_"):
+            return
+        if tag == "blue" and "removed from" in str(message):
+            return
+        bounce_queue.put((message, tag))
+
+    bot_instance = run_bot_with_gui(gui_callback)
+
+    root = tk.Tk()
+    root.title("BounceBot Lightweight")
+    root.geometry("980x680")
+    root.configure(background=dark_grey)
+
+    container = tk.Frame(root, padx=10, pady=10, bg=dark_grey)
+    container.pack(fill=tk.BOTH, expand=True)
+
+    header = tk.Frame(container, bg=dark_grey)
+    header.pack(fill=tk.X, pady=(0, 8))
+
+    status_var = tk.StringVar(value="listening for alerts")
+    connection_var = tk.StringVar(value="IB: connected")
+    tk.Label(header, text="BounceBot Lightweight", bg=dark_grey, fg=text_color, font=("Arial", 11, "bold")).pack(side=tk.LEFT)
+    tk.Label(header, textvariable=connection_var, bg=dark_grey, fg=text_color).pack(side=tk.LEFT, padx=(12, 0))
+    tk.Label(header, textvariable=status_var, bg=dark_grey, fg=text_color).pack(side=tk.LEFT, padx=(12, 0))
+
+    def disconnect_bot():
+        nonlocal bot_instance
+        try:
+            bot_instance.disconnect()
+        except Exception:
+            pass
+        bot_instance = None
+        connection_var.set("IB: disconnected")
+        status_var.set("alerts paused")
+
+    def restart_bot():
+        nonlocal bot_instance
+        disconnect_bot()
+        connection_var.set("IB: reconnecting")
+        status_var.set("starting...")
+        bot_instance = run_bot_with_gui(gui_callback)
+        rrs_threshold_var.set(bot_instance.rrs_threshold)
+        timeframe_var.set(bot_instance.rrs_timeframe_key)
+        env_selection_var.set(bot_instance.get_market_environment())
+        connection_var.set("IB: connected")
+        status_var.set("listening for alerts")
+
+    tk.Button(header, text="Reconnect", command=restart_bot, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT)
+    tk.Button(header, text="Disconnect", command=disconnect_bot, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT, padx=(0, 8))
+
+    def clear_alerts():
+        text_area.config(state="normal")
+        text_area.delete("1.0", tk.END)
+        text_area.config(state="disabled")
+
+    tk.Button(header, text="Clear", command=clear_alerts, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT, padx=(0, 8))
+
+    controls = tk.Frame(container, bg=dark_grey)
+    controls.pack(fill=tk.X, pady=(0, 8))
+
+    tk.Label(controls, text="RRS Sensitivity", bg=dark_grey, fg=text_color).pack(side=tk.LEFT)
+    rrs_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
+
+    def on_rrs_threshold_change(*_):
+        bot_instance.set_rrs_threshold(rrs_threshold_var.get())
+
+    rrs_threshold_var.trace_add("write", on_rrs_threshold_change)
+
+    tk.Scale(
+        controls,
+        from_=0.0,
+        to=5.0,
+        resolution=0.1,
+        orient=tk.HORIZONTAL,
+        variable=rrs_threshold_var,
+        length=180,
+        bg=dark_grey,
+        fg=text_color,
+        highlightthickness=0,
+    ).pack(side=tk.LEFT, padx=(8, 14))
+
+    tk.Label(controls, text="Timeframe", bg=dark_grey, fg=text_color).pack(side=tk.LEFT)
+    timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
+
+    def on_timeframe_change():
+        selected = timeframe_var.get()
+        bot_instance.set_rrs_timeframe(selected)
+        status_var.set(f"RRS timeframe set to {RRS_TIMEFRAMES[selected]['label']}")
+
+    for key in ("5m", "15m", "30m", "1h"):
+        tk.Radiobutton(
+            controls,
+            text=RRS_TIMEFRAMES[key]["label"],
+            variable=timeframe_var,
+            value=key,
+            indicatoron=0,
+            command=on_timeframe_change,
+            padx=6,
+            pady=2,
+            bg=dark_grey,
+            fg=text_color,
+            selectcolor="#444444",
+            activebackground="#444444",
+            activeforeground=text_color,
+        ).pack(side=tk.LEFT, padx=2)
+
+    env_frame = tk.Frame(container, bg=dark_grey)
+    env_frame.pack(fill=tk.X, pady=(0, 8))
+    tk.Label(env_frame, text="Market Environment", bg=dark_grey, fg=text_color).pack(side=tk.LEFT, padx=(0, 8))
+    env_selection_var = tk.StringVar(value=bot_instance.get_market_environment())
+
+    def on_environment_change():
+        selected = env_selection_var.get()
+        bot_instance.set_market_environment(selected)
+        status_var.set(f"Environment: {MARKET_ENVIRONMENTS[selected]['label']}")
+
+    for key, info in MARKET_ENVIRONMENTS.items():
+        tk.Radiobutton(
+            env_frame,
+            text=info["label"],
+            variable=env_selection_var,
+            value=key,
+            indicatoron=0,
+            command=on_environment_change,
+            padx=8,
+            pady=3,
+            bg=dark_grey,
+            fg=text_color,
+            selectcolor="#444444",
+            activebackground="#444444",
+            activeforeground=text_color,
+        ).pack(side=tk.LEFT, padx=2)
+
+    alerts_frame = tk.Frame(container, bg=dark_grey)
+    alerts_frame.pack(fill=tk.BOTH, expand=True)
+    text_area = scrolledtext.ScrolledText(
+        alerts_frame,
+        wrap=tk.WORD,
+        width=80,
+        height=30,
+        font=("Courier", 11),
+        state="disabled",
+        bg=input_grey,
+        fg=text_color,
+        insertbackground=text_color,
+    )
+    text_area.pack(fill=tk.BOTH, expand=True)
+    configure_alert_tags(text_area, font_size=11)
+
+    def process_bounce_queue():
+        while True:
+            try:
+                msg, tag = bounce_queue.get_nowait()
+            except queue.Empty:
+                break
+            text_area.config(state="normal")
+            append_alert_message(text_area, str(msg), str(tag), datetime.now().strftime("%H:%M:%S"))
+            text_area.config(state="disabled")
+            text_area.see(tk.END)
+            root.update()
+        root.after(150, process_bounce_queue)
+
+    def on_closing():
+        disconnect_bot()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    process_bounce_queue()
+    root.mainloop()
+
+
+def start_gui(mode="prompt"):
+    if mode == "prompt":
+        mode = choose_gui_mode()
+    if mode == "lightweight":
+        start_lightweight_gui()
+        return
+
     bounce_queue = queue.Queue()
     rrs_queue = queue.Queue()
     # Replace light_grey with dark_grey
@@ -3609,16 +3886,7 @@ def start_gui():
     text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
     content_pane.add(alerts_frame, stretch="always")
 
-    # Configure tags with new color scheme
-    text_area.tag_config("green", foreground="#50FA7B", font=('Courier', 12))  # Green for long message text
-    text_area.tag_config("red", foreground="#FF5555", font=('Courier', 12))    # Red for short message text
-    text_area.tag_config("pink_symbol", foreground="#FF79C6", font=('Courier', 12, 'bold'))  # Pink for long symbols
-    text_area.tag_config("orange_symbol", foreground="#FFB86C", font=('Courier', 12, 'bold'))  # Orange for short symbols
-    text_area.tag_config("blue", foreground="#8BE9FD", font=('Courier', 12))           # Light blue
-    text_area.tag_config("candle_line", foreground="#BD93F9", overstrike=1)            # Purple
-    text_area.tag_config("approaching", foreground="#FF79C6", font=('Courier', 12))
-    text_area.tag_config("approaching_green", foreground="#50FA7B", font=('Courier', 12))
-    text_area.tag_config("approaching_red", foreground="#FF5555", font=('Courier', 12))
+    configure_alert_tags(text_area, font_size=12)
 
     # Create RRS panel inside main window
     rrs_container = tk.Frame(content_pane, bg=dark_grey)
@@ -3908,49 +4176,7 @@ def start_gui():
             try:
                 msg, tag = bounce_queue.get_nowait()
                 text_area.config(state='normal')
-                
-                # Special handling for bounce confirmations to color the symbol differently
-                if "Bounce confirmed" in msg:
-                    parts = msg.split(":", 1)  # Split at first colon to separate symbol from rest
-                    if len(parts) == 2:
-                        symbol = parts[0].strip()
-                        rest = ":" + parts[1]
-                        
-                        # Determine symbol color based on direction
-                        if "(long)" in rest:
-                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
-                            text_area.insert(tk.END, symbol, "pink_symbol")  # Pink symbol for longs
-                            text_area.insert(tk.END, rest + "\n", "green")   # Green text for rest of long message
-                        elif "(short)" in rest:
-                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
-                            text_area.insert(tk.END, symbol, "orange_symbol")  # Orange symbol for shorts
-                            text_area.insert(tk.END, rest + "\n", "red")       # Red text for rest of short message
-                        else:
-                            # Fallback if direction can't be determined
-                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                    else:
-                        text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                elif "Price approaching levels" in msg:
-                    parts = msg.split(":", 1)
-                    if len(parts) == 2:
-                        symbol = parts[0].strip()
-                        rest = ":" + parts[1]
-                        if "(long)" in rest:
-                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
-                            text_area.insert(tk.END, symbol, "pink_symbol")
-                            text_area.insert(tk.END, rest + "\n", "approaching_green")
-                        elif "(short)" in rest:
-                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
-                            text_area.insert(tk.END, symbol, "orange_symbol")
-                            text_area.insert(tk.END, rest + "\n", "approaching_red")
-                        else:
-                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                    else:
-                        text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                else:
-                    # Standard handling for other messages
-                    text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                    
+                append_alert_message(text_area, str(msg), str(tag), datetime.now().strftime('%H:%M:%S'))
                 text_area.config(state='disabled')
                 text_area.see(tk.END)
                 root.update()
@@ -4055,6 +4281,12 @@ if __name__ == "__main__":
 
         parser = argparse.ArgumentParser()
         parser.add_argument("--use_gui", action="store_true", help="Use the Tkinter GUI")
+        parser.add_argument(
+            "--gui_mode",
+            choices=("prompt", "full", "lightweight"),
+            default="prompt",
+            help="Choose GUI startup mode when launching with the GUI.",
+        )
         print("Parser created.")
         
         args = parser.parse_args()
@@ -4066,7 +4298,7 @@ if __name__ == "__main__":
         
         if use_gui:
             print("Initializing GUI mode...")
-            start_gui()
+            start_gui(mode=args.gui_mode)
         else:
             print("Initializing console mode...")
             # Set up logging for console mode

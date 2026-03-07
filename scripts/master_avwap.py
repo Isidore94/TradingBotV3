@@ -35,6 +35,7 @@ OUTPUT_DIR = ROOT_DIR / "output"
 LOG_DIR = ROOT_DIR / "logs"
 AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
 EVENT_TICKERS_FILE = OUTPUT_DIR / "master_avwap_event_tickers.txt"
+PRIORITY_SETUPS_FILE = OUTPUT_DIR / "master_avwap_priority_setups.txt"
 MASTER_POSITIONS_FILE = OUTPUT_DIR / "master_positions.json"
 AVWAP_CSV_COLUMNS = [
     "run_date",
@@ -58,6 +59,28 @@ EVENT_LEVEL_SORT_ORDER = [
     "LOWER_2",
     "LOWER_3",
 ]
+
+FAVORITE_CURRENT_SIGNALS = {
+    "LONG": {
+        "BOUNCE_VWAP": 120,
+        "CROSS_UP_UPPER_1": 110,
+    },
+    "SHORT": {
+        "BOUNCE_VWAP": 120,
+        "CROSS_DOWN_LOWER_1": 110,
+    },
+}
+
+FAVORITE_CONTEXT_SIGNALS = {
+    "LONG": {
+        "PREV_BOUNCE_VWAP": 40,
+        "PREV_CROSS_UPPER_1": 30,
+    },
+    "SHORT": {
+        "PREV_BOUNCE_VWAP": 40,
+        "PREV_CROSS_LOWER_1": 30,
+    },
+}
 
 for d in (DATA_DIR, OUTPUT_DIR, LOG_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -1139,30 +1162,111 @@ def compute_multi_day_patterns(symbol, side, today_events, prev_events):
 
 def sort_events_for_output(events):
     """Sort events so similar types are grouped in the output file."""
+    def _sort_key(event):
+        label_key = event_label_sort_key(event[2])
+        return (
+            label_key[0],
+            label_key[1],
+            event[0],
+            event[2],
+            event[1],
+        )
 
-    def group_rank(label: str) -> int:
-        if label.startswith("PREV_"):
-            return 0  # previous AVWAP crosses/bounces first
-        if label.startswith("MD_"):
-            return 2  # multi-day patterns last
+    return sorted(events, key=_sort_key)
+
+
+def event_label_sort_key(label: str):
+    def group_rank(lbl: str) -> int:
+        if lbl.startswith("PREV_"):
+            return 0
+        if lbl.startswith("MD_"):
+            return 2
         return 1
 
-    def level_rank(label: str) -> int:
+    def level_rank(lbl: str) -> int:
         for idx, token in enumerate(EVENT_LEVEL_SORT_ORDER):
-            if token in label:
+            if token in lbl:
                 return idx
         return len(EVENT_LEVEL_SORT_ORDER)
 
-    return sorted(
-        events,
-        key=lambda e: (
-            group_rank(e[2]),      # prev vs current vs multi-day
-            level_rank(e[2]),      # e.g. all UPPER_1 before UPPER_2
-            e[0],                  # alphabetical within a level by symbol
-            e[2],                  # stable ordering for identical symbols
-            e[1],
-        ),
+    return (group_rank(label), level_rank(label), label)
+
+
+def format_signal_label(signal: str) -> str:
+    return signal.replace("VWAP", "AVWAPE").replace("_", " ")
+
+
+def build_priority_setup_summary(
+    symbol: str,
+    side: str,
+    events_today: list[str],
+    all_events: list[str],
+    trend_label: str,
+    favorite_zone: str | None,
+) -> dict:
+    current_weights = FAVORITE_CURRENT_SIGNALS.get(side, {})
+    context_weights = FAVORITE_CONTEXT_SIGNALS.get(side, {})
+
+    favorite_signals = sorted(evt for evt in events_today if evt in current_weights)
+    context_signals = sorted(evt for evt in events_today if evt in context_weights)
+    score = sum(current_weights.get(evt, 0) for evt in favorite_signals)
+    score += sum(context_weights.get(evt, 0) for evt in context_signals)
+
+    if favorite_zone:
+        score += 18
+
+    if side == "LONG" and trend_label == "UP":
+        score += 8
+    elif side == "SHORT" and trend_label == "DOWN":
+        score += 8
+
+    if favorite_signals and any(evt.startswith("MD_") for evt in all_events):
+        score += 5
+
+    return {
+        "symbol": symbol,
+        "side": side,
+        "score": score,
+        "favorite_signals": favorite_signals,
+        "context_signals": context_signals,
+        "favorite_zone": favorite_zone,
+        "trend_20d": trend_label,
+        "has_favorite_signal": bool(favorite_signals),
+    }
+
+
+def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
+    favorites = sorted(
+        [row for row in priority_rows if row["has_favorite_signal"]],
+        key=lambda row: (-row["score"], row["symbol"]),
     )
+    watchlist = sorted(
+        [row for row in priority_rows if not row["has_favorite_signal"] and row["favorite_zone"]],
+        key=lambda row: (-row["score"], row["symbol"]),
+    )
+
+    def _write_rows(handle, title: str, rows: list[dict]) -> None:
+        handle.write(f"{title}\n")
+        handle.write("-" * len(title) + "\n")
+        if not rows:
+            handle.write("None\n\n")
+            return
+        for row in rows:
+            signals = ", ".join(format_signal_label(evt) for evt in row["favorite_signals"]) or "None"
+            context = ", ".join(format_signal_label(evt) for evt in row["context_signals"]) or "None"
+            zone = row["favorite_zone"] or "None"
+            handle.write(
+                f"{row['symbol']:<6} {row['side']:<5} score={row['score']:<3} "
+                f"signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']}\n"
+            )
+        handle.write("\n")
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("Master AVWAP priority setups\n")
+        handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        handle.write("Focus: AVWAPE bounces plus UPPER_1 long crosses / LOWER_1 short crosses\n\n")
+        _write_rows(handle, "Best current favorite setups", favorites)
+        _write_rows(handle, "Near favorite zones", watchlist)
 
 
 def closes_between_bands(
@@ -1497,6 +1601,7 @@ def run_master():
     events_for_output = []
     csv_rows = []
     feature_rows = []
+    priority_rows = []
     positions = {
         "current": {lvl: [] for lvl in POSITION_LEVELS},
         "previous": {lvl: [] for lvl in POSITION_LEVELS},
@@ -1839,6 +1944,12 @@ def run_master():
             if _between(current_lower_2, current_lower_1):
                 range_buckets["short_lower_1_to_lower_2"].append(sym)
 
+        favorite_zone = None
+        if side == "LONG" and _between(current_vwap, current_upper_1):
+            favorite_zone = "AVWAPE to UPPER_1"
+        elif side == "SHORT" and _between(current_lower_1, current_vwap):
+            favorite_zone = "LOWER_1 to AVWAPE"
+
         if current_anchor_meta:
             stdev_blocked_by_recent_earnings = False
             if recent_earnings_dates:
@@ -1908,7 +2019,21 @@ def run_master():
             "pct_from_current_lower_1": pct_lower_1,
             "trend_20d": trend_label,
             "has_bounce_event_today": has_bounce_event_today,
+            "favorite_zone": favorite_zone,
         }
+
+        priority_summary = build_priority_setup_summary(
+            symbol=sym,
+            side=side,
+            events_today=symbol_events_today,
+            all_events=full_event_list,
+            trend_label=trend_label,
+            favorite_zone=favorite_zone,
+        )
+        symbol_entry["priority_score"] = priority_summary["score"]
+        symbol_entry["favorite_signals"] = priority_summary["favorite_signals"]
+        symbol_entry["favorite_context_signals"] = priority_summary["context_signals"]
+        priority_rows.append(priority_summary)
 
         ai_state["symbols"][sym] = symbol_entry
 
@@ -1930,6 +2055,10 @@ def run_master():
             "pct_from_current_lower_1": pct_lower_1,
             "trend_20d": trend_label,
             "has_bounce_event_today": has_bounce_event_today,
+            "favorite_zone": favorite_zone,
+            "priority_score": priority_summary["score"],
+            "favorite_signals": ";".join(priority_summary["favorite_signals"]),
+            "favorite_context_signals": ";".join(priority_summary["context_signals"]),
             "events_today": ";".join(symbol_events_today),
         })
 
@@ -1965,10 +2094,15 @@ def run_master():
 
     # trim history to last N days
     trim_history(history)
+    write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
 
     # write human-readable events file (grouped for easier scanning)
     sorted_events = sort_events_for_output(events_for_output)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        priority_text = PRIORITY_SETUPS_FILE.read_text(encoding="utf-8").strip()
+        if priority_text:
+            f.write(priority_text)
+            f.write("\n\n")
         for s, d, lbl, side in sorted_events:
             f.write(f"{s},{d},{lbl},{side}\n")
 
@@ -2000,33 +2134,18 @@ def run_master():
     for sym, _, lbl, side in sorted_events:
         event_buckets.setdefault(lbl, {"LONG": [], "SHORT": []})[side].append(sym)
 
-    def _event_label_sort_key(label: str):
-        def group_rank(lbl: str) -> int:
-            if lbl.startswith("PREV_"):
-                return 0
-            if lbl.startswith("MD_"):
-                return 2
-            return 1
-
-        def level_rank(lbl: str) -> int:
-            for idx, token in enumerate(EVENT_LEVEL_SORT_ORDER):
-                if token in lbl:
-                    return idx
-            return len(EVENT_LEVEL_SORT_ORDER)
-
-        return (group_rank(label), level_rank(label), label)
-
     def _fmt_items(values):
         return ", ".join(sorted(set(values))) if values else "None"
 
     with open(EVENT_TICKERS_FILE, "w", encoding="utf-8") as f:
         f.write("AVWAP crosses and bounces by event type\n")
-        for lbl in sorted(event_buckets.keys(), key=_event_label_sort_key):
+        f.write(f"Priority setups report: {PRIORITY_SETUPS_FILE.name}\n\n")
+        for lbl in sorted(event_buckets.keys(), key=event_label_sort_key):
             for side in ("LONG", "SHORT"):
                 tickers = sorted(set(event_buckets[lbl][side]))
                 if not tickers:
                     continue
-                display_label = lbl.capitalize()
+                display_label = format_signal_label(lbl)
                 f.write(f"{display_label}, {side.capitalize()}: {', '.join(tickers)}\n")
 
         f.write("\nPrice ranges (current anchors)\n")
@@ -2059,6 +2178,10 @@ def run_master():
         "pct_from_current_lower_1",
         "trend_20d",
         "has_bounce_event_today",
+        "favorite_zone",
+        "priority_score",
+        "favorite_signals",
+        "favorite_context_signals",
         "events_today",
     ]
 
@@ -2235,7 +2358,7 @@ class MasterAvwapGUI:
         lookback_spin.pack(side="left", padx=(0, 10))
 
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Run AVWAP Scan Once", command=self.run_master_once).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh Table", command=self.refresh_table).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
@@ -2308,19 +2431,25 @@ class MasterAvwapGUI:
             return f"[Error reading {path.name}] {exc}"
 
     def refresh_avwap_output_view(self):
-        top_section = self._read_text_file(EVENT_TICKERS_FILE)
-        bottom_section = self._read_text_file(STDEV_RANGE_FILE)
+        priority_section = self._read_text_file(PRIORITY_SETUPS_FILE)
+        event_section = self._read_text_file(EVENT_TICKERS_FILE)
+        stdev_section = self._read_text_file(STDEV_RANGE_FILE)
 
         combined = (
+            "MASTER AVWAP PRIORITY SETUPS\n"
+            + "=" * 80
+            + "\n"
+            + (priority_section or "No priority setup output yet.")
+            + "\n\n"
             "MASTER AVWAP EVENT TICKERS\n"
             + "=" * 80
             + "\n"
-            + (top_section or "No event tickers output yet.")
+            + (event_section or "No event tickers output yet.")
             + "\n\n"
             + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
             + "=" * 80
             + "\n"
-            + (bottom_section or "No stdev output yet.")
+            + (stdev_section or "No stdev output yet.")
             + "\n"
         )
 

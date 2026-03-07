@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Unified GUI for Master AVWAP and BounceBot RRS controls."""
+"""Unified GUI with simple and full workspaces for BounceBot and Master AVWAP."""
 
 from __future__ import annotations
 
+import argparse
+import re
 import queue
 import sys
 import threading
@@ -10,298 +12,228 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import scrolledtext, ttk
-from typing import Any, Callable
+from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from bounce_bot import create_rrs_confirmed_panel, run_bot_with_gui
-from master_avwap import MasterAvwapGUI
+ROOT_DIR = SCRIPT_DIR.parent
+LONGS_FILE = ROOT_DIR / "longs.txt"
+SHORTS_FILE = ROOT_DIR / "shorts.txt"
+WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
+
+from bounce_bot import (
+    BOUNCE_TYPE_DEFAULTS,
+    BOUNCE_TYPE_LABELS,
+    MARKET_ENVIRONMENTS,
+    RRS_TIMEFRAMES,
+    append_alert_message,
+    configure_alert_tags,
+    create_rrs_confirmed_panel,
+    run_bot_with_gui,
+)
+from master_avwap import (
+    EVENT_TICKERS_FILE,
+    PRIORITY_SETUPS_FILE,
+    STDEV_RANGE_FILE,
+    MasterAvwapGUI,
+    run_master,
+)
 
 DARK_GREY = "#2E2E2E"
 TEXT_COLOR = "#E0E0E0"
 PANEL_GREY = "#3A3A3A"
 INPUT_GREY = "#252525"
 
+BOUNCE_TOGGLE_ORDER = [
+    "10_candle",
+    "vwap",
+    "dynamic_vwap",
+    "eod_vwap",
+    "vwap_eod_confluence",
+    "impulse_retest_vwap_eod",
+    "ema_8",
+    "ema_15",
+    "ema_21",
+    "vwap_upper_band",
+    "vwap_lower_band",
+    "dynamic_vwap_upper_band",
+    "dynamic_vwap_lower_band",
+    "eod_vwap_upper_band",
+    "eod_vwap_lower_band",
+    "prev_day_high",
+    "prev_day_low",
+]
 
-class ConsolidatedTradingGUI:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("Consolidated Trading GUI")
-        self.root.geometry("1800x980")
-        self.root.configure(bg=DARK_GREY)
 
-        self._configure_theme()
+def configure_theme(root: tk.Misc) -> None:
+    style = ttk.Style(root)
+    style.theme_use("clam")
 
-        self.rrs_queue: queue.Queue = queue.Queue()
-        self.bounce_queue: queue.Queue = queue.Queue()
-        self.bot_controller = BounceBotController(self.rrs_queue, self.bounce_queue)
-        self._queue_after_id = None
-        self._build_layout()
-        self.bot_controller.start()
-        self._process_rrs_queue()
+    root.option_add("*Background", DARK_GREY)
+    root.option_add("*Foreground", TEXT_COLOR)
+    root.option_add("*Label*Background", DARK_GREY)
+    root.option_add("*Entry*Background", INPUT_GREY)
+    root.option_add("*Entry*Foreground", TEXT_COLOR)
+    root.option_add("*Text*Background", INPUT_GREY)
+    root.option_add("*Text*Foreground", TEXT_COLOR)
 
-    def _build_layout(self):
-        main = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashrelief=tk.RAISED, bg=DARK_GREY)
-        main.pack(fill=tk.BOTH, expand=True)
+    style.configure(".", background=DARK_GREY, foreground=TEXT_COLOR)
+    style.configure("TFrame", background=DARK_GREY)
+    style.configure("TLabel", background=DARK_GREY, foreground=TEXT_COLOR)
+    style.configure("TButton", background=PANEL_GREY, foreground=TEXT_COLOR)
+    style.map("TButton", background=[("active", "#4A4A4A")])
+    style.configure("TEntry", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+    style.configure("TSpinbox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+    style.configure("TCombobox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+    style.configure("TNotebook", background=DARK_GREY, borderwidth=0)
+    style.configure("TNotebook.Tab", background=PANEL_GREY, foreground=TEXT_COLOR, padding=(12, 6))
+    style.map("TNotebook.Tab", background=[("selected", "#4A4A4A")])
+    style.configure("TLabelframe", background=DARK_GREY, foreground=TEXT_COLOR)
+    style.configure("TLabelframe.Label", background=DARK_GREY, foreground=TEXT_COLOR)
+    style.configure("Treeview", background=INPUT_GREY, fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+    style.map("Treeview", background=[("selected", "#4A4A4A")], foreground=[("selected", TEXT_COLOR)])
+    style.configure("Treeview.Heading", background=PANEL_GREY, foreground=TEXT_COLOR)
+    style.configure("Horizontal.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
+    style.configure("Vertical.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
 
-        top = ttk.Frame(main)
-        self.avwap_gui = MasterAvwapGUI(top, standalone=False)
-        main.add(top, stretch="always", minsize=620)
 
-        bottom = tk.Frame(main, bg=DARK_GREY)
-        controls = ttk.Frame(bottom)
-        controls.pack(fill=tk.X, padx=8, pady=(8, 2))
+def choose_gui_mode() -> str:
+    selection = {"mode": "full"}
 
-        ttk.Label(controls, text="BounceBot:").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Label(controls, textvariable=self.bot_controller.status_var).pack(side=tk.LEFT)
-        ttk.Label(controls, textvariable=self.bot_controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
-        ttk.Button(controls, text="Reconnect", command=self.bot_controller.restart).pack(side=tk.RIGHT)
+    picker = tk.Tk()
+    picker.title("Consolidated GUI Mode")
+    picker.geometry("400x170")
+    picker.configure(bg=DARK_GREY)
+    picker.resizable(False, False)
 
-        content_pane = tk.PanedWindow(bottom, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=DARK_GREY)
-        content_pane.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+    tk.Label(
+        picker,
+        text="Choose startup mode",
+        bg=DARK_GREY,
+        fg=TEXT_COLOR,
+        font=("Arial", 12, "bold"),
+    ).pack(pady=(18, 10))
 
-        self.alerts_panel = self._create_alerts_panel(content_pane)
-        content_pane.add(self.alerts_panel["container"], stretch="always", minsize=420)
+    tk.Label(
+        picker,
+        text=(
+            "Full mode includes all BounceBot controls and the full Master AVWAP manager.\n"
+            "Simple mode uses the laptop BounceBot layout plus a focused AVWAP scan tab."
+        ),
+        bg=DARK_GREY,
+        fg=TEXT_COLOR,
+        justify=tk.CENTER,
+    ).pack(pady=(0, 14))
 
-        self.rrs_panel = create_rrs_confirmed_panel(
-            content_pane,
-            bot_instance=self.bot_controller.gui_proxy,
-            dark_grey=DARK_GREY,
-            text_color=TEXT_COLOR,
-        )
-        content_pane.add(self.rrs_panel["container"], stretch="always", minsize=420)
-        main.add(bottom, stretch="always", minsize=320)
+    button_row = tk.Frame(picker, bg=DARK_GREY)
+    button_row.pack()
 
-        self._apply_dark_widget_theme()
+    def select_mode(mode: str) -> None:
+        selection["mode"] = mode
+        picker.destroy()
 
-    def _configure_theme(self):
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
+    tk.Button(button_row, text="Full", width=12, command=lambda: select_mode("full")).pack(side=tk.LEFT, padx=8)
+    tk.Button(button_row, text="Simple", width=12, command=lambda: select_mode("simple")).pack(side=tk.LEFT, padx=8)
 
-        self.root.option_add("*Background", DARK_GREY)
-        self.root.option_add("*Foreground", TEXT_COLOR)
-        self.root.option_add("*Label*Background", DARK_GREY)
-        self.root.option_add("*Entry*Background", INPUT_GREY)
-        self.root.option_add("*Entry*Foreground", TEXT_COLOR)
-        self.root.option_add("*Text*Background", INPUT_GREY)
-        self.root.option_add("*Text*Foreground", TEXT_COLOR)
-
-        style.configure(".", background=DARK_GREY, foreground=TEXT_COLOR)
-        style.configure("TFrame", background=DARK_GREY)
-        style.configure("TLabel", background=DARK_GREY, foreground=TEXT_COLOR)
-        style.configure("TButton", background=PANEL_GREY, foreground=TEXT_COLOR)
-        style.map("TButton", background=[("active", "#4A4A4A")])
-        style.configure("TEntry", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
-        style.configure("TSpinbox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
-        style.configure("TCombobox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
-        style.configure("TNotebook", background=DARK_GREY, borderwidth=0)
-        style.configure("TNotebook.Tab", background=PANEL_GREY, foreground=TEXT_COLOR)
-        style.map("TNotebook.Tab", background=[("selected", "#4A4A4A")])
-        style.configure("TLabelframe", background=DARK_GREY, foreground=TEXT_COLOR)
-        style.configure("TLabelframe.Label", background=DARK_GREY, foreground=TEXT_COLOR)
-        style.configure("Treeview", background=INPUT_GREY, fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
-        style.map("Treeview", background=[("selected", "#4A4A4A")], foreground=[("selected", TEXT_COLOR)])
-        style.configure("Treeview.Heading", background=PANEL_GREY, foreground=TEXT_COLOR)
-        style.configure("Horizontal.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
-        style.configure("Vertical.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
-
-    def _create_alerts_panel(self, parent: tk.Misc) -> dict[str, Any]:
-        alerts_container = tk.Frame(parent, bg=DARK_GREY)
-
-        header = ttk.Label(alerts_container, text="BounceBot Alerts")
-        header.pack(anchor="w", padx=8, pady=(8, 2))
-
-        text_area = scrolledtext.ScrolledText(
-            alerts_container,
-            wrap=tk.WORD,
-            width=70,
-            height=18,
-            font=("Courier", 11),
-            state="disabled",
-            bg=INPUT_GREY,
-            fg=TEXT_COLOR,
-        )
-        text_area.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-
-        text_area.tag_config("green", foreground="#50FA7B", font=("Courier", 11))
-        text_area.tag_config("red", foreground="#FF5555", font=("Courier", 11))
-        text_area.tag_config("pink_symbol", foreground="#FF79C6", font=("Courier", 11, "bold"))
-        text_area.tag_config("orange_symbol", foreground="#FFB86C", font=("Courier", 11, "bold"))
-        text_area.tag_config("blue", foreground="#8BE9FD", font=("Courier", 11))
-        text_area.tag_config("candle_line", foreground="#BD93F9", overstrike=1)
-
-        return {"container": alerts_container, "text": text_area}
-
-    def _append_alert(self, msg: str, tag: str) -> None:
-        text_area = self.alerts_panel["text"]
-        text_area.config(state="normal")
-        timestamp = datetime.now().strftime("%H:%M:%S")
-
-        if "Bounce confirmed" in msg:
-            parts = msg.split(":", 1)
-            if len(parts) == 2:
-                symbol = parts[0].strip()
-                rest = ":" + parts[1]
-                text_area.insert(tk.END, f"{timestamp} - ", tag)
-                if "(long)" in rest:
-                    text_area.insert(tk.END, symbol, "pink_symbol")
-                    text_area.insert(tk.END, rest + "\n", "green")
-                elif "(short)" in rest:
-                    text_area.insert(tk.END, symbol, "orange_symbol")
-                    text_area.insert(tk.END, rest + "\n", "red")
-                else:
-                    text_area.insert(tk.END, f"{msg}\n", tag)
-            else:
-                text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
-        else:
-            text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
-
-        text_area.config(state="disabled")
-        text_area.see(tk.END)
-
-    def _apply_dark_widget_theme(self):
-        dark_defaults = {
-            "bg": DARK_GREY,
-            "fg": TEXT_COLOR,
-            "insertbackground": TEXT_COLOR,
-            "highlightbackground": DARK_GREY,
-            "highlightcolor": PANEL_GREY,
-            "selectbackground": "#4A4A4A",
-            "selectforeground": TEXT_COLOR,
-        }
-        input_overrides = {"bg": INPUT_GREY, "fg": TEXT_COLOR}
-
-        def _apply(widget):
-            for key, val in dark_defaults.items():
-                try:
-                    widget.configure(**{key: val})
-                except tk.TclError:
-                    pass
-
-            if isinstance(widget, (tk.Text, tk.Listbox, tk.Entry, tk.Spinbox)):
-                for key, val in input_overrides.items():
-                    try:
-                        widget.configure(**{key: val})
-                    except tk.TclError:
-                        pass
-
-            if isinstance(widget, tk.Button):
-                try:
-                    widget.configure(bg=PANEL_GREY, activebackground="#4A4A4A", relief=tk.RAISED)
-                except tk.TclError:
-                    pass
-
-            for child in widget.winfo_children():
-                _apply(child)
-
-        _apply(self.root)
-
-    def _process_rrs_queue(self):
-        while True:
-            try:
-                msg, tag = self.rrs_queue.get_nowait()
-            except queue.Empty:
-                break
-
-            if tag == "rrs_status":
-                self.rrs_panel["rrs_status_var"].set(str(msg))
-            elif tag == "rrs_snapshot":
-                self.rrs_panel["render_rrs_snapshot"](msg)
-
-        while True:
-            try:
-                msg, tag = self.bounce_queue.get_nowait()
-            except queue.Empty:
-                break
-
-            self._append_alert(str(msg), str(tag))
-
-        self.bot_controller.refresh_active_bounces()
-        self._queue_after_id = self.root.after(150, self._process_rrs_queue)
-
-    def on_close(self):
-        try:
-            if self._queue_after_id:
-                self.root.after_cancel(self._queue_after_id)
-            self.bot_controller.stop()
-        finally:
-            self.root.destroy()
+    picker.protocol("WM_DELETE_WINDOW", lambda: select_mode("full"))
+    picker.mainloop()
+    return selection["mode"]
 
 
 class BounceBotController:
-    """Lifecycle + GUI bridge for BounceBot in the consolidated window."""
-
     class GUIProxy:
         def __init__(self, controller: "BounceBotController"):
             self._controller = controller
-            self.rrs_threshold = 2.0
-            self.rrs_timeframe_key = "5m"
+            self.rrs_threshold = controller.rrs_threshold
+            self.rrs_timeframe_key = controller.rrs_timeframe_key
 
         def set_rrs_threshold(self, value: float) -> None:
-            self.rrs_threshold = float(value)
-            self._controller._forward_call("set_rrs_threshold", value)
+            self._controller.set_rrs_threshold(value)
 
         def set_rrs_timeframe(self, key: str) -> None:
-            self.rrs_timeframe_key = key
-            self._controller._forward_call("set_rrs_timeframe", key)
+            self._controller.set_rrs_timeframe(key)
 
-    def __init__(self, rrs_queue: queue.Queue, bounce_queue: queue.Queue):
-        self.rrs_queue = rrs_queue
-        self.bounce_queue = bounce_queue
+        def set_market_environment(self, env_key: str) -> None:
+            self._controller.set_market_environment(env_key)
+
+        def get_market_environment(self) -> str:
+            return self._controller.get_market_environment()
+
+    def __init__(self, include_approaching: bool):
+        self.include_approaching = include_approaching
+        self.rrs_queue: queue.Queue = queue.Queue()
+        self.bounce_queue: queue.Queue = queue.Queue()
         self.status_var = tk.StringVar(value="starting...")
+        self.connection_var = tk.StringVar(value="IB: disconnected")
         self.active_bounce_var = tk.StringVar(value="active bounces: 0")
         self.bot_instance = None
         self._lock = threading.Lock()
+
+        self.rrs_threshold = 2.0
+        self.rrs_timeframe_key = "5m"
+        self.market_environment = "bullish_strong"
+        self.scanning_enabled = True
+        self.bounce_type_settings = dict(BOUNCE_TYPE_DEFAULTS)
         self.gui_proxy = self.GUIProxy(self)
 
-    def _forward_call(self, method_name: str, *args: Any) -> None:
+    def _with_bot(self, callback):
         with self._lock:
             bot = self.bot_instance
-        if bot:
-            getattr(bot, method_name)(*args)
+        if bot is None:
+            return None
+        return callback(bot)
 
-    def _emit(self, message: str, tag: str = "rrs_status") -> None:
-        self.rrs_queue.put((message, tag))
+    def _sync_state_from_bot(self, bot) -> None:
+        self.rrs_threshold = float(getattr(bot, "rrs_threshold", self.rrs_threshold))
+        self.rrs_timeframe_key = str(getattr(bot, "rrs_timeframe_key", self.rrs_timeframe_key))
+        self.market_environment = str(bot.get_market_environment())
+        self.scanning_enabled = bool(bot.is_scanning_enabled())
+        for bounce_key in self.bounce_type_settings:
+            self.bounce_type_settings[bounce_key] = bool(bot.is_bounce_type_enabled(bounce_key))
+        self.gui_proxy.rrs_threshold = self.rrs_threshold
+        self.gui_proxy.rrs_timeframe_key = self.rrs_timeframe_key
+
+    def _apply_saved_state(self, bot) -> None:
+        bot.set_rrs_threshold(self.rrs_threshold)
+        bot.set_rrs_timeframe(self.rrs_timeframe_key)
+        bot.set_market_environment(self.market_environment)
+        bot.set_scanning_enabled(self.scanning_enabled)
+        for bounce_key, enabled in self.bounce_type_settings.items():
+            bot.set_bounce_type_enabled(bounce_key, enabled)
+
+    def _emit(self, message: str) -> None:
         self.status_var.set(message)
 
-    def refresh_active_bounces(self) -> None:
-        """Pull active Master AVWAP bounce symbols from BounceBot and show count in GUI."""
-        with self._lock:
-            bot = self.bot_instance
-        if not bot:
-            self.active_bounce_var.set("active bounces: 0")
-            return
-        active_bounces = bot.find_active_master_avwap_bounces()
-        count = len(active_bounces)
-        self.active_bounce_var.set(f"active bounces: {count}")
-
-    def _make_callback(self) -> Callable[[Any, str], None]:
+    def _make_callback(self):
         def gui_callback(message, tag):
             if tag.startswith("rrs"):
                 self.rrs_queue.put((message, tag))
-            elif tag == "approaching" or tag.startswith("approaching_"):
                 return
-            elif tag == "blue" and "removed from" in str(message):
+            if tag == "blue" and "removed from" in str(message):
                 return
-            else:
-                self.bounce_queue.put((message, tag))
+            if not self.include_approaching and (tag == "approaching" or str(tag).startswith("approaching_")):
+                return
+            self.bounce_queue.put((message, tag))
 
         return gui_callback
 
     def start(self) -> None:
         def run_bot() -> None:
             self._emit("connecting")
+            self.connection_var.set("IB: connecting")
             try:
                 bot = run_bot_with_gui(self._make_callback())
+                self._apply_saved_state(bot)
+                self._sync_state_from_bot(bot)
                 with self._lock:
                     self.bot_instance = bot
-                self.gui_proxy.rrs_threshold = bot.rrs_threshold
-                self.gui_proxy.rrs_timeframe_key = bot.rrs_timeframe_key
                 self.refresh_active_bounces()
+                self.connection_var.set("IB: connected")
                 self._emit("connected")
             except Exception as exc:
+                self.connection_var.set("IB: disconnected")
                 self._emit(f"start failed: {exc}")
 
         threading.Thread(target=run_bot, daemon=True).start()
@@ -319,15 +251,716 @@ class BounceBotController:
                 bot.disconnect()
             except Exception:
                 pass
+        self.connection_var.set("IB: disconnected")
+        self.active_bounce_var.set("active bounces: 0")
         self._emit("stopped")
 
+    def set_rrs_threshold(self, value: float) -> None:
+        self.rrs_threshold = float(value)
+        self.gui_proxy.rrs_threshold = self.rrs_threshold
+        self._with_bot(lambda bot: bot.set_rrs_threshold(self.rrs_threshold))
 
-def launch():
+    def set_rrs_timeframe(self, key: str) -> None:
+        if key not in RRS_TIMEFRAMES:
+            return
+        self.rrs_timeframe_key = key
+        self.gui_proxy.rrs_timeframe_key = key
+        self._with_bot(lambda bot: bot.set_rrs_timeframe(key))
+
+    def set_market_environment(self, env_key: str) -> None:
+        if env_key not in MARKET_ENVIRONMENTS:
+            return
+        self.market_environment = env_key
+        self._with_bot(lambda bot: bot.set_market_environment(env_key))
+
+    def get_market_environment(self) -> str:
+        return self.market_environment
+
+    def set_bounce_type_enabled(self, bounce_type: str, enabled: bool) -> None:
+        if bounce_type not in self.bounce_type_settings:
+            return
+        self.bounce_type_settings[bounce_type] = bool(enabled)
+        self._with_bot(lambda bot: bot.set_bounce_type_enabled(bounce_type, enabled))
+
+    def is_bounce_type_enabled(self, bounce_type: str) -> bool:
+        return bool(self.bounce_type_settings.get(bounce_type, False))
+
+    def set_scanning_enabled(self, enabled: bool) -> None:
+        self.scanning_enabled = bool(enabled)
+        self._with_bot(lambda bot: bot.set_scanning_enabled(self.scanning_enabled))
+
+    def is_scanning_enabled(self) -> bool:
+        return self.scanning_enabled
+
+    def refresh_active_bounces(self) -> None:
+        def _read_count(bot):
+            return len(bot.find_active_master_avwap_bounces())
+
+        count = self._with_bot(_read_count)
+        if count is None:
+            self.active_bounce_var.set("active bounces: 0")
+            return
+        self.active_bounce_var.set(f"active bounces: {count}")
+
+    def run_manual_check(self, method_name: str, heading: str) -> None:
+        def worker() -> None:
+            with self._lock:
+                bot = self.bot_instance
+            if bot is None:
+                self.bounce_queue.put((f"{heading}: BounceBot not connected.", "red"))
+                return
+            try:
+                results = getattr(bot, method_name)()
+            except Exception as exc:
+                self.bounce_queue.put((f"{heading}: {exc}", "red"))
+                return
+
+            self.bounce_queue.put((f"=== {heading} ===", "blue"))
+            if results:
+                for result in results:
+                    self.bounce_queue.put((str(result), "green"))
+            else:
+                self.bounce_queue.put(("No symbols flagged.", "blue"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
+class BaseBounceBotPanel:
+    def __init__(self, parent: tk.Misc, controller: BounceBotController):
+        self.parent = parent
+        self.controller = controller
+        self.container = ttk.Frame(parent)
+        self._queue_after_id = None
+        self.alert_text: scrolledtext.ScrolledText | None = None
+
+    def pack(self, **kwargs) -> None:
+        self.container.pack(**kwargs)
+
+    def _create_alerts_widget(self, parent: tk.Misc, font_size: int) -> scrolledtext.ScrolledText:
+        text_area = scrolledtext.ScrolledText(
+            parent,
+            wrap=tk.WORD,
+            font=("Courier", font_size),
+            state="disabled",
+            bg=INPUT_GREY,
+            fg=TEXT_COLOR,
+            insertbackground=TEXT_COLOR,
+        )
+        configure_alert_tags(text_area, font_size=font_size)
+        return text_area
+
+    def _append_alert_with_timestamp(self, message: str, tag: str) -> None:
+        if self.alert_text is None:
+            return
+        self.alert_text.config(state="normal")
+        append_alert_message(
+            self.alert_text,
+            message,
+            tag,
+            datetime.now().strftime("%H:%M:%S"),
+        )
+        self.alert_text.config(state="disabled")
+        self.alert_text.see(tk.END)
+
+    def clear_alerts(self) -> None:
+        if self.alert_text is None:
+            return
+        self.alert_text.config(state="normal")
+        self.alert_text.delete("1.0", tk.END)
+        self.alert_text.config(state="disabled")
+
+    def start(self) -> None:
+        self.controller.start()
+        self._process_queues()
+
+    def _process_queues(self) -> None:
+        raise NotImplementedError
+
+    def on_close(self) -> None:
+        try:
+            if self._queue_after_id:
+                self.container.after_cancel(self._queue_after_id)
+        except Exception:
+            pass
+        self.controller.stop()
+
+
+class SimpleBounceBotPanel(BaseBounceBotPanel):
+    def __init__(self, parent: tk.Misc):
+        super().__init__(parent, BounceBotController(include_approaching=False))
+        self._syncing_controls = False
+        self.rrs_threshold_var = tk.DoubleVar(value=self.controller.rrs_threshold)
+        self.timeframe_var = tk.StringVar(value=self.controller.rrs_timeframe_key)
+        self.environment_var = tk.StringVar(value=self.controller.get_market_environment())
+        self._build_layout()
+        self.start()
+
+    def _build_layout(self) -> None:
+        header = ttk.Frame(self.container)
+        header.pack(fill=tk.X, padx=10, pady=(10, 8))
+
+        ttk.Label(header, text="BounceBot Simple").pack(side=tk.LEFT)
+        ttk.Label(header, textvariable=self.controller.connection_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(header, textvariable=self.controller.status_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(header, textvariable=self.controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(header, text="Reconnect", command=self.controller.restart).pack(side=tk.RIGHT)
+        ttk.Button(header, text="Disconnect", command=self.controller.stop).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(header, text="Clear", command=self.clear_alerts).pack(side=tk.RIGHT, padx=(0, 8))
+
+        controls = tk.Frame(self.container, bg=DARK_GREY)
+        controls.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        tk.Label(controls, text="RRS Sensitivity", bg=DARK_GREY, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        self.rrs_threshold_var.trace_add("write", self._on_rrs_threshold_change)
+        tk.Scale(
+            controls,
+            from_=0.0,
+            to=5.0,
+            resolution=0.1,
+            orient=tk.HORIZONTAL,
+            variable=self.rrs_threshold_var,
+            length=180,
+            bg=DARK_GREY,
+            fg=TEXT_COLOR,
+            highlightthickness=0,
+        ).pack(side=tk.LEFT, padx=(8, 14))
+
+        tk.Label(controls, text="Timeframe", bg=DARK_GREY, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        for key in ("5m", "15m", "30m", "1h"):
+            tk.Radiobutton(
+                controls,
+                text=RRS_TIMEFRAMES[key]["label"],
+                variable=self.timeframe_var,
+                value=key,
+                indicatoron=0,
+                command=self._on_timeframe_change,
+                padx=6,
+                pady=2,
+                bg=DARK_GREY,
+                fg=TEXT_COLOR,
+                selectcolor="#444444",
+                activebackground="#444444",
+                activeforeground=TEXT_COLOR,
+            ).pack(side=tk.LEFT, padx=2)
+
+        env_frame = tk.Frame(self.container, bg=DARK_GREY)
+        env_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+        tk.Label(env_frame, text="Market Environment", bg=DARK_GREY, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=(0, 8))
+        for key, info in MARKET_ENVIRONMENTS.items():
+            tk.Radiobutton(
+                env_frame,
+                text=info["label"],
+                variable=self.environment_var,
+                value=key,
+                indicatoron=0,
+                command=self._on_environment_change,
+                padx=8,
+                pady=3,
+                bg=DARK_GREY,
+                fg=TEXT_COLOR,
+                selectcolor="#444444",
+                activebackground="#444444",
+                activeforeground=TEXT_COLOR,
+            ).pack(side=tk.LEFT, padx=2)
+
+        alerts_frame = ttk.Frame(self.container)
+        alerts_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.alert_text = self._create_alerts_widget(alerts_frame, font_size=11)
+        self.alert_text.pack(fill=tk.BOTH, expand=True)
+
+    def _sync_controls_from_controller(self) -> None:
+        self._syncing_controls = True
+        try:
+            if float(self.rrs_threshold_var.get()) != float(self.controller.rrs_threshold):
+                self.rrs_threshold_var.set(self.controller.rrs_threshold)
+            if self.timeframe_var.get() != self.controller.rrs_timeframe_key:
+                self.timeframe_var.set(self.controller.rrs_timeframe_key)
+            if self.environment_var.get() != self.controller.get_market_environment():
+                self.environment_var.set(self.controller.get_market_environment())
+        finally:
+            self._syncing_controls = False
+
+    def _on_rrs_threshold_change(self, *_args) -> None:
+        if self._syncing_controls:
+            return
+        self.controller.set_rrs_threshold(self.rrs_threshold_var.get())
+
+    def _on_timeframe_change(self) -> None:
+        if self._syncing_controls:
+            return
+        self.controller.set_rrs_timeframe(self.timeframe_var.get())
+
+    def _on_environment_change(self) -> None:
+        if self._syncing_controls:
+            return
+        self.controller.set_market_environment(self.environment_var.get())
+
+    def _process_queues(self) -> None:
+        self._sync_controls_from_controller()
+
+        while True:
+            try:
+                message, tag = self.controller.rrs_queue.get_nowait()
+            except queue.Empty:
+                break
+            if tag == "rrs_status":
+                self.controller.status_var.set(str(message))
+
+        while True:
+            try:
+                message, tag = self.controller.bounce_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._append_alert_with_timestamp(str(message), str(tag))
+
+        self.controller.refresh_active_bounces()
+        self._queue_after_id = self.container.after(150, self._process_queues)
+
+
+class FullBounceBotPanel(BaseBounceBotPanel):
+    def __init__(self, parent: tk.Misc):
+        super().__init__(parent, BounceBotController(include_approaching=True))
+        self.toggle_vars: dict[str, tk.BooleanVar] = {}
+        self.scanning_button_text = tk.StringVar(value="Stop Scanning")
+        self._build_layout()
+        self.start()
+
+    def _build_layout(self) -> None:
+        header = ttk.Frame(self.container)
+        header.pack(fill=tk.X, padx=10, pady=(10, 8))
+
+        ttk.Label(header, text="BounceBot Full").pack(side=tk.LEFT)
+        ttk.Label(header, textvariable=self.controller.connection_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(header, textvariable=self.controller.status_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(header, textvariable=self.controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(header, text="Reconnect", command=self.controller.restart).pack(side=tk.RIGHT)
+        ttk.Button(header, text="Clear", command=self.clear_alerts).pack(side=tk.RIGHT, padx=(0, 8))
+
+        button_frame = tk.Frame(self.container, bg=DARK_GREY)
+        button_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        tk.Button(
+            button_frame,
+            text="Check DVWAP Touches",
+            command=lambda: self.controller.run_manual_check("check_dynamic_vwap_touches", "DVWAP Touch Check Results"),
+            relief=tk.RAISED,
+            padx=10,
+            bg=PANEL_GREY,
+            fg=TEXT_COLOR,
+        ).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(
+            button_frame,
+            text="Check DVWAP2 Touches",
+            command=lambda: self.controller.run_manual_check("check_dynamic_vwap2_touches", "DVWAP2 Touch Check Results"),
+            relief=tk.RAISED,
+            padx=10,
+            bg=PANEL_GREY,
+            fg=TEXT_COLOR,
+        ).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(
+            button_frame,
+            textvariable=self.scanning_button_text,
+            command=self._toggle_scanning,
+            relief=tk.RAISED,
+            padx=10,
+            bg=PANEL_GREY,
+            fg=TEXT_COLOR,
+        ).pack(side=tk.LEFT, padx=5)
+
+        content_pane = tk.PanedWindow(self.container, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=DARK_GREY)
+        content_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+
+        alerts_frame = tk.Frame(content_pane, bg=DARK_GREY)
+        tk.Label(alerts_frame, text="BounceBot Alerts", bg=DARK_GREY, fg=TEXT_COLOR).pack(anchor="w", padx=5, pady=(6, 2))
+        self.alert_text = self._create_alerts_widget(alerts_frame, font_size=11)
+        self.alert_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        content_pane.add(alerts_frame, stretch="always")
+
+        self.rrs_panel = create_rrs_confirmed_panel(
+            content_pane,
+            bot_instance=self.controller.gui_proxy,
+            dark_grey=DARK_GREY,
+            text_color=TEXT_COLOR,
+        )
+        content_pane.add(self.rrs_panel["container"], stretch="always")
+
+        bounce_toggle_frame = tk.LabelFrame(
+            self.container,
+            text="Bounce Filters",
+            bg=DARK_GREY,
+            fg=TEXT_COLOR,
+            padx=8,
+            pady=6,
+            highlightbackground="#444444",
+            highlightcolor="#444444",
+        )
+        bounce_toggle_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        for idx, bounce_key in enumerate(BOUNCE_TOGGLE_ORDER):
+            var = tk.BooleanVar(value=self.controller.is_bounce_type_enabled(bounce_key))
+            self.toggle_vars[bounce_key] = var
+            tk.Checkbutton(
+                bounce_toggle_frame,
+                text=BOUNCE_TYPE_LABELS.get(bounce_key, bounce_key),
+                variable=var,
+                command=lambda k=bounce_key, v=var: self.controller.set_bounce_type_enabled(k, bool(v.get())),
+                bg=DARK_GREY,
+                fg=TEXT_COLOR,
+                selectcolor="#444444",
+                activebackground="#444444",
+                activeforeground=TEXT_COLOR,
+            ).grid(row=idx // 4, column=idx % 4, sticky="w", padx=6, pady=2)
+
+    def _toggle_scanning(self) -> None:
+        new_state = not self.controller.is_scanning_enabled()
+        self.controller.set_scanning_enabled(new_state)
+
+    def _sync_toggle_state(self) -> None:
+        for bounce_key, var in self.toggle_vars.items():
+            expected = self.controller.is_bounce_type_enabled(bounce_key)
+            if bool(var.get()) != bool(expected):
+                var.set(expected)
+        self.scanning_button_text.set("Stop Scanning" if self.controller.is_scanning_enabled() else "Start Scanning")
+
+    def _process_queues(self) -> None:
+        self._sync_toggle_state()
+
+        while True:
+            try:
+                message, tag = self.controller.rrs_queue.get_nowait()
+            except queue.Empty:
+                break
+            if tag == "rrs_status":
+                self.controller.status_var.set(str(message))
+                self.rrs_panel["rrs_status_var"].set(str(message))
+            elif tag == "rrs_snapshot":
+                self.rrs_panel["render_rrs_snapshot"](message)
+
+        while True:
+            try:
+                message, tag = self.controller.bounce_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._append_alert_with_timestamp(str(message), str(tag))
+
+        self.controller.refresh_active_bounces()
+        self._queue_after_id = self.container.after(150, self._process_queues)
+
+
+class SimpleMasterAvwapPanel:
+    def __init__(self, parent: tk.Misc):
+        self.parent = parent
+        self.container = ttk.Frame(parent)
+        self.status_var = tk.StringVar(value="Ready")
+        self._build_layout()
+        self.refresh_output_view()
+
+    def pack(self, **kwargs) -> None:
+        self.container.pack(**kwargs)
+
+    def _build_layout(self) -> None:
+        toolbar = ttk.Frame(self.container)
+        toolbar.pack(fill=tk.X, padx=10, pady=(10, 8))
+
+        ttk.Label(toolbar, text="Master AVWAP Simple").pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side=tk.LEFT, padx=(12, 4))
+        ttk.Button(toolbar, text="Refresh Output", command=self.refresh_output_view).pack(side=tk.LEFT, padx=4)
+
+        hint = ttk.Label(
+            self.container,
+            text="Focused on longs.txt / shorts.txt AVWAP event searches. Nothing auto-runs; use Scan Now when you want it.",
+        )
+        hint.pack(anchor="w", padx=10, pady=(0, 8))
+
+        self.text_area = scrolledtext.ScrolledText(
+            self.container,
+            wrap=tk.WORD,
+            font=("Courier New", 10),
+            bg=INPUT_GREY,
+            fg=TEXT_COLOR,
+            insertbackground=TEXT_COLOR,
+        )
+        self.text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+
+        status = ttk.Label(self.container, textvariable=self.status_var, relief="sunken", anchor="w")
+        status.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+    def _read_text_file(self, path: Path) -> str:
+        if not path.exists():
+            return f"[Missing file] {path.name}"
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            return f"[Error reading {path.name}] {exc}"
+
+    def refresh_output_view(self) -> None:
+        combined = (
+            "MASTER AVWAP PRIORITY SETUPS\n"
+            + "=" * 80
+            + "\n"
+            + (self._read_text_file(PRIORITY_SETUPS_FILE) or "No priority setup output yet.")
+            + "\n\n"
+            + "MASTER AVWAP EVENT TICKERS\n"
+            + "=" * 80
+            + "\n"
+            + (self._read_text_file(EVENT_TICKERS_FILE) or "No event ticker output yet.")
+            + "\n\n"
+            + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
+            + "=" * 80
+            + "\n"
+            + (self._read_text_file(STDEV_RANGE_FILE) or "No stdev output yet.")
+            + "\n"
+        )
+        self.text_area.configure(state="normal")
+        self.text_area.delete("1.0", tk.END)
+        self.text_area.insert("1.0", combined)
+        self.text_area.configure(state="disabled")
+
+    def _run_background(self, target, running_msg: str, done_msg: str) -> None:
+        self.status_var.set(running_msg)
+
+        def task() -> None:
+            try:
+                target()
+                self.container.after(0, lambda: self.status_var.set(done_msg))
+                self.container.after(0, self.refresh_output_view)
+            except Exception as exc:
+                self.container.after(0, lambda: self.status_var.set(f"Error: {exc}"))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def run_master_once(self) -> None:
+        self._run_background(
+            run_master,
+            "Running Master AVWAP scan...",
+            "Master AVWAP scan complete.",
+        )
+
+
+class WatchlistEditorPanel:
+    def __init__(self, parent: tk.Misc, title: str, path: Path, on_symbols_saved):
+        self.parent = parent
+        self.title = title
+        self.path = path
+        self.on_symbols_saved = on_symbols_saved
+        self.container = ttk.Frame(parent)
+        self._loading = False
+        self._save_after_id = None
+        self._build_layout()
+        self.refresh_from_disk()
+
+    def pack(self, **kwargs) -> None:
+        self.container.pack(**kwargs)
+
+    def _build_layout(self) -> None:
+        header = ttk.Frame(self.container)
+        header.pack(fill=tk.X, padx=10, pady=(10, 6))
+
+        ttk.Label(header, text=self.title).pack(side=tk.LEFT)
+        ttk.Button(header, text="Refresh", command=self.refresh_from_disk).pack(side=tk.RIGHT)
+        ttk.Button(header, text="Copy", command=self.copy_symbols).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(header, text="Paste", command=self.paste_symbols).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(header, text="Dedupe", command=self.force_save).pack(side=tk.RIGHT, padx=(0, 6))
+
+        hint = ttk.Label(self.container, text=f"{self.path.name} auto-saves and removes duplicates.")
+        hint.pack(anchor="w", padx=10, pady=(0, 6))
+
+        self.text_area = scrolledtext.ScrolledText(
+            self.container,
+            wrap=tk.WORD,
+            font=("Courier New", 10),
+            bg=INPUT_GREY,
+            fg=TEXT_COLOR,
+            insertbackground=TEXT_COLOR,
+        )
+        self.text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.text_area.bind("<<Modified>>", self._on_modified)
+
+    def _normalize_symbols(self, raw_text: str) -> list[str]:
+        symbols: list[str] = []
+        seen = set()
+        for line in raw_text.splitlines():
+            upper = line.strip().upper()
+            if not upper or upper.startswith("SYMBOLS FROM TC2000"):
+                continue
+            for symbol in WATCHLIST_SYMBOL_RE.findall(upper):
+                if symbol not in seen:
+                    seen.add(symbol)
+                    symbols.append(symbol)
+        return symbols
+
+    def _set_text_from_symbols(self, symbols: list[str]) -> None:
+        text = "\n".join(symbols)
+        self._loading = True
+        try:
+            self.text_area.delete("1.0", tk.END)
+            if text:
+                self.text_area.insert("1.0", text)
+            self.text_area.edit_modified(False)
+        finally:
+            self._loading = False
+
+    def _write_symbols(self, symbols: list[str], notify: bool) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("\n".join(symbols), encoding="utf-8")
+        self._set_text_from_symbols(symbols)
+        if notify:
+            self.on_symbols_saved(self, symbols)
+
+    def _save_current(self, notify: bool) -> None:
+        self._save_after_id = None
+        symbols = self._normalize_symbols(self.text_area.get("1.0", tk.END))
+        self._write_symbols(symbols, notify=notify)
+
+    def _on_modified(self, _event=None) -> None:
+        if self._loading or not self.text_area.edit_modified():
+            return
+        self.text_area.edit_modified(False)
+        if self._save_after_id:
+            self.container.after_cancel(self._save_after_id)
+        self._save_after_id = self.container.after(250, lambda: self._save_current(notify=True))
+
+    def refresh_from_disk(self) -> None:
+        if not self.path.exists():
+            self.path.write_text("", encoding="utf-8")
+        symbols = self._normalize_symbols(self.path.read_text(encoding="utf-8"))
+        self._write_symbols(symbols, notify=False)
+
+    def force_save(self) -> None:
+        if self._save_after_id:
+            self.container.after_cancel(self._save_after_id)
+            self._save_after_id = None
+        self._save_current(notify=True)
+
+    def copy_symbols(self) -> None:
+        symbols = self._normalize_symbols(self.text_area.get("1.0", tk.END))
+        self.container.clipboard_clear()
+        self.container.clipboard_append(", ".join(symbols))
+
+    def paste_symbols(self) -> None:
+        try:
+            payload = self.container.clipboard_get()
+        except tk.TclError:
+            return
+        current_symbols = self._normalize_symbols(self.text_area.get("1.0", tk.END))
+        incoming_symbols = self._normalize_symbols(str(payload))
+        merged = []
+        seen = set()
+        for symbol in current_symbols + incoming_symbols:
+            if symbol not in seen:
+                seen.add(symbol)
+                merged.append(symbol)
+        self._write_symbols(merged, notify=True)
+
+    def remove_symbols(self, symbols_to_remove: set[str]) -> None:
+        current_symbols = self._normalize_symbols(self.text_area.get("1.0", tk.END))
+        filtered = [symbol for symbol in current_symbols if symbol not in symbols_to_remove]
+        if filtered != current_symbols:
+            self._write_symbols(filtered, notify=False)
+
+
+class WatchlistEditorArea:
+    def __init__(self, parent: tk.Misc):
+        self.parent = parent
+        self.container = ttk.Frame(parent)
+        self._build_layout()
+
+    def pack(self, **kwargs) -> None:
+        self.container.pack(**kwargs)
+
+    def _build_layout(self) -> None:
+        pane = tk.PanedWindow(self.container, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=DARK_GREY)
+        pane.pack(fill=tk.BOTH, expand=True)
+
+        longs_frame = ttk.Frame(pane)
+        shorts_frame = ttk.Frame(pane)
+
+        self.longs_panel = WatchlistEditorPanel(longs_frame, "Longs Watchlist", LONGS_FILE, self._handle_symbols_saved)
+        self.longs_panel.pack(fill=tk.BOTH, expand=True)
+
+        self.shorts_panel = WatchlistEditorPanel(shorts_frame, "Shorts Watchlist", SHORTS_FILE, self._handle_symbols_saved)
+        self.shorts_panel.pack(fill=tk.BOTH, expand=True)
+
+        pane.add(longs_frame, stretch="always")
+        pane.add(shorts_frame, stretch="always")
+
+    def _handle_symbols_saved(self, source_panel: WatchlistEditorPanel, symbols: list[str]) -> None:
+        peer = self.shorts_panel if source_panel is self.longs_panel else self.longs_panel
+        peer.remove_symbols(set(symbols))
+
+
+class ConsolidatedTradingGUI:
+    def __init__(self, root: tk.Tk, mode: str):
+        self.root = root
+        self.mode = mode
+        self.root.title("Consolidated Trading GUI")
+        self.root.geometry("1880x1040" if mode == "full" else "1380x900")
+        self.root.configure(bg=DARK_GREY)
+        configure_theme(self.root)
+
+        self.bounce_panel: BaseBounceBotPanel | None = None
+        self._build_layout()
+
+    def _build_layout(self) -> None:
+        main_pane = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashrelief=tk.RAISED, bg=DARK_GREY)
+        main_pane.pack(fill=tk.BOTH, expand=True)
+
+        notebook = ttk.Notebook(main_pane)
+
+        bounce_tab = ttk.Frame(notebook)
+        notebook.add(bounce_tab, text="BounceBot")
+
+        master_tab = ttk.Frame(notebook)
+        notebook.add(master_tab, text="Master AVWAP")
+
+        if self.mode == "full":
+            self.bounce_panel = FullBounceBotPanel(bounce_tab)
+            self.bounce_panel.pack(fill=tk.BOTH, expand=True)
+            self.avwap_gui = MasterAvwapGUI(master_tab, standalone=False)
+        else:
+            self.bounce_panel = SimpleBounceBotPanel(bounce_tab)
+            self.bounce_panel.pack(fill=tk.BOTH, expand=True)
+            self.simple_avwap_panel = SimpleMasterAvwapPanel(master_tab)
+            self.simple_avwap_panel.pack(fill=tk.BOTH, expand=True)
+
+        main_pane.add(notebook, stretch="always")
+
+        watchlist_container = ttk.Frame(main_pane)
+        self.watchlist_area = WatchlistEditorArea(watchlist_container)
+        self.watchlist_area.pack(fill=tk.BOTH, expand=True)
+        main_pane.add(watchlist_container)
+
+    def on_close(self) -> None:
+        try:
+            if self.bounce_panel:
+                self.bounce_panel.on_close()
+        finally:
+            self.root.destroy()
+
+
+def launch(mode: str = "prompt") -> None:
+    if mode == "prompt":
+        mode = choose_gui_mode()
+
     root = tk.Tk()
-    app = ConsolidatedTradingGUI(root)
+    app = ConsolidatedTradingGUI(root, mode=mode)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Launch the consolidated BounceBot + Master AVWAP GUI.")
+    parser.add_argument(
+        "--mode",
+        choices=("prompt", "full", "simple"),
+        default="prompt",
+        help="Choose GUI startup mode.",
+    )
+    args = parser.parse_args()
+    launch(mode=args.mode)
+
+
 if __name__ == "__main__":
-    launch()
+    main()
