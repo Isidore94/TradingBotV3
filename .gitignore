@@ -1,1 +1,17 @@
 .venv/
+.tmp.driveupload/
+scripts/__pycache__/
+scripts/bounce_bot_backup_before_chop_filters_20260306.py
+data/avwap_signals.csv
+data/d1_features.csv
+data/earnings_cache.json
+data/earnings_dates_cache.json
+data/intraday_bounces.csv
+data/master_avwap_ai_state.json
+data/master_avwap_history.json
+data/prev_earnings_cache.json
+logs/*.log
+logs/*.txt
+logs/*.csv
+output/*
+!output/.gitkeep

@@ -167,6 +167,41 @@ DEFAULT_SECTOR_ETF_MAP = {
     "utilities": "XLU",
 }
 
+MARKET_ENVIRONMENTS = {
+    "bearish_strong": {"label": "Bearish Strong"},
+    "bearish_weak": {"label": "Bearish Weak"},
+    "bullish_strong": {"label": "Bullish Strong"},
+    "bullish_weak": {"label": "Bullish Weak"},
+}
+MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
+MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
+ENVIRONMENT_HIGHLIGHT_LIMIT = 6
+SPY_COMPRESSION_THRESHOLD = 0.35
+SPY_UP_THRESHOLD = 0.20
+IMPULSE_RRS_PROFILE_LENGTH = 6
+IMPULSE_RRS_RECENT_PHASE_BARS = 3
+IMPULSE_RRS_FAVORED_TREND_RATIO = 0.60
+IMPULSE_RRS_FAVORED_EXCESS_RATIO = 0.20
+IMPULSE_RRS_UNFAVORED_TREND_RATIO = 0.90
+IMPULSE_RRS_UNFAVORED_EXCESS_RATIO = 0.45
+IMPULSE_RRS_COUNTER_RRS = 0.35
+IMPULSE_RRS_COUNTER_MOVE_RATIO = 0.20
+IMPULSE_RRS_COUNTER_BARS_REQUIRED = 2
+BOUNCE_LEVEL_LOOKBACK_BARS = 8
+BOUNCE_LEVEL_BAND_ATR = 0.12
+BOUNCE_MAX_NEAR_BARS = 4
+BOUNCE_MAX_CROSSES = 2
+BOUNCE_MIN_SEPARATION_ATR = 0.45
+BOUNCE_MIN_LEVEL_SLOPE_ATR = 0.04
+BOUNCE_LEVEL_SLOPE_LOOKBACK = 3
+BOUNCE_ONE_SIDED_BARS = 4
+BOUNCE_ONE_SIDED_RATIO = 0.75
+BOUNCE_REACTION_LOOKBACK_BARS = 6
+BOUNCE_MIN_BODY_TO_MEDIAN = 1.10
+BOUNCE_MIN_RANGE_TO_MEDIAN = 1.05
+BOUNCE_VOLUME_LOOKBACK_BARS = 6
+BOUNCE_MIN_RELATIVE_VOLUME = 1.10
+
 
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -567,6 +602,9 @@ class BounceBot(EWrapper, EClient):
         self.latest_bars = {}
         self.latest_scan_extremes = {}
         self.latest_group_extremes = {}
+        self.market_environment = "bullish_strong"
+        self.market_environment_lock = threading.Lock()
+        self.latest_rrs_payload = None
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
         self.scanning_enabled = True
@@ -834,6 +872,291 @@ class BounceBot(EWrapper, EClient):
                 self.rrs_timeframe_key,
             )
 
+    def set_market_environment(self, env_key):
+        if env_key not in MARKET_ENVIRONMENTS:
+            return
+        with self.market_environment_lock:
+            self.market_environment = env_key
+        status_msg = f"Market environment set to {MARKET_ENVIRONMENTS[env_key]['label']}"
+        self._refresh_rrs_gui(status_msg=status_msg)
+
+    def get_market_environment(self):
+        with self.market_environment_lock:
+            return self.market_environment
+
+    def _refresh_rrs_gui(self, status_msg=None):
+        if not self.latest_rrs_payload or not self.gui_callback:
+            return
+        snapshot = self._decorate_snapshot(self.latest_rrs_payload)
+        self.gui_callback(snapshot, "rrs_snapshot")
+        if status_msg:
+            self.gui_callback(status_msg, "rrs_status")
+
+    def _decorate_snapshot(self, base_snapshot):
+        decorated = dict(base_snapshot)
+        env_key = self.get_market_environment()
+        decorated["market_environment"] = env_key
+        decorated["market_environment_label"] = MARKET_ENVIRONMENTS.get(env_key, {}).get("label", env_key)
+        decorated["environment_highlights"] = self._build_environment_highlights(
+            base_snapshot.get("symbol_context", []),
+            base_snapshot.get("spy_move_ratio"),
+        )
+        return decorated
+
+    def _build_environment_highlights(self, symbol_context, spy_ratio):
+        scenario = self.get_market_environment()
+        strong_entries = sorted(
+            [entry for entry in symbol_context if entry.get("signal") == "RS"],
+            key=lambda row: (-(row.get("excess_move_ratio") or 0.0), -row["rrs"]),
+        )
+        weak_entries = sorted(
+            [entry for entry in symbol_context if entry.get("signal") == "RW"],
+            key=lambda row: ((row.get("excess_move_ratio") or 0.0), row["rrs"]),
+        )
+        sections = []
+
+        def append_section(title, entries, tag):
+            section = self._build_section(title, entries, tag)
+            if section:
+                sections.append(section)
+
+        if scenario == "bearish_strong":
+            append_section("Weak Stocks (Bearish Strong focus)", weak_entries, "rrs_rw")
+        elif scenario == "bearish_weak":
+            append_section("Weak Stocks (Bearish Weak focus)", weak_entries, "rrs_rw")
+            append_section("Strong Stocks (Bearish Weak focus)", strong_entries, "rrs_rs")
+        elif scenario == "bullish_strong":
+            append_section("Strong Stocks (Bullish Strong focus)", strong_entries, "rrs_rs")
+        elif scenario == "bullish_weak":
+            append_section("Strong Stocks (Bullish Weak focus)", strong_entries, "rrs_rs")
+            append_section("Weak Stocks (Bullish Weak focus)", weak_entries, "rrs_rw")
+        else:
+            append_section("Strong Stocks", strong_entries, "rrs_rs")
+            append_section("Weak Stocks", weak_entries, "rrs_rw")
+
+        spy_section = self._build_spy_section(spy_ratio, weak_entries)
+        if spy_section:
+            sections.append(spy_section)
+
+        if not sections:
+            sections.append(
+                {
+                    "title": "Environment focus",
+                    "rows": [{"text": "No RS/RW candidates available", "tag": "rrs_hdr"}],
+                    "tag": "rrs_hdr",
+                }
+            )
+        return sections
+
+    def _build_section(self, title, entries, tag):
+        if not entries:
+            return None
+        significant = [entry for entry in entries if self._is_move_significant(entry)]
+        source = significant if significant else entries
+        rows = []
+        for entry in source[:ENVIRONMENT_HIGHLIGHT_LIMIT]:
+            rows.append({"text": self._format_environment_entry(entry), "tag": tag})
+        if not rows:
+            return None
+        return {"title": title, "rows": rows, "tag": tag}
+
+    def _build_spy_section(self, spy_ratio, weak_entries):
+        if spy_ratio is None or not weak_entries:
+            return None
+        if spy_ratio >= SPY_UP_THRESHOLD:
+            title = "SPY rising / flat -> weak stocks to watch"
+        elif abs(spy_ratio) < SPY_COMPRESSION_THRESHOLD:
+            title = "SPY compressing -> weak names to monitor"
+        else:
+            return None
+        return self._build_section(title, weak_entries, "rrs_rw")
+
+    def _format_environment_entry(self, entry):
+        move_ratio = entry.get("move_ratio")
+        excess_move_ratio = entry.get("excess_move_ratio")
+        move_text = f"{move_ratio:+.2f}" if move_ratio is not None else "n/a"
+        excess_text = f"{excess_move_ratio:+.2f}" if excess_move_ratio is not None else "n/a"
+        signal = entry.get("signal", "")
+        marker = "UP" if signal == "RS" else "DN"
+        return f"{entry['symbol']} {marker} {signal} {entry['rrs']:+.2f} ER={excess_text} MR={move_text}"
+
+    def _is_move_significant(self, entry):
+        move_ratio = entry.get("move_ratio")
+        excess_move_ratio = entry.get("excess_move_ratio")
+        if move_ratio is None or excess_move_ratio is None:
+            return False
+        return (
+            abs(move_ratio) >= MIN_MOVE_RATIO_FOR_SIGNAL
+            and abs(excess_move_ratio) >= MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL
+        )
+
+    def _calc_move_ratio(self, bars, length):
+        if not bars or len(bars) < length + 1:
+            return None
+        move = bars[-1].close - bars[-(length + 1)].close
+        atr = _wilder_atr_last(bars[:-1], length)
+        if atr is None or atr == 0:
+            return None
+        return move / atr
+
+    def _build_intraday_rrs_profile(self, symbol_bars, spy_bars, length=IMPULSE_RRS_PROFILE_LENGTH):
+        if not symbol_bars or not spy_bars:
+            return []
+        aligned_sym, aligned_spy = _align_bars_with_map(symbol_bars, {bar.dt: bar for bar in spy_bars})
+        if len(aligned_sym) < length + 2 or len(aligned_spy) < length + 2:
+            return []
+
+        profile = []
+        for idx in range(length + 1, len(aligned_sym)):
+            sym_slice = aligned_sym[:idx + 1]
+            spy_slice = aligned_spy[:idx + 1]
+            rrs_value, power_index = real_relative_strength(sym_slice, spy_slice, length=length)
+            if rrs_value is None:
+                continue
+            sym_move_ratio = self._calc_move_ratio(sym_slice, length)
+            spy_move_ratio = self._calc_move_ratio(spy_slice, length)
+            excess_move_ratio = None
+            if sym_move_ratio is not None and spy_move_ratio is not None:
+                excess_move_ratio = sym_move_ratio - spy_move_ratio
+            profile.append(
+                {
+                    "dt": sym_slice[-1].dt,
+                    "rrs": rrs_value,
+                    "power_index": power_index,
+                    "move_ratio": sym_move_ratio,
+                    "spy_move_ratio": spy_move_ratio,
+                    "excess_move_ratio": excess_move_ratio,
+                }
+            )
+        return profile
+
+    def _impulse_regime_transition_ok(self, symbol, direction, profile):
+        if len(profile) < (IMPULSE_RRS_RECENT_PHASE_BARS + 2):
+            logging.debug(f"{symbol}: Insufficient RS/RW profile points for impulse regime filter.")
+            return False
+
+        env = self.get_market_environment()
+        favored_env = (
+            (direction == "long" and env.startswith("bullish"))
+            or (direction == "short" and env.startswith("bearish"))
+        )
+        weak_env = env.endswith("weak")
+
+        pre_phase = profile[:-IMPULSE_RRS_RECENT_PHASE_BARS]
+        recent_phase = profile[-IMPULSE_RRS_RECENT_PHASE_BARS:]
+        if not pre_phase or not recent_phase:
+            return False
+
+        trend_ratio_req = (
+            IMPULSE_RRS_FAVORED_TREND_RATIO if favored_env else IMPULSE_RRS_UNFAVORED_TREND_RATIO
+        )
+        excess_ratio_req = (
+            IMPULSE_RRS_FAVORED_EXCESS_RATIO if (favored_env and weak_env) else 0.0
+        )
+        if not favored_env:
+            excess_ratio_req = IMPULSE_RRS_UNFAVORED_EXCESS_RATIO
+
+        if direction == "long":
+            best_trend_ratio = max((item.get("move_ratio") for item in pre_phase if item.get("move_ratio") is not None), default=None)
+            best_excess_ratio = max((item.get("excess_move_ratio") for item in pre_phase if item.get("excess_move_ratio") is not None), default=None)
+            counter_rrs_count = sum(
+                1 for item in recent_phase
+                if (item.get("rrs") is not None and item.get("rrs") <= -IMPULSE_RRS_COUNTER_RRS)
+            )
+            counter_move_count = sum(
+                1 for item in recent_phase
+                if (item.get("move_ratio") is not None and item.get("move_ratio") <= -IMPULSE_RRS_COUNTER_MOVE_RATIO)
+            )
+            trend_ok = best_trend_ratio is not None and best_trend_ratio >= trend_ratio_req
+            excess_ok = excess_ratio_req <= 0.0 or (best_excess_ratio is not None and best_excess_ratio >= excess_ratio_req)
+        else:
+            best_trend_ratio = min((item.get("move_ratio") for item in pre_phase if item.get("move_ratio") is not None), default=None)
+            best_excess_ratio = min((item.get("excess_move_ratio") for item in pre_phase if item.get("excess_move_ratio") is not None), default=None)
+            counter_rrs_count = sum(
+                1 for item in recent_phase
+                if (item.get("rrs") is not None and item.get("rrs") >= IMPULSE_RRS_COUNTER_RRS)
+            )
+            counter_move_count = sum(
+                1 for item in recent_phase
+                if (item.get("move_ratio") is not None and item.get("move_ratio") >= IMPULSE_RRS_COUNTER_MOVE_RATIO)
+            )
+            trend_ok = best_trend_ratio is not None and best_trend_ratio <= -trend_ratio_req
+            excess_ok = excess_ratio_req <= 0.0 or (best_excess_ratio is not None and best_excess_ratio <= -excess_ratio_req)
+
+        counter_ok = (
+            counter_rrs_count >= IMPULSE_RRS_COUNTER_BARS_REQUIRED
+            and counter_move_count >= IMPULSE_RRS_COUNTER_BARS_REQUIRED
+        )
+
+        if trend_ok and excess_ok and counter_ok:
+            logging.debug(
+                f"{symbol}: Impulse RS/RW regime accepted. Env={env}, Direction={direction}, "
+                f"TrendRatio={best_trend_ratio}, ExcessRatio={best_excess_ratio}, "
+                f"CounterRRSBars={counter_rrs_count}, CounterMoveBars={counter_move_count}"
+            )
+            return True
+
+        logging.debug(
+            f"{symbol}: Rejecting impulse retest on RS/RW regime filter. Env={env}, Direction={direction}, "
+            f"TrendOK={trend_ok}, ExcessOK={excess_ok}, CounterOK={counter_ok}, "
+            f"TrendRatio={best_trend_ratio}, ExcessRatio={best_excess_ratio}, "
+            f"CounterRRSBars={counter_rrs_count}, CounterMoveBars={counter_move_count}"
+        )
+        return False
+
+    def _build_intraday_level_series_maps(self, df, current_date):
+        prepared = self._prepare_vwap_frame(df)
+        if prepared.empty:
+            return {}
+
+        today_prepared = prepared[prepared["datetime"].dt.date == current_date].copy()
+        if today_prepared.empty:
+            return {}
+
+        series_maps = {}
+
+        std_work = today_prepared.copy()
+        std_work["cum_vol"] = std_work["volume"].cumsum()
+        std_work["cum_vol_price"] = (std_work["typical_price"] * std_work["volume"]).cumsum()
+        std_work["level_value"] = std_work["cum_vol_price"] / std_work["cum_vol"]
+        series_maps["vwap"] = {
+            row["datetime"]: float(row["level_value"])
+            for _, row in std_work.iterrows()
+        }
+
+        previous_sessions = sorted(d for d in prepared["datetime"].dt.date.unique() if d < current_date)
+        if previous_sessions:
+            prev_tail = prepared[prepared["datetime"].dt.date == previous_sessions[-1]].tail(1).copy()
+            eod_source = pd.concat([prev_tail, today_prepared], ignore_index=True)
+            skip_rows = len(prev_tail)
+        else:
+            eod_source = today_prepared.copy()
+            skip_rows = 0
+
+        eod_source["cum_vol"] = eod_source["volume"].cumsum()
+        eod_source["cum_vol_price"] = (eod_source["typical_price"] * eod_source["volume"]).cumsum()
+        eod_source["level_value"] = eod_source["cum_vol_price"] / eod_source["cum_vol"]
+        series_maps["eod_vwap"] = {
+            row["datetime"]: float(row["level_value"])
+            for _, row in eod_source.iloc[skip_rows:].iterrows()
+        }
+
+        confluence_map = {}
+        dt_keys = sorted(set(series_maps["vwap"]) | set(series_maps["eod_vwap"]))
+        for dt in dt_keys:
+            std_val = series_maps["vwap"].get(dt)
+            eod_val = series_maps["eod_vwap"].get(dt)
+            if std_val is None and eod_val is None:
+                continue
+            if std_val is None:
+                confluence_map[dt] = (eod_val, eod_val)
+            elif eod_val is None:
+                confluence_map[dt] = (std_val, std_val)
+            else:
+                confluence_map[dt] = (min(std_val, eod_val), max(std_val, eod_val))
+        series_maps["vwap_eod_confluence"] = confluence_map
+        return series_maps
+
     def _load_symbol_classification_cache(self):
         if not SYMBOL_CLASSIFICATION_CACHE_FILENAME.exists():
             return
@@ -981,10 +1304,12 @@ class BounceBot(EWrapper, EClient):
 
         spy_bars = spy_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(spy_5m, timeframe_minutes)
         spy_by_dt = {bar.dt: bar for bar in spy_bars}
+        spy_move_ratio = self._calc_move_ratio(spy_bars, length)
 
         results = []
         sector_results = []
         industry_results = []
+        symbol_context = []
         all_scores = []
         all_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
         for symbol in all_symbols:
@@ -996,7 +1321,32 @@ class BounceBot(EWrapper, EClient):
             rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
             if rrs_value is None:
                 continue
+            symbol_move_ratio = self._calc_move_ratio(sym_bars, length)
+            excess_move_ratio = None
+            if symbol_move_ratio is not None and spy_move_ratio is not None:
+                excess_move_ratio = symbol_move_ratio - spy_move_ratio
             all_scores.append((symbol, rrs_value, power_index))
+            environment_signal = None
+            if rrs_value >= threshold:
+                environment_signal = "RS"
+            elif rrs_value <= -threshold:
+                environment_signal = "RW"
+
+            if environment_signal:
+                symbol_context.append(
+                    {
+                        "symbol": symbol,
+                        "signal": environment_signal,
+                        "rrs": rrs_value,
+                        "move_ratio": symbol_move_ratio,
+                        "excess_move_ratio": excess_move_ratio,
+                        "power_index": power_index,
+                        "watchlist_bias": (
+                            "long" if symbol in self.longs else "short" if symbol in self.shorts else ""
+                        ),
+                    }
+                )
+
             if symbol in self.longs and rrs_value >= threshold:
                 results.append(("RS", symbol, rrs_value, power_index))
             elif symbol in self.shorts and rrs_value <= -threshold:
@@ -1054,19 +1404,25 @@ class BounceBot(EWrapper, EClient):
             rw = sorted([r for r in rows if r[0] == "RW"], key=lambda r: r[2])
             return rs + rw
 
-        snapshot = {
+        sector_payload = _ordered(sector_results)
+        industry_payload = _ordered(industry_results)
+        snapshot_payload = {
             "timestamp": datetime.now(),
             "threshold": threshold,
             "timeframe_key": timeframe_key,
             "results": ordered_results,
-            "results_sector": _ordered(sector_results),
-            "results_industry": _ordered(industry_results),
+            "results_sector": sector_payload,
+            "results_industry": industry_payload,
             "group_strength": self.compute_group_strengths(),
+            "symbol_context": symbol_context,
+            "spy_move_ratio": spy_move_ratio,
         }
+        self.latest_rrs_payload = snapshot_payload
         if emit_gui and self.gui_callback:
-            self.gui_callback(snapshot, "rrs_snapshot")
+            decorated_snapshot = self._decorate_snapshot(snapshot_payload)
+            self.gui_callback(decorated_snapshot, "rrs_snapshot")
             self.gui_callback(
-                f"RRS scan complete ({len(ordered_results)} SPY, {len(snapshot['results_sector'])} sector, {len(snapshot['results_industry'])} industry refs)",
+                f"RRS scan complete ({len(ordered_results)} SPY, {len(sector_payload)} sector, {len(industry_payload)} industry refs)",
                 "rrs_status",
             )
 
@@ -1663,7 +2019,8 @@ class BounceBot(EWrapper, EClient):
         # Get today's candles
         current_date = df["datetime"].iloc[-1].date()
         today_df = df[df["datetime"].dt.date == current_date].copy()
-        
+        level_series_maps = self._build_intraday_level_series_maps(df, current_date)
+
         # Skip if we don't have enough candles for today
         if len(today_df) < CONSECUTIVE_CANDLES + 1:  # +1 for current candle
             logging.debug(f"{symbol}: Not enough candles for today ({len(today_df)}) to check consecutive condition")
@@ -1692,6 +2049,21 @@ class BounceBot(EWrapper, EClient):
                     intraday_impulse_atr = None
         except Exception:
             intraday_impulse_atr = None
+
+        intraday_rrs_profile = []
+        try:
+            spy_5m = self.latest_bars.get("SPY") or self.get_cached_5m_bars("SPY")
+            if spy_5m:
+                today_symbol_bars = _dedupe_bars(_bars_to_ib(today_df.to_dict("records")))
+                today_spy_bars = [bar for bar in spy_5m if bar.dt.date() == current_date]
+                intraday_rrs_profile = self._build_intraday_rrs_profile(
+                    today_symbol_bars,
+                    today_spy_bars,
+                    length=IMPULSE_RRS_PROFILE_LENGTH,
+                )
+        except Exception as exc:
+            logging.debug(f"{symbol}: Failed building intraday RS/RW profile for impulse filter: {exc}")
+            intraday_rrs_profile = []
         
         # Log the metrics being used for evaluation
         if LOGGING_MODE:
@@ -1881,6 +2253,137 @@ class BounceBot(EWrapper, EClient):
                 return True
             return False
 
+        def build_zone_bounds(zone_key, bars, fallback_low, fallback_high):
+            if bars.empty:
+                return []
+            zone_map = level_series_maps.get(zone_key, {})
+            bounds = []
+            for _, row in bars.iterrows():
+                dt = row.get("datetime")
+                if zone_key == "vwap_eod_confluence":
+                    low_high = zone_map.get(dt)
+                    if low_high is None:
+                        low_val, high_val = fallback_low, fallback_high
+                    else:
+                        low_val, high_val = low_high
+                else:
+                    value = zone_map.get(dt)
+                    if value is None:
+                        low_val = fallback_low
+                        high_val = fallback_high
+                    else:
+                        low_val = value
+                        high_val = value
+                bounds.append((row, low_val, high_val))
+            return bounds
+
+        def passes_level_quality_filter(zone_key, level_low, level_high, label):
+            min_required_bars = max(BOUNCE_ONE_SIDED_BARS, 3)
+            if len(today_df) <= min_required_bars:
+                return True
+
+            prior = today_df.iloc[-(BOUNCE_LEVEL_LOOKBACK_BARS + 1):-1].copy()
+            if len(prior) < min_required_bars:
+                return True
+
+            zone_rows = build_zone_bounds(zone_key, prior, level_low, level_high)
+            if not zone_rows:
+                return True
+
+            band = BOUNCE_LEVEL_BAND_ATR * atr
+            near_count = 0
+            crosses = 0
+            prev_state = 0
+            max_separation = 0.0
+            centers = []
+            directional_accepts = 0
+            acceptance_rows = zone_rows[-BOUNCE_ONE_SIDED_BARS:]
+
+            for idx, (row, row_low, row_high) in enumerate(zone_rows):
+                close_val = float(row["close"])
+                high_val = float(row["high"])
+                low_val = float(row["low"])
+
+                if (row_low - band) <= close_val <= (row_high + band):
+                    near_count += 1
+                    state = 0
+                elif close_val > (row_high + band):
+                    state = 1
+                else:
+                    state = -1
+
+                if prev_state != 0 and state != 0 and state != prev_state:
+                    crosses += 1
+                if state != 0:
+                    prev_state = state
+
+                centers.append((row_low + row_high) / 2.0)
+
+                if direction == "long":
+                    max_separation = max(max_separation, (high_val - row_high) / atr)
+                else:
+                    max_separation = max(max_separation, (row_low - low_val) / atr)
+
+                if idx >= len(zone_rows) - len(acceptance_rows):
+                    if direction == "long" and close_val >= (row_high - band):
+                        directional_accepts += 1
+                    elif direction == "short" and close_val <= (row_low + band):
+                        directional_accepts += 1
+
+            one_sided_ratio = directional_accepts / max(1, len(acceptance_rows))
+            one_sided_ok = one_sided_ratio >= BOUNCE_ONE_SIDED_RATIO
+            separation_ok = max_separation >= BOUNCE_MIN_SEPARATION_ATR
+
+            slope_ok = True
+            if len(centers) > BOUNCE_LEVEL_SLOPE_LOOKBACK:
+                slope_delta = (centers[-1] - centers[-1 - BOUNCE_LEVEL_SLOPE_LOOKBACK]) / atr
+                if direction == "long":
+                    slope_ok = slope_delta >= BOUNCE_MIN_LEVEL_SLOPE_ATR
+                else:
+                    slope_ok = slope_delta <= -BOUNCE_MIN_LEVEL_SLOPE_ATR
+
+            reaction_prior = today_df.iloc[-(BOUNCE_REACTION_LOOKBACK_BARS + 1):-1].copy()
+            body_ok = True
+            range_ok = True
+            if not reaction_prior.empty:
+                prior_bodies = (reaction_prior["close"] - reaction_prior["open"]).abs()
+                prior_ranges = reaction_prior["high"] - reaction_prior["low"]
+                median_body = float(prior_bodies.median()) if not prior_bodies.empty else 0.0
+                median_range = float(prior_ranges.median()) if not prior_ranges.empty else 0.0
+                current_body = abs(current_candle_data["close"] - current_candle_data["open"])
+                current_range = current_candle_data["high"] - current_candle_data["low"]
+                if median_body > 0:
+                    body_ok = current_body >= (median_body * BOUNCE_MIN_BODY_TO_MEDIAN)
+                if median_range > 0:
+                    range_ok = current_range >= (median_range * BOUNCE_MIN_RANGE_TO_MEDIAN)
+
+            volume_ok = True
+            volume_prior = today_df.iloc[-(BOUNCE_VOLUME_LOOKBACK_BARS + 1):-1].copy()
+            if not volume_prior.empty:
+                avg_volume = float(volume_prior["volume"].mean())
+                if avg_volume > 0:
+                    volume_ok = current_candle_data["volume"] >= (avg_volume * BOUNCE_MIN_RELATIVE_VOLUME)
+
+            passes = (
+                near_count <= BOUNCE_MAX_NEAR_BARS
+                and crosses <= BOUNCE_MAX_CROSSES
+                and one_sided_ok
+                and separation_ok
+                and slope_ok
+                and body_ok
+                and range_ok
+                and volume_ok
+            )
+
+            if not passes:
+                logging.debug(
+                    f"{symbol}: Rejecting {label} bounce due to chop/quality filter. "
+                    f"NearBars={near_count}, Crosses={crosses}, Separation={max_separation:.2f}, "
+                    f"OneSidedRatio={one_sided_ratio:.2f}, SlopeOK={slope_ok}, "
+                    f"BodyOK={body_ok}, RangeOK={range_ok}, VolumeOK={volume_ok}"
+                )
+            return passes
+
         # Function to check if a candle respects a level based on direction
         def respects_level(candle, level_value, direction, threshold):
             if direction == "long":
@@ -1943,7 +2446,8 @@ class BounceBot(EWrapper, EClient):
             # Check if price respected standard VWAP for consecutive candles
             respected = check_consecutive_respect(std_vwap, "Standard VWAP")
             reclaim = is_recent_reclaim(std_vwap, "Standard VWAP")
-            if (respected and is_touch_reject(std_vwap)) or reclaim:
+            quality_ok = passes_level_quality_filter("vwap", std_vwap, std_vwap, "Standard VWAP")
+            if quality_ok and ((respected and is_touch_reject(std_vwap)) or reclaim):
                 ref_levels["vwap"] = std_vwap
                 mark_trigger("vwap")
                 logging.debug(
@@ -1971,7 +2475,8 @@ class BounceBot(EWrapper, EClient):
             # Check if price respected EOD VWAP for consecutive candles
             respected = check_consecutive_respect(eod_vwap, "EOD VWAP")
             reclaim = is_recent_reclaim(eod_vwap, "EOD VWAP")
-            if (respected and is_touch_reject(eod_vwap)) or reclaim:
+            quality_ok = passes_level_quality_filter("eod_vwap", eod_vwap, eod_vwap, "EOD VWAP")
+            if quality_ok and ((respected and is_touch_reject(eod_vwap)) or reclaim):
                 ref_levels["eod_vwap"] = eod_vwap
                 mark_trigger("eod_vwap")
                 logging.debug(
@@ -1990,7 +2495,13 @@ class BounceBot(EWrapper, EClient):
                 max_allowed_spread = CONFLUENCE_MAX_SPREAD_ATR * atr
                 if level_spread <= max_allowed_spread:
                     confluence_level = max(std_vwap, eod_vwap) if direction == "long" else min(std_vwap, eod_vwap)
-                    if is_touch_reject(confluence_level) or is_recent_reclaim(confluence_level, "VWAP+EOD Confluence"):
+                    quality_ok = passes_level_quality_filter(
+                        "vwap_eod_confluence",
+                        min(std_vwap, eod_vwap),
+                        max(std_vwap, eod_vwap),
+                        "VWAP+EOD Confluence",
+                    )
+                    if quality_ok and (is_touch_reject(confluence_level) or is_recent_reclaim(confluence_level, "VWAP+EOD Confluence")):
                         ref_levels["vwap_eod_confluence"] = confluence_level
                         mark_trigger("vwap_eod_confluence")
                         ref_levels.setdefault("vwap", std_vwap)
@@ -2030,7 +2541,12 @@ class BounceBot(EWrapper, EClient):
                         and current_candle_data["close"] < current_candle_data["open"]
                     )
 
-                if interacted_zone and recovered_side and has_impulse_retest_structure():
+                if (
+                    interacted_zone
+                    and recovered_side
+                    and has_impulse_retest_structure()
+                    and self._impulse_regime_transition_ok(symbol, direction, intraday_rrs_profile)
+                ):
                     if not is_compressed_around_levels(compression_low, compression_high):
                         ref_levels["impulse_retest_vwap_eod"] = (level_low + level_high) / 2.0
                         mark_trigger("impulse_retest_vwap_eod")
@@ -2862,6 +3378,40 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
             activeforeground=text_color,
         ).pack(side=tk.LEFT, padx=2)
 
+    env_selection_var = tk.StringVar(value=bot_instance.get_market_environment())
+    env_label_var = tk.StringVar(
+        value=f"Environment: {MARKET_ENVIRONMENTS.get(env_selection_var.get(), {}).get('label', env_selection_var.get())}"
+    )
+
+    def on_environment_change():
+        selected = env_selection_var.get()
+        env_label_var.set(
+            f"Environment: {MARKET_ENVIRONMENTS.get(selected, {}).get('label', selected)}"
+        )
+        bot_instance.set_market_environment(selected)
+
+    env_mode_frame = tk.Frame(rrs_container, bg=dark_grey, pady=4)
+    env_mode_frame.pack(fill=tk.X, padx=10)
+    tk.Label(env_mode_frame, textvariable=env_label_var, fg=text_color, bg=dark_grey).pack(side=tk.LEFT)
+    env_button_frame = tk.Frame(env_mode_frame, bg=dark_grey)
+    env_button_frame.pack(side=tk.RIGHT)
+    for key, info in MARKET_ENVIRONMENTS.items():
+        tk.Radiobutton(
+            env_button_frame,
+            text=info["label"],
+            variable=env_selection_var,
+            value=key,
+            indicatoron=0,
+            command=on_environment_change,
+            padx=6,
+            pady=2,
+            bg=dark_grey,
+            fg=text_color,
+            selectcolor="#444444",
+            activebackground="#444444",
+            activeforeground=text_color,
+        ).pack(side=tk.LEFT, padx=2)
+
     rrs_frame = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
     rrs_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -2876,6 +3426,23 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
         fg=text_color,
     )
     rrs_main_text.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+
+    env_focus_frame = tk.LabelFrame(rrs_frame, text="Environment Focus", bg=dark_grey, fg=text_color)
+    env_focus_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+    env_focus_text = scrolledtext.ScrolledText(
+        env_focus_frame,
+        wrap=tk.NONE,
+        width=80,
+        height=8,
+        font=('Courier', 10),
+        state='disabled',
+        bg=dark_grey,
+        fg=text_color,
+    )
+    env_focus_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    env_focus_text.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
+    env_focus_text.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
+    env_focus_text.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
 
     rrs_compare_frame = tk.Frame(rrs_frame, bg=dark_grey)
     rrs_compare_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -2930,6 +3497,7 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
         industry_results = snapshot.get("results_industry", [])
         group_strength = snapshot.get("group_strength", {})
         timestamp = snapshot.get("timestamp", datetime.now())
+        env_label_var.set(f"Environment: {snapshot.get('market_environment_label', 'Environment')}")
 
         def render_table(widget, title, rows, local_threshold):
             selected_tf = timeframe_key
@@ -2975,6 +3543,20 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
         group_text.config(state='disabled')
         group_text.see("1.0")
 
+        env_focus_text.config(state='normal')
+        env_focus_text.delete("1.0", tk.END)
+        env_highlights = snapshot.get("environment_highlights", [])
+        env_focus_text.insert(tk.END, f"{snapshot.get('market_environment_label', 'Environment')} Focus\n", "rrs_hdr")
+        for section in env_highlights:
+            env_focus_text.insert(tk.END, f"\n{section.get('title', 'Section')}\n", "rrs_hdr")
+            rows = section.get("rows", [])
+            if not rows:
+                env_focus_text.insert(tk.END, "  None\n")
+            for row in rows:
+                env_focus_text.insert(tk.END, f"  {row.get('text', '')}\n", row.get("tag", "rrs_rs"))
+        env_focus_text.config(state='disabled')
+        env_focus_text.see("1.0")
+
     return {
         "container": rrs_container,
         "rrs_status_var": rrs_status_var,
@@ -2984,7 +3566,6 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
 
 def start_gui():
     bounce_queue = queue.Queue()
-    approaching_queue = queue.Queue()
     rrs_queue = queue.Queue()
     # Replace light_grey with dark_grey
     dark_grey = "#2E2E2E"  # Dark grey color code
@@ -2993,11 +3574,8 @@ def start_gui():
     def gui_callback(message, tag):
         if tag.startswith("rrs"):
             rrs_queue.put((message, tag))
-        elif tag == "approaching" or tag.startswith("approaching_"):
-            approaching_queue.put((message, tag))
         elif tag == "candle_line":
             bounce_queue.put((message, tag))
-            approaching_queue.put((message, tag))
         elif tag == "blue" and "removed from" in message:
             pass
         else:
@@ -3038,38 +3616,9 @@ def start_gui():
     text_area.tag_config("orange_symbol", foreground="#FFB86C", font=('Courier', 12, 'bold'))  # Orange for short symbols
     text_area.tag_config("blue", foreground="#8BE9FD", font=('Courier', 12))           # Light blue
     text_area.tag_config("candle_line", foreground="#BD93F9", overstrike=1)            # Purple
-
-    # Create approaching prices window
-    approaching_window = tk.Toplevel(root)
-    approaching_window.title("Price Approaching Levels")
-    approaching_window.geometry("800x600")
-    approaching_window.configure(background=dark_grey)
-    
-    approaching_frame = tk.Frame(approaching_window, padx=10, pady=10, bg=dark_grey)
-    approaching_frame.pack(fill=tk.BOTH, expand=True)
-    
-    approaching_text = scrolledtext.ScrolledText(
-        approaching_frame,
-        wrap=tk.WORD,
-        width=80,
-        height=30,
-        font=('Courier', 12),
-        state='disabled',
-        bg=dark_grey,
-        fg=text_color  # Add text color
-    )
-    approaching_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-    
-    # Configure tags for approaching window
-    approaching_text.tag_config("approaching", foreground="#FF79C6", font=('Courier', 12))  # Pink
-    approaching_text.tag_config("green", foreground="#50FA7B", font=('Courier', 12))        # Green for long message text
-    approaching_text.tag_config("red", foreground="#FF5555", font=('Courier', 12))          # Red for short message text
-    approaching_text.tag_config("pink_symbol", foreground="#FF79C6", font=('Courier', 12, 'bold'))  # Pink for long symbols
-    approaching_text.tag_config("orange_symbol", foreground="#FFB86C", font=('Courier', 12, 'bold'))  # Orange for short symbols
-    approaching_text.tag_config("blue", foreground="#8BE9FD", font=('Courier', 12))         # Light blue
-    approaching_text.tag_config("approaching_green", foreground="#50FA7B", font=('Courier', 12))
-    approaching_text.tag_config("approaching_red", foreground="#FF5555", font=('Courier', 12))
-    approaching_text.tag_config("candle_line", foreground="#BD93F9", overstrike=1)          # Purple
+    text_area.tag_config("approaching", foreground="#FF79C6", font=('Courier', 12))
+    text_area.tag_config("approaching_green", foreground="#50FA7B", font=('Courier', 12))
+    text_area.tag_config("approaching_red", foreground="#FF5555", font=('Courier', 12))
 
     # Create RRS panel inside main window
     rrs_container = tk.Frame(content_pane, bg=dark_grey)
@@ -3128,6 +3677,40 @@ def start_gui():
         )
         btn.pack(side=tk.LEFT, padx=2)
 
+    env_selection_var = tk.StringVar(value=bot_instance.get_market_environment())
+    env_label_var = tk.StringVar(
+        value=f"Environment: {MARKET_ENVIRONMENTS.get(env_selection_var.get(), {}).get('label', env_selection_var.get())}"
+    )
+
+    def on_environment_change():
+        selected = env_selection_var.get()
+        env_label_var.set(
+            f"Environment: {MARKET_ENVIRONMENTS.get(selected, {}).get('label', selected)}"
+        )
+        bot_instance.set_market_environment(selected)
+
+    env_mode_frame = tk.Frame(rrs_container, bg=dark_grey, pady=4)
+    env_mode_frame.pack(fill=tk.X, padx=10)
+    tk.Label(env_mode_frame, textvariable=env_label_var, fg=text_color, bg=dark_grey).pack(side=tk.LEFT)
+    env_button_frame = tk.Frame(env_mode_frame, bg=dark_grey)
+    env_button_frame.pack(side=tk.RIGHT)
+    for key, info in MARKET_ENVIRONMENTS.items():
+        tk.Radiobutton(
+            env_button_frame,
+            text=info["label"],
+            variable=env_selection_var,
+            value=key,
+            indicatoron=0,
+            command=on_environment_change,
+            padx=6,
+            pady=2,
+            bg=dark_grey,
+            fg=text_color,
+            selectcolor="#444444",
+            activebackground="#444444",
+            activeforeground=text_color,
+        ).pack(side=tk.LEFT, padx=2)
+
     rrs_frame = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
     rrs_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -3142,6 +3725,23 @@ def start_gui():
         fg=text_color
     )
     rrs_main_text.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+
+    env_focus_frame = tk.LabelFrame(rrs_frame, text="Environment Focus", bg=dark_grey, fg=text_color)
+    env_focus_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+    env_focus_text = scrolledtext.ScrolledText(
+        env_focus_frame,
+        wrap=tk.NONE,
+        width=80,
+        height=8,
+        font=('Courier', 10),
+        state='disabled',
+        bg=dark_grey,
+        fg=text_color,
+    )
+    env_focus_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    env_focus_text.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
+    env_focus_text.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
+    env_focus_text.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
 
     rrs_compare_frame = tk.Frame(rrs_frame, bg=dark_grey)
     rrs_compare_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -3330,6 +3930,23 @@ def start_gui():
                             text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
                     else:
                         text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
+                elif "Price approaching levels" in msg:
+                    parts = msg.split(":", 1)
+                    if len(parts) == 2:
+                        symbol = parts[0].strip()
+                        rest = ":" + parts[1]
+                        if "(long)" in rest:
+                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
+                            text_area.insert(tk.END, symbol, "pink_symbol")
+                            text_area.insert(tk.END, rest + "\n", "approaching_green")
+                        elif "(short)" in rest:
+                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
+                            text_area.insert(tk.END, symbol, "orange_symbol")
+                            text_area.insert(tk.END, rest + "\n", "approaching_red")
+                        else:
+                            text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
+                    else:
+                        text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
                 else:
                     # Standard handling for other messages
                     text_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
@@ -3340,44 +3957,6 @@ def start_gui():
             except queue.Empty:
                 break
         root.after(100, process_bounce_queue)
-
-    def process_approaching_queue():
-        while True:
-            try:
-                msg, tag = approaching_queue.get_nowait()
-                approaching_text.config(state='normal')
-                
-                # Special handling for approaching messages to color the symbol differently
-                if "Price approaching levels" in msg:
-                    parts = msg.split(":", 1)  # Split at first colon to separate symbol from rest
-                    if len(parts) == 2:
-                        symbol = parts[0].strip()
-                        rest = ":" + parts[1]
-                        
-                        # Determine symbol color based on direction
-                        if "(long)" in rest:
-                            approaching_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
-                            approaching_text.insert(tk.END, symbol, "pink_symbol")  # Pink symbol for longs
-                            approaching_text.insert(tk.END, rest + "\n", "approaching_green")  # Green text for rest
-                        elif "(short)" in rest:
-                            approaching_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - ", tag)
-                            approaching_text.insert(tk.END, symbol, "orange_symbol")  # Orange symbol for shorts
-                            approaching_text.insert(tk.END, rest + "\n", "approaching_red")  # Red text for rest
-                        else:
-                            # Fallback if direction can't be determined
-                            approaching_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                    else:
-                        approaching_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                else:
-                    # Standard handling for other messages
-                    approaching_text.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {msg}\n", tag)
-                    
-                approaching_text.config(state='disabled')
-                approaching_text.see(tk.END)
-                approaching_window.update()
-            except queue.Empty:
-                break
-        root.after(100, process_approaching_queue)
 
     def render_rrs_snapshot(snapshot):
         threshold = snapshot.get("threshold", RRS_DEFAULT_THRESHOLD)
@@ -3452,10 +4031,8 @@ def start_gui():
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
-    approaching_window.protocol("WM_DELETE_WINDOW", lambda: None)  # Prevent closing just the approaching window
     
     process_bounce_queue()
-    process_approaching_queue()
     process_rrs_queue()
     root.mainloop()
 
