@@ -7,6 +7,14 @@ import re
 import json
 from datetime import datetime
 
+from project_paths import (
+    LONGS_FILE as LONGS_PATH,
+    SHORTS_FILE as SHORTS_PATH,
+    BOUNCE_LOG_FILE,
+    MASTER_AVWAP_REPORT_FILE,
+    MASTER_POSITIONS_FILE as MASTER_POSITIONS_PATH,
+)
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QTextEdit, QVBoxLayout, QPushButton,
     QMessageBox, QLabel, QScrollArea, QFrame, QHBoxLayout, QGridLayout
@@ -17,11 +25,11 @@ from PyQt5.QtGui import QPalette, QColor
 # ──────────────────────────────────────────────────────────────────────────────
 # Files & Settings
 # ──────────────────────────────────────────────────────────────────────────────
-SHORTS_FILE        = "shorts.txt"
-LONGS_FILE         = "longs.txt"
-BOUNCERS_FILE      = os.path.join("logs", "bouncers.txt")  # legacy live bouncer feed (HH:MM:SS | SYM | types | side)
-MASTER_EVENTS_FILE = os.path.join("output", "master_avwap_events.txt")
-MASTER_POSITIONS_FILE = os.path.join("output", "master_positions.json")
+SHORTS_FILE        = str(SHORTS_PATH)
+LONGS_FILE         = str(LONGS_PATH)
+BOUNCERS_FILE      = str(BOUNCE_LOG_FILE)
+MASTER_EVENTS_FILE = str(MASTER_AVWAP_REPORT_FILE)
+MASTER_POSITIONS_FILE = str(MASTER_POSITIONS_PATH)
 
 # Files that can be opened via "Start New Instance"
 # Order: start with shorts, then open others

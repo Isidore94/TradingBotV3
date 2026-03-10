@@ -10,6 +10,8 @@ data/intraday_bounces.csv
 data/master_avwap_ai_state.json
 data/master_avwap_history.json
 data/prev_earnings_cache.json
+data/cache/
+data/runtime/
 logs/*.log
 logs/*.txt
 logs/*.csv

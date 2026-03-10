@@ -14,13 +14,13 @@ from pathlib import Path
 from tkinter import scrolledtext, ttk
 from typing import Any
 
+from project_paths import LONGS_FILE, SHORTS_FILE
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 ROOT_DIR = SCRIPT_DIR.parent
-LONGS_FILE = ROOT_DIR / "longs.txt"
-SHORTS_FILE = ROOT_DIR / "shorts.txt"
 WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
 
 from bounce_bot import (
@@ -389,6 +389,7 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
     def __init__(self, parent: tk.Misc):
         super().__init__(parent, BounceBotController(include_approaching=False))
         self._syncing_controls = False
+        self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self.rrs_threshold_var = tk.DoubleVar(value=self.controller.rrs_threshold)
         self.timeframe_var = tk.StringVar(value=self.controller.rrs_timeframe_key)
         self.environment_var = tk.StringVar(value=self.controller.get_market_environment())
@@ -468,6 +469,33 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
         self.alert_text = self._create_alerts_widget(alerts_frame, font_size=11)
         self.alert_text.pack(fill=tk.BOTH, expand=True)
 
+        bounce_toggle_frame = tk.LabelFrame(
+            self.container,
+            text="Bounce Filters",
+            bg=DARK_GREY,
+            fg=TEXT_COLOR,
+            padx=8,
+            pady=6,
+            highlightbackground="#444444",
+            highlightcolor="#444444",
+        )
+        bounce_toggle_frame.pack(fill=tk.X, padx=10, pady=(0, 10), side=tk.BOTTOM)
+
+        for idx, bounce_key in enumerate(BOUNCE_TOGGLE_ORDER):
+            var = tk.BooleanVar(value=self.controller.is_bounce_type_enabled(bounce_key))
+            self.toggle_vars[bounce_key] = var
+            tk.Checkbutton(
+                bounce_toggle_frame,
+                text=BOUNCE_TYPE_LABELS.get(bounce_key, bounce_key),
+                variable=var,
+                command=lambda k=bounce_key, v=var: self.controller.set_bounce_type_enabled(k, bool(v.get())),
+                bg=DARK_GREY,
+                fg=TEXT_COLOR,
+                selectcolor="#444444",
+                activebackground="#444444",
+                activeforeground=TEXT_COLOR,
+            ).grid(row=idx // 4, column=idx % 4, sticky="w", padx=6, pady=2)
+
     def _sync_controls_from_controller(self) -> None:
         self._syncing_controls = True
         try:
@@ -477,6 +505,10 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
                 self.timeframe_var.set(self.controller.rrs_timeframe_key)
             if self.environment_var.get() != self.controller.get_market_environment():
                 self.environment_var.set(self.controller.get_market_environment())
+            for bounce_key, var in self.toggle_vars.items():
+                expected = self.controller.is_bounce_type_enabled(bounce_key)
+                if bool(var.get()) != bool(expected):
+                    var.set(expected)
         finally:
             self._syncing_controls = False
 
@@ -519,7 +551,7 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
 
 class FullBounceBotPanel(BaseBounceBotPanel):
     def __init__(self, parent: tk.Misc):
-        super().__init__(parent, BounceBotController(include_approaching=True))
+        super().__init__(parent, BounceBotController(include_approaching=False))
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self.scanning_button_text = tk.StringVar(value="Stop Scanning")
         self._build_layout()
@@ -533,43 +565,28 @@ class FullBounceBotPanel(BaseBounceBotPanel):
         ttk.Label(header, textvariable=self.controller.connection_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(header, textvariable=self.controller.status_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(header, textvariable=self.controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
-        ttk.Button(header, text="Reconnect", command=self.controller.restart).pack(side=tk.RIGHT)
-        ttk.Button(header, text="Clear", command=self.clear_alerts).pack(side=tk.RIGHT, padx=(0, 8))
-
-        button_frame = tk.Frame(self.container, bg=DARK_GREY)
-        button_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
-
+        controls_frame = ttk.Frame(header)
+        controls_frame.pack(side=tk.RIGHT)
         tk.Button(
-            button_frame,
-            text="Check DVWAP Touches",
-            command=lambda: self.controller.run_manual_check("check_dynamic_vwap_touches", "DVWAP Touch Check Results"),
-            relief=tk.RAISED,
-            padx=10,
-            bg=PANEL_GREY,
-            fg=TEXT_COLOR,
-        ).pack(side=tk.LEFT, padx=5)
-
-        tk.Button(
-            button_frame,
-            text="Check DVWAP2 Touches",
-            command=lambda: self.controller.run_manual_check("check_dynamic_vwap2_touches", "DVWAP2 Touch Check Results"),
-            relief=tk.RAISED,
-            padx=10,
-            bg=PANEL_GREY,
-            fg=TEXT_COLOR,
-        ).pack(side=tk.LEFT, padx=5)
-
-        tk.Button(
-            button_frame,
+            controls_frame,
             textvariable=self.scanning_button_text,
             command=self._toggle_scanning,
             relief=tk.RAISED,
             padx=10,
             bg=PANEL_GREY,
             fg=TEXT_COLOR,
-        ).pack(side=tk.LEFT, padx=5)
+        ).pack(side=tk.LEFT)
+        ttk.Button(controls_frame, text="Clear", command=self.clear_alerts).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(controls_frame, text="Reconnect", command=self.controller.restart).pack(side=tk.LEFT, padx=(8, 0))
 
-        content_pane = tk.PanedWindow(self.container, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=DARK_GREY)
+        content_pane = tk.PanedWindow(
+            self.container,
+            orient=tk.HORIZONTAL,
+            sashrelief=tk.RAISED,
+            sashwidth=10,
+            showhandle=True,
+            bg=DARK_GREY,
+        )
         content_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
 
         alerts_frame = tk.Frame(content_pane, bg=DARK_GREY)
@@ -748,6 +765,7 @@ class WatchlistEditorPanel:
         self.container = ttk.Frame(parent)
         self._loading = False
         self._save_after_id = None
+        self.add_symbol_var = tk.StringVar()
         self._build_layout()
         self.refresh_from_disk()
 
@@ -759,10 +777,16 @@ class WatchlistEditorPanel:
         header.pack(fill=tk.X, padx=10, pady=(10, 6))
 
         ttk.Label(header, text=self.title).pack(side=tk.LEFT)
-        ttk.Button(header, text="Refresh", command=self.refresh_from_disk).pack(side=tk.RIGHT)
-        ttk.Button(header, text="Copy", command=self.copy_symbols).pack(side=tk.RIGHT, padx=(0, 6))
-        ttk.Button(header, text="Paste", command=self.paste_symbols).pack(side=tk.RIGHT, padx=(0, 6))
-        ttk.Button(header, text="Dedupe", command=self.force_save).pack(side=tk.RIGHT, padx=(0, 6))
+        actions = ttk.Frame(header)
+        actions.pack(side=tk.RIGHT)
+        self.add_symbol_entry = ttk.Entry(actions, textvariable=self.add_symbol_var, width=12)
+        self.add_symbol_entry.pack(side=tk.LEFT)
+        self.add_symbol_entry.bind("<Return>", self._on_add_symbol_return)
+        ttk.Button(actions, text="Add", command=self.add_symbol).pack(side=tk.LEFT, padx=(6, 12))
+        ttk.Button(actions, text="Dedupe", command=self.force_save).pack(side=tk.LEFT)
+        ttk.Button(actions, text="Paste", command=self.paste_symbols).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(actions, text="Copy", command=self.copy_symbols).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(actions, text="Refresh", command=self.refresh_from_disk).pack(side=tk.LEFT, padx=(6, 0))
 
         hint = ttk.Label(self.container, text=f"{self.path.name} auto-saves and removes duplicates.")
         hint.pack(anchor="w", padx=10, pady=(0, 6))
@@ -854,6 +878,24 @@ class WatchlistEditorPanel:
                 merged.append(symbol)
         self._write_symbols(merged, notify=True)
 
+    def add_symbol(self) -> None:
+        incoming = self._normalize_symbols(self.add_symbol_var.get())
+        if not incoming:
+            return
+        current_symbols = self._normalize_symbols(self.text_area.get("1.0", tk.END))
+        merged = []
+        seen = set()
+        for symbol in current_symbols + incoming:
+            if symbol not in seen:
+                seen.add(symbol)
+                merged.append(symbol)
+        self._write_symbols(merged, notify=True)
+        self.add_symbol_var.set("")
+
+    def _on_add_symbol_return(self, _event=None):
+        self.add_symbol()
+        return "break"
+
     def remove_symbols(self, symbols_to_remove: set[str]) -> None:
         current_symbols = self._normalize_symbols(self.text_area.get("1.0", tk.END))
         filtered = [symbol for symbol in current_symbols if symbol not in symbols_to_remove]
@@ -904,7 +946,14 @@ class ConsolidatedTradingGUI:
         self._build_layout()
 
     def _build_layout(self) -> None:
-        main_pane = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashrelief=tk.RAISED, bg=DARK_GREY)
+        main_pane = tk.PanedWindow(
+            self.root,
+            orient=tk.VERTICAL,
+            sashrelief=tk.RAISED,
+            sashwidth=10,
+            showhandle=True,
+            bg=DARK_GREY,
+        )
         main_pane.pack(fill=tk.BOTH, expand=True)
 
         notebook = ttk.Notebook(main_pane)

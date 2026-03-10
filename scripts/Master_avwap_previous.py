@@ -15,17 +15,28 @@ from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 
+from project_paths import (
+    DATA_DIR,
+    OUTPUT_DIR,
+    LOG_DIR,
+    ROOT_DIR,
+    LONGS_FILE,
+    SHORTS_FILE,
+    EARNINGS_CACHE_FILE as CURRENT_CACHE_FILE,
+    PREV_EARNINGS_CACHE_FILE as PREV_CACHE_FILE,
+    MASTER_AVWAP_HISTORY_FILE as HISTORY_FILE,
+    MASTER_AVWAP_AI_STATE_FILE as AI_STATE_FILE,
+    D1_FEATURES_FILE,
+    AVWAP_SIGNALS_FILE,
+    MASTER_AVWAP_EVENT_TICKERS_FILE as EVENT_TICKERS_FILE,
+    MASTER_POSITIONS_FILE,
+    MASTER_AVWAP_REPORT_FILE as OUTPUT_FILE,
+)
+
 # ============================================================================
 # PATHS / CONFIG
 # ============================================================================
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT_DIR / "data"
-OUTPUT_DIR = ROOT_DIR / "output"
-LOG_DIR = ROOT_DIR / "logs"
-AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
-EVENT_TICKERS_FILE = OUTPUT_DIR / "master_avwap_event_tickers.txt"
-MASTER_POSITIONS_FILE = OUTPUT_DIR / "master_positions.json"
 AVWAP_CSV_COLUMNS = [
     "run_date",
     "symbol",
@@ -49,18 +60,6 @@ EVENT_LEVEL_SORT_ORDER = [
     "LOWER_3",
 ]
 
-for d in (DATA_DIR, OUTPUT_DIR, LOG_DIR):
-    d.mkdir(parents=True, exist_ok=True)
-
-LONGS_FILE = ROOT_DIR / "longs.txt"
-SHORTS_FILE = ROOT_DIR / "shorts.txt"
-
-CURRENT_CACHE_FILE = DATA_DIR / "earnings_cache.json"
-PREV_CACHE_FILE = DATA_DIR / "prev_earnings_cache.json"
-HISTORY_FILE = DATA_DIR / "master_avwap_history.json"
-AI_STATE_FILE = DATA_DIR / "master_avwap_ai_state.json"
-D1_FEATURES_FILE = DATA_DIR / "d1_features.csv"
-OUTPUT_FILE = OUTPUT_DIR / "master_avwap_events.txt"
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
 HEADERS = {

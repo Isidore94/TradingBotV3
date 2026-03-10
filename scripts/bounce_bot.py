@@ -13,12 +13,13 @@ import math
 import time
 import threading
 import logging
+from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import zoneinfo
 import queue
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, ttk
 import tkinter.font as tkFont
 
 import pandas as pd
@@ -33,25 +34,39 @@ from ibapi.contract import Contract
 from colorama import init, Fore, Style
 init(autoreset=True)
 
+from project_paths import (
+    DATA_DIR,
+    LOG_DIR,
+    ROOT_DIR,
+    LONGS_FILE,
+    SHORTS_FILE,
+    BOUNCE_LOG_FILE,
+    TRADING_BOT_LOG_FILE,
+    INTRADAY_BOUNCES_FILE,
+    AVWAP_SIGNALS_FILE,
+    RRS_STRENGTH_LOG_FILE,
+    RRS_GROUP_STRENGTH_LOG_FILE,
+    SECTOR_ETF_MAP_FILE,
+    INDUSTRY_ETF_MAP_FILE,
+    SYMBOL_CLASSIFICATION_CACHE_FILE,
+    MASTER_AVWAP_FOCUS_FILE,
+)
+
 ##########################################
 # Adjustable Parameters
 ##########################################
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT_DIR / "data"
-LOG_DIR = ROOT_DIR / "logs"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LONGS_FILENAME = ROOT_DIR / "longs.txt"
-SHORTS_FILENAME = ROOT_DIR / "shorts.txt"
-BOUNCE_LOG_FILENAME = LOG_DIR / "bouncers.txt"
-TRADING_BOT_LOG_FILENAME = LOG_DIR / "trading_bot.log"
-INTRADAY_BOUNCES_CSV = DATA_DIR / "intraday_bounces.csv"
-MASTER_AVWAP_SIGNALS_FILENAME = DATA_DIR / "avwap_signals.csv"
-STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_strength_extremes.csv"
-GROUP_STRENGTH_SCAN_LOG_FILENAME = LOG_DIR / "rrs_group_strength_extremes.csv"
-SECTOR_ETF_MAP_FILENAME = DATA_DIR / "sector_etf_map.json"
-INDUSTRY_ETF_MAP_FILENAME = DATA_DIR / "industry_etf_map.json"
-SYMBOL_CLASSIFICATION_CACHE_FILENAME = DATA_DIR / "symbol_classification.csv"
+LONGS_FILENAME = LONGS_FILE
+SHORTS_FILENAME = SHORTS_FILE
+BOUNCE_LOG_FILENAME = BOUNCE_LOG_FILE
+TRADING_BOT_LOG_FILENAME = TRADING_BOT_LOG_FILE
+INTRADAY_BOUNCES_CSV = INTRADAY_BOUNCES_FILE
+MASTER_AVWAP_SIGNALS_FILENAME = AVWAP_SIGNALS_FILE
+MASTER_AVWAP_FOCUS_FILENAME = MASTER_AVWAP_FOCUS_FILE
+STRENGTH_SCAN_LOG_FILENAME = RRS_STRENGTH_LOG_FILE
+GROUP_STRENGTH_SCAN_LOG_FILENAME = RRS_GROUP_STRENGTH_LOG_FILE
+SECTOR_ETF_MAP_FILENAME = SECTOR_ETF_MAP_FILE
+INDUSTRY_ETF_MAP_FILENAME = INDUSTRY_ETF_MAP_FILE
+SYMBOL_CLASSIFICATION_CACHE_FILENAME = SYMBOL_CLASSIFICATION_CACHE_FILE
 ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
@@ -175,9 +190,14 @@ MARKET_ENVIRONMENTS = {
 }
 MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
 MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
+MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
+MASTER_AVWAP_FOCUS_MIN_MOVE_RATIO = 0.45
+MASTER_AVWAP_FOCUS_MIN_EXCESS_MOVE_RATIO = 0.25
 ENVIRONMENT_HIGHLIGHT_LIMIT = 6
+ENVIRONMENT_SCAN_LIMIT = 25
 SPY_COMPRESSION_THRESHOLD = 0.35
 SPY_UP_THRESHOLD = 0.20
+SPY_PULLBACK_DELTA_THRESHOLD = 0.25
 IMPULSE_RRS_PROFILE_LENGTH = 6
 IMPULSE_RRS_RECENT_PHASE_BARS = 3
 IMPULSE_RRS_FAVORED_TREND_RATIO = 0.60
@@ -201,6 +221,7 @@ BOUNCE_MIN_BODY_TO_MEDIAN = 1.10
 BOUNCE_MIN_RANGE_TO_MEDIAN = 1.05
 BOUNCE_VOLUME_LOOKBACK_BARS = 6
 BOUNCE_MIN_RELATIVE_VOLUME = 1.10
+BOUNCE_CONFIRMATION_MAX_CANDLES = 3
 
 
 def utc_now_iso():
@@ -569,7 +590,11 @@ class BounceBot(EWrapper, EClient):
         self.connect_lock = threading.Lock()
         self.ib_host = None
         self.ib_port = None
+        self.ib_client_id_base = None
         self.ib_client_id = None
+        self.ib_client_id_offset = 0
+        self.client_id_conflict = False
+        self.client_id_namespace = max(1, os.getpid() % 1000) * 1000
         self.api_thread = None
 
         self.data = {}
@@ -613,6 +638,8 @@ class BounceBot(EWrapper, EClient):
         self.master_avwap_events = {}
         self.master_avwap_last_scan_date = None
         self.emitted_master_avwap_events = set()
+        self.master_avwap_focus_map = {}
+        self.emitted_master_avwap_focus_alerts = set()
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -638,7 +665,17 @@ class BounceBot(EWrapper, EClient):
     def set_connection_info(self, host, port, client_id):
         self.ib_host = host
         self.ib_port = port
+        self.ib_client_id_base = int(client_id) if client_id is not None else 125
+        if self.ib_client_id is None:
+            self.ib_client_id = self._allocate_client_id()
+
+    def _allocate_client_id(self):
+        base = int(self.ib_client_id_base or self.ib_client_id or 125)
+        client_id = (base * 10000) + self.client_id_namespace + self.ib_client_id_offset
+        self.ib_client_id_offset += 1
         self.ib_client_id = client_id
+        self.client_id_conflict = False
+        return client_id
 
     def _ensure_api_thread(self):
         if self.api_thread is None or not self.api_thread.is_alive():
@@ -651,27 +688,41 @@ class BounceBot(EWrapper, EClient):
         if self.ib_host is None or self.ib_port is None or self.ib_client_id is None:
             logging.error("IB connection info not set.")
             return False
+        deadline = time.time() + timeout
         with self.connect_lock:
             if self.connection_status:
                 return True
-            try:
+            while time.time() < deadline:
+                if self.client_id_conflict or self.ib_client_id is None:
+                    old_client_id = self.ib_client_id
+                    new_client_id = self._allocate_client_id()
+                    if old_client_id is not None:
+                        logging.warning(
+                            f"IB client id {old_client_id} is already in use; retrying with {new_client_id}."
+                        )
                 try:
-                    self.disconnect()
-                except Exception:
-                    pass
-                self.connect(self.ib_host, self.ib_port, clientId=self.ib_client_id)
-                self._ensure_api_thread()
-                start = time.time()
-                while not self.connection_status and time.time() - start < timeout:
-                    time.sleep(0.2)
-                if not self.connection_status:
-                    logging.error("Failed to reconnect to IB within timeout.")
+                    try:
+                        self.disconnect()
+                    except Exception:
+                        pass
+                    current_client_id = self.ib_client_id
+                    self.connect(self.ib_host, self.ib_port, clientId=current_client_id)
+                    self._ensure_api_thread()
+                    attempt_deadline = min(deadline, time.time() + 2.5)
+                    while not self.connection_status and time.time() < attempt_deadline:
+                        if self.client_id_conflict:
+                            break
+                        time.sleep(0.2)
+                    if self.connection_status:
+                        logging.info(f"Reconnected to IB with clientId={self.ib_client_id}.")
+                        return True
+                    if self.client_id_conflict:
+                        continue
+                except Exception as e:
+                    logging.exception(f"Reconnect error: {e}")
                     return False
-                logging.info("Reconnected to IB.")
-                return True
-            except Exception as e:
-                logging.exception(f"Reconnect error: {e}")
-                return False
+            logging.error("Failed to reconnect to IB within timeout.")
+            return False
 
     def set_bounce_type_enabled(self, bounce_type, enabled):
         if bounce_type in self.bounce_type_toggles:
@@ -715,6 +766,16 @@ class BounceBot(EWrapper, EClient):
                 level = signal_type[len(prefix):]
                 break
 
+        priority_bucket = (row.get("priority_bucket") or "").strip().lower()
+        favorite_zone = (row.get("favorite_zone") or "").strip()
+        favorite_signals = [
+            value.strip().upper()
+            for value in str(row.get("favorite_signals") or "").split(";")
+            if value.strip()
+        ]
+        is_favorite_setup = str(row.get("is_favorite_setup") or "").strip().lower() in ("1", "true", "yes")
+        is_near_favorite_zone = str(row.get("is_near_favorite_zone") or "").strip().lower() in ("1", "true", "yes")
+
         return {
             "symbol": symbol,
             "trade_date": trade_date,
@@ -723,6 +784,11 @@ class BounceBot(EWrapper, EClient):
             "anchor_date": (row.get("anchor_date") or "").strip(),
             "side": (row.get("side") or "").strip().upper(),
             "level": level,
+            "priority_bucket": priority_bucket,
+            "favorite_zone": favorite_zone,
+            "favorite_signals": favorite_signals,
+            "is_favorite_setup": is_favorite_setup,
+            "is_near_favorite_zone": is_near_favorite_zone,
         }
 
     def load_master_avwap_events_today(self):
@@ -794,6 +860,137 @@ class BounceBot(EWrapper, EClient):
             event.get("anchor_date"),
         )
 
+    def load_master_avwap_focus(self):
+        if not MASTER_AVWAP_FOCUS_FILENAME.exists():
+            self.master_avwap_focus_map = {}
+            return
+
+        try:
+            with open(MASTER_AVWAP_FOCUS_FILENAME, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except Exception as exc:
+            logging.warning(f"Failed reading master AVWAP focus file: {exc}")
+            self.master_avwap_focus_map = {}
+            return
+
+        raw_symbols = payload.get("symbols", {}) if isinstance(payload, dict) else {}
+        focus_map = {}
+        if isinstance(raw_symbols, dict):
+            for raw_symbol, raw_entry in raw_symbols.items():
+                entry = raw_entry if isinstance(raw_entry, dict) else {}
+                symbol = (entry.get("symbol") or raw_symbol or "").strip().upper()
+                if not symbol:
+                    continue
+                focus_map[symbol] = {
+                    "symbol": symbol,
+                    "side": (entry.get("side") or "").strip().upper(),
+                    "priority_bucket": (entry.get("priority_bucket") or "").strip().lower(),
+                    "priority_rank": entry.get("priority_rank"),
+                    "priority_score": entry.get("priority_score"),
+                    "favorite_zone": (entry.get("favorite_zone") or "").strip(),
+                    "favorite_signals": [
+                        str(value).strip().upper()
+                        for value in (entry.get("favorite_signals") or [])
+                        if str(value).strip()
+                    ],
+                    "favorite_context_signals": [
+                        str(value).strip().upper()
+                        for value in (entry.get("favorite_context_signals") or [])
+                        if str(value).strip()
+                    ],
+                    "breakout_5d": bool(entry.get("breakout_5d")),
+                    "retest_followthrough": bool(entry.get("retest_followthrough")),
+                }
+
+        self.master_avwap_focus_map = focus_map
+
+    def _describe_master_avwap_focus(self, focus_entry):
+        bucket = (focus_entry or {}).get("priority_bucket", "")
+        if bucket == "favorite_setup":
+            return "best current favorite setup"
+        if bucket == "near_favorite_zone":
+            return "near favorite zone"
+        return "master avwap focus"
+
+    def _emit_master_avwap_focus_bounce_alert(self, symbol, direction, levels_list):
+        if not self.gui_callback:
+            return
+        focus_entry = self.master_avwap_focus_map.get(symbol)
+        if not focus_entry:
+            return
+        focus_side = focus_entry.get("side")
+        if direction == "long" and focus_side != "LONG":
+            return
+        if direction == "short" and focus_side != "SHORT":
+            return
+
+        normalized_levels = tuple(sorted(str(level) for level in (levels_list or [])))
+        alert_key = (datetime.now().date().isoformat(), "bounce", symbol, direction, normalized_levels)
+        if alert_key in self.emitted_master_avwap_focus_alerts:
+            return
+        self.emitted_master_avwap_focus_alerts.add(alert_key)
+
+        reason = self._describe_master_avwap_focus(focus_entry)
+        level_text = ", ".join(normalized_levels) if normalized_levels else "level"
+        message = f"MASTER_AVWAP_FOCUS_BOUNCE: {symbol} ({direction}) {level_text} [{reason}]"
+        gui_tag = "master_avwap_focus_long" if direction == "long" else "master_avwap_focus_short"
+        self.gui_callback(message, gui_tag)
+        self.log_symbol(symbol, message)
+
+    def _focus_rrs_is_significant(self, entry, threshold):
+        rrs_value = entry.get("rrs")
+        move_ratio = entry.get("move_ratio")
+        excess_move_ratio = entry.get("excess_move_ratio")
+        if rrs_value is None or move_ratio is None or excess_move_ratio is None:
+            return False
+        if not self._is_move_significant(entry):
+            return False
+        return (
+            abs(rrs_value) >= max(MASTER_AVWAP_FOCUS_MIN_ABS_RRS, float(threshold) + 0.75)
+            and abs(move_ratio) >= MASTER_AVWAP_FOCUS_MIN_MOVE_RATIO
+            and abs(excess_move_ratio) >= MASTER_AVWAP_FOCUS_MIN_EXCESS_MOVE_RATIO
+        )
+
+    def _emit_master_avwap_focus_rrs_alerts(self, symbol_context, threshold, timeframe_key):
+        if not self.gui_callback or not self.master_avwap_focus_map:
+            return
+
+        timeframe_label = RRS_TIMEFRAMES.get(timeframe_key, {}).get("label", timeframe_key)
+        today_iso = datetime.now().date().isoformat()
+        for entry in symbol_context:
+            symbol = entry.get("symbol")
+            if not symbol:
+                continue
+            focus_entry = self.master_avwap_focus_map.get(symbol)
+            if not focus_entry:
+                continue
+
+            focus_side = focus_entry.get("side")
+            signal = entry.get("signal")
+            if focus_side == "LONG" and signal != "RS":
+                continue
+            if focus_side == "SHORT" and signal != "RW":
+                continue
+            if not self._focus_rrs_is_significant(entry, threshold):
+                continue
+
+            alert_key = (today_iso, timeframe_key, symbol, signal)
+            if alert_key in self.emitted_master_avwap_focus_alerts:
+                continue
+            self.emitted_master_avwap_focus_alerts.add(alert_key)
+
+            reason = self._describe_master_avwap_focus(focus_entry)
+            move_ratio = entry.get("move_ratio")
+            excess_move_ratio = entry.get("excess_move_ratio")
+            message = (
+                f"MASTER_AVWAP_FOCUS_RRS: {symbol} ({focus_side.lower()}) {signal} "
+                f"{entry['rrs']:+.2f} ER={excess_move_ratio:+.2f} MR={move_ratio:+.2f} "
+                f"[{reason}, {timeframe_label}]"
+            )
+            gui_tag = "master_avwap_focus_long" if focus_side == "LONG" else "master_avwap_focus_short"
+            self.gui_callback(message, gui_tag)
+            self.log_symbol(symbol, message)
+
 
     def update_watchlists_from_master_avwap(self):
         self.load_master_avwap_events_today()
@@ -827,9 +1024,6 @@ class BounceBot(EWrapper, EClient):
                 signal_type = event.get("signal_type", "")
                 msg = f"MASTER_AVWAP_EVENT: {symbol} ({side}) {signal_type}"
                 self.log_symbol(symbol, msg)
-                if self.gui_callback:
-                    gui_tag = "green" if side == "LONG" else "red"
-                    self.gui_callback(msg, gui_tag)
 
             if newly_emitted == 0:
                 continue
@@ -900,10 +1094,23 @@ class BounceBot(EWrapper, EClient):
         decorated["environment_highlights"] = self._build_environment_highlights(
             base_snapshot.get("symbol_context", []),
             base_snapshot.get("spy_move_ratio"),
+            base_snapshot.get("environment_scan"),
         )
         return decorated
 
-    def _build_environment_highlights(self, symbol_context, spy_ratio):
+    def _build_environment_highlights(self, symbol_context, spy_ratio, environment_scan=None):
+        if environment_scan is not None:
+            sections = self._build_intraday_environment_sections(environment_scan)
+            if sections:
+                return sections
+            return [
+                {
+                    "title": "Environment focus",
+                    "rows": [{"text": "No intraday RS/RW candidates matched the current SPY context windows.", "tag": "rrs_hdr"}],
+                    "tag": "rrs_hdr",
+                }
+            ]
+
         scenario = self.get_market_environment()
         strong_entries = sorted(
             [entry for entry in symbol_context if entry.get("signal") == "RS"],
@@ -913,6 +1120,8 @@ class BounceBot(EWrapper, EClient):
             [entry for entry in symbol_context if entry.get("signal") == "RW"],
             key=lambda row: ((row.get("excess_move_ratio") or 0.0), row["rrs"]),
         )
+        strong_long_entries = [entry for entry in strong_entries if entry.get("watchlist_bias") == "long"]
+        weak_short_entries = [entry for entry in weak_entries if entry.get("watchlist_bias") == "short"]
         sections = []
 
         def append_section(title, entries, tag):
@@ -924,12 +1133,12 @@ class BounceBot(EWrapper, EClient):
             append_section("Weak Stocks (Bearish Strong focus)", weak_entries, "rrs_rw")
         elif scenario == "bearish_weak":
             append_section("Weak Stocks (Bearish Weak focus)", weak_entries, "rrs_rw")
-            append_section("Strong Stocks (Bearish Weak focus)", strong_entries, "rrs_rs")
+            append_section("Strong Stocks (Bearish Weak focus)", strong_long_entries, "rrs_rs")
         elif scenario == "bullish_strong":
             append_section("Strong Stocks (Bullish Strong focus)", strong_entries, "rrs_rs")
         elif scenario == "bullish_weak":
             append_section("Strong Stocks (Bullish Weak focus)", strong_entries, "rrs_rs")
-            append_section("Weak Stocks (Bullish Weak focus)", weak_entries, "rrs_rw")
+            append_section("Weak Stocks (Bullish Weak focus)", weak_short_entries, "rrs_rw")
         else:
             append_section("Strong Stocks", strong_entries, "rrs_rs")
             append_section("Weak Stocks", weak_entries, "rrs_rw")
@@ -947,6 +1156,191 @@ class BounceBot(EWrapper, EClient):
                 }
             )
         return sections
+
+    def _build_spy_context_windows(self, spy_bars, length):
+        if not spy_bars or len(spy_bars) < length + 2:
+            return []
+
+        current_date = spy_bars[-1].dt.date()
+        windows = []
+        for idx in range(length + 1, len(spy_bars)):
+            bar = spy_bars[idx]
+            if bar.dt.date() != current_date:
+                continue
+            move_ratio = self._calc_move_ratio(spy_bars[:idx + 1], length)
+            if move_ratio is None:
+                continue
+            prev_move_ratio = windows[-1]["move_ratio"] if windows else None
+            delta = move_ratio - prev_move_ratio if prev_move_ratio is not None else 0.0
+            compression = abs(move_ratio) < SPY_COMPRESSION_THRESHOLD
+            rising = move_ratio >= SPY_UP_THRESHOLD or delta >= SPY_PULLBACK_DELTA_THRESHOLD
+            falling = move_ratio <= -SPY_UP_THRESHOLD or delta <= -SPY_PULLBACK_DELTA_THRESHOLD
+            windows.append(
+                {
+                    "dt": bar.dt,
+                    "move_ratio": move_ratio,
+                    "delta": delta,
+                    "compression": compression,
+                    "long_eval": compression or falling,
+                    "short_eval": compression or rising,
+                }
+            )
+        return windows
+
+    def _summarize_environment_scan(self, intraday_profiles, spy_windows, threshold):
+        if not intraday_profiles or not spy_windows:
+            return None
+
+        window_map = {item["dt"]: item for item in spy_windows}
+        long_candidates = []
+        short_candidates = []
+        long_window_count = sum(1 for item in spy_windows if item.get("long_eval"))
+        short_window_count = sum(1 for item in spy_windows if item.get("short_eval"))
+
+        def finalize_candidate(symbol, direction, hits, total_windows):
+            if not hits:
+                return None
+            hit_rrs = [item["rrs"] for item in hits if item.get("rrs") is not None]
+            hit_excess = [item["excess_move_ratio"] for item in hits if item.get("excess_move_ratio") is not None]
+            if not hit_rrs:
+                return None
+            avg_rrs = sum(hit_rrs) / len(hit_rrs)
+            best_rrs = max(hit_rrs) if direction == "long" else min(hit_rrs)
+            avg_excess = (sum(hit_excess) / len(hit_excess)) if hit_excess else None
+            score = (
+                len(hit_rrs) * 100.0
+                + abs(avg_rrs) * 10.0
+                + abs(best_rrs) * 5.0
+                + (abs(avg_excess) * 5.0 if avg_excess is not None else 0.0)
+            )
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "hits": len(hit_rrs),
+                "windows": total_windows,
+                "avg_rrs": avg_rrs,
+                "best_rrs": best_rrs,
+                "avg_excess": avg_excess,
+                "score": score,
+            }
+
+        for symbol, profile in intraday_profiles.items():
+            if not profile:
+                continue
+
+            if symbol in self.longs:
+                total_windows = 0
+                hits = []
+                for item in profile:
+                    window = window_map.get(item.get("dt"))
+                    if not window or not window.get("long_eval"):
+                        continue
+                    total_windows += 1
+                    if (item.get("rrs") or 0.0) >= threshold:
+                        hits.append(item)
+                candidate = finalize_candidate(symbol, "long", hits, total_windows)
+                if candidate:
+                    long_candidates.append(candidate)
+
+            if symbol in self.shorts:
+                total_windows = 0
+                hits = []
+                for item in profile:
+                    window = window_map.get(item.get("dt"))
+                    if not window or not window.get("short_eval"):
+                        continue
+                    total_windows += 1
+                    if (item.get("rrs") or 0.0) <= -threshold:
+                        hits.append(item)
+                candidate = finalize_candidate(symbol, "short", hits, total_windows)
+                if candidate:
+                    short_candidates.append(candidate)
+
+        long_candidates.sort(key=lambda row: (-row["score"], -row["hits"], -row["avg_rrs"], row["symbol"]))
+        short_candidates.sort(key=lambda row: (-row["score"], -row["hits"], row["avg_rrs"], row["symbol"]))
+        return {
+            "long_candidates": long_candidates,
+            "short_candidates": short_candidates,
+            "long_window_count": long_window_count,
+            "short_window_count": short_window_count,
+            "spy_windows": len(spy_windows),
+        }
+
+    def _build_intraday_environment_sections(self, environment_scan):
+        scenario = self.get_market_environment()
+        long_candidates = environment_scan.get("long_candidates", [])
+        short_candidates = environment_scan.get("short_candidates", [])
+        long_windows = int(environment_scan.get("long_window_count", 0) or 0)
+        short_windows = int(environment_scan.get("short_window_count", 0) or 0)
+        sections = []
+
+        def add_candidate_section(title, candidates, tag, window_count):
+            if not candidates:
+                return
+            rows = []
+            for entry in candidates[:ENVIRONMENT_SCAN_LIMIT]:
+                rows.append({"text": self._format_environment_scan_entry(entry, window_count), "tag": tag})
+            sections.append({"title": title, "rows": rows, "tag": tag})
+
+        if scenario == "bearish_strong":
+            add_candidate_section(
+                "Weak Shorts on SPY Pullbacks / Compression",
+                short_candidates,
+                "rrs_rw",
+                short_windows,
+            )
+        elif scenario == "bullish_strong":
+            add_candidate_section(
+                "Strong Longs on SPY Pullbacks / Compression",
+                long_candidates,
+                "rrs_rs",
+                long_windows,
+            )
+        elif scenario == "bearish_weak":
+            add_candidate_section(
+                "Weak Shorts on SPY Bounces / Compression",
+                short_candidates,
+                "rrs_rw",
+                short_windows,
+            )
+            add_candidate_section(
+                "Strong Longs While SPY Is Weak / Compressing",
+                long_candidates,
+                "rrs_rs",
+                long_windows,
+            )
+        elif scenario == "bullish_weak":
+            add_candidate_section(
+                "Strong Longs on SPY Pullbacks / Compression",
+                long_candidates,
+                "rrs_rs",
+                long_windows,
+            )
+            add_candidate_section(
+                "Weak Shorts While SPY Is Firm / Compressing",
+                short_candidates,
+                "rrs_rw",
+                short_windows,
+            )
+        else:
+            add_candidate_section("Strong Long Candidates", long_candidates, "rrs_rs", long_windows)
+            add_candidate_section("Weak Short Candidates", short_candidates, "rrs_rw", short_windows)
+
+        if sections:
+            return sections
+        return None
+
+    def _format_environment_scan_entry(self, entry, window_count):
+        avg_rrs = entry.get("avg_rrs")
+        best_rrs = entry.get("best_rrs")
+        avg_excess = entry.get("avg_excess")
+        return (
+            f"{entry['symbol']} hits={entry.get('hits', 0)}/{window_count or entry.get('windows', 0)} "
+            f"avgRRS={avg_rrs:+.2f} best={best_rrs:+.2f} "
+            f"avgER={avg_excess:+.2f}" if avg_excess is not None else
+            f"{entry['symbol']} hits={entry.get('hits', 0)}/{window_count or entry.get('windows', 0)} "
+            f"avgRRS={avg_rrs:+.2f} best={best_rrs:+.2f}"
+        )
 
     def _build_section(self, title, entries, tag):
         if not entries:
@@ -1287,6 +1681,7 @@ class BounceBot(EWrapper, EClient):
         return self._get_cached_bars(symbol, "5 D", "5 mins")
 
     def run_rrs_scan(self, timeframe_key_override=None, emit_gui=True):
+        self.load_master_avwap_focus()
         threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
         if timeframe_key_override in RRS_TIMEFRAMES:
             timeframe_key = timeframe_key_override
@@ -1311,11 +1706,19 @@ class BounceBot(EWrapper, EClient):
         industry_results = []
         symbol_context = []
         all_scores = []
+        intraday_profiles = {}
         all_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
+        spy_context_windows = self._build_spy_context_windows(spy_5m, length)
         for symbol in all_symbols:
             sym_5m = self.get_cached_5m_bars(symbol)
             if not sym_5m:
                 continue
+            intraday_profile = self._build_intraday_rrs_profile(sym_5m, spy_5m, length=length)
+            if intraday_profile:
+                current_date = spy_5m[-1].dt.date()
+                today_profile = [item for item in intraday_profile if item.get("dt") and item["dt"].date() == current_date]
+                if today_profile:
+                    intraday_profiles[symbol] = today_profile
             sym_bars = sym_5m if timeframe_minutes == 5 else _aggregate_bars_timeframe(sym_5m, timeframe_minutes)
             aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt)
             rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
@@ -1406,6 +1809,7 @@ class BounceBot(EWrapper, EClient):
 
         sector_payload = _ordered(sector_results)
         industry_payload = _ordered(industry_results)
+        environment_scan = self._summarize_environment_scan(intraday_profiles, spy_context_windows, threshold)
         snapshot_payload = {
             "timestamp": datetime.now(),
             "threshold": threshold,
@@ -1416,7 +1820,10 @@ class BounceBot(EWrapper, EClient):
             "group_strength": self.compute_group_strengths(),
             "symbol_context": symbol_context,
             "spy_move_ratio": spy_move_ratio,
+            "environment_scan": environment_scan,
         }
+        if emit_gui:
+            self._emit_master_avwap_focus_rrs_alerts(symbol_context, threshold, timeframe_key)
         self.latest_rrs_payload = snapshot_payload
         if emit_gui and self.gui_callback:
             decorated_snapshot = self._decorate_snapshot(snapshot_payload)
@@ -1529,6 +1936,7 @@ class BounceBot(EWrapper, EClient):
 
     def nextValidId(self, orderId):
         self.connection_status = True
+        self.client_id_conflict = False
         logging.info(f"Connected to IB API. NextValidId={orderId}")
 
     def error(self, reqId, errorCode, errorString):
@@ -1540,6 +1948,9 @@ class BounceBot(EWrapper, EClient):
                     self.invalid_security_symbols.add(symbol)
                 if reqId in self.data_ready_events:
                     self.data_ready_events[reqId].set()
+        if errorCode == 326:
+            self.connection_status = False
+            self.client_id_conflict = True
         if errorCode in (504, 1100) or "not connected" in errorString.lower():
             self.connection_status = False
         elif errorCode in (1101, 1102):
@@ -2915,13 +3326,14 @@ class BounceBot(EWrapper, EClient):
                         self.bounce_candidates.pop(symbol)
                         return
                     
-                    # For longs: confirm if the current candle's high is greater than the bounce candle's high
-                    if direction == "long" and current_candle["high"] > bounce_candle["high"]:
+                    # Confirm only after a later candle closes through the bounce candle extreme.
+                    if direction == "long" and current_candle["close"] > bounce_candle["high"]:
                         levels = bounce_data["levels"]
                         levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
                         bounce_msg = f"{symbol}: Bounce confirmed (long) from {levels_list}"
                         if self.gui_callback:
                             self.gui_callback(bounce_msg, "green")
+                        self._emit_master_avwap_focus_bounce_alert(symbol, "long", levels_list)
                         self.log_symbol(symbol, f"ALERT: {bounce_msg}")
                         self.log_bounce_to_file(
                             symbol=symbol,
@@ -2935,13 +3347,13 @@ class BounceBot(EWrapper, EClient):
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
                 
-                    # For shorts: confirm if the current candle's low is less than the bounce candle's low
-                    elif direction == "short" and current_candle["low"] < bounce_candle["low"]:
+                    elif direction == "short" and current_candle["close"] < bounce_candle["low"]:
                         levels = bounce_data["levels"]
                         levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
                         bounce_msg = f"{symbol}: Bounce confirmed (short) from {levels_list}"
                         if self.gui_callback:
                             self.gui_callback(bounce_msg, "red")
+                        self._emit_master_avwap_focus_bounce_alert(symbol, "short", levels_list)
                         self.log_symbol(symbol, f"ALERT: {bounce_msg}")
                         self.log_bounce_to_file(
                             symbol=symbol,
@@ -2955,7 +3367,7 @@ class BounceBot(EWrapper, EClient):
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
                     else:
-                        if candles_waited >= 3:
+                        if candles_waited >= BOUNCE_CONFIRMATION_MAX_CANDLES:
                             logging.debug(
                                 f"{symbol}: Removing bounce candidate after {candles_waited} candles without confirmation"
                             )
@@ -3079,11 +3491,13 @@ class BounceBot(EWrapper, EClient):
                 if current_date != last_warning_reset:
                     self.warned_symbols.clear()
                     self.emitted_master_avwap_events.clear()
+                    self.emitted_master_avwap_focus_alerts.clear()
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
                 
                 self.longs = read_tickers(LONGS_FILENAME)
                 self.shorts = read_tickers(SHORTS_FILENAME)
+                self.load_master_avwap_focus()
                 self.update_watchlists_from_master_avwap()
                 self.alerted_symbols.clear()
                 self.symbol_metrics = {}
@@ -3293,7 +3707,11 @@ def run_bot_with_gui(gui_callback):
     console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     console_handler.setFormatter(console_formatter)
 
-    file_handler = logging.FileHandler(TRADING_BOT_LOG_FILENAME, mode="a")
+    file_handler = RotatingFileHandler(
+        TRADING_BOT_LOG_FILENAME,
+        maxBytes=1_000_000,
+        backupCount=3,
+    )
     file_handler.setLevel(logging.INFO)
     file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     file_handler.setFormatter(file_formatter)
@@ -3307,7 +3725,7 @@ def run_bot_with_gui(gui_callback):
     bot = BounceBot(gui_callback=gui_callback)
     bot.set_connection_info("127.0.0.1", 7496, 125)
     try:
-        bot.connect("127.0.0.1", 7496, clientId=125)
+        bot.connect("127.0.0.1", 7496, clientId=bot.ib_client_id)
     except Exception as exc:
         logging.warning(f"Initial IB connection attempt failed: {exc}")
     api_thread = threading.Thread(target=bot.run, daemon=True)
@@ -3415,25 +3833,22 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
     rrs_frame = tk.Frame(rrs_container, padx=10, pady=10, bg=dark_grey)
     rrs_frame.pack(fill=tk.BOTH, expand=True)
 
-    rrs_main_text = scrolledtext.ScrolledText(
+    vertical_pane = tk.PanedWindow(
         rrs_frame,
-        wrap=tk.NONE,
-        width=80,
-        height=12,
-        font=('Courier', 11),
-        state='disabled',
+        orient=tk.VERTICAL,
+        sashrelief=tk.RAISED,
+        sashwidth=10,
+        showhandle=True,
         bg=dark_grey,
-        fg=text_color,
     )
-    rrs_main_text.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+    vertical_pane.pack(fill=tk.BOTH, expand=True)
 
-    env_focus_frame = tk.LabelFrame(rrs_frame, text="Environment Focus", bg=dark_grey, fg=text_color)
-    env_focus_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+    env_focus_frame = tk.LabelFrame(vertical_pane, text="Environment Focus", bg=dark_grey, fg=text_color)
     env_focus_text = scrolledtext.ScrolledText(
         env_focus_frame,
         wrap=tk.NONE,
         width=80,
-        height=8,
+        height=10,
         font=('Courier', 10),
         state='disabled',
         bg=dark_grey,
@@ -3443,50 +3858,123 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
     env_focus_text.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
     env_focus_text.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
     env_focus_text.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
+    vertical_pane.add(env_focus_frame, minsize=150)
 
-    rrs_compare_frame = tk.Frame(rrs_frame, bg=dark_grey)
-    rrs_compare_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    notebook_host = tk.Frame(vertical_pane, bg=dark_grey)
+    vertical_pane.add(notebook_host, stretch="always")
 
-    industry_col = tk.LabelFrame(rrs_compare_frame, text="RS/RW vs Industry Ref", bg=dark_grey, fg=text_color)
-    industry_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
-    sector_col = tk.LabelFrame(rrs_compare_frame, text="RS/RW vs Sector", bg=dark_grey, fg=text_color)
-    sector_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
+    notebook = ttk.Notebook(notebook_host)
+    notebook.pack(fill=tk.BOTH, expand=True)
+
+    def _make_text(parent_widget, width, height):
+        widget = scrolledtext.ScrolledText(
+            parent_widget,
+            wrap=tk.NONE,
+            width=width,
+            height=height,
+            font=("Courier", 10),
+            state="disabled",
+            bg=dark_grey,
+            fg=text_color,
+        )
+        widget.tag_config("rrs_hdr", foreground="#BD93F9", font=("Courier", 11, "bold"))
+        widget.tag_config("rrs_rs", foreground="#50FA7B", font=("Courier", 11, "bold"))
+        widget.tag_config("rrs_rw", foreground="#FF5555", font=("Courier", 11, "bold"))
+        return widget
+
+    def _create_split_signal_tab(parent_widget, title, threshold_var=None, timeframe_var=None):
+        tab = ttk.Frame(parent_widget)
+        parent_widget.add(tab, text=title)
+
+        if threshold_var is not None or timeframe_var is not None:
+            controls = tk.Frame(tab, bg=dark_grey, padx=6, pady=6)
+            controls.pack(fill=tk.X)
+            if threshold_var is not None:
+                tk.Scale(
+                    controls,
+                    from_=0.0,
+                    to=5.0,
+                    resolution=0.1,
+                    orient=tk.HORIZONTAL,
+                    label="Sensitivity",
+                    variable=threshold_var,
+                    length=180,
+                    bg=dark_grey,
+                    fg=text_color,
+                    highlightthickness=0,
+                ).pack(side=tk.LEFT, padx=(0, 10))
+            if timeframe_var is not None:
+                tf_frame = tk.Frame(controls, bg=dark_grey)
+                tf_frame.pack(side=tk.LEFT)
+                for key in ("5m", "15m", "30m", "1h"):
+                    tk.Radiobutton(
+                        tf_frame,
+                        text=key,
+                        variable=timeframe_var,
+                        value=key,
+                        indicatoron=0,
+                        padx=4,
+                        pady=1,
+                        bg=dark_grey,
+                        fg=text_color,
+                        selectcolor="#444444",
+                        activebackground="#444444",
+                        activeforeground=text_color,
+                    ).pack(side=tk.LEFT, padx=1)
+
+        split = tk.PanedWindow(
+            tab,
+            orient=tk.HORIZONTAL,
+            sashrelief=tk.RAISED,
+            sashwidth=10,
+            showhandle=True,
+            bg=dark_grey,
+        )
+        split.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+        strong_frame = tk.LabelFrame(split, text="Strong", bg=dark_grey, fg=text_color)
+        weak_frame = tk.LabelFrame(split, text="Weak", bg=dark_grey, fg=text_color)
+        strong_text = _make_text(strong_frame, width=40, height=18)
+        weak_text = _make_text(weak_frame, width=40, height=18)
+        strong_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        weak_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        split.add(strong_frame, stretch="always")
+        split.add(weak_frame, stretch="always")
+        return {
+            "tab": tab,
+            "strong_text": strong_text,
+            "weak_text": weak_text,
+        }
 
     industry_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
     sector_threshold_var = tk.DoubleVar(value=bot_instance.rrs_threshold)
 
-    tk.Scale(industry_col, from_=0.0, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, label="Sensitivity",
-             variable=industry_threshold_var, length=180, bg=dark_grey, fg=text_color, highlightthickness=0).pack(fill=tk.X, padx=4)
-    tk.Scale(sector_col, from_=0.0, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, label="Sensitivity",
-             variable=sector_threshold_var, length=180, bg=dark_grey, fg=text_color, highlightthickness=0).pack(fill=tk.X, padx=4)
-
     industry_timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
     sector_timeframe_var = tk.StringVar(value=bot_instance.rrs_timeframe_key)
 
-    industry_tf = tk.Frame(industry_col, bg=dark_grey)
-    industry_tf.pack(fill=tk.X)
-    sector_tf = tk.Frame(sector_col, bg=dark_grey)
-    sector_tf.pack(fill=tk.X)
-    for key in ("5m", "15m", "30m", "1h"):
-        for parent_tf, var in ((industry_tf, industry_timeframe_var), (sector_tf, sector_timeframe_var)):
-            tk.Radiobutton(parent_tf, text=key, variable=var, value=key, indicatoron=0, padx=4, pady=1,
-                           bg=dark_grey, fg=text_color, selectcolor="#444444", activebackground="#444444",
-                           activeforeground=text_color).pack(side=tk.LEFT, padx=1)
+    spy_view = _create_split_signal_tab(notebook, "VS SPY")
+    industry_view = _create_split_signal_tab(notebook, "Industry Ref", industry_threshold_var, industry_timeframe_var)
+    sector_view = _create_split_signal_tab(notebook, "Sector", sector_threshold_var, sector_timeframe_var)
 
-    industry_text = scrolledtext.ScrolledText(industry_col, wrap=tk.NONE, width=45, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
-    industry_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-    sector_text = scrolledtext.ScrolledText(sector_col, wrap=tk.NONE, width=45, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
-    sector_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-
-    group_frame = tk.LabelFrame(rrs_frame, text="Top Industries/Sectors", bg=dark_grey, fg=text_color)
-    group_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-    group_text = scrolledtext.ScrolledText(group_frame, wrap=tk.NONE, width=90, height=14, font=('Courier', 10), state='disabled', bg=dark_grey, fg=text_color)
-    group_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-
-    for widget in (rrs_main_text, industry_text, sector_text, group_text):
-        widget.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
-        widget.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
-        widget.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
+    groups_tab = ttk.Frame(notebook)
+    notebook.add(groups_tab, text="Top Industries/Sectors")
+    groups_split = tk.PanedWindow(
+        groups_tab,
+        orient=tk.HORIZONTAL,
+        sashrelief=tk.RAISED,
+        sashwidth=10,
+        showhandle=True,
+        bg=dark_grey,
+    )
+    groups_split.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+    sectors_frame = tk.LabelFrame(groups_split, text="Sectors", bg=dark_grey, fg=text_color)
+    industries_frame = tk.LabelFrame(groups_split, text="Industries", bg=dark_grey, fg=text_color)
+    sectors_text = _make_text(sectors_frame, width=44, height=18)
+    industries_text = _make_text(industries_frame, width=44, height=18)
+    sectors_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    industries_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    groups_split.add(sectors_frame, stretch="always")
+    groups_split.add(industries_frame, stretch="always")
 
     def render_rrs_snapshot(snapshot):
         threshold = snapshot.get("threshold", RRS_DEFAULT_THRESHOLD)
@@ -3499,49 +3987,81 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
         timestamp = snapshot.get("timestamp", datetime.now())
         env_label_var.set(f"Environment: {snapshot.get('market_environment_label', 'Environment')}")
 
-        def render_table(widget, title, rows, local_threshold):
-            selected_tf = timeframe_key
-            if title.startswith("RS/RW vs Industry"):
-                selected_tf = industry_timeframe_var.get()
-            elif title.startswith("RS/RW vs Sector"):
-                selected_tf = sector_timeframe_var.get()
-            widget.config(state='normal')
-            widget.delete("1.0", tk.END)
-            widget.insert(tk.END, f"{title}  TF:{selected_tf}  Threshold:{local_threshold:.2f}\n", "rrs_hdr")
-            widget.insert(tk.END, "SYMBOL  SIDE  RRS    POWER\n")
-            widget.insert(tk.END, "--------------------------\n")
+        def render_split_table(view, title, rows, local_threshold, selected_tf):
             filtered = [r for r in rows if abs(r[2]) >= local_threshold]
-            if not filtered:
-                widget.insert(tk.END, "No symbols flagged.\n")
-            for signal, symbol, rrs_value, power in filtered:
-                line = f"{symbol:<6}  {signal:<4}  {rrs_value:+.2f}  {power if power is not None else 0:>6.2f}\n"
-                widget.insert(tk.END, line, "rrs_rs" if signal == "RS" else "rrs_rw")
-            widget.config(state='disabled')
+            strong_rows = [r for r in filtered if r[0] == "RS"]
+            weak_rows = [r for r in filtered if r[0] == "RW"]
+            for widget, heading, subset, tag in (
+                (view["strong_text"], "Strong", strong_rows, "rrs_rs"),
+                (view["weak_text"], "Weak", weak_rows, "rrs_rw"),
+            ):
+                widget.config(state="normal")
+                widget.delete("1.0", tk.END)
+                widget.insert(
+                    tk.END,
+                    f"{title} {heading}  TF:{selected_tf}  Threshold:{local_threshold:.2f}\n",
+                    "rrs_hdr",
+                )
+                widget.insert(tk.END, "SYMBOL  SIDE  RRS    POWER\n")
+                widget.insert(tk.END, "--------------------------\n")
+                if not subset:
+                    widget.insert(tk.END, "No symbols flagged.\n")
+                for signal, symbol, rrs_value, power in subset:
+                    line = f"{symbol:<6}  {signal:<4}  {rrs_value:+.2f}  {power if power is not None else 0:>6.2f}\n"
+                    widget.insert(tk.END, line, tag)
+                widget.config(state="disabled")
+                widget.see("1.0")
+
+        render_split_table(spy_view, "RS/RW vs SPY", results, threshold, timeframe_key)
+        render_split_table(
+            industry_view,
+            "RS/RW vs Industry Ref",
+            industry_results,
+            industry_threshold_var.get(),
+            industry_timeframe_var.get(),
+        )
+        render_split_table(
+            sector_view,
+            "RS/RW vs Sector",
+            sector_results,
+            sector_threshold_var.get(),
+            sector_timeframe_var.get(),
+        )
+
+        def render_group_column(widget, label, key_name):
+            widget.config(state="normal")
+            widget.delete("1.0", tk.END)
+            widget.insert(
+                tk.END,
+                f"{label}  Last scan: {timestamp.strftime('%H:%M:%S')}  Base TF:{timeframe_label}\n",
+                "rrs_hdr",
+            )
+            for tf in ("M5", "H1", "D1"):
+                payload = group_strength.get(tf, {})
+                items = payload.get(key_name, [])
+                widget.insert(tk.END, f"\n[{tf}] Strongest\n", "rrs_hdr")
+                if not items:
+                    widget.insert(tk.END, "  No data\n")
+                for item in items[:SCAN_EXTREME_COUNT]:
+                    widget.insert(
+                        tk.END,
+                        f"  + {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n",
+                        "rrs_rs",
+                    )
+                widget.insert(tk.END, f"[{tf}] Weakest\n", "rrs_hdr")
+                if not items:
+                    widget.insert(tk.END, "  No data\n")
+                for item in list(reversed(items[-SCAN_EXTREME_COUNT:])):
+                    widget.insert(
+                        tk.END,
+                        f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n",
+                        "rrs_rw",
+                    )
+            widget.config(state="disabled")
             widget.see("1.0")
 
-        render_table(rrs_main_text, "RS/RW vs SPY", results, threshold)
-        render_table(industry_text, "RS/RW vs Industry Ref", industry_results, industry_threshold_var.get())
-        render_table(sector_text, "RS/RW vs Sector", sector_results, sector_threshold_var.get())
-
-        group_text.config(state='normal')
-        group_text.delete("1.0", tk.END)
-        group_text.insert(tk.END, f"Last scan: {timestamp.strftime('%H:%M:%S')}   Timeframe: {timeframe_label}\n", "rrs_hdr")
-        for tf in ("D1", "H1", "M5"):
-            payload = group_strength.get(tf, {})
-            sectors = payload.get("sectors", [])
-            industries = payload.get("industries", [])
-            group_text.insert(tk.END, f"\n[{tf}] Sectors\n", "rrs_hdr")
-            for item in sectors[:SCAN_EXTREME_COUNT]:
-                group_text.insert(tk.END, f"  + {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rs")
-            for item in list(reversed(sectors[-SCAN_EXTREME_COUNT:])):
-                group_text.insert(tk.END, f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rw")
-            group_text.insert(tk.END, f"[{tf}] Industries\n", "rrs_hdr")
-            for item in industries[:SCAN_EXTREME_COUNT]:
-                group_text.insert(tk.END, f"  + {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rs")
-            for item in list(reversed(industries[-SCAN_EXTREME_COUNT:])):
-                group_text.insert(tk.END, f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rw")
-        group_text.config(state='disabled')
-        group_text.see("1.0")
+        render_group_column(sectors_text, "Sectors", "sectors")
+        render_group_column(industries_text, "Industries", "industries")
 
         env_focus_text.config(state='normal')
         env_focus_text.delete("1.0", tk.END)
@@ -3604,7 +4124,9 @@ def choose_gui_mode():
 
 
 def append_alert_message(text_area, msg, tag, timestamp):
-    if "Bounce confirmed" in msg:
+    if msg.startswith("MASTER_AVWAP_FAVORITE_BOUNCE:"):
+        text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+    elif "Bounce confirmed" in msg:
         parts = msg.split(":", 1)
         if len(parts) == 2:
             symbol = parts[0].strip()
@@ -3648,6 +4170,10 @@ def configure_alert_tags(text_area, font_size=12):
     text_area.tag_config("pink_symbol", foreground="#FF79C6", font=("Courier", font_size, "bold"))
     text_area.tag_config("orange_symbol", foreground="#FFB86C", font=("Courier", font_size, "bold"))
     text_area.tag_config("blue", foreground="#8BE9FD", font=("Courier", font_size))
+    text_area.tag_config("master_avwap_favorite_long", foreground="#00E5FF", font=("Courier", font_size, "bold"))
+    text_area.tag_config("master_avwap_favorite_short", foreground="#FFD166", font=("Courier", font_size, "bold"))
+    text_area.tag_config("master_avwap_focus_long", foreground="#7DF9FF", font=("Courier", font_size, "bold"))
+    text_area.tag_config("master_avwap_focus_short", foreground="#FFB000", font=("Courier", font_size, "bold"))
     text_area.tag_config("candle_line", foreground="#BD93F9", overstrike=1)
     text_area.tag_config("approaching", foreground="#FF79C6", font=("Courier", font_size))
     text_area.tag_config("approaching_green", foreground="#50FA7B", font=("Courier", font_size))
@@ -4307,7 +4833,11 @@ if __name__ == "__main__":
             console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
             console_handler.setFormatter(console_formatter)
 
-            file_handler = logging.FileHandler(TRADING_BOT_LOG_FILENAME, mode="a")
+            file_handler = RotatingFileHandler(
+                TRADING_BOT_LOG_FILENAME,
+                maxBytes=1_000_000,
+                backupCount=3,
+            )
             file_handler.setLevel(logging.INFO)
             file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
             file_handler.setFormatter(file_formatter)
@@ -4324,8 +4854,9 @@ if __name__ == "__main__":
             # Initialize and run the bot without GUI
             print("Creating BounceBot instance...")
             bot = BounceBot()
+            bot.set_connection_info("127.0.0.1", 7496, 125)
             print("Connecting to IB API...")
-            bot.connect("127.0.0.1", 7496, clientId=125)
+            bot.connect("127.0.0.1", 7496, clientId=bot.ib_client_id)
             
             # Wait for connection
             print("Waiting for connection...")

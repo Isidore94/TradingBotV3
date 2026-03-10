@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import argparse
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from statistics import mean
@@ -25,18 +26,39 @@ from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 
+from project_paths import (
+    DATA_DIR,
+    OUTPUT_DIR,
+    LOG_DIR,
+    ROOT_DIR,
+    LONGS_FILE,
+    SHORTS_FILE,
+    EARNINGS_CACHE_FILE,
+    PREV_EARNINGS_CACHE_FILE,
+    EARNINGS_DATES_CACHE_FILE,
+    MASTER_AVWAP_HISTORY_FILE,
+    MASTER_AVWAP_AI_STATE_FILE,
+    D1_FEATURES_FILE,
+    AVWAP_SIGNALS_FILE,
+    MASTER_AVWAP_EVENT_TICKERS_FILE,
+    MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+    MASTER_POSITIONS_FILE,
+    MASTER_AVWAP_REPORT_FILE,
+    MASTER_AVWAP_STDEV_REPORT_FILE,
+    MASTER_AVWAP_FOCUS_FILE,
+    EARNINGS_ANCHORS_FILE,
+    PREVIOUS_GAP_UPS_FILE,
+    MASTER_ANCHOR_AVWAP_REPORT_FILE,
+    ANCHOR_AVWAP_SIGNALS_FILE,
+    MASTER_AVWAP_LOG_FILE,
+)
+
 # ============================================================================
 # PATHS / CONFIG
 # ============================================================================
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT_DIR / "data"
-OUTPUT_DIR = ROOT_DIR / "output"
-LOG_DIR = ROOT_DIR / "logs"
-AVWAP_SIGNALS_FILE = DATA_DIR / "avwap_signals.csv"
-EVENT_TICKERS_FILE = OUTPUT_DIR / "master_avwap_event_tickers.txt"
-PRIORITY_SETUPS_FILE = OUTPUT_DIR / "master_avwap_priority_setups.txt"
-MASTER_POSITIONS_FILE = OUTPUT_DIR / "master_positions.json"
+EVENT_TICKERS_FILE = MASTER_AVWAP_EVENT_TICKERS_FILE
+PRIORITY_SETUPS_FILE = MASTER_AVWAP_PRIORITY_SETUPS_FILE
 AVWAP_CSV_COLUMNS = [
     "run_date",
     "symbol",
@@ -48,6 +70,12 @@ AVWAP_CSV_COLUMNS = [
     "avwap_price",
     "band_price",
     "stdev",
+    "priority_bucket",
+    "is_favorite_setup",
+    "is_near_favorite_zone",
+    "favorite_zone",
+    "favorite_signals",
+    "favorite_context_signals",
 ]
 
 EVENT_LEVEL_SORT_ORDER = [
@@ -82,21 +110,12 @@ FAVORITE_CONTEXT_SIGNALS = {
     },
 }
 
-for d in (DATA_DIR, OUTPUT_DIR, LOG_DIR):
-    d.mkdir(parents=True, exist_ok=True)
-
-LONGS_FILE = ROOT_DIR / "longs.txt"
-SHORTS_FILE = ROOT_DIR / "shorts.txt"
-
-CURRENT_CACHE_FILE = DATA_DIR / "earnings_cache.json"
-PREV_CACHE_FILE = DATA_DIR / "prev_earnings_cache.json"
-EARNINGS_DATES_CACHE_FILE = DATA_DIR / "earnings_dates_cache.json"
-HISTORY_FILE = DATA_DIR / "master_avwap_history.json"
-AI_STATE_FILE = DATA_DIR / "master_avwap_ai_state.json"
-D1_FEATURES_FILE = DATA_DIR / "d1_features.csv"
-OUTPUT_FILE = OUTPUT_DIR / "master_avwap_events.txt"
-STDEV_RANGE_FILE = OUTPUT_DIR / "master_avwap_stdev2_3.txt"
-EARNINGS_ANCHORS_FILE = DATA_DIR / "earnings_avwap_anchors.csv"
+CURRENT_CACHE_FILE = EARNINGS_CACHE_FILE
+PREV_CACHE_FILE = PREV_EARNINGS_CACHE_FILE
+HISTORY_FILE = MASTER_AVWAP_HISTORY_FILE
+AI_STATE_FILE = MASTER_AVWAP_AI_STATE_FILE
+OUTPUT_FILE = MASTER_AVWAP_REPORT_FILE
+STDEV_RANGE_FILE = MASTER_AVWAP_STDEV_REPORT_FILE
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
 HEADERS = {
@@ -105,6 +124,11 @@ HEADERS = {
 }
 
 MAX_LOOKBACK_DAYS = 130       # Nasdaq earnings scan window
+EARNINGS_RECENT_DISCOVERY_WINDOW_DAYS = 21
+EARNINGS_FORCE_REFRESH_AFTER_DAYS = 100
+EARNINGS_DEEP_LOOKBACK_DAYS = 220
+EARNINGS_HISTORY_LIMIT = 8
+MASTER_AVWAP_FOCUS_LIMIT_PER_BUCKET = 25
 RECENT_DAYS = 10              # if earnings < RECENT_DAYS, use prior one for "current"
 ATR_LENGTH = 20
 ATR_MULT = 0.05               # eps / push = 0.05 * ATR(20)
@@ -153,7 +177,11 @@ def configure_logging():
     ch.setFormatter(fmt)
     ch.setLevel(logging.INFO)
 
-    fh = logging.FileHandler(LOG_DIR / "master_avwap.log", mode="a")
+    fh = RotatingFileHandler(
+        MASTER_AVWAP_LOG_FILE,
+        maxBytes=2_000_000,
+        backupCount=3,
+    )
     fh.setFormatter(fmt)
     fh.setLevel(logging.INFO)
 
@@ -198,11 +226,121 @@ def save_json(path: Path, obj):
 
 
 def load_earnings_date_cache():
-    return load_json(EARNINGS_DATES_CACHE_FILE, default={"refreshed_on": None, "data": {}})
+    raw_cache = load_json(EARNINGS_DATES_CACHE_FILE, default={})
+    normalized = {
+        "schema_version": 2,
+        "last_recent_refresh_on": None,
+        "symbols": {},
+    }
+    if not isinstance(raw_cache, dict):
+        return normalized
+
+    normalized["last_recent_refresh_on"] = (
+        raw_cache.get("last_recent_refresh_on") or raw_cache.get("refreshed_on")
+    )
+    raw_symbols = raw_cache.get("symbols")
+    if not isinstance(raw_symbols, dict):
+        raw_symbols = raw_cache.get("data", {})
+
+    for raw_symbol, raw_entry in raw_symbols.items():
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol:
+            continue
+        entry = _normalize_earnings_cache_entry(
+            raw_entry,
+            fallback_refresh_on=normalized["last_recent_refresh_on"],
+        )
+        if entry["dates"]:
+            normalized["symbols"][symbol] = entry
+
+    return normalized
 
 
 def save_earnings_date_cache(cache_obj):
-    save_json(EARNINGS_DATES_CACHE_FILE, cache_obj)
+    symbols_payload = {}
+    raw_symbols = cache_obj.get("symbols", {}) if isinstance(cache_obj, dict) else {}
+    for raw_symbol, raw_entry in raw_symbols.items():
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol:
+            continue
+        entry = _normalize_earnings_cache_entry(raw_entry)
+        if entry["dates"]:
+            symbols_payload[symbol] = entry
+
+    normalized = {
+        "schema_version": 2,
+        "last_recent_refresh_on": (
+            cache_obj.get("last_recent_refresh_on") if isinstance(cache_obj, dict) else None
+        ),
+        "symbols": symbols_payload,
+    }
+    save_json(EARNINGS_DATES_CACHE_FILE, normalized)
+
+
+def _parse_iso_date_or_none(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_earnings_dates(dates, today=None, limit=EARNINGS_HISTORY_LIMIT):
+    today = today or datetime.now().date()
+    normalized = []
+    seen = set()
+    for value in dates or []:
+        parsed = _parse_iso_date_or_none(value)
+        if parsed is None or parsed > today:
+            continue
+        iso = parsed.isoformat()
+        if iso in seen:
+            continue
+        seen.add(iso)
+        normalized.append(iso)
+    normalized.sort(reverse=True)
+    return normalized[:limit]
+
+
+def _normalize_earnings_cache_entry(raw_entry, fallback_refresh_on=None):
+    if isinstance(raw_entry, dict):
+        dates = raw_entry.get("dates", [])
+        last_deep_refresh_on = (
+            raw_entry.get("last_deep_refresh_on")
+            or raw_entry.get("last_full_refresh_on")
+            or raw_entry.get("refreshed_on")
+            or fallback_refresh_on
+        )
+        last_yf_refresh_on = raw_entry.get("last_yf_refresh_on")
+    else:
+        dates = raw_entry
+        last_deep_refresh_on = fallback_refresh_on
+        last_yf_refresh_on = None
+
+    return {
+        "dates": _normalize_earnings_dates(dates),
+        "last_deep_refresh_on": last_deep_refresh_on,
+        "last_yf_refresh_on": last_yf_refresh_on,
+    }
+
+
+def _merge_earnings_dates(*date_lists):
+    merged = []
+    for values in date_lists:
+        merged.extend(values or [])
+    return _normalize_earnings_dates(merged)
+
+
+def _earnings_symbol_needs_deep_refresh(symbol_entry, today=None):
+    today = today or datetime.now().date()
+    dates = _normalize_earnings_dates(symbol_entry.get("dates", []), today=today)
+    if len(dates) < 2:
+        return True
+    latest_date = _parse_iso_date_or_none(dates[0])
+    if latest_date is None:
+        return True
+    return (today - latest_date).days >= EARNINGS_FORCE_REFRESH_AFTER_DAYS
 
 
 def compute_atr_from_ohlc(daily_rows, last_trade_date, length=ATR_LENGTH):
@@ -233,13 +371,12 @@ def compute_atr_from_ohlc(daily_rows, last_trade_date, length=ATR_LENGTH):
 def compute_trend_label_20d(daily_rows, last_trade_date):
     target = last_trade_date.isoformat()
     closes = [float(row["close"]) for row in daily_rows if row["date"] <= target]
-    if len(closes) < 20:
+    relevant_rows = [row for row in daily_rows if row["date"] <= target]
+    if len(closes) < 10 or not relevant_rows:
         return "SIDEWAYS"
 
     short = closes[-5:]
-    long = closes[-20:-5]
-    if not long:
-        return "SIDEWAYS"
+    long = closes[-20:] if len(closes) >= 20 else closes
 
     short_avg = mean(short)
     long_avg = mean(long)
@@ -247,12 +384,100 @@ def compute_trend_label_20d(daily_rows, last_trade_date):
         return "SIDEWAYS"
 
     diff_pct = (short_avg - long_avg) / long_avg * 100
-    threshold = 1.0
-    if diff_pct > threshold:
+    recent_closes = closes[-10:]
+    recent_rows = relevant_rows[-5:]
+
+    n = len(recent_closes)
+    x_mean = (n - 1) / 2
+    y_mean = mean(recent_closes)
+    denom = sum((idx - x_mean) ** 2 for idx in range(n))
+    slope = (
+        sum((idx - x_mean) * (value - y_mean) for idx, value in enumerate(recent_closes)) / denom
+        if denom else 0.0
+    )
+    slope_pct = (slope / y_mean * 100) if y_mean else 0.0
+    swing_base = recent_closes[0]
+    swing_pct = ((recent_closes[-1] - swing_base) / swing_base * 100) if swing_base else 0.0
+
+    recent_highs = [float(row["high"]) for row in recent_rows]
+    recent_lows = [float(row["low"]) for row in recent_rows]
+    up_structure = recent_highs[-1] > recent_highs[0] and recent_lows[-1] > recent_lows[0]
+    down_structure = recent_highs[-1] < recent_highs[0] and recent_lows[-1] < recent_lows[0]
+
+    if (
+        (diff_pct >= 0.40 and slope_pct >= 0.08)
+        or (swing_pct >= 1.00 and up_structure)
+    ):
         return "UP"
-    if diff_pct < -threshold:
+    if (
+        (diff_pct <= -0.40 and slope_pct <= -0.08)
+        or (swing_pct <= -1.00 and down_structure)
+    ):
         return "DOWN"
     return "SIDEWAYS"
+
+
+def compute_five_day_breakout_flags(daily_rows, last_trade_date):
+    target = last_trade_date.isoformat()
+    relevant = [row for row in daily_rows if row["date"] <= target]
+    if len(relevant) < 6:
+        return False, False
+
+    current = relevant[-1]
+    prior_five = relevant[-6:-1]
+    current_close = float(current["close"])
+    prior_high = max(float(row["high"]) for row in prior_five)
+    prior_low = min(float(row["low"]) for row in prior_five)
+    return current_close > prior_high, current_close < prior_low
+
+
+def count_recent_band_extension_days(daily_rows, last_trade_date, band_level, side, lookback=5):
+    if band_level is None:
+        return 0
+
+    target = last_trade_date.isoformat()
+    relevant = [row for row in daily_rows if row["date"] <= target]
+    if len(relevant) < 2:
+        return 0
+
+    prior_rows = relevant[max(0, len(relevant) - 1 - lookback):-1]
+    count = 0
+    for row in reversed(prior_rows):
+        if side == "LONG" and float(row["low"]) < band_level:
+            count += 1
+            continue
+        if side == "SHORT" and float(row["high"]) > band_level:
+            count += 1
+            continue
+        break
+    return count
+
+
+def analyze_avwap_retest_behavior(daily_rows, last_trade_date, current_vwap, side):
+    if current_vwap is None:
+        return False
+
+    target = last_trade_date.isoformat()
+    relevant = [row for row in daily_rows if row["date"] <= target]
+    if len(relevant) < 4:
+        return False
+
+    recent = relevant[-4:]
+    prior = recent[:-1]
+    current = recent[-1]
+    prior_closes = [float(row["close"]) for row in prior]
+    current_close = float(current["close"])
+
+    if side == "SHORT":
+        directional_drive = prior_closes[-1] < prior_closes[0]
+        retest = any(float(row["high"]) >= current_vwap for row in prior[-2:])
+        continuation = current_close < prior_closes[-1] and current_close < current_vwap
+        return directional_drive and retest and continuation
+
+    directional_drive = prior_closes[-1] > prior_closes[0]
+    retest = any(float(row["low"]) <= current_vwap for row in prior[-2:])
+    continuation = current_close > prior_closes[-1] and current_close > current_vwap
+    return directional_drive and retest and continuation
 
 
 def get_last_daily_row_for_date(daily_rows, last_trade_date):
@@ -292,49 +517,63 @@ def fetch_earnings_for_date(date_str: str):
         time.sleep(0.3)
         return []
 
-def collect_earnings_dates(symbols, fetch_fn=fetch_earnings_for_date, base_sleep=0.5):
+def collect_earnings_dates(
+    symbols,
+    fetch_fn=fetch_earnings_for_date,
+    base_sleep=0.5,
+    lookback_days=MAX_LOOKBACK_DAYS,
+    stop_when_complete=False,
+    min_dates_per_symbol=1,
+):
     """
     Return dict: sym -> sorted list of past earnings dates (YYYY-MM-DD), most recent first.
 
-    Short-circuits once every symbol has at least one earnings date, and reduces
-    throttle after the first discovery to speed up remaining lookups.
+    Default behavior walks the entire lookback window so quarterly anchor history
+    stays correct. Optional early-stop behavior is kept for targeted refreshes and
+    dry-run validation.
     """
-    symbol_dates = {sym: [] for sym in symbols}
+    normalized_symbols = sorted(
+        {str(sym or "").strip().upper() for sym in symbols if str(sym or "").strip()}
+    )
+    symbol_dates = {sym: [] for sym in normalized_symbols}
+    if not symbol_dates:
+        return {}
+
     today = datetime.now().date()
-    pending = set(symbols)
+    pending = set(normalized_symbols) if stop_when_complete else set()
+    minimum_dates = max(1, int(min_dates_per_symbol))
 
-    for delta in range(MAX_LOOKBACK_DAYS):
-        date = today - timedelta(days=delta)
-        rows = fetch_fn(date.isoformat())
+    for delta in range(lookback_days):
+        day = today - timedelta(days=delta)
+        rows = fetch_fn(day.isoformat())
+        if not isinstance(rows, list):
+            rows = []
         for row in rows:
-            sym = row.get("symbol", "").upper()
-            if sym in symbol_dates:
-                ds = date.isoformat()
-                if ds not in symbol_dates[sym]:
-                    symbol_dates[sym].append(ds)
-                    pending.discard(sym)
+            sym = str(row.get("symbol", "")).strip().upper()
+            if sym not in symbol_dates:
+                continue
+            ds = day.isoformat()
+            if ds not in symbol_dates[sym]:
+                symbol_dates[sym].append(ds)
+            if stop_when_complete and len(symbol_dates[sym]) >= minimum_dates:
+                pending.discard(sym)
 
-        if not pending:
-            logging.info("Collected earnings dates for all symbols; stopping early.")
+        if stop_when_complete and not pending:
+            logging.info("Collected required earnings history for all requested symbols; stopping early.")
             break
 
-        sleep_duration = base_sleep if len(pending) == len(symbols) else min(base_sleep, 0.2)
-        if sleep_duration:
-            time.sleep(sleep_duration)
+        if base_sleep:
+            time.sleep(base_sleep)
 
     for sym, dates in symbol_dates.items():
-        past = [d for d in dates
-                if datetime.fromisoformat(d).date() <= today]
-        past.sort(reverse=True)
-        symbol_dates[sym] = past
+        symbol_dates[sym] = _normalize_earnings_dates(dates, today=today)
 
     return symbol_dates
 
 
 def dry_run_collect_earnings_dates_short_circuit():
     """
-    Dry-run helper to validate collect_earnings_dates short-circuits once all
-    symbols have an earnings date. Uses a mocked fetch to avoid network calls.
+    Dry-run helper to validate optional short-circuit behavior.
     """
     symbols = ["AAA", "BBB", "CCC"]
     today = datetime.now().date()
@@ -352,7 +591,14 @@ def dry_run_collect_earnings_dates_short_circuit():
         calls.append(date_str)
         return schedule.get(date_str, [])
 
-    results = collect_earnings_dates(symbols, fetch_fn=mock_fetch, base_sleep=0)
+    results = collect_earnings_dates(
+        symbols,
+        fetch_fn=mock_fetch,
+        base_sleep=0,
+        lookback_days=10,
+        stop_when_complete=True,
+        min_dates_per_symbol=1,
+    )
 
     assert len(calls) == 3, f"Expected 3 fetches before short-circuiting, got {len(calls)}"
     assert all(results[sym] for sym in symbols), f"Missing earnings data for: {results}"
@@ -402,25 +648,72 @@ def yf_earnings_dates(symbol: str):
 
 def load_or_refresh_earnings(symbols):
     """
-    Refresh earnings dates at most once per day. Subsequent runs reuse the
-    cache unless new symbols are added.
+    Maintain a rolling earnings cache that can discover new quarterly releases.
+
+    The cache does a daily recent-window refresh across the universe to catch new
+    earnings quickly, then forces a deeper rebuild for symbols whose latest known
+    earnings is stale or whose history is incomplete.
     """
     cache = load_earnings_date_cache()
-    cached_date = cache.get("refreshed_on")
-    cached_data = cache.get("data", {})
+    symbol_cache = cache.setdefault("symbols", {})
+    today = datetime.now().date()
+    today_iso = today.isoformat()
+    normalized_symbols = sorted(
+        {str(sym or "").strip().upper() for sym in symbols if str(sym or "").strip()}
+    )
 
-    today_iso = datetime.now().date().isoformat()
-    missing_symbols = [s for s in symbols if s not in cached_data]
-    cache_stale = cached_date != today_iso
+    for sym in normalized_symbols:
+        symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
 
-    if cache_stale or missing_symbols:
-        logging.info("Refreshing earnings date cache from Nasdaq (once per day)…")
-        earnings_data = collect_earnings_dates(symbols)
-        cache = {"refreshed_on": today_iso, "data": earnings_data}
-        save_earnings_date_cache(cache)
-        return earnings_data
+    if cache.get("last_recent_refresh_on") != today_iso:
+        logging.info(
+            f"Refreshing recent earnings window across {len(normalized_symbols)} symbols "
+            f"({EARNINGS_RECENT_DISCOVERY_WINDOW_DAYS} days)."
+        )
+        recent_updates = collect_earnings_dates(
+            normalized_symbols,
+            lookback_days=EARNINGS_RECENT_DISCOVERY_WINDOW_DAYS,
+            base_sleep=0.15,
+        )
+        for sym in normalized_symbols:
+            entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
+            entry["dates"] = _merge_earnings_dates(entry.get("dates", []), recent_updates.get(sym, []))
+        cache["last_recent_refresh_on"] = today_iso
 
-    return {sym: cached_data.get(sym, []) for sym in symbols}
+    deep_refresh_symbols = [
+        sym for sym in normalized_symbols
+        if _earnings_symbol_needs_deep_refresh(symbol_cache.get(sym, {}), today=today)
+    ]
+    if deep_refresh_symbols:
+        logging.info(
+            f"Refreshing deep earnings history for {len(deep_refresh_symbols)} symbol(s) "
+            f"({EARNINGS_DEEP_LOOKBACK_DAYS} days)."
+        )
+        deep_updates = collect_earnings_dates(
+            deep_refresh_symbols,
+            lookback_days=EARNINGS_DEEP_LOOKBACK_DAYS,
+            base_sleep=0.15,
+        )
+        for sym in deep_refresh_symbols:
+            entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
+            entry["dates"] = _merge_earnings_dates(entry.get("dates", []), deep_updates.get(sym, []))
+            entry["last_deep_refresh_on"] = today_iso
+
+        logging.info(
+            f"Supplementing stale/incomplete earnings history with yfinance for {len(deep_refresh_symbols)} symbol(s)."
+        )
+        for sym in deep_refresh_symbols:
+            entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
+            yf_dates = yf_earnings_dates(sym)
+            if yf_dates:
+                entry["dates"] = _merge_earnings_dates(entry.get("dates", []), yf_dates)
+                entry["last_yf_refresh_on"] = today_iso
+
+    save_earnings_date_cache(cache)
+    return {
+        sym: _normalize_earnings_dates(symbol_cache.get(sym, {}).get("dates", []), today=today)
+        for sym in normalized_symbols
+    }
 
 # ============================================================================
 # EARNINGS GAP-ANCHOR SCANNER (D1 FOUNDATION)
@@ -442,9 +735,7 @@ EARNINGS_ANCHOR_COLUMNS = [
     "created_at",
 ]
 
-PREVIOUS_GAP_UPS_FILE = OUTPUT_DIR / "previous_gap_ups.csv"
-ANCHOR_AVWAP_OUTPUT_FILE = OUTPUT_DIR / "master_anchor_avwap_events.txt"
-ANCHOR_AVWAP_SIGNALS_FILE = OUTPUT_DIR / "master_anchor_avwap_signals.csv"
+ANCHOR_AVWAP_OUTPUT_FILE = MASTER_ANCHOR_AVWAP_REPORT_FILE
 ANCHOR_AVWAP_SIGNAL_COLUMNS = [
     "run_date",
     "trade_date",
@@ -1203,6 +1494,9 @@ def build_priority_setup_summary(
     all_events: list[str],
     trend_label: str,
     favorite_zone: str | None,
+    recent_band_extension_days: int = 0,
+    breakout_5d: bool = False,
+    retest_followthrough: bool = False,
 ) -> dict:
     current_weights = FAVORITE_CURRENT_SIGNALS.get(side, {})
     context_weights = FAVORITE_CONTEXT_SIGNALS.get(side, {})
@@ -1214,6 +1508,17 @@ def build_priority_setup_summary(
 
     if favorite_zone:
         score += 18
+
+    if retest_followthrough:
+        score += 22
+
+    if breakout_5d:
+        score += 14
+
+    if recent_band_extension_days <= 2:
+        score += 8
+    else:
+        score -= min(18, (recent_band_extension_days - 2) * 6)
 
     if side == "LONG" and trend_label == "UP":
         score += 8
@@ -1232,6 +1537,9 @@ def build_priority_setup_summary(
         "favorite_zone": favorite_zone,
         "trend_20d": trend_label,
         "has_favorite_signal": bool(favorite_signals),
+        "recent_band_extension_days": recent_band_extension_days,
+        "breakout_5d": breakout_5d,
+        "retest_followthrough": retest_followthrough,
     }
 
 
@@ -1255,9 +1563,13 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             signals = ", ".join(format_signal_label(evt) for evt in row["favorite_signals"]) or "None"
             context = ", ".join(format_signal_label(evt) for evt in row["context_signals"]) or "None"
             zone = row["favorite_zone"] or "None"
+            extension_days = row.get("recent_band_extension_days", 0)
+            breakout_text = "Y" if row.get("breakout_5d") else "N"
+            retest_text = "Y" if row.get("retest_followthrough") else "N"
             handle.write(
                 f"{row['symbol']:<6} {row['side']:<5} score={row['score']:<3} "
-                f"signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']}\n"
+                f"signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']} "
+                f"| ext_days={extension_days} | 5d_breakout={breakout_text} | retest={retest_text}\n"
             )
         handle.write("\n")
 
@@ -1267,6 +1579,51 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         handle.write("Focus: AVWAPE bounces plus UPPER_1 long crosses / LOWER_1 short crosses\n\n")
         _write_rows(handle, "Best current favorite setups", favorites)
         _write_rows(handle, "Near favorite zones", watchlist)
+
+
+def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_state: dict) -> None:
+    ranked_rows = sorted(priority_rows, key=lambda row: (-row["score"], row["symbol"]))
+    favorite_rows = [row for row in ranked_rows if row["has_favorite_signal"]][:MASTER_AVWAP_FOCUS_LIMIT_PER_BUCKET]
+    near_rows = [
+        row for row in ranked_rows
+        if not row["has_favorite_signal"] and row["favorite_zone"]
+    ][:MASTER_AVWAP_FOCUS_LIMIT_PER_BUCKET]
+
+    def _build_entry(row: dict, bucket: str, rank: int) -> dict:
+        symbol = row["symbol"]
+        symbol_state = ai_state.get("symbols", {}).get(symbol, {})
+        return {
+            "symbol": symbol,
+            "side": row["side"],
+            "priority_bucket": bucket,
+            "priority_rank": rank,
+            "priority_score": row["score"],
+            "favorite_zone": row.get("favorite_zone") or "",
+            "trend_20d": row.get("trend_20d") or "SIDEWAYS",
+            "favorite_signals": list(row.get("favorite_signals") or []),
+            "favorite_context_signals": list(row.get("context_signals") or []),
+            "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),
+            "breakout_5d": bool(row.get("breakout_5d")),
+            "retest_followthrough": bool(row.get("retest_followthrough")),
+            "has_bounce_event_today": bool(symbol_state.get("has_bounce_event_today")),
+            "last_trade_date": symbol_state.get("last_trade_date"),
+        }
+
+    favorites = [_build_entry(row, "favorite_setup", idx + 1) for idx, row in enumerate(favorite_rows)]
+    near_favorites = [_build_entry(row, "near_favorite_zone", idx + 1) for idx, row in enumerate(near_rows)]
+    symbol_map = {
+        entry["symbol"]: entry
+        for entry in favorites + near_favorites
+    }
+
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "run_date": datetime.now().date().isoformat(),
+        "favorites": favorites,
+        "near_favorite_zones": near_favorites,
+        "symbols": symbol_map,
+    }
+    save_json(path, payload)
 
 
 def closes_between_bands(
@@ -1558,7 +1915,7 @@ def run_master():
         if not dates:
             dates = yf_earnings_dates(sym)
             if dates:
-                earnings_data[sym] = dates
+                earnings_data[sym] = _normalize_earnings_dates(dates)
                 earnings_cache_updated = True
 
         if not dates:
@@ -1582,7 +1939,15 @@ def run_master():
                 logging.info(f"{sym}: previous anchor -> {previous_anchor}")
 
     if earnings_cache_updated:
-        save_earnings_date_cache({"refreshed_on": today_iso, "data": earnings_data})
+        earnings_cache = load_earnings_date_cache()
+        symbol_cache = earnings_cache.setdefault("symbols", {})
+        for sym, dates in earnings_data.items():
+            if not dates:
+                continue
+            entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
+            entry["dates"] = _merge_earnings_dates(entry.get("dates", []), dates)
+            entry["last_yf_refresh_on"] = today_iso
+        save_earnings_date_cache(earnings_cache)
 
     if missing_anchors:
         logging.warning(
@@ -1689,6 +2054,12 @@ def run_master():
                     "avwap_price": _to_float(avwap_value),
                     "band_price": _to_float(band_value),
                     "stdev": _to_float(stdev_value),
+                    "priority_bucket": "",
+                    "is_favorite_setup": False,
+                    "is_near_favorite_zone": False,
+                    "favorite_zone": "",
+                    "favorite_signals": "",
+                    "favorite_context_signals": "",
                 }
 
         # Current earnings AVWAP
@@ -1843,11 +2214,6 @@ def run_master():
         # include multi-day patterns as events as well
         full_event_list = symbol_events_today + symbol_multi_day
 
-        for lbl in symbol_events_today:
-            record = symbol_signal_info.get(lbl)
-            if record:
-                csv_rows.append(record)
-
         # record in history
         entry = {
             "date": today_run.isoformat(),
@@ -1950,6 +2316,21 @@ def run_master():
         elif side == "SHORT" and _between(current_lower_1, current_vwap):
             favorite_zone = "LOWER_1 to AVWAPE"
 
+        breakout_long_5d, breakout_short_5d = compute_five_day_breakout_flags(daily_ohlc, last_trade_date)
+        recent_band_extension_days = count_recent_band_extension_days(
+            daily_ohlc,
+            last_trade_date,
+            current_lower_1 if side == "LONG" else current_upper_1,
+            side,
+        )
+        breakout_5d = breakout_long_5d if side == "LONG" else breakout_short_5d
+        retest_followthrough = analyze_avwap_retest_behavior(
+            daily_ohlc,
+            last_trade_date,
+            current_vwap,
+            side,
+        )
+
         if current_anchor_meta:
             stdev_blocked_by_recent_earnings = False
             if recent_earnings_dates:
@@ -2020,6 +2401,9 @@ def run_master():
             "trend_20d": trend_label,
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
+            "recent_band_extension_days": recent_band_extension_days,
+            "breakout_5d": breakout_5d,
+            "retest_followthrough": retest_followthrough,
         }
 
         priority_summary = build_priority_setup_summary(
@@ -2029,11 +2413,33 @@ def run_master():
             all_events=full_event_list,
             trend_label=trend_label,
             favorite_zone=favorite_zone,
+            recent_band_extension_days=recent_band_extension_days,
+            breakout_5d=breakout_5d,
+            retest_followthrough=retest_followthrough,
         )
         symbol_entry["priority_score"] = priority_summary["score"]
         symbol_entry["favorite_signals"] = priority_summary["favorite_signals"]
         symbol_entry["favorite_context_signals"] = priority_summary["context_signals"]
         priority_rows.append(priority_summary)
+
+        priority_bucket = ""
+        if priority_summary["has_favorite_signal"]:
+            priority_bucket = "favorite_setup"
+        elif favorite_zone:
+            priority_bucket = "near_favorite_zone"
+
+        for record in symbol_signal_info.values():
+            record["priority_bucket"] = priority_bucket
+            record["is_favorite_setup"] = bool(priority_summary["has_favorite_signal"])
+            record["is_near_favorite_zone"] = bool(favorite_zone)
+            record["favorite_zone"] = favorite_zone or ""
+            record["favorite_signals"] = ";".join(priority_summary["favorite_signals"])
+            record["favorite_context_signals"] = ";".join(priority_summary["context_signals"])
+
+        for lbl in symbol_events_today:
+            record = symbol_signal_info.get(lbl)
+            if record:
+                csv_rows.append(record)
 
         ai_state["symbols"][sym] = symbol_entry
 
@@ -2056,6 +2462,9 @@ def run_master():
             "trend_20d": trend_label,
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
+            "recent_band_extension_days": recent_band_extension_days,
+            "breakout_5d": breakout_5d,
+            "retest_followthrough": retest_followthrough,
             "priority_score": priority_summary["score"],
             "favorite_signals": ";".join(priority_summary["favorite_signals"]),
             "favorite_context_signals": ";".join(priority_summary["context_signals"]),
@@ -2074,15 +2483,15 @@ def run_master():
         df_signals = df_signals.reindex(columns=AVWAP_CSV_COLUMNS)
         df_signals.sort_values(["run_date", "trade_date", "symbol", "signal_type"], inplace=True)
 
-        write_header = (
-            not AVWAP_SIGNALS_FILE.exists()
-            or AVWAP_SIGNALS_FILE.stat().st_size == 0
-        )
+        if AVWAP_SIGNALS_FILE.exists() and AVWAP_SIGNALS_FILE.stat().st_size > 0:
+            existing_signals = pd.read_csv(AVWAP_SIGNALS_FILE)
+            existing_signals = existing_signals.reindex(columns=AVWAP_CSV_COLUMNS)
+            df_signals = pd.concat([existing_signals, df_signals], ignore_index=True)
+            df_signals.sort_values(["run_date", "trade_date", "symbol", "signal_type"], inplace=True)
+
         df_signals.to_csv(
             AVWAP_SIGNALS_FILE,
-            mode="a",
             index=False,
-            header=write_header,
         )
         logging.info(
             f"Appended {len(df_signals)} AVWAP signals to {AVWAP_SIGNALS_FILE}"
@@ -2095,6 +2504,7 @@ def run_master():
     # trim history to last N days
     trim_history(history)
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
+    write_master_avwap_focus_feed(MASTER_AVWAP_FOCUS_FILE, priority_rows, ai_state)
 
     # write human-readable events file (grouped for easier scanning)
     sorted_events = sort_events_for_output(events_for_output)
@@ -2179,6 +2589,9 @@ def run_master():
         "trend_20d",
         "has_bounce_event_today",
         "favorite_zone",
+        "recent_band_extension_days",
+        "breakout_5d",
+        "retest_followthrough",
         "priority_score",
         "favorite_signals",
         "favorite_context_signals",
