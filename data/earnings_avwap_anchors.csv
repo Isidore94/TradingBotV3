@@ -1,1 +1,7 @@
 ticker,side,anchor_date,gap_date,earnings_date,release_session,gap_atr_multiple,price,avg_volume20,market_cap,notes,source,created_at
+DELL,LONG,2026-02-26,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:09:45
+ROST,LONG,2026-03-03,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:10:10
+IOVA,LONG,2026-02-23,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:10:34
+IRM,LONG,2026-02-11,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:10:45
+ACHC,LONG,2026-02-24,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:11:02
+PCG,LONG,2026-02-11,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:11:14

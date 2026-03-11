@@ -227,6 +227,7 @@ BOUNCE_MIN_RANGE_TO_MEDIAN = 1.05
 BOUNCE_VOLUME_LOOKBACK_BARS = 6
 BOUNCE_MIN_RELATIVE_VOLUME = 1.10
 BOUNCE_CONFIRMATION_MAX_CANDLES = 3
+VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES = 4
 
 
 def utc_now_iso():
@@ -1590,7 +1591,10 @@ class BounceBot(EWrapper, EClient):
         return False
 
     def _build_intraday_level_series_maps(self, df, current_date):
-        prepared = self._prepare_vwap_frame(df)
+        if "datetime" in df.columns and "typical_price" in df.columns:
+            prepared = df.copy()
+        else:
+            prepared = self._prepare_vwap_frame(df)
         if prepared.empty:
             return {}
 
@@ -1610,8 +1614,28 @@ class BounceBot(EWrapper, EClient):
         }
 
         previous_sessions = sorted(d for d in prepared["datetime"].dt.date.unique() if d < current_date)
+        previous_session_df = (
+            prepared[prepared["datetime"].dt.date == previous_sessions[-1]].copy()
+            if previous_sessions
+            else pd.DataFrame()
+        )
+
+        dynamic_source = (
+            pd.concat([previous_session_df, today_prepared], ignore_index=True)
+            if not previous_session_df.empty
+            else today_prepared.copy()
+        )
+        dynamic_skip_rows = len(previous_session_df)
+        dynamic_source["cum_vol"] = dynamic_source["volume"].cumsum()
+        dynamic_source["cum_vol_price"] = (dynamic_source["typical_price"] * dynamic_source["volume"]).cumsum()
+        dynamic_source["level_value"] = dynamic_source["cum_vol_price"] / dynamic_source["cum_vol"]
+        series_maps["dynamic_vwap"] = {
+            row["datetime"]: float(row["level_value"])
+            for _, row in dynamic_source.iloc[dynamic_skip_rows:].iterrows()
+        }
+
         if previous_sessions:
-            prev_tail = prepared[prepared["datetime"].dt.date == previous_sessions[-1]].tail(1).copy()
+            prev_tail = previous_session_df.tail(1).copy()
             eod_source = pd.concat([prev_tail, today_prepared], ignore_index=True)
             skip_rows = len(prev_tail)
         else:
@@ -1641,6 +1665,64 @@ class BounceBot(EWrapper, EClient):
                 confluence_map[dt] = (min(std_val, eod_val), max(std_val, eod_val))
         series_maps["vwap_eod_confluence"] = confluence_map
         return series_maps
+
+    def _build_vwap_invalidation_snapshot(self, df, direction):
+        prepared = self._prepare_vwap_frame(df)
+        if prepared.empty:
+            return None
+
+        current_date = prepared["datetime"].iloc[-1].date()
+        today_prepared = prepared[prepared["datetime"].dt.date == current_date].copy()
+        if today_prepared.empty:
+            return None
+
+        level_series_maps = self._build_intraday_level_series_maps(prepared, current_date)
+        if not level_series_maps:
+            return None
+
+        consecutive_bad_closes = 0
+        recent_rows = []
+        for _, row in today_prepared.sort_values("datetime", ascending=False).iterrows():
+            bar_dt = row["datetime"]
+            close_value = float(row["close"])
+            levels = {
+                "vwap": level_series_maps.get("vwap", {}).get(bar_dt),
+                "dynamic_vwap": level_series_maps.get("dynamic_vwap", {}).get(bar_dt),
+                "eod_vwap": level_series_maps.get("eod_vwap", {}).get(bar_dt),
+            }
+            if any(level is None for level in levels.values()):
+                break
+
+            if direction == "long":
+                violates_levels = all(close_value < level for level in levels.values())
+            else:
+                violates_levels = all(close_value > level for level in levels.values())
+
+            recent_rows.append(
+                {
+                    "datetime": bar_dt.isoformat(),
+                    "close": close_value,
+                    "vwap": float(levels["vwap"]),
+                    "dynamic_vwap": float(levels["dynamic_vwap"]),
+                    "eod_vwap": float(levels["eod_vwap"]),
+                    "violates_levels": violates_levels,
+                }
+            )
+
+            if not violates_levels:
+                break
+            consecutive_bad_closes += 1
+
+        recent_rows.reverse()
+        last_row = recent_rows[-1] if recent_rows else None
+        return {
+            "direction": direction,
+            "required_consecutive_closes": VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES,
+            "consecutive_bad_closes": consecutive_bad_closes,
+            "bars_reviewed": len(recent_rows),
+            "last_row": last_row,
+            "recent_rows": recent_rows,
+        }
 
     def _load_symbol_classification_cache(self):
         if not SYMBOL_CLASSIFICATION_CACHE_FILENAME.exists():
@@ -3362,6 +3444,7 @@ class BounceBot(EWrapper, EClient):
 
         # 6. Get current price
         current_price = today_df["close"].iloc[-1] if not today_df.empty else None
+        direction = "long" if symbol in self.longs else "short"
         
         # Calculate standard VWAP with bands
         vwap_value, vwap_upper_band, vwap_lower_band = self.calculate_vwap_with_stdev_bands(today_df)
@@ -3385,6 +3468,7 @@ class BounceBot(EWrapper, EClient):
         eod_lower_str = f"{eod_lower_band:.4f}" if eod_lower_band is not None else "None"
         logging.debug(f"{symbol}: EOD VWAP: {eod_vwap_str}, Upper 1SD: {eod_upper_str}, Lower 1SD: {eod_lower_str}")
 
+        vwap_invalidation = self._build_vwap_invalidation_snapshot(df, direction)
 
         # Store all metrics in one comprehensive dictionary
         self.symbol_metrics[symbol] = {
@@ -3402,7 +3486,8 @@ class BounceBot(EWrapper, EClient):
             "eod_vwap_1stdev_lower": eod_lower_band,
             "ema_8": ema_8,
             "ema_15": ema_15,
-            "ema_21": ema_21
+            "ema_21": ema_21,
+            "vwap_invalidation": vwap_invalidation,
         }
 
         # Then continue with detailed logging if LOGGING_MODE is enabled
@@ -3431,7 +3516,6 @@ class BounceBot(EWrapper, EClient):
 
 
         # Continue with evaluating bounce candidates
-        direction = "long" if symbol in self.longs else "short"
         candidate_info = self.evaluate_bounce_candidate(symbol, df, allowed_bounce_types=allowed_bounce_types)
 
         
@@ -3555,46 +3639,39 @@ class BounceBot(EWrapper, EClient):
 
 
     def check_removal_conditions(self):
-        if not self.has_minimum_candles_completed():
-            logging.info("Skipping removal conditions until 6 completed 5-minute candles.")
+        if not self.has_minimum_candles_completed(required=VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES):
+            logging.info(
+                f"Skipping removal conditions until {VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES} completed 5-minute candles."
+            )
             return
-        for file_name, direction in [(LONGS_FILENAME, "long"), (SHORTS_FILENAME, "short")]:
-            tickers = read_tickers(file_name)
+        for watchlist_path, direction in [(LONGS_FILENAME, "long"), (SHORTS_FILENAME, "short")]:
+            tickers = read_tickers(watchlist_path)
             for symbol in tickers:
                 if symbol not in self.symbol_metrics:
                     continue
-                    
+
                 metrics = self.symbol_metrics[symbol]
-                current_price = metrics.get("price")
-                eod_vwap = metrics.get("eod_vwap")
-                dynamic_vwap = metrics.get("dynamic_vwap")
-                prev_high = metrics.get("prev_high")
-                prev_low = metrics.get("prev_low")
-                
-                if current_price is None:
+                invalidation = metrics.get("vwap_invalidation") or {}
+                consecutive_bad_closes = int(invalidation.get("consecutive_bad_closes") or 0)
+                if consecutive_bad_closes < VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES:
                     continue
-                    
-                if (eod_vwap is None or dynamic_vwap is None or 
-                    (direction == "long" and prev_high is None) or 
-                    (direction == "short" and prev_low is None)):
-                    continue
-                
-                if direction == "long":
-                    if (current_price < eod_vwap and 
-                        current_price < dynamic_vwap and 
-                        current_price < prev_high):
-                        self.remove_from_watchlist(symbol, direction)
-                        if self.gui_callback:
-                            removal_msg = f"{symbol} removed from {direction}s watchlist - price below all key levels"
-                            self.gui_callback(removal_msg, "blue")
-                else:
-                    if (current_price > eod_vwap and 
-                        current_price > dynamic_vwap and 
-                        current_price > prev_low):
-                        self.remove_from_watchlist(symbol, direction)
-                        if self.gui_callback:
-                            removal_msg = f"{symbol} removed from {direction}s watchlist - price above all key levels"
-                            self.gui_callback(removal_msg, "blue")
+
+                last_row = invalidation.get("last_row") or {}
+                close_value = last_row.get("close")
+                vwap_value = last_row.get("vwap")
+                dynamic_vwap = last_row.get("dynamic_vwap")
+                eod_vwap = last_row.get("eod_vwap")
+                level_side = "below" if direction == "long" else "above"
+
+                self.remove_from_watchlist(symbol, direction)
+                removal_msg = (
+                    f"{symbol} removed from {direction}s watchlist - "
+                    f"{consecutive_bad_closes} completed M5 closes {level_side} VWAP/Dynamic VWAP/EOD VWAP "
+                    f"(close={close_value:.2f}, vwap={vwap_value:.2f}, dvwap={dynamic_vwap:.2f}, eod={eod_vwap:.2f})"
+                )
+                logging.info(removal_msg)
+                if self.gui_callback:
+                    self.gui_callback(removal_msg, "blue")
 
     def remove_from_watchlist(self, symbol, direction):
         filename = LONGS_FILENAME if direction == "long" else SHORTS_FILENAME
@@ -3608,6 +3685,12 @@ class BounceBot(EWrapper, EClient):
                 self.longs = symbols
             else:
                 self.shorts = symbols
+            self.bounce_candidates.pop(symbol, None)
+            self.symbol_metrics.pop(symbol, None)
+            self.latest_bars.pop(symbol, None)
+            stale_bar_keys = [key for key in self.latest_bars if str(key).startswith(f"{symbol}|")]
+            for key in stale_bar_keys:
+                self.latest_bars.pop(key, None)
             logging.info(f"{symbol} removed from {filename} due to removal condition.")
         except Exception as e:
             logging.error(f"Error removing {symbol} from {filename}: {e}")

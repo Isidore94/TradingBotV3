@@ -2,6 +2,7 @@
 import os
 import time
 import json
+import re
 import logging
 import threading
 import argparse
@@ -145,6 +146,18 @@ MIN_GAP_ATR_MULTIPLE = 1.0
 RECENT_EARNINGS_SESSION_BLOCK = 12  # skip current AVWAPE events if last earnings is this recent
 STDEV_RECENT_EARNINGS_BLOCK = 7      # skip stdev 2-3 scan when earnings is too recent
 BOUNCE_LEVEL_ATR_TOL_PCT = 0.12      # 12% ATR proximity threshold for level touch/bounce
+PRIORITY_SMA_LOOKBACK_DAYS = 320
+PRIORITY_SMA_PERIODS = (20, 50, 100, 200)
+PRIORITY_SMA_DQ_ATR = 2.0
+PRIORITY_SMA_WARN_ATR = 3.0
+PRIORITY_PREV_AVWAP_WARN_ATR = 3.0
+PRIORITY_TRENDLINE_LOOKBACK_BARS = 200
+PRIORITY_TRENDLINE_MIN_ANGLE_DEG = 30.0
+PRIORITY_TRENDLINE_MAX_ANGLE_DEG = 60.0
+PRIORITY_TRENDLINE_TOUCH_TOL_ATR = 0.35
+PRIORITY_TRENDLINE_ALERT_ATR = 1.0
+PRIORITY_TRENDLINE_PIVOT_WINDOW = 3
+PRIORITY_TRENDLINE_MIN_SEPARATION_BARS = 10
 POSITION_LEVELS = [
     "VWAP",
     "UPPER_1",
@@ -161,6 +174,8 @@ GUI_DARK_INPUT = "#252525"
 # Softer light-gray text improves readability on platforms where pure white
 # foreground can appear blown out against themed widget backgrounds.
 GUI_DARK_TEXT = "#C7CDD4"
+WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
+WATCHLIST_SKIP_TOKENS = {"LONG", "SHORT", "NONE"}
 
 # ============================================================================
 # LOGGING
@@ -959,16 +974,52 @@ def _coerce_int(value):
 
 
 
-def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session: str):
-    tkr = yf.Ticker(symbol)
-    try:
-        hist = tkr.history(period="4mo", interval="1d", auto_adjust=False)
-    except Exception as exc:
-        logging.warning(f"{symbol}: failed history download for earnings scan ({exc})")
-        return None
+def load_latest_earnings_release_map(symbols) -> dict[str, dict | None]:
+    normalized_symbols = _ordered_unique_symbols(symbols)
+    if not normalized_symbols:
+        return {}
 
-    if hist is None or hist.empty or len(hist) < ATR_LENGTH + 5:
-        return None
+    earnings_lookup = load_or_refresh_earnings(normalized_symbols)
+    unique_dates = sorted({dates[0] for dates in earnings_lookup.values() if dates}, reverse=True)
+    rows_by_date = {}
+    for earnings_date_iso in unique_dates:
+        rows = fetch_earnings_for_date(earnings_date_iso)
+        rows_by_date[earnings_date_iso] = rows if isinstance(rows, list) else []
+
+    release_map = {}
+    for symbol in normalized_symbols:
+        dates = earnings_lookup.get(symbol, [])
+        if not dates:
+            release_map[symbol] = None
+            continue
+
+        earnings_date_iso = dates[0]
+        release_session = "unknown"
+        for row in rows_by_date.get(earnings_date_iso, []):
+            row_symbol = str(row.get("symbol", "")).strip().upper()
+            if row_symbol != symbol:
+                continue
+            release_session = infer_release_session(row)
+            break
+
+        release_map[symbol] = {
+            "earnings_date": earnings_date_iso,
+            "release_session": release_session,
+        }
+
+    return release_map
+
+
+def _load_symbol_daily_history_frame(symbol: str):
+    ticker_obj = yf.Ticker(symbol)
+    try:
+        hist = ticker_obj.history(period="4mo", interval="1d", auto_adjust=False)
+    except Exception as exc:
+        logging.warning(f"{symbol}: failed history download for earnings anchor resolution ({exc})")
+        return ticker_obj, pd.DataFrame()
+
+    if hist is None or hist.empty:
+        return ticker_obj, pd.DataFrame()
 
     hist = hist.copy()
     if getattr(hist.index, "tz", None) is not None:
@@ -977,7 +1028,7 @@ def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session:
     hist = hist.rename(columns={c: c.lower() for c in hist.columns})
     for col in ["open", "high", "low", "close", "volume"]:
         if col not in hist.columns:
-            return None
+            return ticker_obj, pd.DataFrame()
 
     df = hist.reset_index().rename(columns={"Date": "datetime", "date": "datetime"})
     if "datetime" not in df.columns:
@@ -986,22 +1037,75 @@ def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session:
     df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
     df = df.sort_values("datetime").reset_index(drop=True)
     df["trade_date"] = df["datetime"].dt.date
+    return ticker_obj, df
 
+
+def _infer_gap_index_from_history(df: pd.DataFrame, earnings_idx: int):
+    candidates = []
+    if earnings_idx > 0:
+        same_day_gap = abs(float(df.iloc[earnings_idx]["open"]) - float(df.iloc[earnings_idx - 1]["close"]))
+        candidates.append((same_day_gap, earnings_idx, "bmo_inferred"))
+    if earnings_idx + 1 < len(df):
+        next_day_gap = abs(float(df.iloc[earnings_idx + 1]["open"]) - float(df.iloc[earnings_idx]["close"]))
+        candidates.append((next_day_gap, earnings_idx + 1, "amc_inferred"))
+    if not candidates:
+        return None, "unknown"
+    _, gap_idx, resolved_session = max(candidates, key=lambda item: item[0])
+    return gap_idx, resolved_session
+
+
+def _resolve_gap_window_from_earnings_event(
+    df: pd.DataFrame,
+    earnings_date,
+    release_session: str,
+):
     earnings_idx = df.index[df["trade_date"] == earnings_date]
     if earnings_idx.empty:
         return None
 
-    release_session = (release_session or "unknown").lower()
-    if release_session == "amc":
-        gap_idx = int(earnings_idx[0]) + 1
+    earnings_idx = int(earnings_idx[0])
+    normalized_session = (release_session or "").strip().lower()
+    if normalized_session == "amc":
+        gap_idx = earnings_idx + 1
+        resolved_session = "amc"
+    elif normalized_session == "bmo":
+        gap_idx = earnings_idx
+        resolved_session = "bmo"
     else:
-        gap_idx = int(earnings_idx[0])
+        gap_idx, resolved_session = _infer_gap_index_from_history(df, earnings_idx)
 
-    if gap_idx <= 0 or gap_idx >= len(df):
+    if gap_idx is None or gap_idx <= 0 or gap_idx >= len(df):
         return None
 
+    return {
+        "earnings_idx": earnings_idx,
+        "anchor_idx": gap_idx - 1,
+        "gap_idx": gap_idx,
+        "release_session": resolved_session,
+    }
+
+
+def build_earnings_anchor_candidate(
+    symbol: str,
+    earnings_date,
+    release_session: str,
+    side: str = "LONG",
+    require_filters: bool = True,
+    source: str = "program",
+    notes: str = "",
+):
+    ticker_obj, df = _load_symbol_daily_history_frame(symbol)
+    if df.empty or len(df) < 2:
+        return None
+
+    gap_window = _resolve_gap_window_from_earnings_event(df, earnings_date, release_session)
+    if not gap_window:
+        return None
+
+    gap_idx = gap_window["gap_idx"]
+    anchor_idx = gap_window["anchor_idx"]
     gap_row = df.iloc[gap_idx]
-    anchor_row = df.iloc[gap_idx - 1]
+    anchor_row = df.iloc[anchor_idx]
     pre_gap = df.iloc[:gap_idx + 1]
 
     atr20 = get_atr20(pre_gap[["open", "high", "low", "close", "volume"]], ATR_LENGTH)
@@ -1015,36 +1119,53 @@ def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session:
 
     avg_vol_20 = int(pre_gap["volume"].tail(20).mean()) if len(pre_gap) >= 20 else 0
     last_price = float(gap_row["close"])
+    market_cap = 0
 
-    info = _get_info_with_fallbacks(tkr)
-    market_cap = _coerce_int(
-        info.get("marketCap")
-        or info.get("market_cap")
-        or getattr(getattr(tkr, "fast_info", {}), "get", lambda *_: None)("marketCap")
-    )
+    if require_filters:
+        info = _get_info_with_fallbacks(ticker_obj)
+        market_cap = _coerce_int(
+            info.get("marketCap")
+            or info.get("market_cap")
+            or getattr(getattr(ticker_obj, "fast_info", {}), "get", lambda *_: None)("marketCap")
+        )
 
-    if last_price < MIN_PRICE:
-        return None
-    if avg_vol_20 < MIN_AVG_VOLUME_20D:
-        return None
-    if market_cap is None or market_cap < MIN_MARKET_CAP:
-        return None
-    if not has_weekly_options(symbol):
-        return None
-    if gap_atr_multiple < MIN_GAP_ATR_MULTIPLE:
-        return None
+        if last_price < MIN_PRICE:
+            return None
+        if avg_vol_20 < MIN_AVG_VOLUME_20D:
+            return None
+        if market_cap is None or market_cap < MIN_MARKET_CAP:
+            return None
+        if not has_weekly_options(symbol):
+            return None
+        if gap_atr_multiple < MIN_GAP_ATR_MULTIPLE:
+            return None
+
+        market_cap = int(market_cap or 0)
 
     return EarningsGapAnchorCandidate(
         ticker=symbol,
         anchor_date=anchor_row["trade_date"].isoformat(),
-        side="LONG",
+        side=normalize_side(side),
         gap_date=gap_row["trade_date"].isoformat(),
         earnings_date=earnings_date.isoformat(),
-        release_session=release_session,
+        release_session=gap_window["release_session"],
         gap_atr_multiple=round(gap_atr_multiple, 3),
         price=round(last_price, 3),
         avg_volume20=avg_vol_20,
         market_cap=market_cap,
+        notes=str(notes or "").strip(),
+        source=str(source or "").strip() or "program",
+    )
+
+
+def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session: str):
+    return build_earnings_anchor_candidate(
+        symbol,
+        earnings_date,
+        release_session,
+        side="LONG",
+        require_filters=True,
+        source="earnings_scan",
     )
 
 
@@ -1123,6 +1244,141 @@ def _format_symbols_for_tc2000(symbols) -> str:
         cleaned.add(text.split()[0])
     cleaned = sorted(cleaned)
     return ", ".join(cleaned) if cleaned else "None"
+
+
+def _ordered_unique_symbols(symbols) -> list[str]:
+    ordered = []
+    seen = set()
+    for symbol in symbols or []:
+        text = str(symbol).strip().upper()
+        if not text or text in seen:
+            continue
+        ordered.append(text)
+        seen.add(text)
+    return ordered
+
+
+def _format_symbol_group(symbols) -> str:
+    ordered = _ordered_unique_symbols(symbols)
+    return ", ".join(ordered) if ordered else "None"
+
+
+def _extract_symbols_from_text(text: str) -> list[str]:
+    matches = WATCHLIST_SYMBOL_RE.findall(str(text or "").upper())
+    return [
+        symbol
+        for symbol in _ordered_unique_symbols(matches)
+        if symbol not in WATCHLIST_SKIP_TOKENS
+    ]
+
+
+def load_latest_anchor_candidate_rows(
+    path: Path = EARNINGS_ANCHOR_CANDIDATES_FILE,
+) -> dict[str, dict]:
+    ensure_anchor_candidate_file(path)
+    try:
+        df = pd.read_csv(path)
+    except Exception as exc:
+        logging.warning(f"Failed to load earnings anchor candidates from {path}: {exc}")
+        return {}
+
+    if df.empty:
+        return {}
+
+    for col in EARNINGS_ANCHOR_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    if "created_at" not in df.columns:
+        df["created_at"] = ""
+
+    df = df.fillna("")
+    df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
+    df["anchor_date"] = df["anchor_date"].astype(str).str.strip()
+    df["created_at"] = df["created_at"].astype(str).str.strip()
+    df = df.sort_values(by=["created_at", "anchor_date", "ticker"], ascending=[False, False, True], kind="stable")
+
+    latest_rows = {}
+    for _, row in df.iterrows():
+        ticker = str(row.get("ticker", "")).strip().upper()
+        if not ticker or ticker in latest_rows:
+            continue
+        latest_rows[ticker] = {col: row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS}
+    return latest_rows
+
+
+def resolve_bulk_anchor_candidates(
+    symbols,
+    default_side: str = "LONG",
+    focus_side_map: dict[str, str] | None = None,
+) -> dict:
+    ordered_symbols = _ordered_unique_symbols(symbols)
+    if not ordered_symbols:
+        return {
+            "candidates": [],
+            "unresolved": [],
+            "candidate_matches": 0,
+            "earnings_matches": 0,
+        }
+
+    normalized_side_map = {
+        str(symbol).strip().upper(): normalize_side(side)
+        for symbol, side in (focus_side_map or {}).items()
+        if str(symbol).strip()
+    }
+    default_side = normalize_side(default_side)
+
+    candidate_rows = load_latest_anchor_candidate_rows()
+    resolved_candidates = []
+    unresolved_symbols = []
+    candidate_matches = 0
+    earnings_matches = 0
+
+    latest_release_map = load_latest_earnings_release_map(ordered_symbols)
+    for symbol in ordered_symbols:
+        resolved_side = normalized_side_map.get(symbol, default_side)
+        release_info = latest_release_map.get(symbol)
+        if release_info:
+            earnings_date_iso = release_info.get("earnings_date")
+            release_session = release_info.get("release_session", "unknown")
+            try:
+                earnings_date = datetime.fromisoformat(str(earnings_date_iso)).date()
+            except ValueError:
+                earnings_date = None
+
+            if earnings_date is not None:
+                candidate = build_earnings_anchor_candidate(
+                    symbol,
+                    earnings_date,
+                    release_session,
+                    side=resolved_side,
+                    require_filters=False,
+                    source="bulk_import",
+                    notes="Bulk import from ticker group",
+                )
+                if candidate and candidate.anchor_date:
+                    resolved_candidates.append(candidate)
+                    earnings_matches += 1
+                    continue
+
+        candidate_row = candidate_rows.get(symbol)
+        if candidate_row:
+            candidate = _candidate_from_row(candidate_row)
+            if candidate.anchor_date:
+                candidate.side = resolved_side
+                if not candidate.source:
+                    candidate.source = "earnings_scan"
+                resolved_candidates.append(candidate)
+                candidate_matches += 1
+                continue
+
+        unresolved_symbols.append(symbol)
+
+    return {
+        "candidates": resolved_candidates,
+        "unresolved": unresolved_symbols,
+        "candidate_matches": candidate_matches,
+        "earnings_matches": earnings_matches,
+    }
 
 
 def write_anchor_candidates_output(
@@ -1751,13 +2007,462 @@ def build_priority_setup_summary(
     }
 
 
+def compute_major_sma_levels(df: pd.DataFrame) -> dict[str, float]:
+    if df is None or df.empty or "close" not in df.columns:
+        return {}
+
+    closes = pd.to_numeric(df["close"], errors="coerce").dropna().reset_index(drop=True)
+    if closes.empty:
+        return {}
+
+    sma_levels = {}
+    for period in PRIORITY_SMA_PERIODS:
+        if len(closes) < period:
+            continue
+        value = closes.rolling(period).mean().iloc[-1]
+        if pd.notna(value):
+            sma_levels[f"SMA_{period}"] = float(value)
+    return sma_levels
+
+
+def _directional_atr_distance(last_close: float, level: float, atr20: float, side: str):
+    if last_close is None or level is None or atr20 is None or atr20 <= 0:
+        return None
+
+    side = normalize_side(side)
+    if side == "SHORT":
+        delta = float(last_close) - float(level)
+    else:
+        delta = float(level) - float(last_close)
+
+    if delta < 0:
+        return None
+    return float(delta) / float(atr20)
+
+
+def _format_obstacle_labels(obstacles: list[dict], limit: int = 4) -> str:
+    if not obstacles:
+        return "None"
+
+    parts = []
+    for entry in obstacles[:limit]:
+        label = entry.get("label", "?")
+        atr_distance = entry.get("atr_distance")
+        if atr_distance is None:
+            parts.append(label)
+        else:
+            parts.append(f"{label}@{atr_distance:.1f} ATR")
+    if len(obstacles) > limit:
+        parts.append(f"+{len(obstacles) - limit} more")
+    return ", ".join(parts)
+
+
+def _find_trendline_pivots(df: pd.DataFrame, price_col: str, mode: str, window: int = PRIORITY_TRENDLINE_PIVOT_WINDOW):
+    if df is None or df.empty or price_col not in df.columns or len(df) < (window * 2 + 1):
+        return []
+
+    values = pd.to_numeric(df[price_col], errors="coerce").tolist()
+    pivots = []
+    for idx in range(window, len(values) - window):
+        center = values[idx]
+        if center is None or pd.isna(center):
+            continue
+        local = values[idx - window: idx + window + 1]
+        local_clean = [value for value in local if value is not None and not pd.isna(value)]
+        if len(local_clean) != len(local):
+            continue
+
+        if mode == "high":
+            if center != max(local_clean):
+                continue
+            if sum(1 for value in local_clean if value == center) > 1:
+                continue
+        else:
+            if center != min(local_clean):
+                continue
+            if sum(1 for value in local_clean if value == center) > 1:
+                continue
+
+        pivots.append(
+            {
+                "idx": idx,
+                "value": float(center),
+                "datetime": df.iloc[idx]["datetime"],
+                "date": df.iloc[idx]["datetime"].date().isoformat(),
+            }
+        )
+    return pivots
+
+
+def _compute_trendline_angle_deg(x1: int, y1: float, x2: int, y2: float, bar_count: int, log_range: float):
+    if bar_count <= 1 or log_range <= 0 or x2 <= x1:
+        return None
+
+    dx_norm = float(x2 - x1) / float(bar_count - 1)
+    dy_norm = abs(float(y2 - y1)) / float(log_range)
+    if dx_norm <= 0:
+        return None
+    return float(math.degrees(math.atan2(dy_norm, dx_norm)))
+
+
+def _describe_trendline_candidate(candidate: dict | None) -> str:
+    if not candidate:
+        return ""
+    return (
+        f"{candidate.get('type', '?')} {candidate.get('start_date', '?')} -> {candidate.get('end_date', '?')} "
+        f"angle={candidate.get('angle_deg', 0.0):.1f}deg touches={candidate.get('touch_count', 0)} "
+        f"line={candidate.get('current_line_price', 0.0):.2f} dist={candidate.get('atr_distance', 0.0):.2f} ATR"
+    )
+
+
+def find_directional_trendline_candidate(
+    df: pd.DataFrame,
+    side: str,
+    last_close: float,
+    atr20: float,
+) -> dict:
+    side = normalize_side(side)
+    if df is None or df.empty or last_close is None or atr20 is None or atr20 <= 0:
+        return {
+            "trendline_candidate": None,
+            "trendline_note": "",
+            "trendline_within_alert_range": False,
+        }
+
+    work_df = df.tail(PRIORITY_TRENDLINE_LOOKBACK_BARS).copy().reset_index(drop=True)
+    if work_df.empty or len(work_df) < (PRIORITY_TRENDLINE_PIVOT_WINDOW * 2 + 3):
+        return {
+            "trendline_candidate": None,
+            "trendline_note": "",
+            "trendline_within_alert_range": False,
+        }
+
+    price_col = "high" if side == "LONG" else "low"
+    mode = "high" if side == "LONG" else "low"
+    pivots = _find_trendline_pivots(work_df, price_col, mode)
+    if len(pivots) < 2:
+        return {
+            "trendline_candidate": None,
+            "trendline_note": "",
+            "trendline_within_alert_range": False,
+        }
+
+    highs = pd.to_numeric(work_df["high"], errors="coerce").tolist()
+    lows = pd.to_numeric(work_df["low"], errors="coerce").tolist()
+    datetimes = pd.to_datetime(work_df["datetime"])
+    log_high = [math.log(value) for value in highs if value and value > 0]
+    log_low = [math.log(value) for value in lows if value and value > 0]
+    if not log_high or not log_low:
+        return {
+            "trendline_candidate": None,
+            "trendline_note": "",
+            "trendline_within_alert_range": False,
+        }
+    log_range = max(log_high) - min(log_low)
+    if log_range <= 0:
+        return {
+            "trendline_candidate": None,
+            "trendline_note": "",
+            "trendline_within_alert_range": False,
+        }
+
+    best_candidate = None
+    line_touch_tol = float(atr20) * PRIORITY_TRENDLINE_TOUCH_TOL_ATR
+    last_idx = len(work_df) - 1
+
+    for left_idx in range(len(pivots) - 1):
+        pivot_a = pivots[left_idx]
+        for right_idx in range(left_idx + 1, len(pivots)):
+            pivot_b = pivots[right_idx]
+            x1 = int(pivot_a["idx"])
+            x2 = int(pivot_b["idx"])
+            if x2 - x1 < PRIORITY_TRENDLINE_MIN_SEPARATION_BARS:
+                continue
+
+            price_a = float(pivot_a["value"])
+            price_b = float(pivot_b["value"])
+            if side == "LONG" and not (price_b < price_a):
+                continue
+            if side == "SHORT" and not (price_b > price_a):
+                continue
+
+            y1 = math.log(price_a)
+            y2 = math.log(price_b)
+            angle_deg = _compute_trendline_angle_deg(x1, y1, x2, y2, len(work_df), log_range)
+            if angle_deg is None:
+                continue
+            if not (PRIORITY_TRENDLINE_MIN_ANGLE_DEG <= angle_deg <= PRIORITY_TRENDLINE_MAX_ANGLE_DEG):
+                continue
+
+            slope = (y2 - y1) / float(x2 - x1)
+            touch_count = 0
+            broken = False
+            max_overshoot = 0.0
+
+            for idx in range(x1, len(work_df)):
+                line_log = y1 + slope * (idx - x1)
+                line_price = math.exp(line_log)
+                if side == "LONG":
+                    candle_extreme = float(highs[idx])
+                    overshoot = candle_extreme - line_price
+                else:
+                    candle_extreme = float(lows[idx])
+                    overshoot = line_price - candle_extreme
+
+                if abs(candle_extreme - line_price) <= line_touch_tol:
+                    touch_count += 1
+                if overshoot > line_touch_tol:
+                    broken = True
+                    max_overshoot = max(max_overshoot, overshoot)
+                    break
+
+            if broken or touch_count < 2:
+                continue
+
+            current_line_price = math.exp(y1 + slope * (last_idx - x1))
+            if side == "LONG":
+                if current_line_price <= float(last_close):
+                    continue
+                atr_distance = (current_line_price - float(last_close)) / float(atr20)
+            else:
+                if current_line_price >= float(last_close):
+                    continue
+                atr_distance = (float(last_close) - current_line_price) / float(atr20)
+
+            candidate = {
+                "type": "H-" if side == "LONG" else "L+",
+                "start_date": pivot_a["date"],
+                "end_date": pivot_b["date"],
+                "start_idx": x1,
+                "end_idx": x2,
+                "current_line_price": float(current_line_price),
+                "atr_distance": float(atr_distance),
+                "angle_deg": float(angle_deg),
+                "touch_count": int(touch_count),
+                "bar_count": int(len(work_df)),
+                "lookback_start": datetimes.iloc[0].date().isoformat(),
+                "lookback_end": datetimes.iloc[-1].date().isoformat(),
+                "slope_log_per_bar": float(slope),
+                "max_overshoot": float(max_overshoot),
+            }
+
+            if best_candidate is None:
+                best_candidate = candidate
+                continue
+
+            current_key = (candidate["atr_distance"], -candidate["touch_count"], abs(candidate["angle_deg"] - 45.0))
+            best_key = (best_candidate["atr_distance"], -best_candidate["touch_count"], abs(best_candidate["angle_deg"] - 45.0))
+            if current_key < best_key:
+                best_candidate = candidate
+
+    return {
+        "trendline_candidate": best_candidate,
+        "trendline_note": _describe_trendline_candidate(best_candidate),
+        "trendline_within_alert_range": bool(
+            best_candidate and best_candidate.get("atr_distance") is not None
+            and best_candidate["atr_distance"] <= PRIORITY_TRENDLINE_ALERT_ATR
+        ),
+    }
+
+
+def assess_priority_directional_obstacles(
+    side: str,
+    last_close: float,
+    atr20: float,
+    sma_levels: dict[str, float],
+    previous_anchor_meta: dict | None,
+) -> dict:
+    sma_obstacles = []
+    sma_blockers = []
+    sma_penalty = 0
+
+    for label, level in sorted(sma_levels.items(), key=lambda item: int(item[0].split("_")[-1])):
+        atr_distance = _directional_atr_distance(last_close, level, atr20, side)
+        if atr_distance is None or atr_distance > PRIORITY_SMA_WARN_ATR:
+            continue
+        obstacle = {
+            "label": label,
+            "level": float(level),
+            "atr_distance": float(atr_distance),
+        }
+        sma_obstacles.append(obstacle)
+        if atr_distance <= PRIORITY_SMA_DQ_ATR:
+            sma_blockers.append(obstacle)
+        else:
+            sma_penalty += 10 if atr_distance <= 2.5 else 6
+
+    prev_anchor_obstacles = []
+    prev_anchor_penalty = 0
+    if previous_anchor_meta:
+        prev_levels = [("PREV_AVWAPE", previous_anchor_meta.get("vwap"))]
+        prev_bands = previous_anchor_meta.get("bands", {}) or {}
+        if normalize_side(side) == "SHORT":
+            prev_levels.append(("PREV_LOWER_1", prev_bands.get("LOWER_1")))
+        else:
+            prev_levels.append(("PREV_UPPER_1", prev_bands.get("UPPER_1")))
+
+        for label, level in prev_levels:
+            atr_distance = _directional_atr_distance(last_close, level, atr20, side)
+            if atr_distance is None or atr_distance > PRIORITY_PREV_AVWAP_WARN_ATR:
+                continue
+            obstacle = {
+                "label": label,
+                "level": float(level),
+                "atr_distance": float(atr_distance),
+            }
+            prev_anchor_obstacles.append(obstacle)
+            if atr_distance <= 1.0:
+                prev_anchor_penalty += 10
+            elif atr_distance <= 2.0:
+                prev_anchor_penalty += 6
+            else:
+                prev_anchor_penalty += 3
+
+    ranking_blocked = bool(sma_blockers)
+    notes = []
+    if ranking_blocked:
+        notes.append(f"SMA DQ: {_format_obstacle_labels(sma_blockers)}")
+    elif sma_obstacles:
+        notes.append(f"SMAs ahead: {_format_obstacle_labels(sma_obstacles)}")
+    if prev_anchor_obstacles:
+        notes.append(f"Prev AVWAPE ahead: {_format_obstacle_labels(prev_anchor_obstacles)}")
+
+    return {
+        "ranking_blocked": ranking_blocked,
+        "ranking_block_reason": _format_obstacle_labels(sma_blockers) if ranking_blocked else "",
+        "sma_obstacles": sma_obstacles,
+        "sma_blockers": sma_blockers,
+        "previous_anchor_obstacles": prev_anchor_obstacles,
+        "score_penalty": sma_penalty + prev_anchor_penalty,
+        "score_penalty_sma": sma_penalty,
+        "score_penalty_previous_anchor": prev_anchor_penalty,
+        "ranking_note": " | ".join(notes),
+    }
+
+
+def refine_priority_rows_with_directional_filters(
+    priority_rows: list[dict],
+    ai_state: dict,
+    ib: IBApi,
+) -> None:
+    symbol_map = ai_state.setdefault("symbols", {})
+    priority_candidates = [
+        row for row in priority_rows
+        if row.get("has_favorite_signal") or row.get("favorite_zone")
+    ]
+
+    for row in priority_candidates:
+        symbol = row.get("symbol")
+        symbol_entry = symbol_map.get(symbol, {})
+        last_close = symbol_entry.get("last_close")
+        atr20 = symbol_entry.get("atr20")
+        side = row.get("side") or symbol_entry.get("side") or "LONG"
+
+        sma_df = fetch_daily_bars(ib, symbol, PRIORITY_SMA_LOOKBACK_DAYS)
+        sma_levels = compute_major_sma_levels(sma_df)
+        trendline_summary = find_directional_trendline_candidate(
+            sma_df,
+            side=side,
+            last_close=last_close,
+            atr20=atr20,
+        )
+        obstacle_summary = assess_priority_directional_obstacles(
+            side=side,
+            last_close=last_close,
+            atr20=atr20,
+            sma_levels=sma_levels,
+            previous_anchor_meta=symbol_entry.get("previous_anchor"),
+        )
+
+        row["base_score"] = row["score"]
+        row["score"] = row["score"] - obstacle_summary["score_penalty"]
+        row.update(obstacle_summary)
+        row.update(trendline_summary)
+        row["sma_levels"] = sma_levels
+
+        if row.get("ranking_blocked"):
+            logging.info(
+                f"{symbol}: excluded from priority rankings due to nearby SMAs "
+                f"({row.get('ranking_block_reason')})."
+            )
+        elif row.get("ranking_note"):
+            logging.info(f"{symbol}: priority ranking adjusted by filters ({row['ranking_note']}).")
+        if row.get("trendline_within_alert_range"):
+            logging.info(f"{symbol}: nearby trendline candidate found ({row.get('trendline_note')}).")
+
+        symbol_entry["priority_score"] = row["score"]
+        symbol_entry["priority_base_score"] = row["base_score"]
+        symbol_entry["priority_ranking_blocked"] = bool(row.get("ranking_blocked"))
+        symbol_entry["priority_ranking_note"] = row.get("ranking_note", "")
+        symbol_entry["priority_sma_levels"] = sma_levels
+        symbol_entry["priority_sma_obstacles"] = list(row.get("sma_obstacles") or [])
+        symbol_entry["priority_previous_anchor_obstacles"] = list(row.get("previous_anchor_obstacles") or [])
+        symbol_entry["priority_trendline_candidate"] = row.get("trendline_candidate")
+        symbol_entry["priority_trendline_note"] = row.get("trendline_note", "")
+        symbol_entry["priority_trendline_within_alert_range"] = bool(row.get("trendline_within_alert_range"))
+
+
+def apply_final_priority_buckets(
+    priority_rows: list[dict],
+    ai_state: dict,
+    csv_rows: list[dict],
+    feature_rows_by_symbol: dict[str, dict],
+) -> None:
+    priority_map = {row["symbol"]: row for row in priority_rows}
+    symbol_map = ai_state.setdefault("symbols", {})
+
+    for symbol, symbol_entry in symbol_map.items():
+        row = priority_map.get(symbol)
+        priority_bucket = ""
+        is_favorite_setup = False
+        is_near_favorite_zone = False
+        if row and not row.get("ranking_blocked"):
+            if row.get("has_favorite_signal"):
+                priority_bucket = "favorite_setup"
+                is_favorite_setup = True
+            elif row.get("favorite_zone"):
+                priority_bucket = "near_favorite_zone"
+                is_near_favorite_zone = True
+
+        symbol_entry["priority_bucket"] = priority_bucket
+        symbol_entry["is_favorite_setup"] = is_favorite_setup
+        symbol_entry["is_near_favorite_zone"] = is_near_favorite_zone
+
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if row and feature_row is not None:
+            feature_row["priority_score"] = row.get("score", feature_row.get("priority_score"))
+
+    for record in csv_rows:
+        row = priority_map.get(record.get("symbol"))
+        if not row or row.get("ranking_blocked"):
+            record["priority_bucket"] = ""
+            record["is_favorite_setup"] = False
+            record["is_near_favorite_zone"] = False
+            continue
+
+        if row.get("has_favorite_signal"):
+            record["priority_bucket"] = "favorite_setup"
+            record["is_favorite_setup"] = True
+            record["is_near_favorite_zone"] = False
+        elif row.get("favorite_zone"):
+            record["priority_bucket"] = "near_favorite_zone"
+            record["is_favorite_setup"] = False
+            record["is_near_favorite_zone"] = True
+        else:
+            record["priority_bucket"] = ""
+            record["is_favorite_setup"] = False
+            record["is_near_favorite_zone"] = False
+
 def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     favorites = sorted(
-        [row for row in priority_rows if row["has_favorite_signal"]],
+        [row for row in priority_rows if row["has_favorite_signal"] and not row.get("ranking_blocked")],
         key=lambda row: (-row["score"], row["symbol"]),
     )
     watchlist = sorted(
-        [row for row in priority_rows if not row["has_favorite_signal"] and row["favorite_zone"]],
+        [
+            row for row in priority_rows
+            if not row["has_favorite_signal"] and row["favorite_zone"] and not row.get("ranking_blocked")
+        ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
 
@@ -1774,11 +2479,18 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             extension_days = row.get("recent_band_extension_days", 0)
             breakout_text = "Y" if row.get("breakout_5d") else "N"
             retest_text = "Y" if row.get("retest_followthrough") else "N"
+            ranking_note = row.get("ranking_note", "")
+            trendline_note = row.get("trendline_note", "")
             handle.write(
                 f"{row['symbol']:<6} {row['side']:<5} score={row['score']:<3} "
                 f"signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']} "
                 f"| ext_days={extension_days} | 5d_breakout={breakout_text} | retest={retest_text}\n"
             )
+            if ranking_note:
+                handle.write(f"  filters={ranking_note}\n")
+            if trendline_note:
+                prefix = "trendline_alert" if row.get("trendline_within_alert_range") else "trendline"
+                handle.write(f"  {prefix}={trendline_note}\n")
         handle.write("\n")
 
     with open(path, "w", encoding="utf-8") as handle:
@@ -1791,11 +2503,11 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
 
 def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_state: dict) -> None:
     ranked_rows = sorted(priority_rows, key=lambda row: (-row["score"], row["symbol"]))
-    favorite_rows = [row for row in ranked_rows if row["has_favorite_signal"]][:MASTER_AVWAP_FOCUS_LIMIT_PER_BUCKET]
+    favorite_rows = [row for row in ranked_rows if row["has_favorite_signal"] and not row.get("ranking_blocked")]
     near_rows = [
         row for row in ranked_rows
-        if not row["has_favorite_signal"] and row["favorite_zone"]
-    ][:MASTER_AVWAP_FOCUS_LIMIT_PER_BUCKET]
+        if not row["has_favorite_signal"] and row["favorite_zone"] and not row.get("ranking_blocked")
+    ]
 
     def _build_entry(row: dict, bucket: str, rank: int) -> dict:
         symbol = row["symbol"]
@@ -1879,11 +2591,14 @@ def write_tradingview_report(
     stdev_cross_hits: dict,
 ) -> None:
     favorites = sorted(
-        [row for row in priority_rows if row["has_favorite_signal"]],
+        [row for row in priority_rows if row["has_favorite_signal"] and not row.get("ranking_blocked")],
         key=lambda row: (-row["score"], row["symbol"]),
     )
     near_favorites = sorted(
-        [row for row in priority_rows if not row["has_favorite_signal"] and row["favorite_zone"]],
+        [
+            row for row in priority_rows
+            if not row["has_favorite_signal"] and row["favorite_zone"] and not row.get("ranking_blocked")
+        ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
 
@@ -2246,6 +2961,7 @@ def run_master():
     events_for_output = []
     csv_rows = []
     feature_rows = []
+    feature_rows_by_symbol = {}
     priority_rows = []
     positions = {
         "current": {lvl: [] for lvl in POSITION_LEVELS},
@@ -2711,7 +3427,7 @@ def run_master():
 
         ai_state["symbols"][sym] = symbol_entry
 
-        feature_rows.append({
+        feature_row = {
             "symbol": sym,
             "side": side,
             "last_trade_date": last_trade_date.isoformat(),
@@ -2743,12 +3459,17 @@ def run_master():
             "favorite_signals": ";".join(priority_summary["favorite_signals"]),
             "favorite_context_signals": ";".join(priority_summary["context_signals"]),
             "events_today": ";".join(symbol_events_today),
-        })
+        }
+        feature_rows.append(feature_row)
+        feature_rows_by_symbol[sym] = feature_row
 
         logging.info(
             f"{sym}: events_today={symbol_events_today}, "
             f"multi_day={symbol_multi_day}"
         )
+
+    refine_priority_rows_with_directional_filters(priority_rows, ai_state, ib)
+    apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
 
     ib.disconnect()
 
@@ -2945,13 +3666,13 @@ class MasterAvwapGUI:
         self.anchor_var = tk.StringVar()
         self.side_var = tk.StringVar(value="LONG")
         self.notes_var = tk.StringVar()
+        self.bulk_side_var = tk.StringVar(value="LONG")
         self.earnings_lookback_var = tk.IntVar(value=1)
+        self.focus_side_map = {}
 
         self._build_layout()
         self.refresh_table()
-        self.refresh_candidate_table()
         self.refresh_avwap_output_view()
-        self.refresh_tradingview_output_view()
         self.refresh_anchor_output_view()
 
     def _configure_dark_theme(self):
@@ -3035,7 +3756,13 @@ class MasterAvwapGUI:
         style.configure("Vertical.TScrollbar", background=GUI_DARK_PANEL, troughcolor=GUI_DARK_BG)
 
     def _apply_dark_theme_to_text_widgets(self):
-        for widget in (self.avwap_text, self.tradingview_text, self.anchor_scan_text):
+        for widget in (
+            self.avwap_text,
+            self.favorite_symbols_text,
+            self.near_favorite_symbols_text,
+            self.bulk_anchor_text,
+            self.anchor_scan_text,
+        ):
             widget.configure(
                 bg=GUI_DARK_INPUT,
                 fg=GUI_DARK_TEXT,
@@ -3045,6 +3772,7 @@ class MasterAvwapGUI:
                 highlightbackground=GUI_DARK_BG,
                 highlightcolor=GUI_DARK_PANEL,
             )
+        self.avwap_text.tag_configure("trendline_bold", font=("Courier New", 10, "bold"))
 
     def _build_layout(self):
         toolbar = ttk.Frame(self.root)
@@ -3063,9 +3791,7 @@ class MasterAvwapGUI:
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh Active Anchors", command=self.refresh_table).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Refresh Candidates", command=self.refresh_candidate_table).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Refresh TradingView Lists", command=self.refresh_tradingview_output_view).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
 
         self.notebook = ttk.Notebook(self.root)
@@ -3091,8 +3817,11 @@ class MasterAvwapGUI:
         ttk.Button(form, text="Delete Selected", command=self.delete_selected_anchor).grid(row=0, column=10, padx=8, pady=6)
         form.columnconfigure(7, weight=1)
 
-        table_frame = ttk.Frame(anchors_tab)
-        table_frame.pack(fill="both", expand=True, padx=0, pady=0)
+        anchors_body = ttk.Frame(anchors_tab)
+        anchors_body.pack(fill="both", expand=True, padx=0, pady=0)
+
+        table_frame = ttk.Frame(anchors_body)
+        table_frame.pack(side="left", fill="both", expand=True)
 
         self.table = ttk.Treeview(table_frame, columns=EARNINGS_ANCHOR_COLUMNS, show="headings", style="Dark.Treeview")
         for col in EARNINGS_ANCHOR_COLUMNS:
@@ -3106,68 +3835,82 @@ class MasterAvwapGUI:
         self.table.pack(side="left", fill="both", expand=True)
         yscroll.pack(side="right", fill="y")
 
-        candidate_tab = ttk.Frame(self.notebook)
-        self.candidates_tab = candidate_tab
-        self.notebook.add(candidate_tab, text="Anchor Candidates")
+        anchors_side = ttk.Frame(anchors_body, width=340)
+        anchors_side.pack(side="right", fill="y", padx=(12, 0))
+        anchors_side.pack_propagate(False)
 
-        candidate_toolbar = ttk.Frame(candidate_tab)
-        candidate_toolbar.pack(fill="x", padx=0, pady=(0, 8))
+        bulk_frame = ttk.LabelFrame(anchors_side, text="Bulk Watchlist Import")
+        bulk_frame.pack(fill="both", expand=True)
         ttk.Label(
-            candidate_toolbar,
-            text="Daily scan candidates are review-only until you add selected rows to active anchors.",
-        ).pack(side="left", padx=(0, 12))
-        ttk.Button(candidate_toolbar, text="Copy All Symbols", command=self.copy_all_candidate_symbols).pack(side="left", padx=4)
-        ttk.Button(candidate_toolbar, text="Copy Selected Symbols", command=self.copy_selected_candidate_symbols).pack(side="left", padx=4)
-        ttk.Button(candidate_toolbar, text="Add Selected to Active Anchors", command=self.add_selected_candidates_to_anchors).pack(side="left", padx=4)
+            bulk_frame,
+            text=(
+                "Paste comma or newline separated tickers here. Bulk imports resolve the latest earnings event "
+                "and anchor the pre-gap day automatically: morning releases anchor the prior session, and "
+                "after-close releases anchor the earnings session."
+            ),
+            justify="left",
+            wraplength=300,
+        ).pack(fill="x", padx=8, pady=(8, 8))
 
-        candidate_table_frame = ttk.Frame(candidate_tab)
-        candidate_table_frame.pack(fill="both", expand=True, padx=0, pady=0)
+        bulk_side_row = ttk.Frame(bulk_frame)
+        bulk_side_row.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Label(bulk_side_row, text="Fallback side:").pack(side="left")
+        ttk.Combobox(
+            bulk_side_row,
+            textvariable=self.bulk_side_var,
+            values=("LONG", "SHORT"),
+            width=8,
+            state="readonly",
+        ).pack(side="left", padx=(8, 0))
 
-        self.candidate_table = ttk.Treeview(
-            candidate_table_frame,
-            columns=EARNINGS_ANCHOR_COLUMNS,
-            show="headings",
-            style="Dark.Treeview",
-            selectmode="extended",
-        )
-        for col in EARNINGS_ANCHOR_COLUMNS:
-            self.candidate_table.heading(col, text=col)
-            width = 120 if col not in {"notes"} else 260
-            self.candidate_table.column(col, width=width, anchor="w")
+        self.bulk_anchor_text = tk.Text(bulk_frame, wrap="word", height=12, font=("Courier New", 10))
+        self.bulk_anchor_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        candidate_scroll = ttk.Scrollbar(candidate_table_frame, orient="vertical", command=self.candidate_table.yview)
-        self.candidate_table.configure(yscrollcommand=candidate_scroll.set)
-
-        self.candidate_table.pack(side="left", fill="both", expand=True)
-        candidate_scroll.pack(side="right", fill="y")
+        bulk_actions = ttk.Frame(bulk_frame)
+        bulk_actions.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(bulk_actions, text="Add Pasted Tickers", command=self.add_pasted_tickers_to_anchors).pack(side="left")
+        ttk.Button(bulk_actions, text="Clear", command=self.clear_bulk_anchor_text).pack(side="left", padx=(8, 0))
 
         avwap_tab = ttk.Frame(self.notebook)
         self.avwap_tab = avwap_tab
         self.notebook.add(avwap_tab, text="AVWAP Scan Output")
 
-        self.avwap_text = tk.Text(avwap_tab, wrap="word", font=("Courier New", 10))
+        avwap_body = ttk.Frame(avwap_tab)
+        avwap_body.pack(fill="both", expand=True)
+
+        avwap_main = ttk.Frame(avwap_body)
+        avwap_main.pack(side="left", fill="both", expand=True)
+        self.avwap_text = tk.Text(avwap_main, wrap="word", font=("Courier New", 10))
         self.avwap_text.pack(side="left", fill="both", expand=True)
-        output_scroll = ttk.Scrollbar(avwap_tab, orient="vertical", command=self.avwap_text.yview)
+        output_scroll = ttk.Scrollbar(avwap_main, orient="vertical", command=self.avwap_text.yview)
         self.avwap_text.configure(yscrollcommand=output_scroll.set)
         output_scroll.pack(side="right", fill="y")
 
-        tradingview_tab = ttk.Frame(self.notebook)
-        self.tradingview_tab = tradingview_tab
-        self.notebook.add(tradingview_tab, text="TradingView Lists")
-
-        tradingview_toolbar = ttk.Frame(tradingview_tab)
-        tradingview_toolbar.pack(fill="x", padx=0, pady=(0, 8))
+        avwap_side = ttk.Frame(avwap_body, width=340)
+        avwap_side.pack(side="right", fill="y", padx=(12, 0))
+        avwap_side.pack_propagate(False)
         ttk.Label(
-            tradingview_toolbar,
-            text="Grouped comma-separated ticker lists matching the AVWAP scan output sections.",
-        ).pack(side="left", padx=(0, 12))
-        ttk.Button(tradingview_toolbar, text="Copy All Lists", command=self.copy_tradingview_output).pack(side="left", padx=4)
+            avwap_side,
+            text="Comma-separated ticker groups for TradingView paste and bulk watchlist imports.",
+            justify="left",
+            wraplength=300,
+        ).pack(fill="x", pady=(0, 8))
 
-        self.tradingview_text = tk.Text(tradingview_tab, wrap="word", font=("Courier New", 10))
-        self.tradingview_text.pack(side="left", fill="both", expand=True)
-        tradingview_scroll = ttk.Scrollbar(tradingview_tab, orient="vertical", command=self.tradingview_text.yview)
-        self.tradingview_text.configure(yscrollcommand=tradingview_scroll.set)
-        tradingview_scroll.pack(side="right", fill="y")
+        favorite_frame = ttk.LabelFrame(avwap_side, text="Favorite Setups")
+        favorite_frame.pack(fill="x", pady=(0, 10))
+        self.favorite_symbols_text = tk.Text(favorite_frame, wrap="word", height=8, font=("Courier New", 10))
+        self.favorite_symbols_text.pack(fill="both", expand=True, padx=8, pady=(8, 8))
+        ttk.Button(favorite_frame, text="Copy Favorites", command=self.copy_favorite_symbols).pack(anchor="w", padx=8, pady=(0, 8))
+
+        near_favorite_frame = ttk.LabelFrame(avwap_side, text="Near Favorite Zones")
+        near_favorite_frame.pack(fill="x")
+        self.near_favorite_symbols_text = tk.Text(near_favorite_frame, wrap="word", height=8, font=("Courier New", 10))
+        self.near_favorite_symbols_text.pack(fill="both", expand=True, padx=8, pady=(8, 8))
+        ttk.Button(
+            near_favorite_frame,
+            text="Copy Near Favorites",
+            command=self.copy_near_favorite_symbols,
+        ).pack(anchor="w", padx=8, pady=(0, 8))
 
         anchor_scan_tab = ttk.Frame(self.notebook)
         self.anchor_scan_tab = anchor_scan_tab
@@ -3190,6 +3933,156 @@ class MasterAvwapGUI:
             return path.read_text(encoding="utf-8").strip()
         except Exception as exc:
             return f"[Error reading {path.name}] {exc}"
+
+    def _set_text_widget_contents(self, widget, text: str):
+        widget.configure(state="normal")
+        widget.delete("1.0", tk.END)
+        widget.insert("1.0", text)
+        widget.configure(state="normal")
+
+    def _load_ai_state_payload(self) -> dict:
+        payload = load_json(AI_STATE_FILE, default={})
+        return payload if isinstance(payload, dict) else {}
+
+    def _highlight_trendline_candidates_in_avwap_output(self):
+        self.avwap_text.tag_remove("trendline_bold", "1.0", tk.END)
+        payload = self._load_ai_state_payload()
+        raw_symbols = payload.get("symbols", {}) if isinstance(payload, dict) else {}
+        highlighted = {
+            str(symbol).strip().upper()
+            for symbol, entry in (raw_symbols.items() if isinstance(raw_symbols, dict) else [])
+            if isinstance(entry, dict) and entry.get("priority_trendline_within_alert_range")
+        }
+        if not highlighted:
+            return
+
+        section_end = self.avwap_text.search("MASTER AVWAP EVENT TICKERS", "1.0", stopindex=tk.END)
+        if section_end:
+            total_lines = max(0, int(section_end.split(".")[0]) - 1)
+        else:
+            total_lines = int(self.avwap_text.index("end-1c").split(".")[0])
+
+        for line_no in range(1, total_lines + 1):
+            line_start = f"{line_no}.0"
+            line_end = f"{line_no}.end"
+            line_text = self.avwap_text.get(line_start, line_end).strip()
+            if not line_text or "score=" not in line_text:
+                continue
+            parts = line_text.split()
+            if len(parts) < 2 or parts[1].upper() not in {"LONG", "SHORT"}:
+                continue
+            symbol = parts[0].strip(",").upper()
+            if symbol in highlighted:
+                self.avwap_text.tag_add("trendline_bold", line_start, line_end)
+
+    def _load_tradingview_groups(self) -> dict | None:
+        text = self._read_text_file(TRADINGVIEW_REPORT_FILE)
+        if not text or text.startswith("[Missing file]") or text.startswith("[Error reading"):
+            return None
+
+        section_lookup = {
+            "Best current favorite setups": "favorites",
+            "Near favorite zones": "near_favorite_zones",
+        }
+        groups = {
+            "favorites": {"LONG": [], "SHORT": []},
+            "near_favorite_zones": {"LONG": [], "SHORT": []},
+        }
+
+        current_section = None
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                current_section = None
+                continue
+            if line in section_lookup:
+                current_section = section_lookup[line]
+                continue
+            if line.startswith("-"):
+                continue
+            if current_section not in groups or ":" not in line:
+                continue
+
+            side_label, values = line.split(":", 1)
+            side = side_label.strip().upper()
+            if side not in ("LONG", "SHORT"):
+                continue
+            groups[current_section][side] = _extract_symbols_from_text(values)
+
+        return groups
+
+    def _load_focus_payload(self) -> dict:
+        payload = load_json(MASTER_AVWAP_FOCUS_FILE, default={})
+        return payload if isinstance(payload, dict) else {}
+
+    def refresh_focus_group_boxes(self):
+        self.focus_side_map = {}
+        tradingview_groups = self._load_tradingview_groups()
+        if tradingview_groups:
+            favorite_longs = tradingview_groups["favorites"]["LONG"]
+            favorite_shorts = tradingview_groups["favorites"]["SHORT"]
+            near_longs = tradingview_groups["near_favorite_zones"]["LONG"]
+            near_shorts = tradingview_groups["near_favorite_zones"]["SHORT"]
+
+            for symbol in favorite_longs + near_longs:
+                self.focus_side_map[symbol] = "LONG"
+            for symbol in favorite_shorts + near_shorts:
+                self.focus_side_map[symbol] = "SHORT"
+
+            favorite_text = _format_symbol_group(favorite_longs + favorite_shorts)
+            near_favorite_text = _format_symbol_group(near_longs + near_shorts)
+        else:
+            payload = self._load_focus_payload()
+            favorites = payload.get("favorites", [])
+            near_favorites = payload.get("near_favorite_zones", [])
+            symbol_map = payload.get("symbols", {})
+
+            if isinstance(symbol_map, dict):
+                for symbol, row in symbol_map.items():
+                    ticker = str(symbol).strip().upper()
+                    if not ticker or not isinstance(row, dict):
+                        continue
+                    self.focus_side_map[ticker] = normalize_side(row.get("side", "LONG"))
+
+            favorite_text = _format_symbol_group(
+                entry.get("symbol", "")
+                for entry in favorites
+                if isinstance(entry, dict)
+            )
+            near_favorite_text = _format_symbol_group(
+                entry.get("symbol", "")
+                for entry in near_favorites
+                if isinstance(entry, dict)
+            )
+
+        self._set_text_widget_contents(self.favorite_symbols_text, favorite_text)
+        self._set_text_widget_contents(self.near_favorite_symbols_text, near_favorite_text)
+
+    def _copy_text_widget_contents(self, widget, empty_message: str, success_message: str):
+        text = widget.get("1.0", tk.END).strip()
+        if not text or text == "None":
+            self.status_var.set(empty_message)
+            return
+        self._copy_to_clipboard(text)
+        self.status_var.set(success_message)
+
+    def copy_favorite_symbols(self):
+        self._copy_text_widget_contents(
+            self.favorite_symbols_text,
+            "No favorite setup symbols to copy.",
+            "Copied favorite setup symbols to clipboard.",
+        )
+
+    def copy_near_favorite_symbols(self):
+        self._copy_text_widget_contents(
+            self.near_favorite_symbols_text,
+            "No near favorite zone symbols to copy.",
+            "Copied near favorite zone symbols to clipboard.",
+        )
+
+    def clear_bulk_anchor_text(self):
+        self.bulk_anchor_text.delete("1.0", tk.END)
+        self.status_var.set("Cleared pasted ticker input.")
 
     def refresh_avwap_output_view(self):
         priority_section = self._read_text_file(PRIORITY_SETUPS_FILE)
@@ -3214,45 +4107,13 @@ class MasterAvwapGUI:
             + "\n"
         )
 
-        self.avwap_text.configure(state="normal")
-        self.avwap_text.delete("1.0", tk.END)
-        self.avwap_text.insert("1.0", combined)
-        self.avwap_text.configure(state="normal")
-
-    def refresh_tradingview_output_view(self):
-        text = self._read_text_file(TRADINGVIEW_REPORT_FILE)
-        self.tradingview_text.configure(state="normal")
-        self.tradingview_text.delete("1.0", tk.END)
-        self.tradingview_text.insert("1.0", text or "No TradingView list output yet.")
-        self.tradingview_text.configure(state="normal")
-
-    def copy_tradingview_output(self):
-        text = self.tradingview_text.get("1.0", tk.END).strip()
-        if not text:
-            self.status_var.set("No TradingView output to copy.")
-            return
-        self._copy_to_clipboard(text)
-        self.status_var.set("Copied TradingView list output to clipboard.")
+        self._set_text_widget_contents(self.avwap_text, combined)
+        self._highlight_trendline_candidates_in_avwap_output()
+        self.refresh_focus_group_boxes()
 
     def refresh_anchor_output_view(self):
         text = self._read_text_file(ANCHOR_AVWAP_OUTPUT_FILE)
-        self.anchor_scan_text.configure(state="normal")
-        self.anchor_scan_text.delete("1.0", tk.END)
-        self.anchor_scan_text.insert("1.0", text or "No anchor AVWAP output yet.")
-        self.anchor_scan_text.configure(state="normal")
-
-    def _treeview_rows(self, treeview, selected_only=False):
-        item_ids = treeview.selection() if selected_only else treeview.get_children()
-        rows = []
-        for item_id in item_ids:
-            values = treeview.item(item_id, "values")
-            if not values:
-                continue
-            rows.append({
-                col: values[idx] if idx < len(values) else ""
-                for idx, col in enumerate(EARNINGS_ANCHOR_COLUMNS)
-            })
-        return rows
+        self._set_text_widget_contents(self.anchor_scan_text, text or "No anchor AVWAP output yet.")
 
     def _copy_to_clipboard(self, text: str):
         self.root.clipboard_clear()
@@ -3282,12 +4143,12 @@ class MasterAvwapGUI:
             lookback_days = 1
             self.earnings_lookback_var.set(1)
 
-        self.notebook.select(self.candidates_tab)
+        self.notebook.select(self.anchors_tab)
         self._run_background(
             lambda: scan_last_session_earnings_for_anchors(lookback_days=lookback_days),
             f"Running earnings gap anchor scan (last {lookback_days} session(s))...",
             "Earnings gap candidate scan complete.",
-            done_callback=lambda: (self.refresh_candidate_table(), self.notebook.select(self.candidates_tab)),
+            done_callback=lambda: self.notebook.select(self.anchors_tab),
         )
 
     def run_master_once(self):
@@ -3298,7 +4159,6 @@ class MasterAvwapGUI:
             "Master AVWAP scan complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
-                self.refresh_tradingview_output_view(),
                 self.refresh_anchor_output_view(),
             ),
         )
@@ -3326,67 +4186,49 @@ class MasterAvwapGUI:
         for _, row in df.iterrows():
             self.table.insert("", "end", values=[row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS])
 
-    def refresh_candidate_table(self):
-        ensure_anchor_candidate_file()
-        df = pd.read_csv(EARNINGS_ANCHOR_CANDIDATES_FILE)
-
-        for item in self.candidate_table.get_children():
-            self.candidate_table.delete(item)
-
-        if df.empty:
+    def add_pasted_tickers_to_anchors(self):
+        symbols = _extract_symbols_from_text(self.bulk_anchor_text.get("1.0", tk.END))
+        if not symbols:
+            self.status_var.set("No tickers found in the pasted input.")
             return
 
-        df = df.fillna("")
-        for _, row in df.iterrows():
-            self.candidate_table.insert("", "end", values=[row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS])
+        fallback_side = normalize_side(self.bulk_side_var.get())
+        self.status_var.set(f"Resolving anchors for {len(symbols)} pasted ticker(s)...")
 
-    def copy_all_candidate_symbols(self):
-        rows = self._treeview_rows(self.candidate_table, selected_only=False)
-        symbols = [row.get("ticker", "") for row in rows]
-        symbols_text = _format_symbols_for_tc2000(symbols)
-        if symbols_text == "None":
-            self.status_var.set("No earnings scan candidates to copy.")
-            return
-        self._copy_to_clipboard(symbols_text)
-        self.status_var.set(f"Copied {len(set(symbols))} candidate symbol(s) to clipboard.")
+        def _task():
+            try:
+                result = resolve_bulk_anchor_candidates(
+                    symbols,
+                    default_side=fallback_side,
+                    focus_side_map=self.focus_side_map,
+                )
+                candidates = result.get("candidates", [])
+                unresolved = result.get("unresolved", [])
+                added = append_anchor_candidates(candidates)
+                duplicates = len(candidates) - added
 
-    def copy_selected_candidate_symbols(self):
-        rows = self._treeview_rows(self.candidate_table, selected_only=True)
-        symbols = [row.get("ticker", "") for row in rows]
-        symbols_text = _format_symbols_for_tc2000(symbols)
-        if symbols_text == "None":
-            self.status_var.set("No candidate rows selected.")
-            return
-        self._copy_to_clipboard(symbols_text)
-        self.status_var.set(f"Copied {len(set(symbols))} selected candidate symbol(s) to clipboard.")
+                def _finish():
+                    self.refresh_table()
+                    self.notebook.select(self.anchors_tab)
+                    summary = (
+                        f"Added {added} anchor row(s)"
+                        f" ({result.get('candidate_matches', 0)} from earnings scan, "
+                        f"{result.get('earnings_matches', 0)} from direct earnings resolution)."
+                    )
+                    if duplicates > 0:
+                        summary += f" {duplicates} already existed."
+                    if unresolved:
+                        preview = ", ".join(unresolved[:6])
+                        more = "" if len(unresolved) <= 6 else f" (+{len(unresolved) - 6} more)"
+                        summary += f" Unresolved: {preview}{more}."
+                    self.status_var.set(summary)
 
-    def add_selected_candidates_to_anchors(self):
-        rows = self._treeview_rows(self.candidate_table, selected_only=True)
-        if not rows:
-            self.status_var.set("No candidate rows selected to add.")
-            return
+                self.root.after(0, _finish)
+            except Exception as exc:
+                logging.exception("Bulk anchor import failed")
+                self.root.after(0, lambda: self.status_var.set(f"Bulk import failed: {exc}"))
 
-        candidates = []
-        for row in rows:
-            ticker = str(row.get("ticker", "")).strip().upper()
-            anchor_date = str(row.get("anchor_date", "")).strip()
-            if not ticker or not anchor_date:
-                continue
-            candidates.append(_candidate_from_row(row))
-
-        if not candidates:
-            self.status_var.set("Selected candidate rows are missing ticker or anchor date.")
-            return
-
-        added = append_anchor_candidates(candidates)
-        duplicates = len(candidates) - added
-        self.refresh_table()
-        if duplicates > 0:
-            self.status_var.set(
-                f"Added {added} candidate(s) to active anchors; {duplicates} already existed."
-            )
-        else:
-            self.status_var.set(f"Added {added} candidate(s) to active anchors.")
+        threading.Thread(target=_task, daemon=True).start()
 
     def set_selected_anchor_side(self):
         selected = self.table.selection()
