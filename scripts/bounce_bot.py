@@ -94,6 +94,9 @@ LOG_PRICE_APPROACHING = True
 USE_GUI = True  # New parameter to toggle GUI on/off
 RECLAIM_LOOKBACK_CANDLES = 3
 CONFLUENCE_MAX_SPREAD_ATR = 0.25
+VWAP_BOUNCE_NEAR_ATR = 0.08
+VWAP_BOUNCE_PIERCE_ATR = 0.08
+VWAP_BOUNCE_CLOSE_BUFFER_ATR = 0.03
 IMPULSE_LOOKBACK_BARS = 12
 IMPULSE_MAX_BARS = 6
 IMPULSE_MIN_ATR = 0.8
@@ -168,6 +171,7 @@ GROUP_STRENGTH_TIMEFRAMES = {
     "H1": {"bar_size": "1 hour", "duration": "5 D"},
     "M5": {"bar_size": "5 mins", "duration": "5 D"},
 }
+ENVIRONMENT_FOCUS_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 DEFAULT_SECTOR_ETF_MAP = {
     "communication-services": "XLC",
     "consumer-cyclical": "XLY",
@@ -193,6 +197,7 @@ MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
 MASTER_AVWAP_FOCUS_MIN_MOVE_RATIO = 0.45
 MASTER_AVWAP_FOCUS_MIN_EXCESS_MOVE_RATIO = 0.25
+EMIT_MASTER_AVWAP_FOCUS_RRS_ALERTS = False
 ENVIRONMENT_HIGHLIGHT_LIMIT = 6
 ENVIRONMENT_SCAN_LIMIT = 25
 SPY_COMPRESSION_THRESHOLD = 0.35
@@ -952,6 +957,8 @@ class BounceBot(EWrapper, EClient):
         )
 
     def _emit_master_avwap_focus_rrs_alerts(self, symbol_context, threshold, timeframe_key):
+        if not EMIT_MASTER_AVWAP_FOCUS_RRS_ALERTS:
+            return
         if not self.gui_callback or not self.master_avwap_focus_map:
             return
 
@@ -1032,17 +1039,6 @@ class BounceBot(EWrapper, EClient):
                 f"MASTER_AVWAP_ACTIVE_EVENT: {symbol} ({side}) levels={levels} new_events={newly_emitted}"
             )
             logging.info(summary_msg)
-
-        keep = set(matched_symbols)
-        if keep != monitored:
-            filtered_longs = [s for s in self.longs if s in keep]
-            filtered_shorts = [s for s in self.shorts if s in keep]
-            self.longs = filtered_longs
-            self.shorts = filtered_shorts
-            logging.info(
-                "Master AVWAP filter active: reduced universe to %d symbol(s) with today's new events.",
-                len(keep),
-            )
 
     def set_rrs_threshold(self, value):
         with self.rrs_lock:
@@ -1181,6 +1177,8 @@ class BounceBot(EWrapper, EClient):
                     "move_ratio": move_ratio,
                     "delta": delta,
                     "compression": compression,
+                    "spy_weak": falling,
+                    "spy_strong": rising,
                     "long_eval": compression or falling,
                     "short_eval": compression or rising,
                 }
@@ -1194,33 +1192,73 @@ class BounceBot(EWrapper, EClient):
         window_map = {item["dt"]: item for item in spy_windows}
         long_candidates = []
         short_candidates = []
-        long_window_count = sum(1 for item in spy_windows if item.get("long_eval"))
-        short_window_count = sum(1 for item in spy_windows if item.get("short_eval"))
+        weak_spy_window_count = sum(1 for item in spy_windows if item.get("spy_weak"))
+        strong_spy_window_count = sum(1 for item in spy_windows if item.get("spy_strong"))
+        compression_window_count = sum(1 for item in spy_windows if item.get("compression"))
 
-        def finalize_candidate(symbol, direction, hits, total_windows):
-            if not hits:
+        def summarize_bucket(profile, direction, flag_key):
+            samples = []
+            hits = []
+            for item in profile:
+                window = window_map.get(item.get("dt"))
+                if not window or not window.get(flag_key):
+                    continue
+                if item.get("rrs") is None:
+                    continue
+                samples.append(item)
+                if direction == "long":
+                    if item["rrs"] >= threshold:
+                        hits.append(item)
+                else:
+                    if item["rrs"] <= -threshold:
+                        hits.append(item)
+
+            sample_rrs = [item["rrs"] for item in samples if item.get("rrs") is not None]
+            sample_excess = [item["excess_move_ratio"] for item in samples if item.get("excess_move_ratio") is not None]
+            avg_rrs = (sum(sample_rrs) / len(sample_rrs)) if sample_rrs else None
+            best_rrs = None
+            if sample_rrs:
+                best_rrs = max(sample_rrs) if direction == "long" else min(sample_rrs)
+            avg_excess = (sum(sample_excess) / len(sample_excess)) if sample_excess else None
+            return {
+                "windows": len(samples),
+                "hits": len(hits),
+                "hit_rate": (len(hits) / len(samples)) if samples else 0.0,
+                "avg_rrs": avg_rrs,
+                "best_rrs": best_rrs,
+                "avg_excess": avg_excess,
+            }
+
+        def finalize_candidate(symbol, direction, context_summary, compression_summary):
+            if context_summary["hits"] <= 0 and compression_summary["hits"] <= 0:
                 return None
-            hit_rrs = [item["rrs"] for item in hits if item.get("rrs") is not None]
-            hit_excess = [item["excess_move_ratio"] for item in hits if item.get("excess_move_ratio") is not None]
-            if not hit_rrs:
-                return None
-            avg_rrs = sum(hit_rrs) / len(hit_rrs)
-            best_rrs = max(hit_rrs) if direction == "long" else min(hit_rrs)
-            avg_excess = (sum(hit_excess) / len(hit_excess)) if hit_excess else None
             score = (
-                len(hit_rrs) * 100.0
-                + abs(avg_rrs) * 10.0
-                + abs(best_rrs) * 5.0
-                + (abs(avg_excess) * 5.0 if avg_excess is not None else 0.0)
+                context_summary["hits"] * 160.0
+                + context_summary["hit_rate"] * 110.0
+                + (abs(context_summary["avg_rrs"]) * 18.0 if context_summary["avg_rrs"] is not None else 0.0)
+                + (abs(context_summary["best_rrs"]) * 8.0 if context_summary["best_rrs"] is not None else 0.0)
+                + (abs(context_summary["avg_excess"]) * 10.0 if context_summary["avg_excess"] is not None else 0.0)
+                + compression_summary["hits"] * 55.0
+                + compression_summary["hit_rate"] * 35.0
+                + (abs(compression_summary["avg_rrs"]) * 6.0 if compression_summary["avg_rrs"] is not None else 0.0)
+                + (abs(compression_summary["best_rrs"]) * 3.0 if compression_summary["best_rrs"] is not None else 0.0)
+                + (abs(compression_summary["avg_excess"]) * 4.0 if compression_summary["avg_excess"] is not None else 0.0)
             )
             return {
                 "symbol": symbol,
                 "direction": direction,
-                "hits": len(hit_rrs),
-                "windows": total_windows,
-                "avg_rrs": avg_rrs,
-                "best_rrs": best_rrs,
-                "avg_excess": avg_excess,
+                "context_hits": context_summary["hits"],
+                "context_windows": context_summary["windows"],
+                "context_hit_rate": context_summary["hit_rate"],
+                "context_avg_rrs": context_summary["avg_rrs"],
+                "context_best_rrs": context_summary["best_rrs"],
+                "context_avg_excess": context_summary["avg_excess"],
+                "compression_hits": compression_summary["hits"],
+                "compression_windows": compression_summary["windows"],
+                "compression_hit_rate": compression_summary["hit_rate"],
+                "compression_avg_rrs": compression_summary["avg_rrs"],
+                "compression_best_rrs": compression_summary["best_rrs"],
+                "compression_avg_excess": compression_summary["avg_excess"],
                 "score": score,
             }
 
@@ -1229,40 +1267,41 @@ class BounceBot(EWrapper, EClient):
                 continue
 
             if symbol in self.longs:
-                total_windows = 0
-                hits = []
-                for item in profile:
-                    window = window_map.get(item.get("dt"))
-                    if not window or not window.get("long_eval"):
-                        continue
-                    total_windows += 1
-                    if (item.get("rrs") or 0.0) >= threshold:
-                        hits.append(item)
-                candidate = finalize_candidate(symbol, "long", hits, total_windows)
+                context_summary = summarize_bucket(profile, "long", "spy_weak")
+                compression_summary = summarize_bucket(profile, "long", "compression")
+                candidate = finalize_candidate(symbol, "long", context_summary, compression_summary)
                 if candidate:
                     long_candidates.append(candidate)
 
             if symbol in self.shorts:
-                total_windows = 0
-                hits = []
-                for item in profile:
-                    window = window_map.get(item.get("dt"))
-                    if not window or not window.get("short_eval"):
-                        continue
-                    total_windows += 1
-                    if (item.get("rrs") or 0.0) <= -threshold:
-                        hits.append(item)
-                candidate = finalize_candidate(symbol, "short", hits, total_windows)
+                context_summary = summarize_bucket(profile, "short", "spy_strong")
+                compression_summary = summarize_bucket(profile, "short", "compression")
+                candidate = finalize_candidate(symbol, "short", context_summary, compression_summary)
                 if candidate:
                     short_candidates.append(candidate)
 
-        long_candidates.sort(key=lambda row: (-row["score"], -row["hits"], -row["avg_rrs"], row["symbol"]))
-        short_candidates.sort(key=lambda row: (-row["score"], -row["hits"], row["avg_rrs"], row["symbol"]))
+        long_candidates.sort(
+            key=lambda row: (
+                -row["score"],
+                -row["context_hits"],
+                -(row["context_avg_rrs"] if row["context_avg_rrs"] is not None else float("-inf")),
+                row["symbol"],
+            )
+        )
+        short_candidates.sort(
+            key=lambda row: (
+                -row["score"],
+                -row["context_hits"],
+                (row["context_avg_rrs"] if row["context_avg_rrs"] is not None else float("inf")),
+                row["symbol"],
+            )
+        )
         return {
             "long_candidates": long_candidates,
             "short_candidates": short_candidates,
-            "long_window_count": long_window_count,
-            "short_window_count": short_window_count,
+            "weak_spy_window_count": weak_spy_window_count,
+            "strong_spy_window_count": strong_spy_window_count,
+            "compression_window_count": compression_window_count,
             "spy_windows": len(spy_windows),
         }
 
@@ -1270,77 +1309,125 @@ class BounceBot(EWrapper, EClient):
         scenario = self.get_market_environment()
         long_candidates = environment_scan.get("long_candidates", [])
         short_candidates = environment_scan.get("short_candidates", [])
-        long_windows = int(environment_scan.get("long_window_count", 0) or 0)
-        short_windows = int(environment_scan.get("short_window_count", 0) or 0)
+        weak_spy_windows = int(environment_scan.get("weak_spy_window_count", 0) or 0)
+        strong_spy_windows = int(environment_scan.get("strong_spy_window_count", 0) or 0)
+        compression_windows = int(environment_scan.get("compression_window_count", 0) or 0)
         sections = []
 
-        def add_candidate_section(title, candidates, tag, window_count):
+        def candidate_sort_key(entry):
+            return (
+                -entry.get("score", 0.0),
+                -entry.get("context_hits", 0),
+                entry.get("symbol", ""),
+            )
+
+        long_context_candidates = sorted(
+            [entry for entry in long_candidates if entry.get("context_hits", 0) > 0],
+            key=candidate_sort_key,
+        )
+        short_context_candidates = sorted(
+            [entry for entry in short_candidates if entry.get("context_hits", 0) > 0],
+            key=candidate_sort_key,
+        )
+        long_compression_candidates = sorted(
+            [entry for entry in long_candidates if entry.get("compression_hits", 0) > 0],
+            key=candidate_sort_key,
+        )
+        short_compression_candidates = sorted(
+            [entry for entry in short_candidates if entry.get("compression_hits", 0) > 0],
+            key=candidate_sort_key,
+        )
+
+        def add_candidate_section(title, candidates, tag, focus_mode):
             if not candidates:
                 return
             rows = []
             for entry in candidates[:ENVIRONMENT_SCAN_LIMIT]:
-                rows.append({"text": self._format_environment_scan_entry(entry, window_count), "tag": tag})
+                rows.append({
+                    "text": self._format_environment_scan_entry(entry, focus_mode=focus_mode),
+                    "tag": tag,
+                    "symbol": entry.get("symbol"),
+                })
             sections.append({"title": title, "rows": rows, "tag": tag})
 
-        if scenario == "bearish_strong":
-            add_candidate_section(
-                "Weak Shorts on SPY Pullbacks / Compression",
-                short_candidates,
-                "rrs_rw",
-                short_windows,
-            )
-        elif scenario == "bullish_strong":
-            add_candidate_section(
-                "Strong Longs on SPY Pullbacks / Compression",
-                long_candidates,
+        prefer_shorts_first = scenario.startswith("bearish")
+        primary_sections = []
+
+        if weak_spy_windows > 0 and long_context_candidates:
+            primary_sections.append((
+                f"Strong Longs During SPY Weakness ({weak_spy_windows} weak windows)",
+                long_context_candidates,
                 "rrs_rs",
-                long_windows,
-            )
-        elif scenario == "bearish_weak":
-            add_candidate_section(
-                "Weak Shorts on SPY Bounces / Compression",
-                short_candidates,
+                "context",
+            ))
+        if strong_spy_windows > 0 and short_context_candidates:
+            primary_sections.append((
+                f"Weak Shorts During SPY Strength ({strong_spy_windows} strong windows)",
+                short_context_candidates,
                 "rrs_rw",
-                short_windows,
-            )
-            add_candidate_section(
-                "Strong Longs While SPY Is Weak / Compressing",
-                long_candidates,
-                "rrs_rs",
-                long_windows,
-            )
-        elif scenario == "bullish_weak":
-            add_candidate_section(
-                "Strong Longs on SPY Pullbacks / Compression",
-                long_candidates,
-                "rrs_rs",
-                long_windows,
-            )
-            add_candidate_section(
-                "Weak Shorts While SPY Is Firm / Compressing",
-                short_candidates,
-                "rrs_rw",
-                short_windows,
-            )
-        else:
-            add_candidate_section("Strong Long Candidates", long_candidates, "rrs_rs", long_windows)
-            add_candidate_section("Weak Short Candidates", short_candidates, "rrs_rw", short_windows)
+                "context",
+            ))
+
+        if prefer_shorts_first:
+            primary_sections.sort(key=lambda item: 0 if "Shorts" in item[0] else 1)
+
+        for title, candidates, tag, focus_mode in primary_sections:
+            add_candidate_section(title, candidates, tag, focus_mode)
+
+        if not sections:
+            if compression_windows > 0 and long_compression_candidates:
+                add_candidate_section(
+                    f"Strong Longs During SPY Compression ({compression_windows} compression windows)",
+                    long_compression_candidates,
+                    "rrs_rs",
+                    "compression",
+                )
+            if compression_windows > 0 and short_compression_candidates:
+                add_candidate_section(
+                    f"Weak Shorts During SPY Compression ({compression_windows} compression windows)",
+                    short_compression_candidates,
+                    "rrs_rw",
+                    "compression",
+                )
 
         if sections:
             return sections
         return None
 
-    def _format_environment_scan_entry(self, entry, window_count):
-        avg_rrs = entry.get("avg_rrs")
-        best_rrs = entry.get("best_rrs")
-        avg_excess = entry.get("avg_excess")
-        return (
-            f"{entry['symbol']} hits={entry.get('hits', 0)}/{window_count or entry.get('windows', 0)} "
-            f"avgRRS={avg_rrs:+.2f} best={best_rrs:+.2f} "
-            f"avgER={avg_excess:+.2f}" if avg_excess is not None else
-            f"{entry['symbol']} hits={entry.get('hits', 0)}/{window_count or entry.get('windows', 0)} "
-            f"avgRRS={avg_rrs:+.2f} best={best_rrs:+.2f}"
+    def _format_environment_scan_entry(self, entry, focus_mode="context"):
+        direction = entry.get("direction")
+        if focus_mode == "compression":
+            focus_label = "comp"
+            focus_hits = entry.get("compression_hits", 0)
+            focus_windows = entry.get("compression_windows", 0)
+            avg_rrs = entry.get("compression_avg_rrs")
+            best_rrs = entry.get("compression_best_rrs")
+            avg_excess = entry.get("compression_avg_excess")
+            secondary_label = "weakSPY" if direction == "long" else "strongSPY"
+            secondary_hits = entry.get("context_hits", 0)
+            secondary_windows = entry.get("context_windows", 0)
+        else:
+            focus_label = "weakSPY" if direction == "long" else "strongSPY"
+            focus_hits = entry.get("context_hits", 0)
+            focus_windows = entry.get("context_windows", 0)
+            avg_rrs = entry.get("context_avg_rrs")
+            best_rrs = entry.get("context_best_rrs")
+            avg_excess = entry.get("context_avg_excess")
+            secondary_label = "comp"
+            secondary_hits = entry.get("compression_hits", 0)
+            secondary_windows = entry.get("compression_windows", 0)
+
+        avg_rrs_text = f"{avg_rrs:+.2f}" if avg_rrs is not None else "n/a"
+        best_rrs_text = f"{best_rrs:+.2f}" if best_rrs is not None else "n/a"
+        line = (
+            f"{entry['symbol']} {focus_label}={focus_hits}/{focus_windows} "
+            f"avgRRS={avg_rrs_text} best={best_rrs_text}"
         )
+        if avg_excess is not None:
+            line += f" avgER={avg_excess:+.2f}"
+        if secondary_windows:
+            line += f" {secondary_label}={secondary_hits}/{secondary_windows}"
+        return line
 
     def _build_section(self, title, entries, tag):
         if not entries:
@@ -1349,7 +1436,11 @@ class BounceBot(EWrapper, EClient):
         source = significant if significant else entries
         rows = []
         for entry in source[:ENVIRONMENT_HIGHLIGHT_LIMIT]:
-            rows.append({"text": self._format_environment_entry(entry), "tag": tag})
+            rows.append({
+                "text": self._format_environment_entry(entry),
+                "tag": tag,
+                "symbol": entry.get("symbol"),
+            })
         if not rows:
             return None
         return {"title": title, "rows": rows, "tag": tag}
@@ -2560,6 +2651,42 @@ class BounceBot(EWrapper, EClient):
                 )
             return reclaimed
 
+        def is_vwap_zone_reaction(level_low, level_high, level_name):
+            if level_low is None or level_high is None:
+                return False
+
+            near_buffer = max(threshold, VWAP_BOUNCE_NEAR_ATR * atr)
+            pierce_buffer = max(threshold, VWAP_BOUNCE_PIERCE_ATR * atr)
+            close_buffer = max(threshold, VWAP_BOUNCE_CLOSE_BUFFER_ATR * atr)
+
+            if direction == "long":
+                approached_zone = current_candle_data["low"] <= (level_high + near_buffer)
+                limited_undershoot = current_candle_data["low"] >= (level_low - pierce_buffer)
+                recovered = (
+                    current_candle_data["close"] >= (level_high - close_buffer)
+                    and current_candle_data["close"] > current_candle_data["open"]
+                )
+                distance = level_high - current_candle_data["low"]
+            else:
+                approached_zone = current_candle_data["high"] >= (level_low - near_buffer)
+                limited_overshoot = current_candle_data["high"] <= (level_high + pierce_buffer)
+                recovered = (
+                    current_candle_data["close"] <= (level_low + close_buffer)
+                    and current_candle_data["close"] < current_candle_data["open"]
+                )
+                limited_undershoot = limited_overshoot
+                distance = current_candle_data["high"] - level_low
+
+            reacted = approached_zone and limited_undershoot and recovered
+            if reacted:
+                logging.debug(
+                    f"{symbol}: {level_name} zone reaction accepted. "
+                    f"ZoneLow={level_low:.4f}, ZoneHigh={level_high:.4f}, "
+                    f"Distance={distance:.4f}, NearBuffer={near_buffer:.4f}, "
+                    f"PierceBuffer={pierce_buffer:.4f}, CloseBuffer={close_buffer:.4f}"
+                )
+            return reacted
+
         def has_impulse_retest_structure():
             prior_candles = today_df.iloc[:-1].copy().reset_index(drop=True)
             if len(prior_candles) < 4:
@@ -2857,12 +2984,14 @@ class BounceBot(EWrapper, EClient):
             # Check if price respected standard VWAP for consecutive candles
             respected = check_consecutive_respect(std_vwap, "Standard VWAP")
             reclaim = is_recent_reclaim(std_vwap, "Standard VWAP")
+            zone_reaction = is_vwap_zone_reaction(std_vwap, std_vwap, "Standard VWAP")
             quality_ok = passes_level_quality_filter("vwap", std_vwap, std_vwap, "Standard VWAP")
-            if quality_ok and ((respected and is_touch_reject(std_vwap)) or reclaim):
+            touch_reject = is_touch_reject(std_vwap)
+            if quality_ok and ((respected and (touch_reject or zone_reaction)) or reclaim):
                 ref_levels["vwap"] = std_vwap
                 mark_trigger("vwap")
                 logging.debug(
-                    f"{symbol}: Standard VWAP bounce candidate found ({'reclaim' if reclaim else 'touch/reject'}). "
+                    f"{symbol}: Standard VWAP bounce candidate found ({'reclaim' if reclaim else 'zone reaction' if zone_reaction and not touch_reject else 'touch/reject'}). "
                     f"VWAP: {std_vwap:.2f}, Close: {current_candle_data['close']:.2f}"
                 )
 
@@ -2886,12 +3015,14 @@ class BounceBot(EWrapper, EClient):
             # Check if price respected EOD VWAP for consecutive candles
             respected = check_consecutive_respect(eod_vwap, "EOD VWAP")
             reclaim = is_recent_reclaim(eod_vwap, "EOD VWAP")
+            zone_reaction = is_vwap_zone_reaction(eod_vwap, eod_vwap, "EOD VWAP")
             quality_ok = passes_level_quality_filter("eod_vwap", eod_vwap, eod_vwap, "EOD VWAP")
-            if quality_ok and ((respected and is_touch_reject(eod_vwap)) or reclaim):
+            touch_reject = is_touch_reject(eod_vwap)
+            if quality_ok and ((respected and (touch_reject or zone_reaction)) or reclaim):
                 ref_levels["eod_vwap"] = eod_vwap
                 mark_trigger("eod_vwap")
                 logging.debug(
-                    f"{symbol}: EOD VWAP bounce candidate found ({'reclaim' if reclaim else 'touch/reject'}). "
+                    f"{symbol}: EOD VWAP bounce candidate found ({'reclaim' if reclaim else 'zone reaction' if zone_reaction and not touch_reject else 'touch/reject'}). "
                     f"EOD VWAP: {eod_vwap:.2f}, Close: {current_candle_data['close']:.2f}"
                 )
 
@@ -2906,19 +3037,27 @@ class BounceBot(EWrapper, EClient):
                 max_allowed_spread = CONFLUENCE_MAX_SPREAD_ATR * atr
                 if level_spread <= max_allowed_spread:
                     confluence_level = max(std_vwap, eod_vwap) if direction == "long" else min(std_vwap, eod_vwap)
+                    touch_reject = is_touch_reject(confluence_level)
+                    zone_reaction = is_vwap_zone_reaction(
+                        min(std_vwap, eod_vwap),
+                        max(std_vwap, eod_vwap),
+                        "VWAP+EOD Confluence",
+                    )
+                    reclaim = is_recent_reclaim(confluence_level, "VWAP+EOD Confluence")
                     quality_ok = passes_level_quality_filter(
                         "vwap_eod_confluence",
                         min(std_vwap, eod_vwap),
                         max(std_vwap, eod_vwap),
                         "VWAP+EOD Confluence",
                     )
-                    if quality_ok and (is_touch_reject(confluence_level) or is_recent_reclaim(confluence_level, "VWAP+EOD Confluence")):
+                    if quality_ok and (touch_reject or zone_reaction or reclaim):
                         ref_levels["vwap_eod_confluence"] = confluence_level
                         mark_trigger("vwap_eod_confluence")
                         ref_levels.setdefault("vwap", std_vwap)
                         ref_levels.setdefault("eod_vwap", eod_vwap)
                         logging.debug(
-                            f"{symbol}: VWAP+EOD confluence bounce candidate found. "
+                            f"{symbol}: VWAP+EOD confluence bounce candidate found "
+                            f"({'reclaim' if reclaim else 'zone reaction' if zone_reaction and not touch_reject else 'touch/reject'}). "
                             f"Spread: {level_spread:.4f} (max {max_allowed_spread:.4f})"
                         )
 
@@ -3742,6 +3881,48 @@ def run_bot_with_gui(gui_callback):
 # Find and replace the light_grey variable definition with dark theme colors
 # Around line 677 in the start_gui() function
 
+def build_environment_focus_copy_text(snapshot):
+    sections = snapshot.get("environment_highlights", []) if isinstance(snapshot, dict) else []
+    label = "Environment Focus Lists"
+    if isinstance(snapshot, dict):
+        env_label = snapshot.get("market_environment_label", "Environment")
+        label = f"{env_label} Focus Lists"
+
+    lines = [label]
+    if not sections:
+        lines.extend(["", "None"])
+        return "\n".join(lines)
+
+    for section in sections:
+        title = str(section.get("title", "Section")).strip() or "Section"
+        seen = set()
+        symbols = []
+        for row in section.get("rows", []):
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol:
+                text = str(row.get("text") or "").strip()
+                if text:
+                    first_token = text.split()[0].strip(",")
+                    if ENVIRONMENT_FOCUS_SYMBOL_RE.fullmatch(first_token):
+                        symbol = first_token
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            symbols.append(symbol)
+
+        lines.append("")
+        lines.append(title)
+        lines.append(", ".join(symbols) if symbols else "None")
+
+    return "\n".join(lines).strip()
+
+
+def copy_text_to_clipboard(widget: tk.Misc, text: str) -> None:
+    widget.clipboard_clear()
+    widget.clipboard_append(text)
+    widget.update_idletasks()
+
+
 def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_color="#E0E0E0"):
     """Create the BounceBot RS/RW confirmed screen (industry + sector) inside `parent`."""
     rrs_container = tk.Frame(parent, bg=dark_grey)
@@ -3843,7 +4024,17 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
     )
     vertical_pane.pack(fill=tk.BOTH, expand=True)
 
-    env_focus_frame = tk.LabelFrame(vertical_pane, text="Environment Focus", bg=dark_grey, fg=text_color)
+    env_focus_pane = tk.PanedWindow(
+        vertical_pane,
+        orient=tk.HORIZONTAL,
+        sashrelief=tk.RAISED,
+        sashwidth=10,
+        showhandle=True,
+        bg=dark_grey,
+    )
+    vertical_pane.add(env_focus_pane, minsize=150)
+
+    env_focus_frame = tk.LabelFrame(env_focus_pane, text="Environment Focus", bg=dark_grey, fg=text_color)
     env_focus_text = scrolledtext.ScrolledText(
         env_focus_frame,
         wrap=tk.NONE,
@@ -3858,7 +4049,43 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
     env_focus_text.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
     env_focus_text.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
     env_focus_text.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
-    vertical_pane.add(env_focus_frame, minsize=150)
+    env_focus_pane.add(env_focus_frame, stretch="always")
+
+    env_copy_frame = tk.LabelFrame(env_focus_pane, text="Environment Focus Lists", bg=dark_grey, fg=text_color)
+    env_copy_toolbar = tk.Frame(env_copy_frame, bg=dark_grey)
+    env_copy_toolbar.pack(fill=tk.X, padx=4, pady=(4, 0))
+
+    env_copy_text = scrolledtext.ScrolledText(
+        env_copy_frame,
+        wrap=tk.WORD,
+        width=52,
+        height=10,
+        font=('Courier', 10),
+        state='disabled',
+        bg=dark_grey,
+        fg=text_color,
+    )
+
+    def copy_env_focus_lists():
+        text = env_copy_text.get("1.0", tk.END).strip()
+        if not text:
+            rrs_status_var.set("Environment focus lists: nothing to copy.")
+            return
+        copy_text_to_clipboard(env_copy_text, text)
+        rrs_status_var.set("Copied environment focus lists to clipboard.")
+
+    tk.Button(
+        env_copy_toolbar,
+        text="Copy",
+        command=copy_env_focus_lists,
+        relief=tk.RAISED,
+        padx=10,
+        bg=dark_grey,
+        fg=text_color,
+    ).pack(side=tk.LEFT)
+
+    env_copy_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    env_focus_pane.add(env_copy_frame, stretch="always")
 
     notebook_host = tk.Frame(vertical_pane, bg=dark_grey)
     vertical_pane.add(notebook_host, stretch="always")
@@ -4076,6 +4303,12 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
                 env_focus_text.insert(tk.END, f"  {row.get('text', '')}\n", row.get("tag", "rrs_rs"))
         env_focus_text.config(state='disabled')
         env_focus_text.see("1.0")
+
+        env_copy_text.config(state='normal')
+        env_copy_text.delete("1.0", tk.END)
+        env_copy_text.insert(tk.END, build_environment_focus_copy_text(snapshot))
+        env_copy_text.config(state='disabled')
+        env_copy_text.see("1.0")
 
     return {
         "container": rrs_container,
@@ -4520,8 +4753,17 @@ def start_gui(mode="prompt"):
     )
     rrs_main_text.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
 
-    env_focus_frame = tk.LabelFrame(rrs_frame, text="Environment Focus", bg=dark_grey, fg=text_color)
-    env_focus_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+    env_focus_row = tk.PanedWindow(
+        rrs_frame,
+        orient=tk.HORIZONTAL,
+        sashrelief=tk.RAISED,
+        sashwidth=10,
+        showhandle=True,
+        bg=dark_grey,
+    )
+    env_focus_row.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
+
+    env_focus_frame = tk.LabelFrame(env_focus_row, text="Environment Focus", bg=dark_grey, fg=text_color)
     env_focus_text = scrolledtext.ScrolledText(
         env_focus_frame,
         wrap=tk.NONE,
@@ -4536,6 +4778,41 @@ def start_gui(mode="prompt"):
     env_focus_text.tag_config("rrs_hdr", foreground="#BD93F9", font=('Courier', 11, 'bold'))
     env_focus_text.tag_config("rrs_rs", foreground="#50FA7B", font=('Courier', 11, 'bold'))
     env_focus_text.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
+    env_focus_row.add(env_focus_frame, stretch="always")
+
+    env_copy_frame = tk.LabelFrame(env_focus_row, text="Environment Focus Lists", bg=dark_grey, fg=text_color)
+    env_copy_toolbar = tk.Frame(env_copy_frame, bg=dark_grey)
+    env_copy_toolbar.pack(fill=tk.X, padx=4, pady=(4, 0))
+    env_copy_text = scrolledtext.ScrolledText(
+        env_copy_frame,
+        wrap=tk.WORD,
+        width=52,
+        height=8,
+        font=('Courier', 10),
+        state='disabled',
+        bg=dark_grey,
+        fg=text_color,
+    )
+
+    def copy_env_focus_lists():
+        text = env_copy_text.get("1.0", tk.END).strip()
+        if not text:
+            rrs_status_var.set("Environment focus lists: nothing to copy.")
+            return
+        copy_text_to_clipboard(env_copy_text, text)
+        rrs_status_var.set("Copied environment focus lists to clipboard.")
+
+    tk.Button(
+        env_copy_toolbar,
+        text="Copy",
+        command=copy_env_focus_lists,
+        relief=tk.RAISED,
+        padx=10,
+        bg=dark_grey,
+        fg=text_color,
+    ).pack(side=tk.LEFT)
+    env_copy_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    env_focus_row.add(env_copy_frame, stretch="always")
 
     rrs_compare_frame = tk.Frame(rrs_frame, bg=dark_grey)
     rrs_compare_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -4763,6 +5040,26 @@ def start_gui(mode="prompt"):
                 group_text.insert(tk.END, f"  - {item['group_key']:<26} {item['etf']:<6} {item['rrs']:+.2f} {item['power_index']:+.2f}\n", "rrs_rw")
         group_text.config(state='disabled')
         group_text.see("1.0")
+
+        env_focus_text.config(state='normal')
+        env_focus_text.delete("1.0", tk.END)
+        env_highlights = snapshot.get("environment_highlights", [])
+        env_focus_text.insert(tk.END, f"{snapshot.get('market_environment_label', 'Environment')} Focus\n", "rrs_hdr")
+        for section in env_highlights:
+            env_focus_text.insert(tk.END, f"\n{section.get('title', 'Section')}\n", "rrs_hdr")
+            rows = section.get("rows", [])
+            if not rows:
+                env_focus_text.insert(tk.END, "  None\n")
+            for row in rows:
+                env_focus_text.insert(tk.END, f"  {row.get('text', '')}\n", row.get("tag", "rrs_rs"))
+        env_focus_text.config(state='disabled')
+        env_focus_text.see("1.0")
+
+        env_copy_text.config(state='normal')
+        env_copy_text.delete("1.0", tk.END)
+        env_copy_text.insert(tk.END, build_environment_focus_copy_text(snapshot))
+        env_copy_text.config(state='disabled')
+        env_copy_text.see("1.0")
 
     def process_rrs_queue():
         while True:

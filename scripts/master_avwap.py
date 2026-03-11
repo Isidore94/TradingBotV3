@@ -45,8 +45,11 @@ from project_paths import (
     MASTER_POSITIONS_FILE,
     MASTER_AVWAP_REPORT_FILE,
     MASTER_AVWAP_STDEV_REPORT_FILE,
+    MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
     MASTER_AVWAP_FOCUS_FILE,
     EARNINGS_ANCHORS_FILE,
+    EARNINGS_ANCHOR_CANDIDATES_FILE,
+    EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE,
     PREVIOUS_GAP_UPS_FILE,
     MASTER_ANCHOR_AVWAP_REPORT_FILE,
     ANCHOR_AVWAP_SIGNALS_FILE,
@@ -116,6 +119,7 @@ HISTORY_FILE = MASTER_AVWAP_HISTORY_FILE
 AI_STATE_FILE = MASTER_AVWAP_AI_STATE_FILE
 OUTPUT_FILE = MASTER_AVWAP_REPORT_FILE
 STDEV_RANGE_FILE = MASTER_AVWAP_STDEV_REPORT_FILE
+TRADINGVIEW_REPORT_FILE = MASTER_AVWAP_TRADINGVIEW_REPORT_FILE
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
 HEADERS = {
@@ -736,6 +740,7 @@ EARNINGS_ANCHOR_COLUMNS = [
 ]
 
 ANCHOR_AVWAP_OUTPUT_FILE = MASTER_ANCHOR_AVWAP_REPORT_FILE
+EARNINGS_ANCHOR_CANDIDATES_OUTPUT_FILE = EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE
 ANCHOR_AVWAP_SIGNAL_COLUMNS = [
     "run_date",
     "trade_date",
@@ -770,6 +775,28 @@ class EarningsGapAnchorCandidate:
 
 
 def ensure_anchor_file(path: Path = EARNINGS_ANCHORS_FILE):
+    if not path.exists():
+        pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS).to_csv(path, index=False)
+        return
+
+    df = pd.read_csv(path)
+    updated = False
+    for col in EARNINGS_ANCHOR_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+            updated = True
+
+    if "side" in df.columns:
+        normalized = df["side"].fillna("").astype(str).str.upper().replace({"": "LONG"})
+        if not normalized.equals(df["side"]):
+            df["side"] = normalized
+            updated = True
+
+    if updated:
+        df[EARNINGS_ANCHOR_COLUMNS].to_csv(path, index=False)
+
+
+def ensure_anchor_candidate_file(path: Path = EARNINGS_ANCHOR_CANDIDATES_FILE):
     if not path.exists():
         pd.DataFrame(columns=EARNINGS_ANCHOR_COLUMNS).to_csv(path, index=False)
         return
@@ -1060,6 +1087,96 @@ def append_anchor_candidates(candidates, path: Path = EARNINGS_ANCHORS_FILE):
 
 
 
+def _candidate_to_row(candidate: EarningsGapAnchorCandidate, created_at: str) -> dict:
+    row = asdict(candidate)
+    row["ticker"] = str(row.get("ticker", "")).strip().upper()
+    row["side"] = normalize_side(row.get("side", "LONG"))
+    row["notes"] = str(row.get("notes", "")).strip()
+    row["source"] = str(row.get("source", "")).strip() or "program"
+    row["created_at"] = created_at
+    return {col: row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS}
+
+
+def _candidate_from_row(row: dict) -> EarningsGapAnchorCandidate:
+    return EarningsGapAnchorCandidate(
+        ticker=str(row.get("ticker", "")).strip().upper(),
+        anchor_date=str(row.get("anchor_date", "")).strip(),
+        gap_date=str(row.get("gap_date", "")).strip(),
+        earnings_date=str(row.get("earnings_date", "")).strip(),
+        release_session=str(row.get("release_session", "")).strip(),
+        gap_atr_multiple=float(_coerce_float(row.get("gap_atr_multiple")) or 0.0),
+        price=float(_coerce_float(row.get("price")) or 0.0),
+        avg_volume20=int(_coerce_int(row.get("avg_volume20")) or 0),
+        market_cap=int(_coerce_int(row.get("market_cap")) or 0),
+        side=normalize_side(row.get("side", "LONG")),
+        notes=str(row.get("notes", "")).strip(),
+        source=str(row.get("source", "")).strip() or "program",
+    )
+
+
+def _format_symbols_for_tc2000(symbols) -> str:
+    cleaned = set()
+    for symbol in symbols or []:
+        text = str(symbol).strip().upper()
+        if not text:
+            continue
+        cleaned.add(text.split()[0])
+    cleaned = sorted(cleaned)
+    return ", ".join(cleaned) if cleaned else "None"
+
+
+def write_anchor_candidates_output(
+    candidates,
+    sessions,
+    lookback_days: int,
+    csv_path: Path = EARNINGS_ANCHOR_CANDIDATES_FILE,
+    report_path: Path = EARNINGS_ANCHOR_CANDIDATES_OUTPUT_FILE,
+):
+    ensure_anchor_candidate_file(csv_path)
+
+    created_at = datetime.now().isoformat(timespec="seconds")
+    rows = [
+        _candidate_to_row(candidate, created_at)
+        for candidate in sorted(candidates, key=lambda item: (normalize_side(item.side), item.ticker, item.anchor_date))
+    ]
+    df_candidates = pd.DataFrame(rows, columns=EARNINGS_ANCHOR_COLUMNS)
+    df_candidates.to_csv(csv_path, index=False)
+
+    long_symbols = [row["ticker"] for row in rows if row.get("side") == "LONG"]
+    short_symbols = [row["ticker"] for row in rows if row.get("side") == "SHORT"]
+
+    report_lines = [
+        "Earnings gap anchor candidates",
+        f"Generated at {created_at}",
+        f"Sessions scanned: {len(sessions)}",
+        f"Lookback sessions requested: {max(1, int(lookback_days))}",
+        f"Qualified candidates: {len(rows)}",
+        "",
+        "TC2000 copy/paste",
+        f"LONG: {_format_symbols_for_tc2000(long_symbols)}",
+        f"SHORT: {_format_symbols_for_tc2000(short_symbols)}",
+        "",
+        "Candidate rows",
+    ]
+
+    if not rows:
+        report_lines.append("None")
+    else:
+        for row in rows:
+            report_lines.append(
+                f"{row['ticker']:<6} {row['side']:<5} anchor={row['anchor_date']} gap={row['gap_date']} "
+                f"earnings={row['earnings_date']} gap_atr={row['gap_atr_multiple']} "
+                f"price={row['price']} avg_vol20={row['avg_volume20']} release={row['release_session']} "
+                f"source={row['source']}"
+            )
+            notes = str(row.get("notes", "")).strip()
+            if notes:
+                report_lines.append(f"  notes={notes}")
+
+    report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+    return rows
+
+
 def scan_last_session_earnings_for_anchors(lookback_days: int = 1):
     sessions = get_recent_market_session_dates(lookback_days)
     if not sessions:
@@ -1085,11 +1202,11 @@ def scan_last_session_earnings_for_anchors(lookback_days: int = 1):
                     f"gap_atr={candidate.gap_atr_multiple})."
                 )
 
-    added = append_anchor_candidates(candidates)
+    write_anchor_candidates_output(candidates, sessions, lookback_days)
     logging.info(
         f"Earnings gap anchor scan complete. Sessions={len(sessions)}, qualified={len(candidates)}, "
-        f"newly_added={added}, "
-        f"file={EARNINGS_ANCHORS_FILE}"
+        f"candidate_file={EARNINGS_ANCHOR_CANDIDATES_FILE}, "
+        f"report={EARNINGS_ANCHOR_CANDIDATES_OUTPUT_FILE}"
     )
     return candidates
 
@@ -1269,13 +1386,11 @@ def normalize_side(value: str) -> str:
     return "SHORT" if raw == "SHORT" else "LONG"
 
 
-def classify_position_by_band(last_close: float, anchor_meta: dict):
-    """Return the band label the last_close sits above (or at)."""
-    if last_close is None or not anchor_meta:
-        return None
+def _build_ordered_level_points(anchor_meta: dict) -> list[tuple[str, float]]:
+    if not anchor_meta:
+        return []
 
     bands = anchor_meta.get("bands", {}) if anchor_meta else {}
-
     level_points = []
     for name, level in [
         ("LOWER_3", bands.get("LOWER_3")),
@@ -1295,10 +1410,26 @@ def classify_position_by_band(last_close: float, anchor_meta: dict):
             pass
         level_points.append((name, float(level)))
 
+    level_points.sort(key=lambda item: item[1])
+    return level_points
+
+
+def classify_position_by_band(last_close: float, anchor_meta: dict, side: str = "LONG"):
+    """Return the active break level for the current side."""
+    if last_close is None:
+        return None
+
+    level_points = _build_ordered_level_points(anchor_meta)
     if not level_points:
         return None
 
-    level_points.sort(key=lambda x: x[1])
+    side = normalize_side(side)
+    if side == "SHORT":
+        for name, level in level_points:
+            if last_close <= level:
+                return name
+        return level_points[-1][0]
+
     category = level_points[0][0]
     for name, level in level_points:
         if last_close >= level:
@@ -1306,6 +1437,83 @@ def classify_position_by_band(last_close: float, anchor_meta: dict):
         else:
             break
     return category
+
+
+def get_band_context(last_close: float, anchor_meta: dict, side: str = "LONG") -> dict:
+    level_points = _build_ordered_level_points(anchor_meta)
+    if last_close is None or not level_points:
+        return {
+            "active_level": None,
+            "nearby_levels": [],
+            "zone": "",
+        }
+
+    nearby_levels = []
+    for name, level in level_points:
+        if abs(last_close - level) <= 1e-9:
+            nearby_levels = [name]
+            break
+
+    if not nearby_levels:
+        if last_close <= level_points[0][1]:
+            nearby_levels = [level_points[0][0]]
+        elif last_close >= level_points[-1][1]:
+            nearby_levels = [level_points[-1][0]]
+        else:
+            for idx in range(len(level_points) - 1):
+                lower_name, lower_level = level_points[idx]
+                upper_name, upper_level = level_points[idx + 1]
+                if lower_level <= last_close <= upper_level:
+                    nearby_levels = [lower_name, upper_name]
+                    break
+
+    side = normalize_side(side)
+    if side == "SHORT" and len(nearby_levels) == 2:
+        nearby_levels = list(reversed(nearby_levels))
+
+    return {
+        "active_level": classify_position_by_band(last_close, anchor_meta, side=side),
+        "nearby_levels": nearby_levels,
+        "zone": " to ".join(nearby_levels),
+    }
+
+
+def select_primary_cross_signal(
+    df: pd.DataFrame,
+    side: str,
+    prefix: str,
+    vwap_value: float,
+    bands: dict,
+):
+    side = normalize_side(side)
+    candidates = []
+
+    if side == "LONG":
+        cross_tests = [
+            ("VWAP", vwap_value, cross_up_through_level),
+            ("UPPER_1", bands.get("UPPER_1"), cross_up_through_level),
+            ("UPPER_2", bands.get("UPPER_2"), cross_up_through_level),
+            ("UPPER_3", bands.get("UPPER_3"), cross_up_through_level),
+        ]
+        direction = "UP"
+    else:
+        cross_tests = [
+            ("VWAP", vwap_value, cross_down_through_level),
+            ("LOWER_1", bands.get("LOWER_1"), cross_down_through_level),
+            ("LOWER_2", bands.get("LOWER_2"), cross_down_through_level),
+            ("LOWER_3", bands.get("LOWER_3"), cross_down_through_level),
+        ]
+        direction = "DOWN"
+
+    for level_name, level_price, test_fn in cross_tests:
+        if level_price is None:
+            continue
+        if test_fn(df, level_price):
+            candidates.append((f"{prefix}CROSS_{direction}_{level_name}", level_price))
+
+    if not candidates:
+        return None
+    return candidates[-1]
 
 # ============================================================================
 # ATR + BOUNCE / CROSS LOGIC
@@ -1660,6 +1868,78 @@ def write_stdev_range_report(path: Path, range_hits: dict, cross_hits: dict) -> 
         f.write("Crosses/bounces through 2nd stdev (current anchors)\n")
         f.write(f"Longs crossing/bouncing at UPPER_2: {long_cross}\n")
         f.write(f"Shorts crossing/bouncing at LOWER_2: {short_cross}\n")
+
+
+def write_tradingview_report(
+    path: Path,
+    priority_rows: list[dict],
+    event_buckets: dict,
+    range_buckets: dict,
+    stdev_range_hits: dict,
+    stdev_cross_hits: dict,
+) -> None:
+    favorites = sorted(
+        [row for row in priority_rows if row["has_favorite_signal"]],
+        key=lambda row: (-row["score"], row["symbol"]),
+    )
+    near_favorites = sorted(
+        [row for row in priority_rows if not row["has_favorite_signal"] and row["favorite_zone"]],
+        key=lambda row: (-row["score"], row["symbol"]),
+    )
+
+    def _symbols(rows, side: str) -> str:
+        values = [row["symbol"] for row in rows if row.get("side") == side]
+        return _format_symbols_for_tc2000(values)
+
+    def _write_block(handle, title: str, lines: list[tuple[str, str]]) -> None:
+        handle.write(f"{title}\n")
+        handle.write("-" * len(title) + "\n")
+        if not lines:
+            handle.write("None\n\n")
+            return
+        for label, values in lines:
+            handle.write(f"{label}: {values}\n")
+        handle.write("\n")
+
+    event_lines = []
+    for lbl in sorted(event_buckets.keys(), key=event_label_sort_key):
+        display_label = format_signal_label(lbl)
+        for side in ("LONG", "SHORT"):
+            values = _format_symbols_for_tc2000(event_buckets[lbl].get(side, []))
+            if values == "None":
+                continue
+            event_lines.append((f"{display_label} {side}", values))
+
+    range_lines = [
+        ("Longs between AVWAP and UPPER_1", _format_symbols_for_tc2000(range_buckets.get("long_avwap_to_upper_1", []))),
+        ("Longs between UPPER_1 and UPPER_2", _format_symbols_for_tc2000(range_buckets.get("long_upper_1_to_upper_2", []))),
+        ("Shorts between AVWAP and LOWER_1", _format_symbols_for_tc2000(range_buckets.get("short_avwap_to_lower_1", []))),
+        ("Shorts between LOWER_1 and LOWER_2", _format_symbols_for_tc2000(range_buckets.get("short_lower_1_to_lower_2", []))),
+    ]
+
+    stdev_lines = [
+        ("Longs between UPPER_2 and UPPER_3", _format_symbols_for_tc2000(stdev_range_hits.get("long", []))),
+        ("Shorts between LOWER_2 and LOWER_3", _format_symbols_for_tc2000(stdev_range_hits.get("short", []))),
+        ("Longs crossing or bouncing UPPER_2", _format_symbols_for_tc2000(stdev_cross_hits.get("long", []))),
+        ("Shorts crossing or bouncing LOWER_2", _format_symbols_for_tc2000(stdev_cross_hits.get("short", []))),
+    ]
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("Master AVWAP TradingView lists\n")
+        handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        _write_block(
+            handle,
+            "Best current favorite setups",
+            [("LONG", _symbols(favorites, "LONG")), ("SHORT", _symbols(favorites, "SHORT"))],
+        )
+        _write_block(
+            handle,
+            "Near favorite zones",
+            [("LONG", _symbols(near_favorites, "LONG")), ("SHORT", _symbols(near_favorites, "SHORT"))],
+        )
+        _write_block(handle, "Event tickers", event_lines)
+        _write_block(handle, "Price ranges (current anchors)", range_lines)
+        _write_block(handle, "Stdev 2-3 groups", stdev_lines)
 
 
 
@@ -2077,27 +2357,16 @@ def run_master():
                         "bands": {k: float(v) for k, v in bands_c.items()}
                     }
                     if not skip_current_events:
-                        # crosses (current)
-                        if side == "LONG" and cross_up_through_level(df, vwap_c):
-                            add_signal("CROSS_UP_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
-                        if side == "SHORT" and cross_down_through_level(df, vwap_c):
-                            add_signal("CROSS_DOWN_VWAP", "CURRENT", curr_iso, vwap_c, sd_c, vwap_c)
-
-                        for k in (1, 2, 3):
-                            if side == "LONG":
-                                lvl = bands_c.get(f"UPPER_{k}")
-                                if lvl is None:
-                                    continue
-                                if cross_up_through_level(df, lvl):
-                                    lbl = f"CROSS_UP_UPPER_{k}"
-                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
-                            else:
-                                lvl = bands_c.get(f"LOWER_{k}")
-                                if lvl is None:
-                                    continue
-                                if cross_down_through_level(df, lvl):
-                                    lbl = f"CROSS_DOWN_LOWER_{k}"
-                                    add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
+                        primary_cross = select_primary_cross_signal(
+                            df,
+                            side,
+                            "",
+                            vwap_c,
+                            bands_c,
+                        )
+                        if primary_cross:
+                            lbl, lvl = primary_cross
+                            add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
 
                         # bounces (current)
                         if side == "LONG":
@@ -2176,25 +2445,16 @@ def run_master():
                                 add_signal(lbl, "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
 
                     # previous crosses
-                    if side == "LONG" and cross_up_through_level(df, vwap_p):
-                        add_signal("PREV_CROSS_UP_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
-                    if side == "SHORT" and cross_down_through_level(df, vwap_p):
-                        add_signal("PREV_CROSS_DOWN_VWAP", "PREVIOUS", prev_iso, vwap_p, sd_p, vwap_p)
-
-                    if side == "LONG":
-                        for k in (1, 2, 3):
-                            lvl = bands_p.get(f"UPPER_{k}")
-                            if lvl is None:
-                                continue
-                            if cross_up_through_level(df, lvl):
-                                add_signal(f"PREV_CROSS_UPPER_{k}", "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
-                    else:
-                        for k in (1, 2, 3):
-                            lvl = bands_p.get(f"LOWER_{k}")
-                            if lvl is None:
-                                continue
-                            if cross_down_through_level(df, lvl):
-                                add_signal(f"PREV_CROSS_LOWER_{k}", "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
+                    primary_prev_cross = select_primary_cross_signal(
+                        df,
+                        side,
+                        "PREV_",
+                        vwap_p,
+                        bands_p,
+                    )
+                    if primary_prev_cross:
+                        lbl, lvl = primary_prev_cross
+                        add_signal(lbl, "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
                 else:
                     logging.warning(f"{sym}: invalid previous AVWAP / bands.")
             else:
@@ -2275,6 +2535,8 @@ def run_master():
             current_anchor_meta.get("bands", {}).get("LOWER_3")
             if current_anchor_meta else None
         )
+        current_band_context = get_band_context(last_close, current_anchor_meta, side)
+        previous_band_context = get_band_context(last_close, prev_anchor_meta, side)
 
         def _distance(level):
             if last_close is None or level is None:
@@ -2372,11 +2634,11 @@ def run_master():
                     if current_lower_2 is not None and bounce_down_at_level(df, current_lower_2):
                         stdev_cross_hits["short"].append(f"{sym} (bounce)")
 
-        current_position = classify_position_by_band(last_close, current_anchor_meta)
+        current_position = current_band_context["active_level"]
         if current_position:
             positions["current"].setdefault(current_position, []).append(sym)
 
-        previous_position = classify_position_by_band(last_close, prev_anchor_meta)
+        previous_position = previous_band_context["active_level"]
         if previous_position:
             positions["previous"].setdefault(previous_position, []).append(sym)
 
@@ -2392,6 +2654,12 @@ def run_master():
             "last_close": last_close,
             "last_volume": last_volume,
             "atr20": atr20,
+            "current_active_level": current_band_context["active_level"],
+            "current_nearby_bands": list(current_band_context["nearby_levels"]),
+            "current_band_zone": current_band_context["zone"],
+            "previous_active_level": previous_band_context["active_level"],
+            "previous_nearby_bands": list(previous_band_context["nearby_levels"]),
+            "previous_band_zone": previous_band_context["zone"],
             "distance_from_current_vwap": dist_vwap,
             "pct_from_current_vwap": pct_vwap,
             "distance_from_current_upper_1": dist_upper_1,
@@ -2450,6 +2718,12 @@ def run_master():
             "last_close": last_close,
             "last_volume": last_volume,
             "atr20": atr20,
+            "current_active_level": current_band_context["active_level"],
+            "current_nearby_bands": ";".join(current_band_context["nearby_levels"]),
+            "current_band_zone": current_band_context["zone"],
+            "previous_active_level": previous_band_context["active_level"],
+            "previous_nearby_bands": ";".join(previous_band_context["nearby_levels"]),
+            "previous_band_zone": previous_band_context["zone"],
             "current_anchor_date": current_anchor_meta.get("date") if current_anchor_meta else None,
             "current_anchor_vwap": current_vwap,
             "current_anchor_stdev": current_anchor_meta.get("stdev") if current_anchor_meta else None,
@@ -2569,6 +2843,14 @@ def run_master():
             f.write(f"{label}: {_fmt_items(range_buckets[key])}\n")
 
     write_stdev_range_report(STDEV_RANGE_FILE, stdev_range_hits, stdev_cross_hits)
+    write_tradingview_report(
+        TRADINGVIEW_REPORT_FILE,
+        priority_rows,
+        event_buckets,
+        range_buckets,
+        stdev_range_hits,
+        stdev_cross_hits,
+    )
 
     feature_columns = [
         "symbol",
@@ -2577,6 +2859,12 @@ def run_master():
         "last_close",
         "last_volume",
         "atr20",
+        "current_active_level",
+        "current_nearby_bands",
+        "current_band_zone",
+        "previous_active_level",
+        "previous_nearby_bands",
+        "previous_band_zone",
         "current_anchor_date",
         "current_anchor_vwap",
         "current_anchor_stdev",
@@ -2661,7 +2949,9 @@ class MasterAvwapGUI:
 
         self._build_layout()
         self.refresh_table()
+        self.refresh_candidate_table()
         self.refresh_avwap_output_view()
+        self.refresh_tradingview_output_view()
         self.refresh_anchor_output_view()
 
     def _configure_dark_theme(self):
@@ -2745,7 +3035,7 @@ class MasterAvwapGUI:
         style.configure("Vertical.TScrollbar", background=GUI_DARK_PANEL, troughcolor=GUI_DARK_BG)
 
     def _apply_dark_theme_to_text_widgets(self):
-        for widget in (self.avwap_text, self.anchor_scan_text):
+        for widget in (self.avwap_text, self.tradingview_text, self.anchor_scan_text):
             widget.configure(
                 bg=GUI_DARK_INPUT,
                 fg=GUI_DARK_TEXT,
@@ -2772,14 +3062,17 @@ class MasterAvwapGUI:
 
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Refresh Table", command=self.refresh_table).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Refresh Active Anchors", command=self.refresh_table).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Refresh Candidates", command=self.refresh_candidate_table).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Refresh TradingView Lists", command=self.refresh_tradingview_output_view).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=8)
 
         anchors_tab = ttk.Frame(self.notebook)
+        self.anchors_tab = anchors_tab
         self.notebook.add(anchors_tab, text="Earnings Anchors")
 
         form = ttk.LabelFrame(anchors_tab, text="Manual Anchor Entry")
@@ -2813,7 +3106,43 @@ class MasterAvwapGUI:
         self.table.pack(side="left", fill="both", expand=True)
         yscroll.pack(side="right", fill="y")
 
+        candidate_tab = ttk.Frame(self.notebook)
+        self.candidates_tab = candidate_tab
+        self.notebook.add(candidate_tab, text="Anchor Candidates")
+
+        candidate_toolbar = ttk.Frame(candidate_tab)
+        candidate_toolbar.pack(fill="x", padx=0, pady=(0, 8))
+        ttk.Label(
+            candidate_toolbar,
+            text="Daily scan candidates are review-only until you add selected rows to active anchors.",
+        ).pack(side="left", padx=(0, 12))
+        ttk.Button(candidate_toolbar, text="Copy All Symbols", command=self.copy_all_candidate_symbols).pack(side="left", padx=4)
+        ttk.Button(candidate_toolbar, text="Copy Selected Symbols", command=self.copy_selected_candidate_symbols).pack(side="left", padx=4)
+        ttk.Button(candidate_toolbar, text="Add Selected to Active Anchors", command=self.add_selected_candidates_to_anchors).pack(side="left", padx=4)
+
+        candidate_table_frame = ttk.Frame(candidate_tab)
+        candidate_table_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+        self.candidate_table = ttk.Treeview(
+            candidate_table_frame,
+            columns=EARNINGS_ANCHOR_COLUMNS,
+            show="headings",
+            style="Dark.Treeview",
+            selectmode="extended",
+        )
+        for col in EARNINGS_ANCHOR_COLUMNS:
+            self.candidate_table.heading(col, text=col)
+            width = 120 if col not in {"notes"} else 260
+            self.candidate_table.column(col, width=width, anchor="w")
+
+        candidate_scroll = ttk.Scrollbar(candidate_table_frame, orient="vertical", command=self.candidate_table.yview)
+        self.candidate_table.configure(yscrollcommand=candidate_scroll.set)
+
+        self.candidate_table.pack(side="left", fill="both", expand=True)
+        candidate_scroll.pack(side="right", fill="y")
+
         avwap_tab = ttk.Frame(self.notebook)
+        self.avwap_tab = avwap_tab
         self.notebook.add(avwap_tab, text="AVWAP Scan Output")
 
         self.avwap_text = tk.Text(avwap_tab, wrap="word", font=("Courier New", 10))
@@ -2822,7 +3151,26 @@ class MasterAvwapGUI:
         self.avwap_text.configure(yscrollcommand=output_scroll.set)
         output_scroll.pack(side="right", fill="y")
 
+        tradingview_tab = ttk.Frame(self.notebook)
+        self.tradingview_tab = tradingview_tab
+        self.notebook.add(tradingview_tab, text="TradingView Lists")
+
+        tradingview_toolbar = ttk.Frame(tradingview_tab)
+        tradingview_toolbar.pack(fill="x", padx=0, pady=(0, 8))
+        ttk.Label(
+            tradingview_toolbar,
+            text="Grouped comma-separated ticker lists matching the AVWAP scan output sections.",
+        ).pack(side="left", padx=(0, 12))
+        ttk.Button(tradingview_toolbar, text="Copy All Lists", command=self.copy_tradingview_output).pack(side="left", padx=4)
+
+        self.tradingview_text = tk.Text(tradingview_tab, wrap="word", font=("Courier New", 10))
+        self.tradingview_text.pack(side="left", fill="both", expand=True)
+        tradingview_scroll = ttk.Scrollbar(tradingview_tab, orient="vertical", command=self.tradingview_text.yview)
+        self.tradingview_text.configure(yscrollcommand=tradingview_scroll.set)
+        tradingview_scroll.pack(side="right", fill="y")
+
         anchor_scan_tab = ttk.Frame(self.notebook)
+        self.anchor_scan_tab = anchor_scan_tab
         self.notebook.add(anchor_scan_tab, text="Anchor AVWAP Output")
         self.anchor_scan_text = tk.Text(anchor_scan_tab, wrap="word", font=("Courier New", 10))
         self.anchor_scan_text.pack(side="left", fill="both", expand=True)
@@ -2871,12 +3219,45 @@ class MasterAvwapGUI:
         self.avwap_text.insert("1.0", combined)
         self.avwap_text.configure(state="normal")
 
+    def refresh_tradingview_output_view(self):
+        text = self._read_text_file(TRADINGVIEW_REPORT_FILE)
+        self.tradingview_text.configure(state="normal")
+        self.tradingview_text.delete("1.0", tk.END)
+        self.tradingview_text.insert("1.0", text or "No TradingView list output yet.")
+        self.tradingview_text.configure(state="normal")
+
+    def copy_tradingview_output(self):
+        text = self.tradingview_text.get("1.0", tk.END).strip()
+        if not text:
+            self.status_var.set("No TradingView output to copy.")
+            return
+        self._copy_to_clipboard(text)
+        self.status_var.set("Copied TradingView list output to clipboard.")
+
     def refresh_anchor_output_view(self):
         text = self._read_text_file(ANCHOR_AVWAP_OUTPUT_FILE)
         self.anchor_scan_text.configure(state="normal")
         self.anchor_scan_text.delete("1.0", tk.END)
         self.anchor_scan_text.insert("1.0", text or "No anchor AVWAP output yet.")
         self.anchor_scan_text.configure(state="normal")
+
+    def _treeview_rows(self, treeview, selected_only=False):
+        item_ids = treeview.selection() if selected_only else treeview.get_children()
+        rows = []
+        for item_id in item_ids:
+            values = treeview.item(item_id, "values")
+            if not values:
+                continue
+            rows.append({
+                col: values[idx] if idx < len(values) else ""
+                for idx, col in enumerate(EARNINGS_ANCHOR_COLUMNS)
+            })
+        return rows
+
+    def _copy_to_clipboard(self, text: str):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update_idletasks()
 
     def _run_background(self, target, running_msg, done_msg, done_callback=None):
         self.status_var.set(running_msg)
@@ -2901,25 +3282,29 @@ class MasterAvwapGUI:
             lookback_days = 1
             self.earnings_lookback_var.set(1)
 
-        self.notebook.select(0)
+        self.notebook.select(self.candidates_tab)
         self._run_background(
             lambda: scan_last_session_earnings_for_anchors(lookback_days=lookback_days),
             f"Running earnings gap anchor scan (last {lookback_days} session(s))...",
-            "Earnings gap anchor scan complete.",
-            done_callback=lambda: self.notebook.select(0),
+            "Earnings gap candidate scan complete.",
+            done_callback=lambda: (self.refresh_candidate_table(), self.notebook.select(self.candidates_tab)),
         )
 
     def run_master_once(self):
-        self.notebook.select(1)
+        self.notebook.select(self.avwap_tab)
         self._run_background(
             run_master,
             "Running full Master AVWAP scan...",
             "Master AVWAP scan complete.",
-            done_callback=lambda: (self.refresh_avwap_output_view(), self.refresh_anchor_output_view()),
+            done_callback=lambda: (
+                self.refresh_avwap_output_view(),
+                self.refresh_tradingview_output_view(),
+                self.refresh_anchor_output_view(),
+            ),
         )
 
     def run_anchor_scan_once(self):
-        self.notebook.select(2)
+        self.notebook.select(self.anchor_scan_tab)
         self._run_background(
             run_anchor_watchlist_scan,
             "Running anchor watchlist AVWAP scan...",
@@ -2940,6 +3325,68 @@ class MasterAvwapGUI:
         df = df.fillna("")
         for _, row in df.iterrows():
             self.table.insert("", "end", values=[row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS])
+
+    def refresh_candidate_table(self):
+        ensure_anchor_candidate_file()
+        df = pd.read_csv(EARNINGS_ANCHOR_CANDIDATES_FILE)
+
+        for item in self.candidate_table.get_children():
+            self.candidate_table.delete(item)
+
+        if df.empty:
+            return
+
+        df = df.fillna("")
+        for _, row in df.iterrows():
+            self.candidate_table.insert("", "end", values=[row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS])
+
+    def copy_all_candidate_symbols(self):
+        rows = self._treeview_rows(self.candidate_table, selected_only=False)
+        symbols = [row.get("ticker", "") for row in rows]
+        symbols_text = _format_symbols_for_tc2000(symbols)
+        if symbols_text == "None":
+            self.status_var.set("No earnings scan candidates to copy.")
+            return
+        self._copy_to_clipboard(symbols_text)
+        self.status_var.set(f"Copied {len(set(symbols))} candidate symbol(s) to clipboard.")
+
+    def copy_selected_candidate_symbols(self):
+        rows = self._treeview_rows(self.candidate_table, selected_only=True)
+        symbols = [row.get("ticker", "") for row in rows]
+        symbols_text = _format_symbols_for_tc2000(symbols)
+        if symbols_text == "None":
+            self.status_var.set("No candidate rows selected.")
+            return
+        self._copy_to_clipboard(symbols_text)
+        self.status_var.set(f"Copied {len(set(symbols))} selected candidate symbol(s) to clipboard.")
+
+    def add_selected_candidates_to_anchors(self):
+        rows = self._treeview_rows(self.candidate_table, selected_only=True)
+        if not rows:
+            self.status_var.set("No candidate rows selected to add.")
+            return
+
+        candidates = []
+        for row in rows:
+            ticker = str(row.get("ticker", "")).strip().upper()
+            anchor_date = str(row.get("anchor_date", "")).strip()
+            if not ticker or not anchor_date:
+                continue
+            candidates.append(_candidate_from_row(row))
+
+        if not candidates:
+            self.status_var.set("Selected candidate rows are missing ticker or anchor date.")
+            return
+
+        added = append_anchor_candidates(candidates)
+        duplicates = len(candidates) - added
+        self.refresh_table()
+        if duplicates > 0:
+            self.status_var.set(
+                f"Added {added} candidate(s) to active anchors; {duplicates} already existed."
+            )
+        else:
+            self.status_var.set(f"Added {added} candidate(s) to active anchors.")
 
     def set_selected_anchor_side(self):
         selected = self.table.selection()
@@ -3042,6 +3489,7 @@ def launch_gui():
         return
 
     ensure_anchor_file()
+    ensure_anchor_candidate_file()
     root = tk.Tk()
     MasterAvwapGUI(root, standalone=True)
     root.mainloop()
@@ -3059,7 +3507,7 @@ def main():
     parser.add_argument(
         "--scan-earnings",
         action="store_true",
-        help="Scan the last market session for earnings gap anchors and update data file.",
+        help="Scan the last market session for earnings gap anchor candidates and write the review list.",
     )
     parser.add_argument("--gui", action="store_true", help="Launch the Master AVWAP management GUI.")
     parser.add_argument("--anchor-scan", action="store_true", help="Run only the anchor watchlist AVWAP scan.")
