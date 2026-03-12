@@ -1,7 +1,18 @@
 ticker,side,anchor_date,gap_date,earnings_date,release_session,gap_atr_multiple,price,avg_volume20,market_cap,notes,source,created_at
-DELL,LONG,2026-02-26,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:09:45
-ROST,LONG,2026-03-03,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:10:10
-IOVA,LONG,2026-02-23,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:10:34
-IRM,LONG,2026-02-11,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:10:45
-ACHC,LONG,2026-02-24,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:11:02
-PCG,LONG,2026-02-11,,,manual,0.0,0.0,0,0,,manual,2026-03-11T10:11:14
+IOVA,LONG,2026-02-23,2026-02-24,2026-02-24,bmo_inferred,1.822,3.78,12530180,0,Bulk import from ticker group,bulk_import,2026-03-12T15:46:22
+DELL,LONG,2026-02-26,2026-02-27,2026-02-26,amc_inferred,2.209,148.08,9421780,0,Bulk import from ticker group,bulk_import,2026-03-12T15:46:22
+ROST,LONG,2026-03-03,2026-03-04,2026-03-03,amc_inferred,3.509,213.52,2779980,0,Bulk import from ticker group,bulk_import,2026-03-12T15:46:22
+PGNY,LONG,2026-02-26,2026-02-27,2026-02-26,amc_inferred,2.184,17.69,1574555,0,Bulk import from ticker group,bulk_import,2026-03-12T15:48:08
+IRM,LONG,2026-02-11,2026-02-12,2026-02-12,bmo,1.048,106.0,2135230,0,Bulk import from ticker group,bulk_import,2026-03-12T15:48:08
+ACHC,LONG,2026-02-24,2026-02-25,2026-02-25,bmo_inferred,3.027,20.84,4162425,0,Bulk import from ticker group,bulk_import,2026-03-12T15:48:08
+PCG,LONG,2026-02-11,2026-02-12,2026-02-12,bmo,0.335,17.56,24057825,0,Bulk import from ticker group,bulk_import,2026-03-12T15:48:08
+AAOI,LONG,2026-02-26,2026-02-27,2026-02-26,amc_inferred,1.809,84.23,6233300,0,Bulk import from ticker group,bulk_import,2026-03-12T15:48:08
+FSLY,LONG,2026-02-11,2026-02-12,2026-02-11,amc_inferred,4.514,16.04,9874445,0,Bulk import from ticker group,bulk_import,2026-03-12T15:48:08
+MNDY,SHORT,2026-02-06,2026-02-09,2026-02-09,bmo_inferred,2.608,77.63,2635070,0,Bulk import from ticker group,bulk_import,2026-03-12T15:49:45
+DOCS,SHORT,2026-02-05,2026-02-06,2026-02-05,amc_inferred,4.538,27.73,4250675,0,Bulk import from ticker group,bulk_import,2026-03-12T15:49:45
+DUOL,SHORT,2026-02-26,2026-02-27,2026-02-26,amc_inferred,3.058,101.0,3836970,0,Bulk import from ticker group,bulk_import,2026-03-12T15:49:45
+CAR,SHORT,2026-02-18,2026-02-19,2026-02-18,amc_inferred,3.414,96.74,701110,0,Bulk import from ticker group,bulk_import,2026-03-12T15:49:45
+NOMD,SHORT,2026-02-25,2026-02-26,2026-02-26,bmo_inferred,2.897,11.26,1725460,0,Bulk import from ticker group,bulk_import,2026-03-12T15:49:45
+EOSE,SHORT,2026-02-25,2026-02-26,2026-02-26,bmo_inferred,2.597,6.74,24161155,0,Bulk import from ticker group,bulk_import,2026-03-12T15:49:45
+CPB,SHORT,2026-03-10,,,manual,0.0,0.0,0,0,,manual,2026-03-12T15:49:51
+PBR,LONG,2026-03-05,,,manual,0.0,0.0,0,0,,manual,2026-03-12T15:50:35

@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import os
 import time
 import json
 import re
+import math
+import importlib.util
 import logging
 import threading
 import argparse
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, date
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from dataclasses import dataclass, asdict
 
 try:
@@ -48,6 +52,10 @@ from project_paths import (
     MASTER_AVWAP_STDEV_REPORT_FILE,
     MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
     MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_SETUP_TRACKER_FILE,
+    MASTER_AVWAP_SETUP_SCENARIOS_FILE,
+    MASTER_AVWAP_SETUP_DAILY_FILE,
+    MASTER_AVWAP_SETUP_STATS_FILE,
     EARNINGS_ANCHORS_FILE,
     EARNINGS_ANCHOR_CANDIDATES_FILE,
     EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE,
@@ -121,6 +129,10 @@ AI_STATE_FILE = MASTER_AVWAP_AI_STATE_FILE
 OUTPUT_FILE = MASTER_AVWAP_REPORT_FILE
 STDEV_RANGE_FILE = MASTER_AVWAP_STDEV_REPORT_FILE
 TRADINGVIEW_REPORT_FILE = MASTER_AVWAP_TRADINGVIEW_REPORT_FILE
+SETUP_TRACKER_FILE = MASTER_AVWAP_SETUP_TRACKER_FILE
+SETUP_SCENARIOS_FILE = MASTER_AVWAP_SETUP_SCENARIOS_FILE
+SETUP_DAILY_FILE = MASTER_AVWAP_SETUP_DAILY_FILE
+SETUP_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
 HEADERS = {
@@ -133,6 +145,7 @@ EARNINGS_RECENT_DISCOVERY_WINDOW_DAYS = 21
 EARNINGS_FORCE_REFRESH_AFTER_DAYS = 100
 EARNINGS_DEEP_LOOKBACK_DAYS = 220
 EARNINGS_HISTORY_LIMIT = 8
+EARNINGS_YF_RETRY_AFTER_DAYS = 30
 MASTER_AVWAP_FOCUS_LIMIT_PER_BUCKET = 25
 RECENT_DAYS = 10              # if earnings < RECENT_DAYS, use prior one for "current"
 ATR_LENGTH = 20
@@ -158,6 +171,66 @@ PRIORITY_TRENDLINE_TOUCH_TOL_ATR = 0.35
 PRIORITY_TRENDLINE_ALERT_ATR = 1.0
 PRIORITY_TRENDLINE_PIVOT_WINDOW = 3
 PRIORITY_TRENDLINE_MIN_SEPARATION_BARS = 10
+PRIORITY_TRENDLINE_BREAK_RECENT_BARS = 3
+PRIORITY_TRENDLINE_BREAK_MAX_ATR = 1.5
+PRIORITY_TRENDLINE_BREAK_SCORE_BONUS = 18
+PRIORITY_RETEST_LOOKBACK_BARS = 5
+PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
+PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
+PRIORITY_FAVORITE_ZONE_SCORE_BONUS = 18
+PRIORITY_SECOND_BAND_TEST_LOOKBACK_DAYS = 8
+PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY = 10
+PRIORITY_SECOND_BAND_REPEAT_TEST_SCORE_PENALTY = 4
+PRIORITY_SECOND_BAND_MAX_SCORE_PENALTY = 22
+PRIORITY_RETEST_FOLLOWTHROUGH_SCORE_BONUS = 30
+PRIORITY_RETEST_LEVEL_SCORE_BONUS = {
+    "AVWAPE": 12,
+    "UPPER_1": 16,
+    "LOWER_1": 16,
+}
+PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS = 10
+PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS = 8
+PRIORITY_RETEST_CLEAR_PATH_SCORE_BONUS = 14
+SETUP_TRACKER_SCHEMA_VERSION = 1
+STANDARDIZED_RISK_USD = 500.0
+TRACKER_STOP_FAILURE_CLOSES = 2
+TRACKER_PREV_AVWAPE_NEAR_ATR = 0.5
+TRACKER_EMA_CONSOLIDATION_ATR = 0.35
+TRACKER_EMA_CONSOLIDATION_RANGE_ATR = 1.0
+PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
+PRIORITY_COMPRESSION_RANGE_ATR_MAX = 4.0
+PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_MAX = 2.5
+PRIORITY_COMPRESSION_SCORE_PENALTY = 16
+SETUP_EXIT_TEMPLATES = [
+    {
+        "id": "full_band2",
+        "label": "Full at band2",
+        "partial_target_label": None,
+        "final_target_label": "BAND2",
+        "trail_after_partial_label": None,
+    },
+    {
+        "id": "half_band2_trail_band1",
+        "label": "50% at band2, trail band1",
+        "partial_target_label": "BAND2",
+        "final_target_label": None,
+        "trail_after_partial_label": "BAND1",
+    },
+    {
+        "id": "full_band3",
+        "label": "Full at band3",
+        "partial_target_label": None,
+        "final_target_label": "BAND3",
+        "trail_after_partial_label": None,
+    },
+    {
+        "id": "half_band2_band3_trail_band1",
+        "label": "50% at band2, rest at band3 with band1 trail",
+        "partial_target_label": "BAND2",
+        "final_target_label": "BAND3",
+        "trail_after_partial_label": "BAND1",
+    },
+]
 POSITION_LEVELS = [
     "VWAP",
     "UPPER_1",
@@ -176,6 +249,23 @@ GUI_DARK_INPUT = "#252525"
 GUI_DARK_TEXT = "#C7CDD4"
 WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
 WATCHLIST_SKIP_TOKENS = {"LONG", "SHORT", "NONE"}
+YF_EARNINGS_LOGGER_NAMES = (
+    "yfinance",
+    "yfinance.base",
+    "yfinance.scrapers",
+    "yfinance.scrapers.calendar",
+)
+YF_EARNINGS_NO_DATA_MARKERS = (
+    "No earnings dates found",
+    "symbol may be delisted",
+    "'NoneType' object has no attribute 'index'",
+)
+YF_EARNINGS_LOOKUP_DISABLED_REASON = (
+    "lxml is not installed"
+    if importlib.util.find_spec("lxml") is None
+    else None
+)
+YF_EARNINGS_LOOKUP_DISABLED_LOGGED = False
 
 # ============================================================================
 # LOGGING
@@ -240,6 +330,7 @@ def load_json(path: Path, default):
     return default
 
 def save_json(path: Path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
 
@@ -362,6 +453,27 @@ def _earnings_symbol_needs_deep_refresh(symbol_entry, today=None):
     return (today - latest_date).days >= EARNINGS_FORCE_REFRESH_AFTER_DAYS
 
 
+def _earnings_symbol_needs_yf_refresh(symbol_entry, today=None):
+    today = today or datetime.now().date()
+    last_yf_refresh = _parse_iso_date_or_none(symbol_entry.get("last_yf_refresh_on"))
+    if last_yf_refresh is None:
+        return True
+    return (today - last_yf_refresh).days >= EARNINGS_YF_RETRY_AFTER_DAYS
+
+
+def _can_attempt_yf_earnings_lookup(log_once: bool = False) -> bool:
+    global YF_EARNINGS_LOOKUP_DISABLED_LOGGED
+
+    if YF_EARNINGS_LOOKUP_DISABLED_REASON:
+        if log_once and not YF_EARNINGS_LOOKUP_DISABLED_LOGGED:
+            logging.info(
+                f"Skipping yfinance earnings supplement: {YF_EARNINGS_LOOKUP_DISABLED_REASON}."
+            )
+            YF_EARNINGS_LOOKUP_DISABLED_LOGGED = True
+        return False
+    return True
+
+
 def compute_atr_from_ohlc(daily_rows, last_trade_date, length=ATR_LENGTH):
     target = last_trade_date.isoformat()
     relevant = [row for row in daily_rows if row["date"] <= target]
@@ -472,33 +584,1115 @@ def count_recent_band_extension_days(daily_rows, last_trade_date, band_level, si
     return count
 
 
-def analyze_avwap_retest_behavior(daily_rows, last_trade_date, current_vwap, side):
-    if current_vwap is None:
-        return False
+def count_recent_band_test_days(
+    daily_rows,
+    last_trade_date,
+    band_level,
+    side,
+    lookback=PRIORITY_SECOND_BAND_TEST_LOOKBACK_DAYS,
+):
+    if band_level is None:
+        return 0
 
     target = last_trade_date.isoformat()
     relevant = [row for row in daily_rows if row["date"] <= target]
-    if len(relevant) < 4:
-        return False
+    if not relevant:
+        return 0
 
-    recent = relevant[-4:]
+    recent_rows = relevant[-max(1, int(lookback)):]
+    count = 0
+    for row in recent_rows:
+        try:
+            row_high = float(row["high"])
+            row_low = float(row["low"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if side == "LONG" and row_high >= float(band_level):
+            count += 1
+        elif side == "SHORT" and row_low <= float(band_level):
+            count += 1
+    return count
+
+
+def compute_recent_second_band_penalty(recent_second_band_test_days: int) -> int:
+    if recent_second_band_test_days <= 0:
+        return 0
+    penalty = PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY
+    penalty += max(0, int(recent_second_band_test_days) - 1) * PRIORITY_SECOND_BAND_REPEAT_TEST_SCORE_PENALTY
+    return min(PRIORITY_SECOND_BAND_MAX_SCORE_PENALTY, penalty)
+
+
+def analyze_avwap_retest_behavior(
+    daily_rows,
+    last_trade_date,
+    current_vwap,
+    side,
+    current_upper_1=None,
+    current_lower_1=None,
+    atr20=None,
+):
+    result = {
+        "retest_followthrough": False,
+        "retest_reference_level": "",
+        "retest_note": "",
+    }
+    if current_vwap is None or atr20 is None or atr20 <= 0:
+        return result
+
+    target = last_trade_date.isoformat()
+    relevant = [row for row in daily_rows if row["date"] <= target]
+    if len(relevant) < PRIORITY_RETEST_LOOKBACK_BARS:
+        return result
+
+    recent = relevant[-PRIORITY_RETEST_LOOKBACK_BARS:]
     prior = recent[:-1]
     current = recent[-1]
     prior_closes = [float(row["close"]) for row in prior]
+    prior_lows = [float(row["low"]) for row in prior]
+    prior_highs = [float(row["high"]) for row in prior]
     current_close = float(current["close"])
+    current_low = float(current["low"])
+    current_high = float(current["high"])
+    touch_tol = max(BOUNCE_LEVEL_ATR_TOL_PCT * float(atr20), PRIORITY_RETEST_TOUCH_TOL_ATR * float(atr20))
+    confirm_push = max(ATR_MULT * float(atr20), PRIORITY_RETEST_CONFIRM_PUSH_ATR * float(atr20))
+    retest_window = prior[-3:]
 
     if side == "SHORT":
+        candidate_levels = [
+            ("UPPER_1", current_upper_1),
+            ("AVWAPE", current_vwap),
+        ]
         directional_drive = prior_closes[-1] < prior_closes[0]
-        retest = any(float(row["high"]) >= current_vwap for row in prior[-2:])
-        continuation = current_close < prior_closes[-1] and current_close < current_vwap
-        return directional_drive and retest and continuation
+        continuation = (
+            current_close < prior_closes[-1]
+            and current_low < min(prior_lows[-2:])
+            and current_close < current_vwap - confirm_push
+        )
+        if not (directional_drive and continuation):
+            return result
 
+        for label, level in candidate_levels:
+            if level is None:
+                continue
+            touched = any(float(row["high"]) >= float(level) - touch_tol for row in retest_window)
+            rejected = any(
+                float(row["close"]) <= float(level) + touch_tol
+                for row in retest_window
+                if float(row["high"]) >= float(level) - touch_tol
+            )
+            if not (touched and rejected):
+                continue
+            result["retest_followthrough"] = True
+            result["retest_reference_level"] = label
+            result["retest_note"] = f"Retested {label} and continued lower"
+            return result
+
+        return result
+
+    candidate_levels = [
+        ("LOWER_1", current_lower_1),
+        ("AVWAPE", current_vwap),
+    ]
     directional_drive = prior_closes[-1] > prior_closes[0]
-    retest = any(float(row["low"]) <= current_vwap for row in prior[-2:])
-    continuation = current_close > prior_closes[-1] and current_close > current_vwap
-    return directional_drive and retest and continuation
+    continuation = (
+        current_close > prior_closes[-1]
+        and current_high > max(prior_highs[-2:])
+        and current_close > current_vwap + confirm_push
+    )
+    if not (directional_drive and continuation):
+        return result
+
+    for label, level in candidate_levels:
+        if level is None:
+            continue
+        touched = any(float(row["low"]) <= float(level) + touch_tol for row in retest_window)
+        reclaimed = any(
+            float(row["close"]) >= float(level) - touch_tol
+            for row in retest_window
+            if float(row["low"]) <= float(level) + touch_tol
+        )
+        if not (touched and reclaimed):
+            continue
+        result["retest_followthrough"] = True
+        result["retest_reference_level"] = label
+        result["retest_note"] = f"Retested {label} and continued higher"
+        return result
+
+    return result
 
 
+def compute_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    work = df.copy().reset_index(drop=True)
+    work["close_num"] = pd.to_numeric(work["close"], errors="coerce")
+    work["high_num"] = pd.to_numeric(work["high"], errors="coerce")
+    work["low_num"] = pd.to_numeric(work["low"], errors="coerce")
+
+    for period in (10, 20, 50, 100, 200):
+        work[f"sma_{period}"] = work["close_num"].rolling(period).mean()
+        work[f"sma_{period}_prev"] = work[f"sma_{period}"].shift(1)
+
+    for span in (15, 21):
+        work[f"ema_{span}"] = work["close_num"].ewm(span=span, adjust=False).mean()
+
+    prev_close = work["close_num"].shift(1)
+    tr_components = pd.concat(
+        [
+            work["high_num"] - work["low_num"],
+            (work["high_num"] - prev_close).abs(),
+            (work["low_num"] - prev_close).abs(),
+        ],
+        axis=1,
+    )
+    work["atr_20"] = tr_components.max(axis=1).rolling(ATR_LENGTH, min_periods=1).mean()
+    work["recent_high_3"] = work["high_num"].rolling(3).max()
+    work["recent_low_3"] = work["low_num"].rolling(3).min()
+    work["recent_close_std_3"] = work["close_num"].rolling(3).std(ddof=0)
+    work["trade_date"] = pd.to_datetime(work["datetime"]).dt.date.astype(str)
+    return work
+
+
+def calc_anchored_vwap_band_history(df: pd.DataFrame, anchor_date_iso: str) -> dict[str, dict]:
+    try:
+        anchor_date = datetime.fromisoformat(str(anchor_date_iso)).date()
+    except ValueError:
+        return {}
+
+    idxs = df.index[df["datetime"].dt.date == anchor_date]
+    if idxs.empty:
+        return {}
+
+    anchor_idx = int(idxs[0])
+    cum_vol = 0.0
+    cum_vp = 0.0
+    cum_sd = 0.0
+    history = {}
+
+    for i in range(anchor_idx, len(df)):
+        row = df.iloc[i]
+        volume = float(row["volume"])
+        if volume <= 0:
+            continue
+        tp = (float(row["open"]) + float(row["high"]) + float(row["low"]) + float(row["close"])) / 4.0
+        cum_vol += volume
+        cum_vp += tp * volume
+        vwap = cum_vp / cum_vol
+        dev = tp - vwap
+        cum_sd += dev * dev * volume
+        stdev = (cum_sd / cum_vol) ** 0.5 if cum_vol > 0 else float("nan")
+        history[row["datetime"].date().isoformat()] = {
+            "vwap": float(vwap),
+            "stdev": float(stdev),
+            "bands": {
+                "UPPER_1": float(vwap + stdev),
+                "LOWER_1": float(vwap - stdev),
+                "UPPER_2": float(vwap + 2 * stdev),
+                "LOWER_2": float(vwap - 2 * stdev),
+                "UPPER_3": float(vwap + 3 * stdev),
+                "LOWER_3": float(vwap - 3 * stdev),
+            },
+        }
+
+    return history
+
+
+def _anchor_level_value(anchor_levels: dict | None, label: str):
+    if not anchor_levels or not label:
+        return None
+    if label in {"AVWAPE", "VWAP"}:
+        return _coerce_float(anchor_levels.get("vwap"))
+    bands = anchor_levels.get("bands", {}) if isinstance(anchor_levels.get("bands"), dict) else {}
+    return _coerce_float(bands.get(label))
+
+
+def _indicator_level_value(indicator_row: pd.Series | dict | None, label: str):
+    if indicator_row is None or not label:
+        return None
+    field_map = {
+        "SMA_10": "sma_10",
+        "SMA_20": "sma_20",
+        "SMA_50": "sma_50",
+        "SMA_100": "sma_100",
+        "SMA_200": "sma_200",
+        "EMA_15": "ema_15",
+        "EMA_21": "ema_21",
+    }
+    field = field_map.get(label)
+    if not field:
+        return None
+    if isinstance(indicator_row, pd.Series):
+        return _coerce_float(indicator_row.get(field))
+    return _coerce_float(indicator_row.get(field))
+
+
+def _resolve_dynamic_level(label: str, current_anchor_levels: dict | None, indicator_row: pd.Series | dict | None):
+    if label in {"AVWAPE", "VWAP", "UPPER_1", "LOWER_1", "UPPER_2", "LOWER_2", "UPPER_3", "LOWER_3"}:
+        return _anchor_level_value(current_anchor_levels, label)
+    return _indicator_level_value(indicator_row, label)
+
+
+def _favorable_band_label(side: str, band_number: int) -> str:
+    side = normalize_side(side)
+    if band_number == 1:
+        return "UPPER_1" if side == "LONG" else "LOWER_1"
+    if band_number == 2:
+        return "UPPER_2" if side == "LONG" else "LOWER_2"
+    return "UPPER_3" if side == "LONG" else "LOWER_3"
+
+
+def _protective_band_label(side: str) -> str:
+    return "LOWER_1" if normalize_side(side) == "LONG" else "UPPER_1"
+
+
+def summarize_anchor_compression(price_slice: pd.DataFrame, anchor_stdev: float, atr20: float) -> dict:
+    result = {
+        "is_compressed": False,
+        "compression_score": 0,
+        "compression_penalty": 0,
+        "compression_note": "",
+        "compression_stdev_atr_ratio": None,
+        "compression_range_atr_ratio": None,
+        "compression_close_range_atr_ratio": None,
+    }
+    if price_slice is None or price_slice.empty or anchor_stdev is None or atr20 is None or atr20 <= 0:
+        return result
+
+    highs = pd.to_numeric(price_slice["high"], errors="coerce").dropna()
+    lows = pd.to_numeric(price_slice["low"], errors="coerce").dropna()
+    closes = pd.to_numeric(price_slice["close"], errors="coerce").dropna()
+    if highs.empty or lows.empty or closes.empty:
+        return result
+
+    stdev_atr_ratio = float(anchor_stdev) / float(atr20)
+    range_atr_ratio = (float(highs.max()) - float(lows.min())) / float(atr20)
+    close_range_atr_ratio = (float(closes.max()) - float(closes.min())) / float(atr20)
+    compression_score = 0
+    if stdev_atr_ratio <= PRIORITY_COMPRESSION_STDEV_ATR_MAX:
+        compression_score += 1
+    if range_atr_ratio <= PRIORITY_COMPRESSION_RANGE_ATR_MAX:
+        compression_score += 1
+    if close_range_atr_ratio <= PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_MAX:
+        compression_score += 1
+
+    result["compression_score"] = compression_score
+    result["compression_stdev_atr_ratio"] = float(stdev_atr_ratio)
+    result["compression_range_atr_ratio"] = float(range_atr_ratio)
+    result["compression_close_range_atr_ratio"] = float(close_range_atr_ratio)
+    if compression_score >= 2:
+        result["is_compressed"] = True
+        penalty = PRIORITY_COMPRESSION_SCORE_PENALTY + (4 if compression_score >= 3 else 0)
+        result["compression_penalty"] = penalty
+        result["compression_note"] = (
+            f"Compressed post-earnings structure "
+            f"(stdev={stdev_atr_ratio:.2f} ATR, range={range_atr_ratio:.2f} ATR, close_range={close_range_atr_ratio:.2f} ATR)"
+        )
+    return result
+
+
+def evaluate_anchor_compression(
+    df: pd.DataFrame,
+    anchor_date_iso: str | None,
+    anchor_stdev: float | None,
+    atr20: float | None,
+    last_trade_date: date,
+) -> dict:
+    if not anchor_date_iso:
+        return summarize_anchor_compression(pd.DataFrame(), anchor_stdev, atr20)
+    try:
+        anchor_date = datetime.fromisoformat(str(anchor_date_iso)).date()
+    except ValueError:
+        return summarize_anchor_compression(pd.DataFrame(), anchor_stdev, atr20)
+
+    price_slice = df[
+        (df["datetime"].dt.date >= anchor_date)
+        & (df["datetime"].dt.date <= last_trade_date)
+    ].copy()
+    return summarize_anchor_compression(price_slice, anchor_stdev, atr20)
+
+
+def build_tracker_feature_snapshot(
+    side: str,
+    bar_row: pd.Series,
+    indicator_row: pd.Series | None,
+    current_anchor_levels: dict | None,
+    previous_anchor_levels: dict | None,
+    compression_summary: dict | None,
+) -> dict:
+    atr20 = _coerce_float(indicator_row.get("atr_20")) if isinstance(indicator_row, pd.Series) else None
+    close_value = _coerce_float(bar_row.get("close"))
+    prev_avwape = _anchor_level_value(previous_anchor_levels, "AVWAPE")
+    prev_distance_atr = None
+    prev_near_flag = False
+    if close_value is not None and prev_avwape is not None and atr20 and atr20 > 0:
+        prev_distance_atr = (close_value - prev_avwape) / atr20
+        prev_near_flag = abs(prev_distance_atr) <= TRACKER_PREV_AVWAPE_NEAR_ATR
+
+    ema15 = _indicator_level_value(indicator_row, "EMA_15")
+    ema21 = _indicator_level_value(indicator_row, "EMA_21")
+    sma10 = _indicator_level_value(indicator_row, "SMA_10")
+    sma20 = _indicator_level_value(indicator_row, "SMA_20")
+    sma50 = _indicator_level_value(indicator_row, "SMA_50")
+    sma100 = _indicator_level_value(indicator_row, "SMA_100")
+    sma200 = _indicator_level_value(indicator_row, "SMA_200")
+
+    ema15_distance_atr = None
+    ema21_distance_atr = None
+    if close_value is not None and atr20 and atr20 > 0:
+        if ema15 is not None:
+            ema15_distance_atr = (close_value - ema15) / atr20
+        if ema21 is not None:
+            ema21_distance_atr = (close_value - ema21) / atr20
+
+    prior_sma10 = _coerce_float(indicator_row.get("sma_10_prev")) if isinstance(indicator_row, pd.Series) else None
+    prior_sma20 = _coerce_float(indicator_row.get("sma_20_prev")) if isinstance(indicator_row, pd.Series) else None
+    sma_cross = ""
+    if sma10 is not None and sma20 is not None and prior_sma10 is not None and prior_sma20 is not None:
+        if prior_sma10 <= prior_sma20 and sma10 > sma20:
+            sma_cross = "UP"
+        elif prior_sma10 >= prior_sma20 and sma10 < sma20:
+            sma_cross = "DOWN"
+
+    ema21_consolidation = False
+    consolidation_span_atr = None
+    if isinstance(indicator_row, pd.Series):
+        recent_high = _coerce_float(indicator_row.get("recent_high_3"))
+        recent_low = _coerce_float(indicator_row.get("recent_low_3"))
+        recent_close_std = _coerce_float(indicator_row.get("recent_close_std_3"))
+        if atr20 and atr20 > 0 and recent_high is not None and recent_low is not None and ema21 is not None:
+            consolidation_span_atr = (recent_high - recent_low) / atr20
+            ema21_consolidation = (
+                consolidation_span_atr <= TRACKER_EMA_CONSOLIDATION_RANGE_ATR
+                and ema21_distance_atr is not None
+                and abs(ema21_distance_atr) <= TRACKER_EMA_CONSOLIDATION_ATR
+                and recent_close_std is not None
+                and (recent_close_std / atr20) <= 0.45
+            )
+
+    current_vwap = _anchor_level_value(current_anchor_levels, "AVWAPE")
+    current_upper_1 = _anchor_level_value(current_anchor_levels, "UPPER_1")
+    current_lower_1 = _anchor_level_value(current_anchor_levels, "LOWER_1")
+
+    snapshot = {
+        "atr20": atr20,
+        "current_close": close_value,
+        "current_avwape": current_vwap,
+        "current_upper_1": current_upper_1,
+        "current_lower_1": current_lower_1,
+        "previous_avwape": prev_avwape,
+        "previous_avwape_distance_atr": prev_distance_atr,
+        "previous_avwape_near_0_5atr": prev_near_flag,
+        "ema15": ema15,
+        "ema21": ema21,
+        "ema15_distance_atr": ema15_distance_atr,
+        "ema21_distance_atr": ema21_distance_atr,
+        "ema21_consolidation": ema21_consolidation,
+        "ema21_consolidation_span_atr": consolidation_span_atr,
+        "sma10": sma10,
+        "sma20": sma20,
+        "sma50": sma50,
+        "sma100": sma100,
+        "sma200": sma200,
+        "sma10_20_cross": sma_cross,
+        "compression_flag": bool((compression_summary or {}).get("is_compressed")),
+        "compression_penalty": int((compression_summary or {}).get("compression_penalty", 0) or 0),
+        "compression_note": (compression_summary or {}).get("compression_note", ""),
+    }
+    return snapshot
+
+
+def _default_setup_tracker_payload() -> dict:
+    return {
+        "schema_version": SETUP_TRACKER_SCHEMA_VERSION,
+        "updated_at": None,
+        "daily_watchlists": {},
+        "setups": {},
+        "stats": [],
+    }
+
+
+def load_setup_tracker_payload() -> dict:
+    payload = load_json(SETUP_TRACKER_FILE, default={})
+    if not isinstance(payload, dict):
+        return _default_setup_tracker_payload()
+
+    tracker = _default_setup_tracker_payload()
+    tracker["schema_version"] = int(payload.get("schema_version", SETUP_TRACKER_SCHEMA_VERSION) or SETUP_TRACKER_SCHEMA_VERSION)
+    tracker["updated_at"] = payload.get("updated_at")
+    tracker["daily_watchlists"] = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
+    tracker["setups"] = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
+    tracker["stats"] = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
+    return tracker
+
+
+def save_setup_tracker_payload(payload: dict) -> None:
+    payload["schema_version"] = SETUP_TRACKER_SCHEMA_VERSION
+    payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    save_json(SETUP_TRACKER_FILE, payload)
+
+
+def _setup_id_for_row(row: dict, symbol_entry: dict) -> str:
+    scan_date = str(symbol_entry.get("last_trade_date") or datetime.now().date().isoformat())
+    anchor_date = ((symbol_entry.get("current_anchor") or {}).get("date")) or scan_date
+    bucket = str(row.get("priority_bucket") or "tracked")
+    return f"{scan_date}:{row.get('symbol', '')}:{normalize_side(row.get('side'))}:{anchor_date}:{bucket}"
+
+
+def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
+    side = normalize_side(row.get("side") or symbol_entry.get("side") or "LONG")
+    current_anchor = symbol_entry.get("current_anchor") or {}
+    atr20 = _coerce_float(symbol_entry.get("atr20"))
+    primary_stop_label = _protective_band_label(side)
+    primary_stop_level = _anchor_level_value(current_anchor, primary_stop_label)
+    priority_bucket = str(row.get("priority_bucket") or "")
+    candidates = []
+
+    def _add(label: str, level: float | None, source_type: str) -> None:
+        if level is None:
+            return
+        if any(existing["label"] == label for existing in candidates):
+            return
+        candidates.append(
+            {
+                "label": label,
+                "level": float(level),
+                "source_type": source_type,
+            }
+        )
+
+    if priority_bucket == "favorite_setup":
+        _add("AVWAPE", _anchor_level_value(current_anchor, "AVWAPE"), "current_anchor")
+    _add(primary_stop_label, primary_stop_level, "current_anchor")
+
+    sma_levels = row.get("sma_levels") or symbol_entry.get("priority_sma_levels") or {}
+    if primary_stop_level is not None and atr20 and atr20 > 0:
+        for label, level in sorted(sma_levels.items()):
+            if level is None:
+                continue
+            if abs(float(level) - float(primary_stop_level)) <= float(atr20):
+                _add(str(label), float(level), "sma")
+
+    return candidates
+
+
+def _build_tracker_scenarios(entry_price: float | None, stop_candidates: list[dict], side: str) -> dict[str, dict]:
+    scenarios = {}
+    direction = 1.0 if normalize_side(side) == "LONG" else -1.0
+
+    for stop in stop_candidates:
+        stop_level = _coerce_float(stop.get("level"))
+        risk_per_share = abs(float(entry_price) - float(stop_level)) if entry_price is not None and stop_level is not None else None
+        shares = int(STANDARDIZED_RISK_USD // risk_per_share) if risk_per_share and risk_per_share > 0 else 0
+        for template in SETUP_EXIT_TEMPLATES:
+            scenario_id = f"{str(stop['label']).lower()}__{template['id']}"
+            scenarios[scenario_id] = {
+                "scenario_id": scenario_id,
+                "stop_reference_label": stop["label"],
+                "stop_reference_level": stop_level,
+                "stop_source_type": stop["source_type"],
+                "exit_template_id": template["id"],
+                "exit_template_label": template["label"],
+                "partial_target_label": _favorable_band_label(side, 2) if template.get("partial_target_label") == "BAND2" else None,
+                "final_target_label": (
+                    _favorable_band_label(side, 2) if template.get("final_target_label") == "BAND2"
+                    else _favorable_band_label(side, 3) if template.get("final_target_label") == "BAND3"
+                    else None
+                ),
+                "trail_after_partial_label": _favorable_band_label(side, 1) if template.get("trail_after_partial_label") == "BAND1" else None,
+                "shares": int(shares),
+                "initial_risk_per_share": risk_per_share,
+                "initial_risk_usd": float(shares * risk_per_share) if shares and risk_per_share else 0.0,
+                "direction": direction,
+                "tradeable": bool(shares > 0 and risk_per_share and risk_per_share > 0),
+                "status": "UNTRADEABLE" if not (shares > 0 and risk_per_share and risk_per_share > 0) else "OPEN",
+                "events": [],
+                "remaining_shares": int(shares),
+                "partial_taken": False,
+                "partial_shares": 0,
+                "realized_pnl": 0.0,
+                "realized_r": 0.0,
+                "unrealized_pnl": 0.0,
+                "unrealized_r": 0.0,
+                "total_pnl": 0.0,
+                "total_r": 0.0,
+                "close_failure_count": 0,
+                "active_stop_label": stop["label"],
+                "active_stop_level": stop_level,
+                "last_action": "Awaiting update" if shares > 0 else "Risk too tight for $500 standard risk",
+                "days_held": 0,
+                "max_favorable_r": 0.0,
+                "max_adverse_r": 0.0,
+            }
+    return scenarios
+
+
+def build_tracker_setup_record(
+    row: dict,
+    symbol_entry: dict,
+    feature_row: dict | None,
+    generated_at: str,
+    indicator_row: pd.Series | None,
+) -> dict | None:
+    entry_price = _coerce_float(symbol_entry.get("last_close"))
+    if entry_price is None:
+        return None
+
+    current_anchor = symbol_entry.get("current_anchor") or {}
+    previous_anchor = symbol_entry.get("previous_anchor") or {}
+    compression_summary = {
+        "is_compressed": bool(row.get("compression_flag")),
+        "compression_penalty": int(row.get("compression_penalty", 0) or 0),
+        "compression_note": row.get("compression_note", ""),
+    }
+    entry_snapshot = build_tracker_feature_snapshot(
+        normalize_side(row.get("side")),
+        pd.Series({"open": entry_price, "high": entry_price, "low": entry_price, "close": entry_price}),
+        indicator_row,
+        current_anchor,
+        previous_anchor,
+        compression_summary,
+    )
+
+    stop_candidates = _find_tracker_stop_candidates(row, symbol_entry)
+    scenarios = _build_tracker_scenarios(entry_price, stop_candidates, normalize_side(row.get("side")))
+    setup_id = _setup_id_for_row(row, symbol_entry)
+    scan_date = str(symbol_entry.get("last_trade_date") or datetime.now().date().isoformat())
+
+    return {
+        "setup_id": setup_id,
+        "symbol": str(row.get("symbol", "")).strip().upper(),
+        "side": normalize_side(row.get("side")),
+        "scan_date": scan_date,
+        "scan_timestamp": generated_at,
+        "entry_trade_date": scan_date,
+        "entry_price": float(entry_price),
+        "anchor_date": str(current_anchor.get("date") or scan_date),
+        "previous_anchor_date": str(previous_anchor.get("date") or ""),
+        "priority_bucket": str(row.get("priority_bucket") or ""),
+        "priority_score": float(row.get("score", 0) or 0),
+        "favorite_zone": row.get("favorite_zone") or "",
+        "favorite_signals": list(row.get("favorite_signals") or []),
+        "context_signals": list(row.get("context_signals") or []),
+        "recent_second_band_test_days": int(row.get("recent_second_band_test_days", 0) or 0),
+        "second_band_penalty": int(row.get("second_band_penalty", 0) or 0),
+        "retest_followthrough": bool(row.get("retest_followthrough")),
+        "retest_reference_level": row.get("retest_reference_level") or "",
+        "retest_note": row.get("retest_note") or "",
+        "extension_note": row.get("extension_note") or "",
+        "ranking_note": row.get("ranking_note") or "",
+        "score_bonus_note": row.get("score_bonus_note") or "",
+        "trendline_break_recent": bool(row.get("trendline_break_recent")),
+        "trendline_break_note": row.get("trendline_break_note") or "",
+        "compression_flag": bool(row.get("compression_flag")),
+        "compression_penalty": int(row.get("compression_penalty", 0) or 0),
+        "compression_note": row.get("compression_note") or "",
+        "current_anchor_entry": current_anchor,
+        "previous_anchor_entry": previous_anchor,
+        "sma_levels_entry": row.get("sma_levels") or {},
+        "entry_feature_snapshot": entry_snapshot,
+        "scenarios": scenarios,
+        "daily_marks": [],
+        "latest_snapshot": {},
+        "setup_status": "OPEN" if any(item.get("tradeable") for item in scenarios.values()) else "UNTRADEABLE",
+        "open_scenario_count": 0,
+        "closed_scenario_count": 0,
+        "feature_row": feature_row or {},
+    }
+
+
+def _scenario_is_open(status: str) -> bool:
+    return str(status).upper() in {"OPEN", "PARTIAL", "ACTIVE"}
+
+
+def _bar_hits_target(side: str, bar_row: pd.Series, target_level: float | None) -> bool:
+    if target_level is None:
+        return False
+    side = normalize_side(side)
+    if side == "LONG":
+        return _coerce_float(bar_row.get("high")) is not None and float(bar_row["high"]) >= float(target_level)
+    return _coerce_float(bar_row.get("low")) is not None and float(bar_row["low"]) <= float(target_level)
+
+
+def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trade_date: str, reason: str) -> dict:
+    qty = int(max(0, qty))
+    if qty <= 0:
+        return {}
+    direction = float(scenario.get("direction", 1.0) or 1.0)
+    entry_price = float(scenario.get("entry_price"))
+    pnl = (float(exit_price) - entry_price) * qty * direction
+    scenario["realized_pnl"] = float(scenario.get("realized_pnl", 0.0) + pnl)
+    scenario["remaining_shares"] = int(max(0, int(scenario.get("remaining_shares", 0)) - qty))
+    risk_usd = float(scenario.get("initial_risk_usd", 0.0) or 0.0)
+    scenario["realized_r"] = (scenario["realized_pnl"] / risk_usd) if risk_usd > 0 else 0.0
+    event = {
+        "trade_date": trade_date,
+        "reason": reason,
+        "price": float(exit_price),
+        "shares": qty,
+        "pnl": float(pnl),
+    }
+    scenario.setdefault("events", []).append(event)
+    scenario["last_action"] = f"{reason} @ {exit_price:.2f} on {trade_date}"
+    return event
+
+
+def _evaluate_tracker_scenario_bar(
+    scenario: dict,
+    side: str,
+    trade_date: str,
+    bar_row: pd.Series,
+    current_anchor_levels: dict | None,
+    indicator_row: pd.Series | None,
+    is_entry_day: bool,
+) -> list[dict]:
+    if not scenario.get("tradeable"):
+        scenario["status"] = "UNTRADEABLE"
+        return []
+
+    events = []
+    entry_price = float(scenario.get("entry_price"))
+    initial_risk_per_share = float(scenario.get("initial_risk_per_share", 0.0) or 0.0)
+    direction = float(scenario.get("direction", 1.0) or 1.0)
+    close_value = _coerce_float(bar_row.get("close"))
+    high_value = _coerce_float(bar_row.get("high"))
+    low_value = _coerce_float(bar_row.get("low"))
+    if close_value is None or high_value is None or low_value is None:
+        return events
+
+    favorable_move = (high_value - entry_price) if normalize_side(side) == "LONG" else (entry_price - low_value)
+    adverse_move = (entry_price - low_value) if normalize_side(side) == "LONG" else (high_value - entry_price)
+    if initial_risk_per_share > 0:
+        scenario["max_favorable_r"] = max(float(scenario.get("max_favorable_r", 0.0) or 0.0), favorable_move / initial_risk_per_share)
+        scenario["max_adverse_r"] = max(float(scenario.get("max_adverse_r", 0.0) or 0.0), adverse_move / initial_risk_per_share)
+
+    if is_entry_day:
+        scenario["unrealized_pnl"] = (close_value - entry_price) * int(scenario.get("remaining_shares", 0)) * direction
+        risk_usd = float(scenario.get("initial_risk_usd", 0.0) or 0.0)
+        scenario["unrealized_r"] = (scenario["unrealized_pnl"] / risk_usd) if risk_usd > 0 else 0.0
+        scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0) + scenario.get("unrealized_pnl", 0.0))
+        scenario["total_r"] = float(scenario.get("realized_r", 0.0) + scenario.get("unrealized_r", 0.0))
+        return events
+
+    if not _scenario_is_open(scenario.get("status", "OPEN")):
+        scenario["unrealized_pnl"] = 0.0
+        scenario["unrealized_r"] = 0.0
+        scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
+        scenario["total_r"] = float(scenario.get("realized_r", 0.0))
+        return events
+
+    partial_target_level = _resolve_dynamic_level(str(scenario.get("partial_target_label") or ""), current_anchor_levels, indicator_row)
+    final_target_level = _resolve_dynamic_level(str(scenario.get("final_target_label") or ""), current_anchor_levels, indicator_row)
+    active_stop_label = str(scenario.get("active_stop_label") or scenario.get("stop_reference_label") or "")
+    active_stop_level = _resolve_dynamic_level(active_stop_label, current_anchor_levels, indicator_row)
+    scenario["active_stop_level"] = active_stop_level
+
+    if not scenario.get("partial_taken") and partial_target_level is not None and _bar_hits_target(side, bar_row, partial_target_level):
+        qty = max(1, int(scenario.get("remaining_shares", 0)) // 2)
+        qty = min(qty, int(scenario.get("remaining_shares", 0)))
+        event = _apply_scenario_exit_event(scenario, qty, float(partial_target_level), trade_date, "PARTIAL_TARGET")
+        if event:
+            events.append(event)
+        scenario["partial_taken"] = True
+        scenario["partial_shares"] = int(qty)
+        if scenario.get("trail_after_partial_label"):
+            scenario["active_stop_label"] = str(scenario.get("trail_after_partial_label"))
+            scenario["close_failure_count"] = 0
+        scenario["status"] = "PARTIAL" if int(scenario.get("remaining_shares", 0)) > 0 else "TARGET_HIT"
+
+    final_target_level = _resolve_dynamic_level(str(scenario.get("final_target_label") or ""), current_anchor_levels, indicator_row)
+    if int(scenario.get("remaining_shares", 0)) > 0 and final_target_level is not None and _bar_hits_target(side, bar_row, final_target_level):
+        event = _apply_scenario_exit_event(
+            scenario,
+            int(scenario.get("remaining_shares", 0)),
+            float(final_target_level),
+            trade_date,
+            "FINAL_TARGET",
+        )
+        if event:
+            events.append(event)
+        scenario["status"] = "TARGET_HIT"
+        scenario["unrealized_pnl"] = 0.0
+        scenario["unrealized_r"] = 0.0
+        scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
+        scenario["total_r"] = float(scenario.get("realized_r", 0.0))
+        return events
+
+    active_stop_label = str(scenario.get("active_stop_label") or scenario.get("stop_reference_label") or "")
+    active_stop_level = _resolve_dynamic_level(active_stop_label, current_anchor_levels, indicator_row)
+    scenario["active_stop_level"] = active_stop_level
+    if active_stop_level is not None:
+        failed = close_value <= active_stop_level if normalize_side(side) == "LONG" else close_value >= active_stop_level
+        scenario["close_failure_count"] = int(scenario.get("close_failure_count", 0) + 1) if failed else 0
+        if scenario["close_failure_count"] >= TRACKER_STOP_FAILURE_CLOSES and int(scenario.get("remaining_shares", 0)) > 0:
+            reason = "TRAIL_STOP" if scenario.get("partial_taken") and active_stop_label != scenario.get("stop_reference_label") else "STOP_FAIL"
+            event = _apply_scenario_exit_event(
+                scenario,
+                int(scenario.get("remaining_shares", 0)),
+                float(close_value),
+                trade_date,
+                reason,
+            )
+            if event:
+                events.append(event)
+            scenario["status"] = "STOPPED"
+            scenario["unrealized_pnl"] = 0.0
+            scenario["unrealized_r"] = 0.0
+            scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
+            scenario["total_r"] = float(scenario.get("realized_r", 0.0))
+            return events
+
+    remaining = int(scenario.get("remaining_shares", 0))
+    unrealized_pnl = (close_value - entry_price) * remaining * direction
+    risk_usd = float(scenario.get("initial_risk_usd", 0.0) or 0.0)
+    scenario["unrealized_pnl"] = float(unrealized_pnl)
+    scenario["unrealized_r"] = (unrealized_pnl / risk_usd) if risk_usd > 0 else 0.0
+    scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0) + scenario.get("unrealized_pnl", 0.0))
+    scenario["total_r"] = float(scenario.get("realized_r", 0.0) + scenario.get("unrealized_r", 0.0))
+    scenario["status"] = "PARTIAL" if scenario.get("partial_taken") else "OPEN"
+    return events
+
+
+def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
+    if df is None or df.empty:
+        return setup
+
+    indicator_frame = compute_indicator_frame(df)
+    current_history = calc_anchored_vwap_band_history(df, str(setup.get("anchor_date") or ""))
+    previous_history = calc_anchored_vwap_band_history(df, str(setup.get("previous_anchor_date") or "")) if setup.get("previous_anchor_date") else {}
+    entry_trade_date = str(setup.get("entry_trade_date") or setup.get("scan_date") or "")
+    if not entry_trade_date:
+        return setup
+
+    working_scenarios = {}
+    for scenario_id, original in (setup.get("scenarios") or {}).items():
+        if not isinstance(original, dict):
+            continue
+        scenario = dict(original)
+        scenario["entry_price"] = _coerce_float(setup.get("entry_price"))
+        scenario["events"] = []
+        scenario["remaining_shares"] = int(scenario.get("shares", 0) or 0)
+        scenario["partial_taken"] = False
+        scenario["partial_shares"] = 0
+        scenario["realized_pnl"] = 0.0
+        scenario["realized_r"] = 0.0
+        scenario["unrealized_pnl"] = 0.0
+        scenario["unrealized_r"] = 0.0
+        scenario["total_pnl"] = 0.0
+        scenario["total_r"] = 0.0
+        scenario["close_failure_count"] = 0
+        scenario["active_stop_label"] = scenario.get("stop_reference_label")
+        scenario["active_stop_level"] = scenario.get("stop_reference_level")
+        scenario["last_action"] = "Awaiting update" if scenario.get("tradeable") else "Risk too tight for $500 standard risk"
+        scenario["days_held"] = 0
+        scenario["max_favorable_r"] = 0.0
+        scenario["max_adverse_r"] = 0.0
+        scenario["status"] = "UNTRADEABLE" if not scenario.get("tradeable") else "OPEN"
+        working_scenarios[scenario_id] = scenario
+
+    trade_df = df[df["datetime"].dt.date.astype(str) >= entry_trade_date].copy().reset_index(drop=True)
+    indicator_trade = indicator_frame[indicator_frame["trade_date"] >= entry_trade_date].copy().reset_index(drop=True)
+    daily_marks = []
+
+    try:
+        anchor_start_date = datetime.fromisoformat(str(setup.get("anchor_date") or entry_trade_date)).date()
+    except ValueError:
+        anchor_start_date = datetime.fromisoformat(entry_trade_date).date()
+
+    for idx in range(len(trade_df)):
+        bar_row = trade_df.iloc[idx]
+        indicator_row = indicator_trade.iloc[idx] if idx < len(indicator_trade) else None
+        trade_date = bar_row["datetime"].date().isoformat()
+        current_levels = current_history.get(trade_date)
+        previous_levels = previous_history.get(trade_date)
+        slice_df = df[
+            (df["datetime"].dt.date >= anchor_start_date)
+            & (df["datetime"].dt.date <= bar_row["datetime"].date())
+        ]
+        compression_summary = summarize_anchor_compression(
+            slice_df,
+            _coerce_float((current_levels or {}).get("stdev")),
+            _coerce_float(indicator_row.get("atr_20")) if isinstance(indicator_row, pd.Series) else None,
+        )
+        feature_snapshot = build_tracker_feature_snapshot(
+            normalize_side(setup.get("side")),
+            bar_row,
+            indicator_row,
+            current_levels,
+            previous_levels,
+            compression_summary,
+        )
+
+        scenario_events = []
+        for scenario in working_scenarios.values():
+            scenario_events.extend(
+                _evaluate_tracker_scenario_bar(
+                    scenario,
+                    normalize_side(setup.get("side")),
+                    trade_date,
+                    bar_row,
+                    current_levels,
+                    indicator_row,
+                    is_entry_day=(trade_date == entry_trade_date),
+                )
+            )
+            scenario["days_held"] = max(0, idx)
+
+        daily_marks.append(
+            {
+                "trade_date": trade_date,
+                "is_entry_day": bool(trade_date == entry_trade_date),
+                "close": _coerce_float(bar_row.get("close")),
+                "high": _coerce_float(bar_row.get("high")),
+                "low": _coerce_float(bar_row.get("low")),
+                "current_levels": current_levels or {},
+                "previous_levels": previous_levels or {},
+                "feature_snapshot": feature_snapshot,
+                "scenario_events": scenario_events,
+            }
+        )
+
+    setup["scenarios"] = working_scenarios
+    setup["daily_marks"] = daily_marks
+    setup["latest_snapshot"] = daily_marks[-1] if daily_marks else {}
+    setup["open_scenario_count"] = sum(1 for scenario in working_scenarios.values() if _scenario_is_open(scenario.get("status")))
+    setup["closed_scenario_count"] = sum(
+        1
+        for scenario in working_scenarios.values()
+        if str(scenario.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+    )
+    if setup["open_scenario_count"] > 0:
+        setup["setup_status"] = "OPEN"
+    elif any(str(scenario.get("status", "")).upper() == "UNTRADEABLE" for scenario in working_scenarios.values()):
+        setup["setup_status"] = "UNTRADEABLE"
+    else:
+        setup["setup_status"] = "CLOSED"
+    return setup
+
+
+def _flatten_tracker_scenarios(setups: dict[str, dict]) -> list[dict]:
+    rows = []
+    for setup in setups.values():
+        for scenario in (setup.get("scenarios") or {}).values():
+            rows.append(
+                {
+                    "setup_id": setup.get("setup_id"),
+                    "scan_date": setup.get("scan_date"),
+                    "symbol": setup.get("symbol"),
+                    "side": setup.get("side"),
+                    "priority_bucket": setup.get("priority_bucket"),
+                    "entry_price": setup.get("entry_price"),
+                    "anchor_date": setup.get("anchor_date"),
+                    "retest_reference_level": setup.get("retest_reference_level"),
+                    "compression_flag": bool(setup.get("compression_flag")),
+                    "stop_reference_label": scenario.get("stop_reference_label"),
+                    "stop_source_type": scenario.get("stop_source_type"),
+                    "exit_template_id": scenario.get("exit_template_id"),
+                    "exit_template_label": scenario.get("exit_template_label"),
+                    "shares": int(scenario.get("shares", 0) or 0),
+                    "initial_risk_per_share": _coerce_float(scenario.get("initial_risk_per_share")),
+                    "initial_risk_usd": _coerce_float(scenario.get("initial_risk_usd")),
+                    "status": scenario.get("status"),
+                    "remaining_shares": int(scenario.get("remaining_shares", 0) or 0),
+                    "realized_pnl": _coerce_float(scenario.get("realized_pnl")),
+                    "realized_r": _coerce_float(scenario.get("realized_r")),
+                    "unrealized_pnl": _coerce_float(scenario.get("unrealized_pnl")),
+                    "unrealized_r": _coerce_float(scenario.get("unrealized_r")),
+                    "total_pnl": _coerce_float(scenario.get("total_pnl")),
+                    "total_r": _coerce_float(scenario.get("total_r")),
+                    "max_favorable_r": _coerce_float(scenario.get("max_favorable_r")),
+                    "max_adverse_r": _coerce_float(scenario.get("max_adverse_r")),
+                    "days_held": int(scenario.get("days_held", 0) or 0),
+                    "last_action": scenario.get("last_action", ""),
+                }
+            )
+    return rows
+
+
+def _flatten_tracker_daily_marks(setups: dict[str, dict]) -> list[dict]:
+    rows = []
+    for setup in setups.values():
+        for mark in setup.get("daily_marks") or []:
+            feature_snapshot = mark.get("feature_snapshot") or {}
+            current_levels = mark.get("current_levels") or {}
+            previous_levels = mark.get("previous_levels") or {}
+            rows.append(
+                {
+                    "setup_id": setup.get("setup_id"),
+                    "scan_date": setup.get("scan_date"),
+                    "symbol": setup.get("symbol"),
+                    "side": setup.get("side"),
+                    "trade_date": mark.get("trade_date"),
+                    "is_entry_day": bool(mark.get("is_entry_day")),
+                    "close": _coerce_float(mark.get("close")),
+                    "high": _coerce_float(mark.get("high")),
+                    "low": _coerce_float(mark.get("low")),
+                    "current_avwape": _anchor_level_value(current_levels, "AVWAPE"),
+                    "current_upper_1": _anchor_level_value(current_levels, "UPPER_1"),
+                    "current_lower_1": _anchor_level_value(current_levels, "LOWER_1"),
+                    "current_upper_2": _anchor_level_value(current_levels, "UPPER_2"),
+                    "current_lower_2": _anchor_level_value(current_levels, "LOWER_2"),
+                    "current_upper_3": _anchor_level_value(current_levels, "UPPER_3"),
+                    "current_lower_3": _anchor_level_value(current_levels, "LOWER_3"),
+                    "previous_avwape": _anchor_level_value(previous_levels, "AVWAPE"),
+                    "previous_upper_1": _anchor_level_value(previous_levels, "UPPER_1"),
+                    "previous_lower_1": _anchor_level_value(previous_levels, "LOWER_1"),
+                    "atr20": _coerce_float(feature_snapshot.get("atr20")),
+                    "ema15": _coerce_float(feature_snapshot.get("ema15")),
+                    "ema21": _coerce_float(feature_snapshot.get("ema21")),
+                    "ema21_consolidation": bool(feature_snapshot.get("ema21_consolidation")),
+                    "sma10": _coerce_float(feature_snapshot.get("sma10")),
+                    "sma20": _coerce_float(feature_snapshot.get("sma20")),
+                    "sma50": _coerce_float(feature_snapshot.get("sma50")),
+                    "sma100": _coerce_float(feature_snapshot.get("sma100")),
+                    "sma200": _coerce_float(feature_snapshot.get("sma200")),
+                    "sma10_20_cross": feature_snapshot.get("sma10_20_cross", ""),
+                    "previous_avwape_near_0_5atr": bool(feature_snapshot.get("previous_avwape_near_0_5atr")),
+                    "compression_flag": bool(feature_snapshot.get("compression_flag")),
+                    "compression_penalty": int(feature_snapshot.get("compression_penalty", 0) or 0),
+                    "scenario_events": "; ".join(
+                        f"{item.get('reason')}:{item.get('shares')}@{item.get('price')}"
+                        for item in mark.get("scenario_events") or []
+                    ),
+                }
+            )
+    return rows
+
+
+def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
+    if not scenario_rows:
+        return []
+
+    grouped = {}
+    for row in scenario_rows:
+        key = f"{row.get('stop_reference_label')}__{row.get('exit_template_id')}"
+        grouped.setdefault(key, []).append(row)
+
+    stats_rows = []
+    for key, rows in grouped.items():
+        tradeable = [row for row in rows if int(row.get("shares", 0) or 0) > 0]
+        closed = [row for row in tradeable if str(row.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}]
+        open_rows = [row for row in tradeable if _scenario_is_open(row.get("status", ""))]
+        closed_rs = [float(row.get("total_r", 0.0) or 0.0) for row in closed]
+        total_rs = [float(row.get("total_r", 0.0) or 0.0) for row in tradeable]
+        pnl_values = [float(row.get("total_pnl", 0.0) or 0.0) for row in closed]
+        wins = [value for value in closed_rs if value > 0]
+        stats_rows.append(
+            {
+                "scenario_group": key,
+                "stop_reference_label": rows[0].get("stop_reference_label"),
+                "exit_template_id": rows[0].get("exit_template_id"),
+                "exit_template_label": rows[0].get("exit_template_label"),
+                "tracked_setups": len(rows),
+                "tradeable_setups": len(tradeable),
+                "closed_setups": len(closed),
+                "open_setups": len(open_rows),
+                "win_rate_closed": (len(wins) / len(closed)) if closed else None,
+                "avg_closed_r": mean(closed_rs) if closed_rs else None,
+                "median_closed_r": median(closed_rs) if closed_rs else None,
+                "avg_total_r": mean(total_rs) if total_rs else None,
+                "avg_closed_pnl": mean(pnl_values) if pnl_values else None,
+            }
+        )
+
+    stats_rows.sort(key=lambda item: (item["avg_total_r"] is None, -(item["avg_total_r"] or -9999), item["scenario_group"]))
+    return stats_rows
+
+
+def export_setup_tracker_views(payload: dict) -> None:
+    setups = payload.get("setups", {}) if isinstance(payload, dict) else {}
+    scenario_rows = _flatten_tracker_scenarios(setups)
+    daily_rows = _flatten_tracker_daily_marks(setups)
+    stats_rows = build_tracker_stats_rows(scenario_rows)
+    payload["stats"] = stats_rows
+
+    SETUP_SCENARIOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(scenario_rows).to_csv(SETUP_SCENARIOS_FILE, index=False)
+    pd.DataFrame(daily_rows).to_csv(SETUP_DAILY_FILE, index=False)
+    pd.DataFrame(stats_rows).to_csv(SETUP_STATS_FILE, index=False)
+
+
+def update_setup_tracker_from_scan(
+    tracked_rows: list[dict],
+    ai_state: dict,
+    feature_rows_by_symbol: dict[str, dict],
+    daily_frames_by_symbol: dict[str, pd.DataFrame],
+    ib: IBApi,
+) -> None:
+    tracker = load_setup_tracker_payload()
+    symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    today_iso = datetime.now().date().isoformat()
+
+    existing_today_ids = [
+        setup_id
+        for setup_id, setup in list((tracker.get("setups") or {}).items())
+        if isinstance(setup, dict) and str(setup.get("scan_date")) == today_iso
+    ]
+    for setup_id in existing_today_ids:
+        tracker["setups"].pop(setup_id, None)
+
+    current_setup_ids = []
+    for row in tracked_rows:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        symbol_entry = symbol_map.get(symbol)
+        if not isinstance(symbol_entry, dict):
+            continue
+        df = daily_frames_by_symbol.get(symbol)
+        indicator_row = None
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            indicator_frame = compute_indicator_frame(df)
+            if not indicator_frame.empty:
+                indicator_row = indicator_frame.iloc[-1]
+        setup = build_tracker_setup_record(
+            row,
+            symbol_entry,
+            feature_rows_by_symbol.get(symbol),
+            now_iso,
+            indicator_row,
+        )
+        if not setup:
+            continue
+        tracker["setups"][setup["setup_id"]] = setup
+        current_setup_ids.append(setup["setup_id"])
+
+    tracker["daily_watchlists"][today_iso] = {
+        "updated_at": now_iso,
+        "setup_ids": current_setup_ids,
+        "symbols": sorted(
+            {
+                setup.get("symbol")
+                for setup in tracker["setups"].values()
+                if setup.get("setup_id") in current_setup_ids
+            }
+        ),
+    }
+
+    recompute_cache = {}
+    for setup_id, setup in list((tracker.get("setups") or {}).items()):
+        if not isinstance(setup, dict):
+            continue
+        symbol = str(setup.get("symbol", "")).strip().upper()
+        if symbol in recompute_cache:
+            df = recompute_cache[symbol]
+        else:
+            df = daily_frames_by_symbol.get(symbol)
+            if df is None or df.empty:
+                anchor_date = str(setup.get("anchor_date") or setup.get("entry_trade_date") or today_iso)
+                days_needed = ATR_LENGTH + 220
+                try:
+                    anchor_date_obj = datetime.fromisoformat(anchor_date).date()
+                    days_needed = max(days_needed, (datetime.now().date() - anchor_date_obj).days + 20)
+                except ValueError:
+                    pass
+                df = fetch_daily_bars(ib, symbol, days_needed)
+            recompute_cache[symbol] = df
+        if df is None or df.empty:
+            continue
+        tracker["setups"][setup_id] = recompute_tracker_setup_record(setup, df)
+
+    export_setup_tracker_views(tracker)
+    save_setup_tracker_payload(tracker)
 def get_last_daily_row_for_date(daily_rows, last_trade_date):
     target = last_trade_date.isoformat()
     for row in reversed(daily_rows):
@@ -653,16 +1847,43 @@ def yf_earnings_dates(symbol: str):
     """
     Fallback using yfinance earnings_dates.
     """
+    if not _can_attempt_yf_earnings_lookup(log_once=True):
+        return []
+
+    logger_state = []
+    for logger_name in YF_EARNINGS_LOGGER_NAMES:
+        logger = logging.getLogger(logger_name)
+        logger_state.append((logger, logger.level, logger.propagate))
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = False
+
     try:
         t = yf.Ticker(symbol)
         ed = t.get_earnings_dates(limit=8)
-        ed.index = ed.index.tz_localize(None)
+        if ed is None or getattr(ed, "empty", True):
+            return []
+        if not hasattr(ed, "index") or ed.index is None:
+            return []
+        if getattr(ed.index, "tz", None) is not None:
+            ed.index = ed.index.tz_localize(None)
         past = ed[ed.index < pd.Timestamp.today().tz_localize(None)]
         sorted_past = sorted(past.index, reverse=True)
         return [d.date().isoformat() for d in sorted_past]
     except Exception as e:
+        message = str(e)
+        if "Import lxml" in message:
+            global YF_EARNINGS_LOOKUP_DISABLED_REASON
+            YF_EARNINGS_LOOKUP_DISABLED_REASON = "lxml is not installed"
+            _can_attempt_yf_earnings_lookup(log_once=True)
+            return []
+        if any(marker in message for marker in YF_EARNINGS_NO_DATA_MARKERS):
+            return []
         logging.warning(f"{symbol}: yfinance earnings lookup failed: {e}")
         return []
+    finally:
+        for logger, level, propagate in logger_state:
+            logger.setLevel(level)
+            logger.propagate = propagate
 
 
 def load_or_refresh_earnings(symbols):
@@ -718,14 +1939,19 @@ def load_or_refresh_earnings(symbols):
             entry["dates"] = _merge_earnings_dates(entry.get("dates", []), deep_updates.get(sym, []))
             entry["last_deep_refresh_on"] = today_iso
 
-        logging.info(
-            f"Supplementing stale/incomplete earnings history with yfinance for {len(deep_refresh_symbols)} symbol(s)."
-        )
-        for sym in deep_refresh_symbols:
-            entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
-            yf_dates = yf_earnings_dates(sym)
-            if yf_dates:
-                entry["dates"] = _merge_earnings_dates(entry.get("dates", []), yf_dates)
+        yf_refresh_symbols = [
+            sym for sym in deep_refresh_symbols
+            if _earnings_symbol_needs_yf_refresh(symbol_cache.get(sym, {}), today=today)
+        ]
+        if yf_refresh_symbols and _can_attempt_yf_earnings_lookup(log_once=True):
+            logging.info(
+                f"Supplementing stale/incomplete earnings history with yfinance for {len(yf_refresh_symbols)} symbol(s)."
+            )
+            for sym in yf_refresh_symbols:
+                entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
+                yf_dates = yf_earnings_dates(sym)
+                if yf_dates:
+                    entry["dates"] = _merge_earnings_dates(entry.get("dates", []), yf_dates)
                 entry["last_yf_refresh_on"] = today_iso
 
     save_earnings_date_cache(cache)
@@ -1959,8 +3185,13 @@ def build_priority_setup_summary(
     trend_label: str,
     favorite_zone: str | None,
     recent_band_extension_days: int = 0,
+    recent_second_band_test_days: int = 0,
+    second_band_penalty: int = 0,
     breakout_5d: bool = False,
     retest_followthrough: bool = False,
+    retest_reference_level: str = "",
+    retest_note: str = "",
+    extension_note: str = "",
 ) -> dict:
     current_weights = FAVORITE_CURRENT_SIGNALS.get(side, {})
     context_weights = FAVORITE_CONTEXT_SIGNALS.get(side, {})
@@ -1969,12 +3200,21 @@ def build_priority_setup_summary(
     context_signals = sorted(evt for evt in events_today if evt in context_weights)
     score = sum(current_weights.get(evt, 0) for evt in favorite_signals)
     score += sum(context_weights.get(evt, 0) for evt in context_signals)
+    trend_is_aligned = (
+        (side == "LONG" and trend_label == "UP")
+        or (side == "SHORT" and trend_label == "DOWN")
+    )
 
     if favorite_zone:
-        score += 18
+        score += PRIORITY_FAVORITE_ZONE_SCORE_BONUS
 
     if retest_followthrough:
-        score += 22
+        score += PRIORITY_RETEST_FOLLOWTHROUGH_SCORE_BONUS
+        score += PRIORITY_RETEST_LEVEL_SCORE_BONUS.get(retest_reference_level or "", 0)
+        if favorite_zone:
+            score += PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS
+        if trend_is_aligned:
+            score += PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS
 
     if breakout_5d:
         score += 14
@@ -1984,9 +3224,9 @@ def build_priority_setup_summary(
     else:
         score -= min(18, (recent_band_extension_days - 2) * 6)
 
-    if side == "LONG" and trend_label == "UP":
-        score += 8
-    elif side == "SHORT" and trend_label == "DOWN":
+    score -= max(0, int(second_band_penalty or 0))
+
+    if trend_is_aligned:
         score += 8
 
     if favorite_signals and any(evt.startswith("MD_") for evt in all_events):
@@ -2002,8 +3242,13 @@ def build_priority_setup_summary(
         "trend_20d": trend_label,
         "has_favorite_signal": bool(favorite_signals),
         "recent_band_extension_days": recent_band_extension_days,
+        "recent_second_band_test_days": int(recent_second_band_test_days or 0),
+        "second_band_penalty": int(second_band_penalty or 0),
         "breakout_5d": breakout_5d,
         "retest_followthrough": retest_followthrough,
+        "retest_reference_level": retest_reference_level,
+        "retest_note": retest_note,
+        "extension_note": extension_note,
     }
 
 
@@ -2108,10 +3353,16 @@ def _compute_trendline_angle_deg(x1: int, y1: float, x2: int, y2: float, bar_cou
 def _describe_trendline_candidate(candidate: dict | None) -> str:
     if not candidate:
         return ""
+    break_suffix = ""
+    bars_since_break = candidate.get("bars_since_break")
+    if bars_since_break is not None:
+        bar_label = "bar" if int(bars_since_break) == 1 else "bars"
+        break_suffix = f" break={int(bars_since_break)} {bar_label} ago"
     return (
         f"{candidate.get('type', '?')} {candidate.get('start_date', '?')} -> {candidate.get('end_date', '?')} "
         f"angle={candidate.get('angle_deg', 0.0):.1f}deg touches={candidate.get('touch_count', 0)} "
         f"line={candidate.get('current_line_price', 0.0):.2f} dist={candidate.get('atr_distance', 0.0):.2f} ATR"
+        f"{break_suffix}"
     )
 
 
@@ -2127,6 +3378,9 @@ def find_directional_trendline_candidate(
             "trendline_candidate": None,
             "trendline_note": "",
             "trendline_within_alert_range": False,
+            "trendline_break_candidate": None,
+            "trendline_break_note": "",
+            "trendline_break_recent": False,
         }
 
     work_df = df.tail(PRIORITY_TRENDLINE_LOOKBACK_BARS).copy().reset_index(drop=True)
@@ -2135,6 +3389,9 @@ def find_directional_trendline_candidate(
             "trendline_candidate": None,
             "trendline_note": "",
             "trendline_within_alert_range": False,
+            "trendline_break_candidate": None,
+            "trendline_break_note": "",
+            "trendline_break_recent": False,
         }
 
     price_col = "high" if side == "LONG" else "low"
@@ -2145,10 +3402,14 @@ def find_directional_trendline_candidate(
             "trendline_candidate": None,
             "trendline_note": "",
             "trendline_within_alert_range": False,
+            "trendline_break_candidate": None,
+            "trendline_break_note": "",
+            "trendline_break_recent": False,
         }
 
     highs = pd.to_numeric(work_df["high"], errors="coerce").tolist()
     lows = pd.to_numeric(work_df["low"], errors="coerce").tolist()
+    closes = pd.to_numeric(work_df["close"], errors="coerce").tolist()
     datetimes = pd.to_datetime(work_df["datetime"])
     log_high = [math.log(value) for value in highs if value and value > 0]
     log_low = [math.log(value) for value in lows if value and value > 0]
@@ -2157,6 +3418,9 @@ def find_directional_trendline_candidate(
             "trendline_candidate": None,
             "trendline_note": "",
             "trendline_within_alert_range": False,
+            "trendline_break_candidate": None,
+            "trendline_break_note": "",
+            "trendline_break_recent": False,
         }
     log_range = max(log_high) - min(log_low)
     if log_range <= 0:
@@ -2164,9 +3428,13 @@ def find_directional_trendline_candidate(
             "trendline_candidate": None,
             "trendline_note": "",
             "trendline_within_alert_range": False,
+            "trendline_break_candidate": None,
+            "trendline_break_note": "",
+            "trendline_break_recent": False,
         }
 
     best_candidate = None
+    best_break_candidate = None
     line_touch_tol = float(atr20) * PRIORITY_TRENDLINE_TOUCH_TOL_ATR
     last_idx = len(work_df) - 1
 
@@ -2196,30 +3464,106 @@ def find_directional_trendline_candidate(
 
             slope = (y2 - y1) / float(x2 - x1)
             touch_count = 0
-            broken = False
-            max_overshoot = 0.0
+            invalidated = False
+            break_idx = None
+            break_distance = 0.0
 
             for idx in range(x1, len(work_df)):
                 line_log = y1 + slope * (idx - x1)
                 line_price = math.exp(line_log)
+                close_value = closes[idx]
                 if side == "LONG":
                     candle_extreme = float(highs[idx])
                     overshoot = candle_extreme - line_price
+                    close_delta = (
+                        float(close_value) - line_price
+                        if close_value is not None and not pd.isna(close_value)
+                        else None
+                    )
                 else:
                     candle_extreme = float(lows[idx])
                     overshoot = line_price - candle_extreme
+                    close_delta = (
+                        line_price - float(close_value)
+                        if close_value is not None and not pd.isna(close_value)
+                        else None
+                    )
 
                 if abs(candle_extreme - line_price) <= line_touch_tol:
                     touch_count += 1
+
+                if idx <= x2:
+                    continue
+
+                if close_delta is not None and close_delta > line_touch_tol:
+                    break_idx = idx
+                    break_distance = close_delta
+                    break
                 if overshoot > line_touch_tol:
-                    broken = True
-                    max_overshoot = max(max_overshoot, overshoot)
+                    invalidated = True
                     break
 
-            if broken or touch_count < 2:
+            if invalidated or touch_count < 2:
                 continue
 
             current_line_price = math.exp(y1 + slope * (last_idx - x1))
+            if break_idx is not None:
+                bars_since_break = last_idx - break_idx
+                if bars_since_break > PRIORITY_TRENDLINE_BREAK_RECENT_BARS:
+                    continue
+
+                if side == "LONG":
+                    if current_line_price >= float(last_close):
+                        continue
+                    atr_distance = (float(last_close) - current_line_price) / float(atr20)
+                else:
+                    if current_line_price <= float(last_close):
+                        continue
+                    atr_distance = (current_line_price - float(last_close)) / float(atr20)
+
+                if atr_distance > PRIORITY_TRENDLINE_BREAK_MAX_ATR:
+                    continue
+
+                candidate = {
+                    "type": "H-break" if side == "LONG" else "L-break",
+                    "start_date": pivot_a["date"],
+                    "end_date": pivot_b["date"],
+                    "break_date": datetimes.iloc[break_idx].date().isoformat(),
+                    "bars_since_break": int(bars_since_break),
+                    "start_idx": x1,
+                    "end_idx": x2,
+                    "break_idx": int(break_idx),
+                    "current_line_price": float(current_line_price),
+                    "atr_distance": float(atr_distance),
+                    "break_atr_distance": float(break_distance / float(atr20)),
+                    "angle_deg": float(angle_deg),
+                    "touch_count": int(touch_count),
+                    "bar_count": int(len(work_df)),
+                    "lookback_start": datetimes.iloc[0].date().isoformat(),
+                    "lookback_end": datetimes.iloc[-1].date().isoformat(),
+                    "slope_log_per_bar": float(slope),
+                }
+
+                if best_break_candidate is None:
+                    best_break_candidate = candidate
+                    continue
+
+                current_key = (
+                    candidate["bars_since_break"],
+                    candidate["atr_distance"],
+                    -candidate["touch_count"],
+                    abs(candidate["angle_deg"] - 45.0),
+                )
+                best_key = (
+                    best_break_candidate["bars_since_break"],
+                    best_break_candidate["atr_distance"],
+                    -best_break_candidate["touch_count"],
+                    abs(best_break_candidate["angle_deg"] - 45.0),
+                )
+                if current_key < best_key:
+                    best_break_candidate = candidate
+                continue
+
             if side == "LONG":
                 if current_line_price <= float(last_close):
                     continue
@@ -2243,7 +3587,7 @@ def find_directional_trendline_candidate(
                 "lookback_start": datetimes.iloc[0].date().isoformat(),
                 "lookback_end": datetimes.iloc[-1].date().isoformat(),
                 "slope_log_per_bar": float(slope),
-                "max_overshoot": float(max_overshoot),
+                "max_overshoot": 0.0,
             }
 
             if best_candidate is None:
@@ -2262,6 +3606,9 @@ def find_directional_trendline_candidate(
             best_candidate and best_candidate.get("atr_distance") is not None
             and best_candidate["atr_distance"] <= PRIORITY_TRENDLINE_ALERT_ATR
         ),
+        "trendline_break_candidate": best_break_candidate,
+        "trendline_break_note": _describe_trendline_candidate(best_break_candidate),
+        "trendline_break_recent": bool(best_break_candidate),
     }
 
 
@@ -2292,14 +3639,18 @@ def assess_priority_directional_obstacles(
             sma_penalty += 10 if atr_distance <= 2.5 else 6
 
     prev_anchor_obstacles = []
+    prev_avwap_obstacles = []
+    prev_band_obstacles = []
     prev_anchor_penalty = 0
     if previous_anchor_meta:
         prev_levels = [("PREV_AVWAPE", previous_anchor_meta.get("vwap"))]
         prev_bands = previous_anchor_meta.get("bands", {}) or {}
-        if normalize_side(side) == "SHORT":
-            prev_levels.append(("PREV_LOWER_1", prev_bands.get("LOWER_1")))
-        else:
-            prev_levels.append(("PREV_UPPER_1", prev_bands.get("UPPER_1")))
+        prev_levels.extend(
+            [
+                ("PREV_UPPER_1", prev_bands.get("UPPER_1")),
+                ("PREV_LOWER_1", prev_bands.get("LOWER_1")),
+            ]
+        )
 
         for label, level in prev_levels:
             atr_distance = _directional_atr_distance(last_close, level, atr20, side)
@@ -2311,6 +3662,10 @@ def assess_priority_directional_obstacles(
                 "atr_distance": float(atr_distance),
             }
             prev_anchor_obstacles.append(obstacle)
+            if label == "PREV_AVWAPE":
+                prev_avwap_obstacles.append(obstacle)
+            else:
+                prev_band_obstacles.append(obstacle)
             if atr_distance <= 1.0:
                 prev_anchor_penalty += 10
             elif atr_distance <= 2.0:
@@ -2324,8 +3679,10 @@ def assess_priority_directional_obstacles(
         notes.append(f"SMA DQ: {_format_obstacle_labels(sma_blockers)}")
     elif sma_obstacles:
         notes.append(f"SMAs ahead: {_format_obstacle_labels(sma_obstacles)}")
-    if prev_anchor_obstacles:
-        notes.append(f"Prev AVWAPE ahead: {_format_obstacle_labels(prev_anchor_obstacles)}")
+    if prev_avwap_obstacles:
+        notes.append(f"Prev AVWAPE ahead: {_format_obstacle_labels(prev_avwap_obstacles)}")
+    if prev_band_obstacles:
+        notes.append(f"Prev stdev bands ahead: {_format_obstacle_labels(prev_band_obstacles)}")
 
     return {
         "ranking_blocked": ranking_blocked,
@@ -2333,6 +3690,7 @@ def assess_priority_directional_obstacles(
         "sma_obstacles": sma_obstacles,
         "sma_blockers": sma_blockers,
         "previous_anchor_obstacles": prev_anchor_obstacles,
+        "previous_anchor_path_clear": bool(previous_anchor_meta) and not prev_anchor_obstacles,
         "score_penalty": sma_penalty + prev_anchor_penalty,
         "score_penalty_sma": sma_penalty,
         "score_penalty_previous_anchor": prev_anchor_penalty,
@@ -2348,7 +3706,7 @@ def refine_priority_rows_with_directional_filters(
     symbol_map = ai_state.setdefault("symbols", {})
     priority_candidates = [
         row for row in priority_rows
-        if row.get("has_favorite_signal") or row.get("favorite_zone")
+        if row.get("has_favorite_signal") or row.get("favorite_zone") or row.get("retest_followthrough")
     ]
 
     for row in priority_candidates:
@@ -2373,11 +3731,34 @@ def refine_priority_rows_with_directional_filters(
             sma_levels=sma_levels,
             previous_anchor_meta=symbol_entry.get("previous_anchor"),
         )
+        trendline_score_bonus = (
+            PRIORITY_TRENDLINE_BREAK_SCORE_BONUS
+            if trendline_summary.get("trendline_break_recent")
+            else 0
+        )
+        clean_path_score_bonus = (
+            PRIORITY_RETEST_CLEAR_PATH_SCORE_BONUS
+            if row.get("retest_followthrough") and obstacle_summary.get("previous_anchor_path_clear")
+            else 0
+        )
+        bonus_notes = []
+        if trendline_score_bonus:
+            bonus_notes.append(f"Trendline break +{trendline_score_bonus}")
+        if clean_path_score_bonus:
+            bonus_notes.append(f"Clean prev anchor path +{clean_path_score_bonus}")
 
         row["base_score"] = row["score"]
-        row["score"] = row["score"] - obstacle_summary["score_penalty"]
+        row["score"] = (
+            row["score"]
+            - obstacle_summary["score_penalty"]
+            + trendline_score_bonus
+            + clean_path_score_bonus
+        )
         row.update(obstacle_summary)
         row.update(trendline_summary)
+        row["trendline_score_bonus"] = trendline_score_bonus
+        row["clean_path_score_bonus"] = clean_path_score_bonus
+        row["score_bonus_note"] = " | ".join(bonus_notes)
         row["sma_levels"] = sma_levels
 
         if row.get("ranking_blocked"):
@@ -2389,6 +3770,16 @@ def refine_priority_rows_with_directional_filters(
             logging.info(f"{symbol}: priority ranking adjusted by filters ({row['ranking_note']}).")
         if row.get("trendline_within_alert_range"):
             logging.info(f"{symbol}: nearby trendline candidate found ({row.get('trendline_note')}).")
+        if row.get("trendline_break_recent"):
+            logging.info(
+                f"{symbol}: recent trendline break candidate found "
+                f"({row.get('trendline_break_note')}); added +{trendline_score_bonus} ranking bonus."
+            )
+        if clean_path_score_bonus:
+            logging.info(
+                f"{symbol}: retest setup has clear previous-anchor path; "
+                f"added +{clean_path_score_bonus} ranking bonus."
+            )
 
         symbol_entry["priority_score"] = row["score"]
         symbol_entry["priority_base_score"] = row["base_score"]
@@ -2397,9 +3788,16 @@ def refine_priority_rows_with_directional_filters(
         symbol_entry["priority_sma_levels"] = sma_levels
         symbol_entry["priority_sma_obstacles"] = list(row.get("sma_obstacles") or [])
         symbol_entry["priority_previous_anchor_obstacles"] = list(row.get("previous_anchor_obstacles") or [])
+        symbol_entry["priority_previous_anchor_path_clear"] = bool(row.get("previous_anchor_path_clear"))
         symbol_entry["priority_trendline_candidate"] = row.get("trendline_candidate")
         symbol_entry["priority_trendline_note"] = row.get("trendline_note", "")
         symbol_entry["priority_trendline_within_alert_range"] = bool(row.get("trendline_within_alert_range"))
+        symbol_entry["priority_trendline_break_candidate"] = row.get("trendline_break_candidate")
+        symbol_entry["priority_trendline_break_note"] = row.get("trendline_break_note", "")
+        symbol_entry["priority_trendline_break_recent"] = bool(row.get("trendline_break_recent"))
+        symbol_entry["priority_trendline_score_bonus"] = int(row.get("trendline_score_bonus", 0) or 0)
+        symbol_entry["priority_clean_path_score_bonus"] = int(row.get("clean_path_score_bonus", 0) or 0)
+        symbol_entry["priority_score_bonus_note"] = row.get("score_bonus_note", "")
 
 
 def apply_final_priority_buckets(
@@ -2417,16 +3815,22 @@ def apply_final_priority_buckets(
         is_favorite_setup = False
         is_near_favorite_zone = False
         if row and not row.get("ranking_blocked"):
-            if row.get("has_favorite_signal"):
+            if row.get("has_favorite_signal") or (
+                row.get("retest_followthrough") and row.get("previous_anchor_path_clear")
+            ):
                 priority_bucket = "favorite_setup"
                 is_favorite_setup = True
-            elif row.get("favorite_zone"):
+            elif row.get("favorite_zone") or row.get("retest_followthrough"):
                 priority_bucket = "near_favorite_zone"
                 is_near_favorite_zone = True
 
         symbol_entry["priority_bucket"] = priority_bucket
         symbol_entry["is_favorite_setup"] = is_favorite_setup
         symbol_entry["is_near_favorite_zone"] = is_near_favorite_zone
+        if row:
+            row["priority_bucket"] = priority_bucket
+            row["is_favorite_setup"] = is_favorite_setup
+            row["is_near_favorite_zone"] = is_near_favorite_zone
 
         feature_row = feature_rows_by_symbol.get(symbol)
         if row and feature_row is not None:
@@ -2440,11 +3844,13 @@ def apply_final_priority_buckets(
             record["is_near_favorite_zone"] = False
             continue
 
-        if row.get("has_favorite_signal"):
+        if row.get("has_favorite_signal") or (
+            row.get("retest_followthrough") and row.get("previous_anchor_path_clear")
+        ):
             record["priority_bucket"] = "favorite_setup"
             record["is_favorite_setup"] = True
             record["is_near_favorite_zone"] = False
-        elif row.get("favorite_zone"):
+        elif row.get("favorite_zone") or row.get("retest_followthrough"):
             record["priority_bucket"] = "near_favorite_zone"
             record["is_favorite_setup"] = False
             record["is_near_favorite_zone"] = True
@@ -2455,13 +3861,25 @@ def apply_final_priority_buckets(
 
 def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     favorites = sorted(
-        [row for row in priority_rows if row["has_favorite_signal"] and not row.get("ranking_blocked")],
+        [
+            row for row in priority_rows
+            if (
+                row["has_favorite_signal"]
+                or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+            )
+            and not row.get("ranking_blocked")
+        ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
     watchlist = sorted(
         [
             row for row in priority_rows
-            if not row["has_favorite_signal"] and row["favorite_zone"] and not row.get("ranking_blocked")
+            if (
+                not row["has_favorite_signal"]
+                and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+                and (row["favorite_zone"] or row.get("retest_followthrough"))
+                and not row.get("ranking_blocked")
+            )
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
@@ -2477,36 +3895,65 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             context = ", ".join(format_signal_label(evt) for evt in row["context_signals"]) or "None"
             zone = row["favorite_zone"] or "None"
             extension_days = row.get("recent_band_extension_days", 0)
+            second_band_tests = row.get("recent_second_band_test_days", 0)
             breakout_text = "Y" if row.get("breakout_5d") else "N"
             retest_text = "Y" if row.get("retest_followthrough") else "N"
             ranking_note = row.get("ranking_note", "")
+            score_bonus_note = row.get("score_bonus_note", "")
+            retest_note = row.get("retest_note", "")
+            extension_note = row.get("extension_note", "")
+            compression_note = row.get("compression_note", "")
             trendline_note = row.get("trendline_note", "")
+            trendline_break_note = row.get("trendline_break_note", "")
             handle.write(
                 f"{row['symbol']:<6} {row['side']:<5} score={row['score']:<3} "
                 f"signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']} "
-                f"| ext_days={extension_days} | 5d_breakout={breakout_text} | retest={retest_text}\n"
+                f"| ext_days={extension_days} | 2nd_tests={second_band_tests} "
+                f"| 5d_breakout={breakout_text} | retest={retest_text}\n"
             )
             if ranking_note:
                 handle.write(f"  filters={ranking_note}\n")
+            if score_bonus_note:
+                handle.write(f"  bonus={score_bonus_note}\n")
+            if retest_note:
+                handle.write(f"  retest={retest_note}\n")
+            if extension_note:
+                handle.write(f"  extension={extension_note}\n")
+            if compression_note:
+                handle.write(f"  compression={compression_note}\n")
             if trendline_note:
                 prefix = "trendline_alert" if row.get("trendline_within_alert_range") else "trendline"
                 handle.write(f"  {prefix}={trendline_note}\n")
+            if trendline_break_note:
+                handle.write(f"  trendline_break={trendline_break_note}\n")
         handle.write("\n")
 
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("Master AVWAP priority setups\n")
         handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        handle.write("Focus: AVWAPE bounces plus UPPER_1 long crosses / LOWER_1 short crosses\n\n")
+        handle.write("Focus: AVWAPE bounces, directional retest continuations, and UPPER_1 / LOWER_1 crosses\n\n")
         _write_rows(handle, "Best current favorite setups", favorites)
         _write_rows(handle, "Near favorite zones", watchlist)
 
 
 def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_state: dict) -> None:
     ranked_rows = sorted(priority_rows, key=lambda row: (-row["score"], row["symbol"]))
-    favorite_rows = [row for row in ranked_rows if row["has_favorite_signal"] and not row.get("ranking_blocked")]
+    favorite_rows = [
+        row for row in ranked_rows
+        if (
+            row["has_favorite_signal"]
+            or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+        )
+        and not row.get("ranking_blocked")
+    ]
     near_rows = [
         row for row in ranked_rows
-        if not row["has_favorite_signal"] and row["favorite_zone"] and not row.get("ranking_blocked")
+        if (
+            not row["has_favorite_signal"]
+            and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+            and (row["favorite_zone"] or row.get("retest_followthrough"))
+            and not row.get("ranking_blocked")
+        )
     ]
 
     def _build_entry(row: dict, bucket: str, rank: int) -> dict:
@@ -2523,8 +3970,20 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "favorite_signals": list(row.get("favorite_signals") or []),
             "favorite_context_signals": list(row.get("context_signals") or []),
             "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),
+            "recent_second_band_test_days": int(row.get("recent_second_band_test_days", 0) or 0),
+            "second_band_penalty": int(row.get("second_band_penalty", 0) or 0),
             "breakout_5d": bool(row.get("breakout_5d")),
             "retest_followthrough": bool(row.get("retest_followthrough")),
+            "retest_reference_level": row.get("retest_reference_level") or "",
+            "retest_note": row.get("retest_note") or "",
+            "extension_note": row.get("extension_note") or "",
+            "compression_flag": bool(row.get("compression_flag")),
+            "compression_penalty": int(row.get("compression_penalty", 0) or 0),
+            "compression_note": row.get("compression_note") or "",
+            "trendline_note": row.get("trendline_note") or "",
+            "trendline_break_note": row.get("trendline_break_note") or "",
+            "trendline_break_recent": bool(row.get("trendline_break_recent")),
+            "trendline_score_bonus": int(row.get("trendline_score_bonus", 0) or 0),
             "has_bounce_event_today": bool(symbol_state.get("has_bounce_event_today")),
             "last_trade_date": symbol_state.get("last_trade_date"),
         }
@@ -2591,13 +4050,25 @@ def write_tradingview_report(
     stdev_cross_hits: dict,
 ) -> None:
     favorites = sorted(
-        [row for row in priority_rows if row["has_favorite_signal"] and not row.get("ranking_blocked")],
+        [
+            row for row in priority_rows
+            if (
+                row["has_favorite_signal"]
+                or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+            )
+            and not row.get("ranking_blocked")
+        ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
     near_favorites = sorted(
         [
             row for row in priority_rows
-            if not row["has_favorite_signal"] and row["favorite_zone"] and not row.get("ranking_blocked")
+            if (
+                not row["has_favorite_signal"]
+                and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+                and (row["favorite_zone"] or row.get("retest_followthrough"))
+                and not row.get("ranking_blocked")
+            )
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
@@ -2785,15 +4256,11 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
         levels = _build_anchor_levels(df, anchor_date_iso)
         if not levels:
             continue
-        avwap, stdev, bands = levels
+        avwap, stdev, _ = levels
         last_trade_date = df["datetime"].iloc[-1].date().isoformat()
 
         named_levels = {
             "AVWAP": avwap,
-            "UPPER_1": bands.get("UPPER_1"),
-            "LOWER_1": bands.get("LOWER_1"),
-            "UPPER_2": bands.get("UPPER_2"),
-            "LOWER_2": bands.get("LOWER_2"),
         }
 
         def add_anchor_event(name: str, level_name: str):
@@ -2815,31 +4282,15 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
         if side == "LONG":
             if bounce_up_at_level(df, avwap):
                 add_anchor_event("BOUNCE_UP_AVWAP", "AVWAP")
-            if bounce_up_at_level(df, bands.get("LOWER_1")):
-                add_anchor_event("BOUNCE_UP_LOWER_1", "LOWER_1")
-            if bounce_up_at_level(df, bands.get("UPPER_1")):
-                add_anchor_event("BOUNCE_UP_UPPER_1", "UPPER_1")
-            if cross_up_through_level(df, bands.get("UPPER_1")):
-                add_anchor_event("CROSS_UP_UPPER_1", "UPPER_1")
-            if cross_down_through_level(df, bands.get("LOWER_1")):
-                add_anchor_event("CROSS_DOWN_LOWER_1", "LOWER_1")
         else:
             if bounce_down_at_level(df, avwap):
                 add_anchor_event("BOUNCE_DOWN_AVWAP", "AVWAP")
-            if bounce_down_at_level(df, bands.get("UPPER_1")):
-                add_anchor_event("BOUNCE_DOWN_UPPER_1", "UPPER_1")
-            if bounce_down_at_level(df, bands.get("LOWER_1")):
-                add_anchor_event("BOUNCE_DOWN_LOWER_1", "LOWER_1")
-            if cross_down_through_level(df, bands.get("LOWER_1")):
-                add_anchor_event("CROSS_DOWN_LOWER_1", "LOWER_1")
-            if cross_up_through_level(df, bands.get("UPPER_1")):
-                add_anchor_event("CROSS_UP_UPPER_1", "UPPER_1")
 
     ib.disconnect()
 
     now_iso = datetime.now().isoformat(timespec="seconds")
     if events:
-        lines = [f"Anchor AVWAP events generated at {now_iso}", "=" * 80]
+        lines = [f"Anchor AVWAP bounce events generated at {now_iso}", "=" * 80]
         for item in sorted(events, key=lambda x: (x["ticker"], x["event"])):
             lines.append(
                 f"{item['ticker']} [{item['list_name']}] {item['side']} {item['event']} "
@@ -2861,7 +4312,10 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
             })
         ANCHOR_AVWAP_OUTPUT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     else:
-        ANCHOR_AVWAP_OUTPUT_FILE.write_text(f"Anchor AVWAP scan completed at {now_iso}. No events.\n", encoding="utf-8")
+        ANCHOR_AVWAP_OUTPUT_FILE.write_text(
+            f"Anchor AVWAP scan completed at {now_iso}. No AVWAP bounce events.\n",
+            encoding="utf-8",
+        )
 
     if signal_rows:
         df_signals = pd.DataFrame(signal_rows, columns=ANCHOR_AVWAP_SIGNAL_COLUMNS)
@@ -2907,11 +4361,6 @@ def run_master():
 
     for sym in symbols:
         dates = earnings_data.get(sym, [])
-        if not dates:
-            dates = yf_earnings_dates(sym)
-            if dates:
-                earnings_data[sym] = _normalize_earnings_dates(dates)
-                earnings_cache_updated = True
 
         if not dates:
             missing_anchors.append(sym)
@@ -2962,6 +4411,7 @@ def run_master():
     csv_rows = []
     feature_rows = []
     feature_rows_by_symbol = {}
+    daily_frames_by_symbol = {}
     priority_rows = []
     positions = {
         "current": {lvl: [] for lvl in POSITION_LEVELS},
@@ -3006,6 +4456,7 @@ def run_master():
         if df.empty:
             logging.warning(f"{sym}: no daily bars returned.")
             continue
+        daily_frames_by_symbol[sym] = df.copy()
 
         last_trade_date = df["datetime"].iloc[-1].date()
         dstr = df["datetime"].iloc[-1].strftime("%m/%d")
@@ -3301,12 +4752,37 @@ def run_master():
             current_lower_1 if side == "LONG" else current_upper_1,
             side,
         )
+        recent_second_band_test_days = count_recent_band_test_days(
+            daily_ohlc,
+            last_trade_date,
+            current_upper_2 if side == "LONG" else current_lower_2,
+            side,
+        )
+        second_band_penalty = compute_recent_second_band_penalty(recent_second_band_test_days)
+        extension_note = ""
+        if recent_second_band_test_days > 0:
+            second_band_label = "UPPER_2" if side == "LONG" else "LOWER_2"
+            extension_note = (
+                f"Recent {second_band_label} tests={recent_second_band_test_days} "
+                f"(-{second_band_penalty})"
+            )
         breakout_5d = breakout_long_5d if side == "LONG" else breakout_short_5d
-        retest_followthrough = analyze_avwap_retest_behavior(
+        retest_summary = analyze_avwap_retest_behavior(
             daily_ohlc,
             last_trade_date,
             current_vwap,
             side,
+            current_upper_1=current_upper_1,
+            current_lower_1=current_lower_1,
+            atr20=atr20,
+        )
+        retest_followthrough = bool(retest_summary["retest_followthrough"])
+        compression_summary = evaluate_anchor_compression(
+            df,
+            current_anchor_meta.get("date") if current_anchor_meta else None,
+            current_anchor_meta.get("stdev") if current_anchor_meta else None,
+            atr20,
+            last_trade_date,
         )
 
         if current_anchor_meta:
@@ -3386,8 +4862,16 @@ def run_master():
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
             "recent_band_extension_days": recent_band_extension_days,
+            "recent_second_band_test_days": recent_second_band_test_days,
+            "second_band_penalty": second_band_penalty,
             "breakout_5d": breakout_5d,
             "retest_followthrough": retest_followthrough,
+            "retest_reference_level": retest_summary["retest_reference_level"],
+            "retest_note": retest_summary["retest_note"],
+            "extension_note": extension_note,
+            "compression_flag": bool(compression_summary.get("is_compressed")),
+            "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
+            "compression_note": compression_summary.get("compression_note", ""),
         }
 
         priority_summary = build_priority_setup_summary(
@@ -3398,9 +4882,18 @@ def run_master():
             trend_label=trend_label,
             favorite_zone=favorite_zone,
             recent_band_extension_days=recent_band_extension_days,
+            recent_second_band_test_days=recent_second_band_test_days,
+            second_band_penalty=second_band_penalty,
             breakout_5d=breakout_5d,
             retest_followthrough=retest_followthrough,
+            retest_reference_level=retest_summary["retest_reference_level"],
+            retest_note=retest_summary["retest_note"],
+            extension_note=extension_note,
         )
+        priority_summary["score"] = float(priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0))
+        priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
+        priority_summary["compression_penalty"] = int(compression_summary.get("compression_penalty", 0) or 0)
+        priority_summary["compression_note"] = compression_summary.get("compression_note", "")
         symbol_entry["priority_score"] = priority_summary["score"]
         symbol_entry["favorite_signals"] = priority_summary["favorite_signals"]
         symbol_entry["favorite_context_signals"] = priority_summary["context_signals"]
@@ -3453,8 +4946,16 @@ def run_master():
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
             "recent_band_extension_days": recent_band_extension_days,
+            "recent_second_band_test_days": recent_second_band_test_days,
+            "second_band_penalty": second_band_penalty,
             "breakout_5d": breakout_5d,
             "retest_followthrough": retest_followthrough,
+            "retest_reference_level": retest_summary["retest_reference_level"],
+            "retest_note": retest_summary["retest_note"],
+            "extension_note": extension_note,
+            "compression_flag": bool(compression_summary.get("is_compressed")),
+            "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
+            "compression_note": compression_summary.get("compression_note", ""),
             "priority_score": priority_summary["score"],
             "favorite_signals": ";".join(priority_summary["favorite_signals"]),
             "favorite_context_signals": ";".join(priority_summary["context_signals"]),
@@ -3470,6 +4971,13 @@ def run_master():
 
     refine_priority_rows_with_directional_filters(priority_rows, ai_state, ib)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
+    tracked_rows = [
+        row
+        for row in priority_rows
+        if row.get("priority_bucket") in {"favorite_setup", "near_favorite_zone"}
+        and not row.get("ranking_blocked")
+    ]
+    update_setup_tracker_from_scan(tracked_rows, ai_state, feature_rows_by_symbol, daily_frames_by_symbol, ib)
 
     ib.disconnect()
 
@@ -3599,8 +5107,16 @@ def run_master():
         "has_bounce_event_today",
         "favorite_zone",
         "recent_band_extension_days",
+        "recent_second_band_test_days",
+        "second_band_penalty",
         "breakout_5d",
         "retest_followthrough",
+        "retest_reference_level",
+        "retest_note",
+        "extension_note",
+        "compression_flag",
+        "compression_penalty",
+        "compression_note",
         "priority_score",
         "favorite_signals",
         "favorite_context_signals",
@@ -3669,11 +5185,13 @@ class MasterAvwapGUI:
         self.bulk_side_var = tk.StringVar(value="LONG")
         self.earnings_lookback_var = tk.IntVar(value=1)
         self.focus_side_map = {}
+        self.setup_tracker_row_map = {}
 
         self._build_layout()
         self.refresh_table()
         self.refresh_avwap_output_view()
         self.refresh_anchor_output_view()
+        self.refresh_setup_tracker_view()
 
     def _configure_dark_theme(self):
         style = ttk.Style(self.root)
@@ -3762,6 +5280,7 @@ class MasterAvwapGUI:
             self.near_favorite_symbols_text,
             self.bulk_anchor_text,
             self.anchor_scan_text,
+            self.setup_tracker_stats_text,
         ):
             widget.configure(
                 bg=GUI_DARK_INPUT,
@@ -3792,10 +5311,105 @@ class MasterAvwapGUI:
         ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh Active Anchors", command=self.refresh_table).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Refresh Setup Tracker", command=self.refresh_setup_tracker_view).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=8)
+
+        tracker_tab = ttk.Frame(self.notebook)
+        self.tracker_tab = tracker_tab
+        self.notebook.add(tracker_tab, text="Setup Tracker")
+
+        tracker_toolbar = ttk.Frame(tracker_tab)
+        tracker_toolbar.pack(fill="x", pady=(0, 8))
+        ttk.Button(tracker_toolbar, text="Refresh Tracker", command=self.refresh_setup_tracker_view).pack(side="left")
+        ttk.Button(tracker_toolbar, text="Copy Active Symbols", command=self.copy_setup_tracker_symbols).pack(side="left", padx=(8, 0))
+
+        tracker_body = ttk.Frame(tracker_tab)
+        tracker_body.pack(fill="both", expand=True)
+
+        tracker_left = ttk.Frame(tracker_body)
+        tracker_left.pack(side="left", fill="both", expand=True)
+
+        setup_frame = ttk.LabelFrame(tracker_left, text="Tracked Setups")
+        setup_frame.pack(fill="both", expand=True, pady=(0, 8))
+        setup_columns = (
+            "scan_date",
+            "symbol",
+            "side",
+            "bucket",
+            "entry_price",
+            "status",
+            "open_scenarios",
+            "priority_score",
+            "retest",
+            "compression",
+        )
+        self.setup_tracker_table = ttk.Treeview(setup_frame, columns=setup_columns, show="headings", style="Dark.Treeview", height=12)
+        tracker_col_widths = {
+            "scan_date": 96,
+            "symbol": 80,
+            "side": 60,
+            "bucket": 120,
+            "entry_price": 86,
+            "status": 86,
+            "open_scenarios": 96,
+            "priority_score": 90,
+            "retest": 110,
+            "compression": 100,
+        }
+        for col in setup_columns:
+            self.setup_tracker_table.heading(col, text=col)
+            self.setup_tracker_table.column(col, width=tracker_col_widths.get(col, 100), anchor="w")
+        setup_scroll = ttk.Scrollbar(setup_frame, orient="vertical", command=self.setup_tracker_table.yview)
+        self.setup_tracker_table.configure(yscrollcommand=setup_scroll.set)
+        self.setup_tracker_table.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        setup_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self.setup_tracker_table.bind("<<TreeviewSelect>>", self._on_setup_tracker_selected)
+
+        scenario_frame = ttk.LabelFrame(tracker_left, text="Scenario Outcomes")
+        scenario_frame.pack(fill="both", expand=True)
+        scenario_columns = (
+            "stop",
+            "exit",
+            "shares",
+            "status",
+            "total_r",
+            "total_pnl",
+            "last_action",
+        )
+        self.setup_tracker_scenario_table = ttk.Treeview(
+            scenario_frame,
+            columns=scenario_columns,
+            show="headings",
+            style="Dark.Treeview",
+            height=10,
+        )
+        scenario_col_widths = {
+            "stop": 90,
+            "exit": 180,
+            "shares": 70,
+            "status": 86,
+            "total_r": 80,
+            "total_pnl": 90,
+            "last_action": 260,
+        }
+        for col in scenario_columns:
+            self.setup_tracker_scenario_table.heading(col, text=col)
+            self.setup_tracker_scenario_table.column(col, width=scenario_col_widths.get(col, 110), anchor="w")
+        scenario_scroll = ttk.Scrollbar(scenario_frame, orient="vertical", command=self.setup_tracker_scenario_table.yview)
+        self.setup_tracker_scenario_table.configure(yscrollcommand=scenario_scroll.set)
+        self.setup_tracker_scenario_table.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        scenario_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+
+        tracker_right = ttk.Frame(tracker_body, width=360)
+        tracker_right.pack(side="right", fill="y", padx=(12, 0))
+        tracker_right.pack_propagate(False)
+        tracker_stats_frame = ttk.LabelFrame(tracker_right, text="Tracker Stats / Details")
+        tracker_stats_frame.pack(fill="both", expand=True)
+        self.setup_tracker_stats_text = tk.Text(tracker_stats_frame, wrap="word", font=("Courier New", 10))
+        self.setup_tracker_stats_text.pack(fill="both", expand=True, padx=8, pady=8)
 
         anchors_tab = ttk.Frame(self.notebook)
         self.anchors_tab = anchors_tab
@@ -3944,6 +5558,181 @@ class MasterAvwapGUI:
         payload = load_json(AI_STATE_FILE, default={})
         return payload if isinstance(payload, dict) else {}
 
+    def _load_setup_tracker_payload(self) -> dict:
+        payload = load_setup_tracker_payload()
+        return payload if isinstance(payload, dict) else _default_setup_tracker_payload()
+
+    def copy_setup_tracker_symbols(self):
+        symbols = []
+        for item_id in self.setup_tracker_table.get_children():
+            values = self.setup_tracker_table.item(item_id, "values")
+            if len(values) >= 2 and values[1]:
+                symbols.append(str(values[1]).strip().upper())
+        symbols = sorted(set(symbols))
+        if not symbols:
+            self.status_var.set("No setup tracker symbols to copy.")
+            return
+        self._copy_to_clipboard(", ".join(symbols))
+        self.status_var.set("Copied setup tracker symbols to clipboard.")
+
+    def _render_setup_tracker_stats_text(self, payload: dict, selected_setup: dict | None = None):
+        stats_rows = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
+        daily_watchlists = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
+        lines = []
+        lines.append("Tracker summary")
+        lines.append("-" * 80)
+        lines.append(f"Updated: {payload.get('updated_at') or 'n/a'}")
+        lines.append(f"Tracked setups: {len(payload.get('setups', {}) or {})}")
+        if daily_watchlists:
+            latest_date = max(daily_watchlists.keys())
+            latest_watchlist = daily_watchlists.get(latest_date, {})
+            lines.append(
+                f"Latest final scan day: {latest_date} | symbols={len(latest_watchlist.get('symbols', []) or [])}"
+            )
+        lines.append("")
+        lines.append("Top scenario stats")
+        lines.append("-" * 80)
+        if not stats_rows:
+            lines.append("No scenario stats yet.")
+        else:
+            for row in stats_rows[:8]:
+                avg_r = row.get("avg_total_r")
+                avg_r_text = f"{avg_r:.2f}R" if avg_r is not None else "n/a"
+                win_rate = row.get("win_rate_closed")
+                win_rate_text = f"{win_rate * 100:.0f}%" if win_rate is not None else "n/a"
+                lines.append(
+                    f"{row.get('stop_reference_label')} / {row.get('exit_template_id')}: "
+                    f"avg_total={avg_r_text} closed={row.get('closed_setups', 0)} win={win_rate_text}"
+                )
+
+        if selected_setup:
+            lines.append("")
+            lines.append("Selected setup")
+            lines.append("-" * 80)
+            lines.append(
+                f"{selected_setup.get('symbol')} {selected_setup.get('side')} "
+                f"{selected_setup.get('priority_bucket', '')} scan={selected_setup.get('scan_date')}"
+            )
+            lines.append(
+                f"entry={_coerce_float(selected_setup.get('entry_price')) or 0:.2f} "
+                f"anchor={selected_setup.get('anchor_date')} "
+                f"score={_coerce_float(selected_setup.get('priority_score')) or 0:.1f}"
+            )
+            if selected_setup.get("favorite_zone"):
+                lines.append(f"zone={selected_setup.get('favorite_zone')}")
+            if selected_setup.get("retest_note"):
+                lines.append(f"retest={selected_setup.get('retest_note')}")
+            if selected_setup.get("extension_note"):
+                lines.append(f"extension={selected_setup.get('extension_note')}")
+            if selected_setup.get("score_bonus_note"):
+                lines.append(f"bonus={selected_setup.get('score_bonus_note')}")
+            if selected_setup.get("ranking_note"):
+                lines.append(f"filters={selected_setup.get('ranking_note')}")
+            if selected_setup.get("compression_note"):
+                lines.append(f"compression={selected_setup.get('compression_note')}")
+
+        lines.append("")
+        lines.append("Exports")
+        lines.append("-" * 80)
+        lines.append(f"Tracker JSON: {SETUP_TRACKER_FILE}")
+        lines.append(f"Scenario CSV: {SETUP_SCENARIOS_FILE}")
+        lines.append(f"Daily CSV: {SETUP_DAILY_FILE}")
+        lines.append(f"Stats CSV: {SETUP_STATS_FILE}")
+        self._set_text_widget_contents(self.setup_tracker_stats_text, "\n".join(lines))
+
+    def _populate_setup_tracker_scenarios(self, setup: dict | None):
+        for item in self.setup_tracker_scenario_table.get_children():
+            self.setup_tracker_scenario_table.delete(item)
+        if not setup:
+            return
+
+        scenarios = list((setup.get("scenarios") or {}).values())
+        scenarios.sort(key=lambda item: (not _scenario_is_open(item.get("status", "")), -(float(item.get("total_r", 0.0) or 0.0)), item.get("scenario_id", "")))
+        for scenario in scenarios:
+            total_r = _coerce_float(scenario.get("total_r"))
+            total_pnl = _coerce_float(scenario.get("total_pnl"))
+            self.setup_tracker_scenario_table.insert(
+                "",
+                "end",
+                values=(
+                    scenario.get("stop_reference_label", ""),
+                    scenario.get("exit_template_label", ""),
+                    int(scenario.get("shares", 0) or 0),
+                    scenario.get("status", ""),
+                    "" if total_r is None else f"{total_r:.2f}",
+                    "" if total_pnl is None else f"{total_pnl:.2f}",
+                    scenario.get("last_action", ""),
+                ),
+            )
+
+    def _on_setup_tracker_selected(self, _event=None):
+        selected = self.setup_tracker_table.selection()
+        setup = self.setup_tracker_row_map.get(selected[0]) if selected else None
+        self._populate_setup_tracker_scenarios(setup)
+        self._render_setup_tracker_stats_text(self.setup_tracker_payload, setup)
+
+    def refresh_setup_tracker_view(self):
+        payload = self._load_setup_tracker_payload()
+        self.setup_tracker_payload = payload
+        self.setup_tracker_row_map = {}
+
+        for item in self.setup_tracker_table.get_children():
+            self.setup_tracker_table.delete(item)
+
+        setups = list((payload.get("setups") or {}).values())
+        setups.sort(
+            key=lambda setup: (
+                setup.get("setup_status") != "OPEN",
+                str(setup.get("scan_date") or ""),
+                str(setup.get("symbol") or ""),
+            ),
+            reverse=False,
+        )
+        setups = sorted(
+            setups,
+            key=lambda setup: (
+                setup.get("setup_status") != "OPEN",
+                str(setup.get("scan_date") or ""),
+                str(setup.get("symbol") or ""),
+            ),
+        )
+        setups = sorted(
+            setups,
+            key=lambda setup: (
+                setup.get("setup_status") != "OPEN",
+                -(float(setup.get("priority_score", 0) or 0.0)),
+                str(setup.get("symbol") or ""),
+            ),
+        )
+
+        for setup in setups:
+            item_id = self.setup_tracker_table.insert(
+                "",
+                "end",
+                values=(
+                    setup.get("scan_date", ""),
+                    setup.get("symbol", ""),
+                    setup.get("side", ""),
+                    setup.get("priority_bucket", ""),
+                    "" if _coerce_float(setup.get("entry_price")) is None else f"{float(setup.get('entry_price')):.2f}",
+                    setup.get("setup_status", ""),
+                    int(setup.get("open_scenario_count", 0) or 0),
+                    "" if _coerce_float(setup.get("priority_score")) is None else f"{float(setup.get('priority_score')):.1f}",
+                    setup.get("retest_reference_level", ""),
+                    "Y" if setup.get("compression_flag") else "",
+                ),
+            )
+            self.setup_tracker_row_map[item_id] = setup
+
+        first_item = self.setup_tracker_table.get_children()
+        if first_item:
+            self.setup_tracker_table.selection_set(first_item[0])
+            self.setup_tracker_table.focus(first_item[0])
+            self._on_setup_tracker_selected()
+        else:
+            self._populate_setup_tracker_scenarios(None)
+            self._render_setup_tracker_stats_text(payload, None)
+
     def _highlight_trendline_candidates_in_avwap_output(self):
         self.avwap_text.tag_remove("trendline_bold", "1.0", tk.END)
         payload = self._load_ai_state_payload()
@@ -3951,7 +5740,10 @@ class MasterAvwapGUI:
         highlighted = {
             str(symbol).strip().upper()
             for symbol, entry in (raw_symbols.items() if isinstance(raw_symbols, dict) else [])
-            if isinstance(entry, dict) and entry.get("priority_trendline_within_alert_range")
+            if isinstance(entry, dict) and (
+                entry.get("priority_trendline_within_alert_range")
+                or entry.get("priority_trendline_break_recent")
+            )
         }
         if not highlighted:
             return
@@ -4017,43 +5809,50 @@ class MasterAvwapGUI:
 
     def refresh_focus_group_boxes(self):
         self.focus_side_map = {}
-        tradingview_groups = self._load_tradingview_groups()
-        if tradingview_groups:
-            favorite_longs = tradingview_groups["favorites"]["LONG"]
-            favorite_shorts = tradingview_groups["favorites"]["SHORT"]
-            near_longs = tradingview_groups["near_favorite_zones"]["LONG"]
-            near_shorts = tradingview_groups["near_favorite_zones"]["SHORT"]
+        payload = self._load_focus_payload()
+        favorites = payload.get("favorites", [])
+        near_favorites = payload.get("near_favorite_zones", [])
+        symbol_map = payload.get("symbols", {})
 
-            for symbol in favorite_longs + near_longs:
-                self.focus_side_map[symbol] = "LONG"
-            for symbol in favorite_shorts + near_shorts:
-                self.focus_side_map[symbol] = "SHORT"
+        if isinstance(symbol_map, dict):
+            for symbol, row in symbol_map.items():
+                ticker = str(symbol).strip().upper()
+                if not ticker or not isinstance(row, dict):
+                    continue
+                self.focus_side_map[ticker] = normalize_side(row.get("side", "LONG"))
 
-            favorite_text = _format_symbol_group(favorite_longs + favorite_shorts)
-            near_favorite_text = _format_symbol_group(near_longs + near_shorts)
+        favorite_symbols = [
+            str(entry.get("symbol", "")).strip().upper()
+            for entry in favorites
+            if isinstance(entry, dict) and str(entry.get("symbol", "")).strip()
+        ]
+        near_favorite_symbols = [
+            str(entry.get("symbol", "")).strip().upper()
+            for entry in near_favorites
+            if isinstance(entry, dict) and str(entry.get("symbol", "")).strip()
+        ]
+
+        if favorite_symbols or near_favorite_symbols:
+            favorite_text = _format_symbol_group(favorite_symbols)
+            near_favorite_text = _format_symbol_group(near_favorite_symbols)
         else:
-            payload = self._load_focus_payload()
-            favorites = payload.get("favorites", [])
-            near_favorites = payload.get("near_favorite_zones", [])
-            symbol_map = payload.get("symbols", {})
+            tradingview_groups = self._load_tradingview_groups()
+            if tradingview_groups:
+                favorite_longs = tradingview_groups["favorites"]["LONG"]
+                favorite_shorts = tradingview_groups["favorites"]["SHORT"]
+                near_longs = tradingview_groups["near_favorite_zones"]["LONG"]
+                near_shorts = tradingview_groups["near_favorite_zones"]["SHORT"]
 
-            if isinstance(symbol_map, dict):
-                for symbol, row in symbol_map.items():
-                    ticker = str(symbol).strip().upper()
-                    if not ticker or not isinstance(row, dict):
-                        continue
-                    self.focus_side_map[ticker] = normalize_side(row.get("side", "LONG"))
+                for symbol in favorite_longs + near_longs:
+                    self.focus_side_map[symbol] = "LONG"
+                for symbol in favorite_shorts + near_shorts:
+                    self.focus_side_map[symbol] = "SHORT"
 
-            favorite_text = _format_symbol_group(
-                entry.get("symbol", "")
-                for entry in favorites
-                if isinstance(entry, dict)
-            )
-            near_favorite_text = _format_symbol_group(
-                entry.get("symbol", "")
-                for entry in near_favorites
-                if isinstance(entry, dict)
-            )
+                favorite_text = _format_symbol_group(favorite_longs + favorite_shorts)
+                near_favorite_text = _format_symbol_group(near_longs + near_shorts)
+            else:
+                favorite_text = "None"
+                near_favorite_text = "None"
 
         self._set_text_widget_contents(self.favorite_symbols_text, favorite_text)
         self._set_text_widget_contents(self.near_favorite_symbols_text, near_favorite_text)
@@ -4132,7 +5931,8 @@ class MasterAvwapGUI:
                     self.root.after(0, done_callback)
             except Exception as exc:
                 logging.exception("GUI background task failed")
-                self.root.after(0, lambda: self.status_var.set(f"Error: {exc}"))
+                error_message = f"Error: {exc}"
+                self.root.after(0, lambda msg=error_message: self.status_var.set(msg))
 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -4160,6 +5960,7 @@ class MasterAvwapGUI:
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_anchor_output_view(),
+                self.refresh_setup_tracker_view(),
             ),
         )
 
@@ -4226,7 +6027,8 @@ class MasterAvwapGUI:
                 self.root.after(0, _finish)
             except Exception as exc:
                 logging.exception("Bulk anchor import failed")
-                self.root.after(0, lambda: self.status_var.set(f"Bulk import failed: {exc}"))
+                error_message = f"Bulk import failed: {exc}"
+                self.root.after(0, lambda msg=error_message: self.status_var.set(msg))
 
         threading.Thread(target=_task, daemon=True).start()
 
