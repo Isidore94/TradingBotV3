@@ -18,10 +18,11 @@ from dataclasses import dataclass, asdict
 
 try:
     import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import filedialog, ttk, messagebox
 except Exception:
     tk = None
     ttk = None
+    filedialog = None
     messagebox = None
 
 import requests
@@ -32,6 +33,7 @@ from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 
 from project_paths import (
+    LOCAL_SETTINGS_FILE,
     DATA_DIR,
     OUTPUT_DIR,
     LOG_DIR,
@@ -41,6 +43,9 @@ from project_paths import (
     EARNINGS_CACHE_FILE,
     PREV_EARNINGS_CACHE_FILE,
     EARNINGS_DATES_CACHE_FILE,
+    EARNINGS_CALENDAR_CACHE_FILE,
+    YAHOO_SYMBOL_META_CACHE_FILE,
+    DAILY_BARS_CACHE_DIR,
     MASTER_AVWAP_HISTORY_FILE,
     MASTER_AVWAP_AI_STATE_FILE,
     D1_FEATURES_FILE,
@@ -63,6 +68,10 @@ from project_paths import (
     MASTER_ANCHOR_AVWAP_REPORT_FILE,
     ANCHOR_AVWAP_SIGNALS_FILE,
     MASTER_AVWAP_LOG_FILE,
+    APP_LOG_BACKUP_COUNT,
+    get_shared_watchlist_paths,
+    get_tracker_storage_details,
+    save_tracker_storage_dir,
 )
 
 # ============================================================================
@@ -266,6 +275,13 @@ YF_EARNINGS_LOOKUP_DISABLED_REASON = (
     else None
 )
 YF_EARNINGS_LOOKUP_DISABLED_LOGGED = False
+DAILY_BAR_CACHE_MAX_AGE_MINUTES = 30
+DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS = 10
+DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
+SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
+EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES = 30
+DAILY_BAR_COLUMNS = ["datetime", "open", "high", "low", "close", "volume"]
+APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 # ============================================================================
 # LOGGING
@@ -277,10 +293,7 @@ def configure_logging():
         return  # already configured
 
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S"
-    )
+    fmt = logging.Formatter(APP_LOG_FORMAT)
 
     ch = logging.StreamHandler()
     ch.setFormatter(fmt)
@@ -289,7 +302,7 @@ def configure_logging():
     fh = RotatingFileHandler(
         MASTER_AVWAP_LOG_FILE,
         maxBytes=2_000_000,
-        backupCount=3,
+        backupCount=APP_LOG_BACKUP_COUNT,
     )
     fh.setFormatter(fmt)
     fh.setLevel(logging.INFO)
@@ -316,6 +329,51 @@ def load_tickers(path: Path):
             out.append(v.upper())
     return out
 
+
+def connect_daily_data_client(client_id: int, startup_wait: float = 1.0) -> IBApi | None:
+    ib = IBApi()
+    try:
+        ib.connect("127.0.0.1", 7496, clientId=client_id)
+        threading.Thread(target=ib.run, daemon=True).start()
+        time.sleep(startup_wait)
+        if ib.isConnected():
+            logging.info("Connected to IBKR for daily bar requests.")
+            return ib
+        logging.warning("IBKR is unavailable; falling back to Yahoo Finance daily bars for this scan.")
+    except Exception as exc:
+        logging.warning(f"IBKR daily-bar connection failed; using Yahoo Finance fallback ({exc}).")
+    try:
+        ib.disconnect()
+    except Exception:
+        pass
+    return None
+
+
+def disconnect_daily_data_client(ib: IBApi | None) -> None:
+    if ib is None:
+        return
+    try:
+        ib.disconnect()
+    except Exception:
+        pass
+
+
+def resolve_scan_watchlist_paths(
+    longs_path: Path | None = None,
+    shorts_path: Path | None = None,
+    use_shared_watchlists: bool = False,
+) -> tuple[Path, Path, str]:
+    if longs_path is not None and shorts_path is not None:
+        return Path(longs_path), Path(shorts_path), "custom watchlists"
+    if use_shared_watchlists:
+        shared_longs_path, shared_shorts_path = get_shared_watchlist_paths()
+        return shared_longs_path, shared_shorts_path, "shared folder watchlists"
+    return LONGS_FILE, SHORTS_FILE, "repo watchlists"
+
+
+def run_master_with_shared_watchlists():
+    return run_master(use_shared_watchlists=True)
+
 # ============================================================================
 # CACHE HELPERS
 # ============================================================================
@@ -333,6 +391,213 @@ def save_json(path: Path, obj):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
+
+
+_EARNINGS_CALENDAR_ROWS_CACHE: dict | None = None
+_SYMBOL_METADATA_CACHE: dict | None = None
+_DAILY_BAR_FRAME_CACHE: dict[str, pd.DataFrame] = {}
+_DAILY_BAR_CACHE_TOUCHED_AT: dict[str, datetime] = {}
+
+
+def _is_timestamp_within_minutes(value, minutes: int) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return False
+    return (datetime.now() - parsed) <= timedelta(minutes=max(1, int(minutes)))
+
+
+def _load_earnings_calendar_rows_cache() -> dict:
+    global _EARNINGS_CALENDAR_ROWS_CACHE
+    if _EARNINGS_CALENDAR_ROWS_CACHE is None:
+        raw = load_json(EARNINGS_CALENDAR_CACHE_FILE, default={})
+        _EARNINGS_CALENDAR_ROWS_CACHE = raw if isinstance(raw, dict) else {}
+    return _EARNINGS_CALENDAR_ROWS_CACHE
+
+
+def _save_earnings_calendar_rows_cache() -> None:
+    if _EARNINGS_CALENDAR_ROWS_CACHE is None:
+        return
+    save_json(EARNINGS_CALENDAR_CACHE_FILE, _EARNINGS_CALENDAR_ROWS_CACHE)
+
+
+def _load_symbol_metadata_cache() -> dict:
+    global _SYMBOL_METADATA_CACHE
+    if _SYMBOL_METADATA_CACHE is None:
+        raw = load_json(YAHOO_SYMBOL_META_CACHE_FILE, default={})
+        _SYMBOL_METADATA_CACHE = raw if isinstance(raw, dict) else {}
+    return _SYMBOL_METADATA_CACHE
+
+
+def _save_symbol_metadata_cache() -> None:
+    if _SYMBOL_METADATA_CACHE is None:
+        return
+    save_json(YAHOO_SYMBOL_META_CACHE_FILE, _SYMBOL_METADATA_CACHE)
+
+
+def _symbol_metadata_is_fresh(entry: dict | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    updated_on = _parse_iso_date_or_none(entry.get("updated_on"))
+    if updated_on is None:
+        return False
+    return (datetime.now().date() - updated_on).days < max(1, SYMBOL_METADATA_CACHE_MAX_AGE_DAYS)
+
+
+def _sanitize_symbol_for_filename(symbol: str) -> str:
+    text = str(symbol or "").strip().upper()
+    return re.sub(r"[^A-Z0-9._-]+", "_", text) or "UNKNOWN"
+
+
+def _daily_bar_cache_file(symbol: str) -> Path:
+    return DAILY_BARS_CACHE_DIR / f"{_sanitize_symbol_for_filename(symbol)}.csv"
+
+
+def _empty_daily_bar_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=DAILY_BAR_COLUMNS)
+
+
+def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return _empty_daily_bar_frame()
+
+    normalized = df.copy()
+    if "datetime" not in normalized.columns:
+        if "Date" in normalized.columns:
+            normalized = normalized.rename(columns={"Date": "datetime"})
+        elif "date" in normalized.columns:
+            normalized = normalized.rename(columns={"date": "datetime"})
+        else:
+            normalized = normalized.rename(columns={normalized.columns[0]: "datetime"})
+
+    normalized = normalized.rename(columns={str(col): str(col).lower() for col in normalized.columns})
+    if "datetime" not in normalized.columns:
+        return _empty_daily_bar_frame()
+
+    normalized["datetime"] = pd.to_datetime(normalized["datetime"], errors="coerce")
+    if getattr(normalized["datetime"].dt, "tz", None) is not None:
+        normalized["datetime"] = normalized["datetime"].dt.tz_localize(None)
+
+    for column in DAILY_BAR_COLUMNS[1:]:
+        if column not in normalized.columns:
+            return _empty_daily_bar_frame()
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+
+    normalized = normalized.dropna(subset=DAILY_BAR_COLUMNS)
+    if normalized.empty:
+        return _empty_daily_bar_frame()
+
+    normalized = (
+        normalized[DAILY_BAR_COLUMNS]
+        .drop_duplicates(subset=["datetime"], keep="last")
+        .sort_values("datetime")
+        .reset_index(drop=True)
+    )
+    return normalized
+
+
+def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
+    symbol = str(symbol or "").strip().upper()
+    cached = _DAILY_BAR_FRAME_CACHE.get(symbol)
+    if cached is not None:
+        return cached.copy()
+
+    cache_path = _daily_bar_cache_file(symbol)
+    if not cache_path.exists():
+        return _empty_daily_bar_frame()
+
+    try:
+        df = pd.read_csv(cache_path, parse_dates=["datetime"])
+    except Exception as exc:
+        logging.warning(f"{symbol}: failed reading cached daily bars ({exc})")
+        return _empty_daily_bar_frame()
+
+    normalized = _normalize_daily_bar_frame(df)
+    _DAILY_BAR_FRAME_CACHE[symbol] = normalized
+    _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.fromtimestamp(cache_path.stat().st_mtime)
+    return normalized.copy()
+
+
+def _write_cached_daily_bar_frame(symbol: str, df: pd.DataFrame) -> None:
+    symbol = str(symbol or "").strip().upper()
+    normalized = _normalize_daily_bar_frame(df)
+    cache_path = _daily_bar_cache_file(symbol)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized.to_csv(cache_path, index=False)
+    _DAILY_BAR_FRAME_CACHE[symbol] = normalized
+    _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
+
+
+def _merge_daily_bar_frames(existing: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
+    if existing is None or existing.empty:
+        return _normalize_daily_bar_frame(fresh)
+    if fresh is None or fresh.empty:
+        return _normalize_daily_bar_frame(existing)
+    combined = pd.concat([existing, fresh], ignore_index=True)
+    return _normalize_daily_bar_frame(combined)
+
+
+def _daily_bar_cache_covers_history(df: pd.DataFrame, days: int) -> bool:
+    if df is None or df.empty:
+        return False
+    required_days = max(int(days), ATR_LENGTH + 5) + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS
+    required_start = datetime.now().date() - timedelta(days=required_days)
+    try:
+        oldest_date = pd.to_datetime(df["datetime"].iloc[0]).date()
+    except Exception:
+        return False
+    return oldest_date <= required_start
+
+
+def _daily_bar_cache_is_recent(symbol: str) -> bool:
+    symbol = str(symbol or "").strip().upper()
+    touched_at = _DAILY_BAR_CACHE_TOUCHED_AT.get(symbol)
+    if touched_at is None:
+        cache_path = _daily_bar_cache_file(symbol)
+        if not cache_path.exists():
+            return False
+        touched_at = datetime.fromtimestamp(cache_path.stat().st_mtime)
+    return (datetime.now() - touched_at) <= timedelta(minutes=DAILY_BAR_CACHE_MAX_AGE_MINUTES)
+
+
+def _get_cached_symbol_metadata(symbol: str, ticker_obj=None) -> dict:
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return {}
+
+    cache = _load_symbol_metadata_cache()
+    cached = cache.get(normalized_symbol)
+    if _symbol_metadata_is_fresh(cached):
+        return cached
+
+    if ticker_obj is None:
+        ticker_obj = yf.Ticker(normalized_symbol)
+
+    info = _get_info_with_fallbacks(ticker_obj)
+    try:
+        options = sorted(
+            {
+                pd.Timestamp(value).date().isoformat()
+                for value in (ticker_obj.options or [])
+            }
+        )
+    except Exception:
+        options = []
+
+    payload = {
+        "updated_on": datetime.now().date().isoformat(),
+        "market_cap": _coerce_int(
+            info.get("marketCap")
+            or info.get("market_cap")
+            or getattr(getattr(ticker_obj, "fast_info", {}), "get", lambda *_: None)("marketCap")
+        ),
+        "options_expirations": options,
+    }
+    cache[normalized_symbol] = payload
+    _save_symbol_metadata_cache()
+    return payload
 
 
 def load_earnings_date_cache():
@@ -1617,17 +1882,18 @@ def update_setup_tracker_from_scan(
     ai_state: dict,
     feature_rows_by_symbol: dict[str, dict],
     daily_frames_by_symbol: dict[str, pd.DataFrame],
-    ib: IBApi,
+    ib: IBApi | None,
+    scan_date: str | None = None,
 ) -> None:
     tracker = load_setup_tracker_payload()
     symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
     now_iso = datetime.now().isoformat(timespec="seconds")
-    today_iso = datetime.now().date().isoformat()
+    target_scan_date = str(scan_date or datetime.now().date().isoformat())
 
     existing_today_ids = [
         setup_id
         for setup_id, setup in list((tracker.get("setups") or {}).items())
-        if isinstance(setup, dict) and str(setup.get("scan_date")) == today_iso
+        if isinstance(setup, dict) and str(setup.get("scan_date")) == target_scan_date
     ]
     for setup_id in existing_today_ids:
         tracker["setups"].pop(setup_id, None)
@@ -1656,7 +1922,7 @@ def update_setup_tracker_from_scan(
         tracker["setups"][setup["setup_id"]] = setup
         current_setup_ids.append(setup["setup_id"])
 
-    tracker["daily_watchlists"][today_iso] = {
+    tracker["daily_watchlists"][target_scan_date] = {
         "updated_at": now_iso,
         "setup_ids": current_setup_ids,
         "symbols": sorted(
@@ -1678,7 +1944,7 @@ def update_setup_tracker_from_scan(
         else:
             df = daily_frames_by_symbol.get(symbol)
             if df is None or df.empty:
-                anchor_date = str(setup.get("anchor_date") or setup.get("entry_trade_date") or today_iso)
+                anchor_date = str(setup.get("anchor_date") or setup.get("entry_trade_date") or target_scan_date)
                 days_needed = ATR_LENGTH + 220
                 try:
                     anchor_date_obj = datetime.fromisoformat(anchor_date).date()
@@ -1720,13 +1986,35 @@ def sessions_since_date(df: pd.DataFrame, event_date: date) -> int | None:
 # ============================================================================
 
 def fetch_earnings_for_date(date_str: str):
+    cache = _load_earnings_calendar_rows_cache()
+    cached_entry = cache.get(date_str) if isinstance(cache, dict) else None
+    cached_rows = cached_entry.get("rows", []) if isinstance(cached_entry, dict) else []
+    today_iso = datetime.now().date().isoformat()
+    if isinstance(cached_entry, dict):
+        if date_str < today_iso:
+            return cached_rows if isinstance(cached_rows, list) else []
+        if date_str == today_iso and _is_timestamp_within_minutes(
+            cached_entry.get("fetched_at"),
+            EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES,
+        ):
+            return cached_rows if isinstance(cached_rows, list) else []
+
     try:
         resp = requests.get(API_URL.format(date=date_str),
                             headers=HEADERS, timeout=10)
         resp.raise_for_status()
-        return resp.json().get("data", {}).get("rows", []) or []
+        rows = resp.json().get("data", {}).get("rows", []) or []
+        cache[date_str] = {
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "rows": rows if isinstance(rows, list) else [],
+        }
+        _save_earnings_calendar_rows_cache()
+        return rows if isinstance(rows, list) else []
     except Exception as e:
         logging.warning(f"Failed fetch earnings for {date_str}: {e}")
+        if isinstance(cached_rows, list) and cached_rows:
+            logging.info(f"Using cached earnings calendar rows for {date_str} after fetch failure.")
+            return cached_rows
         time.sleep(0.3)
         return []
 
@@ -1842,6 +2130,33 @@ def pick_previous_earnings_anchor(dates):
     if len(dates) < 2:
         return None
     return datetime.fromisoformat(dates[1]).date()
+
+
+def _earnings_dates_as_of(dates, reference_date: date) -> list[str]:
+    filtered = []
+    for value in dates or []:
+        parsed = _parse_iso_date_or_none(value)
+        if parsed is None or parsed > reference_date:
+            continue
+        filtered.append(parsed.isoformat())
+    return _normalize_earnings_dates(filtered, today=reference_date, limit=EARNINGS_HISTORY_LIMIT)
+
+
+def pick_current_earnings_anchor_for_reference_date(dates, reference_date: date):
+    eligible_dates = _earnings_dates_as_of(dates, reference_date)
+    if not eligible_dates:
+        return None
+    first_date = datetime.fromisoformat(eligible_dates[0]).date()
+    if (reference_date - first_date).days <= RECENT_DAYS and len(eligible_dates) > 1:
+        return datetime.fromisoformat(eligible_dates[1]).date()
+    return first_date
+
+
+def pick_previous_earnings_anchor_for_reference_date(dates, reference_date: date):
+    eligible_dates = _earnings_dates_as_of(dates, reference_date)
+    if len(eligible_dates) < 2:
+        return None
+    return datetime.fromisoformat(eligible_dates[1]).date()
 
 def yf_earnings_dates(symbol: str):
     """
@@ -2094,40 +2409,22 @@ def infer_release_session(row: dict) -> str:
 
 
 def get_last_market_session_date() -> date | None:
-    try:
-        benchmark = yf.download("SPY", period="10d", interval="1d", progress=False, auto_adjust=False)
-    except Exception as exc:
-        logging.error(f"Failed to determine last market session from Yahoo: {exc}")
-        return None
-
+    benchmark = fetch_daily_bars(None, "SPY", 10)
     if benchmark is None or benchmark.empty:
         return None
-    idx = benchmark.index.tz_localize(None) if getattr(benchmark.index, "tz", None) is not None else benchmark.index
-    return idx[-1].date()
+    return pd.to_datetime(benchmark["datetime"].iloc[-1]).date()
 
 
 def get_recent_market_session_dates(lookback_days: int = 1):
     lookback_days = max(1, int(lookback_days))
     period_days = max(10, lookback_days * 4)
-    try:
-        benchmark = yf.download(
-            "SPY",
-            period=f"{period_days}d",
-            interval="1d",
-            progress=False,
-            auto_adjust=False,
-        )
-    except Exception as exc:
-        logging.error(f"Failed to determine recent market sessions from Yahoo: {exc}")
-        return []
-
+    benchmark = fetch_daily_bars(None, "SPY", period_days)
     if benchmark is None or benchmark.empty:
         return []
 
-    idx = benchmark.index.tz_localize(None) if getattr(benchmark.index, "tz", None) is not None else benchmark.index
     unique_dates = []
     seen = set()
-    for ts in reversed(idx):
+    for ts in reversed(pd.to_datetime(benchmark["datetime"]).tolist()):
         session_date = ts.date()
         if session_date in seen:
             continue
@@ -2164,12 +2461,14 @@ def _get_info_with_fallbacks(ticker_obj):
 
 
 
-def has_weekly_options(symbol: str) -> bool:
-    try:
-        tkr = yf.Ticker(symbol)
-        expirations = [pd.Timestamp(d).date() for d in (tkr.options or [])]
-    except Exception:
-        return False
+def has_weekly_options(symbol: str, ticker_obj=None, metadata: dict | None = None) -> bool:
+    metadata = metadata if isinstance(metadata, dict) else _get_cached_symbol_metadata(symbol, ticker_obj=ticker_obj)
+    expirations = []
+    for value in metadata.get("options_expirations", []):
+        try:
+            expirations.append(pd.Timestamp(value).date())
+        except Exception:
+            continue
 
     expirations = sorted(set(expirations))
     if len(expirations) < 2:
@@ -2238,29 +2537,11 @@ def load_latest_earnings_release_map(symbols) -> dict[str, dict | None]:
 
 def _load_symbol_daily_history_frame(symbol: str):
     ticker_obj = yf.Ticker(symbol)
-    try:
-        hist = ticker_obj.history(period="4mo", interval="1d", auto_adjust=False)
-    except Exception as exc:
-        logging.warning(f"{symbol}: failed history download for earnings anchor resolution ({exc})")
+    df = fetch_daily_bars(None, symbol, 130)
+    if df.empty:
+        logging.warning(f"{symbol}: failed history download for earnings anchor resolution.")
         return ticker_obj, pd.DataFrame()
 
-    if hist is None or hist.empty:
-        return ticker_obj, pd.DataFrame()
-
-    hist = hist.copy()
-    if getattr(hist.index, "tz", None) is not None:
-        hist.index = hist.index.tz_localize(None)
-
-    hist = hist.rename(columns={c: c.lower() for c in hist.columns})
-    for col in ["open", "high", "low", "close", "volume"]:
-        if col not in hist.columns:
-            return ticker_obj, pd.DataFrame()
-
-    df = hist.reset_index().rename(columns={"Date": "datetime", "date": "datetime"})
-    if "datetime" not in df.columns:
-        first_col = df.columns[0]
-        df = df.rename(columns={first_col: "datetime"})
-    df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
     df = df.sort_values("datetime").reset_index(drop=True)
     df["trade_date"] = df["datetime"].dt.date
     return ticker_obj, df
@@ -2348,12 +2629,8 @@ def build_earnings_anchor_candidate(
     market_cap = 0
 
     if require_filters:
-        info = _get_info_with_fallbacks(ticker_obj)
-        market_cap = _coerce_int(
-            info.get("marketCap")
-            or info.get("market_cap")
-            or getattr(getattr(ticker_obj, "fast_info", {}), "get", lambda *_: None)("marketCap")
-        )
+        metadata = _get_cached_symbol_metadata(symbol, ticker_obj=ticker_obj)
+        market_cap = _coerce_int(metadata.get("market_cap"))
 
         if last_price < MIN_PRICE:
             return None
@@ -2361,7 +2638,7 @@ def build_earnings_anchor_candidate(
             return None
         if market_cap is None or market_cap < MIN_MARKET_CAP:
             return None
-        if not has_weekly_options(symbol):
+        if not has_weekly_options(symbol, ticker_obj=ticker_obj, metadata=metadata):
             return None
         if gap_atr_multiple < MIN_GAP_ATR_MULTIPLE:
             return None
@@ -2763,10 +3040,13 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
     df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
     df = df.dropna(subset=list(required))
     df = df.sort_values("datetime")
-    return df[["datetime", "open", "high", "low", "close", "volume"]]
+    return _normalize_daily_bar_frame(df[["datetime", "open", "high", "low", "close", "volume"]])
 
 
-def fetch_daily_bars(ib: IBApi, symbol: str, days: int) -> pd.DataFrame:
+def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
+    if ib is None:
+        return fetch_daily_bars_from_yahoo(symbol, days)
+
     # Try IBKR first
     try:
         reqId = int(time.time() * 1000) % (2**31 - 1)
@@ -2803,12 +3083,39 @@ def fetch_daily_bars(ib: IBApi, symbol: str, days: int) -> pd.DataFrame:
         if not df.empty:
             df["datetime"] = pd.to_datetime(df["time"], format="%Y%m%d", errors="coerce")
             df = df.sort_values("datetime").reset_index(drop=True)
-            return df
+            return _normalize_daily_bar_frame(df)
         logging.warning(f"{symbol}: no daily bars returned from IBKR, falling back to Yahoo.")
     except Exception as e:
         logging.error(f"{symbol}: IBKR daily fetch failed ({e}), falling back to Yahoo.")
 
     return fetch_daily_bars_from_yahoo(symbol, days)
+
+
+def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
+    normalized_symbol = str(symbol or "").strip().upper()
+    requested_days = max(int(days), ATR_LENGTH + 5)
+    cached = _load_cached_daily_bar_frame(normalized_symbol)
+    cache_has_history = _daily_bar_cache_covers_history(cached, requested_days)
+
+    if cache_has_history and _daily_bar_cache_is_recent(normalized_symbol):
+        return cached.copy()
+
+    refresh_days = (
+        requested_days
+        if not cache_has_history
+        else min(requested_days, max(ATR_LENGTH + 5, DAILY_BAR_CACHE_RECENT_REFRESH_DAYS))
+    )
+    fresh = _fetch_live_daily_bars(ib, normalized_symbol, refresh_days)
+    if fresh is not None and not fresh.empty:
+        merged = _merge_daily_bar_frames(cached, fresh)
+        _write_cached_daily_bar_frame(normalized_symbol, merged)
+        return merged.copy()
+
+    if not cached.empty:
+        logging.info(f"{normalized_symbol}: using cached daily bars because live refresh was unavailable.")
+        return cached.copy()
+
+    return _empty_daily_bar_frame()
 
 # ============================================================================
 # AVWAP CALCULATION
@@ -4227,10 +4534,7 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
         ANCHOR_AVWAP_OUTPUT_FILE.write_text("No anchor watchlist rows to process.\n", encoding="utf-8")
         return []
 
-    ib = IBApi()
-    ib.connect("127.0.0.1", 7496, clientId=1004)
-    threading.Thread(target=ib.run, daemon=True).start()
-    time.sleep(1.0)
+    ib = connect_daily_data_client(client_id=1004, startup_wait=1.0)
 
     events = []
     signal_rows = []
@@ -4286,7 +4590,7 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
             if bounce_down_at_level(df, avwap):
                 add_anchor_event("BOUNCE_DOWN_AVWAP", "AVWAP")
 
-    ib.disconnect()
+    disconnect_daily_data_client(ib)
 
     now_iso = datetime.now().isoformat(timespec="seconds")
     if events:
@@ -4336,13 +4640,513 @@ def _run_anchor_watchlist_scan_safe():
         logging.exception(f"Anchor watchlist scan failed: {exc}")
 
 
-def run_master():
-    longs = load_tickers(LONGS_FILE)
-    shorts = load_tickers(SHORTS_FILE)
+def _evaluate_priority_snapshot_for_date(
+    symbol: str,
+    side: str,
+    df_full: pd.DataFrame,
+    evaluation_date: date,
+    current_anchor_iso: str | None,
+    previous_anchor_iso: str | None,
+    recent_earnings_dates: list[str],
+    history_state: dict[str, list[dict]],
+) -> dict | None:
+    df = df_full[df_full["datetime"].dt.date <= evaluation_date].copy()
+    if df.empty:
+        return None
+
+    last_trade_date = df["datetime"].iloc[-1].date()
+    if last_trade_date != evaluation_date:
+        return None
+
+    symbol_events_today = []
+    symbol_multi_day = []
+    current_anchor_meta = None
+    prev_anchor_meta = None
+    skip_current_events = False
+
+    if recent_earnings_dates:
+        try:
+            last_earnings_date = datetime.fromisoformat(recent_earnings_dates[0]).date()
+            sessions_since_last_earnings = sessions_since_date(df, last_earnings_date)
+            if (
+                sessions_since_last_earnings is not None
+                and sessions_since_last_earnings <= RECENT_EARNINGS_SESSION_BLOCK
+            ):
+                skip_current_events = True
+        except ValueError:
+            skip_current_events = False
+
+    def add_signal(event_name, _anchor_type, _anchor_date, _avwap_value, _stdev_value, _band_value):
+        if event_name not in symbol_events_today:
+            symbol_events_today.append(event_name)
+
+    if current_anchor_iso:
+        current_anchor_date = datetime.fromisoformat(current_anchor_iso).date()
+        idxs = df.index[df["datetime"].dt.date == current_anchor_date]
+        if not idxs.empty:
+            anchor_idx = int(idxs[0])
+            vwap_c, sd_c, bands_c = calc_anchored_vwap_bands(df, anchor_idx)
+            if pd.notna(vwap_c) and bands_c:
+                current_anchor_meta = {
+                    "date": current_anchor_iso,
+                    "vwap": float(vwap_c),
+                    "stdev": float(sd_c),
+                    "bands": {k: float(v) for k, v in bands_c.items()},
+                }
+                if not skip_current_events:
+                    primary_cross = select_primary_cross_signal(df, side, "", vwap_c, bands_c)
+                    if primary_cross:
+                        lbl, lvl = primary_cross
+                        add_signal(lbl, "CURRENT", current_anchor_iso, vwap_c, sd_c, lvl)
+
+                    if side == "LONG":
+                        bounce_tests = [
+                            ("BOUNCE_VWAP", vwap_c),
+                            ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                            ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
+                            ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
+                            ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                            ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
+                            ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
+                        ]
+                        for lbl, lvl in bounce_tests:
+                            if bounce_up_at_level(df, lvl):
+                                add_signal(lbl, "CURRENT", current_anchor_iso, vwap_c, sd_c, lvl)
+                    else:
+                        bounce_tests = [
+                            ("BOUNCE_VWAP", vwap_c),
+                            ("BOUNCE_UPPER_1", bands_c["UPPER_1"]),
+                            ("BOUNCE_UPPER_2", bands_c["UPPER_2"]),
+                            ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
+                            ("BOUNCE_LOWER_1", bands_c["LOWER_1"]),
+                            ("BOUNCE_LOWER_2", bands_c["LOWER_2"]),
+                            ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
+                        ]
+                        for lbl, lvl in bounce_tests:
+                            if bounce_down_at_level(df, lvl):
+                                add_signal(lbl, "CURRENT", current_anchor_iso, vwap_c, sd_c, lvl)
+
+    if previous_anchor_iso:
+        previous_anchor_date = datetime.fromisoformat(previous_anchor_iso).date()
+        idxs = df.index[df["datetime"].dt.date == previous_anchor_date]
+        if not idxs.empty:
+            anchor_idx = int(idxs[0])
+            vwap_p, sd_p, bands_p = calc_anchored_vwap_bands(df, anchor_idx)
+            if pd.notna(vwap_p) and bands_p:
+                prev_anchor_meta = {
+                    "date": previous_anchor_iso,
+                    "vwap": float(vwap_p),
+                    "stdev": float(sd_p),
+                    "bands": {k: float(v) for k, v in bands_p.items()},
+                }
+
+                if side == "LONG":
+                    prev_bounce_tests = [
+                        ("PREV_BOUNCE_VWAP", vwap_p),
+                        ("PREV_BOUNCE_LOWER_1", bands_p.get("LOWER_1")),
+                        ("PREV_BOUNCE_LOWER_2", bands_p.get("LOWER_2")),
+                        ("PREV_BOUNCE_LOWER_3", bands_p.get("LOWER_3")),
+                        ("PREV_BOUNCE_UPPER_1", bands_p.get("UPPER_1")),
+                        ("PREV_BOUNCE_UPPER_2", bands_p.get("UPPER_2")),
+                        ("PREV_BOUNCE_UPPER_3", bands_p.get("UPPER_3")),
+                    ]
+                    for lbl, lvl in prev_bounce_tests:
+                        if bounce_up_at_level(df, lvl):
+                            add_signal(lbl, "PREVIOUS", previous_anchor_iso, vwap_p, sd_p, lvl)
+                else:
+                    prev_bounce_tests = [
+                        ("PREV_BOUNCE_VWAP", vwap_p),
+                        ("PREV_BOUNCE_UPPER_1", bands_p.get("UPPER_1")),
+                        ("PREV_BOUNCE_UPPER_2", bands_p.get("UPPER_2")),
+                        ("PREV_BOUNCE_UPPER_3", bands_p.get("UPPER_3")),
+                        ("PREV_BOUNCE_LOWER_1", bands_p.get("LOWER_1")),
+                        ("PREV_BOUNCE_LOWER_2", bands_p.get("LOWER_2")),
+                        ("PREV_BOUNCE_LOWER_3", bands_p.get("LOWER_3")),
+                    ]
+                    for lbl, lvl in prev_bounce_tests:
+                        if bounce_down_at_level(df, lvl):
+                            add_signal(lbl, "PREVIOUS", previous_anchor_iso, vwap_p, sd_p, lvl)
+
+                primary_prev_cross = select_primary_cross_signal(df, side, "PREV_", vwap_p, bands_p)
+                if primary_prev_cross:
+                    lbl, lvl = primary_prev_cross
+                    add_signal(lbl, "PREVIOUS", previous_anchor_iso, vwap_p, sd_p, lvl)
+
+    symbol_events_today = sorted(set(symbol_events_today))
+    previous_entries = history_state.get(symbol, [])
+    previous_events = previous_entries[-1]["events"] if previous_entries else []
+    symbol_multi_day = compute_multi_day_patterns(symbol, side, symbol_events_today, previous_events)
+    full_event_list = symbol_events_today + symbol_multi_day
+    history_state.setdefault(symbol, []).append(
+        {
+            "date": evaluation_date.isoformat(),
+            "side": side,
+            "events": full_event_list,
+        }
+    )
+
+    df_recent = df.tail(60).copy()
+    daily_ohlc = []
+    for _, row in df_recent.iterrows():
+        if pd.isna(row["datetime"]):
+            continue
+        daily_ohlc.append(
+            {
+                "date": row["datetime"].date().isoformat(),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            }
+        )
+
+    last_row = get_last_daily_row_for_date(daily_ohlc, last_trade_date)
+    last_close = float(last_row["close"]) if last_row else None
+    last_volume = float(last_row["volume"]) if last_row else None
+    atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
+    trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
+    has_bounce_event_today = bool(symbol_events_today)
+
+    current_vwap = current_anchor_meta.get("vwap") if current_anchor_meta else None
+    current_upper_1 = current_anchor_meta.get("bands", {}).get("UPPER_1") if current_anchor_meta else None
+    current_upper_2 = current_anchor_meta.get("bands", {}).get("UPPER_2") if current_anchor_meta else None
+    current_lower_1 = current_anchor_meta.get("bands", {}).get("LOWER_1") if current_anchor_meta else None
+    current_lower_2 = current_anchor_meta.get("bands", {}).get("LOWER_2") if current_anchor_meta else None
+    current_lower_3 = current_anchor_meta.get("bands", {}).get("LOWER_3") if current_anchor_meta else None
+    current_upper_3 = current_anchor_meta.get("bands", {}).get("UPPER_3") if current_anchor_meta else None
+
+    current_band_context = get_band_context(last_close, current_anchor_meta, side)
+    previous_band_context = get_band_context(last_close, prev_anchor_meta, side)
+
+    def _distance(level):
+        if last_close is None or level is None:
+            return None
+        return last_close - level
+
+    def _pct(level):
+        if last_close is None or level is None or level == 0:
+            return None
+        return (last_close - level) / level * 100
+
+    def _between(level_a, level_b):
+        if last_close is None or level_a is None or level_b is None:
+            return False
+        low, high = sorted([level_a, level_b])
+        return low <= last_close <= high
+
+    favorite_zone = None
+    if side == "LONG" and _between(current_vwap, current_upper_1):
+        favorite_zone = "AVWAPE to UPPER_1"
+    elif side == "SHORT" and _between(current_lower_1, current_vwap):
+        favorite_zone = "LOWER_1 to AVWAPE"
+
+    breakout_long_5d, breakout_short_5d = compute_five_day_breakout_flags(daily_ohlc, last_trade_date)
+    recent_band_extension_days = count_recent_band_extension_days(
+        daily_ohlc,
+        last_trade_date,
+        current_lower_1 if side == "LONG" else current_upper_1,
+        side,
+    )
+    recent_second_band_test_days = count_recent_band_test_days(
+        daily_ohlc,
+        last_trade_date,
+        current_upper_2 if side == "LONG" else current_lower_2,
+        side,
+    )
+    second_band_penalty = compute_recent_second_band_penalty(recent_second_band_test_days)
+    extension_note = ""
+    if recent_second_band_test_days > 0:
+        second_band_label = "UPPER_2" if side == "LONG" else "LOWER_2"
+        extension_note = (
+            f"Recent {second_band_label} tests={recent_second_band_test_days} "
+            f"(-{second_band_penalty})"
+        )
+    breakout_5d = breakout_long_5d if side == "LONG" else breakout_short_5d
+    retest_summary = analyze_avwap_retest_behavior(
+        daily_ohlc,
+        last_trade_date,
+        current_vwap,
+        side,
+        current_upper_1=current_upper_1,
+        current_lower_1=current_lower_1,
+        atr20=atr20,
+    )
+    retest_followthrough = bool(retest_summary["retest_followthrough"])
+    compression_summary = evaluate_anchor_compression(
+        df,
+        current_anchor_meta.get("date") if current_anchor_meta else None,
+        current_anchor_meta.get("stdev") if current_anchor_meta else None,
+        atr20,
+        last_trade_date,
+    )
+
+    symbol_entry = {
+        "side": side,
+        "last_trade_date": last_trade_date.isoformat(),
+        "current_anchor": current_anchor_meta,
+        "previous_anchor": prev_anchor_meta,
+        "events_today": symbol_events_today,
+        "multi_day_patterns": symbol_multi_day,
+        "events_all_for_day": full_event_list,
+        "daily_ohlc": daily_ohlc,
+        "last_close": last_close,
+        "last_volume": last_volume,
+        "atr20": atr20,
+        "current_active_level": current_band_context["active_level"],
+        "current_nearby_bands": list(current_band_context["nearby_levels"]),
+        "current_band_zone": current_band_context["zone"],
+        "previous_active_level": previous_band_context["active_level"],
+        "previous_nearby_bands": list(previous_band_context["nearby_levels"]),
+        "previous_band_zone": previous_band_context["zone"],
+        "distance_from_current_vwap": _distance(current_vwap),
+        "pct_from_current_vwap": _pct(current_vwap),
+        "distance_from_current_upper_1": _distance(current_upper_1),
+        "pct_from_current_upper_1": _pct(current_upper_1),
+        "distance_from_current_lower_1": _distance(current_lower_1),
+        "pct_from_current_lower_1": _pct(current_lower_1),
+        "trend_20d": trend_label,
+        "has_bounce_event_today": has_bounce_event_today,
+        "favorite_zone": favorite_zone,
+        "recent_band_extension_days": recent_band_extension_days,
+        "recent_second_band_test_days": recent_second_band_test_days,
+        "second_band_penalty": second_band_penalty,
+        "breakout_5d": breakout_5d,
+        "retest_followthrough": retest_followthrough,
+        "retest_reference_level": retest_summary["retest_reference_level"],
+        "retest_note": retest_summary["retest_note"],
+        "extension_note": extension_note,
+        "compression_flag": bool(compression_summary.get("is_compressed")),
+        "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
+        "compression_note": compression_summary.get("compression_note", ""),
+    }
+
+    priority_summary = build_priority_setup_summary(
+        symbol=symbol,
+        side=side,
+        events_today=symbol_events_today,
+        all_events=full_event_list,
+        trend_label=trend_label,
+        favorite_zone=favorite_zone,
+        recent_band_extension_days=recent_band_extension_days,
+        recent_second_band_test_days=recent_second_band_test_days,
+        second_band_penalty=second_band_penalty,
+        breakout_5d=breakout_5d,
+        retest_followthrough=retest_followthrough,
+        retest_reference_level=retest_summary["retest_reference_level"],
+        retest_note=retest_summary["retest_note"],
+        extension_note=extension_note,
+    )
+    priority_summary["score"] = float(
+        priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0)
+    )
+    priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
+    priority_summary["compression_penalty"] = int(compression_summary.get("compression_penalty", 0) or 0)
+    priority_summary["compression_note"] = compression_summary.get("compression_note", "")
+
+    feature_row = {
+        "symbol": symbol,
+        "side": side,
+        "last_trade_date": last_trade_date.isoformat(),
+        "last_close": last_close,
+        "last_volume": last_volume,
+        "atr20": atr20,
+        "current_active_level": current_band_context["active_level"],
+        "current_nearby_bands": ";".join(current_band_context["nearby_levels"]),
+        "current_band_zone": current_band_context["zone"],
+        "previous_active_level": previous_band_context["active_level"],
+        "previous_nearby_bands": ";".join(previous_band_context["nearby_levels"]),
+        "previous_band_zone": previous_band_context["zone"],
+        "current_anchor_date": current_anchor_meta.get("date") if current_anchor_meta else None,
+        "current_anchor_vwap": current_vwap,
+        "current_anchor_stdev": current_anchor_meta.get("stdev") if current_anchor_meta else None,
+        "distance_from_current_vwap": _distance(current_vwap),
+        "pct_from_current_vwap": _pct(current_vwap),
+        "distance_from_current_upper_1": _distance(current_upper_1),
+        "pct_from_current_upper_1": _pct(current_upper_1),
+        "distance_from_current_lower_1": _distance(current_lower_1),
+        "pct_from_current_lower_1": _pct(current_lower_1),
+        "trend_20d": trend_label,
+        "has_bounce_event_today": has_bounce_event_today,
+        "favorite_zone": favorite_zone,
+        "recent_band_extension_days": recent_band_extension_days,
+        "recent_second_band_test_days": recent_second_band_test_days,
+        "second_band_penalty": second_band_penalty,
+        "breakout_5d": breakout_5d,
+        "retest_followthrough": retest_followthrough,
+        "retest_reference_level": retest_summary["retest_reference_level"],
+        "retest_note": retest_summary["retest_note"],
+        "extension_note": extension_note,
+        "compression_flag": bool(compression_summary.get("is_compressed")),
+        "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
+        "compression_note": compression_summary.get("compression_note", ""),
+        "priority_score": priority_summary["score"],
+        "favorite_signals": ";".join(priority_summary["favorite_signals"]),
+        "favorite_context_signals": ";".join(priority_summary["context_signals"]),
+        "events_today": ";".join(symbol_events_today),
+    }
+
+    return {
+        "priority_row": priority_summary,
+        "symbol_entry": symbol_entry,
+        "feature_row": feature_row,
+    }
+
+
+def backfill_setup_tracker_from_recent_sessions(
+    lookback_sessions: int = 5,
+    longs_path: Path | None = None,
+    shorts_path: Path | None = None,
+    use_shared_watchlists: bool = False,
+) -> dict:
+    lookback_sessions = max(1, int(lookback_sessions))
+    longs_path, shorts_path, watchlist_label = resolve_scan_watchlist_paths(
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+        use_shared_watchlists=use_shared_watchlists,
+    )
+    longs = load_tickers(longs_path)
+    shorts = load_tickers(shorts_path)
+    symbols = sorted(set(longs + shorts))
+    if not symbols:
+        logging.warning(f"No symbols found in {watchlist_label}; historical tracker backfill skipped.")
+        return {"dates": [], "watchlists": {}}
+
+    evaluation_dates = list(reversed(get_recent_market_session_dates(lookback_sessions)))
+    if not evaluation_dates:
+        logging.warning("Could not determine recent market sessions for tracker backfill.")
+        return {"dates": [], "watchlists": {}}
+
+    earnings_data = load_or_refresh_earnings(symbols)
+    history_state: dict[str, list[dict]] = {}
+    daily_frames_by_symbol: dict[str, pd.DataFrame] = {}
+    earliest_eval_date = min(evaluation_dates)
+
+    ib = connect_daily_data_client(client_id=1004, startup_wait=1.5)
+    try:
+        for symbol in symbols:
+            symbol_side = "LONG" if symbol in longs else "SHORT"
+            symbol_earnings = [
+                _parse_iso_date_or_none(value)
+                for value in earnings_data.get(symbol, [])
+            ]
+            symbol_earnings = [value for value in symbol_earnings if value is not None]
+
+            days_needed = max(ATR_LENGTH + 220, (datetime.now().date() - earliest_eval_date).days + ATR_LENGTH + 20)
+            if symbol_earnings:
+                oldest_relevant_anchor = min(symbol_earnings)
+                days_needed = max(days_needed, (datetime.now().date() - oldest_relevant_anchor).days + ATR_LENGTH + 20)
+
+            df = fetch_daily_bars(ib, symbol, days_needed)
+            if df.empty:
+                logging.warning(f"{symbol}: no daily bars returned for tracker backfill.")
+                continue
+            daily_frames_by_symbol[symbol] = df
+
+        watchlists_by_date = {}
+        for evaluation_date in evaluation_dates:
+            ai_state = {
+                "run_timestamp": datetime.now().isoformat(timespec="seconds"),
+                "run_date": evaluation_date.isoformat(),
+                "symbols": {},
+            }
+            priority_rows = []
+            feature_rows_by_symbol = {}
+
+            for symbol in symbols:
+                df = daily_frames_by_symbol.get(symbol)
+                if df is None or df.empty:
+                    continue
+                side = "LONG" if symbol in longs else "SHORT"
+                recent_earnings_dates = _earnings_dates_as_of(earnings_data.get(symbol, []), evaluation_date)
+                current_anchor = pick_current_earnings_anchor_for_reference_date(
+                    earnings_data.get(symbol, []),
+                    evaluation_date,
+                )
+                previous_anchor = pick_previous_earnings_anchor_for_reference_date(
+                    earnings_data.get(symbol, []),
+                    evaluation_date,
+                )
+                snapshot = _evaluate_priority_snapshot_for_date(
+                    symbol=symbol,
+                    side=side,
+                    df_full=df,
+                    evaluation_date=evaluation_date,
+                    current_anchor_iso=current_anchor.isoformat() if current_anchor else None,
+                    previous_anchor_iso=previous_anchor.isoformat() if previous_anchor else None,
+                    recent_earnings_dates=recent_earnings_dates,
+                    history_state=history_state,
+                )
+                if not snapshot:
+                    continue
+
+                ai_state["symbols"][symbol] = snapshot["symbol_entry"]
+                feature_rows_by_symbol[symbol] = snapshot["feature_row"]
+                priority_rows.append(snapshot["priority_row"])
+
+            if not priority_rows:
+                update_setup_tracker_from_scan(
+                    [],
+                    ai_state,
+                    feature_rows_by_symbol,
+                    daily_frames_by_symbol,
+                    ib,
+                    scan_date=evaluation_date.isoformat(),
+                )
+                watchlists_by_date[evaluation_date.isoformat()] = []
+                continue
+
+            refine_priority_rows_with_directional_filters(priority_rows, ai_state, ib)
+            apply_final_priority_buckets(priority_rows, ai_state, [], feature_rows_by_symbol)
+            tracked_rows = [
+                row
+                for row in priority_rows
+                if row.get("priority_bucket") in {"favorite_setup", "near_favorite_zone"}
+                and not row.get("ranking_blocked")
+            ]
+            tracked_symbols = sorted({str(row.get("symbol", "")).strip().upper() for row in tracked_rows if str(row.get("symbol", "")).strip()})
+            update_setup_tracker_from_scan(
+                tracked_rows,
+                ai_state,
+                feature_rows_by_symbol,
+                daily_frames_by_symbol,
+                ib,
+                scan_date=evaluation_date.isoformat(),
+            )
+            watchlists_by_date[evaluation_date.isoformat()] = tracked_symbols
+            logging.info(
+                f"Tracker backfill {evaluation_date.isoformat()}: tracked {len(tracked_rows)} setup(s) "
+                f"across {len(tracked_symbols)} symbol(s)."
+            )
+
+        return {
+            "dates": [value.isoformat() for value in evaluation_dates],
+            "watchlists": watchlists_by_date,
+        }
+    finally:
+        disconnect_daily_data_client(ib)
+
+
+def run_master(
+    longs_path: Path | None = None,
+    shorts_path: Path | None = None,
+    use_shared_watchlists: bool = False,
+):
+    longs_path, shorts_path, watchlist_label = resolve_scan_watchlist_paths(
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+        use_shared_watchlists=use_shared_watchlists,
+    )
+    logging.info(f"Running Master AVWAP scan using {watchlist_label}: {longs_path} | {shorts_path}")
+
+    longs = load_tickers(longs_path)
+    shorts = load_tickers(shorts_path)
     symbols = sorted(set(longs + shorts))
 
     if not symbols:
-        logging.warning("No symbols found in longs/shorts lists. Running anchor-watchlist scan only.")
+        logging.warning(
+            f"No symbols found in {watchlist_label}. Running anchor-watchlist scan only."
+        )
         _run_anchor_watchlist_scan_safe()
         return
 
@@ -4401,10 +5205,7 @@ def run_master():
         f"Earnings anchors refreshed (current: {refreshed_curr}, previous: {refreshed_prev})."
     )
 
-    ib = IBApi()
-    ib.connect("127.0.0.1", 7496, clientId=1003)
-    threading.Thread(target=ib.run, daemon=True).start()
-    time.sleep(1.5)
+    ib = connect_daily_data_client(client_id=1003, startup_wait=1.5)
 
     today_run = datetime.now().date()
     events_for_output = []
@@ -4979,7 +5780,7 @@ def run_master():
     ]
     update_setup_tracker_from_scan(tracked_rows, ai_state, feature_rows_by_symbol, daily_frames_by_symbol, ib)
 
-    ib.disconnect()
+    disconnect_daily_data_client(ib)
 
     if csv_rows:
         df_signals = pd.DataFrame(csv_rows)
@@ -5178,12 +5979,14 @@ class MasterAvwapGUI:
         self._configure_dark_theme()
 
         self.status_var = tk.StringVar(value="Ready")
+        self.tracker_storage_var = tk.StringVar(value="")
         self.ticker_var = tk.StringVar()
         self.anchor_var = tk.StringVar()
         self.side_var = tk.StringVar(value="LONG")
         self.notes_var = tk.StringVar()
         self.bulk_side_var = tk.StringVar(value="LONG")
         self.earnings_lookback_var = tk.IntVar(value=1)
+        self.tracker_backfill_sessions_var = tk.IntVar(value=5)
         self.focus_side_map = {}
         self.setup_tracker_row_map = {}
 
@@ -5309,6 +6112,7 @@ class MasterAvwapGUI:
 
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Scan Shared Watchlists", command=self.run_shared_watchlist_scan_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh Active Anchors", command=self.refresh_table).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Refresh Setup Tracker", command=self.refresh_setup_tracker_view).pack(side="left", padx=4)
@@ -5325,6 +6129,31 @@ class MasterAvwapGUI:
         tracker_toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(tracker_toolbar, text="Refresh Tracker", command=self.refresh_setup_tracker_view).pack(side="left")
         ttk.Button(tracker_toolbar, text="Copy Active Symbols", command=self.copy_setup_tracker_symbols).pack(side="left", padx=(8, 0))
+        ttk.Label(tracker_toolbar, text="Backfill sessions:").pack(side="left", padx=(16, 4))
+        tracker_backfill_spin = ttk.Spinbox(
+            tracker_toolbar,
+            from_=1,
+            to=30,
+            width=4,
+            textvariable=self.tracker_backfill_sessions_var,
+        )
+        tracker_backfill_spin.pack(side="left")
+        ttk.Button(
+            tracker_toolbar,
+            text="Backfill Tracker",
+            command=self.backfill_setup_tracker_history,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(tracker_toolbar, text="Change Home Folder", command=self.choose_tracker_storage_dir).pack(side="left", padx=(16, 0))
+        ttk.Button(tracker_toolbar, text="Open Home Folder", command=self.open_tracker_storage_dir).pack(side="left", padx=(8, 0))
+        ttk.Button(tracker_toolbar, text="Open Settings File", command=self.open_tracker_settings_file).pack(side="left", padx=(8, 0))
+
+        tracker_storage_label = ttk.Label(
+            tracker_tab,
+            textvariable=self.tracker_storage_var,
+            justify="left",
+            wraplength=1100,
+        )
+        tracker_storage_label.pack(fill="x", pady=(0, 8))
 
         tracker_body = ttk.Frame(tracker_tab)
         tracker_body.pack(fill="both", expand=True)
@@ -5539,6 +6368,66 @@ class MasterAvwapGUI:
 
         status = ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w")
         status.pack(fill="x", padx=10, pady=(0, 10))
+        self.refresh_tracker_storage_summary()
+
+    def refresh_tracker_storage_summary(self):
+        details = get_tracker_storage_details()
+        shared_longs_path, shared_shorts_path = get_shared_watchlist_paths()
+        self.tracker_storage_dir = Path(details["data_dir"])
+        self.tracker_storage_runtime_dir = Path(details["runtime_dir"])
+        self.tracker_storage_settings_file = Path(details["settings_file"])
+        self.tracker_storage_var.set(
+            f"Home folder: {details['data_dir']} | "
+            f"Mutable data: {details['mutable_data_dir']} | "
+            f"Logs: {details['logs_dir']} | "
+            f"Reports: {details['output_dir']} | "
+            f"Shared longs.txt: {'OK' if shared_longs_path.exists() else 'missing'} | "
+            f"Shared shorts.txt: {'OK' if shared_shorts_path.exists() else 'missing'} | "
+            f"Source: {details['source_label']}"
+        )
+
+    def _open_folder_in_explorer(self, path: Path):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(path))
+        except Exception as exc:
+            if messagebox:
+                messagebox.showerror("Open Folder", f"Could not open folder:\n{path}\n\n{exc}")
+            else:
+                raise
+
+    def choose_tracker_storage_dir(self):
+        if filedialog is None:
+            self.status_var.set("Folder picker is not available in this environment.")
+            return
+        initial_dir = self.tracker_storage_dir if getattr(self, "tracker_storage_dir", None) else Path.home()
+        selected = filedialog.askdirectory(
+            title="Choose home folder",
+            initialdir=str(initial_dir if initial_dir.exists() else Path.home()),
+            mustexist=False,
+        )
+        if not selected:
+            return
+        target = save_tracker_storage_dir(selected)
+        self.refresh_tracker_storage_summary()
+        self.status_var.set("Saved home folder. Restart the GUI to use the new location.")
+        if messagebox:
+            messagebox.showinfo(
+                "Home Folder Saved",
+                "Saved this computer's home folder.\n\n"
+                f"Folder: {target}\n"
+                f"Settings file: {LOCAL_SETTINGS_FILE}\n\n"
+                "Place longs.txt and shorts.txt in that folder root to share watchlists across devices.\n\n"
+                "Restart the GUI to start using the new home folder.",
+            )
+
+    def open_tracker_storage_dir(self):
+        self.refresh_tracker_storage_summary()
+        self._open_folder_in_explorer(self.tracker_storage_dir)
+
+    def open_tracker_settings_file(self):
+        self.refresh_tracker_storage_summary()
+        self._open_folder_in_explorer(self.tracker_storage_settings_file.parent)
 
     def _read_text_file(self, path: Path):
         if not path.exists():
@@ -5589,6 +6478,16 @@ class MasterAvwapGUI:
             lines.append(
                 f"Latest final scan day: {latest_date} | symbols={len(latest_watchlist.get('symbols', []) or [])}"
             )
+            lines.append("")
+            lines.append("Recent daily watchlists")
+            lines.append("-" * 80)
+            for watchlist_date in sorted(daily_watchlists.keys(), reverse=True)[:8]:
+                watchlist = daily_watchlists.get(watchlist_date, {})
+                symbols = [str(symbol).strip().upper() for symbol in watchlist.get("symbols", []) if str(symbol).strip()]
+                preview = ", ".join(symbols[:10]) if symbols else "None"
+                if len(symbols) > 10:
+                    preview += f" (+{len(symbols) - 10} more)"
+                lines.append(f"{watchlist_date}: {preview}")
         lines.append("")
         lines.append("Top scenario stats")
         lines.append("-" * 80)
@@ -5672,6 +6571,7 @@ class MasterAvwapGUI:
         self._render_setup_tracker_stats_text(self.setup_tracker_payload, setup)
 
     def refresh_setup_tracker_view(self):
+        self.refresh_tracker_storage_summary()
         payload = self._load_setup_tracker_payload()
         self.setup_tracker_payload = payload
         self.setup_tracker_row_map = {}
@@ -5957,6 +6857,34 @@ class MasterAvwapGUI:
             run_master,
             "Running full Master AVWAP scan...",
             "Master AVWAP scan complete.",
+            done_callback=lambda: (
+                self.refresh_avwap_output_view(),
+                self.refresh_anchor_output_view(),
+                self.refresh_setup_tracker_view(),
+            ),
+        )
+
+    def backfill_setup_tracker_history(self):
+        try:
+            lookback_sessions = max(1, int(self.tracker_backfill_sessions_var.get()))
+        except Exception:
+            lookback_sessions = 5
+            self.tracker_backfill_sessions_var.set(lookback_sessions)
+
+        self.notebook.select(self.tracker_tab)
+        self._run_background(
+            lambda: backfill_setup_tracker_from_recent_sessions(lookback_sessions=lookback_sessions),
+            f"Backfilling tracker from last {lookback_sessions} session(s)...",
+            f"Setup tracker backfill complete for last {lookback_sessions} session(s).",
+            done_callback=self.refresh_setup_tracker_view,
+        )
+
+    def run_shared_watchlist_scan_once(self):
+        self.notebook.select(self.avwap_tab)
+        self._run_background(
+            run_master_with_shared_watchlists,
+            "Running Master AVWAP scan from shared longs.txt / shorts.txt...",
+            "Shared-watchlist Master AVWAP scan complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_anchor_output_view(),

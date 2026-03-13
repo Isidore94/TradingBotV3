@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import queue
 import sys
@@ -11,10 +12,19 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any
 
-from project_paths import LONGS_FILE, SHORTS_FILE
+from project_paths import (
+    LOCAL_SETTINGS_FILE,
+    LONGS_FILE,
+    SHORTS_FILE,
+    get_shared_watchlist_details,
+    get_tracker_storage_details,
+    get_local_setting,
+    save_tracker_storage_dir,
+    save_local_setting,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -39,6 +49,7 @@ from master_avwap import (
     STDEV_RANGE_FILE,
     MasterAvwapGUI,
     run_master,
+    run_master_with_shared_watchlists,
 )
 
 DARK_GREY = "#2E2E2E"
@@ -65,6 +76,96 @@ BOUNCE_TOGGLE_ORDER = [
     "prev_day_high",
     "prev_day_low",
 ]
+
+
+def _open_folder(path: Path) -> None:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(path))
+    except Exception as exc:
+        messagebox.showerror("Open Folder", f"Could not open folder:\n{path}\n\n{exc}")
+
+
+class TrackerStorageControls:
+    def __init__(self, parent: tk.Misc, compact: bool = False):
+        self.parent = parent
+        self.compact = compact
+        self.info_var = tk.StringVar()
+        self._build(parent)
+        self.refresh()
+
+    def _build(self, parent: tk.Misc) -> None:
+        container = ttk.LabelFrame(parent, text="Home Folder")
+        container.pack(fill=tk.X, padx=10, pady=(0, 8))
+        self.container = container
+
+        description = (
+            "Use a Google Drive or OneDrive folder here so watchlists, caches, reports, logs, and AVWAP tracker data stay in sync across devices."
+        )
+        ttk.Label(container, text=description, wraplength=900, justify=tk.LEFT).pack(
+            anchor="w",
+            padx=10,
+            pady=(8, 6),
+        )
+
+        self.info_label = ttk.Label(container, textvariable=self.info_var, justify=tk.LEFT, wraplength=900)
+        self.info_label.pack(anchor="w", padx=10, pady=(0, 6))
+
+        button_row = ttk.Frame(container)
+        button_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        ttk.Button(button_row, text="Change Home Folder", command=self.choose_folder).pack(side=tk.LEFT)
+        ttk.Button(button_row, text="Open Home Folder", command=self.open_folder).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(button_row, text="Open Settings File", command=self.open_settings_file).pack(side=tk.LEFT, padx=(8, 0))
+
+        if not self.compact:
+            hint = ttk.Label(
+                container,
+                text="If you change this setting, restart the GUI so every AVWAP tab picks up the new location.",
+                wraplength=900,
+                justify=tk.LEFT,
+            )
+            hint.pack(anchor="w", padx=10, pady=(0, 8))
+
+    def refresh(self) -> None:
+        details = get_tracker_storage_details()
+        shared_watchlists = get_shared_watchlist_details()
+        self.shared_root_dir = Path(details["data_dir"])
+        self.settings_file = Path(details["settings_file"])
+        self.info_var.set(
+            f"Home folder: {details['data_dir']}\n"
+            f"Mutable data: {details['mutable_data_dir']}\n"
+            f"Logs: {details['logs_dir']}\n"
+            f"Reports: {details['output_dir']}\n"
+            f"Runtime tracker data: {details['runtime_dir']}\n"
+            f"Shared longs.txt: {shared_watchlists['longs_path']} ({shared_watchlists['longs_exists']})\n"
+            f"Shared shorts.txt: {shared_watchlists['shorts_path']} ({shared_watchlists['shorts_exists']})\n"
+            f"Source: {details['source_label']}"
+        )
+
+    def choose_folder(self) -> None:
+        selected = filedialog.askdirectory(
+            title="Choose home folder",
+            initialdir=str(self.shared_root_dir if self.shared_root_dir.exists() else Path.home()),
+            mustexist=False,
+        )
+        if not selected:
+            return
+        target = save_tracker_storage_dir(selected)
+        self.refresh()
+        messagebox.showinfo(
+            "Home Folder Saved",
+            "Saved this computer's home folder.\n\n"
+            f"Folder: {target}\n"
+            f"Settings file: {LOCAL_SETTINGS_FILE}\n\n"
+            "Place longs.txt and shorts.txt in that folder root to share watchlists across devices.\n\n"
+            "Restart the GUI to start using the new home folder.",
+        )
+
+    def open_folder(self) -> None:
+        _open_folder(self.shared_root_dir)
+
+    def open_settings_file(self) -> None:
+        _open_folder(self.settings_file.parent)
 
 
 def configure_theme(root: tk.Misc) -> None:
@@ -100,7 +201,10 @@ def configure_theme(root: tk.Misc) -> None:
 
 
 def choose_gui_mode() -> str:
-    selection = {"mode": "full"}
+    preferred_mode = str(get_local_setting("gui_mode", "full") or "full").strip().lower()
+    if preferred_mode not in {"full", "simple"}:
+        preferred_mode = "full"
+    selection = {"mode": preferred_mode}
 
     picker = tk.Tk()
     picker.title("Consolidated GUI Mode")
@@ -119,8 +223,10 @@ def choose_gui_mode() -> str:
     tk.Label(
         picker,
         text=(
-            "Full mode includes all BounceBot controls and the full Master AVWAP manager.\n"
-            "Simple mode uses the laptop BounceBot layout plus a focused AVWAP scan tab."
+            "Full mode uses the full BounceBot layout.\n"
+            "Simple mode uses the laptop BounceBot layout.\n"
+            "Master AVWAP stays full in both modes.\n"
+            f"Default on this computer: {preferred_mode.title()}"
         ),
         bg=DARK_GREY,
         fg=TEXT_COLOR,
@@ -132,6 +238,7 @@ def choose_gui_mode() -> str:
 
     def select_mode(mode: str) -> None:
         selection["mode"] = mode
+        save_local_setting("gui_mode", mode)
         picker.destroy()
 
     tk.Button(button_row, text="Full", width=12, command=lambda: select_mode("full")).pack(side=tk.LEFT, padx=8)
@@ -326,9 +433,10 @@ class BounceBotController:
 
 
 class BaseBounceBotPanel:
-    def __init__(self, parent: tk.Misc, controller: BounceBotController):
+    def __init__(self, parent: tk.Misc, controller: BounceBotController, switch_mode_callback=None):
         self.parent = parent
         self.controller = controller
+        self.switch_mode_callback = switch_mode_callback
         self.container = ttk.Frame(parent)
         self._queue_after_id = None
         self.alert_text: scrolledtext.ScrolledText | None = None
@@ -386,8 +494,8 @@ class BaseBounceBotPanel:
 
 
 class SimpleBounceBotPanel(BaseBounceBotPanel):
-    def __init__(self, parent: tk.Misc):
-        super().__init__(parent, BounceBotController(include_approaching=False))
+    def __init__(self, parent: tk.Misc, switch_mode_callback=None):
+        super().__init__(parent, BounceBotController(include_approaching=False), switch_mode_callback=switch_mode_callback)
         self._syncing_controls = False
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self.rrs_threshold_var = tk.DoubleVar(value=self.controller.rrs_threshold)
@@ -404,6 +512,8 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
         ttk.Label(header, textvariable=self.controller.connection_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(header, textvariable=self.controller.status_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(header, textvariable=self.controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
+        if self.switch_mode_callback:
+            ttk.Button(header, text="Switch to Full", command=self.switch_mode_callback).pack(side=tk.RIGHT)
         ttk.Button(header, text="Reconnect", command=self.controller.restart).pack(side=tk.RIGHT)
         ttk.Button(header, text="Disconnect", command=self.controller.stop).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(header, text="Clear", command=self.clear_alerts).pack(side=tk.RIGHT, padx=(0, 8))
@@ -550,8 +660,8 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
 
 
 class FullBounceBotPanel(BaseBounceBotPanel):
-    def __init__(self, parent: tk.Misc):
-        super().__init__(parent, BounceBotController(include_approaching=False))
+    def __init__(self, parent: tk.Misc, switch_mode_callback=None):
+        super().__init__(parent, BounceBotController(include_approaching=False), switch_mode_callback=switch_mode_callback)
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self.scanning_button_text = tk.StringVar(value="Stop Scanning")
         self._build_layout()
@@ -567,6 +677,8 @@ class FullBounceBotPanel(BaseBounceBotPanel):
         ttk.Label(header, textvariable=self.controller.active_bounce_var).pack(side=tk.LEFT, padx=(12, 0))
         controls_frame = ttk.Frame(header)
         controls_frame.pack(side=tk.RIGHT)
+        if self.switch_mode_callback:
+            ttk.Button(controls_frame, text="Switch to Simple", command=self.switch_mode_callback).pack(side=tk.LEFT, padx=(0, 8))
         tk.Button(
             controls_frame,
             textvariable=self.scanning_button_text,
@@ -683,6 +795,7 @@ class SimpleMasterAvwapPanel:
 
         ttk.Label(toolbar, text="Master AVWAP Simple").pack(side=tk.LEFT)
         ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side=tk.LEFT, padx=(12, 4))
+        ttk.Button(toolbar, text="Scan Shared Lists", command=self.run_shared_watchlists_once).pack(side=tk.LEFT, padx=4)
         ttk.Button(toolbar, text="Refresh Output", command=self.refresh_output_view).pack(side=tk.LEFT, padx=4)
 
         hint = ttk.Label(
@@ -690,6 +803,8 @@ class SimpleMasterAvwapPanel:
             text="Focused on longs.txt / shorts.txt AVWAP event searches. Nothing auto-runs; use Scan Now when you want it.",
         )
         hint.pack(anchor="w", padx=10, pady=(0, 8))
+
+        self.tracker_storage_controls = TrackerStorageControls(self.container, compact=True)
 
         self.text_area = scrolledtext.ScrolledText(
             self.container,
@@ -753,6 +868,13 @@ class SimpleMasterAvwapPanel:
             run_master,
             "Running Master AVWAP scan...",
             "Master AVWAP scan complete.",
+        )
+
+    def run_shared_watchlists_once(self) -> None:
+        self._run_background(
+            run_master_with_shared_watchlists,
+            "Running Master AVWAP scan from shared longs.txt / shorts.txt...",
+            "Shared-watchlist Master AVWAP scan complete.",
         )
 
 
@@ -943,6 +1065,7 @@ class ConsolidatedTradingGUI:
         configure_theme(self.root)
 
         self.bounce_panel: BaseBounceBotPanel | None = None
+        self.avwap_gui: MasterAvwapGUI | None = None
         self._build_layout()
 
     def _build_layout(self) -> None:
@@ -965,14 +1088,13 @@ class ConsolidatedTradingGUI:
         notebook.add(master_tab, text="Master AVWAP")
 
         if self.mode == "full":
-            self.bounce_panel = FullBounceBotPanel(bounce_tab)
+            self.bounce_panel = FullBounceBotPanel(bounce_tab, switch_mode_callback=lambda: self.switch_mode("simple"))
             self.bounce_panel.pack(fill=tk.BOTH, expand=True)
-            self.avwap_gui = MasterAvwapGUI(master_tab, standalone=False)
         else:
-            self.bounce_panel = SimpleBounceBotPanel(bounce_tab)
+            self.bounce_panel = SimpleBounceBotPanel(bounce_tab, switch_mode_callback=lambda: self.switch_mode("full"))
             self.bounce_panel.pack(fill=tk.BOTH, expand=True)
-            self.simple_avwap_panel = SimpleMasterAvwapPanel(master_tab)
-            self.simple_avwap_panel.pack(fill=tk.BOTH, expand=True)
+
+        self.avwap_gui = MasterAvwapGUI(master_tab, standalone=False)
 
         main_pane.add(notebook, stretch="always")
 
@@ -988,10 +1110,23 @@ class ConsolidatedTradingGUI:
         finally:
             self.root.destroy()
 
+    def switch_mode(self, next_mode: str) -> None:
+        if next_mode == self.mode:
+            return
+        save_local_setting("gui_mode", next_mode)
+        try:
+            if self.bounce_panel:
+                self.bounce_panel.on_close()
+        finally:
+            self.root.destroy()
+        launch(mode=next_mode)
+
 
 def launch(mode: str = "prompt") -> None:
     if mode == "prompt":
-        mode = choose_gui_mode()
+        mode = str(get_local_setting("gui_mode", "full") or "full").strip().lower()
+        if mode not in {"full", "simple"}:
+            mode = "full"
 
     root = tk.Tk()
     app = ConsolidatedTradingGUI(root, mode=mode)
@@ -1004,12 +1139,17 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         choices=("prompt", "full", "simple"),
-        default="prompt",
-        help="Choose GUI startup mode.",
+        default="full",
+        help="Launch directly in full/simple mode, or use prompt to choose and save a preference.",
     )
     args = parser.parse_args()
+    if args.mode in {"full", "simple"}:
+        save_local_setting("gui_mode", args.mode)
     launch(mode=args.mode)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

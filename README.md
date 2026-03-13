@@ -30,7 +30,7 @@ These files should live in the repository root. The scripts will create any miss
   python scripts/master_avwap.py
   ```
 
-  Generates `output/master_avwap_events.txt` and logs to `logs/`.
+  Generates `output/master_avwap_events.txt` and writes diagnostics to the shared app log under `logs/trading_bot.log`.
 
 - Intraday 5-minute bounce detector (with optional GUI):
 
@@ -38,7 +38,7 @@ These files should live in the repository root. The scripts will create any miss
   python scripts/bounce_bot.py --use_gui
   ```
 
-  Writes detected bouncers to `logs/bouncers.txt` and `data/intraday_bounces.csv`.
+  Writes detected bouncers to `logs/bouncers.txt`, stores the structured bounce history in `data/intraday_bounces.csv`, and writes runtime diagnostics to `logs/trading_bot.log`.
 
 Ensure your IB session is connected before launching either bot so that market data requests succeed.
 
@@ -54,4 +54,16 @@ It is kept outside the `scripts/` directory to avoid accidental execution.
 
 ## Notes
 - AI training/labeling scripts were removed from this repository.
-- Bounce logs and runtime bot logs are written under `logs/`.
+- The main rotating app log is `logs/trading_bot.log`.
+- `logs/bouncers.txt` is the lightweight current-session bounce list.
+- `logs/rrs_strength_extremes.csv` and `logs/rrs_group_strength_extremes.csv` are data logs for RRS history.
+
+## Syncing day-to-day data across devices
+- The app can use a per-machine home folder such as Google Drive or OneDrive for day-to-day mutable data.
+- In the GUI, open the `Master AVWAP` tab and use `Change Home Folder` to point this computer at your synced folder.
+- The home folder stores watchlists, caches, runtime AVWAP data, reports, logs, and setup-tracker files.
+- Place `longs.txt` and `shorts.txt` in the home folder root to share watchlists across devices.
+- Each computer can use a different local path as long as they all point to the same shared cloud folder.
+- The chosen folder is saved locally in `%LOCALAPPDATA%\TradingBotV3\local_settings.json`.
+- Restart the GUI after changing the home folder so the scripts reload from the new location.
+- Avoid running the same writer-heavy workflows from multiple devices at the same time, since JSON/CSV files can still conflict during cloud sync.

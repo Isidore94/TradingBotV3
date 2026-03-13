@@ -22,6 +22,9 @@ PRESERVED_FILENAMES = {".gitkeep"}
 FILES_TO_DELETE = (
     Path("output") / "master_avwap_events.txt",
     Path("logs") / "bouncers.txt",
+    Path("trading_bot.log"),
+    Path("bouncers.txt"),
+    Path("scripts") / "trading_bot.log",
 )
 
 

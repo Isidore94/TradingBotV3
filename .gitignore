@@ -1,6 +1,7 @@
 .venv/
 .tmp.driveupload/
 scripts/__pycache__/
+maintenance/__pycache__/
 scripts/bounce_bot_backup_before_chop_filters_20260306.py
 data/avwap_signals.csv
 data/d1_features.csv
@@ -15,5 +16,10 @@ data/runtime/
 logs/*.log
 logs/*.txt
 logs/*.csv
+/trading_bot.log
+/trading_bot.log.*
+/bouncers.txt
+/scripts/trading_bot.log
+/scripts/trading_bot.log.*
 output/*
 !output/.gitkeep

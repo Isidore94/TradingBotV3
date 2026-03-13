@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 import zoneinfo
 import queue
 import tkinter as tk
-from tkinter import scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 import tkinter.font as tkFont
 
 import pandas as pd
@@ -50,6 +50,11 @@ from project_paths import (
     INDUSTRY_ETF_MAP_FILE,
     SYMBOL_CLASSIFICATION_CACHE_FILE,
     MASTER_AVWAP_FOCUS_FILE,
+    APP_LOG_BACKUP_COUNT,
+    get_tracker_storage_details,
+    get_local_setting,
+    save_local_setting,
+    save_tracker_storage_dir,
 )
 
 ##########################################
@@ -228,6 +233,7 @@ BOUNCE_VOLUME_LOOKBACK_BARS = 6
 BOUNCE_MIN_RELATIVE_VOLUME = 1.10
 BOUNCE_CONFIRMATION_MAX_CANDLES = 3
 VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES = 4
+APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 
 def utc_now_iso():
@@ -397,22 +403,43 @@ def _parse_iso_date_safe(value):
         return None
 
 def reset_log_files():
-    files_to_reset = [TRADING_BOT_LOG_FILENAME, BOUNCE_LOG_FILENAME]
+    TRADING_BOT_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+    Path(TRADING_BOT_LOG_FILENAME).touch(exist_ok=True)
 
-    for log_file_path in files_to_reset:
-        try:
-            # Check if file exists before attempting to remove it
-            if os.path.exists(log_file_path):
-                os.remove(log_file_path)
-                print(f"Previous log file deleted: {log_file_path}")
-            
-            # Create an empty file
-            with open(log_file_path, 'w') as f:
-                pass
-            
-            print(f"Created fresh log file: {log_file_path}")
-        except Exception as e:
-            print(f"Error resetting log file {log_file_path}: {e}")
+    try:
+        if os.path.exists(BOUNCE_LOG_FILENAME):
+            os.remove(BOUNCE_LOG_FILENAME)
+            print(f"Previous session bounce list deleted: {BOUNCE_LOG_FILENAME}")
+        with open(BOUNCE_LOG_FILENAME, "w", encoding="utf-8"):
+            pass
+        print(f"Created fresh bounce list: {BOUNCE_LOG_FILENAME}")
+    except Exception as e:
+        print(f"Error resetting bounce list {BOUNCE_LOG_FILENAME}: {e}")
+
+
+def configure_app_logging():
+    if getattr(configure_app_logging, "_configured", False):
+        return
+
+    TRADING_BOT_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(APP_LOG_FORMAT))
+
+    file_handler = RotatingFileHandler(
+        TRADING_BOT_LOG_FILENAME,
+        maxBytes=1_000_000,
+        backupCount=APP_LOG_BACKUP_COUNT,
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(APP_LOG_FORMAT))
+
+    logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler], force=True)
+    logger = logging.getLogger()
+    logger.addFilter(HistoricalDataFilter())
+    logging.getLogger("ibapi").addFilter(HistoricalDataFilter())
+    logging.getLogger("ibapi.client").addFilter(HistoricalDataFilter())
+    configure_app_logging._configured = True
 
 
 @dataclass(frozen=True)
@@ -3924,25 +3951,7 @@ class BounceBot(EWrapper, EClient):
 # Run Bot with GUI Integration
 ##########################################
 def run_bot_with_gui(gui_callback):
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    console_handler.setFormatter(console_formatter)
-
-    file_handler = RotatingFileHandler(
-        TRADING_BOT_LOG_FILENAME,
-        maxBytes=1_000_000,
-        backupCount=3,
-    )
-    file_handler.setLevel(logging.INFO)
-    file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(file_formatter)
-
-    logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler])
-    logger = logging.getLogger()
-    logger.addFilter(HistoricalDataFilter())
-    logging.getLogger("ibapi").addFilter(HistoricalDataFilter())
-    logging.getLogger("ibapi.client").addFilter(HistoricalDataFilter())
+    configure_app_logging()
 
     bot = BounceBot(gui_callback=gui_callback)
     bot.set_connection_info("127.0.0.1", 7496, 125)
@@ -4401,7 +4410,10 @@ def create_rrs_confirmed_panel(parent, bot_instance, dark_grey="#2E2E2E", text_c
 
 
 def choose_gui_mode():
-    selection = {"mode": "full"}
+    preferred_mode = str(get_local_setting("bounce_bot_gui_mode", "full") or "full").strip().lower()
+    if preferred_mode not in {"full", "lightweight"}:
+        preferred_mode = "full"
+    selection = {"mode": preferred_mode}
     picker = tk.Tk()
     picker.title("BounceBot Mode")
     picker.geometry("360x160")
@@ -4418,7 +4430,11 @@ def choose_gui_mode():
 
     tk.Label(
         picker,
-        text="Full mode keeps the RS/RW panels.\nLightweight mode keeps alerts and core bounce controls only.",
+        text=(
+            "Full mode keeps the RS/RW panels.\n"
+            "Lightweight mode keeps alerts and core bounce controls only.\n"
+            f"Default on this computer: {preferred_mode.title()}"
+        ),
         bg="#2E2E2E",
         fg="#E0E0E0",
         justify=tk.CENTER,
@@ -4429,6 +4445,7 @@ def choose_gui_mode():
 
     def select_mode(mode):
         selection["mode"] = mode
+        save_local_setting("bounce_bot_gui_mode", mode)
         picker.destroy()
 
     tk.Button(button_row, text="Full", width=12, command=lambda: select_mode("full")).pack(side=tk.LEFT, padx=8)
@@ -4437,6 +4454,31 @@ def choose_gui_mode():
     picker.protocol("WM_DELETE_WINDOW", lambda: select_mode("full"))
     picker.mainloop()
     return selection["mode"]
+
+
+def prompt_change_home_folder(root, cleanup_callback=None):
+    details = get_tracker_storage_details()
+    current_dir = Path(details["data_dir"])
+    selected = filedialog.askdirectory(
+        title="Choose home folder",
+        initialdir=str(current_dir if current_dir.exists() else Path.home()),
+        mustexist=False,
+    )
+    if not selected:
+        return
+
+    target = save_tracker_storage_dir(selected)
+    restart_now = messagebox.askyesno(
+        "Home Folder Saved",
+        "Saved this computer's home folder.\n\n"
+        f"Folder: {target}\n\n"
+        "Restart BounceBot now so it starts using the new home folder?",
+    )
+    if restart_now:
+        if cleanup_callback is not None:
+            cleanup_callback()
+        root.destroy()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def append_alert_message(text_area, msg, tag, timestamp):
@@ -4553,6 +4595,22 @@ def start_lightweight_gui():
         connection_var.set("IB: connected")
         status_var.set("listening for alerts")
 
+    def switch_mode(new_mode):
+        save_local_setting("bounce_bot_gui_mode", new_mode)
+        disconnect_bot()
+        root.destroy()
+        start_gui(mode=new_mode)
+
+    tk.Button(
+        header,
+        text="Change Home Folder",
+        command=lambda: prompt_change_home_folder(root, cleanup_callback=disconnect_bot),
+        relief=tk.RAISED,
+        padx=10,
+        bg=panel_grey,
+        fg=text_color,
+    ).pack(side=tk.RIGHT)
+    tk.Button(header, text="Switch to Full", command=lambda: switch_mode("full"), relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT)
     tk.Button(header, text="Reconnect", command=restart_bot, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT)
     tk.Button(header, text="Disconnect", command=disconnect_bot, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -4679,7 +4737,11 @@ def start_lightweight_gui():
 
 def start_gui(mode="prompt"):
     if mode == "prompt":
-        mode = choose_gui_mode()
+        mode = str(get_local_setting("bounce_bot_gui_mode", "full") or "full").strip().lower()
+        if mode not in {"full", "lightweight"}:
+            mode = "full"
+    if mode in {"full", "lightweight"}:
+        save_local_setting("bounce_bot_gui_mode", mode)
     if mode == "lightweight":
         start_lightweight_gui()
         return
@@ -4710,6 +4772,38 @@ def start_gui(mode="prompt"):
 
     frame = tk.Frame(root, padx=10, pady=10, bg=dark_grey)
     frame.pack(fill=tk.BOTH, expand=True)
+
+    header = tk.Frame(frame, bg=dark_grey)
+    header.pack(fill=tk.X, pady=(0, 8))
+    tk.Label(header, text="BounceBot Full", bg=dark_grey, fg=text_color, font=("Arial", 11, "bold")).pack(side=tk.LEFT)
+
+    def switch_mode(new_mode):
+        save_local_setting("bounce_bot_gui_mode", new_mode)
+        try:
+            bot_instance.disconnect()
+        except Exception:
+            pass
+        root.destroy()
+        start_gui(mode=new_mode)
+
+    tk.Button(
+        header,
+        text="Switch to Lightweight",
+        command=lambda: switch_mode("lightweight"),
+        relief=tk.RAISED,
+        padx=10,
+        bg="#3A3A3A",
+        fg=text_color,
+    ).pack(side=tk.RIGHT)
+    tk.Button(
+        header,
+        text="Change Home Folder",
+        command=lambda: prompt_change_home_folder(root, cleanup_callback=lambda: bot_instance.disconnect()),
+        relief=tk.RAISED,
+        padx=10,
+        bg="#3A3A3A",
+        fg=text_color,
+    ).pack(side=tk.RIGHT, padx=(0, 8))
 
     content_pane = tk.PanedWindow(frame, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=dark_grey)
     content_pane.pack(fill=tk.BOTH, expand=True)
@@ -5175,7 +5269,7 @@ def start_gui(mode="prompt"):
 if __name__ == "__main__":
     print("Starting script...")
     reset_log_files()  # Use the new function instead of reset_log_file()
-    print("Log files reset complete.")
+    print("Runtime files prepared.")
     
     # Rest of the code remains the same...
 
@@ -5207,28 +5301,8 @@ if __name__ == "__main__":
             start_gui(mode=args.gui_mode)
         else:
             print("Initializing console mode...")
-            # Set up logging for console mode
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-            console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-            console_handler.setFormatter(console_formatter)
-
-            file_handler = RotatingFileHandler(
-                TRADING_BOT_LOG_FILENAME,
-                maxBytes=1_000_000,
-                backupCount=3,
-            )
-            file_handler.setLevel(logging.INFO)
-            file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-            file_handler.setFormatter(file_formatter)
-
-            logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler])
+            configure_app_logging()
             print("Logging configured.")
-            
-            logger = logging.getLogger()
-            logger.addFilter(HistoricalDataFilter())
-            logging.getLogger("ibapi").addFilter(HistoricalDataFilter())
-            logging.getLogger("ibapi.client").addFilter(HistoricalDataFilter())
             print("Filters applied.")
             
             # Initialize and run the bot without GUI

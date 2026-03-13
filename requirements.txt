@@ -7,3 +7,4 @@ pyarrow
 requests
 scikit-learn
 yfinance
+lxml

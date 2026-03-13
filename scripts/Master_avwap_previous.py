@@ -4,6 +4,7 @@ import time
 import json
 import logging
 import threading
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean
@@ -22,8 +23,12 @@ from project_paths import (
     ROOT_DIR,
     LONGS_FILE,
     SHORTS_FILE,
+    MASTER_AVWAP_LOG_FILE,
+    APP_LOG_BACKUP_COUNT,
     EARNINGS_CACHE_FILE as CURRENT_CACHE_FILE,
     PREV_EARNINGS_CACHE_FILE as PREV_CACHE_FILE,
+    EARNINGS_CALENDAR_CACHE_FILE,
+    DAILY_BARS_CACHE_DIR,
     MASTER_AVWAP_HISTORY_FILE as HISTORY_FILE,
     MASTER_AVWAP_AI_STATE_FILE as AI_STATE_FILE,
     D1_FEATURES_FILE,
@@ -72,6 +77,11 @@ RECENT_DAYS = 10              # if earnings < RECENT_DAYS, use prior one for "cu
 ATR_LENGTH = 20
 ATR_MULT = 0.05               # eps / push = 0.05 * ATR(20)
 HISTORY_DAYS_TO_KEEP = 20     # multi-day context window
+DAILY_BAR_CACHE_MAX_AGE_MINUTES = 30
+DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS = 10
+DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
+EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES = 30
+DAILY_BAR_COLUMNS = ["datetime", "open", "high", "low", "close", "volume"]
 POSITION_LEVELS = [
     "VWAP",
     "UPPER_1",
@@ -86,22 +96,25 @@ POSITION_LEVELS = [
 # LOGGING
 # ============================================================================
 
+APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
+
 def configure_logging():
     logger = logging.getLogger()
     if logger.handlers:
         return  # already configured
 
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S"
-    )
+    fmt = logging.Formatter(APP_LOG_FORMAT)
 
     ch = logging.StreamHandler()
     ch.setFormatter(fmt)
     ch.setLevel(logging.INFO)
 
-    fh = logging.FileHandler(LOG_DIR / "master_avwap_previous.log", mode="a")
+    fh = RotatingFileHandler(
+        MASTER_AVWAP_LOG_FILE,
+        maxBytes=2_000_000,
+        backupCount=APP_LOG_BACKUP_COUNT,
+    )
     fh.setFormatter(fmt)
     fh.setLevel(logging.INFO)
 
@@ -141,8 +154,154 @@ def load_json(path: Path, default):
     return default
 
 def save_json(path: Path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
+
+
+_EARNINGS_CALENDAR_ROWS_CACHE: dict | None = None
+_DAILY_BAR_FRAME_CACHE: dict[str, pd.DataFrame] = {}
+_DAILY_BAR_CACHE_TOUCHED_AT: dict[str, datetime] = {}
+
+
+def _is_timestamp_within_minutes(value, minutes: int) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return False
+    return (datetime.now() - parsed) <= timedelta(minutes=max(1, int(minutes)))
+
+
+def _load_earnings_calendar_rows_cache() -> dict:
+    global _EARNINGS_CALENDAR_ROWS_CACHE
+    if _EARNINGS_CALENDAR_ROWS_CACHE is None:
+        raw = load_json(EARNINGS_CALENDAR_CACHE_FILE, default={})
+        _EARNINGS_CALENDAR_ROWS_CACHE = raw if isinstance(raw, dict) else {}
+    return _EARNINGS_CALENDAR_ROWS_CACHE
+
+
+def _save_earnings_calendar_rows_cache() -> None:
+    if _EARNINGS_CALENDAR_ROWS_CACHE is None:
+        return
+    save_json(EARNINGS_CALENDAR_CACHE_FILE, _EARNINGS_CALENDAR_ROWS_CACHE)
+
+
+def _sanitize_symbol_for_filename(symbol: str) -> str:
+    text = str(symbol or "").strip().upper()
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in text) or "UNKNOWN"
+
+
+def _daily_bar_cache_file(symbol: str) -> Path:
+    return DAILY_BARS_CACHE_DIR / f"{_sanitize_symbol_for_filename(symbol)}.csv"
+
+
+def _empty_daily_bar_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=DAILY_BAR_COLUMNS)
+
+
+def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return _empty_daily_bar_frame()
+
+    normalized = df.copy()
+    if "datetime" not in normalized.columns:
+        if "Date" in normalized.columns:
+            normalized = normalized.rename(columns={"Date": "datetime"})
+        elif "date" in normalized.columns:
+            normalized = normalized.rename(columns={"date": "datetime"})
+        else:
+            normalized = normalized.rename(columns={normalized.columns[0]: "datetime"})
+
+    normalized = normalized.rename(columns={str(col): str(col).lower() for col in normalized.columns})
+    if "datetime" not in normalized.columns:
+        return _empty_daily_bar_frame()
+
+    normalized["datetime"] = pd.to_datetime(normalized["datetime"], errors="coerce")
+    if getattr(normalized["datetime"].dt, "tz", None) is not None:
+        normalized["datetime"] = normalized["datetime"].dt.tz_localize(None)
+
+    for column in DAILY_BAR_COLUMNS[1:]:
+        if column not in normalized.columns:
+            return _empty_daily_bar_frame()
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+
+    normalized = normalized.dropna(subset=DAILY_BAR_COLUMNS)
+    if normalized.empty:
+        return _empty_daily_bar_frame()
+
+    normalized = (
+        normalized[DAILY_BAR_COLUMNS]
+        .drop_duplicates(subset=["datetime"], keep="last")
+        .sort_values("datetime")
+        .reset_index(drop=True)
+    )
+    return normalized
+
+
+def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
+    symbol = str(symbol or "").strip().upper()
+    cached = _DAILY_BAR_FRAME_CACHE.get(symbol)
+    if cached is not None:
+        return cached.copy()
+
+    cache_path = _daily_bar_cache_file(symbol)
+    if not cache_path.exists():
+        return _empty_daily_bar_frame()
+
+    try:
+        df = pd.read_csv(cache_path, parse_dates=["datetime"])
+    except Exception as exc:
+        logging.warning(f"{symbol}: failed reading cached daily bars ({exc})")
+        return _empty_daily_bar_frame()
+
+    normalized = _normalize_daily_bar_frame(df)
+    _DAILY_BAR_FRAME_CACHE[symbol] = normalized
+    _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.fromtimestamp(cache_path.stat().st_mtime)
+    return normalized.copy()
+
+
+def _write_cached_daily_bar_frame(symbol: str, df: pd.DataFrame) -> None:
+    symbol = str(symbol or "").strip().upper()
+    normalized = _normalize_daily_bar_frame(df)
+    cache_path = _daily_bar_cache_file(symbol)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized.to_csv(cache_path, index=False)
+    _DAILY_BAR_FRAME_CACHE[symbol] = normalized
+    _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
+
+
+def _merge_daily_bar_frames(existing: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
+    if existing is None or existing.empty:
+        return _normalize_daily_bar_frame(fresh)
+    if fresh is None or fresh.empty:
+        return _normalize_daily_bar_frame(existing)
+    combined = pd.concat([existing, fresh], ignore_index=True)
+    return _normalize_daily_bar_frame(combined)
+
+
+def _daily_bar_cache_covers_history(df: pd.DataFrame, days: int) -> bool:
+    if df is None or df.empty:
+        return False
+    required_days = max(int(days), ATR_LENGTH + 5) + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS
+    required_start = datetime.now().date() - timedelta(days=required_days)
+    try:
+        oldest_date = pd.to_datetime(df["datetime"].iloc[0]).date()
+    except Exception:
+        return False
+    return oldest_date <= required_start
+
+
+def _daily_bar_cache_is_recent(symbol: str) -> bool:
+    symbol = str(symbol or "").strip().upper()
+    touched_at = _DAILY_BAR_CACHE_TOUCHED_AT.get(symbol)
+    if touched_at is None:
+        cache_path = _daily_bar_cache_file(symbol)
+        if not cache_path.exists():
+            return False
+        touched_at = datetime.fromtimestamp(cache_path.stat().st_mtime)
+    return (datetime.now() - touched_at) <= timedelta(minutes=DAILY_BAR_CACHE_MAX_AGE_MINUTES)
 
 
 def compute_atr_from_ohlc(daily_rows, last_trade_date, length=ATR_LENGTH):
@@ -207,13 +366,35 @@ def get_last_daily_row_for_date(daily_rows, last_trade_date):
 # ============================================================================
 
 def fetch_earnings_for_date(date_str: str):
+    cache = _load_earnings_calendar_rows_cache()
+    cached_entry = cache.get(date_str) if isinstance(cache, dict) else None
+    cached_rows = cached_entry.get("rows", []) if isinstance(cached_entry, dict) else []
+    today_iso = datetime.now().date().isoformat()
+    if isinstance(cached_entry, dict):
+        if date_str < today_iso:
+            return cached_rows if isinstance(cached_rows, list) else []
+        if date_str == today_iso and _is_timestamp_within_minutes(
+            cached_entry.get("fetched_at"),
+            EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES,
+        ):
+            return cached_rows if isinstance(cached_rows, list) else []
+
     try:
         resp = requests.get(API_URL.format(date=date_str),
                             headers=HEADERS, timeout=10)
         resp.raise_for_status()
-        return resp.json().get("data", {}).get("rows", []) or []
+        rows = resp.json().get("data", {}).get("rows", []) or []
+        cache[date_str] = {
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "rows": rows if isinstance(rows, list) else [],
+        }
+        _save_earnings_calendar_rows_cache()
+        return rows if isinstance(rows, list) else []
     except Exception as e:
         logging.warning(f"Failed fetch earnings for {date_str}: {e}")
+        if isinstance(cached_rows, list) and cached_rows:
+            logging.info(f"Using cached earnings calendar rows for {date_str} after fetch failure.")
+            return cached_rows
         time.sleep(0.3)
         return []
 
@@ -360,18 +541,32 @@ def create_contract(symbol: str) -> Contract:
     return c
 
 def fetch_daily_bars(ib: IBApi, symbol: str, days: int) -> pd.DataFrame:
+    normalized_symbol = str(symbol or "").strip().upper()
+    requested_days = max(int(days), ATR_LENGTH + 5)
+    cached = _load_cached_daily_bar_frame(normalized_symbol)
+    cache_has_history = _daily_bar_cache_covers_history(cached, requested_days)
+
+    if cache_has_history and _daily_bar_cache_is_recent(normalized_symbol):
+        return cached.copy()
+
     reqId = int(time.time() * 1000) % (2**31 - 1)
     ib.data[reqId] = []
     ib.ready[reqId] = False
 
-    if days > 365:
-        dur = f"{max(1, days // 365)} Y"
+    refresh_days = (
+        requested_days
+        if not cache_has_history
+        else min(requested_days, max(ATR_LENGTH + 5, DAILY_BAR_CACHE_RECENT_REFRESH_DAYS))
+    )
+
+    if refresh_days > 365:
+        dur = f"{max(1, refresh_days // 365)} Y"
     else:
-        dur = f"{max(2, days)} D"
+        dur = f"{max(2, refresh_days)} D"
 
     ib.reqHistoricalData(
         reqId,
-        create_contract(symbol),
+        create_contract(normalized_symbol),
         "",
         dur,
         "1 day",
@@ -392,11 +587,17 @@ def fetch_daily_bars(ib: IBApi, symbol: str, days: int) -> pd.DataFrame:
 
     df = pd.DataFrame(bars)
     if df.empty:
-        return df
+        if not cached.empty:
+            logging.info(f"{normalized_symbol}: using cached daily bars because live refresh was unavailable.")
+            return cached.copy()
+        return _empty_daily_bar_frame()
 
     df["datetime"] = pd.to_datetime(df["time"], format="%Y%m%d", errors="coerce")
     df = df.sort_values("datetime").reset_index(drop=True)
-    return df
+    normalized = _normalize_daily_bar_frame(df)
+    merged = _merge_daily_bar_frames(cached, normalized)
+    _write_cached_daily_bar_frame(normalized_symbol, merged)
+    return merged.copy()
 
 # ============================================================================
 # AVWAP CALCULATION
