@@ -11,19 +11,18 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
-## Repository layout
-- `scripts/` – Intraday and daily-running bots ready for out-of-the-box use (`master_avwap.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
-- `maintenance/` – Workspace cleanup helpers that are intentionally outside the main script directory.
-- `data/`, `logs/`, `output/` – Generated artifacts. These are created as needed by the scripts.
-- `longs.txt`, `shorts.txt` – Input watchlists consumed by the scanners.
+## Repository Layout
+- `scripts/` - Intraday and daily-running bots ready for use (`master_avwap.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
+- `data/`, `logs/`, `output/` - Generated artifacts created as needed by the scripts.
+- `longs.txt`, `shorts.txt` - Input watchlists consumed by the scanners.
 
-## Required inputs
-- `longs.txt` – one ticker per line for long-side scanning.
-- `shorts.txt` – one ticker per line for short-side scanning.
+## Required Inputs
+- `longs.txt` - one ticker per line for long-side scanning.
+- `shorts.txt` - one ticker per line for short-side scanning.
 
 These files should live in the repository root. The scripts will create any missing `data`, `logs`, and `output` directories at runtime.
 
-## Running the bots
+## Running The Bots
 - Daily AVWAP/previous-AVWAP engine:
 
   ```bash
@@ -32,7 +31,7 @@ These files should live in the repository root. The scripts will create any miss
 
   Generates `output/master_avwap_events.txt` and writes diagnostics to the shared app log under `logs/trading_bot.log`.
 
-- Intraday 5-minute bounce detector (with optional GUI):
+- Intraday 5-minute bounce detector with optional GUI:
 
   ```bash
   python scripts/bounce_bot.py --use_gui
@@ -40,25 +39,14 @@ These files should live in the repository root. The scripts will create any miss
 
   Writes detected bouncers to `logs/bouncers.txt`, stores the structured bounce history in `data/intraday_bounces.csv`, and writes runtime diagnostics to `logs/trading_bot.log`.
 
-Ensure your IB session is connected before launching either bot so that market data requests succeed.
-
-## Maintenance tools
-To reset generated artifacts to the repository's default state, use the intentionally tucked-away maintenance script:
-
-```bash
-python maintenance/tidy_workspace.py --dry-run  # inspect what would be removed
-python maintenance/tidy_workspace.py            # perform the cleanup
-```
-
-It is kept outside the `scripts/` directory to avoid accidental execution.
+Ensure your IB session is connected before launching either bot so market data requests succeed.
 
 ## Notes
-- AI training/labeling scripts were removed from this repository.
 - The main rotating app log is `logs/trading_bot.log`.
 - `logs/bouncers.txt` is the lightweight current-session bounce list.
 - `logs/rrs_strength_extremes.csv` and `logs/rrs_group_strength_extremes.csv` are data logs for RRS history.
 
-## Syncing day-to-day data across devices
+## Syncing Day-To-Day Data Across Devices
 - The app can use a per-machine home folder such as Google Drive or OneDrive for day-to-day mutable data.
 - In the GUI, open the `Master AVWAP` tab and use `Change Home Folder` to point this computer at your synced folder.
 - The home folder stores watchlists, caches, runtime AVWAP data, reports, logs, and setup-tracker files.
