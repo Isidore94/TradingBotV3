@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 
 ## Repository Layout
-- `scripts/` - Intraday and daily-running bots ready for use (`master_avwap.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
+- `scripts/` - Intraday and daily-running bots ready for use (`master_avwap.py`, `master_avwap_mini_pc.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
 - `data/`, `logs/`, `output/` - Legacy repo folders; current runtime files are stored under the selected home folder.
 - `longs.txt`, `shorts.txt` - Input watchlists consumed by the scanners, stored in the selected home folder root.
 
@@ -30,6 +30,29 @@ These files should live in the selected home folder root. The app creates any mi
   ```
 
   Generates `output/master_avwap_events.txt` inside the selected home folder and writes diagnostics to `logs/trading_bot.log` there as well.
+
+- Always-on mini-PC AVWAP scheduler for a shared home folder:
+
+  ```bash
+  python scripts/master_avwap_mini_pc.py
+  ```
+
+  Reuses the full `master_avwap.py` scan logic with the shared-folder watchlists, runs on the default `07:00,08:00,09:00,10:00,11:00,12:00,13:00` schedule, stops at `13:30`, updates the setup tracker, and writes a phone-friendly status file to `master_avwap_mini_pc_status.txt` in the shared home-folder root.
+
+  Useful flags:
+
+  ```bash
+  python scripts/master_avwap_mini_pc.py --once
+  python scripts/master_avwap_mini_pc.py --dry-run
+  python scripts/master_avwap_mini_pc.py --shutdown-at-end
+  ```
+
+  Windows Task Scheduler pattern:
+  Program/script: `py`
+  Add arguments: `scripts\\master_avwap_mini_pc.py`
+  Start in: the repo root folder
+
+  If you want the mini PC itself to power off after the scan window, either use `--shutdown-at-end` or create a separate `13:30` Task Scheduler action that runs `shutdown /s /t 0`.
 
 - Intraday 5-minute bounce detector with optional GUI:
 
