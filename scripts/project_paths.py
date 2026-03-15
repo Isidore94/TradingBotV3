@@ -270,11 +270,9 @@ def _consolidate_legacy_logs() -> None:
             continue
         _consolidate_log_variants(APP_LOG_FILE, "trading_bot.log", search_dir, keep_backups=0)
         _consolidate_log_variants(APP_LOG_FILE, "master_avwap.log", search_dir, keep_backups=0)
-        _consolidate_log_variants(APP_LOG_FILE, "master_avwap_previous.log", search_dir, keep_backups=0)
         _consolidate_log_variants(BOUNCE_LOG_FILE, "bouncers.txt", search_dir, keep_backups=0)
 
     _consolidate_log_variants(APP_LOG_FILE, "master_avwap.log", LOG_DIR, keep_backups=0)
-    _consolidate_log_variants(APP_LOG_FILE, "master_avwap_previous.log", LOG_DIR, keep_backups=0)
     _consolidate_log_variants(APP_LOG_FILE, APP_LOG_FILE.name, LOG_DIR, keep_backups=APP_LOG_BACKUP_COUNT)
 
 
@@ -333,7 +331,6 @@ def migrate_legacy_layout() -> None:
         (REPO_LOG_DIR / "master_avwap.log", MASTER_AVWAP_LOG_FILE),
         (REPO_LOG_DIR / "rrs_strength_extremes.csv", RRS_STRENGTH_LOG_FILE),
         (REPO_LOG_DIR / "rrs_group_strength_extremes.csv", RRS_GROUP_STRENGTH_LOG_FILE),
-        (REPO_LOG_DIR / "master_avwap_previous.log", APP_LOG_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "sector_etf_map.json", SECTOR_ETF_MAP_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "industry_etf_map.json", INDUSTRY_ETF_MAP_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "symbol_classification.csv", SYMBOL_CLASSIFICATION_CACHE_FILE),
@@ -367,7 +364,6 @@ def migrate_legacy_layout() -> None:
         (LOCAL_SETTINGS_DIR / "logs" / "master_avwap.log", MASTER_AVWAP_LOG_FILE),
         (LOCAL_SETTINGS_DIR / "logs" / "rrs_strength_extremes.csv", RRS_STRENGTH_LOG_FILE),
         (LOCAL_SETTINGS_DIR / "logs" / "rrs_group_strength_extremes.csv", RRS_GROUP_STRENGTH_LOG_FILE),
-        (LOCAL_SETTINGS_DIR / "logs" / "master_avwap_previous.log", APP_LOG_FILE),
     ]
     for legacy_path, new_path in legacy_moves:
         _migrate_legacy_file(legacy_path, new_path)
