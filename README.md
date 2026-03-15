@@ -37,13 +37,15 @@ These files should live in the selected home folder root. The app creates any mi
   python scripts/master_avwap_mini_pc.py
   ```
 
-  Reuses the full `master_avwap.py` scan logic with the shared-folder watchlists, runs on the default `07:00,08:00,09:00,10:00,11:00,12:00,13:00` schedule, stops at `13:30`, updates the setup tracker, and writes a phone-friendly status file to `master_avwap_mini_pc_status.txt` in the shared home-folder root.
+  Launches the normal Master AVWAP GUI plus a dedicated `Mini PC` tab. It reuses the full `master_avwap.py` scan logic with the shared-folder watchlists, auto-runs on the default `07:00,08:00,09:00,10:00,11:00,12:00,13:00` schedule, stops at `13:30`, updates the setup tracker, and writes a phone-friendly status file to `master_avwap_mini_pc_status.txt` in the shared home-folder root.
 
   Useful flags:
 
   ```bash
   python scripts/master_avwap_mini_pc.py --once
   python scripts/master_avwap_mini_pc.py --dry-run
+  python scripts/master_avwap_mini_pc.py --headless
+  python scripts/master_avwap_mini_pc.py --no-autostart
   python scripts/master_avwap_mini_pc.py --shutdown-at-end
   ```
 
@@ -51,6 +53,8 @@ These files should live in the selected home folder root. The app creates any mi
   Program/script: `py`
   Add arguments: `scripts\\master_avwap_mini_pc.py`
   Start in: the repo root folder
+
+  The `Mini PC` tab exposes a scheduler status panel, a live preview of the phone status file, and quick access to `Change Home Folder` / `Open Home Folder`. The existing Setup Tracker tab still has the same home-folder controls too.
 
   If you want the mini PC itself to power off after the scan window, either use `--shutdown-at-end` or create a separate `13:30` Task Scheduler action that runs `shutdown /s /t 0`.
 

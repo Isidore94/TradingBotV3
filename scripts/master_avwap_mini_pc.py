@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless Master AVWAP scheduler for an always-on Windows mini PC."""
+"""GUI-first Master AVWAP scheduler for an always-on Windows mini PC."""
 
 from __future__ import annotations
 
@@ -10,17 +10,26 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, time as dt_time, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+try:
+    import tkinter as tk
+    from tkinter import messagebox, ttk
+except Exception:
+    tk = None
+    ttk = None
+    messagebox = None
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from master_avwap import run_master
+from master_avwap import MasterAvwapGUI, run_master
 from project_paths import (
     APP_LOG_BACKUP_COUNT,
     LOG_DIR,
@@ -45,6 +54,7 @@ APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 STATUS_PREVIEW_RUNS = 8
 SLEEP_POLL_SECONDS = 30
 STALE_LOCK_MAX_AGE = timedelta(hours=12)
+GUI_TICK_MS = 15_000
 
 _LOCK_ACQUIRED = False
 
@@ -598,8 +608,447 @@ def run_schedule(schedule: list[str], stop_at: str, dry_run: bool = False, shutd
     return 0
 
 
+class MiniPCMasterAvwapGUI(MasterAvwapGUI):
+    def __init__(
+        self,
+        root,
+        schedule: list[str],
+        stop_at: str,
+        dry_run: bool = False,
+        shutdown_at_end: bool = False,
+        auto_start: bool = True,
+    ):
+        self.schedule = list(schedule)
+        self.stop_at = stop_at
+        self.dry_run = dry_run
+        self.shutdown_at_end = shutdown_at_end
+        self.scheduler_enabled = bool(auto_start)
+        self.background_task_active = False
+        self.current_background_label = ""
+        self.scheduler_scan_active = False
+        self.scheduler_active_slot = ""
+        self.scheduler_phase = "starting"
+        self.scheduler_note = "Launching mini-PC GUI scheduler."
+        self.completed_window_date = None
+        self.shutdown_issued_date = None
+        self.scheduler_state = load_state(self.schedule)
+
+        self.scheduler_summary_var = tk.StringVar(master=root, value="")
+        self.scheduler_toggle_text = tk.StringVar(master=root, value="Pause Scheduler" if auto_start else "Resume Scheduler")
+
+        super().__init__(root, standalone=True)
+        self.root.title("Master AVWAP Mini PC Scheduler")
+        self.root.geometry("1380x860")
+        self.refresh_tracker_storage_summary()
+        self.refresh_mini_pc_status_view()
+        self._refresh_scheduler_panel(phase="waiting" if self.scheduler_enabled else "paused", note="Mini-PC GUI ready.")
+        self.notebook.select(self.mini_pc_tab)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.after(750, self._scheduler_tick)
+
+    def _build_layout(self):
+        super()._build_layout()
+
+        mini_pc_tab = ttk.Frame(self.notebook)
+        self.mini_pc_tab = mini_pc_tab
+        self.notebook.insert(0, mini_pc_tab, text="Mini PC")
+
+        toolbar = ttk.Frame(mini_pc_tab)
+        toolbar.pack(fill="x", padx=10, pady=(8, 8))
+
+        self.scheduler_toggle_button = ttk.Button(
+            toolbar,
+            textvariable=self.scheduler_toggle_text,
+            command=self.toggle_scheduler,
+        )
+        self.scheduler_toggle_button.pack(side="left", padx=(0, 8))
+        ttk.Button(toolbar, text="Run Home Folder Scan Now", command=self.run_shared_watchlist_scan_once).pack(side="left", padx=(0, 8))
+        ttk.Button(toolbar, text="Refresh Status Preview", command=self.refresh_mini_pc_status_view).pack(side="left", padx=(0, 8))
+        ttk.Button(toolbar, text="Change Home Folder", command=self.choose_tracker_storage_dir).pack(side="left", padx=(0, 8))
+        ttk.Button(toolbar, text="Open Home Folder", command=self.open_tracker_storage_dir).pack(side="left", padx=(0, 8))
+        ttk.Button(toolbar, text="Open Status Folder", command=self.open_status_folder).pack(side="left")
+
+        ttk.Label(
+            mini_pc_tab,
+            textvariable=self.scheduler_summary_var,
+            justify="left",
+            wraplength=1220,
+        ).pack(fill="x", padx=10, pady=(0, 8))
+
+        ttk.Label(
+            mini_pc_tab,
+            text=(
+                "This mini-PC view auto-runs the shared-folder AVWAP scan on the configured schedule. "
+                "If you change the home folder, restart this app before the next scan so the new location is used."
+            ),
+            justify="left",
+            wraplength=1220,
+        ).pack(fill="x", padx=10, pady=(0, 8))
+
+        preview_frame = ttk.LabelFrame(mini_pc_tab, text="Phone Status File Preview")
+        preview_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        self.mini_pc_status_text = tk.Text(preview_frame, wrap="word", font=("Courier New", 10))
+        self.mini_pc_status_text.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        status_scroll = ttk.Scrollbar(preview_frame, orient="vertical", command=self.mini_pc_status_text.yview)
+        self.mini_pc_status_text.configure(yscrollcommand=status_scroll.set)
+        status_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self._style_mini_pc_text_widget()
+
+    def _style_mini_pc_text_widget(self):
+        self.mini_pc_status_text.configure(
+            bg="#1F1F1F",
+            fg="#F0F0F0",
+            insertbackground="#F0F0F0",
+            selectbackground="#4A4A4A",
+            selectforeground="#F0F0F0",
+            highlightbackground="#202020",
+            highlightcolor="#3A3A3A",
+        )
+
+    def _refresh_active_tab(self):
+        selected_tab = self.notebook.select()
+        if selected_tab == str(self.mini_pc_tab):
+            self.refresh_mini_pc_status_view()
+            self._refresh_scheduler_panel()
+            return
+        super()._refresh_active_tab()
+
+    def refresh_tracker_storage_summary(self):
+        super().refresh_tracker_storage_summary()
+        if hasattr(self, "scheduler_summary_var"):
+            self._refresh_scheduler_panel()
+
+    def refresh_mini_pc_status_view(self):
+        if not hasattr(self, "mini_pc_status_text"):
+            return
+        text = read_text(STATUS_FILE)
+        if not text:
+            text = (
+                "The status file does not exist yet.\n\n"
+                "It will be created automatically after the scheduler starts waiting or after the first scan runs.\n\n"
+                f"Expected path:\n{STATUS_FILE}"
+            )
+        self._set_text_widget_contents(self.mini_pc_status_text, text)
+
+    def open_status_folder(self):
+        self._open_folder_in_explorer(STATUS_FILE.parent)
+
+    def toggle_scheduler(self):
+        self.scheduler_enabled = not self.scheduler_enabled
+        phase = "waiting" if self.scheduler_enabled else "paused"
+        note = "Scheduler resumed from GUI." if self.scheduler_enabled else "Scheduler paused from GUI."
+        self._refresh_scheduler_panel(phase=phase, note=note)
+        write_status_file(load_state(self.schedule), self.schedule, self.stop_at, phase=phase, note=note, active_slot=self.scheduler_active_slot)
+        self.refresh_mini_pc_status_view()
+        self.status_var.set(note)
+
+    def _refresh_scheduler_panel(self, phase: str | None = None, note: str | None = None):
+        if phase is not None:
+            self.scheduler_phase = phase
+        if note is not None:
+            self.scheduler_note = note
+
+        self.scheduler_state = load_state(self.schedule)
+        now = datetime.now()
+        next_slot = get_next_pending_slot(self.scheduler_state, self.schedule, now=now)
+        self.scheduler_toggle_text.set("Pause Scheduler" if self.scheduler_enabled else "Resume Scheduler")
+
+        active_task = self.scheduler_active_slot or self.current_background_label or "None"
+        shutdown_text = "enabled" if self.shutdown_at_end else "disabled"
+        lines = [
+            f"Scheduler phase: {self.scheduler_phase} | Auto scheduler: {'running' if self.scheduler_enabled else 'paused'} | Auto shutdown: {shutdown_text}",
+            f"Today's schedule: {', '.join(self.schedule)} | Stop at: {self.stop_at}",
+            f"Next pending slot: {next_slot or 'None'} | Active task: {active_task}",
+            f"Last status: {self.scheduler_state.get('last_status') or 'idle'} | Last success: {self.scheduler_state.get('last_success_at') or 'None'}",
+            f"Shared folder root: {LONGS_FILE.parent}",
+            f"Status file: {STATUS_FILE}",
+            f"Scheduler log: {SCHEDULER_LOG_FILE}",
+        ]
+        if self.scheduler_note:
+            lines.append(f"Note: {self.scheduler_note}")
+        self.scheduler_summary_var.set("\n".join(lines))
+
+    def _write_scheduler_status(self, phase: str, note: str, active_slot: str = ""):
+        self.scheduler_state = load_state(self.schedule)
+        write_status_file(
+            self.scheduler_state,
+            self.schedule,
+            self.stop_at,
+            phase=phase,
+            note=note,
+            active_slot=active_slot,
+        )
+        self.refresh_mini_pc_status_view()
+        self._refresh_scheduler_panel(phase=phase, note=note)
+
+    def _run_background(self, target, running_msg, done_msg, done_callback=None):
+        if self.background_task_active:
+            self.status_var.set("Another background task is already running. Please wait for it to finish.")
+            return
+
+        self.background_task_active = True
+        self.current_background_label = running_msg
+        self.status_var.set(running_msg)
+        self._write_scheduler_status("busy", running_msg)
+
+        def _task():
+            error_message = ""
+            try:
+                target()
+            except Exception as exc:
+                logging.exception("GUI background task failed")
+                error_message = str(exc)
+
+            def _finish():
+                self.background_task_active = False
+                self.current_background_label = ""
+                if error_message:
+                    final_note = f"Error: {error_message}"
+                    self.status_var.set(final_note)
+                else:
+                    final_note = done_msg
+                    self.status_var.set(done_msg)
+                    self.refresh_table()
+                    if done_callback:
+                        done_callback()
+                phase = "waiting" if self.scheduler_enabled else "paused"
+                self._write_scheduler_status(phase, final_note)
+                self._maybe_complete_schedule_window()
+
+            self.root.after(0, _finish)
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def run_shared_watchlist_scan_once(self):
+        self.notebook.select(self.avwap_tab)
+        self._start_shared_scan(run_label="manual", scheduled_slot=None)
+
+    def _start_shared_scan(self, run_label: str, scheduled_slot: str | None):
+        if self.background_task_active:
+            self.status_var.set("A scan is already running. Please wait for it to finish.")
+            return
+
+        started_at = datetime.now()
+        run_id = started_at.strftime("%Y%m%d-%H%M%S")
+        state = load_state(self.schedule)
+        active_slot = scheduled_slot or "manual"
+
+        if scheduled_slot:
+            mark_slots_skipped_before_trigger(state, self.schedule, scheduled_slot, started_at)
+            save_state(state)
+            running_note = f"Running scheduled slot {scheduled_slot} from the shared home folder."
+            phase = "running"
+            self.scheduler_scan_active = True
+            self.scheduler_active_slot = scheduled_slot
+        else:
+            running_note = "Running a manual shared home-folder scan from the GUI."
+            phase = "manual_run"
+            self.scheduler_scan_active = False
+            self.scheduler_active_slot = ""
+
+        self.background_task_active = True
+        self.current_background_label = running_note
+        self.status_var.set(running_note)
+        self._write_scheduler_status(phase, running_note, active_slot=active_slot)
+        logging.info("Starting GUI mini-PC scan. label=%s scheduled_slot=%s dry_run=%s", run_label, scheduled_slot, self.dry_run)
+
+        def _task():
+            error_text = ""
+            run_status = "dry_run" if self.dry_run else "success"
+            try:
+                if self.dry_run:
+                    logging.info("Dry-run enabled; skipping live Master AVWAP GUI mini-PC scan.")
+                else:
+                    run_master(use_shared_watchlists=True)
+            except Exception as exc:
+                run_status = "failed"
+                error_text = str(exc)
+                logging.exception("GUI mini-PC scan failed. label=%s scheduled_slot=%s", run_label, scheduled_slot)
+
+            finished_at = datetime.now()
+            duration_seconds = round((finished_at - started_at).total_seconds(), 2)
+
+            def _finish():
+                state = load_state(self.schedule)
+                run_record = {
+                    "run_id": run_id,
+                    "slot": scheduled_slot or "manual",
+                    "status": run_status,
+                    "started_at": started_at.isoformat(timespec="seconds"),
+                    "finished_at": finished_at.isoformat(timespec="seconds"),
+                    "duration_seconds": duration_seconds,
+                }
+                if error_text:
+                    run_record["error"] = error_text
+                state.setdefault("runs", []).append(run_record)
+
+                if scheduled_slot:
+                    if run_status == "failed":
+                        state["slots"][scheduled_slot] = {
+                            "status": "failed",
+                            "run_id": run_id,
+                            "covered_at": finished_at.isoformat(timespec="seconds"),
+                            "note": error_text,
+                        }
+                    else:
+                        cover_slots_after_success(
+                            state,
+                            self.schedule,
+                            scheduled_slot,
+                            run_id,
+                            finished_at,
+                            dry_run=self.dry_run,
+                        )
+
+                if run_status == "failed":
+                    state["last_status"] = "failed" if scheduled_slot else "manual_failed"
+                    state["last_error"] = error_text
+                    done_note = (
+                        f"Scheduled slot {scheduled_slot} failed: {error_text}"
+                        if scheduled_slot
+                        else f"Manual shared-folder scan failed: {error_text}"
+                    )
+                else:
+                    state["last_status"] = run_status if scheduled_slot else f"manual_{run_status}"
+                    state["last_error"] = ""
+                    state["last_success_at"] = finished_at.isoformat(timespec="seconds")
+                    done_note = (
+                        f"Scheduled slot {scheduled_slot} completed in {format_duration(duration_seconds)}."
+                        if scheduled_slot
+                        else f"Manual shared-folder scan completed in {format_duration(duration_seconds)}."
+                    )
+
+                save_state(state)
+                self.scheduler_state = state
+                self.background_task_active = False
+                self.current_background_label = ""
+                self.scheduler_scan_active = False
+                self.scheduler_active_slot = ""
+
+                self.refresh_table()
+                self.refresh_avwap_output_view()
+                self.refresh_anchor_output_view()
+                self.refresh_setup_tracker_view()
+                self.refresh_tracker_storage_summary()
+                self.status_var.set(done_note)
+
+                phase_after = "waiting" if self.scheduler_enabled else "paused"
+                if not scheduled_slot:
+                    phase_after = "idle" if not self.scheduler_enabled else "waiting"
+                self._write_scheduler_status(phase_after, done_note)
+                self._maybe_complete_schedule_window()
+
+            self.root.after(0, _finish)
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _maybe_complete_schedule_window(self):
+        today_iso = datetime.now().date().isoformat()
+        stop_dt = slot_datetime(self.stop_at)
+        if self.background_task_active or datetime.now() < stop_dt:
+            return
+        if self.completed_window_date == today_iso:
+            return
+
+        state = load_state(self.schedule)
+        state["last_status"] = state.get("last_status", "idle") or "idle"
+        save_state(state)
+        self.completed_window_date = today_iso
+        self._write_scheduler_status("completed", f"Schedule window ended at {self.stop_at}.")
+        logging.info("Mini-PC GUI schedule finished for %s.", today_iso)
+
+        if self.shutdown_at_end and self.shutdown_issued_date != today_iso:
+            self.shutdown_issued_date = today_iso
+            self.status_var.set("Schedule window ended. Shutting down Windows...")
+            self.root.after(1500, self._shutdown_host)
+
+    def _shutdown_host(self):
+        maybe_shutdown_windows()
+
+    def _scheduler_tick(self):
+        self.scheduler_state = load_state(self.schedule)
+        today_iso = datetime.now().date().isoformat()
+        if self.completed_window_date and self.completed_window_date != today_iso:
+            self.completed_window_date = None
+        if self.shutdown_issued_date and self.shutdown_issued_date != today_iso:
+            self.shutdown_issued_date = None
+
+        if self.background_task_active:
+            phase = "running" if self.scheduler_scan_active else "busy"
+            note = self.current_background_label or "Background task is still running."
+            self._write_scheduler_status(phase, note, active_slot=self.scheduler_active_slot)
+            self.root.after(GUI_TICK_MS, self._scheduler_tick)
+            return
+
+        if not self.scheduler_enabled:
+            self._write_scheduler_status("paused", "Scheduler is paused in the GUI.")
+            self.root.after(GUI_TICK_MS, self._scheduler_tick)
+            return
+
+        stop_dt = slot_datetime(self.stop_at)
+        if datetime.now() >= stop_dt:
+            self._maybe_complete_schedule_window()
+            self.root.after(GUI_TICK_MS, self._scheduler_tick)
+            return
+
+        due_slots = get_due_pending_slots(self.scheduler_state, self.schedule)
+        if due_slots:
+            self._start_shared_scan(run_label=due_slots[-1], scheduled_slot=due_slots[-1])
+            self.root.after(GUI_TICK_MS, self._scheduler_tick)
+            return
+
+        next_slot = get_next_pending_slot(self.scheduler_state, self.schedule)
+        waiting_note = (
+            f"Waiting for next slot {next_slot}."
+            if next_slot
+            else "No pending slots remain for today."
+        )
+        self._write_scheduler_status("waiting", waiting_note)
+        self.root.after(GUI_TICK_MS, self._scheduler_tick)
+
+    def _on_close(self):
+        if self.background_task_active:
+            if messagebox and not messagebox.askyesno(
+                "Exit Mini-PC Scheduler",
+                "A background task is still running. Closing now will stop the scheduler window. Exit anyway?",
+            ):
+                return
+        elif self.scheduler_enabled and messagebox and datetime.now() < slot_datetime(self.stop_at):
+            if not messagebox.askyesno(
+                "Exit Mini-PC Scheduler",
+                "The auto scheduler is still active for today. Closing now will stop future scheduled scans. Exit anyway?",
+            ):
+                return
+        self.root.destroy()
+
+
+def launch_gui_app(
+    schedule: list[str],
+    stop_at: str,
+    dry_run: bool = False,
+    shutdown_at_end: bool = False,
+    auto_start: bool = True,
+) -> int:
+    if tk is None or ttk is None:
+        logging.error("tkinter is unavailable in this Python environment; cannot launch the mini-PC GUI.")
+        return 1
+
+    root = tk.Tk()
+    MiniPCMasterAvwapGUI(
+        root,
+        schedule=schedule,
+        stop_at=stop_at,
+        dry_run=dry_run,
+        shutdown_at_end=shutdown_at_end,
+        auto_start=auto_start,
+    )
+    root.mainloop()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the headless Master AVWAP mini-PC scheduler.")
+    parser = argparse.ArgumentParser(description="Run the Master AVWAP mini-PC scheduler.")
     parser.add_argument(
         "--schedule",
         default=",".join(DEFAULT_SCHEDULE),
@@ -619,6 +1068,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Exercise the scheduler/status flow without running the live scan.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run the scheduler loop without launching the GUI.",
+    )
+    parser.add_argument(
+        "--no-autostart",
+        action="store_true",
+        help="Launch the GUI without immediately starting the auto scheduler.",
     )
     parser.add_argument(
         "--shutdown-at-end",
@@ -641,12 +1100,25 @@ def main() -> int:
     stop_at = parse_clock(args.stop_at).strftime("%H:%M")
 
     attach_scheduler_log_handler()
-    acquire_lock(force_reset=args.reset_lock)
+    try:
+        acquire_lock(force_reset=args.reset_lock)
+    except RuntimeError as exc:
+        logging.error(str(exc))
+        if not args.headless and tk is not None and messagebox is not None:
+            try:
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showerror("Mini-PC Scheduler", str(exc))
+                root.destroy()
+            except Exception:
+                pass
+        return 1
 
     logging.info(
-        "Mini-PC runner starting. once=%s dry_run=%s schedule=%s stop_at=%s shared_root=%s",
+        "Mini-PC runner starting. once=%s dry_run=%s headless=%s schedule=%s stop_at=%s shared_root=%s",
         args.once,
         args.dry_run,
+        args.headless,
         ",".join(schedule),
         stop_at,
         LONGS_FILE.parent,
@@ -655,11 +1127,20 @@ def main() -> int:
     if args.once:
         return run_once(schedule, stop_at, dry_run=args.dry_run)
 
-    return run_schedule(
+    if args.headless:
+        return run_schedule(
+            schedule,
+            stop_at,
+            dry_run=args.dry_run,
+            shutdown_at_end=args.shutdown_at_end,
+        )
+
+    return launch_gui_app(
         schedule,
         stop_at,
         dry_run=args.dry_run,
         shutdown_at_end=args.shutdown_at_end,
+        auto_start=not args.no_autostart,
     )
 
 
