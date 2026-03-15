@@ -6,6 +6,7 @@ import os
 import re
 import json
 from datetime import datetime
+from pathlib import Path
 
 from project_paths import (
     LONGS_FILE as LONGS_PATH,
@@ -13,14 +14,18 @@ from project_paths import (
     BOUNCE_LOG_FILE,
     MASTER_AVWAP_REPORT_FILE,
     MASTER_POSITIONS_FILE as MASTER_POSITIONS_PATH,
+    get_tracker_storage_details,
+    get_shared_watchlist_details,
+    save_tracker_storage_dir,
 )
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QTextEdit, QVBoxLayout, QPushButton,
-    QMessageBox, QLabel, QScrollArea, QFrame, QHBoxLayout, QGridLayout
+    QMessageBox, QLabel, QScrollArea, QFrame, QHBoxLayout, QGridLayout,
+    QFileDialog,
 )
-from PyQt5.QtCore import Qt, QFileSystemWatcher, QTimer, QDateTime
-from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtCore import Qt, QFileSystemWatcher, QTimer, QDateTime, QUrl
+from PyQt5.QtGui import QPalette, QColor, QDesktopServices
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Files & Settings
@@ -53,6 +58,14 @@ POSITION_BAND_GROUPS = {
     "2SD": ["UPPER_2", "LOWER_2"],
     "3SD": ["UPPER_3", "LOWER_3"],
 }
+
+
+def _open_folder(path: Path):
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    except Exception as exc:
+        QMessageBox.critical(None, "Open Folder", f"Could not open folder:\n{path}\n\n{exc}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UI Widgets
@@ -168,6 +181,25 @@ class MainWindow(QWidget):
         self.clock.setStyleSheet(f"color:{TEXT_COLOR}; font-size:10pt;")
         layout.addWidget(self.clock)
 
+        self.info_label = QLabel()
+        self.info_label.setWordWrap(True)
+        self.info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.info_label.setStyleSheet(f"color:{TEXT_COLOR}; font-size:9pt;")
+        layout.addWidget(self.info_label)
+
+        home_row = QHBoxLayout()
+        change_home_btn = QPushButton("Change Home Folder")
+        change_home_btn.clicked.connect(self.change_home_folder)
+        change_home_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+        home_row.addWidget(change_home_btn)
+
+        open_home_btn = QPushButton("Open Home Folder")
+        open_home_btn.clicked.connect(self.open_home_folder)
+        open_home_btn.setStyleSheet(f"background-color:#3D3D3D; color:{TEXT_COLOR};")
+        home_row.addWidget(open_home_btn)
+        home_row.addStretch(1)
+        layout.addLayout(home_row)
+
         # Content widget
         if self.newest_at_top:
             self.list_widget = TickerListWidget(self)
@@ -270,6 +302,7 @@ class MainWindow(QWidget):
         self.last_save = 0
         self.last_run_marker = None
         self.seen_events = set()
+        self.refresh_storage_info()
         self.load_tickers(force=True)
         self.update_clock()
 
@@ -281,6 +314,55 @@ class MainWindow(QWidget):
     def update_clock(self):
         now = datetime.now()
         self.clock.setText(now.strftime("%H:%M:%S"))
+
+    def refresh_storage_info(self):
+        details = get_tracker_storage_details()
+        watchlists = get_shared_watchlist_details()
+        current_file = Path(self.filename)
+        self.info_label.setText(
+            "Home folder: "
+            f"{details['data_dir']}\n"
+            "Current file: "
+            f"{current_file}\n"
+            "Watchlists: "
+            f"longs.txt ({watchlists['longs_exists']}) | shorts.txt ({watchlists['shorts_exists']})"
+        )
+
+    def open_home_folder(self):
+        details = get_tracker_storage_details()
+        _open_folder(Path(details["data_dir"]))
+
+    def change_home_folder(self):
+        details = get_tracker_storage_details()
+        current_dir = Path(details["data_dir"])
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Choose home folder",
+            str(current_dir if current_dir.exists() else Path.home()),
+        )
+        if not selected:
+            return
+
+        target = save_tracker_storage_dir(selected)
+        restart_now = QMessageBox.question(
+            self,
+            "Home Folder Saved",
+            "Saved this computer's home folder.\n\n"
+            f"Folder: {target}\n\n"
+            "Restart TickerMover now so it starts using the new home folder?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if restart_now == QMessageBox.Yes:
+            QApplication.instance().quit()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+            return
+
+        QMessageBox.information(
+            self,
+            "Restart Required",
+            "Restart TickerMover when you are ready. This running instance is still using the previous home folder.",
+        )
 
     # ───── file <-> view ─────
     def load_tickers(self, force=False):

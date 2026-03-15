@@ -71,6 +71,7 @@ from project_paths import (
     APP_LOG_BACKUP_COUNT,
     get_shared_watchlist_paths,
     get_tracker_storage_details,
+    open_path_in_file_manager,
     save_tracker_storage_dir,
 )
 
@@ -367,8 +368,8 @@ def resolve_scan_watchlist_paths(
         return Path(longs_path), Path(shorts_path), "custom watchlists"
     if use_shared_watchlists:
         shared_longs_path, shared_shorts_path = get_shared_watchlist_paths()
-        return shared_longs_path, shared_shorts_path, "shared folder watchlists"
-    return LONGS_FILE, SHORTS_FILE, "repo watchlists"
+        return shared_longs_path, shared_shorts_path, "home folder watchlists"
+    return LONGS_FILE, SHORTS_FILE, "home folder watchlists"
 
 
 def run_master_with_shared_watchlists():
@@ -6100,7 +6101,7 @@ class MasterAvwapGUI:
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill="x", padx=10, pady=8)
 
-        ttk.Label(toolbar, text="Earnings lookback days:").pack(side="left", padx=(0, 4))
+        ttk.Label(toolbar, text="Earnings gap lookback:").pack(side="left", padx=(0, 4))
         lookback_spin = ttk.Spinbox(
             toolbar,
             from_=1,
@@ -6111,15 +6112,19 @@ class MasterAvwapGUI:
         lookback_spin.pack(side="left", padx=(0, 10))
 
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Scan Shared Watchlists", command=self.run_shared_watchlist_scan_once).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Refresh Active Anchors", command=self.refresh_table).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Refresh AVWAP Output", command=self.refresh_avwap_output_view).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Refresh Setup Tracker", command=self.refresh_setup_tracker_view).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Run Master Scan", command=self.run_master_once).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Run Home Folder Scan", command=self.run_shared_watchlist_scan_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
+
+        ttk.Label(
+            self.root,
+            text="Views refresh automatically when scans finish or when you open a tab.",
+            justify="left",
+        ).pack(fill="x", padx=10, pady=(0, 8))
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=8)
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
 
         tracker_tab = ttk.Frame(self.notebook)
         self.tracker_tab = tracker_tab
@@ -6127,7 +6132,6 @@ class MasterAvwapGUI:
 
         tracker_toolbar = ttk.Frame(tracker_tab)
         tracker_toolbar.pack(fill="x", pady=(0, 8))
-        ttk.Button(tracker_toolbar, text="Refresh Tracker", command=self.refresh_setup_tracker_view).pack(side="left")
         ttk.Button(tracker_toolbar, text="Copy Active Symbols", command=self.copy_setup_tracker_symbols).pack(side="left", padx=(8, 0))
         ttk.Label(tracker_toolbar, text="Backfill sessions:").pack(side="left", padx=(16, 4))
         tracker_backfill_spin = ttk.Spinbox(
@@ -6143,6 +6147,7 @@ class MasterAvwapGUI:
             text="Backfill Tracker",
             command=self.backfill_setup_tracker_history,
         ).pack(side="left", padx=(8, 0))
+        ttk.Frame(tracker_toolbar).pack(side="left", fill="x", expand=True)
         ttk.Button(tracker_toolbar, text="Change Home Folder", command=self.choose_tracker_storage_dir).pack(side="left", padx=(16, 0))
         ttk.Button(tracker_toolbar, text="Open Home Folder", command=self.open_tracker_storage_dir).pack(side="left", padx=(8, 0))
         ttk.Button(tracker_toolbar, text="Open Settings File", command=self.open_tracker_settings_file).pack(side="left", padx=(8, 0))
@@ -6244,6 +6249,13 @@ class MasterAvwapGUI:
         self.anchors_tab = anchors_tab
         self.notebook.add(anchors_tab, text="Earnings Anchors")
 
+        ttk.Label(
+            anchors_tab,
+            text="Anchor rows refresh automatically after scans, imports, edits, and when you reopen this tab.",
+            justify="left",
+            wraplength=1100,
+        ).pack(fill="x", pady=(0, 8))
+
         form = ttk.LabelFrame(anchors_tab, text="Manual Anchor Entry")
         form.pack(fill="x", padx=0, pady=(0, 8))
 
@@ -6316,7 +6328,14 @@ class MasterAvwapGUI:
 
         avwap_tab = ttk.Frame(self.notebook)
         self.avwap_tab = avwap_tab
-        self.notebook.add(avwap_tab, text="AVWAP Scan Output")
+        self.notebook.add(avwap_tab, text="AVWAP Results")
+
+        ttk.Label(
+            avwap_tab,
+            text="Priority setups, event tickers, and stdev groups refresh automatically after each scan and when you open this tab.",
+            justify="left",
+            wraplength=1100,
+        ).pack(fill="x", pady=(0, 8))
 
         avwap_body = ttk.Frame(avwap_tab)
         avwap_body.pack(fill="both", expand=True)
@@ -6357,7 +6376,14 @@ class MasterAvwapGUI:
 
         anchor_scan_tab = ttk.Frame(self.notebook)
         self.anchor_scan_tab = anchor_scan_tab
-        self.notebook.add(anchor_scan_tab, text="Anchor AVWAP Output")
+        self.notebook.add(anchor_scan_tab, text="Anchor Results")
+
+        ttk.Label(
+            anchor_scan_tab,
+            text="Anchor watchlist output refreshes automatically after scans and when you open this tab.",
+            justify="left",
+            wraplength=1100,
+        ).pack(fill="x", pady=(0, 8))
         self.anchor_scan_text = tk.Text(anchor_scan_tab, wrap="word", font=("Courier New", 10))
         self.anchor_scan_text.pack(side="left", fill="both", expand=True)
         anchor_output_scroll = ttk.Scrollbar(anchor_scan_tab, orient="vertical", command=self.anchor_scan_text.yview)
@@ -6377,19 +6403,20 @@ class MasterAvwapGUI:
         self.tracker_storage_runtime_dir = Path(details["runtime_dir"])
         self.tracker_storage_settings_file = Path(details["settings_file"])
         self.tracker_storage_var.set(
-            f"Home folder: {details['data_dir']} | "
-            f"Mutable data: {details['mutable_data_dir']} | "
-            f"Logs: {details['logs_dir']} | "
-            f"Reports: {details['output_dir']} | "
-            f"Shared longs.txt: {'OK' if shared_longs_path.exists() else 'missing'} | "
-            f"Shared shorts.txt: {'OK' if shared_shorts_path.exists() else 'missing'} | "
+            f"Home folder: {details['data_dir']}\n"
+            f"Mutable data: {details['mutable_data_dir']}\n"
+            f"Logs: {details['logs_dir']}\n"
+            f"Reports: {details['output_dir']}\n"
+            f"Runtime tracker data: {details['runtime_dir']}\n"
+            f"Home-folder longs.txt: {'OK' if shared_longs_path.exists() else 'missing'}\n"
+            f"Home-folder shorts.txt: {'OK' if shared_shorts_path.exists() else 'missing'}\n"
             f"Source: {details['source_label']}"
         )
 
     def _open_folder_in_explorer(self, path: Path):
         try:
             path.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(path))
+            open_path_in_file_manager(path)
         except Exception as exc:
             if messagebox:
                 messagebox.showerror("Open Folder", f"Could not open folder:\n{path}\n\n{exc}")
@@ -6428,6 +6455,20 @@ class MasterAvwapGUI:
     def open_tracker_settings_file(self):
         self.refresh_tracker_storage_summary()
         self._open_folder_in_explorer(self.tracker_storage_settings_file.parent)
+
+    def _refresh_active_tab(self):
+        selected_tab = self.notebook.select()
+        if selected_tab == str(self.tracker_tab):
+            self.refresh_setup_tracker_view()
+        elif selected_tab == str(self.anchors_tab):
+            self.refresh_table()
+        elif selected_tab == str(self.avwap_tab):
+            self.refresh_avwap_output_view()
+        elif selected_tab == str(self.anchor_scan_tab):
+            self.refresh_anchor_output_view()
+
+    def _on_notebook_tab_changed(self, _event=None):
+        self._refresh_active_tab()
 
     def _read_text_file(self, path: Path):
         if not path.exists():
@@ -6883,8 +6924,8 @@ class MasterAvwapGUI:
         self.notebook.select(self.avwap_tab)
         self._run_background(
             run_master_with_shared_watchlists,
-            "Running Master AVWAP scan from shared longs.txt / shorts.txt...",
-            "Shared-watchlist Master AVWAP scan complete.",
+            "Running Master AVWAP scan from home-folder longs.txt / shorts.txt...",
+            "Home-folder Master AVWAP scan complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_anchor_output_view(),

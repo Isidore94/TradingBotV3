@@ -22,6 +22,7 @@ from project_paths import (
     get_shared_watchlist_details,
     get_tracker_storage_details,
     get_local_setting,
+    open_path_in_file_manager,
     save_tracker_storage_dir,
     save_local_setting,
 )
@@ -81,7 +82,7 @@ BOUNCE_TOGGLE_ORDER = [
 def _open_folder(path: Path) -> None:
     try:
         path.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(path))
+        open_path_in_file_manager(path)
     except Exception as exc:
         messagebox.showerror("Open Folder", f"Could not open folder:\n{path}\n\n{exc}")
 
@@ -137,8 +138,8 @@ class TrackerStorageControls:
             f"Logs: {details['logs_dir']}\n"
             f"Reports: {details['output_dir']}\n"
             f"Runtime tracker data: {details['runtime_dir']}\n"
-            f"Shared longs.txt: {shared_watchlists['longs_path']} ({shared_watchlists['longs_exists']})\n"
-            f"Shared shorts.txt: {shared_watchlists['shorts_path']} ({shared_watchlists['shorts_exists']})\n"
+            f"Home-folder longs.txt: {shared_watchlists['longs_path']} ({shared_watchlists['longs_exists']})\n"
+            f"Home-folder shorts.txt: {shared_watchlists['shorts_path']} ({shared_watchlists['shorts_exists']})\n"
             f"Source: {details['source_label']}"
         )
 
@@ -268,8 +269,9 @@ class BounceBotController:
         def get_market_environment(self) -> str:
             return self._controller.get_market_environment()
 
-    def __init__(self, include_approaching: bool):
+    def __init__(self, include_approaching: bool, ui_parent: tk.Misc):
         self.include_approaching = include_approaching
+        self.ui_parent = ui_parent
         self.rrs_queue: queue.Queue = queue.Queue()
         self.bounce_queue: queue.Queue = queue.Queue()
         self.status_var = tk.StringVar(value="starting...")
@@ -284,6 +286,18 @@ class BounceBotController:
         self.scanning_enabled = True
         self.bounce_type_settings = dict(BOUNCE_TYPE_DEFAULTS)
         self.gui_proxy = self.GUIProxy(self)
+
+    def _run_on_ui_thread(self, callback) -> None:
+        if threading.current_thread() is threading.main_thread():
+            callback()
+            return
+        try:
+            self.ui_parent.after(0, callback)
+        except RuntimeError:
+            pass
+
+    def _set_var(self, variable: tk.Variable, value: str) -> None:
+        self._run_on_ui_thread(lambda: variable.set(value))
 
     def _with_bot(self, callback):
         with self._lock:
@@ -311,7 +325,7 @@ class BounceBotController:
             bot.set_bounce_type_enabled(bounce_key, enabled)
 
     def _emit(self, message: str) -> None:
-        self.status_var.set(message)
+        self._set_var(self.status_var, message)
 
     def _make_callback(self):
         def gui_callback(message, tag):
@@ -329,18 +343,18 @@ class BounceBotController:
     def start(self) -> None:
         def run_bot() -> None:
             self._emit("connecting")
-            self.connection_var.set("IB: connecting")
+            self._set_var(self.connection_var, "IB: connecting")
             try:
                 bot = run_bot_with_gui(self._make_callback())
                 self._apply_saved_state(bot)
                 self._sync_state_from_bot(bot)
                 with self._lock:
                     self.bot_instance = bot
-                self.refresh_active_bounces()
-                self.connection_var.set("IB: connected")
+                self._run_on_ui_thread(self.refresh_active_bounces)
+                self._set_var(self.connection_var, "IB: connected")
                 self._emit("connected")
             except Exception as exc:
-                self.connection_var.set("IB: disconnected")
+                self._set_var(self.connection_var, "IB: disconnected")
                 self._emit(f"start failed: {exc}")
 
         threading.Thread(target=run_bot, daemon=True).start()
@@ -358,8 +372,8 @@ class BounceBotController:
                 bot.disconnect()
             except Exception:
                 pass
-        self.connection_var.set("IB: disconnected")
-        self.active_bounce_var.set("active bounces: 0")
+        self._set_var(self.connection_var, "IB: disconnected")
+        self._set_var(self.active_bounce_var, "active bounces: 0")
         self._emit("stopped")
 
     def set_rrs_threshold(self, value: float) -> None:
@@ -405,9 +419,9 @@ class BounceBotController:
 
         count = self._with_bot(_read_count)
         if count is None:
-            self.active_bounce_var.set("active bounces: 0")
+            self._set_var(self.active_bounce_var, "active bounces: 0")
             return
-        self.active_bounce_var.set(f"active bounces: {count}")
+        self._set_var(self.active_bounce_var, f"active bounces: {count}")
 
     def run_manual_check(self, method_name: str, heading: str) -> None:
         def worker() -> None:
@@ -495,7 +509,11 @@ class BaseBounceBotPanel:
 
 class SimpleBounceBotPanel(BaseBounceBotPanel):
     def __init__(self, parent: tk.Misc, switch_mode_callback=None):
-        super().__init__(parent, BounceBotController(include_approaching=False), switch_mode_callback=switch_mode_callback)
+        super().__init__(
+            parent,
+            BounceBotController(include_approaching=False, ui_parent=parent),
+            switch_mode_callback=switch_mode_callback,
+        )
         self._syncing_controls = False
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self.rrs_threshold_var = tk.DoubleVar(value=self.controller.rrs_threshold)
@@ -661,7 +679,11 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
 
 class FullBounceBotPanel(BaseBounceBotPanel):
     def __init__(self, parent: tk.Misc, switch_mode_callback=None):
-        super().__init__(parent, BounceBotController(include_approaching=False), switch_mode_callback=switch_mode_callback)
+        super().__init__(
+            parent,
+            BounceBotController(include_approaching=False, ui_parent=parent),
+            switch_mode_callback=switch_mode_callback,
+        )
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self.scanning_button_text = tk.StringVar(value="Stop Scanning")
         self._build_layout()
@@ -795,7 +817,7 @@ class SimpleMasterAvwapPanel:
 
         ttk.Label(toolbar, text="Master AVWAP Simple").pack(side=tk.LEFT)
         ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side=tk.LEFT, padx=(12, 4))
-        ttk.Button(toolbar, text="Scan Shared Lists", command=self.run_shared_watchlists_once).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="Run Home Folder Scan", command=self.run_shared_watchlists_once).pack(side=tk.LEFT, padx=4)
         ttk.Button(toolbar, text="Refresh Output", command=self.refresh_output_view).pack(side=tk.LEFT, padx=4)
 
         hint = ttk.Label(
@@ -873,8 +895,8 @@ class SimpleMasterAvwapPanel:
     def run_shared_watchlists_once(self) -> None:
         self._run_background(
             run_master_with_shared_watchlists,
-            "Running Master AVWAP scan from shared longs.txt / shorts.txt...",
-            "Shared-watchlist Master AVWAP scan complete.",
+            "Running Master AVWAP scan from home-folder longs.txt / shorts.txt...",
+            "Home-folder Master AVWAP scan complete.",
         )
 
 

@@ -13,14 +13,14 @@ pip install -r requirements.txt
 
 ## Repository Layout
 - `scripts/` - Intraday and daily-running bots ready for use (`master_avwap.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
-- `data/`, `logs/`, `output/` - Generated artifacts created as needed by the scripts.
-- `longs.txt`, `shorts.txt` - Input watchlists consumed by the scanners.
+- `data/`, `logs/`, `output/` - Legacy repo folders; current runtime files are stored under the selected home folder.
+- `longs.txt`, `shorts.txt` - Input watchlists consumed by the scanners, stored in the selected home folder root.
 
 ## Required Inputs
 - `longs.txt` - one ticker per line for long-side scanning.
 - `shorts.txt` - one ticker per line for short-side scanning.
 
-These files should live in the repository root. The scripts will create any missing `data`, `logs`, and `output` directories at runtime.
+These files should live in the selected home folder root. The app creates any missing `data`, `logs`, and `output` directories inside that home folder at runtime.
 
 ## Running The Bots
 - Daily AVWAP/previous-AVWAP engine:
@@ -29,7 +29,7 @@ These files should live in the repository root. The scripts will create any miss
   python scripts/master_avwap.py
   ```
 
-  Generates `output/master_avwap_events.txt` and writes diagnostics to the shared app log under `logs/trading_bot.log`.
+  Generates `output/master_avwap_events.txt` inside the selected home folder and writes diagnostics to `logs/trading_bot.log` there as well.
 
 - Intraday 5-minute bounce detector with optional GUI:
 
@@ -37,12 +37,12 @@ These files should live in the repository root. The scripts will create any miss
   python scripts/bounce_bot.py --use_gui
   ```
 
-  Writes detected bouncers to `logs/bouncers.txt`, stores the structured bounce history in `data/intraday_bounces.csv`, and writes runtime diagnostics to `logs/trading_bot.log`.
+  Writes detected bouncers to `logs/bouncers.txt`, stores the structured bounce history in `data/intraday_bounces.csv`, and writes runtime diagnostics to `logs/trading_bot.log` inside the selected home folder.
 
 Ensure your IB session is connected before launching either bot so market data requests succeed.
 
 ## Notes
-- The main rotating app log is `logs/trading_bot.log`.
+- The main rotating app log is `logs/trading_bot.log` in the selected home folder.
 - `logs/bouncers.txt` is the lightweight current-session bounce list.
 - `logs/rrs_strength_extremes.csv` and `logs/rrs_group_strength_extremes.csv` are data logs for RRS history.
 

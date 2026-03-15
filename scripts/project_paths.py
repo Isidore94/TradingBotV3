@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import shutil
 import json
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -11,8 +13,25 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 REPO_DATA_DIR = ROOT_DIR / "data"
 REPO_OUTPUT_DIR = ROOT_DIR / "output"
 REPO_LOG_DIR = ROOT_DIR / "logs"
-LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-LOCAL_SETTINGS_DIR = LOCAL_APPDATA_DIR / "TradingBotV3"
+
+
+def _default_local_settings_dir() -> Path:
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        return Path(local_appdata) / "TradingBotV3"
+
+    if sys.platform == "darwin":
+        preferred = Path.home() / "Library" / "Application Support" / "TradingBotV3"
+    else:
+        preferred = Path.home() / ".local" / "share" / "TradingBotV3"
+
+    legacy = Path.home() / "AppData" / "Local" / "TradingBotV3"
+    if legacy.exists() and not preferred.exists():
+        return legacy
+    return preferred
+
+
+LOCAL_SETTINGS_DIR = _default_local_settings_dir()
 LOCAL_SETTINGS_FILE = LOCAL_SETTINGS_DIR / "local_settings.json"
 
 
@@ -159,6 +178,16 @@ def save_local_setting(key: str, value) -> None:
     payload = _load_local_settings()
     payload[key] = value
     LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def open_path_in_file_manager(path: Path) -> None:
+    target = Path(path).expanduser()
+    if sys.platform == "win32":
+        os.startfile(str(target))
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
 
 
 def _ensure_directories() -> None:
