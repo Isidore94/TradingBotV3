@@ -265,6 +265,17 @@ YF_EARNINGS_LOGGER_NAMES = (
     "yfinance.scrapers",
     "yfinance.scrapers.calendar",
 )
+IBAPI_NOISY_LOGGER_NAMES = (
+    "ibapi",
+    "ibapi.client",
+    "ibapi.comm",
+    "ibapi.connection",
+    "ibapi.decoder",
+    "ibapi.orderdecoder",
+    "ibapi.reader",
+    "ibapi.utils",
+    "ibapi.wrapper",
+)
 YF_EARNINGS_NO_DATA_MARKERS = (
     "No earnings dates found",
     "symbol may be delisted",
@@ -281,6 +292,7 @@ DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS = 10
 DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
 SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
 EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES = 30
+DEFAULT_SETUP_TRACKER_UPDATE_CUTOFF = "12:00"
 DAILY_BAR_COLUMNS = ["datetime", "open", "high", "low", "close", "volume"]
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
@@ -288,9 +300,19 @@ APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 # LOGGING
 # ============================================================================
 
+def _configure_third_party_loggers() -> None:
+    # The IB API emits one INFO log per socket send/request, which overwhelms
+    # the console and makes it look like the watchlist itself exploded.
+    for logger_name in IBAPI_NOISY_LOGGER_NAMES:
+        ib_logger = logging.getLogger(logger_name)
+        ib_logger.setLevel(logging.WARNING)
+        ib_logger.propagate = True
+
+
 def configure_logging():
     logger = logging.getLogger()
     if logger.handlers:
+        _configure_third_party_loggers()
         return  # already configured
 
     logger.setLevel(logging.INFO)
@@ -314,6 +336,7 @@ def configure_logging():
     fh.setFormatter(fmt)
     fh.setLevel(logging.INFO)
     logger.addHandler(fh)
+    _configure_third_party_loggers()
 
 configure_logging()
 
@@ -333,6 +356,18 @@ def load_tickers(path: Path):
                 continue
             out.append(v.upper())
     return out
+
+
+def _parse_clock_time(value: str) -> datetime.time:
+    return datetime.strptime(str(value).strip(), "%H:%M").time()
+
+
+def should_update_setup_tracker_now(
+    now: datetime | None = None,
+    cutoff: str = DEFAULT_SETUP_TRACKER_UPDATE_CUTOFF,
+) -> bool:
+    reference = now or datetime.now()
+    return reference.time() >= _parse_clock_time(cutoff)
 
 
 def connect_daily_data_client(client_id: int, startup_wait: float = 1.0) -> IBApi | None:
@@ -5136,6 +5171,7 @@ def run_master(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
     use_shared_watchlists: bool = False,
+    update_setup_tracker: bool | None = None,
 ):
     longs_path, shorts_path, watchlist_label = resolve_scan_watchlist_paths(
         longs_path=longs_path,
@@ -5783,7 +5819,34 @@ def run_master(
         if row.get("priority_bucket") in {"favorite_setup", "near_favorite_zone"}
         and not row.get("ranking_blocked")
     ]
-    update_setup_tracker_from_scan(tracked_rows, ai_state, feature_rows_by_symbol, daily_frames_by_symbol, ib)
+    setup_tracker_allowed = (
+        bool(update_setup_tracker)
+        if update_setup_tracker is not None
+        else should_update_setup_tracker_now()
+    )
+
+    if setup_tracker_allowed:
+        update_setup_tracker_from_scan(
+            tracked_rows,
+            ai_state,
+            feature_rows_by_symbol,
+            daily_frames_by_symbol,
+            ib,
+        )
+        logging.info(
+            "Setup tracker updated for %s tracked symbol(s).",
+            len(tracked_rows),
+        )
+    else:
+        if update_setup_tracker is None:
+            logging.info(
+                "Setup tracker refresh skipped for this run because local time is before %s.",
+                DEFAULT_SETUP_TRACKER_UPDATE_CUTOFF,
+            )
+        else:
+            logging.info(
+                "Setup tracker refresh skipped for this run; final scheduled slot will refresh stored setups."
+            )
 
     disconnect_daily_data_client(ib)
 
@@ -7122,6 +7185,11 @@ def main():
     parser.add_argument("--once", action="store_true", help="Run a single AVWAP scan and exit.")
     parser.add_argument("--loop", action="store_true", help="Run AVWAP scan in hourly loop.")
     parser.add_argument(
+        "--force-setup-tracker-update",
+        action="store_true",
+        help="Update the setup tracker even before the default 12:00 local cutoff.",
+    )
+    parser.add_argument(
         "--scan-earnings",
         action="store_true",
         help="Scan the last market session for earnings gap anchor candidates and write the review list.",
@@ -7137,14 +7205,14 @@ def main():
         run_anchor_watchlist_scan(archive_expired=True)
 
     if args.once:
-        run_master()
+        run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
         return
 
     if args.loop:
         logging.info("Starting hourly Master AVWAP loop (once per hour)…")
         while True:
             start = time.time()
-            run_master()
+            run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
             elapsed = time.time() - start
             sleep_seconds = max(0, 3600 - elapsed)
             logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run…")

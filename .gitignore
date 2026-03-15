@@ -22,3 +22,5 @@ logs/*.csv
 /scripts/trading_bot.log.*
 output/*
 !output/.gitkeep
+run_python_script.ps1
+run_master_avwap_mini_pc.cmd

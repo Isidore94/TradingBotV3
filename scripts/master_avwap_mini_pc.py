@@ -54,6 +54,7 @@ from project_paths import (
 
 DEFAULT_SCHEDULE = ("07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00")
 DEFAULT_STOP_TIME = "13:30"
+DEFAULT_SETUP_TRACKER_REFRESH_SLOT = "12:00"
 STATUS_FILE = LONGS_FILE.parent / "master_avwap_mini_pc_status.txt"
 STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc_state.json"
 LOCK_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc.lock"
@@ -119,6 +120,72 @@ def load_json(path: Path, default: Any) -> Any:
             return json.load(handle)
     except Exception:
         return default
+
+
+def _pid_is_running(pid_value: Any) -> bool:
+    try:
+        pid = int(pid_value)
+    except (TypeError, ValueError):
+        return False
+
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+
+    if os.name == "nt":
+        try:
+            completed = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception:
+            return True
+
+        output = (completed.stdout or "").strip()
+        if not output or output.startswith("INFO:"):
+            return False
+        return f'"{pid}"' in output
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _stale_lock_reason(existing: Any) -> str | None:
+    if not isinstance(existing, dict):
+        return "lock payload is invalid"
+
+    started_at = existing.get("started_at")
+    try:
+        started_dt = datetime.fromisoformat(str(started_at))
+    except (TypeError, ValueError):
+        started_dt = None
+    if started_dt and (datetime.now() - started_dt) > STALE_LOCK_MAX_AGE:
+        return f"lock is older than {int(STALE_LOCK_MAX_AGE.total_seconds() // 3600)} hours"
+
+    pid = existing.get("pid")
+    if pid is not None and not _pid_is_running(pid):
+        return f"recorded PID {pid} is not running"
+
+    script_value = existing.get("script")
+    if script_value:
+        try:
+            script_path = Path(str(script_value)).expanduser()
+        except Exception:
+            script_path = None
+        if script_path is not None and not script_path.exists():
+            return f"recorded script path is missing: {script_path}"
+
+    return None
 
 
 def save_json(path: Path, payload: Any) -> None:
@@ -458,14 +525,33 @@ def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
     return summary
 
 
-def run_master_with_watchlist_filter() -> dict[str, Any]:
+def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> dict[str, Any]:
     filter_summary = filter_watchlists_by_previous_day_levels()
     try:
-        run_master(use_shared_watchlists=True)
+        run_master(
+            use_shared_watchlists=True,
+            update_setup_tracker=update_setup_tracker,
+        )
     except Exception as exc:
         setattr(exc, "watchlist_filter_summary", filter_summary)
         raise
     return filter_summary
+
+
+def should_update_setup_tracker_for_slot(
+    schedule: list[str],
+    scheduled_slot: str | None,
+) -> bool:
+    if not scheduled_slot:
+        return False
+    if not schedule:
+        return False
+    refresh_slot = (
+        DEFAULT_SETUP_TRACKER_REFRESH_SLOT
+        if DEFAULT_SETUP_TRACKER_REFRESH_SLOT in schedule
+        else schedule[-1]
+    )
+    return scheduled_slot == refresh_slot
 
 
 def _extract_symbols_from_text(text: str) -> list[str]:
@@ -669,12 +755,7 @@ def acquire_lock(force_reset: bool = False) -> None:
 
     if LOCK_FILE.exists():
         existing = load_json(LOCK_FILE, default={})
-        started_at = existing.get("started_at") if isinstance(existing, dict) else None
-        try:
-            started_dt = datetime.fromisoformat(str(started_at))
-        except (TypeError, ValueError):
-            started_dt = None
-        if started_dt and (datetime.now() - started_dt) > STALE_LOCK_MAX_AGE:
+        if _stale_lock_reason(existing):
             LOCK_FILE.unlink(missing_ok=True)
 
     payload = {
@@ -753,6 +834,7 @@ def execute_scan(
 ) -> bool:
     started_at = datetime.now()
     run_id = started_at.strftime("%Y%m%d-%H%M%S")
+    update_setup_tracker = should_update_setup_tracker_for_slot(schedule, trigger_slot)
     mark_slots_skipped_before_trigger(state, schedule, trigger_slot, started_at)
     save_state(state)
     write_status_file(
@@ -764,7 +846,11 @@ def execute_scan(
         active_slot=trigger_slot,
     )
 
-    logging.info("Starting mini-PC Master AVWAP run for slot %s.", trigger_slot)
+    logging.info(
+        "Starting mini-PC Master AVWAP run for slot %s. update_setup_tracker=%s",
+        trigger_slot,
+        update_setup_tracker,
+    )
     error_text = ""
     status = "success"
     filter_summary = None
@@ -777,7 +863,9 @@ def execute_scan(
                 "message": "Dry-run mode skipped the watchlist filter.",
             }
         else:
-            filter_summary = run_master_with_watchlist_filter()
+            filter_summary = run_master_with_watchlist_filter(
+                update_setup_tracker=update_setup_tracker,
+            )
     except Exception as exc:
         status = "failed"
         error_text = str(exc)
@@ -860,6 +948,7 @@ def maybe_shutdown_windows() -> None:
 
 def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
     state = load_state(schedule)
+    update_setup_tracker = False
     write_status_file(
         state,
         schedule,
@@ -868,7 +957,10 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
         note="Running one immediate mini-PC scan.",
         active_slot="manual",
     )
-    logging.info("Starting one immediate mini-PC Master AVWAP scan.")
+    logging.info(
+        "Starting one immediate mini-PC Master AVWAP scan. update_setup_tracker=%s",
+        update_setup_tracker,
+    )
     started_at = datetime.now()
     error_text = ""
     filter_summary = None
@@ -881,7 +973,9 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
                 "message": "Dry-run mode skipped the watchlist filter.",
             }
         else:
-            filter_summary = run_master_with_watchlist_filter()
+            filter_summary = run_master_with_watchlist_filter(
+                update_setup_tracker=update_setup_tracker,
+            )
         status = "success" if not dry_run else "dry_run"
     except Exception as exc:
         status = "failed"
@@ -1189,6 +1283,7 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         run_id = started_at.strftime("%Y%m%d-%H%M%S")
         state = load_state(self.schedule)
         active_slot = scheduled_slot or "manual"
+        update_setup_tracker = should_update_setup_tracker_for_slot(self.schedule, scheduled_slot)
 
         if scheduled_slot:
             mark_slots_skipped_before_trigger(state, self.schedule, scheduled_slot, started_at)
@@ -1207,7 +1302,13 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         self.current_background_label = running_note
         self.status_var.set(running_note)
         self._write_scheduler_status(phase, running_note, active_slot=active_slot)
-        logging.info("Starting GUI mini-PC scan. label=%s scheduled_slot=%s dry_run=%s", run_label, scheduled_slot, self.dry_run)
+        logging.info(
+            "Starting GUI mini-PC scan. label=%s scheduled_slot=%s dry_run=%s update_setup_tracker=%s",
+            run_label,
+            scheduled_slot,
+            self.dry_run,
+            update_setup_tracker,
+        )
 
         def _task():
             error_text = ""
@@ -1222,7 +1323,9 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                         "message": "Dry-run mode skipped the watchlist filter.",
                     }
                 else:
-                    filter_summary = run_master_with_watchlist_filter()
+                    filter_summary = run_master_with_watchlist_filter(
+                        update_setup_tracker=update_setup_tracker,
+                    )
             except Exception as exc:
                 run_status = "failed"
                 error_text = str(exc)
