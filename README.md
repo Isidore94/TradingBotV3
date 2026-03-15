@@ -11,6 +11,14 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
+Windows repo-local virtual environment:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_python_script.ps1 scripts\master_avwap.py
+```
+
+The launcher always runs the target script with `.venv\Scripts\python.exe`. If `.venv` is missing it creates it, and if `requirements.txt` changed it refreshes the environment before starting the script.
+
 ## Repository Layout
 - `scripts/` - Intraday and daily-running bots ready for use (`master_avwap.py`, `master_avwap_mini_pc.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
 - `data/`, `logs/`, `output/` - Legacy repo folders; current runtime files are stored under the selected home folder.
@@ -26,7 +34,7 @@ These files should live in the selected home folder root. The app creates any mi
 - Daily AVWAP/previous-AVWAP engine:
 
   ```bash
-  python scripts/master_avwap.py
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_python_script.ps1 scripts\master_avwap.py
   ```
 
   Generates `output/master_avwap_events.txt` inside the selected home folder and writes diagnostics to `logs/trading_bot.log` there as well.
@@ -34,7 +42,7 @@ These files should live in the selected home folder root. The app creates any mi
 - Always-on mini-PC AVWAP scheduler for a shared home folder:
 
   ```bash
-  python scripts/master_avwap_mini_pc.py
+  .\run_master_avwap_mini_pc.cmd
   ```
 
   Launches the normal Master AVWAP GUI plus a dedicated `Mini PC` tab. It reuses the full `master_avwap.py` scan logic with the shared-folder watchlists, auto-runs on the default `07:00,08:00,09:00,10:00,11:00,12:00,13:00` schedule, stops at `13:30`, updates the setup tracker, and writes a phone-friendly status file to `master_avwap_mini_pc_status.txt` in the shared home-folder root.
@@ -42,17 +50,22 @@ These files should live in the selected home folder root. The app creates any mi
   Useful flags:
 
   ```bash
-  python scripts/master_avwap_mini_pc.py --once
-  python scripts/master_avwap_mini_pc.py --dry-run
-  python scripts/master_avwap_mini_pc.py --headless
-  python scripts/master_avwap_mini_pc.py --no-autostart
-  python scripts/master_avwap_mini_pc.py --shutdown-at-end
+  .\run_master_avwap_mini_pc.cmd --once
+  .\run_master_avwap_mini_pc.cmd --dry-run
+  .\run_master_avwap_mini_pc.cmd --headless
+  .\run_master_avwap_mini_pc.cmd --no-autostart
+  .\run_master_avwap_mini_pc.cmd --shutdown-at-end
   ```
 
   Windows Task Scheduler pattern:
-  Program/script: `py`
-  Add arguments: `scripts\\master_avwap_mini_pc.py`
-  Start in: the repo root folder
+  Program/script: `C:\Users\aaron\OneDrive\Desktop\TradingBotV3\run_master_avwap_mini_pc.cmd`
+  Add arguments: optional flags such as `--headless`
+  Start in: `C:\Users\aaron\OneDrive\Desktop\TradingBotV3`
+
+  Generic scheduler pattern for any repo script:
+  Program/script: `powershell.exe`
+  Add arguments: `-NoProfile -ExecutionPolicy Bypass -File C:\Users\aaron\OneDrive\Desktop\TradingBotV3\run_python_script.ps1 scripts\\your_script.py ...`
+  Start in: `C:\Users\aaron\OneDrive\Desktop\TradingBotV3`
 
   The `Mini PC` tab exposes a scheduler status panel, a live preview of the phone status file, and quick access to `Change Home Folder` / `Open Home Folder`. The existing Setup Tracker tab still has the same home-folder controls too.
 
@@ -61,7 +74,7 @@ These files should live in the selected home folder root. The app creates any mi
 - Intraday 5-minute bounce detector with optional GUI:
 
   ```bash
-  python scripts/bounce_bot.py --use_gui
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run_python_script.ps1 scripts\bounce_bot.py --use_gui
   ```
 
   Writes detected bouncers to `logs/bouncers.txt`, stores the structured bounce history in `data/intraday_bounces.csv`, and writes runtime diagnostics to `logs/trading_bot.log` inside the selected home folder.

@@ -207,8 +207,12 @@ def _ensure_directories() -> None:
 def _migrate_legacy_file(legacy_path: Path, new_path: Path) -> None:
     if not legacy_path.exists() or new_path.exists():
         return
-    new_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(legacy_path), str(new_path))
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_path), str(new_path))
+    except OSError:
+        # Cloud-synced folders can briefly lock files; don't block app startup on legacy migration.
+        return
 
 
 def _append_legacy_text_file(source_path: Path, destination_path: Path) -> None:
@@ -226,18 +230,24 @@ def _append_legacy_text_file(source_path: Path, destination_path: Path) -> None:
         content = ""
 
     if content.strip():
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
-        had_content = destination_path.exists() and destination_path.stat().st_size > 0
-        with destination_path.open("a", encoding="utf-8") as destination_file:
-            if had_content:
+        try:
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            had_content = destination_path.exists() and destination_path.stat().st_size > 0
+            with destination_path.open("a", encoding="utf-8") as destination_file:
+                if had_content:
+                    destination_file.write("\n")
+                destination_file.write(
+                    f"=== migrated from {source_path} at {datetime.now().isoformat(timespec='seconds')} ===\n"
+                )
+                destination_file.write(content.rstrip())
                 destination_file.write("\n")
-            destination_file.write(
-                f"=== migrated from {source_path} at {datetime.now().isoformat(timespec='seconds')} ===\n"
-            )
-            destination_file.write(content.rstrip())
-            destination_file.write("\n")
+        except OSError:
+            return
 
-    source_path.unlink(missing_ok=True)
+    try:
+        source_path.unlink(missing_ok=True)
+    except OSError:
+        return
 
 
 def _consolidate_log_variants(destination_path: Path, base_name: str, search_dir: Path, keep_backups: int) -> None:

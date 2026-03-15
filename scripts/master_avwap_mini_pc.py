@@ -8,6 +8,7 @@ import atexit
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -29,7 +30,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from master_avwap import MasterAvwapGUI, run_master
+from master_avwap import (
+    MasterAvwapGUI,
+    connect_daily_data_client,
+    disconnect_daily_data_client,
+    fetch_daily_bars,
+    load_tickers,
+    run_master,
+)
 from project_paths import (
     APP_LOG_BACKUP_COUNT,
     LOG_DIR,
@@ -55,6 +63,9 @@ STATUS_PREVIEW_RUNS = 8
 SLEEP_POLL_SECONDS = 30
 STALE_LOCK_MAX_AGE = timedelta(hours=12)
 GUI_TICK_MS = 15_000
+WATCHLIST_FILTER_CLIENT_ID = 1005
+WATCHLIST_FILTER_DAYS = 5
+WATCHLIST_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 
 _LOCK_ACQUIRED = False
 
@@ -95,6 +106,7 @@ def default_state(schedule: list[str]) -> dict[str, Any]:
         "last_status": "idle",
         "last_error": "",
         "last_success_at": None,
+        "last_filter_summary": None,
         "updated_at": now_iso,
     }
 
@@ -213,6 +225,311 @@ def format_duration(seconds: float | None) -> str:
     return f"{secs}s"
 
 
+def _dedupe_symbols(symbols: list[str]) -> list[str]:
+    cleaned = []
+    seen = set()
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        cleaned.append(symbol)
+    return cleaned
+
+
+def _format_symbol_preview(symbols: list[str], max_items: int = 12) -> str:
+    cleaned = _dedupe_symbols(symbols)
+    if not cleaned:
+        return "None"
+    preview = ", ".join(cleaned[:max_items])
+    if len(cleaned) > max_items:
+        preview += f" (+{len(cleaned) - max_items} more)"
+    return preview
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if result != result:
+        return None
+    return result
+
+
+def _coerce_bar_date(value: Any):
+    if value is None:
+        return None
+    if hasattr(value, "date"):
+        try:
+            return value.date()
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_previous_day_range_break(df) -> dict[str, Any] | None:
+    if df is None or getattr(df, "empty", True):
+        return None
+    if len(df.index) < 2:
+        return None
+
+    work = df.sort_values("datetime").reset_index(drop=True)
+    current_row = work.iloc[-1]
+    previous_row = work.iloc[-2]
+
+    current_date = _coerce_bar_date(current_row.get("datetime"))
+    previous_date = _coerce_bar_date(previous_row.get("datetime"))
+    if current_date is None or previous_date is None:
+        return None
+    if current_date != datetime.now().date():
+        return None
+
+    current_high = _coerce_float(current_row.get("high"))
+    current_low = _coerce_float(current_row.get("low"))
+    previous_high = _coerce_float(previous_row.get("high"))
+    previous_low = _coerce_float(previous_row.get("low"))
+    if None in (current_high, current_low, previous_high, previous_low):
+        return None
+
+    return {
+        "current_date": current_date.isoformat(),
+        "previous_date": previous_date.isoformat(),
+        "current_high": current_high,
+        "current_low": current_low,
+        "previous_high": previous_high,
+        "previous_low": previous_low,
+    }
+
+
+def _rewrite_watchlist_symbols(path: Path, keep_symbols: list[str]) -> None:
+    keep_ordered = _dedupe_symbols(keep_symbols)
+    keep_set = set(keep_ordered)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = "\n".join(keep_ordered)
+        path.write_text(f"{content}\n" if content else "", encoding="utf-8")
+        return
+
+    raw_lines = path.read_text(encoding="utf-8").splitlines()
+    rendered_lines = []
+    emitted = set()
+
+    for raw_line in raw_lines:
+        stripped = raw_line.strip()
+        upper = stripped.upper()
+        if not stripped:
+            rendered_lines.append("")
+            continue
+        if upper.startswith("SYMBOLS FROM TC2000"):
+            rendered_lines.append(raw_line.rstrip())
+            continue
+        if WATCHLIST_SYMBOL_RE.fullmatch(upper):
+            if upper in keep_set and upper not in emitted:
+                rendered_lines.append(upper)
+                emitted.add(upper)
+            continue
+        rendered_lines.append(raw_line.rstrip())
+
+    for symbol in keep_ordered:
+        if symbol not in emitted:
+            rendered_lines.append(symbol)
+
+    content = "\n".join(rendered_lines).rstrip()
+    path.write_text(f"{content}\n" if content else "", encoding="utf-8")
+
+
+def format_watchlist_filter_summary(summary: Any) -> str:
+    if not isinstance(summary, dict):
+        return "Not run yet."
+
+    message = str(summary.get("message") or "").strip()
+    if message:
+        return message
+
+    status = str(summary.get("status") or "").strip().lower()
+    if status == "error":
+        error_text = str(summary.get("error") or "").strip()
+        return f"Filter error: {error_text or 'Unknown error'}"
+    if status == "no_symbols":
+        return "No symbols were available to filter."
+    if status == "waiting_for_session":
+        return "No live session bar was available yet."
+    return "No watchlist filter summary available."
+
+
+def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
+    started_at = datetime.now()
+    longs = _dedupe_symbols(load_tickers(LONGS_FILE))
+    shorts = _dedupe_symbols(load_tickers(SHORTS_FILE))
+    summary = {
+        "ran_at": started_at.isoformat(timespec="seconds"),
+        "status": "ok",
+        "longs_before": len(longs),
+        "shorts_before": len(shorts),
+        "longs_after": len(longs),
+        "shorts_after": len(shorts),
+        "symbols_considered": 0,
+        "symbols_with_live_session_bar": 0,
+        "symbols_skipped_no_session_bar": 0,
+        "removed_longs": [],
+        "removed_shorts": [],
+        "message": "",
+    }
+
+    if not longs and not shorts:
+        summary["status"] = "no_symbols"
+        summary["message"] = "No symbols were available to filter."
+        logging.info(summary["message"])
+        return summary
+
+    long_set = set(longs)
+    short_set = set(shorts)
+    symbol_list = sorted(long_set | short_set)
+    summary["symbols_considered"] = len(symbol_list)
+
+    removed_longs = []
+    removed_shorts = []
+    skipped_no_session_bar = 0
+    ib = None
+    try:
+        ib = connect_daily_data_client(client_id=WATCHLIST_FILTER_CLIENT_ID, startup_wait=1.0)
+        for symbol in symbol_list:
+            df = fetch_daily_bars(ib, symbol, WATCHLIST_FILTER_DAYS)
+            day_range = _get_previous_day_range_break(df)
+            if not day_range:
+                skipped_no_session_bar += 1
+                continue
+
+            summary["symbols_with_live_session_bar"] += 1
+            if symbol in long_set and day_range["current_low"] < day_range["previous_low"]:
+                removed_longs.append(symbol)
+            if symbol in short_set and day_range["current_high"] > day_range["previous_high"]:
+                removed_shorts.append(symbol)
+    except Exception as exc:
+        summary["status"] = "error"
+        summary["error"] = str(exc)
+        summary["message"] = f"Filter error: {exc}"
+        logging.exception("Previous-day watchlist filter failed.")
+        return summary
+    finally:
+        disconnect_daily_data_client(ib)
+
+    summary["symbols_skipped_no_session_bar"] = skipped_no_session_bar
+
+    removed_long_set = set(removed_longs)
+    removed_short_set = set(removed_shorts)
+    kept_longs = [symbol for symbol in longs if symbol not in removed_long_set]
+    kept_shorts = [symbol for symbol in shorts if symbol not in removed_short_set]
+
+    if removed_long_set:
+        _rewrite_watchlist_symbols(LONGS_FILE, kept_longs)
+    if removed_short_set:
+        _rewrite_watchlist_symbols(SHORTS_FILE, kept_shorts)
+
+    summary["removed_longs"] = sorted(removed_long_set)
+    summary["removed_shorts"] = sorted(removed_short_set)
+    summary["longs_after"] = len(kept_longs)
+    summary["shorts_after"] = len(kept_shorts)
+
+    if summary["symbols_with_live_session_bar"] == 0:
+        summary["status"] = "waiting_for_session"
+        summary["message"] = (
+            "No live session bar was available yet; watchlists were left unchanged."
+        )
+    else:
+        parts = [
+            f"checked {summary['symbols_with_live_session_bar']}/{summary['symbols_considered']} symbol(s)",
+            f"removed {len(summary['removed_longs'])} long(s)",
+            f"removed {len(summary['removed_shorts'])} short(s)",
+        ]
+        if summary["removed_longs"]:
+            parts.append(f"longs: {_format_symbol_preview(summary['removed_longs'])}")
+        if summary["removed_shorts"]:
+            parts.append(f"shorts: {_format_symbol_preview(summary['removed_shorts'])}")
+        if skipped_no_session_bar:
+            parts.append(f"skipped {skipped_no_session_bar} without a live session bar")
+        summary["message"] = "; ".join(parts)
+
+    logging.info("Watchlist range filter: %s", summary["message"])
+    return summary
+
+
+def run_master_with_watchlist_filter() -> dict[str, Any]:
+    filter_summary = filter_watchlists_by_previous_day_levels()
+    try:
+        run_master(use_shared_watchlists=True)
+    except Exception as exc:
+        setattr(exc, "watchlist_filter_summary", filter_summary)
+        raise
+    return filter_summary
+
+
+def _extract_symbols_from_text(text: str) -> list[str]:
+    symbols = []
+    seen = set()
+    for raw_value in str(text or "").split(","):
+        symbol = raw_value.strip().upper()
+        if not symbol or symbol == "NONE":
+            continue
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+    return symbols
+
+
+def _format_symbol_group(symbols: list[str]) -> str:
+    cleaned = []
+    seen = set()
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        cleaned.append(symbol)
+    return ", ".join(cleaned) if cleaned else "None"
+
+
+def load_tradingview_groups() -> dict[str, dict[str, list[str]]]:
+    text = read_text(MASTER_AVWAP_TRADINGVIEW_REPORT_FILE)
+    groups = {
+        "favorites": {"LONG": [], "SHORT": []},
+        "near_favorite_zones": {"LONG": [], "SHORT": []},
+    }
+    if not text:
+        return groups
+
+    section_lookup = {
+        "Best current favorite setups": "favorites",
+        "Near favorite zones": "near_favorite_zones",
+    }
+    current_section = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            current_section = None
+            continue
+        if line in section_lookup:
+            current_section = section_lookup[line]
+            continue
+        if line.startswith("-"):
+            continue
+        if current_section not in groups or ":" not in line:
+            continue
+
+        side_label, values = line.split(":", 1)
+        side = side_label.strip().upper()
+        if side not in ("LONG", "SHORT"):
+            continue
+        groups[current_section][side] = _extract_symbols_from_text(values)
+
+    return groups
+
+
 def write_status_file(
     state: dict[str, Any],
     schedule: list[str],
@@ -227,9 +544,21 @@ def write_status_file(
     longs_count = count_watchlist_symbols(LONGS_FILE)
     shorts_count = count_watchlist_symbols(SHORTS_FILE)
     main_report = read_text(MASTER_AVWAP_REPORT_FILE)
+    filter_summary = state.get("last_filter_summary")
+    tradingview_groups = load_tradingview_groups()
+    favorite_symbols = (
+        tradingview_groups["favorites"]["LONG"]
+        + tradingview_groups["favorites"]["SHORT"]
+    )
+    near_favorite_symbols = (
+        tradingview_groups["near_favorite_zones"]["LONG"]
+        + tradingview_groups["near_favorite_zones"]["SHORT"]
+    )
+    favorite_focus_symbols = favorite_symbols + near_favorite_symbols
 
     lines = [
         "Master AVWAP Mini PC Status",
+        f"TV Paste: {_format_symbol_group(favorite_focus_symbols)}",
         f"Generated at: {now.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Phase: {phase}",
         f"Today's schedule: {', '.join(schedule)}",
@@ -242,6 +571,7 @@ def write_status_file(
         f"Shared folder: {storage['data_dir']}",
         f"Long watchlist count: {longs_count} ({LONGS_FILE})",
         f"Short watchlist count: {shorts_count} ({SHORTS_FILE})",
+        f"Last watchlist filter: {format_watchlist_filter_summary(filter_summary)}",
         f"Setup tracker: {MASTER_AVWAP_SETUP_TRACKER_FILE}",
         f"Priority setups report: {MASTER_AVWAP_PRIORITY_SETUPS_FILE}",
         f"Ticker buckets report: {MASTER_AVWAP_EVENT_TICKERS_FILE}",
@@ -251,6 +581,16 @@ def write_status_file(
 
     if note:
         lines.extend(["", f"Note: {note}"])
+
+    lines.extend(
+        [
+            "",
+            "Mobile TradingView paste",
+            f"Favorite setups: {_format_symbol_group(favorite_symbols)}",
+            f"Favorite zones: {_format_symbol_group(near_favorite_symbols)}",
+            f"Favorite focus combined: {_format_symbol_group(favorite_focus_symbols)}",
+        ]
+    )
 
     lines.extend(["", "Slot coverage:"])
     slots = state.get("slots", {})
@@ -427,14 +767,21 @@ def execute_scan(
     logging.info("Starting mini-PC Master AVWAP run for slot %s.", trigger_slot)
     error_text = ""
     status = "success"
+    filter_summary = None
     try:
         if dry_run:
             logging.info("Dry-run enabled; skipping live Master AVWAP scan for slot %s.", trigger_slot)
+            filter_summary = {
+                "ran_at": datetime.now().isoformat(timespec="seconds"),
+                "status": "dry_run",
+                "message": "Dry-run mode skipped the watchlist filter.",
+            }
         else:
-            run_master(use_shared_watchlists=True)
+            filter_summary = run_master_with_watchlist_filter()
     except Exception as exc:
         status = "failed"
         error_text = str(exc)
+        filter_summary = getattr(exc, "watchlist_filter_summary", filter_summary)
         logging.exception("Mini-PC Master AVWAP run failed for slot %s.", trigger_slot)
 
     finished_at = datetime.now()
@@ -450,6 +797,7 @@ def execute_scan(
     if error_text:
         run_record["error"] = error_text
     state.setdefault("runs", []).append(run_record)
+    state["last_filter_summary"] = filter_summary
 
     if status == "failed":
         state["slots"][trigger_slot] = {
@@ -523,15 +871,22 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
     logging.info("Starting one immediate mini-PC Master AVWAP scan.")
     started_at = datetime.now()
     error_text = ""
+    filter_summary = None
     try:
         if dry_run:
             logging.info("Dry-run enabled; skipping live Master AVWAP scan.")
+            filter_summary = {
+                "ran_at": datetime.now().isoformat(timespec="seconds"),
+                "status": "dry_run",
+                "message": "Dry-run mode skipped the watchlist filter.",
+            }
         else:
-            run_master(use_shared_watchlists=True)
+            filter_summary = run_master_with_watchlist_filter()
         status = "success" if not dry_run else "dry_run"
     except Exception as exc:
         status = "failed"
         error_text = str(exc)
+        filter_summary = getattr(exc, "watchlist_filter_summary", filter_summary)
         logging.exception("Immediate mini-PC Master AVWAP scan failed.")
 
     finished_at = datetime.now()
@@ -549,6 +904,7 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
     )
     state["last_status"] = status
     state["last_error"] = error_text
+    state["last_filter_summary"] = filter_summary
     if status != "failed":
         state["last_success_at"] = finished_at.isoformat(timespec="seconds")
     save_state(state)
@@ -856,14 +1212,21 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         def _task():
             error_text = ""
             run_status = "dry_run" if self.dry_run else "success"
+            filter_summary = None
             try:
                 if self.dry_run:
                     logging.info("Dry-run enabled; skipping live Master AVWAP GUI mini-PC scan.")
+                    filter_summary = {
+                        "ran_at": datetime.now().isoformat(timespec="seconds"),
+                        "status": "dry_run",
+                        "message": "Dry-run mode skipped the watchlist filter.",
+                    }
                 else:
-                    run_master(use_shared_watchlists=True)
+                    filter_summary = run_master_with_watchlist_filter()
             except Exception as exc:
                 run_status = "failed"
                 error_text = str(exc)
+                filter_summary = getattr(exc, "watchlist_filter_summary", filter_summary)
                 logging.exception("GUI mini-PC scan failed. label=%s scheduled_slot=%s", run_label, scheduled_slot)
 
             finished_at = datetime.now()
@@ -882,6 +1245,7 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                 if error_text:
                     run_record["error"] = error_text
                 state.setdefault("runs", []).append(run_record)
+                state["last_filter_summary"] = filter_summary
 
                 if scheduled_slot:
                     if run_status == "failed":

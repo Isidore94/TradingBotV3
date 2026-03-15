@@ -300,15 +300,19 @@ def configure_logging():
     ch.setFormatter(fmt)
     ch.setLevel(logging.INFO)
 
-    fh = RotatingFileHandler(
-        MASTER_AVWAP_LOG_FILE,
-        maxBytes=2_000_000,
-        backupCount=APP_LOG_BACKUP_COUNT,
-    )
+    logger.addHandler(ch)
+    try:
+        fh = RotatingFileHandler(
+            MASTER_AVWAP_LOG_FILE,
+            maxBytes=2_000_000,
+            backupCount=APP_LOG_BACKUP_COUNT,
+        )
+    except OSError as exc:
+        logger.warning(f"File logging disabled for {MASTER_AVWAP_LOG_FILE}: {exc}")
+        return
+
     fh.setFormatter(fmt)
     fh.setLevel(logging.INFO)
-
-    logger.addHandler(ch)
     logger.addHandler(fh)
 
 configure_logging()

@@ -403,8 +403,11 @@ def _parse_iso_date_safe(value):
         return None
 
 def reset_log_files():
-    TRADING_BOT_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
-    Path(TRADING_BOT_LOG_FILENAME).touch(exist_ok=True)
+    try:
+        TRADING_BOT_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+        Path(TRADING_BOT_LOG_FILENAME).touch(exist_ok=True)
+    except OSError as e:
+        print(f"Could not prepare trading log {TRADING_BOT_LOG_FILENAME}: {e}")
 
     try:
         if os.path.exists(BOUNCE_LOG_FILENAME):
@@ -425,16 +428,22 @@ def configure_app_logging():
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(logging.Formatter(APP_LOG_FORMAT))
+    handlers = [console_handler]
+    try:
+        file_handler = RotatingFileHandler(
+            TRADING_BOT_LOG_FILENAME,
+            maxBytes=1_000_000,
+            backupCount=APP_LOG_BACKUP_COUNT,
+        )
+    except OSError as exc:
+        logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
+        logging.getLogger().warning(f"File logging disabled for {TRADING_BOT_LOG_FILENAME}: {exc}")
+    else:
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter(APP_LOG_FORMAT))
+        handlers.append(file_handler)
+        logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
 
-    file_handler = RotatingFileHandler(
-        TRADING_BOT_LOG_FILENAME,
-        maxBytes=1_000_000,
-        backupCount=APP_LOG_BACKUP_COUNT,
-    )
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(logging.Formatter(APP_LOG_FORMAT))
-
-    logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler], force=True)
     logger = logging.getLogger()
     logger.addFilter(HistoricalDataFilter())
     logging.getLogger("ibapi").addFilter(HistoricalDataFilter())
