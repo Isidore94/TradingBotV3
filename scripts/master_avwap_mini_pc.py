@@ -30,6 +30,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from market_session import (
+    get_default_hourly_scan_schedule,
+    get_default_setup_tracker_refresh_slot,
+    get_default_stop_time_label,
+    get_market_session_window,
+)
 from master_avwap import (
     MasterAvwapGUI,
     connect_daily_data_client,
@@ -52,9 +58,6 @@ from project_paths import (
     get_tracker_storage_details,
 )
 
-DEFAULT_SCHEDULE = ("07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00")
-DEFAULT_STOP_TIME = "13:30"
-DEFAULT_SETUP_TRACKER_REFRESH_SLOT = "12:00"
 STATUS_FILE = LONGS_FILE.parent / "master_avwap_mini_pc_status.txt"
 STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc_state.json"
 LOCK_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc.lock"
@@ -69,6 +72,14 @@ WATCHLIST_FILTER_DAYS = 5
 WATCHLIST_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 
 _LOCK_ACQUIRED = False
+
+
+def get_current_default_schedule(reference: datetime | None = None) -> list[str]:
+    return list(get_default_hourly_scan_schedule(reference=reference))
+
+
+def get_current_default_stop_at(reference: datetime | None = None) -> str:
+    return get_default_stop_time_label(reference=reference)
 
 
 def parse_clock(value: str) -> dt_time:
@@ -546,9 +557,11 @@ def should_update_setup_tracker_for_slot(
         return False
     if not schedule:
         return False
+    scheduled_dt = slot_datetime(scheduled_slot)
+    default_refresh_slot = get_default_setup_tracker_refresh_slot(reference=scheduled_dt)
     refresh_slot = (
-        DEFAULT_SETUP_TRACKER_REFRESH_SLOT
-        if DEFAULT_SETUP_TRACKER_REFRESH_SLOT in schedule
+        default_refresh_slot
+        if default_refresh_slot in schedule
         else schedule[-1]
     )
     return scheduled_slot == refresh_slot
@@ -1067,11 +1080,16 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         dry_run: bool = False,
         shutdown_at_end: bool = False,
         auto_start: bool = True,
+        dynamic_schedule: bool = False,
+        dynamic_stop_at: bool = False,
     ):
         self.schedule = list(schedule)
         self.stop_at = stop_at
         self.dry_run = dry_run
         self.shutdown_at_end = shutdown_at_end
+        self.dynamic_schedule = bool(dynamic_schedule)
+        self.dynamic_stop_at = bool(dynamic_stop_at)
+        self.dynamic_defaults_date = None
         self.scheduler_enabled = bool(auto_start)
         self.background_task_active = False
         self.current_background_label = ""
@@ -1095,6 +1113,17 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         self.notebook.select(self.mini_pc_tab)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(750, self._scheduler_tick)
+
+    def _refresh_dynamic_market_defaults(self, force: bool = False):
+        today_iso = datetime.now().date().isoformat()
+        if not force and self.dynamic_defaults_date == today_iso:
+            return
+        now = datetime.now()
+        if self.dynamic_schedule:
+            self.schedule = get_current_default_schedule(reference=now)
+        if self.dynamic_stop_at:
+            self.stop_at = get_current_default_stop_at(reference=now)
+        self.dynamic_defaults_date = today_iso
 
     def _build_layout(self):
         super()._build_layout()
@@ -1199,16 +1228,18 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         if note is not None:
             self.scheduler_note = note
 
+        self._refresh_dynamic_market_defaults()
         self.scheduler_state = load_state(self.schedule)
         now = datetime.now()
         next_slot = get_next_pending_slot(self.scheduler_state, self.schedule, now=now)
         self.scheduler_toggle_text.set("Pause Scheduler" if self.scheduler_enabled else "Resume Scheduler")
+        market_session = get_market_session_window(reference=now)
 
         active_task = self.scheduler_active_slot or self.current_background_label or "None"
         shutdown_text = "enabled" if self.shutdown_at_end else "disabled"
         lines = [
             f"Scheduler phase: {self.scheduler_phase} | Auto scheduler: {'running' if self.scheduler_enabled else 'paused'} | Auto shutdown: {shutdown_text}",
-            f"Today's schedule: {', '.join(self.schedule)} | Stop at: {self.stop_at}",
+            f"Local market session today: {market_session.session_label} | Today's schedule: {', '.join(self.schedule)} | Stop at: {self.stop_at}",
             f"Next pending slot: {next_slot or 'None'} | Active task: {active_task}",
             f"Last status: {self.scheduler_state.get('last_status') or 'idle'} | Last success: {self.scheduler_state.get('last_success_at') or 'None'}",
             f"Shared folder root: {LONGS_FILE.parent}",
@@ -1434,6 +1465,7 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         maybe_shutdown_windows()
 
     def _scheduler_tick(self):
+        self._refresh_dynamic_market_defaults()
         self.scheduler_state = load_state(self.schedule)
         today_iso = datetime.now().date().isoformat()
         if self.completed_window_date and self.completed_window_date != today_iso:
@@ -1496,6 +1528,8 @@ def launch_gui_app(
     dry_run: bool = False,
     shutdown_at_end: bool = False,
     auto_start: bool = True,
+    dynamic_schedule: bool = False,
+    dynamic_stop_at: bool = False,
 ) -> int:
     if tk is None or ttk is None:
         logging.error("tkinter is unavailable in this Python environment; cannot launch the mini-PC GUI.")
@@ -1509,22 +1543,34 @@ def launch_gui_app(
         dry_run=dry_run,
         shutdown_at_end=shutdown_at_end,
         auto_start=auto_start,
+        dynamic_schedule=dynamic_schedule,
+        dynamic_stop_at=dynamic_stop_at,
     )
     root.mainloop()
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
+    current_session = get_market_session_window()
+    current_schedule = ",".join(get_current_default_schedule())
+    current_stop_at = get_current_default_stop_at()
     parser = argparse.ArgumentParser(description="Run the Master AVWAP mini-PC scheduler.")
     parser.add_argument(
         "--schedule",
-        default=",".join(DEFAULT_SCHEDULE),
-        help="Comma-separated HH:MM times to run the scan. Default: 07:00 through 13:00 hourly.",
+        default=None,
+        help=(
+            "Comma-separated HH:MM times to run the scan. "
+            "Default: auto-generated from today's local NYSE session "
+            f"({current_session.session_label}), currently {current_schedule}."
+        ),
     )
     parser.add_argument(
         "--stop-at",
-        default=DEFAULT_STOP_TIME,
-        help="Time to stop the daily scheduler loop. Default: 13:30.",
+        default=None,
+        help=(
+            "Time to stop the daily scheduler loop. "
+            f"Default: 30 minutes after today's local close, currently {current_stop_at}."
+        ),
     )
     parser.add_argument(
         "--once",
@@ -1563,8 +1609,10 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    schedule = normalize_schedule(args.schedule)
-    stop_at = parse_clock(args.stop_at).strftime("%H:%M")
+    dynamic_schedule = not args.schedule
+    dynamic_stop_at = not args.stop_at
+    schedule = normalize_schedule(args.schedule) if args.schedule else get_current_default_schedule()
+    stop_at = parse_clock(args.stop_at).strftime("%H:%M") if args.stop_at else get_current_default_stop_at()
 
     attach_scheduler_log_handler()
     try:
@@ -1608,6 +1656,8 @@ def main() -> int:
         dry_run=args.dry_run,
         shutdown_at_end=args.shutdown_at_end,
         auto_start=not args.no_autostart,
+        dynamic_schedule=dynamic_schedule,
+        dynamic_stop_at=dynamic_stop_at,
     )
 
 

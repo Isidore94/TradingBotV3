@@ -6,10 +6,13 @@ import time
 import json
 import re
 import math
+import copy
 import importlib.util
 import logging
 import threading
 import argparse
+import subprocess
+import sys
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -31,6 +34,7 @@ import yfinance as yf
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
+from market_session import get_last_hour_window_labels
 
 from project_paths import (
     LOCAL_SETTINGS_FILE,
@@ -61,6 +65,12 @@ from project_paths import (
     MASTER_AVWAP_SETUP_SCENARIOS_FILE,
     MASTER_AVWAP_SETUP_DAILY_FILE,
     MASTER_AVWAP_SETUP_STATS_FILE,
+    MASTER_AVWAP_SETUP_ATTRIBUTES_FILE,
+    MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE,
+    MASTER_AVWAP_SCORING_CONFIG_FILE,
+    MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE,
+    MASTER_AVWAP_SCORING_TUNER_REPORT_FILE,
+    RRS_ENVIRONMENT_FOCUS_HISTORY_FILE,
     EARNINGS_ANCHORS_FILE,
     EARNINGS_ANCHOR_CANDIDATES_FILE,
     EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE,
@@ -143,6 +153,12 @@ SETUP_TRACKER_FILE = MASTER_AVWAP_SETUP_TRACKER_FILE
 SETUP_SCENARIOS_FILE = MASTER_AVWAP_SETUP_SCENARIOS_FILE
 SETUP_DAILY_FILE = MASTER_AVWAP_SETUP_DAILY_FILE
 SETUP_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE
+SETUP_ATTRIBUTES_FILE = MASTER_AVWAP_SETUP_ATTRIBUTES_FILE
+SETUP_ATTRIBUTE_LEADERBOARD_FILE = MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE
+SCORING_CONFIG_FILE = MASTER_AVWAP_SCORING_CONFIG_FILE
+SCORING_RECOMMENDATIONS_FILE = MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE
+SCORING_TUNER_REPORT_FILE = MASTER_AVWAP_SCORING_TUNER_REPORT_FILE
+RRS_ENVIRONMENT_FOCUS_HISTORY_PATH = RRS_ENVIRONMENT_FOCUS_HISTORY_FILE
 
 API_URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
 HEADERS = {
@@ -192,6 +208,10 @@ PRIORITY_SECOND_BAND_TEST_LOOKBACK_DAYS = 8
 PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY = 10
 PRIORITY_SECOND_BAND_REPEAT_TEST_SCORE_PENALTY = 4
 PRIORITY_SECOND_BAND_MAX_SCORE_PENALTY = 22
+PRIORITY_FIRST_DEV_FRESH_BREAK_SCORE_BONUS = 12
+PRIORITY_FIRST_DEV_REPEAT_FAILURE_PENALTY = 14
+PRIORITY_FIRST_DEV_CHOP_PENALTY = 10
+PRIORITY_FIRST_DEV_LOOKBACK_DAYS = 5
 PRIORITY_RETEST_FOLLOWTHROUGH_SCORE_BONUS = 30
 PRIORITY_RETEST_LEVEL_SCORE_BONUS = {
     "AVWAPE": 12,
@@ -201,7 +221,8 @@ PRIORITY_RETEST_LEVEL_SCORE_BONUS = {
 PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS = 10
 PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS = 8
 PRIORITY_RETEST_CLEAR_PATH_SCORE_BONUS = 14
-SETUP_TRACKER_SCHEMA_VERSION = 1
+SETUP_TRACKER_SCHEMA_VERSION = 2
+PRIORITY_SCORING_CONFIG_SCHEMA_VERSION = 1
 STANDARDIZED_RISK_USD = 500.0
 TRACKER_STOP_FAILURE_CLOSES = 2
 TRACKER_PREV_AVWAPE_NEAR_ATR = 0.5
@@ -258,6 +279,232 @@ GUI_DARK_INPUT = "#252525"
 # foreground can appear blown out against themed widget backgrounds.
 GUI_DARK_TEXT = "#C7CDD4"
 WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
+
+_PRIORITY_SCORING_CONFIG_CACHE: dict | None = None
+
+DEFAULT_PRIORITY_SCORING_CONFIG = {
+    "schema_version": PRIORITY_SCORING_CONFIG_SCHEMA_VERSION,
+    "updated_at": None,
+    "signal_weights": {
+        "current": copy.deepcopy(FAVORITE_CURRENT_SIGNALS),
+        "context": copy.deepcopy(FAVORITE_CONTEXT_SIGNALS),
+    },
+    "attribute_adjustments": [
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "LONG",
+            "attribute_key": "bouncebot.bullish_weak_long_seen_today",
+            "operator": "equals",
+            "value": True,
+            "score_delta": 6,
+            "label": "BounceBot bullish weak long hit",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "SHORT",
+            "attribute_key": "bouncebot.bearish_weak_short_seen_today",
+            "operator": "equals",
+            "value": True,
+            "score_delta": 6,
+            "label": "BounceBot bearish weak short hit",
+        },
+    ],
+}
+
+
+def default_priority_scoring_config() -> dict:
+    return copy.deepcopy(DEFAULT_PRIORITY_SCORING_CONFIG)
+
+
+def load_priority_scoring_config(force_reload: bool = False) -> dict:
+    global _PRIORITY_SCORING_CONFIG_CACHE
+
+    if _PRIORITY_SCORING_CONFIG_CACHE is not None and not force_reload:
+        return copy.deepcopy(_PRIORITY_SCORING_CONFIG_CACHE)
+
+    config = default_priority_scoring_config()
+    raw = load_json(SCORING_CONFIG_FILE, default={})
+    if isinstance(raw, dict):
+        config["schema_version"] = int(raw.get("schema_version", PRIORITY_SCORING_CONFIG_SCHEMA_VERSION) or PRIORITY_SCORING_CONFIG_SCHEMA_VERSION)
+        config["updated_at"] = raw.get("updated_at")
+        raw_signal_weights = raw.get("signal_weights", {})
+        if isinstance(raw_signal_weights, dict):
+            for bucket in ("current", "context"):
+                bucket_payload = raw_signal_weights.get(bucket, {})
+                if not isinstance(bucket_payload, dict):
+                    continue
+                for side, weights in bucket_payload.items():
+                    if not isinstance(weights, dict):
+                        continue
+                    normalized_side = normalize_side(side)
+                    config["signal_weights"].setdefault(bucket, {}).setdefault(normalized_side, {})
+                    for signal_name, weight in weights.items():
+                        try:
+                            config["signal_weights"][bucket][normalized_side][str(signal_name)] = int(weight)
+                        except (TypeError, ValueError):
+                            continue
+        raw_adjustments = raw.get("attribute_adjustments", [])
+        if isinstance(raw_adjustments, list):
+            config["attribute_adjustments"] = [item for item in raw_adjustments if isinstance(item, dict)]
+
+    _PRIORITY_SCORING_CONFIG_CACHE = copy.deepcopy(config)
+    return copy.deepcopy(config)
+
+
+def save_priority_scoring_config(payload: dict) -> None:
+    global _PRIORITY_SCORING_CONFIG_CACHE
+
+    config = default_priority_scoring_config()
+    if isinstance(payload, dict):
+        raw_signal_weights = payload.get("signal_weights", {})
+        if isinstance(raw_signal_weights, dict):
+            for bucket in ("current", "context"):
+                bucket_payload = raw_signal_weights.get(bucket, {})
+                if not isinstance(bucket_payload, dict):
+                    continue
+                for side, weights in bucket_payload.items():
+                    if not isinstance(weights, dict):
+                        continue
+                    normalized_side = normalize_side(side)
+                    config["signal_weights"].setdefault(bucket, {}).setdefault(normalized_side, {})
+                    for signal_name, weight in weights.items():
+                        try:
+                            config["signal_weights"][bucket][normalized_side][str(signal_name)] = int(weight)
+                        except (TypeError, ValueError):
+                            continue
+        raw_adjustments = payload.get("attribute_adjustments", [])
+        if isinstance(raw_adjustments, list):
+            config["attribute_adjustments"] = [dict(item) for item in raw_adjustments if isinstance(item, dict)]
+
+    config["schema_version"] = PRIORITY_SCORING_CONFIG_SCHEMA_VERSION
+    config["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    save_json(SCORING_CONFIG_FILE, config)
+    _PRIORITY_SCORING_CONFIG_CACHE = copy.deepcopy(config)
+
+
+def get_priority_signal_weights(side: str, bucket: str) -> dict[str, int]:
+    normalized_bucket = "context" if str(bucket).strip().lower() == "context" else "current"
+    normalized_side = normalize_side(side)
+    config = load_priority_scoring_config()
+    weights = config.get("signal_weights", {}).get(normalized_bucket, {}).get(normalized_side, {})
+    return {str(key): int(value) for key, value in weights.items() if isinstance(key, str)}
+
+
+def get_priority_attribute_adjustments() -> list[dict]:
+    config = load_priority_scoring_config()
+    adjustments = config.get("attribute_adjustments", [])
+    return [dict(item) for item in adjustments if isinstance(item, dict)]
+
+
+def run_priority_scoring_tuner(apply_changes: bool = False, min_setups: int = 8, suppress_failures: bool = False) -> str:
+    script_path = ROOT_DIR / "scripts" / "analyze_master_avwap_scoring.py"
+    if not script_path.exists():
+        message = f"Missing scoring tuner script: {script_path}"
+        if suppress_failures:
+            logging.warning(message)
+            return message
+        raise FileNotFoundError(message)
+
+    command = [sys.executable, str(script_path), "--min-setups", str(max(1, int(min_setups)))]
+    if apply_changes:
+        command.append("--apply")
+
+    completed = subprocess.run(
+        command,
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = "\n".join(
+        chunk.strip()
+        for chunk in (completed.stdout or "", completed.stderr or "")
+        if chunk and chunk.strip()
+    ).strip()
+    if completed.returncode != 0:
+        if suppress_failures:
+            logging.warning("Scoring tuner did not complete cleanly: %s", output or "Unknown error")
+            return output or "Scoring tuner failed."
+        raise RuntimeError(output or "Scoring tuner failed.")
+    return output
+
+
+def _default_rrs_environment_focus_payload() -> dict:
+    return {
+        "schema_version": 1,
+        "updated_at": None,
+        "days": {},
+    }
+
+
+def load_rrs_environment_focus_payload() -> dict:
+    payload = load_json(RRS_ENVIRONMENT_FOCUS_HISTORY_PATH, default={})
+    if not isinstance(payload, dict):
+        return _default_rrs_environment_focus_payload()
+
+    history = _default_rrs_environment_focus_payload()
+    history["schema_version"] = int(payload.get("schema_version", 1) or 1)
+    history["updated_at"] = payload.get("updated_at")
+    history["days"] = payload.get("days", {}) if isinstance(payload.get("days"), dict) else {}
+    return history
+
+
+def get_rrs_environment_focus_hits_for_symbol(symbol: str, side: str, trade_date: str | None = None) -> dict:
+    history = load_rrs_environment_focus_payload()
+    target_date = str(trade_date or datetime.now().date().isoformat())
+    day_payload = (history.get("days") or {}).get(target_date, {})
+    if not isinstance(day_payload, dict):
+        return {}
+
+    bucket_key = "bullish_weak_longs" if normalize_side(side) == "LONG" else "bearish_weak_shorts"
+    bucket_payload = day_payload.get(bucket_key, {})
+    if not isinstance(bucket_payload, dict):
+        return {}
+    symbols_payload = bucket_payload.get("symbols", {})
+    if not isinstance(symbols_payload, dict):
+        return {}
+    return symbols_payload.get(str(symbol or "").strip().upper(), {}) if isinstance(symbols_payload.get(str(symbol or "").strip().upper(), {}), dict) else {}
+
+
+def build_bouncebot_focus_context(symbol: str, side: str, trade_date: str | None = None) -> dict[str, object]:
+    target_date = str(trade_date or datetime.now().date().isoformat())
+    history = load_rrs_environment_focus_payload()
+    day_payload = (history.get("days") or {}).get(target_date, {})
+    if not isinstance(day_payload, dict):
+        day_payload = {}
+
+    symbol_key = str(symbol or "").strip().upper()
+
+    def _bucket_record(bucket_key: str) -> dict:
+        bucket_payload = day_payload.get(bucket_key, {})
+        if not isinstance(bucket_payload, dict):
+            return {}
+        symbols_payload = bucket_payload.get("symbols", {})
+        if not isinstance(symbols_payload, dict):
+            return {}
+        record = symbols_payload.get(symbol_key, {})
+        return record if isinstance(record, dict) else {}
+
+    long_record = _bucket_record("bullish_weak_longs")
+    short_record = _bucket_record("bearish_weak_shorts")
+    relevant_record = long_record if normalize_side(side) == "LONG" else short_record
+
+    return {
+        "bouncebot_bullish_weak_long_seen_today": bool(long_record),
+        "bouncebot_bullish_weak_long_hit_count": int(long_record.get("hit_count", 0) or 0),
+        "bouncebot_bullish_weak_long_max_score": _coerce_float(long_record.get("max_score")),
+        "bouncebot_bullish_weak_long_timeframes": list(long_record.get("timeframes") or []),
+        "bouncebot_bearish_weak_short_seen_today": bool(short_record),
+        "bouncebot_bearish_weak_short_hit_count": int(short_record.get("hit_count", 0) or 0),
+        "bouncebot_bearish_weak_short_max_score": _coerce_float(short_record.get("max_score")),
+        "bouncebot_bearish_weak_short_timeframes": list(short_record.get("timeframes") or []),
+        "bouncebot_relevant_focus_hit_today": bool(relevant_record),
+        "bouncebot_relevant_focus_hit_count": int(relevant_record.get("hit_count", 0) or 0),
+        "bouncebot_relevant_focus_max_score": _coerce_float(relevant_record.get("max_score")),
+        "bouncebot_relevant_focus_timeframes": list(relevant_record.get("timeframes") or []),
+    }
 WATCHLIST_SKIP_TOKENS = {"LONG", "SHORT", "NONE"}
 YF_EARNINGS_LOGGER_NAMES = (
     "yfinance",
@@ -292,7 +539,6 @@ DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS = 10
 DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
 SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
 EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES = 30
-DEFAULT_SETUP_TRACKER_UPDATE_CUTOFF = "12:00"
 DAILY_BAR_COLUMNS = ["datetime", "open", "high", "low", "close", "volume"]
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
@@ -362,12 +608,23 @@ def _parse_clock_time(value: str) -> datetime.time:
     return datetime.strptime(str(value).strip(), "%H:%M").time()
 
 
+def get_setup_tracker_update_window_labels(
+    reference: datetime | date | None = None,
+) -> tuple[str, str]:
+    return get_last_hour_window_labels(reference=reference)
+
+
 def should_update_setup_tracker_now(
     now: datetime | None = None,
-    cutoff: str = DEFAULT_SETUP_TRACKER_UPDATE_CUTOFF,
+    window_start: str | None = None,
+    window_end: str | None = None,
 ) -> bool:
     reference = now or datetime.now()
-    return reference.time() >= _parse_clock_time(cutoff)
+    default_start, default_end = get_setup_tracker_update_window_labels(reference=reference)
+    current_time = reference.time()
+    start_time = _parse_clock_time(window_start or default_start)
+    end_time = _parse_clock_time(window_end or default_end)
+    return start_time <= current_time < end_time
 
 
 def connect_daily_data_client(client_id: int, startup_wait: float = 1.0) -> IBApi | None:
@@ -927,6 +1184,119 @@ def compute_recent_second_band_penalty(recent_second_band_test_days: int) -> int
     return min(PRIORITY_SECOND_BAND_MAX_SCORE_PENALTY, penalty)
 
 
+def assess_first_dev_break_quality(
+    daily_rows,
+    last_trade_date,
+    band_level,
+    side,
+    atr20=None,
+    lookback=PRIORITY_FIRST_DEV_LOOKBACK_DAYS,
+):
+    result = {
+        "fresh_break_bonus": 0,
+        "chop_penalty": 0,
+        "failed_break_days": 0,
+        "chop_days": 0,
+        "touch_days": 0,
+        "breakout_today": False,
+        "fresh_break_today": False,
+        "note": "",
+    }
+    if band_level is None:
+        return result
+
+    target = last_trade_date.isoformat()
+    relevant = [row for row in daily_rows if row["date"] <= target]
+    if len(relevant) < 2:
+        return result
+
+    current = relevant[-1]
+    prior_rows = relevant[max(0, len(relevant) - 1 - max(1, int(lookback))):-1]
+    if not prior_rows:
+        return result
+
+    tol = max(
+        abs(float(band_level)) * 0.002,
+        float(atr20 or 0.0) * 0.12,
+    )
+    close_tol = max(tol * 0.35, abs(float(band_level)) * 0.001)
+
+    def _as_float(row, key):
+        try:
+            return float(row[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    clean_lookback = True
+    for row in prior_rows:
+        row_high = _as_float(row, "high")
+        row_low = _as_float(row, "low")
+        row_close = _as_float(row, "close")
+        if None in (row_high, row_low, row_close):
+            continue
+
+        if side == "LONG":
+            touched = row_high >= float(band_level) - tol
+            straddled = row_low <= float(band_level) + tol and row_high >= float(band_level) - tol
+            failed_break = touched and row_close < float(band_level) - close_tol
+            stayed_clean = row_high < float(band_level) - tol
+        else:
+            touched = row_low <= float(band_level) + tol
+            straddled = row_low <= float(band_level) + tol and row_high >= float(band_level) - tol
+            failed_break = touched and row_close > float(band_level) + close_tol
+            stayed_clean = row_low > float(band_level) + tol
+
+        if touched:
+            result["touch_days"] += 1
+        if straddled:
+            result["chop_days"] += 1
+        if failed_break:
+            result["failed_break_days"] += 1
+        if not stayed_clean:
+            clean_lookback = False
+
+    current_high = _as_float(current, "high")
+    current_low = _as_float(current, "low")
+    current_close = _as_float(current, "close")
+    if None in (current_high, current_low, current_close):
+        return result
+
+    if side == "LONG":
+        breakout_today = current_high >= float(band_level) - tol and current_close > float(band_level) + close_tol
+    else:
+        breakout_today = current_low <= float(band_level) + tol and current_close < float(band_level) - close_tol
+
+    result["breakout_today"] = breakout_today
+    result["fresh_break_today"] = bool(breakout_today and clean_lookback and result["touch_days"] == 0)
+
+    if result["fresh_break_today"]:
+        result["fresh_break_bonus"] = PRIORITY_FIRST_DEV_FRESH_BREAK_SCORE_BONUS
+
+    penalty = 0
+    note_parts = []
+    level_label = "UPPER_1" if side == "LONG" else "LOWER_1"
+    if result["failed_break_days"] >= 2:
+        penalty += PRIORITY_FIRST_DEV_REPEAT_FAILURE_PENALTY
+        note_parts.append(f"recent failed {level_label} pushes={result['failed_break_days']}")
+    elif result["failed_break_days"] == 1 and result["chop_days"] >= 2:
+        penalty += max(8, PRIORITY_FIRST_DEV_CHOP_PENALTY - 2)
+        note_parts.append(f"{level_label} lost momentum after an earlier push")
+
+    if result["chop_days"] >= 3:
+        penalty += PRIORITY_FIRST_DEV_CHOP_PENALTY
+        note_parts.append(f"chopped around {level_label} for {result['chop_days']} sessions")
+    elif result["chop_days"] == 2 and not result["fresh_break_today"]:
+        penalty += 6
+        note_parts.append(f"multiple recent {level_label} tests")
+
+    if result["fresh_break_today"]:
+        note_parts.append(f"fresh {level_label} break today after staying clear for {len(prior_rows)} sessions")
+
+    result["chop_penalty"] = penalty
+    result["note"] = "; ".join(note_parts)
+    return result
+
+
 def analyze_avwap_retest_behavior(
     daily_rows,
     last_trade_date,
@@ -1307,6 +1677,717 @@ def build_tracker_feature_snapshot(
     return snapshot
 
 
+def _normalize_tracker_attribute_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (list, tuple, set)):
+        normalized_items = []
+        for item in value:
+            normalized = _normalize_tracker_attribute_value(item)
+            if normalized is not None:
+                normalized_items.append(normalized)
+        return normalized_items
+    if isinstance(value, dict):
+        normalized_map = {}
+        for key, item in value.items():
+            normalized = _normalize_tracker_attribute_value(item)
+            if normalized is not None:
+                normalized_map[str(key)] = normalized
+        return normalized_map
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return str(value)
+
+
+def _tracker_attribute_is_present(value, value_type: str | None = None) -> bool:
+    if value is None:
+        return False
+    if value_type in {"bool", "number"}:
+        return True
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _register_tracker_attribute(
+    registry: dict,
+    key: str,
+    *,
+    group: str,
+    label: str,
+    value_type: str,
+    description: str,
+    source_stage: str = "entry",
+) -> None:
+    if not isinstance(registry, dict) or not key:
+        return
+    registry[key] = {
+        "group": group,
+        "label": label,
+        "value_type": value_type,
+        "description": description,
+        "source_stage": source_stage,
+    }
+
+
+def build_tracker_entry_attributes(
+    row: dict,
+    symbol_entry: dict,
+    entry_snapshot: dict,
+    feature_row: dict | None = None,
+) -> tuple[dict[str, object], dict[str, dict]]:
+    feature_row = feature_row or {}
+    attributes: dict[str, object] = {}
+    registry: dict[str, dict] = {}
+
+    def add(
+        key: str,
+        value,
+        *,
+        group: str,
+        label: str,
+        value_type: str,
+        description: str,
+    ) -> None:
+        normalized = _normalize_tracker_attribute_value(value)
+        if not _tracker_attribute_is_present(normalized, value_type=value_type):
+            return
+        attributes[key] = normalized
+        _register_tracker_attribute(
+            registry,
+            key,
+            group=group,
+            label=label,
+            value_type=value_type,
+            description=description,
+        )
+
+    favorite_signals = list(row.get("favorite_signals") or [])
+    context_signals = list(row.get("context_signals") or [])
+    events_today = list(symbol_entry.get("events_today") or [])
+
+    add(
+        "setup.side",
+        normalize_side(row.get("side") or symbol_entry.get("side") or ""),
+        group="setup",
+        label="Side",
+        value_type="text",
+        description="Trade direction for the setup.",
+    )
+    add(
+        "setup.symbol",
+        str(row.get("symbol") or symbol_entry.get("symbol") or "").strip().upper(),
+        group="setup",
+        label="Symbol",
+        value_type="text",
+        description="Ticker symbol for the setup.",
+    )
+    add(
+        "setup.priority_bucket",
+        row.get("priority_bucket") or "",
+        group="setup",
+        label="Priority bucket",
+        value_type="text",
+        description="Priority bucket assigned to the setup at scan time.",
+    )
+    add(
+        "setup.priority_score",
+        _coerce_float(row.get("score")),
+        group="setup",
+        label="Priority score",
+        value_type="number",
+        description="Final priority score after ranking filters and bonuses.",
+    )
+    add(
+        "setup.favorite_zone",
+        row.get("favorite_zone") or "",
+        group="setup",
+        label="Favorite zone",
+        value_type="text",
+        description="Named AVWAP zone the setup was trading in at scan time.",
+    )
+    add(
+        "signals.favorite_signals",
+        favorite_signals,
+        group="signals",
+        label="Favorite signals",
+        value_type="list",
+        description="Priority signals active for the setup on the entry day.",
+    )
+    add(
+        "signals.favorite_signal_count",
+        len(favorite_signals),
+        group="signals",
+        label="Favorite signal count",
+        value_type="number",
+        description="Number of favorite signals active on the entry day.",
+    )
+    add(
+        "signals.context_signals",
+        context_signals,
+        group="signals",
+        label="Context signals",
+        value_type="list",
+        description="Supporting context signals that contributed to the setup rank.",
+    )
+    add(
+        "signals.context_signal_count",
+        len(context_signals),
+        group="signals",
+        label="Context signal count",
+        value_type="number",
+        description="Number of context signals active on the entry day.",
+    )
+    add(
+        "signals.events_today",
+        events_today,
+        group="signals",
+        label="Events today",
+        value_type="list",
+        description="All primary entry-day events recorded for the setup.",
+    )
+    add(
+        "signals.has_bounce_event_today",
+        bool(symbol_entry.get("has_bounce_event_today")),
+        group="signals",
+        label="Has bounce event today",
+        value_type="bool",
+        description="Whether the scanner saw a bounce event on the entry day.",
+    )
+    add(
+        "bouncebot.bullish_weak_long_seen_today",
+        bool(symbol_entry.get("bouncebot_bullish_weak_long_seen_today")),
+        group="bouncebot",
+        label="BounceBot bullish weak long hit",
+        value_type="bool",
+        description="Whether the symbol appeared in BounceBot's bullish-weak long context list at some point that day.",
+    )
+    add(
+        "bouncebot.bullish_weak_long_hit_count",
+        int(symbol_entry.get("bouncebot_bullish_weak_long_hit_count", 0) or 0),
+        group="bouncebot",
+        label="BounceBot bullish weak long hit count",
+        value_type="number",
+        description="How many BounceBot scans that day included the symbol in the bullish-weak long list.",
+    )
+    add(
+        "bouncebot.bullish_weak_long_max_score",
+        _coerce_float(symbol_entry.get("bouncebot_bullish_weak_long_max_score")),
+        group="bouncebot",
+        label="BounceBot bullish weak long max score",
+        value_type="number",
+        description="Highest BounceBot environment-focus score seen that day for bullish-weak long list membership.",
+    )
+    add(
+        "bouncebot.bullish_weak_long_timeframes",
+        list(symbol_entry.get("bouncebot_bullish_weak_long_timeframes") or []),
+        group="bouncebot",
+        label="BounceBot bullish weak long timeframes",
+        value_type="list",
+        description="RRS timeframes where the symbol showed up in the bullish-weak long list that day.",
+    )
+    add(
+        "bouncebot.bearish_weak_short_seen_today",
+        bool(symbol_entry.get("bouncebot_bearish_weak_short_seen_today")),
+        group="bouncebot",
+        label="BounceBot bearish weak short hit",
+        value_type="bool",
+        description="Whether the symbol appeared in BounceBot's bearish-weak short context list at some point that day.",
+    )
+    add(
+        "bouncebot.bearish_weak_short_hit_count",
+        int(symbol_entry.get("bouncebot_bearish_weak_short_hit_count", 0) or 0),
+        group="bouncebot",
+        label="BounceBot bearish weak short hit count",
+        value_type="number",
+        description="How many BounceBot scans that day included the symbol in the bearish-weak short list.",
+    )
+    add(
+        "bouncebot.bearish_weak_short_max_score",
+        _coerce_float(symbol_entry.get("bouncebot_bearish_weak_short_max_score")),
+        group="bouncebot",
+        label="BounceBot bearish weak short max score",
+        value_type="number",
+        description="Highest BounceBot environment-focus score seen that day for bearish-weak short list membership.",
+    )
+    add(
+        "bouncebot.bearish_weak_short_timeframes",
+        list(symbol_entry.get("bouncebot_bearish_weak_short_timeframes") or []),
+        group="bouncebot",
+        label="BounceBot bearish weak short timeframes",
+        value_type="list",
+        description="RRS timeframes where the symbol showed up in the bearish-weak short list that day.",
+    )
+    add(
+        "bouncebot.relevant_focus_hit_today",
+        bool(symbol_entry.get("bouncebot_relevant_focus_hit_today")),
+        group="bouncebot",
+        label="BounceBot relevant focus hit",
+        value_type="bool",
+        description="Whether the symbol appeared in the BounceBot focus list relevant to this setup direction that day.",
+    )
+    add(
+        "bouncebot.relevant_focus_hit_count",
+        int(symbol_entry.get("bouncebot_relevant_focus_hit_count", 0) or 0),
+        group="bouncebot",
+        label="BounceBot relevant focus hit count",
+        value_type="number",
+        description="How many BounceBot scans that day included the symbol in the directionally relevant focus list.",
+    )
+    add(
+        "bouncebot.relevant_focus_max_score",
+        _coerce_float(symbol_entry.get("bouncebot_relevant_focus_max_score")),
+        group="bouncebot",
+        label="BounceBot relevant focus max score",
+        value_type="number",
+        description="Highest BounceBot focus score seen that day in the directionally relevant list.",
+    )
+    add(
+        "bouncebot.relevant_focus_timeframes",
+        list(symbol_entry.get("bouncebot_relevant_focus_timeframes") or []),
+        group="bouncebot",
+        label="BounceBot relevant focus timeframes",
+        value_type="list",
+        description="RRS timeframes where the symbol appeared in the directionally relevant BounceBot focus list.",
+    )
+    add(
+        "pattern.breakout_5d",
+        bool(row.get("breakout_5d")),
+        group="pattern",
+        label="Five-day breakout",
+        value_type="bool",
+        description="Whether the setup closed through the prior five-day range on the entry day.",
+    )
+    add(
+        "pattern.retest_followthrough",
+        bool(row.get("retest_followthrough")),
+        group="pattern",
+        label="Retest followthrough",
+        value_type="bool",
+        description="Whether the setup showed directional retest followthrough.",
+    )
+    add(
+        "pattern.retest_reference_level",
+        row.get("retest_reference_level") or "",
+        group="pattern",
+        label="Retest reference level",
+        value_type="text",
+        description="Level used by the retest followthrough classifier.",
+    )
+    add(
+        "pattern.retest_note",
+        row.get("retest_note") or "",
+        group="pattern",
+        label="Retest note",
+        value_type="text",
+        description="Freeform note describing the retest structure detected by the scanner.",
+    )
+    add(
+        "pattern.recent_band_extension_days",
+        int(symbol_entry.get("recent_band_extension_days", 0) or 0),
+        group="pattern",
+        label="Recent band extension days",
+        value_type="number",
+        description="Consecutive sessions already extended through the first favorable band before entry.",
+    )
+    add(
+        "pattern.recent_second_band_test_days",
+        int(row.get("recent_second_band_test_days", 0) or 0),
+        group="pattern",
+        label="Recent second-band test days",
+        value_type="number",
+        description="How many recent sessions tested the second favorable band.",
+    )
+    add(
+        "pattern.second_band_penalty",
+        int(row.get("second_band_penalty", 0) or 0),
+        group="pattern",
+        label="Second-band penalty",
+        value_type="number",
+        description="Ranking penalty applied for repeated second-band tests.",
+    )
+    add(
+        "pattern.extension_note",
+        row.get("extension_note") or "",
+        group="pattern",
+        label="Extension note",
+        value_type="text",
+        description="Scanner note about recent extension behavior.",
+    )
+    add(
+        "pattern.first_dev_break_bonus",
+        int(row.get("first_dev_break_bonus", 0) or 0),
+        group="pattern",
+        label="First-dev break bonus",
+        value_type="number",
+        description="Bonus applied when the first-dev break was fresh instead of recycled.",
+    )
+    add(
+        "pattern.first_dev_chop_penalty",
+        int(row.get("first_dev_chop_penalty", 0) or 0),
+        group="pattern",
+        label="First-dev chop penalty",
+        value_type="number",
+        description="Penalty applied when price chopped or repeatedly failed around the first deviation band.",
+    )
+    add(
+        "pattern.first_dev_note",
+        row.get("first_dev_note") or "",
+        group="pattern",
+        label="First-dev note",
+        value_type="text",
+        description="Scanner note describing the first-dev break quality.",
+    )
+    add(
+        "trend.trend_20d",
+        symbol_entry.get("trend_20d") or feature_row.get("trend_20d") or "",
+        group="trend",
+        label="20-day trend",
+        value_type="text",
+        description="Directional trend label derived from recent daily closes.",
+    )
+    add(
+        "trend.trendline_break_recent",
+        bool(row.get("trendline_break_recent") or symbol_entry.get("priority_trendline_break_recent")),
+        group="trend",
+        label="Recent trendline break",
+        value_type="bool",
+        description="Whether a recent trendline break candidate was detected for the setup.",
+    )
+    add(
+        "trend.trendline_break_note",
+        row.get("trendline_break_note") or symbol_entry.get("priority_trendline_break_note") or "",
+        group="trend",
+        label="Trendline break note",
+        value_type="text",
+        description="Scanner description of the recent trendline break candidate.",
+    )
+    add(
+        "trend.trendline_alert_nearby",
+        bool(symbol_entry.get("priority_trendline_within_alert_range")),
+        group="trend",
+        label="Trendline alert nearby",
+        value_type="bool",
+        description="Whether a directional trendline candidate was nearby at scan time.",
+    )
+    add(
+        "trend.trendline_note",
+        symbol_entry.get("priority_trendline_note") or "",
+        group="trend",
+        label="Trendline note",
+        value_type="text",
+        description="Scanner description of the nearby trendline candidate.",
+    )
+    add(
+        "structure.compression_flag",
+        bool(row.get("compression_flag")),
+        group="structure",
+        label="Compression flag",
+        value_type="bool",
+        description="Whether the setup met the anchor compression criteria.",
+    )
+    add(
+        "structure.compression_penalty",
+        int(row.get("compression_penalty", 0) or 0),
+        group="structure",
+        label="Compression penalty",
+        value_type="number",
+        description="Ranking penalty applied for compression.",
+    )
+    add(
+        "structure.compression_note",
+        row.get("compression_note") or "",
+        group="structure",
+        label="Compression note",
+        value_type="text",
+        description="Scanner note describing the compression structure.",
+    )
+    add(
+        "structure.ema21_consolidation",
+        bool(entry_snapshot.get("ema21_consolidation")),
+        group="structure",
+        label="EMA21 consolidation",
+        value_type="bool",
+        description="Whether the setup was consolidating tightly around the 21 EMA.",
+    )
+    add(
+        "structure.ema21_consolidation_span_atr",
+        _coerce_float(entry_snapshot.get("ema21_consolidation_span_atr")),
+        group="structure",
+        label="EMA21 consolidation span ATR",
+        value_type="number",
+        description="Width of the recent consolidation range measured in ATR.",
+    )
+    add(
+        "structure.previous_avwape_near_0_5atr",
+        bool(entry_snapshot.get("previous_avwape_near_0_5atr")),
+        group="structure",
+        label="Previous AVWAPE within 0.5 ATR",
+        value_type="bool",
+        description="Whether the prior anchor AVWAPE was within 0.5 ATR of price.",
+    )
+    add(
+        "filters.ranking_blocked",
+        bool(symbol_entry.get("priority_ranking_blocked")),
+        group="filters",
+        label="Ranking blocked",
+        value_type="bool",
+        description="Whether ranking filters blocked the setup from the top list.",
+    )
+    add(
+        "filters.ranking_note",
+        row.get("ranking_note") or symbol_entry.get("priority_ranking_note") or "",
+        group="filters",
+        label="Ranking note",
+        value_type="text",
+        description="Explanation for any ranking penalty or exclusion applied to the setup.",
+    )
+    add(
+        "filters.score_bonus_note",
+        row.get("score_bonus_note") or symbol_entry.get("priority_score_bonus_note") or "",
+        group="filters",
+        label="Score bonus note",
+        value_type="text",
+        description="Explanation for score bonuses applied during final ranking refinement.",
+    )
+    add(
+        "filters.clean_path_score_bonus",
+        int(symbol_entry.get("priority_clean_path_score_bonus", 0) or 0),
+        group="filters",
+        label="Clean-path score bonus",
+        value_type="number",
+        description="Bonus added when the previous anchor path looked clear.",
+    )
+    add(
+        "filters.trendline_score_bonus",
+        int(symbol_entry.get("priority_trendline_score_bonus", 0) or 0),
+        group="filters",
+        label="Trendline score bonus",
+        value_type="number",
+        description="Bonus added for a recent trendline break candidate.",
+    )
+    add(
+        "levels.current_active_level",
+        symbol_entry.get("current_active_level") or feature_row.get("current_active_level") or "",
+        group="levels",
+        label="Current active level",
+        value_type="text",
+        description="Band level containing price at scan time for the current anchor.",
+    )
+    add(
+        "levels.current_band_zone",
+        symbol_entry.get("current_band_zone") or feature_row.get("current_band_zone") or "",
+        group="levels",
+        label="Current band zone",
+        value_type="text",
+        description="Scanner band-zone label for the current anchor.",
+    )
+    add(
+        "levels.current_nearby_bands",
+        symbol_entry.get("current_nearby_bands") or [],
+        group="levels",
+        label="Current nearby bands",
+        value_type="list",
+        description="Nearby current-anchor AVWAP levels around the entry price.",
+    )
+    add(
+        "levels.previous_active_level",
+        symbol_entry.get("previous_active_level") or feature_row.get("previous_active_level") or "",
+        group="levels",
+        label="Previous active level",
+        value_type="text",
+        description="Band level containing price for the previous anchor at scan time.",
+    )
+    add(
+        "levels.previous_band_zone",
+        symbol_entry.get("previous_band_zone") or feature_row.get("previous_band_zone") or "",
+        group="levels",
+        label="Previous band zone",
+        value_type="text",
+        description="Scanner band-zone label for the previous anchor.",
+    )
+    add(
+        "levels.previous_nearby_bands",
+        symbol_entry.get("previous_nearby_bands") or [],
+        group="levels",
+        label="Previous nearby bands",
+        value_type="list",
+        description="Nearby previous-anchor AVWAP levels around the entry price.",
+    )
+    add(
+        "distance.distance_from_current_vwap",
+        _coerce_float(symbol_entry.get("distance_from_current_vwap")),
+        group="distance",
+        label="Distance from current AVWAPE",
+        value_type="number",
+        description="Absolute price distance from current AVWAPE at scan time.",
+    )
+    add(
+        "distance.pct_from_current_vwap",
+        _coerce_float(symbol_entry.get("pct_from_current_vwap")),
+        group="distance",
+        label="Pct from current AVWAPE",
+        value_type="number",
+        description="Percent distance from current AVWAPE at scan time.",
+    )
+    add(
+        "distance.distance_from_current_upper_1",
+        _coerce_float(symbol_entry.get("distance_from_current_upper_1")),
+        group="distance",
+        label="Distance from current UPPER_1",
+        value_type="number",
+        description="Absolute price distance from current UPPER_1 at scan time.",
+    )
+    add(
+        "distance.pct_from_current_upper_1",
+        _coerce_float(symbol_entry.get("pct_from_current_upper_1")),
+        group="distance",
+        label="Pct from current UPPER_1",
+        value_type="number",
+        description="Percent distance from current UPPER_1 at scan time.",
+    )
+    add(
+        "distance.distance_from_current_lower_1",
+        _coerce_float(symbol_entry.get("distance_from_current_lower_1")),
+        group="distance",
+        label="Distance from current LOWER_1",
+        value_type="number",
+        description="Absolute price distance from current LOWER_1 at scan time.",
+    )
+    add(
+        "distance.pct_from_current_lower_1",
+        _coerce_float(symbol_entry.get("pct_from_current_lower_1")),
+        group="distance",
+        label="Pct from current LOWER_1",
+        value_type="number",
+        description="Percent distance from current LOWER_1 at scan time.",
+    )
+
+    return attributes, registry
+
+
+def build_priority_scoring_attribute_context(row: dict, symbol_entry: dict) -> dict[str, object]:
+    entry_snapshot = symbol_entry.get("entry_feature_snapshot", {})
+    if not isinstance(entry_snapshot, dict):
+        entry_snapshot = {}
+    attributes, _ = build_tracker_entry_attributes(
+        row,
+        symbol_entry,
+        entry_snapshot,
+        feature_row=symbol_entry.get("feature_row") if isinstance(symbol_entry.get("feature_row"), dict) else None,
+    )
+    return attributes
+
+
+def _coerce_rule_scalar(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+        try:
+            if "." in lowered:
+                return float(lowered)
+            return int(lowered)
+        except ValueError:
+            return value.strip()
+    return value
+
+
+def _attribute_rule_matches(rule: dict, attributes: dict[str, object]) -> bool:
+    rule_side = str(rule.get("side") or "").strip()
+    if rule_side:
+        actual_side = normalize_side(str(attributes.get("setup.side") or ""))
+        if actual_side != normalize_side(rule_side):
+            return False
+
+    attribute_key = str(rule.get("attribute_key") or "").strip()
+    if not attribute_key or attribute_key not in attributes:
+        return False
+
+    operator = str(rule.get("operator") or "equals").strip().lower()
+    actual = attributes.get(attribute_key)
+    expected = _coerce_rule_scalar(rule.get("value"))
+
+    if operator == "contains":
+        if isinstance(actual, list):
+            return any(str(item) == str(expected) for item in actual)
+        if isinstance(actual, str):
+            return str(expected) in actual
+        return False
+
+    if operator == "equals":
+        if isinstance(actual, list):
+            return any(_coerce_rule_scalar(item) == expected for item in actual)
+        return _coerce_rule_scalar(actual) == expected
+
+    if operator == "not_equals":
+        if isinstance(actual, list):
+            return all(_coerce_rule_scalar(item) != expected for item in actual)
+        return _coerce_rule_scalar(actual) != expected
+
+    actual_number = _coerce_float(actual)
+    expected_number = _coerce_float(expected)
+    if actual_number is None or expected_number is None:
+        return False
+
+    if operator == "gte":
+        return actual_number >= expected_number
+    if operator == "lte":
+        return actual_number <= expected_number
+    if operator == "gt":
+        return actual_number > expected_number
+    if operator == "lt":
+        return actual_number < expected_number
+
+    return False
+
+
+def apply_priority_attribute_adjustments(row: dict, symbol_entry: dict) -> None:
+    rules = get_priority_attribute_adjustments()
+    if not rules:
+        row["adaptive_score_delta"] = 0
+        row["adaptive_score_note"] = ""
+        return
+
+    attributes = build_priority_scoring_attribute_context(row, symbol_entry)
+    total_delta = 0
+    notes = []
+    for rule in rules:
+        if not bool(rule.get("enabled", True)):
+            continue
+        if not _attribute_rule_matches(rule, attributes):
+            continue
+        try:
+            score_delta = int(rule.get("score_delta", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if score_delta == 0:
+            continue
+        total_delta += score_delta
+        rule_label = str(rule.get("label") or rule.get("attribute_key") or "adaptive rule").strip()
+        notes.append(f"{rule_label} {score_delta:+d}")
+
+    row["adaptive_score_delta"] = int(total_delta)
+    row["adaptive_score_note"] = " | ".join(notes)
+    if total_delta:
+        row["score"] = float(row.get("score", 0) or 0) + float(total_delta)
+    symbol_entry["priority_adaptive_score_delta"] = int(total_delta)
+    symbol_entry["priority_adaptive_score_note"] = row["adaptive_score_note"]
+
+
 def _default_setup_tracker_payload() -> dict:
     return {
         "schema_version": SETUP_TRACKER_SCHEMA_VERSION,
@@ -1314,6 +2395,7 @@ def _default_setup_tracker_payload() -> dict:
         "daily_watchlists": {},
         "setups": {},
         "stats": [],
+        "attribute_registry": {},
     }
 
 
@@ -1328,6 +2410,7 @@ def load_setup_tracker_payload() -> dict:
     tracker["daily_watchlists"] = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
     tracker["setups"] = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
     tracker["stats"] = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
+    tracker["attribute_registry"] = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
     return tracker
 
 
@@ -1438,6 +2521,7 @@ def build_tracker_setup_record(
     feature_row: dict | None,
     generated_at: str,
     indicator_row: pd.Series | None,
+    attribute_registry: dict | None = None,
 ) -> dict | None:
     entry_price = _coerce_float(symbol_entry.get("last_close"))
     if entry_price is None:
@@ -1458,6 +2542,14 @@ def build_tracker_setup_record(
         previous_anchor,
         compression_summary,
     )
+    entry_attributes, attribute_updates = build_tracker_entry_attributes(
+        row,
+        symbol_entry,
+        entry_snapshot,
+        feature_row=feature_row,
+    )
+    if isinstance(attribute_registry, dict):
+        attribute_registry.update(attribute_updates)
 
     stop_candidates = _find_tracker_stop_candidates(row, symbol_entry)
     scenarios = _build_tracker_scenarios(entry_price, stop_candidates, normalize_side(row.get("side")))
@@ -1481,12 +2573,15 @@ def build_tracker_setup_record(
         "context_signals": list(row.get("context_signals") or []),
         "recent_second_band_test_days": int(row.get("recent_second_band_test_days", 0) or 0),
         "second_band_penalty": int(row.get("second_band_penalty", 0) or 0),
+        "first_dev_note": row.get("first_dev_note") or "",
         "retest_followthrough": bool(row.get("retest_followthrough")),
         "retest_reference_level": row.get("retest_reference_level") or "",
         "retest_note": row.get("retest_note") or "",
         "extension_note": row.get("extension_note") or "",
         "ranking_note": row.get("ranking_note") or "",
         "score_bonus_note": row.get("score_bonus_note") or "",
+        "adaptive_score_delta": int(row.get("adaptive_score_delta", 0) or 0),
+        "adaptive_score_note": row.get("adaptive_score_note") or "",
         "trendline_break_recent": bool(row.get("trendline_break_recent")),
         "trendline_break_note": row.get("trendline_break_note") or "",
         "compression_flag": bool(row.get("compression_flag")),
@@ -1496,6 +2591,7 @@ def build_tracker_setup_record(
         "previous_anchor_entry": previous_anchor,
         "sma_levels_entry": row.get("sma_levels") or {},
         "entry_feature_snapshot": entry_snapshot,
+        "entry_attributes": entry_attributes,
         "scenarios": scenarios,
         "daily_marks": [],
         "latest_snapshot": {},
@@ -1864,6 +2960,302 @@ def _flatten_tracker_daily_marks(setups: dict[str, dict]) -> list[dict]:
     return rows
 
 
+def _summarize_tracker_setup_outcome(setup: dict) -> dict[str, object]:
+    scenarios = [
+        scenario
+        for scenario in (setup.get("scenarios") or {}).values()
+        if isinstance(scenario, dict)
+    ]
+    tradeable = [scenario for scenario in scenarios if scenario.get("tradeable")]
+    closed = [
+        scenario
+        for scenario in tradeable
+        if str(scenario.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+    ]
+    total_rs = [
+        float(scenario.get("total_r", 0.0) or 0.0)
+        for scenario in tradeable
+        if _coerce_float(scenario.get("total_r")) is not None
+    ]
+    closed_rs = [
+        float(scenario.get("total_r", 0.0) or 0.0)
+        for scenario in closed
+        if _coerce_float(scenario.get("total_r")) is not None
+    ]
+    return {
+        "tradeable_scenario_count": len(tradeable),
+        "closed_tradeable_scenario_count": len(closed),
+        "avg_total_r": mean(total_rs) if total_rs else None,
+        "median_total_r": median(total_rs) if total_rs else None,
+        "avg_closed_r": mean(closed_rs) if closed_rs else None,
+        "best_total_r": max(total_rs) if total_rs else None,
+        "worst_total_r": min(total_rs) if total_rs else None,
+        "any_target_hit": any(str(scenario.get("status", "")).upper() == "TARGET_HIT" for scenario in tradeable),
+        "any_stopped": any(str(scenario.get("status", "")).upper() == "STOPPED" for scenario in tradeable),
+    }
+
+
+def _format_tracker_attribute_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+def _flatten_tracker_attributes(setups: dict[str, dict], attribute_registry: dict | None) -> list[dict]:
+    registry = attribute_registry if isinstance(attribute_registry, dict) else {}
+    rows = []
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            continue
+        entry_attributes = setup.get("entry_attributes", {})
+        if not isinstance(entry_attributes, dict):
+            continue
+
+        outcome_summary = _summarize_tracker_setup_outcome(setup)
+        for attribute_key, raw_value in sorted(entry_attributes.items()):
+            meta = registry.get(attribute_key, {}) if isinstance(registry.get(attribute_key), dict) else {}
+            value_type = str(meta.get("value_type") or "").strip().lower()
+            if not value_type:
+                if isinstance(raw_value, bool):
+                    value_type = "bool"
+                elif isinstance(raw_value, (int, float)):
+                    value_type = "number"
+                elif isinstance(raw_value, list):
+                    value_type = "list"
+                elif isinstance(raw_value, dict):
+                    value_type = "object"
+                else:
+                    value_type = "text"
+
+            number_value = None
+            bool_value = None
+            json_value = ""
+            if value_type == "bool":
+                bool_value = bool(raw_value)
+            elif value_type == "number":
+                number_value = _coerce_float(raw_value)
+            elif value_type in {"list", "object"}:
+                try:
+                    json_value = json.dumps(raw_value, sort_keys=True)
+                except Exception:
+                    json_value = str(raw_value)
+
+            rows.append(
+                {
+                    "setup_id": setup.get("setup_id"),
+                    "scan_date": setup.get("scan_date"),
+                    "symbol": setup.get("symbol"),
+                    "side": setup.get("side"),
+                    "priority_bucket": setup.get("priority_bucket"),
+                    "priority_score": _coerce_float(setup.get("priority_score")),
+                    "setup_status": setup.get("setup_status"),
+                    "open_scenario_count": int(setup.get("open_scenario_count", 0) or 0),
+                    "closed_scenario_count": int(setup.get("closed_scenario_count", 0) or 0),
+                    "tradeable_scenario_count": int(outcome_summary.get("tradeable_scenario_count", 0) or 0),
+                    "closed_tradeable_scenario_count": int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0),
+                    "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
+                    "median_total_r": _coerce_float(outcome_summary.get("median_total_r")),
+                    "avg_closed_r": _coerce_float(outcome_summary.get("avg_closed_r")),
+                    "best_total_r": _coerce_float(outcome_summary.get("best_total_r")),
+                    "worst_total_r": _coerce_float(outcome_summary.get("worst_total_r")),
+                    "any_target_hit": bool(outcome_summary.get("any_target_hit")),
+                    "any_stopped": bool(outcome_summary.get("any_stopped")),
+                    "attribute_key": attribute_key,
+                    "attribute_group": meta.get("group") or attribute_key.split(".", 1)[0],
+                    "attribute_label": meta.get("label") or attribute_key,
+                    "attribute_type": value_type,
+                    "attribute_description": meta.get("description") or "",
+                    "attribute_source_stage": meta.get("source_stage") or "entry",
+                    "value_text": _format_tracker_attribute_text(raw_value),
+                    "value_number": number_value,
+                    "value_bool": bool_value,
+                    "value_json": json_value,
+                }
+            )
+    return rows
+
+
+def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> list[dict]:
+    if not attribute_rows:
+        return []
+
+    total_setups = len(
+        {
+            str(row.get("setup_id") or "").strip()
+            for row in attribute_rows
+            if str(row.get("setup_id") or "").strip()
+        }
+    )
+    if total_setups <= 0:
+        return []
+
+    observations = []
+    numeric_groups: dict[str, list[dict]] = {}
+
+    for row in attribute_rows:
+        if not isinstance(row, dict):
+            continue
+        attribute_type = str(row.get("attribute_type") or "").strip().lower()
+        if attribute_type == "object":
+            continue
+
+        base = {
+            "setup_id": row.get("setup_id"),
+            "symbol": row.get("symbol"),
+            "side": row.get("side"),
+            "priority_bucket": row.get("priority_bucket"),
+            "priority_score": _coerce_float(row.get("priority_score")),
+            "setup_status": row.get("setup_status"),
+            "tradeable_scenario_count": int(row.get("tradeable_scenario_count", 0) or 0),
+            "closed_tradeable_scenario_count": int(row.get("closed_tradeable_scenario_count", 0) or 0),
+            "avg_total_r": _coerce_float(row.get("avg_total_r")),
+            "median_total_r": _coerce_float(row.get("median_total_r")),
+            "avg_closed_r": _coerce_float(row.get("avg_closed_r")),
+            "best_total_r": _coerce_float(row.get("best_total_r")),
+            "worst_total_r": _coerce_float(row.get("worst_total_r")),
+            "any_target_hit": bool(row.get("any_target_hit")),
+            "any_stopped": bool(row.get("any_stopped")),
+            "attribute_key": row.get("attribute_key"),
+            "attribute_group": row.get("attribute_group"),
+            "attribute_label": row.get("attribute_label"),
+            "attribute_description": row.get("attribute_description"),
+            "attribute_source_stage": row.get("attribute_source_stage"),
+        }
+
+        if attribute_type == "list":
+            parsed_items = []
+            try:
+                parsed_items = json.loads(str(row.get("value_json") or "[]"))
+            except Exception:
+                parsed_items = []
+            for item in parsed_items:
+                item_text = str(item).strip()
+                if not item_text:
+                    continue
+                obs = dict(base)
+                obs["value_kind"] = "list_item"
+                obs["value_label"] = item_text
+                observations.append(obs)
+            continue
+
+        if attribute_type == "number":
+            if _coerce_float(row.get("value_number")) is not None:
+                numeric_groups.setdefault(str(row.get("attribute_key") or ""), []).append(row)
+            continue
+
+        value_label = str(row.get("value_text") or "").strip()
+        if not value_label:
+            continue
+        obs = dict(base)
+        obs["value_kind"] = attribute_type or "text"
+        obs["value_label"] = value_label
+        observations.append(obs)
+
+    for attribute_key, rows_for_key in numeric_groups.items():
+        values = pd.Series(
+            [_coerce_float(row.get("value_number")) for row in rows_for_key],
+            dtype="float64",
+        )
+        valid_mask = values.notna()
+        if int(valid_mask.sum()) < 8 or int(values[valid_mask].nunique()) < 4:
+            continue
+        try:
+            buckets = pd.qcut(values[valid_mask], q=min(4, int(values[valid_mask].nunique())), duplicates="drop")
+        except Exception:
+            continue
+        valid_rows = [row for row, keep in zip(rows_for_key, valid_mask.tolist()) if keep]
+        for row, bucket in zip(valid_rows, buckets.astype(str).tolist()):
+            obs = {
+                "setup_id": row.get("setup_id"),
+                "symbol": row.get("symbol"),
+                "side": row.get("side"),
+                "priority_bucket": row.get("priority_bucket"),
+                "priority_score": _coerce_float(row.get("priority_score")),
+                "setup_status": row.get("setup_status"),
+                "tradeable_scenario_count": int(row.get("tradeable_scenario_count", 0) or 0),
+                "closed_tradeable_scenario_count": int(row.get("closed_tradeable_scenario_count", 0) or 0),
+                "avg_total_r": _coerce_float(row.get("avg_total_r")),
+                "median_total_r": _coerce_float(row.get("median_total_r")),
+                "avg_closed_r": _coerce_float(row.get("avg_closed_r")),
+                "best_total_r": _coerce_float(row.get("best_total_r")),
+                "worst_total_r": _coerce_float(row.get("worst_total_r")),
+                "any_target_hit": bool(row.get("any_target_hit")),
+                "any_stopped": bool(row.get("any_stopped")),
+                "attribute_key": row.get("attribute_key"),
+                "attribute_group": row.get("attribute_group"),
+                "attribute_label": row.get("attribute_label"),
+                "attribute_description": row.get("attribute_description"),
+                "attribute_source_stage": row.get("attribute_source_stage"),
+                "value_kind": "number_bucket",
+                "value_label": bucket,
+            }
+            observations.append(obs)
+
+    if not observations:
+        return []
+
+    obs_df = pd.DataFrame(observations)
+    leaderboard_rows = []
+    group_cols = [
+        "side",
+        "priority_bucket",
+        "attribute_key",
+        "attribute_group",
+        "attribute_label",
+        "attribute_description",
+        "attribute_source_stage",
+        "value_kind",
+        "value_label",
+    ]
+    for group_key, group_df in obs_df.groupby(group_cols, dropna=False):
+        tradeable_mask = group_df["tradeable_scenario_count"].fillna(0).astype(float) > 0
+        closed_mask = group_df["closed_tradeable_scenario_count"].fillna(0).astype(float) > 0
+        avg_total_values = pd.to_numeric(group_df["avg_total_r"], errors="coerce").dropna()
+        avg_closed_values = pd.to_numeric(group_df["avg_closed_r"], errors="coerce").dropna()
+        priority_values = pd.to_numeric(group_df["priority_score"], errors="coerce").dropna()
+        leaderboard_rows.append(
+            {
+                "side": group_key[0],
+                "priority_bucket": group_key[1],
+                "attribute_key": group_key[2],
+                "attribute_group": group_key[3],
+                "attribute_label": group_key[4],
+                "attribute_description": group_key[5],
+                "attribute_source_stage": group_key[6],
+                "value_kind": group_key[7],
+                "value_label": group_key[8],
+                "setup_count": int(group_df["setup_id"].nunique()),
+                "coverage_pct": (float(group_df["setup_id"].nunique()) / float(total_setups)) * 100.0,
+                "tradeable_setup_count": int(tradeable_mask.sum()),
+                "closed_tradeable_setup_count": int(closed_mask.sum()),
+                "avg_priority_score": float(priority_values.mean()) if not priority_values.empty else None,
+                "avg_total_r": float(avg_total_values.mean()) if not avg_total_values.empty else None,
+                "median_total_r": float(avg_total_values.median()) if not avg_total_values.empty else None,
+                "avg_closed_r": float(avg_closed_values.mean()) if not avg_closed_values.empty else None,
+                "target_hit_rate": float(group_df["any_target_hit"].astype(bool).mean()) if not group_df.empty else None,
+                "stop_rate": float(group_df["any_stopped"].astype(bool).mean()) if not group_df.empty else None,
+            }
+        )
+
+    leaderboard_rows.sort(
+        key=lambda item: (
+            -(int(item.get("setup_count", 0) or 0)),
+            -(float(item.get("avg_total_r")) if item.get("avg_total_r") is not None else -9999.0),
+            str(item.get("attribute_key") or ""),
+            str(item.get("value_label") or ""),
+        )
+    )
+    return leaderboard_rows
+
+
 def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
     if not scenario_rows:
         return []
@@ -1906,8 +3298,11 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
 
 def export_setup_tracker_views(payload: dict) -> None:
     setups = payload.get("setups", {}) if isinstance(payload, dict) else {}
+    attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload, dict) else {}
     scenario_rows = _flatten_tracker_scenarios(setups)
     daily_rows = _flatten_tracker_daily_marks(setups)
+    attribute_rows = _flatten_tracker_attributes(setups, attribute_registry)
+    attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
     stats_rows = build_tracker_stats_rows(scenario_rows)
     payload["stats"] = stats_rows
 
@@ -1915,6 +3310,8 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(scenario_rows).to_csv(SETUP_SCENARIOS_FILE, index=False)
     pd.DataFrame(daily_rows).to_csv(SETUP_DAILY_FILE, index=False)
     pd.DataFrame(stats_rows).to_csv(SETUP_STATS_FILE, index=False)
+    pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
+    pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
 
 
 def update_setup_tracker_from_scan(
@@ -1924,6 +3321,7 @@ def update_setup_tracker_from_scan(
     daily_frames_by_symbol: dict[str, pd.DataFrame],
     ib: IBApi | None,
     scan_date: str | None = None,
+    auto_tune: bool = True,
 ) -> None:
     tracker = load_setup_tracker_payload()
     symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
@@ -1956,6 +3354,7 @@ def update_setup_tracker_from_scan(
             feature_rows_by_symbol.get(symbol),
             now_iso,
             indicator_row,
+            tracker.setdefault("attribute_registry", {}),
         )
         if not setup:
             continue
@@ -1999,6 +3398,14 @@ def update_setup_tracker_from_scan(
 
     export_setup_tracker_views(tracker)
     save_setup_tracker_payload(tracker)
+    if auto_tune:
+        tuner_output = run_priority_scoring_tuner(
+            apply_changes=True,
+            min_setups=8,
+            suppress_failures=True,
+        )
+        if tuner_output:
+            logging.info("Priority scoring tuner: %s", tuner_output.splitlines()[0])
 def get_last_daily_row_for_date(daily_rows, last_trade_date):
     target = last_trade_date.isoformat()
     for row in reversed(daily_rows):
@@ -3539,9 +4946,12 @@ def build_priority_setup_summary(
     retest_reference_level: str = "",
     retest_note: str = "",
     extension_note: str = "",
+    first_dev_break_bonus: int = 0,
+    first_dev_chop_penalty: int = 0,
+    first_dev_note: str = "",
 ) -> dict:
-    current_weights = FAVORITE_CURRENT_SIGNALS.get(side, {})
-    context_weights = FAVORITE_CONTEXT_SIGNALS.get(side, {})
+    current_weights = get_priority_signal_weights(side, "current")
+    context_weights = get_priority_signal_weights(side, "context")
 
     favorite_signals = sorted(evt for evt in events_today if evt in current_weights)
     context_signals = sorted(evt for evt in events_today if evt in context_weights)
@@ -3566,12 +4976,15 @@ def build_priority_setup_summary(
     if breakout_5d:
         score += 14
 
+    score += max(0, int(first_dev_break_bonus or 0))
+
     if recent_band_extension_days <= 2:
         score += 8
     else:
         score -= min(18, (recent_band_extension_days - 2) * 6)
 
     score -= max(0, int(second_band_penalty or 0))
+    score -= max(0, int(first_dev_chop_penalty or 0))
 
     if trend_is_aligned:
         score += 8
@@ -3596,6 +5009,9 @@ def build_priority_setup_summary(
         "retest_reference_level": retest_reference_level,
         "retest_note": retest_note,
         "extension_note": extension_note,
+        "first_dev_break_bonus": int(first_dev_break_bonus or 0),
+        "first_dev_chop_penalty": int(first_dev_chop_penalty or 0),
+        "first_dev_note": first_dev_note or "",
     }
 
 
@@ -4107,6 +5523,7 @@ def refine_priority_rows_with_directional_filters(
         row["clean_path_score_bonus"] = clean_path_score_bonus
         row["score_bonus_note"] = " | ".join(bonus_notes)
         row["sma_levels"] = sma_levels
+        apply_priority_attribute_adjustments(row, symbol_entry)
 
         if row.get("ranking_blocked"):
             logging.info(
@@ -4127,6 +5544,11 @@ def refine_priority_rows_with_directional_filters(
                 f"{symbol}: retest setup has clear previous-anchor path; "
                 f"added +{clean_path_score_bonus} ranking bonus."
             )
+        if row.get("adaptive_score_note"):
+            logging.info(
+                f"{symbol}: adaptive scoring adjustments applied "
+                f"({row.get('adaptive_score_note')})."
+            )
 
         symbol_entry["priority_score"] = row["score"]
         symbol_entry["priority_base_score"] = row["base_score"]
@@ -4145,6 +5567,8 @@ def refine_priority_rows_with_directional_filters(
         symbol_entry["priority_trendline_score_bonus"] = int(row.get("trendline_score_bonus", 0) or 0)
         symbol_entry["priority_clean_path_score_bonus"] = int(row.get("clean_path_score_bonus", 0) or 0)
         symbol_entry["priority_score_bonus_note"] = row.get("score_bonus_note", "")
+        symbol_entry["priority_adaptive_score_delta"] = int(row.get("adaptive_score_delta", 0) or 0)
+        symbol_entry["priority_adaptive_score_note"] = row.get("adaptive_score_note", "")
 
 
 def apply_final_priority_buckets(
@@ -4247,8 +5671,10 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             retest_text = "Y" if row.get("retest_followthrough") else "N"
             ranking_note = row.get("ranking_note", "")
             score_bonus_note = row.get("score_bonus_note", "")
+            adaptive_score_note = row.get("adaptive_score_note", "")
             retest_note = row.get("retest_note", "")
             extension_note = row.get("extension_note", "")
+            first_dev_note = row.get("first_dev_note", "")
             compression_note = row.get("compression_note", "")
             trendline_note = row.get("trendline_note", "")
             trendline_break_note = row.get("trendline_break_note", "")
@@ -4262,10 +5688,14 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
                 handle.write(f"  filters={ranking_note}\n")
             if score_bonus_note:
                 handle.write(f"  bonus={score_bonus_note}\n")
+            if adaptive_score_note:
+                handle.write(f"  adaptive={adaptive_score_note}\n")
             if retest_note:
                 handle.write(f"  retest={retest_note}\n")
             if extension_note:
                 handle.write(f"  extension={extension_note}\n")
+            if first_dev_note:
+                handle.write(f"  first_dev={first_dev_note}\n")
             if compression_note:
                 handle.write(f"  compression={compression_note}\n")
             if trendline_note:
@@ -4324,6 +5754,7 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "retest_reference_level": row.get("retest_reference_level") or "",
             "retest_note": row.get("retest_note") or "",
             "extension_note": row.get("extension_note") or "",
+            "first_dev_note": row.get("first_dev_note") or "",
             "compression_flag": bool(row.get("compression_flag")),
             "compression_penalty": int(row.get("compression_penalty", 0) or 0),
             "compression_note": row.get("compression_note") or "",
@@ -4895,6 +6326,13 @@ def _evaluate_priority_snapshot_for_date(
         side,
     )
     second_band_penalty = compute_recent_second_band_penalty(recent_second_band_test_days)
+    first_dev_quality = assess_first_dev_break_quality(
+        daily_ohlc,
+        last_trade_date,
+        current_upper_1 if side == "LONG" else current_lower_1,
+        side,
+        atr20=atr20,
+    )
     extension_note = ""
     if recent_second_band_test_days > 0:
         second_band_label = "UPPER_2" if side == "LONG" else "LOWER_2"
@@ -4919,6 +6357,26 @@ def _evaluate_priority_snapshot_for_date(
         current_anchor_meta.get("stdev") if current_anchor_meta else None,
         atr20,
         last_trade_date,
+    )
+    indicator_frame = compute_indicator_frame(df)
+    indicator_row = None
+    if not indicator_frame.empty:
+        eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= last_trade_date.isoformat()]
+        if not eligible_indicator_rows.empty:
+            indicator_row = eligible_indicator_rows.iloc[-1]
+    entry_bar = pd.Series(last_row or {"open": last_close, "high": last_close, "low": last_close, "close": last_close})
+    entry_feature_snapshot = build_tracker_feature_snapshot(
+        normalize_side(side),
+        entry_bar,
+        indicator_row,
+        current_anchor_meta,
+        prev_anchor_meta,
+        compression_summary,
+    )
+    bouncebot_focus_context = build_bouncebot_focus_context(
+        symbol,
+        side,
+        trade_date=last_trade_date.isoformat(),
     )
 
     symbol_entry = {
@@ -4951,6 +6409,9 @@ def _evaluate_priority_snapshot_for_date(
         "recent_band_extension_days": recent_band_extension_days,
         "recent_second_band_test_days": recent_second_band_test_days,
         "second_band_penalty": second_band_penalty,
+        "first_dev_break_bonus": int(first_dev_quality.get("fresh_break_bonus", 0) or 0),
+        "first_dev_chop_penalty": int(first_dev_quality.get("chop_penalty", 0) or 0),
+        "first_dev_note": first_dev_quality.get("note", ""),
         "breakout_5d": breakout_5d,
         "retest_followthrough": retest_followthrough,
         "retest_reference_level": retest_summary["retest_reference_level"],
@@ -4959,6 +6420,8 @@ def _evaluate_priority_snapshot_for_date(
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
         "compression_note": compression_summary.get("compression_note", ""),
+        "entry_feature_snapshot": entry_feature_snapshot,
+        **bouncebot_focus_context,
     }
 
     priority_summary = build_priority_setup_summary(
@@ -4971,6 +6434,9 @@ def _evaluate_priority_snapshot_for_date(
         recent_band_extension_days=recent_band_extension_days,
         recent_second_band_test_days=recent_second_band_test_days,
         second_band_penalty=second_band_penalty,
+        first_dev_break_bonus=first_dev_quality.get("fresh_break_bonus", 0),
+        first_dev_chop_penalty=first_dev_quality.get("chop_penalty", 0),
+        first_dev_note=first_dev_quality.get("note", ""),
         breakout_5d=breakout_5d,
         retest_followthrough=retest_followthrough,
         retest_reference_level=retest_summary["retest_reference_level"],
@@ -5020,11 +6486,17 @@ def _evaluate_priority_snapshot_for_date(
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
         "compression_note": compression_summary.get("compression_note", ""),
+        "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
+        "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
+        "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
+        "bouncebot_bullish_weak_long_seen_today": bool(bouncebot_focus_context.get("bouncebot_bullish_weak_long_seen_today")),
+        "bouncebot_bearish_weak_short_seen_today": bool(bouncebot_focus_context.get("bouncebot_bearish_weak_short_seen_today")),
         "priority_score": priority_summary["score"],
         "favorite_signals": ";".join(priority_summary["favorite_signals"]),
         "favorite_context_signals": ";".join(priority_summary["context_signals"]),
         "events_today": ";".join(symbol_events_today),
     }
+    symbol_entry["feature_row"] = feature_row
 
     return {
         "priority_row": priority_summary,
@@ -5132,6 +6604,7 @@ def backfill_setup_tracker_from_recent_sessions(
                     daily_frames_by_symbol,
                     ib,
                     scan_date=evaluation_date.isoformat(),
+                    auto_tune=False,
                 )
                 watchlists_by_date[evaluation_date.isoformat()] = []
                 continue
@@ -5152,12 +6625,21 @@ def backfill_setup_tracker_from_recent_sessions(
                 daily_frames_by_symbol,
                 ib,
                 scan_date=evaluation_date.isoformat(),
+                auto_tune=False,
             )
             watchlists_by_date[evaluation_date.isoformat()] = tracked_symbols
             logging.info(
                 f"Tracker backfill {evaluation_date.isoformat()}: tracked {len(tracked_rows)} setup(s) "
                 f"across {len(tracked_symbols)} symbol(s)."
             )
+
+        tuner_output = run_priority_scoring_tuner(
+            apply_changes=True,
+            min_setups=8,
+            suppress_failures=True,
+        )
+        if tuner_output:
+            logging.info("Priority scoring tuner after backfill: %s", tuner_output.splitlines()[0])
 
         return {
             "dates": [value.isoformat() for value in evaluation_dates],
@@ -5601,6 +7083,13 @@ def run_master(
             side,
         )
         second_band_penalty = compute_recent_second_band_penalty(recent_second_band_test_days)
+        first_dev_quality = assess_first_dev_break_quality(
+            daily_ohlc,
+            last_trade_date,
+            current_upper_1 if side == "LONG" else current_lower_1,
+            side,
+            atr20=atr20,
+        )
         extension_note = ""
         if recent_second_band_test_days > 0:
             second_band_label = "UPPER_2" if side == "LONG" else "LOWER_2"
@@ -5625,6 +7114,26 @@ def run_master(
             current_anchor_meta.get("stdev") if current_anchor_meta else None,
             atr20,
             last_trade_date,
+        )
+        indicator_frame = compute_indicator_frame(df)
+        indicator_row = None
+        if not indicator_frame.empty:
+            eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= last_trade_date.isoformat()]
+            if not eligible_indicator_rows.empty:
+                indicator_row = eligible_indicator_rows.iloc[-1]
+        entry_bar = pd.Series(last_row or {"open": last_close, "high": last_close, "low": last_close, "close": last_close})
+        entry_feature_snapshot = build_tracker_feature_snapshot(
+            normalize_side(side),
+            entry_bar,
+            indicator_row,
+            current_anchor_meta,
+            prev_anchor_meta,
+            compression_summary,
+        )
+        bouncebot_focus_context = build_bouncebot_focus_context(
+            sym,
+            side,
+            trade_date=last_trade_date.isoformat(),
         )
 
         if current_anchor_meta:
@@ -5706,6 +7215,9 @@ def run_master(
             "recent_band_extension_days": recent_band_extension_days,
             "recent_second_band_test_days": recent_second_band_test_days,
             "second_band_penalty": second_band_penalty,
+            "first_dev_break_bonus": int(first_dev_quality.get("fresh_break_bonus", 0) or 0),
+            "first_dev_chop_penalty": int(first_dev_quality.get("chop_penalty", 0) or 0),
+            "first_dev_note": first_dev_quality.get("note", ""),
             "breakout_5d": breakout_5d,
             "retest_followthrough": retest_followthrough,
             "retest_reference_level": retest_summary["retest_reference_level"],
@@ -5714,6 +7226,8 @@ def run_master(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
             "compression_note": compression_summary.get("compression_note", ""),
+            "entry_feature_snapshot": entry_feature_snapshot,
+            **bouncebot_focus_context,
         }
 
         priority_summary = build_priority_setup_summary(
@@ -5726,6 +7240,9 @@ def run_master(
             recent_band_extension_days=recent_band_extension_days,
             recent_second_band_test_days=recent_second_band_test_days,
             second_band_penalty=second_band_penalty,
+            first_dev_break_bonus=first_dev_quality.get("fresh_break_bonus", 0),
+            first_dev_chop_penalty=first_dev_quality.get("chop_penalty", 0),
+            first_dev_note=first_dev_quality.get("note", ""),
             breakout_5d=breakout_5d,
             retest_followthrough=retest_followthrough,
             retest_reference_level=retest_summary["retest_reference_level"],
@@ -5798,11 +7315,17 @@ def run_master(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
             "compression_note": compression_summary.get("compression_note", ""),
+            "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
+            "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
+            "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
+            "bouncebot_bullish_weak_long_seen_today": bool(bouncebot_focus_context.get("bouncebot_bullish_weak_long_seen_today")),
+            "bouncebot_bearish_weak_short_seen_today": bool(bouncebot_focus_context.get("bouncebot_bearish_weak_short_seen_today")),
             "priority_score": priority_summary["score"],
             "favorite_signals": ";".join(priority_summary["favorite_signals"]),
             "favorite_context_signals": ";".join(priority_summary["context_signals"]),
             "events_today": ";".join(symbol_events_today),
         }
+        symbol_entry["feature_row"] = feature_row
         feature_rows.append(feature_row)
         feature_rows_by_symbol[sym] = feature_row
 
@@ -5839,9 +7362,11 @@ def run_master(
         )
     else:
         if update_setup_tracker is None:
+            window_start, window_end = get_setup_tracker_update_window_labels()
             logging.info(
-                "Setup tracker refresh skipped for this run because local time is before %s.",
-                DEFAULT_SETUP_TRACKER_UPDATE_CUTOFF,
+                "Setup tracker refresh skipped for this run because local time is outside the live update window (%s-%s).",
+                window_start,
+                window_end,
             )
         else:
             logging.info(
@@ -6179,8 +7704,8 @@ class MasterAvwapGUI:
         lookback_spin.pack(side="left", padx=(0, 10))
 
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Run Master Scan", command=self.run_master_once).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Run Home Folder Scan", command=self.run_shared_watchlist_scan_once).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Run Shared Watchlist Scan", command=self.run_master_once).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Run Local Watchlist Scan", command=self.run_local_watchlist_scan_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
 
         ttk.Label(
@@ -6213,6 +7738,26 @@ class MasterAvwapGUI:
             tracker_toolbar,
             text="Backfill Tracker",
             command=self.backfill_setup_tracker_history,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            tracker_toolbar,
+            text="Analyze Scoring",
+            command=self.run_scoring_analysis_once,
+        ).pack(side="left", padx=(16, 0))
+        ttk.Button(
+            tracker_toolbar,
+            text="Apply Scoring",
+            command=self.apply_scoring_analysis_once,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            tracker_toolbar,
+            text="Open Tuner Report",
+            command=self.open_scoring_tuner_report,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            tracker_toolbar,
+            text="Open Scoring Config",
+            command=self.open_scoring_config_file,
         ).pack(side="left", padx=(8, 0))
         ttk.Frame(tracker_toolbar).pack(side="left", fill="x", expand=True)
         ttk.Button(tracker_toolbar, text="Change Home Folder", command=self.choose_tracker_storage_dir).pack(side="left", padx=(16, 0))
@@ -6523,6 +8068,44 @@ class MasterAvwapGUI:
         self.refresh_tracker_storage_summary()
         self._open_folder_in_explorer(self.tracker_storage_settings_file.parent)
 
+    def _reveal_path_in_explorer(self, path: Path):
+        try:
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", str(target)])
+            else:
+                open_path_in_file_manager(target.parent)
+        except Exception as exc:
+            if messagebox:
+                messagebox.showerror("Open File", f"Could not open file location:\n{path}\n\n{exc}")
+            else:
+                raise
+
+    def run_scoring_analysis_once(self):
+        self.notebook.select(self.tracker_tab)
+        self._run_background(
+            lambda: run_priority_scoring_tuner(apply_changes=False, min_setups=8, suppress_failures=False),
+            "Analyzing setup-tracker scoring signals...",
+            "Scoring analysis complete.",
+            done_callback=self.refresh_setup_tracker_view,
+        )
+
+    def apply_scoring_analysis_once(self):
+        self.notebook.select(self.tracker_tab)
+        self._run_background(
+            lambda: run_priority_scoring_tuner(apply_changes=True, min_setups=8, suppress_failures=False),
+            "Applying scoring suggestions from setup-tracker history...",
+            "Scoring suggestions applied.",
+            done_callback=self.refresh_setup_tracker_view,
+        )
+
+    def open_scoring_tuner_report(self):
+        self._reveal_path_in_explorer(SCORING_TUNER_REPORT_FILE)
+
+    def open_scoring_config_file(self):
+        self._reveal_path_in_explorer(SCORING_CONFIG_FILE)
+
     def _refresh_active_tab(self):
         selected_tab = self.notebook.select()
         if selected_tab == str(self.tracker_tab):
@@ -6575,11 +8158,13 @@ class MasterAvwapGUI:
     def _render_setup_tracker_stats_text(self, payload: dict, selected_setup: dict | None = None):
         stats_rows = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
         daily_watchlists = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
+        attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
         lines = []
         lines.append("Tracker summary")
         lines.append("-" * 80)
         lines.append(f"Updated: {payload.get('updated_at') or 'n/a'}")
         lines.append(f"Tracked setups: {len(payload.get('setups', {}) or {})}")
+        lines.append("Auto scoring tuner: enabled after tracker updates/backfills")
         if daily_watchlists:
             latest_date = max(daily_watchlists.keys())
             latest_watchlist = daily_watchlists.get(latest_date, {})
@@ -6631,12 +8216,34 @@ class MasterAvwapGUI:
                 lines.append(f"retest={selected_setup.get('retest_note')}")
             if selected_setup.get("extension_note"):
                 lines.append(f"extension={selected_setup.get('extension_note')}")
+            if selected_setup.get("first_dev_note"):
+                lines.append(f"1stdev={selected_setup.get('first_dev_note')}")
             if selected_setup.get("score_bonus_note"):
                 lines.append(f"bonus={selected_setup.get('score_bonus_note')}")
+            if selected_setup.get("adaptive_score_note"):
+                lines.append(f"adaptive={selected_setup.get('adaptive_score_note')}")
             if selected_setup.get("ranking_note"):
                 lines.append(f"filters={selected_setup.get('ranking_note')}")
             if selected_setup.get("compression_note"):
                 lines.append(f"compression={selected_setup.get('compression_note')}")
+
+            entry_attributes = selected_setup.get("entry_attributes", {})
+            if isinstance(entry_attributes, dict) and entry_attributes:
+                lines.append("")
+                lines.append("Entry attributes")
+                lines.append("-" * 80)
+                rendered_count = 0
+                for attribute_key in sorted(entry_attributes.keys()):
+                    meta = attribute_registry.get(attribute_key, {}) if isinstance(attribute_registry.get(attribute_key), dict) else {}
+                    label = meta.get("label") or attribute_key
+                    group = meta.get("group") or attribute_key.split(".", 1)[0]
+                    lines.append(f"[{group}] {label}: {_format_tracker_attribute_text(entry_attributes[attribute_key])}")
+                    rendered_count += 1
+                    if rendered_count >= 18:
+                        remaining = len(entry_attributes) - rendered_count
+                        if remaining > 0:
+                            lines.append(f"... {remaining} more attributes logged in {SETUP_ATTRIBUTES_FILE.name}")
+                        break
 
         lines.append("")
         lines.append("Exports")
@@ -6645,6 +8252,11 @@ class MasterAvwapGUI:
         lines.append(f"Scenario CSV: {SETUP_SCENARIOS_FILE}")
         lines.append(f"Daily CSV: {SETUP_DAILY_FILE}")
         lines.append(f"Stats CSV: {SETUP_STATS_FILE}")
+        lines.append(f"Attributes CSV: {SETUP_ATTRIBUTES_FILE}")
+        lines.append(f"Attribute leaderboard CSV: {SETUP_ATTRIBUTE_LEADERBOARD_FILE}")
+        lines.append(f"Scoring config JSON: {SCORING_CONFIG_FILE}")
+        lines.append(f"Scoring recommendations JSON: {SCORING_RECOMMENDATIONS_FILE}")
+        lines.append(f"Scoring tuner report: {SCORING_TUNER_REPORT_FILE}")
         self._set_text_widget_contents(self.setup_tracker_stats_text, "\n".join(lines))
 
     def _populate_setup_tracker_scenarios(self, setup: dict | None):
@@ -6962,9 +8574,22 @@ class MasterAvwapGUI:
     def run_master_once(self):
         self.notebook.select(self.avwap_tab)
         self._run_background(
+            run_master_with_shared_watchlists,
+            "Running Master AVWAP scan from shared home-folder longs.txt / shorts.txt...",
+            "Shared-watchlist Master AVWAP scan complete.",
+            done_callback=lambda: (
+                self.refresh_avwap_output_view(),
+                self.refresh_anchor_output_view(),
+                self.refresh_setup_tracker_view(),
+            ),
+        )
+
+    def run_local_watchlist_scan_once(self):
+        self.notebook.select(self.avwap_tab)
+        self._run_background(
             run_master,
-            "Running full Master AVWAP scan...",
-            "Master AVWAP scan complete.",
+            "Running Master AVWAP scan from local project watchlists...",
+            "Local-watchlist Master AVWAP scan complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_anchor_output_view(),
@@ -6988,17 +8613,7 @@ class MasterAvwapGUI:
         )
 
     def run_shared_watchlist_scan_once(self):
-        self.notebook.select(self.avwap_tab)
-        self._run_background(
-            run_master_with_shared_watchlists,
-            "Running Master AVWAP scan from home-folder longs.txt / shorts.txt...",
-            "Home-folder Master AVWAP scan complete.",
-            done_callback=lambda: (
-                self.refresh_avwap_output_view(),
-                self.refresh_anchor_output_view(),
-                self.refresh_setup_tracker_view(),
-            ),
-        )
+        self.run_master_once()
 
     def run_anchor_scan_once(self):
         self.notebook.select(self.anchor_scan_tab)
@@ -7182,12 +8797,16 @@ def launch_gui():
 
 def main():
     parser = argparse.ArgumentParser(description="Run Master AVWAP scanner")
+    tracker_window_start, tracker_window_end = get_setup_tracker_update_window_labels()
     parser.add_argument("--once", action="store_true", help="Run a single AVWAP scan and exit.")
     parser.add_argument("--loop", action="store_true", help="Run AVWAP scan in hourly loop.")
     parser.add_argument(
         "--force-setup-tracker-update",
         action="store_true",
-        help="Update the setup tracker even before the default 12:00 local cutoff.",
+        help=(
+            "Update the setup tracker even outside the default "
+            f"{tracker_window_start}-{tracker_window_end} local live-update window."
+        ),
     )
     parser.add_argument(
         "--scan-earnings",

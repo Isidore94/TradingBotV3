@@ -24,6 +24,11 @@ import tkinter.font as tkFont
 
 import pandas as pd
 import yfinance as yf
+from market_session import (
+    get_market_local_now,
+    get_market_session_open_naive,
+    get_market_session_window,
+)
 
 # IB API imports
 from ibapi.client import EClient
@@ -46,6 +51,7 @@ from project_paths import (
     AVWAP_SIGNALS_FILE,
     RRS_STRENGTH_LOG_FILE,
     RRS_GROUP_STRENGTH_LOG_FILE,
+    RRS_ENVIRONMENT_FOCUS_HISTORY_FILE,
     SECTOR_ETF_MAP_FILE,
     INDUSTRY_ETF_MAP_FILE,
     SYMBOL_CLASSIFICATION_CACHE_FILE,
@@ -69,6 +75,9 @@ MASTER_AVWAP_SIGNALS_FILENAME = AVWAP_SIGNALS_FILE
 MASTER_AVWAP_FOCUS_FILENAME = MASTER_AVWAP_FOCUS_FILE
 STRENGTH_SCAN_LOG_FILENAME = RRS_STRENGTH_LOG_FILE
 GROUP_STRENGTH_SCAN_LOG_FILENAME = RRS_GROUP_STRENGTH_LOG_FILE
+ENVIRONMENT_FOCUS_HISTORY_FILENAME = RRS_ENVIRONMENT_FOCUS_HISTORY_FILE
+ENVIRONMENT_FOCUS_HISTORY_SCHEMA_VERSION = 1
+ENVIRONMENT_FOCUS_HISTORY_KEEP_DAYS = 30
 SECTOR_ETF_MAP_FILENAME = SECTOR_ETF_MAP_FILE
 INDUSTRY_ETF_MAP_FILENAME = INDUSTRY_ETF_MAP_FILE
 SYMBOL_CLASSIFICATION_CACHE_FILENAME = SYMBOL_CLASSIFICATION_CACHE_FILE
@@ -217,6 +226,44 @@ IMPULSE_RRS_UNFAVORED_EXCESS_RATIO = 0.45
 IMPULSE_RRS_COUNTER_RRS = 0.35
 IMPULSE_RRS_COUNTER_MOVE_RATIO = 0.20
 IMPULSE_RRS_COUNTER_BARS_REQUIRED = 2
+
+
+def _default_environment_focus_history_payload():
+    return {
+        "schema_version": ENVIRONMENT_FOCUS_HISTORY_SCHEMA_VERSION,
+        "updated_at": None,
+        "days": {},
+    }
+
+
+def _load_environment_focus_history_payload():
+    if not ENVIRONMENT_FOCUS_HISTORY_FILENAME.exists():
+        return _default_environment_focus_history_payload()
+    try:
+        payload = json.loads(ENVIRONMENT_FOCUS_HISTORY_FILENAME.read_text(encoding="utf-8"))
+    except Exception:
+        return _default_environment_focus_history_payload()
+    if not isinstance(payload, dict):
+        return _default_environment_focus_history_payload()
+
+    history = _default_environment_focus_history_payload()
+    history["schema_version"] = int(
+        payload.get("schema_version", ENVIRONMENT_FOCUS_HISTORY_SCHEMA_VERSION)
+        or ENVIRONMENT_FOCUS_HISTORY_SCHEMA_VERSION
+    )
+    history["updated_at"] = payload.get("updated_at")
+    history["days"] = payload.get("days", {}) if isinstance(payload.get("days"), dict) else {}
+    return history
+
+
+def _save_environment_focus_history_payload(payload):
+    history = _default_environment_focus_history_payload()
+    if isinstance(payload, dict):
+        history["days"] = payload.get("days", {}) if isinstance(payload.get("days"), dict) else {}
+    history["schema_version"] = ENVIRONMENT_FOCUS_HISTORY_SCHEMA_VERSION
+    history["updated_at"] = get_market_local_now().isoformat(timespec="seconds")
+    ENVIRONMENT_FOCUS_HISTORY_FILENAME.parent.mkdir(parents=True, exist_ok=True)
+    ENVIRONMENT_FOCUS_HISTORY_FILENAME.write_text(json.dumps(history, indent=2), encoding="utf-8")
 BOUNCE_LEVEL_LOOKBACK_BARS = 8
 BOUNCE_LEVEL_BAND_ATR = 0.12
 BOUNCE_MAX_NEAR_BARS = 4
@@ -371,7 +418,7 @@ class HistoricalDataFilter(logging.Filter):
 # Utility Functions
 ##########################################
 def wait_for_candle_close():
-    now = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
+    now = get_market_local_now()
     sec_since_5 = (now.minute % 5) * 60 + now.second
     sec_to_go = 300 - sec_since_5
     logging.info(f"Waiting for candle to close: {sec_to_go} seconds remaining.")
@@ -514,7 +561,7 @@ def _aggregate_bars_timeframe(bars, timeframe_minutes):
     counts = {}
     for bar in bars:
         dt = bar.dt
-        market_open = dt.replace(hour=6, minute=30, second=0, microsecond=0)
+        market_open = get_market_session_open_naive(reference=dt)
         minutes_since = int((dt - market_open).total_seconds() // 60)
         if minutes_since < 0:
             bucket_minute = (dt.minute // timeframe_minutes) * timeframe_minutes
@@ -1431,6 +1478,109 @@ class BounceBot(EWrapper, EClient):
             return sections
         return None
 
+    def _record_environment_focus_history(self, environment_scan, timeframe_key):
+        if not isinstance(environment_scan, dict):
+            return
+
+        now_local = get_market_local_now()
+        current_date = now_local.date().isoformat()
+        history = _load_environment_focus_history_payload()
+        days = history.setdefault("days", {})
+
+        cutoff_date = now_local.date() - timedelta(days=ENVIRONMENT_FOCUS_HISTORY_KEEP_DAYS)
+        for day_key in list(days.keys()):
+            try:
+                day_value = datetime.fromisoformat(str(day_key)).date()
+            except ValueError:
+                days.pop(day_key, None)
+                continue
+            if day_value < cutoff_date:
+                days.pop(day_key, None)
+
+        day_payload = days.setdefault(
+            current_date,
+            {
+                "updated_at": now_local.isoformat(timespec="seconds"),
+                "bullish_weak_longs": {"symbols": {}},
+                "bearish_weak_shorts": {"symbols": {}},
+            },
+        )
+        day_payload["updated_at"] = now_local.isoformat(timespec="seconds")
+
+        bucket_inputs = (
+            (
+                "bullish_weak_longs",
+                [entry for entry in environment_scan.get("long_candidates", []) if int(entry.get("context_hits", 0) or 0) > 0],
+            ),
+            (
+                "bearish_weak_shorts",
+                [entry for entry in environment_scan.get("short_candidates", []) if int(entry.get("context_hits", 0) or 0) > 0],
+            ),
+        )
+
+        current_environment = self.get_market_environment()
+        for bucket_name, candidates in bucket_inputs:
+            bucket_payload = day_payload.setdefault(bucket_name, {"symbols": {}})
+            bucket_payload["updated_at"] = now_local.isoformat(timespec="seconds")
+            symbols_payload = bucket_payload.setdefault("symbols", {})
+            for entry in candidates:
+                symbol = str(entry.get("symbol") or "").strip().upper()
+                if not symbol:
+                    continue
+                existing = symbols_payload.setdefault(
+                    symbol,
+                    {
+                        "first_seen_at": now_local.isoformat(timespec="seconds"),
+                        "last_seen_at": now_local.isoformat(timespec="seconds"),
+                        "hit_count": 0,
+                        "max_score": 0.0,
+                        "max_context_hits": 0,
+                        "max_context_hit_rate": 0.0,
+                        "max_compression_hits": 0,
+                        "max_compression_hit_rate": 0.0,
+                        "timeframes": [],
+                        "market_environments": [],
+                    },
+                )
+                existing["last_seen_at"] = now_local.isoformat(timespec="seconds")
+                existing["hit_count"] = int(existing.get("hit_count", 0) or 0) + 1
+                existing["max_score"] = max(
+                    float(existing.get("max_score", 0.0) or 0.0),
+                    float(entry.get("score", 0.0) or 0.0),
+                )
+                existing["max_context_hits"] = max(
+                    int(existing.get("max_context_hits", 0) or 0),
+                    int(entry.get("context_hits", 0) or 0),
+                )
+                existing["max_context_hit_rate"] = max(
+                    float(existing.get("max_context_hit_rate", 0.0) or 0.0),
+                    float(entry.get("context_hit_rate", 0.0) or 0.0),
+                )
+                existing["max_compression_hits"] = max(
+                    int(existing.get("max_compression_hits", 0) or 0),
+                    int(entry.get("compression_hits", 0) or 0),
+                )
+                existing["max_compression_hit_rate"] = max(
+                    float(existing.get("max_compression_hit_rate", 0.0) or 0.0),
+                    float(entry.get("compression_hit_rate", 0.0) or 0.0),
+                )
+                existing["timeframes"] = sorted(
+                    {
+                        str(item).strip()
+                        for item in list(existing.get("timeframes", []) or []) + [timeframe_key]
+                        if str(item).strip()
+                    }
+                )
+                existing["market_environments"] = sorted(
+                    {
+                        str(item).strip()
+                        for item in list(existing.get("market_environments", []) or []) + [current_environment]
+                        if str(item).strip()
+                    }
+                )
+
+        _save_environment_focus_history_payload(history)
+
     def _format_environment_scan_entry(self, entry, focus_mode="context"):
         direction = entry.get("direction")
         if focus_mode == "compression":
@@ -2019,6 +2169,8 @@ class BounceBot(EWrapper, EClient):
         sector_payload = _ordered(sector_results)
         industry_payload = _ordered(industry_results)
         environment_scan = self._summarize_environment_scan(intraday_profiles, spy_context_windows, threshold)
+        if environment_scan:
+            self._record_environment_focus_history(environment_scan, timeframe_key)
         snapshot_payload = {
             "timestamp": datetime.now(),
             "threshold": threshold,
@@ -2078,7 +2230,7 @@ class BounceBot(EWrapper, EClient):
         return results
 
     def _log_group_strength_extremes(self, grouped):
-        timestamp_local = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d %H:%M:%S %Z")
+        timestamp_local = get_market_local_now().strftime("%Y-%m-%d %H:%M:%S %Z")
         GROUP_STRENGTH_SCAN_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
         write_header = not GROUP_STRENGTH_SCAN_LOG_FILENAME.exists()
         with open(GROUP_STRENGTH_SCAN_LOG_FILENAME, "a", newline="") as csvfile:
@@ -2104,7 +2256,7 @@ class BounceBot(EWrapper, EClient):
                         })
 
     def _log_scan_extremes(self, timeframe_key, strongest, weakest):
-        timestamp_local = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
+        timestamp_local = get_market_local_now()
         STRENGTH_SCAN_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
         write_header = not STRENGTH_SCAN_LOG_FILENAME.exists()
         with open(STRENGTH_SCAN_LOG_FILENAME, "a", newline="") as csvfile:
@@ -2136,11 +2288,11 @@ class BounceBot(EWrapper, EClient):
         return symbols
 
     def has_minimum_candles_completed(self, required=CONSECUTIVE_CANDLES):
-        now = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
-        market_open = now.replace(hour=6, minute=30, second=0, microsecond=0)
-        if now < market_open:
+        now = get_market_local_now()
+        market_session = get_market_session_window(reference=now)
+        if now < market_session.open_local:
             return False
-        elapsed = (now - market_open).total_seconds()
+        elapsed = (now - market_session.open_local).total_seconds()
         return elapsed >= required * 300
 
     def nextValidId(self, orderId):
@@ -3350,10 +3502,9 @@ class BounceBot(EWrapper, EClient):
     def request_and_detect_bounce(self, symbol, allowed_bounce_types=None):
         # Only scan within market hours (if enabled)
         if not SCAN_OUTSIDE_MARKET_HOURS:
-            current_time = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles"))
-            market_open = current_time.replace(hour=6, minute=30, second=0, microsecond=0)
-            market_close = current_time.replace(hour=13, minute=0, second=0, microsecond=0)
-            if not (market_open <= current_time <= market_close):
+            current_time = get_market_local_now()
+            market_session = get_market_session_window(reference=current_time)
+            if not (market_session.open_local <= current_time <= market_session.close_local):
                 logging.debug(f"{symbol}: Not within market hours for bounce detection.")
                 return
 

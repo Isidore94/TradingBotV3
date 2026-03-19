@@ -98,6 +98,11 @@ MASTER_AVWAP_SETUP_TRACKER_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_se
 MASTER_AVWAP_SETUP_SCENARIOS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_scenarios.csv"
 MASTER_AVWAP_SETUP_DAILY_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_daily.csv"
 MASTER_AVWAP_SETUP_STATS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_stats.csv"
+MASTER_AVWAP_SETUP_ATTRIBUTES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_attributes.csv"
+MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_attribute_leaderboard.csv"
+MASTER_AVWAP_SCORING_CONFIG_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_config.json"
+MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_recommendations.json"
+MASTER_AVWAP_SCORING_TUNER_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_tuner_report.txt"
 
 MASTER_AVWAP_REPORT_FILE = REPORTS_DIR / "master_avwap_events.txt"
 MASTER_AVWAP_EVENT_TICKERS_FILE = REPORTS_DIR / "master_avwap_event_tickers.txt"
@@ -114,6 +119,7 @@ TRADING_BOT_LOG_FILE = APP_LOG_FILE
 MASTER_AVWAP_LOG_FILE = APP_LOG_FILE
 RRS_STRENGTH_LOG_FILE = LOG_DIR / "rrs_strength_extremes.csv"
 RRS_GROUP_STRENGTH_LOG_FILE = LOG_DIR / "rrs_group_strength_extremes.csv"
+RRS_ENVIRONMENT_FOCUS_HISTORY_FILE = RUNTIME_DATA_DIR / "rrs_environment_focus_history.json"
 
 
 def get_tracker_storage_details() -> dict[str, str]:
@@ -308,6 +314,7 @@ def migrate_legacy_layout() -> None:
         (REPO_DATA_DIR / "runtime" / "avwap_signals.csv", AVWAP_SIGNALS_FILE),
         (REPO_DATA_DIR / "runtime" / "d1_features.csv", D1_FEATURES_FILE),
         (REPO_DATA_DIR / "runtime" / "intraday_bounces.csv", INTRADAY_BOUNCES_FILE),
+        (REPO_DATA_DIR / "runtime" / "rrs_environment_focus_history.json", RRS_ENVIRONMENT_FOCUS_HISTORY_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_ai_state.json", MASTER_AVWAP_AI_STATE_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_history.json", MASTER_AVWAP_HISTORY_FILE),
         (REPO_DATA_DIR / "runtime" / "master_positions.json", MASTER_POSITIONS_FILE),
@@ -318,6 +325,11 @@ def migrate_legacy_layout() -> None:
         (REPO_DATA_DIR / "runtime" / "master_avwap_setup_scenarios.csv", MASTER_AVWAP_SETUP_SCENARIOS_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_setup_daily.csv", MASTER_AVWAP_SETUP_DAILY_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_setup_stats.csv", MASTER_AVWAP_SETUP_STATS_FILE),
+        (REPO_DATA_DIR / "runtime" / "master_avwap_setup_attributes.csv", MASTER_AVWAP_SETUP_ATTRIBUTES_FILE),
+        (REPO_DATA_DIR / "runtime" / "master_avwap_setup_attribute_leaderboard.csv", MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE),
+        (REPO_DATA_DIR / "runtime" / "master_avwap_scoring_config.json", MASTER_AVWAP_SCORING_CONFIG_FILE),
+        (REPO_DATA_DIR / "runtime" / "master_avwap_scoring_recommendations.json", MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE),
+        (REPO_DATA_DIR / "runtime" / "master_avwap_scoring_tuner_report.txt", MASTER_AVWAP_SCORING_TUNER_REPORT_FILE),
         (REPO_DATA_DIR / "cache" / "earnings_cache.json", EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "cache" / "prev_earnings_cache.json", PREV_EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "cache" / "earnings_dates_cache.json", EARNINGS_DATES_CACHE_FILE),
@@ -352,6 +364,7 @@ def migrate_legacy_layout() -> None:
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "avwap_signals.csv", AVWAP_SIGNALS_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "d1_features.csv", D1_FEATURES_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "intraday_bounces.csv", INTRADAY_BOUNCES_FILE),
+        (LOCAL_SETTINGS_DIR / "data" / "runtime" / "rrs_environment_focus_history.json", RRS_ENVIRONMENT_FOCUS_HISTORY_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_ai_state.json", MASTER_AVWAP_AI_STATE_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_history.json", MASTER_AVWAP_HISTORY_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_positions.json", MASTER_POSITIONS_FILE),
@@ -362,6 +375,11 @@ def migrate_legacy_layout() -> None:
         (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_scenarios.csv", MASTER_AVWAP_SETUP_SCENARIOS_FILE),
         (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_daily.csv", MASTER_AVWAP_SETUP_DAILY_FILE),
         (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_stats.csv", MASTER_AVWAP_SETUP_STATS_FILE),
+        (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_attributes.csv", MASTER_AVWAP_SETUP_ATTRIBUTES_FILE),
+        (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_attribute_leaderboard.csv", MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE),
+        (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_scoring_config.json", MASTER_AVWAP_SCORING_CONFIG_FILE),
+        (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_scoring_recommendations.json", MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE),
+        (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_scoring_tuner_report.txt", MASTER_AVWAP_SCORING_TUNER_REPORT_FILE),
         (LOCAL_SETTINGS_DIR / "output" / "reports" / "master_avwap_events.txt", MASTER_AVWAP_REPORT_FILE),
         (LOCAL_SETTINGS_DIR / "output" / "reports" / "master_avwap_event_tickers.txt", MASTER_AVWAP_EVENT_TICKERS_FILE),
         (LOCAL_SETTINGS_DIR / "output" / "reports" / "master_avwap_priority_setups.txt", MASTER_AVWAP_PRIORITY_SETUPS_FILE),

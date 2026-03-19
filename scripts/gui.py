@@ -816,13 +816,13 @@ class SimpleMasterAvwapPanel:
         toolbar.pack(fill=tk.X, padx=10, pady=(10, 8))
 
         ttk.Label(toolbar, text="Master AVWAP Simple").pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="Scan Now", command=self.run_master_once).pack(side=tk.LEFT, padx=(12, 4))
-        ttk.Button(toolbar, text="Run Home Folder Scan", command=self.run_shared_watchlists_once).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="Run Shared Watchlist Scan", command=self.run_master_once).pack(side=tk.LEFT, padx=(12, 4))
+        ttk.Button(toolbar, text="Run Local Watchlist Scan", command=self.run_local_watchlists_once).pack(side=tk.LEFT, padx=4)
         ttk.Button(toolbar, text="Refresh Output", command=self.refresh_output_view).pack(side=tk.LEFT, padx=4)
 
         hint = ttk.Label(
             self.container,
-            text="Focused on longs.txt / shorts.txt AVWAP event searches. Nothing auto-runs; use Scan Now when you want it.",
+            text="Focused on longs.txt / shorts.txt AVWAP event searches. Shared home-folder watchlists are the default here.",
         )
         hint.pack(anchor="w", padx=10, pady=(0, 8))
 
@@ -887,16 +887,16 @@ class SimpleMasterAvwapPanel:
 
     def run_master_once(self) -> None:
         self._run_background(
-            run_master,
-            "Running Master AVWAP scan...",
-            "Master AVWAP scan complete.",
+            run_master_with_shared_watchlists,
+            "Running Master AVWAP scan from shared home-folder longs.txt / shorts.txt...",
+            "Shared-watchlist Master AVWAP scan complete.",
         )
 
-    def run_shared_watchlists_once(self) -> None:
+    def run_local_watchlists_once(self) -> None:
         self._run_background(
-            run_master_with_shared_watchlists,
-            "Running Master AVWAP scan from home-folder longs.txt / shorts.txt...",
-            "Home-folder Master AVWAP scan complete.",
+            run_master,
+            "Running Master AVWAP scan from local project watchlists...",
+            "Local-watchlist Master AVWAP scan complete.",
         )
 
 
