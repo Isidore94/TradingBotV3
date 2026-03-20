@@ -232,6 +232,13 @@ PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
 PRIORITY_COMPRESSION_RANGE_ATR_MAX = 4.0
 PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_MAX = 2.5
 PRIORITY_COMPRESSION_SCORE_PENALTY = 16
+PRIORITY_DIRECTIONAL_REJECTION_MIN_RANGE_RATIO = 0.35
+PRIORITY_DIRECTIONAL_REJECTION_MIN_ATR_RATIO = 0.22
+PRIORITY_DIRECTIONAL_REJECTION_MIN_BODY_RATIO = 1.20
+PRIORITY_DIRECTIONAL_REJECTION_TOUCH_TOL_ATR = 0.18
+PRIORITY_DIRECTIONAL_REJECTION_BASE_PENALTY = 6
+PRIORITY_DIRECTIONAL_REJECTION_LEVEL_PENALTY = 4
+PRIORITY_DIRECTIONAL_REJECTION_EXTREME_PENALTY = 4
 SETUP_EXIT_TEMPLATES = [
     {
         "id": "full_band2",
@@ -1294,6 +1301,164 @@ def assess_first_dev_break_quality(
 
     result["chop_penalty"] = penalty
     result["note"] = "; ".join(note_parts)
+    return result
+
+
+def _collect_priority_reference_levels(
+    sma_levels: dict[str, float],
+    current_anchor_meta: dict | None,
+    previous_anchor_meta: dict | None,
+) -> list[tuple[str, float]]:
+    levels = []
+    seen = set()
+
+    def _add(label: str, value) -> None:
+        try:
+            level_value = float(value)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(level_value):
+            return
+        normalized_label = str(label or "").strip()
+        if not normalized_label or normalized_label in seen:
+            return
+        seen.add(normalized_label)
+        levels.append((normalized_label, level_value))
+
+    if current_anchor_meta:
+        _add("AVWAPE", current_anchor_meta.get("vwap"))
+        current_bands = current_anchor_meta.get("bands", {}) or {}
+        for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
+            _add(label, current_bands.get(label))
+
+    if previous_anchor_meta:
+        _add("PREV_AVWAPE", previous_anchor_meta.get("vwap"))
+        previous_bands = previous_anchor_meta.get("bands", {}) or {}
+        for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
+            _add(f"PREV_{label}", previous_bands.get(label))
+
+    for label, value in sorted(sma_levels.items(), key=lambda item: int(item[0].split("_")[-1])):
+        _add(label, value)
+
+    return levels
+
+
+def assess_directional_rejection_candle(
+    daily_rows,
+    last_trade_date,
+    side: str,
+    atr20: float | None,
+    sma_levels: dict[str, float],
+    current_anchor_meta: dict | None,
+    previous_anchor_meta: dict | None,
+) -> dict:
+    result = {
+        "directional_rejection_penalty": 0,
+        "directional_rejection_note": "",
+        "directional_rejection_levels": [],
+        "directional_rejection_range_ratio": 0.0,
+        "directional_rejection_atr_ratio": None,
+    }
+    if not daily_rows or not last_trade_date:
+        return result
+
+    target = last_trade_date.isoformat() if hasattr(last_trade_date, "isoformat") else str(last_trade_date)
+    relevant = [row for row in daily_rows if str(row.get("date") or "") == target]
+    if not relevant:
+        return result
+
+    candle = relevant[-1]
+
+    def _as_float(key: str):
+        try:
+            value = float(candle[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return value
+
+    open_value = _as_float("open")
+    high_value = _as_float("high")
+    low_value = _as_float("low")
+    close_value = _as_float("close")
+    if None in (open_value, high_value, low_value, close_value):
+        return result
+
+    range_size = max(0.0, float(high_value) - float(low_value))
+    if range_size <= 0:
+        return result
+
+    body_size = abs(float(close_value) - float(open_value))
+    lower_tail = max(0.0, min(float(open_value), float(close_value)) - float(low_value))
+    upper_wick = max(0.0, float(high_value) - max(float(open_value), float(close_value)))
+
+    normalized_side = normalize_side(side)
+    directional_shadow = lower_tail if normalized_side == "LONG" else upper_wick
+    opposite_shadow = upper_wick if normalized_side == "LONG" else lower_tail
+    shadow_range_ratio = directional_shadow / range_size if range_size else 0.0
+    body_denominator = max(body_size, range_size * 0.10, 0.01)
+    shadow_body_ratio = directional_shadow / body_denominator
+    shadow_atr_ratio = (
+        directional_shadow / float(atr20)
+        if atr20 is not None and atr20 > 0
+        else None
+    )
+
+    result["directional_rejection_range_ratio"] = float(shadow_range_ratio)
+    result["directional_rejection_atr_ratio"] = (
+        float(shadow_atr_ratio) if shadow_atr_ratio is not None else None
+    )
+
+    looks_large = (
+        shadow_range_ratio >= PRIORITY_DIRECTIONAL_REJECTION_MIN_RANGE_RATIO
+        and shadow_body_ratio >= PRIORITY_DIRECTIONAL_REJECTION_MIN_BODY_RATIO
+        and directional_shadow >= opposite_shadow * 1.05
+    )
+    if shadow_atr_ratio is not None and shadow_atr_ratio >= PRIORITY_DIRECTIONAL_REJECTION_MIN_ATR_RATIO:
+        looks_large = looks_large or shadow_range_ratio >= (PRIORITY_DIRECTIONAL_REJECTION_MIN_RANGE_RATIO - 0.04)
+    if not looks_large:
+        return result
+
+    zone_low = float(low_value) if normalized_side == "LONG" else max(float(open_value), float(close_value))
+    zone_high = min(float(open_value), float(close_value)) if normalized_side == "LONG" else float(high_value)
+    touch_tol = max(
+        float(atr20 or 0.0) * PRIORITY_DIRECTIONAL_REJECTION_TOUCH_TOL_ATR,
+        range_size * 0.05,
+        abs(float(close_value)) * 0.001,
+    )
+
+    touched_levels = []
+    for label, level in _collect_priority_reference_levels(
+        sma_levels=sma_levels,
+        current_anchor_meta=current_anchor_meta,
+        previous_anchor_meta=previous_anchor_meta,
+    ):
+        if zone_low - touch_tol <= float(level) <= zone_high + touch_tol:
+            touched_levels.append(label)
+
+    penalty = PRIORITY_DIRECTIONAL_REJECTION_BASE_PENALTY
+    if touched_levels:
+        penalty += PRIORITY_DIRECTIONAL_REJECTION_LEVEL_PENALTY
+    if (
+        len(touched_levels) >= 2
+        or shadow_range_ratio >= 0.50
+        or (shadow_atr_ratio is not None and shadow_atr_ratio >= 0.45)
+    ):
+        penalty += PRIORITY_DIRECTIONAL_REJECTION_EXTREME_PENALTY
+
+    shadow_label = "tail" if normalized_side == "LONG" else "wick"
+    note = f"Large {shadow_label}"
+    if touched_levels:
+        note += f" into {', '.join(touched_levels[:4])}"
+        if len(touched_levels) > 4:
+            note += f", +{len(touched_levels) - 4} more"
+    else:
+        note += f" ({shadow_range_ratio:.0%} of range)"
+
+    result["directional_rejection_penalty"] = int(penalty)
+    result["directional_rejection_note"] = note
+    result["directional_rejection_levels"] = touched_levels
     return result
 
 
@@ -5379,7 +5544,10 @@ def assess_priority_directional_obstacles(
     side: str,
     last_close: float,
     atr20: float,
+    daily_rows,
+    last_trade_date,
     sma_levels: dict[str, float],
+    current_anchor_meta: dict | None,
     previous_anchor_meta: dict | None,
 ) -> dict:
     sma_obstacles = []
@@ -5436,6 +5604,16 @@ def assess_priority_directional_obstacles(
             else:
                 prev_anchor_penalty += 3
 
+    directional_rejection = assess_directional_rejection_candle(
+        daily_rows=daily_rows,
+        last_trade_date=last_trade_date,
+        side=side,
+        atr20=atr20,
+        sma_levels=sma_levels,
+        current_anchor_meta=current_anchor_meta,
+        previous_anchor_meta=previous_anchor_meta,
+    )
+
     ranking_blocked = bool(sma_blockers)
     notes = []
     if ranking_blocked:
@@ -5446,6 +5624,11 @@ def assess_priority_directional_obstacles(
         notes.append(f"Prev AVWAPE ahead: {_format_obstacle_labels(prev_avwap_obstacles)}")
     if prev_band_obstacles:
         notes.append(f"Prev stdev bands ahead: {_format_obstacle_labels(prev_band_obstacles)}")
+    if directional_rejection.get("directional_rejection_note"):
+        notes.append(
+            f"{directional_rejection['directional_rejection_note']} "
+            f"(-{int(directional_rejection.get('directional_rejection_penalty', 0) or 0)})"
+        )
 
     return {
         "ranking_blocked": ranking_blocked,
@@ -5454,9 +5637,20 @@ def assess_priority_directional_obstacles(
         "sma_blockers": sma_blockers,
         "previous_anchor_obstacles": prev_anchor_obstacles,
         "previous_anchor_path_clear": bool(previous_anchor_meta) and not prev_anchor_obstacles,
-        "score_penalty": sma_penalty + prev_anchor_penalty,
+        "score_penalty": (
+            sma_penalty
+            + prev_anchor_penalty
+            + int(directional_rejection.get("directional_rejection_penalty", 0) or 0)
+        ),
         "score_penalty_sma": sma_penalty,
         "score_penalty_previous_anchor": prev_anchor_penalty,
+        "score_penalty_directional_rejection": int(
+            directional_rejection.get("directional_rejection_penalty", 0) or 0
+        ),
+        "directional_rejection_note": directional_rejection.get("directional_rejection_note", ""),
+        "directional_rejection_levels": list(directional_rejection.get("directional_rejection_levels") or []),
+        "directional_rejection_range_ratio": directional_rejection.get("directional_rejection_range_ratio"),
+        "directional_rejection_atr_ratio": directional_rejection.get("directional_rejection_atr_ratio"),
         "ranking_note": " | ".join(notes),
     }
 
@@ -5491,7 +5685,10 @@ def refine_priority_rows_with_directional_filters(
             side=side,
             last_close=last_close,
             atr20=atr20,
+            daily_rows=symbol_entry.get("daily_ohlc") or [],
+            last_trade_date=symbol_entry.get("last_trade_date"),
             sma_levels=sma_levels,
+            current_anchor_meta=symbol_entry.get("current_anchor"),
             previous_anchor_meta=symbol_entry.get("previous_anchor"),
         )
         trendline_score_bonus = (
@@ -5558,6 +5755,8 @@ def refine_priority_rows_with_directional_filters(
         symbol_entry["priority_sma_obstacles"] = list(row.get("sma_obstacles") or [])
         symbol_entry["priority_previous_anchor_obstacles"] = list(row.get("previous_anchor_obstacles") or [])
         symbol_entry["priority_previous_anchor_path_clear"] = bool(row.get("previous_anchor_path_clear"))
+        symbol_entry["priority_directional_rejection_penalty"] = int(row.get("score_penalty_directional_rejection", 0) or 0)
+        symbol_entry["priority_directional_rejection_note"] = row.get("directional_rejection_note", "")
         symbol_entry["priority_trendline_candidate"] = row.get("trendline_candidate")
         symbol_entry["priority_trendline_note"] = row.get("trendline_note", "")
         symbol_entry["priority_trendline_within_alert_range"] = bool(row.get("trendline_within_alert_range"))

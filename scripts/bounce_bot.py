@@ -214,6 +214,8 @@ MASTER_AVWAP_FOCUS_MIN_EXCESS_MOVE_RATIO = 0.25
 EMIT_MASTER_AVWAP_FOCUS_RRS_ALERTS = False
 ENVIRONMENT_HIGHLIGHT_LIMIT = 6
 ENVIRONMENT_SCAN_LIMIT = 25
+ENVIRONMENT_RECENT_PROFILE_BARS = 3
+ENVIRONMENT_SCAN_DELAY_MINUTES = 60
 SPY_COMPRESSION_THRESHOLD = 0.35
 SPY_UP_THRESHOLD = 0.20
 SPY_PULLBACK_DELTA_THRESHOLD = 0.25
@@ -1178,6 +1180,17 @@ class BounceBot(EWrapper, EClient):
         )
         return decorated
 
+    def _environment_scan_is_active(self, latest_bar_dt=None):
+        now_local = get_market_local_now()
+        current_session = get_market_session_window(reference=now_local)
+        first_hour_end = current_session.open_local + timedelta(minutes=ENVIRONMENT_SCAN_DELAY_MINUTES)
+        if now_local < first_hour_end:
+            return False
+        if latest_bar_dt is None:
+            return True
+        latest_session = get_market_session_window(reference=latest_bar_dt)
+        return latest_session.market_date == current_session.market_date
+
     def _build_environment_highlights(self, symbol_context, spy_ratio, environment_scan=None):
         if environment_scan is not None:
             sections = self._build_intraday_environment_sections(environment_scan)
@@ -1253,8 +1266,14 @@ class BounceBot(EWrapper, EClient):
             prev_move_ratio = windows[-1]["move_ratio"] if windows else None
             delta = move_ratio - prev_move_ratio if prev_move_ratio is not None else 0.0
             compression = abs(move_ratio) < SPY_COMPRESSION_THRESHOLD
-            rising = move_ratio >= SPY_UP_THRESHOLD or delta >= SPY_PULLBACK_DELTA_THRESHOLD
-            falling = move_ratio <= -SPY_UP_THRESHOLD or delta <= -SPY_PULLBACK_DELTA_THRESHOLD
+            # Only treat delta-only turns as valid context when SPY is near flat/compressed.
+            # This avoids calling a small bounce inside a weak tape "SPY strength".
+            rising = move_ratio >= SPY_UP_THRESHOLD or (
+                delta >= SPY_PULLBACK_DELTA_THRESHOLD and move_ratio >= -SPY_COMPRESSION_THRESHOLD
+            )
+            falling = move_ratio <= -SPY_UP_THRESHOLD or (
+                delta <= -SPY_PULLBACK_DELTA_THRESHOLD and move_ratio <= SPY_COMPRESSION_THRESHOLD
+            )
             windows.append(
                 {
                     "dt": bar.dt,
@@ -1313,9 +1332,27 @@ class BounceBot(EWrapper, EClient):
                 "avg_excess": avg_excess,
             }
 
-        def finalize_candidate(symbol, direction, context_summary, compression_summary):
+        def finalize_candidate(symbol, direction, profile, context_summary, compression_summary):
             if context_summary["hits"] <= 0 and compression_summary["hits"] <= 0:
                 return None
+            latest_profile = profile[-1] if profile else {}
+            recent_profile = profile[-ENVIRONMENT_RECENT_PROFILE_BARS:] if profile else []
+            recent_profile_hits = sum(
+                1
+                for item in recent_profile
+                if self._profile_item_matches_direction(item, direction, require_significant=True)
+            )
+            recent_profile_hit_rate = (
+                recent_profile_hits / len(recent_profile) if recent_profile else 0.0
+            )
+            current_direction_ok = self._profile_item_matches_direction(
+                latest_profile,
+                direction,
+                require_significant=True,
+            )
+            current_rrs = latest_profile.get("rrs") if latest_profile else None
+            current_move_ratio = latest_profile.get("move_ratio") if latest_profile else None
+            current_excess = latest_profile.get("excess_move_ratio") if latest_profile else None
             score = (
                 context_summary["hits"] * 160.0
                 + context_summary["hit_rate"] * 110.0
@@ -1327,7 +1364,17 @@ class BounceBot(EWrapper, EClient):
                 + (abs(compression_summary["avg_rrs"]) * 6.0 if compression_summary["avg_rrs"] is not None else 0.0)
                 + (abs(compression_summary["best_rrs"]) * 3.0 if compression_summary["best_rrs"] is not None else 0.0)
                 + (abs(compression_summary["avg_excess"]) * 4.0 if compression_summary["avg_excess"] is not None else 0.0)
+                + recent_profile_hits * 75.0
+                + recent_profile_hit_rate * 50.0
             )
+            if current_direction_ok:
+                score += 40.0
+                if current_rrs is not None:
+                    score += abs(current_rrs) * 14.0
+                if current_move_ratio is not None:
+                    score += abs(current_move_ratio) * 8.0
+            else:
+                score -= 60.0
             return {
                 "symbol": symbol,
                 "direction": direction,
@@ -1343,6 +1390,12 @@ class BounceBot(EWrapper, EClient):
                 "compression_avg_rrs": compression_summary["avg_rrs"],
                 "compression_best_rrs": compression_summary["best_rrs"],
                 "compression_avg_excess": compression_summary["avg_excess"],
+                "current_rrs": current_rrs,
+                "current_move_ratio": current_move_ratio,
+                "current_excess": current_excess,
+                "current_direction_ok": current_direction_ok,
+                "recent_profile_hits": recent_profile_hits,
+                "recent_profile_hit_rate": recent_profile_hit_rate,
                 "score": score,
             }
 
@@ -1353,19 +1406,22 @@ class BounceBot(EWrapper, EClient):
             if symbol in self.longs:
                 context_summary = summarize_bucket(profile, "long", "spy_weak")
                 compression_summary = summarize_bucket(profile, "long", "compression")
-                candidate = finalize_candidate(symbol, "long", context_summary, compression_summary)
+                candidate = finalize_candidate(symbol, "long", profile, context_summary, compression_summary)
                 if candidate:
                     long_candidates.append(candidate)
 
             if symbol in self.shorts:
                 context_summary = summarize_bucket(profile, "short", "spy_strong")
                 compression_summary = summarize_bucket(profile, "short", "compression")
-                candidate = finalize_candidate(symbol, "short", context_summary, compression_summary)
+                candidate = finalize_candidate(symbol, "short", profile, context_summary, compression_summary)
                 if candidate:
                     short_candidates.append(candidate)
 
         long_candidates.sort(
             key=lambda row: (
+                0 if row.get("current_direction_ok") else 1,
+                -(row.get("recent_profile_hits", 0) or 0),
+                -(row.get("recent_profile_hit_rate", 0.0) or 0.0),
                 -row["score"],
                 -row["context_hits"],
                 -(row["context_avg_rrs"] if row["context_avg_rrs"] is not None else float("-inf")),
@@ -1374,6 +1430,9 @@ class BounceBot(EWrapper, EClient):
         )
         short_candidates.sort(
             key=lambda row: (
+                0 if row.get("current_direction_ok") else 1,
+                -(row.get("recent_profile_hits", 0) or 0),
+                -(row.get("recent_profile_hit_rate", 0.0) or 0.0),
                 -row["score"],
                 -row["context_hits"],
                 (row["context_avg_rrs"] if row["context_avg_rrs"] is not None else float("inf")),
@@ -1400,27 +1459,34 @@ class BounceBot(EWrapper, EClient):
 
         def candidate_sort_key(entry):
             return (
+                0 if entry.get("current_direction_ok") else 1,
+                -(entry.get("recent_profile_hits", 0) or 0),
+                -(entry.get("recent_profile_hit_rate", 0.0) or 0.0),
                 -entry.get("score", 0.0),
                 -entry.get("context_hits", 0),
                 entry.get("symbol", ""),
             )
 
-        long_context_candidates = sorted(
+        def prefer_live_candidates(candidates):
+            live = [entry for entry in candidates if entry.get("current_direction_ok")]
+            return live if live else candidates
+
+        long_context_candidates = prefer_live_candidates(sorted(
             [entry for entry in long_candidates if entry.get("context_hits", 0) > 0],
             key=candidate_sort_key,
-        )
-        short_context_candidates = sorted(
+        ))
+        short_context_candidates = prefer_live_candidates(sorted(
             [entry for entry in short_candidates if entry.get("context_hits", 0) > 0],
             key=candidate_sort_key,
-        )
-        long_compression_candidates = sorted(
+        ))
+        long_compression_candidates = prefer_live_candidates(sorted(
             [entry for entry in long_candidates if entry.get("compression_hits", 0) > 0],
             key=candidate_sort_key,
-        )
-        short_compression_candidates = sorted(
+        ))
+        short_compression_candidates = prefer_live_candidates(sorted(
             [entry for entry in short_candidates if entry.get("compression_hits", 0) > 0],
             key=candidate_sort_key,
-        )
+        ))
 
         def add_candidate_section(title, candidates, tag, focus_mode):
             if not candidates:
@@ -1612,6 +1678,9 @@ class BounceBot(EWrapper, EClient):
         )
         if avg_excess is not None:
             line += f" avgER={avg_excess:+.2f}"
+        current_excess = entry.get("current_excess")
+        if current_excess is not None:
+            line += f" nowER={current_excess:+.2f}"
         if secondary_windows:
             line += f" {secondary_label}={secondary_hits}/{secondary_windows}"
         return line
@@ -1660,6 +1729,38 @@ class BounceBot(EWrapper, EClient):
         return (
             abs(move_ratio) >= MIN_MOVE_RATIO_FOR_SIGNAL
             and abs(excess_move_ratio) >= MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL
+        )
+
+    def _profile_item_matches_direction(self, entry, direction, require_significant=False):
+        if not isinstance(entry, dict):
+            return False
+        rrs_value = entry.get("rrs")
+        move_ratio = entry.get("move_ratio")
+        excess_move_ratio = entry.get("excess_move_ratio")
+        if rrs_value is None:
+            return False
+        if require_significant:
+            if move_ratio is None or excess_move_ratio is None:
+                return False
+            if direction == "long":
+                return (
+                    move_ratio >= MIN_MOVE_RATIO_FOR_SIGNAL
+                    and excess_move_ratio >= MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL
+                )
+            return (
+                move_ratio <= -MIN_MOVE_RATIO_FOR_SIGNAL
+                and excess_move_ratio <= -MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL
+            )
+        if direction == "long":
+            return (
+                rrs_value > 0
+                and (move_ratio is None or move_ratio > 0)
+                and (excess_move_ratio is None or excess_move_ratio > 0)
+            )
+        return (
+            rrs_value < 0
+            and (move_ratio is None or move_ratio < 0)
+            and (excess_move_ratio is None or excess_move_ratio < 0)
         )
 
     def _calc_move_ratio(self, bars, length):
@@ -2067,7 +2168,10 @@ class BounceBot(EWrapper, EClient):
         all_scores = []
         intraday_profiles = {}
         all_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
-        spy_context_windows = self._build_spy_context_windows(spy_5m, length)
+        environment_scan_active = self._environment_scan_is_active(
+            spy_5m[-1].dt if spy_5m else None
+        )
+        spy_context_windows = self._build_spy_context_windows(spy_5m, length) if environment_scan_active else []
         for symbol in all_symbols:
             sym_5m = self.get_cached_5m_bars(symbol)
             if not sym_5m:
@@ -2168,7 +2272,10 @@ class BounceBot(EWrapper, EClient):
 
         sector_payload = _ordered(sector_results)
         industry_payload = _ordered(industry_results)
-        environment_scan = self._summarize_environment_scan(intraday_profiles, spy_context_windows, threshold)
+        environment_scan = (
+            self._summarize_environment_scan(intraday_profiles, spy_context_windows, threshold)
+            if environment_scan_active else None
+        )
         if environment_scan:
             self._record_environment_focus_history(environment_scan, timeframe_key)
         snapshot_payload = {
@@ -2189,8 +2296,16 @@ class BounceBot(EWrapper, EClient):
         if emit_gui and self.gui_callback:
             decorated_snapshot = self._decorate_snapshot(snapshot_payload)
             self.gui_callback(decorated_snapshot, "rrs_snapshot")
+            status_msg = (
+                f"RRS scan complete ({len(ordered_results)} SPY, {len(sector_payload)} sector, "
+                f"{len(industry_payload)} industry refs)"
+            )
+            if not environment_scan_active:
+                market_session = get_market_session_window(reference=get_market_local_now())
+                first_hour_end = market_session.open_local + timedelta(minutes=ENVIRONMENT_SCAN_DELAY_MINUTES)
+                status_msg += f" | SPY context windows start after {first_hour_end.strftime('%H:%M')}"
             self.gui_callback(
-                f"RRS scan complete ({len(ordered_results)} SPY, {len(sector_payload)} sector, {len(industry_payload)} industry refs)",
+                status_msg,
                 "rrs_status",
             )
 
