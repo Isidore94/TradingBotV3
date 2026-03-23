@@ -124,10 +124,12 @@ FAVORITE_CURRENT_SIGNALS = {
     "LONG": {
         "BOUNCE_VWAP": 120,
         "CROSS_UP_UPPER_1": 110,
+        "EXTREME_MOVE_RETEST": 112,
     },
     "SHORT": {
         "BOUNCE_VWAP": 120,
         "CROSS_DOWN_LOWER_1": 110,
+        "EXTREME_MOVE_RETEST": 112,
     },
 }
 
@@ -228,10 +230,22 @@ TRACKER_STOP_FAILURE_CLOSES = 2
 TRACKER_PREV_AVWAPE_NEAR_ATR = 0.5
 TRACKER_EMA_CONSOLIDATION_ATR = 0.35
 TRACKER_EMA_CONSOLIDATION_RANGE_ATR = 1.0
+PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX = 0.90
 PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
-PRIORITY_COMPRESSION_RANGE_ATR_MAX = 4.0
-PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_MAX = 2.5
-PRIORITY_COMPRESSION_SCORE_PENALTY = 16
+PRIORITY_COMPRESSION_STDEV_ATR_STRONG_MAX = 0.60
+PRIORITY_COMPRESSION_STDEV_ATR_EXTREME_MAX = 0.45
+PRIORITY_COMPRESSION_RANGE_ATR_MAX = 3.5
+PRIORITY_COMPRESSION_RANGE_ATR_STRONG_MAX = 3.0
+PRIORITY_COMPRESSION_RANGE_ATR_EXTREME_MAX = 2.5
+PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_MAX = 2.1
+PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_STRONG_MAX = 1.8
+PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_EXTREME_MAX = 1.5
+PRIORITY_COMPRESSION_SCORE_PENALTY = 10
+PRIORITY_COMPRESSION_SCORE_PENALTY_SEVERE = 16
+PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_SOFT = 4
+PRIORITY_COMPRESSION_NARROW_BAND_PENALTY = 10
+PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_STRONG = 16
+PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_EXTREME = 22
 PRIORITY_DIRECTIONAL_REJECTION_MIN_RANGE_RATIO = 0.35
 PRIORITY_DIRECTIONAL_REJECTION_MIN_ATR_RATIO = 0.22
 PRIORITY_DIRECTIONAL_REJECTION_MIN_BODY_RATIO = 1.20
@@ -239,6 +253,13 @@ PRIORITY_DIRECTIONAL_REJECTION_TOUCH_TOL_ATR = 0.18
 PRIORITY_DIRECTIONAL_REJECTION_BASE_PENALTY = 6
 PRIORITY_DIRECTIONAL_REJECTION_LEVEL_PENALTY = 4
 PRIORITY_DIRECTIONAL_REJECTION_EXTREME_PENALTY = 4
+PRIORITY_EXTREME_MOVE_LOOKBACK_DAYS = 8
+PRIORITY_EXTREME_MOVE_MIN_BAND_CROSSES = 2
+PRIORITY_EXTREME_MOVE_MIN_BODY_ATR = 0.75
+PRIORITY_EXTREME_MOVE_MIN_RANGE_ATR = 1.10
+PRIORITY_EXTREME_MOVE_MIN_STDEV_ATR = 0.80
+PRIORITY_EXTREME_MOVE_FAVORITE_STDEV_ATR = 1.00
+PRIORITY_EXTREME_MOVE_WATCH_SCORE_BONUS = 12
 SETUP_EXIT_TEMPLATES = [
     {
         "id": "full_band2",
@@ -643,9 +664,16 @@ def connect_daily_data_client(client_id: int, startup_wait: float = 1.0) -> IBAp
         if ib.isConnected():
             logging.info("Connected to IBKR for daily bar requests.")
             return ib
-        logging.warning("IBKR is unavailable; falling back to Yahoo Finance daily bars for this scan.")
+        logging.warning(
+            "IBKR is unavailable; falling back to Yahoo Finance daily bars for this scan. "
+            "Later scans will retry the IBKR connection automatically."
+        )
     except Exception as exc:
-        logging.warning(f"IBKR daily-bar connection failed; using Yahoo Finance fallback ({exc}).")
+        logging.warning(
+            "IBKR daily-bar connection failed; using Yahoo Finance fallback (%s). "
+            "Later scans will retry the IBKR connection automatically.",
+            exc,
+        )
     try:
         ib.disconnect()
     except Exception:
@@ -660,6 +688,15 @@ def disconnect_daily_data_client(ib: IBApi | None) -> None:
         ib.disconnect()
     except Exception:
         pass
+
+
+def is_daily_data_client_connected(ib: IBApi | None) -> bool:
+    if ib is None:
+        return False
+    try:
+        return bool(ib.isConnected())
+    except Exception:
+        return False
 
 
 def resolve_scan_watchlist_paths(
@@ -1561,6 +1598,262 @@ def analyze_avwap_retest_behavior(
     return result
 
 
+def _count_crossed_levels(start_price: float, end_price: float, levels: list[float]) -> int:
+    low, high = sorted([float(start_price), float(end_price)])
+    return sum(1 for level in levels if low <= float(level) <= high)
+
+
+def analyze_extreme_move_retest_setup(
+    df: pd.DataFrame,
+    daily_rows,
+    last_trade_date,
+    side: str,
+    current_anchor_meta: dict | None,
+    indicator_frame: pd.DataFrame | None,
+    atr20: float | None,
+    blocked_by_recent_earnings: bool = False,
+) -> dict:
+    result = {
+        "watch": False,
+        "favorite_signal": False,
+        "displacement_date": "",
+        "displacement_target_level": "",
+        "band_crosses": 0,
+        "band_width_atr": None,
+        "body_atr_ratio": None,
+        "range_atr_ratio": None,
+        "retest_level": "",
+        "retest_level_value": None,
+        "retest_source": "",
+        "note": "",
+    }
+    if (
+        blocked_by_recent_earnings
+        or df is None
+        or df.empty
+        or not daily_rows
+        or not current_anchor_meta
+    ):
+        return result
+
+    anchor_date_iso = str(current_anchor_meta.get("date") or "").strip()
+    target_date = last_trade_date.isoformat() if hasattr(last_trade_date, "isoformat") else str(last_trade_date)
+    if not anchor_date_iso or not target_date:
+        return result
+
+    band_history = calc_anchored_vwap_band_history(df, anchor_date_iso)
+    if not band_history or target_date not in band_history:
+        return result
+
+    ordered_rows = [
+        row for row in daily_rows
+        if anchor_date_iso <= str(row.get("date") or "") <= target_date
+    ]
+    if len(ordered_rows) < 3:
+        return result
+
+    indicator_by_date: dict[str, pd.Series] = {}
+    if (
+        isinstance(indicator_frame, pd.DataFrame)
+        and not indicator_frame.empty
+        and "trade_date" in indicator_frame.columns
+    ):
+        indicator_slice = indicator_frame[indicator_frame["trade_date"] <= target_date].copy()
+        for _, indicator_row in indicator_slice.tail(PRIORITY_EXTREME_MOVE_LOOKBACK_DAYS + 10).iterrows():
+            trade_date = str(indicator_row.get("trade_date") or "").strip()
+            if trade_date:
+                indicator_by_date[trade_date] = indicator_row
+
+    search_start = max(0, len(ordered_rows) - (PRIORITY_EXTREME_MOVE_LOOKBACK_DAYS + 1))
+    candidates = []
+    normalized_side = normalize_side(side)
+    for idx in range(search_start, len(ordered_rows) - 1):
+        row = ordered_rows[idx]
+        trade_date = str(row.get("date") or "").strip()
+        anchor_levels = band_history.get(trade_date)
+        if not trade_date or not anchor_levels:
+            continue
+
+        try:
+            open_value = float(row["open"])
+            high_value = float(row["high"])
+            low_value = float(row["low"])
+            close_value = float(row["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        prev_close = open_value
+        if idx > 0:
+            try:
+                prev_close = float(ordered_rows[idx - 1]["close"])
+            except (KeyError, TypeError, ValueError):
+                prev_close = open_value
+
+        indicator_row = indicator_by_date.get(trade_date)
+        bar_atr = _coerce_float(indicator_row.get("atr_20")) if indicator_row is not None else None
+        if bar_atr is None or bar_atr <= 0:
+            bar_atr = _coerce_float(atr20)
+        if bar_atr is None or bar_atr <= 0:
+            continue
+
+        bands = anchor_levels.get("bands", {}) or {}
+        level_values = [
+            _coerce_float(bands.get("LOWER_3")),
+            _coerce_float(bands.get("LOWER_2")),
+            _coerce_float(bands.get("LOWER_1")),
+            _coerce_float(anchor_levels.get("vwap")),
+            _coerce_float(bands.get("UPPER_1")),
+            _coerce_float(bands.get("UPPER_2")),
+            _coerce_float(bands.get("UPPER_3")),
+        ]
+        level_values = [value for value in level_values if value is not None]
+        if not level_values:
+            continue
+
+        if normalized_side == "LONG":
+            start_price = min(open_value, prev_close)
+            end_price = max(close_value, high_value)
+            first_favorable_level = _coerce_float(bands.get("UPPER_1"))
+            directional_close_ok = (
+                close_value > open_value
+                and first_favorable_level is not None
+                and close_value >= first_favorable_level
+            )
+        else:
+            start_price = max(open_value, prev_close)
+            end_price = min(close_value, low_value)
+            first_favorable_level = _coerce_float(bands.get("LOWER_1"))
+            directional_close_ok = (
+                close_value < open_value
+                and first_favorable_level is not None
+                and close_value <= first_favorable_level
+            )
+
+        if not directional_close_ok:
+            continue
+
+        body_atr_ratio = abs(close_value - open_value) / float(bar_atr)
+        range_atr_ratio = max(0.0, high_value - low_value) / float(bar_atr)
+        band_crosses = _count_crossed_levels(start_price, end_price, level_values)
+        band_width_atr = _coerce_float(anchor_levels.get("stdev"))
+        if band_width_atr is not None:
+            band_width_atr = band_width_atr / float(bar_atr)
+
+        if (
+            band_crosses < PRIORITY_EXTREME_MOVE_MIN_BAND_CROSSES
+            or body_atr_ratio < PRIORITY_EXTREME_MOVE_MIN_BODY_ATR
+            or range_atr_ratio < PRIORITY_EXTREME_MOVE_MIN_RANGE_ATR
+            or band_width_atr is None
+            or band_width_atr < PRIORITY_EXTREME_MOVE_MIN_STDEV_ATR
+        ):
+            continue
+
+        target_level = classify_position_by_band(
+            end_price,
+            {
+                "vwap": anchor_levels.get("vwap"),
+                "bands": bands,
+            },
+            side=normalized_side,
+        ) or ("UPPER_1" if normalized_side == "LONG" else "LOWER_1")
+
+        candidates.append(
+            {
+                "trade_date": trade_date,
+                "target_level": target_level,
+                "band_crosses": int(band_crosses),
+                "band_width_atr": float(band_width_atr),
+                "body_atr_ratio": float(body_atr_ratio),
+                "range_atr_ratio": float(range_atr_ratio),
+            }
+        )
+
+    if not candidates:
+        return result
+
+    candidates.sort(
+        key=lambda item: (
+            item["trade_date"],
+            item["band_crosses"],
+            item["band_width_atr"],
+            item["body_atr_ratio"],
+        ),
+        reverse=True,
+    )
+    best = candidates[0]
+
+    latest_indicator_row = indicator_by_date.get(target_date)
+    latest_ema8 = _coerce_float(latest_indicator_row.get("ema_8")) if latest_indicator_row is not None else None
+    latest_ema15 = _coerce_float(latest_indicator_row.get("ema_15")) if latest_indicator_row is not None else None
+    latest_ema21 = _coerce_float(latest_indicator_row.get("ema_21")) if latest_indicator_row is not None else None
+    current_bands = current_anchor_meta.get("bands", {}) or {}
+
+    if normalized_side == "LONG":
+        retest_levels = [
+            ("UPPER_1", _coerce_float(current_bands.get("UPPER_1")), "band"),
+            ("UPPER_2", _coerce_float(current_bands.get("UPPER_2")), "band"),
+            ("UPPER_3", _coerce_float(current_bands.get("UPPER_3")), "band"),
+            ("EMA_8", latest_ema8, "ema"),
+            ("EMA_15", latest_ema15, "ema"),
+            ("EMA_21", latest_ema21, "ema"),
+        ]
+    else:
+        retest_levels = [
+            ("LOWER_1", _coerce_float(current_bands.get("LOWER_1")), "band"),
+            ("LOWER_2", _coerce_float(current_bands.get("LOWER_2")), "band"),
+            ("LOWER_3", _coerce_float(current_bands.get("LOWER_3")), "band"),
+            ("EMA_8", latest_ema8, "ema"),
+            ("EMA_15", latest_ema15, "ema"),
+            ("EMA_21", latest_ema21, "ema"),
+        ]
+
+    retest_level = ""
+    retest_value = None
+    retest_source = ""
+    for label, level, source in retest_levels:
+        if level is None:
+            continue
+        is_clean_bounce = bounce_up_at_level(df, level) if normalized_side == "LONG" else bounce_down_at_level(df, level)
+        if not is_clean_bounce:
+            continue
+        retest_level = label
+        retest_value = float(level)
+        retest_source = source
+        break
+
+    wide_enough_for_favorite = best["band_width_atr"] >= PRIORITY_EXTREME_MOVE_FAVORITE_STDEV_ATR
+    direction_label = "long" if normalized_side == "LONG" else "short"
+    note_parts = [
+        f"Recent {best['band_crosses']}-band {direction_label} displacement on {best['trade_date']}",
+        f"stdev={best['band_width_atr']:.2f} ATR",
+    ]
+    if retest_level:
+        action = "clean reclaim" if normalized_side == "LONG" else "clean rejection"
+        note_parts.append(f"{retest_level} {action}")
+        if not wide_enough_for_favorite:
+            note_parts.append("bands not wide enough for favorite bucket")
+    else:
+        note_parts.append("awaiting clean band/EMA retest")
+
+    result.update(
+        {
+            "watch": True,
+            "favorite_signal": bool(retest_level and wide_enough_for_favorite),
+            "displacement_date": best["trade_date"],
+            "displacement_target_level": best["target_level"],
+            "band_crosses": int(best["band_crosses"]),
+            "band_width_atr": float(best["band_width_atr"]),
+            "body_atr_ratio": float(best["body_atr_ratio"]),
+            "range_atr_ratio": float(best["range_atr_ratio"]),
+            "retest_level": retest_level,
+            "retest_level_value": retest_value,
+            "retest_source": retest_source,
+            "note": "; ".join(note_parts),
+        }
+    )
+    return result
+
+
 def compute_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
@@ -1574,7 +1867,7 @@ def compute_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
         work[f"sma_{period}"] = work["close_num"].rolling(period).mean()
         work[f"sma_{period}_prev"] = work[f"sma_{period}"].shift(1)
 
-    for span in (15, 21):
+    for span in (8, 15, 21):
         work[f"ema_{span}"] = work["close_num"].ewm(span=span, adjust=False).mean()
 
     prev_close = work["close_num"].shift(1)
@@ -1656,6 +1949,7 @@ def _indicator_level_value(indicator_row: pd.Series | dict | None, label: str):
         "SMA_50": "sma_50",
         "SMA_100": "sma_100",
         "SMA_200": "sma_200",
+        "EMA_8": "ema_8",
         "EMA_15": "ema_15",
         "EMA_21": "ema_21",
     }
@@ -1691,6 +1985,8 @@ def summarize_anchor_compression(price_slice: pd.DataFrame, anchor_stdev: float,
         "is_compressed": False,
         "compression_score": 0,
         "compression_penalty": 0,
+        "compression_structure_penalty": 0,
+        "narrow_band_penalty": 0,
         "compression_note": "",
         "compression_stdev_atr_ratio": None,
         "compression_range_atr_ratio": None,
@@ -1708,24 +2004,58 @@ def summarize_anchor_compression(price_slice: pd.DataFrame, anchor_stdev: float,
     stdev_atr_ratio = float(anchor_stdev) / float(atr20)
     range_atr_ratio = (float(highs.max()) - float(lows.min())) / float(atr20)
     close_range_atr_ratio = (float(closes.max()) - float(closes.min())) / float(atr20)
-    compression_score = 0
-    if stdev_atr_ratio <= PRIORITY_COMPRESSION_STDEV_ATR_MAX:
-        compression_score += 1
-    if range_atr_ratio <= PRIORITY_COMPRESSION_RANGE_ATR_MAX:
-        compression_score += 1
-    if close_range_atr_ratio <= PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_MAX:
-        compression_score += 1
+    stdev_tight = stdev_atr_ratio <= PRIORITY_COMPRESSION_STDEV_ATR_MAX
+    stdev_strong = stdev_atr_ratio <= PRIORITY_COMPRESSION_STDEV_ATR_STRONG_MAX
+    stdev_extreme = stdev_atr_ratio <= PRIORITY_COMPRESSION_STDEV_ATR_EXTREME_MAX
+    range_tight = range_atr_ratio <= PRIORITY_COMPRESSION_RANGE_ATR_MAX
+    range_strong = range_atr_ratio <= PRIORITY_COMPRESSION_RANGE_ATR_STRONG_MAX
+    range_extreme = range_atr_ratio <= PRIORITY_COMPRESSION_RANGE_ATR_EXTREME_MAX
+    close_tight = close_range_atr_ratio <= PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_MAX
+    close_strong = close_range_atr_ratio <= PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_STRONG_MAX
+    close_extreme = close_range_atr_ratio <= PRIORITY_COMPRESSION_CLOSE_RANGE_ATR_EXTREME_MAX
+
+    compression_score = int(stdev_tight) + int(range_tight) + int(close_tight)
 
     result["compression_score"] = compression_score
     result["compression_stdev_atr_ratio"] = float(stdev_atr_ratio)
     result["compression_range_atr_ratio"] = float(range_atr_ratio)
     result["compression_close_range_atr_ratio"] = float(close_range_atr_ratio)
-    if compression_score >= 2:
+
+    narrow_band_penalty = 0
+    if stdev_extreme:
+        narrow_band_penalty = PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_EXTREME
+    elif stdev_strong:
+        narrow_band_penalty = PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_STRONG
+    elif stdev_tight:
+        narrow_band_penalty = PRIORITY_COMPRESSION_NARROW_BAND_PENALTY
+    elif stdev_atr_ratio <= PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX:
+        narrow_band_penalty = PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_SOFT
+
+    is_compressed = (
+        (stdev_tight and range_tight and close_tight)
+        or (stdev_strong and (range_strong or close_strong))
+        or ((range_extreme and close_extreme) and stdev_atr_ratio <= PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX)
+    )
+
+    structure_penalty = 0
+    if is_compressed:
+        structure_penalty = PRIORITY_COMPRESSION_SCORE_PENALTY
+        if stdev_extreme or range_extreme or close_extreme:
+            structure_penalty = PRIORITY_COMPRESSION_SCORE_PENALTY_SEVERE
+
+    result["narrow_band_penalty"] = int(narrow_band_penalty)
+    result["compression_structure_penalty"] = int(structure_penalty)
+    result["compression_penalty"] = int(narrow_band_penalty + structure_penalty)
+
+    if is_compressed:
         result["is_compressed"] = True
-        penalty = PRIORITY_COMPRESSION_SCORE_PENALTY + (4 if compression_score >= 3 else 0)
-        result["compression_penalty"] = penalty
         result["compression_note"] = (
             f"Compressed post-earnings structure "
+            f"(stdev={stdev_atr_ratio:.2f} ATR, range={range_atr_ratio:.2f} ATR, close_range={close_range_atr_ratio:.2f} ATR)"
+        )
+    elif narrow_band_penalty > 0:
+        result["compression_note"] = (
+            f"Narrow post-earnings bands without a full compression box "
             f"(stdev={stdev_atr_ratio:.2f} ATR, range={range_atr_ratio:.2f} ATR, close_range={close_range_atr_ratio:.2f} ATR)"
         )
     return result
@@ -1769,6 +2099,7 @@ def build_tracker_feature_snapshot(
         prev_distance_atr = (close_value - prev_avwape) / atr20
         prev_near_flag = abs(prev_distance_atr) <= TRACKER_PREV_AVWAPE_NEAR_ATR
 
+    ema8 = _indicator_level_value(indicator_row, "EMA_8")
     ema15 = _indicator_level_value(indicator_row, "EMA_15")
     ema21 = _indicator_level_value(indicator_row, "EMA_21")
     sma10 = _indicator_level_value(indicator_row, "SMA_10")
@@ -1777,9 +2108,12 @@ def build_tracker_feature_snapshot(
     sma100 = _indicator_level_value(indicator_row, "SMA_100")
     sma200 = _indicator_level_value(indicator_row, "SMA_200")
 
+    ema8_distance_atr = None
     ema15_distance_atr = None
     ema21_distance_atr = None
     if close_value is not None and atr20 and atr20 > 0:
+        if ema8 is not None:
+            ema8_distance_atr = (close_value - ema8) / atr20
         if ema15 is not None:
             ema15_distance_atr = (close_value - ema15) / atr20
         if ema21 is not None:
@@ -1823,8 +2157,10 @@ def build_tracker_feature_snapshot(
         "previous_avwape": prev_avwape,
         "previous_avwape_distance_atr": prev_distance_atr,
         "previous_avwape_near_0_5atr": prev_near_flag,
+        "ema8": ema8,
         "ema15": ema15,
         "ema21": ema21,
+        "ema8_distance_atr": ema8_distance_atr,
         "ema15_distance_atr": ema15_distance_atr,
         "ema21_distance_atr": ema21_distance_atr,
         "ema21_consolidation": ema21_consolidation,
@@ -2155,6 +2491,54 @@ def build_tracker_entry_attributes(
         label="Retest note",
         value_type="text",
         description="Freeform note describing the retest structure detected by the scanner.",
+    )
+    add(
+        "pattern.extreme_move_watch",
+        bool(row.get("extreme_move_watch")),
+        group="pattern",
+        label="Extreme move watch",
+        value_type="bool",
+        description="Whether the symbol recently displaced through multiple AVWAP bands and is being tracked for a retest.",
+    )
+    add(
+        "pattern.extreme_move_favorite_ready",
+        bool(row.get("extreme_move_favorite_ready")),
+        group="pattern",
+        label="Extreme move favorite ready",
+        value_type="bool",
+        description="Whether the extreme-move setup had both wide bands and a clean retest signal.",
+    )
+    add(
+        "pattern.extreme_move_retest_level",
+        row.get("extreme_move_retest_level") or "",
+        group="pattern",
+        label="Extreme move retest level",
+        value_type="text",
+        description="Band or EMA level used by the extreme-move retest classifier.",
+    )
+    add(
+        "pattern.extreme_move_band_crosses",
+        int(row.get("extreme_move_band_crosses", 0) or 0),
+        group="pattern",
+        label="Extreme move band crosses",
+        value_type="number",
+        description="How many anchored AVWAP band boundaries the displacement candle traveled through.",
+    )
+    add(
+        "pattern.extreme_move_band_width_atr",
+        _coerce_float(row.get("extreme_move_band_width_atr")),
+        group="pattern",
+        label="Extreme move band width ATR",
+        value_type="number",
+        description="Anchored AVWAP standard deviation width measured in ATR for the displacement setup.",
+    )
+    add(
+        "pattern.extreme_move_note",
+        row.get("extreme_move_note") or "",
+        group="pattern",
+        label="Extreme move note",
+        value_type="text",
+        description="Scanner note describing the recent extreme displacement and retest setup.",
     )
     add(
         "pattern.recent_band_extension_days",
@@ -2742,6 +3126,13 @@ def build_tracker_setup_record(
         "retest_followthrough": bool(row.get("retest_followthrough")),
         "retest_reference_level": row.get("retest_reference_level") or "",
         "retest_note": row.get("retest_note") or "",
+        "extreme_move_watch": bool(row.get("extreme_move_watch")),
+        "extreme_move_favorite_ready": bool(row.get("extreme_move_favorite_ready")),
+        "extreme_move_retest_level": row.get("extreme_move_retest_level") or "",
+        "extreme_move_band_crosses": int(row.get("extreme_move_band_crosses", 0) or 0),
+        "extreme_move_band_width_atr": _coerce_float(row.get("extreme_move_band_width_atr")),
+        "extreme_move_displacement_date": row.get("extreme_move_displacement_date") or "",
+        "extreme_move_note": row.get("extreme_move_note") or "",
         "extension_note": row.get("extension_note") or "",
         "ranking_note": row.get("ranking_note") or "",
         "score_bonus_note": row.get("score_bonus_note") or "",
@@ -4708,8 +5099,11 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     requested_days = max(int(days), ATR_LENGTH + 5)
     cached = _load_cached_daily_bar_frame(normalized_symbol)
     cache_has_history = _daily_bar_cache_covers_history(cached, requested_days)
+    ib_connected = is_daily_data_client_connected(ib)
 
-    if cache_has_history and _daily_bar_cache_is_recent(normalized_symbol):
+    # If IBKR comes online later in the day, keep retrying live refreshes on
+    # later scans instead of staying pinned to an earlier Yahoo/cached result.
+    if cache_has_history and _daily_bar_cache_is_recent(normalized_symbol) and not ib_connected:
         return cached.copy()
 
     refresh_days = (
@@ -5114,6 +5508,13 @@ def build_priority_setup_summary(
     first_dev_break_bonus: int = 0,
     first_dev_chop_penalty: int = 0,
     first_dev_note: str = "",
+    extreme_move_watch: bool = False,
+    extreme_move_favorite_ready: bool = False,
+    extreme_move_retest_level: str = "",
+    extreme_move_band_crosses: int = 0,
+    extreme_move_band_width_atr: float | None = None,
+    extreme_move_displacement_date: str = "",
+    extreme_move_note: str = "",
 ) -> dict:
     current_weights = get_priority_signal_weights(side, "current")
     context_weights = get_priority_signal_weights(side, "context")
@@ -5140,6 +5541,9 @@ def build_priority_setup_summary(
 
     if breakout_5d:
         score += 14
+
+    if extreme_move_watch:
+        score += PRIORITY_EXTREME_MOVE_WATCH_SCORE_BONUS
 
     score += max(0, int(first_dev_break_bonus or 0))
 
@@ -5177,6 +5581,15 @@ def build_priority_setup_summary(
         "first_dev_break_bonus": int(first_dev_break_bonus or 0),
         "first_dev_chop_penalty": int(first_dev_chop_penalty or 0),
         "first_dev_note": first_dev_note or "",
+        "extreme_move_watch": bool(extreme_move_watch),
+        "extreme_move_favorite_ready": bool(extreme_move_favorite_ready),
+        "extreme_move_retest_level": extreme_move_retest_level or "",
+        "extreme_move_band_crosses": int(extreme_move_band_crosses or 0),
+        "extreme_move_band_width_atr": (
+            None if extreme_move_band_width_atr is None else float(extreme_move_band_width_atr)
+        ),
+        "extreme_move_displacement_date": extreme_move_displacement_date or "",
+        "extreme_move_note": extreme_move_note or "",
     }
 
 
@@ -5663,7 +6076,12 @@ def refine_priority_rows_with_directional_filters(
     symbol_map = ai_state.setdefault("symbols", {})
     priority_candidates = [
         row for row in priority_rows
-        if row.get("has_favorite_signal") or row.get("favorite_zone") or row.get("retest_followthrough")
+        if (
+            row.get("has_favorite_signal")
+            or row.get("favorite_zone")
+            or row.get("retest_followthrough")
+            or row.get("extreme_move_watch")
+        )
     ]
 
     for row in priority_candidates:
@@ -5790,7 +6208,11 @@ def apply_final_priority_buckets(
             ):
                 priority_bucket = "favorite_setup"
                 is_favorite_setup = True
-            elif row.get("favorite_zone") or row.get("retest_followthrough"):
+            elif (
+                row.get("favorite_zone")
+                or row.get("retest_followthrough")
+                or row.get("extreme_move_watch")
+            ):
                 priority_bucket = "near_favorite_zone"
                 is_near_favorite_zone = True
 
@@ -5820,7 +6242,11 @@ def apply_final_priority_buckets(
             record["priority_bucket"] = "favorite_setup"
             record["is_favorite_setup"] = True
             record["is_near_favorite_zone"] = False
-        elif row.get("favorite_zone") or row.get("retest_followthrough"):
+        elif (
+            row.get("favorite_zone")
+            or row.get("retest_followthrough")
+            or row.get("extreme_move_watch")
+        ):
             record["priority_bucket"] = "near_favorite_zone"
             record["is_favorite_setup"] = False
             record["is_near_favorite_zone"] = True
@@ -5847,7 +6273,11 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             if (
                 not row["has_favorite_signal"]
                 and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-                and (row["favorite_zone"] or row.get("retest_followthrough"))
+                and (
+                    row["favorite_zone"]
+                    or row.get("retest_followthrough")
+                    or row.get("extreme_move_watch")
+                )
                 and not row.get("ranking_blocked")
             )
         ],
@@ -5874,6 +6304,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             retest_note = row.get("retest_note", "")
             extension_note = row.get("extension_note", "")
             first_dev_note = row.get("first_dev_note", "")
+            extreme_move_note = row.get("extreme_move_note", "")
             compression_note = row.get("compression_note", "")
             trendline_note = row.get("trendline_note", "")
             trendline_break_note = row.get("trendline_break_note", "")
@@ -5895,6 +6326,8 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
                 handle.write(f"  extension={extension_note}\n")
             if first_dev_note:
                 handle.write(f"  first_dev={first_dev_note}\n")
+            if extreme_move_note:
+                handle.write(f"  extreme_move={extreme_move_note}\n")
             if compression_note:
                 handle.write(f"  compression={compression_note}\n")
             if trendline_note:
@@ -5907,7 +6340,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("Master AVWAP priority setups\n")
         handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        handle.write("Focus: AVWAPE bounces, directional retest continuations, and UPPER_1 / LOWER_1 crosses\n\n")
+        handle.write("Focus: AVWAPE bounces, directional retest continuations, UPPER_1 / LOWER_1 crosses, and extreme 2-3 band retests\n\n")
         _write_rows(handle, "Best current favorite setups", favorites)
         _write_rows(handle, "Near favorite zones", watchlist)
 
@@ -5927,7 +6360,11 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         if (
             not row["has_favorite_signal"]
             and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-            and (row["favorite_zone"] or row.get("retest_followthrough"))
+            and (
+                row["favorite_zone"]
+                or row.get("retest_followthrough")
+                or row.get("extreme_move_watch")
+            )
             and not row.get("ranking_blocked")
         )
     ]
@@ -5952,6 +6389,13 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "retest_followthrough": bool(row.get("retest_followthrough")),
             "retest_reference_level": row.get("retest_reference_level") or "",
             "retest_note": row.get("retest_note") or "",
+            "extreme_move_watch": bool(row.get("extreme_move_watch")),
+            "extreme_move_favorite_ready": bool(row.get("extreme_move_favorite_ready")),
+            "extreme_move_retest_level": row.get("extreme_move_retest_level") or "",
+            "extreme_move_band_crosses": int(row.get("extreme_move_band_crosses", 0) or 0),
+            "extreme_move_band_width_atr": _coerce_float(row.get("extreme_move_band_width_atr")),
+            "extreme_move_displacement_date": row.get("extreme_move_displacement_date") or "",
+            "extreme_move_note": row.get("extreme_move_note") or "",
             "extension_note": row.get("extension_note") or "",
             "first_dev_note": row.get("first_dev_note") or "",
             "compression_flag": bool(row.get("compression_flag")),
@@ -6043,7 +6487,11 @@ def write_tradingview_report(
             if (
                 not row["has_favorite_signal"]
                 and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-                and (row["favorite_zone"] or row.get("retest_followthrough"))
+                and (
+                    row["favorite_zone"]
+                    or row.get("retest_followthrough")
+                    or row.get("extreme_move_watch")
+                )
                 and not row.get("ranking_blocked")
             )
         ],
@@ -6442,19 +6890,6 @@ def _evaluate_priority_snapshot_for_date(
                     lbl, lvl = primary_prev_cross
                     add_signal(lbl, "PREVIOUS", previous_anchor_iso, vwap_p, sd_p, lvl)
 
-    symbol_events_today = sorted(set(symbol_events_today))
-    previous_entries = history_state.get(symbol, [])
-    previous_events = previous_entries[-1]["events"] if previous_entries else []
-    symbol_multi_day = compute_multi_day_patterns(symbol, side, symbol_events_today, previous_events)
-    full_event_list = symbol_events_today + symbol_multi_day
-    history_state.setdefault(symbol, []).append(
-        {
-            "date": evaluation_date.isoformat(),
-            "side": side,
-            "events": full_event_list,
-        }
-    )
-
     df_recent = df.tail(60).copy()
     daily_ohlc = []
     for _, row in df_recent.iterrows():
@@ -6476,7 +6911,6 @@ def _evaluate_priority_snapshot_for_date(
     last_volume = float(last_row["volume"]) if last_row else None
     atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
     trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
-    has_bounce_event_today = bool(symbol_events_today)
 
     current_vwap = current_anchor_meta.get("vwap") if current_anchor_meta else None
     current_upper_1 = current_anchor_meta.get("bands", {}).get("UPPER_1") if current_anchor_meta else None
@@ -6485,6 +6919,59 @@ def _evaluate_priority_snapshot_for_date(
     current_lower_2 = current_anchor_meta.get("bands", {}).get("LOWER_2") if current_anchor_meta else None
     current_lower_3 = current_anchor_meta.get("bands", {}).get("LOWER_3") if current_anchor_meta else None
     current_upper_3 = current_anchor_meta.get("bands", {}).get("UPPER_3") if current_anchor_meta else None
+
+    indicator_frame = compute_indicator_frame(df)
+    indicator_row = None
+    if not indicator_frame.empty:
+        eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= last_trade_date.isoformat()]
+        if not eligible_indicator_rows.empty:
+            indicator_row = eligible_indicator_rows.iloc[-1]
+
+    stdev_blocked_by_recent_earnings = False
+    if recent_earnings_dates:
+        try:
+            stdev_last_earnings = datetime.fromisoformat(recent_earnings_dates[0]).date()
+            stdev_sessions_since = sessions_since_date(df, stdev_last_earnings)
+            stdev_blocked_by_recent_earnings = (
+                stdev_sessions_since is not None
+                and stdev_sessions_since <= STDEV_RECENT_EARNINGS_BLOCK
+            )
+        except ValueError:
+            stdev_blocked_by_recent_earnings = False
+
+    extreme_move_summary = analyze_extreme_move_retest_setup(
+        df=df,
+        daily_rows=daily_ohlc,
+        last_trade_date=last_trade_date,
+        side=side,
+        current_anchor_meta=current_anchor_meta,
+        indicator_frame=indicator_frame,
+        atr20=atr20,
+        blocked_by_recent_earnings=stdev_blocked_by_recent_earnings,
+    )
+    if extreme_move_summary.get("favorite_signal"):
+        add_signal(
+            "EXTREME_MOVE_RETEST",
+            "CURRENT",
+            current_anchor_meta.get("date") if current_anchor_meta else "",
+            current_vwap,
+            current_anchor_meta.get("stdev") if current_anchor_meta else None,
+            extreme_move_summary.get("retest_level_value"),
+        )
+
+    symbol_events_today = sorted(set(symbol_events_today))
+    previous_entries = history_state.get(symbol, [])
+    previous_events = previous_entries[-1]["events"] if previous_entries else []
+    symbol_multi_day = compute_multi_day_patterns(symbol, side, symbol_events_today, previous_events)
+    full_event_list = symbol_events_today + symbol_multi_day
+    history_state.setdefault(symbol, []).append(
+        {
+            "date": evaluation_date.isoformat(),
+            "side": side,
+            "events": full_event_list,
+        }
+    )
+    has_bounce_event_today = bool(symbol_events_today)
 
     current_band_context = get_band_context(last_close, current_anchor_meta, side)
     previous_band_context = get_band_context(last_close, prev_anchor_meta, side)
@@ -6557,12 +7044,6 @@ def _evaluate_priority_snapshot_for_date(
         atr20,
         last_trade_date,
     )
-    indicator_frame = compute_indicator_frame(df)
-    indicator_row = None
-    if not indicator_frame.empty:
-        eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= last_trade_date.isoformat()]
-        if not eligible_indicator_rows.empty:
-            indicator_row = eligible_indicator_rows.iloc[-1]
     entry_bar = pd.Series(last_row or {"open": last_close, "high": last_close, "low": last_close, "close": last_close})
     entry_feature_snapshot = build_tracker_feature_snapshot(
         normalize_side(side),
@@ -6615,6 +7096,13 @@ def _evaluate_priority_snapshot_for_date(
         "retest_followthrough": retest_followthrough,
         "retest_reference_level": retest_summary["retest_reference_level"],
         "retest_note": retest_summary["retest_note"],
+        "extreme_move_watch": bool(extreme_move_summary.get("watch")),
+        "extreme_move_favorite_ready": bool(extreme_move_summary.get("favorite_signal")),
+        "extreme_move_retest_level": extreme_move_summary.get("retest_level", ""),
+        "extreme_move_band_crosses": int(extreme_move_summary.get("band_crosses", 0) or 0),
+        "extreme_move_band_width_atr": _coerce_float(extreme_move_summary.get("band_width_atr")),
+        "extreme_move_displacement_date": extreme_move_summary.get("displacement_date", ""),
+        "extreme_move_note": extreme_move_summary.get("note", ""),
         "extension_note": extension_note,
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
@@ -6640,6 +7128,13 @@ def _evaluate_priority_snapshot_for_date(
         retest_followthrough=retest_followthrough,
         retest_reference_level=retest_summary["retest_reference_level"],
         retest_note=retest_summary["retest_note"],
+        extreme_move_watch=bool(extreme_move_summary.get("watch")),
+        extreme_move_favorite_ready=bool(extreme_move_summary.get("favorite_signal")),
+        extreme_move_retest_level=extreme_move_summary.get("retest_level", ""),
+        extreme_move_band_crosses=int(extreme_move_summary.get("band_crosses", 0) or 0),
+        extreme_move_band_width_atr=_coerce_float(extreme_move_summary.get("band_width_atr")),
+        extreme_move_displacement_date=extreme_move_summary.get("displacement_date", ""),
+        extreme_move_note=extreme_move_summary.get("note", ""),
         extension_note=extension_note,
     )
     priority_summary["score"] = float(
@@ -6681,6 +7176,13 @@ def _evaluate_priority_snapshot_for_date(
         "retest_followthrough": retest_followthrough,
         "retest_reference_level": retest_summary["retest_reference_level"],
         "retest_note": retest_summary["retest_note"],
+        "extreme_move_watch": bool(extreme_move_summary.get("watch")),
+        "extreme_move_favorite_ready": bool(extreme_move_summary.get("favorite_signal")),
+        "extreme_move_retest_level": extreme_move_summary.get("retest_level", ""),
+        "extreme_move_band_crosses": int(extreme_move_summary.get("band_crosses", 0) or 0),
+        "extreme_move_band_width_atr": _coerce_float(extreme_move_summary.get("band_width_atr")),
+        "extreme_move_displacement_date": extreme_move_summary.get("displacement_date", ""),
+        "extreme_move_note": extreme_move_summary.get("note", ""),
         "extension_note": extension_note,
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
@@ -7150,32 +7652,6 @@ def run_master(
             else:
                 logging.warning(f"{sym}: no candle on previous earnings date {prev_date}.")
 
-        # dedupe and sort events for consistency
-        symbol_events_today = sorted(set(symbol_events_today))
-
-        # multi-day pattern detection
-        prev_entries = history.get(sym, [])
-        prev_events = prev_entries[-1]["events"] if prev_entries else []
-        md_patterns = compute_multi_day_patterns(sym, side,
-                                                 symbol_events_today,
-                                                 prev_events)
-        symbol_multi_day = md_patterns
-
-        # include multi-day patterns as events as well
-        full_event_list = symbol_events_today + symbol_multi_day
-
-        # record in history
-        entry = {
-            "date": today_run.isoformat(),
-            "side": side,
-            "events": full_event_list
-        }
-        history.setdefault(sym, []).append(entry)
-
-        # append to output lines
-        for lbl in full_event_list:
-            events_for_output.append((sym, dstr, lbl, side))
-
         # prepare daily OHLC slice for AI (recent window only)
         # use last ~60 days of df
         df_recent = df.tail(60).copy()
@@ -7198,7 +7674,6 @@ def run_master(
 
         atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
         trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
-        has_bounce_event_today = bool(symbol_events_today)
 
         current_vwap = current_anchor_meta.get("vwap") if current_anchor_meta else None
         current_upper_1 = (
@@ -7225,6 +7700,71 @@ def run_master(
             current_anchor_meta.get("bands", {}).get("LOWER_3")
             if current_anchor_meta else None
         )
+
+        indicator_frame = compute_indicator_frame(df)
+        indicator_row = None
+        if not indicator_frame.empty:
+            eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= last_trade_date.isoformat()]
+            if not eligible_indicator_rows.empty:
+                indicator_row = eligible_indicator_rows.iloc[-1]
+
+        stdev_blocked_by_recent_earnings = False
+        if recent_earnings_dates:
+            try:
+                stdev_last_earnings = datetime.fromisoformat(recent_earnings_dates[0]).date()
+                stdev_sessions_since = sessions_since_date(df, stdev_last_earnings)
+                stdev_blocked_by_recent_earnings = (
+                    stdev_sessions_since is not None
+                    and stdev_sessions_since <= STDEV_RECENT_EARNINGS_BLOCK
+                )
+            except ValueError:
+                stdev_blocked_by_recent_earnings = False
+
+        extreme_move_summary = analyze_extreme_move_retest_setup(
+            df=df,
+            daily_rows=daily_ohlc,
+            last_trade_date=last_trade_date,
+            side=side,
+            current_anchor_meta=current_anchor_meta,
+            indicator_frame=indicator_frame,
+            atr20=atr20,
+            blocked_by_recent_earnings=stdev_blocked_by_recent_earnings,
+        )
+        if extreme_move_summary.get("favorite_signal"):
+            add_signal(
+                "EXTREME_MOVE_RETEST",
+                "CURRENT",
+                current_anchor_meta.get("date") if current_anchor_meta else "",
+                current_vwap,
+                current_anchor_meta.get("stdev") if current_anchor_meta else None,
+                extreme_move_summary.get("retest_level_value"),
+            )
+
+        # dedupe and sort events for consistency
+        symbol_events_today = sorted(set(symbol_events_today))
+
+        # multi-day pattern detection
+        prev_entries = history.get(sym, [])
+        prev_events = prev_entries[-1]["events"] if prev_entries else []
+        md_patterns = compute_multi_day_patterns(sym, side, symbol_events_today, prev_events)
+        symbol_multi_day = md_patterns
+
+        # include multi-day patterns as events as well
+        full_event_list = symbol_events_today + symbol_multi_day
+
+        # record in history
+        entry = {
+            "date": today_run.isoformat(),
+            "side": side,
+            "events": full_event_list
+        }
+        history.setdefault(sym, []).append(entry)
+
+        # append to output lines
+        for lbl in full_event_list:
+            events_for_output.append((sym, dstr, lbl, side))
+
+        has_bounce_event_today = bool(symbol_events_today)
         current_band_context = get_band_context(last_close, current_anchor_meta, side)
         previous_band_context = get_band_context(last_close, prev_anchor_meta, side)
 
@@ -7314,12 +7854,6 @@ def run_master(
             atr20,
             last_trade_date,
         )
-        indicator_frame = compute_indicator_frame(df)
-        indicator_row = None
-        if not indicator_frame.empty:
-            eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= last_trade_date.isoformat()]
-            if not eligible_indicator_rows.empty:
-                indicator_row = eligible_indicator_rows.iloc[-1]
         entry_bar = pd.Series(last_row or {"open": last_close, "high": last_close, "low": last_close, "close": last_close})
         entry_feature_snapshot = build_tracker_feature_snapshot(
             normalize_side(side),
@@ -7334,20 +7868,7 @@ def run_master(
             side,
             trade_date=last_trade_date.isoformat(),
         )
-
         if current_anchor_meta:
-            stdev_blocked_by_recent_earnings = False
-            if recent_earnings_dates:
-                try:
-                    stdev_last_earnings = datetime.fromisoformat(recent_earnings_dates[0]).date()
-                    stdev_sessions_since = sessions_since_date(df, stdev_last_earnings)
-                    stdev_blocked_by_recent_earnings = (
-                        stdev_sessions_since is not None
-                        and stdev_sessions_since <= STDEV_RECENT_EARNINGS_BLOCK
-                    )
-                except ValueError:
-                    stdev_blocked_by_recent_earnings = False
-
             if not stdev_blocked_by_recent_earnings:
                 if side == "LONG":
                     if (
@@ -7421,6 +7942,13 @@ def run_master(
             "retest_followthrough": retest_followthrough,
             "retest_reference_level": retest_summary["retest_reference_level"],
             "retest_note": retest_summary["retest_note"],
+            "extreme_move_watch": bool(extreme_move_summary.get("watch")),
+            "extreme_move_favorite_ready": bool(extreme_move_summary.get("favorite_signal")),
+            "extreme_move_retest_level": extreme_move_summary.get("retest_level", ""),
+            "extreme_move_band_crosses": int(extreme_move_summary.get("band_crosses", 0) or 0),
+            "extreme_move_band_width_atr": _coerce_float(extreme_move_summary.get("band_width_atr")),
+            "extreme_move_displacement_date": extreme_move_summary.get("displacement_date", ""),
+            "extreme_move_note": extreme_move_summary.get("note", ""),
             "extension_note": extension_note,
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
@@ -7446,6 +7974,13 @@ def run_master(
             retest_followthrough=retest_followthrough,
             retest_reference_level=retest_summary["retest_reference_level"],
             retest_note=retest_summary["retest_note"],
+            extreme_move_watch=bool(extreme_move_summary.get("watch")),
+            extreme_move_favorite_ready=bool(extreme_move_summary.get("favorite_signal")),
+            extreme_move_retest_level=extreme_move_summary.get("retest_level", ""),
+            extreme_move_band_crosses=int(extreme_move_summary.get("band_crosses", 0) or 0),
+            extreme_move_band_width_atr=_coerce_float(extreme_move_summary.get("band_width_atr")),
+            extreme_move_displacement_date=extreme_move_summary.get("displacement_date", ""),
+            extreme_move_note=extreme_move_summary.get("note", ""),
             extension_note=extension_note,
         )
         priority_summary["score"] = float(priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0))
@@ -7460,13 +7995,13 @@ def run_master(
         priority_bucket = ""
         if priority_summary["has_favorite_signal"]:
             priority_bucket = "favorite_setup"
-        elif favorite_zone:
+        elif favorite_zone or priority_summary.get("extreme_move_watch"):
             priority_bucket = "near_favorite_zone"
 
         for record in symbol_signal_info.values():
             record["priority_bucket"] = priority_bucket
             record["is_favorite_setup"] = bool(priority_summary["has_favorite_signal"])
-            record["is_near_favorite_zone"] = bool(favorite_zone)
+            record["is_near_favorite_zone"] = bool(favorite_zone or priority_summary.get("extreme_move_watch"))
             record["favorite_zone"] = favorite_zone or ""
             record["favorite_signals"] = ";".join(priority_summary["favorite_signals"])
             record["favorite_context_signals"] = ";".join(priority_summary["context_signals"])
@@ -7510,6 +8045,13 @@ def run_master(
             "retest_followthrough": retest_followthrough,
             "retest_reference_level": retest_summary["retest_reference_level"],
             "retest_note": retest_summary["retest_note"],
+            "extreme_move_watch": bool(extreme_move_summary.get("watch")),
+            "extreme_move_favorite_ready": bool(extreme_move_summary.get("favorite_signal")),
+            "extreme_move_retest_level": extreme_move_summary.get("retest_level", ""),
+            "extreme_move_band_crosses": int(extreme_move_summary.get("band_crosses", 0) or 0),
+            "extreme_move_band_width_atr": _coerce_float(extreme_move_summary.get("band_width_atr")),
+            "extreme_move_displacement_date": extreme_move_summary.get("displacement_date", ""),
+            "extreme_move_note": extreme_move_summary.get("note", ""),
             "extension_note": extension_note,
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
@@ -7706,6 +8248,13 @@ def run_master(
         "retest_followthrough",
         "retest_reference_level",
         "retest_note",
+        "extreme_move_watch",
+        "extreme_move_favorite_ready",
+        "extreme_move_retest_level",
+        "extreme_move_band_crosses",
+        "extreme_move_band_width_atr",
+        "extreme_move_displacement_date",
+        "extreme_move_note",
         "extension_note",
         "compression_flag",
         "compression_penalty",
@@ -8413,6 +8962,8 @@ class MasterAvwapGUI:
                 lines.append(f"zone={selected_setup.get('favorite_zone')}")
             if selected_setup.get("retest_note"):
                 lines.append(f"retest={selected_setup.get('retest_note')}")
+            if selected_setup.get("extreme_move_note"):
+                lines.append(f"extreme_move={selected_setup.get('extreme_move_note')}")
             if selected_setup.get("extension_note"):
                 lines.append(f"extension={selected_setup.get('extension_note')}")
             if selected_setup.get("first_dev_note"):
