@@ -568,6 +568,10 @@ DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
 SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
 EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES = 30
 DAILY_BAR_COLUMNS = ["datetime", "open", "high", "low", "close", "volume"]
+DAILY_BAR_SOURCE_ATTR = "daily_bar_source"
+DAILY_BAR_SOURCE_IBKR = "ibkr"
+DAILY_BAR_SOURCE_YAHOO = "yahoo"
+DAILY_BAR_SOURCE_CACHE = "cache"
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 # ============================================================================
@@ -796,13 +800,30 @@ def _daily_bar_cache_file(symbol: str) -> Path:
     return DAILY_BARS_CACHE_DIR / f"{_sanitize_symbol_for_filename(symbol)}.csv"
 
 
-def _empty_daily_bar_frame() -> pd.DataFrame:
-    return pd.DataFrame(columns=DAILY_BAR_COLUMNS)
+def _get_daily_bar_source(df: pd.DataFrame | None) -> str:
+    if not isinstance(df, pd.DataFrame):
+        return ""
+    return str(df.attrs.get(DAILY_BAR_SOURCE_ATTR, "") or "").strip().lower()
+
+
+def _set_daily_bar_source(df: pd.DataFrame | None, source: str | None) -> pd.DataFrame:
+    frame = df if isinstance(df, pd.DataFrame) else pd.DataFrame(columns=DAILY_BAR_COLUMNS)
+    source_value = str(source or "").strip().lower()
+    if source_value:
+        frame.attrs[DAILY_BAR_SOURCE_ATTR] = source_value
+    else:
+        frame.attrs.pop(DAILY_BAR_SOURCE_ATTR, None)
+    return frame
+
+
+def _empty_daily_bar_frame(source: str | None = None) -> pd.DataFrame:
+    return _set_daily_bar_source(pd.DataFrame(columns=DAILY_BAR_COLUMNS), source)
 
 
 def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    source = _get_daily_bar_source(df)
     if df is None or df.empty:
-        return _empty_daily_bar_frame()
+        return _empty_daily_bar_frame(source=source)
 
     normalized = df.copy()
     if "datetime" not in normalized.columns:
@@ -815,7 +836,7 @@ def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
 
     normalized = normalized.rename(columns={str(col): str(col).lower() for col in normalized.columns})
     if "datetime" not in normalized.columns:
-        return _empty_daily_bar_frame()
+        return _empty_daily_bar_frame(source=source)
 
     normalized["datetime"] = pd.to_datetime(normalized["datetime"], errors="coerce")
     if getattr(normalized["datetime"].dt, "tz", None) is not None:
@@ -823,12 +844,12 @@ def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
 
     for column in DAILY_BAR_COLUMNS[1:]:
         if column not in normalized.columns:
-            return _empty_daily_bar_frame()
+            return _empty_daily_bar_frame(source=source)
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
 
     normalized = normalized.dropna(subset=DAILY_BAR_COLUMNS)
     if normalized.empty:
-        return _empty_daily_bar_frame()
+        return _empty_daily_bar_frame(source=source)
 
     normalized = (
         normalized[DAILY_BAR_COLUMNS]
@@ -836,34 +857,34 @@ def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
         .sort_values("datetime")
         .reset_index(drop=True)
     )
-    return normalized
+    return _set_daily_bar_source(normalized, source)
 
 
 def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
     symbol = str(symbol or "").strip().upper()
     cached = _DAILY_BAR_FRAME_CACHE.get(symbol)
     if cached is not None:
-        return cached.copy()
+        return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
     cache_path = _daily_bar_cache_file(symbol)
     if not cache_path.exists():
-        return _empty_daily_bar_frame()
+        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
 
     try:
         df = pd.read_csv(cache_path, parse_dates=["datetime"])
     except Exception as exc:
         logging.warning(f"{symbol}: failed reading cached daily bars ({exc})")
-        return _empty_daily_bar_frame()
+        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
 
-    normalized = _normalize_daily_bar_frame(df)
+    normalized = _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
     _DAILY_BAR_FRAME_CACHE[symbol] = normalized
     _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.fromtimestamp(cache_path.stat().st_mtime)
-    return normalized.copy()
+    return _set_daily_bar_source(normalized.copy(), DAILY_BAR_SOURCE_CACHE)
 
 
 def _write_cached_daily_bar_frame(symbol: str, df: pd.DataFrame) -> None:
     symbol = str(symbol or "").strip().upper()
-    normalized = _normalize_daily_bar_frame(df)
+    normalized = _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
     cache_path = _daily_bar_cache_file(symbol)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     normalized.to_csv(cache_path, index=False)
@@ -5016,11 +5037,11 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
         df = yf.download(symbol, period=period, interval="1d", auto_adjust=False, progress=False)
     except Exception as e:
         logging.error(f"{symbol}: failed to download daily bars from Yahoo: {e}")
-        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
 
     if df is None or df.empty:
         logging.warning(f"{symbol}: no daily data returned from Yahoo.")
-        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
 
     df = df.reset_index()
 
@@ -5038,12 +5059,15 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
     missing = required - set(df.columns)
     if missing:
         logging.error(f"{symbol}: missing expected columns from Yahoo response: {sorted(missing)}")
-        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
 
     df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
     df = df.dropna(subset=list(required))
     df = df.sort_values("datetime")
-    return _normalize_daily_bar_frame(df[["datetime", "open", "high", "low", "close", "volume"]])
+    return _set_daily_bar_source(
+        _normalize_daily_bar_frame(df[["datetime", "open", "high", "low", "close", "volume"]]),
+        DAILY_BAR_SOURCE_YAHOO,
+    )
 
 
 def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
@@ -5086,7 +5110,7 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         if not df.empty:
             df["datetime"] = pd.to_datetime(df["time"], format="%Y%m%d", errors="coerce")
             df = df.sort_values("datetime").reset_index(drop=True)
-            return _normalize_daily_bar_frame(df)
+            return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_IBKR)
         logging.warning(f"{symbol}: no daily bars returned from IBKR, falling back to Yahoo.")
     except Exception as e:
         logging.error(f"{symbol}: IBKR daily fetch failed ({e}), falling back to Yahoo.")
@@ -5104,7 +5128,7 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     # If IBKR comes online later in the day, keep retrying live refreshes on
     # later scans instead of staying pinned to an earlier Yahoo/cached result.
     if cache_has_history and _daily_bar_cache_is_recent(normalized_symbol) and not ib_connected:
-        return cached.copy()
+        return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
     refresh_days = (
         requested_days
@@ -5115,13 +5139,13 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     if fresh is not None and not fresh.empty:
         merged = _merge_daily_bar_frames(cached, fresh)
         _write_cached_daily_bar_frame(normalized_symbol, merged)
-        return merged.copy()
+        return _set_daily_bar_source(merged.copy(), _get_daily_bar_source(fresh))
 
     if not cached.empty:
         logging.info(f"{normalized_symbol}: using cached daily bars because live refresh was unavailable.")
-        return cached.copy()
+        return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
-    return _empty_daily_bar_frame()
+    return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
 
 # ============================================================================
 # AVWAP CALCULATION
@@ -7355,6 +7379,7 @@ def run_master(
     shorts_path: Path | None = None,
     use_shared_watchlists: bool = False,
     update_setup_tracker: bool | None = None,
+    require_ib_for_setup_tracker: bool = False,
 ):
     longs_path, shorts_path, watchlist_label = resolve_scan_watchlist_paths(
         longs_path=longs_path,
@@ -8088,6 +8113,41 @@ def run_master(
         if update_setup_tracker is not None
         else should_update_setup_tracker_now()
     )
+    setup_tracker_skip_reason = ""
+
+    if setup_tracker_allowed and require_ib_for_setup_tracker:
+        if not is_daily_data_client_connected(ib):
+            setup_tracker_allowed = False
+            setup_tracker_skip_reason = (
+                "Setup tracker refresh skipped for this mini-PC run because the IBKR daily-bar "
+                "client was unavailable."
+            )
+        else:
+            tracked_symbols = sorted(
+                {
+                    str(row.get("symbol", "")).strip().upper()
+                    for row in tracked_rows
+                    if str(row.get("symbol", "")).strip()
+                }
+            )
+            non_ib_symbols = [
+                symbol
+                for symbol in tracked_symbols
+                if _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) != DAILY_BAR_SOURCE_IBKR
+            ]
+            if non_ib_symbols:
+                sources = sorted(
+                    {
+                        _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) or "unknown"
+                        for symbol in non_ib_symbols
+                    }
+                )
+                setup_tracker_allowed = False
+                setup_tracker_skip_reason = (
+                    "Setup tracker refresh skipped for this mini-PC run because tracked setups "
+                    f"used non-IBKR daily data (symbols={', '.join(non_ib_symbols)}; "
+                    f"sources={', '.join(sources)})."
+                )
 
     if setup_tracker_allowed:
         update_setup_tracker_from_scan(
@@ -8102,7 +8162,9 @@ def run_master(
             len(tracked_rows),
         )
     else:
-        if update_setup_tracker is None:
+        if setup_tracker_skip_reason:
+            logging.info(setup_tracker_skip_reason)
+        elif update_setup_tracker is None:
             window_start, window_end = get_setup_tracker_update_window_labels()
             logging.info(
                 "Setup tracker refresh skipped for this run because local time is outside the live update window (%s-%s).",

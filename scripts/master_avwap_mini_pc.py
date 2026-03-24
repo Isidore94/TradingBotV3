@@ -542,6 +542,7 @@ def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> dict[
         run_master(
             use_shared_watchlists=True,
             update_setup_tracker=update_setup_tracker,
+            require_ib_for_setup_tracker=True,
         )
     except Exception as exc:
         setattr(exc, "watchlist_filter_summary", filter_summary)
