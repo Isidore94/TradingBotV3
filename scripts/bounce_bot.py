@@ -730,7 +730,9 @@ class BounceBot(EWrapper, EClient):
         self.master_avwap_last_scan_date = None
         self.emitted_master_avwap_events = set()
         self.master_avwap_focus_map = {}
+        self.master_avwap_second_stdev_cross_map = {}
         self.emitted_master_avwap_focus_alerts = set()
+        self.emitted_master_avwap_second_stdev_alerts = set()
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -927,6 +929,36 @@ class BounceBot(EWrapper, EClient):
             if levels:
                 active_levels[symbol] = sorted(levels)
         return active_levels
+
+    def _build_master_avwap_second_stdev_cross_map(self):
+        cross_map = {}
+        for symbol, events in self.master_avwap_events.items():
+            matching_events = [
+                event for event in events
+                if event.get("anchor_type") == "CURRENT"
+                and event.get("signal_type") in {"CROSS_UP_UPPER_2", "CROSS_DOWN_LOWER_2"}
+            ]
+            if not matching_events:
+                continue
+
+            latest_event = sorted(
+                matching_events,
+                key=lambda event: (
+                    str(event.get("trade_date") or ""),
+                    str(event.get("anchor_date") or ""),
+                    str(event.get("signal_type") or ""),
+                ),
+            )[-1]
+            cross_map[symbol] = {
+                "symbol": symbol,
+                "side": (latest_event.get("side") or "").strip().upper(),
+                "signal_type": (latest_event.get("signal_type") or "").strip().upper(),
+                "level": (latest_event.get("level") or "").strip().upper(),
+                "anchor_type": (latest_event.get("anchor_type") or "").strip().upper(),
+                "anchor_date": (latest_event.get("anchor_date") or "").strip(),
+            }
+        return cross_map
+
     def find_active_master_avwap_bounces(self):
         self.load_master_avwap_events_today()
         active = {}
@@ -1022,8 +1054,60 @@ class BounceBot(EWrapper, EClient):
         self.emitted_master_avwap_focus_alerts.add(alert_key)
 
         reason = self._describe_master_avwap_focus(focus_entry)
+        cross_entry = self.master_avwap_second_stdev_cross_map.get(symbol)
+        if cross_entry:
+            cross_side = cross_entry.get("side")
+            if (direction == "long" and cross_side == "LONG") or (direction == "short" and cross_side == "SHORT"):
+                reason = f"{reason}; {self._describe_master_avwap_second_stdev_cross(cross_entry)}"
         level_text = ", ".join(normalized_levels) if normalized_levels else "level"
         message = f"MASTER_AVWAP_FOCUS_BOUNCE: {symbol} ({direction}) {level_text} [{reason}]"
+        gui_tag = "master_avwap_focus_long" if direction == "long" else "master_avwap_focus_short"
+        self.gui_callback(message, gui_tag)
+        self.log_symbol(symbol, message)
+
+    def _describe_master_avwap_second_stdev_cross(self, cross_entry):
+        signal_type = (cross_entry or {}).get("signal_type", "")
+        if signal_type == "CROSS_UP_UPPER_2":
+            return "current UPPER_2 cross"
+        if signal_type == "CROSS_DOWN_LOWER_2":
+            return "current LOWER_2 cross"
+        return "current 2nd stdev cross"
+
+    def _emit_master_avwap_second_stdev_bounce_alert(self, symbol, direction, levels_list):
+        if not self.gui_callback:
+            return
+        cross_entry = self.master_avwap_second_stdev_cross_map.get(symbol)
+        if not cross_entry:
+            return
+
+        focus_entry = self.master_avwap_focus_map.get(symbol)
+        if focus_entry:
+            focus_side = focus_entry.get("side")
+            if (direction == "long" and focus_side == "LONG") or (direction == "short" and focus_side == "SHORT"):
+                return
+
+        cross_side = cross_entry.get("side")
+        if direction == "long" and cross_side != "LONG":
+            return
+        if direction == "short" and cross_side != "SHORT":
+            return
+
+        normalized_levels = tuple(sorted(str(level) for level in (levels_list or [])))
+        alert_key = (
+            datetime.now().date().isoformat(),
+            "2nd_stdev_bounce",
+            symbol,
+            direction,
+            normalized_levels,
+            cross_entry.get("signal_type", ""),
+        )
+        if alert_key in self.emitted_master_avwap_second_stdev_alerts:
+            return
+        self.emitted_master_avwap_second_stdev_alerts.add(alert_key)
+
+        reason = self._describe_master_avwap_second_stdev_cross(cross_entry)
+        level_text = ", ".join(normalized_levels) if normalized_levels else "bounce"
+        message = f"MASTER_AVWAP_2ND_STDEV_BOUNCE: {symbol} ({direction}) {level_text} [{reason}]"
         gui_tag = "master_avwap_focus_long" if direction == "long" else "master_avwap_focus_short"
         self.gui_callback(message, gui_tag)
         self.log_symbol(symbol, message)
@@ -1087,6 +1171,7 @@ class BounceBot(EWrapper, EClient):
 
     def update_watchlists_from_master_avwap(self):
         self.load_master_avwap_events_today()
+        self.master_avwap_second_stdev_cross_map = self._build_master_avwap_second_stdev_cross_map()
         active_level_map = self._build_master_avwap_active_level_map()
         event_symbols = set(active_level_map)
         if not event_symbols:
@@ -3842,11 +3927,23 @@ class BounceBot(EWrapper, EClient):
                         logging.debug(
                             f"{symbol}: Invalidating long bounce candidate - close {current_candle['close']:.2f} below bounce low {bounce_candle['low']:.2f}"
                         )
+                        levels_list = bounce_data.get("triggered_levels") or list(bounce_data.get("levels", {}).keys())
+                        self.log_symbol(
+                            symbol,
+                            f"{symbol}: Bounce candidate invalidated (long) from {levels_list} - "
+                            f"close {current_candle['close']:.2f} fell below bounce low {bounce_candle['low']:.2f}"
+                        )
                         self.bounce_candidates.pop(symbol)
                         return
                     if direction == "short" and current_candle["close"] > bounce_candle["high"]:
                         logging.debug(
                             f"{symbol}: Invalidating short bounce candidate - close {current_candle['close']:.2f} above bounce high {bounce_candle['high']:.2f}"
+                        )
+                        levels_list = bounce_data.get("triggered_levels") or list(bounce_data.get("levels", {}).keys())
+                        self.log_symbol(
+                            symbol,
+                            f"{symbol}: Bounce candidate invalidated (short) from {levels_list} - "
+                            f"close {current_candle['close']:.2f} rose above bounce high {bounce_candle['high']:.2f}"
                         )
                         self.bounce_candidates.pop(symbol)
                         return
@@ -3859,6 +3956,7 @@ class BounceBot(EWrapper, EClient):
                         if self.gui_callback:
                             self.gui_callback(bounce_msg, "green")
                         self._emit_master_avwap_focus_bounce_alert(symbol, "long", levels_list)
+                        self._emit_master_avwap_second_stdev_bounce_alert(symbol, "long", levels_list)
                         self.log_symbol(symbol, f"ALERT: {bounce_msg}")
                         self.log_bounce_to_file(
                             symbol=symbol,
@@ -3879,6 +3977,7 @@ class BounceBot(EWrapper, EClient):
                         if self.gui_callback:
                             self.gui_callback(bounce_msg, "red")
                         self._emit_master_avwap_focus_bounce_alert(symbol, "short", levels_list)
+                        self._emit_master_avwap_second_stdev_bounce_alert(symbol, "short", levels_list)
                         self.log_symbol(symbol, f"ALERT: {bounce_msg}")
                         self.log_bounce_to_file(
                             symbol=symbol,
@@ -3893,15 +3992,27 @@ class BounceBot(EWrapper, EClient):
                         return  # Exit after confirming a bounce
                     else:
                         if candles_waited >= BOUNCE_CONFIRMATION_MAX_CANDLES:
+                            levels_list = bounce_data.get("triggered_levels") or list(bounce_data.get("levels", {}).keys())
                             logging.debug(
                                 f"{symbol}: Removing bounce candidate after {candles_waited} candles without confirmation"
+                            )
+                            self.log_symbol(
+                                symbol,
+                                f"{symbol}: Bounce candidate expired after {candles_waited} candles without confirmation "
+                                f"from {levels_list}"
                             )
                             self.bounce_candidates.pop(symbol)
                             return
                         # Remove stale candidates after a certain time period (e.g., 4 hours)
                         detection_time = bounce_data["detection_time"]
                         if (datetime.now() - detection_time).total_seconds() > 14400:  # 4 hours in seconds
+                            levels_list = bounce_data.get("triggered_levels") or list(bounce_data.get("levels", {}).keys())
                             logging.debug(f"{symbol}: Removing stale bounce candidate detected at {detection_time}")
+                            self.log_symbol(
+                                symbol,
+                                f"{symbol}: Bounce candidate removed as stale from {levels_list} "
+                                f"(detected at {detection_time:%H:%M:%S})"
+                            )
                             self.bounce_candidates.pop(symbol)
                 else:
                     logging.debug(f"{symbol}: Current candle is the same as bounce candle, waiting for next candle")
@@ -4016,6 +4127,7 @@ class BounceBot(EWrapper, EClient):
                     self.warned_symbols.clear()
                     self.emitted_master_avwap_events.clear()
                     self.emitted_master_avwap_focus_alerts.clear()
+                    self.emitted_master_avwap_second_stdev_alerts.clear()
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
                 

@@ -220,6 +220,7 @@ PRIORITY_RETEST_LEVEL_SCORE_BONUS = {
     "UPPER_1": 16,
     "LOWER_1": 16,
 }
+PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS = 12
 PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS = 10
 PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS = 8
 PRIORITY_RETEST_CLEAR_PATH_SCORE_BONUS = 14
@@ -2706,6 +2707,14 @@ def build_tracker_entry_attributes(
         description="Whether the prior anchor AVWAPE was within 0.5 ATR of price.",
     )
     add(
+        "structure.previous_day_range_break",
+        bool(row.get("previous_day_range_break") or symbol_entry.get("previous_day_range_break")),
+        group="structure",
+        label="Previous day range break",
+        value_type="bool",
+        description="Whether price closed through the prior session trigger level for the setup direction.",
+    )
+    add(
         "filters.ranking_blocked",
         bool(symbol_entry.get("priority_ranking_blocked")),
         group="filters",
@@ -2746,6 +2755,26 @@ def build_tracker_entry_attributes(
         description="Bonus added for a recent trendline break candidate.",
     )
     add(
+        "filters.previous_day_range_break_bonus",
+        int(
+            row.get("previous_day_range_break_bonus", 0)
+            or symbol_entry.get("previous_day_range_break_bonus", 0)
+            or 0
+        ),
+        group="filters",
+        label="Previous day range bonus",
+        value_type="number",
+        description="Bonus added when price cleared the prior day high for longs or low for shorts.",
+    )
+    add(
+        "filters.previous_day_range_note",
+        row.get("previous_day_range_note") or symbol_entry.get("previous_day_range_note") or "",
+        group="filters",
+        label="Previous day range note",
+        value_type="text",
+        description="Scanner note describing the prior-day range break bonus.",
+    )
+    add(
         "levels.current_active_level",
         symbol_entry.get("current_active_level") or feature_row.get("current_active_level") or "",
         group="levels",
@@ -2768,6 +2797,22 @@ def build_tracker_entry_attributes(
         label="Current nearby bands",
         value_type="list",
         description="Nearby current-anchor AVWAP levels around the entry price.",
+    )
+    add(
+        "levels.previous_day_high",
+        _coerce_float(symbol_entry.get("previous_day_high") or feature_row.get("previous_day_high")),
+        group="levels",
+        label="Previous day high",
+        value_type="number",
+        description="High of the session immediately before the scan date.",
+    )
+    add(
+        "levels.previous_day_low",
+        _coerce_float(symbol_entry.get("previous_day_low") or feature_row.get("previous_day_low")),
+        group="levels",
+        label="Previous day low",
+        value_type="number",
+        description="Low of the session immediately before the scan date.",
     )
     add(
         "levels.previous_active_level",
@@ -3983,12 +4028,60 @@ def update_setup_tracker_from_scan(
         )
         if tuner_output:
             logging.info("Priority scoring tuner: %s", tuner_output.splitlines()[0])
+
+
 def get_last_daily_row_for_date(daily_rows, last_trade_date):
     target = last_trade_date.isoformat()
     for row in reversed(daily_rows):
         if row["date"] == target:
             return row
     return None
+
+
+def get_previous_daily_row_for_date(daily_rows, last_trade_date):
+    target = last_trade_date.isoformat()
+    previous_row = None
+    for row in daily_rows:
+        row_date = str(row.get("date") or "")
+        if not row_date:
+            continue
+        if row_date >= target:
+            break
+        previous_row = row
+    return previous_row
+
+
+def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, side):
+    previous_row = get_previous_daily_row_for_date(daily_rows, last_trade_date)
+    previous_day_high = _coerce_float(previous_row.get("high")) if previous_row else None
+    previous_day_low = _coerce_float(previous_row.get("low")) if previous_row else None
+    result = {
+        "previous_day_date": str(previous_row.get("date") or "") if previous_row else "",
+        "previous_day_high": previous_day_high,
+        "previous_day_low": previous_day_low,
+        "previous_day_range_break": False,
+        "previous_day_range_break_bonus": 0,
+        "previous_day_range_note": "",
+    }
+    if last_close is None:
+        return result
+
+    side = normalize_side(side)
+    if side == "LONG" and previous_day_high is not None and float(last_close) > float(previous_day_high):
+        result["previous_day_range_break"] = True
+        result["previous_day_range_break_bonus"] = PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS
+        result["previous_day_range_note"] = (
+            f"Above previous day high {float(previous_day_high):.2f} "
+            f"(+{PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS})"
+        )
+    elif side == "SHORT" and previous_day_low is not None and float(last_close) < float(previous_day_low):
+        result["previous_day_range_break"] = True
+        result["previous_day_range_break_bonus"] = PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS
+        result["previous_day_range_note"] = (
+            f"Below previous day low {float(previous_day_low):.2f} "
+            f"(+{PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS})"
+        )
+    return result
 
 
 def sessions_since_date(df: pd.DataFrame, event_date: date) -> int | None:
@@ -5539,6 +5632,9 @@ def build_priority_setup_summary(
     extreme_move_band_width_atr: float | None = None,
     extreme_move_displacement_date: str = "",
     extreme_move_note: str = "",
+    previous_day_range_break: bool = False,
+    previous_day_range_break_bonus: int = 0,
+    previous_day_range_note: str = "",
 ) -> dict:
     current_weights = get_priority_signal_weights(side, "current")
     context_weights = get_priority_signal_weights(side, "context")
@@ -5569,6 +5665,7 @@ def build_priority_setup_summary(
     if extreme_move_watch:
         score += PRIORITY_EXTREME_MOVE_WATCH_SCORE_BONUS
 
+    score += max(0, int(previous_day_range_break_bonus or 0))
     score += max(0, int(first_dev_break_bonus or 0))
 
     if recent_band_extension_days <= 2:
@@ -5614,6 +5711,9 @@ def build_priority_setup_summary(
         ),
         "extreme_move_displacement_date": extreme_move_displacement_date or "",
         "extreme_move_note": extreme_move_note or "",
+        "previous_day_range_break": bool(previous_day_range_break),
+        "previous_day_range_break_bonus": int(previous_day_range_break_bonus or 0),
+        "previous_day_range_note": previous_day_range_note or "",
     }
 
 
@@ -6327,6 +6427,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             adaptive_score_note = row.get("adaptive_score_note", "")
             retest_note = row.get("retest_note", "")
             extension_note = row.get("extension_note", "")
+            previous_day_range_note = row.get("previous_day_range_note", "")
             first_dev_note = row.get("first_dev_note", "")
             extreme_move_note = row.get("extreme_move_note", "")
             compression_note = row.get("compression_note", "")
@@ -6348,6 +6449,8 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
                 handle.write(f"  retest={retest_note}\n")
             if extension_note:
                 handle.write(f"  extension={extension_note}\n")
+            if previous_day_range_note:
+                handle.write(f"  prev_day={previous_day_range_note}\n")
             if first_dev_note:
                 handle.write(f"  first_dev={first_dev_note}\n")
             if extreme_move_note:
@@ -6413,6 +6516,12 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "retest_followthrough": bool(row.get("retest_followthrough")),
             "retest_reference_level": row.get("retest_reference_level") or "",
             "retest_note": row.get("retest_note") or "",
+            "previous_day_date": symbol_state.get("previous_day_date") or "",
+            "previous_day_high": _coerce_float(symbol_state.get("previous_day_high")),
+            "previous_day_low": _coerce_float(symbol_state.get("previous_day_low")),
+            "previous_day_range_break": bool(row.get("previous_day_range_break")),
+            "previous_day_range_break_bonus": int(row.get("previous_day_range_break_bonus", 0) or 0),
+            "previous_day_range_note": row.get("previous_day_range_note") or "",
             "extreme_move_watch": bool(row.get("extreme_move_watch")),
             "extreme_move_favorite_ready": bool(row.get("extreme_move_favorite_ready")),
             "extreme_move_retest_level": row.get("extreme_move_retest_level") or "",
@@ -6935,6 +7044,12 @@ def _evaluate_priority_snapshot_for_date(
     last_volume = float(last_row["volume"]) if last_row else None
     atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
     trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
+    previous_day_range_summary = assess_previous_day_range_break(
+        daily_ohlc,
+        last_trade_date,
+        last_close,
+        side,
+    )
 
     current_vwap = current_anchor_meta.get("vwap") if current_anchor_meta else None
     current_upper_1 = current_anchor_meta.get("bands", {}).get("UPPER_1") if current_anchor_meta else None
@@ -7108,6 +7223,12 @@ def _evaluate_priority_snapshot_for_date(
         "distance_from_current_lower_1": _distance(current_lower_1),
         "pct_from_current_lower_1": _pct(current_lower_1),
         "trend_20d": trend_label,
+        "previous_day_date": previous_day_range_summary["previous_day_date"],
+        "previous_day_high": previous_day_range_summary["previous_day_high"],
+        "previous_day_low": previous_day_range_summary["previous_day_low"],
+        "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
+        "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
+        "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
         "recent_band_extension_days": recent_band_extension_days,
@@ -7159,6 +7280,9 @@ def _evaluate_priority_snapshot_for_date(
         extreme_move_band_width_atr=_coerce_float(extreme_move_summary.get("band_width_atr")),
         extreme_move_displacement_date=extreme_move_summary.get("displacement_date", ""),
         extreme_move_note=extreme_move_summary.get("note", ""),
+        previous_day_range_break=bool(previous_day_range_summary["previous_day_range_break"]),
+        previous_day_range_break_bonus=int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
+        previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
         extension_note=extension_note,
     )
     priority_summary["score"] = float(
@@ -7191,6 +7315,12 @@ def _evaluate_priority_snapshot_for_date(
         "distance_from_current_lower_1": _distance(current_lower_1),
         "pct_from_current_lower_1": _pct(current_lower_1),
         "trend_20d": trend_label,
+        "previous_day_date": previous_day_range_summary["previous_day_date"],
+        "previous_day_high": previous_day_range_summary["previous_day_high"],
+        "previous_day_low": previous_day_range_summary["previous_day_low"],
+        "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
+        "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
+        "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
         "recent_band_extension_days": recent_band_extension_days,
@@ -7699,6 +7829,12 @@ def run_master(
 
         atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
         trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
+        previous_day_range_summary = assess_previous_day_range_break(
+            daily_ohlc,
+            last_trade_date,
+            last_close,
+            side,
+        )
 
         current_vwap = current_anchor_meta.get("vwap") if current_anchor_meta else None
         current_upper_1 = (
@@ -7955,6 +8091,12 @@ def run_master(
             "distance_from_current_lower_1": dist_lower_1,
             "pct_from_current_lower_1": pct_lower_1,
             "trend_20d": trend_label,
+            "previous_day_date": previous_day_range_summary["previous_day_date"],
+            "previous_day_high": previous_day_range_summary["previous_day_high"],
+            "previous_day_low": previous_day_range_summary["previous_day_low"],
+            "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
+            "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
+            "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
             "recent_band_extension_days": recent_band_extension_days,
@@ -8006,6 +8148,9 @@ def run_master(
             extreme_move_band_width_atr=_coerce_float(extreme_move_summary.get("band_width_atr")),
             extreme_move_displacement_date=extreme_move_summary.get("displacement_date", ""),
             extreme_move_note=extreme_move_summary.get("note", ""),
+            previous_day_range_break=bool(previous_day_range_summary["previous_day_range_break"]),
+            previous_day_range_break_bonus=int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
+            previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
             extension_note=extension_note,
         )
         priority_summary["score"] = float(priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0))
@@ -8061,6 +8206,12 @@ def run_master(
             "distance_from_current_lower_1": dist_lower_1,
             "pct_from_current_lower_1": pct_lower_1,
             "trend_20d": trend_label,
+            "previous_day_date": previous_day_range_summary["previous_day_date"],
+            "previous_day_high": previous_day_range_summary["previous_day_high"],
+            "previous_day_low": previous_day_range_summary["previous_day_low"],
+            "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
+            "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
+            "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
             "recent_band_extension_days": recent_band_extension_days,
@@ -8285,6 +8436,9 @@ def run_master(
         "last_close",
         "last_volume",
         "atr20",
+        "previous_day_date",
+        "previous_day_high",
+        "previous_day_low",
         "current_active_level",
         "current_nearby_bands",
         "current_band_zone",
@@ -8301,6 +8455,9 @@ def run_master(
         "distance_from_current_lower_1",
         "pct_from_current_lower_1",
         "trend_20d",
+        "previous_day_range_break",
+        "previous_day_range_break_bonus",
+        "previous_day_range_note",
         "has_bounce_event_today",
         "favorite_zone",
         "recent_band_extension_days",
