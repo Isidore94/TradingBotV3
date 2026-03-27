@@ -269,7 +269,13 @@ class BounceBotController:
         def get_market_environment(self) -> str:
             return self._controller.get_market_environment()
 
-    def __init__(self, include_approaching: bool, ui_parent: tk.Misc):
+    def __init__(
+        self,
+        include_approaching: bool,
+        ui_parent: tk.Misc,
+        *,
+        start_scanning_enabled: bool = False,
+    ):
         self.include_approaching = include_approaching
         self.ui_parent = ui_parent
         self.rrs_queue: queue.Queue = queue.Queue()
@@ -283,7 +289,7 @@ class BounceBotController:
         self.rrs_threshold = 2.0
         self.rrs_timeframe_key = "5m"
         self.market_environment = "bullish_strong"
-        self.scanning_enabled = True
+        self.scanning_enabled = bool(start_scanning_enabled)
         self.bounce_type_settings = dict(BOUNCE_TYPE_DEFAULTS)
         self.gui_proxy = self.GUIProxy(self)
 
@@ -345,7 +351,10 @@ class BounceBotController:
             self._emit("connecting")
             self._set_var(self.connection_var, "IB: connecting")
             try:
-                bot = run_bot_with_gui(self._make_callback())
+                bot = run_bot_with_gui(
+                    self._make_callback(),
+                    start_scanning_enabled=self.scanning_enabled,
+                )
                 self._apply_saved_state(bot)
                 self._sync_state_from_bot(bot)
                 with self._lock:
@@ -412,6 +421,12 @@ class BounceBotController:
 
     def is_scanning_enabled(self) -> bool:
         return self.scanning_enabled
+
+    def start_scanning(self) -> None:
+        self.set_scanning_enabled(True)
+
+    def stop_scanning(self) -> None:
+        self.set_scanning_enabled(False)
 
     def refresh_active_bounces(self) -> None:
         def _read_count(bot):
@@ -511,7 +526,11 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
     def __init__(self, parent: tk.Misc, switch_mode_callback=None):
         super().__init__(
             parent,
-            BounceBotController(include_approaching=False, ui_parent=parent),
+            BounceBotController(
+                include_approaching=False,
+                ui_parent=parent,
+                start_scanning_enabled=False,
+            ),
             switch_mode_callback=switch_mode_callback,
         )
         self._syncing_controls = False
@@ -533,6 +552,10 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
         if self.switch_mode_callback:
             ttk.Button(header, text="Switch to Full", command=self.switch_mode_callback).pack(side=tk.RIGHT)
         ttk.Button(header, text="Reconnect", command=self.controller.restart).pack(side=tk.RIGHT)
+        self.stop_scanning_button = ttk.Button(header, text="Stop Scanning", command=self.controller.stop_scanning)
+        self.stop_scanning_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.start_scanning_button = ttk.Button(header, text="Start Scanning", command=self.controller.start_scanning)
+        self.start_scanning_button.pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(header, text="Disconnect", command=self.controller.stop).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(header, text="Clear", command=self.clear_alerts).pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -639,6 +662,12 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
                     var.set(expected)
         finally:
             self._syncing_controls = False
+        self._sync_scanning_controls()
+
+    def _sync_scanning_controls(self) -> None:
+        scanning_enabled = self.controller.is_scanning_enabled()
+        self.start_scanning_button.configure(state=("disabled" if scanning_enabled else "normal"))
+        self.stop_scanning_button.configure(state=("normal" if scanning_enabled else "disabled"))
 
     def _on_rrs_threshold_change(self, *_args) -> None:
         if self._syncing_controls:
@@ -681,11 +710,14 @@ class FullBounceBotPanel(BaseBounceBotPanel):
     def __init__(self, parent: tk.Misc, switch_mode_callback=None):
         super().__init__(
             parent,
-            BounceBotController(include_approaching=False, ui_parent=parent),
+            BounceBotController(
+                include_approaching=False,
+                ui_parent=parent,
+                start_scanning_enabled=False,
+            ),
             switch_mode_callback=switch_mode_callback,
         )
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
-        self.scanning_button_text = tk.StringVar(value="Stop Scanning")
         self._build_layout()
         self.start()
 
@@ -701,15 +733,26 @@ class FullBounceBotPanel(BaseBounceBotPanel):
         controls_frame.pack(side=tk.RIGHT)
         if self.switch_mode_callback:
             ttk.Button(controls_frame, text="Switch to Simple", command=self.switch_mode_callback).pack(side=tk.LEFT, padx=(0, 8))
-        tk.Button(
+        self.start_scanning_button = tk.Button(
             controls_frame,
-            textvariable=self.scanning_button_text,
-            command=self._toggle_scanning,
+            text="Start Scanning",
+            command=self.controller.start_scanning,
             relief=tk.RAISED,
             padx=10,
             bg=PANEL_GREY,
             fg=TEXT_COLOR,
-        ).pack(side=tk.LEFT)
+        )
+        self.start_scanning_button.pack(side=tk.LEFT)
+        self.stop_scanning_button = tk.Button(
+            controls_frame,
+            text="Stop Scanning",
+            command=self.controller.stop_scanning,
+            relief=tk.RAISED,
+            padx=10,
+            bg=PANEL_GREY,
+            fg=TEXT_COLOR,
+        )
+        self.stop_scanning_button.pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(controls_frame, text="Clear", command=self.clear_alerts).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(controls_frame, text="Reconnect", command=self.controller.restart).pack(side=tk.LEFT, padx=(8, 0))
 
@@ -764,16 +807,14 @@ class FullBounceBotPanel(BaseBounceBotPanel):
                 activeforeground=TEXT_COLOR,
             ).grid(row=idx // 4, column=idx % 4, sticky="w", padx=6, pady=2)
 
-    def _toggle_scanning(self) -> None:
-        new_state = not self.controller.is_scanning_enabled()
-        self.controller.set_scanning_enabled(new_state)
-
     def _sync_toggle_state(self) -> None:
         for bounce_key, var in self.toggle_vars.items():
             expected = self.controller.is_bounce_type_enabled(bounce_key)
             if bool(var.get()) != bool(expected):
                 var.set(expected)
-        self.scanning_button_text.set("Stop Scanning" if self.controller.is_scanning_enabled() else "Start Scanning")
+        scanning_enabled = self.controller.is_scanning_enabled()
+        self.start_scanning_button.configure(state=(tk.DISABLED if scanning_enabled else tk.NORMAL))
+        self.stop_scanning_button.configure(state=(tk.NORMAL if scanning_enabled else tk.DISABLED))
 
     def _process_queues(self) -> None:
         self._sync_toggle_state()

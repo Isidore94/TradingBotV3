@@ -69,12 +69,28 @@ def _coerce_float(value):
     return parsed
 
 
+def _select_outcome_avg_r(row) -> float | None:
+    closed_count = _coerce_float(
+        row.get("closed_tradeable_setup_count", row.get("closed_tradeable_scenario_count", 0))
+    )
+    avg_closed_r = _coerce_float(row.get("avg_closed_r"))
+    if closed_count and closed_count > 0 and avg_closed_r is not None:
+        return avg_closed_r
+    return _coerce_float(row.get("avg_total_r"))
+
+
 def _baseline_by_side(attributes_df: pd.DataFrame) -> dict[str, dict]:
     if attributes_df.empty or "setup_id" not in attributes_df.columns:
         return {}
 
     setup_df = attributes_df.drop_duplicates(subset=["setup_id"]).copy()
-    if "tradeable_scenario_count" in setup_df.columns:
+    if "closed_tradeable_scenario_count" in setup_df.columns:
+        closed = setup_df[
+            pd.to_numeric(setup_df["closed_tradeable_scenario_count"], errors="coerce").fillna(0) > 0
+        ].copy()
+        if not closed.empty:
+            setup_df = closed
+    elif "tradeable_scenario_count" in setup_df.columns:
         tradeable = setup_df[pd.to_numeric(setup_df["tradeable_scenario_count"], errors="coerce").fillna(0) > 0].copy()
         if not tradeable.empty:
             setup_df = tradeable
@@ -84,7 +100,7 @@ def _baseline_by_side(attributes_df: pd.DataFrame) -> dict[str, dict]:
         side_key = str(side or "").strip().upper()
         if not side_key or group.empty:
             continue
-        avg_total_series = pd.to_numeric(group.get("avg_total_r"), errors="coerce").dropna()
+        avg_total_series = pd.to_numeric(group.apply(_select_outcome_avg_r, axis=1), errors="coerce").dropna()
         target_hit_series = group.get("any_target_hit")
         stop_series = group.get("any_stopped")
         baselines[side_key] = {
@@ -97,11 +113,18 @@ def _baseline_by_side(attributes_df: pd.DataFrame) -> dict[str, dict]:
 
 
 def _derive_score_delta(row: pd.Series, baseline: dict, *, min_setups: int, max_abs: int) -> int:
-    setup_count = int(row.get("setup_count", 0) or 0)
+    setup_count = int(
+        row.get("closed_tradeable_setup_count", 0)
+        or row.get("closed_tradeable_scenario_count", 0)
+        or row.get("tradeable_setup_count", 0)
+        or row.get("tradeable_scenario_count", 0)
+        or row.get("setup_count", 0)
+        or 0
+    )
     if setup_count < min_setups:
         return 0
 
-    avg_total_r = _coerce_float(row.get("avg_total_r"))
+    avg_total_r = _select_outcome_avg_r(row)
     target_hit_rate = _coerce_float(row.get("target_hit_rate"))
     stop_rate = _coerce_float(row.get("stop_rate"))
     if avg_total_r is None:
@@ -181,7 +204,7 @@ def _recommend_signal_changes(
                 "signal": signal_name,
                 "attribute_key": row.get("attribute_key"),
                 "setup_count": int(row.get("setup_count", 0) or 0),
-                "avg_total_r": _coerce_float(row.get("avg_total_r")),
+                "avg_total_r": _select_outcome_avg_r(row),
                 "baseline_avg_total_r": float(baseline.get("avg_total_r", 0.0) or 0.0),
                 "target_hit_rate": _coerce_float(row.get("target_hit_rate")),
                 "baseline_target_hit_rate": float(baseline.get("target_hit_rate", 0.0) or 0.0),
@@ -261,7 +284,7 @@ def _recommend_attribute_rules(
                     "score_delta": int(item["delta"]),
                     "label": label,
                     "setup_count": int(row.get("setup_count", 0) or 0),
-                    "avg_total_r": _coerce_float(row.get("avg_total_r")),
+                    "avg_total_r": _select_outcome_avg_r(row),
                     "baseline_avg_total_r": float(item["baseline"].get("avg_total_r", 0.0) or 0.0),
                     "target_hit_rate": _coerce_float(row.get("target_hit_rate")),
                     "baseline_target_hit_rate": float(item["baseline"].get("target_hit_rate", 0.0) or 0.0),

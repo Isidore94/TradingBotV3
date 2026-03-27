@@ -157,6 +157,7 @@ SETUP_DAILY_FILE = MASTER_AVWAP_SETUP_DAILY_FILE
 SETUP_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE
 SETUP_ATTRIBUTES_FILE = MASTER_AVWAP_SETUP_ATTRIBUTES_FILE
 SETUP_ATTRIBUTE_LEADERBOARD_FILE = MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE
+SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 SCORING_CONFIG_FILE = MASTER_AVWAP_SCORING_CONFIG_FILE
 SCORING_RECOMMENDATIONS_FILE = MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE
 SCORING_TUNER_REPORT_FILE = MASTER_AVWAP_SCORING_TUNER_REPORT_FILE
@@ -425,6 +426,32 @@ def get_priority_attribute_adjustments() -> list[dict]:
     config = load_priority_scoring_config()
     adjustments = config.get("attribute_adjustments", [])
     return [dict(item) for item in adjustments if isinstance(item, dict)]
+
+
+def _priority_attribute_rule_signature(rule: dict) -> tuple[str, str, str, str]:
+    side = normalize_side(str(rule.get("side") or ""))
+    attribute_key = str(rule.get("attribute_key") or "").strip()
+    operator = str(rule.get("operator") or "equals").strip().lower()
+    raw_value = rule.get("value")
+    if isinstance(raw_value, (list, dict)):
+        try:
+            value_repr = json.dumps(raw_value, sort_keys=True)
+        except Exception:
+            value_repr = str(raw_value)
+    else:
+        value_repr = str(raw_value)
+    return side, attribute_key, operator, value_repr
+
+
+def _priority_attribute_rule_source_rank(rule: dict) -> int:
+    source = str(rule.get("source") or "").strip().lower()
+    if source in {"user_preference", "manual_preference", "manual"}:
+        return 4
+    if source == "default":
+        return 2
+    if source == "auto_tuner":
+        return 1
+    return 0
 
 
 def run_priority_scoring_tuner(apply_changes: bool = False, min_setups: int = 8, suppress_failures: bool = False) -> str:
@@ -2971,7 +2998,31 @@ def _attribute_rule_matches(rule: dict, attributes: dict[str, object]) -> bool:
 
 
 def apply_priority_attribute_adjustments(row: dict, symbol_entry: dict) -> None:
-    rules = get_priority_attribute_adjustments()
+    raw_rules = get_priority_attribute_adjustments()
+    rule_map: dict[tuple[str, str, str, str], dict] = {}
+    for rule in raw_rules:
+        signature = _priority_attribute_rule_signature(rule)
+        existing = rule_map.get(signature)
+        if existing is None:
+            rule_map[signature] = rule
+            continue
+        existing_rank = _priority_attribute_rule_source_rank(existing)
+        incoming_rank = _priority_attribute_rule_source_rank(rule)
+        if incoming_rank > existing_rank:
+            rule_map[signature] = rule
+            continue
+        if incoming_rank == existing_rank:
+            try:
+                existing_delta = abs(int(existing.get("score_delta", 0) or 0))
+            except (TypeError, ValueError):
+                existing_delta = 0
+            try:
+                incoming_delta = abs(int(rule.get("score_delta", 0) or 0))
+            except (TypeError, ValueError):
+                incoming_delta = 0
+            if incoming_delta > existing_delta:
+                rule_map[signature] = rule
+    rules = list(rule_map.values())
     if not rules:
         row["adaptive_score_delta"] = 0
         row["adaptive_score_note"] = ""
@@ -3010,8 +3061,45 @@ def _default_setup_tracker_payload() -> dict:
         "daily_watchlists": {},
         "setups": {},
         "stats": [],
+        "setup_type_stats": [],
         "attribute_registry": {},
     }
+
+
+def _normalize_setup_tracker_daily_watchlists(
+    daily_watchlists: dict | None,
+    setups: dict | None,
+    *,
+    default_updated_at: str | None = None,
+) -> dict:
+    existing = daily_watchlists if isinstance(daily_watchlists, dict) else {}
+    setup_map = setups if isinstance(setups, dict) else {}
+    grouped: dict[str, dict[str, object]] = {}
+
+    for setup_id, setup in setup_map.items():
+        if not isinstance(setup, dict):
+            continue
+        scan_date = str(setup.get("scan_date") or "").strip()
+        if not scan_date:
+            continue
+        bucket = grouped.setdefault(scan_date, {"setup_ids": [], "symbols": set()})
+        resolved_setup_id = str(setup.get("setup_id") or setup_id or "").strip()
+        if resolved_setup_id:
+            bucket["setup_ids"].append(resolved_setup_id)
+        symbol = str(setup.get("symbol") or "").strip().upper()
+        if symbol:
+            bucket["symbols"].add(symbol)
+
+    normalized = {}
+    for scan_date in sorted(set(existing.keys()) | set(grouped.keys())):
+        existing_entry = existing.get(scan_date, {}) if isinstance(existing.get(scan_date), dict) else {}
+        grouped_entry = grouped.get(scan_date, {"setup_ids": [], "symbols": set()})
+        normalized[scan_date] = {
+            "updated_at": existing_entry.get("updated_at") or default_updated_at,
+            "setup_ids": sorted(set(grouped_entry["setup_ids"])),
+            "symbols": sorted(grouped_entry["symbols"]),
+        }
+    return normalized
 
 
 def load_setup_tracker_payload() -> dict:
@@ -3022,21 +3110,31 @@ def load_setup_tracker_payload() -> dict:
     tracker = _default_setup_tracker_payload()
     tracker["schema_version"] = int(payload.get("schema_version", SETUP_TRACKER_SCHEMA_VERSION) or SETUP_TRACKER_SCHEMA_VERSION)
     tracker["updated_at"] = payload.get("updated_at")
-    tracker["daily_watchlists"] = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
     tracker["setups"] = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
     tracker["stats"] = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
+    tracker["setup_type_stats"] = payload.get("setup_type_stats", []) if isinstance(payload.get("setup_type_stats"), list) else []
     tracker["attribute_registry"] = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
+    tracker["daily_watchlists"] = _normalize_setup_tracker_daily_watchlists(
+        payload.get("daily_watchlists"),
+        tracker["setups"],
+        default_updated_at=tracker["updated_at"],
+    )
     return tracker
 
 
 def save_setup_tracker_payload(payload: dict) -> None:
     payload["schema_version"] = SETUP_TRACKER_SCHEMA_VERSION
     payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    payload["daily_watchlists"] = _normalize_setup_tracker_daily_watchlists(
+        payload.get("daily_watchlists"),
+        payload.get("setups"),
+        default_updated_at=payload["updated_at"],
+    )
     save_json(SETUP_TRACKER_FILE, payload)
 
 
-def _setup_id_for_row(row: dict, symbol_entry: dict) -> str:
-    scan_date = str(symbol_entry.get("last_trade_date") or datetime.now().date().isoformat())
+def _setup_id_for_row(row: dict, symbol_entry: dict, scan_date: str | None = None) -> str:
+    scan_date = str(scan_date or symbol_entry.get("last_trade_date") or datetime.now().date().isoformat())
     anchor_date = ((symbol_entry.get("current_anchor") or {}).get("date")) or scan_date
     bucket = str(row.get("priority_bucket") or "tracked")
     return f"{scan_date}:{row.get('symbol', '')}:{normalize_side(row.get('side'))}:{anchor_date}:{bucket}"
@@ -3136,12 +3234,14 @@ def build_tracker_setup_record(
     feature_row: dict | None,
     generated_at: str,
     indicator_row: pd.Series | None,
+    scan_date: str | None = None,
     attribute_registry: dict | None = None,
 ) -> dict | None:
     entry_price = _coerce_float(symbol_entry.get("last_close"))
     if entry_price is None:
         return None
 
+    scan_date = str(scan_date or symbol_entry.get("last_trade_date") or datetime.now().date().isoformat())
     current_anchor = symbol_entry.get("current_anchor") or {}
     previous_anchor = symbol_entry.get("previous_anchor") or {}
     compression_summary = {
@@ -3149,14 +3249,18 @@ def build_tracker_setup_record(
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note", ""),
     }
-    entry_snapshot = build_tracker_feature_snapshot(
-        normalize_side(row.get("side")),
-        pd.Series({"open": entry_price, "high": entry_price, "low": entry_price, "close": entry_price}),
-        indicator_row,
-        current_anchor,
-        previous_anchor,
-        compression_summary,
-    )
+    entry_snapshot = symbol_entry.get("entry_feature_snapshot")
+    if isinstance(entry_snapshot, dict) and entry_snapshot:
+        entry_snapshot = copy.deepcopy(entry_snapshot)
+    else:
+        entry_snapshot = build_tracker_feature_snapshot(
+            normalize_side(row.get("side")),
+            pd.Series({"open": entry_price, "high": entry_price, "low": entry_price, "close": entry_price}),
+            indicator_row,
+            current_anchor,
+            previous_anchor,
+            compression_summary,
+        )
     entry_attributes, attribute_updates = build_tracker_entry_attributes(
         row,
         symbol_entry,
@@ -3168,8 +3272,7 @@ def build_tracker_setup_record(
 
     stop_candidates = _find_tracker_stop_candidates(row, symbol_entry)
     scenarios = _build_tracker_scenarios(entry_price, stop_candidates, normalize_side(row.get("side")))
-    setup_id = _setup_id_for_row(row, symbol_entry)
-    scan_date = str(symbol_entry.get("last_trade_date") or datetime.now().date().isoformat())
+    setup_id = _setup_id_for_row(row, symbol_entry, scan_date=scan_date)
 
     return {
         "setup_id": setup_id,
@@ -3477,6 +3580,8 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
 
     setup["scenarios"] = working_scenarios
     setup["daily_marks"] = daily_marks
+    if daily_marks and isinstance(daily_marks[0].get("feature_snapshot"), dict):
+        setup["entry_feature_snapshot"] = copy.deepcopy(daily_marks[0]["feature_snapshot"])
     setup["latest_snapshot"] = daily_marks[-1] if daily_marks else {}
     setup["open_scenario_count"] = sum(1 for scenario in working_scenarios.values() if _scenario_is_open(scenario.get("status")))
     setup["closed_scenario_count"] = sum(
@@ -3721,16 +3826,30 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
 
     observations = []
     numeric_groups: dict[str, list[dict]] = {}
+    setup_context: dict[str, dict] = {}
 
     for row in attribute_rows:
         if not isinstance(row, dict):
             continue
+        setup_id = str(row.get("setup_id") or "").strip()
+        if setup_id and setup_id not in setup_context:
+            setup_context[setup_id] = {
+                "side": str(row.get("side") or ""),
+                "priority_bucket": str(row.get("priority_bucket") or ""),
+                "tradeable_scenario_count": int(row.get("tradeable_scenario_count", 0) or 0),
+                "closed_tradeable_scenario_count": int(row.get("closed_tradeable_scenario_count", 0) or 0),
+                "avg_total_r": _coerce_float(row.get("avg_total_r")),
+                "avg_closed_r": _coerce_float(row.get("avg_closed_r")),
+                "any_target_hit": bool(row.get("any_target_hit")),
+                "any_stopped": bool(row.get("any_stopped")),
+            }
         attribute_type = str(row.get("attribute_type") or "").strip().lower()
         if attribute_type == "object":
             continue
 
         base = {
             "setup_id": row.get("setup_id"),
+            "scan_date": row.get("scan_date"),
             "symbol": row.get("symbol"),
             "side": row.get("side"),
             "priority_bucket": row.get("priority_bucket"),
@@ -3797,6 +3916,7 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
         for row, bucket in zip(valid_rows, buckets.astype(str).tolist()):
             obs = {
                 "setup_id": row.get("setup_id"),
+                "scan_date": row.get("scan_date"),
                 "symbol": row.get("symbol"),
                 "side": row.get("side"),
                 "priority_bucket": row.get("priority_bucket"),
@@ -3824,6 +3944,49 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
     if not observations:
         return []
 
+    baseline_map: dict[tuple[str, str], dict[str, float | None]] = {}
+    baseline_groups: dict[tuple[str, str], list[dict]] = {}
+    for setup_row in setup_context.values():
+        baseline_groups.setdefault(
+            (str(setup_row.get("side") or ""), str(setup_row.get("priority_bucket") or "")),
+            [],
+        ).append(setup_row)
+    for baseline_key, rows_for_baseline in baseline_groups.items():
+        tradeable_rows = [
+            item
+            for item in rows_for_baseline
+            if int(item.get("tradeable_scenario_count", 0) or 0) > 0
+        ]
+        closed_rows = [
+            item
+            for item in rows_for_baseline
+            if int(item.get("closed_tradeable_scenario_count", 0) or 0) > 0
+        ]
+        tradeable_values = [
+            float(item.get("avg_total_r", 0.0) or 0.0)
+            for item in tradeable_rows
+            if _coerce_float(item.get("avg_total_r")) is not None
+        ]
+        closed_values = [
+            float(item.get("avg_closed_r", 0.0) or 0.0)
+            for item in closed_rows
+            if _coerce_float(item.get("avg_closed_r")) is not None
+        ]
+        baseline_map[baseline_key] = {
+            "avg_total_r": mean(tradeable_values) if tradeable_values else None,
+            "avg_closed_r": mean(closed_values) if closed_values else None,
+            "target_hit_rate": (
+                mean(1.0 if item.get("any_target_hit") else 0.0 for item in closed_rows)
+                if closed_rows
+                else None
+            ),
+            "stop_rate": (
+                mean(1.0 if item.get("any_stopped") else 0.0 for item in closed_rows)
+                if closed_rows
+                else None
+            ),
+        }
+
     obs_df = pd.DataFrame(observations)
     leaderboard_rows = []
     group_cols = [
@@ -3840,9 +4003,55 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
     for group_key, group_df in obs_df.groupby(group_cols, dropna=False):
         tradeable_mask = group_df["tradeable_scenario_count"].fillna(0).astype(float) > 0
         closed_mask = group_df["closed_tradeable_scenario_count"].fillna(0).astype(float) > 0
-        avg_total_values = pd.to_numeric(group_df["avg_total_r"], errors="coerce").dropna()
-        avg_closed_values = pd.to_numeric(group_df["avg_closed_r"], errors="coerce").dropna()
-        priority_values = pd.to_numeric(group_df["priority_score"], errors="coerce").dropna()
+        unique_group_df = group_df.drop_duplicates(subset=["setup_id"])
+        tradeable_group_df = group_df[tradeable_mask].drop_duplicates(subset=["setup_id"])
+        closed_group_df = group_df[closed_mask].drop_duplicates(subset=["setup_id"])
+        avg_total_values = pd.to_numeric(unique_group_df["avg_total_r"], errors="coerce").dropna()
+        avg_closed_values = pd.to_numeric(unique_group_df["avg_closed_r"], errors="coerce").dropna()
+        priority_values = pd.to_numeric(unique_group_df["priority_score"], errors="coerce").dropna()
+        baseline = baseline_map.get((group_key[0], group_key[1]), {})
+        baseline_avg_total_r = _coerce_float(baseline.get("avg_total_r"))
+        baseline_avg_closed_r = _coerce_float(baseline.get("avg_closed_r"))
+        baseline_target_hit_rate = _coerce_float(baseline.get("target_hit_rate"))
+        baseline_stop_rate = _coerce_float(baseline.get("stop_rate"))
+        sample_examples: list[str] = []
+        example_rows = unique_group_df.to_dict("records")
+        example_rows.sort(
+            key=lambda item: (
+                str(item.get("scan_date") or ""),
+                float(item.get("priority_score", 0.0) or 0.0),
+                str(item.get("symbol") or ""),
+            ),
+            reverse=True,
+        )
+        for item in example_rows:
+            symbol = str(item.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            scan_date = str(item.get("scan_date") or "").strip()
+            closed_r_value = _coerce_float(item.get("avg_closed_r"))
+            setup_status = str(item.get("setup_status") or "").strip()
+            sample = f"{symbol} {scan_date}".strip()
+            if closed_r_value is not None and int(item.get("closed_tradeable_scenario_count", 0) or 0) > 0:
+                sample += f" ({closed_r_value:+.2f}R)"
+            elif setup_status:
+                sample += f" ({setup_status})"
+            sample_examples.append(sample)
+            if len(sample_examples) >= 8:
+                break
+        avg_total_r = float(avg_total_values.mean()) if not avg_total_values.empty else None
+        median_total_r = float(avg_total_values.median()) if not avg_total_values.empty else None
+        avg_closed_r = float(avg_closed_values.mean()) if not avg_closed_values.empty else None
+        target_hit_rate = (
+            float(closed_group_df["any_target_hit"].astype(bool).mean())
+            if not closed_group_df.empty
+            else None
+        )
+        stop_rate = (
+            float(closed_group_df["any_stopped"].astype(bool).mean())
+            if not closed_group_df.empty
+            else None
+        )
         leaderboard_rows.append(
             {
                 "side": group_key[0],
@@ -3854,16 +4063,41 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
                 "attribute_source_stage": group_key[6],
                 "value_kind": group_key[7],
                 "value_label": group_key[8],
-                "setup_count": int(group_df["setup_id"].nunique()),
-                "coverage_pct": (float(group_df["setup_id"].nunique()) / float(total_setups)) * 100.0,
-                "tradeable_setup_count": int(tradeable_mask.sum()),
-                "closed_tradeable_setup_count": int(closed_mask.sum()),
+                "setup_count": int(unique_group_df["setup_id"].nunique()),
+                "coverage_pct": (float(unique_group_df["setup_id"].nunique()) / float(total_setups)) * 100.0,
+                "tradeable_setup_count": int(tradeable_group_df["setup_id"].nunique()),
+                "closed_tradeable_setup_count": int(closed_group_df["setup_id"].nunique()),
                 "avg_priority_score": float(priority_values.mean()) if not priority_values.empty else None,
-                "avg_total_r": float(avg_total_values.mean()) if not avg_total_values.empty else None,
-                "median_total_r": float(avg_total_values.median()) if not avg_total_values.empty else None,
-                "avg_closed_r": float(avg_closed_values.mean()) if not avg_closed_values.empty else None,
-                "target_hit_rate": float(group_df["any_target_hit"].astype(bool).mean()) if not group_df.empty else None,
-                "stop_rate": float(group_df["any_stopped"].astype(bool).mean()) if not group_df.empty else None,
+                "avg_total_r": avg_total_r,
+                "median_total_r": median_total_r,
+                "avg_closed_r": avg_closed_r,
+                "target_hit_rate": target_hit_rate,
+                "stop_rate": stop_rate,
+                "baseline_avg_total_r": baseline_avg_total_r,
+                "baseline_avg_closed_r": baseline_avg_closed_r,
+                "baseline_target_hit_rate": baseline_target_hit_rate,
+                "baseline_stop_rate": baseline_stop_rate,
+                "avg_total_r_edge": (
+                    avg_total_r - baseline_avg_total_r
+                    if avg_total_r is not None and baseline_avg_total_r is not None
+                    else None
+                ),
+                "avg_closed_r_edge": (
+                    avg_closed_r - baseline_avg_closed_r
+                    if avg_closed_r is not None and baseline_avg_closed_r is not None
+                    else None
+                ),
+                "target_hit_rate_edge": (
+                    target_hit_rate - baseline_target_hit_rate
+                    if target_hit_rate is not None and baseline_target_hit_rate is not None
+                    else None
+                ),
+                "stop_rate_edge": (
+                    stop_rate - baseline_stop_rate
+                    if stop_rate is not None and baseline_stop_rate is not None
+                    else None
+                ),
+                "sample_setups": "; ".join(sample_examples),
             }
         )
 
@@ -3918,6 +4152,298 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
     return stats_rows
 
 
+def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
+    if not isinstance(setups, dict) or not setups:
+        return []
+
+    def _summarize_counts(values: list[str], limit: int = 4) -> str:
+        counts: dict[str, int] = {}
+        for value in values:
+            value_text = str(value or "").strip()
+            if not value_text:
+                continue
+            counts[value_text] = counts.get(value_text, 0) + 1
+        if not counts:
+            return ""
+        ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return ", ".join(f"{label} ({count})" for label, count in ordered[:limit])
+
+    setup_rows = []
+    baseline_groups: dict[tuple[str, str], list[dict]] = {}
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            continue
+        side = normalize_side(setup.get("side") or "")
+        priority_bucket = str(setup.get("priority_bucket") or "tracked")
+        favorite_zone = str(setup.get("favorite_zone") or "").strip() or "None"
+        retest_followthrough = bool(setup.get("retest_followthrough"))
+        retest_reference_level = str(setup.get("retest_reference_level") or "").strip()
+        retest_label = retest_reference_level if retest_followthrough and retest_reference_level else "None"
+        compression_flag = bool(setup.get("compression_flag"))
+        compression_label = "Y" if compression_flag else "N"
+        entry_attributes = setup.get("entry_attributes", {})
+        if not isinstance(entry_attributes, dict):
+            entry_attributes = {}
+        outcome_summary = _summarize_tracker_setup_outcome(setup)
+        row = {
+            "setup_id": str(setup.get("setup_id") or ""),
+            "scan_date": str(setup.get("scan_date") or ""),
+            "symbol": str(setup.get("symbol") or "").strip().upper(),
+            "side": side,
+            "priority_bucket": priority_bucket,
+            "favorite_zone": favorite_zone,
+            "retest_label": retest_label,
+            "compression_label": compression_label,
+            "compression_flag": compression_flag,
+            "setup_status": str(setup.get("setup_status") or ""),
+            "priority_score": _coerce_float(setup.get("priority_score")),
+            "tradeable": int(outcome_summary.get("tradeable_scenario_count", 0) or 0) > 0,
+            "closed": int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0) > 0,
+            "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
+            "avg_closed_r": _coerce_float(outcome_summary.get("avg_closed_r")),
+            "any_target_hit": bool(outcome_summary.get("any_target_hit")),
+            "any_stopped": bool(outcome_summary.get("any_stopped")),
+            "current_band_zone": str(entry_attributes.get("levels.current_band_zone") or ""),
+            "trend_20d": str(entry_attributes.get("trend.trend_20d") or ""),
+            "previous_day_range_break": bool(entry_attributes.get("structure.previous_day_range_break")),
+            "extreme_move_watch": bool(
+                setup.get("extreme_move_watch")
+                or entry_attributes.get("pattern.extreme_move_watch")
+            ),
+        }
+        setup_rows.append(row)
+        baseline_groups.setdefault((side, priority_bucket), []).append(row)
+
+    baseline_map: dict[tuple[str, str], dict[str, float | None]] = {}
+    for baseline_key, rows_for_baseline in baseline_groups.items():
+        tradeable_rows = [row for row in rows_for_baseline if row.get("tradeable")]
+        closed_rows = [row for row in rows_for_baseline if row.get("closed")]
+        total_values = [
+            float(row.get("avg_total_r", 0.0) or 0.0)
+            for row in tradeable_rows
+            if _coerce_float(row.get("avg_total_r")) is not None
+        ]
+        closed_values = [
+            float(row.get("avg_closed_r", 0.0) or 0.0)
+            for row in closed_rows
+            if _coerce_float(row.get("avg_closed_r")) is not None
+        ]
+        baseline_map[baseline_key] = {
+            "avg_total_r": mean(total_values) if total_values else None,
+            "avg_closed_r": mean(closed_values) if closed_values else None,
+            "target_hit_rate": (
+                mean(1.0 if row.get("any_target_hit") else 0.0 for row in closed_rows)
+                if closed_rows
+                else None
+            ),
+            "stop_rate": (
+                mean(1.0 if row.get("any_stopped") else 0.0 for row in closed_rows)
+                if closed_rows
+                else None
+            ),
+        }
+
+    grouped: dict[tuple[str, str, str, str, str], list[dict]] = {}
+    for row in setup_rows:
+        key = (
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+            str(row.get("favorite_zone") or ""),
+            str(row.get("retest_label") or ""),
+            str(row.get("compression_label") or ""),
+        )
+        grouped.setdefault(key, []).append(row)
+
+    setup_type_rows = []
+    for group_key, rows_for_group in grouped.items():
+        tradeable_rows = [row for row in rows_for_group if row.get("tradeable")]
+        closed_rows = [row for row in rows_for_group if row.get("closed")]
+        open_rows = [row for row in rows_for_group if str(row.get("setup_status") or "").upper() == "OPEN"]
+        priority_values = [
+            float(row.get("priority_score", 0.0) or 0.0)
+            for row in rows_for_group
+            if _coerce_float(row.get("priority_score")) is not None
+        ]
+        total_values = [
+            float(row.get("avg_total_r", 0.0) or 0.0)
+            for row in tradeable_rows
+            if _coerce_float(row.get("avg_total_r")) is not None
+        ]
+        closed_values = [
+            float(row.get("avg_closed_r", 0.0) or 0.0)
+            for row in closed_rows
+            if _coerce_float(row.get("avg_closed_r")) is not None
+        ]
+        baseline = baseline_map.get((group_key[0], group_key[1]), {})
+        baseline_avg_total_r = _coerce_float(baseline.get("avg_total_r"))
+        baseline_avg_closed_r = _coerce_float(baseline.get("avg_closed_r"))
+        baseline_target_hit_rate = _coerce_float(baseline.get("target_hit_rate"))
+        baseline_stop_rate = _coerce_float(baseline.get("stop_rate"))
+        avg_total_r = mean(total_values) if total_values else None
+        avg_closed_r = mean(closed_values) if closed_values else None
+        target_hit_rate = (
+            mean(1.0 if row.get("any_target_hit") else 0.0 for row in closed_rows)
+            if closed_rows
+            else None
+        )
+        stop_rate = (
+            mean(1.0 if row.get("any_stopped") else 0.0 for row in closed_rows)
+            if closed_rows
+            else None
+        )
+        sample_rows = sorted(
+            rows_for_group,
+            key=lambda row: (
+                str(row.get("scan_date") or ""),
+                float(row.get("priority_score", 0.0) or 0.0),
+                str(row.get("symbol") or ""),
+            ),
+            reverse=True,
+        )
+        sample_examples = []
+        for row in sample_rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            scan_date = str(row.get("scan_date") or "").strip()
+            sample = f"{symbol} {scan_date}".strip()
+            if row.get("closed") and _coerce_float(row.get("avg_closed_r")) is not None:
+                sample += f" ({float(row.get('avg_closed_r')):+.2f}R)"
+            elif row.get("setup_status"):
+                sample += f" ({row.get('setup_status')})"
+            sample_examples.append(sample)
+            if len(sample_examples) >= 8:
+                break
+        type_label = (
+            f"{group_key[0]} | {group_key[1]} | zone={group_key[2]} "
+            f"| retest={group_key[3]} | comp={group_key[4]}"
+        )
+        setup_type_rows.append(
+            {
+                "setup_type_id": " | ".join(group_key),
+                "type_label": type_label,
+                "side": group_key[0],
+                "priority_bucket": group_key[1],
+                "favorite_zone": group_key[2],
+                "retest_label": group_key[3],
+                "compression_label": group_key[4],
+                "tracked_setups": len(rows_for_group),
+                "tradeable_setups": len(tradeable_rows),
+                "closed_setups": len(closed_rows),
+                "open_setups": len(open_rows),
+                "avg_priority_score": mean(priority_values) if priority_values else None,
+                "avg_total_r": avg_total_r,
+                "avg_closed_r": avg_closed_r,
+                "target_hit_rate": target_hit_rate,
+                "stop_rate": stop_rate,
+                "baseline_avg_total_r": baseline_avg_total_r,
+                "baseline_avg_closed_r": baseline_avg_closed_r,
+                "baseline_target_hit_rate": baseline_target_hit_rate,
+                "baseline_stop_rate": baseline_stop_rate,
+                "avg_total_r_edge": (
+                    avg_total_r - baseline_avg_total_r
+                    if avg_total_r is not None and baseline_avg_total_r is not None
+                    else None
+                ),
+                "avg_closed_r_edge": (
+                    avg_closed_r - baseline_avg_closed_r
+                    if avg_closed_r is not None and baseline_avg_closed_r is not None
+                    else None
+                ),
+                "target_hit_rate_edge": (
+                    target_hit_rate - baseline_target_hit_rate
+                    if target_hit_rate is not None and baseline_target_hit_rate is not None
+                    else None
+                ),
+                "stop_rate_edge": (
+                    stop_rate - baseline_stop_rate
+                    if stop_rate is not None and baseline_stop_rate is not None
+                    else None
+                ),
+                "current_band_zone_summary": _summarize_counts(
+                    [row.get("current_band_zone") or "" for row in rows_for_group]
+                ),
+                "trend_summary": _summarize_counts(
+                    [row.get("trend_20d") or "" for row in rows_for_group]
+                ),
+                "previous_day_range_break_rate": (
+                    mean(1.0 if row.get("previous_day_range_break") else 0.0 for row in rows_for_group)
+                    if rows_for_group
+                    else None
+                ),
+                "extreme_move_rate": (
+                    mean(1.0 if row.get("extreme_move_watch") else 0.0 for row in rows_for_group)
+                    if rows_for_group
+                    else None
+                ),
+                "sample_setups": "; ".join(sample_examples),
+            }
+        )
+
+    setup_type_rows.sort(
+        key=lambda item: (
+            -int(item.get("closed_setups", 0) or 0),
+            -int(item.get("tracked_setups", 0) or 0),
+            -(float(item.get("avg_closed_r")) if item.get("avg_closed_r") is not None else -9999.0),
+            str(item.get("type_label") or ""),
+        )
+    )
+    return setup_type_rows
+
+
+def build_tracker_factor_view_rows(attribute_leaderboard_rows: list[dict]) -> list[dict]:
+    if not attribute_leaderboard_rows:
+        return []
+
+    excluded_keys = {
+        "setup.symbol",
+        "setup.side",
+        "setup.priority_bucket",
+        "setup.priority_score",
+        "levels.previous_day_high",
+        "levels.previous_day_low",
+    }
+    rows = []
+    for row in attribute_leaderboard_rows:
+        if not isinstance(row, dict):
+            continue
+        attribute_key = str(row.get("attribute_key") or "").strip()
+        if not attribute_key or attribute_key in excluded_keys or attribute_key.endswith("_note"):
+            continue
+        if int(row.get("setup_count", 0) or 0) < 6:
+            continue
+        if int(row.get("closed_tradeable_setup_count", 0) or 0) < 4:
+            continue
+        avg_closed_r_edge = _coerce_float(row.get("avg_closed_r_edge")) or 0.0
+        target_hit_rate_edge = _coerce_float(row.get("target_hit_rate_edge")) or 0.0
+        stop_rate_edge = _coerce_float(row.get("stop_rate_edge")) or 0.0
+        impact_score = (
+            abs(avg_closed_r_edge)
+            + (abs(target_hit_rate_edge) * 1.5)
+            + (abs(stop_rate_edge) * 1.5)
+        ) * math.log1p(max(1, int(row.get("closed_tradeable_setup_count", 0) or 0)))
+        if impact_score <= 0:
+            continue
+        item = dict(row)
+        item["success_edge"] = (
+            avg_closed_r_edge
+            + (target_hit_rate_edge * 1.5)
+            - (stop_rate_edge * 1.5)
+        )
+        item["impact_score"] = impact_score
+        rows.append(item)
+
+    rows.sort(
+        key=lambda item: (
+            -(float(item.get("impact_score", 0.0) or 0.0)),
+            -int(item.get("closed_tradeable_setup_count", 0) or 0),
+            str(item.get("attribute_label") or ""),
+            str(item.get("value_label") or ""),
+        )
+    )
+    return rows
+
+
 def export_setup_tracker_views(payload: dict) -> None:
     setups = payload.get("setups", {}) if isinstance(payload, dict) else {}
     attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload, dict) else {}
@@ -3926,14 +4452,65 @@ def export_setup_tracker_views(payload: dict) -> None:
     attribute_rows = _flatten_tracker_attributes(setups, attribute_registry)
     attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
     stats_rows = build_tracker_stats_rows(scenario_rows)
+    setup_type_rows = build_tracker_setup_type_rows(setups)
     payload["stats"] = stats_rows
+    payload["setup_type_stats"] = setup_type_rows
 
     SETUP_SCENARIOS_FILE.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(scenario_rows).to_csv(SETUP_SCENARIOS_FILE, index=False)
     pd.DataFrame(daily_rows).to_csv(SETUP_DAILY_FILE, index=False)
     pd.DataFrame(stats_rows).to_csv(SETUP_STATS_FILE, index=False)
+    pd.DataFrame(setup_type_rows).to_csv(SETUP_TYPE_STATS_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
+
+
+def _infer_tracker_scan_date(
+    tracked_rows: list[dict],
+    symbol_map: dict,
+    requested_scan_date: str | None = None,
+) -> str:
+    requested = str(requested_scan_date or "").strip()
+    if requested:
+        return requested
+
+    candidate_dates = []
+    tracked_symbols = [
+        str(row.get("symbol", "")).strip().upper()
+        for row in tracked_rows
+        if isinstance(row, dict) and str(row.get("symbol", "")).strip()
+    ]
+    if tracked_symbols:
+        for symbol in tracked_symbols:
+            symbol_entry = symbol_map.get(symbol, {}) if isinstance(symbol_map, dict) else {}
+            trade_date = str(symbol_entry.get("last_trade_date") or "").strip()
+            if trade_date:
+                candidate_dates.append(trade_date)
+    elif isinstance(symbol_map, dict):
+        for symbol_entry in symbol_map.values():
+            if not isinstance(symbol_entry, dict):
+                continue
+            trade_date = str(symbol_entry.get("last_trade_date") or "").strip()
+            if trade_date:
+                candidate_dates.append(trade_date)
+
+    if not candidate_dates:
+        return datetime.now().date().isoformat()
+    if len(set(candidate_dates)) == 1:
+        return candidate_dates[0]
+    return max(set(candidate_dates), key=lambda value: (candidate_dates.count(value), value))
+
+
+def _indicator_row_for_scan_date(df: pd.DataFrame | None, scan_date: str) -> pd.Series | None:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty or not scan_date:
+        return None
+    indicator_frame = compute_indicator_frame(df)
+    if indicator_frame.empty or "trade_date" not in indicator_frame.columns:
+        return None
+    eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= scan_date]
+    if eligible_indicator_rows.empty:
+        return None
+    return eligible_indicator_rows.iloc[-1]
 
 
 def update_setup_tracker_from_scan(
@@ -3948,7 +4525,7 @@ def update_setup_tracker_from_scan(
     tracker = load_setup_tracker_payload()
     symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
     now_iso = datetime.now().isoformat(timespec="seconds")
-    target_scan_date = str(scan_date or datetime.now().date().isoformat())
+    target_scan_date = _infer_tracker_scan_date(tracked_rows, symbol_map, requested_scan_date=scan_date)
 
     existing_today_ids = [
         setup_id
@@ -3959,24 +4536,26 @@ def update_setup_tracker_from_scan(
         tracker["setups"].pop(setup_id, None)
 
     current_setup_ids = []
+    skipped_symbols = []
     for row in tracked_rows:
         symbol = str(row.get("symbol", "")).strip().upper()
         symbol_entry = symbol_map.get(symbol)
         if not isinstance(symbol_entry, dict):
             continue
+        symbol_scan_date = str(symbol_entry.get("last_trade_date") or "").strip()
+        if symbol_scan_date != target_scan_date:
+            skipped_symbols.append(f"{symbol} ({symbol_scan_date or 'missing trade date'})")
+            continue
         df = daily_frames_by_symbol.get(symbol)
-        indicator_row = None
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            indicator_frame = compute_indicator_frame(df)
-            if not indicator_frame.empty:
-                indicator_row = indicator_frame.iloc[-1]
+        indicator_row = _indicator_row_for_scan_date(df, target_scan_date)
         setup = build_tracker_setup_record(
             row,
             symbol_entry,
             feature_rows_by_symbol.get(symbol),
             now_iso,
             indicator_row,
-            tracker.setdefault("attribute_registry", {}),
+            scan_date=target_scan_date,
+            attribute_registry=tracker.setdefault("attribute_registry", {}),
         )
         if not setup:
             continue
@@ -3994,6 +4573,13 @@ def update_setup_tracker_from_scan(
             }
         ),
     }
+    if skipped_symbols:
+        logging.warning(
+            "Setup tracker skipped %s symbol(s) whose daily data did not match scan date %s: %s",
+            len(skipped_symbols),
+            target_scan_date,
+            ", ".join(skipped_symbols[:12]) + (f" (+{len(skipped_symbols) - 12} more)" if len(skipped_symbols) > 12 else ""),
+        )
 
     recompute_cache = {}
     for setup_id, setup in list((tracker.get("setups") or {}).items()):
@@ -6318,27 +6904,56 @@ def apply_final_priority_buckets(
     csv_rows: list[dict],
     feature_rows_by_symbol: dict[str, dict],
 ) -> None:
+    def _enrich_priority_bucket_context(row: dict, symbol_entry: dict) -> None:
+        row.setdefault("current_active_level", symbol_entry.get("current_active_level") or "")
+        row.setdefault("current_band_zone", symbol_entry.get("current_band_zone") or "")
+        if "compression_flag" not in row:
+            row["compression_flag"] = bool(symbol_entry.get("compression_flag"))
+
+    def _is_clean_favorite_zone_setup(row: dict) -> bool:
+        favorite_zone = str(row.get("favorite_zone") or "")
+        active_level = str(row.get("current_active_level") or "")
+        current_band_zone = str(row.get("current_band_zone") or "")
+        side = str(row.get("side") or "")
+        if not favorite_zone or active_level != "VWAP" or bool(row.get("compression_flag")):
+            return False
+        if side == "LONG":
+            return (
+                favorite_zone == "AVWAPE to UPPER_1"
+                and current_band_zone == "VWAP to UPPER_1"
+            )
+        if side == "SHORT":
+            return (
+                favorite_zone == "LOWER_1 to AVWAPE"
+                and current_band_zone == "VWAP to LOWER_1"
+            )
+        return False
+
+    def _classify_priority_bucket(row: dict | None) -> tuple[str, bool, bool]:
+        if not row or row.get("ranking_blocked"):
+            return "", False, False
+        if (
+            row.get("has_favorite_signal")
+            or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+            or _is_clean_favorite_zone_setup(row)
+        ):
+            return "favorite_setup", True, False
+        if (
+            row.get("favorite_zone")
+            or row.get("retest_followthrough")
+            or row.get("extreme_move_watch")
+        ):
+            return "near_favorite_zone", False, True
+        return "", False, False
+
     priority_map = {row["symbol"]: row for row in priority_rows}
     symbol_map = ai_state.setdefault("symbols", {})
 
     for symbol, symbol_entry in symbol_map.items():
         row = priority_map.get(symbol)
-        priority_bucket = ""
-        is_favorite_setup = False
-        is_near_favorite_zone = False
-        if row and not row.get("ranking_blocked"):
-            if row.get("has_favorite_signal") or (
-                row.get("retest_followthrough") and row.get("previous_anchor_path_clear")
-            ):
-                priority_bucket = "favorite_setup"
-                is_favorite_setup = True
-            elif (
-                row.get("favorite_zone")
-                or row.get("retest_followthrough")
-                or row.get("extreme_move_watch")
-            ):
-                priority_bucket = "near_favorite_zone"
-                is_near_favorite_zone = True
+        if row:
+            _enrich_priority_bucket_context(row, symbol_entry)
+        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_priority_bucket(row)
 
         symbol_entry["priority_bucket"] = priority_bucket
         symbol_entry["is_favorite_setup"] = is_favorite_setup
@@ -6354,56 +6969,23 @@ def apply_final_priority_buckets(
 
     for record in csv_rows:
         row = priority_map.get(record.get("symbol"))
-        if not row or row.get("ranking_blocked"):
-            record["priority_bucket"] = ""
-            record["is_favorite_setup"] = False
-            record["is_near_favorite_zone"] = False
-            continue
-
-        if row.get("has_favorite_signal") or (
-            row.get("retest_followthrough") and row.get("previous_anchor_path_clear")
-        ):
-            record["priority_bucket"] = "favorite_setup"
-            record["is_favorite_setup"] = True
-            record["is_near_favorite_zone"] = False
-        elif (
-            row.get("favorite_zone")
-            or row.get("retest_followthrough")
-            or row.get("extreme_move_watch")
-        ):
-            record["priority_bucket"] = "near_favorite_zone"
-            record["is_favorite_setup"] = False
-            record["is_near_favorite_zone"] = True
-        else:
-            record["priority_bucket"] = ""
-            record["is_favorite_setup"] = False
-            record["is_near_favorite_zone"] = False
+        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_priority_bucket(row)
+        record["priority_bucket"] = priority_bucket
+        record["is_favorite_setup"] = is_favorite_setup
+        record["is_near_favorite_zone"] = is_near_favorite_zone
 
 def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     favorites = sorted(
         [
             row for row in priority_rows
-            if (
-                row["has_favorite_signal"]
-                or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-            )
-            and not row.get("ranking_blocked")
+            if row.get("priority_bucket") == "favorite_setup"
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
     watchlist = sorted(
         [
             row for row in priority_rows
-            if (
-                not row["has_favorite_signal"]
-                and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-                and (
-                    row["favorite_zone"]
-                    or row.get("retest_followthrough")
-                    or row.get("extreme_move_watch")
-                )
-                and not row.get("ranking_blocked")
-            )
+            if row.get("priority_bucket") == "near_favorite_zone"
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
@@ -6476,24 +7058,11 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
     ranked_rows = sorted(priority_rows, key=lambda row: (-row["score"], row["symbol"]))
     favorite_rows = [
         row for row in ranked_rows
-        if (
-            row["has_favorite_signal"]
-            or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-        )
-        and not row.get("ranking_blocked")
+        if row.get("priority_bucket") == "favorite_setup"
     ]
     near_rows = [
         row for row in ranked_rows
-        if (
-            not row["has_favorite_signal"]
-            and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-            and (
-                row["favorite_zone"]
-                or row.get("retest_followthrough")
-                or row.get("extreme_move_watch")
-            )
-            and not row.get("ranking_blocked")
-        )
+        if row.get("priority_bucket") == "near_favorite_zone"
     ]
 
     def _build_entry(row: dict, bucket: str, rank: int) -> dict:
@@ -6606,27 +7175,14 @@ def write_tradingview_report(
     favorites = sorted(
         [
             row for row in priority_rows
-            if (
-                row["has_favorite_signal"]
-                or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-            )
-            and not row.get("ranking_blocked")
+            if row.get("priority_bucket") == "favorite_setup"
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
     near_favorites = sorted(
         [
             row for row in priority_rows
-            if (
-                not row["has_favorite_signal"]
-                and not (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-                and (
-                    row["favorite_zone"]
-                    or row.get("retest_followthrough")
-                    or row.get("extreme_move_watch")
-                )
-                and not row.get("ranking_blocked")
-            )
+            if row.get("priority_bucket") == "near_favorite_zone"
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
@@ -7288,6 +7844,8 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["score"] = float(
         priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0)
     )
+    priority_summary["current_active_level"] = current_band_context["active_level"]
+    priority_summary["current_band_zone"] = current_band_context["zone"]
     priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
     priority_summary["compression_penalty"] = int(compression_summary.get("compression_penalty", 0) or 0)
     priority_summary["compression_note"] = compression_summary.get("compression_note", "")
@@ -8154,6 +8712,8 @@ def run_master(
             extension_note=extension_note,
         )
         priority_summary["score"] = float(priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0))
+        priority_summary["current_active_level"] = current_band_context["active_level"]
+        priority_summary["current_band_zone"] = current_band_context["zone"]
         priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
         priority_summary["compression_penalty"] = int(compression_summary.get("compression_penalty", 0) or 0)
         priority_summary["compression_note"] = compression_summary.get("compression_note", "")
@@ -8162,16 +8722,36 @@ def run_master(
         symbol_entry["favorite_context_signals"] = priority_summary["context_signals"]
         priority_rows.append(priority_summary)
 
+        clean_favorite_zone_setup = (
+            not priority_summary["compression_flag"]
+            and priority_summary.get("current_active_level") == "VWAP"
+            and (
+                (
+                    side == "LONG"
+                    and favorite_zone == "AVWAPE to UPPER_1"
+                    and priority_summary.get("current_band_zone") == "VWAP to UPPER_1"
+                )
+                or (
+                    side == "SHORT"
+                    and favorite_zone == "LOWER_1 to AVWAPE"
+                    and priority_summary.get("current_band_zone") == "VWAP to LOWER_1"
+                )
+            )
+        )
         priority_bucket = ""
-        if priority_summary["has_favorite_signal"]:
+        is_favorite_setup = False
+        is_near_favorite_zone = False
+        if priority_summary["has_favorite_signal"] or clean_favorite_zone_setup:
             priority_bucket = "favorite_setup"
+            is_favorite_setup = True
         elif favorite_zone or priority_summary.get("extreme_move_watch"):
             priority_bucket = "near_favorite_zone"
+            is_near_favorite_zone = True
 
         for record in symbol_signal_info.values():
             record["priority_bucket"] = priority_bucket
-            record["is_favorite_setup"] = bool(priority_summary["has_favorite_signal"])
-            record["is_near_favorite_zone"] = bool(favorite_zone or priority_summary.get("extreme_move_watch"))
+            record["is_favorite_setup"] = is_favorite_setup
+            record["is_near_favorite_zone"] = is_near_favorite_zone
             record["favorite_zone"] = favorite_zone or ""
             record["favorite_signals"] = ";".join(priority_summary["favorite_signals"])
             record["favorite_context_signals"] = ";".join(priority_summary["context_signals"])
@@ -8816,13 +9396,140 @@ class MasterAvwapGUI:
         self.setup_tracker_scenario_table.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
         scenario_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
 
-        tracker_right = ttk.Frame(tracker_body, width=360)
+        tracker_right = ttk.Frame(tracker_body, width=640)
         tracker_right.pack(side="right", fill="y", padx=(12, 0))
         tracker_right.pack_propagate(False)
-        tracker_stats_frame = ttk.LabelFrame(tracker_right, text="Tracker Stats / Details")
+        tracker_insights_notebook = ttk.Notebook(tracker_right)
+        tracker_insights_notebook.pack(fill="both", expand=True)
+
+        tracker_summary_tab = ttk.Frame(tracker_insights_notebook)
+        tracker_insights_notebook.add(tracker_summary_tab, text="Summary")
+        tracker_stats_frame = ttk.LabelFrame(tracker_summary_tab, text="Tracker Stats / Details")
         tracker_stats_frame.pack(fill="both", expand=True)
         self.setup_tracker_stats_text = tk.Text(tracker_stats_frame, wrap="word", font=("Courier New", 10))
         self.setup_tracker_stats_text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        setup_types_tab = ttk.Frame(tracker_insights_notebook)
+        tracker_insights_notebook.add(setup_types_tab, text="Setup Types")
+        setup_type_frame = ttk.LabelFrame(setup_types_tab, text="Setup Type Performance")
+        setup_type_frame.pack(fill="both", expand=True, pady=(0, 8))
+        setup_type_columns = (
+            "type",
+            "tracked",
+            "closed",
+            "avg_closed_r",
+            "r_edge",
+            "hit_rate",
+        )
+        self.setup_tracker_setup_type_table = ttk.Treeview(
+            setup_type_frame,
+            columns=setup_type_columns,
+            show="headings",
+            style="Dark.Treeview",
+            height=12,
+        )
+        setup_type_col_widths = {
+            "type": 315,
+            "tracked": 64,
+            "closed": 64,
+            "avg_closed_r": 78,
+            "r_edge": 72,
+            "hit_rate": 68,
+        }
+        for col in setup_type_columns:
+            self.setup_tracker_setup_type_table.heading(col, text=col)
+            self.setup_tracker_setup_type_table.column(
+                col,
+                width=setup_type_col_widths.get(col, 90),
+                anchor="w",
+            )
+        setup_type_scroll = ttk.Scrollbar(
+            setup_type_frame,
+            orient="vertical",
+            command=self.setup_tracker_setup_type_table.yview,
+        )
+        self.setup_tracker_setup_type_table.configure(yscrollcommand=setup_type_scroll.set)
+        self.setup_tracker_setup_type_table.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(8, 0),
+            pady=8,
+        )
+        setup_type_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self.setup_tracker_setup_type_table.bind("<<TreeviewSelect>>", self._on_setup_type_selected)
+
+        setup_type_detail_frame = ttk.LabelFrame(setup_types_tab, text="Setup Type Details")
+        setup_type_detail_frame.pack(fill="both", expand=True)
+        self.setup_tracker_setup_type_text = tk.Text(
+            setup_type_detail_frame,
+            wrap="word",
+            font=("Courier New", 10),
+            height=11,
+        )
+        self.setup_tracker_setup_type_text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        factor_tab = ttk.Frame(tracker_insights_notebook)
+        tracker_insights_notebook.add(factor_tab, text="Factor Impact")
+        factor_frame = ttk.LabelFrame(factor_tab, text="Factor Impact")
+        factor_frame.pack(fill="both", expand=True, pady=(0, 8))
+        factor_columns = (
+            "factor",
+            "value",
+            "setups",
+            "closed",
+            "avg_closed_r",
+            "r_edge",
+            "impact",
+        )
+        self.setup_tracker_factor_table = ttk.Treeview(
+            factor_frame,
+            columns=factor_columns,
+            show="headings",
+            style="Dark.Treeview",
+            height=12,
+        )
+        factor_col_widths = {
+            "factor": 170,
+            "value": 150,
+            "setups": 58,
+            "closed": 58,
+            "avg_closed_r": 78,
+            "r_edge": 72,
+            "impact": 68,
+        }
+        for col in factor_columns:
+            self.setup_tracker_factor_table.heading(col, text=col)
+            self.setup_tracker_factor_table.column(
+                col,
+                width=factor_col_widths.get(col, 90),
+                anchor="w",
+            )
+        factor_scroll = ttk.Scrollbar(
+            factor_frame,
+            orient="vertical",
+            command=self.setup_tracker_factor_table.yview,
+        )
+        self.setup_tracker_factor_table.configure(yscrollcommand=factor_scroll.set)
+        self.setup_tracker_factor_table.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(8, 0),
+            pady=8,
+        )
+        factor_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self.setup_tracker_factor_table.bind("<<TreeviewSelect>>", self._on_factor_selected)
+
+        factor_detail_frame = ttk.LabelFrame(factor_tab, text="Factor Details")
+        factor_detail_frame.pack(fill="both", expand=True)
+        self.setup_tracker_factor_text = tk.Text(
+            factor_detail_frame,
+            wrap="word",
+            font=("Courier New", 10),
+            height=11,
+        )
+        self.setup_tracker_factor_text.pack(fill="both", expand=True, padx=8, pady=8)
 
         anchors_tab = ttk.Frame(self.notebook)
         self.anchors_tab = anchors_tab
@@ -9124,8 +9831,31 @@ class MasterAvwapGUI:
 
     def _render_setup_tracker_stats_text(self, payload: dict, selected_setup: dict | None = None):
         stats_rows = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
+        setup_type_rows = getattr(
+            self,
+            "setup_tracker_setup_type_rows",
+            payload.get("setup_type_stats", []) if isinstance(payload.get("setup_type_stats"), list) else [],
+        )
+        factor_rows = getattr(self, "setup_tracker_factor_rows", [])
         daily_watchlists = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
         attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
+
+        def _fmt_r(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_r_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:+.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:.0f}%" if numeric is not None else "n/a"
+
+        def _fmt_pct_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:+.0f} pts" if numeric is not None else "n/a"
+
         lines = []
         lines.append("Tracker summary")
         lines.append("-" * 80)
@@ -9162,6 +9892,62 @@ class MasterAvwapGUI:
                 lines.append(
                     f"{row.get('stop_reference_label')} / {row.get('exit_template_id')}: "
                     f"avg_total={avg_r_text} closed={row.get('closed_setups', 0)} win={win_rate_text}"
+                )
+
+        lines.append("")
+        lines.append("Top setup types")
+        lines.append("-" * 80)
+        if not setup_type_rows:
+            lines.append("No setup-type stats yet.")
+        else:
+            for row in setup_type_rows[:6]:
+                lines.append(
+                    f"{row.get('type_label')}: tracked={row.get('tracked_setups', 0)} "
+                    f"closed={row.get('closed_setups', 0)} avg_closed={_fmt_r(row.get('avg_closed_r'))} "
+                    f"edge={_fmt_r_edge(row.get('avg_closed_r_edge'))} hit={_fmt_pct(row.get('target_hit_rate'))}"
+                )
+
+        positive_factor_rows = [
+            row
+            for row in factor_rows
+            if (_coerce_float(row.get("success_edge")) or 0.0) > 0
+        ]
+        negative_factor_rows = [
+            row
+            for row in factor_rows
+            if (_coerce_float(row.get("success_edge")) or 0.0) < 0
+        ]
+
+        lines.append("")
+        lines.append("Positive factor edges")
+        lines.append("-" * 80)
+        if not positive_factor_rows:
+            lines.append("No positive factor edges yet.")
+        else:
+            for row in positive_factor_rows[:5]:
+                lines.append(
+                    f"{row.get('side')} {row.get('priority_bucket')} | "
+                    f"{row.get('attribute_label')}={row.get('value_label')}: "
+                    f"closed={row.get('closed_tradeable_setup_count', 0)} "
+                    f"r_edge={_fmt_r_edge(row.get('avg_closed_r_edge'))} "
+                    f"hit_edge={_fmt_pct_edge(row.get('target_hit_rate_edge'))} "
+                    f"stop_edge={_fmt_pct_edge(row.get('stop_rate_edge'))}"
+                )
+
+        lines.append("")
+        lines.append("Negative factor edges")
+        lines.append("-" * 80)
+        if not negative_factor_rows:
+            lines.append("No negative factor edges yet.")
+        else:
+            for row in negative_factor_rows[:5]:
+                lines.append(
+                    f"{row.get('side')} {row.get('priority_bucket')} | "
+                    f"{row.get('attribute_label')}={row.get('value_label')}: "
+                    f"closed={row.get('closed_tradeable_setup_count', 0)} "
+                    f"r_edge={_fmt_r_edge(row.get('avg_closed_r_edge'))} "
+                    f"hit_edge={_fmt_pct_edge(row.get('target_hit_rate_edge'))} "
+                    f"stop_edge={_fmt_pct_edge(row.get('stop_rate_edge'))}"
                 )
 
         if selected_setup:
@@ -9221,12 +10007,234 @@ class MasterAvwapGUI:
         lines.append(f"Scenario CSV: {SETUP_SCENARIOS_FILE}")
         lines.append(f"Daily CSV: {SETUP_DAILY_FILE}")
         lines.append(f"Stats CSV: {SETUP_STATS_FILE}")
+        lines.append(f"Setup type stats CSV: {SETUP_TYPE_STATS_FILE}")
         lines.append(f"Attributes CSV: {SETUP_ATTRIBUTES_FILE}")
         lines.append(f"Attribute leaderboard CSV: {SETUP_ATTRIBUTE_LEADERBOARD_FILE}")
         lines.append(f"Scoring config JSON: {SCORING_CONFIG_FILE}")
         lines.append(f"Scoring recommendations JSON: {SCORING_RECOMMENDATIONS_FILE}")
         lines.append(f"Scoring tuner report: {SCORING_TUNER_REPORT_FILE}")
         self._set_text_widget_contents(self.setup_tracker_stats_text, "\n".join(lines))
+
+    def _populate_setup_type_table(self, rows: list[dict]) -> None:
+        self.setup_tracker_setup_type_row_map = {}
+        for item in self.setup_tracker_setup_type_table.get_children():
+            self.setup_tracker_setup_type_table.delete(item)
+        if not rows:
+            self._render_setup_type_details(None)
+            return
+
+        for row in rows:
+            avg_closed_r = _coerce_float(row.get("avg_closed_r"))
+            avg_closed_r_edge = _coerce_float(row.get("avg_closed_r_edge"))
+            hit_rate = _coerce_float(row.get("target_hit_rate"))
+            item_id = self.setup_tracker_setup_type_table.insert(
+                "",
+                "end",
+                values=(
+                    row.get("type_label", ""),
+                    int(row.get("tracked_setups", 0) or 0),
+                    int(row.get("closed_setups", 0) or 0),
+                    "" if avg_closed_r is None else f"{avg_closed_r:.2f}",
+                    "" if avg_closed_r_edge is None else f"{avg_closed_r_edge:+.2f}",
+                    "" if hit_rate is None else f"{hit_rate * 100:.0f}%",
+                ),
+            )
+            self.setup_tracker_setup_type_row_map[item_id] = row
+
+        first_item = self.setup_tracker_setup_type_table.get_children()
+        if first_item:
+            self.setup_tracker_setup_type_table.selection_set(first_item[0])
+            self.setup_tracker_setup_type_table.focus(first_item[0])
+            self._on_setup_type_selected()
+        else:
+            self._render_setup_type_details(None)
+
+    def _render_setup_type_details(self, row: dict | None) -> None:
+        if not row:
+            self._set_text_widget_contents(
+                self.setup_tracker_setup_type_text,
+                "No setup-type stats yet.",
+            )
+            return
+
+        def _fmt_r(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_r_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:+.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:.0f}%" if numeric is not None else "n/a"
+
+        def _fmt_pct_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:+.0f} pts" if numeric is not None else "n/a"
+
+        avg_priority_score = _coerce_float(row.get("avg_priority_score"))
+        avg_priority_score_text = f"{avg_priority_score:.1f}" if avg_priority_score is not None else "n/a"
+        lines = [
+            str(row.get("type_label") or "Setup type"),
+            "-" * 80,
+            (
+                f"Tracked={int(row.get('tracked_setups', 0) or 0)} | "
+                f"tradeable={int(row.get('tradeable_setups', 0) or 0)} | "
+                f"with_closed={int(row.get('closed_setups', 0) or 0)} | "
+                f"open={int(row.get('open_setups', 0) or 0)}"
+            ),
+            (
+                f"Avg closed R={_fmt_r(row.get('avg_closed_r'))} "
+                f"vs baseline {_fmt_r(row.get('baseline_avg_closed_r'))} "
+                f"({_fmt_r_edge(row.get('avg_closed_r_edge'))})"
+            ),
+            (
+                f"Target hit={_fmt_pct(row.get('target_hit_rate'))} "
+                f"vs baseline {_fmt_pct(row.get('baseline_target_hit_rate'))} "
+                f"({_fmt_pct_edge(row.get('target_hit_rate_edge'))})"
+            ),
+            (
+                f"Stop rate={_fmt_pct(row.get('stop_rate'))} "
+                f"vs baseline {_fmt_pct(row.get('baseline_stop_rate'))} "
+                f"({_fmt_pct_edge(row.get('stop_rate_edge'))})"
+            ),
+            (
+                f"Avg priority score={avg_priority_score_text}"
+                f" | avg total R={_fmt_r(row.get('avg_total_r'))}"
+            ),
+        ]
+        if row.get("current_band_zone_summary"):
+            lines.append(f"Common band zones: {row.get('current_band_zone_summary')}")
+        if row.get("trend_summary"):
+            lines.append(f"Common trends: {row.get('trend_summary')}")
+        if _coerce_float(row.get("previous_day_range_break_rate")) is not None:
+            lines.append(
+                f"Previous-day range break rate: {_fmt_pct(row.get('previous_day_range_break_rate'))}"
+            )
+        if _coerce_float(row.get("extreme_move_rate")) is not None:
+            lines.append(f"Extreme-move rate: {_fmt_pct(row.get('extreme_move_rate'))}")
+        if row.get("sample_setups"):
+            lines.append("")
+            lines.append("Recent examples")
+            lines.append("-" * 80)
+            for item in str(row.get("sample_setups") or "").split("; "):
+                if item:
+                    lines.append(item)
+        self._set_text_widget_contents(self.setup_tracker_setup_type_text, "\n".join(lines))
+
+    def _on_setup_type_selected(self, _event=None) -> None:
+        selected = self.setup_tracker_setup_type_table.selection()
+        row = self.setup_tracker_setup_type_row_map.get(selected[0]) if selected else None
+        self._render_setup_type_details(row)
+
+    def _populate_factor_table(self, rows: list[dict]) -> None:
+        self.setup_tracker_factor_row_map = {}
+        for item in self.setup_tracker_factor_table.get_children():
+            self.setup_tracker_factor_table.delete(item)
+        if not rows:
+            self._render_factor_details(None)
+            return
+
+        for row in rows:
+            avg_closed_r = _coerce_float(row.get("avg_closed_r"))
+            avg_closed_r_edge = _coerce_float(row.get("avg_closed_r_edge"))
+            impact_score = _coerce_float(row.get("impact_score"))
+            item_id = self.setup_tracker_factor_table.insert(
+                "",
+                "end",
+                values=(
+                    row.get("attribute_label", ""),
+                    row.get("value_label", ""),
+                    int(row.get("setup_count", 0) or 0),
+                    int(row.get("closed_tradeable_setup_count", 0) or 0),
+                    "" if avg_closed_r is None else f"{avg_closed_r:.2f}",
+                    "" if avg_closed_r_edge is None else f"{avg_closed_r_edge:+.2f}",
+                    "" if impact_score is None else f"{impact_score:.2f}",
+                ),
+            )
+            self.setup_tracker_factor_row_map[item_id] = row
+
+        first_item = self.setup_tracker_factor_table.get_children()
+        if first_item:
+            self.setup_tracker_factor_table.selection_set(first_item[0])
+            self.setup_tracker_factor_table.focus(first_item[0])
+            self._on_factor_selected()
+        else:
+            self._render_factor_details(None)
+
+    def _render_factor_details(self, row: dict | None) -> None:
+        if not row:
+            self._set_text_widget_contents(
+                self.setup_tracker_factor_text,
+                "No factor-impact stats yet.",
+            )
+            return
+
+        def _fmt_r(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_r_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:+.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:.0f}%" if numeric is not None else "n/a"
+
+        def _fmt_pct_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:+.0f} pts" if numeric is not None else "n/a"
+
+        coverage_pct = _coerce_float(row.get("coverage_pct"))
+        coverage_text = f"{coverage_pct:.1f}%" if coverage_pct is not None else "n/a"
+        impact_score = _coerce_float(row.get("impact_score"))
+        impact_text = f"{impact_score:.2f}" if impact_score is not None else "n/a"
+        lines = [
+            f"[{row.get('attribute_group')}] {row.get('attribute_label')} = {row.get('value_label')}",
+            "-" * 80,
+            f"Context: {row.get('side')} {row.get('priority_bucket')}",
+            (
+                f"Setups={int(row.get('setup_count', 0) or 0)} | "
+                f"tradeable={int(row.get('tradeable_setup_count', 0) or 0)} | "
+                f"with_closed={int(row.get('closed_tradeable_setup_count', 0) or 0)} | "
+                f"coverage={coverage_text}"
+            ),
+            (
+                f"Avg closed R={_fmt_r(row.get('avg_closed_r'))} "
+                f"vs baseline {_fmt_r(row.get('baseline_avg_closed_r'))} "
+                f"({_fmt_r_edge(row.get('avg_closed_r_edge'))})"
+            ),
+            (
+                f"Target hit={_fmt_pct(row.get('target_hit_rate'))} "
+                f"vs baseline {_fmt_pct(row.get('baseline_target_hit_rate'))} "
+                f"({_fmt_pct_edge(row.get('target_hit_rate_edge'))})"
+            ),
+            (
+                f"Stop rate={_fmt_pct(row.get('stop_rate'))} "
+                f"vs baseline {_fmt_pct(row.get('baseline_stop_rate'))} "
+                f"({_fmt_pct_edge(row.get('stop_rate_edge'))})"
+            ),
+            (
+                f"Impact score={impact_text}"
+            ),
+        ]
+        if row.get("attribute_description"):
+            lines.append(f"Description: {row.get('attribute_description')}")
+        if row.get("sample_setups"):
+            lines.append("")
+            lines.append("Recent examples")
+            lines.append("-" * 80)
+            for item in str(row.get("sample_setups") or "").split("; "):
+                if item:
+                    lines.append(item)
+        self._set_text_widget_contents(self.setup_tracker_factor_text, "\n".join(lines))
+
+    def _on_factor_selected(self, _event=None) -> None:
+        selected = self.setup_tracker_factor_table.selection()
+        row = self.setup_tracker_factor_row_map.get(selected[0]) if selected else None
+        self._render_factor_details(row)
 
     def _populate_setup_tracker_scenarios(self, setup: dict | None):
         for item in self.setup_tracker_scenario_table.get_children():
@@ -9264,6 +10272,18 @@ class MasterAvwapGUI:
         payload = self._load_setup_tracker_payload()
         self.setup_tracker_payload = payload
         self.setup_tracker_row_map = {}
+        tracker_setups = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
+        attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
+        attribute_rows = _flatten_tracker_attributes(tracker_setups, attribute_registry)
+        attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
+        self.setup_tracker_setup_type_rows = (
+            payload.get("setup_type_stats", [])
+            if isinstance(payload.get("setup_type_stats"), list) and payload.get("setup_type_stats")
+            else build_tracker_setup_type_rows(tracker_setups)
+        )
+        self.setup_tracker_factor_rows = build_tracker_factor_view_rows(attribute_leaderboard_rows)
+        self._populate_setup_type_table(self.setup_tracker_setup_type_rows)
+        self._populate_factor_table(self.setup_tracker_factor_rows)
 
         for item in self.setup_tracker_table.get_children():
             self.setup_tracker_table.delete(item)

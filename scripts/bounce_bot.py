@@ -83,6 +83,8 @@ INDUSTRY_ETF_MAP_FILENAME = INDUSTRY_ETF_MAP_FILE
 SYMBOL_CLASSIFICATION_CACHE_FILENAME = SYMBOL_CLASSIFICATION_CACHE_FILE
 ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
+EMA_21_TOUCH_BUFFER_ATR = 0.002
+EMA_21_TOUCH_BUFFER_MIN = 0.01
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
 CHECK_CONSECUTIVE_CANDLES = True  # Parameter to enable/disable this check
 CHECK_BOUNCE_VVWAP = True
@@ -672,7 +674,7 @@ class RequestQueue:
 # BounceBot Class with GUI callback
 ##########################################
 class BounceBot(EWrapper, EClient):
-    def __init__(self, gui_callback=None):
+    def __init__(self, gui_callback=None, start_scanning_enabled=True):
         EClient.__init__(self, self)
         self.connection_status = False
         self.reqIdCount = 1000
@@ -723,7 +725,7 @@ class BounceBot(EWrapper, EClient):
         self.latest_rrs_payload = None
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
-        self.scanning_enabled = True
+        self.scanning_enabled = bool(start_scanning_enabled)
         self.scanning_lock = threading.Lock()
 
         self.master_avwap_events = {}
@@ -3085,7 +3087,16 @@ class BounceBot(EWrapper, EClient):
             return (
                 interacted
                 and current_candle_data["close"] <= (level_value + threshold)
-                and current_candle_data["close"] < current_candle_data["open"]
+                    and current_candle_data["close"] < current_candle_data["open"]
+                )
+
+        def candle_interacts_with_level(level_value, touch_buffer):
+            if level_value is None:
+                return False
+            buffer = max(0.0, float(touch_buffer or 0.0))
+            return (
+                current_candle_data["high"] >= (level_value - buffer)
+                and current_candle_data["low"] <= (level_value + buffer)
             )
 
         def is_recent_reclaim(level_value, level_name):
@@ -3592,8 +3603,13 @@ class BounceBot(EWrapper, EClient):
 
             if direction == "long":
                 is_above_vwap = current_candle_data["close"] > std_vwap
+                if ema_key == "ema_21":
+                    touch_buffer = max(EMA_21_TOUCH_BUFFER_MIN, EMA_21_TOUCH_BUFFER_ATR * atr)
+                    touched_ema = candle_interacts_with_level(ema_value, touch_buffer)
+                else:
+                    touched_ema = abs(current_candle_data["low"] - ema_value) <= threshold
                 clean_bounce = (
-                    abs(current_candle_data["low"] - ema_value) <= threshold
+                    touched_ema
                     and current_candle_data["close"] > current_candle_data["open"]
                     and current_candle_data["close"] > ema_value
                 )
@@ -3605,8 +3621,13 @@ class BounceBot(EWrapper, EClient):
                     )
             elif direction == "short":
                 is_below_vwap = current_candle_data["close"] < std_vwap
+                if ema_key == "ema_21":
+                    touch_buffer = max(EMA_21_TOUCH_BUFFER_MIN, EMA_21_TOUCH_BUFFER_ATR * atr)
+                    touched_ema = candle_interacts_with_level(ema_value, touch_buffer)
+                else:
+                    touched_ema = abs(current_candle_data["high"] - ema_value) <= threshold
                 clean_bounce = (
-                    abs(current_candle_data["high"] - ema_value) <= threshold
+                    touched_ema
                     and current_candle_data["close"] < current_candle_data["open"]
                     and current_candle_data["close"] < ema_value
                 )
@@ -4337,10 +4358,13 @@ class BounceBot(EWrapper, EClient):
 ##########################################
 # Run Bot with GUI Integration
 ##########################################
-def run_bot_with_gui(gui_callback):
+def run_bot_with_gui(gui_callback, start_scanning_enabled=False):
     configure_app_logging()
 
-    bot = BounceBot(gui_callback=gui_callback)
+    bot = BounceBot(
+        gui_callback=gui_callback,
+        start_scanning_enabled=start_scanning_enabled,
+    )
     bot.set_connection_info("127.0.0.1", 7496, 125)
     try:
         bot.connect("127.0.0.1", 7496, clientId=bot.ib_client_id)
@@ -4941,7 +4965,7 @@ def start_lightweight_gui():
             return
         bounce_queue.put((message, tag))
 
-    bot_instance = run_bot_with_gui(gui_callback)
+    bot_instance = run_bot_with_gui(gui_callback, start_scanning_enabled=False)
 
     root = tk.Tk()
     root.title("BounceBot Lightweight")
@@ -4954,7 +4978,7 @@ def start_lightweight_gui():
     header = tk.Frame(container, bg=dark_grey)
     header.pack(fill=tk.X, pady=(0, 8))
 
-    status_var = tk.StringVar(value="listening for alerts")
+    status_var = tk.StringVar(value="scanning paused")
     connection_var = tk.StringVar(value="IB: connected")
     tk.Label(header, text="BounceBot Lightweight", bg=dark_grey, fg=text_color, font=("Arial", 11, "bold")).pack(side=tk.LEFT)
     tk.Label(header, textvariable=connection_var, bg=dark_grey, fg=text_color).pack(side=tk.LEFT, padx=(12, 0))
@@ -4975,12 +4999,24 @@ def start_lightweight_gui():
         disconnect_bot()
         connection_var.set("IB: reconnecting")
         status_var.set("starting...")
-        bot_instance = run_bot_with_gui(gui_callback)
+        bot_instance = run_bot_with_gui(gui_callback, start_scanning_enabled=False)
         rrs_threshold_var.set(bot_instance.rrs_threshold)
         timeframe_var.set(bot_instance.rrs_timeframe_key)
         env_selection_var.set(bot_instance.get_market_environment())
         connection_var.set("IB: connected")
-        status_var.set("listening for alerts")
+        status_var.set("scanning paused")
+
+    def start_scanning():
+        if bot_instance is None:
+            return
+        bot_instance.set_scanning_enabled(True)
+        status_var.set("scanning enabled")
+
+    def stop_scanning():
+        if bot_instance is None:
+            return
+        bot_instance.set_scanning_enabled(False)
+        status_var.set("scanning paused")
 
     def switch_mode(new_mode):
         save_local_setting("bounce_bot_gui_mode", new_mode)
@@ -4999,6 +5035,10 @@ def start_lightweight_gui():
     ).pack(side=tk.RIGHT)
     tk.Button(header, text="Switch to Full", command=lambda: switch_mode("full"), relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT)
     tk.Button(header, text="Reconnect", command=restart_bot, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT)
+    stop_scanning_button = tk.Button(header, text="Stop Scanning", command=stop_scanning, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color)
+    stop_scanning_button.pack(side=tk.RIGHT, padx=(0, 8))
+    start_scanning_button = tk.Button(header, text="Start Scanning", command=start_scanning, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color)
+    start_scanning_button.pack(side=tk.RIGHT, padx=(0, 8))
     tk.Button(header, text="Disconnect", command=disconnect_bot, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT, padx=(0, 8))
 
     def clear_alerts():
@@ -5101,6 +5141,9 @@ def start_lightweight_gui():
     configure_alert_tags(text_area, font_size=11)
 
     def process_bounce_queue():
+        scanning_active = bool(bot_instance is not None and bot_instance.is_scanning_enabled())
+        start_scanning_button.config(state=(tk.DISABLED if scanning_active else tk.NORMAL))
+        stop_scanning_button.config(state=(tk.NORMAL if scanning_active else tk.DISABLED))
         while True:
             try:
                 msg, tag = bounce_queue.get_nowait()
@@ -5149,7 +5192,7 @@ def start_gui(mode="prompt"):
         else:
             bounce_queue.put((message, tag))
 
-    bot_instance = run_bot_with_gui(gui_callback)
+    bot_instance = run_bot_with_gui(gui_callback, start_scanning_enabled=False)
 
     # Main bounce alerts window
     root = tk.Tk()
@@ -5172,6 +5215,12 @@ def start_gui(mode="prompt"):
             pass
         root.destroy()
         start_gui(mode=new_mode)
+
+    def start_scanning():
+        bot_instance.set_scanning_enabled(True)
+
+    def stop_scanning():
+        bot_instance.set_scanning_enabled(False)
 
     tk.Button(
         header,
@@ -5520,25 +5569,27 @@ def start_gui(mode="prompt"):
     )
     dvwap2_button.pack(side=tk.LEFT, padx=5)
 
-    scanning_button_text = tk.StringVar(
-        value="Stop Scanning" if bot_instance.is_scanning_enabled() else "Start Scanning"
-    )
-
-    def toggle_scanning():
-        new_state = not bot_instance.is_scanning_enabled()
-        bot_instance.set_scanning_enabled(new_state)
-        scanning_button_text.set("Stop Scanning" if new_state else "Start Scanning")
-
-    scanning_button = tk.Button(
+    start_scanning_button = tk.Button(
         button_frame,
-        textvariable=scanning_button_text,
-        command=toggle_scanning,
+        text="Start Scanning",
+        command=start_scanning,
         relief=tk.RAISED,
         padx=10,
     )
-    scanning_button.pack(side=tk.LEFT, padx=5)
+    start_scanning_button.pack(side=tk.LEFT, padx=5)
+    stop_scanning_button = tk.Button(
+        button_frame,
+        text="Stop Scanning",
+        command=stop_scanning,
+        relief=tk.RAISED,
+        padx=10,
+    )
+    stop_scanning_button.pack(side=tk.LEFT, padx=5)
 
     def process_bounce_queue():
+        scanning_active = bot_instance.is_scanning_enabled()
+        start_scanning_button.config(state=(tk.DISABLED if scanning_active else tk.NORMAL))
+        stop_scanning_button.config(state=(tk.NORMAL if scanning_active else tk.DISABLED))
         while True:
             try:
                 msg, tag = bounce_queue.get_nowait()
