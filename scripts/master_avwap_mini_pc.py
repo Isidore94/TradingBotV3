@@ -49,9 +49,19 @@ from project_paths import (
     LOG_DIR,
     LONGS_FILE,
     MASTER_AVWAP_EVENT_TICKERS_FILE,
+    MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
     MASTER_AVWAP_REPORT_FILE,
+    MASTER_AVWAP_SCORING_CONFIG_FILE,
+    MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE,
+    MASTER_AVWAP_SCORING_TUNER_REPORT_FILE,
+    MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE,
+    MASTER_AVWAP_SETUP_ATTRIBUTES_FILE,
+    MASTER_AVWAP_SETUP_DAILY_FILE,
+    MASTER_AVWAP_SETUP_SCENARIOS_FILE,
+    MASTER_AVWAP_SETUP_STATS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
+    MASTER_AVWAP_STDEV_REPORT_FILE,
     MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
     PERSISTENT_RUNTIME_DATA_DIR,
     SHORTS_FILE,
@@ -70,6 +80,7 @@ GUI_TICK_MS = 15_000
 WATCHLIST_FILTER_CLIENT_ID = 1005
 WATCHLIST_FILTER_DAYS = 5
 WATCHLIST_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
+SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 
 _LOCK_ACQUIRED = False
 
@@ -594,12 +605,76 @@ def _format_symbol_group(symbols: list[str]) -> str:
     return ", ".join(cleaned) if cleaned else "None"
 
 
-def load_tradingview_groups() -> dict[str, dict[str, list[str]]]:
-    text = read_text(MASTER_AVWAP_TRADINGVIEW_REPORT_FILE)
-    groups = {
+def _empty_focus_groups(source: str = "none", source_label: str = "No focus output yet") -> dict[str, Any]:
+    return {
         "favorites": {"LONG": [], "SHORT": []},
         "near_favorite_zones": {"LONG": [], "SHORT": []},
+        "source": source,
+        "source_label": source_label,
     }
+
+
+def _append_focus_symbol(groups: dict[str, Any], section: str, side: str, symbol: str) -> None:
+    section_groups = groups.get(section)
+    if not isinstance(section_groups, dict):
+        return
+
+    target = section_groups.get(side)
+    if not isinstance(target, list):
+        return
+
+    cleaned_symbol = str(symbol or "").strip().upper()
+    if not cleaned_symbol or cleaned_symbol in target:
+        return
+    target.append(cleaned_symbol)
+
+
+def _load_focus_groups_from_feed() -> dict[str, Any]:
+    payload = load_json(MASTER_AVWAP_FOCUS_FILE, default={})
+    if not isinstance(payload, dict):
+        return _empty_focus_groups()
+
+    groups = _empty_focus_groups(source="focus_feed", source_label="Focus feed JSON")
+    symbol_map = payload.get("symbols")
+    symbol_map = symbol_map if isinstance(symbol_map, dict) else {}
+
+    for section, payload_key in (
+        ("favorites", "favorites"),
+        ("near_favorite_zones", "near_favorite_zones"),
+    ):
+        entries = payload.get(payload_key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            symbol = str(entry.get("symbol", "")).strip().upper()
+            if not symbol:
+                continue
+            symbol_state = symbol_map.get(symbol)
+            symbol_state = symbol_state if isinstance(symbol_state, dict) else {}
+            side = str(entry.get("side") or symbol_state.get("side") or "").strip().upper()
+            if side not in ("LONG", "SHORT"):
+                continue
+            _append_focus_symbol(groups, section, side, symbol)
+
+    has_symbols = any(
+        groups[section][side]
+        for section in ("favorites", "near_favorite_zones")
+        for side in ("LONG", "SHORT")
+    )
+    if has_symbols:
+        return groups
+    return _empty_focus_groups()
+
+
+def load_tradingview_groups() -> dict[str, Any]:
+    focus_groups = _load_focus_groups_from_feed()
+    if focus_groups.get("source") != "none":
+        return focus_groups
+
+    text = read_text(MASTER_AVWAP_TRADINGVIEW_REPORT_FILE)
+    groups = _empty_focus_groups(source="tradingview_report", source_label="TradingView report")
     if not text:
         return groups
 
@@ -672,9 +747,21 @@ def write_status_file(
         f"Long watchlist count: {longs_count} ({LONGS_FILE})",
         f"Short watchlist count: {shorts_count} ({SHORTS_FILE})",
         f"Last watchlist filter: {format_watchlist_filter_summary(filter_summary)}",
+        f"TV paste source: {tradingview_groups.get('source_label', 'Unknown')}",
         f"Setup tracker: {MASTER_AVWAP_SETUP_TRACKER_FILE}",
+        f"Setup scenarios CSV: {MASTER_AVWAP_SETUP_SCENARIOS_FILE}",
+        f"Setup daily CSV: {MASTER_AVWAP_SETUP_DAILY_FILE}",
+        f"Setup stats CSV: {MASTER_AVWAP_SETUP_STATS_FILE}",
+        f"Setup type stats CSV: {SETUP_TYPE_STATS_FILE}",
+        f"Setup attributes CSV: {MASTER_AVWAP_SETUP_ATTRIBUTES_FILE}",
+        f"Factor leaderboard CSV: {MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE}",
+        f"Scoring config JSON: {MASTER_AVWAP_SCORING_CONFIG_FILE}",
+        f"Scoring recommendations JSON: {MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE}",
+        f"Scoring tuner report: {MASTER_AVWAP_SCORING_TUNER_REPORT_FILE}",
         f"Priority setups report: {MASTER_AVWAP_PRIORITY_SETUPS_FILE}",
         f"Ticker buckets report: {MASTER_AVWAP_EVENT_TICKERS_FILE}",
+        f"Focus feed JSON: {MASTER_AVWAP_FOCUS_FILE}",
+        f"Stdev report: {MASTER_AVWAP_STDEV_REPORT_FILE}",
         f"TradingView report: {MASTER_AVWAP_TRADINGVIEW_REPORT_FILE}",
         f"Main AVWAP report: {MASTER_AVWAP_REPORT_FILE}",
     ]
