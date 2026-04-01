@@ -72,6 +72,14 @@ These files should live in the selected home folder root. The app creates any mi
 
   If you want the mini PC itself to power off after the scan window, either use `--shutdown-at-end` or create a separate `13:30` Task Scheduler action that runs `shutdown /s /t 0`.
 
+- Consolidated BounceBot + Master AVWAP GUI:
+
+  ```powershell
+  .\.venv\Scripts\python.exe .\scripts\gui.py
+  ```
+
+  Uses the same selected home folder and now writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well.
+
 - Intraday 5-minute bounce detector with optional GUI:
 
   ```powershell

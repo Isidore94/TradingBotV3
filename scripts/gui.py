@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import re
 import queue
@@ -77,6 +78,146 @@ BOUNCE_TOGGLE_ORDER = [
     "prev_day_high",
     "prev_day_low",
 ]
+
+MAIN_GUI_OUTPUT_FILE = LONGS_FILE.parent / "consolidated_gui_output.txt"
+MAIN_GUI_OUTPUT_DEBOUNCE_MS = 750
+MAIN_GUI_OUTPUT_REFRESH_MS = 30_000
+MAIN_GUI_BOUNCE_ALERT_LINES = 120
+
+
+def _count_watchlist_symbols(path: Path) -> int:
+    if not path.exists():
+        return 0
+    seen = set()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                symbol = str(raw_line).strip().upper()
+                if not symbol or symbol.startswith("SYMBOLS FROM TC2000"):
+                    continue
+                seen.add(symbol)
+    except Exception:
+        return 0
+    return len(seen)
+
+
+def _read_text_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _read_widget_text(widget: tk.Text | None) -> str:
+    if widget is None:
+        return ""
+    try:
+        return widget.get("1.0", tk.END).strip()
+    except Exception:
+        return ""
+
+
+def _tail_lines(text: str, max_lines: int) -> str:
+    lines = [line.rstrip() for line in str(text or "").splitlines()]
+    if len(lines) <= max_lines:
+        return "\n".join(lines).strip()
+    trimmed = lines[-max_lines:]
+    return "\n".join([f"... showing last {max_lines} lines ...", *trimmed]).strip()
+
+
+def build_consolidated_gui_output(
+    mode: str,
+    bounce_panel: "BaseBounceBotPanel | None",
+    avwap_gui: MasterAvwapGUI | None,
+) -> str:
+    storage = get_tracker_storage_details()
+    bounce_controller = getattr(bounce_panel, "controller", None)
+    bounce_status = (
+        str(bounce_controller.status_var.get()).strip()
+        if bounce_controller and hasattr(bounce_controller, "status_var")
+        else "Unavailable"
+    )
+    bounce_connection = (
+        str(bounce_controller.connection_var.get()).strip()
+        if bounce_controller and hasattr(bounce_controller, "connection_var")
+        else "Unavailable"
+    )
+    bounce_active = (
+        str(bounce_controller.active_bounce_var.get()).strip()
+        if bounce_controller and hasattr(bounce_controller, "active_bounce_var")
+        else "Unavailable"
+    )
+    bounce_alerts = _tail_lines(
+        _read_widget_text(getattr(bounce_panel, "alert_text", None)),
+        MAIN_GUI_BOUNCE_ALERT_LINES,
+    )
+    avwap_status = (
+        str(avwap_gui.status_var.get()).strip()
+        if avwap_gui and hasattr(avwap_gui, "status_var")
+        else "Unavailable"
+    )
+    avwap_output = _read_widget_text(getattr(avwap_gui, "avwap_text", None)) or (
+        "MASTER AVWAP PRIORITY SETUPS\n"
+        + "=" * 80
+        + "\n"
+        + (_read_text_file(PRIORITY_SETUPS_FILE) or "No priority setup output yet.")
+        + "\n\n"
+        + "MASTER AVWAP EVENT TICKERS\n"
+        + "=" * 80
+        + "\n"
+        + (_read_text_file(EVENT_TICKERS_FILE) or "No event ticker output yet.")
+        + "\n\n"
+        + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
+        + "=" * 80
+        + "\n"
+        + (_read_text_file(STDEV_RANGE_FILE) or "No stdev output yet.")
+    )
+    anchor_output = _read_widget_text(getattr(avwap_gui, "anchor_scan_text", None)) or "No anchor AVWAP output yet."
+
+    lines = [
+        "Consolidated Trading GUI Snapshot",
+        "=" * 80,
+        f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"GUI mode: {mode}",
+        f"Home folder: {storage['data_dir']}",
+        f"Reports folder: {storage['output_dir']}",
+        f"Logs folder: {storage['logs_dir']}",
+        f"Snapshot file: {MAIN_GUI_OUTPUT_FILE}",
+        "",
+        "Watchlists",
+        "-" * 80,
+        f"Longs: {_count_watchlist_symbols(LONGS_FILE)} | Shorts: {_count_watchlist_symbols(SHORTS_FILE)}",
+        f"longs.txt: {LONGS_FILE}",
+        f"shorts.txt: {SHORTS_FILE}",
+        "",
+        "BounceBot",
+        "-" * 80,
+        f"Connection: {bounce_connection}",
+        f"Status: {bounce_status}",
+        f"Active bounces: {bounce_active}",
+        "",
+        "Master AVWAP",
+        "-" * 80,
+        f"Status: {avwap_status}",
+        f"Priority setups report: {PRIORITY_SETUPS_FILE}",
+        f"Event tickers report: {EVENT_TICKERS_FILE}",
+        f"Stdev report: {STDEV_RANGE_FILE}",
+        "",
+        "Latest AVWAP Results",
+        "-" * 80,
+        avwap_output or "No AVWAP output yet.",
+        "",
+        "Latest Anchor Results",
+        "-" * 80,
+        anchor_output,
+        "",
+        "Recent BounceBot Alerts",
+        "-" * 80,
+        bounce_alerts or "No BounceBot alerts yet.",
+    ]
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _open_folder(path: Path) -> None:
@@ -469,6 +610,7 @@ class BaseBounceBotPanel:
         self.container = ttk.Frame(parent)
         self._queue_after_id = None
         self.alert_text: scrolledtext.ScrolledText | None = None
+        self.on_output_changed = None
 
     def pack(self, **kwargs) -> None:
         self.container.pack(**kwargs)
@@ -498,6 +640,7 @@ class BaseBounceBotPanel:
         )
         self.alert_text.config(state="disabled")
         self.alert_text.see(tk.END)
+        self._notify_output_changed()
 
     def clear_alerts(self) -> None:
         if self.alert_text is None:
@@ -505,6 +648,12 @@ class BaseBounceBotPanel:
         self.alert_text.config(state="normal")
         self.alert_text.delete("1.0", tk.END)
         self.alert_text.config(state="disabled")
+        self._notify_output_changed()
+
+    def _notify_output_changed(self) -> None:
+        callback = getattr(self, "on_output_changed", None)
+        if callable(callback):
+            callback()
 
     def start(self) -> None:
         self.controller.start()
@@ -1129,7 +1278,11 @@ class ConsolidatedTradingGUI:
 
         self.bounce_panel: BaseBounceBotPanel | None = None
         self.avwap_gui: MasterAvwapGUI | None = None
+        self._output_write_after_id = None
+        self._output_refresh_after_id = None
+        self._output_traces: list[tuple[tk.Variable, str]] = []
         self._build_layout()
+        self._configure_output_snapshot_updates()
 
     def _build_layout(self) -> None:
         main_pane = tk.PanedWindow(
@@ -1166,7 +1319,87 @@ class ConsolidatedTradingGUI:
         self.watchlist_area.pack(fill=tk.BOTH, expand=True)
         main_pane.add(watchlist_container)
 
+    def _configure_output_snapshot_updates(self) -> None:
+        if self.bounce_panel:
+            self.bounce_panel.on_output_changed = self.request_output_snapshot
+            controller = getattr(self.bounce_panel, "controller", None)
+            if controller:
+                self._bind_output_var(controller.status_var)
+                self._bind_output_var(controller.connection_var)
+                self._bind_output_var(controller.active_bounce_var)
+        if self.avwap_gui:
+            self.avwap_gui.on_output_changed = self.request_output_snapshot
+            self._bind_output_var(self.avwap_gui.status_var)
+            self._bind_output_var(self.avwap_gui.tracker_storage_var)
+        self.request_output_snapshot(delay_ms=250)
+        self._schedule_periodic_output_snapshot()
+
+    def _bind_output_var(self, variable: tk.Variable | None) -> None:
+        if variable is None:
+            return
+        trace_id = variable.trace_add("write", lambda *_args: self.request_output_snapshot())
+        self._output_traces.append((variable, trace_id))
+
+    def request_output_snapshot(self, delay_ms: int = MAIN_GUI_OUTPUT_DEBOUNCE_MS) -> None:
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        if self._output_write_after_id:
+            try:
+                self.root.after_cancel(self._output_write_after_id)
+            except Exception:
+                pass
+        self._output_write_after_id = self.root.after(delay_ms, self._write_output_snapshot)
+
+    def _write_output_snapshot(self) -> None:
+        self._output_write_after_id = None
+        try:
+            payload = build_consolidated_gui_output(self.mode, self.bounce_panel, self.avwap_gui)
+            MAIN_GUI_OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            MAIN_GUI_OUTPUT_FILE.write_text(payload, encoding="utf-8")
+        except Exception:
+            logging.exception("Failed writing consolidated GUI snapshot to %s", MAIN_GUI_OUTPUT_FILE)
+
+    def _schedule_periodic_output_snapshot(self) -> None:
+        try:
+            self._output_refresh_after_id = self.root.after(
+                MAIN_GUI_OUTPUT_REFRESH_MS,
+                self._run_periodic_output_snapshot,
+            )
+        except tk.TclError:
+            self._output_refresh_after_id = None
+
+    def _run_periodic_output_snapshot(self) -> None:
+        self._output_refresh_after_id = None
+        self.request_output_snapshot(delay_ms=0)
+        self._schedule_periodic_output_snapshot()
+
+    def _cancel_output_snapshot_updates(self) -> None:
+        if self._output_write_after_id:
+            try:
+                self.root.after_cancel(self._output_write_after_id)
+            except Exception:
+                pass
+            self._output_write_after_id = None
+        if self._output_refresh_after_id:
+            try:
+                self.root.after_cancel(self._output_refresh_after_id)
+            except Exception:
+                pass
+            self._output_refresh_after_id = None
+        for variable, trace_id in self._output_traces:
+            try:
+                variable.trace_remove("write", trace_id)
+            except Exception:
+                pass
+        self._output_traces.clear()
+
     def on_close(self) -> None:
+        self._write_output_snapshot()
+        self._cancel_output_snapshot_updates()
         try:
             if self.bounce_panel:
                 self.bounce_panel.on_close()
@@ -1177,6 +1410,8 @@ class ConsolidatedTradingGUI:
         if next_mode == self.mode:
             return
         save_local_setting("gui_mode", next_mode)
+        self._write_output_snapshot()
+        self._cancel_output_snapshot_updates()
         try:
             if self.bounce_panel:
                 self.bounce_panel.on_close()

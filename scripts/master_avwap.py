@@ -9129,6 +9129,7 @@ class MasterAvwapGUI:
         self.tracker_backfill_sessions_var = tk.IntVar(value=5)
         self.focus_side_map = {}
         self.setup_tracker_row_map = {}
+        self.on_output_changed = None
 
         self._build_layout()
         self.refresh_table()
@@ -9215,6 +9216,11 @@ class MasterAvwapGUI:
         style.map("Dark.Treeview.Heading", background=[("active", "#4A4A4A")])
 
         style.configure("Vertical.TScrollbar", background=GUI_DARK_PANEL, troughcolor=GUI_DARK_BG)
+
+    def _notify_output_changed(self):
+        callback = getattr(self, "on_output_changed", None)
+        if callable(callback):
+            callback()
 
     def _apply_dark_theme_to_text_widgets(self):
         for widget in (
@@ -9698,6 +9704,7 @@ class MasterAvwapGUI:
             f"Home-folder shorts.txt: {'OK' if shared_shorts_path.exists() else 'missing'}\n"
             f"Source: {details['source_label']}"
         )
+        self._notify_output_changed()
 
     def _open_folder_in_explorer(self, path: Path):
         try:
@@ -10341,6 +10348,7 @@ class MasterAvwapGUI:
         else:
             self._populate_setup_tracker_scenarios(None)
             self._render_setup_tracker_stats_text(payload, None)
+        self._notify_output_changed()
 
     def _highlight_trendline_candidates_in_avwap_output(self):
         self.avwap_text.tag_remove("trendline_bold", "1.0", tk.END)
@@ -10518,10 +10526,12 @@ class MasterAvwapGUI:
         self._set_text_widget_contents(self.avwap_text, combined)
         self._highlight_trendline_candidates_in_avwap_output()
         self.refresh_focus_group_boxes()
+        self._notify_output_changed()
 
     def refresh_anchor_output_view(self):
         text = self._read_text_file(ANCHOR_AVWAP_OUTPUT_FILE)
         self._set_text_widget_contents(self.anchor_scan_text, text or "No anchor AVWAP output yet.")
+        self._notify_output_changed()
 
     def _copy_to_clipboard(self, text: str):
         self.root.clipboard_clear()
