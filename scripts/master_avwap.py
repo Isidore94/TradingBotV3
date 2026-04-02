@@ -34,7 +34,12 @@ import yfinance as yf
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
-from market_session import get_last_hour_window_labels
+from market_session import (
+    get_default_hourly_scan_schedule,
+    get_default_stop_time_label,
+    get_last_hour_window_labels,
+    get_market_session_window,
+)
 
 from project_paths import (
     LOCAL_SETTINGS_FILE,
@@ -122,27 +127,48 @@ EVENT_LEVEL_SORT_ORDER = [
 
 FAVORITE_CURRENT_SIGNALS = {
     "LONG": {
-        "BOUNCE_VWAP": 120,
-        "CROSS_UP_UPPER_1": 110,
+        "CROSS_UP_VWAP": 88,
+        "CROSS_UP_UPPER_1": 112,
+        "CROSS_UP_UPPER_2": 136,
+        "CROSS_UP_UPPER_3": 142,
         "EXTREME_MOVE_RETEST": 112,
     },
     "SHORT": {
-        "BOUNCE_VWAP": 120,
-        "CROSS_DOWN_LOWER_1": 110,
+        "CROSS_DOWN_VWAP": 88,
+        "CROSS_DOWN_LOWER_1": 112,
+        "CROSS_DOWN_LOWER_2": 136,
+        "CROSS_DOWN_LOWER_3": 142,
         "EXTREME_MOVE_RETEST": 112,
     },
 }
 
 FAVORITE_CONTEXT_SIGNALS = {
     "LONG": {
-        "PREV_BOUNCE_VWAP": 40,
-        "PREV_CROSS_UPPER_1": 30,
+        "PREV_CROSS_UP_VWAP": 18,
+        "PREV_CROSS_UP_UPPER_1": 24,
+        "PREV_CROSS_UP_UPPER_2": 28,
+        "PREV_CROSS_UP_UPPER_3": 30,
+        "PREV_BOUNCE_VWAP": 10,
     },
     "SHORT": {
-        "PREV_BOUNCE_VWAP": 40,
-        "PREV_CROSS_LOWER_1": 30,
+        "PREV_CROSS_DOWN_VWAP": 18,
+        "PREV_CROSS_DOWN_LOWER_1": 24,
+        "PREV_CROSS_DOWN_LOWER_2": 28,
+        "PREV_CROSS_DOWN_LOWER_3": 30,
+        "PREV_BOUNCE_VWAP": 10,
     },
 }
+
+PRIORITY_BOUNCE_SUPPORT_BONUSES = {
+    "VWAP": 10,
+    "UPPER_1": 7,
+    "LOWER_1": 7,
+    "UPPER_2": 8,
+    "LOWER_2": 8,
+    "UPPER_3": 10,
+    "LOWER_3": 10,
+}
+PRIORITY_BOUNCE_SUPPORT_BONUS_CAP = 18
 
 CURRENT_CACHE_FILE = EARNINGS_CACHE_FILE
 PREV_CACHE_FILE = PREV_EARNINGS_CACHE_FILE
@@ -248,6 +274,9 @@ PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_SOFT = 4
 PRIORITY_COMPRESSION_NARROW_BAND_PENALTY = 10
 PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_STRONG = 16
 PRIORITY_COMPRESSION_NARROW_BAND_PENALTY_EXTREME = 22
+PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_VWAP = 8
+PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_FIRST_DEV = 6
+PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_SECOND_DEV = 4
 PRIORITY_DIRECTIONAL_REJECTION_MIN_RANGE_RATIO = 0.35
 PRIORITY_DIRECTIONAL_REJECTION_MIN_ATR_RATIO = 0.22
 PRIORITY_DIRECTIONAL_REJECTION_MIN_BODY_RATIO = 1.20
@@ -308,6 +337,7 @@ GUI_DARK_INPUT = "#252525"
 # Softer light-gray text improves readability on platforms where pure white
 # foreground can appear blown out against themed widget backgrounds.
 GUI_DARK_TEXT = "#C7CDD4"
+SHARED_WATCHLIST_SCHEDULER_TICK_MS = 15_000
 WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
 
 _PRIORITY_SCORING_CONFIG_CACHE: dict | None = None
@@ -6193,6 +6223,102 @@ def format_signal_label(signal: str) -> str:
     return signal.replace("VWAP", "AVWAPE").replace("_", " ")
 
 
+def _priority_breakout_levels(side: str) -> set[str]:
+    if normalize_side(side) == "SHORT":
+        return {"VWAP", "LOWER_1", "LOWER_2", "LOWER_3"}
+    return {"VWAP", "UPPER_1", "UPPER_2", "UPPER_3"}
+
+
+def _priority_breakout_signal_level(event_name: str, side: str, include_previous: bool = False) -> str:
+    normalized_event = str(event_name or "").strip().upper()
+    normalized_side = normalize_side(side)
+    if normalized_side == "SHORT":
+        prefixes = ["CROSS_DOWN_"]
+        if include_previous:
+            prefixes.insert(0, "PREV_CROSS_DOWN_")
+    else:
+        prefixes = ["CROSS_UP_"]
+        if include_previous:
+            prefixes.insert(0, "PREV_CROSS_UP_")
+
+    for prefix in prefixes:
+        if normalized_event.startswith(prefix):
+            level = normalized_event[len(prefix):]
+            return level if level in _priority_breakout_levels(normalized_side) else ""
+    return ""
+
+
+def _is_priority_breakout_signal(event_name: str, side: str, include_previous: bool = False) -> bool:
+    return bool(_priority_breakout_signal_level(event_name, side, include_previous=include_previous))
+
+
+def _bounce_signal_level(event_name: str) -> str:
+    normalized_event = str(event_name or "").strip().upper()
+    if not normalized_event.startswith("BOUNCE_"):
+        return ""
+    return normalized_event[len("BOUNCE_"):]
+
+
+def _compute_bounce_support_bonus(events_today: list[str], setup_active: bool) -> tuple[int, list[str]]:
+    if not setup_active:
+        return 0, []
+
+    bonus = 0
+    bounce_signals = []
+    for event_name in sorted(set(events_today or [])):
+        level = _bounce_signal_level(event_name)
+        if not level:
+            continue
+        bounce_signals.append(event_name)
+        bonus += int(PRIORITY_BOUNCE_SUPPORT_BONUSES.get(level, 0) or 0)
+
+    return min(PRIORITY_BOUNCE_SUPPORT_BONUS_CAP, bonus), bounce_signals
+
+
+def _effective_compression_penalty(
+    compression_summary: dict | None,
+    priority_row: dict | None,
+    side: str,
+) -> tuple[int, str]:
+    summary = compression_summary or {}
+    row = priority_row or {}
+    raw_penalty = int(summary.get("compression_penalty", 0) or 0)
+    note = str(summary.get("compression_note") or "")
+    if raw_penalty <= 0:
+        return 0, note
+
+    breakout_levels = [
+        _priority_breakout_signal_level(signal_name, side)
+        for signal_name in list(row.get("favorite_signals") or [])
+    ]
+    breakout_levels = [level for level in breakout_levels if level]
+
+    effective_penalty = raw_penalty
+    if (
+        any(level in {"UPPER_2", "UPPER_3", "LOWER_2", "LOWER_3"} for level in breakout_levels)
+        or bool(row.get("extreme_move_watch"))
+    ):
+        effective_penalty = min(effective_penalty, PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_SECOND_DEV)
+    elif (
+        any(level in {"UPPER_1", "LOWER_1"} for level in breakout_levels)
+        or int(row.get("first_dev_break_bonus", 0) or 0) > 0
+    ):
+        effective_penalty = min(effective_penalty, PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_FIRST_DEV)
+    elif (
+        any(level == "VWAP" for level in breakout_levels)
+        or bool(row.get("retest_followthrough"))
+        or bool(row.get("breakout_5d"))
+        or bool(row.get("previous_day_range_break"))
+    ):
+        effective_penalty = min(effective_penalty, PRIORITY_COMPRESSION_BREAKOUT_PENALTY_CAP_VWAP)
+
+    if effective_penalty < raw_penalty:
+        relief_note = f"breakout compression relief {raw_penalty}->{effective_penalty}"
+        note = f"{note}; {relief_note}" if note else relief_note
+
+    return int(effective_penalty), note
+
+
 def build_priority_setup_summary(
     symbol: str,
     side: str,
@@ -6225,10 +6351,30 @@ def build_priority_setup_summary(
     current_weights = get_priority_signal_weights(side, "current")
     context_weights = get_priority_signal_weights(side, "context")
 
-    favorite_signals = sorted(evt for evt in events_today if evt in current_weights)
+    current_setup_signals = sorted(
+        evt
+        for evt in events_today
+        if evt in current_weights
+        and (
+            _is_priority_breakout_signal(evt, side)
+            or evt == "EXTREME_MOVE_RETEST"
+        )
+    )
     context_signals = sorted(evt for evt in events_today if evt in context_weights)
-    score = sum(current_weights.get(evt, 0) for evt in favorite_signals)
+    setup_active = bool(current_setup_signals) or bool(first_dev_break_bonus) or bool(extreme_move_favorite_ready)
+    bounce_support_bonus, bounce_support_signals = _compute_bounce_support_bonus(
+        events_today,
+        setup_active=(
+            setup_active
+            or bool(retest_followthrough)
+            or bool(breakout_5d)
+            or bool(previous_day_range_break)
+        ),
+    )
+
+    score = sum(current_weights.get(evt, 0) for evt in current_setup_signals)
     score += sum(context_weights.get(evt, 0) for evt in context_signals)
+    score += bounce_support_bonus
     trend_is_aligned = (
         (side == "LONG" and trend_label == "UP")
         or (side == "SHORT" and trend_label == "DOWN")
@@ -6265,18 +6411,20 @@ def build_priority_setup_summary(
     if trend_is_aligned:
         score += 8
 
-    if favorite_signals and any(evt.startswith("MD_") for evt in all_events):
+    if current_setup_signals and any(evt.startswith("MD_") for evt in all_events):
         score += 5
 
     return {
         "symbol": symbol,
         "side": side,
         "score": score,
-        "favorite_signals": favorite_signals,
+        "favorite_signals": current_setup_signals,
         "context_signals": context_signals,
+        "bounce_support_signals": bounce_support_signals,
+        "bounce_support_bonus": int(bounce_support_bonus or 0),
         "favorite_zone": favorite_zone,
         "trend_20d": trend_label,
-        "has_favorite_signal": bool(favorite_signals),
+        "has_favorite_signal": bool(setup_active),
         "recent_band_extension_days": recent_band_extension_days,
         "recent_second_band_test_days": int(recent_second_band_test_days or 0),
         "second_band_penalty": int(second_band_penalty or 0),
@@ -6791,6 +6939,8 @@ def refine_priority_rows_with_directional_filters(
             or row.get("favorite_zone")
             or row.get("retest_followthrough")
             or row.get("extreme_move_watch")
+            or int(row.get("first_dev_break_bonus", 0) or 0) > 0
+            or bool(row.get("breakout_5d"))
         )
     ]
 
@@ -6999,6 +7149,9 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         for row in rows:
             signals = ", ".join(format_signal_label(evt) for evt in row["favorite_signals"]) or "None"
             context = ", ".join(format_signal_label(evt) for evt in row["context_signals"]) or "None"
+            bounce_support = ", ".join(
+                format_signal_label(evt) for evt in row.get("bounce_support_signals", [])
+            ) or "None"
             zone = row["favorite_zone"] or "None"
             extension_days = row.get("recent_band_extension_days", 0)
             second_band_tests = row.get("recent_second_band_test_days", 0)
@@ -7021,6 +7174,11 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
                 f"| ext_days={extension_days} | 2nd_tests={second_band_tests} "
                 f"| 5d_breakout={breakout_text} | retest={retest_text}\n"
             )
+            if row.get("bounce_support_bonus"):
+                handle.write(
+                    f"  bounce_bonus=+{int(row.get('bounce_support_bonus', 0) or 0)} "
+                    f"from {bounce_support}\n"
+                )
             if ranking_note:
                 handle.write(f"  filters={ranking_note}\n")
             if score_bonus_note:
@@ -7049,7 +7207,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("Master AVWAP priority setups\n")
         handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        handle.write("Focus: AVWAPE bounces, directional retest continuations, UPPER_1 / LOWER_1 crosses, and extreme 2-3 band retests\n\n")
+        handle.write("Focus: AVWAPE, 1st-dev, and 2nd-dev breakouts first; bounce only boosts the score of those setups\n\n")
         _write_rows(handle, "Best current favorite setups", favorites)
         _write_rows(handle, "Near favorite zones", watchlist)
 
@@ -7666,7 +7824,7 @@ def _evaluate_priority_snapshot_for_date(
             "events": full_event_list,
         }
     )
-    has_bounce_event_today = bool(symbol_events_today)
+    has_bounce_event_today = any(_bounce_signal_level(event_name) for event_name in symbol_events_today)
 
     current_band_context = get_band_context(last_close, current_anchor_meta, side)
     previous_band_context = get_band_context(last_close, prev_anchor_meta, side)
@@ -7841,14 +7999,22 @@ def _evaluate_priority_snapshot_for_date(
         previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
         extension_note=extension_note,
     )
-    priority_summary["score"] = float(
-        priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0)
+    effective_compression_penalty, effective_compression_note = _effective_compression_penalty(
+        compression_summary,
+        priority_summary,
+        side,
     )
+    priority_summary["score"] = float(priority_summary["score"] - effective_compression_penalty)
     priority_summary["current_active_level"] = current_band_context["active_level"]
     priority_summary["current_band_zone"] = current_band_context["zone"]
     priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
-    priority_summary["compression_penalty"] = int(compression_summary.get("compression_penalty", 0) or 0)
-    priority_summary["compression_note"] = compression_summary.get("compression_note", "")
+    priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
+    priority_summary["compression_note"] = effective_compression_note
+    symbol_entry["compression_penalty"] = int(effective_compression_penalty or 0)
+    symbol_entry["compression_note"] = effective_compression_note
+    if isinstance(entry_feature_snapshot, dict):
+        entry_feature_snapshot["compression_penalty"] = int(effective_compression_penalty or 0)
+        entry_feature_snapshot["compression_note"] = effective_compression_note
 
     feature_row = {
         "symbol": symbol,
@@ -7897,8 +8063,8 @@ def _evaluate_priority_snapshot_for_date(
         "extreme_move_note": extreme_move_summary.get("note", ""),
         "extension_note": extension_note,
         "compression_flag": bool(compression_summary.get("is_compressed")),
-        "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
-        "compression_note": compression_summary.get("compression_note", ""),
+        "compression_penalty": int(effective_compression_penalty or 0),
+        "compression_note": effective_compression_note,
         "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
         "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
         "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
@@ -8483,7 +8649,7 @@ def run_master(
         for lbl in full_event_list:
             events_for_output.append((sym, dstr, lbl, side))
 
-        has_bounce_event_today = bool(symbol_events_today)
+        has_bounce_event_today = any(_bounce_signal_level(event_name) for event_name in symbol_events_today)
         current_band_context = get_band_context(last_close, current_anchor_meta, side)
         previous_band_context = get_band_context(last_close, prev_anchor_meta, side)
 
@@ -8711,12 +8877,22 @@ def run_master(
             previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
             extension_note=extension_note,
         )
-        priority_summary["score"] = float(priority_summary["score"] - int(compression_summary.get("compression_penalty", 0) or 0))
+        effective_compression_penalty, effective_compression_note = _effective_compression_penalty(
+            compression_summary,
+            priority_summary,
+            side,
+        )
+        priority_summary["score"] = float(priority_summary["score"] - effective_compression_penalty)
         priority_summary["current_active_level"] = current_band_context["active_level"]
         priority_summary["current_band_zone"] = current_band_context["zone"]
         priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
-        priority_summary["compression_penalty"] = int(compression_summary.get("compression_penalty", 0) or 0)
-        priority_summary["compression_note"] = compression_summary.get("compression_note", "")
+        priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
+        priority_summary["compression_note"] = effective_compression_note
+        symbol_entry["compression_penalty"] = int(effective_compression_penalty or 0)
+        symbol_entry["compression_note"] = effective_compression_note
+        if isinstance(entry_feature_snapshot, dict):
+            entry_feature_snapshot["compression_penalty"] = int(effective_compression_penalty or 0)
+            entry_feature_snapshot["compression_note"] = effective_compression_note
         symbol_entry["priority_score"] = priority_summary["score"]
         symbol_entry["favorite_signals"] = priority_summary["favorite_signals"]
         symbol_entry["favorite_context_signals"] = priority_summary["context_signals"]
@@ -8810,8 +8986,8 @@ def run_master(
             "extreme_move_note": extreme_move_summary.get("note", ""),
             "extension_note": extension_note,
             "compression_flag": bool(compression_summary.get("is_compressed")),
-            "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
-            "compression_note": compression_summary.get("compression_note", ""),
+            "compression_penalty": int(effective_compression_penalty or 0),
+            "compression_note": effective_compression_note,
             "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
@@ -9127,15 +9303,26 @@ class MasterAvwapGUI:
         self.bulk_side_var = tk.StringVar(value="LONG")
         self.earnings_lookback_var = tk.IntVar(value=1)
         self.tracker_backfill_sessions_var = tk.IntVar(value=5)
+        self.shared_scheduler_button_var = tk.StringVar(value="Start Scheduler")
+        self.shared_scheduler_status_var = tk.StringVar(value="")
         self.focus_side_map = {}
         self.setup_tracker_row_map = {}
         self.on_output_changed = None
+        self.background_task_active = False
+        self.current_background_label = ""
+        self.shared_scheduler_enabled = False
+        self.shared_scheduler_active_slot = ""
+        self.shared_scheduler_note = "Hourly shared-watchlist scheduler is off."
+        self.shared_scheduler_day = ""
+        self.shared_scheduler_slots_state = {}
 
         self._build_layout()
         self.refresh_table()
         self.refresh_avwap_output_view()
         self.refresh_anchor_output_view()
         self.refresh_setup_tracker_view()
+        self._refresh_shared_watchlist_scheduler_status()
+        self.root.after(SHARED_WATCHLIST_SCHEDULER_TICK_MS, self._shared_watchlist_scheduler_tick)
 
     def _configure_dark_theme(self):
         style = ttk.Style(self.root)
@@ -9258,6 +9445,11 @@ class MasterAvwapGUI:
 
         ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Shared Watchlist Scan", command=self.run_master_once).pack(side="left", padx=4)
+        ttk.Button(
+            toolbar,
+            textvariable=self.shared_scheduler_button_var,
+            command=self.toggle_shared_watchlist_scheduler,
+        ).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Local Watchlist Scan", command=self.run_local_watchlist_scan_once).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
 
@@ -9265,6 +9457,12 @@ class MasterAvwapGUI:
             self.root,
             text="Views refresh automatically when scans finish or when you open a tab.",
             justify="left",
+        ).pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(
+            self.root,
+            textvariable=self.shared_scheduler_status_var,
+            justify="left",
+            wraplength=1100,
         ).pack(fill="x", padx=10, pady=(0, 8))
 
         self.notebook = ttk.Notebook(self.root)
@@ -10538,22 +10736,229 @@ class MasterAvwapGUI:
         self.root.clipboard_append(text)
         self.root.update_idletasks()
 
-    def _run_background(self, target, running_msg, done_msg, done_callback=None):
+    def _shared_scheduler_slot_datetime(self, slot: str, reference: datetime | None = None) -> datetime:
+        now = reference or datetime.now()
+        slot_time = datetime.strptime(str(slot).strip(), "%H:%M").time()
+        return datetime.combine(now.date(), slot_time)
+
+    def _reset_shared_watchlist_scheduler_state_for_day(self, now: datetime | None = None) -> bool:
+        now = now or datetime.now()
+        today_iso = now.date().isoformat()
+        if self.shared_scheduler_day == today_iso and self.shared_scheduler_slots_state:
+            return False
+
+        schedule = list(get_default_hourly_scan_schedule(reference=now))
+        self.shared_scheduler_day = today_iso
+        self.shared_scheduler_slots_state = {slot: "pending" for slot in schedule}
+        if self.shared_scheduler_enabled:
+            self.shared_scheduler_note = "Scheduler ready for today's market window."
+        else:
+            self.shared_scheduler_note = "Hourly shared-watchlist scheduler is off."
+        return True
+
+    def _get_shared_watchlist_scheduler_schedule(self, now: datetime | None = None) -> list[str]:
+        self._reset_shared_watchlist_scheduler_state_for_day(now)
+        return list(self.shared_scheduler_slots_state.keys())
+
+    def _get_due_pending_shared_watchlist_scheduler_slots(self, now: datetime | None = None) -> list[str]:
+        now = now or datetime.now()
+        schedule = self._get_shared_watchlist_scheduler_schedule(now)
+        due_slots = []
+        for slot in schedule:
+            if self.shared_scheduler_slots_state.get(slot) != "pending":
+                continue
+            if self._shared_scheduler_slot_datetime(slot, reference=now) <= now:
+                due_slots.append(slot)
+        return due_slots
+
+    def _get_next_pending_shared_watchlist_scheduler_slot(self, now: datetime | None = None) -> str | None:
+        now = now or datetime.now()
+        schedule = self._get_shared_watchlist_scheduler_schedule(now)
+        for slot in schedule:
+            if self.shared_scheduler_slots_state.get(slot) != "pending":
+                continue
+            if self._shared_scheduler_slot_datetime(slot, reference=now) > now:
+                return slot
+        return None
+
+    def _refresh_shared_watchlist_scheduler_status(self, note: str | None = None):
+        now = datetime.now()
+        self._reset_shared_watchlist_scheduler_state_for_day(now)
+        if note is not None:
+            self.shared_scheduler_note = note
+
+        schedule = self._get_shared_watchlist_scheduler_schedule(now)
+        next_slot = self._get_next_pending_shared_watchlist_scheduler_slot(now)
+        stop_at = get_default_stop_time_label(reference=now)
+        market_session = get_market_session_window(reference=now)
+        completed_slots = [
+            slot for slot, status in self.shared_scheduler_slots_state.items()
+            if status == "completed"
+        ]
+        failed_slots = [
+            slot for slot, status in self.shared_scheduler_slots_state.items()
+            if status == "failed"
+        ]
+        active_task = self.shared_scheduler_active_slot or self.current_background_label or "None"
+        scheduler_state = "running" if self.shared_scheduler_enabled else "stopped"
+        self.shared_scheduler_button_var.set(
+            "Stop Scheduler" if self.shared_scheduler_enabled else "Start Scheduler"
+        )
+        self.shared_scheduler_status_var.set(
+            "\n".join(
+                [
+                    (
+                        f"Hourly shared-watchlist scheduler: {scheduler_state} | "
+                        f"Market session: {market_session.session_label} | "
+                        f"Today's slots: {', '.join(schedule) if schedule else 'None'} | Stop at: {stop_at}"
+                    ),
+                    (
+                        f"Next slot: {next_slot or 'None'} | Completed: {len(completed_slots)} | "
+                        f"Failed: {len(failed_slots)} | Active task: {active_task}"
+                    ),
+                    f"Note: {self.shared_scheduler_note}",
+                ]
+            )
+        )
+
+    def toggle_shared_watchlist_scheduler(self):
+        self.shared_scheduler_enabled = not self.shared_scheduler_enabled
+        note = (
+            "Hourly shared-watchlist scheduler started."
+            if self.shared_scheduler_enabled
+            else "Hourly shared-watchlist scheduler stopped."
+        )
+        self._refresh_shared_watchlist_scheduler_status(note=note)
+        self.status_var.set(note)
+
+    def _finish_shared_watchlist_scheduler_run(
+        self,
+        covered_slots: list[str],
+        trigger_slot: str,
+        success: bool,
+        error_text: str = "",
+    ):
+        for slot in covered_slots:
+            if slot not in self.shared_scheduler_slots_state:
+                continue
+            self.shared_scheduler_slots_state[slot] = "completed" if success else "failed"
+        self.shared_scheduler_active_slot = ""
+        note = (
+            f"Scheduled shared-watchlist scan for {trigger_slot} completed."
+            if success
+            else f"Scheduled shared-watchlist scan for {trigger_slot} failed: {error_text}"
+        )
+        self._refresh_shared_watchlist_scheduler_status(note=note)
+
+    def _start_scheduled_shared_watchlist_scan(self, trigger_slot: str, covered_slots: list[str]) -> bool:
+        if self.background_task_active:
+            self.status_var.set("Another background task is already running. Please wait for it to finish.")
+            return False
+
+        self.notebook.select(self.avwap_tab)
+        self.shared_scheduler_active_slot = trigger_slot
+        running_msg = f"Running scheduled shared-watchlist scan for {trigger_slot}..."
+        started = self._run_background(
+            run_master_with_shared_watchlists,
+            running_msg,
+            f"Scheduled shared-watchlist scan for {trigger_slot} complete.",
+            done_callback=lambda: (
+                self.refresh_avwap_output_view(),
+                self.refresh_anchor_output_view(),
+                self.refresh_setup_tracker_view(),
+            ),
+            finish_callback=lambda success, error_text, slots=list(covered_slots), slot=trigger_slot: (
+                self._finish_shared_watchlist_scheduler_run(slots, slot, success, error_text)
+            ),
+        )
+        if not started:
+            self.shared_scheduler_active_slot = ""
+            return False
+        self._refresh_shared_watchlist_scheduler_status(note=running_msg)
+        return True
+
+    def _shared_watchlist_scheduler_tick(self):
+        try:
+            now = datetime.now()
+            self._reset_shared_watchlist_scheduler_state_for_day(now)
+
+            if self.background_task_active:
+                self._refresh_shared_watchlist_scheduler_status()
+                return
+
+            if not self.shared_scheduler_enabled:
+                self._refresh_shared_watchlist_scheduler_status()
+                return
+
+            stop_dt = self._shared_scheduler_slot_datetime(
+                get_default_stop_time_label(reference=now),
+                reference=now,
+            )
+            if now >= stop_dt:
+                self._refresh_shared_watchlist_scheduler_status(
+                    note=f"Today's scheduler window ended at {stop_dt.strftime('%H:%M')}.",
+                )
+                return
+
+            due_slots = self._get_due_pending_shared_watchlist_scheduler_slots(now)
+            if due_slots:
+                self._start_scheduled_shared_watchlist_scan(due_slots[-1], due_slots)
+                return
+
+            next_slot = self._get_next_pending_shared_watchlist_scheduler_slot(now)
+            self._refresh_shared_watchlist_scheduler_status(
+                note=(
+                    f"Waiting for next hourly slot {next_slot}."
+                    if next_slot else "No pending hourly shared-watchlist slots remain for today."
+                ),
+            )
+        finally:
+            try:
+                if self.root.winfo_exists():
+                    self.root.after(
+                        SHARED_WATCHLIST_SCHEDULER_TICK_MS,
+                        self._shared_watchlist_scheduler_tick,
+                    )
+            except Exception:
+                pass
+
+    def _run_background(self, target, running_msg, done_msg, done_callback=None, finish_callback=None):
+        if self.background_task_active:
+            self.status_var.set("Another background task is already running. Please wait for it to finish.")
+            return False
+
+        self.background_task_active = True
+        self.current_background_label = running_msg
         self.status_var.set(running_msg)
+        self._refresh_shared_watchlist_scheduler_status()
 
         def _task():
+            error_text = ""
             try:
                 target()
-                self.root.after(0, lambda: self.status_var.set(done_msg))
-                self.root.after(0, self.refresh_table)
-                if done_callback:
-                    self.root.after(0, done_callback)
             except Exception as exc:
                 logging.exception("GUI background task failed")
-                error_message = f"Error: {exc}"
-                self.root.after(0, lambda msg=error_message: self.status_var.set(msg))
+                error_text = str(exc)
+
+            def _finish():
+                self.background_task_active = False
+                self.current_background_label = ""
+                if error_text:
+                    self.status_var.set(f"Error: {error_text}")
+                else:
+                    self.status_var.set(done_msg)
+                    self.refresh_table()
+                    if done_callback:
+                        done_callback()
+                if finish_callback:
+                    finish_callback(not bool(error_text), error_text)
+                else:
+                    self._refresh_shared_watchlist_scheduler_status()
+
+            self.root.after(0, _finish)
 
         threading.Thread(target=_task, daemon=True).start()
+        return True
 
     def run_earnings_scan(self):
         try:

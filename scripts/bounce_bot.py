@@ -217,6 +217,9 @@ EMIT_MASTER_AVWAP_FOCUS_RRS_ALERTS = False
 ENVIRONMENT_HIGHLIGHT_LIMIT = 6
 ENVIRONMENT_SCAN_LIMIT = 25
 ENVIRONMENT_RECENT_PROFILE_BARS = 3
+ENVIRONMENT_PROFILE_EMA_ALPHA = 0.70
+ENVIRONMENT_RECENT_BIAS_MIN_SCORE = 0.15
+ENVIRONMENT_TOTAL_BIAS_MIN_SCORE = 0.05
 ENVIRONMENT_SCAN_DELAY_MINUTES = 60
 SPY_COMPRESSION_THRESHOLD = 0.35
 SPY_UP_THRESHOLD = 0.20
@@ -1437,9 +1440,36 @@ class BounceBot(EWrapper, EClient):
                 direction,
                 require_significant=True,
             )
+            current_countertrend = self._profile_item_is_countertrend(latest_profile, direction)
             current_rrs = latest_profile.get("rrs") if latest_profile else None
             current_move_ratio = latest_profile.get("move_ratio") if latest_profile else None
             current_excess = latest_profile.get("excess_move_ratio") if latest_profile else None
+            current_direction_bias = self._profile_direction_bias_score(
+                latest_profile,
+                direction,
+                threshold,
+            )
+            recent_direction_bias = self._ema_profile_direction_bias(
+                recent_profile,
+                direction,
+                threshold,
+            )
+            total_direction_bias = self._ema_profile_direction_bias(
+                profile,
+                direction,
+                threshold,
+            )
+            active_direction_bias_ok = (
+                not current_countertrend and (
+                    current_direction_ok
+                    or (
+                        recent_direction_bias is not None
+                        and recent_direction_bias >= ENVIRONMENT_RECENT_BIAS_MIN_SCORE
+                        and total_direction_bias is not None
+                        and total_direction_bias >= ENVIRONMENT_TOTAL_BIAS_MIN_SCORE
+                    )
+                )
+            )
             score = (
                 context_summary["hits"] * 160.0
                 + context_summary["hit_rate"] * 110.0
@@ -1453,15 +1483,16 @@ class BounceBot(EWrapper, EClient):
                 + (abs(compression_summary["avg_excess"]) * 4.0 if compression_summary["avg_excess"] is not None else 0.0)
                 + recent_profile_hits * 75.0
                 + recent_profile_hit_rate * 50.0
+                + (total_direction_bias * 70.0 if total_direction_bias is not None else 0.0)
+                + (recent_direction_bias * 110.0 if recent_direction_bias is not None else 0.0)
+                + (current_direction_bias * 140.0 if current_direction_bias is not None else 0.0)
             )
             if current_direction_ok:
-                score += 40.0
-                if current_rrs is not None:
-                    score += abs(current_rrs) * 14.0
-                if current_move_ratio is not None:
-                    score += abs(current_move_ratio) * 8.0
-            else:
-                score -= 60.0
+                score += 35.0
+            if current_countertrend:
+                score -= 140.0
+            elif not active_direction_bias_ok:
+                score -= 45.0
             return {
                 "symbol": symbol,
                 "direction": direction,
@@ -1481,6 +1512,11 @@ class BounceBot(EWrapper, EClient):
                 "current_move_ratio": current_move_ratio,
                 "current_excess": current_excess,
                 "current_direction_ok": current_direction_ok,
+                "current_countertrend": current_countertrend,
+                "current_direction_bias": current_direction_bias,
+                "recent_direction_bias": recent_direction_bias,
+                "total_direction_bias": total_direction_bias,
+                "active_direction_bias_ok": active_direction_bias_ok,
                 "recent_profile_hits": recent_profile_hits,
                 "recent_profile_hit_rate": recent_profile_hit_rate,
                 "score": score,
@@ -1506,7 +1542,16 @@ class BounceBot(EWrapper, EClient):
 
         long_candidates.sort(
             key=lambda row: (
+                0 if row.get("active_direction_bias_ok") else 1,
                 0 if row.get("current_direction_ok") else 1,
+                -(
+                    row.get("recent_direction_bias")
+                    if row.get("recent_direction_bias") is not None else float("-inf")
+                ),
+                -(
+                    row.get("current_direction_bias")
+                    if row.get("current_direction_bias") is not None else float("-inf")
+                ),
                 -(row.get("recent_profile_hits", 0) or 0),
                 -(row.get("recent_profile_hit_rate", 0.0) or 0.0),
                 -row["score"],
@@ -1517,7 +1562,16 @@ class BounceBot(EWrapper, EClient):
         )
         short_candidates.sort(
             key=lambda row: (
+                0 if row.get("active_direction_bias_ok") else 1,
                 0 if row.get("current_direction_ok") else 1,
+                -(
+                    row.get("recent_direction_bias")
+                    if row.get("recent_direction_bias") is not None else float("-inf")
+                ),
+                -(
+                    row.get("current_direction_bias")
+                    if row.get("current_direction_bias") is not None else float("-inf")
+                ),
                 -(row.get("recent_profile_hits", 0) or 0),
                 -(row.get("recent_profile_hit_rate", 0.0) or 0.0),
                 -row["score"],
@@ -1546,7 +1600,16 @@ class BounceBot(EWrapper, EClient):
 
         def candidate_sort_key(entry):
             return (
+                0 if entry.get("active_direction_bias_ok") else 1,
                 0 if entry.get("current_direction_ok") else 1,
+                -(
+                    entry.get("recent_direction_bias")
+                    if entry.get("recent_direction_bias") is not None else float("-inf")
+                ),
+                -(
+                    entry.get("current_direction_bias")
+                    if entry.get("current_direction_bias") is not None else float("-inf")
+                ),
                 -(entry.get("recent_profile_hits", 0) or 0),
                 -(entry.get("recent_profile_hit_rate", 0.0) or 0.0),
                 -entry.get("score", 0.0),
@@ -1554,23 +1617,22 @@ class BounceBot(EWrapper, EClient):
                 entry.get("symbol", ""),
             )
 
-        def prefer_live_candidates(candidates):
-            live = [entry for entry in candidates if entry.get("current_direction_ok")]
-            return live if live else candidates
+        def filter_active_candidates(candidates):
+            return [entry for entry in candidates if entry.get("active_direction_bias_ok")]
 
-        long_context_candidates = prefer_live_candidates(sorted(
+        long_context_candidates = filter_active_candidates(sorted(
             [entry for entry in long_candidates if entry.get("context_hits", 0) > 0],
             key=candidate_sort_key,
         ))
-        short_context_candidates = prefer_live_candidates(sorted(
+        short_context_candidates = filter_active_candidates(sorted(
             [entry for entry in short_candidates if entry.get("context_hits", 0) > 0],
             key=candidate_sort_key,
         ))
-        long_compression_candidates = prefer_live_candidates(sorted(
+        long_compression_candidates = filter_active_candidates(sorted(
             [entry for entry in long_candidates if entry.get("compression_hits", 0) > 0],
             key=candidate_sort_key,
         ))
-        short_compression_candidates = prefer_live_candidates(sorted(
+        short_compression_candidates = filter_active_candidates(sorted(
             [entry for entry in short_candidates if entry.get("compression_hits", 0) > 0],
             key=candidate_sort_key,
         ))
@@ -1768,6 +1830,12 @@ class BounceBot(EWrapper, EClient):
         current_excess = entry.get("current_excess")
         if current_excess is not None:
             line += f" nowER={current_excess:+.2f}"
+        recent_direction_bias = entry.get("recent_direction_bias")
+        if recent_direction_bias is not None:
+            line += f" ema={recent_direction_bias:+.2f}"
+        current_direction_bias = entry.get("current_direction_bias")
+        if current_direction_bias is not None:
+            line += f" nowBias={current_direction_bias:+.2f}"
         if secondary_windows:
             line += f" {secondary_label}={secondary_hits}/{secondary_windows}"
         return line
@@ -1849,6 +1917,61 @@ class BounceBot(EWrapper, EClient):
             and (move_ratio is None or move_ratio < 0)
             and (excess_move_ratio is None or excess_move_ratio < 0)
         )
+
+    def _profile_item_is_countertrend(self, entry, direction):
+        opposite_direction = "short" if direction == "long" else "long"
+        return self._profile_item_matches_direction(
+            entry,
+            opposite_direction,
+            require_significant=True,
+        )
+
+    def _profile_direction_bias_score(self, entry, direction, threshold):
+        if not isinstance(entry, dict):
+            return None
+
+        threshold = abs(float(threshold or 0.0))
+        if threshold <= 0.0:
+            threshold = float(RRS_DEFAULT_THRESHOLD)
+
+        def clamp(value, limit=3.0):
+            return max(-limit, min(limit, value))
+
+        components = []
+
+        rrs_value = entry.get("rrs")
+        if rrs_value is not None:
+            signed_rrs = rrs_value if direction == "long" else -rrs_value
+            components.append(clamp(signed_rrs / threshold))
+
+        move_ratio = entry.get("move_ratio")
+        if move_ratio is not None and MIN_MOVE_RATIO_FOR_SIGNAL > 0:
+            signed_move = move_ratio if direction == "long" else -move_ratio
+            components.append(clamp(signed_move / MIN_MOVE_RATIO_FOR_SIGNAL))
+
+        excess_move_ratio = entry.get("excess_move_ratio")
+        if excess_move_ratio is not None and MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL > 0:
+            signed_excess = excess_move_ratio if direction == "long" else -excess_move_ratio
+            components.append(clamp(signed_excess / MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL))
+
+        if not components:
+            return None
+        return sum(components) / len(components)
+
+    def _ema_profile_direction_bias(self, profile, direction, threshold):
+        ema_value = None
+        for item in profile or []:
+            bias_score = self._profile_direction_bias_score(item, direction, threshold)
+            if bias_score is None:
+                continue
+            if ema_value is None:
+                ema_value = bias_score
+            else:
+                ema_value = (
+                    (ENVIRONMENT_PROFILE_EMA_ALPHA * bias_score)
+                    + ((1.0 - ENVIRONMENT_PROFILE_EMA_ALPHA) * ema_value)
+                )
+        return ema_value
 
     def _calc_move_ratio(self, bars, length):
         if not bars or len(bars) < length + 1:
@@ -3481,12 +3604,15 @@ class BounceBot(EWrapper, EClient):
             dynamic_vwap = metrics.get("dynamic_vwap")
             # Check if price respected dynamic VWAP for consecutive candles
             respected = check_consecutive_respect(dynamic_vwap, "Dynamic VWAP")
-            reclaim = is_recent_reclaim(dynamic_vwap, "Dynamic VWAP")
-            if (respected and is_touch_reject(dynamic_vwap)) or reclaim:
+            zone_reaction = is_vwap_zone_reaction(dynamic_vwap, dynamic_vwap, "Dynamic VWAP")
+            quality_ok = passes_level_quality_filter("dynamic_vwap", dynamic_vwap, dynamic_vwap, "Dynamic VWAP")
+            touch_reject = is_touch_reject(dynamic_vwap)
+            if quality_ok and respected and (touch_reject or zone_reaction):
                 ref_levels["dynamic_vwap"] = dynamic_vwap
                 mark_trigger("dynamic_vwap")
                 logging.debug(
-                    f"{symbol}: Dynamic VWAP bounce candidate found ({'reclaim' if reclaim else 'touch/reject'}). "
+                    f"{symbol}: Dynamic VWAP bounce candidate found "
+                    f"({'zone reaction' if zone_reaction and not touch_reject else 'touch/reject'}). "
                     f"DVWAP: {dynamic_vwap:.2f}, Close: {current_candle_data['close']:.2f}"
                 )
 
