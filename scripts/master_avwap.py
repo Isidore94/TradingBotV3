@@ -258,6 +258,8 @@ TRACKER_STOP_FAILURE_CLOSES = 2
 TRACKER_PREV_AVWAPE_NEAR_ATR = 0.5
 TRACKER_EMA_CONSOLIDATION_ATR = 0.35
 TRACKER_EMA_CONSOLIDATION_RANGE_ATR = 1.0
+TRACKER_SUMMARY_MIN_CLOSED_SAMPLES = 25
+TRACKER_TUNER_MIN_CLOSED_SETUPS = 12
 PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX = 0.90
 PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
 PRIORITY_COMPRESSION_STDEV_ATR_STRONG_MAX = 0.60
@@ -370,6 +372,106 @@ DEFAULT_PRIORITY_SCORING_CONFIG = {
             "score_delta": 6,
             "label": "BounceBot bearish weak short hit",
         },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "LONG",
+            "attribute_key": "structure.directional_sma_support",
+            "operator": "equals",
+            "value": True,
+            "score_delta": 6,
+            "label": "Long above SMA20 and SMA50",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "SHORT",
+            "attribute_key": "structure.directional_sma_support",
+            "operator": "equals",
+            "value": True,
+            "score_delta": 6,
+            "label": "Short below SMA20 and SMA50",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "LONG",
+            "attribute_key": "structure.directional_sma_stack_aligned",
+            "operator": "equals",
+            "value": True,
+            "score_delta": 4,
+            "label": "Bullish SMA stack",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "SHORT",
+            "attribute_key": "structure.directional_sma_stack_aligned",
+            "operator": "equals",
+            "value": True,
+            "score_delta": 4,
+            "label": "Bearish SMA stack",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "LONG",
+            "attribute_key": "structure.directional_ema21_bucket",
+            "operator": "equals",
+            "value": "CLEAN_EXTENSION",
+            "score_delta": 4,
+            "label": "Long clean EMA21 extension",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "SHORT",
+            "attribute_key": "structure.directional_ema21_bucket",
+            "operator": "equals",
+            "value": "CLEAN_EXTENSION",
+            "score_delta": 4,
+            "label": "Short clean EMA21 extension",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "LONG",
+            "attribute_key": "structure.directional_ema21_bucket",
+            "operator": "equals",
+            "value": "OVEREXTENDED",
+            "score_delta": -4,
+            "label": "Long overextended from EMA21",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "SHORT",
+            "attribute_key": "structure.directional_ema21_bucket",
+            "operator": "equals",
+            "value": "OVEREXTENDED",
+            "score_delta": -4,
+            "label": "Short overextended from EMA21",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "LONG",
+            "attribute_key": "structure.directional_ema21_bucket",
+            "operator": "equals",
+            "value": "AGAINST_EMA21",
+            "score_delta": -6,
+            "label": "Long below EMA21",
+        },
+        {
+            "enabled": True,
+            "source": "default",
+            "side": "SHORT",
+            "attribute_key": "structure.directional_ema21_bucket",
+            "operator": "equals",
+            "value": "AGAINST_EMA21",
+            "score_delta": -6,
+            "label": "Short above EMA21",
+        },
     ],
 }
 
@@ -458,8 +560,9 @@ def get_priority_attribute_adjustments() -> list[dict]:
     return [dict(item) for item in adjustments if isinstance(item, dict)]
 
 
-def _priority_attribute_rule_signature(rule: dict) -> tuple[str, str, str, str]:
+def _priority_attribute_rule_signature(rule: dict) -> tuple[str, str, str, str, str]:
     side = normalize_side(str(rule.get("side") or ""))
+    priority_bucket = str(rule.get("priority_bucket") or "").strip()
     attribute_key = str(rule.get("attribute_key") or "").strip()
     operator = str(rule.get("operator") or "equals").strip().lower()
     raw_value = rule.get("value")
@@ -470,7 +573,7 @@ def _priority_attribute_rule_signature(rule: dict) -> tuple[str, str, str, str]:
             value_repr = str(raw_value)
     else:
         value_repr = str(raw_value)
-    return side, attribute_key, operator, value_repr
+    return side, priority_bucket, attribute_key, operator, value_repr
 
 
 def _priority_attribute_rule_source_rank(rule: dict) -> int:
@@ -484,7 +587,12 @@ def _priority_attribute_rule_source_rank(rule: dict) -> int:
     return 0
 
 
-def run_priority_scoring_tuner(apply_changes: bool = False, min_setups: int = 8, suppress_failures: bool = False) -> str:
+def run_priority_scoring_tuner(
+    apply_changes: bool = False,
+    min_setups: int = 8,
+    min_closed_setups: int = TRACKER_TUNER_MIN_CLOSED_SETUPS,
+    suppress_failures: bool = False,
+) -> str:
     script_path = ROOT_DIR / "scripts" / "analyze_master_avwap_scoring.py"
     if not script_path.exists():
         message = f"Missing scoring tuner script: {script_path}"
@@ -493,7 +601,14 @@ def run_priority_scoring_tuner(apply_changes: bool = False, min_setups: int = 8,
             return message
         raise FileNotFoundError(message)
 
-    command = [sys.executable, str(script_path), "--min-setups", str(max(1, int(min_setups)))]
+    command = [
+        sys.executable,
+        str(script_path),
+        "--min-setups",
+        str(max(1, int(min_setups))),
+        "--min-closed-setups",
+        str(max(1, int(min_closed_setups))),
+    ]
     if apply_changes:
         command.append("--apply")
 
@@ -2161,6 +2276,28 @@ def evaluate_anchor_compression(
     return summarize_anchor_compression(price_slice, anchor_stdev, atr20)
 
 
+def _directional_distance_atr(side: str, raw_distance_atr: float | None) -> float | None:
+    if raw_distance_atr is None:
+        return None
+    normalized_side = normalize_side(side)
+    if normalized_side == "SHORT":
+        return -float(raw_distance_atr)
+    return float(raw_distance_atr)
+
+
+def _directional_ema21_bucket(side: str, raw_distance_atr: float | None) -> str:
+    directional_distance = _directional_distance_atr(side, raw_distance_atr)
+    if directional_distance is None:
+        return ""
+    if directional_distance < -0.25:
+        return "AGAINST_EMA21"
+    if directional_distance <= 0.5:
+        return "TIGHT_TO_EMA21"
+    if directional_distance <= 3.0:
+        return "CLEAN_EXTENSION"
+    return "OVEREXTENDED"
+
+
 def build_tracker_feature_snapshot(
     side: str,
     bar_row: pd.Series,
@@ -2223,6 +2360,19 @@ def build_tracker_feature_snapshot(
                 and (recent_close_std / atr20) <= 0.45
             )
 
+    directional_ema21_distance_atr = _directional_distance_atr(side, ema21_distance_atr)
+    directional_ema21_bucket = _directional_ema21_bucket(side, ema21_distance_atr)
+    directional_sma_support = None
+    directional_sma_stack_aligned = None
+    normalized_side = normalize_side(side)
+    if close_value is not None and sma20 is not None and sma50 is not None:
+        if normalized_side == "SHORT":
+            directional_sma_support = close_value < sma20 and close_value < sma50
+            directional_sma_stack_aligned = close_value < sma20 < sma50
+        else:
+            directional_sma_support = close_value > sma20 and close_value > sma50
+            directional_sma_stack_aligned = close_value > sma20 > sma50
+
     current_vwap = _anchor_level_value(current_anchor_levels, "AVWAPE")
     current_upper_1 = _anchor_level_value(current_anchor_levels, "UPPER_1")
     current_lower_1 = _anchor_level_value(current_anchor_levels, "LOWER_1")
@@ -2242,6 +2392,8 @@ def build_tracker_feature_snapshot(
         "ema8_distance_atr": ema8_distance_atr,
         "ema15_distance_atr": ema15_distance_atr,
         "ema21_distance_atr": ema21_distance_atr,
+        "directional_ema21_distance_atr": directional_ema21_distance_atr,
+        "directional_ema21_bucket": directional_ema21_bucket,
         "ema21_consolidation": ema21_consolidation,
         "ema21_consolidation_span_atr": consolidation_span_atr,
         "sma10": sma10,
@@ -2250,6 +2402,8 @@ def build_tracker_feature_snapshot(
         "sma100": sma100,
         "sma200": sma200,
         "sma10_20_cross": sma_cross,
+        "directional_sma_support": directional_sma_support,
+        "directional_sma_stack_aligned": directional_sma_stack_aligned,
         "compression_flag": bool((compression_summary or {}).get("is_compressed")),
         "compression_penalty": int((compression_summary or {}).get("compression_penalty", 0) or 0),
         "compression_note": (compression_summary or {}).get("compression_note", ""),
@@ -2756,6 +2910,38 @@ def build_tracker_entry_attributes(
         description="Width of the recent consolidation range measured in ATR.",
     )
     add(
+        "structure.directional_ema21_distance_atr",
+        _coerce_float(entry_snapshot.get("directional_ema21_distance_atr")),
+        group="structure",
+        label="Directional EMA21 distance ATR",
+        value_type="number",
+        description="ATR-normalized distance from EMA21, flipped so positive values align with the setup direction.",
+    )
+    add(
+        "structure.directional_ema21_bucket",
+        entry_snapshot.get("directional_ema21_bucket") or "",
+        group="structure",
+        label="Directional EMA21 bucket",
+        value_type="text",
+        description="Directional EMA21 posture bucket: tight, clean extension, overextended, or against the setup.",
+    )
+    add(
+        "structure.directional_sma_support",
+        entry_snapshot.get("directional_sma_support"),
+        group="structure",
+        label="Directional SMA support",
+        value_type="bool",
+        description="Whether price is on the favorable side of both the 20-day and 50-day moving averages.",
+    )
+    add(
+        "structure.directional_sma_stack_aligned",
+        entry_snapshot.get("directional_sma_stack_aligned"),
+        group="structure",
+        label="Directional SMA stack aligned",
+        value_type="bool",
+        description="Whether price and the 20-day/50-day moving averages are stacked in the setup direction.",
+    )
+    add(
         "structure.previous_avwape_near_0_5atr",
         bool(entry_snapshot.get("previous_avwape_near_0_5atr")),
         group="structure",
@@ -2985,6 +3171,12 @@ def _attribute_rule_matches(rule: dict, attributes: dict[str, object]) -> bool:
         if actual_side != normalize_side(rule_side):
             return False
 
+    rule_bucket = str(rule.get("priority_bucket") or "").strip()
+    if rule_bucket:
+        actual_bucket = str(attributes.get("setup.priority_bucket") or "").strip()
+        if actual_bucket != rule_bucket:
+            return False
+
     attribute_key = str(rule.get("attribute_key") or "").strip()
     if not attribute_key or attribute_key not in attributes:
         return False
@@ -3029,7 +3221,7 @@ def _attribute_rule_matches(rule: dict, attributes: dict[str, object]) -> bool:
 
 def apply_priority_attribute_adjustments(row: dict, symbol_entry: dict) -> None:
     raw_rules = get_priority_attribute_adjustments()
-    rule_map: dict[tuple[str, str, str, str], dict] = {}
+    rule_map: dict[tuple[str, str, str, str, str], dict] = {}
     for rule in raw_rules:
         signature = _priority_attribute_rule_signature(rule)
         existing = rule_map.get(signature)
@@ -3724,6 +3916,7 @@ def _summarize_tracker_setup_outcome(setup: dict) -> dict[str, object]:
         if isinstance(scenario, dict)
     ]
     tradeable = [scenario for scenario in scenarios if scenario.get("tradeable")]
+    open_tradeable = [scenario for scenario in tradeable if _scenario_is_open(scenario.get("status", ""))]
     closed = [
         scenario
         for scenario in tradeable
@@ -3739,14 +3932,25 @@ def _summarize_tracker_setup_outcome(setup: dict) -> dict[str, object]:
         for scenario in closed
         if _coerce_float(scenario.get("total_r")) is not None
     ]
+    avg_total_r = mean(total_rs) if total_rs else None
+    avg_closed_r = mean(closed_rs) if closed_rs else None
+    days_held_values = [int(scenario.get("days_held", 0) or 0) for scenario in tradeable]
     return {
         "tradeable_scenario_count": len(tradeable),
+        "open_tradeable_scenario_count": len(open_tradeable),
         "closed_tradeable_scenario_count": len(closed),
-        "avg_total_r": mean(total_rs) if total_rs else None,
+        "avg_total_r": avg_total_r,
         "median_total_r": median(total_rs) if total_rs else None,
-        "avg_closed_r": mean(closed_rs) if closed_rs else None,
+        "avg_closed_r": avg_closed_r,
+        "open_distortion": (
+            avg_total_r - avg_closed_r
+            if avg_total_r is not None and avg_closed_r is not None
+            else None
+        ),
         "best_total_r": max(total_rs) if total_rs else None,
         "worst_total_r": min(total_rs) if total_rs else None,
+        "avg_days_held": mean(days_held_values) if days_held_values else None,
+        "max_days_held": max(days_held_values) if days_held_values else 0,
         "any_target_hit": any(str(scenario.get("status", "")).upper() == "TARGET_HIT" for scenario in tradeable),
         "any_stopped": any(str(scenario.get("status", "")).upper() == "STOPPED" for scenario in tradeable),
     }
@@ -4146,6 +4350,10 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
     if not scenario_rows:
         return []
 
+    def _sort_metric(item: dict, key: str) -> float:
+        value = _coerce_float(item.get(key))
+        return value if value is not None else -9999.0
+
     grouped = {}
     for row in scenario_rows:
         key = f"{row.get('stop_reference_label')}__{row.get('exit_template_id')}"
@@ -4174,12 +4382,64 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
                 "avg_closed_r": mean(closed_rs) if closed_rs else None,
                 "median_closed_r": median(closed_rs) if closed_rs else None,
                 "avg_total_r": mean(total_rs) if total_rs else None,
+                "open_distortion": (
+                    (mean(total_rs) - mean(closed_rs))
+                    if total_rs and closed_rs
+                    else None
+                ),
                 "avg_closed_pnl": mean(pnl_values) if pnl_values else None,
             }
         )
 
-    stats_rows.sort(key=lambda item: (item["avg_total_r"] is None, -(item["avg_total_r"] or -9999), item["scenario_group"]))
+    stats_rows.sort(
+        key=lambda item: (
+            int(item.get("closed_setups", 0) or 0) <= 0,
+            _coerce_float(item.get("avg_closed_r")) is None,
+            -_sort_metric(item, "avg_closed_r"),
+            -int(item.get("closed_setups", 0) or 0),
+            -_sort_metric(item, "avg_total_r"),
+            str(item.get("scenario_group") or ""),
+        )
+    )
     return stats_rows
+
+
+def _filter_tracker_summary_rows(
+    rows: list[dict],
+    *,
+    closed_key: str,
+    preferred_min_closed: int = TRACKER_SUMMARY_MIN_CLOSED_SAMPLES,
+) -> tuple[list[dict], int]:
+    if not rows:
+        return [], 0
+
+    thresholds = [
+        max(1, int(preferred_min_closed)),
+        max(8, int(preferred_min_closed) // 2),
+        1,
+        0,
+    ]
+    for threshold in thresholds:
+        filtered = [
+            row
+            for row in rows
+            if int(row.get(closed_key, 0) or 0) >= threshold
+        ]
+        if filtered:
+            return filtered, threshold
+    return list(rows), 0
+
+
+def _tracker_days_since_scan(scan_date: str, reference: date | None = None) -> int | None:
+    scan_date_text = str(scan_date or "").strip()
+    if not scan_date_text:
+        return None
+    try:
+        scan_day = datetime.fromisoformat(scan_date_text).date()
+    except ValueError:
+        return None
+    reference_day = reference or datetime.now().date()
+    return max(0, (reference_day - scan_day).days)
 
 
 def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
@@ -4465,6 +4725,7 @@ def build_tracker_factor_view_rows(attribute_leaderboard_rows: list[dict]) -> li
 
     rows.sort(
         key=lambda item: (
+            -(float(item.get("success_edge", 0.0) or 0.0)),
             -(float(item.get("impact_score", 0.0) or 0.0)),
             -int(item.get("closed_tradeable_setup_count", 0) or 0),
             str(item.get("attribute_label") or ""),
@@ -9533,31 +9794,52 @@ class MasterAvwapGUI:
         setup_frame.pack(fill="both", expand=True, pady=(0, 8))
         setup_columns = (
             "scan_date",
+            "age_d",
             "symbol",
             "side",
             "bucket",
-            "entry_price",
             "status",
+            "closed_scenarios",
             "open_scenarios",
+            "avg_closed_r",
+            "open_bias",
             "priority_score",
             "retest",
             "compression",
         )
         self.setup_tracker_table = ttk.Treeview(setup_frame, columns=setup_columns, show="headings", style="Dark.Treeview", height=12)
+        tracker_headings = {
+            "scan_date": "Scan",
+            "age_d": "Age",
+            "symbol": "Symbol",
+            "side": "Side",
+            "bucket": "Bucket",
+            "status": "Status",
+            "closed_scenarios": "Closed",
+            "open_scenarios": "Open",
+            "avg_closed_r": "Avg Closed R",
+            "open_bias": "Open Bias",
+            "priority_score": "Score",
+            "retest": "Retest",
+            "compression": "Comp",
+        }
         tracker_col_widths = {
             "scan_date": 96,
+            "age_d": 54,
             "symbol": 80,
             "side": 60,
             "bucket": 120,
-            "entry_price": 86,
             "status": 86,
+            "closed_scenarios": 70,
             "open_scenarios": 96,
+            "avg_closed_r": 94,
+            "open_bias": 88,
             "priority_score": 90,
             "retest": 110,
-            "compression": 100,
+            "compression": 64,
         }
         for col in setup_columns:
-            self.setup_tracker_table.heading(col, text=col)
+            self.setup_tracker_table.heading(col, text=tracker_headings.get(col, col))
             self.setup_tracker_table.column(col, width=tracker_col_widths.get(col, 100), anchor="w")
         setup_scroll = ttk.Scrollbar(setup_frame, orient="vertical", command=self.setup_tracker_table.yview)
         self.setup_tracker_table.configure(yscrollcommand=setup_scroll.set)
@@ -9684,6 +9966,7 @@ class MasterAvwapGUI:
             "closed",
             "avg_closed_r",
             "r_edge",
+            "success",
             "impact",
         )
         self.setup_tracker_factor_table = ttk.Treeview(
@@ -9700,6 +9983,7 @@ class MasterAvwapGUI:
             "closed": 58,
             "avg_closed_r": 78,
             "r_edge": 72,
+            "success": 74,
             "impact": 68,
         }
         for col in factor_columns:
@@ -10025,8 +10309,8 @@ class MasterAvwapGUI:
         symbols = []
         for item_id in self.setup_tracker_table.get_children():
             values = self.setup_tracker_table.item(item_id, "values")
-            if len(values) >= 2 and values[1]:
-                symbols.append(str(values[1]).strip().upper())
+            if len(values) >= 3 and values[2]:
+                symbols.append(str(values[2]).strip().upper())
         symbols = sorted(set(symbols))
         if not symbols:
             self.status_var.set("No setup tracker symbols to copy.")
@@ -10086,26 +10370,42 @@ class MasterAvwapGUI:
         lines.append("")
         lines.append("Top scenario stats")
         lines.append("-" * 80)
-        if not stats_rows:
+        display_stats_rows, stats_min_closed = _filter_tracker_summary_rows(
+            stats_rows,
+            closed_key="closed_setups",
+        )
+        if not display_stats_rows:
             lines.append("No scenario stats yet.")
         else:
-            for row in stats_rows[:8]:
-                avg_r = row.get("avg_total_r")
-                avg_r_text = f"{avg_r:.2f}R" if avg_r is not None else "n/a"
-                win_rate = row.get("win_rate_closed")
-                win_rate_text = f"{win_rate * 100:.0f}%" if win_rate is not None else "n/a"
+            if stats_min_closed > 0:
+                lines.append(
+                    f"Showing rows with >= {stats_min_closed} closed setups, ranked by avg closed R."
+                )
+            for row in display_stats_rows[:8]:
                 lines.append(
                     f"{row.get('stop_reference_label')} / {row.get('exit_template_id')}: "
-                    f"avg_total={avg_r_text} closed={row.get('closed_setups', 0)} win={win_rate_text}"
+                    f"closed={row.get('closed_setups', 0)} open={row.get('open_setups', 0)} "
+                    f"avg_closed={_fmt_r(row.get('avg_closed_r'))} "
+                    f"avg_total={_fmt_r(row.get('avg_total_r'))} "
+                    f"bias={_fmt_r_edge(row.get('open_distortion'))} "
+                    f"win={_fmt_pct(row.get('win_rate_closed'))}"
                 )
 
         lines.append("")
         lines.append("Top setup types")
         lines.append("-" * 80)
-        if not setup_type_rows:
+        display_setup_type_rows, setup_type_min_closed = _filter_tracker_summary_rows(
+            setup_type_rows,
+            closed_key="closed_setups",
+        )
+        if not display_setup_type_rows:
             lines.append("No setup-type stats yet.")
         else:
-            for row in setup_type_rows[:6]:
+            if setup_type_min_closed > 0:
+                lines.append(
+                    f"Showing rows with >= {setup_type_min_closed} closed setups."
+                )
+            for row in display_setup_type_rows[:6]:
                 lines.append(
                     f"{row.get('type_label')}: tracked={row.get('tracked_setups', 0)} "
                     f"closed={row.get('closed_setups', 0)} avg_closed={_fmt_r(row.get('avg_closed_r'))} "
@@ -10115,13 +10415,41 @@ class MasterAvwapGUI:
         positive_factor_rows = [
             row
             for row in factor_rows
+            if int(row.get("closed_tradeable_setup_count", 0) or 0) >= TRACKER_SUMMARY_MIN_CLOSED_SAMPLES
             if (_coerce_float(row.get("success_edge")) or 0.0) > 0
         ]
         negative_factor_rows = [
             row
             for row in factor_rows
+            if int(row.get("closed_tradeable_setup_count", 0) or 0) >= TRACKER_SUMMARY_MIN_CLOSED_SAMPLES
             if (_coerce_float(row.get("success_edge")) or 0.0) < 0
         ]
+        if not positive_factor_rows:
+            positive_factor_rows = [
+                row
+                for row in factor_rows
+                if (_coerce_float(row.get("success_edge")) or 0.0) > 0
+            ]
+        if not negative_factor_rows:
+            negative_factor_rows = [
+                row
+                for row in factor_rows
+                if (_coerce_float(row.get("success_edge")) or 0.0) < 0
+            ]
+        positive_factor_rows = sorted(
+            positive_factor_rows,
+            key=lambda row: (
+                -(_coerce_float(row.get("success_edge")) or 0.0),
+                -int(row.get("closed_tradeable_setup_count", 0) or 0),
+            ),
+        )
+        negative_factor_rows = sorted(
+            negative_factor_rows,
+            key=lambda row: (
+                (_coerce_float(row.get("success_edge")) or 0.0),
+                -int(row.get("closed_tradeable_setup_count", 0) or 0),
+            ),
+        )
 
         lines.append("")
         lines.append("Positive factor edges")
@@ -10134,6 +10462,7 @@ class MasterAvwapGUI:
                     f"{row.get('side')} {row.get('priority_bucket')} | "
                     f"{row.get('attribute_label')}={row.get('value_label')}: "
                     f"closed={row.get('closed_tradeable_setup_count', 0)} "
+                    f"success={_fmt_r_edge(row.get('success_edge'))} "
                     f"r_edge={_fmt_r_edge(row.get('avg_closed_r_edge'))} "
                     f"hit_edge={_fmt_pct_edge(row.get('target_hit_rate_edge'))} "
                     f"stop_edge={_fmt_pct_edge(row.get('stop_rate_edge'))}"
@@ -10150,6 +10479,7 @@ class MasterAvwapGUI:
                     f"{row.get('side')} {row.get('priority_bucket')} | "
                     f"{row.get('attribute_label')}={row.get('value_label')}: "
                     f"closed={row.get('closed_tradeable_setup_count', 0)} "
+                    f"success={_fmt_r_edge(row.get('success_edge'))} "
                     f"r_edge={_fmt_r_edge(row.get('avg_closed_r_edge'))} "
                     f"hit_edge={_fmt_pct_edge(row.get('target_hit_rate_edge'))} "
                     f"stop_edge={_fmt_pct_edge(row.get('stop_rate_edge'))}"
@@ -10168,6 +10498,19 @@ class MasterAvwapGUI:
                 f"anchor={selected_setup.get('anchor_date')} "
                 f"score={_coerce_float(selected_setup.get('priority_score')) or 0:.1f}"
             )
+            selected_outcome = _summarize_tracker_setup_outcome(selected_setup)
+            selected_days_since_scan = _tracker_days_since_scan(str(selected_setup.get("scan_date") or ""))
+            lines.append(
+                f"age={selected_days_since_scan if selected_days_since_scan is not None else 'n/a'}d "
+                f"closed={int(selected_outcome.get('closed_tradeable_scenario_count', 0) or 0)} "
+                f"open={int(selected_outcome.get('open_tradeable_scenario_count', 0) or 0)} "
+                f"avg_closed={_fmt_r(selected_outcome.get('avg_closed_r'))} "
+                f"avg_total={_fmt_r(selected_outcome.get('avg_total_r'))} "
+                f"bias={_fmt_r_edge(selected_outcome.get('open_distortion'))}"
+            )
+            max_days_held = int(selected_outcome.get("max_days_held", 0) or 0)
+            if max_days_held > 0:
+                lines.append(f"max scenario hold={max_days_held} day(s)")
             if selected_setup.get("favorite_zone"):
                 lines.append(f"zone={selected_setup.get('favorite_zone')}")
             if selected_setup.get("retest_note"):
@@ -10344,6 +10687,7 @@ class MasterAvwapGUI:
         for row in rows:
             avg_closed_r = _coerce_float(row.get("avg_closed_r"))
             avg_closed_r_edge = _coerce_float(row.get("avg_closed_r_edge"))
+            success_edge = _coerce_float(row.get("success_edge"))
             impact_score = _coerce_float(row.get("impact_score"))
             item_id = self.setup_tracker_factor_table.insert(
                 "",
@@ -10355,6 +10699,7 @@ class MasterAvwapGUI:
                     int(row.get("closed_tradeable_setup_count", 0) or 0),
                     "" if avg_closed_r is None else f"{avg_closed_r:.2f}",
                     "" if avg_closed_r_edge is None else f"{avg_closed_r_edge:+.2f}",
+                    "" if success_edge is None else f"{success_edge:+.2f}",
                     "" if impact_score is None else f"{impact_score:.2f}",
                 ),
             )
@@ -10394,6 +10739,8 @@ class MasterAvwapGUI:
 
         coverage_pct = _coerce_float(row.get("coverage_pct"))
         coverage_text = f"{coverage_pct:.1f}%" if coverage_pct is not None else "n/a"
+        success_edge = _coerce_float(row.get("success_edge"))
+        success_text = f"{success_edge:+.2f}R" if success_edge is not None else "n/a"
         impact_score = _coerce_float(row.get("impact_score"))
         impact_text = f"{impact_score:.2f}" if impact_score is not None else "n/a"
         lines = [
@@ -10421,9 +10768,8 @@ class MasterAvwapGUI:
                 f"vs baseline {_fmt_pct(row.get('baseline_stop_rate'))} "
                 f"({_fmt_pct_edge(row.get('stop_rate_edge'))})"
             ),
-            (
-                f"Impact score={impact_text}"
-            ),
+            f"Success edge={success_text}",
+            f"Impact score={impact_text}",
         ]
         if row.get("attribute_description"):
             lines.append(f"Description: {row.get('attribute_description')}")
@@ -10519,18 +10865,26 @@ class MasterAvwapGUI:
             ),
         )
 
+        today = datetime.now().date()
         for setup in setups:
+            outcome_summary = _summarize_tracker_setup_outcome(setup)
+            days_since_scan = _tracker_days_since_scan(str(setup.get("scan_date") or ""), reference=today)
+            avg_closed_r = _coerce_float(outcome_summary.get("avg_closed_r"))
+            open_bias = _coerce_float(outcome_summary.get("open_distortion"))
             item_id = self.setup_tracker_table.insert(
                 "",
                 "end",
                 values=(
                     setup.get("scan_date", ""),
+                    "" if days_since_scan is None else str(days_since_scan),
                     setup.get("symbol", ""),
                     setup.get("side", ""),
                     setup.get("priority_bucket", ""),
-                    "" if _coerce_float(setup.get("entry_price")) is None else f"{float(setup.get('entry_price')):.2f}",
                     setup.get("setup_status", ""),
+                    int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0),
                     int(setup.get("open_scenario_count", 0) or 0),
+                    "" if avg_closed_r is None else f"{avg_closed_r:.2f}",
+                    "" if open_bias is None else f"{open_bias:+.2f}",
                     "" if _coerce_float(setup.get("priority_score")) is None else f"{float(setup.get('priority_score')):.1f}",
                     setup.get("retest_reference_level", ""),
                     "Y" if setup.get("compression_flag") else "",

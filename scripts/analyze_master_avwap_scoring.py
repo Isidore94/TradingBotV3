@@ -41,6 +41,9 @@ RULE_WHITELIST = {
     "trend.trend_20d",
     "trend.trendline_break_recent",
     "structure.compression_flag",
+    "structure.directional_ema21_bucket",
+    "structure.directional_sma_support",
+    "structure.directional_sma_stack_aligned",
     "structure.previous_avwape_near_0_5atr",
     "structure.ema21_consolidation",
     "levels.current_active_level",
@@ -48,6 +51,9 @@ RULE_WHITELIST = {
     "levels.current_band_zone",
     "levels.previous_band_zone",
 }
+
+DEFAULT_MIN_SETUPS = 8
+DEFAULT_MIN_CLOSED_SETUPS = 12
 
 
 def _load_csv(path: Path) -> pd.DataFrame:
@@ -79,11 +85,49 @@ def _select_outcome_avg_r(row) -> float | None:
     return _coerce_float(row.get("avg_total_r"))
 
 
-def _baseline_by_side(attributes_df: pd.DataFrame) -> dict[str, dict]:
+def _row_closed_count(row) -> int:
+    return int(
+        row.get("closed_tradeable_setup_count", 0)
+        or row.get("closed_tradeable_scenario_count", 0)
+        or 0
+    )
+
+
+def _row_sample_count(row) -> int:
+    return int(
+        row.get("tradeable_setup_count", 0)
+        or row.get("tradeable_scenario_count", 0)
+        or row.get("setup_count", 0)
+        or 0
+    )
+
+
+def _baseline_context_key(side: str, priority_bucket: str) -> str:
+    side_key = str(side or "").strip().upper()
+    bucket_key = str(priority_bucket or "").strip()
+    return f"{side_key}::{bucket_key or '_all'}"
+
+
+def _row_baseline_context_key(row) -> str:
+    return _baseline_context_key(
+        str(row.get("side") or ""),
+        str(row.get("priority_bucket") or ""),
+    )
+
+
+def _baseline_label(baseline: dict) -> str:
+    side = str(baseline.get("side") or "").strip()
+    priority_bucket = str(baseline.get("priority_bucket") or "").strip()
+    return f"{side} {priority_bucket}".strip()
+
+
+def _baseline_by_context(attributes_df: pd.DataFrame) -> dict[str, dict]:
     if attributes_df.empty or "setup_id" not in attributes_df.columns:
         return {}
 
     setup_df = attributes_df.drop_duplicates(subset=["setup_id"]).copy()
+    if "priority_bucket" not in setup_df.columns:
+        setup_df["priority_bucket"] = ""
     if "closed_tradeable_scenario_count" in setup_df.columns:
         closed = setup_df[
             pd.to_numeric(setup_df["closed_tradeable_scenario_count"], errors="coerce").fillna(0) > 0
@@ -96,14 +140,17 @@ def _baseline_by_side(attributes_df: pd.DataFrame) -> dict[str, dict]:
             setup_df = tradeable
 
     baselines = {}
-    for side, group in setup_df.groupby("side", dropna=False):
+    for (side, priority_bucket), group in setup_df.groupby(["side", "priority_bucket"], dropna=False):
         side_key = str(side or "").strip().upper()
+        bucket_key = str(priority_bucket or "").strip()
         if not side_key or group.empty:
             continue
         avg_total_series = pd.to_numeric(group.apply(_select_outcome_avg_r, axis=1), errors="coerce").dropna()
         target_hit_series = group.get("any_target_hit")
         stop_series = group.get("any_stopped")
-        baselines[side_key] = {
+        baselines[_baseline_context_key(side_key, bucket_key)] = {
+            "side": side_key,
+            "priority_bucket": bucket_key,
             "setup_count": int(group["setup_id"].nunique()),
             "avg_total_r": float(avg_total_series.mean()) if not avg_total_series.empty else 0.0,
             "target_hit_rate": float(target_hit_series.fillna(False).astype(bool).mean()) if target_hit_series is not None else 0.0,
@@ -112,16 +159,19 @@ def _baseline_by_side(attributes_df: pd.DataFrame) -> dict[str, dict]:
     return baselines
 
 
-def _derive_score_delta(row: pd.Series, baseline: dict, *, min_setups: int, max_abs: int) -> int:
-    setup_count = int(
-        row.get("closed_tradeable_setup_count", 0)
-        or row.get("closed_tradeable_scenario_count", 0)
-        or row.get("tradeable_setup_count", 0)
-        or row.get("tradeable_scenario_count", 0)
-        or row.get("setup_count", 0)
-        or 0
-    )
+def _derive_score_delta(
+    row: pd.Series,
+    baseline: dict,
+    *,
+    min_setups: int,
+    min_closed_setups: int,
+    max_abs: int,
+) -> int:
+    setup_count = _row_sample_count(row)
+    closed_count = _row_closed_count(row)
     if setup_count < min_setups:
+        return 0
+    if closed_count > 0 and closed_count < min_closed_setups:
         return 0
 
     avg_total_r = _select_outcome_avg_r(row)
@@ -134,7 +184,9 @@ def _derive_score_delta(row: pd.Series, baseline: dict, *, min_setups: int, max_
     edge_target = (target_hit_rate or 0.0) - float(baseline.get("target_hit_rate", 0.0) or 0.0)
     edge_stop = float(baseline.get("stop_rate", 0.0) or 0.0) - (stop_rate or 0.0)
 
-    confidence = min(1.0, math.sqrt(max(setup_count, 1) / float(max(min_setups, 1))) / 2.0)
+    confidence_count = closed_count if closed_count > 0 else setup_count
+    confidence_floor = min_closed_setups if closed_count > 0 else min_setups
+    confidence = min(1.0, math.sqrt(max(confidence_count, 1) / float(max(confidence_floor, 1))) / 2.0)
     raw_score = (edge_r * 10.0 + edge_target * 4.0 + edge_stop * 4.0) * confidence
     delta = int(round(max(-max_abs, min(max_abs, raw_score))))
     return delta if abs(delta) >= 2 else 0
@@ -154,6 +206,7 @@ def _recommend_signal_changes(
     current_config: dict,
     *,
     min_setups: int,
+    min_closed_setups: int,
 ) -> list[dict]:
     recommendations = []
     if leaderboard_df.empty:
@@ -166,9 +219,10 @@ def _recommend_signal_changes(
     if signal_rows.empty:
         return recommendations
 
+    aggregated: dict[tuple[str, str, str], dict] = {}
     for _, row in signal_rows.iterrows():
         side = str(row.get("side") or "").strip().upper()
-        baseline = baselines.get(side)
+        baseline = baselines.get(_row_baseline_context_key(row))
         if not baseline:
             continue
         bucket = SIGNAL_ATTRIBUTE_MAP.get(str(row.get("attribute_key") or ""))
@@ -176,6 +230,7 @@ def _recommend_signal_changes(
             row,
             baseline,
             min_setups=min_setups,
+            min_closed_setups=min_closed_setups,
             max_abs=12 if bucket == "current" else 8,
         )
         if score_delta == 0:
@@ -185,32 +240,81 @@ def _recommend_signal_changes(
         if not signal_name:
             continue
 
+        closed_count = _row_closed_count(row)
+        setup_count = _row_sample_count(row)
+        evidence_count = max(closed_count, setup_count, 1)
+        recommendation_key = (bucket, side, signal_name)
+        aggregate = aggregated.setdefault(
+            recommendation_key,
+            {
+                "bucket": bucket,
+                "side": side,
+                "signal": signal_name,
+                "attribute_key": row.get("attribute_key"),
+                "setup_count": 0,
+                "closed_setup_count": 0,
+                "weighted_delta": 0.0,
+                "evidence_count": 0,
+                "weighted_avg_outcome_r": 0.0,
+                "weighted_baseline_avg_outcome_r": 0.0,
+                "weighted_target_hit_rate": 0.0,
+                "weighted_baseline_target_hit_rate": 0.0,
+                "weighted_stop_rate": 0.0,
+                "weighted_baseline_stop_rate": 0.0,
+                "priority_bucket_summary": [],
+            },
+        )
+        aggregate["setup_count"] += int(row.get("setup_count", 0) or 0)
+        aggregate["closed_setup_count"] += closed_count
+        aggregate["weighted_delta"] += float(score_delta) * evidence_count
+        aggregate["evidence_count"] += evidence_count
+        aggregate["weighted_avg_outcome_r"] += float(_select_outcome_avg_r(row) or 0.0) * evidence_count
+        aggregate["weighted_baseline_avg_outcome_r"] += float(baseline.get("avg_total_r", 0.0) or 0.0) * evidence_count
+        aggregate["weighted_target_hit_rate"] += float(_coerce_float(row.get("target_hit_rate")) or 0.0) * evidence_count
+        aggregate["weighted_baseline_target_hit_rate"] += float(baseline.get("target_hit_rate", 0.0) or 0.0) * evidence_count
+        aggregate["weighted_stop_rate"] += float(_coerce_float(row.get("stop_rate")) or 0.0) * evidence_count
+        aggregate["weighted_baseline_stop_rate"] += float(baseline.get("stop_rate", 0.0) or 0.0) * evidence_count
+        aggregate["priority_bucket_summary"].append(
+            f"{str(row.get('priority_bucket') or '').strip() or 'all'}:{score_delta:+d}"
+        )
+
+    for aggregate in aggregated.values():
+        evidence_count = int(aggregate.get("evidence_count", 0) or 0)
+        if evidence_count <= 0:
+            continue
         current_weight = int(
             current_config.get("signal_weights", {})
-            .get(bucket, {})
-            .get(side, {})
-            .get(signal_name, 0)
+            .get(aggregate["bucket"], {})
+            .get(aggregate["side"], {})
+            .get(aggregate["signal"], 0)
             or 0
         )
-        new_weight = max(0, current_weight + score_delta)
+        weight_delta = int(round(float(aggregate.get("weighted_delta", 0.0) or 0.0) / evidence_count))
+        if abs(weight_delta) < 2:
+            continue
+        new_weight = max(0, current_weight + weight_delta)
         if new_weight == current_weight:
             continue
 
         recommendations.append(
             {
                 "section": "signal_weight",
-                "bucket": bucket,
-                "side": side,
-                "signal": signal_name,
-                "attribute_key": row.get("attribute_key"),
-                "setup_count": int(row.get("setup_count", 0) or 0),
-                "avg_total_r": _select_outcome_avg_r(row),
-                "baseline_avg_total_r": float(baseline.get("avg_total_r", 0.0) or 0.0),
-                "target_hit_rate": _coerce_float(row.get("target_hit_rate")),
-                "baseline_target_hit_rate": float(baseline.get("target_hit_rate", 0.0) or 0.0),
-                "stop_rate": _coerce_float(row.get("stop_rate")),
-                "baseline_stop_rate": float(baseline.get("stop_rate", 0.0) or 0.0),
-                "weight_delta": int(score_delta),
+                "bucket": aggregate["bucket"],
+                "side": aggregate["side"],
+                "signal": aggregate["signal"],
+                "attribute_key": aggregate["attribute_key"],
+                "setup_count": int(aggregate.get("setup_count", 0) or 0),
+                "closed_setup_count": int(aggregate.get("closed_setup_count", 0) or 0),
+                "avg_outcome_r": float(aggregate.get("weighted_avg_outcome_r", 0.0) or 0.0) / evidence_count,
+                "avg_total_r": float(aggregate.get("weighted_avg_outcome_r", 0.0) or 0.0) / evidence_count,
+                "baseline_avg_outcome_r": float(aggregate.get("weighted_baseline_avg_outcome_r", 0.0) or 0.0) / evidence_count,
+                "baseline_avg_total_r": float(aggregate.get("weighted_baseline_avg_outcome_r", 0.0) or 0.0) / evidence_count,
+                "target_hit_rate": float(aggregate.get("weighted_target_hit_rate", 0.0) or 0.0) / evidence_count,
+                "baseline_target_hit_rate": float(aggregate.get("weighted_baseline_target_hit_rate", 0.0) or 0.0) / evidence_count,
+                "stop_rate": float(aggregate.get("weighted_stop_rate", 0.0) or 0.0) / evidence_count,
+                "baseline_stop_rate": float(aggregate.get("weighted_baseline_stop_rate", 0.0) or 0.0) / evidence_count,
+                "priority_bucket_summary": ", ".join(aggregate.get("priority_bucket_summary", [])),
+                "weight_delta": int(weight_delta),
                 "old_weight": int(current_weight),
                 "new_weight": int(new_weight),
             }
@@ -219,6 +323,7 @@ def _recommend_signal_changes(
     recommendations.sort(
         key=lambda item: (
             -abs(int(item.get("weight_delta", 0) or 0)),
+            -int(item.get("closed_setup_count", 0) or 0),
             -int(item.get("setup_count", 0) or 0),
             str(item.get("signal") or ""),
         )
@@ -231,6 +336,7 @@ def _recommend_attribute_rules(
     baselines: dict[str, dict],
     *,
     min_setups: int,
+    min_closed_setups: int,
 ) -> list[dict]:
     rules = []
     if leaderboard_df.empty:
@@ -243,16 +349,23 @@ def _recommend_attribute_rules(
     if candidate_rows.empty:
         return rules
 
-    grouped_choices: dict[tuple[str, str], list[dict]] = {}
+    grouped_choices: dict[tuple[str, str, str], list[dict]] = {}
     for _, row in candidate_rows.iterrows():
         side = str(row.get("side") or "").strip().upper()
-        baseline = baselines.get(side)
+        priority_bucket = str(row.get("priority_bucket") or "").strip()
+        baseline = baselines.get(_baseline_context_key(side, priority_bucket))
         if not baseline:
             continue
-        delta = _derive_score_delta(row, baseline, min_setups=min_setups, max_abs=10)
+        delta = _derive_score_delta(
+            row,
+            baseline,
+            min_setups=min_setups,
+            min_closed_setups=min_closed_setups,
+            max_abs=10,
+        )
         if delta == 0:
             continue
-        grouped_choices.setdefault((side, str(row.get("attribute_key") or "")), []).append(
+        grouped_choices.setdefault((side, priority_bucket, str(row.get("attribute_key") or "")), []).append(
             {
                 "row": row,
                 "delta": delta,
@@ -260,7 +373,7 @@ def _recommend_attribute_rules(
             }
         )
 
-    for (side, attribute_key), items in grouped_choices.items():
+    for (side, priority_bucket, attribute_key), items in grouped_choices.items():
         positives = [item for item in items if item["delta"] > 0]
         negatives = [item for item in items if item["delta"] < 0]
         selected = []
@@ -272,30 +385,36 @@ def _recommend_attribute_rules(
         for item in selected:
             row = item["row"]
             value = _coerce_rule_value(row)
-            label = f"{side} {row.get('attribute_label')} = {row.get('value_label')}"
-            rules.append(
-                {
-                    "enabled": True,
-                    "source": "auto_tuner",
-                    "side": side,
-                    "attribute_key": attribute_key,
-                    "operator": "equals",
-                    "value": value,
-                    "score_delta": int(item["delta"]),
-                    "label": label,
-                    "setup_count": int(row.get("setup_count", 0) or 0),
-                    "avg_total_r": _select_outcome_avg_r(row),
-                    "baseline_avg_total_r": float(item["baseline"].get("avg_total_r", 0.0) or 0.0),
-                    "target_hit_rate": _coerce_float(row.get("target_hit_rate")),
-                    "baseline_target_hit_rate": float(item["baseline"].get("target_hit_rate", 0.0) or 0.0),
-                    "stop_rate": _coerce_float(row.get("stop_rate")),
-                    "baseline_stop_rate": float(item["baseline"].get("stop_rate", 0.0) or 0.0),
-                }
-            )
+            context_label = f"{side} {priority_bucket}".strip()
+            label = f"{context_label} {row.get('attribute_label')} = {row.get('value_label')}".strip()
+            rule_payload = {
+                "enabled": True,
+                "source": "auto_tuner",
+                "side": side,
+                "attribute_key": attribute_key,
+                "operator": "equals",
+                "value": value,
+                "score_delta": int(item["delta"]),
+                "label": label,
+                "setup_count": int(row.get("setup_count", 0) or 0),
+                "closed_setup_count": _row_closed_count(row),
+                "avg_outcome_r": _select_outcome_avg_r(row),
+                "avg_total_r": _select_outcome_avg_r(row),
+                "baseline_avg_outcome_r": float(item["baseline"].get("avg_total_r", 0.0) or 0.0),
+                "baseline_avg_total_r": float(item["baseline"].get("avg_total_r", 0.0) or 0.0),
+                "target_hit_rate": _coerce_float(row.get("target_hit_rate")),
+                "baseline_target_hit_rate": float(item["baseline"].get("target_hit_rate", 0.0) or 0.0),
+                "stop_rate": _coerce_float(row.get("stop_rate")),
+                "baseline_stop_rate": float(item["baseline"].get("stop_rate", 0.0) or 0.0),
+            }
+            if priority_bucket:
+                rule_payload["priority_bucket"] = priority_bucket
+            rules.append(rule_payload)
 
     rules.sort(
         key=lambda item: (
             -abs(int(item.get("score_delta", 0) or 0)),
+            -int(item.get("closed_setup_count", 0) or 0),
             -int(item.get("setup_count", 0) or 0),
             str(item.get("attribute_key") or ""),
         )
@@ -342,10 +461,10 @@ def _build_report_text(
     if not baselines:
         lines.append("No baseline data found.")
     else:
-        for side in sorted(baselines.keys()):
-            baseline = baselines[side]
+        for baseline_key in sorted(baselines.keys()):
+            baseline = baselines[baseline_key]
             lines.append(
-                f"{side}: setups={baseline['setup_count']} avg_total_r={baseline['avg_total_r']:.2f} "
+                f"{_baseline_label(baseline)}: setups={baseline['setup_count']} avg_outcome_r={baseline['avg_total_r']:.2f} "
                 f"target_hit={baseline['target_hit_rate'] * 100:.0f}% stop_rate={baseline['stop_rate'] * 100:.0f}%"
             )
 
@@ -359,8 +478,11 @@ def _build_report_text(
             lines.append(
                 f"{change['side']} {change['bucket']} {change['signal']}: "
                 f"{change['old_weight']} -> {change['new_weight']} ({change['weight_delta']:+d}) "
-                f"setups={change['setup_count']} avg_total_r={change['avg_total_r']:.2f}"
+                f"setups={change['setup_count']} closed={change.get('closed_setup_count', 0)} "
+                f"avg_outcome_r={change['avg_outcome_r']:.2f}"
             )
+            if change.get("priority_bucket_summary"):
+                lines.append(f"  contexts: {change['priority_bucket_summary']}")
 
     lines.append("")
     lines.append("Attribute rules")
@@ -371,7 +493,8 @@ def _build_report_text(
         for rule in attribute_rules[:24]:
             lines.append(
                 f"{rule['label']}: {int(rule['score_delta']):+d} "
-                f"setups={rule['setup_count']} avg_total_r={float(rule['avg_total_r'] or 0.0):.2f}"
+                f"setups={rule['setup_count']} closed={rule.get('closed_setup_count', 0)} "
+                f"avg_outcome_r={float(rule['avg_outcome_r'] or 0.0):.2f}"
             )
 
     lines.append("")
@@ -389,7 +512,18 @@ def _build_report_text(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Analyze Master AVWAP tracker results and recommend scoring adjustments.")
-    parser.add_argument("--min-setups", type=int, default=8, help="Minimum setup count before a signal or attribute can influence scoring.")
+    parser.add_argument(
+        "--min-setups",
+        type=int,
+        default=DEFAULT_MIN_SETUPS,
+        help="Minimum overall setup count before a signal or attribute can influence scoring.",
+    )
+    parser.add_argument(
+        "--min-closed-setups",
+        type=int,
+        default=DEFAULT_MIN_CLOSED_SETUPS,
+        help="Minimum closed setup count required before closed-outcome evidence can influence scoring.",
+    )
     parser.add_argument("--apply", action="store_true", help="Write the generated recommendations into the live scoring config JSON.")
     args = parser.parse_args()
 
@@ -418,14 +552,26 @@ def main() -> int:
         print(message)
         return 0
 
-    baselines = _baseline_by_side(attributes_df)
+    baselines = _baseline_by_context(attributes_df)
     current_config = load_priority_scoring_config()
-    signal_changes = _recommend_signal_changes(leaderboard_df, baselines, current_config, min_setups=max(1, int(args.min_setups)))
-    attribute_rules = _recommend_attribute_rules(leaderboard_df, baselines, min_setups=max(1, int(args.min_setups)))
+    signal_changes = _recommend_signal_changes(
+        leaderboard_df,
+        baselines,
+        current_config,
+        min_setups=max(1, int(args.min_setups)),
+        min_closed_setups=max(1, int(args.min_closed_setups)),
+    )
+    attribute_rules = _recommend_attribute_rules(
+        leaderboard_df,
+        baselines,
+        min_setups=max(1, int(args.min_setups)),
+        min_closed_setups=max(1, int(args.min_closed_setups)),
+    )
 
     recommendation_payload = {
         "generated_at": pd.Timestamp.utcnow().isoformat(),
         "min_setups": max(1, int(args.min_setups)),
+        "min_closed_setups": max(1, int(args.min_closed_setups)),
         "baselines": baselines,
         "signal_changes": signal_changes,
         "attribute_rules": attribute_rules,

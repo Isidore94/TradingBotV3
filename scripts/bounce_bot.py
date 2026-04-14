@@ -1286,10 +1286,23 @@ class BounceBot(EWrapper, EClient):
             sections = self._build_intraday_environment_sections(environment_scan)
             if sections:
                 return sections
+            scenario = self.get_market_environment()
+            weak_spy_bars = int(environment_scan.get("weak_spy_window_count", 0) or 0)
+            strong_spy_bars = int(environment_scan.get("strong_spy_window_count", 0) or 0)
+            if scenario == "bullish_strong":
+                message = "No intraday long leaders are available by average RRS yet."
+            elif scenario == "bearish_strong":
+                message = "No intraday short leaders are available by average RRS yet."
+            elif scenario == "bullish_weak" and weak_spy_bars <= 0:
+                message = "No SPY-weak bars have been measured yet for bullish weak focus."
+            elif scenario == "bearish_weak" and strong_spy_bars <= 0:
+                message = "No SPY-strong bars have been measured yet for bearish weak focus."
+            else:
+                message = "No intraday RS/RW candidates matched the current opposite-SPY bars."
             return [
                 {
                     "title": "Environment focus",
-                    "rows": [{"text": "No intraday RS/RW candidates matched the current SPY context windows.", "tag": "rrs_hdr"}],
+                    "rows": [{"text": message, "tag": "rrs_hdr"}],
                     "tag": "rrs_hdr",
                 }
             ]
@@ -1350,6 +1363,9 @@ class BounceBot(EWrapper, EClient):
             bar = spy_bars[idx]
             if bar.dt.date() != current_date:
                 continue
+            # Score each SPY bar independently so the "weak" environments can
+            # rank symbols against the exact opposite-tape bars instead of a
+            # single blended session state.
             move_ratio = self._calc_move_ratio(spy_bars[:idx + 1], length)
             if move_ratio is None:
                 continue
@@ -1379,7 +1395,7 @@ class BounceBot(EWrapper, EClient):
         return windows
 
     def _summarize_environment_scan(self, intraday_profiles, spy_windows, threshold):
-        if not intraday_profiles or not spy_windows:
+        if not intraday_profiles:
             return None
 
         window_map = {item["dt"]: item for item in spy_windows}
@@ -1389,15 +1405,16 @@ class BounceBot(EWrapper, EClient):
         strong_spy_window_count = sum(1 for item in spy_windows if item.get("spy_strong"))
         compression_window_count = sum(1 for item in spy_windows if item.get("compression"))
 
-        def summarize_bucket(profile, direction, flag_key):
+        def summarize_bucket(profile, direction, flag_key=None):
             samples = []
             hits = []
             for item in profile:
-                window = window_map.get(item.get("dt"))
-                if not window or not window.get(flag_key):
-                    continue
                 if item.get("rrs") is None:
                     continue
+                if flag_key:
+                    window = window_map.get(item.get("dt"))
+                    if not window or not window.get(flag_key):
+                        continue
                 samples.append(item)
                 if direction == "long":
                     if item["rrs"] >= threshold:
@@ -1422,8 +1439,13 @@ class BounceBot(EWrapper, EClient):
                 "avg_excess": avg_excess,
             }
 
-        def finalize_candidate(symbol, direction, profile, context_summary, compression_summary):
-            if context_summary["hits"] <= 0 and compression_summary["hits"] <= 0:
+        def _signed_rrs(value, direction):
+            if value is None:
+                return None
+            return value if direction == "long" else -value
+
+        def finalize_candidate(symbol, direction, profile, overall_summary, context_summary, compression_summary):
+            if overall_summary["windows"] <= 0:
                 return None
             latest_profile = profile[-1] if profile else {}
             recent_profile = profile[-ENVIRONMENT_RECENT_PROFILE_BARS:] if profile else []
@@ -1470,7 +1492,15 @@ class BounceBot(EWrapper, EClient):
                     )
                 )
             )
-            score = (
+            overall_signed_avg_rrs = _signed_rrs(overall_summary["avg_rrs"], direction)
+            if (
+                (overall_signed_avg_rrs is None or overall_signed_avg_rrs <= 0)
+                and overall_summary["hits"] <= 0
+                and recent_profile_hits <= 0
+                and not current_direction_ok
+            ):
+                return None
+            context_score = (
                 context_summary["hits"] * 160.0
                 + context_summary["hit_rate"] * 110.0
                 + (abs(context_summary["avg_rrs"]) * 18.0 if context_summary["avg_rrs"] is not None else 0.0)
@@ -1487,15 +1517,38 @@ class BounceBot(EWrapper, EClient):
                 + (recent_direction_bias * 110.0 if recent_direction_bias is not None else 0.0)
                 + (current_direction_bias * 140.0 if current_direction_bias is not None else 0.0)
             )
+            overall_score = (
+                overall_summary["hits"] * 120.0
+                + overall_summary["hit_rate"] * 85.0
+                + (abs(overall_summary["avg_rrs"]) * 95.0 if overall_summary["avg_rrs"] is not None else 0.0)
+                + (abs(overall_summary["best_rrs"]) * 16.0 if overall_summary["best_rrs"] is not None else 0.0)
+                + (abs(overall_summary["avg_excess"]) * 18.0 if overall_summary["avg_excess"] is not None else 0.0)
+                + context_summary["hits"] * 28.0
+                + context_summary["hit_rate"] * 18.0
+                + recent_profile_hits * 75.0
+                + recent_profile_hit_rate * 55.0
+                + (total_direction_bias * 75.0 if total_direction_bias is not None else 0.0)
+                + (recent_direction_bias * 120.0 if recent_direction_bias is not None else 0.0)
+                + (current_direction_bias * 150.0 if current_direction_bias is not None else 0.0)
+            )
             if current_direction_ok:
-                score += 35.0
+                context_score += 35.0
+                overall_score += 35.0
             if current_countertrend:
-                score -= 140.0
+                context_score -= 140.0
+                overall_score -= 140.0
             elif not active_direction_bias_ok:
-                score -= 45.0
+                context_score -= 45.0
+                overall_score -= 45.0
             return {
                 "symbol": symbol,
                 "direction": direction,
+                "overall_hits": overall_summary["hits"],
+                "overall_windows": overall_summary["windows"],
+                "overall_hit_rate": overall_summary["hit_rate"],
+                "overall_avg_rrs": overall_summary["avg_rrs"],
+                "overall_best_rrs": overall_summary["best_rrs"],
+                "overall_avg_excess": overall_summary["avg_excess"],
                 "context_hits": context_summary["hits"],
                 "context_windows": context_summary["windows"],
                 "context_hit_rate": context_summary["hit_rate"],
@@ -1519,7 +1572,9 @@ class BounceBot(EWrapper, EClient):
                 "active_direction_bias_ok": active_direction_bias_ok,
                 "recent_profile_hits": recent_profile_hits,
                 "recent_profile_hit_rate": recent_profile_hit_rate,
-                "score": score,
+                "context_score": context_score,
+                "overall_score": overall_score,
+                "score": context_score,
             }
 
         for symbol, profile in intraday_profiles.items():
@@ -1527,16 +1582,32 @@ class BounceBot(EWrapper, EClient):
                 continue
 
             if symbol in self.longs:
+                overall_summary = summarize_bucket(profile, "long")
                 context_summary = summarize_bucket(profile, "long", "spy_weak")
                 compression_summary = summarize_bucket(profile, "long", "compression")
-                candidate = finalize_candidate(symbol, "long", profile, context_summary, compression_summary)
+                candidate = finalize_candidate(
+                    symbol,
+                    "long",
+                    profile,
+                    overall_summary,
+                    context_summary,
+                    compression_summary,
+                )
                 if candidate:
                     long_candidates.append(candidate)
 
             if symbol in self.shorts:
+                overall_summary = summarize_bucket(profile, "short")
                 context_summary = summarize_bucket(profile, "short", "spy_strong")
                 compression_summary = summarize_bucket(profile, "short", "compression")
-                candidate = finalize_candidate(symbol, "short", profile, context_summary, compression_summary)
+                candidate = finalize_candidate(
+                    symbol,
+                    "short",
+                    profile,
+                    overall_summary,
+                    context_summary,
+                    compression_summary,
+                )
                 if candidate:
                     short_candidates.append(candidate)
 
@@ -1544,6 +1615,10 @@ class BounceBot(EWrapper, EClient):
             key=lambda row: (
                 0 if row.get("active_direction_bias_ok") else 1,
                 0 if row.get("current_direction_ok") else 1,
+                -(
+                    row.get("overall_avg_rrs")
+                    if row.get("overall_avg_rrs") is not None else float("-inf")
+                ),
                 -(
                     row.get("recent_direction_bias")
                     if row.get("recent_direction_bias") is not None else float("-inf")
@@ -1554,6 +1629,7 @@ class BounceBot(EWrapper, EClient):
                 ),
                 -(row.get("recent_profile_hits", 0) or 0),
                 -(row.get("recent_profile_hit_rate", 0.0) or 0.0),
+                -(row.get("overall_score", 0.0) or 0.0),
                 -row["score"],
                 -row["context_hits"],
                 -(row["context_avg_rrs"] if row["context_avg_rrs"] is not None else float("-inf")),
@@ -1564,6 +1640,10 @@ class BounceBot(EWrapper, EClient):
             key=lambda row: (
                 0 if row.get("active_direction_bias_ok") else 1,
                 0 if row.get("current_direction_ok") else 1,
+                (
+                    row.get("overall_avg_rrs")
+                    if row.get("overall_avg_rrs") is not None else float("inf")
+                ),
                 -(
                     row.get("recent_direction_bias")
                     if row.get("recent_direction_bias") is not None else float("-inf")
@@ -1574,6 +1654,7 @@ class BounceBot(EWrapper, EClient):
                 ),
                 -(row.get("recent_profile_hits", 0) or 0),
                 -(row.get("recent_profile_hit_rate", 0.0) or 0.0),
+                -(row.get("overall_score", 0.0) or 0.0),
                 -row["score"],
                 -row["context_hits"],
                 (row["context_avg_rrs"] if row["context_avg_rrs"] is not None else float("inf")),
@@ -1595,47 +1676,83 @@ class BounceBot(EWrapper, EClient):
         short_candidates = environment_scan.get("short_candidates", [])
         weak_spy_windows = int(environment_scan.get("weak_spy_window_count", 0) or 0)
         strong_spy_windows = int(environment_scan.get("strong_spy_window_count", 0) or 0)
-        compression_windows = int(environment_scan.get("compression_window_count", 0) or 0)
         sections = []
 
-        def candidate_sort_key(entry):
+        def _signed_entry_rrs(entry, key):
+            value = entry.get(key)
+            if value is None:
+                return None
+            return value if entry.get("direction") == "long" else -value
+
+        def _descending(value):
+            return -(value if value is not None else float("-inf"))
+
+        def candidate_sort_key(entry, focus_mode):
+            if focus_mode == "overall":
+                primary_avg = _signed_entry_rrs(entry, "overall_avg_rrs")
+                primary_hit_rate = entry.get("overall_hit_rate")
+                primary_hits = entry.get("overall_hits", 0)
+                score_value = entry.get("overall_score", 0.0)
+            elif focus_mode == "compression":
+                primary_avg = _signed_entry_rrs(entry, "compression_avg_rrs")
+                primary_hit_rate = entry.get("compression_hit_rate")
+                primary_hits = entry.get("compression_hits", 0)
+                score_value = entry.get("score", 0.0)
+            else:
+                primary_avg = _signed_entry_rrs(entry, "context_avg_rrs")
+                primary_hit_rate = entry.get("context_hit_rate")
+                primary_hits = entry.get("context_hits", 0)
+                score_value = entry.get("context_score", entry.get("score", 0.0))
             return (
                 0 if entry.get("active_direction_bias_ok") else 1,
+                _descending(primary_avg),
+                -float(primary_hit_rate or 0.0),
+                -int(primary_hits or 0),
                 0 if entry.get("current_direction_ok") else 1,
-                -(
+                _descending(
                     entry.get("recent_direction_bias")
-                    if entry.get("recent_direction_bias") is not None else float("-inf")
+                    if entry.get("recent_direction_bias") is not None else None
                 ),
-                -(
+                _descending(
                     entry.get("current_direction_bias")
-                    if entry.get("current_direction_bias") is not None else float("-inf")
+                    if entry.get("current_direction_bias") is not None else None
                 ),
                 -(entry.get("recent_profile_hits", 0) or 0),
                 -(entry.get("recent_profile_hit_rate", 0.0) or 0.0),
-                -entry.get("score", 0.0),
-                -entry.get("context_hits", 0),
+                _descending(_signed_entry_rrs(entry, "overall_avg_rrs")),
+                -(score_value or 0.0),
                 entry.get("symbol", ""),
             )
 
-        def filter_active_candidates(candidates):
-            return [entry for entry in candidates if entry.get("active_direction_bias_ok")]
+        def focus_metric_present(entry, focus_mode):
+            if focus_mode == "overall":
+                primary_avg = _signed_entry_rrs(entry, "overall_avg_rrs")
+                primary_hits = entry.get("overall_hits", 0)
+            elif focus_mode == "compression":
+                primary_avg = _signed_entry_rrs(entry, "compression_avg_rrs")
+                primary_hits = entry.get("compression_hits", 0)
+            else:
+                primary_avg = _signed_entry_rrs(entry, "context_avg_rrs")
+                primary_hits = entry.get("context_hits", 0)
+            return (
+                (primary_avg is not None and primary_avg > 0)
+                or int(primary_hits or 0) > 0
+            )
 
-        long_context_candidates = filter_active_candidates(sorted(
+        def prepare_candidates(candidates, focus_mode):
+            ordered = sorted(candidates, key=lambda entry: candidate_sort_key(entry, focus_mode))
+            return [entry for entry in ordered if focus_metric_present(entry, focus_mode)]
+
+        long_overall_candidates = prepare_candidates(long_candidates, "overall")
+        short_overall_candidates = prepare_candidates(short_candidates, "overall")
+        long_context_candidates = prepare_candidates(
             [entry for entry in long_candidates if entry.get("context_hits", 0) > 0],
-            key=candidate_sort_key,
-        ))
-        short_context_candidates = filter_active_candidates(sorted(
+            "context",
+        )
+        short_context_candidates = prepare_candidates(
             [entry for entry in short_candidates if entry.get("context_hits", 0) > 0],
-            key=candidate_sort_key,
-        ))
-        long_compression_candidates = filter_active_candidates(sorted(
-            [entry for entry in long_candidates if entry.get("compression_hits", 0) > 0],
-            key=candidate_sort_key,
-        ))
-        short_compression_candidates = filter_active_candidates(sorted(
-            [entry for entry in short_candidates if entry.get("compression_hits", 0) > 0],
-            key=candidate_sort_key,
-        ))
+            "context",
+        )
 
         def add_candidate_section(title, candidates, tag, focus_mode):
             if not candidates:
@@ -1649,45 +1766,37 @@ class BounceBot(EWrapper, EClient):
                 })
             sections.append({"title": title, "rows": rows, "tag": tag})
 
-        prefer_shorts_first = scenario.startswith("bearish")
-        primary_sections = []
-
-        if weak_spy_windows > 0 and long_context_candidates:
-            primary_sections.append((
-                f"Strong Longs During SPY Weakness ({weak_spy_windows} weak windows)",
-                long_context_candidates,
+        if scenario == "bullish_strong":
+            add_candidate_section(
+                "Strongest Longs by Avg RRS",
+                long_overall_candidates,
+                "rrs_rs",
+                "overall",
+            )
+        elif scenario == "bearish_strong":
+            add_candidate_section(
+                "Weakest Shorts by Avg RRS",
+                short_overall_candidates,
+                "rrs_rw",
+                "overall",
+            )
+        elif scenario == "bullish_weak":
+            add_candidate_section(
+                f"Strong Longs During SPY Weakness ({weak_spy_windows} weak bars)",
+                long_context_candidates if weak_spy_windows > 0 else [],
                 "rrs_rs",
                 "context",
-            ))
-        if strong_spy_windows > 0 and short_context_candidates:
-            primary_sections.append((
-                f"Weak Shorts During SPY Strength ({strong_spy_windows} strong windows)",
-                short_context_candidates,
+            )
+        elif scenario == "bearish_weak":
+            add_candidate_section(
+                f"Weak Shorts During SPY Strength ({strong_spy_windows} strong bars)",
+                short_context_candidates if strong_spy_windows > 0 else [],
                 "rrs_rw",
                 "context",
-            ))
-
-        if prefer_shorts_first:
-            primary_sections.sort(key=lambda item: 0 if "Shorts" in item[0] else 1)
-
-        for title, candidates, tag, focus_mode in primary_sections:
-            add_candidate_section(title, candidates, tag, focus_mode)
-
-        if not sections:
-            if compression_windows > 0 and long_compression_candidates:
-                add_candidate_section(
-                    f"Strong Longs During SPY Compression ({compression_windows} compression windows)",
-                    long_compression_candidates,
-                    "rrs_rs",
-                    "compression",
-                )
-            if compression_windows > 0 and short_compression_candidates:
-                add_candidate_section(
-                    f"Weak Shorts During SPY Compression ({compression_windows} compression windows)",
-                    short_compression_candidates,
-                    "rrs_rw",
-                    "compression",
-                )
+            )
+        else:
+            add_candidate_section("Strongest Longs by Avg RRS", long_overall_candidates, "rrs_rs", "overall")
+            add_candidate_section("Weakest Shorts by Avg RRS", short_overall_candidates, "rrs_rw", "overall")
 
         if sections:
             return sections
@@ -1798,7 +1907,17 @@ class BounceBot(EWrapper, EClient):
 
     def _format_environment_scan_entry(self, entry, focus_mode="context"):
         direction = entry.get("direction")
-        if focus_mode == "compression":
+        if focus_mode == "overall":
+            focus_label = "dayRS" if direction == "long" else "dayRW"
+            focus_hits = entry.get("overall_hits", 0)
+            focus_windows = entry.get("overall_windows", 0)
+            avg_rrs = entry.get("overall_avg_rrs")
+            best_rrs = entry.get("overall_best_rrs")
+            avg_excess = entry.get("overall_avg_excess")
+            secondary_label = "weakSPY" if direction == "long" else "strongSPY"
+            secondary_hits = entry.get("context_hits", 0)
+            secondary_windows = entry.get("context_windows", 0)
+        elif focus_mode == "compression":
             focus_label = "comp"
             focus_hits = entry.get("compression_hits", 0)
             focus_windows = entry.get("compression_windows", 0)
