@@ -182,6 +182,7 @@ def build_consolidated_gui_output(
         f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"GUI mode: {mode}",
         f"Home folder: {storage['data_dir']}",
+        f"Local machine cache: {storage['local_cache_dir']}",
         f"Reports folder: {storage['output_dir']}",
         f"Logs folder: {storage['logs_dir']}",
         f"Snapshot file: {MAIN_GUI_OUTPUT_FILE}",
@@ -242,7 +243,7 @@ class TrackerStorageControls:
         self.container = container
 
         description = (
-            "Use a Google Drive or OneDrive folder here so watchlists, caches, reports, logs, and AVWAP tracker data stay in sync across devices."
+            "Use a Google Drive or OneDrive folder here so watchlists, reports, logs, and AVWAP tracker data stay in sync across devices. Replaceable download caches stay local on each computer so the cloud folder stays lightweight."
         )
         ttk.Label(container, text=description, wraplength=900, justify=tk.LEFT).pack(
             anchor="w",
@@ -279,6 +280,7 @@ class TrackerStorageControls:
             f"Logs: {details['logs_dir']}\n"
             f"Reports: {details['output_dir']}\n"
             f"Runtime tracker data: {details['runtime_dir']}\n"
+            f"Local machine cache: {details['local_cache_dir']}\n"
             f"Home-folder longs.txt: {shared_watchlists['longs_path']} ({shared_watchlists['longs_exists']})\n"
             f"Home-folder shorts.txt: {shared_watchlists['shorts_path']} ({shared_watchlists['shorts_exists']})\n"
             f"Source: {details['source_label']}"
@@ -300,6 +302,7 @@ class TrackerStorageControls:
             f"Folder: {target}\n"
             f"Settings file: {LOCAL_SETTINGS_FILE}\n\n"
             "Place longs.txt and shorts.txt in that folder root to share watchlists across devices.\n\n"
+            "Replaceable download caches stay local to each computer so the shared folder stays small.\n\n"
             "Restart the GUI to start using the new home folder.",
         )
 

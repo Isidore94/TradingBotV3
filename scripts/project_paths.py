@@ -60,11 +60,13 @@ def _resolve_persistent_data_dir() -> tuple[Path, str]:
 
 PERSISTENT_DATA_DIR, PERSISTENT_DATA_DIR_SOURCE = _resolve_persistent_data_dir()
 
+SHARED_HOME_DIR = PERSISTENT_DATA_DIR
 DATA_DIR = PERSISTENT_DATA_DIR / "data"
 OUTPUT_DIR = PERSISTENT_DATA_DIR / "output"
 LOG_DIR = PERSISTENT_DATA_DIR / "logs"
 
-CACHE_DIR = DATA_DIR / "cache"
+LOCAL_MACHINE_CACHE_DIR = LOCAL_SETTINGS_DIR / "machine_cache"
+CACHE_DIR = LOCAL_MACHINE_CACHE_DIR
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
 PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
@@ -130,10 +132,12 @@ def get_tracker_storage_details() -> dict[str, str]:
     }
     return {
         "data_dir": str(PERSISTENT_DATA_DIR),
+        "shared_root_dir": str(SHARED_HOME_DIR),
         "mutable_data_dir": str(DATA_DIR),
         "logs_dir": str(LOG_DIR),
         "output_dir": str(OUTPUT_DIR),
         "runtime_dir": str(PERSISTENT_RUNTIME_DATA_DIR),
+        "local_cache_dir": str(LOCAL_MACHINE_CACHE_DIR),
         "source": PERSISTENT_DATA_DIR_SOURCE,
         "source_label": source_labels.get(PERSISTENT_DATA_DIR_SOURCE, PERSISTENT_DATA_DIR_SOURCE),
         "settings_file": str(LOCAL_SETTINGS_FILE),
@@ -305,6 +309,8 @@ def migrate_legacy_layout() -> None:
         (REPO_DATA_DIR / "earnings_cache.json", EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "prev_earnings_cache.json", PREV_EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "earnings_dates_cache.json", EARNINGS_DATES_CACHE_FILE),
+        (REPO_DATA_DIR / "earnings_calendar_rows.json", EARNINGS_CALENDAR_CACHE_FILE),
+        (REPO_DATA_DIR / "yahoo_symbol_metadata.json", YAHOO_SYMBOL_META_CACHE_FILE),
         (REPO_DATA_DIR / "avwap_signals.csv", AVWAP_SIGNALS_FILE),
         (REPO_DATA_DIR / "d1_features.csv", D1_FEATURES_FILE),
         (REPO_DATA_DIR / "intraday_bounces.csv", INTRADAY_BOUNCES_FILE),
@@ -333,6 +339,9 @@ def migrate_legacy_layout() -> None:
         (REPO_DATA_DIR / "cache" / "earnings_cache.json", EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "cache" / "prev_earnings_cache.json", PREV_EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "cache" / "earnings_dates_cache.json", EARNINGS_DATES_CACHE_FILE),
+        (REPO_DATA_DIR / "cache" / "earnings_calendar_rows.json", EARNINGS_CALENDAR_CACHE_FILE),
+        (REPO_DATA_DIR / "cache" / "yahoo_symbol_metadata.json", YAHOO_SYMBOL_META_CACHE_FILE),
+        (REPO_DATA_DIR / "cache" / "daily_bars", DAILY_BARS_CACHE_DIR),
         (REPO_OUTPUT_DIR / "master_positions.json", MASTER_POSITIONS_FILE),
         (REPO_OUTPUT_DIR / "previous_gap_ups.csv", PREVIOUS_GAP_UPS_FILE),
         (REPO_OUTPUT_DIR / "master_anchor_avwap_signals.csv", ANCHOR_AVWAP_SIGNALS_FILE),
@@ -353,6 +362,12 @@ def migrate_legacy_layout() -> None:
         (REPO_LOG_DIR / "master_avwap.log", MASTER_AVWAP_LOG_FILE),
         (REPO_LOG_DIR / "rrs_strength_extremes.csv", RRS_STRENGTH_LOG_FILE),
         (REPO_LOG_DIR / "rrs_group_strength_extremes.csv", RRS_GROUP_STRENGTH_LOG_FILE),
+        (DATA_DIR / "cache" / "earnings_cache.json", EARNINGS_CACHE_FILE),
+        (DATA_DIR / "cache" / "prev_earnings_cache.json", PREV_EARNINGS_CACHE_FILE),
+        (DATA_DIR / "cache" / "earnings_dates_cache.json", EARNINGS_DATES_CACHE_FILE),
+        (DATA_DIR / "cache" / "earnings_calendar_rows.json", EARNINGS_CALENDAR_CACHE_FILE),
+        (DATA_DIR / "cache" / "yahoo_symbol_metadata.json", YAHOO_SYMBOL_META_CACHE_FILE),
+        (DATA_DIR / "cache" / "daily_bars", DAILY_BARS_CACHE_DIR),
         (LOCAL_SETTINGS_DIR / "data" / "sector_etf_map.json", SECTOR_ETF_MAP_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "industry_etf_map.json", INDUSTRY_ETF_MAP_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "symbol_classification.csv", SYMBOL_CLASSIFICATION_CACHE_FILE),
@@ -360,6 +375,9 @@ def migrate_legacy_layout() -> None:
         (LOCAL_SETTINGS_DIR / "data" / "cache" / "earnings_cache.json", EARNINGS_CACHE_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "cache" / "prev_earnings_cache.json", PREV_EARNINGS_CACHE_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "cache" / "earnings_dates_cache.json", EARNINGS_DATES_CACHE_FILE),
+        (LOCAL_SETTINGS_DIR / "data" / "cache" / "earnings_calendar_rows.json", EARNINGS_CALENDAR_CACHE_FILE),
+        (LOCAL_SETTINGS_DIR / "data" / "cache" / "yahoo_symbol_metadata.json", YAHOO_SYMBOL_META_CACHE_FILE),
+        (LOCAL_SETTINGS_DIR / "data" / "cache" / "daily_bars", DAILY_BARS_CACHE_DIR),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "earnings_anchor_candidates.csv", EARNINGS_ANCHOR_CANDIDATES_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "avwap_signals.csv", AVWAP_SIGNALS_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "d1_features.csv", D1_FEATURES_FILE),

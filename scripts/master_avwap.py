@@ -7,12 +7,14 @@ import json
 import re
 import math
 import copy
+import io
 import importlib.util
 import logging
 import threading
 import argparse
 import subprocess
 import sys
+import tempfile
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -184,6 +186,7 @@ SETUP_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE
 SETUP_ATTRIBUTES_FILE = MASTER_AVWAP_SETUP_ATTRIBUTES_FILE
 SETUP_ATTRIBUTE_LEADERBOARD_FILE = MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE
 SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
+SETUP_PLAYBOOKS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 SCORING_CONFIG_FILE = MASTER_AVWAP_SCORING_CONFIG_FILE
 SCORING_RECOMMENDATIONS_FILE = MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE
 SCORING_TUNER_REPORT_FILE = MASTER_AVWAP_SCORING_TUNER_REPORT_FILE
@@ -260,6 +263,8 @@ TRACKER_EMA_CONSOLIDATION_ATR = 0.35
 TRACKER_EMA_CONSOLIDATION_RANGE_ATR = 1.0
 TRACKER_SUMMARY_MIN_CLOSED_SAMPLES = 25
 TRACKER_TUNER_MIN_CLOSED_SETUPS = 12
+TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES = 8
+TRACKER_PLAYBOOK_R_CLIP = 4.0
 PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX = 0.90
 PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
 PRIORITY_COMPRESSION_STDEV_ATR_STRONG_MAX = 0.60
@@ -293,6 +298,9 @@ PRIORITY_EXTREME_MOVE_MIN_RANGE_ATR = 1.10
 PRIORITY_EXTREME_MOVE_MIN_STDEV_ATR = 0.80
 PRIORITY_EXTREME_MOVE_FAVORITE_STDEV_ATR = 1.00
 PRIORITY_EXTREME_MOVE_WATCH_SCORE_BONUS = 12
+TRACKER_EXPERIMENTAL_FRAMEWORK_VERSION = "2026-04-14"
+TRACKER_EXPERIMENTAL_HARD_STOP_R = 1.25
+TRACKER_FILTER_RULE_SKIP_SMA50_SHORT_NEAR_FAVORITE = "skip_sma50_short_near_favorite"
 SETUP_EXIT_TEMPLATES = [
     {
         "id": "full_band2",
@@ -300,6 +308,9 @@ SETUP_EXIT_TEMPLATES = [
         "partial_target_label": None,
         "final_target_label": "BAND2",
         "trail_after_partial_label": None,
+        "framework_family": "baseline",
+        "framework_version": "baseline",
+        "experimental": False,
     },
     {
         "id": "half_band2_trail_band1",
@@ -307,6 +318,9 @@ SETUP_EXIT_TEMPLATES = [
         "partial_target_label": "BAND2",
         "final_target_label": None,
         "trail_after_partial_label": "BAND1",
+        "framework_family": "baseline",
+        "framework_version": "baseline",
+        "experimental": False,
     },
     {
         "id": "full_band3",
@@ -314,6 +328,9 @@ SETUP_EXIT_TEMPLATES = [
         "partial_target_label": None,
         "final_target_label": "BAND3",
         "trail_after_partial_label": None,
+        "framework_family": "baseline",
+        "framework_version": "baseline",
+        "experimental": False,
     },
     {
         "id": "half_band2_band3_trail_band1",
@@ -321,6 +338,37 @@ SETUP_EXIT_TEMPLATES = [
         "partial_target_label": "BAND2",
         "final_target_label": "BAND3",
         "trail_after_partial_label": "BAND1",
+        "framework_family": "baseline",
+        "framework_version": "baseline",
+        "experimental": False,
+    },
+    {
+        "id": "exp_full_band2_hard_stop_125r",
+        "label": "EXP Full at band2 + 1.25R hard stop",
+        "partial_target_label": None,
+        "final_target_label": "BAND2",
+        "trail_after_partial_label": None,
+        "framework_family": "comparison_apr2026",
+        "framework_version": TRACKER_EXPERIMENTAL_FRAMEWORK_VERSION,
+        "experimental": True,
+        "hard_stop_r_multiple": TRACKER_EXPERIMENTAL_HARD_STOP_R,
+        "notes": "Comparison framework: baseline band2 take-profit plus a 1.25R hard-stop fail-safe.",
+    },
+    {
+        "id": "exp_full_band2_hard_stop_125r_no_sma50_short_nearfav",
+        "label": "EXP Full at band2 + 1.25R hard stop + no SMA50 short near-fav",
+        "partial_target_label": None,
+        "final_target_label": "BAND2",
+        "trail_after_partial_label": None,
+        "framework_family": "comparison_apr2026",
+        "framework_version": TRACKER_EXPERIMENTAL_FRAMEWORK_VERSION,
+        "experimental": True,
+        "hard_stop_r_multiple": TRACKER_EXPERIMENTAL_HARD_STOP_R,
+        "blocked_stop_rules": [TRACKER_FILTER_RULE_SKIP_SMA50_SHORT_NEAR_FAVORITE],
+        "notes": (
+            "Comparison framework: baseline band2 take-profit plus a 1.25R hard-stop fail-safe, "
+            "while skipping SMA_50 stops for SHORT near-favorite-zone setups."
+        ),
     },
 ]
 POSITION_LEVELS = [
@@ -542,8 +590,154 @@ def save_priority_scoring_config(payload: dict) -> None:
 
     config["schema_version"] = PRIORITY_SCORING_CONFIG_SCHEMA_VERSION
     config["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    save_json(SCORING_CONFIG_FILE, config)
+    save_json(SCORING_CONFIG_FILE, config, pretty=True)
     _PRIORITY_SCORING_CONFIG_CACHE = copy.deepcopy(config)
+
+
+def _get_setup_exit_template(template_id: str) -> dict | None:
+    template_key = str(template_id or "").strip()
+    if not template_key:
+        return None
+    for template in SETUP_EXIT_TEMPLATES:
+        if str(template.get("id") or "").strip() == template_key:
+            return template
+    return None
+
+
+def _tracker_scenario_id(stop_label: str, template_id: str) -> str:
+    return f"{str(stop_label or '').strip().lower()}__{str(template_id or '').strip()}"
+
+
+def _tracker_experimental_filter_reason(
+    template: dict,
+    side: str,
+    priority_bucket: str,
+    stop_candidate: dict,
+) -> str:
+    rules = template.get("blocked_stop_rules") or []
+    if not isinstance(rules, list):
+        return ""
+
+    normalized_side = normalize_side(side)
+    bucket = str(priority_bucket or "").strip()
+    stop_label = str(stop_candidate.get("label") or "").strip().upper()
+    for rule in rules:
+        rule_name = str(rule or "").strip()
+        if not rule_name:
+            continue
+        if rule_name == TRACKER_FILTER_RULE_SKIP_SMA50_SHORT_NEAR_FAVORITE:
+            if normalized_side == "SHORT" and bucket == "near_favorite_zone" and stop_label == "SMA_50":
+                return "Filtered by experiment: skip SMA_50 stop for SHORT near-favorite-zone setups"
+    return ""
+
+
+def _build_tracker_scenario(
+    entry_price: float | None,
+    stop_candidate: dict,
+    side: str,
+    priority_bucket: str,
+    template: dict,
+) -> dict:
+    stop_level = _coerce_float(stop_candidate.get("level"))
+    risk_per_share = abs(float(entry_price) - float(stop_level)) if entry_price is not None and stop_level is not None else None
+    shares = int(STANDARDIZED_RISK_USD // risk_per_share) if risk_per_share and risk_per_share > 0 else 0
+    filter_reason = _tracker_experimental_filter_reason(template, side, priority_bucket, stop_candidate)
+    tradeable = bool(not filter_reason and shares > 0 and risk_per_share and risk_per_share > 0)
+    inactive_status = ""
+    inactive_reason = ""
+    if filter_reason:
+        inactive_status = "FILTERED"
+        inactive_reason = filter_reason
+    elif not tradeable:
+        inactive_status = "UNTRADEABLE"
+        inactive_reason = "Risk too tight for $500 standard risk"
+
+    template_id = str(template.get("id") or "").strip()
+    scenario_id = _tracker_scenario_id(str(stop_candidate.get("label") or ""), template_id)
+    return {
+        "scenario_id": scenario_id,
+        "stop_reference_label": stop_candidate.get("label"),
+        "stop_reference_level": stop_level,
+        "stop_source_type": stop_candidate.get("source_type"),
+        "exit_template_id": template_id,
+        "exit_template_label": template.get("label"),
+        "framework_family": str(template.get("framework_family") or "baseline"),
+        "framework_version": str(template.get("framework_version") or "baseline"),
+        "framework_notes": str(template.get("notes") or ""),
+        "experimental": bool(template.get("experimental")),
+        "partial_target_label": _favorable_band_label(side, 2) if template.get("partial_target_label") == "BAND2" else None,
+        "final_target_label": (
+            _favorable_band_label(side, 2) if template.get("final_target_label") == "BAND2"
+            else _favorable_band_label(side, 3) if template.get("final_target_label") == "BAND3"
+            else None
+        ),
+        "trail_after_partial_label": _favorable_band_label(side, 1) if template.get("trail_after_partial_label") == "BAND1" else None,
+        "hard_stop_r_multiple": _coerce_float(template.get("hard_stop_r_multiple")),
+        "blocked_stop_rules": list(template.get("blocked_stop_rules") or []),
+        "cohort_filter_reason": filter_reason,
+        "shares": int(shares),
+        "initial_risk_per_share": risk_per_share,
+        "initial_risk_usd": float(shares * risk_per_share) if shares and risk_per_share else 0.0,
+        "direction": 1.0 if normalize_side(side) == "LONG" else -1.0,
+        "tradeable": tradeable,
+        "status": "OPEN" if tradeable else inactive_status,
+        "inactive_status": inactive_status,
+        "inactive_reason": inactive_reason,
+        "events": [],
+        "remaining_shares": int(shares),
+        "partial_taken": False,
+        "partial_shares": 0,
+        "realized_pnl": 0.0,
+        "realized_r": 0.0,
+        "unrealized_pnl": 0.0,
+        "unrealized_r": 0.0,
+        "total_pnl": 0.0,
+        "total_r": 0.0,
+        "close_failure_count": 0,
+        "active_stop_label": stop_candidate.get("label"),
+        "active_stop_level": stop_level,
+        "hard_stop_level": None,
+        "last_action": "Awaiting update" if tradeable else inactive_reason,
+        "days_held": 0,
+        "max_favorable_r": 0.0,
+        "max_adverse_r": 0.0,
+    }
+
+
+def _extract_tracker_stop_candidates_from_setup(setup: dict) -> list[dict]:
+    stop_map: dict[tuple[str, str], dict] = {}
+    for scenario in (setup.get("scenarios") or {}).values():
+        if not isinstance(scenario, dict):
+            continue
+        label = str(scenario.get("stop_reference_label") or "").strip()
+        source_type = str(scenario.get("stop_source_type") or "").strip()
+        level = _coerce_float(scenario.get("stop_reference_level"))
+        if not label or not source_type or level is None:
+            continue
+        stop_map.setdefault(
+            (label, source_type),
+            {
+                "label": label,
+                "level": float(level),
+                "source_type": source_type,
+            },
+        )
+    return [stop_map[key] for key in sorted(stop_map.keys())]
+
+
+def _build_tracker_scenarios_from_setup(setup: dict) -> dict[str, dict]:
+    if not isinstance(setup, dict):
+        return {}
+    stop_candidates = _extract_tracker_stop_candidates_from_setup(setup)
+    if not stop_candidates:
+        existing = setup.get("scenarios") or {}
+        return {str(key): dict(value) for key, value in existing.items() if isinstance(value, dict)}
+    return _build_tracker_scenarios(
+        _coerce_float(setup.get("entry_price")),
+        stop_candidates,
+        normalize_side(setup.get("side")),
+        priority_bucket=str(setup.get("priority_bucket") or ""),
+    )
 
 
 def get_priority_signal_weights(side: str, bucket: str) -> dict[str, int]:
@@ -905,10 +1099,35 @@ def load_json(path: Path, default):
             logging.warning(f"JSON corrupt at {path}, starting fresh.")
     return default
 
-def save_json(path: Path, obj):
+
+def _write_text_atomic(path: Path, text: str, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding=encoding,
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(text)
+            temp_path = Path(handle.name)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+def save_json(path: Path, obj, *, pretty: bool = False):
+    json_text = json.dumps(
+        obj,
+        indent=2 if pretty else None,
+        separators=None if pretty else (",", ":"),
+        ensure_ascii=False,
+    )
+    _write_text_atomic(path, json_text.rstrip() + "\n")
 
 
 _EARNINGS_CALENDAR_ROWS_CACHE: dict | None = None
@@ -3399,54 +3618,18 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
     return candidates
 
 
-def _build_tracker_scenarios(entry_price: float | None, stop_candidates: list[dict], side: str) -> dict[str, dict]:
+def _build_tracker_scenarios(
+    entry_price: float | None,
+    stop_candidates: list[dict],
+    side: str,
+    priority_bucket: str = "",
+) -> dict[str, dict]:
     scenarios = {}
-    direction = 1.0 if normalize_side(side) == "LONG" else -1.0
 
     for stop in stop_candidates:
-        stop_level = _coerce_float(stop.get("level"))
-        risk_per_share = abs(float(entry_price) - float(stop_level)) if entry_price is not None and stop_level is not None else None
-        shares = int(STANDARDIZED_RISK_USD // risk_per_share) if risk_per_share and risk_per_share > 0 else 0
         for template in SETUP_EXIT_TEMPLATES:
-            scenario_id = f"{str(stop['label']).lower()}__{template['id']}"
-            scenarios[scenario_id] = {
-                "scenario_id": scenario_id,
-                "stop_reference_label": stop["label"],
-                "stop_reference_level": stop_level,
-                "stop_source_type": stop["source_type"],
-                "exit_template_id": template["id"],
-                "exit_template_label": template["label"],
-                "partial_target_label": _favorable_band_label(side, 2) if template.get("partial_target_label") == "BAND2" else None,
-                "final_target_label": (
-                    _favorable_band_label(side, 2) if template.get("final_target_label") == "BAND2"
-                    else _favorable_band_label(side, 3) if template.get("final_target_label") == "BAND3"
-                    else None
-                ),
-                "trail_after_partial_label": _favorable_band_label(side, 1) if template.get("trail_after_partial_label") == "BAND1" else None,
-                "shares": int(shares),
-                "initial_risk_per_share": risk_per_share,
-                "initial_risk_usd": float(shares * risk_per_share) if shares and risk_per_share else 0.0,
-                "direction": direction,
-                "tradeable": bool(shares > 0 and risk_per_share and risk_per_share > 0),
-                "status": "UNTRADEABLE" if not (shares > 0 and risk_per_share and risk_per_share > 0) else "OPEN",
-                "events": [],
-                "remaining_shares": int(shares),
-                "partial_taken": False,
-                "partial_shares": 0,
-                "realized_pnl": 0.0,
-                "realized_r": 0.0,
-                "unrealized_pnl": 0.0,
-                "unrealized_r": 0.0,
-                "total_pnl": 0.0,
-                "total_r": 0.0,
-                "close_failure_count": 0,
-                "active_stop_label": stop["label"],
-                "active_stop_level": stop_level,
-                "last_action": "Awaiting update" if shares > 0 else "Risk too tight for $500 standard risk",
-                "days_held": 0,
-                "max_favorable_r": 0.0,
-                "max_adverse_r": 0.0,
-            }
+            scenario = _build_tracker_scenario(entry_price, stop, side, priority_bucket, template)
+            scenarios[scenario["scenario_id"]] = scenario
     return scenarios
 
 
@@ -3493,7 +3676,12 @@ def build_tracker_setup_record(
         attribute_registry.update(attribute_updates)
 
     stop_candidates = _find_tracker_stop_candidates(row, symbol_entry)
-    scenarios = _build_tracker_scenarios(entry_price, stop_candidates, normalize_side(row.get("side")))
+    scenarios = _build_tracker_scenarios(
+        entry_price,
+        stop_candidates,
+        normalize_side(row.get("side")),
+        priority_bucket=str(row.get("priority_bucket") or ""),
+    )
     setup_id = _setup_id_for_row(row, symbol_entry, scan_date=scan_date)
 
     return {
@@ -3562,6 +3750,15 @@ def _bar_hits_target(side: str, bar_row: pd.Series, target_level: float | None) 
     return _coerce_float(bar_row.get("low")) is not None and float(bar_row["low"]) <= float(target_level)
 
 
+def _bar_hits_stop_level(side: str, bar_row: pd.Series, stop_level: float | None) -> bool:
+    if stop_level is None:
+        return False
+    side = normalize_side(side)
+    if side == "LONG":
+        return _coerce_float(bar_row.get("low")) is not None and float(bar_row["low"]) <= float(stop_level)
+    return _coerce_float(bar_row.get("high")) is not None and float(bar_row["high"]) >= float(stop_level)
+
+
 def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trade_date: str, reason: str) -> dict:
     qty = int(max(0, qty))
     if qty <= 0:
@@ -3595,7 +3792,9 @@ def _evaluate_tracker_scenario_bar(
     is_entry_day: bool,
 ) -> list[dict]:
     if not scenario.get("tradeable"):
-        scenario["status"] = "UNTRADEABLE"
+        scenario["status"] = str(scenario.get("inactive_status") or "UNTRADEABLE")
+        if scenario.get("inactive_reason"):
+            scenario["last_action"] = str(scenario.get("inactive_reason"))
         return []
 
     events = []
@@ -3666,6 +3865,28 @@ def _evaluate_tracker_scenario_bar(
         scenario["total_r"] = float(scenario.get("realized_r", 0.0))
         return events
 
+    hard_stop_r_multiple = _coerce_float(scenario.get("hard_stop_r_multiple"))
+    hard_stop_level = None
+    if hard_stop_r_multiple is not None and hard_stop_r_multiple > 0 and initial_risk_per_share > 0:
+        hard_stop_level = float(entry_price - (initial_risk_per_share * hard_stop_r_multiple * direction))
+    scenario["hard_stop_level"] = hard_stop_level
+    if int(scenario.get("remaining_shares", 0)) > 0 and _bar_hits_stop_level(side, bar_row, hard_stop_level):
+        event = _apply_scenario_exit_event(
+            scenario,
+            int(scenario.get("remaining_shares", 0)),
+            float(hard_stop_level),
+            trade_date,
+            "HARD_STOP",
+        )
+        if event:
+            events.append(event)
+        scenario["status"] = "STOPPED"
+        scenario["unrealized_pnl"] = 0.0
+        scenario["unrealized_r"] = 0.0
+        scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
+        scenario["total_r"] = float(scenario.get("realized_r", 0.0))
+        return events
+
     active_stop_label = str(scenario.get("active_stop_label") or scenario.get("stop_reference_label") or "")
     active_stop_level = _resolve_dynamic_level(active_stop_label, current_anchor_levels, indicator_row)
     scenario["active_stop_level"] = active_stop_level
@@ -3713,7 +3934,7 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
         return setup
 
     working_scenarios = {}
-    for scenario_id, original in (setup.get("scenarios") or {}).items():
+    for scenario_id, original in _build_tracker_scenarios_from_setup(setup).items():
         if not isinstance(original, dict):
             continue
         scenario = dict(original)
@@ -3731,11 +3952,20 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
         scenario["close_failure_count"] = 0
         scenario["active_stop_label"] = scenario.get("stop_reference_label")
         scenario["active_stop_level"] = scenario.get("stop_reference_level")
-        scenario["last_action"] = "Awaiting update" if scenario.get("tradeable") else "Risk too tight for $500 standard risk"
+        scenario["hard_stop_level"] = None
+        scenario["last_action"] = (
+            "Awaiting update"
+            if scenario.get("tradeable")
+            else str(scenario.get("inactive_reason") or "Risk too tight for $500 standard risk")
+        )
         scenario["days_held"] = 0
         scenario["max_favorable_r"] = 0.0
         scenario["max_adverse_r"] = 0.0
-        scenario["status"] = "UNTRADEABLE" if not scenario.get("tradeable") else "OPEN"
+        scenario["status"] = (
+            str(scenario.get("inactive_status") or "UNTRADEABLE")
+            if not scenario.get("tradeable")
+            else "OPEN"
+        )
         working_scenarios[scenario_id] = scenario
 
     trade_df = df[df["datetime"].dt.date.astype(str) >= entry_trade_date].copy().reset_index(drop=True)
@@ -3805,15 +4035,16 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
     if daily_marks and isinstance(daily_marks[0].get("feature_snapshot"), dict):
         setup["entry_feature_snapshot"] = copy.deepcopy(daily_marks[0]["feature_snapshot"])
     setup["latest_snapshot"] = daily_marks[-1] if daily_marks else {}
-    setup["open_scenario_count"] = sum(1 for scenario in working_scenarios.values() if _scenario_is_open(scenario.get("status")))
+    baseline_scenarios = [scenario for scenario in working_scenarios.values() if not bool(scenario.get("experimental"))]
+    setup["open_scenario_count"] = sum(1 for scenario in baseline_scenarios if _scenario_is_open(scenario.get("status")))
     setup["closed_scenario_count"] = sum(
         1
-        for scenario in working_scenarios.values()
+        for scenario in baseline_scenarios
         if str(scenario.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
     )
     if setup["open_scenario_count"] > 0:
         setup["setup_status"] = "OPEN"
-    elif any(str(scenario.get("status", "")).upper() == "UNTRADEABLE" for scenario in working_scenarios.values()):
+    elif any(str(scenario.get("status", "")).upper() == "UNTRADEABLE" for scenario in baseline_scenarios):
         setup["setup_status"] = "UNTRADEABLE"
     else:
         setup["setup_status"] = "CLOSED"
@@ -3839,6 +4070,16 @@ def _flatten_tracker_scenarios(setups: dict[str, dict]) -> list[dict]:
                     "stop_source_type": scenario.get("stop_source_type"),
                     "exit_template_id": scenario.get("exit_template_id"),
                     "exit_template_label": scenario.get("exit_template_label"),
+                    "framework_family": scenario.get("framework_family", ""),
+                    "framework_version": scenario.get("framework_version", ""),
+                    "framework_notes": scenario.get("framework_notes", ""),
+                    "experimental": bool(scenario.get("experimental")),
+                    "tradeable": bool(scenario.get("tradeable")),
+                    "hard_stop_r_multiple": _coerce_float(scenario.get("hard_stop_r_multiple")),
+                    "hard_stop_level": _coerce_float(scenario.get("hard_stop_level")),
+                    "inactive_status": scenario.get("inactive_status", ""),
+                    "inactive_reason": scenario.get("inactive_reason", ""),
+                    "cohort_filter_reason": scenario.get("cohort_filter_reason", ""),
                     "shares": int(scenario.get("shares", 0) or 0),
                     "initial_risk_per_share": _coerce_float(scenario.get("initial_risk_per_share")),
                     "initial_risk_usd": _coerce_float(scenario.get("initial_risk_usd")),
@@ -3909,12 +4150,14 @@ def _flatten_tracker_daily_marks(setups: dict[str, dict]) -> list[dict]:
     return rows
 
 
-def _summarize_tracker_setup_outcome(setup: dict) -> dict[str, object]:
+def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool = False) -> dict[str, object]:
     scenarios = [
         scenario
         for scenario in (setup.get("scenarios") or {}).values()
         if isinstance(scenario, dict)
     ]
+    if not include_experimental:
+        scenarios = [scenario for scenario in scenarios if not bool(scenario.get("experimental"))]
     tradeable = [scenario for scenario in scenarios if scenario.get("tradeable")]
     open_tradeable = [scenario for scenario in tradeable if _scenario_is_open(scenario.get("status", ""))]
     closed = [
@@ -4361,7 +4604,7 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
 
     stats_rows = []
     for key, rows in grouped.items():
-        tradeable = [row for row in rows if int(row.get("shares", 0) or 0) > 0]
+        tradeable = [row for row in rows if bool(row.get("tradeable", int(row.get("shares", 0) or 0) > 0))]
         closed = [row for row in tradeable if str(row.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}]
         open_rows = [row for row in tradeable if _scenario_is_open(row.get("status", ""))]
         closed_rs = [float(row.get("total_r", 0.0) or 0.0) for row in closed]
@@ -4374,6 +4617,10 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
                 "stop_reference_label": rows[0].get("stop_reference_label"),
                 "exit_template_id": rows[0].get("exit_template_id"),
                 "exit_template_label": rows[0].get("exit_template_label"),
+                "framework_family": rows[0].get("framework_family", ""),
+                "framework_version": rows[0].get("framework_version", ""),
+                "experimental": bool(rows[0].get("experimental")),
+                "hard_stop_r_multiple": _coerce_float(rows[0].get("hard_stop_r_multiple")),
                 "tracked_setups": len(rows),
                 "tradeable_setups": len(tradeable),
                 "closed_setups": len(closed),
@@ -4442,35 +4689,442 @@ def _tracker_days_since_scan(scan_date: str, reference: date | None = None) -> i
     return max(0, (reference_day - scan_day).days)
 
 
-def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
+def _summarize_tracker_value_counts(values: list[str], limit: int = 4) -> str:
+    counts: dict[str, int] = {}
+    for value in values:
+        value_text = str(value or "").strip()
+        if not value_text:
+            continue
+        counts[value_text] = counts.get(value_text, 0) + 1
+    if not counts:
+        return ""
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return ", ".join(f"{label} ({count})" for label, count in ordered[:limit])
+
+
+def _tracker_setup_context(setup: dict) -> dict[str, object]:
+    side = normalize_side(setup.get("side") or "")
+    priority_bucket = str(setup.get("priority_bucket") or "tracked")
+    favorite_zone = str(setup.get("favorite_zone") or "").strip() or "None"
+    retest_followthrough = bool(setup.get("retest_followthrough"))
+    retest_reference_level = str(setup.get("retest_reference_level") or "").strip()
+    retest_label = retest_reference_level if retest_followthrough and retest_reference_level else "None"
+    compression_flag = bool(setup.get("compression_flag"))
+    compression_label = "Y" if compression_flag else "N"
+    context_parts = [side, priority_bucket, favorite_zone, retest_label, compression_label]
+    return {
+        "context_key": tuple(context_parts),
+        "context_id": " | ".join(context_parts),
+        "type_label": (
+            f"{side} | {priority_bucket} | zone={favorite_zone} "
+            f"| retest={retest_label} | comp={compression_label}"
+        ),
+        "side": side,
+        "priority_bucket": priority_bucket,
+        "favorite_zone": favorite_zone,
+        "retest_label": retest_label,
+        "compression_label": compression_label,
+        "compression_flag": compression_flag,
+    }
+
+
+def _clip_tracker_r_value(value, limit: float = TRACKER_PLAYBOOK_R_CLIP) -> float | None:
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return None
+    clip_limit = max(0.5, float(limit))
+    return max(-clip_limit, min(clip_limit, numeric))
+
+
+def _format_tracker_r_multiple_text(value) -> str:
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return ""
+    return f"{numeric:.2f}".rstrip("0").rstrip(".")
+
+
+def _format_tracker_exit_summary(
+    *,
+    partial_target_label: str | None = None,
+    final_target_label: str | None = None,
+    trail_after_partial_label: str | None = None,
+    fallback_label: str = "",
+    hard_stop_r_multiple=None,
+) -> str:
+    partial_label = str(partial_target_label or "").strip()
+    final_label = str(final_target_label or "").strip()
+    trail_label = str(trail_after_partial_label or "").strip()
+    fallback = str(fallback_label or "").strip()
+
+    if partial_label and final_label:
+        summary = f"50% at {partial_label}, rest at {final_label}"
+        if trail_label:
+            summary += f" with {trail_label} trail"
+    elif partial_label and trail_label:
+        summary = f"50% at {partial_label}, trail {trail_label}"
+    elif final_label:
+        summary = f"Full at {final_label}"
+    elif partial_label:
+        summary = f"50% at {partial_label}"
+    else:
+        summary = fallback or "Custom exit"
+
+    hard_stop_text = _format_tracker_r_multiple_text(hard_stop_r_multiple)
+    if hard_stop_text:
+        summary += f" + {hard_stop_text}R hard stop"
+    return summary
+
+
+def _format_tracker_playbook_label(stop_reference_label: str, profit_take_summary: str) -> str:
+    stop_label = str(stop_reference_label or "").strip() or "unknown stop"
+    exit_summary = str(profit_take_summary or "").strip() or "custom exit"
+    return f"Stop {stop_label} -> {exit_summary}"
+
+
+def _tracker_playbook_sort_key(item: dict) -> tuple:
+    ranking_score = _coerce_float(item.get("ranking_score"))
+    robust_closed_r = _coerce_float(item.get("robust_closed_r"))
+    median_closed_r = _coerce_float(item.get("median_closed_r"))
+    win_rate_closed = _coerce_float(item.get("win_rate_closed"))
+    return (
+        int(item.get("closed_setups", 0) or 0) < TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES,
+        ranking_score is None,
+        -(ranking_score if ranking_score is not None else -9999.0),
+        -(robust_closed_r if robust_closed_r is not None else -9999.0),
+        -(median_closed_r if median_closed_r is not None else -9999.0),
+        -(win_rate_closed if win_rate_closed is not None else -9999.0),
+        -int(item.get("closed_setups", 0) or 0),
+        str(item.get("exit_template_label") or ""),
+        str(item.get("playbook_label") or ""),
+    )
+
+
+def build_tracker_playbook_rows(setups: dict[str, dict]) -> list[dict]:
     if not isinstance(setups, dict) or not setups:
         return []
 
-    def _summarize_counts(values: list[str], limit: int = 4) -> str:
-        counts: dict[str, int] = {}
-        for value in values:
-            value_text = str(value or "").strip()
-            if not value_text:
+    grouped: dict[tuple, list[dict]] = {}
+    context_groups: dict[tuple, list[dict]] = {}
+
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            continue
+        context = _tracker_setup_context(setup)
+        entry_attributes = setup.get("entry_attributes", {})
+        if not isinstance(entry_attributes, dict):
+            entry_attributes = {}
+
+        for scenario in (setup.get("scenarios") or {}).values():
+            if not isinstance(scenario, dict) or not scenario.get("tradeable"):
                 continue
-            counts[value_text] = counts.get(value_text, 0) + 1
-        if not counts:
-            return ""
-        ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        return ", ".join(f"{label} ({count})" for label, count in ordered[:limit])
+
+            profit_take_summary = _format_tracker_exit_summary(
+                partial_target_label=scenario.get("partial_target_label"),
+                final_target_label=scenario.get("final_target_label"),
+                trail_after_partial_label=scenario.get("trail_after_partial_label"),
+                fallback_label=str(scenario.get("exit_template_label") or ""),
+                hard_stop_r_multiple=scenario.get("hard_stop_r_multiple"),
+            )
+            merged_row = {
+                **context,
+                "setup_id": str(setup.get("setup_id") or ""),
+                "scan_date": str(setup.get("scan_date") or ""),
+                "symbol": str(setup.get("symbol") or "").strip().upper(),
+                "setup_status": str(setup.get("setup_status") or ""),
+                "priority_score": _coerce_float(setup.get("priority_score")),
+                "current_band_zone": str(entry_attributes.get("levels.current_band_zone") or ""),
+                "trend_20d": str(entry_attributes.get("trend.trend_20d") or ""),
+                "stop_reference_label": str(scenario.get("stop_reference_label") or "").strip(),
+                "stop_source_type": str(scenario.get("stop_source_type") or "").strip(),
+                "exit_template_id": str(scenario.get("exit_template_id") or "").strip(),
+                "exit_template_label": str(scenario.get("exit_template_label") or "").strip(),
+                "framework_family": str(scenario.get("framework_family") or ""),
+                "framework_version": str(scenario.get("framework_version") or ""),
+                "framework_notes": str(scenario.get("framework_notes") or ""),
+                "experimental": bool(scenario.get("experimental")),
+                "hard_stop_r_multiple": _coerce_float(scenario.get("hard_stop_r_multiple")),
+                "partial_target_label": str(scenario.get("partial_target_label") or "").strip(),
+                "final_target_label": str(scenario.get("final_target_label") or "").strip(),
+                "trail_after_partial_label": str(scenario.get("trail_after_partial_label") or "").strip(),
+                "profit_take_summary": profit_take_summary,
+                "playbook_label": _format_tracker_playbook_label(
+                    scenario.get("stop_reference_label"),
+                    profit_take_summary,
+                ),
+                "status": str(scenario.get("status") or ""),
+                "total_r": _coerce_float(scenario.get("total_r")),
+                "total_pnl": _coerce_float(scenario.get("total_pnl")),
+                "days_held": int(scenario.get("days_held", 0) or 0),
+                "last_action": str(scenario.get("last_action") or ""),
+            }
+            context_groups.setdefault(context["context_key"], []).append(merged_row)
+            grouped.setdefault(
+                context["context_key"] + (
+                    merged_row["stop_reference_label"],
+                    merged_row["exit_template_id"],
+                ),
+                [],
+            ).append(merged_row)
+
+    context_baselines: dict[tuple, dict[str, float | None]] = {}
+    for context_key, rows in context_groups.items():
+        closed_rows = [
+            row
+            for row in rows
+            if str(row.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+        ]
+        closed_rs = [
+            float(row.get("total_r", 0.0) or 0.0)
+            for row in closed_rows
+            if _coerce_float(row.get("total_r")) is not None
+        ]
+        clipped_closed_rs = [
+            clipped
+            for clipped in (_clip_tracker_r_value(value) for value in closed_rs)
+            if clipped is not None
+        ]
+        context_baselines[context_key] = {
+            "robust_closed_r": mean(clipped_closed_rs) if clipped_closed_rs else None,
+            "median_closed_r": median(closed_rs) if closed_rs else None,
+            "win_rate_closed": (
+                mean(1.0 if value > 0 else 0.0 for value in closed_rs)
+                if closed_rs
+                else None
+            ),
+            "target_hit_rate": (
+                mean(1.0 if str(row.get("status", "")).upper() == "TARGET_HIT" else 0.0 for row in closed_rows)
+                if closed_rows
+                else None
+            ),
+        }
+
+    playbook_rows = []
+    for group_key, rows_for_group in grouped.items():
+        closed_rows = [
+            row
+            for row in rows_for_group
+            if str(row.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+        ]
+        open_rows = [
+            row
+            for row in rows_for_group
+            if _scenario_is_open(row.get("status", ""))
+        ]
+        closed_rs = [
+            float(row.get("total_r", 0.0) or 0.0)
+            for row in closed_rows
+            if _coerce_float(row.get("total_r")) is not None
+        ]
+        total_rs = [
+            float(row.get("total_r", 0.0) or 0.0)
+            for row in rows_for_group
+            if _coerce_float(row.get("total_r")) is not None
+        ]
+        clipped_closed_rs = [
+            clipped
+            for clipped in (_clip_tracker_r_value(value) for value in closed_rs)
+            if clipped is not None
+        ]
+        clipped_total_rs = [
+            clipped
+            for clipped in (_clip_tracker_r_value(value) for value in total_rs)
+            if clipped is not None
+        ]
+        wins = [value for value in closed_rs if value > 0]
+        sample_rows = sorted(
+            rows_for_group,
+            key=lambda row: (
+                str(row.get("scan_date") or ""),
+                float(row.get("priority_score", 0.0) or 0.0),
+                str(row.get("symbol") or ""),
+            ),
+            reverse=True,
+        )
+        sample_examples = []
+        for sample_row in sample_rows:
+            symbol = str(sample_row.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            scan_date = str(sample_row.get("scan_date") or "").strip()
+            sample_text = f"{symbol} {scan_date}".strip()
+            scenario_status = str(sample_row.get("status") or "").strip()
+            sample_r = _coerce_float(sample_row.get("total_r"))
+            if scenario_status in {"STOPPED", "TARGET_HIT"} and sample_r is not None:
+                sample_text += f" ({sample_r:+.2f}R)"
+            elif scenario_status:
+                sample_text += f" ({scenario_status})"
+            sample_examples.append(sample_text)
+            if len(sample_examples) >= 8:
+                break
+
+        baseline = context_baselines.get(group_key[:5], {})
+        raw_avg_closed_r = mean(closed_rs) if closed_rs else None
+        robust_closed_r = mean(clipped_closed_rs) if clipped_closed_rs else None
+        median_closed_r = median(closed_rs) if closed_rs else None
+        ranking_score = None
+        if robust_closed_r is not None:
+            ranking_score = (
+                (robust_closed_r * math.log1p(max(1, len(closed_rows))))
+                + ((median_closed_r or 0.0) * 0.35)
+                + ((mean(1.0 if value > 0 else 0.0 for value in closed_rs) if closed_rs else 0.0) * 0.20)
+            )
+
+        outlier_warning = ""
+        max_abs_r = max((abs(value) for value in closed_rs), default=0.0)
+        if (
+            raw_avg_closed_r is not None
+            and robust_closed_r is not None
+            and (
+                abs(raw_avg_closed_r - robust_closed_r) >= 0.75
+                or max_abs_r > (TRACKER_PLAYBOOK_R_CLIP * 2.0)
+            )
+        ):
+            outlier_warning = (
+                "Raw average R is skewed by one or more extreme outcomes; robust R is used for ranking."
+            )
+
+        playbook_rows.append(
+            {
+                "context_id": rows_for_group[0].get("context_id", ""),
+                "type_label": rows_for_group[0].get("type_label", ""),
+                "side": rows_for_group[0].get("side", ""),
+                "priority_bucket": rows_for_group[0].get("priority_bucket", ""),
+                "favorite_zone": rows_for_group[0].get("favorite_zone", ""),
+                "retest_label": rows_for_group[0].get("retest_label", ""),
+                "compression_label": rows_for_group[0].get("compression_label", ""),
+                "stop_reference_label": rows_for_group[0].get("stop_reference_label", ""),
+                "stop_source_type": rows_for_group[0].get("stop_source_type", ""),
+                "exit_template_id": rows_for_group[0].get("exit_template_id", ""),
+                "exit_template_label": rows_for_group[0].get("exit_template_label", ""),
+                "framework_family": rows_for_group[0].get("framework_family", ""),
+                "framework_version": rows_for_group[0].get("framework_version", ""),
+                "framework_notes": rows_for_group[0].get("framework_notes", ""),
+                "experimental": bool(rows_for_group[0].get("experimental")),
+                "hard_stop_r_multiple": _coerce_float(rows_for_group[0].get("hard_stop_r_multiple")),
+                "partial_target_label": rows_for_group[0].get("partial_target_label", ""),
+                "final_target_label": rows_for_group[0].get("final_target_label", ""),
+                "trail_after_partial_label": rows_for_group[0].get("trail_after_partial_label", ""),
+                "profit_take_summary": rows_for_group[0].get("profit_take_summary", ""),
+                "playbook_label": rows_for_group[0].get("playbook_label", ""),
+                "tracked_setups": len(rows_for_group),
+                "tradeable_setups": len(rows_for_group),
+                "closed_setups": len(closed_rows),
+                "open_setups": len(open_rows),
+                "raw_avg_closed_r": raw_avg_closed_r,
+                "robust_closed_r": robust_closed_r,
+                "median_closed_r": median_closed_r,
+                "robust_total_r": mean(clipped_total_rs) if clipped_total_rs else None,
+                "avg_total_r": mean(total_rs) if total_rs else None,
+                "win_rate_closed": (len(wins) / len(closed_rows)) if closed_rows else None,
+                "target_hit_rate": (
+                    mean(1.0 if str(row.get("status", "")).upper() == "TARGET_HIT" else 0.0 for row in closed_rows)
+                    if closed_rows
+                    else None
+                ),
+                "stop_rate": (
+                    mean(1.0 if str(row.get("status", "")).upper() == "STOPPED" else 0.0 for row in closed_rows)
+                    if closed_rows
+                    else None
+                ),
+                "baseline_robust_closed_r": _coerce_float(baseline.get("robust_closed_r")),
+                "baseline_median_closed_r": _coerce_float(baseline.get("median_closed_r")),
+                "baseline_win_rate_closed": _coerce_float(baseline.get("win_rate_closed")),
+                "baseline_target_hit_rate": _coerce_float(baseline.get("target_hit_rate")),
+                "robust_closed_r_edge": (
+                    robust_closed_r - float(baseline.get("robust_closed_r"))
+                    if robust_closed_r is not None and _coerce_float(baseline.get("robust_closed_r")) is not None
+                    else None
+                ),
+                "median_closed_r_edge": (
+                    median_closed_r - float(baseline.get("median_closed_r"))
+                    if median_closed_r is not None and _coerce_float(baseline.get("median_closed_r")) is not None
+                    else None
+                ),
+                "win_rate_closed_edge": (
+                    float(len(wins) / len(closed_rows)) - float(baseline.get("win_rate_closed"))
+                    if closed_rows and _coerce_float(baseline.get("win_rate_closed")) is not None
+                    else None
+                ),
+                "target_hit_rate_edge": (
+                    (
+                        mean(1.0 if str(row.get("status", "")).upper() == "TARGET_HIT" else 0.0 for row in closed_rows)
+                        - float(baseline.get("target_hit_rate"))
+                    )
+                    if closed_rows and _coerce_float(baseline.get("target_hit_rate")) is not None
+                    else None
+                ),
+                "ranking_score": ranking_score,
+                "outlier_warning": outlier_warning,
+                "sample_setups": "; ".join(sample_examples),
+            }
+        )
+
+    playbook_rows.sort(key=_tracker_playbook_sort_key)
+
+    deduped_rows = []
+    seen_display_keys = set()
+    for row in playbook_rows:
+        display_key = (
+            row.get("context_id", ""),
+            row.get("stop_reference_label", ""),
+            row.get("profit_take_summary", ""),
+            int(row.get("tracked_setups", 0) or 0),
+            int(row.get("closed_setups", 0) or 0),
+            round(_coerce_float(row.get("robust_closed_r")) or 0.0, 6),
+            round(_coerce_float(row.get("median_closed_r")) or 0.0, 6),
+            round(_coerce_float(row.get("win_rate_closed")) or 0.0, 6),
+            round(_coerce_float(row.get("target_hit_rate")) or 0.0, 6),
+        )
+        if display_key in seen_display_keys:
+            continue
+        seen_display_keys.add(display_key)
+        deduped_rows.append(row)
+    return deduped_rows
+
+
+def build_tracker_playbook_recommendation_rows(playbook_rows: list[dict]) -> list[dict]:
+    if not playbook_rows:
+        return []
+
+    grouped: dict[str, list[dict]] = {}
+    for row in playbook_rows:
+        grouped.setdefault(str(row.get("context_id") or ""), []).append(row)
+
+    recommendations = []
+    for context_id, rows_for_context in grouped.items():
+        rows_with_history = [
+            row for row in rows_for_context if int(row.get("closed_setups", 0) or 0) > 0
+        ]
+        if not rows_with_history:
+            continue
+        display_rows, min_closed = _filter_tracker_summary_rows(
+            rows_with_history,
+            closed_key="closed_setups",
+            preferred_min_closed=TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES,
+        )
+        ranked_rows = sorted(display_rows, key=_tracker_playbook_sort_key)
+        if not ranked_rows:
+            continue
+        top_row = dict(ranked_rows[0])
+        top_row["context_min_closed_used"] = min_closed
+        top_row["context_option_count"] = len(ranked_rows)
+        top_row["context_id"] = context_id
+        recommendations.append(top_row)
+
+    recommendations.sort(key=_tracker_playbook_sort_key)
+    return recommendations
+
+
+def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
+    if not isinstance(setups, dict) or not setups:
+        return []
 
     setup_rows = []
     baseline_groups: dict[tuple[str, str], list[dict]] = {}
     for setup in setups.values():
         if not isinstance(setup, dict):
             continue
-        side = normalize_side(setup.get("side") or "")
-        priority_bucket = str(setup.get("priority_bucket") or "tracked")
-        favorite_zone = str(setup.get("favorite_zone") or "").strip() or "None"
-        retest_followthrough = bool(setup.get("retest_followthrough"))
-        retest_reference_level = str(setup.get("retest_reference_level") or "").strip()
-        retest_label = retest_reference_level if retest_followthrough and retest_reference_level else "None"
-        compression_flag = bool(setup.get("compression_flag"))
-        compression_label = "Y" if compression_flag else "N"
+        context = _tracker_setup_context(setup)
         entry_attributes = setup.get("entry_attributes", {})
         if not isinstance(entry_attributes, dict):
             entry_attributes = {}
@@ -4479,12 +5133,12 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             "setup_id": str(setup.get("setup_id") or ""),
             "scan_date": str(setup.get("scan_date") or ""),
             "symbol": str(setup.get("symbol") or "").strip().upper(),
-            "side": side,
-            "priority_bucket": priority_bucket,
-            "favorite_zone": favorite_zone,
-            "retest_label": retest_label,
-            "compression_label": compression_label,
-            "compression_flag": compression_flag,
+            "side": context["side"],
+            "priority_bucket": context["priority_bucket"],
+            "favorite_zone": context["favorite_zone"],
+            "retest_label": context["retest_label"],
+            "compression_label": context["compression_label"],
+            "compression_flag": context["compression_flag"],
             "setup_status": str(setup.get("setup_status") or ""),
             "priority_score": _coerce_float(setup.get("priority_score")),
             "tradeable": int(outcome_summary.get("tradeable_scenario_count", 0) or 0) > 0,
@@ -4502,7 +5156,7 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             ),
         }
         setup_rows.append(row)
-        baseline_groups.setdefault((side, priority_bucket), []).append(row)
+        baseline_groups.setdefault((str(context["side"]), str(context["priority_bucket"])), []).append(row)
 
     baseline_map: dict[tuple[str, str], dict[str, float | None]] = {}
     for baseline_key, rows_for_baseline in baseline_groups.items():
@@ -4650,10 +5304,10 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
                     if stop_rate is not None and baseline_stop_rate is not None
                     else None
                 ),
-                "current_band_zone_summary": _summarize_counts(
+                "current_band_zone_summary": _summarize_tracker_value_counts(
                     [row.get("current_band_zone") or "" for row in rows_for_group]
                 ),
-                "trend_summary": _summarize_counts(
+                "trend_summary": _summarize_tracker_value_counts(
                     [row.get("trend_20d") or "" for row in rows_for_group]
                 ),
                 "previous_day_range_break_rate": (
@@ -4744,6 +5398,7 @@ def export_setup_tracker_views(payload: dict) -> None:
     attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
     stats_rows = build_tracker_stats_rows(scenario_rows)
     setup_type_rows = build_tracker_setup_type_rows(setups)
+    playbook_rows = build_tracker_playbook_rows(setups)
     payload["stats"] = stats_rows
     payload["setup_type_stats"] = setup_type_rows
 
@@ -4752,6 +5407,7 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(daily_rows).to_csv(SETUP_DAILY_FILE, index=False)
     pd.DataFrame(stats_rows).to_csv(SETUP_STATS_FILE, index=False)
     pd.DataFrame(setup_type_rows).to_csv(SETUP_TYPE_STATS_FILE, index=False)
+    pd.DataFrame(playbook_rows).to_csv(SETUP_PLAYBOOKS_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
 
@@ -7465,12 +8121,14 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
                 handle.write(f"  trendline_break={trendline_break_note}\n")
         handle.write("\n")
 
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write("Master AVWAP priority setups\n")
-        handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        handle.write("Focus: AVWAPE, 1st-dev, and 2nd-dev breakouts first; bounce only boosts the score of those setups\n\n")
-        _write_rows(handle, "Best current favorite setups", favorites)
-        _write_rows(handle, "Near favorite zones", watchlist)
+    buffer = io.StringIO()
+    handle = buffer
+    handle.write("Master AVWAP priority setups\n")
+    handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    handle.write("Focus: AVWAPE, 1st-dev, and 2nd-dev breakouts first; bounce only boosts the score of those setups\n\n")
+    _write_rows(handle, "Best current favorite setups", favorites)
+    _write_rows(handle, "Near favorite zones", watchlist)
+    _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
 def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_state: dict) -> None:
@@ -7566,21 +8224,22 @@ def closes_between_bands(
 
 
 def write_stdev_range_report(path: Path, range_hits: dict, cross_hits: dict) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("AVWAP 2nd-3rd stdev multi-day range + 2nd stdev crosses/bounces\n")
-        f.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    buffer = io.StringIO()
+    buffer.write("AVWAP 2nd-3rd stdev multi-day range + 2nd stdev crosses/bounces\n")
+    buffer.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
-        long_range = ", ".join(sorted(set(range_hits.get("long", [])))) or "None"
-        short_range = ", ".join(sorted(set(range_hits.get("short", [])))) or "None"
-        f.write("Traded between 2nd and 3rd stdev for >= 4 days (current anchors)\n")
-        f.write(f"Longs (UPPER_2 to UPPER_3): {long_range}\n")
-        f.write(f"Shorts (LOWER_3 to LOWER_2): {short_range}\n\n")
+    long_range = ", ".join(sorted(set(range_hits.get("long", [])))) or "None"
+    short_range = ", ".join(sorted(set(range_hits.get("short", [])))) or "None"
+    buffer.write("Traded between 2nd and 3rd stdev for >= 4 days (current anchors)\n")
+    buffer.write(f"Longs (UPPER_2 to UPPER_3): {long_range}\n")
+    buffer.write(f"Shorts (LOWER_3 to LOWER_2): {short_range}\n\n")
 
-        long_cross = ", ".join(sorted(set(cross_hits.get("long", [])))) or "None"
-        short_cross = ", ".join(sorted(set(cross_hits.get("short", [])))) or "None"
-        f.write("Crosses/bounces through 2nd stdev (current anchors)\n")
-        f.write(f"Longs crossing/bouncing at UPPER_2: {long_cross}\n")
-        f.write(f"Shorts crossing/bouncing at LOWER_2: {short_cross}\n")
+    long_cross = ", ".join(sorted(set(cross_hits.get("long", [])))) or "None"
+    short_cross = ", ".join(sorted(set(cross_hits.get("short", [])))) or "None"
+    buffer.write("Crosses/bounces through 2nd stdev (current anchors)\n")
+    buffer.write(f"Longs crossing/bouncing at UPPER_2: {long_cross}\n")
+    buffer.write(f"Shorts crossing/bouncing at LOWER_2: {short_cross}\n")
+    _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
 def write_tradingview_report(
@@ -7643,22 +8302,24 @@ def write_tradingview_report(
         ("Shorts crossing or bouncing LOWER_2", _format_symbols_for_tc2000(stdev_cross_hits.get("short", []))),
     ]
 
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write("Master AVWAP TradingView lists\n")
-        handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        _write_block(
-            handle,
-            "Best current favorite setups",
-            [("LONG", _symbols(favorites, "LONG")), ("SHORT", _symbols(favorites, "SHORT"))],
-        )
-        _write_block(
-            handle,
-            "Near favorite zones",
-            [("LONG", _symbols(near_favorites, "LONG")), ("SHORT", _symbols(near_favorites, "SHORT"))],
-        )
-        _write_block(handle, "Event tickers", event_lines)
-        _write_block(handle, "Price ranges (current anchors)", range_lines)
-        _write_block(handle, "Stdev 2-3 groups", stdev_lines)
+    buffer = io.StringIO()
+    handle = buffer
+    handle.write("Master AVWAP TradingView lists\n")
+    handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    _write_block(
+        handle,
+        "Best current favorite setups",
+        [("LONG", _symbols(favorites, "LONG")), ("SHORT", _symbols(favorites, "SHORT"))],
+    )
+    _write_block(
+        handle,
+        "Near favorite zones",
+        [("LONG", _symbols(near_favorites, "LONG")), ("SHORT", _symbols(near_favorites, "SHORT"))],
+    )
+    _write_block(handle, "Event tickers", event_lines)
+    _write_block(handle, "Price ranges (current anchors)", range_lines)
+    _write_block(handle, "Stdev 2-3 groups", stdev_lines)
+    _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
 
@@ -7730,7 +8391,7 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
     previous_df = pd.read_csv(PREVIOUS_GAP_UPS_FILE)
 
     if current_df.empty and previous_df.empty:
-        ANCHOR_AVWAP_OUTPUT_FILE.write_text("No anchor watchlist rows to process.\n", encoding="utf-8")
+        _write_text_atomic(ANCHOR_AVWAP_OUTPUT_FILE, "No anchor watchlist rows to process.\n")
         return []
 
     for frame in (current_df, previous_df):
@@ -7757,7 +8418,7 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
 
     merged = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
     if merged.empty:
-        ANCHOR_AVWAP_OUTPUT_FILE.write_text("No anchor watchlist rows to process.\n", encoding="utf-8")
+        _write_text_atomic(ANCHOR_AVWAP_OUTPUT_FILE, "No anchor watchlist rows to process.\n")
         return []
 
     ib = connect_daily_data_client(client_id=1004, startup_wait=1.0)
@@ -7840,11 +8501,11 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
                 "level_name": item["level_name"],
                 "level_price": item["level_price"],
             })
-        ANCHOR_AVWAP_OUTPUT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _write_text_atomic(ANCHOR_AVWAP_OUTPUT_FILE, "\n".join(lines).rstrip() + "\n")
     else:
-        ANCHOR_AVWAP_OUTPUT_FILE.write_text(
+        _write_text_atomic(
+            ANCHOR_AVWAP_OUTPUT_FILE,
             f"Anchor AVWAP scan completed at {now_iso}. No AVWAP bounce events.\n",
-            encoding="utf-8",
         )
 
     if signal_rows:
@@ -9376,36 +10037,38 @@ def run_master(
 
     # write human-readable events file (grouped for easier scanning)
     sorted_events = sort_events_for_output(events_for_output)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        priority_text = PRIORITY_SETUPS_FILE.read_text(encoding="utf-8").strip()
-        if priority_text:
-            f.write(priority_text)
-            f.write("\n\n")
-        for s, d, lbl, side in sorted_events:
-            f.write(f"{s},{d},{lbl},{side}\n")
+    output_buffer = io.StringIO()
+    f = output_buffer
+    priority_text = PRIORITY_SETUPS_FILE.read_text(encoding="utf-8").strip()
+    if priority_text:
+        f.write(priority_text)
+        f.write("\n\n")
+    for s, d, lbl, side in sorted_events:
+        f.write(f"{s},{d},{lbl},{side}\n")
 
-        def _write_range_line(label, tickers):
-            items = ", ".join(sorted(set(tickers))) if tickers else "None"
-            f.write(f"{label}: {items}\n")
+    def _write_range_line(label, tickers):
+        items = ", ".join(sorted(set(tickers))) if tickers else "None"
+        f.write(f"{label}: {items}\n")
 
-        f.write("\nPrice ranges (current anchors):\n")
-        _write_range_line(
-            "Longs between AVWAP and UPPER_1",
-            range_buckets["long_avwap_to_upper_1"],
-        )
-        _write_range_line(
-            "Longs between UPPER_1 and UPPER_2",
-            range_buckets["long_upper_1_to_upper_2"],
-        )
-        _write_range_line(
-            "Shorts between AVWAP and LOWER_1",
-            range_buckets["short_avwap_to_lower_1"],
-        )
-        _write_range_line(
-            "Shorts between LOWER_1 and LOWER_2",
-            range_buckets["short_lower_1_to_lower_2"],
-        )
-        f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
+    f.write("\nPrice ranges (current anchors):\n")
+    _write_range_line(
+        "Longs between AVWAP and UPPER_1",
+        range_buckets["long_avwap_to_upper_1"],
+    )
+    _write_range_line(
+        "Longs between UPPER_1 and UPPER_2",
+        range_buckets["long_upper_1_to_upper_2"],
+    )
+    _write_range_line(
+        "Shorts between AVWAP and LOWER_1",
+        range_buckets["short_avwap_to_lower_1"],
+    )
+    _write_range_line(
+        "Shorts between LOWER_1 and LOWER_2",
+        range_buckets["short_lower_1_to_lower_2"],
+    )
+    f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
+    _write_text_atomic(OUTPUT_FILE, output_buffer.getvalue().rstrip() + "\n")
 
     # write grouped ticker lists for easy copy/paste into TradingView/TC2000
     event_buckets = {}
@@ -9415,26 +10078,28 @@ def run_master(
     def _fmt_items(values):
         return ", ".join(sorted(set(values))) if values else "None"
 
-    with open(EVENT_TICKERS_FILE, "w", encoding="utf-8") as f:
-        f.write("AVWAP crosses and bounces by event type\n")
-        f.write(f"Priority setups report: {PRIORITY_SETUPS_FILE.name}\n\n")
-        for lbl in sorted(event_buckets.keys(), key=event_label_sort_key):
-            for side in ("LONG", "SHORT"):
-                tickers = sorted(set(event_buckets[lbl][side]))
-                if not tickers:
-                    continue
-                display_label = format_signal_label(lbl)
-                f.write(f"{display_label}, {side.capitalize()}: {', '.join(tickers)}\n")
+    event_buffer = io.StringIO()
+    f = event_buffer
+    f.write("AVWAP crosses and bounces by event type\n")
+    f.write(f"Priority setups report: {PRIORITY_SETUPS_FILE.name}\n\n")
+    for lbl in sorted(event_buckets.keys(), key=event_label_sort_key):
+        for side in ("LONG", "SHORT"):
+            tickers = sorted(set(event_buckets[lbl][side]))
+            if not tickers:
+                continue
+            display_label = format_signal_label(lbl)
+            f.write(f"{display_label}, {side.capitalize()}: {', '.join(tickers)}\n")
 
-        f.write("\nPrice ranges (current anchors)\n")
-        range_labels = [
-            ("Longs between AVWAP and UPPER_1", "long_avwap_to_upper_1"),
-            ("Longs between UPPER_1 and UPPER_2", "long_upper_1_to_upper_2"),
-            ("Shorts between AVWAP and LOWER_1", "short_avwap_to_lower_1"),
-            ("Shorts between LOWER_1 and LOWER_2", "short_lower_1_to_lower_2"),
-        ]
-        for label, key in range_labels:
-            f.write(f"{label}: {_fmt_items(range_buckets[key])}\n")
+    f.write("\nPrice ranges (current anchors)\n")
+    range_labels = [
+        ("Longs between AVWAP and UPPER_1", "long_avwap_to_upper_1"),
+        ("Longs between UPPER_1 and UPPER_2", "long_upper_1_to_upper_2"),
+        ("Shorts between AVWAP and LOWER_1", "short_avwap_to_lower_1"),
+        ("Shorts between LOWER_1 and LOWER_2", "short_lower_1_to_lower_2"),
+    ]
+    for label, key in range_labels:
+        f.write(f"{label}: {_fmt_items(range_buckets[key])}\n")
+    _write_text_atomic(EVENT_TICKERS_FILE, event_buffer.getvalue().rstrip() + "\n")
 
     write_stdev_range_report(STDEV_RANGE_FILE, stdev_range_hits, stdev_cross_hits)
     write_tradingview_report(
@@ -9867,12 +10532,12 @@ class MasterAvwapGUI:
         )
         scenario_col_widths = {
             "stop": 90,
-            "exit": 180,
+            "exit": 300,
             "shares": 70,
             "status": 86,
             "total_r": 80,
             "total_pnl": 90,
-            "last_action": 260,
+            "last_action": 300,
         }
         for col in scenario_columns:
             self.setup_tracker_scenario_table.heading(col, text=col)
@@ -9894,6 +10559,77 @@ class MasterAvwapGUI:
         tracker_stats_frame.pack(fill="both", expand=True)
         self.setup_tracker_stats_text = tk.Text(tracker_stats_frame, wrap="word", font=("Courier New", 10))
         self.setup_tracker_stats_text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        playbook_tab = ttk.Frame(tracker_insights_notebook)
+        tracker_insights_notebook.add(playbook_tab, text="Best Playbooks")
+        playbook_frame = ttk.LabelFrame(playbook_tab, text="Best Stop / Profit-Take Playbooks")
+        playbook_frame.pack(fill="both", expand=True, pady=(0, 8))
+        playbook_columns = (
+            "context",
+            "stop",
+            "profit_take",
+            "closed",
+            "robust_r",
+            "r_edge",
+            "win_rate",
+        )
+        self.setup_tracker_playbook_table = ttk.Treeview(
+            playbook_frame,
+            columns=playbook_columns,
+            show="headings",
+            style="Dark.Treeview",
+            height=12,
+        )
+        playbook_col_widths = {
+            "context": 210,
+            "stop": 68,
+            "profit_take": 150,
+            "closed": 52,
+            "robust_r": 66,
+            "r_edge": 66,
+            "win_rate": 56,
+        }
+        playbook_headings = {
+            "context": "Setup Type",
+            "stop": "Stop",
+            "profit_take": "Take Profit",
+            "closed": "Closed",
+            "robust_r": "Robust R",
+            "r_edge": "R Edge",
+            "win_rate": "Win",
+        }
+        for col in playbook_columns:
+            self.setup_tracker_playbook_table.heading(col, text=playbook_headings.get(col, col))
+            self.setup_tracker_playbook_table.column(
+                col,
+                width=playbook_col_widths.get(col, 90),
+                anchor="w",
+            )
+        playbook_scroll = ttk.Scrollbar(
+            playbook_frame,
+            orient="vertical",
+            command=self.setup_tracker_playbook_table.yview,
+        )
+        self.setup_tracker_playbook_table.configure(yscrollcommand=playbook_scroll.set)
+        self.setup_tracker_playbook_table.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(8, 0),
+            pady=8,
+        )
+        playbook_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self.setup_tracker_playbook_table.bind("<<TreeviewSelect>>", self._on_playbook_selected)
+
+        playbook_detail_frame = ttk.LabelFrame(playbook_tab, text="Playbook Details")
+        playbook_detail_frame.pack(fill="both", expand=True)
+        self.setup_tracker_playbook_text = tk.Text(
+            playbook_detail_frame,
+            wrap="word",
+            font=("Courier New", 10),
+            height=11,
+        )
+        self.setup_tracker_playbook_text.pack(fill="both", expand=True, padx=8, pady=8)
 
         setup_types_tab = ttk.Frame(tracker_insights_notebook)
         tracker_insights_notebook.add(setup_types_tab, text="Setup Types")
@@ -10182,6 +10918,7 @@ class MasterAvwapGUI:
             f"Logs: {details['logs_dir']}\n"
             f"Reports: {details['output_dir']}\n"
             f"Runtime tracker data: {details['runtime_dir']}\n"
+            f"Local machine cache: {details['local_cache_dir']}\n"
             f"Home-folder longs.txt: {'OK' if shared_longs_path.exists() else 'missing'}\n"
             f"Home-folder shorts.txt: {'OK' if shared_shorts_path.exists() else 'missing'}\n"
             f"Source: {details['source_label']}"
@@ -10220,6 +10957,7 @@ class MasterAvwapGUI:
                 f"Folder: {target}\n"
                 f"Settings file: {LOCAL_SETTINGS_FILE}\n\n"
                 "Place longs.txt and shorts.txt in that folder root to share watchlists across devices.\n\n"
+                "Replaceable download caches stay local to each computer so the shared folder stays small.\n\n"
                 "Restart the GUI to start using the new home folder.",
             )
 
@@ -10318,6 +11056,154 @@ class MasterAvwapGUI:
         self._copy_to_clipboard(", ".join(symbols))
         self.status_var.set("Copied setup tracker symbols to clipboard.")
 
+    def _get_playbooks_for_context(
+        self,
+        context_id: str,
+        preferred_min_closed: int = TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES,
+    ) -> tuple[list[dict], int]:
+        playbook_rows = getattr(self, "setup_tracker_playbook_rows", [])
+        matching_rows = [
+            row
+            for row in playbook_rows
+            if str(row.get("context_id") or "") == str(context_id or "")
+            and int(row.get("closed_setups", 0) or 0) > 0
+        ]
+        display_rows, min_closed = _filter_tracker_summary_rows(
+            matching_rows,
+            closed_key="closed_setups",
+            preferred_min_closed=preferred_min_closed,
+        )
+        ranked_rows = sorted(display_rows, key=_tracker_playbook_sort_key)
+        return ranked_rows, min_closed
+
+    def _populate_playbook_table(self, rows: list[dict]) -> None:
+        self.setup_tracker_playbook_row_map = {}
+        for item in self.setup_tracker_playbook_table.get_children():
+            self.setup_tracker_playbook_table.delete(item)
+        if not rows:
+            self._render_playbook_details(None)
+            return
+
+        for row in rows:
+            robust_closed_r = _coerce_float(row.get("robust_closed_r"))
+            robust_closed_r_edge = _coerce_float(row.get("robust_closed_r_edge"))
+            win_rate = _coerce_float(row.get("win_rate_closed"))
+            item_id = self.setup_tracker_playbook_table.insert(
+                "",
+                "end",
+                values=(
+                    row.get("type_label", ""),
+                    row.get("stop_reference_label", ""),
+                    row.get("profit_take_summary", ""),
+                    int(row.get("closed_setups", 0) or 0),
+                    "" if robust_closed_r is None else f"{robust_closed_r:.2f}",
+                    "" if robust_closed_r_edge is None else f"{robust_closed_r_edge:+.2f}",
+                    "" if win_rate is None else f"{win_rate * 100:.0f}%",
+                ),
+            )
+            self.setup_tracker_playbook_row_map[item_id] = row
+
+        first_item = self.setup_tracker_playbook_table.get_children()
+        if first_item:
+            self.setup_tracker_playbook_table.selection_set(first_item[0])
+            self.setup_tracker_playbook_table.focus(first_item[0])
+            self._on_playbook_selected()
+        else:
+            self._render_playbook_details(None)
+
+    def _render_playbook_details(self, row: dict | None) -> None:
+        if not row:
+            self._set_text_widget_contents(
+                self.setup_tracker_playbook_text,
+                "No playbook recommendations yet.",
+            )
+            return
+
+        def _fmt_r(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_r_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:+.2f}R" if numeric is not None else "n/a"
+
+        def _fmt_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:.0f}%" if numeric is not None else "n/a"
+
+        matching_rows, min_closed = self._get_playbooks_for_context(
+            str(row.get("context_id") or "")
+        )
+        framework_label = "Experimental comparison" if row.get("experimental") else "Baseline"
+        lines = [
+            str(row.get("type_label") or "Playbook"),
+            "-" * 80,
+            f"Recommended playbook: {row.get('playbook_label')}",
+            (
+                f"Framework={framework_label}"
+                f" | closed filter used={max(0, int(row.get('context_min_closed_used', min_closed) or 0))}"
+                f" | alternatives={max(0, int(row.get('context_option_count', len(matching_rows)) or 0) - 1)}"
+            ),
+            (
+                f"Tracked={int(row.get('tracked_setups', 0) or 0)} | "
+                f"with_closed={int(row.get('closed_setups', 0) or 0)} | "
+                f"open={int(row.get('open_setups', 0) or 0)}"
+            ),
+            (
+                f"Robust closed R={_fmt_r(row.get('robust_closed_r'))} "
+                f"vs context {_fmt_r(row.get('baseline_robust_closed_r'))} "
+                f"({_fmt_r_edge(row.get('robust_closed_r_edge'))})"
+            ),
+            (
+                f"Median closed R={_fmt_r(row.get('median_closed_r'))} "
+                f"| raw avg closed R={_fmt_r(row.get('raw_avg_closed_r'))}"
+            ),
+            (
+                f"Win rate={_fmt_pct(row.get('win_rate_closed'))} "
+                f"| target hit={_fmt_pct(row.get('target_hit_rate'))} "
+                f"| stop rate={_fmt_pct(row.get('stop_rate'))}"
+            ),
+        ]
+        if _coerce_float(row.get("robust_total_r")) is not None:
+            lines.append(f"Robust total R including open setups: {_fmt_r(row.get('robust_total_r'))}")
+        if row.get("framework_notes"):
+            lines.append(f"Notes: {row.get('framework_notes')}")
+        if row.get("outlier_warning"):
+            lines.append(f"Note: {row.get('outlier_warning')}")
+
+        alternatives = [
+            item
+            for item in matching_rows
+            if str(item.get("playbook_label") or "") != str(row.get("playbook_label") or "")
+        ]
+        if alternatives:
+            lines.append("")
+            lines.append("Next-best options in this setup type")
+            lines.append("-" * 80)
+            for item in alternatives[:4]:
+                lines.append(
+                    f"{item.get('playbook_label')}: "
+                    f"closed={int(item.get('closed_setups', 0) or 0)} "
+                    f"robust={_fmt_r(item.get('robust_closed_r'))} "
+                    f"edge={_fmt_r_edge(item.get('robust_closed_r_edge'))} "
+                    f"win={_fmt_pct(item.get('win_rate_closed'))}"
+                )
+
+        if row.get("sample_setups"):
+            lines.append("")
+            lines.append("Recent examples")
+            lines.append("-" * 80)
+            for item in str(row.get("sample_setups") or "").split("; "):
+                if item:
+                    lines.append(item)
+
+        self._set_text_widget_contents(self.setup_tracker_playbook_text, "\n".join(lines))
+
+    def _on_playbook_selected(self, _event=None) -> None:
+        selected = self.setup_tracker_playbook_table.selection()
+        row = self.setup_tracker_playbook_row_map.get(selected[0]) if selected else None
+        self._render_playbook_details(row)
+
     def _render_setup_tracker_stats_text(self, payload: dict, selected_setup: dict | None = None):
         stats_rows = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
         setup_type_rows = getattr(
@@ -10326,6 +11212,8 @@ class MasterAvwapGUI:
             payload.get("setup_type_stats", []) if isinstance(payload.get("setup_type_stats"), list) else [],
         )
         factor_rows = getattr(self, "setup_tracker_factor_rows", [])
+        playbook_rows = getattr(self, "setup_tracker_playbook_rows", [])
+        best_playbook_rows = getattr(self, "setup_tracker_best_playbook_rows", [])
         daily_watchlists = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
         attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
 
@@ -10368,26 +11256,29 @@ class MasterAvwapGUI:
                     preview += f" (+{len(symbols) - 10} more)"
                 lines.append(f"{watchlist_date}: {preview}")
         lines.append("")
-        lines.append("Top scenario stats")
+        lines.append("Best playbooks right now")
         lines.append("-" * 80)
-        display_stats_rows, stats_min_closed = _filter_tracker_summary_rows(
-            stats_rows,
-            closed_key="closed_setups",
-        )
-        if not display_stats_rows:
-            lines.append("No scenario stats yet.")
+        if not best_playbook_rows:
+            lines.append("No playbook recommendations yet.")
         else:
-            if stats_min_closed > 0:
+            display_best_rows, best_min_closed = _filter_tracker_summary_rows(
+                best_playbook_rows,
+                closed_key="closed_setups",
+                preferred_min_closed=TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES,
+            )
+            if best_min_closed > 0:
                 lines.append(
-                    f"Showing rows with >= {stats_min_closed} closed setups, ranked by avg closed R."
+                    f"Showing setup-type recommendations with >= {best_min_closed} closed setups when possible."
                 )
-            for row in display_stats_rows[:8]:
+            for row in display_best_rows[:6]:
                 lines.append(
-                    f"{row.get('stop_reference_label')} / {row.get('exit_template_id')}: "
-                    f"closed={row.get('closed_setups', 0)} open={row.get('open_setups', 0)} "
-                    f"avg_closed={_fmt_r(row.get('avg_closed_r'))} "
-                    f"avg_total={_fmt_r(row.get('avg_total_r'))} "
-                    f"bias={_fmt_r_edge(row.get('open_distortion'))} "
+                    f"{row.get('type_label')}:"
+                )
+                lines.append(
+                    f"  {row.get('playbook_label')} | "
+                    f"closed={int(row.get('closed_setups', 0) or 0)} "
+                    f"robust={_fmt_r(row.get('robust_closed_r'))} "
+                    f"edge={_fmt_r_edge(row.get('robust_closed_r_edge'))} "
                     f"win={_fmt_pct(row.get('win_rate_closed'))}"
                 )
 
@@ -10410,6 +11301,31 @@ class MasterAvwapGUI:
                     f"{row.get('type_label')}: tracked={row.get('tracked_setups', 0)} "
                     f"closed={row.get('closed_setups', 0)} avg_closed={_fmt_r(row.get('avg_closed_r'))} "
                     f"edge={_fmt_r_edge(row.get('avg_closed_r_edge'))} hit={_fmt_pct(row.get('target_hit_rate'))}"
+                )
+
+        lines.append("")
+        lines.append("Top scenario groups")
+        lines.append("-" * 80)
+        display_stats_rows, stats_min_closed = _filter_tracker_summary_rows(
+            stats_rows,
+            closed_key="closed_setups",
+        )
+        if not display_stats_rows:
+            lines.append("No scenario-group stats yet.")
+        else:
+            if stats_min_closed > 0:
+                lines.append(
+                    f"Showing rows with >= {stats_min_closed} closed setups, ranked by avg closed R."
+                )
+            for row in display_stats_rows[:6]:
+                scenario_label = str(row.get("exit_template_label") or row.get("exit_template_id") or "").strip()
+                lines.append(
+                    f"{row.get('stop_reference_label')} / {scenario_label}: "
+                    f"closed={row.get('closed_setups', 0)} open={row.get('open_setups', 0)} "
+                    f"avg_closed={_fmt_r(row.get('avg_closed_r'))} "
+                    f"avg_total={_fmt_r(row.get('avg_total_r'))} "
+                    f"bias={_fmt_r_edge(row.get('open_distortion'))} "
+                    f"win={_fmt_pct(row.get('win_rate_closed'))}"
                 )
 
         positive_factor_rows = [
@@ -10530,6 +11446,54 @@ class MasterAvwapGUI:
             if selected_setup.get("compression_note"):
                 lines.append(f"compression={selected_setup.get('compression_note')}")
 
+            selected_context_id = _tracker_setup_context(selected_setup).get("context_id", "")
+            matching_playbooks, matching_min_closed = self._get_playbooks_for_context(str(selected_context_id))
+            if matching_playbooks:
+                lines.append("")
+                lines.append("Best matching stop / take-profit playbooks")
+                lines.append("-" * 80)
+                if matching_min_closed > 0:
+                    lines.append(
+                        f"Ranking this setup against playbooks with >= {matching_min_closed} closed setups when possible."
+                    )
+                for row in matching_playbooks[:4]:
+                    lines.append(
+                        f"{row.get('playbook_label')}: "
+                        f"closed={int(row.get('closed_setups', 0) or 0)} "
+                        f"robust={_fmt_r(row.get('robust_closed_r'))} "
+                        f"median={_fmt_r(row.get('median_closed_r'))} "
+                        f"edge={_fmt_r_edge(row.get('robust_closed_r_edge'))} "
+                        f"win={_fmt_pct(row.get('win_rate_closed'))}"
+                    )
+            elif playbook_rows:
+                broader_matches = [
+                    row
+                    for row in playbook_rows
+                    if str(row.get("side") or "") == str(selected_setup.get("side") or "")
+                    and str(row.get("priority_bucket") or "") == str(selected_setup.get("priority_bucket") or "")
+                    and int(row.get("closed_setups", 0) or 0) > 0
+                ]
+                broader_matches, _ = _filter_tracker_summary_rows(
+                    broader_matches,
+                    closed_key="closed_setups",
+                    preferred_min_closed=TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES,
+                )
+                broader_matches = sorted(broader_matches, key=_tracker_playbook_sort_key)
+                if broader_matches:
+                    lines.append("")
+                    lines.append("Best broader-context playbooks")
+                    lines.append("-" * 80)
+                    lines.append(
+                        "No exact setup-type match had enough history yet, so this is using the broader side + bucket context."
+                    )
+                    for row in broader_matches[:3]:
+                        lines.append(
+                            f"{row.get('type_label')} -> {row.get('playbook_label')}: "
+                            f"closed={int(row.get('closed_setups', 0) or 0)} "
+                            f"robust={_fmt_r(row.get('robust_closed_r'))} "
+                            f"win={_fmt_pct(row.get('win_rate_closed'))}"
+                        )
+
             entry_attributes = selected_setup.get("entry_attributes", {})
             if isinstance(entry_attributes, dict) and entry_attributes:
                 lines.append("")
@@ -10556,6 +11520,7 @@ class MasterAvwapGUI:
         lines.append(f"Daily CSV: {SETUP_DAILY_FILE}")
         lines.append(f"Stats CSV: {SETUP_STATS_FILE}")
         lines.append(f"Setup type stats CSV: {SETUP_TYPE_STATS_FILE}")
+        lines.append(f"Playbook stats CSV: {SETUP_PLAYBOOKS_FILE}")
         lines.append(f"Attributes CSV: {SETUP_ATTRIBUTES_FILE}")
         lines.append(f"Attribute leaderboard CSV: {SETUP_ATTRIBUTE_LEADERBOARD_FILE}")
         lines.append(f"Scoring config JSON: {SCORING_CONFIG_FILE}")
@@ -10662,6 +11627,26 @@ class MasterAvwapGUI:
             )
         if _coerce_float(row.get("extreme_move_rate")) is not None:
             lines.append(f"Extreme-move rate: {_fmt_pct(row.get('extreme_move_rate'))}")
+        matching_playbooks, matching_min_closed = self._get_playbooks_for_context(
+            str(row.get("setup_type_id") or "")
+        )
+        if matching_playbooks:
+            lines.append("")
+            lines.append("Best stop / take-profit playbooks")
+            lines.append("-" * 80)
+            if matching_min_closed > 0:
+                lines.append(
+                    f"Showing playbooks with >= {matching_min_closed} closed setups when possible."
+                )
+            for item in matching_playbooks[:4]:
+                lines.append(
+                    f"{item.get('playbook_label')}: "
+                    f"closed={int(item.get('closed_setups', 0) or 0)} "
+                    f"robust={_fmt_r(item.get('robust_closed_r'))} "
+                    f"median={_fmt_r(item.get('median_closed_r'))} "
+                    f"edge={_fmt_r_edge(item.get('robust_closed_r_edge'))} "
+                    f"win={_fmt_pct(item.get('win_rate_closed'))}"
+                )
         if row.get("sample_setups"):
             lines.append("")
             lines.append("Recent examples")
@@ -10798,12 +11783,19 @@ class MasterAvwapGUI:
         for scenario in scenarios:
             total_r = _coerce_float(scenario.get("total_r"))
             total_pnl = _coerce_float(scenario.get("total_pnl"))
+            exit_summary = _format_tracker_exit_summary(
+                partial_target_label=scenario.get("partial_target_label"),
+                final_target_label=scenario.get("final_target_label"),
+                trail_after_partial_label=scenario.get("trail_after_partial_label"),
+                fallback_label=str(scenario.get("exit_template_label") or ""),
+                hard_stop_r_multiple=scenario.get("hard_stop_r_multiple"),
+            )
             self.setup_tracker_scenario_table.insert(
                 "",
                 "end",
                 values=(
                     scenario.get("stop_reference_label", ""),
-                    scenario.get("exit_template_label", ""),
+                    exit_summary,
                     int(scenario.get("shares", 0) or 0),
                     scenario.get("status", ""),
                     "" if total_r is None else f"{total_r:.2f}",
@@ -10832,7 +11824,12 @@ class MasterAvwapGUI:
             if isinstance(payload.get("setup_type_stats"), list) and payload.get("setup_type_stats")
             else build_tracker_setup_type_rows(tracker_setups)
         )
+        self.setup_tracker_playbook_rows = build_tracker_playbook_rows(tracker_setups)
+        self.setup_tracker_best_playbook_rows = build_tracker_playbook_recommendation_rows(
+            self.setup_tracker_playbook_rows
+        )
         self.setup_tracker_factor_rows = build_tracker_factor_view_rows(attribute_leaderboard_rows)
+        self._populate_playbook_table(self.setup_tracker_best_playbook_rows)
         self._populate_setup_type_table(self.setup_tracker_setup_type_rows)
         self._populate_factor_table(self.setup_tracker_factor_rows)
 

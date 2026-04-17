@@ -98,7 +98,8 @@ Ensure your IB session is connected before launching either bot so market data r
 ## Syncing Day-To-Day Data Across Devices
 - The app can use a per-machine home folder such as Google Drive or OneDrive for day-to-day mutable data.
 - In the GUI, open the `Master AVWAP` tab and use `Change Home Folder` to point this computer at your synced folder.
-- The home folder stores watchlists, caches, runtime AVWAP data, reports, logs, and setup-tracker files.
+- The home folder stores watchlists, runtime AVWAP data, reports, logs, and setup-tracker files.
+- Replaceable download caches now stay in a per-machine local cache directory so Google Drive or OneDrive stays lightweight.
 - Place `longs.txt` and `shorts.txt` in the home folder root to share watchlists across devices.
 - Each computer can use a different local path as long as they all point to the same shared cloud folder.
 - The chosen folder is saved locally in `%LOCALAPPDATA%\TradingBotV3\local_settings.json`.
