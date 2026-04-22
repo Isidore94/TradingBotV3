@@ -36,6 +36,7 @@ from market_session import (
     get_default_stop_time_label,
     get_market_session_window,
 )
+from master_avwap_shared import load_tradingview_groups
 from master_avwap import (
     ATR_LENGTH,
     MasterAvwapGUI,
@@ -698,21 +699,6 @@ def sync_setup_tracker_from_scan_result(scan_result: dict[str, Any]) -> tuple[bo
     finally:
         disconnect_daily_data_client(ib)
 
-
-def _extract_symbols_from_text(text: str) -> list[str]:
-    symbols = []
-    seen = set()
-    for raw_value in str(text or "").split(","):
-        symbol = raw_value.strip().upper()
-        if not symbol or symbol == "NONE":
-            continue
-        if symbol in seen:
-            continue
-        seen.add(symbol)
-        symbols.append(symbol)
-    return symbols
-
-
 def _format_symbol_group(symbols: list[str]) -> str:
     cleaned = []
     seen = set()
@@ -723,106 +709,6 @@ def _format_symbol_group(symbols: list[str]) -> str:
         seen.add(symbol)
         cleaned.append(symbol)
     return ", ".join(cleaned) if cleaned else "None"
-
-
-def _empty_focus_groups(source: str = "none", source_label: str = "No focus output yet") -> dict[str, Any]:
-    return {
-        "favorites": {"LONG": [], "SHORT": []},
-        "near_favorite_zones": {"LONG": [], "SHORT": []},
-        "source": source,
-        "source_label": source_label,
-    }
-
-
-def _append_focus_symbol(groups: dict[str, Any], section: str, side: str, symbol: str) -> None:
-    section_groups = groups.get(section)
-    if not isinstance(section_groups, dict):
-        return
-
-    target = section_groups.get(side)
-    if not isinstance(target, list):
-        return
-
-    cleaned_symbol = str(symbol or "").strip().upper()
-    if not cleaned_symbol or cleaned_symbol in target:
-        return
-    target.append(cleaned_symbol)
-
-
-def _load_focus_groups_from_feed() -> dict[str, Any]:
-    payload = load_json(MASTER_AVWAP_FOCUS_FILE, default={})
-    if not isinstance(payload, dict):
-        return _empty_focus_groups()
-
-    groups = _empty_focus_groups(source="focus_feed", source_label="Focus feed JSON")
-    symbol_map = payload.get("symbols")
-    symbol_map = symbol_map if isinstance(symbol_map, dict) else {}
-
-    for section, payload_key in (
-        ("favorites", "favorites"),
-        ("near_favorite_zones", "near_favorite_zones"),
-    ):
-        entries = payload.get(payload_key)
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            symbol = str(entry.get("symbol", "")).strip().upper()
-            if not symbol:
-                continue
-            symbol_state = symbol_map.get(symbol)
-            symbol_state = symbol_state if isinstance(symbol_state, dict) else {}
-            side = str(entry.get("side") or symbol_state.get("side") or "").strip().upper()
-            if side not in ("LONG", "SHORT"):
-                continue
-            _append_focus_symbol(groups, section, side, symbol)
-
-    has_symbols = any(
-        groups[section][side]
-        for section in ("favorites", "near_favorite_zones")
-        for side in ("LONG", "SHORT")
-    )
-    if has_symbols:
-        return groups
-    return _empty_focus_groups()
-
-
-def load_tradingview_groups() -> dict[str, Any]:
-    focus_groups = _load_focus_groups_from_feed()
-    if focus_groups.get("source") != "none":
-        return focus_groups
-
-    text = read_text(MASTER_AVWAP_TRADINGVIEW_REPORT_FILE)
-    groups = _empty_focus_groups(source="tradingview_report", source_label="TradingView report")
-    if not text:
-        return groups
-
-    section_lookup = {
-        "Best current favorite setups": "favorites",
-        "Near favorite zones": "near_favorite_zones",
-    }
-    current_section = None
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            current_section = None
-            continue
-        if line in section_lookup:
-            current_section = section_lookup[line]
-            continue
-        if line.startswith("-"):
-            continue
-        if current_section not in groups or ":" not in line:
-            continue
-
-        side_label, values = line.split(":", 1)
-        side = side_label.strip().upper()
-        if side not in ("LONG", "SHORT"):
-            continue
-        groups[current_section][side] = _extract_symbols_from_text(values)
-
-    return groups
 
 
 def write_status_file(

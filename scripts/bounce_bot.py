@@ -39,6 +39,15 @@ from ibapi.contract import Contract
 from colorama import init, Fore, Style
 init(autoreset=True)
 
+from master_avwap_shared import (
+    build_master_avwap_active_level_map,
+    build_master_avwap_second_stdev_cross_map,
+    describe_master_avwap_focus,
+    describe_master_avwap_second_stdev_cross,
+    load_master_avwap_events_for_date,
+    load_master_avwap_focus_map,
+    normalize_master_avwap_event_row,
+)
 from project_paths import (
     DATA_DIR,
     LOG_DIR,
@@ -842,127 +851,25 @@ class BounceBot(EWrapper, EClient):
             return self.scanning_enabled
 
     def _normalize_master_avwap_event_row(self, row):
-        signal_type = (row.get("signal_type") or "").strip().upper()
-        if not signal_type:
-            return None
-        if "BETWEEN" in signal_type:
-            return None
-        if not (signal_type.startswith("CROSS") or signal_type.startswith("BOUNCE")):
-            return None
-
-        symbol = (row.get("symbol") or "").strip().upper()
-        if not symbol:
-            return None
-
-        trade_date = _parse_iso_date_safe(row.get("trade_date"))
-        if trade_date is None:
-            return None
-
-        level = signal_type
-        for prefix in ("CROSS_UP_", "CROSS_DOWN_", "BOUNCE_"):
-            if signal_type.startswith(prefix) and len(signal_type) > len(prefix):
-                level = signal_type[len(prefix):]
-                break
-
-        priority_bucket = (row.get("priority_bucket") or "").strip().lower()
-        favorite_zone = (row.get("favorite_zone") or "").strip()
-        favorite_signals = [
-            value.strip().upper()
-            for value in str(row.get("favorite_signals") or "").split(";")
-            if value.strip()
-        ]
-        is_favorite_setup = str(row.get("is_favorite_setup") or "").strip().lower() in ("1", "true", "yes")
-        is_near_favorite_zone = str(row.get("is_near_favorite_zone") or "").strip().lower() in ("1", "true", "yes")
-
-        return {
-            "symbol": symbol,
-            "trade_date": trade_date,
-            "signal_type": signal_type,
-            "anchor_type": (row.get("anchor_type") or "").strip().upper() or "UNKNOWN",
-            "anchor_date": (row.get("anchor_date") or "").strip(),
-            "side": (row.get("side") or "").strip().upper(),
-            "level": level,
-            "priority_bucket": priority_bucket,
-            "favorite_zone": favorite_zone,
-            "favorite_signals": favorite_signals,
-            "is_favorite_setup": is_favorite_setup,
-            "is_near_favorite_zone": is_near_favorite_zone,
-        }
+        return normalize_master_avwap_event_row(row)
 
     def load_master_avwap_events_today(self):
         """
         Load today's NEW cross/bounce events from master_avwap signal output.
         Keeps parsing generic so new signal/level names continue to work.
         """
-        if not MASTER_AVWAP_SIGNALS_FILENAME.exists():
-            self.master_avwap_events = {}
-            self.master_avwap_last_scan_date = datetime.now().date()
-            return
-
-        try:
-            with open(MASTER_AVWAP_SIGNALS_FILENAME, "r", newline="") as fh:
-                reader = csv.DictReader(fh)
-                rows = list(reader)
-        except Exception as exc:
-            logging.warning(f"Failed reading master AVWAP signals file: {exc}")
-            self.master_avwap_events = {}
-            return
-
         today = datetime.now().date()
-        events_map = {}
-        for row in rows:
-            normalized = self._normalize_master_avwap_event_row(row)
-            if not normalized:
-                continue
-            if normalized["trade_date"] != today:
-                continue
-
-            symbol = normalized["symbol"]
-            events_map.setdefault(symbol, []).append(normalized)
-
-        self.master_avwap_events = events_map
+        self.master_avwap_events = load_master_avwap_events_for_date(
+            trade_date=today,
+            signals_path=MASTER_AVWAP_SIGNALS_FILENAME,
+        )
         self.master_avwap_last_scan_date = today
 
     def _build_master_avwap_active_level_map(self):
-        active_levels = {}
-        for symbol, events in self.master_avwap_events.items():
-            levels = set()
-            for event in events:
-                signal = event.get("signal_type", "")
-                if signal.startswith("CROSS") or signal.startswith("BOUNCE"):
-                    levels.add(event.get("level") or signal)
-            if levels:
-                active_levels[symbol] = sorted(levels)
-        return active_levels
+        return build_master_avwap_active_level_map(self.master_avwap_events)
 
     def _build_master_avwap_second_stdev_cross_map(self):
-        cross_map = {}
-        for symbol, events in self.master_avwap_events.items():
-            matching_events = [
-                event for event in events
-                if event.get("anchor_type") == "CURRENT"
-                and event.get("signal_type") in {"CROSS_UP_UPPER_2", "CROSS_DOWN_LOWER_2"}
-            ]
-            if not matching_events:
-                continue
-
-            latest_event = sorted(
-                matching_events,
-                key=lambda event: (
-                    str(event.get("trade_date") or ""),
-                    str(event.get("anchor_date") or ""),
-                    str(event.get("signal_type") or ""),
-                ),
-            )[-1]
-            cross_map[symbol] = {
-                "symbol": symbol,
-                "side": (latest_event.get("side") or "").strip().upper(),
-                "signal_type": (latest_event.get("signal_type") or "").strip().upper(),
-                "level": (latest_event.get("level") or "").strip().upper(),
-                "anchor_type": (latest_event.get("anchor_type") or "").strip().upper(),
-                "anchor_date": (latest_event.get("anchor_date") or "").strip(),
-            }
-        return cross_map
+        return build_master_avwap_second_stdev_cross_map(self.master_avwap_events)
 
     def find_active_master_avwap_bounces(self):
         self.load_master_avwap_events_today()
@@ -989,56 +896,12 @@ class BounceBot(EWrapper, EClient):
         )
 
     def load_master_avwap_focus(self):
-        if not MASTER_AVWAP_FOCUS_FILENAME.exists():
-            self.master_avwap_focus_map = {}
-            return
-
-        try:
-            with open(MASTER_AVWAP_FOCUS_FILENAME, "r", encoding="utf-8") as fh:
-                payload = json.load(fh)
-        except Exception as exc:
-            logging.warning(f"Failed reading master AVWAP focus file: {exc}")
-            self.master_avwap_focus_map = {}
-            return
-
-        raw_symbols = payload.get("symbols", {}) if isinstance(payload, dict) else {}
-        focus_map = {}
-        if isinstance(raw_symbols, dict):
-            for raw_symbol, raw_entry in raw_symbols.items():
-                entry = raw_entry if isinstance(raw_entry, dict) else {}
-                symbol = (entry.get("symbol") or raw_symbol or "").strip().upper()
-                if not symbol:
-                    continue
-                focus_map[symbol] = {
-                    "symbol": symbol,
-                    "side": (entry.get("side") or "").strip().upper(),
-                    "priority_bucket": (entry.get("priority_bucket") or "").strip().lower(),
-                    "priority_rank": entry.get("priority_rank"),
-                    "priority_score": entry.get("priority_score"),
-                    "favorite_zone": (entry.get("favorite_zone") or "").strip(),
-                    "favorite_signals": [
-                        str(value).strip().upper()
-                        for value in (entry.get("favorite_signals") or [])
-                        if str(value).strip()
-                    ],
-                    "favorite_context_signals": [
-                        str(value).strip().upper()
-                        for value in (entry.get("favorite_context_signals") or [])
-                        if str(value).strip()
-                    ],
-                    "breakout_5d": bool(entry.get("breakout_5d")),
-                    "retest_followthrough": bool(entry.get("retest_followthrough")),
-                }
-
-        self.master_avwap_focus_map = focus_map
+        self.master_avwap_focus_map = load_master_avwap_focus_map(
+            focus_path=MASTER_AVWAP_FOCUS_FILENAME,
+        )
 
     def _describe_master_avwap_focus(self, focus_entry):
-        bucket = (focus_entry or {}).get("priority_bucket", "")
-        if bucket == "favorite_setup":
-            return "best current favorite setup"
-        if bucket == "near_favorite_zone":
-            return "near favorite zone"
-        return "master avwap focus"
+        return describe_master_avwap_focus(focus_entry)
 
     def _emit_master_avwap_focus_bounce_alert(self, symbol, direction, levels_list):
         if not self.gui_callback:
@@ -1071,12 +934,7 @@ class BounceBot(EWrapper, EClient):
         self.log_symbol(symbol, message)
 
     def _describe_master_avwap_second_stdev_cross(self, cross_entry):
-        signal_type = (cross_entry or {}).get("signal_type", "")
-        if signal_type == "CROSS_UP_UPPER_2":
-            return "current UPPER_2 cross"
-        if signal_type == "CROSS_DOWN_LOWER_2":
-            return "current LOWER_2 cross"
-        return "current 2nd stdev cross"
+        return describe_master_avwap_second_stdev_cross(cross_entry)
 
     def _emit_master_avwap_second_stdev_bounce_alert(self, symbol, direction, levels_list):
         if not self.gui_callback:

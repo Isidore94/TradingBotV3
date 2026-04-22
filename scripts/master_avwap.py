@@ -134,6 +134,9 @@ FAVORITE_CURRENT_SIGNALS = {
         "CROSS_UP_UPPER_2": 136,
         "CROSS_UP_UPPER_3": 142,
         "EXTREME_MOVE_RETEST": 112,
+        "POST_EARNINGS_52W_BREAK": 150,
+        "POST_EARNINGS_AVWAPE_BOUNCE": 128,
+        "MID_EARNINGS_EMA15_RETEST": 138,
     },
     "SHORT": {
         "CROSS_DOWN_VWAP": 88,
@@ -141,6 +144,9 @@ FAVORITE_CURRENT_SIGNALS = {
         "CROSS_DOWN_LOWER_2": 136,
         "CROSS_DOWN_LOWER_3": 142,
         "EXTREME_MOVE_RETEST": 112,
+        "POST_EARNINGS_52W_BREAK": 150,
+        "POST_EARNINGS_AVWAPE_BOUNCE": 128,
+        "MID_EARNINGS_EMA15_RETEST": 138,
     },
 }
 
@@ -151,6 +157,10 @@ FAVORITE_CONTEXT_SIGNALS = {
         "PREV_CROSS_UP_UPPER_2": 28,
         "PREV_CROSS_UP_UPPER_3": 30,
         "PREV_BOUNCE_VWAP": 10,
+        "POST_EARNINGS_CLOSE_CONFIRM": 20,
+        "MID_EARNINGS_EMA8_CONFLUENCE": 8,
+        "MID_EARNINGS_EMA21_CONFLUENCE": 10,
+        "MID_EARNINGS_FIRST_DEV_CONFLUENCE": 12,
     },
     "SHORT": {
         "PREV_CROSS_DOWN_VWAP": 18,
@@ -158,6 +168,10 @@ FAVORITE_CONTEXT_SIGNALS = {
         "PREV_CROSS_DOWN_LOWER_2": 28,
         "PREV_CROSS_DOWN_LOWER_3": 30,
         "PREV_BOUNCE_VWAP": 10,
+        "POST_EARNINGS_CLOSE_CONFIRM": 20,
+        "MID_EARNINGS_EMA8_CONFLUENCE": 8,
+        "MID_EARNINGS_EMA21_CONFLUENCE": 10,
+        "MID_EARNINGS_FIRST_DEV_CONFLUENCE": 12,
     },
 }
 
@@ -265,6 +279,25 @@ TRACKER_SUMMARY_MIN_CLOSED_SAMPLES = 25
 TRACKER_TUNER_MIN_CLOSED_SETUPS = 12
 TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES = 8
 TRACKER_PLAYBOOK_R_CLIP = 4.0
+TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
+TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
+TRACKER_RECENT_FAMILY_MIN_TRACKED_SETUPS = 3
+TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS = 2
+TRACKER_RECENT_FAMILY_MIN_SCORE_DELTA = 2
+TRACKER_RECENT_FAMILY_MAX_SCORE_DELTA = 12
+FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS = 252
+POST_EARNINGS_MAX_SESSIONS = 20
+POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
+POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
+POST_EARNINGS_CLOSE_CONFIRM_SIGNAL = "POST_EARNINGS_CLOSE_CONFIRM"
+POST_EARNINGS_STOP_LABEL = "POST_EARNINGS_AVWAPE"
+POST_EARNINGS_STOP_FAILURE_CLOSES = 1
+MID_EARNINGS_EMA15_RETEST_SIGNAL = "MID_EARNINGS_EMA15_RETEST"
+MID_EARNINGS_EMA8_CONFLUENCE_SIGNAL = "MID_EARNINGS_EMA8_CONFLUENCE"
+MID_EARNINGS_EMA21_CONFLUENCE_SIGNAL = "MID_EARNINGS_EMA21_CONFLUENCE"
+MID_EARNINGS_FIRST_DEV_CONFLUENCE_SIGNAL = "MID_EARNINGS_FIRST_DEV_CONFLUENCE"
+MID_EARNINGS_ZONE_MIN_DAYS = 2
+MID_EARNINGS_EMA_RECLAIM_UNDERCUT_ATR = 0.55
 PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX = 0.90
 PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
 PRIORITY_COMPRESSION_STDEV_ATR_STRONG_MAX = 0.60
@@ -659,6 +692,9 @@ def _build_tracker_scenario(
         "stop_reference_label": stop_candidate.get("label"),
         "stop_reference_level": stop_level,
         "stop_source_type": stop_candidate.get("source_type"),
+        "close_failure_limit": int(
+            stop_candidate.get("close_failure_limit", TRACKER_STOP_FAILURE_CLOSES) or TRACKER_STOP_FAILURE_CLOSES
+        ),
         "exit_template_id": template_id,
         "exit_template_label": template.get("label"),
         "framework_family": str(template.get("framework_family") or "baseline"),
@@ -720,6 +756,9 @@ def _extract_tracker_stop_candidates_from_setup(setup: dict) -> list[dict]:
                 "label": label,
                 "level": float(level),
                 "source_type": source_type,
+                "close_failure_limit": int(
+                    scenario.get("close_failure_limit", TRACKER_STOP_FAILURE_CLOSES) or TRACKER_STOP_FAILURE_CLOSES
+                ),
             },
         )
     return [stop_map[key] for key in sorted(stop_map.keys())]
@@ -2374,7 +2413,17 @@ def _indicator_level_value(indicator_row: pd.Series | dict | None, label: str):
     return _coerce_float(indicator_row.get(field))
 
 
-def _resolve_dynamic_level(label: str, current_anchor_levels: dict | None, indicator_row: pd.Series | dict | None):
+def _resolve_dynamic_level(
+    label: str,
+    current_anchor_levels: dict | None,
+    indicator_row: pd.Series | dict | None,
+    dynamic_level_overrides: dict[str, float] | None = None,
+):
+    override_value = None
+    if isinstance(dynamic_level_overrides, dict):
+        override_value = _coerce_float(dynamic_level_overrides.get(label))
+    if override_value is not None:
+        return override_value
     if label in {"AVWAPE", "VWAP", "UPPER_1", "LOWER_1", "UPPER_2", "LOWER_2", "UPPER_3", "LOWER_3"}:
         return _anchor_level_value(current_anchor_levels, label)
     return _indicator_level_value(indicator_row, label)
@@ -2769,6 +2818,22 @@ def build_tracker_entry_attributes(
         description="Named AVWAP zone the setup was trading in at scan time.",
     )
     add(
+        "setup.setup_family",
+        row.get("setup_family") or symbol_entry.get("setup_family") or "",
+        group="setup",
+        label="Setup family",
+        value_type="text",
+        description="High-level setup family assigned by the generalized setup scanner.",
+    )
+    add(
+        "setup.setup_tags",
+        list(row.get("setup_tags") or symbol_entry.get("setup_tags") or []),
+        group="setup",
+        label="Setup tags",
+        value_type="list",
+        description="Normalized priority setup tags active for this setup family.",
+    )
+    add(
         "signals.favorite_signals",
         favorite_signals,
         group="signals",
@@ -2991,6 +3056,86 @@ def build_tracker_entry_attributes(
         label="Extreme move note",
         value_type="text",
         description="Scanner note describing the recent extreme displacement and retest setup.",
+    )
+    add(
+        "pattern.post_earnings_active",
+        bool(row.get("post_earnings_active") or symbol_entry.get("post_earnings_active")),
+        group="pattern",
+        label="Post-earnings watch active",
+        value_type="bool",
+        description="Whether the symbol is inside the 20-session post-earnings setup window.",
+    )
+    add(
+        "pattern.post_earnings_break_intraday",
+        bool(row.get("post_earnings_break_intraday") or symbol_entry.get("post_earnings_break_intraday")),
+        group="pattern",
+        label="Post-earnings intraday break",
+        value_type="bool",
+        description="Whether price broke the post-earnings 52-week close level intraday.",
+    )
+    add(
+        "pattern.post_earnings_break_close",
+        bool(row.get("post_earnings_break_close") or symbol_entry.get("post_earnings_break_close")),
+        group="pattern",
+        label="Post-earnings close confirm",
+        value_type="bool",
+        description="Whether price closed through the post-earnings 52-week close level.",
+    )
+    add(
+        "pattern.post_earnings_sessions_since_gap",
+        int(row.get("post_earnings_sessions_since_gap", symbol_entry.get("post_earnings_sessions_since_gap", 0)) or 0),
+        group="pattern",
+        label="Post-earnings sessions since gap",
+        value_type="number",
+        description="Trading sessions elapsed since the qualifying earnings gap.",
+    )
+    add(
+        "pattern.post_earnings_gap_atr_multiple",
+        _coerce_float(row.get("post_earnings_gap_atr_multiple") or symbol_entry.get("latest_release_gap_atr_multiple")),
+        group="pattern",
+        label="Post-earnings gap ATR multiple",
+        value_type="number",
+        description="Gap size measured against ATR(20) for the qualifying earnings reaction.",
+    )
+    add(
+        "pattern.mid_earnings_watch",
+        bool(row.get("mid_earnings_watch") or symbol_entry.get("mid_earnings_watch")),
+        group="pattern",
+        label="Mid-earnings watch active",
+        value_type="bool",
+        description="Whether the symbol is tracking the mid-earnings 2nd-to-3rd deviation continuation structure.",
+    )
+    add(
+        "pattern.mid_earnings_zone_streak_days",
+        int(row.get("mid_earnings_zone_streak_days", symbol_entry.get("mid_earnings_zone_streak_days", 0)) or 0),
+        group="pattern",
+        label="Mid-earnings zone streak days",
+        value_type="number",
+        description="How many consecutive closes held in the 2nd-to-3rd deviation continuation zone.",
+    )
+    add(
+        "pattern.mid_earnings_ema8_confluence",
+        bool(row.get("mid_earnings_ema8_confluence") or symbol_entry.get("mid_earnings_ema8_confluence")),
+        group="pattern",
+        label="Mid-earnings EMA8 confluence",
+        value_type="bool",
+        description="Whether the mid-earnings retest also interacted with EMA8.",
+    )
+    add(
+        "pattern.mid_earnings_ema21_confluence",
+        bool(row.get("mid_earnings_ema21_confluence") or symbol_entry.get("mid_earnings_ema21_confluence")),
+        group="pattern",
+        label="Mid-earnings EMA21 confluence",
+        value_type="bool",
+        description="Whether the mid-earnings retest also interacted with EMA21.",
+    )
+    add(
+        "pattern.mid_earnings_first_dev_confluence",
+        bool(row.get("mid_earnings_first_dev_confluence") or symbol_entry.get("mid_earnings_first_dev_confluence")),
+        group="pattern",
+        label="Mid-earnings 1st-dev confluence",
+        value_type="bool",
+        description="Whether the mid-earnings retest also lined up with the first deviation band.",
     )
     add(
         "pattern.recent_band_extension_days",
@@ -3584,13 +3729,21 @@ def _setup_id_for_row(row: dict, symbol_entry: dict, scan_date: str | None = Non
 def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
     side = normalize_side(row.get("side") or symbol_entry.get("side") or "LONG")
     current_anchor = symbol_entry.get("current_anchor") or {}
+    post_earnings_anchor = symbol_entry.get("post_earnings_anchor") or {}
     atr20 = _coerce_float(symbol_entry.get("atr20"))
     primary_stop_label = _protective_band_label(side)
     primary_stop_level = _anchor_level_value(current_anchor, primary_stop_label)
     priority_bucket = str(row.get("priority_bucket") or "")
+    setup_family = str(row.get("setup_family") or symbol_entry.get("setup_family") or "").strip().lower()
     candidates = []
 
-    def _add(label: str, level: float | None, source_type: str) -> None:
+    def _add(
+        label: str,
+        level: float | None,
+        source_type: str,
+        *,
+        close_failure_limit: int = TRACKER_STOP_FAILURE_CLOSES,
+    ) -> None:
         if level is None:
             return
         if any(existing["label"] == label for existing in candidates):
@@ -3600,12 +3753,26 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
                 "label": label,
                 "level": float(level),
                 "source_type": source_type,
+                "close_failure_limit": int(close_failure_limit or TRACKER_STOP_FAILURE_CLOSES),
             }
+        )
+
+    if setup_family.startswith("post_earnings_"):
+        _add(
+            POST_EARNINGS_STOP_LABEL,
+            _anchor_level_value(post_earnings_anchor, "AVWAPE"),
+            "post_earnings_anchor",
+            close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
         )
 
     if priority_bucket == "favorite_setup":
         _add("AVWAPE", _anchor_level_value(current_anchor, "AVWAPE"), "current_anchor")
     _add(primary_stop_label, primary_stop_level, "current_anchor")
+
+    if setup_family == "mid_earnings_ema15_retest":
+        _add("EMA_15", _coerce_float(symbol_entry.get("ema_15")), "ema")
+        _add("EMA_21", _coerce_float(symbol_entry.get("ema_21")), "ema")
+        _add("EMA_8", _coerce_float(symbol_entry.get("ema_8")), "ema")
 
     sma_levels = row.get("sma_levels") or symbol_entry.get("priority_sma_levels") or {}
     if primary_stop_level is not None and atr20 and atr20 > 0:
@@ -3697,6 +3864,8 @@ def build_tracker_setup_record(
         "priority_bucket": str(row.get("priority_bucket") or ""),
         "priority_score": float(row.get("score", 0) or 0),
         "favorite_zone": row.get("favorite_zone") or "",
+        "setup_family": str(row.get("setup_family") or symbol_entry.get("setup_family") or ""),
+        "setup_tags": list(row.get("setup_tags") or symbol_entry.get("setup_tags") or []),
         "favorite_signals": list(row.get("favorite_signals") or []),
         "context_signals": list(row.get("context_signals") or []),
         "recent_second_band_test_days": int(row.get("recent_second_band_test_days", 0) or 0),
@@ -3717,6 +3886,8 @@ def build_tracker_setup_record(
         "score_bonus_note": row.get("score_bonus_note") or "",
         "adaptive_score_delta": int(row.get("adaptive_score_delta", 0) or 0),
         "adaptive_score_note": row.get("adaptive_score_note") or "",
+        "recent_tracker_score_delta": int(row.get("recent_tracker_score_delta", 0) or 0),
+        "recent_tracker_score_note": row.get("recent_tracker_score_note") or "",
         "trendline_break_recent": bool(row.get("trendline_break_recent")),
         "trendline_break_note": row.get("trendline_break_note") or "",
         "compression_flag": bool(row.get("compression_flag")),
@@ -3724,6 +3895,22 @@ def build_tracker_setup_record(
         "compression_note": row.get("compression_note") or "",
         "current_anchor_entry": current_anchor,
         "previous_anchor_entry": previous_anchor,
+        "post_earnings_anchor_entry": symbol_entry.get("post_earnings_anchor") or {},
+        "post_earnings_anchor_date": row.get("post_earnings_anchor_date") or symbol_entry.get("latest_release_anchor_date") or "",
+        "post_earnings_gap_date": row.get("post_earnings_gap_date") or symbol_entry.get("latest_release_gap_date") or "",
+        "post_earnings_monitor_level": _coerce_float(row.get("post_earnings_monitor_level") or symbol_entry.get("post_earnings_monitor_level")),
+        "post_earnings_gap_atr_multiple": _coerce_float(row.get("post_earnings_gap_atr_multiple") or symbol_entry.get("latest_release_gap_atr_multiple")),
+        "mid_earnings_watch": bool(row.get("mid_earnings_watch") or symbol_entry.get("mid_earnings_watch")),
+        "mid_earnings_zone_streak_days": int(
+            row.get("mid_earnings_zone_streak_days", symbol_entry.get("mid_earnings_zone_streak_days", 0)) or 0
+        ),
+        "mid_earnings_zone_start_date": row.get("mid_earnings_zone_start_date") or symbol_entry.get("mid_earnings_zone_start_date") or "",
+        "mid_earnings_zone_end_date": row.get("mid_earnings_zone_end_date") or symbol_entry.get("mid_earnings_zone_end_date") or "",
+        "mid_earnings_ema8_confluence": bool(row.get("mid_earnings_ema8_confluence") or symbol_entry.get("mid_earnings_ema8_confluence")),
+        "mid_earnings_ema21_confluence": bool(row.get("mid_earnings_ema21_confluence") or symbol_entry.get("mid_earnings_ema21_confluence")),
+        "mid_earnings_first_dev_confluence": bool(
+            row.get("mid_earnings_first_dev_confluence") or symbol_entry.get("mid_earnings_first_dev_confluence")
+        ),
         "sma_levels_entry": row.get("sma_levels") or {},
         "entry_feature_snapshot": entry_snapshot,
         "entry_attributes": entry_attributes,
@@ -3790,6 +3977,7 @@ def _evaluate_tracker_scenario_bar(
     current_anchor_levels: dict | None,
     indicator_row: pd.Series | None,
     is_entry_day: bool,
+    dynamic_level_overrides: dict[str, float] | None = None,
 ) -> list[dict]:
     if not scenario.get("tradeable"):
         scenario["status"] = str(scenario.get("inactive_status") or "UNTRADEABLE")
@@ -3828,10 +4016,25 @@ def _evaluate_tracker_scenario_bar(
         scenario["total_r"] = float(scenario.get("realized_r", 0.0))
         return events
 
-    partial_target_level = _resolve_dynamic_level(str(scenario.get("partial_target_label") or ""), current_anchor_levels, indicator_row)
-    final_target_level = _resolve_dynamic_level(str(scenario.get("final_target_label") or ""), current_anchor_levels, indicator_row)
+    partial_target_level = _resolve_dynamic_level(
+        str(scenario.get("partial_target_label") or ""),
+        current_anchor_levels,
+        indicator_row,
+        dynamic_level_overrides=dynamic_level_overrides,
+    )
+    final_target_level = _resolve_dynamic_level(
+        str(scenario.get("final_target_label") or ""),
+        current_anchor_levels,
+        indicator_row,
+        dynamic_level_overrides=dynamic_level_overrides,
+    )
     active_stop_label = str(scenario.get("active_stop_label") or scenario.get("stop_reference_label") or "")
-    active_stop_level = _resolve_dynamic_level(active_stop_label, current_anchor_levels, indicator_row)
+    active_stop_level = _resolve_dynamic_level(
+        active_stop_label,
+        current_anchor_levels,
+        indicator_row,
+        dynamic_level_overrides=dynamic_level_overrides,
+    )
     scenario["active_stop_level"] = active_stop_level
 
     if not scenario.get("partial_taken") and partial_target_level is not None and _bar_hits_target(side, bar_row, partial_target_level):
@@ -3847,7 +4050,12 @@ def _evaluate_tracker_scenario_bar(
             scenario["close_failure_count"] = 0
         scenario["status"] = "PARTIAL" if int(scenario.get("remaining_shares", 0)) > 0 else "TARGET_HIT"
 
-    final_target_level = _resolve_dynamic_level(str(scenario.get("final_target_label") or ""), current_anchor_levels, indicator_row)
+    final_target_level = _resolve_dynamic_level(
+        str(scenario.get("final_target_label") or ""),
+        current_anchor_levels,
+        indicator_row,
+        dynamic_level_overrides=dynamic_level_overrides,
+    )
     if int(scenario.get("remaining_shares", 0)) > 0 and final_target_level is not None and _bar_hits_target(side, bar_row, final_target_level):
         event = _apply_scenario_exit_event(
             scenario,
@@ -3888,12 +4096,20 @@ def _evaluate_tracker_scenario_bar(
         return events
 
     active_stop_label = str(scenario.get("active_stop_label") or scenario.get("stop_reference_label") or "")
-    active_stop_level = _resolve_dynamic_level(active_stop_label, current_anchor_levels, indicator_row)
+    active_stop_level = _resolve_dynamic_level(
+        active_stop_label,
+        current_anchor_levels,
+        indicator_row,
+        dynamic_level_overrides=dynamic_level_overrides,
+    )
     scenario["active_stop_level"] = active_stop_level
     if active_stop_level is not None:
         failed = close_value <= active_stop_level if normalize_side(side) == "LONG" else close_value >= active_stop_level
         scenario["close_failure_count"] = int(scenario.get("close_failure_count", 0) + 1) if failed else 0
-        if scenario["close_failure_count"] >= TRACKER_STOP_FAILURE_CLOSES and int(scenario.get("remaining_shares", 0)) > 0:
+        close_failure_limit = int(
+            scenario.get("close_failure_limit", TRACKER_STOP_FAILURE_CLOSES) or TRACKER_STOP_FAILURE_CLOSES
+        )
+        if scenario["close_failure_count"] >= close_failure_limit and int(scenario.get("remaining_shares", 0)) > 0:
             reason = "TRAIL_STOP" if scenario.get("partial_taken") and active_stop_label != scenario.get("stop_reference_label") else "STOP_FAIL"
             event = _apply_scenario_exit_event(
                 scenario,
@@ -3929,6 +4145,11 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
     indicator_frame = compute_indicator_frame(df)
     current_history = calc_anchored_vwap_band_history(df, str(setup.get("anchor_date") or ""))
     previous_history = calc_anchored_vwap_band_history(df, str(setup.get("previous_anchor_date") or "")) if setup.get("previous_anchor_date") else {}
+    post_earnings_history = (
+        calc_anchored_vwap_band_history(df, str(setup.get("post_earnings_anchor_date") or ""))
+        if setup.get("post_earnings_anchor_date")
+        else {}
+    )
     entry_trade_date = str(setup.get("entry_trade_date") or setup.get("scan_date") or "")
     if not entry_trade_date:
         return setup
@@ -3983,6 +4204,7 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
         trade_date = bar_row["datetime"].date().isoformat()
         current_levels = current_history.get(trade_date)
         previous_levels = previous_history.get(trade_date)
+        post_earnings_levels = post_earnings_history.get(trade_date)
         slice_df = df[
             (df["datetime"].dt.date >= anchor_start_date)
             & (df["datetime"].dt.date <= bar_row["datetime"].date())
@@ -4002,6 +4224,9 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
         )
 
         scenario_events = []
+        dynamic_level_overrides = {}
+        if post_earnings_levels:
+            dynamic_level_overrides[POST_EARNINGS_STOP_LABEL] = _anchor_level_value(post_earnings_levels, "AVWAPE")
         for scenario in working_scenarios.values():
             scenario_events.extend(
                 _evaluate_tracker_scenario_bar(
@@ -4012,6 +4237,7 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
                     current_levels,
                     indicator_row,
                     is_entry_day=(trade_date == entry_trade_date),
+                    dynamic_level_overrides=dynamic_level_overrides,
                 )
             )
             scenario["days_held"] = max(0, idx)
@@ -4062,12 +4288,16 @@ def _flatten_tracker_scenarios(setups: dict[str, dict]) -> list[dict]:
                     "symbol": setup.get("symbol"),
                     "side": setup.get("side"),
                     "priority_bucket": setup.get("priority_bucket"),
+                    "setup_family": setup.get("setup_family"),
                     "entry_price": setup.get("entry_price"),
                     "anchor_date": setup.get("anchor_date"),
                     "retest_reference_level": setup.get("retest_reference_level"),
                     "compression_flag": bool(setup.get("compression_flag")),
                     "stop_reference_label": scenario.get("stop_reference_label"),
                     "stop_source_type": scenario.get("stop_source_type"),
+                    "close_failure_limit": int(
+                        scenario.get("close_failure_limit", TRACKER_STOP_FAILURE_CLOSES) or TRACKER_STOP_FAILURE_CLOSES
+                    ),
                     "exit_template_id": scenario.get("exit_template_id"),
                     "exit_template_label": scenario.get("exit_template_label"),
                     "framework_family": scenario.get("framework_family", ""),
@@ -4197,6 +4427,369 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
         "any_target_hit": any(str(scenario.get("status", "")).upper() == "TARGET_HIT" for scenario in tradeable),
         "any_stopped": any(str(scenario.get("status", "")).upper() == "STOPPED" for scenario in tradeable),
     }
+
+
+def _weighted_mean(values_with_weights: list[tuple[object, object]]) -> float | None:
+    total_weight = 0.0
+    weighted_sum = 0.0
+    for raw_value, raw_weight in values_with_weights:
+        value = _coerce_float(raw_value)
+        weight = _coerce_float(raw_weight)
+        if value is None or weight is None or weight <= 0:
+            continue
+        weighted_sum += float(value) * float(weight)
+        total_weight += float(weight)
+    if total_weight <= 0:
+        return None
+    return weighted_sum / total_weight
+
+
+def _recent_tracker_family_metric_pair(group_row: dict, baseline_row: dict) -> tuple[float | None, float | None, str]:
+    group_closed = int(group_row.get("closed_setups", 0) or 0)
+    baseline_closed = int(baseline_row.get("closed_setups", 0) or 0)
+    group_closed_r = _coerce_float(group_row.get("avg_closed_r"))
+    baseline_closed_r = _coerce_float(baseline_row.get("avg_closed_r"))
+    if (
+        group_closed >= TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS
+        and baseline_closed >= TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS
+        and group_closed_r is not None
+        and baseline_closed_r is not None
+    ):
+        return group_closed_r, baseline_closed_r, "avg_closed_r"
+    return (
+        _coerce_float(group_row.get("avg_total_r")),
+        _coerce_float(baseline_row.get("avg_total_r")),
+        "avg_total_r",
+    )
+
+
+def _derive_recent_tracker_family_score_delta(group_row: dict, baseline_row: dict) -> tuple[int, float]:
+    tracked_setups = int(group_row.get("tracked_setups", 0) or 0)
+    closed_setups = int(group_row.get("closed_setups", 0) or 0)
+    if tracked_setups < TRACKER_RECENT_FAMILY_MIN_TRACKED_SETUPS:
+        return 0, 0.0
+
+    avg_outcome_r, baseline_outcome_r, metric_name = _recent_tracker_family_metric_pair(group_row, baseline_row)
+    if avg_outcome_r is None or baseline_outcome_r is None:
+        return 0, 0.0
+
+    target_hit_rate = _coerce_float(group_row.get("target_hit_rate"))
+    baseline_target_hit_rate = _coerce_float(baseline_row.get("target_hit_rate"))
+    stop_rate = _coerce_float(group_row.get("stop_rate"))
+    baseline_stop_rate = _coerce_float(baseline_row.get("stop_rate"))
+
+    edge_r = float(avg_outcome_r) - float(baseline_outcome_r)
+    edge_target = (
+        float(target_hit_rate) - float(baseline_target_hit_rate)
+        if target_hit_rate is not None and baseline_target_hit_rate is not None
+        else 0.0
+    )
+    edge_stop = (
+        float(baseline_stop_rate) - float(stop_rate)
+        if stop_rate is not None and baseline_stop_rate is not None
+        else 0.0
+    )
+
+    confidence_count = closed_setups if metric_name == "avg_closed_r" else tracked_setups
+    confidence_floor = (
+        TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS
+        if metric_name == "avg_closed_r"
+        else TRACKER_RECENT_FAMILY_MIN_TRACKED_SETUPS
+    )
+    confidence = min(
+        1.0,
+        math.sqrt(max(confidence_count, 1) / float(max(confidence_floor, 1))) / 2.0,
+    )
+    raw_score = (edge_r * 10.0 + edge_target * 4.0 + edge_stop * 4.0) * confidence
+    score_delta = int(
+        round(
+            max(
+                -TRACKER_RECENT_FAMILY_MAX_SCORE_DELTA,
+                min(TRACKER_RECENT_FAMILY_MAX_SCORE_DELTA, raw_score),
+            )
+        )
+    )
+    if abs(score_delta) < TRACKER_RECENT_FAMILY_MIN_SCORE_DELTA:
+        return 0, raw_score
+    return score_delta, raw_score
+
+
+def build_recent_tracker_setup_family_rows(
+    setups: dict[str, dict],
+    *,
+    reference_date: date | None = None,
+    lookback_days: int = TRACKER_RECENT_FAMILY_LOOKBACK_DAYS,
+    recency_half_life_days: float = TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS,
+) -> list[dict]:
+    if not isinstance(setups, dict) or not setups:
+        return []
+
+    reference_day = reference_date or datetime.now().date()
+    max_age_days = max(1, int(lookback_days))
+    half_life = max(1.0, float(recency_half_life_days))
+    recent_rows = []
+    baseline_groups: dict[tuple[str, str], list[dict]] = {}
+
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            continue
+        scan_day = _parse_iso_date_or_none(setup.get("scan_date"))
+        if scan_day is None or scan_day > reference_day:
+            continue
+        age_days = (reference_day - scan_day).days
+        if age_days < 0 or age_days > max_age_days:
+            continue
+
+        outcome_summary = _summarize_tracker_setup_outcome(setup)
+        if int(outcome_summary.get("tradeable_scenario_count", 0) or 0) <= 0:
+            continue
+
+        side = normalize_side(setup.get("side") or "")
+        priority_bucket = str(setup.get("priority_bucket") or "").strip()
+        setup_family = str(setup.get("setup_family") or "").strip() or "general"
+        if not side or not priority_bucket:
+            continue
+
+        recency_weight = math.exp(-math.log(2.0) * (float(age_days) / half_life))
+        row = {
+            "symbol": str(setup.get("symbol") or "").strip().upper(),
+            "scan_date": scan_day.isoformat(),
+            "side": side,
+            "priority_bucket": priority_bucket,
+            "setup_family": setup_family,
+            "setup_status": str(setup.get("setup_status") or ""),
+            "closed_setups": 1 if int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0) > 0 else 0,
+            "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
+            "avg_closed_r": _coerce_float(outcome_summary.get("avg_closed_r")),
+            "any_target_hit": bool(outcome_summary.get("any_target_hit")),
+            "any_stopped": bool(outcome_summary.get("any_stopped")),
+            "recency_weight": float(recency_weight),
+        }
+        recent_rows.append(row)
+        baseline_groups.setdefault((side, priority_bucket), []).append(row)
+
+    if not recent_rows:
+        return []
+
+    baseline_map: dict[tuple[str, str], dict[str, object]] = {}
+    for context_key, rows_for_context in baseline_groups.items():
+        closed_rows = [row for row in rows_for_context if int(row.get("closed_setups", 0) or 0) > 0]
+        baseline_map[context_key] = {
+            "tracked_setups": len(rows_for_context),
+            "closed_setups": len(closed_rows),
+            "avg_total_r": _weighted_mean(
+                [(row.get("avg_total_r"), row.get("recency_weight")) for row in rows_for_context]
+            ),
+            "avg_closed_r": _weighted_mean(
+                [(row.get("avg_closed_r"), row.get("recency_weight")) for row in closed_rows]
+            ),
+            "target_hit_rate": _weighted_mean(
+                [
+                    (1.0 if row.get("any_target_hit") else 0.0, row.get("recency_weight"))
+                    for row in closed_rows
+                ]
+            ),
+            "stop_rate": _weighted_mean(
+                [
+                    (1.0 if row.get("any_stopped") else 0.0, row.get("recency_weight"))
+                    for row in closed_rows
+                ]
+            ),
+        }
+
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    for row in recent_rows:
+        key = (
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+            str(row.get("setup_family") or "general"),
+        )
+        grouped.setdefault(key, []).append(row)
+
+    family_rows = []
+    for group_key, rows_for_group in grouped.items():
+        closed_rows = [row for row in rows_for_group if int(row.get("closed_setups", 0) or 0) > 0]
+        baseline = baseline_map.get((group_key[0], group_key[1]), {})
+        avg_total_r = _weighted_mean(
+            [(row.get("avg_total_r"), row.get("recency_weight")) for row in rows_for_group]
+        )
+        avg_closed_r = _weighted_mean(
+            [(row.get("avg_closed_r"), row.get("recency_weight")) for row in closed_rows]
+        )
+        target_hit_rate = _weighted_mean(
+            [
+                (1.0 if row.get("any_target_hit") else 0.0, row.get("recency_weight"))
+                for row in closed_rows
+            ]
+        )
+        stop_rate = _weighted_mean(
+            [
+                (1.0 if row.get("any_stopped") else 0.0, row.get("recency_weight"))
+                for row in closed_rows
+            ]
+        )
+        sample_rows = sorted(
+            rows_for_group,
+            key=lambda row: (
+                str(row.get("scan_date") or ""),
+                str(row.get("symbol") or ""),
+            ),
+            reverse=True,
+        )
+        sample_setups = []
+        for row in sample_rows[:6]:
+            sample = f"{row.get('symbol')} {row.get('scan_date')}".strip()
+            avg_closed_value = _coerce_float(row.get("avg_closed_r"))
+            avg_total_value = _coerce_float(row.get("avg_total_r"))
+            if avg_closed_value is not None and int(row.get("closed_setups", 0) or 0) > 0:
+                sample += f" ({avg_closed_value:+.2f}R)"
+            elif avg_total_value is not None:
+                sample += f" ({avg_total_value:+.2f}R open)"
+            sample_setups.append(sample)
+
+        item = {
+            "type_label": f"{group_key[0]} | {group_key[1]} | family={group_key[2]}",
+            "side": group_key[0],
+            "priority_bucket": group_key[1],
+            "setup_family": group_key[2],
+            "lookback_days": max_age_days,
+            "tracked_setups": len(rows_for_group),
+            "closed_setups": len(closed_rows),
+            "avg_total_r": avg_total_r,
+            "avg_closed_r": avg_closed_r,
+            "target_hit_rate": target_hit_rate,
+            "stop_rate": stop_rate,
+            "baseline_avg_total_r": _coerce_float(baseline.get("avg_total_r")),
+            "baseline_avg_closed_r": _coerce_float(baseline.get("avg_closed_r")),
+            "baseline_target_hit_rate": _coerce_float(baseline.get("target_hit_rate")),
+            "baseline_stop_rate": _coerce_float(baseline.get("stop_rate")),
+            "sample_setups": "; ".join(sample_setups),
+        }
+        item["avg_total_r_edge"] = (
+            item["avg_total_r"] - item["baseline_avg_total_r"]
+            if item["avg_total_r"] is not None and item["baseline_avg_total_r"] is not None
+            else None
+        )
+        item["avg_closed_r_edge"] = (
+            item["avg_closed_r"] - item["baseline_avg_closed_r"]
+            if item["avg_closed_r"] is not None and item["baseline_avg_closed_r"] is not None
+            else None
+        )
+        item["target_hit_rate_edge"] = (
+            item["target_hit_rate"] - item["baseline_target_hit_rate"]
+            if item["target_hit_rate"] is not None and item["baseline_target_hit_rate"] is not None
+            else None
+        )
+        item["stop_rate_edge"] = (
+            item["stop_rate"] - item["baseline_stop_rate"]
+            if item["stop_rate"] is not None and item["baseline_stop_rate"] is not None
+            else None
+        )
+        score_delta, raw_score = _derive_recent_tracker_family_score_delta(item, baseline)
+        item["score_delta"] = int(score_delta)
+        item["ranking_score"] = float(raw_score)
+        family_rows.append(item)
+
+    family_rows.sort(
+        key=lambda item: (
+            -int(item.get("score_delta", 0) or 0),
+            -int(item.get("closed_setups", 0) or 0),
+            -int(item.get("tracked_setups", 0) or 0),
+            -(float(item.get("avg_closed_r")) if item.get("avg_closed_r") is not None else -9999.0),
+            str(item.get("type_label") or ""),
+        )
+    )
+    return family_rows
+
+
+def _format_recent_tracker_setup_family_note(row: dict | None) -> str:
+    if not isinstance(row, dict):
+        return ""
+    score_delta = int(row.get("score_delta", 0) or 0)
+    if score_delta == 0:
+        return ""
+
+    tracked_setups = int(row.get("tracked_setups", 0) or 0)
+    closed_setups = int(row.get("closed_setups", 0) or 0)
+    _, _, metric_name = _recent_tracker_family_metric_pair(row, row)
+    if metric_name == "avg_closed_r":
+        metric_label = "avg_closed"
+        outcome_value = _coerce_float(row.get("avg_closed_r"))
+        baseline_value = _coerce_float(row.get("baseline_avg_closed_r"))
+    else:
+        metric_label = "avg_total"
+        outcome_value = _coerce_float(row.get("avg_total_r"))
+        baseline_value = _coerce_float(row.get("baseline_avg_total_r"))
+    lookback_days = int(row.get("lookback_days", TRACKER_RECENT_FAMILY_LOOKBACK_DAYS) or TRACKER_RECENT_FAMILY_LOOKBACK_DAYS)
+
+    if outcome_value is None or baseline_value is None:
+        return (
+            f"{lookback_days}d recent family edge {score_delta:+d} "
+            f"(closed={closed_setups}/{tracked_setups})"
+        )
+    return (
+        f"{lookback_days}d recent family edge {score_delta:+d} "
+        f"(closed={closed_setups}/{tracked_setups}, {metric_label}={outcome_value:+.2f}R vs ctx {baseline_value:+.2f}R)"
+    )
+
+
+def apply_recent_tracker_setup_family_adjustments(
+    priority_rows: list[dict],
+    ai_state: dict,
+    feature_rows_by_symbol: dict[str, dict],
+    *,
+    tracker_payload: dict | None = None,
+    reference_date: date | None = None,
+) -> list[dict]:
+    tracker = tracker_payload if isinstance(tracker_payload, dict) else load_setup_tracker_payload()
+    recent_family_rows = build_recent_tracker_setup_family_rows(
+        tracker.get("setups", {}) if isinstance(tracker, dict) else {},
+        reference_date=reference_date,
+    )
+    lookup = {
+        (
+            str(item.get("side") or ""),
+            str(item.get("priority_bucket") or ""),
+            str(item.get("setup_family") or "general"),
+        ): item
+        for item in recent_family_rows
+        if int(item.get("score_delta", 0) or 0) != 0
+    }
+    symbol_map = ai_state.setdefault("symbols", {}) if isinstance(ai_state, dict) else {}
+
+    for row in priority_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        previous_delta = int(row.get("recent_tracker_score_delta", 0) or 0)
+        base_score = float(row.get("score", 0.0) or 0.0) - float(previous_delta)
+        key = (
+            normalize_side(row.get("side") or ""),
+            str(row.get("priority_bucket") or "").strip(),
+            str(row.get("setup_family") or "").strip() or "general",
+        )
+        family_row = lookup.get(key)
+        score_delta = int(family_row.get("score_delta", 0) or 0) if family_row else 0
+        score_note = _format_recent_tracker_setup_family_note(family_row)
+
+        row["recent_tracker_score_delta"] = score_delta
+        row["recent_tracker_score_note"] = score_note
+        row["score"] = base_score + float(score_delta)
+
+        symbol_entry = symbol_map.get(symbol)
+        if isinstance(symbol_entry, dict):
+            symbol_entry["priority_recent_tracker_score_delta"] = score_delta
+            symbol_entry["priority_recent_tracker_score_note"] = score_note
+            symbol_entry["priority_score"] = row["score"]
+
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if isinstance(feature_row, dict):
+            feature_row["recent_tracker_score_delta"] = score_delta
+            feature_row["recent_tracker_score_note"] = score_note
+            feature_row["priority_score"] = row["score"]
+
+        if score_delta:
+            logging.info("%s: recent tracker family adjustment applied (%s).", symbol, score_note)
+
+    return recent_family_rows
 
 
 def _format_tracker_attribute_text(value) -> str:
@@ -4705,22 +5298,24 @@ def _summarize_tracker_value_counts(values: list[str], limit: int = 4) -> str:
 def _tracker_setup_context(setup: dict) -> dict[str, object]:
     side = normalize_side(setup.get("side") or "")
     priority_bucket = str(setup.get("priority_bucket") or "tracked")
+    setup_family = str(setup.get("setup_family") or "").strip() or "general"
     favorite_zone = str(setup.get("favorite_zone") or "").strip() or "None"
     retest_followthrough = bool(setup.get("retest_followthrough"))
     retest_reference_level = str(setup.get("retest_reference_level") or "").strip()
     retest_label = retest_reference_level if retest_followthrough and retest_reference_level else "None"
     compression_flag = bool(setup.get("compression_flag"))
     compression_label = "Y" if compression_flag else "N"
-    context_parts = [side, priority_bucket, favorite_zone, retest_label, compression_label]
+    context_parts = [side, priority_bucket, setup_family, favorite_zone, retest_label, compression_label]
     return {
         "context_key": tuple(context_parts),
         "context_id": " | ".join(context_parts),
         "type_label": (
-            f"{side} | {priority_bucket} | zone={favorite_zone} "
+            f"{side} | {priority_bucket} | family={setup_family} | zone={favorite_zone} "
             f"| retest={retest_label} | comp={compression_label}"
         ),
         "side": side,
         "priority_bucket": priority_bucket,
+        "setup_family": setup_family,
         "favorite_zone": favorite_zone,
         "retest_label": retest_label,
         "compression_label": compression_label,
@@ -4957,7 +5552,7 @@ def build_tracker_playbook_rows(setups: dict[str, dict]) -> list[dict]:
             if len(sample_examples) >= 8:
                 break
 
-        baseline = context_baselines.get(group_key[:5], {})
+        baseline = context_baselines.get(group_key[:6], {})
         raw_avg_closed_r = mean(closed_rs) if closed_rs else None
         robust_closed_r = mean(clipped_closed_rs) if clipped_closed_rs else None
         median_closed_r = median(closed_rs) if closed_rs else None
@@ -4989,6 +5584,7 @@ def build_tracker_playbook_rows(setups: dict[str, dict]) -> list[dict]:
                 "type_label": rows_for_group[0].get("type_label", ""),
                 "side": rows_for_group[0].get("side", ""),
                 "priority_bucket": rows_for_group[0].get("priority_bucket", ""),
+                "setup_family": rows_for_group[0].get("setup_family", ""),
                 "favorite_zone": rows_for_group[0].get("favorite_zone", ""),
                 "retest_label": rows_for_group[0].get("retest_label", ""),
                 "compression_label": rows_for_group[0].get("compression_label", ""),
@@ -5187,11 +5783,12 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             ),
         }
 
-    grouped: dict[tuple[str, str, str, str, str], list[dict]] = {}
+    grouped: dict[tuple[str, str, str, str, str, str], list[dict]] = {}
     for row in setup_rows:
         key = (
             str(row.get("side") or ""),
             str(row.get("priority_bucket") or ""),
+            str(row.get("setup_family") or "general"),
             str(row.get("favorite_zone") or ""),
             str(row.get("retest_label") or ""),
             str(row.get("compression_label") or ""),
@@ -5259,8 +5856,8 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             if len(sample_examples) >= 8:
                 break
         type_label = (
-            f"{group_key[0]} | {group_key[1]} | zone={group_key[2]} "
-            f"| retest={group_key[3]} | comp={group_key[4]}"
+            f"{group_key[0]} | {group_key[1]} | family={group_key[2]} | zone={group_key[3]} "
+            f"| retest={group_key[4]} | comp={group_key[5]}"
         )
         setup_type_rows.append(
             {
@@ -5268,9 +5865,10 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
                 "type_label": type_label,
                 "side": group_key[0],
                 "priority_bucket": group_key[1],
-                "favorite_zone": group_key[2],
-                "retest_label": group_key[3],
-                "compression_label": group_key[4],
+                "setup_family": group_key[2],
+                "favorite_zone": group_key[3],
+                "retest_label": group_key[4],
+                "compression_label": group_key[5],
                 "tracked_setups": len(rows_for_group),
                 "tradeable_setups": len(tradeable_rows),
                 "closed_setups": len(closed_rows),
@@ -6149,12 +6747,15 @@ def _coerce_int(value):
 
 
 
-def load_latest_earnings_release_map(symbols) -> dict[str, dict | None]:
+def load_latest_earnings_release_map(
+    symbols,
+    earnings_lookup: dict[str, list[str]] | None = None,
+) -> dict[str, dict | None]:
     normalized_symbols = _ordered_unique_symbols(symbols)
     if not normalized_symbols:
         return {}
 
-    earnings_lookup = load_or_refresh_earnings(normalized_symbols)
+    earnings_lookup = earnings_lookup if isinstance(earnings_lookup, dict) else load_or_refresh_earnings(normalized_symbols)
     unique_dates = sorted({dates[0] for dates in earnings_lookup.values() if dates}, reverse=True)
     rows_by_date = {}
     for earnings_date_iso in unique_dates:
@@ -6216,7 +6817,14 @@ def _resolve_gap_window_from_earnings_event(
     earnings_date,
     release_session: str,
 ):
-    earnings_idx = df.index[df["trade_date"] == earnings_date]
+    if "trade_date" in df.columns:
+        trade_dates = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    elif "datetime" in df.columns:
+        trade_dates = pd.to_datetime(df["datetime"], errors="coerce").dt.date
+    else:
+        return None
+
+    earnings_idx = df.index[trade_dates == earnings_date]
     if earnings_idx.empty:
         return None
 
@@ -6320,6 +6928,501 @@ def evaluate_earnings_gap_candidate(symbol: str, earnings_date, release_session:
         require_filters=True,
         source="earnings_scan",
     )
+
+
+def _is_break_above_level(side: str, bar_row: pd.Series, level: float | None) -> bool:
+    if level is None:
+        return False
+    high_value = _coerce_float(bar_row.get("high"))
+    low_value = _coerce_float(bar_row.get("low"))
+    if normalize_side(side) == "LONG":
+        return high_value is not None and float(high_value) > float(level)
+    return low_value is not None and float(low_value) < float(level)
+
+
+def _is_close_beyond_level(side: str, close_value: float | None, level: float | None) -> bool:
+    if close_value is None or level is None:
+        return False
+    if normalize_side(side) == "LONG":
+        return float(close_value) > float(level)
+    return float(close_value) < float(level)
+
+
+def _rolling_close_extreme_before_index(
+    df: pd.DataFrame,
+    end_idx: int,
+    side: str,
+    lookback_sessions: int = FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS,
+) -> float | None:
+    if df is None or df.empty or end_idx <= 0:
+        return None
+    start_idx = max(0, int(end_idx) - max(1, int(lookback_sessions)))
+    closes = pd.to_numeric(df.iloc[start_idx:end_idx]["close"], errors="coerce").dropna()
+    if closes.empty:
+        return None
+    return float(closes.max()) if normalize_side(side) == "LONG" else float(closes.min())
+
+
+def _build_latest_earnings_release_context(
+    df: pd.DataFrame,
+    release_info: dict | None,
+) -> dict[str, Any]:
+    result = {
+        "active": False,
+        "earnings_date": "",
+        "release_session": "",
+        "gap_date": "",
+        "anchor_date": "",
+        "gap_idx": None,
+        "anchor_idx": None,
+        "gap_atr_multiple": None,
+        "gap_open": None,
+        "gap_close": None,
+        "pre_gap_close": None,
+        "gap_is_up": False,
+        "gap_is_down": False,
+        "sessions_since_gap": None,
+        "in_post_earnings_window": False,
+        "anchor_meta": None,
+    }
+    if df is None or df.empty or not isinstance(release_info, dict):
+        return result
+
+    earnings_date_text = str(release_info.get("earnings_date") or "").strip()
+    release_session = str(release_info.get("release_session") or "").strip().lower() or "unknown"
+    if not earnings_date_text:
+        return result
+    try:
+        earnings_date = datetime.fromisoformat(earnings_date_text).date()
+    except ValueError:
+        return result
+
+    gap_window = _resolve_gap_window_from_earnings_event(df, earnings_date, release_session)
+    if not gap_window:
+        return result
+
+    gap_idx = int(gap_window["gap_idx"])
+    anchor_idx = int(gap_window["anchor_idx"])
+    if gap_idx <= 0 or gap_idx >= len(df):
+        return result
+
+    gap_row = df.iloc[gap_idx]
+    anchor_row = df.iloc[anchor_idx]
+    pre_gap = df.iloc[:gap_idx]
+    atr20 = get_atr20(pre_gap[["open", "high", "low", "close", "volume"]], ATR_LENGTH)
+    prev_close = _coerce_float(anchor_row.get("close"))
+    gap_open = _coerce_float(gap_row.get("open"))
+    gap_close = _coerce_float(gap_row.get("close"))
+    if atr20 is None or atr20 <= 0 or prev_close is None or gap_open is None or gap_close is None:
+        return result
+
+    gap_trade_date = ""
+    anchor_trade_date = ""
+    gap_datetime = pd.to_datetime(gap_row.get("datetime"), errors="coerce")
+    anchor_datetime = pd.to_datetime(anchor_row.get("datetime"), errors="coerce")
+    if pd.notna(gap_datetime):
+        gap_trade_date = gap_datetime.date().isoformat()
+    elif hasattr(gap_row.get("trade_date"), "isoformat"):
+        gap_trade_date = gap_row.get("trade_date").isoformat()
+    else:
+        gap_trade_date = str(gap_row.get("trade_date") or "").strip()
+    if pd.notna(anchor_datetime):
+        anchor_trade_date = anchor_datetime.date().isoformat()
+    elif hasattr(anchor_row.get("trade_date"), "isoformat"):
+        anchor_trade_date = anchor_row.get("trade_date").isoformat()
+    else:
+        anchor_trade_date = str(anchor_row.get("trade_date") or "").strip()
+    if not gap_trade_date or not anchor_trade_date:
+        return result
+
+    avwap, stdev, bands = calc_anchored_vwap_bands(df, anchor_idx)
+    anchor_meta = None
+    if pd.notna(avwap) and bands:
+        anchor_meta = {
+            "date": anchor_trade_date,
+            "vwap": float(avwap),
+            "stdev": float(stdev),
+            "bands": {key: float(value) for key, value in bands.items()},
+        }
+
+    sessions_since_gap = max(0, len(df) - gap_idx - 1)
+    result.update(
+        {
+            "active": True,
+            "earnings_date": earnings_date.isoformat(),
+            "release_session": str(gap_window.get("release_session") or release_session),
+            "gap_date": gap_trade_date,
+            "anchor_date": anchor_trade_date,
+            "gap_idx": gap_idx,
+            "anchor_idx": anchor_idx,
+            "gap_atr_multiple": abs(float(gap_open) - float(prev_close)) / float(atr20),
+            "gap_open": float(gap_open),
+            "gap_close": float(gap_close),
+            "pre_gap_close": float(prev_close),
+            "gap_is_up": float(gap_open) > float(prev_close),
+            "gap_is_down": float(gap_open) < float(prev_close),
+            "sessions_since_gap": int(sessions_since_gap),
+            "in_post_earnings_window": bool(sessions_since_gap <= POST_EARNINGS_MAX_SESSIONS),
+            "anchor_meta": anchor_meta,
+        }
+    )
+    return result
+
+
+def analyze_post_earnings_setups(
+    df: pd.DataFrame,
+    side: str,
+    release_context: dict | None,
+) -> dict[str, Any]:
+    result = {
+        "active": False,
+        "qualified_gap": False,
+        "monitor_level": None,
+        "monitor_level_label": "",
+        "anchor_date": "",
+        "gap_date": "",
+        "earnings_date": "",
+        "release_session": "",
+        "gap_atr_multiple": None,
+        "sessions_since_gap": None,
+        "break_intraday": False,
+        "break_close": False,
+        "break_signal": False,
+        "bounce_signal": False,
+        "events": [],
+        "note": "",
+        "anchor_meta": None,
+        "family": "",
+    }
+    if not isinstance(release_context, dict) or not release_context.get("active"):
+        return result
+
+    gap_idx = release_context.get("gap_idx")
+    gap_date = str(release_context.get("gap_date") or "").strip()
+    anchor_meta = release_context.get("anchor_meta") if isinstance(release_context.get("anchor_meta"), dict) else None
+    if gap_idx is None or not gap_date or gap_idx >= len(df):
+        return result
+
+    gap_row = df.iloc[int(gap_idx)]
+    gap_close = _coerce_float(gap_row.get("close"))
+    last_close = _coerce_float(df.iloc[-1].get("close"))
+    if gap_close is None or last_close is None:
+        return result
+
+    directional_gap = bool(release_context.get("gap_is_up")) if normalize_side(side) == "LONG" else bool(release_context.get("gap_is_down"))
+    prior_extreme = _rolling_close_extreme_before_index(df, int(gap_idx), side)
+    is_new_close_extreme = False
+    if prior_extreme is not None:
+        if normalize_side(side) == "LONG":
+            is_new_close_extreme = float(gap_close) >= float(prior_extreme)
+        else:
+            is_new_close_extreme = float(gap_close) <= float(prior_extreme)
+
+    sessions_since_gap = int(release_context.get("sessions_since_gap") or 0)
+    qualified_gap = (
+        directional_gap
+        and bool(release_context.get("in_post_earnings_window"))
+        and _coerce_float(release_context.get("gap_atr_multiple")) is not None
+        and float(release_context.get("gap_atr_multiple")) >= MIN_GAP_ATR_MULTIPLE
+        and is_new_close_extreme
+    )
+
+    if qualified_gap and len(df) > int(gap_idx) + 1:
+        break_intraday = _is_break_above_level(side, df.iloc[-1], gap_close)
+        break_close = _is_close_beyond_level(side, last_close, gap_close)
+        bounce_signal = False
+        if anchor_meta:
+            if normalize_side(side) == "LONG":
+                bounce_signal = bounce_up_at_level(df, anchor_meta.get("vwap"))
+            else:
+                bounce_signal = bounce_down_at_level(df, anchor_meta.get("vwap"))
+
+        events = []
+        family = ""
+        if break_intraday:
+            events.append(POST_EARNINGS_BREAK_SIGNAL)
+            family = POST_EARNINGS_BREAK_SIGNAL
+            if break_close:
+                events.append(POST_EARNINGS_CLOSE_CONFIRM_SIGNAL)
+        if bounce_signal:
+            events.append(POST_EARNINGS_BOUNCE_SIGNAL)
+            if not family:
+                family = POST_EARNINGS_BOUNCE_SIGNAL
+
+        note_parts = [
+            f"gap {gap_date} {float(release_context.get('gap_atr_multiple')):.2f} ATR",
+            (
+                f"new 52-week closing {'high' if normalize_side(side) == 'LONG' else 'low'} "
+                f"{float(gap_close):.2f}"
+            ),
+            f"anchor {release_context.get('anchor_date')}",
+            f"window day {sessions_since_gap}/{POST_EARNINGS_MAX_SESSIONS}",
+        ]
+        if break_intraday:
+            note_parts.append("intraday break triggered")
+        if break_close:
+            note_parts.append("close confirmed")
+        if bounce_signal:
+            note_parts.append("post-earnings AVWAPE bounce")
+
+        result.update(
+            {
+                "active": True,
+                "qualified_gap": True,
+                "monitor_level": float(gap_close),
+                "monitor_level_label": "52W_CLOSE_HIGH" if normalize_side(side) == "LONG" else "52W_CLOSE_LOW",
+                "anchor_date": str(release_context.get("anchor_date") or ""),
+                "gap_date": gap_date,
+                "earnings_date": str(release_context.get("earnings_date") or ""),
+                "release_session": str(release_context.get("release_session") or ""),
+                "gap_atr_multiple": _coerce_float(release_context.get("gap_atr_multiple")),
+                "sessions_since_gap": sessions_since_gap,
+                "break_intraday": bool(break_intraday),
+                "break_close": bool(break_close),
+                "break_signal": bool(break_intraday),
+                "bounce_signal": bool(bounce_signal),
+                "events": events,
+                "note": "; ".join(note_parts),
+                "anchor_meta": anchor_meta,
+                "family": family,
+            }
+        )
+        return result
+
+    if qualified_gap:
+        result.update(
+            {
+                "active": True,
+                "qualified_gap": True,
+                "monitor_level": float(gap_close),
+                "monitor_level_label": "52W_CLOSE_HIGH" if normalize_side(side) == "LONG" else "52W_CLOSE_LOW",
+                "anchor_date": str(release_context.get("anchor_date") or ""),
+                "gap_date": gap_date,
+                "earnings_date": str(release_context.get("earnings_date") or ""),
+                "release_session": str(release_context.get("release_session") or ""),
+                "gap_atr_multiple": _coerce_float(release_context.get("gap_atr_multiple")),
+                "sessions_since_gap": sessions_since_gap,
+                "note": (
+                    f"Qualified post-earnings {'high' if normalize_side(side) == 'LONG' else 'low'} watch "
+                    f"from {gap_date} at {float(gap_close):.2f}"
+                ),
+                "anchor_meta": anchor_meta,
+            }
+        )
+    return result
+
+
+def _generous_reclaim_bounce_at_level(df: pd.DataFrame, level: float | None, side: str) -> bool:
+    if level is None or pd.isna(level) or df is None or df.empty or len(df) < ATR_LENGTH + 3:
+        return False
+    atr = get_atr20(df)
+    if atr is None or atr <= 0:
+        return False
+    touch_tol = max(BOUNCE_ATR_TOL_PCT * atr, BOUNCE_LEVEL_ATR_TOL_PCT * atr)
+    undercut_tol = float(atr) * MID_EARNINGS_EMA_RECLAIM_UNDERCUT_ATR
+    prev_bar, last_bar = df.iloc[-2], df.iloc[-1]
+    side = normalize_side(side)
+
+    if side == "LONG":
+        touched_today = _coerce_float(last_bar.get("low")) is not None and float(last_bar["low"]) <= float(level) + touch_tol
+        undercut_ok_today = _coerce_float(last_bar.get("low")) is not None and float(last_bar["low"]) >= float(level) - undercut_tol
+        close_reclaimed_today = _coerce_float(last_bar.get("close")) is not None and float(last_bar["close"]) >= float(level)
+        if touched_today and undercut_ok_today and close_reclaimed_today:
+            return True
+
+        touched_prev = _coerce_float(prev_bar.get("low")) is not None and float(prev_bar["low"]) <= float(level) + touch_tol
+        undercut_ok_prev = _coerce_float(prev_bar.get("low")) is not None and float(prev_bar["low"]) >= float(level) - undercut_tol
+        close_reclaimed = _coerce_float(last_bar.get("close")) is not None and float(last_bar["close"]) >= float(level)
+        return bool(touched_prev and undercut_ok_prev and close_reclaimed)
+
+    touched_today = _coerce_float(last_bar.get("high")) is not None and float(last_bar["high"]) >= float(level) - touch_tol
+    undercut_ok_today = _coerce_float(last_bar.get("high")) is not None and float(last_bar["high"]) <= float(level) + undercut_tol
+    close_reclaimed_today = _coerce_float(last_bar.get("close")) is not None and float(last_bar["close"]) <= float(level)
+    if touched_today and undercut_ok_today and close_reclaimed_today:
+        return True
+
+    touched_prev = _coerce_float(prev_bar.get("high")) is not None and float(prev_bar["high"]) >= float(level) - touch_tol
+    undercut_ok_prev = _coerce_float(prev_bar.get("high")) is not None and float(prev_bar["high"]) <= float(level) + undercut_tol
+    close_reclaimed = _coerce_float(last_bar.get("close")) is not None and float(last_bar["close"]) <= float(level)
+    return bool(touched_prev and undercut_ok_prev and close_reclaimed)
+
+
+def analyze_mid_earnings_ema_retest_setup(
+    df: pd.DataFrame,
+    side: str,
+    release_context: dict | None,
+    indicator_frame: pd.DataFrame | None,
+) -> dict[str, Any]:
+    result = {
+        "watch": False,
+        "favorite_signal": False,
+        "events": [],
+        "zone_streak_days": 0,
+        "zone_start_date": "",
+        "zone_end_date": "",
+        "anchor_date": "",
+        "gap_date": "",
+        "retest_level": "",
+        "retest_level_value": None,
+        "ema8_confluence": False,
+        "ema21_confluence": False,
+        "first_dev_confluence": False,
+        "note": "",
+        "anchor_meta": None,
+    }
+    if not isinstance(release_context, dict) or not release_context.get("active"):
+        return result
+
+    anchor_meta = release_context.get("anchor_meta") if isinstance(release_context.get("anchor_meta"), dict) else None
+    gap_date = str(release_context.get("gap_date") or "").strip()
+    if not anchor_meta or not gap_date or df is None or df.empty or len(df) < ATR_LENGTH + 5:
+        return result
+
+    indicator_by_date: dict[str, pd.Series] = {}
+    if isinstance(indicator_frame, pd.DataFrame) and not indicator_frame.empty and "trade_date" in indicator_frame.columns:
+        for _, indicator_row in indicator_frame.iterrows():
+            trade_date = str(indicator_row.get("trade_date") or "").strip()
+            if trade_date:
+                indicator_by_date[trade_date] = indicator_row
+
+    ordered_rows = []
+    band_history = calc_anchored_vwap_band_history(df, str(anchor_meta.get("date") or ""))
+    for _, row in df.iterrows():
+        trade_date = row["datetime"].date().isoformat()
+        if trade_date < gap_date:
+            continue
+        bands = band_history.get(trade_date)
+        if not bands:
+            continue
+        ordered_rows.append(
+            {
+                "date": trade_date,
+                "close": _coerce_float(row.get("close")),
+                "bands": bands,
+            }
+        )
+
+    if len(ordered_rows) < MID_EARNINGS_ZONE_MIN_DAYS + 2:
+        return result
+
+    qualifying_streak = None
+    current_start = None
+    current_len = 0
+    latest_zone_end_allowed = len(ordered_rows) - 3
+    for idx, row in enumerate(ordered_rows):
+        if idx > latest_zone_end_allowed:
+            break
+        close_value = row.get("close")
+        bands = row.get("bands", {})
+        current_bands = bands.get("bands", {}) if isinstance(bands, dict) else {}
+        upper_2 = _coerce_float(current_bands.get("UPPER_2"))
+        upper_3 = _coerce_float(current_bands.get("UPPER_3"))
+        lower_2 = _coerce_float(current_bands.get("LOWER_2"))
+        lower_3 = _coerce_float(current_bands.get("LOWER_3"))
+        in_zone = False
+        if close_value is not None:
+            if normalize_side(side) == "LONG" and upper_2 is not None and upper_3 is not None:
+                in_zone = float(upper_2) <= float(close_value) <= float(upper_3)
+            elif normalize_side(side) == "SHORT" and lower_2 is not None and lower_3 is not None:
+                in_zone = float(lower_3) <= float(close_value) <= float(lower_2)
+
+        if in_zone:
+            current_start = idx if current_start is None else current_start
+            current_len += 1
+            continue
+
+        if current_len >= MID_EARNINGS_ZONE_MIN_DAYS:
+            qualifying_streak = {
+                "start_idx": current_start,
+                "end_idx": idx - 1,
+                "length": current_len,
+                "start_date": ordered_rows[current_start]["date"],
+                "end_date": ordered_rows[idx - 1]["date"],
+            }
+        current_start = None
+        current_len = 0
+
+    if current_len >= MID_EARNINGS_ZONE_MIN_DAYS and current_start is not None and (len(ordered_rows) - 1) <= latest_zone_end_allowed:
+        qualifying_streak = {
+            "start_idx": current_start,
+            "end_idx": len(ordered_rows) - 1,
+            "length": current_len,
+            "start_date": ordered_rows[current_start]["date"],
+            "end_date": ordered_rows[-1]["date"],
+        }
+
+    if not qualifying_streak:
+        return result
+
+    latest_trade_date = ordered_rows[-1]["date"]
+    latest_indicator_row = indicator_by_date.get(latest_trade_date)
+    ema8 = _coerce_float(latest_indicator_row.get("ema_8")) if latest_indicator_row is not None else None
+    ema15 = _coerce_float(latest_indicator_row.get("ema_15")) if latest_indicator_row is not None else None
+    ema21 = _coerce_float(latest_indicator_row.get("ema_21")) if latest_indicator_row is not None else None
+    current_bands = anchor_meta.get("bands", {}) or {}
+    first_dev_level = _coerce_float(current_bands.get("UPPER_1" if normalize_side(side) == "LONG" else "LOWER_1"))
+
+    ema15_bounce = _generous_reclaim_bounce_at_level(df, ema15, side)
+    if not ema15_bounce:
+        result.update(
+            {
+                "watch": True,
+                "zone_streak_days": int(qualifying_streak["length"]),
+                "zone_start_date": qualifying_streak["start_date"],
+                "zone_end_date": qualifying_streak["end_date"],
+                "anchor_date": str(anchor_meta.get("date") or ""),
+                "gap_date": gap_date,
+                "anchor_meta": anchor_meta,
+                "note": (
+                    f"Held between {'UPPER_2/UPPER_3' if normalize_side(side) == 'LONG' else 'LOWER_3/LOWER_2'} "
+                    f"for {qualifying_streak['length']} day(s) and is waiting for an EMA15 retest."
+                ),
+            }
+        )
+        return result
+
+    ema8_confluence = _generous_reclaim_bounce_at_level(df, ema8, side)
+    ema21_confluence = _generous_reclaim_bounce_at_level(df, ema21, side)
+    first_dev_confluence = _generous_reclaim_bounce_at_level(df, first_dev_level, side)
+    events = [MID_EARNINGS_EMA15_RETEST_SIGNAL]
+    if ema8_confluence:
+        events.append(MID_EARNINGS_EMA8_CONFLUENCE_SIGNAL)
+    if ema21_confluence:
+        events.append(MID_EARNINGS_EMA21_CONFLUENCE_SIGNAL)
+    if first_dev_confluence:
+        events.append(MID_EARNINGS_FIRST_DEV_CONFLUENCE_SIGNAL)
+
+    note_parts = [
+        f"Held between {'UPPER_2 and UPPER_3' if normalize_side(side) == 'LONG' else 'LOWER_3 and LOWER_2'} for {qualifying_streak['length']} day(s)",
+        f"EMA15 retest from {qualifying_streak['end_date']}",
+    ]
+    if ema21_confluence:
+        note_parts.append("EMA21 confluence")
+    if first_dev_confluence:
+        note_parts.append("1st-dev confluence")
+    if ema8_confluence:
+        note_parts.append("EMA8 confluence")
+
+    result.update(
+        {
+            "watch": True,
+            "favorite_signal": True,
+            "events": events,
+            "zone_streak_days": int(qualifying_streak["length"]),
+            "zone_start_date": qualifying_streak["start_date"],
+            "zone_end_date": qualifying_streak["end_date"],
+            "anchor_date": str(anchor_meta.get("date") or ""),
+            "gap_date": gap_date,
+            "retest_level": "EMA_15",
+            "retest_level_value": ema15,
+            "ema8_confluence": bool(ema8_confluence),
+            "ema21_confluence": bool(ema21_confluence),
+            "first_dev_confluence": bool(first_dev_confluence),
+            "note": "; ".join(note_parts),
+            "anchor_meta": anchor_meta,
+        }
+    )
+    return result
 
 
 
@@ -7176,6 +8279,41 @@ def _bounce_signal_level(event_name: str) -> str:
     return normalized_event[len("BOUNCE_"):]
 
 
+def _is_custom_priority_setup_signal(event_name: str) -> bool:
+    return str(event_name or "").strip().upper() in {
+        POST_EARNINGS_BREAK_SIGNAL,
+        POST_EARNINGS_BOUNCE_SIGNAL,
+        MID_EARNINGS_EMA15_RETEST_SIGNAL,
+    }
+
+
+def _derive_setup_family(
+    current_setup_signals: list[str],
+    *,
+    retest_followthrough: bool,
+    extreme_move_favorite_ready: bool,
+    favorite_zone: str | None,
+) -> tuple[str, list[str]]:
+    tags = [str(signal or "").strip().upper() for signal in current_setup_signals if str(signal or "").strip()]
+    tags = list(dict.fromkeys(tags))
+
+    if POST_EARNINGS_BREAK_SIGNAL in tags:
+        return "post_earnings_52w_break", tags
+    if POST_EARNINGS_BOUNCE_SIGNAL in tags:
+        return "post_earnings_avwap_bounce", tags
+    if MID_EARNINGS_EMA15_RETEST_SIGNAL in tags:
+        return "mid_earnings_ema15_retest", tags
+    if extreme_move_favorite_ready:
+        return "extreme_move_retest", tags
+    if retest_followthrough:
+        return "avwap_retest_followthrough", tags
+    if tags:
+        return "avwap_breakout", tags
+    if favorite_zone:
+        return "favorite_zone_watch", tags
+    return "general", tags
+
+
 def _compute_bounce_support_bonus(events_today: list[str], setup_active: bool) -> tuple[int, list[str]]:
     if not setup_active:
         return 0, []
@@ -7275,6 +8413,7 @@ def build_priority_setup_summary(
         and (
             _is_priority_breakout_signal(evt, side)
             or evt == "EXTREME_MOVE_RETEST"
+            or _is_custom_priority_setup_signal(evt)
         )
     )
     context_signals = sorted(evt for evt in events_today if evt in context_weights)
@@ -7331,6 +8470,13 @@ def build_priority_setup_summary(
     if current_setup_signals and any(evt.startswith("MD_") for evt in all_events):
         score += 5
 
+    setup_family, setup_tags = _derive_setup_family(
+        current_setup_signals,
+        retest_followthrough=bool(retest_followthrough),
+        extreme_move_favorite_ready=bool(extreme_move_favorite_ready),
+        favorite_zone=favorite_zone,
+    )
+
     return {
         "symbol": symbol,
         "side": side,
@@ -7342,6 +8488,8 @@ def build_priority_setup_summary(
         "favorite_zone": favorite_zone,
         "trend_20d": trend_label,
         "has_favorite_signal": bool(setup_active),
+        "setup_family": setup_family,
+        "setup_tags": setup_tags,
         "recent_band_extension_days": recent_band_extension_days,
         "recent_second_band_test_days": int(recent_second_band_test_days or 0),
         "second_band_penalty": int(second_band_penalty or 0),
@@ -8009,6 +9157,8 @@ def apply_final_priority_buckets(
             row.get("favorite_zone")
             or row.get("retest_followthrough")
             or row.get("extreme_move_watch")
+            or row.get("post_earnings_active")
+            or row.get("mid_earnings_watch")
         ):
             return "near_favorite_zone", False, True
         return "", False, False
@@ -8056,6 +9206,13 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
+    post_earnings_rows = sorted(
+        [
+            row for row in priority_rows
+            if row.get("post_earnings_active")
+        ],
+        key=lambda row: (-row["score"], row["symbol"]),
+    )
 
     def _write_rows(handle, title: str, rows: list[dict]) -> None:
         handle.write(f"{title}\n")
@@ -8077,6 +9234,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             ranking_note = row.get("ranking_note", "")
             score_bonus_note = row.get("score_bonus_note", "")
             adaptive_score_note = row.get("adaptive_score_note", "")
+            recent_tracker_score_note = row.get("recent_tracker_score_note", "")
             retest_note = row.get("retest_note", "")
             extension_note = row.get("extension_note", "")
             previous_day_range_note = row.get("previous_day_range_note", "")
@@ -8085,9 +9243,12 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
             compression_note = row.get("compression_note", "")
             trendline_note = row.get("trendline_note", "")
             trendline_break_note = row.get("trendline_break_note", "")
+            setup_family = row.get("setup_family") or "general"
+            post_earnings_note = row.get("post_earnings_note", "")
+            mid_earnings_note = row.get("mid_earnings_note", "")
             handle.write(
                 f"{row['symbol']:<6} {row['side']:<5} score={row['score']:<3} "
-                f"signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']} "
+                f"family={setup_family} | signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']} "
                 f"| ext_days={extension_days} | 2nd_tests={second_band_tests} "
                 f"| 5d_breakout={breakout_text} | retest={retest_text}\n"
             )
@@ -8102,6 +9263,8 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
                 handle.write(f"  bonus={score_bonus_note}\n")
             if adaptive_score_note:
                 handle.write(f"  adaptive={adaptive_score_note}\n")
+            if recent_tracker_score_note:
+                handle.write(f"  recent_tracker={recent_tracker_score_note}\n")
             if retest_note:
                 handle.write(f"  retest={retest_note}\n")
             if extension_note:
@@ -8119,15 +9282,22 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
                 handle.write(f"  {prefix}={trendline_note}\n")
             if trendline_break_note:
                 handle.write(f"  trendline_break={trendline_break_note}\n")
+            if post_earnings_note:
+                handle.write(f"  post_earnings={post_earnings_note}\n")
+            if mid_earnings_note:
+                handle.write(f"  mid_earnings={mid_earnings_note}\n")
         handle.write("\n")
 
     buffer = io.StringIO()
     handle = buffer
     handle.write("Master AVWAP priority setups\n")
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-    handle.write("Focus: AVWAPE, 1st-dev, and 2nd-dev breakouts first; bounce only boosts the score of those setups\n\n")
+    handle.write(
+        "Focus: generalized high-quality setups across AVWAP breaks, post-earnings gap structures, and mid-earnings continuation retests\n\n"
+    )
     _write_rows(handle, "Best current favorite setups", favorites)
     _write_rows(handle, "Near favorite zones", watchlist)
+    _write_rows(handle, "Post earnings plays", post_earnings_rows)
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
@@ -8141,6 +9311,10 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         row for row in ranked_rows
         if row.get("priority_bucket") == "near_favorite_zone"
     ]
+    post_earnings_rows = [
+        row for row in ranked_rows
+        if row.get("post_earnings_active")
+    ]
 
     def _build_entry(row: dict, bucket: str, rank: int) -> dict:
         symbol = row["symbol"]
@@ -8151,6 +9325,10 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "priority_bucket": bucket,
             "priority_rank": rank,
             "priority_score": row["score"],
+            "setup_family": row.get("setup_family") or "",
+            "recent_tracker_score_delta": int(row.get("recent_tracker_score_delta", 0) or 0),
+            "recent_tracker_score_note": row.get("recent_tracker_score_note") or "",
+            "setup_tags": list(row.get("setup_tags") or []),
             "favorite_zone": row.get("favorite_zone") or "",
             "trend_20d": row.get("trend_20d") or "SIDEWAYS",
             "favorite_signals": list(row.get("favorite_signals") or []),
@@ -8175,6 +9353,23 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "extreme_move_band_width_atr": _coerce_float(row.get("extreme_move_band_width_atr")),
             "extreme_move_displacement_date": row.get("extreme_move_displacement_date") or "",
             "extreme_move_note": row.get("extreme_move_note") or "",
+            "post_earnings_active": bool(row.get("post_earnings_active")),
+            "post_earnings_break_intraday": bool(row.get("post_earnings_break_intraday")),
+            "post_earnings_break_close": bool(row.get("post_earnings_break_close")),
+            "post_earnings_sessions_since_gap": int(row.get("post_earnings_sessions_since_gap", 0) or 0),
+            "post_earnings_gap_atr_multiple": _coerce_float(row.get("post_earnings_gap_atr_multiple")),
+            "post_earnings_anchor_date": row.get("post_earnings_anchor_date") or "",
+            "post_earnings_gap_date": row.get("post_earnings_gap_date") or "",
+            "post_earnings_monitor_level": _coerce_float(row.get("post_earnings_monitor_level")),
+            "post_earnings_note": row.get("post_earnings_note") or "",
+            "mid_earnings_watch": bool(row.get("mid_earnings_watch")),
+            "mid_earnings_zone_streak_days": int(row.get("mid_earnings_zone_streak_days", 0) or 0),
+            "mid_earnings_zone_start_date": row.get("mid_earnings_zone_start_date") or "",
+            "mid_earnings_zone_end_date": row.get("mid_earnings_zone_end_date") or "",
+            "mid_earnings_ema8_confluence": bool(row.get("mid_earnings_ema8_confluence")),
+            "mid_earnings_ema21_confluence": bool(row.get("mid_earnings_ema21_confluence")),
+            "mid_earnings_first_dev_confluence": bool(row.get("mid_earnings_first_dev_confluence")),
+            "mid_earnings_note": row.get("mid_earnings_note") or "",
             "extension_note": row.get("extension_note") or "",
             "first_dev_note": row.get("first_dev_note") or "",
             "compression_flag": bool(row.get("compression_flag")),
@@ -8190,16 +9385,17 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
 
     favorites = [_build_entry(row, "favorite_setup", idx + 1) for idx, row in enumerate(favorite_rows)]
     near_favorites = [_build_entry(row, "near_favorite_zone", idx + 1) for idx, row in enumerate(near_rows)]
-    symbol_map = {
-        entry["symbol"]: entry
-        for entry in favorites + near_favorites
-    }
+    post_earnings_entries = [_build_entry(row, "post_earnings_play", idx + 1) for idx, row in enumerate(post_earnings_rows)]
+    symbol_map = {}
+    for entry in favorites + near_favorites + post_earnings_entries:
+        symbol_map.setdefault(entry["symbol"], entry)
 
     payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "run_date": datetime.now().date().isoformat(),
         "favorites": favorites,
         "near_favorite_zones": near_favorites,
+        "post_earnings_plays": post_earnings_entries,
         "symbols": symbol_map,
     }
     save_json(path, payload)
@@ -8264,6 +9460,13 @@ def write_tradingview_report(
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
+    post_earnings_rows = sorted(
+        [
+            row for row in priority_rows
+            if row.get("post_earnings_active")
+        ],
+        key=lambda row: (-row["score"], row["symbol"]),
+    )
 
     def _symbols(rows, side: str) -> str:
         values = [row["symbol"] for row in rows if row.get("side") == side]
@@ -8315,6 +9518,11 @@ def write_tradingview_report(
         handle,
         "Near favorite zones",
         [("LONG", _symbols(near_favorites, "LONG")), ("SHORT", _symbols(near_favorites, "SHORT"))],
+    )
+    _write_block(
+        handle,
+        "Post earnings plays",
+        [("LONG", _symbols(post_earnings_rows, "LONG")), ("SHORT", _symbols(post_earnings_rows, "SHORT"))],
     )
     _write_block(handle, "Event tickers", event_lines)
     _write_block(handle, "Price ranges (current anchors)", range_lines)
@@ -8535,6 +9743,7 @@ def _evaluate_priority_snapshot_for_date(
     current_anchor_iso: str | None,
     previous_anchor_iso: str | None,
     recent_earnings_dates: list[str],
+    latest_release_info: dict | None,
     history_state: dict[str, list[dict]],
 ) -> dict | None:
     df = df_full[df_full["datetime"].dt.date <= evaluation_date].copy()
@@ -8702,6 +9911,45 @@ def _evaluate_priority_snapshot_for_date(
         if not eligible_indicator_rows.empty:
             indicator_row = eligible_indicator_rows.iloc[-1]
 
+    latest_release_context = _build_latest_earnings_release_context(
+        df,
+        latest_release_info,
+    )
+    post_earnings_summary = analyze_post_earnings_setups(
+        df,
+        side,
+        latest_release_context,
+    )
+    if post_earnings_summary.get("break_signal"):
+        post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
+        add_signal(
+            POST_EARNINGS_BREAK_SIGNAL,
+            "POST_EARNINGS",
+            post_earnings_summary.get("anchor_date", ""),
+            post_anchor_meta.get("vwap"),
+            post_anchor_meta.get("stdev"),
+            post_earnings_summary.get("monitor_level"),
+        )
+        if post_earnings_summary.get("break_close"):
+            add_signal(
+                POST_EARNINGS_CLOSE_CONFIRM_SIGNAL,
+                "POST_EARNINGS",
+                post_earnings_summary.get("anchor_date", ""),
+                post_anchor_meta.get("vwap"),
+                post_anchor_meta.get("stdev"),
+                post_earnings_summary.get("monitor_level"),
+            )
+    if post_earnings_summary.get("bounce_signal"):
+        post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
+        add_signal(
+            POST_EARNINGS_BOUNCE_SIGNAL,
+            "POST_EARNINGS",
+            post_earnings_summary.get("anchor_date", ""),
+            post_anchor_meta.get("vwap"),
+            post_anchor_meta.get("stdev"),
+            post_anchor_meta.get("vwap"),
+        )
+
     stdev_blocked_by_recent_earnings = False
     if recent_earnings_dates:
         try:
@@ -8733,6 +9981,50 @@ def _evaluate_priority_snapshot_for_date(
             current_anchor_meta.get("stdev") if current_anchor_meta else None,
             extreme_move_summary.get("retest_level_value"),
         )
+
+    mid_earnings_summary = analyze_mid_earnings_ema_retest_setup(
+        df,
+        side,
+        latest_release_context,
+        indicator_frame,
+    )
+    if mid_earnings_summary.get("favorite_signal"):
+        mid_anchor_meta = mid_earnings_summary.get("anchor_meta") if isinstance(mid_earnings_summary.get("anchor_meta"), dict) else {}
+        add_signal(
+            MID_EARNINGS_EMA15_RETEST_SIGNAL,
+            "MID_EARNINGS",
+            mid_earnings_summary.get("anchor_date", ""),
+            mid_anchor_meta.get("vwap"),
+            mid_anchor_meta.get("stdev"),
+            mid_earnings_summary.get("retest_level_value"),
+        )
+        if mid_earnings_summary.get("ema8_confluence"):
+            add_signal(
+                MID_EARNINGS_EMA8_CONFLUENCE_SIGNAL,
+                "MID_EARNINGS",
+                mid_earnings_summary.get("anchor_date", ""),
+                mid_anchor_meta.get("vwap"),
+                mid_anchor_meta.get("stdev"),
+                None,
+            )
+        if mid_earnings_summary.get("ema21_confluence"):
+            add_signal(
+                MID_EARNINGS_EMA21_CONFLUENCE_SIGNAL,
+                "MID_EARNINGS",
+                mid_earnings_summary.get("anchor_date", ""),
+                mid_anchor_meta.get("vwap"),
+                mid_anchor_meta.get("stdev"),
+                None,
+            )
+        if mid_earnings_summary.get("first_dev_confluence"):
+            add_signal(
+                MID_EARNINGS_FIRST_DEV_CONFLUENCE_SIGNAL,
+                "MID_EARNINGS",
+                mid_earnings_summary.get("anchor_date", ""),
+                mid_anchor_meta.get("vwap"),
+                mid_anchor_meta.get("stdev"),
+                None,
+            )
 
     symbol_events_today = sorted(set(symbol_events_today))
     previous_entries = history_state.get(symbol, [])
@@ -8888,6 +10180,26 @@ def _evaluate_priority_snapshot_for_date(
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
         "compression_note": compression_summary.get("compression_note", ""),
+        "latest_release_earnings_date": latest_release_context.get("earnings_date", ""),
+        "latest_release_gap_date": latest_release_context.get("gap_date", ""),
+        "latest_release_anchor_date": latest_release_context.get("anchor_date", ""),
+        "latest_release_gap_atr_multiple": _coerce_float(latest_release_context.get("gap_atr_multiple")),
+        "post_earnings_active": bool(post_earnings_summary.get("active")),
+        "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
+        "post_earnings_monitor_level_label": post_earnings_summary.get("monitor_level_label", ""),
+        "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
+        "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+        "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
+        "post_earnings_note": post_earnings_summary.get("note", ""),
+        "post_earnings_anchor": post_earnings_summary.get("anchor_meta"),
+        "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
+        "mid_earnings_zone_streak_days": int(mid_earnings_summary.get("zone_streak_days", 0) or 0),
+        "mid_earnings_zone_start_date": mid_earnings_summary.get("zone_start_date", ""),
+        "mid_earnings_zone_end_date": mid_earnings_summary.get("zone_end_date", ""),
+        "mid_earnings_ema8_confluence": bool(mid_earnings_summary.get("ema8_confluence")),
+        "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
+        "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
+        "mid_earnings_note": mid_earnings_summary.get("note", ""),
         "entry_feature_snapshot": entry_feature_snapshot,
         **bouncebot_focus_context,
     }
@@ -8921,6 +10233,23 @@ def _evaluate_priority_snapshot_for_date(
         previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
         extension_note=extension_note,
     )
+    priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
+    priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
+    priority_summary["post_earnings_break_close"] = bool(post_earnings_summary.get("break_close"))
+    priority_summary["post_earnings_sessions_since_gap"] = post_earnings_summary.get("sessions_since_gap")
+    priority_summary["post_earnings_gap_atr_multiple"] = _coerce_float(post_earnings_summary.get("gap_atr_multiple"))
+    priority_summary["post_earnings_anchor_date"] = post_earnings_summary.get("anchor_date", "")
+    priority_summary["post_earnings_gap_date"] = post_earnings_summary.get("gap_date", "")
+    priority_summary["post_earnings_monitor_level"] = _coerce_float(post_earnings_summary.get("monitor_level"))
+    priority_summary["post_earnings_note"] = post_earnings_summary.get("note", "")
+    priority_summary["mid_earnings_watch"] = bool(mid_earnings_summary.get("watch"))
+    priority_summary["mid_earnings_zone_streak_days"] = int(mid_earnings_summary.get("zone_streak_days", 0) or 0)
+    priority_summary["mid_earnings_zone_start_date"] = mid_earnings_summary.get("zone_start_date", "")
+    priority_summary["mid_earnings_zone_end_date"] = mid_earnings_summary.get("zone_end_date", "")
+    priority_summary["mid_earnings_ema8_confluence"] = bool(mid_earnings_summary.get("ema8_confluence"))
+    priority_summary["mid_earnings_ema21_confluence"] = bool(mid_earnings_summary.get("ema21_confluence"))
+    priority_summary["mid_earnings_first_dev_confluence"] = bool(mid_earnings_summary.get("first_dev_confluence"))
+    priority_summary["mid_earnings_note"] = mid_earnings_summary.get("note", "")
     effective_compression_penalty, effective_compression_note = _effective_compression_penalty(
         compression_summary,
         priority_summary,
@@ -8937,6 +10266,8 @@ def _evaluate_priority_snapshot_for_date(
     if isinstance(entry_feature_snapshot, dict):
         entry_feature_snapshot["compression_penalty"] = int(effective_compression_penalty or 0)
         entry_feature_snapshot["compression_note"] = effective_compression_note
+    symbol_entry["setup_family"] = priority_summary.get("setup_family", "")
+    symbol_entry["setup_tags"] = list(priority_summary.get("setup_tags") or [])
 
     feature_row = {
         "symbol": symbol,
@@ -8987,6 +10318,23 @@ def _evaluate_priority_snapshot_for_date(
         "compression_flag": bool(compression_summary.get("is_compressed")),
         "compression_penalty": int(effective_compression_penalty or 0),
         "compression_note": effective_compression_note,
+        "setup_family": priority_summary.get("setup_family", ""),
+        "setup_tags": ";".join(priority_summary.get("setup_tags") or []),
+        "post_earnings_active": bool(post_earnings_summary.get("active")),
+        "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
+        "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
+        "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+        "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
+        "post_earnings_gap_atr_multiple": _coerce_float(post_earnings_summary.get("gap_atr_multiple")),
+        "post_earnings_note": post_earnings_summary.get("note", ""),
+        "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
+        "mid_earnings_zone_streak_days": int(mid_earnings_summary.get("zone_streak_days", 0) or 0),
+        "mid_earnings_zone_start_date": mid_earnings_summary.get("zone_start_date", ""),
+        "mid_earnings_zone_end_date": mid_earnings_summary.get("zone_end_date", ""),
+        "mid_earnings_ema8_confluence": bool(mid_earnings_summary.get("ema8_confluence")),
+        "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
+        "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
+        "mid_earnings_note": mid_earnings_summary.get("note", ""),
         "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
         "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
         "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
@@ -9031,6 +10379,7 @@ def backfill_setup_tracker_from_recent_sessions(
         return {"dates": [], "watchlists": {}}
 
     earnings_data = load_or_refresh_earnings(symbols)
+    latest_release_map = load_latest_earnings_release_map(symbols, earnings_lookup=earnings_data)
     history_state: dict[str, list[dict]] = {}
     daily_frames_by_symbol: dict[str, pd.DataFrame] = {}
     earliest_eval_date = min(evaluation_dates)
@@ -9088,6 +10437,7 @@ def backfill_setup_tracker_from_recent_sessions(
                     current_anchor_iso=current_anchor.isoformat() if current_anchor else None,
                     previous_anchor_iso=previous_anchor.isoformat() if previous_anchor else None,
                     recent_earnings_dates=recent_earnings_dates,
+                    latest_release_info=latest_release_map.get(symbol),
                     history_state=history_state,
                 )
                 if not snapshot:
@@ -9112,6 +10462,12 @@ def backfill_setup_tracker_from_recent_sessions(
 
             refine_priority_rows_with_directional_filters(priority_rows, ai_state, ib)
             apply_final_priority_buckets(priority_rows, ai_state, [], feature_rows_by_symbol)
+            apply_recent_tracker_setup_family_adjustments(
+                priority_rows,
+                ai_state,
+                feature_rows_by_symbol,
+                reference_date=evaluation_date,
+            )
             tracked_rows = [
                 row
                 for row in priority_rows
@@ -9524,6 +10880,45 @@ def run_master(
             if not eligible_indicator_rows.empty:
                 indicator_row = eligible_indicator_rows.iloc[-1]
 
+        latest_release_context = _build_latest_earnings_release_context(
+            df,
+            latest_release_map.get(sym),
+        )
+        post_earnings_summary = analyze_post_earnings_setups(
+            df,
+            side,
+            latest_release_context,
+        )
+        if post_earnings_summary.get("break_signal"):
+            post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
+            add_signal(
+                POST_EARNINGS_BREAK_SIGNAL,
+                "POST_EARNINGS",
+                post_earnings_summary.get("anchor_date", ""),
+                post_anchor_meta.get("vwap"),
+                post_anchor_meta.get("stdev"),
+                post_earnings_summary.get("monitor_level"),
+            )
+            if post_earnings_summary.get("break_close"):
+                add_signal(
+                    POST_EARNINGS_CLOSE_CONFIRM_SIGNAL,
+                    "POST_EARNINGS",
+                    post_earnings_summary.get("anchor_date", ""),
+                    post_anchor_meta.get("vwap"),
+                    post_anchor_meta.get("stdev"),
+                    post_earnings_summary.get("monitor_level"),
+                )
+        if post_earnings_summary.get("bounce_signal"):
+            post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
+            add_signal(
+                POST_EARNINGS_BOUNCE_SIGNAL,
+                "POST_EARNINGS",
+                post_earnings_summary.get("anchor_date", ""),
+                post_anchor_meta.get("vwap"),
+                post_anchor_meta.get("stdev"),
+                post_anchor_meta.get("vwap"),
+            )
+
         stdev_blocked_by_recent_earnings = False
         if recent_earnings_dates:
             try:
@@ -9555,6 +10950,50 @@ def run_master(
                 current_anchor_meta.get("stdev") if current_anchor_meta else None,
                 extreme_move_summary.get("retest_level_value"),
             )
+
+        mid_earnings_summary = analyze_mid_earnings_ema_retest_setup(
+            df,
+            side,
+            latest_release_context,
+            indicator_frame,
+        )
+        if mid_earnings_summary.get("favorite_signal"):
+            mid_anchor_meta = mid_earnings_summary.get("anchor_meta") if isinstance(mid_earnings_summary.get("anchor_meta"), dict) else {}
+            add_signal(
+                MID_EARNINGS_EMA15_RETEST_SIGNAL,
+                "MID_EARNINGS",
+                mid_earnings_summary.get("anchor_date", ""),
+                mid_anchor_meta.get("vwap"),
+                mid_anchor_meta.get("stdev"),
+                mid_earnings_summary.get("retest_level_value"),
+            )
+            if mid_earnings_summary.get("ema8_confluence"):
+                add_signal(
+                    MID_EARNINGS_EMA8_CONFLUENCE_SIGNAL,
+                    "MID_EARNINGS",
+                    mid_earnings_summary.get("anchor_date", ""),
+                    mid_anchor_meta.get("vwap"),
+                    mid_anchor_meta.get("stdev"),
+                    None,
+                )
+            if mid_earnings_summary.get("ema21_confluence"):
+                add_signal(
+                    MID_EARNINGS_EMA21_CONFLUENCE_SIGNAL,
+                    "MID_EARNINGS",
+                    mid_earnings_summary.get("anchor_date", ""),
+                    mid_anchor_meta.get("vwap"),
+                    mid_anchor_meta.get("stdev"),
+                    None,
+                )
+            if mid_earnings_summary.get("first_dev_confluence"):
+                add_signal(
+                    MID_EARNINGS_FIRST_DEV_CONFLUENCE_SIGNAL,
+                    "MID_EARNINGS",
+                    mid_earnings_summary.get("anchor_date", ""),
+                    mid_anchor_meta.get("vwap"),
+                    mid_anchor_meta.get("stdev"),
+                    None,
+                )
 
         # dedupe and sort events for consistency
         symbol_events_today = sorted(set(symbol_events_today))
@@ -9775,6 +11214,26 @@ def run_master(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(compression_summary.get("compression_penalty", 0) or 0),
             "compression_note": compression_summary.get("compression_note", ""),
+            "latest_release_earnings_date": latest_release_context.get("earnings_date", ""),
+            "latest_release_gap_date": latest_release_context.get("gap_date", ""),
+            "latest_release_anchor_date": latest_release_context.get("anchor_date", ""),
+            "latest_release_gap_atr_multiple": _coerce_float(latest_release_context.get("gap_atr_multiple")),
+            "post_earnings_active": bool(post_earnings_summary.get("active")),
+            "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
+            "post_earnings_monitor_level_label": post_earnings_summary.get("monitor_level_label", ""),
+            "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
+            "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+            "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
+            "post_earnings_note": post_earnings_summary.get("note", ""),
+            "post_earnings_anchor": post_earnings_summary.get("anchor_meta"),
+            "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
+            "mid_earnings_zone_streak_days": int(mid_earnings_summary.get("zone_streak_days", 0) or 0),
+            "mid_earnings_zone_start_date": mid_earnings_summary.get("zone_start_date", ""),
+            "mid_earnings_zone_end_date": mid_earnings_summary.get("zone_end_date", ""),
+            "mid_earnings_ema8_confluence": bool(mid_earnings_summary.get("ema8_confluence")),
+            "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
+            "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
+            "mid_earnings_note": mid_earnings_summary.get("note", ""),
             "entry_feature_snapshot": entry_feature_snapshot,
             **bouncebot_focus_context,
         }
@@ -9808,6 +11267,23 @@ def run_master(
             previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
             extension_note=extension_note,
         )
+        priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
+        priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
+        priority_summary["post_earnings_break_close"] = bool(post_earnings_summary.get("break_close"))
+        priority_summary["post_earnings_sessions_since_gap"] = post_earnings_summary.get("sessions_since_gap")
+        priority_summary["post_earnings_gap_atr_multiple"] = _coerce_float(post_earnings_summary.get("gap_atr_multiple"))
+        priority_summary["post_earnings_anchor_date"] = post_earnings_summary.get("anchor_date", "")
+        priority_summary["post_earnings_gap_date"] = post_earnings_summary.get("gap_date", "")
+        priority_summary["post_earnings_monitor_level"] = _coerce_float(post_earnings_summary.get("monitor_level"))
+        priority_summary["post_earnings_note"] = post_earnings_summary.get("note", "")
+        priority_summary["mid_earnings_watch"] = bool(mid_earnings_summary.get("watch"))
+        priority_summary["mid_earnings_zone_streak_days"] = int(mid_earnings_summary.get("zone_streak_days", 0) or 0)
+        priority_summary["mid_earnings_zone_start_date"] = mid_earnings_summary.get("zone_start_date", "")
+        priority_summary["mid_earnings_zone_end_date"] = mid_earnings_summary.get("zone_end_date", "")
+        priority_summary["mid_earnings_ema8_confluence"] = bool(mid_earnings_summary.get("ema8_confluence"))
+        priority_summary["mid_earnings_ema21_confluence"] = bool(mid_earnings_summary.get("ema21_confluence"))
+        priority_summary["mid_earnings_first_dev_confluence"] = bool(mid_earnings_summary.get("first_dev_confluence"))
+        priority_summary["mid_earnings_note"] = mid_earnings_summary.get("note", "")
         effective_compression_penalty, effective_compression_note = _effective_compression_penalty(
             compression_summary,
             priority_summary,
@@ -9827,6 +11303,8 @@ def run_master(
         symbol_entry["priority_score"] = priority_summary["score"]
         symbol_entry["favorite_signals"] = priority_summary["favorite_signals"]
         symbol_entry["favorite_context_signals"] = priority_summary["context_signals"]
+        symbol_entry["setup_family"] = priority_summary.get("setup_family", "")
+        symbol_entry["setup_tags"] = list(priority_summary.get("setup_tags") or [])
         priority_rows.append(priority_summary)
 
         clean_favorite_zone_setup = (
@@ -9919,12 +11397,31 @@ def run_master(
             "compression_flag": bool(compression_summary.get("is_compressed")),
             "compression_penalty": int(effective_compression_penalty or 0),
             "compression_note": effective_compression_note,
+            "setup_family": priority_summary.get("setup_family", ""),
+            "setup_tags": ";".join(priority_summary.get("setup_tags") or []),
+            "post_earnings_active": bool(post_earnings_summary.get("active")),
+            "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
+            "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
+            "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+            "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
+            "post_earnings_gap_atr_multiple": _coerce_float(post_earnings_summary.get("gap_atr_multiple")),
+            "post_earnings_note": post_earnings_summary.get("note", ""),
+            "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
+            "mid_earnings_zone_streak_days": int(mid_earnings_summary.get("zone_streak_days", 0) or 0),
+            "mid_earnings_zone_start_date": mid_earnings_summary.get("zone_start_date", ""),
+            "mid_earnings_zone_end_date": mid_earnings_summary.get("zone_end_date", ""),
+            "mid_earnings_ema8_confluence": bool(mid_earnings_summary.get("ema8_confluence")),
+            "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
+            "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
+            "mid_earnings_note": mid_earnings_summary.get("note", ""),
             "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
             "bouncebot_bullish_weak_long_seen_today": bool(bouncebot_focus_context.get("bouncebot_bullish_weak_long_seen_today")),
             "bouncebot_bearish_weak_short_seen_today": bool(bouncebot_focus_context.get("bouncebot_bearish_weak_short_seen_today")),
             "priority_score": priority_summary["score"],
+            "recent_tracker_score_delta": 0,
+            "recent_tracker_score_note": "",
             "favorite_signals": ";".join(priority_summary["favorite_signals"]),
             "favorite_context_signals": ";".join(priority_summary["context_signals"]),
             "events_today": ";".join(symbol_events_today),
@@ -9940,6 +11437,12 @@ def run_master(
 
     refine_priority_rows_with_directional_filters(priority_rows, ai_state, ib)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
+    apply_recent_tracker_setup_family_adjustments(
+        priority_rows,
+        ai_state,
+        feature_rows_by_symbol,
+        reference_date=today_run,
+    )
     tracked_rows = [
         row
         for row in priority_rows
@@ -10165,6 +11668,8 @@ def run_master(
         "previous_day_range_note",
         "has_bounce_event_today",
         "favorite_zone",
+        "setup_family",
+        "setup_tags",
         "recent_band_extension_days",
         "recent_second_band_test_days",
         "second_band_penalty",
@@ -10183,7 +11688,24 @@ def run_master(
         "compression_flag",
         "compression_penalty",
         "compression_note",
+        "post_earnings_active",
+        "post_earnings_monitor_level",
+        "post_earnings_break_intraday",
+        "post_earnings_break_close",
+        "post_earnings_sessions_since_gap",
+        "post_earnings_gap_atr_multiple",
+        "post_earnings_note",
+        "mid_earnings_watch",
+        "mid_earnings_zone_streak_days",
+        "mid_earnings_zone_start_date",
+        "mid_earnings_zone_end_date",
+        "mid_earnings_ema8_confluence",
+        "mid_earnings_ema21_confluence",
+        "mid_earnings_first_dev_confluence",
+        "mid_earnings_note",
         "priority_score",
+        "recent_tracker_score_delta",
+        "recent_tracker_score_note",
         "favorite_signals",
         "favorite_context_signals",
         "events_today",
@@ -11238,8 +12760,10 @@ class MasterAvwapGUI:
         factor_rows = getattr(self, "setup_tracker_factor_rows", [])
         playbook_rows = getattr(self, "setup_tracker_playbook_rows", [])
         best_playbook_rows = getattr(self, "setup_tracker_best_playbook_rows", [])
+        tracker_setups = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
         daily_watchlists = payload.get("daily_watchlists", {}) if isinstance(payload.get("daily_watchlists"), dict) else {}
         attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
+        recent_family_rows = build_recent_tracker_setup_family_rows(tracker_setups)
 
         def _fmt_r(value) -> str:
             numeric = _coerce_float(value)
@@ -11261,7 +12785,7 @@ class MasterAvwapGUI:
         lines.append("Tracker summary")
         lines.append("-" * 80)
         lines.append(f"Updated: {payload.get('updated_at') or 'n/a'}")
-        lines.append(f"Tracked setups: {len(payload.get('setups', {}) or {})}")
+        lines.append(f"Tracked setups: {len(tracker_setups)}")
         lines.append("Auto scoring tuner: enabled after tracker updates/backfills")
         if daily_watchlists:
             latest_date = max(daily_watchlists.keys())
@@ -11279,6 +12803,23 @@ class MasterAvwapGUI:
                 if len(symbols) > 10:
                     preview += f" (+{len(symbols) - 10} more)"
                 lines.append(f"{watchlist_date}: {preview}")
+        lines.append("")
+        lines.append("Recent setup families driving scan rank")
+        lines.append("-" * 80)
+        positive_recent_family_rows = [
+            row for row in recent_family_rows if int(row.get("score_delta", 0) or 0) > 0
+        ]
+        if not positive_recent_family_rows:
+            lines.append("Not enough recent tracker history yet for family-level score boosts.")
+        else:
+            for row in positive_recent_family_rows[:6]:
+                lines.append(
+                    f"{row.get('type_label')}: delta={int(row.get('score_delta', 0) or 0):+d} "
+                    f"closed={int(row.get('closed_setups', 0) or 0)} "
+                    f"tracked={int(row.get('tracked_setups', 0) or 0)} "
+                    f"avg_closed={_fmt_r(row.get('avg_closed_r'))} "
+                    f"edge={_fmt_r_edge(row.get('avg_closed_r_edge'))}"
+                )
         lines.append("")
         lines.append("Best playbooks right now")
         lines.append("-" * 80)
@@ -11465,6 +13006,8 @@ class MasterAvwapGUI:
                 lines.append(f"bonus={selected_setup.get('score_bonus_note')}")
             if selected_setup.get("adaptive_score_note"):
                 lines.append(f"adaptive={selected_setup.get('adaptive_score_note')}")
+            if selected_setup.get("recent_tracker_score_note"):
+                lines.append(f"recent_tracker={selected_setup.get('recent_tracker_score_note')}")
             if selected_setup.get("ranking_note"):
                 lines.append(f"filters={selected_setup.get('ranking_note')}")
             if selected_setup.get("compression_note"):
