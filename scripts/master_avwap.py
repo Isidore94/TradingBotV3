@@ -9173,7 +9173,16 @@ def run_master(
             f"No symbols found in {watchlist_label}. Running anchor-watchlist scan only."
         )
         _run_anchor_watchlist_scan_safe()
-        return
+        return {
+            "watchlist_label": watchlist_label,
+            "tracked_rows": [],
+            "ai_state": {},
+            "feature_rows_by_symbol": {},
+            "daily_frames_by_symbol": {},
+            "setup_tracker_updated": False,
+            "setup_tracker_allowed": False,
+            "setup_tracker_skip_reason": "No symbols were available for the scan.",
+        }
 
     curr_cache = load_json(CURRENT_CACHE_FILE, default={})
     prev_cache = load_json(PREV_CACHE_FILE, default={})
@@ -9937,12 +9946,23 @@ def run_master(
         if row.get("priority_bucket") in {"favorite_setup", "near_favorite_zone"}
         and not row.get("ranking_blocked")
     ]
+    run_result: dict[str, object] = {
+        "watchlist_label": watchlist_label,
+        "tracked_rows": tracked_rows,
+        "ai_state": ai_state,
+        "feature_rows_by_symbol": feature_rows_by_symbol,
+        "daily_frames_by_symbol": daily_frames_by_symbol,
+        "setup_tracker_updated": False,
+        "setup_tracker_allowed": False,
+        "setup_tracker_skip_reason": "",
+    }
     setup_tracker_allowed = (
         bool(update_setup_tracker)
         if update_setup_tracker is not None
         else should_update_setup_tracker_now()
     )
     setup_tracker_skip_reason = ""
+    run_result["setup_tracker_allowed"] = bool(setup_tracker_allowed)
 
     if setup_tracker_allowed and require_ib_for_setup_tracker:
         if not is_daily_data_client_connected(ib):
@@ -9977,6 +9997,8 @@ def run_master(
                     f"used non-IBKR daily data (symbols={', '.join(non_ib_symbols)}; "
                     f"sources={', '.join(sources)})."
                 )
+    run_result["setup_tracker_allowed"] = bool(setup_tracker_allowed)
+    run_result["setup_tracker_skip_reason"] = setup_tracker_skip_reason
 
     if setup_tracker_allowed:
         update_setup_tracker_from_scan(
@@ -9986,6 +10008,7 @@ def run_master(
             daily_frames_by_symbol,
             ib,
         )
+        run_result["setup_tracker_updated"] = True
         logging.info(
             "Setup tracker updated for %s tracked symbol(s).",
             len(tracked_rows),
@@ -10196,6 +10219,7 @@ def run_master(
         f"Master AVWAP run complete. "
         f"Events: {OUTPUT_FILE}, AI state: {AI_STATE_FILE}, history: {HISTORY_FILE}"
     )
+    return run_result
 
 # ============================================================================
 # GUI

@@ -37,12 +37,15 @@ from market_session import (
     get_market_session_window,
 )
 from master_avwap import (
+    ATR_LENGTH,
     MasterAvwapGUI,
     connect_daily_data_client,
     disconnect_daily_data_client,
     fetch_daily_bars,
+    is_daily_data_client_connected,
     load_tickers,
     run_master,
+    update_setup_tracker_from_scan,
 )
 from project_paths import (
     APP_LOG_BACKUP_COUNT,
@@ -78,6 +81,7 @@ SLEEP_POLL_SECONDS = 30
 STALE_LOCK_MAX_AGE = timedelta(hours=12)
 GUI_TICK_MS = 15_000
 WATCHLIST_FILTER_CLIENT_ID = 1005
+SETUP_TRACKER_SYNC_CLIENT_ID = 1006
 WATCHLIST_FILTER_DAYS = 5
 WATCHLIST_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
@@ -547,10 +551,10 @@ def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
     return summary
 
 
-def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> dict[str, Any]:
+def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
     filter_summary = filter_watchlists_by_previous_day_levels()
     try:
-        run_master(
+        scan_result = run_master(
             use_shared_watchlists=True,
             update_setup_tracker=update_setup_tracker,
             require_ib_for_setup_tracker=True,
@@ -558,7 +562,18 @@ def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> dict[
     except Exception as exc:
         setattr(exc, "watchlist_filter_summary", filter_summary)
         raise
-    return filter_summary
+    return filter_summary, scan_result if isinstance(scan_result, dict) else {}
+
+
+def get_setup_tracker_refresh_slot_for_schedule(
+    schedule: list[str],
+    reference: datetime | None = None,
+) -> str | None:
+    if not schedule:
+        return None
+    scheduled_dt = reference or datetime.now()
+    default_refresh_slot = get_default_setup_tracker_refresh_slot(reference=scheduled_dt)
+    return default_refresh_slot if default_refresh_slot in schedule else schedule[-1]
 
 
 def should_update_setup_tracker_for_slot(
@@ -567,16 +582,121 @@ def should_update_setup_tracker_for_slot(
 ) -> bool:
     if not scheduled_slot:
         return False
-    if not schedule:
-        return False
-    scheduled_dt = slot_datetime(scheduled_slot)
-    default_refresh_slot = get_default_setup_tracker_refresh_slot(reference=scheduled_dt)
-    refresh_slot = (
-        default_refresh_slot
-        if default_refresh_slot in schedule
-        else schedule[-1]
+    refresh_slot = get_setup_tracker_refresh_slot_for_schedule(
+        schedule,
+        reference=slot_datetime(scheduled_slot),
     )
+    if not refresh_slot:
+        return False
     return scheduled_slot == refresh_slot
+
+
+def did_run_cover_setup_tracker_refresh_slot(
+    schedule: list[str],
+    trigger_slot: str | None,
+    finished_at: datetime,
+) -> bool:
+    if not trigger_slot:
+        return False
+    refresh_slot = get_setup_tracker_refresh_slot_for_schedule(schedule, reference=finished_at)
+    if not refresh_slot or refresh_slot == trigger_slot:
+        return False
+    trigger_dt = slot_datetime(trigger_slot, finished_at)
+    refresh_dt = slot_datetime(refresh_slot, finished_at)
+    return trigger_dt < refresh_dt <= finished_at
+
+
+def _tracked_symbols_from_scan_result(scan_result: dict[str, Any]) -> list[str]:
+    tracked_rows = scan_result.get("tracked_rows")
+    if not isinstance(tracked_rows, list):
+        return []
+    symbols = []
+    seen = set()
+    for row in tracked_rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+    return symbols
+
+
+def _tracker_days_needed_for_symbol(ai_state: dict[str, Any], symbol: str) -> int:
+    days_needed = ATR_LENGTH + 5
+    symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
+    symbol_entry = symbol_map.get(symbol, {}) if isinstance(symbol_map, dict) else {}
+    anchor_dates = []
+    for anchor_key in ("current_anchor", "previous_anchor"):
+        anchor_meta = symbol_entry.get(anchor_key)
+        if not isinstance(anchor_meta, dict):
+            continue
+        anchor_text = str(anchor_meta.get("date") or "").strip()
+        if not anchor_text:
+            continue
+        try:
+            anchor_dates.append(datetime.fromisoformat(anchor_text).date())
+        except ValueError:
+            continue
+    if not anchor_dates:
+        return days_needed
+    today_run = datetime.now().date()
+    max_span = max(max(0, (today_run - anchor_date).days) for anchor_date in anchor_dates)
+    return max(days_needed, max_span + 5)
+
+
+def sync_setup_tracker_from_scan_result(scan_result: dict[str, Any]) -> tuple[bool, str]:
+    if not isinstance(scan_result, dict):
+        return False, "Setup tracker sync skipped because the mini-PC scan payload was unavailable."
+    if scan_result.get("setup_tracker_updated"):
+        tracked_count = len(scan_result.get("tracked_rows") or [])
+        return True, f"Setup tracker already refreshed during the scan ({tracked_count} tracked setup(s))."
+
+    tracked_rows = scan_result.get("tracked_rows")
+    ai_state = scan_result.get("ai_state")
+    feature_rows_by_symbol = scan_result.get("feature_rows_by_symbol")
+    if not isinstance(tracked_rows, list) or not isinstance(ai_state, dict) or not isinstance(feature_rows_by_symbol, dict):
+        return False, "Setup tracker sync skipped because the mini-PC scan did not return reusable tracker data."
+
+    ib = connect_daily_data_client(SETUP_TRACKER_SYNC_CLIENT_ID)
+    try:
+        if not is_daily_data_client_connected(ib):
+            message = "Setup tracker sync skipped because the IBKR daily-bar client was unavailable."
+            logging.info(message)
+            return False, message
+
+        daily_frames_by_symbol = {}
+        missing_symbols = []
+        for symbol in _tracked_symbols_from_scan_result(scan_result):
+            df = fetch_daily_bars(ib, symbol, _tracker_days_needed_for_symbol(ai_state, symbol))
+            if df is None or df.empty:
+                missing_symbols.append(symbol)
+                continue
+            daily_frames_by_symbol[symbol] = df
+
+        if missing_symbols:
+            logging.warning(
+                "Mini-PC setup-tracker sync could not refetch IBKR daily bars for %s tracked symbol(s): %s",
+                len(missing_symbols),
+                ", ".join(missing_symbols[:12]) + (f" (+{len(missing_symbols) - 12} more)" if len(missing_symbols) > 12 else ""),
+            )
+
+        update_setup_tracker_from_scan(
+            tracked_rows,
+            ai_state,
+            feature_rows_by_symbol,
+            daily_frames_by_symbol,
+            ib,
+        )
+        message = f"Setup tracker synced from the mini-PC scan for {len(tracked_rows)} tracked setup(s)."
+        logging.info(message)
+        return True, message
+    except Exception as exc:
+        logging.exception("Mini-PC setup-tracker sync failed after the scan finished.")
+        return False, f"Setup tracker sync after the mini-PC scan failed: {exc}"
+    finally:
+        disconnect_daily_data_client(ib)
 
 
 def _extract_symbols_from_text(text: str) -> list[str]:
@@ -936,6 +1056,7 @@ def execute_scan(
     started_at = datetime.now()
     run_id = started_at.strftime("%Y%m%d-%H%M%S")
     update_setup_tracker = should_update_setup_tracker_for_slot(schedule, trigger_slot)
+    scan_result: dict[str, Any] = {}
     mark_slots_skipped_before_trigger(state, schedule, trigger_slot, started_at)
     save_state(state)
     write_status_file(
@@ -964,7 +1085,7 @@ def execute_scan(
                 "message": "Dry-run mode skipped the watchlist filter.",
             }
         else:
-            filter_summary = run_master_with_watchlist_filter(
+            filter_summary, scan_result = run_master_with_watchlist_filter(
                 update_setup_tracker=update_setup_tracker,
             )
     except Exception as exc:
@@ -975,6 +1096,22 @@ def execute_scan(
 
     finished_at = datetime.now()
     duration_seconds = round((finished_at - started_at).total_seconds(), 2)
+    tracker_sync_message = ""
+    if (
+        status == "success"
+        and not dry_run
+        and (
+            did_run_cover_setup_tracker_refresh_slot(schedule, trigger_slot, finished_at)
+            or (update_setup_tracker and not scan_result.get("setup_tracker_updated"))
+        )
+    ):
+        _, tracker_sync_message = sync_setup_tracker_from_scan_result(scan_result)
+        if isinstance(filter_summary, dict) and tracker_sync_message:
+            filter_summary = dict(filter_summary)
+            filter_summary["message"] = (
+                f"{filter_summary.get('message', '').strip()} "
+                f"Tracker sync: {tracker_sync_message}"
+            ).strip()
     run_record = {
         "run_id": run_id,
         "slot": trigger_slot,
@@ -1017,7 +1154,10 @@ def execute_scan(
         schedule,
         stop_at,
         phase="waiting",
-        note=f"Slot {trigger_slot} completed in {format_duration(duration_seconds)}.",
+        note=(
+            f"Slot {trigger_slot} completed in {format_duration(duration_seconds)}."
+            + (f" {tracker_sync_message}" if tracker_sync_message else "")
+        ),
     )
     logging.info("Finished mini-PC Master AVWAP run for slot %s in %s.", trigger_slot, format_duration(duration_seconds))
     return True
@@ -1049,7 +1189,7 @@ def maybe_shutdown_windows() -> None:
 
 def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
     state = load_state(schedule)
-    update_setup_tracker = False
+    update_setup_tracker = True
     write_status_file(
         state,
         schedule,
@@ -1065,6 +1205,7 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
     started_at = datetime.now()
     error_text = ""
     filter_summary = None
+    scan_result: dict[str, Any] = {}
     try:
         if dry_run:
             logging.info("Dry-run enabled; skipping live Master AVWAP scan.")
@@ -1074,7 +1215,7 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
                 "message": "Dry-run mode skipped the watchlist filter.",
             }
         else:
-            filter_summary = run_master_with_watchlist_filter(
+            filter_summary, scan_result = run_master_with_watchlist_filter(
                 update_setup_tracker=update_setup_tracker,
             )
         status = "success" if not dry_run else "dry_run"
@@ -1086,6 +1227,15 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
 
     finished_at = datetime.now()
     duration_seconds = round((finished_at - started_at).total_seconds(), 2)
+    tracker_sync_message = ""
+    if status == "success" and not dry_run:
+        _, tracker_sync_message = sync_setup_tracker_from_scan_result(scan_result)
+        if isinstance(filter_summary, dict) and tracker_sync_message:
+            filter_summary = dict(filter_summary)
+            filter_summary["message"] = (
+                f"{filter_summary.get('message', '').strip()} "
+                f"Tracker sync: {tracker_sync_message}"
+            ).strip()
     state.setdefault("runs", []).append(
         {
             "run_id": started_at.strftime("%Y%m%d-%H%M%S"),
@@ -1105,6 +1255,7 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
     save_state(state)
     note = (
         f"Immediate run completed in {format_duration(duration_seconds)}."
+        + (f" {tracker_sync_message}" if tracker_sync_message else "")
         if status != "failed"
         else f"Immediate run failed: {error_text}"
     )
@@ -1402,7 +1553,11 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
         run_id = started_at.strftime("%Y%m%d-%H%M%S")
         state = load_state(self.schedule)
         active_slot = scheduled_slot or "manual"
-        update_setup_tracker = should_update_setup_tracker_for_slot(self.schedule, scheduled_slot)
+        update_setup_tracker = (
+            True
+            if not scheduled_slot
+            else should_update_setup_tracker_for_slot(self.schedule, scheduled_slot)
+        )
 
         if scheduled_slot:
             mark_slots_skipped_before_trigger(state, self.schedule, scheduled_slot, started_at)
@@ -1433,6 +1588,8 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
             error_text = ""
             run_status = "dry_run" if self.dry_run else "success"
             filter_summary = None
+            scan_result: dict[str, Any] = {}
+            tracker_sync_message = ""
             try:
                 if self.dry_run:
                     logging.info("Dry-run enabled; skipping live Master AVWAP GUI mini-PC scan.")
@@ -1442,7 +1599,7 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                         "message": "Dry-run mode skipped the watchlist filter.",
                     }
                 else:
-                    filter_summary = run_master_with_watchlist_filter(
+                    filter_summary, scan_result = run_master_with_watchlist_filter(
                         update_setup_tracker=update_setup_tracker,
                     )
             except Exception as exc:
@@ -1453,6 +1610,20 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
 
             finished_at = datetime.now()
             duration_seconds = round((finished_at - started_at).total_seconds(), 2)
+            if run_status == "success" and not self.dry_run:
+                should_sync_tracker = (
+                    (not scheduled_slot)
+                    or did_run_cover_setup_tracker_refresh_slot(self.schedule, scheduled_slot, finished_at)
+                    or (update_setup_tracker and not scan_result.get("setup_tracker_updated"))
+                )
+                if should_sync_tracker:
+                    _, tracker_sync_message = sync_setup_tracker_from_scan_result(scan_result)
+                    if isinstance(filter_summary, dict) and tracker_sync_message:
+                        filter_summary = dict(filter_summary)
+                        filter_summary["message"] = (
+                            f"{filter_summary.get('message', '').strip()} "
+                            f"Tracker sync: {tracker_sync_message}"
+                        ).strip()
 
             def _finish():
                 state = load_state(self.schedule)
@@ -1504,6 +1675,8 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                         if scheduled_slot
                         else f"Manual shared-folder scan completed in {format_duration(duration_seconds)}."
                     )
+                    if tracker_sync_message:
+                        done_note = f"{done_note} {tracker_sync_message}"
 
                 save_state(state)
                 self.scheduler_state = state
