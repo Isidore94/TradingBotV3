@@ -2,6 +2,7 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -18,6 +19,7 @@ from master_avwap import (  # noqa: E402
     _find_tracker_stop_candidates,
     apply_recent_tracker_setup_family_adjustments,
     build_recent_tracker_setup_family_rows,
+    load_scan_earnings_context,
 )
 
 
@@ -84,6 +86,29 @@ def _build_tracker_setup(
 
 
 class MasterAvwapSetupTests(unittest.TestCase):
+    def test_load_scan_earnings_context_reuses_refreshed_earnings_lookup(self):
+        earnings_lookup = {"AAPL": ["2026-04-21"]}
+        latest_release_map = {
+            "AAPL": {
+                "earnings_date": "2026-04-21",
+                "release_session": "amc",
+            }
+        }
+
+        with patch("master_avwap.load_or_refresh_earnings", return_value=earnings_lookup) as refresh_mock, patch(
+            "master_avwap.load_latest_earnings_release_map",
+            return_value=latest_release_map,
+        ) as release_mock:
+            loaded_earnings, loaded_release_map = load_scan_earnings_context(["aapl", "AAPL"])
+
+        refresh_mock.assert_called_once_with(["AAPL"])
+        release_mock.assert_called_once_with(
+            ["AAPL"],
+            earnings_lookup=earnings_lookup,
+        )
+        self.assertIs(loaded_earnings, earnings_lookup)
+        self.assertIs(loaded_release_map, latest_release_map)
+
     def test_release_context_uses_datetime_dates_without_trade_date_column(self):
         df = _build_history_with_gap()
         earnings_date = df.iloc[20]["datetime"].date().isoformat()

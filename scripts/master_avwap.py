@@ -6786,6 +6786,21 @@ def load_latest_earnings_release_map(
     return release_map
 
 
+def load_scan_earnings_context(
+    symbols,
+) -> tuple[dict[str, list[str]], dict[str, dict | None]]:
+    normalized_symbols = _ordered_unique_symbols(symbols)
+    if not normalized_symbols:
+        return {}, {}
+
+    earnings_data = load_or_refresh_earnings(normalized_symbols)
+    latest_release_map = load_latest_earnings_release_map(
+        normalized_symbols,
+        earnings_lookup=earnings_data,
+    )
+    return earnings_data, latest_release_map
+
+
 def _load_symbol_daily_history_frame(symbol: str):
     ticker_obj = yf.Ticker(symbol)
     df = fetch_daily_bars(None, symbol, 130)
@@ -10378,8 +10393,7 @@ def backfill_setup_tracker_from_recent_sessions(
         logging.warning("Could not determine recent market sessions for tracker backfill.")
         return {"dates": [], "watchlists": {}}
 
-    earnings_data = load_or_refresh_earnings(symbols)
-    latest_release_map = load_latest_earnings_release_map(symbols, earnings_lookup=earnings_data)
+    earnings_data, latest_release_map = load_scan_earnings_context(symbols)
     history_state: dict[str, list[dict]] = {}
     daily_frames_by_symbol: dict[str, pd.DataFrame] = {}
     earliest_eval_date = min(evaluation_dates)
@@ -10544,7 +10558,7 @@ def run_master(
     prev_cache = load_json(PREV_CACHE_FILE, default={})
     history = load_history()
 
-    earnings_data = load_or_refresh_earnings(symbols)
+    earnings_data, latest_release_map = load_scan_earnings_context(symbols)
     today_iso = datetime.now().date().isoformat()
     earnings_cache_updated = False
 
