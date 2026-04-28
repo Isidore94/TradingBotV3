@@ -15,7 +15,7 @@ import threading
 import logging
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 import zoneinfo
 import queue
 import tkinter as tk
@@ -57,6 +57,10 @@ from project_paths import (
     BOUNCE_LOG_FILE,
     TRADING_BOT_LOG_FILE,
     INTRADAY_BOUNCES_FILE,
+    INTRADAY_BOUNCE_CANDIDATES_FILE,
+    INTRADAY_BOUNCE_OUTCOMES_FILE,
+    INTRADAY_BOUNCE_OUTCOME_STATE_FILE,
+    INTRADAY_BOUNCE_FEEDBACK_FILE,
     AVWAP_SIGNALS_FILE,
     RRS_STRENGTH_LOG_FILE,
     RRS_GROUP_STRENGTH_LOG_FILE,
@@ -80,6 +84,10 @@ SHORTS_FILENAME = SHORTS_FILE
 BOUNCE_LOG_FILENAME = BOUNCE_LOG_FILE
 TRADING_BOT_LOG_FILENAME = TRADING_BOT_LOG_FILE
 INTRADAY_BOUNCES_CSV = INTRADAY_BOUNCES_FILE
+INTRADAY_BOUNCE_CANDIDATES_CSV = INTRADAY_BOUNCE_CANDIDATES_FILE
+INTRADAY_BOUNCE_OUTCOMES_CSV = INTRADAY_BOUNCE_OUTCOMES_FILE
+INTRADAY_BOUNCE_OUTCOME_STATE_JSON = INTRADAY_BOUNCE_OUTCOME_STATE_FILE
+INTRADAY_BOUNCE_FEEDBACK_CSV = INTRADAY_BOUNCE_FEEDBACK_FILE
 MASTER_AVWAP_SIGNALS_FILENAME = AVWAP_SIGNALS_FILE
 MASTER_AVWAP_FOCUS_FILENAME = MASTER_AVWAP_FOCUS_FILE
 STRENGTH_SCAN_LOG_FILENAME = RRS_STRENGTH_LOG_FILE
@@ -295,6 +303,92 @@ BOUNCE_MIN_RANGE_TO_MEDIAN = 1.05
 BOUNCE_VOLUME_LOOKBACK_BARS = 6
 BOUNCE_MIN_RELATIVE_VOLUME = 1.10
 BOUNCE_CONFIRMATION_MAX_CANDLES = 3
+BOUNCE_LEARNING_SCHEMA_VERSION = 1
+BOUNCE_OUTCOME_MILESTONE_BARS = (1, 3, 6, 12)
+BOUNCE_CANDIDATE_EVENT_COLUMNS = [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "logged_at",
+    "trade_date",
+    "symbol",
+    "direction",
+    "bounce_types",
+    "reason",
+    "score",
+    "entry_trigger",
+    "entry_price",
+    "stop_price",
+    "risk_per_share",
+    "target_1r",
+    "target_2r",
+    "atr",
+    "threshold",
+    "rrs_timeframe",
+    "rrs_spy",
+    "rrs_sector",
+    "rrs_industry",
+    "sector",
+    "industry",
+    "sector_etf",
+    "industry_etf",
+    "market_environment",
+    "candles_waited",
+    "levels_json",
+    "candle_json",
+    "metrics_json",
+    "context_json",
+]
+BOUNCE_OUTCOME_COLUMNS = [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "logged_at",
+    "trade_date",
+    "symbol",
+    "direction",
+    "entry_time",
+    "entry_price",
+    "stop_price",
+    "risk_per_share",
+    "bars_elapsed",
+    "minutes_elapsed",
+    "close_r",
+    "mfe_r",
+    "mae_r",
+    "best_price",
+    "worst_price",
+    "target_1r_hit",
+    "target_2r_hit",
+    "stop_hit",
+    "status",
+    "milestone_bar",
+    "context_json",
+]
+BOUNCE_FEEDBACK_COLUMNS = [
+    "schema_version",
+    "feedback_id",
+    "logged_at",
+    "source",
+    "rating",
+    "reason",
+    "event_id",
+    "event_type",
+    "trade_date",
+    "symbol",
+    "direction",
+    "bounce_types",
+    "alert_time",
+    "alert_message",
+    "entry_price",
+    "stop_price",
+    "risk_per_share",
+    "score",
+    "levels_json",
+    "candle_json",
+    "metrics_json",
+    "context_json",
+]
 VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES = 4
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
@@ -464,6 +558,139 @@ def _parse_iso_date_safe(value):
         return datetime.fromisoformat(text).date()
     except ValueError:
         return None
+
+
+def _feedback_json_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
+    except TypeError:
+        return str(value)
+
+
+def _normalize_bounce_feedback_context(context):
+    if not isinstance(context, dict):
+        context = {}
+    normalized = dict(context)
+    display_text = str(
+        normalized.get("alert_message")
+        or normalized.get("display_text")
+        or normalized.get("text")
+        or ""
+    ).strip()
+    if display_text:
+        normalized["alert_message"] = display_text
+
+    if not normalized.get("symbol") and display_text:
+        match = re.match(
+            r"^\s*(?P<symbol>[A-Z0-9.\-]+)\s*:\s*Bounce confirmed\s*\((?P<direction>long|short)\)\s*from\s*(?P<levels>.+?)\s*$",
+            display_text,
+            re.IGNORECASE,
+        )
+        if match:
+            normalized["symbol"] = match.group("symbol").upper()
+            normalized["direction"] = match.group("direction").lower()
+            if not normalized.get("bounce_types"):
+                level_text = match.group("levels")
+                levels = [
+                    item
+                    for item in re.findall(r"[A-Za-z0-9_]+", level_text)
+                    if item.lower() not in {"from", "long", "short"}
+                ]
+                normalized["bounce_types"] = ";".join(levels)
+
+    normalized["symbol"] = str(normalized.get("symbol") or "").strip().upper()
+    normalized["direction"] = str(normalized.get("direction") or "").strip().lower()
+    normalized["event_id"] = str(normalized.get("event_id") or "").strip()
+    normalized["event_type"] = str(normalized.get("event_type") or "confirmed").strip() or "confirmed"
+    normalized["trade_date"] = str(normalized.get("trade_date") or get_market_local_now().date().isoformat()).strip()
+    normalized["bounce_types"] = str(normalized.get("bounce_types") or "").strip()
+    normalized["alert_time"] = str(normalized.get("alert_time") or "").strip()
+    return normalized
+
+
+def _normalize_alert_message_payload(msg):
+    if isinstance(msg, dict):
+        display_text = str(
+            msg.get("text")
+            or msg.get("display_text")
+            or msg.get("message")
+            or ""
+        ).strip()
+        feedback = msg.get("feedback")
+        if isinstance(feedback, dict):
+            feedback_context = dict(feedback)
+            if display_text and not feedback_context.get("alert_message"):
+                feedback_context["alert_message"] = display_text
+            return display_text, _normalize_bounce_feedback_context(feedback_context)
+        return display_text, {}
+    return str(msg), {}
+
+
+def record_bounce_feedback(feedback_context, rating, reason="", source="gui") -> Path:
+    context = _normalize_bounce_feedback_context(feedback_context)
+    rating = str(rating or "").strip().lower()
+    if rating in {"ok", "yes", "confirm", "confirmed"}:
+        rating = "good"
+    elif rating in {"bad", "wrong", "not_good", "issue"}:
+        rating = "issue"
+    if rating not in {"good", "issue"}:
+        rating = rating or "unspecified"
+
+    logged_at = get_market_local_now().isoformat(timespec="seconds")
+    feedback_key = "|".join(
+        [
+            context.get("event_id") or context.get("symbol") or "bounce",
+            context.get("direction") or "",
+            context.get("alert_time") or "",
+            logged_at,
+            rating,
+        ]
+    )
+    feedback_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", feedback_key).strip("_")[:180]
+    row = {
+        "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
+        "feedback_id": feedback_id,
+        "logged_at": logged_at,
+        "source": str(source or "gui").strip() or "gui",
+        "rating": rating,
+        "reason": str(reason or "").strip(),
+        "event_id": context.get("event_id", ""),
+        "event_type": context.get("event_type", ""),
+        "trade_date": context.get("trade_date", ""),
+        "symbol": context.get("symbol", ""),
+        "direction": context.get("direction", ""),
+        "bounce_types": context.get("bounce_types", ""),
+        "alert_time": context.get("alert_time", ""),
+        "alert_message": context.get("alert_message", ""),
+        "entry_price": context.get("entry_price", ""),
+        "stop_price": context.get("stop_price", ""),
+        "risk_per_share": context.get("risk_per_share", ""),
+        "score": context.get("score", ""),
+        "levels_json": _feedback_json_value(context.get("levels_json", "")),
+        "candle_json": _feedback_json_value(context.get("candle_json", "")),
+        "metrics_json": _feedback_json_value(context.get("metrics_json", "")),
+        "context_json": _feedback_json_value(context.get("context_json", "")),
+    }
+    try:
+        INTRADAY_BOUNCE_FEEDBACK_CSV.parent.mkdir(parents=True, exist_ok=True)
+        write_header = (
+            not INTRADAY_BOUNCE_FEEDBACK_CSV.exists()
+            or INTRADAY_BOUNCE_FEEDBACK_CSV.stat().st_size == 0
+        )
+        with INTRADAY_BOUNCE_FEEDBACK_CSV.open("a", newline="", encoding="utf-8") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=BOUNCE_FEEDBACK_COLUMNS, extrasaction="ignore")
+            if write_header:
+                writer.writeheader()
+            writer.writerow({key: row.get(key, "") for key in BOUNCE_FEEDBACK_COLUMNS})
+    except Exception as exc:
+        logging.error(f"Failed writing bounce feedback to {INTRADAY_BOUNCE_FEEDBACK_CSV}: {exc}")
+        raise
+    return INTRADAY_BOUNCE_FEEDBACK_CSV
+
 
 def reset_log_files():
     try:
@@ -714,6 +941,8 @@ class BounceBot(EWrapper, EClient):
 
         self.alerted_symbols = set()
         self.bounce_candidates = {}  # Track candidate bounces
+        self.pending_bounce_outcomes = self._load_pending_bounce_outcomes()
+        self.logged_near_miss_events = set()
         self.request_queue = RequestQueue()
         self.gui_callback = gui_callback  # Callback to update the GUI
         
@@ -752,6 +981,552 @@ class BounceBot(EWrapper, EClient):
         self.industry_map_data = _load_industry_etf_map_file()
         self.symbol_classification_cache = {}
         self._load_symbol_classification_cache()
+
+
+    def _load_pending_bounce_outcomes(self):
+        if not INTRADAY_BOUNCE_OUTCOME_STATE_JSON.exists():
+            return {}
+        try:
+            payload = json.loads(INTRADAY_BOUNCE_OUTCOME_STATE_JSON.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        pending = payload.get("pending", {}) if isinstance(payload, dict) else {}
+        return pending if isinstance(pending, dict) else {}
+
+    def _save_pending_bounce_outcomes(self):
+        try:
+            INTRADAY_BOUNCE_OUTCOME_STATE_JSON.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
+                "updated_at": get_market_local_now().isoformat(timespec="seconds"),
+                "pending": self.pending_bounce_outcomes,
+            }
+            INTRADAY_BOUNCE_OUTCOME_STATE_JSON.write_text(
+                json.dumps(payload, indent=2, default=str),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logging.debug(f"Failed saving pending bounce outcome state: {exc}")
+
+    def _append_learning_row(self, path, fieldnames, row):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_header = not path.exists() or path.stat().st_size == 0
+            with path.open("a", newline="", encoding="utf-8") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
+                if write_header:
+                    writer.writeheader()
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
+        except Exception as exc:
+            logging.debug(f"Failed writing learning row to {path}: {exc}")
+
+    def _json_for_learning(self, value):
+        def sanitize(item):
+            if isinstance(item, pd.Series):
+                return sanitize(item.to_dict())
+            if isinstance(item, dict):
+                return {str(key): sanitize(val) for key, val in item.items()}
+            if isinstance(item, (list, tuple, set)):
+                return [sanitize(val) for val in item]
+            if isinstance(item, (datetime, date)):
+                return item.isoformat()
+            try:
+                if pd.isna(item):
+                    return None
+            except Exception:
+                pass
+            if isinstance(item, float) and (math.isnan(item) or math.isinf(item)):
+                return None
+            return item
+
+        # Use `default=str` so unknown/non-JSON-native objects are converted
+        # to a string representation instead of raising TypeError.
+        return json.dumps(sanitize(value), ensure_ascii=True, sort_keys=True, default=str)
+
+    def _to_float_or_blank(self, value):
+        try:
+            if value is None or pd.isna(value):
+                return ""
+        except Exception:
+            if value is None:
+                return ""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return ""
+
+    def _parse_bar_time(self, value):
+        if isinstance(value, datetime):
+            return value
+        parsed = pd.to_datetime(str(value or ""), format="%Y%m%d  %H:%M:%S", errors="coerce")
+        if pd.isna(parsed):
+            parsed = pd.to_datetime(str(value or ""), errors="coerce")
+        if pd.isna(parsed):
+            return None
+        return parsed.to_pydatetime()
+
+    def _extract_rrs_entry(self, payload, key, symbol):
+        if not isinstance(payload, dict):
+            return {}
+        symbol = str(symbol or "").strip().upper()
+        for row in payload.get(key, []) or []:
+            try:
+                signal, row_symbol, rrs_value, power_index = row[:4]
+            except Exception:
+                continue
+            if str(row_symbol or "").strip().upper() == symbol:
+                return {
+                    "signal": signal,
+                    "rrs": self._to_float_or_blank(rrs_value),
+                    "power_index": self._to_float_or_blank(power_index),
+                }
+        return {}
+
+    def _build_bounce_context_snapshot(self, symbol, direction):
+        payload = self.latest_rrs_payload if isinstance(self.latest_rrs_payload, dict) else {}
+        classification = self.symbol_classification_cache.get(str(symbol or "").strip().upper(), {})
+        sector_key = classification.get("sectorKey", "") if isinstance(classification, dict) else ""
+        industry_key = classification.get("industryKey", "") if isinstance(classification, dict) else ""
+        sector_etf = resolve_sector_etf(sector_key, self.sector_etf_map) if sector_key else ""
+        industry_etf = resolve_industry_ref_etf(industry_key, sector_key) if industry_key else ""
+        spy_rrs = self._extract_rrs_entry(payload, "results", symbol)
+        sector_rrs = self._extract_rrs_entry(payload, "results_sector", symbol)
+        industry_rrs = self._extract_rrs_entry(payload, "results_industry", symbol)
+        symbol_context = {}
+        for entry in payload.get("symbol_context", []) or []:
+            if str(entry.get("symbol") or "").strip().upper() == str(symbol or "").strip().upper():
+                symbol_context = dict(entry)
+                break
+        return {
+            "rrs_timeframe": payload.get("timeframe_key", ""),
+            "rrs_spy": spy_rrs.get("rrs", ""),
+            "rrs_spy_signal": spy_rrs.get("signal", ""),
+            "rrs_sector": sector_rrs.get("rrs", ""),
+            "rrs_sector_signal": sector_rrs.get("signal", ""),
+            "rrs_industry": industry_rrs.get("rrs", ""),
+            "rrs_industry_signal": industry_rrs.get("signal", ""),
+            "sector": classification.get("sector", "") if isinstance(classification, dict) else "",
+            "industry": classification.get("industry", "") if isinstance(classification, dict) else "",
+            "sector_etf": sector_etf,
+            "industry_etf": industry_etf,
+            "market_environment": self.get_market_environment(),
+            "watchlist_bias": "long" if symbol in self.longs else "short" if symbol in self.shorts else "",
+            "symbol_context": symbol_context,
+        }
+
+    def _make_bounce_event_id(self, symbol, direction, bounce_candle, levels):
+        candle_time = ""
+        if isinstance(bounce_candle, dict):
+            candle_time = str(bounce_candle.get("time") or "")
+        level_key = "-".join(sorted(str(key) for key in (levels or {}).keys()))
+        raw = f"{symbol}|{direction}|{candle_time}|{level_key}"
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("_")
+
+    def _build_bounce_trade_plan(self, direction, levels, bounce_candle, current_candle=None):
+        candle = current_candle if current_candle is not None else bounce_candle
+        if isinstance(candle, pd.Series):
+            candle = candle.to_dict()
+        if isinstance(bounce_candle, pd.Series):
+            bounce_candle = bounce_candle.to_dict()
+        candle = candle if isinstance(candle, dict) else {}
+        bounce_candle = bounce_candle if isinstance(bounce_candle, dict) else {}
+        entry_price = self._to_float_or_blank(candle.get("close"))
+        if entry_price == "":
+            entry_price = self._to_float_or_blank(bounce_candle.get("close"))
+        if direction == "long":
+            stop_price = self._to_float_or_blank(bounce_candle.get("low"))
+            entry_trigger = self._to_float_or_blank(bounce_candle.get("high"))
+            risk = float(entry_price) - float(stop_price) if entry_price != "" and stop_price != "" else ""
+            target_1r = float(entry_price) + risk if risk != "" and risk > 0 else ""
+            target_2r = float(entry_price) + (2 * risk) if risk != "" and risk > 0 else ""
+        else:
+            stop_price = self._to_float_or_blank(bounce_candle.get("high"))
+            entry_trigger = self._to_float_or_blank(bounce_candle.get("low"))
+            risk = float(stop_price) - float(entry_price) if entry_price != "" and stop_price != "" else ""
+            target_1r = float(entry_price) - risk if risk != "" and risk > 0 else ""
+            target_2r = float(entry_price) - (2 * risk) if risk != "" and risk > 0 else ""
+        if risk != "" and risk <= 0:
+            risk = ""
+            target_1r = ""
+            target_2r = ""
+        return {
+            "entry_trigger": entry_trigger,
+            "entry_price": entry_price,
+            "stop_price": stop_price,
+            "risk_per_share": risk,
+            "target_1r": target_1r,
+            "target_2r": target_2r,
+        }
+
+    def _score_bounce_candidate_snapshot(self, direction, levels, context):
+        score = 10 * len(levels or {})
+        level_names = set((levels or {}).keys())
+        if "vwap_eod_confluence" in level_names:
+            score += 14
+        if "impulse_retest_vwap_eod" in level_names:
+            score += 18
+        if any(name in level_names for name in ("prev_day_high", "prev_day_low")):
+            score += 8
+        rrs_spy = context.get("rrs_spy")
+        try:
+            rrs_value = float(rrs_spy)
+            if direction == "long" and rrs_value > 0:
+                score += min(12, max(0, rrs_value * 2))
+            elif direction == "short" and rrs_value < 0:
+                score += min(12, max(0, abs(rrs_value) * 2))
+        except (TypeError, ValueError):
+            pass
+        if context.get("rrs_sector") != "":
+            score += 4
+        if context.get("rrs_industry") != "":
+            score += 4
+        return round(float(score), 2)
+
+    def _log_bounce_candidate_event(
+        self,
+        event_type,
+        symbol,
+        direction,
+        levels,
+        bounce_candle,
+        current_candle=None,
+        threshold="",
+        reason="",
+        candidate_id="",
+        candles_waited=0,
+    ):
+        if isinstance(current_candle, pd.Series):
+            current_candle = current_candle.to_dict()
+        if isinstance(bounce_candle, pd.Series):
+            bounce_candle = bounce_candle.to_dict()
+        bounce_candle = bounce_candle if isinstance(bounce_candle, dict) else {}
+        current_candle = current_candle if isinstance(current_candle, dict) else {}
+        event_id = candidate_id or self._make_bounce_event_id(symbol, direction, bounce_candle, levels)
+        trade_dt = self._parse_bar_time(current_candle.get("time") or bounce_candle.get("time"))
+        trade_date = trade_dt.date().isoformat() if trade_dt else get_market_local_now().date().isoformat()
+        context = self._build_bounce_context_snapshot(symbol, direction)
+        plan = self._build_bounce_trade_plan(direction, levels, bounce_candle, current_candle or None)
+        atr = self.atr_cache.get(symbol)
+        metrics = self.symbol_metrics.get(symbol, {})
+        row = {
+            "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
+            "event_id": event_id,
+            "event_type": event_type,
+            "logged_at": get_market_local_now().isoformat(timespec="seconds"),
+            "trade_date": trade_date,
+            "symbol": symbol,
+            "direction": direction,
+            "bounce_types": ";".join(sorted(str(key) for key in (levels or {}).keys())),
+            "reason": reason,
+            "score": self._score_bounce_candidate_snapshot(direction, levels, context),
+            "entry_trigger": plan["entry_trigger"],
+            "entry_price": plan["entry_price"],
+            "stop_price": plan["stop_price"],
+            "risk_per_share": plan["risk_per_share"],
+            "target_1r": plan["target_1r"],
+            "target_2r": plan["target_2r"],
+            "atr": self._to_float_or_blank(atr),
+            "threshold": self._to_float_or_blank(threshold),
+            "rrs_timeframe": context.get("rrs_timeframe", ""),
+            "rrs_spy": context.get("rrs_spy", ""),
+            "rrs_sector": context.get("rrs_sector", ""),
+            "rrs_industry": context.get("rrs_industry", ""),
+            "sector": context.get("sector", ""),
+            "industry": context.get("industry", ""),
+            "sector_etf": context.get("sector_etf", ""),
+            "industry_etf": context.get("industry_etf", ""),
+            "market_environment": context.get("market_environment", ""),
+            "candles_waited": int(candles_waited or 0),
+            "levels_json": self._json_for_learning(levels or {}),
+            "candle_json": self._json_for_learning({"bounce": bounce_candle, "current": current_candle}),
+            "metrics_json": self._json_for_learning(metrics),
+            "context_json": self._json_for_learning(context),
+        }
+        self._append_learning_row(INTRADAY_BOUNCE_CANDIDATES_CSV, BOUNCE_CANDIDATE_EVENT_COLUMNS, row)
+        return row
+
+    def _build_bounce_feedback_alert_payload(self, display_text, candidate_row):
+        row = candidate_row if isinstance(candidate_row, dict) else {}
+        feedback_context = {
+            "event_id": row.get("event_id", ""),
+            "event_type": row.get("event_type", "confirmed"),
+            "trade_date": row.get("trade_date", ""),
+            "symbol": row.get("symbol", ""),
+            "direction": row.get("direction", ""),
+            "bounce_types": row.get("bounce_types", ""),
+            "alert_message": display_text,
+            "entry_price": row.get("entry_price", ""),
+            "stop_price": row.get("stop_price", ""),
+            "risk_per_share": row.get("risk_per_share", ""),
+            "score": row.get("score", ""),
+            "levels_json": row.get("levels_json", ""),
+            "candle_json": row.get("candle_json", ""),
+            "metrics_json": row.get("metrics_json", ""),
+            "context_json": row.get("context_json", ""),
+        }
+        return {
+            "kind": "bounce_alert",
+            "text": str(display_text or ""),
+            "feedback": feedback_context,
+        }
+
+    def _collect_near_miss_levels(self, symbol, direction, candle):
+        metrics = self.symbol_metrics.get(symbol, {})
+        atr = self.atr_cache.get(symbol)
+        if not metrics or atr is None:
+            return {}
+        if isinstance(candle, pd.Series):
+            candle = candle.to_dict()
+        high_value = self._to_float_or_blank(candle.get("high"))
+        low_value = self._to_float_or_blank(candle.get("low"))
+        if high_value == "" or low_value == "":
+            return {}
+        threshold = THRESHOLD_MULTIPLIER * float(atr)
+
+        level_specs = [
+            ("vwap", "std_vwap"),
+            ("dynamic_vwap", "dynamic_vwap"),
+            ("eod_vwap", "eod_vwap"),
+            ("ema_8", "ema_8"),
+            ("ema_15", "ema_15"),
+            ("ema_21", "ema_21"),
+        ]
+        if direction == "long":
+            level_specs.extend(
+                [
+                    ("prev_day_high", "prev_high"),
+                    ("vwap_upper_band", "vwap_1stdev_upper"),
+                    ("dynamic_vwap_upper_band", "dynamic_vwap_1stdev_upper"),
+                    ("eod_vwap_upper_band", "eod_vwap_1stdev_upper"),
+                ]
+            )
+        else:
+            level_specs.extend(
+                [
+                    ("prev_day_low", "prev_low"),
+                    ("vwap_lower_band", "vwap_1stdev_lower"),
+                    ("dynamic_vwap_lower_band", "dynamic_vwap_1stdev_lower"),
+                    ("eod_vwap_lower_band", "eod_vwap_1stdev_lower"),
+                ]
+            )
+
+        near_levels = {}
+        for bounce_type, metric_key in level_specs:
+            if not self.is_bounce_type_enabled(bounce_type):
+                continue
+            level_value = metrics.get(metric_key)
+            if level_value is None:
+                continue
+            try:
+                level_float = float(level_value)
+            except (TypeError, ValueError):
+                continue
+            if float(high_value) >= (level_float - threshold) and float(low_value) <= (level_float + threshold):
+                near_levels[bounce_type] = level_float
+        if (
+            self.is_bounce_type_enabled("vwap_eod_confluence")
+            and metrics.get("std_vwap") is not None
+            and metrics.get("eod_vwap") is not None
+        ):
+            std_vwap = float(metrics["std_vwap"])
+            eod_vwap = float(metrics["eod_vwap"])
+            if abs(std_vwap - eod_vwap) <= CONFLUENCE_MAX_SPREAD_ATR * float(atr):
+                low_zone, high_zone = sorted([std_vwap, eod_vwap])
+                if float(high_value) >= (low_zone - threshold) and float(low_value) <= (high_zone + threshold):
+                    near_levels["vwap_eod_confluence"] = (low_zone + high_zone) / 2.0
+        return near_levels
+
+    def _maybe_log_near_miss_bounce(self, symbol, direction, candle):
+        near_levels = self._collect_near_miss_levels(symbol, direction, candle)
+        if not near_levels:
+            return
+        candle_time = str(candle.get("time") if isinstance(candle, dict) else "")
+        level_key = "-".join(sorted(near_levels))
+        cache_key = f"{symbol}|{direction}|{candle_time}|{level_key}"
+        if cache_key in self.logged_near_miss_events:
+            return
+        self.logged_near_miss_events.add(cache_key)
+        self._log_bounce_candidate_event(
+            "near_miss",
+            symbol,
+            direction,
+            near_levels,
+            candle,
+            candle,
+            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+            reason="Touched an enabled level but did not pass all bounce-quality or confirmation setup checks.",
+            candidate_id=self._make_bounce_event_id(symbol, direction, candle, near_levels),
+            candles_waited=0,
+        )
+
+    def _register_bounce_outcome(self, symbol, direction, levels, bounce_candle, current_candle, candidate_id):
+        if isinstance(current_candle, pd.Series):
+            current_candle = current_candle.to_dict()
+        if isinstance(bounce_candle, pd.Series):
+            bounce_candle = bounce_candle.to_dict()
+        current_candle = current_candle if isinstance(current_candle, dict) else {}
+        bounce_candle = bounce_candle if isinstance(bounce_candle, dict) else {}
+        plan = self._build_bounce_trade_plan(direction, levels, bounce_candle, current_candle)
+        if plan.get("risk_per_share") == "":
+            return
+        entry_dt = self._parse_bar_time(current_candle.get("time"))
+        if entry_dt is None:
+            return
+        context = self._build_bounce_context_snapshot(symbol, direction)
+        event_id = candidate_id or self._make_bounce_event_id(symbol, direction, bounce_candle, levels)
+        self.pending_bounce_outcomes[event_id] = {
+            "event_id": event_id,
+            "symbol": symbol,
+            "direction": direction,
+            "trade_date": entry_dt.date().isoformat(),
+            "entry_time": entry_dt.isoformat(timespec="seconds"),
+            "entry_price": float(plan["entry_price"]),
+            "stop_price": float(plan["stop_price"]),
+            "risk_per_share": float(plan["risk_per_share"]),
+            "target_1r": float(plan["target_1r"]) if plan["target_1r"] != "" else None,
+            "target_2r": float(plan["target_2r"]) if plan["target_2r"] != "" else None,
+            "milestones_logged": [],
+            "context": context,
+        }
+        self._save_pending_bounce_outcomes()
+        self._append_bounce_outcome_row(self.pending_bounce_outcomes[event_id], "registered", 0, None, pd.DataFrame())
+
+    def _append_bounce_outcome_row(self, state, event_type, bars_elapsed, milestone_bar, rows_after_entry):
+        direction = state.get("direction")
+        entry_price = float(state.get("entry_price"))
+        risk = float(state.get("risk_per_share"))
+        best_price = ""
+        worst_price = ""
+        close_r = ""
+        mfe_r = ""
+        mae_r = ""
+        target_1r_hit = False
+        target_2r_hit = False
+        stop_hit = False
+        minutes_elapsed = ""
+        status = "open"
+        if rows_after_entry is not None and not rows_after_entry.empty and risk > 0:
+            high_max = float(rows_after_entry["high"].max())
+            low_min = float(rows_after_entry["low"].min())
+            last_row = rows_after_entry.iloc[-1]
+            last_close = float(last_row["close"])
+            last_dt = last_row.get("datetime")
+            entry_dt = self._parse_bar_time(state.get("entry_time"))
+            if entry_dt is not None and isinstance(last_dt, pd.Timestamp):
+                minutes_elapsed = int((last_dt.to_pydatetime() - entry_dt).total_seconds() // 60)
+            if direction == "long":
+                best_price = high_max
+                worst_price = low_min
+                mfe_r = (high_max - entry_price) / risk
+                mae_r = (low_min - entry_price) / risk
+                close_r = (last_close - entry_price) / risk
+                target_1r_hit = state.get("target_1r") is not None and high_max >= float(state["target_1r"])
+                target_2r_hit = state.get("target_2r") is not None and high_max >= float(state["target_2r"])
+                stop_hit = low_min <= float(state.get("stop_price"))
+            else:
+                best_price = low_min
+                worst_price = high_max
+                mfe_r = (entry_price - low_min) / risk
+                mae_r = (entry_price - high_max) / risk
+                close_r = (entry_price - last_close) / risk
+                target_1r_hit = state.get("target_1r") is not None and low_min <= float(state["target_1r"])
+                target_2r_hit = state.get("target_2r") is not None and low_min <= float(state["target_2r"])
+                stop_hit = high_max >= float(state.get("stop_price"))
+            if stop_hit and target_2r_hit:
+                status = "stop_and_target2_seen"
+            elif target_2r_hit:
+                status = "target2_seen"
+            elif stop_hit:
+                status = "stop_seen"
+            elif bars_elapsed >= max(BOUNCE_OUTCOME_MILESTONE_BARS):
+                status = "complete"
+        row = {
+            "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
+            "event_id": state.get("event_id"),
+            "event_type": event_type,
+            "logged_at": get_market_local_now().isoformat(timespec="seconds"),
+            "trade_date": state.get("trade_date"),
+            "symbol": state.get("symbol"),
+            "direction": direction,
+            "entry_time": state.get("entry_time"),
+            "entry_price": entry_price,
+            "stop_price": state.get("stop_price"),
+            "risk_per_share": risk,
+            "bars_elapsed": int(bars_elapsed or 0),
+            "minutes_elapsed": minutes_elapsed,
+            "close_r": round(close_r, 4) if close_r != "" else "",
+            "mfe_r": round(mfe_r, 4) if mfe_r != "" else "",
+            "mae_r": round(mae_r, 4) if mae_r != "" else "",
+            "best_price": best_price,
+            "worst_price": worst_price,
+            "target_1r_hit": bool(target_1r_hit),
+            "target_2r_hit": bool(target_2r_hit),
+            "stop_hit": bool(stop_hit),
+            "status": status,
+            "milestone_bar": "" if milestone_bar is None else int(milestone_bar),
+            "context_json": self._json_for_learning(state.get("context", {})),
+        }
+        self._append_learning_row(INTRADAY_BOUNCE_OUTCOMES_CSV, BOUNCE_OUTCOME_COLUMNS, row)
+        return status
+
+    def _update_pending_bounce_outcomes(self, symbol, df):
+        if not self.pending_bounce_outcomes or df is None or df.empty:
+            return
+        if "datetime" not in df.columns:
+            return
+        symbol_key = str(symbol or "").strip().upper()
+        changed = False
+        for event_id, state in list(self.pending_bounce_outcomes.items()):
+            if str(state.get("symbol") or "").strip().upper() != symbol_key:
+                continue
+            entry_dt = self._parse_bar_time(state.get("entry_time"))
+            if entry_dt is None:
+                self.pending_bounce_outcomes.pop(event_id, None)
+                changed = True
+                continue
+            rows_after_entry = df[df["datetime"] > pd.Timestamp(entry_dt)].copy()
+            if rows_after_entry.empty:
+                continue
+            bars_elapsed = len(rows_after_entry)
+            logged = set(int(item) for item in state.get("milestones_logged", []) if str(item).isdigit())
+            status = "open"
+            for milestone in BOUNCE_OUTCOME_MILESTONE_BARS:
+                if bars_elapsed < milestone or milestone in logged:
+                    continue
+                milestone_rows = rows_after_entry.head(milestone)
+                status = self._append_bounce_outcome_row(
+                    state,
+                    f"{milestone}_bar",
+                    bars_elapsed=milestone,
+                    milestone_bar=milestone,
+                    rows_after_entry=milestone_rows,
+                )
+                logged.add(milestone)
+                changed = True
+            state["milestones_logged"] = sorted(logged)
+            if status == "open":
+                status = self._append_bounce_outcome_row(
+                    state,
+                    "update",
+                    bars_elapsed=bars_elapsed,
+                    milestone_bar=None,
+                    rows_after_entry=rows_after_entry,
+                )
+            if (
+                status in {"target2_seen", "stop_seen", "stop_and_target2_seen", "complete"}
+                or bars_elapsed >= max(BOUNCE_OUTCOME_MILESTONE_BARS)
+            ):
+                self._append_bounce_outcome_row(
+                    state,
+                    "final",
+                    bars_elapsed=bars_elapsed,
+                    milestone_bar=None,
+                    rows_after_entry=rows_after_entry,
+                )
+                self.pending_bounce_outcomes.pop(event_id, None)
+                changed = True
+        if changed:
+            self._save_pending_bounce_outcomes()
 
 
     def getReqId(self):
@@ -3905,6 +4680,8 @@ class BounceBot(EWrapper, EClient):
         if today_df.empty:
             logging.warning(f"{symbol}: No data for today")
             return
+
+        self._update_pending_bounce_outcomes(symbol, df)
         
         # 1. Calculate Standard VWAP (today only)
         standard_vwap = self.calculate_standard_vwap(df)
@@ -4057,6 +4834,18 @@ class BounceBot(EWrapper, EClient):
                             f"{symbol}: Bounce candidate invalidated (long) from {levels_list} - "
                             f"close {current_candle['close']:.2f} fell below bounce low {bounce_candle['low']:.2f}"
                         )
+                        self._log_bounce_candidate_event(
+                            "invalidated",
+                            symbol,
+                            direction,
+                            bounce_data.get("levels", {}),
+                            bounce_candle,
+                            current_candle,
+                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                            reason="Long candidate closed below bounce candle low.",
+                            candidate_id=bounce_data.get("candidate_id", ""),
+                            candles_waited=candles_waited,
+                        )
                         self.bounce_candidates.pop(symbol)
                         return
                     if direction == "short" and current_candle["close"] > bounce_candle["high"]:
@@ -4069,6 +4858,18 @@ class BounceBot(EWrapper, EClient):
                             f"{symbol}: Bounce candidate invalidated (short) from {levels_list} - "
                             f"close {current_candle['close']:.2f} rose above bounce high {bounce_candle['high']:.2f}"
                         )
+                        self._log_bounce_candidate_event(
+                            "invalidated",
+                            symbol,
+                            direction,
+                            bounce_data.get("levels", {}),
+                            bounce_candle,
+                            current_candle,
+                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                            reason="Short candidate closed above bounce candle high.",
+                            candidate_id=bounce_data.get("candidate_id", ""),
+                            candles_waited=candles_waited,
+                        )
                         self.bounce_candidates.pop(symbol)
                         return
                     
@@ -4077,8 +4878,21 @@ class BounceBot(EWrapper, EClient):
                         levels = bounce_data["levels"]
                         levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
                         bounce_msg = f"{symbol}: Bounce confirmed (long) from {levels_list}"
+                        event_row = self._log_bounce_candidate_event(
+                            "confirmed",
+                            symbol,
+                            "long",
+                            levels,
+                            bounce_candle,
+                            current_candle,
+                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                            reason="Confirmed by close above bounce candle high.",
+                            candidate_id=bounce_data.get("candidate_id", ""),
+                            candles_waited=candles_waited,
+                        )
+                        bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
                         if self.gui_callback:
-                            self.gui_callback(bounce_msg, "green")
+                            self.gui_callback(bounce_payload, "green")
                         self._emit_master_avwap_focus_bounce_alert(symbol, "long", levels_list)
                         self._emit_master_avwap_second_stdev_bounce_alert(symbol, "long", levels_list)
                         self.log_symbol(symbol, f"ALERT: {bounce_msg}")
@@ -4090,6 +4904,14 @@ class BounceBot(EWrapper, EClient):
                             current_candle=current_candle,
                             threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0)
                         )
+                        self._register_bounce_outcome(
+                            symbol,
+                            "long",
+                            levels,
+                            bounce_candle,
+                            current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
+                            bounce_data.get("candidate_id", ""),
+                        )
                         self.alerted_symbols.add(symbol)
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
@@ -4098,8 +4920,21 @@ class BounceBot(EWrapper, EClient):
                         levels = bounce_data["levels"]
                         levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
                         bounce_msg = f"{symbol}: Bounce confirmed (short) from {levels_list}"
+                        event_row = self._log_bounce_candidate_event(
+                            "confirmed",
+                            symbol,
+                            "short",
+                            levels,
+                            bounce_candle,
+                            current_candle,
+                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                            reason="Confirmed by close below bounce candle low.",
+                            candidate_id=bounce_data.get("candidate_id", ""),
+                            candles_waited=candles_waited,
+                        )
+                        bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
                         if self.gui_callback:
-                            self.gui_callback(bounce_msg, "red")
+                            self.gui_callback(bounce_payload, "red")
                         self._emit_master_avwap_focus_bounce_alert(symbol, "short", levels_list)
                         self._emit_master_avwap_second_stdev_bounce_alert(symbol, "short", levels_list)
                         self.log_symbol(symbol, f"ALERT: {bounce_msg}")
@@ -4110,6 +4945,14 @@ class BounceBot(EWrapper, EClient):
                             bounce_candle=bounce_candle,
                             current_candle=current_candle,
                             threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0)
+                        )
+                        self._register_bounce_outcome(
+                            symbol,
+                            "short",
+                            levels,
+                            bounce_candle,
+                            current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
+                            bounce_data.get("candidate_id", ""),
                         )
                         self.alerted_symbols.add(symbol)
                         self.bounce_candidates.pop(symbol)
@@ -4125,6 +4968,18 @@ class BounceBot(EWrapper, EClient):
                                 f"{symbol}: Bounce candidate expired after {candles_waited} candles without confirmation "
                                 f"from {levels_list}"
                             )
+                            self._log_bounce_candidate_event(
+                                "expired",
+                                symbol,
+                                direction,
+                                bounce_data.get("levels", {}),
+                                bounce_candle,
+                                current_candle,
+                                threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                                reason=f"No confirmation within {BOUNCE_CONFIRMATION_MAX_CANDLES} candles.",
+                                candidate_id=bounce_data.get("candidate_id", ""),
+                                candles_waited=candles_waited,
+                            )
                             self.bounce_candidates.pop(symbol)
                             return
                         # Remove stale candidates after a certain time period (e.g., 4 hours)
@@ -4137,6 +4992,18 @@ class BounceBot(EWrapper, EClient):
                                 f"{symbol}: Bounce candidate removed as stale from {levels_list} "
                                 f"(detected at {detection_time:%H:%M:%S})"
                             )
+                            self._log_bounce_candidate_event(
+                                "stale",
+                                symbol,
+                                direction,
+                                bounce_data.get("levels", {}),
+                                bounce_candle,
+                                current_candle,
+                                threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                                reason="Candidate exceeded stale timeout.",
+                                candidate_id=bounce_data.get("candidate_id", ""),
+                                candles_waited=candles_waited,
+                            )
                             self.bounce_candidates.pop(symbol)
                 else:
                     logging.debug(f"{symbol}: Current candle is the same as bounce candle, waiting for next candle")
@@ -4146,13 +5013,32 @@ class BounceBot(EWrapper, EClient):
 
         # STEP 2: Check if current candle is a new bounce candidate - FIXED INDENTATION
         if candidate_info and symbol not in self.bounce_candidates:
+            candidate_id = self._make_bounce_event_id(
+                symbol,
+                direction,
+                candidate_info["candle"],
+                candidate_info["levels"],
+            )
             self.bounce_candidates[symbol] = {
+                "candidate_id": candidate_id,
                 "levels": candidate_info["levels"],
                 "triggered_levels": candidate_info.get("triggered_levels", []),
                 "bounce_candle": candidate_info["candle"],
                 "detection_time": datetime.now(),
                 "candles_waited": 0
             }
+            self._log_bounce_candidate_event(
+                "detected",
+                symbol,
+                direction,
+                candidate_info["levels"],
+                candidate_info["candle"],
+                candidate_info["candle"],
+                threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                reason="Level reaction detected; waiting for confirmation candle.",
+                candidate_id=candidate_id,
+                candles_waited=0,
+            )
 
                         # In the evaluate_bounce_candidate function, where price approaching is logged:
             if LOG_PRICE_APPROACHING:
@@ -4173,6 +5059,15 @@ class BounceBot(EWrapper, EClient):
                     if self.gui_callback:
                         direction_tag = "approaching_green" if direction == "long" else "approaching_red"
                         self.gui_callback(approaching_msg, direction_tag)
+        elif not candidate_info and symbol not in self.bounce_candidates:
+            try:
+                self._maybe_log_near_miss_bounce(
+                    symbol,
+                    direction,
+                    today_df.iloc[-1].to_dict(),
+                )
+            except Exception as exc:
+                logging.debug(f"{symbol}: near-miss logging failed: {exc}")
 
 
     def check_removal_conditions(self):
@@ -4252,6 +5147,7 @@ class BounceBot(EWrapper, EClient):
                     self.emitted_master_avwap_events.clear()
                     self.emitted_master_avwap_focus_alerts.clear()
                     self.emitted_master_avwap_second_stdev_alerts.clear()
+                    self.logged_near_miss_events.clear()
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
                 
@@ -4995,45 +5891,178 @@ def prompt_change_home_folder(root, cleanup_callback=None):
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
-def append_alert_message(text_area, msg, tag, timestamp):
-    if msg.startswith("MASTER_AVWAP_FAVORITE_BOUNCE:"):
-        text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
-    elif "Bounce confirmed" in msg:
-        parts = msg.split(":", 1)
+def _save_bounce_feedback_from_widget(text_area, feedback_context, rating, reason, feedback_callback, source):
+    context = _normalize_bounce_feedback_context(feedback_context)
+    if callable(feedback_callback):
+        feedback_callback(context, rating, reason, source)
+    else:
+        record_bounce_feedback(context, rating, reason, source=source)
+
+
+def _open_bounce_feedback_reason_window(text_area, feedback_context, feedback_callback, source):
+    context = _normalize_bounce_feedback_context(feedback_context)
+    parent = text_area.winfo_toplevel()
+    dialog = tk.Toplevel(parent)
+    dialog.title("Bounce Feedback")
+    dialog.configure(bg="#2E2E2E")
+    dialog.transient(parent)
+    dialog.grab_set()
+
+    symbol = context.get("symbol") or "Bounce"
+    direction = context.get("direction", "").upper()
+    bounce_types = context.get("bounce_types") or "unknown levels"
+    header = f"{symbol} {direction} | {bounce_types}"
+    tk.Label(
+        dialog,
+        text=header,
+        bg="#2E2E2E",
+        fg="#E0E0E0",
+        font=("Arial", 10, "bold"),
+        wraplength=520,
+        justify=tk.LEFT,
+    ).pack(fill=tk.X, padx=12, pady=(12, 6))
+    tk.Label(
+        dialog,
+        text="What is wrong with this bounce?",
+        bg="#2E2E2E",
+        fg="#E0E0E0",
+        justify=tk.LEFT,
+    ).pack(anchor="w", padx=12, pady=(0, 4))
+    reason_text = tk.Text(
+        dialog,
+        width=64,
+        height=7,
+        wrap=tk.WORD,
+        bg="#252525",
+        fg="#E0E0E0",
+        insertbackground="#E0E0E0",
+    )
+    reason_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
+
+    button_row = tk.Frame(dialog, bg="#2E2E2E")
+    button_row.pack(fill=tk.X, padx=12, pady=(0, 12))
+
+    def save_issue():
+        reason = reason_text.get("1.0", tk.END).strip()
+        if not reason:
+            messagebox.showerror("Missing Reason", "Enter a short reason before saving this as an issue.")
+            return
+        _save_bounce_feedback_from_widget(
+            text_area,
+            context,
+            "issue",
+            reason,
+            feedback_callback,
+            source,
+        )
+        dialog.destroy()
+
+    tk.Button(button_row, text="Save Issue", command=save_issue, padx=10).pack(side=tk.LEFT)
+    tk.Button(button_row, text="Cancel", command=dialog.destroy, padx=10).pack(side=tk.LEFT, padx=(8, 0))
+    reason_text.focus_set()
+
+
+def _handle_bounce_issue_click(text_area, feedback_context, feedback_callback, source):
+    _open_bounce_feedback_reason_window(text_area, feedback_context, feedback_callback, source)
+
+
+def _insert_bounce_feedback_controls(text_area, feedback_context, feedback_callback, source):
+    seq = getattr(append_alert_message, "_feedback_seq", 0) + 1
+    append_alert_message._feedback_seq = seq
+    issue_tag = f"bounce_feedback_issue_{seq}"
+
+    text_area.insert(tk.END, "!", (issue_tag, "bounce_feedback_issue"))
+    text_area.insert(tk.END, "  ")
+
+    text_area.tag_config("bounce_feedback_issue", foreground="#FF5555", font=("Courier", 10, "bold"))
+    text_area.tag_bind(
+        issue_tag,
+        "<Button-1>",
+        lambda _event, ctx=dict(feedback_context): _handle_bounce_issue_click(
+            text_area,
+            ctx,
+            feedback_callback,
+            source,
+        ),
+    )
+    text_area.tag_bind(issue_tag, "<Enter>", lambda _event: text_area.config(cursor="hand2"))
+    text_area.tag_bind(issue_tag, "<Leave>", lambda _event: text_area.config(cursor=""))
+
+
+def append_alert_message(
+    text_area,
+    msg,
+    tag,
+    timestamp,
+    feedback_callback=None,
+    feedback_source="bounce_bot_gui",
+):
+    display_msg, feedback_context = _normalize_alert_message_payload(msg)
+    if not feedback_context and "Bounce confirmed" in display_msg:
+        feedback_context = _normalize_bounce_feedback_context({"alert_message": display_msg})
+    if feedback_context:
+        feedback_context["alert_time"] = timestamp
+    feedback_available = bool(feedback_context) and "Bounce confirmed" in display_msg
+    prefix_inserted = False
+
+    def insert_prefix(prefix_tag=tag):
+        nonlocal prefix_inserted
+        if prefix_inserted:
+            return
+        if feedback_available:
+            _insert_bounce_feedback_controls(
+                text_area,
+                feedback_context,
+                feedback_callback,
+                feedback_source,
+            )
+        text_area.insert(tk.END, f"{timestamp} - ", prefix_tag)
+        prefix_inserted = True
+
+    if display_msg.startswith("MASTER_AVWAP_FAVORITE_BOUNCE:"):
+        insert_prefix(tag)
+        text_area.insert(tk.END, f"{display_msg}\n", tag)
+    elif "Bounce confirmed" in display_msg:
+        parts = display_msg.split(":", 1)
         if len(parts) == 2:
             symbol = parts[0].strip()
             rest = ":" + parts[1]
             if "(long)" in rest:
-                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                insert_prefix(tag)
                 text_area.insert(tk.END, symbol, "pink_symbol")
                 text_area.insert(tk.END, rest + "\n", "green")
             elif "(short)" in rest:
-                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                insert_prefix(tag)
                 text_area.insert(tk.END, symbol, "orange_symbol")
                 text_area.insert(tk.END, rest + "\n", "red")
             else:
-                text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+                insert_prefix(tag)
+                text_area.insert(tk.END, f"{display_msg}\n", tag)
         else:
-            text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
-    elif "Price approaching levels" in msg:
-        parts = msg.split(":", 1)
+            insert_prefix(tag)
+            text_area.insert(tk.END, f"{display_msg}\n", tag)
+    elif "Price approaching levels" in display_msg:
+        parts = display_msg.split(":", 1)
         if len(parts) == 2:
             symbol = parts[0].strip()
             rest = ":" + parts[1]
             if "(long)" in rest:
-                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                insert_prefix(tag)
                 text_area.insert(tk.END, symbol, "pink_symbol")
                 text_area.insert(tk.END, rest + "\n", "approaching_green")
             elif "(short)" in rest:
-                text_area.insert(tk.END, f"{timestamp} - ", tag)
+                insert_prefix(tag)
                 text_area.insert(tk.END, symbol, "orange_symbol")
                 text_area.insert(tk.END, rest + "\n", "approaching_red")
             else:
-                text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+                insert_prefix(tag)
+                text_area.insert(tk.END, f"{display_msg}\n", tag)
         else:
-            text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+            insert_prefix(tag)
+            text_area.insert(tk.END, f"{display_msg}\n", tag)
     else:
-        text_area.insert(tk.END, f"{timestamp} - {msg}\n", tag)
+        insert_prefix(tag)
+        text_area.insert(tk.END, f"{display_msg}\n", tag)
 
 
 def configure_alert_tags(text_area, font_size=12):
@@ -5253,7 +6282,20 @@ def start_lightweight_gui():
             except queue.Empty:
                 break
             text_area.config(state="normal")
-            append_alert_message(text_area, str(msg), str(tag), datetime.now().strftime("%H:%M:%S"))
+            append_alert_message(
+                text_area,
+                msg,
+                str(tag),
+                datetime.now().strftime("%H:%M:%S"),
+                feedback_callback=lambda ctx, rating, reason, source: (
+                    record_bounce_feedback(ctx, rating, reason, source=source),
+                    status_var.set(
+                        "Saved bounce feedback: "
+                        f"{ctx.get('symbol', 'bounce')} -> {rating}"
+                    ),
+                ),
+                feedback_source="bounce_bot_lightweight_gui",
+            )
             text_area.config(state="disabled")
             text_area.see(tk.END)
             root.update()
@@ -5290,7 +6332,7 @@ def start_gui(mode="prompt"):
             rrs_queue.put((message, tag))
         elif tag == "candle_line":
             bounce_queue.put((message, tag))
-        elif tag == "blue" and "removed from" in message:
+        elif tag == "blue" and "removed from" in str(message):
             pass
         else:
             bounce_queue.put((message, tag))
@@ -5697,7 +6739,13 @@ def start_gui(mode="prompt"):
             try:
                 msg, tag = bounce_queue.get_nowait()
                 text_area.config(state='normal')
-                append_alert_message(text_area, str(msg), str(tag), datetime.now().strftime('%H:%M:%S'))
+                append_alert_message(
+                    text_area,
+                    msg,
+                    str(tag),
+                    datetime.now().strftime('%H:%M:%S'),
+                    feedback_source="bounce_bot_full_gui",
+                )
                 text_area.config(state='disabled')
                 text_area.see(tk.END)
                 root.update()

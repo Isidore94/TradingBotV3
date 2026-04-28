@@ -1,0 +1,7 @@
+{
+  "NVDA": ["AMD", "AVGO", "SMCI", "ARM", "MU", "TSM", "SMH"],
+  "AAPL": ["QCOM", "SWKS", "CRUS", "AMAT", "LRCX"],
+  "MSFT": ["GOOGL", "AMZN", "CRM", "NOW", "DDOG"],
+  "JPM": ["BAC", "WFC", "GS", "MS", "XLF"],
+  "TSLA": ["RIVN", "LCID", "F", "GM"]
+}

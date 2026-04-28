@@ -1574,6 +1574,7 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                 self.refresh_table()
                 self.refresh_avwap_output_view()
                 self.refresh_anchor_output_view()
+                self.refresh_market_prep_view()
                 self.refresh_setup_tracker_view()
                 self.refresh_tracker_storage_summary()
                 self.status_var.set(done_note)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -19,6 +20,10 @@ from typing import Any
 from project_paths import (
     LOCAL_SETTINGS_FILE,
     LONGS_FILE,
+    MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_MARKET_PREP_FILE,
+    MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
+    MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
     SHORTS_FILE,
     get_shared_watchlist_details,
     get_tracker_storage_details,
@@ -43,16 +48,23 @@ from bounce_bot import (
     append_alert_message,
     configure_alert_tags,
     create_rrs_confirmed_panel,
+    record_bounce_feedback,
     run_bot_with_gui,
 )
 from master_avwap import (
     EVENT_TICKERS_FILE,
     PRIORITY_SETUPS_FILE,
     STDEV_RANGE_FILE,
+    USER_FAVORITES_FILE,
     MasterAvwapGUI,
+    format_market_prep_payload_report,
+    build_master_avwap_focus_setup_type_text,
+    build_master_avwap_focus_side_groups,
     run_master,
     run_master_with_shared_watchlists,
 )
+from market_prep_tab import MarketPrepTab
+from master_avwap_shared import load_tradingview_groups
 
 DARK_GREY = "#2E2E2E"
 TEXT_COLOR = "#E0E0E0"
@@ -110,6 +122,15 @@ def _read_text_file(path: Path) -> str:
         return ""
 
 
+def _read_json_file(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
 def _read_widget_text(widget: tk.Text | None) -> str:
     if widget is None:
         return ""
@@ -119,12 +140,89 @@ def _read_widget_text(widget: tk.Text | None) -> str:
         return ""
 
 
+def _format_symbol_group(symbols: list[str]) -> str:
+    ordered = []
+    seen = set()
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol or symbol == "NONE" or symbol in seen:
+            continue
+        seen.add(symbol)
+        ordered.append(symbol)
+    return ", ".join(ordered) if ordered else "None"
+
+
+def _normalize_copy_list_text(text: str) -> str:
+    cleaned = str(text or "").strip()
+    return "" if cleaned.upper() == "NONE" else cleaned
+
+
 def _tail_lines(text: str, max_lines: int) -> str:
     lines = [line.rstrip() for line in str(text or "").splitlines()]
     if len(lines) <= max_lines:
         return "\n".join(lines).strip()
     trimmed = lines[-max_lines:]
     return "\n".join([f"... showing last {max_lines} lines ...", *trimmed]).strip()
+
+
+def _build_master_avwap_copy_lists(avwap_gui: MasterAvwapGUI | None) -> dict[str, str]:
+    copy_lists = {
+        "favorites": _normalize_copy_list_text(_read_widget_text(getattr(avwap_gui, "favorite_symbols_text", None))),
+        "near_favorites": _normalize_copy_list_text(
+            _read_widget_text(getattr(avwap_gui, "near_favorite_symbols_text", None))
+        ),
+        "long_focus": _normalize_copy_list_text(_read_widget_text(getattr(avwap_gui, "long_focus_symbols_text", None))),
+        "short_focus": _normalize_copy_list_text(
+            _read_widget_text(getattr(avwap_gui, "short_focus_symbols_text", None))
+        ),
+        "setup_types": _normalize_copy_list_text(_read_widget_text(getattr(avwap_gui, "setup_type_symbols_text", None))),
+    }
+
+    focus_payload = _read_json_file(MASTER_AVWAP_FOCUS_FILE, default={})
+    if not isinstance(focus_payload, dict):
+        focus_payload = {}
+
+    tradingview_groups = None
+
+    if not copy_lists["favorites"] or not copy_lists["near_favorites"]:
+        tradingview_groups = load_tradingview_groups(
+            focus_path=MASTER_AVWAP_FOCUS_FILE,
+            tradingview_path=MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
+        )
+        if not copy_lists["favorites"]:
+            copy_lists["favorites"] = _format_symbol_group(
+                tradingview_groups["favorites"]["LONG"] + tradingview_groups["favorites"]["SHORT"]
+            )
+        if not copy_lists["near_favorites"]:
+            copy_lists["near_favorites"] = _format_symbol_group(
+                tradingview_groups["near_favorite_zones"]["LONG"]
+                + tradingview_groups["near_favorite_zones"]["SHORT"]
+            )
+
+    if not copy_lists["long_focus"] or not copy_lists["short_focus"]:
+        side_groups = build_master_avwap_focus_side_groups(focus_payload)
+        if not side_groups["LONG"] and not side_groups["SHORT"]:
+            if tradingview_groups is None:
+                tradingview_groups = load_tradingview_groups(
+                    focus_path=MASTER_AVWAP_FOCUS_FILE,
+                    tradingview_path=MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
+                )
+            side_groups = {
+                "LONG": tradingview_groups["favorites"]["LONG"] + tradingview_groups["near_favorite_zones"]["LONG"],
+                "SHORT": tradingview_groups["favorites"]["SHORT"] + tradingview_groups["near_favorite_zones"]["SHORT"],
+            }
+        if not copy_lists["long_focus"]:
+            copy_lists["long_focus"] = _format_symbol_group(side_groups.get("LONG", []))
+        if not copy_lists["short_focus"]:
+            copy_lists["short_focus"] = _format_symbol_group(side_groups.get("SHORT", []))
+
+    if not copy_lists["setup_types"]:
+        copy_lists["setup_types"] = build_master_avwap_focus_setup_type_text(focus_payload)
+
+    for key, value in list(copy_lists.items()):
+        copy_lists[key] = str(value or "").strip() or "None"
+
+    return copy_lists
 
 
 def build_consolidated_gui_output(
@@ -175,6 +273,14 @@ def build_consolidated_gui_output(
         + (_read_text_file(STDEV_RANGE_FILE) or "No stdev output yet.")
     )
     anchor_output = _read_widget_text(getattr(avwap_gui, "anchor_scan_text", None)) or "No anchor AVWAP output yet."
+    market_prep_output = _read_widget_text(getattr(avwap_gui, "market_prep_report_text", None))
+    if not market_prep_output:
+        market_prep_output = _read_text_file(MASTER_AVWAP_MARKET_PREP_REPORT_FILE)
+    if not market_prep_output:
+        market_prep_output = format_market_prep_payload_report(
+            _read_json_file(MASTER_AVWAP_MARKET_PREP_FILE, default={})
+        )
+    copy_lists = _build_master_avwap_copy_lists(avwap_gui)
 
     lines = [
         "Consolidated Trading GUI Snapshot",
@@ -205,10 +311,35 @@ def build_consolidated_gui_output(
         f"Priority setups report: {PRIORITY_SETUPS_FILE}",
         f"Event tickers report: {EVENT_TICKERS_FILE}",
         f"Stdev report: {STDEV_RANGE_FILE}",
+        f"TradingView copy lists report: {MASTER_AVWAP_TRADINGVIEW_REPORT_FILE}",
+        f"Market prep report: {MASTER_AVWAP_MARKET_PREP_REPORT_FILE}",
+        f"Focus feed: {MASTER_AVWAP_FOCUS_FILE}",
+        f"User favorites log: {USER_FAVORITES_FILE}",
         "",
         "Latest AVWAP Results",
         "-" * 80,
         avwap_output or "No AVWAP output yet.",
+        "",
+        "AVWAP Copy/Paste Lists",
+        "-" * 80,
+        "Favorite Setups",
+        copy_lists["favorites"],
+        "",
+        "Near Favorite Zones",
+        copy_lists["near_favorites"],
+        "",
+        "Directional Longs",
+        copy_lists["long_focus"],
+        "",
+        "Directional Shorts",
+        copy_lists["short_focus"],
+        "",
+        "Setup Type Copy Lists",
+        copy_lists["setup_types"],
+        "",
+        "Market Prep",
+        "-" * 80,
+        market_prep_output or "No market prep output yet.",
         "",
         "Latest Anchor Results",
         "-" * 80,
@@ -631,7 +762,7 @@ class BaseBounceBotPanel:
         configure_alert_tags(text_area, font_size=font_size)
         return text_area
 
-    def _append_alert_with_timestamp(self, message: str, tag: str) -> None:
+    def _append_alert_with_timestamp(self, message: Any, tag: str) -> None:
         if self.alert_text is None:
             return
         self.alert_text.config(state="normal")
@@ -640,9 +771,17 @@ class BaseBounceBotPanel:
             message,
             tag,
             datetime.now().strftime("%H:%M:%S"),
+            feedback_callback=self._record_bounce_feedback,
+            feedback_source="consolidated_gui",
         )
         self.alert_text.config(state="disabled")
         self.alert_text.see(tk.END)
+        self._notify_output_changed()
+
+    def _record_bounce_feedback(self, context: dict, rating: str, reason: str, source: str) -> None:
+        record_bounce_feedback(context, rating, reason, source=source)
+        symbol = str(context.get("symbol") or "bounce").strip().upper() or "bounce"
+        self.controller.status_var.set(f"Saved bounce feedback: {symbol} -> {rating}")
         self._notify_output_changed()
 
     def clear_alerts(self) -> None:
@@ -852,7 +991,7 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
                 message, tag = self.controller.bounce_queue.get_nowait()
             except queue.Empty:
                 break
-            self._append_alert_with_timestamp(str(message), str(tag))
+            self._append_alert_with_timestamp(message, str(tag))
 
         self.controller.refresh_active_bounces()
         self._queue_after_id = self.container.after(150, self._process_queues)
@@ -987,7 +1126,7 @@ class FullBounceBotPanel(BaseBounceBotPanel):
                 message, tag = self.controller.bounce_queue.get_nowait()
             except queue.Empty:
                 break
-            self._append_alert_with_timestamp(str(message), str(tag))
+            self._append_alert_with_timestamp(message, str(tag))
 
         self.controller.refresh_active_bounces()
         self._queue_after_id = self.container.after(150, self._process_queues)
@@ -1281,6 +1420,7 @@ class ConsolidatedTradingGUI:
 
         self.bounce_panel: BaseBounceBotPanel | None = None
         self.avwap_gui: MasterAvwapGUI | None = None
+        self.market_prep_panel: MarketPrepTab | None = None
         self._output_write_after_id = None
         self._output_refresh_after_id = None
         self._output_traces: list[tuple[tk.Variable, str]] = []
@@ -1306,6 +1446,9 @@ class ConsolidatedTradingGUI:
         master_tab = ttk.Frame(notebook)
         notebook.add(master_tab, text="Master AVWAP")
 
+        market_prep_tab = ttk.Frame(notebook)
+        notebook.add(market_prep_tab, text="Market Prep")
+
         if self.mode == "full":
             self.bounce_panel = FullBounceBotPanel(bounce_tab, switch_mode_callback=lambda: self.switch_mode("simple"))
             self.bounce_panel.pack(fill=tk.BOTH, expand=True)
@@ -1314,6 +1457,8 @@ class ConsolidatedTradingGUI:
             self.bounce_panel.pack(fill=tk.BOTH, expand=True)
 
         self.avwap_gui = MasterAvwapGUI(master_tab, standalone=False)
+        self.market_prep_panel = MarketPrepTab(market_prep_tab, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
+        self.market_prep_panel.pack(fill=tk.BOTH, expand=True)
 
         main_pane.add(notebook, stretch="always")
 
