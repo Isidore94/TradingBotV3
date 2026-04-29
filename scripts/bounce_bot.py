@@ -102,6 +102,8 @@ ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
 EMA_21_TOUCH_BUFFER_ATR = 0.002
 EMA_21_TOUCH_BUFFER_MIN = 0.01
+EMA_FRESH_TOUCH_LOOKBACK_BARS = 3
+EMA_FRESH_TOUCH_BUFFER_ATR = 0.03
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
 CHECK_CONSECUTIVE_CANDLES = True  # Parameter to enable/disable this check
 CHECK_BOUNCE_VVWAP = True
@@ -303,6 +305,12 @@ BOUNCE_MIN_RANGE_TO_MEDIAN = 1.05
 BOUNCE_VOLUME_LOOKBACK_BARS = 6
 BOUNCE_MIN_RELATIVE_VOLUME = 1.10
 BOUNCE_CONFIRMATION_MAX_CANDLES = 3
+FAST_CONFIRM_BOUNCE_TYPES = {"impulse_retest_vwap_eod", "ema_8", "ema_15", "ema_21"}
+FAST_CONFIRMATION_MAX_CANDLES = 1
+PREV_DAY_LEVEL_MIN_PRIOR_BARS = 4
+PREV_DAY_LEVEL_RESPECT_RATIO = 0.85
+PREV_DAY_LEVEL_MAX_WRONG_SIDE_CLOSES = 1
+PREV_DAY_LEVEL_RECENT_RESPECT_BARS = 6
 BOUNCE_LEARNING_SCHEMA_VERSION = 1
 BOUNCE_OUTCOME_MILESTONE_BARS = (1, 3, 6, 12)
 BOUNCE_CANDIDATE_EVENT_COLUMNS = [
@@ -4311,6 +4319,76 @@ class BounceBot(EWrapper, EClient):
                 
             return level_respected
 
+        def check_previous_day_level_session_respect(level_value, level_name):
+            if level_value is None:
+                return False
+
+            prior = today_df.iloc[:-1].copy()
+            if len(prior) < PREV_DAY_LEVEL_MIN_PRIOR_BARS:
+                logging.debug(
+                    f"{symbol}: Not enough prior candles for {level_name} session-respect check "
+                    f"({len(prior)}/{PREV_DAY_LEVEL_MIN_PRIOR_BARS})"
+                )
+                return False
+
+            if direction == "long":
+                respect_mask = prior["close"] >= (level_value - threshold)
+            else:
+                respect_mask = prior["close"] <= (level_value + threshold)
+
+            respect_count = int(respect_mask.sum())
+            wrong_side_count = len(prior) - respect_count
+            respect_ratio = respect_count / max(1, len(prior))
+
+            recent = prior.tail(min(PREV_DAY_LEVEL_RECENT_RESPECT_BARS, len(prior)))
+            if direction == "long":
+                recent_respected = bool((recent["close"] >= (level_value - threshold)).all())
+            else:
+                recent_respected = bool((recent["close"] <= (level_value + threshold)).all())
+
+            respected = (
+                respect_ratio >= PREV_DAY_LEVEL_RESPECT_RATIO
+                and wrong_side_count <= PREV_DAY_LEVEL_MAX_WRONG_SIDE_CLOSES
+                and recent_respected
+            )
+            if respected:
+                logging.debug(
+                    f"{symbol}: {level_name} session respect accepted. "
+                    f"RespectRatio={respect_ratio:.2f}, WrongSideCloses={wrong_side_count}, "
+                    f"RecentRespected={recent_respected}"
+                )
+            else:
+                logging.debug(
+                    f"{symbol}: Rejecting {level_name} bounce because the level was not respected "
+                    f"through the session. RespectRatio={respect_ratio:.2f}, "
+                    f"WrongSideCloses={wrong_side_count}, RecentRespected={recent_respected}"
+                )
+            return respected
+
+        def has_recent_prior_ema_touch(ema_key, ema_value, ema_label):
+            if ema_value is None or len(today_df) <= 1:
+                return False
+
+            span_by_key = {"ema_8": 8, "ema_15": 15, "ema_21": 21}
+            span = span_by_key.get(ema_key)
+            if span is None or len(today_df) < span:
+                return False
+
+            lookback = min(EMA_FRESH_TOUCH_LOOKBACK_BARS, len(today_df) - 1)
+            ema_frame = today_df[["high", "low"]].copy()
+            ema_frame["ema"] = today_df["close"].ewm(span=span, adjust=False).mean()
+            prior = ema_frame.iloc[-(lookback + 1):-1]
+            touch_buffer = max(threshold, EMA_FRESH_TOUCH_BUFFER_ATR * atr)
+
+            for _, row in prior.iterrows():
+                if row["high"] >= (row["ema"] - touch_buffer) and row["low"] <= (row["ema"] + touch_buffer):
+                    logging.debug(
+                        f"{symbol}: Rejecting {ema_label} bounce because EMA was already touched "
+                        f"within the prior {lookback} candles."
+                    )
+                    return True
+            return False
+
         # Check for 10-candle bounce if enabled
         if bounce_type_allowed("10_candle") and self.is_bounce_type_enabled("10_candle") and len(df) >= 11:
             if direction == "long":
@@ -4478,6 +4556,8 @@ class BounceBot(EWrapper, EClient):
                 continue
             if not check_consecutive_respect(ema_value, ema_label):
                 continue
+            if has_recent_prior_ema_touch(ema_key, ema_value, ema_label):
+                continue
 
             if direction == "long":
                 is_above_vwap = current_candle_data["close"] > std_vwap
@@ -4573,8 +4653,11 @@ class BounceBot(EWrapper, EClient):
         # Check for previous day high/low bounces if enabled
         if direction == "long" and bounce_type_allowed("prev_day_high") and self.is_bounce_type_enabled("prev_day_high") and metrics.get("prev_high") is not None:
             # Check if price respected previous day high for consecutive candles
-            if check_consecutive_respect(metrics.get("prev_high"), "Previous Day High"):
-                # Only consider bounce if price respected the level all day
+            if (
+                check_consecutive_respect(metrics.get("prev_high"), "Previous Day High")
+                and check_previous_day_level_session_respect(metrics.get("prev_high"), "Previous Day High")
+            ):
+                # Only consider bounce if price respected the level through the session.
                 if abs(current_candle_data["low"] - metrics.get("prev_high")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
                     ref_levels["prev_day_high"] = metrics.get("prev_high")
                     mark_trigger("prev_day_high")
@@ -4582,18 +4665,26 @@ class BounceBot(EWrapper, EClient):
 
         elif direction == "short" and bounce_type_allowed("prev_day_low") and self.is_bounce_type_enabled("prev_day_low") and metrics.get("prev_low") is not None:
             # Check if price respected previous day low for consecutive candles
-            if check_consecutive_respect(metrics.get("prev_low"), "Previous Day Low"):
-                # Only consider bounce if price respected the level all day
+            if (
+                check_consecutive_respect(metrics.get("prev_low"), "Previous Day Low")
+                and check_previous_day_level_session_respect(metrics.get("prev_low"), "Previous Day Low")
+            ):
+                # Only consider bounce if price respected the level through the session.
                 if abs(current_candle_data["high"] - metrics.get("prev_low")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
                     ref_levels["prev_day_low"] = metrics.get("prev_low")
                     mark_trigger("prev_day_low")
                     logging.debug(f"{symbol}: Previous Day Low SHORT bounce candidate found. Prev Low: {metrics.get('prev_low'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Return None if no reference levels were found, otherwise return the details
+        fast_confirm = any(level in FAST_CONFIRM_BOUNCE_TYPES for level in triggered_levels)
         return {
             "levels": ref_levels,
             "triggered_levels": triggered_levels,
-            "candle": current_candle_data
+            "candle": current_candle_data,
+            "confirm_immediately": fast_confirm,
+            "max_confirmation_candles": (
+                FAST_CONFIRMATION_MAX_CANDLES if fast_confirm else BOUNCE_CONFIRMATION_MAX_CANDLES
+            ),
         } if ref_levels else None
 
 
@@ -4806,6 +4897,57 @@ class BounceBot(EWrapper, EClient):
         # Continue with evaluating bounce candidates
         candidate_info = self.evaluate_bounce_candidate(symbol, df, allowed_bounce_types=allowed_bounce_types)
 
+        def confirm_bounce_alert(
+            levels,
+            levels_list,
+            bounce_candle,
+            current_candle,
+            *,
+            candidate_id="",
+            candles_waited=0,
+            reason=None,
+        ):
+            bounce_msg = f"{symbol}: Bounce confirmed ({direction}) from {levels_list}"
+            event_row = self._log_bounce_candidate_event(
+                "confirmed",
+                symbol,
+                direction,
+                levels,
+                bounce_candle,
+                current_candle,
+                threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                reason=reason or (
+                    "Confirmed by close above bounce candle high."
+                    if direction == "long"
+                    else "Confirmed by close below bounce candle low."
+                ),
+                candidate_id=candidate_id,
+                candles_waited=candles_waited,
+            )
+            bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
+            if self.gui_callback:
+                self.gui_callback(bounce_payload, "green" if direction == "long" else "red")
+            self._emit_master_avwap_focus_bounce_alert(symbol, direction, levels_list)
+            self._emit_master_avwap_second_stdev_bounce_alert(symbol, direction, levels_list)
+            self.log_symbol(symbol, f"ALERT: {bounce_msg}")
+            self.log_bounce_to_file(
+                symbol=symbol,
+                direction=direction,
+                levels=levels,
+                bounce_candle=bounce_candle,
+                current_candle=current_candle,
+                threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0)
+            )
+            self._register_bounce_outcome(
+                symbol,
+                direction,
+                levels,
+                bounce_candle,
+                current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
+                candidate_id,
+            )
+            self.alerted_symbols.add(symbol)
+
         
         # STEP 1: First check if we have an existing bounce candidate to confirm
         if symbol in self.bounce_candidates:
@@ -4877,88 +5019,36 @@ class BounceBot(EWrapper, EClient):
                     if direction == "long" and current_candle["close"] > bounce_candle["high"]:
                         levels = bounce_data["levels"]
                         levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
-                        bounce_msg = f"{symbol}: Bounce confirmed (long) from {levels_list}"
-                        event_row = self._log_bounce_candidate_event(
-                            "confirmed",
-                            symbol,
-                            "long",
+                        confirm_bounce_alert(
                             levels,
+                            levels_list,
                             bounce_candle,
                             current_candle,
-                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
-                            reason="Confirmed by close above bounce candle high.",
                             candidate_id=bounce_data.get("candidate_id", ""),
                             candles_waited=candles_waited,
                         )
-                        bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
-                        if self.gui_callback:
-                            self.gui_callback(bounce_payload, "green")
-                        self._emit_master_avwap_focus_bounce_alert(symbol, "long", levels_list)
-                        self._emit_master_avwap_second_stdev_bounce_alert(symbol, "long", levels_list)
-                        self.log_symbol(symbol, f"ALERT: {bounce_msg}")
-                        self.log_bounce_to_file(
-                            symbol=symbol,
-                            direction="long",
-                            levels=levels,
-                            bounce_candle=bounce_candle,
-                            current_candle=current_candle,
-                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0)
-                        )
-                        self._register_bounce_outcome(
-                            symbol,
-                            "long",
-                            levels,
-                            bounce_candle,
-                            current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
-                            bounce_data.get("candidate_id", ""),
-                        )
-                        self.alerted_symbols.add(symbol)
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
                 
                     elif direction == "short" and current_candle["close"] < bounce_candle["low"]:
                         levels = bounce_data["levels"]
                         levels_list = bounce_data.get("triggered_levels") or list(levels.keys())
-                        bounce_msg = f"{symbol}: Bounce confirmed (short) from {levels_list}"
-                        event_row = self._log_bounce_candidate_event(
-                            "confirmed",
-                            symbol,
-                            "short",
+                        confirm_bounce_alert(
                             levels,
+                            levels_list,
                             bounce_candle,
                             current_candle,
-                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
-                            reason="Confirmed by close below bounce candle low.",
                             candidate_id=bounce_data.get("candidate_id", ""),
                             candles_waited=candles_waited,
                         )
-                        bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
-                        if self.gui_callback:
-                            self.gui_callback(bounce_payload, "red")
-                        self._emit_master_avwap_focus_bounce_alert(symbol, "short", levels_list)
-                        self._emit_master_avwap_second_stdev_bounce_alert(symbol, "short", levels_list)
-                        self.log_symbol(symbol, f"ALERT: {bounce_msg}")
-                        self.log_bounce_to_file(
-                            symbol=symbol,
-                            direction="short",
-                            levels=levels,
-                            bounce_candle=bounce_candle,
-                            current_candle=current_candle,
-                            threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0)
-                        )
-                        self._register_bounce_outcome(
-                            symbol,
-                            "short",
-                            levels,
-                            bounce_candle,
-                            current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
-                            bounce_data.get("candidate_id", ""),
-                        )
-                        self.alerted_symbols.add(symbol)
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
                     else:
-                        if candles_waited >= BOUNCE_CONFIRMATION_MAX_CANDLES:
+                        max_confirmation_candles = int(
+                            bounce_data.get("max_confirmation_candles", BOUNCE_CONFIRMATION_MAX_CANDLES)
+                            or BOUNCE_CONFIRMATION_MAX_CANDLES
+                        )
+                        if candles_waited >= max_confirmation_candles:
                             levels_list = bounce_data.get("triggered_levels") or list(bounce_data.get("levels", {}).keys())
                             logging.debug(
                                 f"{symbol}: Removing bounce candidate after {candles_waited} candles without confirmation"
@@ -4976,7 +5066,7 @@ class BounceBot(EWrapper, EClient):
                                 bounce_candle,
                                 current_candle,
                                 threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
-                                reason=f"No confirmation within {BOUNCE_CONFIRMATION_MAX_CANDLES} candles.",
+                                reason=f"No confirmation within {max_confirmation_candles} candles.",
                                 candidate_id=bounce_data.get("candidate_id", ""),
                                 candles_waited=candles_waited,
                             )
@@ -5019,13 +5109,33 @@ class BounceBot(EWrapper, EClient):
                 candidate_info["candle"],
                 candidate_info["levels"],
             )
+            if candidate_info.get("confirm_immediately"):
+                levels = candidate_info["levels"]
+                levels_list = candidate_info.get("triggered_levels") or list(levels.keys())
+                logging.debug(
+                    f"{symbol}: Fast-confirming bounce on signal candle from {levels_list}"
+                )
+                confirm_bounce_alert(
+                    levels,
+                    levels_list,
+                    candidate_info["candle"],
+                    today_df.iloc[-1],
+                    candidate_id=candidate_id,
+                    reason="Fast-confirmed on signal candle.",
+                )
+                return
+
             self.bounce_candidates[symbol] = {
                 "candidate_id": candidate_id,
                 "levels": candidate_info["levels"],
                 "triggered_levels": candidate_info.get("triggered_levels", []),
                 "bounce_candle": candidate_info["candle"],
                 "detection_time": datetime.now(),
-                "candles_waited": 0
+                "candles_waited": 0,
+                "max_confirmation_candles": candidate_info.get(
+                    "max_confirmation_candles",
+                    BOUNCE_CONFIRMATION_MAX_CANDLES,
+                ),
             }
             self._log_bounce_candidate_event(
                 "detected",

@@ -104,6 +104,7 @@ from project_paths import (
 
 EVENT_TICKERS_FILE = MASTER_AVWAP_EVENT_TICKERS_FILE
 PRIORITY_SETUPS_FILE = MASTER_AVWAP_PRIORITY_SETUPS_FILE
+THETA_PUTS_FILE = PRIORITY_SETUPS_FILE.with_name("master_avwap_theta_puts.txt")
 AVWAP_CSV_COLUMNS = [
     "run_date",
     "symbol",
@@ -260,6 +261,13 @@ PRIORITY_TRENDLINE_MIN_SEPARATION_BARS = 10
 PRIORITY_TRENDLINE_BREAK_RECENT_BARS = 3
 PRIORITY_TRENDLINE_BREAK_MAX_ATR = 1.5
 PRIORITY_TRENDLINE_BREAK_SCORE_BONUS = 18
+THETA_MIN_EARNINGS_BUFFER_DAYS = 21
+THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS = 63
+THETA_MIN_SUPPORT_LEVELS = 3
+THETA_SUPPORT_MAX_ATR = 3.0
+THETA_SUPPORT_MAX_PCT = 14.0
+THETA_SUPPORT_ABOVE_TOL_ATR = 0.05
+THETA_COMPRESSION_SUPPORT_LOOKBACK_BARS = 20
 PRIORITY_RETEST_LOOKBACK_BARS = 5
 PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
 PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
@@ -6837,6 +6845,11 @@ def fetch_earnings_for_date(date_str: str):
             EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES,
         ):
             return cached_rows if isinstance(cached_rows, list) else []
+        if date_str > today_iso and _is_timestamp_within_minutes(
+            cached_entry.get("fetched_at"),
+            EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES,
+        ):
+            return cached_rows if isinstance(cached_rows, list) else []
 
     try:
         resp = requests.get(API_URL.format(date=date_str),
@@ -6908,6 +6921,40 @@ def collect_earnings_dates(
     for sym, dates in symbol_dates.items():
         symbol_dates[sym] = _normalize_earnings_dates(dates, today=today)
 
+    return symbol_dates
+
+
+def collect_upcoming_earnings_dates(
+    symbols,
+    fetch_fn=fetch_earnings_for_date,
+    lookahead_days=THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS,
+    base_sleep=0.05,
+):
+    normalized_symbols = sorted(
+        {str(sym or "").strip().upper() for sym in symbols if str(sym or "").strip()}
+    )
+    symbol_dates = {sym: [] for sym in normalized_symbols}
+    if not symbol_dates:
+        return {}
+
+    today = datetime.now().date()
+    for delta in range(max(0, int(lookahead_days)) + 1):
+        day = today + timedelta(days=delta)
+        rows = fetch_fn(day.isoformat())
+        if not isinstance(rows, list):
+            rows = []
+        for row in rows:
+            sym = str(row.get("symbol", "")).strip().upper()
+            if sym not in symbol_dates:
+                continue
+            ds = day.isoformat()
+            if ds not in symbol_dates[sym]:
+                symbol_dates[sym].append(ds)
+        if base_sleep:
+            time.sleep(base_sleep)
+
+    for sym, dates in symbol_dates.items():
+        symbol_dates[sym] = sorted(set(dates))
     return symbol_dates
 
 
@@ -10222,6 +10269,333 @@ def find_directional_trendline_candidate(
     }
 
 
+def _format_theta_premium_target(last_close: float | None) -> str:
+    price = _coerce_float(last_close)
+    if price is None or price <= 0:
+        return "manual chain check"
+    if price < 12:
+        return "$0.20-$0.30"
+    if price < 25:
+        return "$0.25-$0.45"
+    if price < 40:
+        return "$0.50-$0.65"
+    if price < 75:
+        return "$0.50-$0.90"
+    if price < 110:
+        return "$1.00-$1.25"
+    if price < 160:
+        return "$1.25-$1.75"
+    return "$1.50-$2.00+"
+
+
+def _theta_support_entry(
+    label: str,
+    level: float | None,
+    last_close: float | None,
+    atr20: float | None,
+    source: str,
+) -> dict | None:
+    level_value = _coerce_float(level)
+    close_value = _coerce_float(last_close)
+    atr_value = _coerce_float(atr20)
+    if level_value is None or close_value is None or close_value <= 0:
+        return None
+    if atr_value is None or atr_value <= 0:
+        return None
+
+    distance = close_value - level_value
+    if distance < -(THETA_SUPPORT_ABOVE_TOL_ATR * atr_value):
+        return None
+    distance = max(0.0, distance)
+    distance_atr = distance / atr_value
+    distance_pct = distance / close_value * 100.0
+    if distance_atr > THETA_SUPPORT_MAX_ATR or distance_pct > THETA_SUPPORT_MAX_PCT:
+        return None
+
+    return {
+        "label": label,
+        "level": float(level_value),
+        "source": source,
+        "distance_atr": float(distance_atr),
+        "distance_pct": float(distance_pct),
+    }
+
+
+def _dedupe_theta_supports(supports: list[dict]) -> list[dict]:
+    seen_labels = set()
+    out = []
+    for entry in sorted(
+        supports,
+        key=lambda item: (
+            float(item.get("distance_atr", 999.0) or 999.0),
+            str(item.get("label") or ""),
+        ),
+    ):
+        label = str(entry.get("label") or "").strip()
+        if not label or label in seen_labels:
+            continue
+        seen_labels.add(label)
+        out.append(entry)
+    return out
+
+
+def _format_theta_support_stack(supports: list[dict], limit: int = 8) -> str:
+    if not supports:
+        return "None"
+    parts = []
+    for entry in supports[:limit]:
+        parts.append(
+            f"{entry.get('label')} {float(entry.get('level')):.2f} "
+            f"({float(entry.get('distance_atr', 0.0)):.1f} ATR)"
+        )
+    if len(supports) > limit:
+        parts.append(f"+{len(supports) - limit} more")
+    return ", ".join(parts)
+
+
+def _theta_earnings_window_summary(
+    last_trade_date: date,
+    recent_earnings_dates: list[str],
+    upcoming_earnings_dates: list[str],
+) -> dict:
+    last_earnings_date = None
+    for value in recent_earnings_dates or []:
+        parsed = _parse_iso_date_or_none(value)
+        if parsed is not None and parsed <= last_trade_date:
+            last_earnings_date = parsed
+            break
+
+    next_earnings_date = None
+    upcoming = []
+    for value in upcoming_earnings_dates or []:
+        parsed = _parse_iso_date_or_none(value)
+        if parsed is not None and parsed >= last_trade_date:
+            upcoming.append(parsed)
+    if upcoming:
+        next_earnings_date = min(upcoming)
+
+    days_since_last = (
+        (last_trade_date - last_earnings_date).days
+        if last_earnings_date is not None
+        else None
+    )
+    days_to_next = (
+        (next_earnings_date - last_trade_date).days
+        if next_earnings_date is not None
+        else None
+    )
+
+    recent_ok = days_since_last is None or days_since_last >= THETA_MIN_EARNINGS_BUFFER_DAYS
+    next_ok = days_to_next is None or days_to_next >= THETA_MIN_EARNINGS_BUFFER_DAYS
+    return {
+        "eligible": bool(recent_ok and next_ok),
+        "last_earnings_date": last_earnings_date.isoformat() if last_earnings_date else "",
+        "days_since_last_earnings": days_since_last,
+        "next_earnings_date": next_earnings_date.isoformat() if next_earnings_date else "",
+        "days_to_next_earnings": days_to_next,
+        "note": (
+            f"last={days_since_last}d, next={days_to_next}d"
+            if days_since_last is not None or days_to_next is not None
+            else f"no earnings found within +/- {THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS}d window"
+        ),
+    }
+
+
+def evaluate_theta_put_candidate(
+    symbol: str,
+    side: str,
+    df: pd.DataFrame,
+    last_trade_date: date,
+    last_close: float | None,
+    atr20: float | None,
+    current_anchor_meta: dict | None,
+    previous_anchor_meta: dict | None,
+    indicator_row: pd.Series | dict | None,
+    compression_summary: dict | None,
+    recent_earnings_dates: list[str],
+    upcoming_earnings_dates: list[str],
+) -> dict | None:
+    if normalize_side(side) != "LONG":
+        return None
+    close_value = _coerce_float(last_close)
+    atr_value = _coerce_float(atr20)
+    if close_value is None or close_value <= 0 or atr_value is None or atr_value <= 0:
+        return None
+
+    earnings_summary = _theta_earnings_window_summary(
+        last_trade_date,
+        recent_earnings_dates,
+        upcoming_earnings_dates,
+    )
+    if not earnings_summary["eligible"]:
+        return None
+
+    raw_supports = []
+    for label in ("SMA_20", "SMA_50", "SMA_100", "SMA_200"):
+        raw_supports.append(
+            _theta_support_entry(
+                label,
+                _indicator_level_value(indicator_row, label),
+                close_value,
+                atr_value,
+                "sma",
+            )
+        )
+
+    if current_anchor_meta:
+        current_bands = current_anchor_meta.get("bands", {}) if isinstance(current_anchor_meta.get("bands"), dict) else {}
+        raw_supports.extend(
+            [
+                _theta_support_entry("CURRENT_AVWAPE", current_anchor_meta.get("vwap"), close_value, atr_value, "avwape"),
+                _theta_support_entry("CURRENT_LOWER_1", current_bands.get("LOWER_1"), close_value, atr_value, "avwape"),
+                _theta_support_entry("CURRENT_UPPER_1", current_bands.get("UPPER_1"), close_value, atr_value, "avwape"),
+            ]
+        )
+
+    if previous_anchor_meta:
+        previous_bands = previous_anchor_meta.get("bands", {}) if isinstance(previous_anchor_meta.get("bands"), dict) else {}
+        raw_supports.extend(
+            [
+                _theta_support_entry("PREV_AVWAPE", previous_anchor_meta.get("vwap"), close_value, atr_value, "previous_avwape"),
+                _theta_support_entry("PREV_LOWER_1", previous_bands.get("LOWER_1"), close_value, atr_value, "previous_avwape"),
+                _theta_support_entry("PREV_UPPER_1", previous_bands.get("UPPER_1"), close_value, atr_value, "previous_avwape"),
+            ]
+        )
+
+    support_trendline = find_directional_trendline_candidate(
+        df,
+        side="SHORT",
+        last_close=close_value,
+        atr20=atr_value,
+    )
+    trendline_candidate = support_trendline.get("trendline_candidate")
+    if trendline_candidate:
+        raw_supports.append(
+            _theta_support_entry(
+                "TRENDLINE_SUPPORT",
+                trendline_candidate.get("current_line_price"),
+                close_value,
+                atr_value,
+                "trendline",
+            )
+        )
+
+    if bool((compression_summary or {}).get("is_compressed")) and df is not None and not df.empty:
+        recent = df.tail(THETA_COMPRESSION_SUPPORT_LOOKBACK_BARS)
+        if not recent.empty:
+            compression_low = pd.to_numeric(recent["low"], errors="coerce").dropna()
+            if not compression_low.empty:
+                raw_supports.append(
+                    _theta_support_entry(
+                        "COMPRESSION_LOW",
+                        float(compression_low.min()),
+                        close_value,
+                        atr_value,
+                        "compression",
+                    )
+                )
+
+    supports = _dedupe_theta_supports([entry for entry in raw_supports if entry])
+    if len(supports) < THETA_MIN_SUPPORT_LEVELS:
+        return None
+
+    sources = {entry.get("source") for entry in supports}
+    score = len(supports) * 20
+    if "avwape" in sources:
+        score += 8
+    if "previous_avwape" in sources:
+        score += 6
+    if "trendline" in sources:
+        score += 8
+    if "compression" in sources:
+        score += 6
+    if earnings_summary.get("days_to_next_earnings") is None or int(earnings_summary.get("days_to_next_earnings") or 0) >= 35:
+        score += 5
+
+    nearest_support = max(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
+    deepest_support = min(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
+    strike_zone = f"at/below {nearest_support['label']} {nearest_support['level']:.2f}"
+    if deepest_support["label"] != nearest_support["label"]:
+        strike_zone += f"; deeper stack to {deepest_support['label']} {deepest_support['level']:.2f}"
+
+    notes = [
+        f"{len(supports)} supports",
+        earnings_summary["note"],
+        "manual IV/premium check",
+    ]
+    if bool((compression_summary or {}).get("is_compressed")):
+        notes.append((compression_summary or {}).get("compression_note", "compression zone"))
+    if trendline_candidate:
+        notes.append("support trendline nearby")
+
+    return {
+        "symbol": str(symbol or "").strip().upper(),
+        "side": "LONG",
+        "score": int(score),
+        "last_trade_date": last_trade_date.isoformat() if hasattr(last_trade_date, "isoformat") else str(last_trade_date),
+        "last_close": float(close_value),
+        "atr20": float(atr_value),
+        "support_count": int(len(supports)),
+        "supports": supports,
+        "support_summary": _format_theta_support_stack(supports),
+        "strike_zone": strike_zone,
+        "premium_target": _format_theta_premium_target(close_value),
+        "last_earnings_date": earnings_summary.get("last_earnings_date", ""),
+        "days_since_last_earnings": earnings_summary.get("days_since_last_earnings"),
+        "next_earnings_date": earnings_summary.get("next_earnings_date", ""),
+        "days_to_next_earnings": earnings_summary.get("days_to_next_earnings"),
+        "notes": "; ".join(part for part in notes if part),
+    }
+
+
+def write_theta_put_report(path: Path, theta_rows: list[dict]) -> None:
+    rows = sorted(
+        theta_rows or [],
+        key=lambda row: (
+            -int(row.get("support_count", 0) or 0),
+            -int(row.get("score", 0) or 0),
+            str(row.get("symbol") or ""),
+        ),
+    )
+    buffer = io.StringIO()
+    handle = buffer
+    handle.write("Master AVWAP theta put-selling candidates\n")
+    handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    handle.write(
+        "Rules: LONG watchlist only; recommendation-only; >=3 nearby support references; "
+        f"no known earnings within {THETA_MIN_EARNINGS_BUFFER_DAYS} calendar days before/after scan date.\n"
+    )
+    handle.write(
+        "Premium targets are manual 1-2 week reference ranges. Live IBKR IV/chain filtering is not enabled yet.\n\n"
+    )
+
+    if not rows:
+        handle.write("No theta put-selling candidates found.\n")
+        _write_text_atomic(path, buffer.getvalue())
+        return
+
+    handle.write("Recommended theta candidates\n")
+    handle.write("----------------------------\n")
+    for idx, row in enumerate(rows, start=1):
+        next_earnings = row.get("next_earnings_date") or f">{THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS}d/unknown"
+        days_to_next = row.get("days_to_next_earnings")
+        next_suffix = f" ({days_to_next}d)" if days_to_next is not None else ""
+        last_earnings = row.get("last_earnings_date") or "unknown"
+        days_since_last = row.get("days_since_last_earnings")
+        last_suffix = f" ({days_since_last}d ago)" if days_since_last is not None else ""
+        handle.write(
+            f"{idx}. {row.get('symbol')} | close={float(row.get('last_close')):.2f} "
+            f"| score={int(row.get('score', 0) or 0)} "
+            f"| supports={int(row.get('support_count', 0) or 0)} "
+            f"| premium_target={row.get('premium_target')}\n"
+        )
+        handle.write(f"   strike_zone={row.get('strike_zone')}\n")
+        handle.write(f"   support_stack={row.get('support_summary')}\n")
+        handle.write(f"   earnings=last {last_earnings}{last_suffix}; next {next_earnings}{next_suffix}\n")
+        handle.write(f"   notes={row.get('notes')}\n")
+    _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
+
+
 def assess_priority_directional_obstacles(
     side: str,
     last_close: float,
@@ -12462,9 +12836,11 @@ def run_master(
             f"No symbols found in {watchlist_label}. Running anchor-watchlist scan only."
         )
         _run_anchor_watchlist_scan_safe()
+        write_theta_put_report(THETA_PUTS_FILE, [])
         return {
             "watchlist_label": watchlist_label,
             "tracked_rows": [],
+            "theta_put_rows": [],
             "ai_state": {},
             "feature_rows_by_symbol": {},
             "daily_frames_by_symbol": {},
@@ -12478,6 +12854,7 @@ def run_master(
     history = load_history()
 
     earnings_data, latest_release_map = load_scan_earnings_context(symbols)
+    upcoming_earnings_map = collect_upcoming_earnings_dates(symbols)
     today_iso = datetime.now().date().isoformat()
     earnings_cache_updated = False
 
@@ -12541,6 +12918,7 @@ def run_master(
     feature_rows_by_symbol = {}
     daily_frames_by_symbol = {}
     priority_rows = []
+    theta_put_rows = []
     positions = {
         "current": {lvl: [] for lvl in POSITION_LEVELS},
         "previous": {lvl: [] for lvl in POSITION_LEVELS},
@@ -13190,6 +13568,24 @@ def run_master(
             **bouncebot_focus_context,
         }
 
+        theta_candidate = evaluate_theta_put_candidate(
+            symbol=sym,
+            side=side,
+            df=df,
+            last_trade_date=last_trade_date,
+            last_close=last_close,
+            atr20=atr20,
+            current_anchor_meta=current_anchor_meta,
+            previous_anchor_meta=prev_anchor_meta,
+            indicator_row=indicator_row,
+            compression_summary=compression_summary,
+            recent_earnings_dates=recent_earnings_dates,
+            upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
+        )
+        if theta_candidate:
+            theta_put_rows.append(theta_candidate)
+            symbol_entry["theta_put_candidate"] = theta_candidate
+
         priority_summary = build_priority_setup_summary(
             symbol=sym,
             side=side,
@@ -13457,6 +13853,7 @@ def run_master(
     run_result: dict[str, object] = {
         "watchlist_label": watchlist_label,
         "tracked_rows": tracked_rows,
+        "theta_put_rows": theta_put_rows,
         "ai_state": ai_state,
         "feature_rows_by_symbol": feature_rows_by_symbol,
         "daily_frames_by_symbol": daily_frames_by_symbol,
@@ -13566,6 +13963,7 @@ def run_master(
     # trim history to last N days
     trim_history(history)
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
+    write_theta_put_report(THETA_PUTS_FILE, theta_put_rows)
     write_master_avwap_focus_feed(MASTER_AVWAP_FOCUS_FILE, priority_rows, ai_state)
 
     # write human-readable events file (grouped for easier scanning)
@@ -13854,6 +14252,7 @@ class MasterAvwapGUI:
         self._build_layout()
         self.refresh_table()
         self.refresh_avwap_output_view()
+        self.refresh_theta_output_view()
         self.refresh_anchor_output_view()
         self.refresh_market_prep_view()
         self.refresh_setup_tracker_view()
@@ -13954,6 +14353,8 @@ class MasterAvwapGUI:
             self.long_focus_symbols_text,
             self.short_focus_symbols_text,
             self.setup_type_symbols_text,
+            self.theta_text,
+            self.theta_symbols_text,
             self.bulk_anchor_text,
             self.anchor_scan_text,
             self.setup_tracker_stats_text,
@@ -14557,6 +14958,41 @@ class MasterAvwapGUI:
         self.setup_type_symbols_text = tk.Text(setup_type_copy_frame, wrap="word", height=12, font=("Courier New", 10))
         self.setup_type_symbols_text.pack(fill="both", expand=True, padx=8, pady=(8, 8))
 
+        theta_tab = ttk.Frame(self.notebook)
+        self.theta_tab = theta_tab
+        self.notebook.add(theta_tab, text="Theta Plays")
+
+        ttk.Label(
+            theta_tab,
+            text="Theta put-selling candidates are recommendation-only and are not added to the setup tracker.",
+            justify="left",
+            wraplength=1100,
+        ).pack(fill="x", pady=(0, 8))
+
+        theta_body = ttk.Frame(theta_tab)
+        theta_body.pack(fill="both", expand=True)
+
+        theta_main = ttk.Frame(theta_body)
+        theta_main.pack(side="left", fill="both", expand=True)
+        self.theta_text = tk.Text(theta_main, wrap="word", font=("Courier New", 10))
+        self.theta_text.pack(side="left", fill="both", expand=True)
+        theta_scroll = ttk.Scrollbar(theta_main, orient="vertical", command=self.theta_text.yview)
+        self.theta_text.configure(yscrollcommand=theta_scroll.set)
+        theta_scroll.pack(side="right", fill="y")
+
+        theta_side = ttk.Frame(theta_body, width=340)
+        theta_side.pack(side="right", fill="y", padx=(12, 0))
+        theta_side.pack_propagate(False)
+        theta_symbols_frame = ttk.LabelFrame(theta_side, text="Theta Symbols")
+        theta_symbols_frame.pack(fill="x")
+        self.theta_symbols_text = tk.Text(theta_symbols_frame, wrap="word", height=10, font=("Courier New", 10))
+        self.theta_symbols_text.pack(fill="both", expand=True, padx=8, pady=(8, 8))
+        ttk.Button(
+            theta_symbols_frame,
+            text="Copy Theta Symbols",
+            command=self.copy_theta_symbols,
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+
         anchor_scan_tab = ttk.Frame(self.notebook)
         self.anchor_scan_tab = anchor_scan_tab
         self.notebook.add(anchor_scan_tab, text="Anchor Results")
@@ -14752,6 +15188,8 @@ class MasterAvwapGUI:
             self.refresh_table()
         elif selected_tab == str(self.avwap_tab):
             self.refresh_avwap_output_view()
+        elif selected_tab == str(self.theta_tab):
+            self.refresh_theta_output_view()
         elif selected_tab == str(self.anchor_scan_tab):
             self.refresh_anchor_output_view()
         elif selected_tab == str(self.market_prep_tab):
@@ -15855,6 +16293,13 @@ class MasterAvwapGUI:
             "Copied setup type groups to clipboard.",
         )
 
+    def copy_theta_symbols(self):
+        self._copy_text_widget_contents(
+            self.theta_symbols_text,
+            "No theta symbols to copy.",
+            "Copied theta symbols to clipboard.",
+        )
+
     def _current_user_favorite_output_context(self) -> dict:
         payload = self._load_focus_payload()
         return {
@@ -15953,7 +16398,6 @@ class MasterAvwapGUI:
             return
         self._copy_to_clipboard("\n".join(chunks))
         self.status_var.set("Copied all market prep lists to clipboard.")
-
     def clear_bulk_anchor_text(self):
         self.bulk_anchor_text.delete("1.0", tk.END)
         self.status_var.set("Cleared pasted ticker input.")
@@ -15984,6 +16428,20 @@ class MasterAvwapGUI:
         self._set_text_widget_contents(self.avwap_text, combined)
         self._highlight_trendline_candidates_in_avwap_output()
         self.refresh_focus_group_boxes()
+        self._notify_output_changed()
+
+    def refresh_theta_output_view(self):
+        theta_section = self._read_text_file(THETA_PUTS_FILE)
+        text = theta_section or "No theta put-selling output yet."
+        self._set_text_widget_contents(self.theta_text, text)
+
+        symbols = []
+        for raw_line in text.splitlines():
+            match = re.match(r"^\s*\d+\.\s+([A-Z0-9.\-]+)\b", raw_line.strip())
+            if match:
+                symbols.append(match.group(1).upper())
+        symbol_text = _format_symbol_group(symbols) if symbols else "None"
+        self._set_text_widget_contents(self.theta_symbols_text, symbol_text)
         self._notify_output_changed()
 
     def refresh_anchor_output_view(self):
@@ -16124,6 +16582,7 @@ class MasterAvwapGUI:
             f"Scheduled shared-watchlist scan for {trigger_slot} complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
+                self.refresh_theta_output_view(),
                 self.refresh_anchor_output_view(),
                 self.refresh_market_prep_view(),
                 self.refresh_setup_tracker_view(),
@@ -16244,6 +16703,7 @@ class MasterAvwapGUI:
             "Shared-watchlist Master AVWAP scan complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
+                self.refresh_theta_output_view(),
                 self.refresh_anchor_output_view(),
                 self.refresh_market_prep_view(),
                 self.refresh_setup_tracker_view(),
@@ -16258,6 +16718,7 @@ class MasterAvwapGUI:
             "Local-watchlist Master AVWAP scan complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
+                self.refresh_theta_output_view(),
                 self.refresh_anchor_output_view(),
                 self.refresh_market_prep_view(),
                 self.refresh_setup_tracker_view(),

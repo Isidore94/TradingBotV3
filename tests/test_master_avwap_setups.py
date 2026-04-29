@@ -1,7 +1,7 @@
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,6 +30,8 @@ from master_avwap import (  # noqa: E402
     build_master_avwap_focus_setup_type_text,
     build_master_avwap_focus_side_groups,
     build_recent_tracker_setup_family_rows,
+    compute_indicator_frame,
+    evaluate_theta_put_candidate,
     format_market_prep_payload_report,
     load_scan_earnings_context,
     rank_tracker_setup_type_rows,
@@ -1254,6 +1256,82 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertEqual(written.loc[0, "overlap_symbols"], "AAPL")
             self.assertEqual(written.loc[0, "missing_from_bot_symbols"], "TSLA")
             self.assertIn("MSFT", written.loc[0, "bot_not_selected_symbols"])
+
+    def test_theta_put_candidate_requires_support_stack_and_earnings_buffer(self):
+        dates = pd.bdate_range("2025-08-01", periods=180)
+        rows = []
+        for idx, dt_value in enumerate(dates):
+            close_price = 60.0 + (idx * 0.22)
+            rows.append(
+                {
+                    "datetime": dt_value,
+                    "open": close_price - 0.2,
+                    "high": close_price + 0.8,
+                    "low": close_price - 0.8,
+                    "close": close_price,
+                    "volume": 1_000_000,
+                }
+            )
+        df = pd.DataFrame(rows)
+        indicator_row = compute_indicator_frame(df).iloc[-1]
+        last_trade_date = df.iloc[-1]["datetime"].date()
+        last_close = float(df.iloc[-1]["close"])
+
+        candidate = evaluate_theta_put_candidate(
+            symbol="MU",
+            side="LONG",
+            df=df,
+            last_trade_date=last_trade_date,
+            last_close=last_close,
+            atr20=10.0,
+            current_anchor_meta={"vwap": last_close - 3.0, "bands": {"LOWER_1": last_close - 6.0, "UPPER_1": last_close - 1.5}},
+            previous_anchor_meta={"vwap": last_close - 4.0, "bands": {"LOWER_1": last_close - 8.0, "UPPER_1": last_close - 2.5}},
+            indicator_row=indicator_row,
+            compression_summary={"is_compressed": False},
+            recent_earnings_dates=[(last_trade_date - timedelta(days=35)).isoformat()],
+            upcoming_earnings_dates=[(last_trade_date + timedelta(days=35)).isoformat()],
+        )
+
+        self.assertIsNotNone(candidate)
+        self.assertGreaterEqual(candidate["support_count"], 3)
+        self.assertEqual(candidate["side"], "LONG")
+
+    def test_theta_put_candidate_rejects_recent_earnings(self):
+        dates = pd.bdate_range("2025-08-01", periods=180)
+        rows = []
+        for idx, dt_value in enumerate(dates):
+            close_price = 60.0 + (idx * 0.22)
+            rows.append(
+                {
+                    "datetime": dt_value,
+                    "open": close_price - 0.2,
+                    "high": close_price + 0.8,
+                    "low": close_price - 0.8,
+                    "close": close_price,
+                    "volume": 1_000_000,
+                }
+            )
+        df = pd.DataFrame(rows)
+        indicator_row = compute_indicator_frame(df).iloc[-1]
+        last_trade_date = df.iloc[-1]["datetime"].date()
+        last_close = float(df.iloc[-1]["close"])
+
+        candidate = evaluate_theta_put_candidate(
+            symbol="MU",
+            side="LONG",
+            df=df,
+            last_trade_date=last_trade_date,
+            last_close=last_close,
+            atr20=10.0,
+            current_anchor_meta={"vwap": last_close - 3.0, "bands": {"LOWER_1": last_close - 6.0, "UPPER_1": last_close - 1.5}},
+            previous_anchor_meta={"vwap": last_close - 4.0, "bands": {"LOWER_1": last_close - 8.0, "UPPER_1": last_close - 2.5}},
+            indicator_row=indicator_row,
+            compression_summary={"is_compressed": False},
+            recent_earnings_dates=[(last_trade_date - timedelta(days=10)).isoformat()],
+            upcoming_earnings_dates=[(last_trade_date + timedelta(days=35)).isoformat()],
+        )
+
+        self.assertIsNone(candidate)
 
 
 if __name__ == "__main__":
