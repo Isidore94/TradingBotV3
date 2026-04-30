@@ -26,12 +26,14 @@ from master_avwap import (  # noqa: E402
     apply_recent_tracker_setup_family_adjustments,
     attach_setup_candidate_payloads,
     build_market_prep_payload,
+    build_combined_avwap_output_text,
     build_priority_setup_summary,
     build_master_avwap_focus_setup_type_text,
     build_master_avwap_focus_side_groups,
     build_recent_tracker_setup_family_rows,
     compute_indicator_frame,
     evaluate_theta_put_candidate,
+    extract_theta_symbols_from_report,
     format_market_prep_payload_report,
     load_scan_earnings_context,
     rank_tracker_setup_type_rows,
@@ -1372,6 +1374,44 @@ class MasterAvwapSetupTests(unittest.TestCase):
         )
 
         self.assertIsNone(candidate)
+
+    def test_master_scan_watchlists_include_master_only_swing_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            longs_path = root / "longs.txt"
+            shorts_path = root / "shorts.txt"
+            swing_longs_path = root / "swinglongs.txt"
+            swing_shorts_path = root / "shortswings.txt"
+            longs_path.write_text("AAPL\nMSFT\n", encoding="utf-8")
+            shorts_path.write_text("TSLA\n", encoding="utf-8")
+            swing_longs_path.write_text("NVDA\nAAPL\n", encoding="utf-8")
+            swing_shorts_path.write_text("AMD\n", encoding="utf-8")
+
+            with (
+                patch.object(master_avwap, "LONGS_FILE", longs_path),
+                patch.object(master_avwap, "SHORTS_FILE", shorts_path),
+                patch.object(master_avwap, "SWING_LONGS_FILE", swing_longs_path),
+                patch.object(master_avwap, "SWING_SHORTS_FILE", swing_shorts_path),
+            ):
+                long_paths, short_paths, label = master_avwap.resolve_master_scan_watchlist_paths()
+                longs = master_avwap.load_tickers_from_paths(long_paths, optional_paths={swing_longs_path})
+                shorts = master_avwap.load_tickers_from_paths(short_paths, optional_paths={swing_shorts_path})
+
+            self.assertIn("swing watchlists", label)
+            self.assertEqual(longs, ["AAPL", "MSFT", "NVDA"])
+            self.assertEqual(shorts, ["TSLA", "AMD"])
+
+    def test_combined_avwap_output_places_theta_near_top(self):
+        text = build_combined_avwap_output_text(
+            "Priority rows",
+            "1. NVDA | close=100.00 | score=10",
+            "Event rows",
+            "Stdev rows",
+        )
+
+        self.assertLess(text.index("MASTER AVWAP THETA PLAYS"), text.index("MASTER AVWAP EVENT TICKERS"))
+        self.assertIn("1. NVDA", text)
+        self.assertEqual(extract_theta_symbols_from_report(text), ["NVDA"])
 
 
 if __name__ == "__main__":

@@ -40,8 +40,10 @@ from master_avwap_shared import load_tradingview_groups
 from master_avwap import (
     ATR_LENGTH,
     MasterAvwapGUI,
+    THETA_PUTS_FILE,
     connect_daily_data_client,
     disconnect_daily_data_client,
+    extract_theta_symbols_from_report,
     fetch_daily_bars,
     is_daily_data_client_connected,
     load_tickers,
@@ -69,6 +71,8 @@ from project_paths import (
     MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
     PERSISTENT_RUNTIME_DATA_DIR,
     SHORTS_FILE,
+    SWING_LONGS_FILE,
+    SWING_SHORTS_FILE,
     get_tracker_storage_details,
 )
 
@@ -436,6 +440,12 @@ def _rewrite_watchlist_symbols(path: Path, keep_symbols: list[str]) -> None:
     path.write_text(f"{content}\n" if content else "", encoding="utf-8")
 
 
+def _load_watchlist_filter_symbols(path: Path, optional: bool = False) -> list[str]:
+    if optional and not path.exists():
+        return []
+    return _dedupe_symbols(load_tickers(path))
+
+
 def format_watchlist_filter_summary(summary: Any) -> str:
     if not isinstance(summary, dict):
         return "Not run yet."
@@ -457,36 +467,79 @@ def format_watchlist_filter_summary(summary: Any) -> str:
 
 def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
     started_at = datetime.now()
-    longs = _dedupe_symbols(load_tickers(LONGS_FILE))
-    shorts = _dedupe_symbols(load_tickers(SHORTS_FILE))
+    watchlists = [
+        {
+            "key": "longs",
+            "label": "longs",
+            "path": LONGS_FILE,
+            "side": "long",
+            "symbols": _load_watchlist_filter_symbols(LONGS_FILE),
+        },
+        {
+            "key": "shorts",
+            "label": "shorts",
+            "path": SHORTS_FILE,
+            "side": "short",
+            "symbols": _load_watchlist_filter_symbols(SHORTS_FILE),
+        },
+        {
+            "key": "swing_longs",
+            "label": "swing longs",
+            "path": SWING_LONGS_FILE,
+            "side": "long",
+            "symbols": _load_watchlist_filter_symbols(SWING_LONGS_FILE, optional=True),
+        },
+        {
+            "key": "swing_shorts",
+            "label": "short swings",
+            "path": SWING_SHORTS_FILE,
+            "side": "short",
+            "symbols": _load_watchlist_filter_symbols(SWING_SHORTS_FILE, optional=True),
+        },
+    ]
+    long_watchlists = [item for item in watchlists if item["side"] == "long"]
+    short_watchlists = [item for item in watchlists if item["side"] == "short"]
+    long_symbols = sorted({symbol for item in long_watchlists for symbol in item["symbols"]})
+    short_symbols = sorted({symbol for item in short_watchlists for symbol in item["symbols"]})
+
     summary = {
         "ran_at": started_at.isoformat(timespec="seconds"),
         "status": "ok",
-        "longs_before": len(longs),
-        "shorts_before": len(shorts),
-        "longs_after": len(longs),
-        "shorts_after": len(shorts),
+        "longs_before": len(watchlists[0]["symbols"]),
+        "shorts_before": len(watchlists[1]["symbols"]),
+        "longs_after": len(watchlists[0]["symbols"]),
+        "shorts_after": len(watchlists[1]["symbols"]),
+        "swing_longs_before": len(watchlists[2]["symbols"]),
+        "swing_shorts_before": len(watchlists[3]["symbols"]),
+        "swing_longs_after": len(watchlists[2]["symbols"]),
+        "swing_shorts_after": len(watchlists[3]["symbols"]),
+        "master_longs_before": sum(len(item["symbols"]) for item in long_watchlists),
+        "master_shorts_before": sum(len(item["symbols"]) for item in short_watchlists),
+        "master_longs_after": sum(len(item["symbols"]) for item in long_watchlists),
+        "master_shorts_after": sum(len(item["symbols"]) for item in short_watchlists),
         "symbols_considered": 0,
         "symbols_with_live_session_bar": 0,
         "symbols_skipped_no_session_bar": 0,
         "removed_longs": [],
         "removed_shorts": [],
+        "removed_swing_longs": [],
+        "removed_swing_shorts": [],
         "message": "",
     }
 
-    if not longs and not shorts:
+    if not long_symbols and not short_symbols:
         summary["status"] = "no_symbols"
         summary["message"] = "No symbols were available to filter."
         logging.info(summary["message"])
         return summary
 
-    long_set = set(longs)
-    short_set = set(shorts)
+    long_set = set(long_symbols)
+    short_set = set(short_symbols)
     symbol_list = sorted(long_set | short_set)
     summary["symbols_considered"] = len(symbol_list)
 
-    removed_longs = []
-    removed_shorts = []
+    removed_long_symbols = []
+    removed_short_symbols = []
     skipped_no_session_bar = 0
     ib = None
     try:
@@ -500,9 +553,9 @@ def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
 
             summary["symbols_with_live_session_bar"] += 1
             if symbol in long_set and day_range["current_low"] < day_range["previous_low"]:
-                removed_longs.append(symbol)
+                removed_long_symbols.append(symbol)
             if symbol in short_set and day_range["current_high"] > day_range["previous_high"]:
-                removed_shorts.append(symbol)
+                removed_short_symbols.append(symbol)
     except Exception as exc:
         summary["status"] = "error"
         summary["error"] = str(exc)
@@ -514,20 +567,30 @@ def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
 
     summary["symbols_skipped_no_session_bar"] = skipped_no_session_bar
 
-    removed_long_set = set(removed_longs)
-    removed_short_set = set(removed_shorts)
-    kept_longs = [symbol for symbol in longs if symbol not in removed_long_set]
-    kept_shorts = [symbol for symbol in shorts if symbol not in removed_short_set]
+    removed_long_set = set(removed_long_symbols)
+    removed_short_set = set(removed_short_symbols)
+    removed_by_key = {}
+    after_by_key = {}
+    for item in watchlists:
+        removed_set = removed_long_set if item["side"] == "long" else removed_short_set
+        original_symbols = item["symbols"]
+        removed_from_file = sorted({symbol for symbol in original_symbols if symbol in removed_set})
+        kept_symbols = [symbol for symbol in original_symbols if symbol not in removed_set]
+        if removed_from_file:
+            _rewrite_watchlist_symbols(item["path"], kept_symbols)
+        removed_by_key[item["key"]] = removed_from_file
+        after_by_key[item["key"]] = len(kept_symbols)
 
-    if removed_long_set:
-        _rewrite_watchlist_symbols(LONGS_FILE, kept_longs)
-    if removed_short_set:
-        _rewrite_watchlist_symbols(SHORTS_FILE, kept_shorts)
-
-    summary["removed_longs"] = sorted(removed_long_set)
-    summary["removed_shorts"] = sorted(removed_short_set)
-    summary["longs_after"] = len(kept_longs)
-    summary["shorts_after"] = len(kept_shorts)
+    summary["removed_longs"] = removed_by_key["longs"]
+    summary["removed_shorts"] = removed_by_key["shorts"]
+    summary["removed_swing_longs"] = removed_by_key["swing_longs"]
+    summary["removed_swing_shorts"] = removed_by_key["swing_shorts"]
+    summary["longs_after"] = after_by_key["longs"]
+    summary["shorts_after"] = after_by_key["shorts"]
+    summary["swing_longs_after"] = after_by_key["swing_longs"]
+    summary["swing_shorts_after"] = after_by_key["swing_shorts"]
+    summary["master_longs_after"] = after_by_key["longs"] + after_by_key["swing_longs"]
+    summary["master_shorts_after"] = after_by_key["shorts"] + after_by_key["swing_shorts"]
 
     if summary["symbols_with_live_session_bar"] == 0:
         summary["status"] = "waiting_for_session"
@@ -535,15 +598,17 @@ def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
             "No live session bar was available yet; watchlists were left unchanged."
         )
     else:
+        removed_long_total = len(summary["removed_longs"]) + len(summary["removed_swing_longs"])
+        removed_short_total = len(summary["removed_shorts"]) + len(summary["removed_swing_shorts"])
         parts = [
             f"checked {summary['symbols_with_live_session_bar']}/{summary['symbols_considered']} symbol(s)",
-            f"removed {len(summary['removed_longs'])} long(s)",
-            f"removed {len(summary['removed_shorts'])} short(s)",
+            f"removed {removed_long_total} long-side symbol(s)",
+            f"removed {removed_short_total} short-side symbol(s)",
         ]
-        if summary["removed_longs"]:
-            parts.append(f"longs: {_format_symbol_preview(summary['removed_longs'])}")
-        if summary["removed_shorts"]:
-            parts.append(f"shorts: {_format_symbol_preview(summary['removed_shorts'])}")
+        for item in watchlists:
+            removed_symbols = summary.get(f"removed_{item['key']}", [])
+            if removed_symbols:
+                parts.append(f"{item['label']}: {_format_symbol_preview(removed_symbols)}")
         if skipped_no_session_bar:
             parts.append(f"skipped {skipped_no_session_bar} without a live session bar")
         summary["message"] = "; ".join(parts)
@@ -724,7 +789,11 @@ def write_status_file(
     next_slot = get_next_pending_slot(state, schedule, now=now)
     longs_count = count_watchlist_symbols(LONGS_FILE)
     shorts_count = count_watchlist_symbols(SHORTS_FILE)
+    swing_longs_count = count_watchlist_symbols(SWING_LONGS_FILE)
+    swing_shorts_count = count_watchlist_symbols(SWING_SHORTS_FILE)
     main_report = read_text(MASTER_AVWAP_REPORT_FILE)
+    theta_report = read_text(THETA_PUTS_FILE)
+    theta_symbols = extract_theta_symbols_from_report(theta_report)
     filter_summary = state.get("last_filter_summary")
     tradingview_groups = load_tradingview_groups()
     favorite_symbols = (
@@ -739,6 +808,7 @@ def write_status_file(
 
     lines = [
         "Master AVWAP Mini PC Status",
+        f"Theta Paste: {_format_symbol_group(theta_symbols)}",
         f"TV Paste: {_format_symbol_group(favorite_focus_symbols)}",
         f"Generated at: {now.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Phase: {phase}",
@@ -752,6 +822,8 @@ def write_status_file(
         f"Shared folder: {storage['data_dir']}",
         f"Long watchlist count: {longs_count} ({LONGS_FILE})",
         f"Short watchlist count: {shorts_count} ({SHORTS_FILE})",
+        f"Master swing long count: {swing_longs_count} ({SWING_LONGS_FILE})",
+        f"Master short swing count: {swing_shorts_count} ({SWING_SHORTS_FILE})",
         f"Last watchlist filter: {format_watchlist_filter_summary(filter_summary)}",
         f"TV paste source: {tradingview_groups.get('source_label', 'Unknown')}",
         f"Setup tracker: {MASTER_AVWAP_SETUP_TRACKER_FILE}",
@@ -765,6 +837,7 @@ def write_status_file(
         f"Scoring recommendations JSON: {MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE}",
         f"Scoring tuner report: {MASTER_AVWAP_SCORING_TUNER_REPORT_FILE}",
         f"Priority setups report: {MASTER_AVWAP_PRIORITY_SETUPS_FILE}",
+        f"Theta plays report: {THETA_PUTS_FILE}",
         f"Ticker buckets report: {MASTER_AVWAP_EVENT_TICKERS_FILE}",
         f"Focus feed JSON: {MASTER_AVWAP_FOCUS_FILE}",
         f"Stdev report: {MASTER_AVWAP_STDEV_REPORT_FILE}",
@@ -774,6 +847,19 @@ def write_status_file(
 
     if note:
         lines.extend(["", f"Note: {note}"])
+
+    lines.extend(
+        [
+            "",
+            "Theta Plays",
+            f"Theta candidates: {_format_symbol_group(theta_symbols)}",
+        ]
+    )
+    if theta_report:
+        theta_preview = "\n".join(theta_report.splitlines()[:24]).strip()
+        lines.extend(["Theta report preview:", theta_preview or "(No theta report details.)"])
+    else:
+        lines.append("(No theta put-selling report has been written yet.)")
 
     lines.extend(
         [
@@ -1573,6 +1659,7 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
 
                 self.refresh_table()
                 self.refresh_avwap_output_view()
+                self.refresh_theta_output_view()
                 self.refresh_anchor_output_view()
                 self.refresh_market_prep_view()
                 self.refresh_setup_tracker_view()

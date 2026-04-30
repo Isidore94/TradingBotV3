@@ -53,6 +53,8 @@ from project_paths import (
     ROOT_DIR,
     LONGS_FILE,
     SHORTS_FILE,
+    SWING_LONGS_FILE,
+    SWING_SHORTS_FILE,
     EARNINGS_CACHE_FILE,
     PREV_EARNINGS_CACHE_FILE,
     EARNINGS_DATES_CACHE_FILE,
@@ -1159,6 +1161,22 @@ def load_tickers(path: Path):
     return out
 
 
+def load_tickers_from_paths(paths: list[Path] | tuple[Path, ...], optional_paths: set[Path] | None = None) -> list[str]:
+    optional_paths = {Path(path) for path in (optional_paths or set())}
+    symbols: list[str] = []
+    seen = set()
+    for raw_path in paths:
+        path = Path(raw_path)
+        if path in optional_paths and not path.exists():
+            continue
+        for symbol in load_tickers(path):
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            symbols.append(symbol)
+    return symbols
+
+
 def _parse_clock_time(value: str) -> datetime.time:
     return datetime.strptime(str(value).strip(), "%H:%M").time()
 
@@ -1237,6 +1255,28 @@ def resolve_scan_watchlist_paths(
         shared_longs_path, shared_shorts_path = get_shared_watchlist_paths()
         return shared_longs_path, shared_shorts_path, "home folder watchlists"
     return LONGS_FILE, SHORTS_FILE, "home folder watchlists"
+
+
+def resolve_master_scan_watchlist_paths(
+    longs_path: Path | None = None,
+    shorts_path: Path | None = None,
+    use_shared_watchlists: bool = False,
+) -> tuple[list[Path], list[Path], str]:
+    if longs_path is not None and shorts_path is not None:
+        return [Path(longs_path)], [Path(shorts_path)], "custom watchlists"
+
+    base_longs_path, base_shorts_path, _ = resolve_scan_watchlist_paths(
+        use_shared_watchlists=use_shared_watchlists,
+    )
+    return (
+        [base_longs_path, SWING_LONGS_FILE],
+        [base_shorts_path, SWING_SHORTS_FILE],
+        "home folder watchlists + Master AVWAP swing watchlists",
+    )
+
+
+def _format_watchlist_path_group(paths: list[Path] | tuple[Path, ...]) -> str:
+    return " + ".join(str(path) for path in paths)
 
 
 def run_master_with_shared_watchlists():
@@ -10601,6 +10641,51 @@ def write_theta_put_report(path: Path, theta_rows: list[dict]) -> None:
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
+def extract_theta_symbols_from_report(text: str) -> list[str]:
+    symbols = []
+    seen = set()
+    for raw_line in str(text or "").splitlines():
+        match = re.match(r"^\s*\d+\.\s+([A-Z0-9.\-]+)\b", raw_line.strip())
+        if not match:
+            continue
+        symbol = match.group(1).upper()
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+    return symbols
+
+
+def build_combined_avwap_output_text(
+    priority_section: str,
+    theta_section: str,
+    event_section: str,
+    stdev_section: str,
+) -> str:
+    return (
+        "MASTER AVWAP PRIORITY SETUPS\n"
+        + "=" * 80
+        + "\n"
+        + (priority_section or "No priority setup output yet.")
+        + "\n\n"
+        + "MASTER AVWAP THETA PLAYS\n"
+        + "=" * 80
+        + "\n"
+        + (theta_section or "No theta put-selling output yet.")
+        + "\n\n"
+        + "MASTER AVWAP EVENT TICKERS\n"
+        + "=" * 80
+        + "\n"
+        + (event_section or "No event tickers output yet.")
+        + "\n\n"
+        + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
+        + "=" * 80
+        + "\n"
+        + (stdev_section or "No stdev output yet.")
+        + "\n"
+    )
+
+
 def assess_priority_directional_obstacles(
     side: str,
     last_close: float,
@@ -12751,13 +12836,14 @@ def backfill_setup_tracker_from_recent_sessions(
     use_shared_watchlists: bool = False,
 ) -> dict:
     lookback_sessions = max(1, int(lookback_sessions))
-    longs_path, shorts_path, watchlist_label = resolve_scan_watchlist_paths(
+    long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
         shorts_path=shorts_path,
         use_shared_watchlists=use_shared_watchlists,
     )
-    longs = load_tickers(longs_path)
-    shorts = load_tickers(shorts_path)
+    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE}
+    longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
+    shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
     symbols = sorted(set(longs + shorts))
     if not symbols:
         logging.warning(f"No symbols found in {watchlist_label}; historical tracker backfill skipped.")
@@ -12916,15 +13002,19 @@ def run_master(
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
 ):
-    longs_path, shorts_path, watchlist_label = resolve_scan_watchlist_paths(
+    long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
         shorts_path=shorts_path,
         use_shared_watchlists=use_shared_watchlists,
     )
-    logging.info(f"Running Master AVWAP scan using {watchlist_label}: {longs_path} | {shorts_path}")
+    logging.info(
+        f"Running Master AVWAP scan using {watchlist_label}: "
+        f"{_format_watchlist_path_group(long_paths)} | {_format_watchlist_path_group(short_paths)}"
+    )
 
-    longs = load_tickers(longs_path)
-    shorts = load_tickers(shorts_path)
+    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE}
+    longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
+    shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
     symbols = sorted(set(longs + shorts))
 
     if not symbols:
@@ -14067,8 +14157,15 @@ def run_master(
     output_buffer = io.StringIO()
     f = output_buffer
     priority_text = PRIORITY_SETUPS_FILE.read_text(encoding="utf-8").strip()
+    theta_text = THETA_PUTS_FILE.read_text(encoding="utf-8").strip()
     if priority_text:
         f.write(priority_text)
+        f.write("\n\n")
+    if theta_text:
+        f.write("MASTER AVWAP THETA PLAYS\n")
+        f.write("=" * 80)
+        f.write("\n")
+        f.write(theta_text)
         f.write("\n\n")
     for s, d, lbl, side in sorted_events:
         f.write(f"{s},{d},{lbl},{side}\n")
@@ -15190,6 +15287,8 @@ class MasterAvwapGUI:
             f"Local machine cache: {details['local_cache_dir']}\n"
             f"Home-folder longs.txt: {'OK' if shared_longs_path.exists() else 'missing'}\n"
             f"Home-folder shorts.txt: {'OK' if shared_shorts_path.exists() else 'missing'}\n"
+            f"Master swinglongs.txt: {'OK' if SWING_LONGS_FILE.exists() else 'missing'}\n"
+            f"Master shortswings.txt: {'OK' if SWING_SHORTS_FILE.exists() else 'missing'}\n"
             f"Source: {details['source_label']}"
         )
         self._notify_output_changed()
@@ -15226,6 +15325,7 @@ class MasterAvwapGUI:
                 f"Folder: {target}\n"
                 f"Settings file: {LOCAL_SETTINGS_FILE}\n\n"
                 "Place longs.txt and shorts.txt in that folder root to share watchlists across devices.\n\n"
+                "Master AVWAP also reads swinglongs.txt and shortswings.txt from that folder; BounceBot does not.\n\n"
                 "Replaceable download caches stay local to each computer so the shared folder stays small.\n\n"
                 "Restart the GUI to start using the new home folder.",
             )
@@ -16500,25 +16600,14 @@ class MasterAvwapGUI:
 
     def refresh_avwap_output_view(self):
         priority_section = self._read_text_file(PRIORITY_SETUPS_FILE)
+        theta_section = self._read_text_file(THETA_PUTS_FILE)
         event_section = self._read_text_file(EVENT_TICKERS_FILE)
         stdev_section = self._read_text_file(STDEV_RANGE_FILE)
-
-        combined = (
-            "MASTER AVWAP PRIORITY SETUPS\n"
-            + "=" * 80
-            + "\n"
-            + (priority_section or "No priority setup output yet.")
-            + "\n\n"
-            "MASTER AVWAP EVENT TICKERS\n"
-            + "=" * 80
-            + "\n"
-            + (event_section or "No event tickers output yet.")
-            + "\n\n"
-            + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
-            + "=" * 80
-            + "\n"
-            + (stdev_section or "No stdev output yet.")
-            + "\n"
+        combined = build_combined_avwap_output_text(
+            priority_section,
+            theta_section,
+            event_section,
+            stdev_section,
         )
 
         self._set_text_widget_contents(self.avwap_text, combined)
@@ -16531,11 +16620,7 @@ class MasterAvwapGUI:
         text = theta_section or "No theta put-selling output yet."
         self._set_text_widget_contents(self.theta_text, text)
 
-        symbols = []
-        for raw_line in text.splitlines():
-            match = re.match(r"^\s*\d+\.\s+([A-Z0-9.\-]+)\b", raw_line.strip())
-            if match:
-                symbols.append(match.group(1).upper())
+        symbols = extract_theta_symbols_from_report(text)
         symbol_text = _format_symbol_group(symbols) if symbols else "None"
         self._set_text_widget_contents(self.theta_symbols_text, symbol_text)
         self._notify_output_changed()

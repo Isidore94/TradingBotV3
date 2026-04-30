@@ -40,6 +40,7 @@ class _FakeAvwapGui:
         long_focus: str,
         short_focus: str,
         setup_types: str,
+        theta: str = "",
         status: str = "Ready",
     ):
         self.status_var = _FakeVar(status)
@@ -50,6 +51,7 @@ class _FakeAvwapGui:
         self.long_focus_symbols_text = _FakeText(long_focus)
         self.short_focus_symbols_text = _FakeText(short_focus)
         self.setup_type_symbols_text = _FakeText(setup_types)
+        self.theta_symbols_text = _FakeText(theta)
 
 
 class GuiOutputTests(unittest.TestCase):
@@ -70,6 +72,7 @@ class GuiOutputTests(unittest.TestCase):
                 long_focus="AAPL, MSFT",
                 short_focus="TSLA",
                 setup_types="avwap_breakout\nLONG: AAPL, MSFT",
+                theta="NVDA",
             )
 
             storage_details = {
@@ -90,6 +93,7 @@ class GuiOutputTests(unittest.TestCase):
             self.assertIn("AVWAP Copy/Paste Lists", output)
             self.assertIn("Favorite Setups\nAAPL, NVDA", output)
             self.assertIn("Near Favorite Zones\nTSLA", output)
+            self.assertIn("Theta Plays\nNVDA", output)
             self.assertIn("Directional Longs\nAAPL, MSFT", output)
             self.assertIn("Directional Shorts\nTSLA", output)
             self.assertIn("Setup Type Copy Lists\navwap_breakout\nLONG: AAPL, MSFT", output)
@@ -102,8 +106,10 @@ class GuiOutputTests(unittest.TestCase):
             snapshot_path = temp_root / "consolidated_gui_output.txt"
             focus_path = temp_root / "master_avwap_focus.json"
             tradingview_path = temp_root / "master_avwap_tradingview.txt"
+            theta_path = temp_root / "master_avwap_theta_puts.txt"
             longs_path.write_text("AAPL\n", encoding="utf-8")
             shorts_path.write_text("TSLA\n", encoding="utf-8")
+            theta_path.write_text("1. NVDA | close=100.00 | score=10\n", encoding="utf-8")
             focus_path.write_text(
                 json.dumps(
                     {
@@ -158,12 +164,14 @@ class GuiOutputTests(unittest.TestCase):
                 patch.object(gui, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
                 patch.object(gui, "MASTER_AVWAP_FOCUS_FILE", focus_path),
                 patch.object(gui, "MASTER_AVWAP_TRADINGVIEW_REPORT_FILE", tradingview_path),
+                patch.object(gui, "THETA_PUTS_FILE", theta_path),
                 patch.object(gui, "get_tracker_storage_details", return_value=storage_details),
             ):
                 output = gui.build_consolidated_gui_output("full", None, avwap_gui)
 
             self.assertIn("Favorite Setups\nAAPL", output)
             self.assertIn("Near Favorite Zones\nMSFT, TSLA", output)
+            self.assertIn("Theta Plays\nNVDA", output)
             self.assertIn("Directional Longs\nAAPL, MSFT", output)
             self.assertIn("Directional Shorts\nTSLA", output)
             self.assertIn("Setup Type Copy Lists\navwap_breakout\nLONG: AAPL, MSFT", output)

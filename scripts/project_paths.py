@@ -73,6 +73,8 @@ PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
 
 LONGS_FILE = PERSISTENT_DATA_DIR / "longs.txt"
 SHORTS_FILE = PERSISTENT_DATA_DIR / "shorts.txt"
+SWING_LONGS_FILE = PERSISTENT_DATA_DIR / "swinglongs.txt"
+SWING_SHORTS_FILE = PERSISTENT_DATA_DIR / "shortswings.txt"
 
 SECTOR_ETF_MAP_FILE = DATA_DIR / "sector_etf_map.json"
 INDUSTRY_ETF_MAP_FILE = DATA_DIR / "industry_etf_map.json"
@@ -156,6 +158,10 @@ def get_shared_watchlist_paths() -> tuple[Path, Path]:
     return (LONGS_FILE, SHORTS_FILE)
 
 
+def get_master_avwap_watchlist_paths() -> tuple[Path, Path, Path, Path]:
+    return (LONGS_FILE, SHORTS_FILE, SWING_LONGS_FILE, SWING_SHORTS_FILE)
+
+
 def get_shared_watchlist_details() -> dict[str, str]:
     longs_path, shorts_path = get_shared_watchlist_paths()
     return {
@@ -163,6 +169,20 @@ def get_shared_watchlist_details() -> dict[str, str]:
         "shorts_path": str(shorts_path),
         "longs_exists": "yes" if longs_path.exists() else "no",
         "shorts_exists": "yes" if shorts_path.exists() else "no",
+    }
+
+
+def get_master_avwap_watchlist_details() -> dict[str, str]:
+    longs_path, shorts_path, swing_longs_path, swing_shorts_path = get_master_avwap_watchlist_paths()
+    return {
+        "longs_path": str(longs_path),
+        "shorts_path": str(shorts_path),
+        "swing_longs_path": str(swing_longs_path),
+        "swing_shorts_path": str(swing_shorts_path),
+        "longs_exists": "yes" if longs_path.exists() else "no",
+        "shorts_exists": "yes" if shorts_path.exists() else "no",
+        "swing_longs_exists": "yes" if swing_longs_path.exists() else "no",
+        "swing_shorts_exists": "yes" if swing_shorts_path.exists() else "no",
     }
 
 

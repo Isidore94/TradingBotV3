@@ -25,6 +25,8 @@ from project_paths import (
     MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
     MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
     SHORTS_FILE,
+    SWING_LONGS_FILE,
+    SWING_SHORTS_FILE,
     get_shared_watchlist_details,
     get_tracker_storage_details,
     get_local_setting,
@@ -55,11 +57,14 @@ from master_avwap import (
     EVENT_TICKERS_FILE,
     PRIORITY_SETUPS_FILE,
     STDEV_RANGE_FILE,
+    THETA_PUTS_FILE,
     USER_FAVORITES_FILE,
     MasterAvwapGUI,
+    build_combined_avwap_output_text,
     format_market_prep_payload_report,
     build_master_avwap_focus_setup_type_text,
     build_master_avwap_focus_side_groups,
+    extract_theta_symbols_from_report,
     run_master,
     run_master_with_shared_watchlists,
 )
@@ -176,6 +181,7 @@ def _build_master_avwap_copy_lists(avwap_gui: MasterAvwapGUI | None) -> dict[str
             _read_widget_text(getattr(avwap_gui, "short_focus_symbols_text", None))
         ),
         "setup_types": _normalize_copy_list_text(_read_widget_text(getattr(avwap_gui, "setup_type_symbols_text", None))),
+        "theta": _normalize_copy_list_text(_read_widget_text(getattr(avwap_gui, "theta_symbols_text", None))),
     }
 
     focus_payload = _read_json_file(MASTER_AVWAP_FOCUS_FILE, default={})
@@ -219,6 +225,11 @@ def _build_master_avwap_copy_lists(avwap_gui: MasterAvwapGUI | None) -> dict[str
     if not copy_lists["setup_types"]:
         copy_lists["setup_types"] = build_master_avwap_focus_setup_type_text(focus_payload)
 
+    if not copy_lists["theta"]:
+        copy_lists["theta"] = _format_symbol_group(
+            extract_theta_symbols_from_report(_read_text_file(THETA_PUTS_FILE))
+        )
+
     for key, value in list(copy_lists.items()):
         copy_lists[key] = str(value or "").strip() or "None"
 
@@ -257,20 +268,12 @@ def build_consolidated_gui_output(
         else "Unavailable"
     )
     avwap_output = _read_widget_text(getattr(avwap_gui, "avwap_text", None)) or (
-        "MASTER AVWAP PRIORITY SETUPS\n"
-        + "=" * 80
-        + "\n"
-        + (_read_text_file(PRIORITY_SETUPS_FILE) or "No priority setup output yet.")
-        + "\n\n"
-        + "MASTER AVWAP EVENT TICKERS\n"
-        + "=" * 80
-        + "\n"
-        + (_read_text_file(EVENT_TICKERS_FILE) or "No event ticker output yet.")
-        + "\n\n"
-        + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
-        + "=" * 80
-        + "\n"
-        + (_read_text_file(STDEV_RANGE_FILE) or "No stdev output yet.")
+        build_combined_avwap_output_text(
+            _read_text_file(PRIORITY_SETUPS_FILE),
+            _read_text_file(THETA_PUTS_FILE),
+            _read_text_file(EVENT_TICKERS_FILE),
+            _read_text_file(STDEV_RANGE_FILE),
+        )
     )
     anchor_output = _read_widget_text(getattr(avwap_gui, "anchor_scan_text", None)) or "No anchor AVWAP output yet."
     market_prep_output = _read_widget_text(getattr(avwap_gui, "market_prep_report_text", None))
@@ -309,6 +312,7 @@ def build_consolidated_gui_output(
         "-" * 80,
         f"Status: {avwap_status}",
         f"Priority setups report: {PRIORITY_SETUPS_FILE}",
+        f"Theta plays report: {THETA_PUTS_FILE}",
         f"Event tickers report: {EVENT_TICKERS_FILE}",
         f"Stdev report: {STDEV_RANGE_FILE}",
         f"TradingView copy lists report: {MASTER_AVWAP_TRADINGVIEW_REPORT_FILE}",
@@ -327,6 +331,9 @@ def build_consolidated_gui_output(
         "",
         "Near Favorite Zones",
         copy_lists["near_favorites"],
+        "",
+        "Theta Plays",
+        copy_lists["theta"],
         "",
         "Directional Longs",
         copy_lists["long_focus"],
@@ -414,6 +421,8 @@ class TrackerStorageControls:
             f"Local machine cache: {details['local_cache_dir']}\n"
             f"Home-folder longs.txt: {shared_watchlists['longs_path']} ({shared_watchlists['longs_exists']})\n"
             f"Home-folder shorts.txt: {shared_watchlists['shorts_path']} ({shared_watchlists['shorts_exists']})\n"
+            f"Master swinglongs.txt: {SWING_LONGS_FILE} ({'yes' if SWING_LONGS_FILE.exists() else 'no'})\n"
+            f"Master shortswings.txt: {SWING_SHORTS_FILE} ({'yes' if SWING_SHORTS_FILE.exists() else 'no'})\n"
             f"Source: {details['source_label']}"
         )
 
@@ -433,6 +442,7 @@ class TrackerStorageControls:
             f"Folder: {target}\n"
             f"Settings file: {LOCAL_SETTINGS_FILE}\n\n"
             "Place longs.txt and shorts.txt in that folder root to share watchlists across devices.\n\n"
+            "Master AVWAP also reads swinglongs.txt and shortswings.txt from that folder; BounceBot does not.\n\n"
             "Replaceable download caches stay local to each computer so the shared folder stays small.\n\n"
             "Restart the GUI to start using the new home folder.",
         )
@@ -1182,22 +1192,11 @@ class SimpleMasterAvwapPanel:
             return f"[Error reading {path.name}] {exc}"
 
     def refresh_output_view(self) -> None:
-        combined = (
-            "MASTER AVWAP PRIORITY SETUPS\n"
-            + "=" * 80
-            + "\n"
-            + (self._read_text_file(PRIORITY_SETUPS_FILE) or "No priority setup output yet.")
-            + "\n\n"
-            + "MASTER AVWAP EVENT TICKERS\n"
-            + "=" * 80
-            + "\n"
-            + (self._read_text_file(EVENT_TICKERS_FILE) or "No event ticker output yet.")
-            + "\n\n"
-            + "MASTER AVWAP STDEV 2-3 OUTPUT\n"
-            + "=" * 80
-            + "\n"
-            + (self._read_text_file(STDEV_RANGE_FILE) or "No stdev output yet.")
-            + "\n"
+        combined = build_combined_avwap_output_text(
+            self._read_text_file(PRIORITY_SETUPS_FILE),
+            self._read_text_file(THETA_PUTS_FILE),
+            self._read_text_file(EVENT_TICKERS_FILE),
+            self._read_text_file(STDEV_RANGE_FILE),
         )
         self.text_area.configure(state="normal")
         self.text_area.delete("1.0", tk.END)
@@ -1380,8 +1379,19 @@ class WatchlistEditorPanel:
 
 
 class WatchlistEditorArea:
-    def __init__(self, parent: tk.Misc):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        long_title: str = "Longs Watchlist",
+        long_path: Path = LONGS_FILE,
+        short_title: str = "Shorts Watchlist",
+        short_path: Path = SHORTS_FILE,
+    ):
         self.parent = parent
+        self.long_title = long_title
+        self.long_path = long_path
+        self.short_title = short_title
+        self.short_path = short_path
         self.container = ttk.Frame(parent)
         self._build_layout()
 
@@ -1395,10 +1405,20 @@ class WatchlistEditorArea:
         longs_frame = ttk.Frame(pane)
         shorts_frame = ttk.Frame(pane)
 
-        self.longs_panel = WatchlistEditorPanel(longs_frame, "Longs Watchlist", LONGS_FILE, self._handle_symbols_saved)
+        self.longs_panel = WatchlistEditorPanel(
+            longs_frame,
+            self.long_title,
+            self.long_path,
+            self._handle_symbols_saved,
+        )
         self.longs_panel.pack(fill=tk.BOTH, expand=True)
 
-        self.shorts_panel = WatchlistEditorPanel(shorts_frame, "Shorts Watchlist", SHORTS_FILE, self._handle_symbols_saved)
+        self.shorts_panel = WatchlistEditorPanel(
+            shorts_frame,
+            self.short_title,
+            self.short_path,
+            self._handle_symbols_saved,
+        )
         self.shorts_panel.pack(fill=tk.BOTH, expand=True)
 
         pane.add(longs_frame, stretch="always")
@@ -1439,14 +1459,18 @@ class ConsolidatedTradingGUI:
         main_pane.pack(fill=tk.BOTH, expand=True)
 
         notebook = ttk.Notebook(main_pane)
+        self.main_notebook = notebook
 
         bounce_tab = ttk.Frame(notebook)
+        self.bounce_tab = bounce_tab
         notebook.add(bounce_tab, text="BounceBot")
 
         master_tab = ttk.Frame(notebook)
+        self.master_tab = master_tab
         notebook.add(master_tab, text="Master AVWAP")
 
         market_prep_tab = ttk.Frame(notebook)
+        self.market_prep_tab = market_prep_tab
         notebook.add(market_prep_tab, text="Market Prep")
 
         if self.mode == "full":
@@ -1461,11 +1485,48 @@ class ConsolidatedTradingGUI:
         self.market_prep_panel.pack(fill=tk.BOTH, expand=True)
 
         main_pane.add(notebook, stretch="always")
+        notebook.bind("<<NotebookTabChanged>>", self._on_main_tab_changed)
 
         watchlist_container = ttk.Frame(main_pane)
-        self.watchlist_area = WatchlistEditorArea(watchlist_container)
-        self.watchlist_area.pack(fill=tk.BOTH, expand=True)
+        self.watchlist_container = watchlist_container
+        self.bounce_watchlist_area = WatchlistEditorArea(
+            watchlist_container,
+            long_title="BounceBot Longs",
+            long_path=LONGS_FILE,
+            short_title="BounceBot Shorts",
+            short_path=SHORTS_FILE,
+        )
+        self.master_watchlist_area = WatchlistEditorArea(
+            watchlist_container,
+            long_title="Master Swing Longs",
+            long_path=SWING_LONGS_FILE,
+            short_title="Master Short Swings",
+            short_path=SWING_SHORTS_FILE,
+        )
+        self.watchlist_area = self.bounce_watchlist_area
+        self._visible_watchlist_area = None
+        self._sync_watchlist_editor_to_selected_tab()
         main_pane.add(watchlist_container)
+
+    def _sync_watchlist_editor_to_selected_tab(self) -> None:
+        selected_tab = self.main_notebook.select()
+        next_area = (
+            self.master_watchlist_area
+            if selected_tab == str(self.master_tab)
+            else self.bounce_watchlist_area
+        )
+        if self._visible_watchlist_area is next_area:
+            return
+        if self._visible_watchlist_area is not None:
+            self._visible_watchlist_area.container.pack_forget()
+        next_area.pack(fill=tk.BOTH, expand=True)
+        next_area.longs_panel.refresh_from_disk()
+        next_area.shorts_panel.refresh_from_disk()
+        self.watchlist_area = next_area
+        self._visible_watchlist_area = next_area
+
+    def _on_main_tab_changed(self, _event=None) -> None:
+        self._sync_watchlist_editor_to_selected_tab()
 
     def _configure_output_snapshot_updates(self) -> None:
         if self.bounce_panel:

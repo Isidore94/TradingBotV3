@@ -23,11 +23,14 @@ If you keep personal launcher files such as `run_python_script.ps1` or `run_mast
 ## Repository Layout
 - `scripts/` - Intraday and daily-running bots ready for use (`master_avwap.py`, `master_avwap_mini_pc.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
 - `data/`, `logs/`, `output/` - Legacy repo folders; current runtime files are stored under the selected home folder.
-- `longs.txt`, `shorts.txt` - Input watchlists consumed by the scanners, stored in the selected home folder root.
+- `longs.txt`, `shorts.txt` - Primary shared watchlists consumed by BounceBot and also scanned by Master AVWAP, stored in the selected home folder root.
+- `swinglongs.txt`, `shortswings.txt` - Master AVWAP-only swing watchlists. BounceBot does not read these files.
 
 ## Required Inputs
 - `longs.txt` - one ticker per line for long-side scanning.
 - `shorts.txt` - one ticker per line for short-side scanning.
+- `swinglongs.txt` - optional Master AVWAP-only long swing tickers.
+- `shortswings.txt` - optional Master AVWAP-only short swing tickers.
 
 These files should live in the selected home folder root. The app creates any missing `data`, `logs`, and `output` directories inside that home folder at runtime.
 
@@ -38,7 +41,7 @@ These files should live in the selected home folder root. The app creates any mi
   .\.venv\Scripts\python.exe .\scripts\master_avwap.py
   ```
 
-  Generates `output/master_avwap_events.txt` inside the selected home folder and writes diagnostics to `logs/trading_bot.log` there as well.
+  Generates `output/master_avwap_events.txt` inside the selected home folder and writes diagnostics to `logs/trading_bot.log` there as well. Master AVWAP scans `longs.txt` / `shorts.txt` plus optional `swinglongs.txt` / `shortswings.txt`.
 
 - Always-on mini-PC AVWAP scheduler for a shared home folder:
 
@@ -46,7 +49,7 @@ These files should live in the selected home folder root. The app creates any mi
   .\.venv\Scripts\python.exe .\scripts\master_avwap_mini_pc.py
   ```
 
-  Launches the normal Master AVWAP GUI plus a dedicated `Mini PC` tab. It reuses the full `master_avwap.py` scan logic with the shared-folder watchlists, auto-runs on the default `07:00,08:00,09:00,10:00,11:00,12:00,13:00` schedule, stops at `13:30`, updates the setup tracker, and writes a phone-friendly status file to `master_avwap_mini_pc_status.txt` in the shared home-folder root.
+  Launches the normal Master AVWAP GUI plus a dedicated `Mini PC` tab. It reuses the full `master_avwap.py` scan logic with the shared-folder watchlists, auto-runs on the default `07:00,08:00,09:00,10:00,11:00,12:00,13:00` schedule, stops at `13:30`, updates the setup tracker, and writes a phone-friendly status file to `master_avwap_mini_pc_status.txt` in the shared home-folder root. Theta plays now appear near the top of that status file.
 
   Useful flags:
 
@@ -78,7 +81,7 @@ These files should live in the selected home folder root. The app creates any mi
   .\.venv\Scripts\python.exe .\scripts\gui.py
   ```
 
-  Uses the same selected home folder and now writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well.
+  Uses the same selected home folder and now writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well. The bottom watchlist editor shows `longs.txt` / `shorts.txt` on BounceBot and `swinglongs.txt` / `shortswings.txt` on Master AVWAP.
 
 - Intraday 5-minute bounce detector with optional GUI:
 
@@ -100,7 +103,8 @@ Ensure your IB session is connected before launching either bot so market data r
 - In the GUI, open the `Master AVWAP` tab and use `Change Home Folder` to point this computer at your synced folder.
 - The home folder stores watchlists, runtime AVWAP data, reports, logs, and setup-tracker files.
 - Replaceable download caches now stay in a per-machine local cache directory so Google Drive or OneDrive stays lightweight.
-- Place `longs.txt` and `shorts.txt` in the home folder root to share watchlists across devices.
+- Place `longs.txt` and `shorts.txt` in the home folder root to share primary BounceBot watchlists across devices.
+- Add `swinglongs.txt` and `shortswings.txt` in the same folder for Master AVWAP-only swing candidates.
 - Each computer can use a different local path as long as they all point to the same shared cloud folder.
 - The chosen folder is saved locally in `%LOCALAPPDATA%\TradingBotV3\local_settings.json`.
 - Restart the GUI after changing the home folder so the scripts reload from the new location.
