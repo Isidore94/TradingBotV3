@@ -36,6 +36,7 @@ from master_avwap import (  # noqa: E402
     load_scan_earnings_context,
     rank_tracker_setup_type_rows,
     write_stdev_range_report,
+    write_priority_setup_report,
 )
 
 
@@ -596,6 +597,45 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 ]
             ),
         )
+
+    def test_priority_setup_report_groups_copy_lists_by_setup_type(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "priority_report.txt"
+            write_priority_setup_report(
+                report_path,
+                [
+                    {
+                        "symbol": "AAPL",
+                        "side": "LONG",
+                        "score": 101,
+                        "priority_bucket": "favorite_setup",
+                        "setup_family": "avwap_breakout",
+                        "favorite_signals": ["CROSS_UP_VWAP"],
+                        "context_signals": [],
+                        "favorite_zone": "AVWAPE to UPPER_1",
+                        "trend_20d": "UP",
+                    },
+                    {
+                        "symbol": "TSLA",
+                        "side": "SHORT",
+                        "score": 98,
+                        "priority_bucket": "near_favorite_zone",
+                        "setup_family": "avwap_breakdown",
+                        "favorite_signals": [],
+                        "context_signals": ["BOUNCE_VWAP"],
+                        "favorite_zone": "LOWER_1 to AVWAPE",
+                        "trend_20d": "DOWN",
+                    },
+                ],
+            )
+
+            text = report_path.read_text(encoding="utf-8")
+
+        self.assertIn("Copy/paste lists", text)
+        self.assertIn("By setup type", text)
+        self.assertIn("AVWAP breakout\n  LONG: AAPL", text)
+        self.assertIn("AVWAP breakdown\n  LONG: None\n  SHORT: TSLA", text)
+        self.assertIn("Detailed setup notes", text)
 
     def test_market_prep_payload_builds_requested_copy_sections(self):
         payload = build_market_prep_payload(

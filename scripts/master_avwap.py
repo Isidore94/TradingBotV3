@@ -1057,6 +1057,7 @@ YF_EARNINGS_LOGGER_NAMES = (
     "yfinance.base",
     "yfinance.scrapers",
     "yfinance.scrapers.calendar",
+    "yfinance.scrapers.quote",
 )
 IBAPI_NOISY_LOGGER_NAMES = (
     "ibapi",
@@ -1103,6 +1104,10 @@ def _configure_third_party_loggers() -> None:
         ib_logger = logging.getLogger(logger_name)
         ib_logger.setLevel(logging.WARNING)
         ib_logger.propagate = True
+    for logger_name in YF_EARNINGS_LOGGER_NAMES:
+        yf_logger = logging.getLogger(logger_name)
+        yf_logger.setLevel(logging.CRITICAL)
+        yf_logger.propagate = True
 
 
 def configure_logging():
@@ -11115,6 +11120,172 @@ def apply_final_priority_buckets(
         record["is_favorite_setup"] = is_favorite_setup
         record["is_near_favorite_zone"] = is_near_favorite_zone
 
+def _priority_setup_family_label(setup_family: str) -> str:
+    raw = str(setup_family or "general").strip() or "general"
+    text = raw.replace("_", " ")
+    replacements = {
+        "avwap": "AVWAP",
+        "vwape": "AVWAPE",
+        "ema": "EMA",
+        "52w": "52w",
+        "2nd": "2nd",
+        "1stdev": "1st-dev",
+        "stdev": "stdev",
+    }
+    return " ".join(replacements.get(part.lower(), part) for part in text.split())
+
+
+def _priority_score_text(row: dict) -> str:
+    score = _coerce_float(row.get("score"))
+    if score is None:
+        return "n/a"
+    return f"{score:.1f}" if abs(score - round(score)) > 0.01 else f"{score:.0f}"
+
+
+def _priority_rows_by_setup_family(rows: list[dict]) -> list[tuple[str, list[dict]]]:
+    groups: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for row in rows or []:
+        family = str(row.get("setup_family") or "general").strip() or "general"
+        if family not in groups:
+            groups[family] = []
+            order.append(family)
+        groups[family].append(row)
+    return [(family, groups[family]) for family in order]
+
+
+def _priority_unique_rows_by_symbol(rows: list[dict]) -> list[dict]:
+    seen = set()
+    unique_rows = []
+    for row in rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        unique_rows.append(row)
+    return unique_rows
+
+
+def _priority_symbols(rows: list[dict], side: str | None = None) -> str:
+    symbols = []
+    normalized_side = normalize_side(side or "") if side else ""
+    for row in rows or []:
+        if normalized_side and normalize_side(row.get("side", "")) != normalized_side:
+            continue
+        symbols.append(row.get("symbol"))
+    return _format_symbols_for_tc2000(symbols)
+
+
+def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
+    score_notes = []
+    setup_notes = []
+
+    note_keys = (
+        ("filters", "ranking_note"),
+        ("bonus", "score_bonus_note"),
+        ("adaptive", "adaptive_score_note"),
+        ("recent tracker", "recent_tracker_score_note"),
+        ("setup type", "setup_type_score_note"),
+        ("clean zone", "clean_first_zone_score_note"),
+        ("market regime", "market_regime_score_note"),
+        ("score cap", "rejection_score_cap_note"),
+    )
+    for label, key in note_keys:
+        value = str(row.get(key) or "").strip()
+        if value:
+            score_notes.append(f"{label}: {value}")
+
+    setup_note_keys = (
+        ("retest", "retest_note"),
+        ("extension", "extension_note"),
+        ("prev day", "previous_day_range_note"),
+        ("first dev", "first_dev_note"),
+        ("extreme move", "extreme_move_note"),
+        ("compression", "compression_note"),
+        ("trendline", "trendline_note"),
+        ("trendline break", "trendline_break_note"),
+        ("post earnings", "post_earnings_note"),
+        ("mid earnings", "mid_earnings_note"),
+    )
+    for label, key in setup_note_keys:
+        value = str(row.get(key) or "").strip()
+        if value:
+            setup_notes.append(f"{label}: {value}")
+
+    return score_notes, setup_notes
+
+
+def _write_priority_copy_lists(handle, title: str, rows: list[dict]) -> None:
+    handle.write(f"{title}\n")
+    handle.write("-" * len(title) + "\n")
+    if not rows:
+        handle.write("None\n\n")
+        return
+    handle.write(f"LONG: {_priority_symbols(rows, 'LONG')}\n")
+    handle.write(f"SHORT: {_priority_symbols(rows, 'SHORT')}\n\n")
+
+
+def _write_priority_setup_copy_lists(handle, title: str, rows: list[dict]) -> None:
+    handle.write(f"{title}\n")
+    handle.write("-" * len(title) + "\n")
+    if not rows:
+        handle.write("None\n\n")
+        return
+    for family, family_rows in _priority_rows_by_setup_family(rows):
+        handle.write(f"{_priority_setup_family_label(family)}\n")
+        handle.write(f"  LONG: {_priority_symbols(family_rows, 'LONG')}\n")
+        handle.write(f"  SHORT: {_priority_symbols(family_rows, 'SHORT')}\n")
+    handle.write("\n")
+
+
+def _write_priority_detail_rows(handle, title: str, rows: list[dict]) -> None:
+    handle.write(f"{title}\n")
+    handle.write("-" * len(title) + "\n")
+    if not rows:
+        handle.write("None\n\n")
+        return
+
+    for family, family_rows in _priority_rows_by_setup_family(rows):
+        handle.write(f"\n{_priority_setup_family_label(family)}\n")
+        handle.write(f"  LONG: {_priority_symbols(family_rows, 'LONG')}\n")
+        handle.write(f"  SHORT: {_priority_symbols(family_rows, 'SHORT')}\n")
+        for row in family_rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            side = normalize_side(row.get("side", ""))
+            signals = ", ".join(format_signal_label(evt) for evt in row.get("favorite_signals", [])) or "None"
+            context = ", ".join(format_signal_label(evt) for evt in row.get("context_signals", [])) or "None"
+            bounce_support = ", ".join(
+                format_signal_label(evt) for evt in row.get("bounce_support_signals", [])
+            ) or "None"
+            zone = row.get("favorite_zone") or "None"
+            trend = row.get("trend_20d") or "SIDEWAYS"
+            extension_days = int(row.get("recent_band_extension_days", 0) or 0)
+            second_band_tests = int(row.get("recent_second_band_test_days", 0) or 0)
+            breakout_text = "Y" if row.get("breakout_5d") else "N"
+            retest_text = "Y" if row.get("retest_followthrough") else "N"
+
+            handle.write(
+                f"  {symbol:<6} {side:<5} score={_priority_score_text(row):<5} "
+                f"trend={trend:<8} zone={zone}\n"
+            )
+            handle.write(f"    signals: fav={signals} | context={context}\n")
+            handle.write(
+                f"    stats: ext_days={extension_days} | 2nd_tests={second_band_tests} "
+                f"| 5d_breakout={breakout_text} | retest={retest_text}\n"
+            )
+            if row.get("bounce_support_bonus"):
+                handle.write(
+                    f"    bounce: +{int(row.get('bounce_support_bonus', 0) or 0)} "
+                    f"from {bounce_support}\n"
+                )
+            score_notes, setup_notes = _priority_note_parts(row)
+            if score_notes:
+                handle.write(f"    score notes: {'; '.join(score_notes)}\n")
+            if setup_notes:
+                handle.write(f"    setup notes: {'; '.join(setup_notes)}\n")
+    handle.write("\n")
+
+
 def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     favorites = sorted(
         [
@@ -11144,92 +11315,9 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
-
-    def _write_rows(handle, title: str, rows: list[dict]) -> None:
-        handle.write(f"{title}\n")
-        handle.write("-" * len(title) + "\n")
-        if not rows:
-            handle.write("None\n\n")
-            return
-        for row in rows:
-            signals = ", ".join(format_signal_label(evt) for evt in row["favorite_signals"]) or "None"
-            context = ", ".join(format_signal_label(evt) for evt in row["context_signals"]) or "None"
-            bounce_support = ", ".join(
-                format_signal_label(evt) for evt in row.get("bounce_support_signals", [])
-            ) or "None"
-            zone = row["favorite_zone"] or "None"
-            extension_days = row.get("recent_band_extension_days", 0)
-            second_band_tests = row.get("recent_second_band_test_days", 0)
-            breakout_text = "Y" if row.get("breakout_5d") else "N"
-            retest_text = "Y" if row.get("retest_followthrough") else "N"
-            ranking_note = row.get("ranking_note", "")
-            score_bonus_note = row.get("score_bonus_note", "")
-            adaptive_score_note = row.get("adaptive_score_note", "")
-            recent_tracker_score_note = row.get("recent_tracker_score_note", "")
-            setup_type_score_note = row.get("setup_type_score_note", "")
-            clean_first_zone_score_note = row.get("clean_first_zone_score_note", "")
-            market_regime_score_note = row.get("market_regime_score_note", "")
-            rejection_score_cap_note = row.get("rejection_score_cap_note", "")
-            retest_note = row.get("retest_note", "")
-            extension_note = row.get("extension_note", "")
-            previous_day_range_note = row.get("previous_day_range_note", "")
-            first_dev_note = row.get("first_dev_note", "")
-            extreme_move_note = row.get("extreme_move_note", "")
-            compression_note = row.get("compression_note", "")
-            trendline_note = row.get("trendline_note", "")
-            trendline_break_note = row.get("trendline_break_note", "")
-            setup_family = row.get("setup_family") or "general"
-            post_earnings_note = row.get("post_earnings_note", "")
-            mid_earnings_note = row.get("mid_earnings_note", "")
-            handle.write(
-                f"{row['symbol']:<6} {row['side']:<5} score={row['score']:<3} "
-                f"family={setup_family} | signals={signals} | context={context} | zone={zone} | trend={row['trend_20d']} "
-                f"| ext_days={extension_days} | 2nd_tests={second_band_tests} "
-                f"| 5d_breakout={breakout_text} | retest={retest_text}\n"
-            )
-            if row.get("bounce_support_bonus"):
-                handle.write(
-                    f"  bounce_bonus=+{int(row.get('bounce_support_bonus', 0) or 0)} "
-                    f"from {bounce_support}\n"
-                )
-            if ranking_note:
-                handle.write(f"  filters={ranking_note}\n")
-            if score_bonus_note:
-                handle.write(f"  bonus={score_bonus_note}\n")
-            if adaptive_score_note:
-                handle.write(f"  adaptive={adaptive_score_note}\n")
-            if recent_tracker_score_note:
-                handle.write(f"  recent_tracker={recent_tracker_score_note}\n")
-            if setup_type_score_note:
-                handle.write(f"  setup_type={setup_type_score_note}\n")
-            if clean_first_zone_score_note:
-                handle.write(f"  clean_zone={clean_first_zone_score_note}\n")
-            if market_regime_score_note:
-                handle.write(f"  market_regime={market_regime_score_note}\n")
-            if rejection_score_cap_note:
-                handle.write(f"  score_cap={rejection_score_cap_note}\n")
-            if retest_note:
-                handle.write(f"  retest={retest_note}\n")
-            if extension_note:
-                handle.write(f"  extension={extension_note}\n")
-            if previous_day_range_note:
-                handle.write(f"  prev_day={previous_day_range_note}\n")
-            if first_dev_note:
-                handle.write(f"  first_dev={first_dev_note}\n")
-            if extreme_move_note:
-                handle.write(f"  extreme_move={extreme_move_note}\n")
-            if compression_note:
-                handle.write(f"  compression={compression_note}\n")
-            if trendline_note:
-                prefix = "trendline_alert" if row.get("trendline_within_alert_range") else "trendline"
-                handle.write(f"  {prefix}={trendline_note}\n")
-            if trendline_break_note:
-                handle.write(f"  trendline_break={trendline_break_note}\n")
-            if post_earnings_note:
-                handle.write(f"  post_earnings={post_earnings_note}\n")
-            if mid_earnings_note:
-                handle.write(f"  mid_earnings={mid_earnings_note}\n")
-        handle.write("\n")
+    all_priority_rows = _priority_unique_rows_by_symbol(
+        favorites + watchlist + post_earnings_rows + mid_earnings_hold_rows
+    )
 
     buffer = io.StringIO()
     handle = buffer
@@ -11238,10 +11326,18 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     handle.write(
         "Focus: generalized high-quality setups across AVWAP breaks, post-earnings gap structures, and mid-earnings continuation retests\n\n"
     )
-    _write_rows(handle, "Best current favorite setups", favorites)
-    _write_rows(handle, "Near favorite zones", watchlist)
-    _write_rows(handle, "Post earnings plays", post_earnings_rows)
-    _write_rows(handle, "Mid earnings above 2nd stdev", mid_earnings_hold_rows)
+    handle.write("Copy/paste lists\n")
+    handle.write("================\n")
+    _write_priority_copy_lists(handle, "Favorite setups", favorites)
+    _write_priority_copy_lists(handle, "Near favorite zones", watchlist)
+    _write_priority_setup_copy_lists(handle, "By setup type", all_priority_rows)
+
+    handle.write("Detailed setup notes\n")
+    handle.write("====================\n")
+    _write_priority_detail_rows(handle, "Best current favorite setups", favorites)
+    _write_priority_detail_rows(handle, "Near favorite zones", watchlist)
+    _write_priority_detail_rows(handle, "Post earnings plays", post_earnings_rows)
+    _write_priority_detail_rows(handle, "Mid earnings above 2nd stdev", mid_earnings_hold_rows)
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 

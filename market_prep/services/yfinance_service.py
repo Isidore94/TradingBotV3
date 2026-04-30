@@ -245,7 +245,7 @@ def get_yfinance_settings(config: MarketPrepConfig | None) -> dict[str, Any]:
 
 
 def _fetch_ticker_metadata(symbol: str) -> dict[str, Any]:
-    ticker_obj = yf.Ticker(symbol)
+    ticker_obj = yf.Ticker(_yfinance_lookup_symbol(symbol))
     info = {}
     try:
         info = ticker_obj.get_info()
@@ -266,6 +266,13 @@ def _fetch_ticker_metadata(symbol: str) -> dict[str, Any]:
         "quoteType": str(info.get("quoteType") or "").strip(),
         "source": "yfinance",
     }
+
+
+def _yfinance_lookup_symbol(symbol: str) -> str:
+    text = str(symbol or "").strip().upper()
+    if "." in text and not text.endswith(".TO"):
+        return text.replace(".", "-")
+    return text
 
 
 def _empty_metadata(ticker: Any) -> dict[str, Any]:

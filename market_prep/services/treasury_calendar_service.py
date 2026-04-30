@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -92,7 +94,10 @@ def get_treasury_calendar_events(
             cache_path=cache_path,
         )
     except Exception as exc:
-        logging.getLogger("market_prep").exception("Treasury calendar enrichment failed.")
+        logging.getLogger("market_prep").warning(
+            "Treasury calendar enrichment failed: %s",
+            _friendly_fetch_error(exc),
+        )
         cached_events = _events_in_window(cache_payload.get("events"), start, end)
         if cached_events:
             return _payload(
@@ -151,6 +156,18 @@ def _fetch_upcoming_auctions(start: date, end: date, settings: dict[str, Any]) -
         payload = json.loads(response.read().decode("utf-8", errors="replace"))
     rows = payload.get("data") if isinstance(payload, dict) else []
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _friendly_fetch_error(exc: Exception) -> str:
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, ssl.SSLCertVerificationError) or isinstance(exc, ssl.SSLCertVerificationError):
+        return (
+            "SSL certificate verification failed. If this machine uses HTTPS inspection, "
+            "install the proxy/root certificate into Python's trusted certificate store."
+        )
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code} {exc.reason}"
+    return str(exc)
 
 
 def _normalize_auction_row(row: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any] | None:

@@ -145,6 +145,20 @@ def _fetch_fed_events(start: date, end: date, settings: dict[str, Any]) -> list[
     for year, month in _months_in_window(start, end):
         try:
             events.extend(_parse_month_calendar(year, month, timeout=timeout))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404 and _is_future_month(year, month):
+                logging.getLogger("market_prep").info(
+                    "Fed monthly calendar page not published yet for %04d-%02d.",
+                    year,
+                    month,
+                )
+            else:
+                logging.getLogger("market_prep").warning(
+                    "Fed monthly calendar fetch failed for %04d-%02d: %s",
+                    year,
+                    month,
+                    exc,
+                )
         except Exception as exc:
             logging.getLogger("market_prep").warning(
                 "Fed monthly calendar fetch failed for %04d-%02d: %s",
@@ -292,6 +306,11 @@ def _months_in_window(start: date, end: date) -> list[tuple[int, int]]:
         else:
             current = date(current.year, current.month + 1, 1)
     return months
+
+
+def _is_future_month(year: int, month: int) -> bool:
+    today = datetime.now().date()
+    return date(year, month, 1) > date(today.year, today.month, 1)
 
 
 def _is_relevant_section(section: str) -> bool:

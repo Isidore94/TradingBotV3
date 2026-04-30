@@ -39,6 +39,21 @@ from ibapi.contract import Contract
 from colorama import init, Fore, Style
 init(autoreset=True)
 
+IB_INFO_STATUS_CODES = {
+    2104: "Market data farm status",
+    2106: "Historical data farm status",
+    2107: "Historical data farm idle",
+    2108: "Market data farm idle",
+    2158: "Security definition farm status",
+}
+IB_WARNING_STATUS_CODES = {2103, 2105}
+YFINANCE_NOISY_LOGGER_NAMES = (
+    "yfinance",
+    "yfinance.base",
+    "yfinance.scrapers",
+    "yfinance.scrapers.quote",
+)
+
 from master_avwap_shared import (
     build_master_avwap_active_level_map,
     build_master_avwap_second_stdev_cross_map,
@@ -95,6 +110,14 @@ GROUP_STRENGTH_SCAN_LOG_FILENAME = RRS_GROUP_STRENGTH_LOG_FILE
 ENVIRONMENT_FOCUS_HISTORY_FILENAME = RRS_ENVIRONMENT_FOCUS_HISTORY_FILE
 ENVIRONMENT_FOCUS_HISTORY_SCHEMA_VERSION = 1
 ENVIRONMENT_FOCUS_HISTORY_KEEP_DAYS = 30
+NASDAQ_EARNINGS_REACTION_CACHE_FILES = (
+    ROOT_DIR / "data" / "cache" / "nasdaq_earnings_calendar_cache.json",
+    DATA_DIR / "cache" / "nasdaq_earnings_calendar_cache.json",
+)
+MANUAL_EARNINGS_REACTION_FILES = (
+    ROOT_DIR / "config" / "manual_earnings_calendar.json",
+    DATA_DIR / "manual_earnings_calendar.json",
+)
 SECTOR_ETF_MAP_FILENAME = SECTOR_ETF_MAP_FILE
 INDUSTRY_ETF_MAP_FILENAME = INDUSTRY_ETF_MAP_FILE
 SYMBOL_CLASSIFICATION_CACHE_FILENAME = SYMBOL_CLASSIFICATION_CACHE_FILE
@@ -240,6 +263,8 @@ ENVIRONMENT_PROFILE_EMA_ALPHA = 0.70
 ENVIRONMENT_RECENT_BIAS_MIN_SCORE = 0.15
 ENVIRONMENT_TOTAL_BIAS_MIN_SCORE = 0.05
 ENVIRONMENT_SCAN_DELAY_MINUTES = 60
+ENVIRONMENT_CONTEXT_MIN_RRS_FRACTION = 0.35
+ENVIRONMENT_HOLD_MOVE_RATIO = 0.10
 SPY_COMPRESSION_THRESHOLD = 0.35
 SPY_UP_THRESHOLD = 0.20
 SPY_PULLBACK_DELTA_THRESHOLD = 0.25
@@ -746,6 +771,8 @@ def configure_app_logging():
     logger.addFilter(HistoricalDataFilter())
     logging.getLogger("ibapi").addFilter(HistoricalDataFilter())
     logging.getLogger("ibapi.client").addFilter(HistoricalDataFilter())
+    for logger_name in YFINANCE_NOISY_LOGGER_NAMES:
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
     configure_app_logging._configured = True
 
 
@@ -972,6 +999,7 @@ class BounceBot(EWrapper, EClient):
         self.market_environment = "bullish_strong"
         self.market_environment_lock = threading.Lock()
         self.latest_rrs_payload = None
+        self.earnings_reaction_filter_cache = {}
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
         self.scanning_enabled = bool(start_scanning_enabled)
@@ -1891,6 +1919,144 @@ class BounceBot(EWrapper, EClient):
         with self.market_environment_lock:
             return self.market_environment
 
+    def _earnings_reaction_source_paths(self):
+        paths = []
+        for path in list(NASDAQ_EARNINGS_REACTION_CACHE_FILES) + list(MANUAL_EARNINGS_REACTION_FILES):
+            candidate = Path(path)
+            if candidate not in paths:
+                paths.append(candidate)
+        return paths
+
+    def _earnings_reaction_source_signature(self, paths):
+        signature = []
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                signature.append((str(path), None))
+            else:
+                signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+        return tuple(signature)
+
+    def _previous_market_date_from_bars(self, bars, current_date):
+        session_dates = sorted(
+            {
+                bar.dt.date()
+                for bar in bars or []
+                if getattr(bar, "dt", None) is not None and bar.dt.date() < current_date
+            }
+        )
+        if session_dates:
+            return session_dates[-1]
+        return current_date - timedelta(days=1)
+
+    def _load_earnings_reaction_symbols(self, market_date, previous_market_date):
+        if market_date is None or previous_market_date is None:
+            return set()
+
+        source_paths = self._earnings_reaction_source_paths()
+        source_signature = self._earnings_reaction_source_signature(source_paths)
+        cache_key = (
+            market_date.isoformat(),
+            previous_market_date.isoformat(),
+            source_signature,
+        )
+        cached = self.earnings_reaction_filter_cache
+        if cached.get("key") == cache_key:
+            return set(cached.get("symbols", set()))
+
+        symbols = set()
+        for path in source_paths:
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logging.debug(f"Failed reading earnings reaction source {path}: {exc}")
+                continue
+            for row, fallback_date in self._iter_earnings_rows(payload):
+                event_date = self._parse_earnings_event_date(row, fallback_date)
+                if event_date is None:
+                    continue
+                release_bucket = self._earnings_release_bucket(row.get("time") or row.get("release_time"))
+                if (
+                    (event_date == previous_market_date and release_bucket == "AMC")
+                    or (event_date == market_date and release_bucket == "BMO")
+                ):
+                    symbols.update(self._symbol_aliases(row.get("symbol") or row.get("ticker")))
+
+        self.earnings_reaction_filter_cache = {"key": cache_key, "symbols": set(symbols)}
+        return symbols
+
+    def _iter_earnings_rows(self, payload):
+        if isinstance(payload, list):
+            for row in payload:
+                if isinstance(row, dict):
+                    yield row, row.get("date")
+            return
+
+        if not isinstance(payload, dict):
+            return
+
+        dates_payload = payload.get("dates")
+        if isinstance(dates_payload, dict):
+            for date_key, entry in dates_payload.items():
+                rows = entry.get("rows") if isinstance(entry, dict) else []
+                for row in rows or []:
+                    if isinstance(row, dict):
+                        yield row, date_key
+
+        for key in ("earnings", "events", "rows"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict):
+                        yield row, row.get("date")
+
+    def _parse_earnings_event_date(self, row, fallback_date=None):
+        for value in (
+            row.get("date") if isinstance(row, dict) else None,
+            row.get("earningsDate") if isinstance(row, dict) else None,
+            row.get("reportDate") if isinstance(row, dict) else None,
+            fallback_date,
+        ):
+            try:
+                text = str(value or "").strip()
+                if not text:
+                    continue
+                return datetime.fromisoformat(text[:10]).date()
+            except ValueError:
+                continue
+        return None
+
+    def _earnings_release_bucket(self, value):
+        text = str(value or "").strip().lower().replace("_", "-")
+        if not text:
+            return ""
+        if text in {"bmo", "pre", "pre-market", "premarket"}:
+            return "BMO"
+        if text in {"amc", "post", "post-market", "after-hours", "afterhours"}:
+            return "AMC"
+        if "pre" in text or "before" in text:
+            return "BMO"
+        if "after" in text or "post" in text or "close" in text:
+            return "AMC"
+        return str(value or "").strip().upper()
+
+    def _symbol_aliases(self, symbol):
+        text = str(symbol or "").strip().upper()
+        if not text:
+            return set()
+        aliases = {text}
+        if "." in text:
+            aliases.add(text.replace(".", "-"))
+        if "-" in text:
+            aliases.add(text.replace("-", "."))
+        return aliases
+
+    def _symbol_matches_alias_set(self, symbol, aliases):
+        return bool(self._symbol_aliases(symbol) & set(aliases or []))
+
     def _refresh_rrs_gui(self, status_msg=None):
         if not self.latest_rrs_payload or not self.gui_callback:
             return
@@ -1928,18 +2094,18 @@ class BounceBot(EWrapper, EClient):
             if sections:
                 return sections
             scenario = self.get_market_environment()
-            weak_spy_bars = int(environment_scan.get("weak_spy_window_count", 0) or 0)
-            strong_spy_bars = int(environment_scan.get("strong_spy_window_count", 0) or 0)
+            long_eval_bars = int(environment_scan.get("long_eval_window_count", 0) or 0)
+            short_eval_bars = int(environment_scan.get("short_eval_window_count", 0) or 0)
             if scenario == "bullish_strong":
                 message = "No intraday long leaders are available by average RRS yet."
             elif scenario == "bearish_strong":
                 message = "No intraday short leaders are available by average RRS yet."
-            elif scenario == "bullish_weak" and weak_spy_bars <= 0:
-                message = "No SPY-weak bars have been measured yet for bullish weak focus."
-            elif scenario == "bearish_weak" and strong_spy_bars <= 0:
-                message = "No SPY-strong bars have been measured yet for bearish weak focus."
+            elif scenario == "bullish_weak" and long_eval_bars <= 0:
+                message = "No SPY-weak or compressed bars have been measured yet for bullish weak focus."
+            elif scenario == "bearish_weak" and short_eval_bars <= 0:
+                message = "No SPY-strong or compressed bars have been measured yet for bearish weak focus."
             else:
-                message = "No intraday RS/RW candidates matched the current opposite-SPY bars."
+                message = "No intraday RS/RW candidates proved the required opposite-SPY behavior."
             return [
                 {
                     "title": "Environment focus",
@@ -2045,6 +2211,8 @@ class BounceBot(EWrapper, EClient):
         weak_spy_window_count = sum(1 for item in spy_windows if item.get("spy_weak"))
         strong_spy_window_count = sum(1 for item in spy_windows if item.get("spy_strong"))
         compression_window_count = sum(1 for item in spy_windows if item.get("compression"))
+        long_eval_window_count = sum(1 for item in spy_windows if item.get("long_eval"))
+        short_eval_window_count = sum(1 for item in spy_windows if item.get("short_eval"))
 
         def summarize_bucket(profile, direction, flag_key=None):
             samples = []
@@ -2057,7 +2225,16 @@ class BounceBot(EWrapper, EClient):
                     if not window or not window.get(flag_key):
                         continue
                 samples.append(item)
-                if direction == "long":
+                if flag_key:
+                    window = window_map.get(item.get("dt"))
+                    if self._profile_item_matches_environment_context(
+                        item,
+                        direction,
+                        window,
+                        threshold,
+                    ):
+                        hits.append(item)
+                elif direction == "long":
                     if item["rrs"] >= threshold:
                         hits.append(item)
                 else:
@@ -2137,6 +2314,8 @@ class BounceBot(EWrapper, EClient):
             if (
                 (overall_signed_avg_rrs is None or overall_signed_avg_rrs <= 0)
                 and overall_summary["hits"] <= 0
+                and context_summary["hits"] <= 0
+                and compression_summary["hits"] <= 0
                 and recent_profile_hits <= 0
                 and not current_direction_ok
             ):
@@ -2224,7 +2403,7 @@ class BounceBot(EWrapper, EClient):
 
             if symbol in self.longs:
                 overall_summary = summarize_bucket(profile, "long")
-                context_summary = summarize_bucket(profile, "long", "spy_weak")
+                context_summary = summarize_bucket(profile, "long", "long_eval")
                 compression_summary = summarize_bucket(profile, "long", "compression")
                 candidate = finalize_candidate(
                     symbol,
@@ -2239,7 +2418,7 @@ class BounceBot(EWrapper, EClient):
 
             if symbol in self.shorts:
                 overall_summary = summarize_bucket(profile, "short")
-                context_summary = summarize_bucket(profile, "short", "spy_strong")
+                context_summary = summarize_bucket(profile, "short", "short_eval")
                 compression_summary = summarize_bucket(profile, "short", "compression")
                 candidate = finalize_candidate(
                     symbol,
@@ -2308,6 +2487,8 @@ class BounceBot(EWrapper, EClient):
             "weak_spy_window_count": weak_spy_window_count,
             "strong_spy_window_count": strong_spy_window_count,
             "compression_window_count": compression_window_count,
+            "long_eval_window_count": long_eval_window_count,
+            "short_eval_window_count": short_eval_window_count,
             "spy_windows": len(spy_windows),
         }
 
@@ -2317,6 +2498,9 @@ class BounceBot(EWrapper, EClient):
         short_candidates = environment_scan.get("short_candidates", [])
         weak_spy_windows = int(environment_scan.get("weak_spy_window_count", 0) or 0)
         strong_spy_windows = int(environment_scan.get("strong_spy_window_count", 0) or 0)
+        compression_windows = int(environment_scan.get("compression_window_count", 0) or 0)
+        long_eval_windows = int(environment_scan.get("long_eval_window_count", 0) or 0)
+        short_eval_windows = int(environment_scan.get("short_eval_window_count", 0) or 0)
         sections = []
 
         def _signed_entry_rrs(entry, key):
@@ -2423,15 +2607,21 @@ class BounceBot(EWrapper, EClient):
             )
         elif scenario == "bullish_weak":
             add_candidate_section(
-                f"Strong Longs During SPY Weakness ({weak_spy_windows} weak bars)",
-                long_context_candidates if weak_spy_windows > 0 else [],
+                (
+                    f"Strong Longs When SPY Weak/Compressed "
+                    f"({long_eval_windows} bars; {weak_spy_windows} weak, {compression_windows} compressed)"
+                ),
+                long_context_candidates if long_eval_windows > 0 else [],
                 "rrs_rs",
                 "context",
             )
         elif scenario == "bearish_weak":
             add_candidate_section(
-                f"Weak Shorts During SPY Strength ({strong_spy_windows} strong bars)",
-                short_context_candidates if strong_spy_windows > 0 else [],
+                (
+                    f"Weak Shorts When SPY Strong/Compressed "
+                    f"({short_eval_windows} bars; {strong_spy_windows} strong, {compression_windows} compressed)"
+                ),
+                short_context_candidates if short_eval_windows > 0 else [],
                 "rrs_rw",
                 "context",
             )
@@ -2569,7 +2759,7 @@ class BounceBot(EWrapper, EClient):
             secondary_hits = entry.get("context_hits", 0)
             secondary_windows = entry.get("context_windows", 0)
         else:
-            focus_label = "weakSPY" if direction == "long" else "strongSPY"
+            focus_label = "weak/compSPY" if direction == "long" else "strong/compSPY"
             focus_hits = entry.get("context_hits", 0)
             focus_windows = entry.get("context_windows", 0)
             avg_rrs = entry.get("context_avg_rrs")
@@ -2685,6 +2875,33 @@ class BounceBot(EWrapper, EClient):
             opposite_direction,
             require_significant=True,
         )
+
+    def _profile_item_matches_environment_context(self, entry, direction, spy_window, threshold):
+        if not isinstance(entry, dict) or not isinstance(spy_window, dict):
+            return False
+
+        rrs_value = entry.get("rrs")
+        move_ratio = entry.get("move_ratio")
+        excess_move_ratio = entry.get("excess_move_ratio")
+        if rrs_value is None or move_ratio is None or excess_move_ratio is None:
+            return False
+
+        signed_rrs = rrs_value if direction == "long" else -rrs_value
+        signed_move = move_ratio if direction == "long" else -move_ratio
+        signed_excess = excess_move_ratio if direction == "long" else -excess_move_ratio
+        min_rrs = max(0.0, abs(float(threshold or RRS_DEFAULT_THRESHOLD)) * ENVIRONMENT_CONTEXT_MIN_RRS_FRACTION)
+        if signed_rrs < min_rrs or signed_excess < MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL:
+            return False
+
+        opposite_spy_move = (
+            (direction == "long" and spy_window.get("spy_weak"))
+            or (direction == "short" and spy_window.get("spy_strong"))
+        )
+        if opposite_spy_move:
+            return signed_move >= -ENVIRONMENT_HOLD_MOVE_RATIO
+        if spy_window.get("compression"):
+            return signed_move >= MIN_MOVE_RATIO_FOR_SIGNAL
+        return False
 
     def _profile_direction_bias_score(self, entry, direction, threshold):
         if not isinstance(entry, dict):
@@ -3137,7 +3354,21 @@ class BounceBot(EWrapper, EClient):
         symbol_context = []
         all_scores = []
         intraday_profiles = {}
-        all_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
+        current_market_date = spy_5m[-1].dt.date()
+        previous_market_date = self._previous_market_date_from_bars(spy_5m, current_market_date)
+        earnings_reaction_aliases = self._load_earnings_reaction_symbols(
+            current_market_date,
+            previous_market_date,
+        )
+        raw_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
+        earnings_reaction_symbols = [
+            symbol for symbol in raw_symbols
+            if self._symbol_matches_alias_set(symbol, earnings_reaction_aliases)
+        ]
+        all_symbols = [
+            symbol for symbol in raw_symbols
+            if symbol not in earnings_reaction_symbols
+        ]
         environment_scan_active = self._environment_scan_is_active(
             spy_5m[-1].dt if spy_5m else None
         )
@@ -3259,6 +3490,7 @@ class BounceBot(EWrapper, EClient):
             "symbol_context": symbol_context,
             "spy_move_ratio": spy_move_ratio,
             "environment_scan": environment_scan,
+            "excluded_earnings_reaction_symbols": earnings_reaction_symbols,
         }
         if emit_gui:
             self._emit_master_avwap_focus_rrs_alerts(symbol_context, threshold, timeframe_key)
@@ -3274,6 +3506,8 @@ class BounceBot(EWrapper, EClient):
                 market_session = get_market_session_window(reference=get_market_local_now())
                 first_hour_end = market_session.open_local + timedelta(minutes=ENVIRONMENT_SCAN_DELAY_MINUTES)
                 status_msg += f" | SPY context windows start after {first_hour_end.strftime('%H:%M')}"
+            if earnings_reaction_symbols:
+                status_msg += f" | excluded {len(earnings_reaction_symbols)} earnings reactions"
             self.gui_callback(
                 status_msg,
                 "rrs_status",
@@ -3386,7 +3620,12 @@ class BounceBot(EWrapper, EClient):
         logging.info(f"Connected to IB API. NextValidId={orderId}")
 
     def error(self, reqId, errorCode, errorString):
-        logging.error(f"IB Error. ReqId={reqId}, Code={errorCode}, Msg={errorString}")
+        if errorCode in IB_INFO_STATUS_CODES:
+            logging.info(f"IB Status. ReqId={reqId}, Code={errorCode}, Msg={errorString}")
+        elif errorCode in IB_WARNING_STATUS_CODES:
+            logging.warning(f"IB Warning. ReqId={reqId}, Code={errorCode}, Msg={errorString}")
+        else:
+            logging.error(f"IB Error. ReqId={reqId}, Code={errorCode}, Msg={errorString}")
         if errorCode == 200:
             with self.data_lock:
                 symbol = self.reqid_to_symbol.get(reqId)

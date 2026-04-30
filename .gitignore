@@ -1,5 +1,7 @@
 .venv/
 .tmp.driveupload/
+__pycache__/
+*.py[cod]
 scripts/__pycache__/
 scripts/bounce_bot_backup_before_chop_filters_20260306.py
 data/avwap_signals.csv

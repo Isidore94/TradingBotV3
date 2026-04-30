@@ -8,6 +8,7 @@ from market_prep.models import MarketPrepConfig
 from market_prep.report_builder import build_daily_report_object
 from market_prep.services import rss_news_service, sec_service
 from market_prep.services.treasury_calendar_service import _normalize_auction_row
+from market_prep.services.yfinance_service import _yfinance_lookup_symbol
 from market_prep.services.watchlist_service import scan_watchlist_risk
 
 
@@ -28,6 +29,11 @@ class MarketPrepEnricherTests(unittest.TestCase):
 
         self.assertEqual(high["priority"], "HIGH")
         self.assertEqual(medium["priority"], "MEDIUM")
+
+    def test_yfinance_lookup_symbol_uses_yahoo_class_share_format(self):
+        self.assertEqual(_yfinance_lookup_symbol("HVT.A"), "HVT-A")
+        self.assertEqual(_yfinance_lookup_symbol("brk.b"), "BRK-B")
+        self.assertEqual(_yfinance_lookup_symbol("SHOP.TO"), "SHOP.TO")
 
     def test_sec_submission_flags_danger_keyword(self):
         submission = {

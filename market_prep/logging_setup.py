@@ -9,6 +9,13 @@ from .config_loader import load_market_prep_config
 
 LOGGER_NAME = "market_prep"
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s]: %(message)s"
+YFINANCE_NOISY_LOGGER_NAMES = (
+    "yfinance",
+    "yfinance.base",
+    "yfinance.scrapers",
+    "yfinance.scrapers.calendar",
+    "yfinance.scrapers.quote",
+)
 
 
 def get_market_prep_logger() -> logging.Logger:
@@ -25,10 +32,17 @@ def get_market_prep_logger() -> logging.Logger:
     for handler in logger.handlers:
         handler_path = getattr(handler, "baseFilename", "")
         if handler_path and str(Path(handler_path).resolve()) == target:
+            _configure_external_loggers()
             return logger
 
     handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=1, encoding="utf-8")
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     logger.addHandler(handler)
+    _configure_external_loggers()
     return logger
+
+
+def _configure_external_loggers() -> None:
+    for logger_name in YFINANCE_NOISY_LOGGER_NAMES:
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
