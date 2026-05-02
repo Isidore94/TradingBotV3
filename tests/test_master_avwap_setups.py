@@ -72,6 +72,98 @@ def _build_history_with_gap() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_post_earnings_52w_history(
+    *,
+    side: str = "LONG",
+    extra_sessions_after_break: int = 0,
+) -> pd.DataFrame:
+    gap_idx = 30
+    periods = gap_idx + 2 + extra_sessions_after_break
+    dates = pd.bdate_range("2026-01-02", periods=periods)
+    rows = []
+    for idx, dt_value in enumerate(dates):
+        if side == "LONG":
+            close_price = 112.0 + (idx * 0.24)
+            open_price = close_price - 0.15
+            high_price = close_price + 0.35
+            low_price = close_price - 1.0
+            if idx == gap_idx:
+                open_price = 119.25
+                high_price = 120.0
+                low_price = 117.5
+                close_price = 118.7
+            elif idx == gap_idx + 1:
+                open_price = 119.0
+                high_price = 121.0
+                low_price = 118.2
+                close_price = 120.4
+            elif idx > gap_idx + 1:
+                age = idx - (gap_idx + 1)
+                open_price = 118.5 - (age * 0.4)
+                high_price = 119.0 - (age * 0.2)
+                low_price = 116.4 - (age * 0.6)
+                close_price = 117.6 - (age * 0.7)
+        else:
+            close_price = 88.0 - (idx * 0.24)
+            open_price = close_price + 0.15
+            high_price = close_price + 1.0
+            low_price = close_price - 0.35
+            if idx == gap_idx:
+                open_price = 80.75
+                high_price = 82.0
+                low_price = 80.0
+                close_price = 81.3
+            elif idx == gap_idx + 1:
+                open_price = 80.8
+                high_price = 81.2
+                low_price = 79.0
+                close_price = 79.6
+            elif idx > gap_idx + 1:
+                age = idx - (gap_idx + 1)
+                open_price = 81.0 + (age * 0.35)
+                high_price = 82.1 + (age * 0.45)
+                low_price = 80.5 + (age * 0.25)
+                close_price = 81.2 + (age * 0.5)
+        rows.append(
+            {
+                "datetime": dt_value,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": 1_500_000,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_post_earnings_52w_release_context(df: pd.DataFrame, *, side: str = "LONG") -> dict:
+    gap_idx = 30
+    anchor_idx = gap_idx - 1
+    anchor_date = df.iloc[anchor_idx]["datetime"].date().isoformat()
+    gap_date = df.iloc[gap_idx]["datetime"].date().isoformat()
+    return {
+        "active": True,
+        "earnings_date": anchor_date,
+        "release_session": "amc",
+        "gap_date": gap_date,
+        "anchor_date": anchor_date,
+        "gap_idx": gap_idx,
+        "anchor_idx": anchor_idx,
+        "gap_atr_multiple": 1.25,
+        "gap_is_up": side == "LONG",
+        "gap_is_down": side != "LONG",
+        "sessions_since_gap": len(df) - gap_idx - 1,
+        "in_post_earnings_window": True,
+        "anchor_meta": {
+            "date": anchor_date,
+            "vwap": 115.0 if side == "LONG" else 85.0,
+            "stdev": 1.0,
+            "bands": {},
+        },
+    }
+
+
 def _build_mid_earnings_history() -> pd.DataFrame:
     dates = pd.bdate_range("2026-01-02", periods=25)
     rows = []
@@ -746,6 +838,46 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(context["gap_date"], df.iloc[21]["datetime"].date().isoformat())
         self.assertTrue(context["gap_is_down"])
         self.assertGreater(context["gap_atr_multiple"], 1.0)
+
+    def test_post_earnings_52w_break_uses_earnings_candle_high_and_fresh_break(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=0)
+        context = _build_post_earnings_52w_release_context(df)
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertTrue(summary["qualified_gap"])
+        self.assertEqual(summary["monitor_level"], 120.0)
+        self.assertEqual(summary["monitor_level_label"], "52W_HIGH")
+        self.assertTrue(summary["break_signal"])
+        self.assertTrue(summary["break_fresh"])
+        self.assertEqual(summary["break_age_sessions"], 0)
+        self.assertIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
+
+    def test_post_earnings_52w_break_goes_stale_after_two_candles(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=4)
+        context = _build_post_earnings_52w_release_context(df)
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertTrue(summary["qualified_gap"])
+        self.assertFalse(summary["break_signal"])
+        self.assertFalse(summary["break_intraday"])
+        self.assertFalse(summary["break_fresh"])
+        self.assertEqual(summary["break_age_sessions"], 4)
+        self.assertNotIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
+        self.assertIn("break stale", summary["note"])
+
+    def test_stale_post_earnings_52w_break_can_still_be_avwape_retest(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=4)
+        context = _build_post_earnings_52w_release_context(df)
+
+        with patch("master_avwap.bounce_up_at_level", return_value=True):
+            summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertFalse(summary["break_signal"])
+        self.assertTrue(summary["bounce_signal"])
+        self.assertEqual(summary["family"], master_avwap.POST_EARNINGS_BOUNCE_SIGNAL)
+        self.assertEqual(summary["events"], [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL])
 
     def test_post_earnings_stop_candidate_uses_custom_close_failure_limit(self):
         candidates = _find_tracker_stop_candidates(

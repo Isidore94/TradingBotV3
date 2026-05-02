@@ -346,6 +346,7 @@ TRACKER_POSITIVE_DELTA_SMALL_SAMPLE_SCORE_CAP = 3
 TRACKER_POSITIVE_DELTA_MEDIUM_SAMPLE_SCORE_CAP = 12
 FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS = 252
 POST_EARNINGS_MAX_SESSIONS = 20
+POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
 POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
 POST_EARNINGS_CLOSE_CONFIRM_SIGNAL = "POST_EARNINGS_CLOSE_CONFIRM"
@@ -3275,7 +3276,7 @@ def build_tracker_entry_attributes(
         group="pattern",
         label="Post-earnings intraday break",
         value_type="bool",
-        description="Whether price broke the post-earnings 52-week close level intraday.",
+        description="Whether price has a fresh break of the earnings candle's 52-week high/low.",
     )
     add(
         "pattern.post_earnings_break_close",
@@ -3283,7 +3284,7 @@ def build_tracker_entry_attributes(
         group="pattern",
         label="Post-earnings close confirm",
         value_type="bool",
-        description="Whether price closed through the post-earnings 52-week close level.",
+        description="Whether price closed through the earnings candle's 52-week high/low.",
     )
     add(
         "pattern.post_earnings_sessions_since_gap",
@@ -7726,6 +7727,51 @@ def _rolling_close_extreme_before_index(
     return float(closes.max()) if normalize_side(side) == "LONG" else float(closes.min())
 
 
+def _rolling_price_extreme_before_index(
+    df: pd.DataFrame,
+    end_idx: int,
+    side: str,
+    lookback_sessions: int = FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS,
+) -> float | None:
+    if df is None or df.empty or end_idx <= 0:
+        return None
+    column = "high" if normalize_side(side) == "LONG" else "low"
+    if column not in df.columns:
+        return None
+    start_idx = max(0, int(end_idx) - max(1, int(lookback_sessions)))
+    prices = pd.to_numeric(df.iloc[start_idx:end_idx][column], errors="coerce").dropna()
+    if prices.empty:
+        return None
+    return float(prices.max()) if normalize_side(side) == "LONG" else float(prices.min())
+
+
+def _find_first_post_earnings_break_index(
+    df: pd.DataFrame,
+    side: str,
+    level: float | None,
+    start_idx: int,
+) -> int | None:
+    if df is None or df.empty or level is None:
+        return None
+    first_idx = max(0, int(start_idx))
+    if first_idx >= len(df):
+        return None
+    for idx in range(first_idx, len(df)):
+        if _is_break_above_level(side, df.iloc[idx], level):
+            return idx
+    return None
+
+
+def _trade_date_text_from_bar(row: pd.Series) -> str:
+    bar_datetime = pd.to_datetime(row.get("datetime"), errors="coerce")
+    if pd.notna(bar_datetime):
+        return bar_datetime.date().isoformat()
+    trade_date = row.get("trade_date")
+    if hasattr(trade_date, "isoformat"):
+        return trade_date.isoformat()
+    return str(trade_date or "").strip()
+
+
 def _build_latest_earnings_release_context(
     df: pd.DataFrame,
     release_info: dict | None,
@@ -7851,6 +7897,9 @@ def analyze_post_earnings_setups(
         "break_intraday": False,
         "break_close": False,
         "break_signal": False,
+        "break_fresh": False,
+        "break_age_sessions": None,
+        "first_break_date": "",
         "bounce_signal": False,
         "events": [],
         "note": "",
@@ -7866,20 +7915,22 @@ def analyze_post_earnings_setups(
     if gap_idx is None or not gap_date or gap_idx >= len(df):
         return result
 
+    side_norm = normalize_side(side)
     gap_row = df.iloc[int(gap_idx)]
-    gap_close = _coerce_float(gap_row.get("close"))
+    monitor_column = "high" if side_norm == "LONG" else "low"
+    gap_extreme = _coerce_float(gap_row.get(monitor_column))
     last_close = _coerce_float(df.iloc[-1].get("close"))
-    if gap_close is None or last_close is None:
+    if gap_extreme is None or last_close is None:
         return result
 
-    directional_gap = bool(release_context.get("gap_is_up")) if normalize_side(side) == "LONG" else bool(release_context.get("gap_is_down"))
-    prior_extreme = _rolling_close_extreme_before_index(df, int(gap_idx), side)
-    is_new_close_extreme = False
+    directional_gap = bool(release_context.get("gap_is_up")) if side_norm == "LONG" else bool(release_context.get("gap_is_down"))
+    prior_extreme = _rolling_price_extreme_before_index(df, int(gap_idx), side)
+    is_new_price_extreme = False
     if prior_extreme is not None:
-        if normalize_side(side) == "LONG":
-            is_new_close_extreme = float(gap_close) >= float(prior_extreme)
+        if side_norm == "LONG":
+            is_new_price_extreme = float(gap_extreme) >= float(prior_extreme)
         else:
-            is_new_close_extreme = float(gap_close) <= float(prior_extreme)
+            is_new_price_extreme = float(gap_extreme) <= float(prior_extreme)
 
     sessions_since_gap = int(release_context.get("sessions_since_gap") or 0)
     qualified_gap = (
@@ -7887,15 +7938,22 @@ def analyze_post_earnings_setups(
         and bool(release_context.get("in_post_earnings_window"))
         and _coerce_float(release_context.get("gap_atr_multiple")) is not None
         and float(release_context.get("gap_atr_multiple")) >= MIN_GAP_ATR_MULTIPLE
-        and is_new_close_extreme
+        and is_new_price_extreme
     )
 
     if qualified_gap and len(df) > int(gap_idx) + 1:
-        break_intraday = _is_break_above_level(side, df.iloc[-1], gap_close)
-        break_close = _is_close_beyond_level(side, last_close, gap_close)
+        first_break_idx = _find_first_post_earnings_break_index(df, side, gap_extreme, int(gap_idx) + 1)
+        first_break_date = ""
+        break_age_sessions = None
+        if first_break_idx is not None:
+            first_break_date = _trade_date_text_from_bar(df.iloc[first_break_idx])
+            break_age_sessions = max(0, len(df) - 1 - int(first_break_idx))
+        break_fresh = break_age_sessions is not None and break_age_sessions <= POST_EARNINGS_BREAK_FRESH_SESSIONS
+        break_intraday = bool(break_fresh)
+        break_close = bool(break_fresh and _is_close_beyond_level(side, last_close, gap_extreme))
         bounce_signal = False
         if anchor_meta:
-            if normalize_side(side) == "LONG":
+            if side_norm == "LONG":
                 bounce_signal = bounce_up_at_level(df, anchor_meta.get("vwap"))
             else:
                 bounce_signal = bounce_down_at_level(df, anchor_meta.get("vwap"))
@@ -7915,14 +7973,20 @@ def analyze_post_earnings_setups(
         note_parts = [
             f"gap {gap_date} {float(release_context.get('gap_atr_multiple')):.2f} ATR",
             (
-                f"new 52-week closing {'high' if normalize_side(side) == 'LONG' else 'low'} "
-                f"{float(gap_close):.2f}"
+                f"new 52-week {'high' if side_norm == 'LONG' else 'low'} "
+                f"{float(gap_extreme):.2f}"
             ),
             f"anchor {release_context.get('anchor_date')}",
             f"window day {sessions_since_gap}/{POST_EARNINGS_MAX_SESSIONS}",
         ]
         if break_intraday:
-            note_parts.append("intraday break triggered")
+            note_parts.append("fresh earnings-candle break triggered")
+            if first_break_date:
+                note_parts.append(f"first break {first_break_date}")
+        elif break_age_sessions is not None:
+            note_parts.append(
+                f"52-week break stale after {int(break_age_sessions)} session(s); waiting for post-earnings AVWAPE retest"
+            )
         if break_close:
             note_parts.append("close confirmed")
         if bounce_signal:
@@ -7932,8 +7996,8 @@ def analyze_post_earnings_setups(
             {
                 "active": True,
                 "qualified_gap": True,
-                "monitor_level": float(gap_close),
-                "monitor_level_label": "52W_CLOSE_HIGH" if normalize_side(side) == "LONG" else "52W_CLOSE_LOW",
+                "monitor_level": float(gap_extreme),
+                "monitor_level_label": "52W_HIGH" if side_norm == "LONG" else "52W_LOW",
                 "anchor_date": str(release_context.get("anchor_date") or ""),
                 "gap_date": gap_date,
                 "earnings_date": str(release_context.get("earnings_date") or ""),
@@ -7943,6 +8007,9 @@ def analyze_post_earnings_setups(
                 "break_intraday": bool(break_intraday),
                 "break_close": bool(break_close),
                 "break_signal": bool(break_intraday),
+                "break_fresh": bool(break_fresh),
+                "break_age_sessions": break_age_sessions,
+                "first_break_date": first_break_date,
                 "bounce_signal": bool(bounce_signal),
                 "events": events,
                 "note": "; ".join(note_parts),
@@ -7957,8 +8024,8 @@ def analyze_post_earnings_setups(
             {
                 "active": True,
                 "qualified_gap": True,
-                "monitor_level": float(gap_close),
-                "monitor_level_label": "52W_CLOSE_HIGH" if normalize_side(side) == "LONG" else "52W_CLOSE_LOW",
+                "monitor_level": float(gap_extreme),
+                "monitor_level_label": "52W_HIGH" if side_norm == "LONG" else "52W_LOW",
                 "anchor_date": str(release_context.get("anchor_date") or ""),
                 "gap_date": gap_date,
                 "earnings_date": str(release_context.get("earnings_date") or ""),
@@ -7966,8 +8033,8 @@ def analyze_post_earnings_setups(
                 "gap_atr_multiple": _coerce_float(release_context.get("gap_atr_multiple")),
                 "sessions_since_gap": sessions_since_gap,
                 "note": (
-                    f"Qualified post-earnings {'high' if normalize_side(side) == 'LONG' else 'low'} watch "
-                    f"from {gap_date} at {float(gap_close):.2f}"
+                    f"Qualified post-earnings {'high' if side_norm == 'LONG' else 'low'} watch "
+                    f"from {gap_date} at {float(gap_extreme):.2f}"
                 ),
                 "anchor_meta": anchor_meta,
             }
