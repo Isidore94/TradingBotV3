@@ -10611,20 +10611,74 @@ def evaluate_theta_put_candidate(
     if len(supports) < THETA_MIN_SUPPORT_LEVELS:
         return None
 
-    sources = {entry.get("source") for entry in supports}
-    score = len(supports) * 20
-    if "avwape" in sources:
-        score += 8
-    if "previous_avwape" in sources:
-        score += 6
-    if "trendline" in sources:
-        score += 8
-    if "compression" in sources:
-        score += 6
+    source_weights = {
+        "avwape": 1.2,
+        "previous_avwape": 1.0,
+        "trendline": 1.25,
+        "sma": 0.85,
+        "compression": 1.05,
+    }
+    proximity_tiers = (
+        (0.20, 1.50),
+        (0.50, 1.20),
+        (1.00, 0.90),
+        (1.75, 0.60),
+        (THETA_SUPPORT_MAX_ATR, 0.35),
+    )
+    source_seen_counts: dict[str, int] = {}
+    proximity_score = 0.0
+    quality_score = 0.0
+    diminishing_penalty = 0.0
+    for entry in supports:
+        source = str(entry.get("source") or "").strip().lower()
+        distance_atr = float(entry.get("distance_atr", THETA_SUPPORT_MAX_ATR) or THETA_SUPPORT_MAX_ATR)
+        proximity_mult = proximity_tiers[-1][1]
+        for tier_limit, tier_mult in proximity_tiers:
+            if distance_atr <= tier_limit:
+                proximity_mult = tier_mult
+                break
+        proximity_score += 14.0 * proximity_mult
+
+        source_weight = source_weights.get(source, 0.75)
+        source_seen_counts[source] = source_seen_counts.get(source, 0) + 1
+        ordinal = source_seen_counts[source]
+        diminishing_mult = 1.0 if ordinal == 1 else max(0.35, 0.72 ** (ordinal - 1))
+        quality_score += 12.0 * source_weight * diminishing_mult
+        if ordinal > 1:
+            diminishing_penalty += 1.75 * (ordinal - 1)
+
+    confluence_score = 0.0
+    confluence_clusters = 0
+    if len(supports) >= 2:
+        levels = sorted(float(entry.get("level", 0.0) or 0.0) for entry in supports)
+        confluence_band = max(0.35 * atr_value, close_value * 0.0035)
+        for idx in range(len(levels)):
+            low = levels[idx]
+            high = low + confluence_band
+            members = [
+                entry
+                for entry in supports
+                if low <= float(entry.get("level", 0.0) or 0.0) <= high
+            ]
+            member_sources = {
+                str(entry.get("source") or "").strip().lower()
+                for entry in members
+                if entry.get("source")
+            }
+            if len(member_sources) >= 2 and len(members) >= 2:
+                confluence_clusters += 1
+                confluence_score = max(confluence_score, 7.0 + (len(member_sources) - 2) * 2.0 + (len(members) - 2) * 1.5)
+
+    nearest_support = max(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
+    nearest_support_distance_atr = float(nearest_support.get("distance_atr", 0.0) or 0.0)
+    far_support_penalty = 0.0
+    if nearest_support_distance_atr > 0.85:
+        far_support_penalty = min(26.0, (nearest_support_distance_atr - 0.85) * 18.0)
+
+    score = proximity_score + quality_score + confluence_score - diminishing_penalty - far_support_penalty
     if earnings_summary.get("days_to_next_earnings") is None or int(earnings_summary.get("days_to_next_earnings") or 0) >= 35:
         score += 5
 
-    nearest_support = max(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
     deepest_support = min(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
     strike_zone = f"at/below {nearest_support['label']} {nearest_support['level']:.2f}"
     if deepest_support["label"] != nearest_support["label"]:
@@ -10649,6 +10703,15 @@ def evaluate_theta_put_candidate(
         "atr20": float(atr_value),
         "support_count": int(len(supports)),
         "supports": supports,
+        "score_breakdown": {
+            "proximity_score": round(proximity_score, 2),
+            "quality_score": round(quality_score, 2),
+            "confluence_bonus": round(confluence_score, 2),
+            "diminishing_returns_penalty": round(diminishing_penalty, 2),
+            "far_support_penalty": round(far_support_penalty, 2),
+            "confluence_clusters": int(confluence_clusters),
+            "nearest_support_distance_atr": round(nearest_support_distance_atr, 3),
+        },
         "support_summary": _format_theta_support_stack(supports),
         "strike_zone": strike_zone,
         "premium_target": _format_theta_premium_target(close_value),
