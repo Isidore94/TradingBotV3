@@ -10465,6 +10465,63 @@ def _format_theta_support_stack(supports: list[dict], limit: int = 8) -> str:
     return ", ".join(parts)
 
 
+
+
+def _build_theta_strike_bands(supports: list[dict], atr20: float) -> list[dict]:
+    if not supports:
+        return []
+    atr_value = _coerce_float(atr20)
+    if atr_value is None or atr_value <= 0:
+        return []
+
+    cluster_threshold = max(0.25 * atr_value, min(0.5 * atr_value, 1.0))
+    ordered = sorted(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0), reverse=True)
+
+    clusters: list[list[dict]] = []
+    for entry in ordered:
+        level = float(entry.get("level", 0.0) or 0.0)
+        if not clusters:
+            clusters.append([entry])
+            continue
+        prior = clusters[-1]
+        prior_level = float(prior[-1].get("level", 0.0) or 0.0)
+        if abs(level - prior_level) <= cluster_threshold:
+            prior.append(entry)
+        else:
+            clusters.append([entry])
+
+    bands = []
+    for idx, cluster in enumerate(clusters, start=1):
+        levels = [float(item.get("level", 0.0) or 0.0) for item in cluster]
+        unique_sources = {str(item.get("source") or "") for item in cluster if item.get("source")}
+        avg_distance_atr = sum(float(item.get("distance_atr", 0.0) or 0.0) for item in cluster) / max(len(cluster), 1)
+        strength_score = (
+            len(cluster) * 12
+            + len(unique_sources) * 8
+            + max(0.0, (THETA_SUPPORT_MAX_ATR - avg_distance_atr) * 10)
+        )
+        bands.append(
+            {
+                "rank": idx,
+                "upper_bound": max(levels),
+                "lower_bound": min(levels),
+                "support_count": len(cluster),
+                "source_diversity_count": len(unique_sources),
+                "cluster_strength_score": round(float(strength_score), 2),
+                "support_labels": [str(item.get("label") or "") for item in cluster],
+            }
+        )
+
+    bands.sort(
+        key=lambda band: (
+            -float(band.get("cluster_strength_score", 0.0) or 0.0),
+            -int(band.get("source_diversity_count", 0) or 0),
+            -float(band.get("upper_bound", 0.0) or 0.0),
+        )
+    )
+    for rank, band in enumerate(bands, start=1):
+        band["rank"] = rank
+    return bands
 def _theta_earnings_window_summary(
     last_trade_date: date,
     recent_earnings_dates: list[str],
@@ -10624,11 +10681,19 @@ def evaluate_theta_put_candidate(
     if earnings_summary.get("days_to_next_earnings") is None or int(earnings_summary.get("days_to_next_earnings") or 0) >= 35:
         score += 5
 
-    nearest_support = max(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
-    deepest_support = min(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
-    strike_zone = f"at/below {nearest_support['label']} {nearest_support['level']:.2f}"
-    if deepest_support["label"] != nearest_support["label"]:
-        strike_zone += f"; deeper stack to {deepest_support['label']} {deepest_support['level']:.2f}"
+    strike_bands = _build_theta_strike_bands(supports, atr_value)
+    if not strike_bands:
+        return None
+
+    primary_strike_band = strike_bands[0]
+    secondary_strike_bands = strike_bands[1:]
+    strike_zone = (
+        f"primary {primary_strike_band['upper_bound']:.2f}-{primary_strike_band['lower_bound']:.2f} "
+        f"(strength={primary_strike_band['cluster_strength_score']:.1f}, "
+        f"sources={primary_strike_band['source_diversity_count']})"
+    )
+    if secondary_strike_bands:
+        strike_zone += f"; +{len(secondary_strike_bands)} secondary band(s)"
 
     notes = [
         f"{len(supports)} supports",
@@ -10650,6 +10715,8 @@ def evaluate_theta_put_candidate(
         "support_count": int(len(supports)),
         "supports": supports,
         "support_summary": _format_theta_support_stack(supports),
+        "primary_strike_band": primary_strike_band,
+        "secondary_strike_bands": secondary_strike_bands,
         "strike_zone": strike_zone,
         "premium_target": _format_theta_premium_target(close_value),
         "last_earnings_date": earnings_summary.get("last_earnings_date", ""),
@@ -10664,6 +10731,8 @@ def write_theta_put_report(path: Path, theta_rows: list[dict]) -> None:
     rows = sorted(
         theta_rows or [],
         key=lambda row: (
+            -float((row.get("primary_strike_band") or {}).get("cluster_strength_score", 0.0) or 0.0),
+            -int((row.get("primary_strike_band") or {}).get("source_diversity_count", 0) or 0),
             -int(row.get("support_count", 0) or 0),
             -int(row.get("score", 0) or 0),
             str(row.get("symbol") or ""),
