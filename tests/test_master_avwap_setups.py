@@ -33,11 +33,13 @@ from master_avwap import (  # noqa: E402
     build_recent_tracker_setup_family_rows,
     compute_indicator_frame,
     evaluate_theta_put_candidate,
+    extract_theta_reason_risk_rows,
     extract_theta_symbols_from_report,
     format_market_prep_payload_report,
     load_scan_earnings_context,
     rank_tracker_setup_type_rows,
     write_stdev_range_report,
+    write_theta_put_report,
     write_priority_setup_report,
 )
 
@@ -1469,6 +1471,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertGreaterEqual(candidate["support_count"], 3)
         self.assertEqual(candidate["side"], "LONG")
+        self.assertTrue(candidate["top_score_drivers"])
+        self.assertIsInstance(candidate["risk_flags"], list)
 
     def test_theta_put_candidate_rejects_recent_earnings(self):
         dates = pd.bdate_range("2025-08-01", periods=180)
@@ -1544,6 +1548,49 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertLess(text.index("MASTER AVWAP THETA PLAYS"), text.index("MASTER AVWAP EVENT TICKERS"))
         self.assertIn("1. NVDA", text)
         self.assertEqual(extract_theta_symbols_from_report(text), ["NVDA"])
+
+    def test_theta_report_and_reason_risk_parser_include_compact_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "theta.txt"
+            write_theta_put_report(
+                path,
+                [
+                    {
+                        "symbol": "NVDA",
+                        "last_close": 100.0,
+                        "score": 88,
+                        "support_count": 5,
+                        "premium_target": "2.00-3.00",
+                        "strike_zone": "at/below CURRENT_AVWAPE 99.00",
+                        "support_summary": "CURRENT_AVWAPE@99.00",
+                        "last_earnings_date": "2026-03-01",
+                        "days_since_last_earnings": 50,
+                        "next_earnings_date": "2026-06-20",
+                        "days_to_next_earnings": 61,
+                        "top_score_drivers": "AVWAPE+Trendline confluence",
+                        "risk_flags": ["support distance high", "earnings soon"],
+                        "notes": "manual IV/premium check",
+                    }
+                ],
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("reason=AVWAPE+Trendline confluence", text)
+            self.assertIn("risk=support distance high, earnings soon", text)
+            parsed = extract_theta_reason_risk_rows(text)
+            self.assertEqual(parsed[0]["symbol"], "NVDA")
+            self.assertIn("AVWAPE+Trendline", parsed[0]["reason"])
+
+    def test_theta_reason_risk_parser_supports_legacy_notes_only_reports(self):
+        text = "\n".join(
+            [
+                "1. NVDA | close=100.00 | score=80",
+                "   notes=legacy-only theta note",
+            ]
+        )
+        parsed = extract_theta_reason_risk_rows(text)
+        self.assertEqual(parsed[0]["symbol"], "NVDA")
+        self.assertEqual(parsed[0]["reason"], "legacy-only theta note")
+        self.assertIn("legacy report", parsed[0]["risk"])
 
 
 if __name__ == "__main__":

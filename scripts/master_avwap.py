@@ -10684,6 +10684,29 @@ def evaluate_theta_put_candidate(
     if deepest_support["label"] != nearest_support["label"]:
         strike_zone += f"; deeper stack to {deepest_support['label']} {deepest_support['level']:.2f}"
 
+    driver_parts = [f"{len(supports)} support stack"]
+    if "avwape" in sources and "trendline" in sources:
+        driver_parts.append("AVWAPE+Trendline confluence")
+    elif "avwape" in sources:
+        driver_parts.append("AVWAPE support confluence")
+    elif "trendline" in sources:
+        driver_parts.append("Trendline support confluence")
+    if "compression" in sources:
+        driver_parts.append("compression floor")
+    if earnings_summary.get("days_to_next_earnings") is None or int(earnings_summary.get("days_to_next_earnings") or 0) >= 35:
+        driver_parts.append("earnings buffer clear")
+
+    risk_flags = []
+    if nearest_support.get("distance_atr") is not None and float(nearest_support.get("distance_atr") or 0.0) >= 2.0:
+        risk_flags.append("support distance high")
+    days_to_next = earnings_summary.get("days_to_next_earnings")
+    if days_to_next is not None and int(days_to_next) <= 35:
+        risk_flags.append("earnings soon")
+    if "previous_avwape" not in sources:
+        risk_flags.append("thin historical AVWAP stack")
+    if not risk_flags:
+        risk_flags.append("none")
+
     notes = [
         f"{len(supports)} supports",
         earnings_summary["note"],
@@ -10719,6 +10742,8 @@ def evaluate_theta_put_candidate(
         "days_since_last_earnings": earnings_summary.get("days_since_last_earnings"),
         "next_earnings_date": earnings_summary.get("next_earnings_date", ""),
         "days_to_next_earnings": earnings_summary.get("days_to_next_earnings"),
+        "top_score_drivers": ", ".join(driver_parts),
+        "risk_flags": risk_flags,
         "notes": "; ".join(part for part in notes if part),
     }
 
@@ -10767,6 +10792,8 @@ def write_theta_put_report(path: Path, theta_rows: list[dict]) -> None:
         handle.write(f"   strike_zone={row.get('strike_zone')}\n")
         handle.write(f"   support_stack={row.get('support_summary')}\n")
         handle.write(f"   earnings=last {last_earnings}{last_suffix}; next {next_earnings}{next_suffix}\n")
+        handle.write(f"   reason={row.get('top_score_drivers') or 'n/a'}\n")
+        handle.write(f"   risk={', '.join(row.get('risk_flags') or []) or 'n/a'}\n")
         handle.write(f"   notes={row.get('notes')}\n")
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
@@ -15412,6 +15439,13 @@ class MasterAvwapGUI:
             text="Copy Theta Symbols",
             command=self.copy_theta_symbols,
         ).pack(anchor="w", padx=8, pady=(0, 8))
+        theta_reason_risk_frame = ttk.LabelFrame(theta_side, text="Reason / Risk")
+        theta_reason_risk_frame.pack(fill="both", expand=True, pady=(8, 0))
+        self.theta_reason_risk_text = tk.Text(theta_reason_risk_frame, wrap="word", height=14, font=("Courier New", 10))
+        self.theta_reason_risk_text.pack(fill="both", expand=True, padx=8, pady=(8, 8))
+        self.theta_reason_risk_text.tag_configure("risk_green", foreground="#1e7f37")
+        self.theta_reason_risk_text.tag_configure("risk_yellow", foreground="#9a6700")
+        self.theta_reason_risk_text.tag_configure("risk_red", foreground="#b42318")
 
         anchor_scan_tab = ttk.Frame(self.notebook)
         self.anchor_scan_tab = anchor_scan_tab
@@ -16852,6 +16886,31 @@ class MasterAvwapGUI:
         symbols = extract_theta_symbols_from_report(text)
         symbol_text = _format_symbol_group(symbols) if symbols else "None"
         self._set_text_widget_contents(self.theta_symbols_text, symbol_text)
+        reason_widget = getattr(self, "theta_reason_risk_text", None)
+        if reason_widget is None:
+            self._notify_output_changed()
+            return
+        reason_rows = extract_theta_reason_risk_rows(text)
+        reason_widget.configure(state="normal")
+        reason_widget.delete("1.0", tk.END)
+        if reason_rows:
+            for row in reason_rows:
+                risk_text = str(row.get("risk") or "none")
+                risk_lower = risk_text.lower()
+                tag = "risk_green"
+                if "none" in risk_lower:
+                    tag = "risk_green"
+                elif "soon" in risk_lower or "high" in risk_lower:
+                    tag = "risk_red"
+                else:
+                    tag = "risk_yellow"
+                reason_widget.insert(tk.END, f"{row.get('symbol')}\n")
+                reason_widget.insert(tk.END, f"  Reason: {row.get('reason') or 'n/a'}\n", "risk_green")
+                reason_widget.insert(tk.END, "  Risk: ")
+                reason_widget.insert(tk.END, f"{risk_text}\n\n", tag)
+        else:
+            reason_widget.insert("1.0", "No theta reason/risk details yet.")
+        reason_widget.configure(state="normal")
         self._notify_output_changed()
 
     def _clear_theta_filters(self):
