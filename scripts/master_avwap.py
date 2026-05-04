@@ -10465,6 +10465,63 @@ def _format_theta_support_stack(supports: list[dict], limit: int = 8) -> str:
     return ", ".join(parts)
 
 
+
+
+def _build_theta_strike_bands(supports: list[dict], atr20: float) -> list[dict]:
+    if not supports:
+        return []
+    atr_value = _coerce_float(atr20)
+    if atr_value is None or atr_value <= 0:
+        return []
+
+    cluster_threshold = min(max(0.35 * atr_value, 0.25 * atr_value), 0.5 * atr_value)
+    ordered = sorted(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0), reverse=True)
+
+    clusters: list[list[dict]] = []
+    for entry in ordered:
+        level = float(entry.get("level", 0.0) or 0.0)
+        if not clusters:
+            clusters.append([entry])
+            continue
+        prior = clusters[-1]
+        prior_level = float(prior[-1].get("level", 0.0) or 0.0)
+        if abs(level - prior_level) <= cluster_threshold:
+            prior.append(entry)
+        else:
+            clusters.append([entry])
+
+    bands = []
+    for idx, cluster in enumerate(clusters, start=1):
+        levels = [float(item.get("level", 0.0) or 0.0) for item in cluster]
+        unique_sources = {str(item.get("source") or "") for item in cluster if item.get("source")}
+        avg_distance_atr = sum(float(item.get("distance_atr", 0.0) or 0.0) for item in cluster) / max(len(cluster), 1)
+        strength_score = (
+            len(cluster) * 12
+            + len(unique_sources) * 8
+            + max(0.0, (THETA_SUPPORT_MAX_ATR - avg_distance_atr) * 10)
+        )
+        bands.append(
+            {
+                "rank": idx,
+                "upper_bound": max(levels),
+                "lower_bound": min(levels),
+                "support_count": len(cluster),
+                "source_diversity_count": len(unique_sources),
+                "cluster_strength_score": round(float(strength_score), 2),
+                "support_labels": [str(item.get("label") or "") for item in cluster],
+            }
+        )
+
+    bands.sort(
+        key=lambda band: (
+            -float(band.get("cluster_strength_score", 0.0) or 0.0),
+            -int(band.get("source_diversity_count", 0) or 0),
+            -float(band.get("upper_bound", 0.0) or 0.0),
+        )
+    )
+    for rank, band in enumerate(bands, start=1):
+        band["rank"] = rank
+    return bands
 def _theta_earnings_window_summary(
     last_trade_date: date,
     recent_earnings_dates: list[str],
@@ -10736,6 +10793,9 @@ def evaluate_theta_put_candidate(
             "nearest_support_distance_atr": round(nearest_support_distance_atr, 3),
         },
         "support_summary": _format_theta_support_stack(supports),
+        "primary_strike_band": primary_strike_band,
+        "secondary_strike_bands": secondary_strike_bands,
+        "ranked_strike_bands": ranked_strike_bands,
         "strike_zone": strike_zone,
         "premium_target": _format_theta_premium_target(close_value),
         "last_earnings_date": earnings_summary.get("last_earnings_date", ""),
