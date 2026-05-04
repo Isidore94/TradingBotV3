@@ -38,6 +38,7 @@ import yfinance as yf
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
+from ibapi.ticktype import TickTypeEnum
 from market_session import (
     get_default_hourly_scan_schedule,
     get_default_stop_time_label,
@@ -270,6 +271,25 @@ THETA_SUPPORT_MAX_ATR = 3.0
 THETA_SUPPORT_MAX_PCT = 14.0
 THETA_SUPPORT_ABOVE_TOL_ATR = 0.05
 THETA_COMPRESSION_SUPPORT_LOOKBACK_BARS = 20
+THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 11
+THETA_PUT_TARGET_TOTAL_CREDIT = 100.0
+THETA_PUT_MAX_CONTRACTS = 4
+THETA_PUT_TARGET_MIN_CREDIT = THETA_PUT_TARGET_TOTAL_CREDIT / 100.0 / THETA_PUT_MAX_CONTRACTS
+THETA_PUT_CUSP_MIN_CREDIT = 0.15
+THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE = 2
+THETA_PUT_MAX_STRIKES_PER_EXPIRATION = 6
+THETA_PUT_MAX_EXPIRATIONS = 3
+THETA_PCS_MIN_SUPPORT_LEVELS = 2
+THETA_PCS_MIN_EXPIRATION_MARKET_DAYS = 6
+THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 15
+THETA_PCS_TARGET_CREDIT_WIDTH_RATIO = 0.20
+THETA_PCS_CUSP_CREDIT_WIDTH_RATIO = 0.12
+THETA_PCS_MAX_EXPIRATIONS = 3
+THETA_PCS_MAX_SHORT_STRIKES_PER_EXPIRATION = 4
+THETA_PCS_MAX_WIDTH_CHOICES_PER_SHORT = 2
+THETA_OPTION_QUOTE_TIMEOUT_SEC = 4.0
+THETA_OPTION_CHAIN_TIMEOUT_SEC = 8.0
+THETA_OPTION_REQUEST_DELAY_SEC = 0.08
 PRIORITY_RETEST_LOOKBACK_BARS = 5
 PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
 PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
@@ -345,7 +365,7 @@ TRACKER_POSITIVE_DELTA_MEDIUM_CLOSED_MAX = 24
 TRACKER_POSITIVE_DELTA_SMALL_SAMPLE_SCORE_CAP = 3
 TRACKER_POSITIVE_DELTA_MEDIUM_SAMPLE_SCORE_CAP = 12
 FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS = 252
-POST_EARNINGS_MAX_SESSIONS = 20
+POST_EARNINGS_MAX_SESSIONS = 10
 POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
 POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
@@ -503,6 +523,18 @@ WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
 MARKET_PREP_SCHEMA_VERSION = 1
 MARKET_PREP_SECTION_DEFINITIONS = [
     {
+        "id": "post_earnings_potential_plays",
+        "title": "Post-Earnings Potential Plays",
+        "copy_label": "Copy Post-Earnings",
+        "empty_message": "None",
+    },
+    {
+        "id": "earnings_last_night_or_today",
+        "title": "Earnings Last Night / Today",
+        "copy_label": "Copy Earnings",
+        "empty_message": "None",
+    },
+    {
         "id": "long_avwape_to_1stdev",
         "title": "Longs: AVWAPE to 1st Dev",
         "copy_label": "Copy Longs",
@@ -518,18 +550,6 @@ MARKET_PREP_SECTION_DEFINITIONS = [
         "id": "long_2nd_to_3rd_stdev_2_sessions",
         "title": "Longs: 2nd to 3rd Dev, 2+ Sessions",
         "copy_label": "Copy 2nd-3rd",
-        "empty_message": "None",
-    },
-    {
-        "id": "earnings_last_night_or_today",
-        "title": "Earnings Last Night / Today",
-        "copy_label": "Copy Earnings",
-        "empty_message": "None",
-    },
-    {
-        "id": "post_earnings_potential_plays",
-        "title": "Post-Earnings Potential Plays",
-        "copy_label": "Copy Post-Earnings",
         "empty_message": "None",
     },
 ]
@@ -3268,7 +3288,7 @@ def build_tracker_entry_attributes(
         group="pattern",
         label="Post-earnings watch active",
         value_type="bool",
-        description="Whether the symbol is inside the 20-session post-earnings setup window.",
+        description="Whether the symbol is inside the 10-session post-earnings setup window.",
     )
     add(
         "pattern.post_earnings_break_intraday",
@@ -7932,10 +7952,16 @@ def analyze_post_earnings_setups(
         else:
             is_new_price_extreme = float(gap_extreme) <= float(prior_extreme)
 
-    sessions_since_gap = int(release_context.get("sessions_since_gap") or 0)
+    sessions_since_gap = _coerce_int(release_context.get("sessions_since_gap"))
+    if sessions_since_gap is None or sessions_since_gap < 0:
+        return result
+    in_post_earnings_window = (
+        bool(release_context.get("in_post_earnings_window"))
+        and sessions_since_gap <= POST_EARNINGS_MAX_SESSIONS
+    )
     qualified_gap = (
         directional_gap
-        and bool(release_context.get("in_post_earnings_window"))
+        and in_post_earnings_window
         and _coerce_float(release_context.get("gap_atr_multiple")) is not None
         and float(release_context.get("gap_atr_multiple")) >= MIN_GAP_ATR_MULTIPLE
         and is_new_price_extreme
@@ -9103,6 +9129,21 @@ class IBApi(EWrapper, EClient):
         EClient.__init__(self, self)
         self.data = {}
         self.ready = {}
+        self.contract_details = {}
+        self.contract_details_ready = {}
+        self.option_chain_params = {}
+        self.option_chain_ready = {}
+        self.option_quotes = {}
+        self.option_quotes_ready = {}
+        self._req_id_lock = threading.Lock()
+        self._next_req_id = int(time.time() * 1000) % (2**31 - 100000)
+
+    def next_request_id(self) -> int:
+        with self._req_id_lock:
+            self._next_req_id += 1
+            if self._next_req_id >= 2**31 - 1:
+                self._next_req_id = 1000
+            return self._next_req_id
 
     def historicalData(self, reqId, bar):
         self.data.setdefault(reqId, []).append({
@@ -9117,7 +9158,105 @@ class IBApi(EWrapper, EClient):
     def historicalDataEnd(self, reqId, start, end):
         self.ready[reqId] = True
 
+    def contractDetails(self, reqId, contractDetails):
+        self.contract_details.setdefault(reqId, []).append(contractDetails)
+
+    def contractDetailsEnd(self, reqId):
+        self.contract_details_ready[reqId] = True
+
+    def securityDefinitionOptionParameter(
+        self,
+        reqId,
+        exchange,
+        underlyingConId,
+        tradingClass,
+        multiplier,
+        expirations,
+        strikes,
+    ):
+        self.option_chain_params.setdefault(reqId, []).append(
+            {
+                "exchange": exchange,
+                "underlyingConId": underlyingConId,
+                "tradingClass": tradingClass,
+                "multiplier": multiplier,
+                "expirations": set(expirations or []),
+                "strikes": set(strikes or []),
+            }
+        )
+
+    def securityDefinitionOptionParameterEnd(self, reqId):
+        self.option_chain_ready[reqId] = True
+
+    def tickPrice(self, reqId, tickType, price, attrib):
+        quote = self.option_quotes.setdefault(reqId, {})
+        if price is None or price <= 0:
+            return
+        if tickType in (TickTypeEnum.BID, TickTypeEnum.DELAYED_BID):
+            quote["bid"] = float(price)
+        elif tickType in (TickTypeEnum.ASK, TickTypeEnum.DELAYED_ASK):
+            quote["ask"] = float(price)
+        elif tickType in (TickTypeEnum.LAST, TickTypeEnum.DELAYED_LAST):
+            quote["last"] = float(price)
+        elif tickType in (TickTypeEnum.CLOSE, TickTypeEnum.DELAYED_CLOSE):
+            quote["close"] = float(price)
+
+    def tickSize(self, reqId, tickType, size):
+        quote = self.option_quotes.setdefault(reqId, {})
+        if size is None or size < 0:
+            return
+        if tickType in (TickTypeEnum.BID_SIZE, TickTypeEnum.DELAYED_BID_SIZE):
+            quote["bid_size"] = int(size)
+        elif tickType in (TickTypeEnum.ASK_SIZE, TickTypeEnum.DELAYED_ASK_SIZE):
+            quote["ask_size"] = int(size)
+        elif tickType in (TickTypeEnum.LAST_SIZE, TickTypeEnum.DELAYED_LAST_SIZE):
+            quote["last_size"] = int(size)
+        elif tickType == TickTypeEnum.OPTION_PUT_OPEN_INTEREST:
+            quote["open_interest"] = int(size)
+        elif tickType == TickTypeEnum.OPTION_PUT_VOLUME:
+            quote["volume"] = int(size)
+
+    def tickOptionComputation(
+        self,
+        reqId,
+        tickType,
+        tickAttrib,
+        impliedVol,
+        delta,
+        optPrice,
+        pvDividend,
+        gamma,
+        vega,
+        theta,
+        undPrice,
+    ):
+        quote = self.option_quotes.setdefault(reqId, {})
+        if optPrice is not None and optPrice > 0:
+            if tickType in (TickTypeEnum.MODEL_OPTION, TickTypeEnum.DELAYED_MODEL_OPTION):
+                quote["model_price"] = float(optPrice)
+            elif tickType in (TickTypeEnum.BID_OPTION_COMPUTATION, TickTypeEnum.DELAYED_BID_OPTION):
+                quote["bid_model_price"] = float(optPrice)
+            elif tickType in (TickTypeEnum.ASK_OPTION_COMPUTATION, TickTypeEnum.DELAYED_ASK_OPTION):
+                quote["ask_model_price"] = float(optPrice)
+        if impliedVol is not None and impliedVol > 0:
+            quote["implied_vol"] = float(impliedVol)
+        if delta is not None and -2 < delta < 2:
+            quote["delta"] = float(delta)
+        if theta is not None and -1000 < theta < 1000:
+            quote["theta"] = float(theta)
+        if undPrice is not None and undPrice > 0:
+            quote["underlying_price"] = float(undPrice)
+
+    def tickSnapshotEnd(self, reqId: int):
+        self.option_quotes_ready[reqId] = True
+
     def error(self, reqId, code, msg):
+        if reqId in self.contract_details_ready:
+            self.contract_details_ready[reqId] = True
+        if reqId in self.option_chain_ready:
+            self.option_chain_ready[reqId] = True
+        if reqId in self.option_quotes_ready:
+            self.option_quotes_ready[reqId] = True
         if code not in (2104, 2106, 2158, 2176):
             logging.error(f"IB Error {code}[{reqId}]: {msg}")
 
@@ -9128,6 +9267,337 @@ def create_contract(symbol: str) -> Contract:
     c.exchange = "SMART"
     c.currency = "USD"
     return c
+
+
+def create_option_contract(
+    symbol: str,
+    expiration: date | str,
+    strike: float,
+    *,
+    right: str = "P",
+    trading_class: str = "",
+    multiplier: str = "100",
+) -> Contract:
+    c = Contract()
+    c.symbol = str(symbol or "").strip().upper()
+    c.secType = "OPT"
+    c.exchange = "SMART"
+    c.currency = "USD"
+    c.lastTradeDateOrContractMonth = _format_option_expiration(expiration)
+    c.strike = float(strike)
+    c.right = str(right or "P").strip().upper()
+    c.multiplier = str(multiplier or "100")
+    if str(trading_class or "").strip():
+        c.tradingClass = str(trading_class).strip()
+    return c
+
+
+def _wait_for_ib_flag(flag_map: dict, req_id: int, timeout_sec: float) -> bool:
+    deadline = time.monotonic() + max(0.5, float(timeout_sec or 0.5))
+    while time.monotonic() < deadline:
+        if flag_map.get(req_id):
+            return True
+        time.sleep(0.05)
+    return bool(flag_map.get(req_id))
+
+
+def _fetch_ib_stock_contract_details(ib: IBApi | None, symbol: str, timeout_sec: float = THETA_OPTION_CHAIN_TIMEOUT_SEC) -> list:
+    if ib is None or not is_daily_data_client_connected(ib):
+        return []
+    req_id = ib.next_request_id()
+    ib.contract_details[req_id] = []
+    ib.contract_details_ready[req_id] = False
+    try:
+        ib.reqContractDetails(req_id, create_contract(symbol))
+        _wait_for_ib_flag(ib.contract_details_ready, req_id, timeout_sec)
+        return list(ib.contract_details.get(req_id, []) or [])
+    except Exception as exc:
+        logging.warning("%s: IBKR stock contract detail request failed: %s", symbol, exc)
+        return []
+    finally:
+        ib.contract_details.pop(req_id, None)
+        ib.contract_details_ready.pop(req_id, None)
+
+
+def _fetch_ib_option_chain_definitions(
+    ib: IBApi | None,
+    symbol: str,
+    timeout_sec: float = THETA_OPTION_CHAIN_TIMEOUT_SEC,
+) -> list[dict]:
+    if ib is None or not is_daily_data_client_connected(ib):
+        return []
+    details = _fetch_ib_stock_contract_details(ib, symbol, timeout_sec=timeout_sec)
+    underlying_con_id = None
+    for item in details:
+        contract = getattr(item, "contract", None)
+        con_id = getattr(contract, "conId", None)
+        if con_id:
+            underlying_con_id = int(con_id)
+            break
+    if not underlying_con_id:
+        logging.warning("%s: no IBKR underlying conId found for option chain lookup.", symbol)
+        return []
+
+    req_id = ib.next_request_id()
+    ib.option_chain_params[req_id] = []
+    ib.option_chain_ready[req_id] = False
+    try:
+        ib.reqSecDefOptParams(req_id, str(symbol).strip().upper(), "", "STK", underlying_con_id)
+        _wait_for_ib_flag(ib.option_chain_ready, req_id, timeout_sec)
+        return list(ib.option_chain_params.get(req_id, []) or [])
+    except Exception as exc:
+        logging.warning("%s: IBKR option-chain request failed: %s", symbol, exc)
+        return []
+    finally:
+        ib.option_chain_params.pop(req_id, None)
+        ib.option_chain_ready.pop(req_id, None)
+
+
+def _select_ib_option_chain(definitions: list[dict], symbol: str) -> dict:
+    symbol_key = str(symbol or "").strip().upper()
+    candidates = []
+    for definition in definitions or []:
+        expirations = _normalize_option_expirations(definition.get("expirations", []))
+        strikes = _normalize_option_strikes(definition.get("strikes", []))
+        if not expirations or not strikes:
+            continue
+        exchange = str(definition.get("exchange") or "").strip().upper()
+        trading_class = str(definition.get("tradingClass") or "").strip().upper()
+        exchange_rank = 0 if exchange == "SMART" else 1
+        trading_class_rank = 0 if trading_class == symbol_key else 1
+        candidates.append(
+            (
+                exchange_rank,
+                trading_class_rank,
+                -len(expirations),
+                -len(strikes),
+                {
+                    **definition,
+                    "expirations": expirations,
+                    "strikes": strikes,
+                    "multiplier": str(definition.get("multiplier") or "100"),
+                    "tradingClass": str(definition.get("tradingClass") or symbol_key).strip() or symbol_key,
+                },
+            )
+        )
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda item: item[:4])
+    return candidates[0][4]
+
+
+def _fetch_ib_option_quote(
+    ib: IBApi | None,
+    contract: Contract,
+    timeout_sec: float = THETA_OPTION_QUOTE_TIMEOUT_SEC,
+) -> dict:
+    if ib is None or not is_daily_data_client_connected(ib):
+        return {}
+    req_id = ib.next_request_id()
+    ib.option_quotes[req_id] = {}
+    ib.option_quotes_ready[req_id] = False
+    try:
+        ib.reqMktData(req_id, contract, "100,101,106", True, False, [])
+        _wait_for_ib_flag(ib.option_quotes_ready, req_id, timeout_sec)
+        quote = dict(ib.option_quotes.get(req_id, {}) or {})
+        if quote:
+            quote["snapshot_received"] = bool(ib.option_quotes_ready.get(req_id))
+        return quote
+    except Exception as exc:
+        logging.warning(
+            "%s %s %.2f%s: IBKR option quote request failed: %s",
+            getattr(contract, "symbol", ""),
+            getattr(contract, "lastTradeDateOrContractMonth", ""),
+            float(getattr(contract, "strike", 0.0) or 0.0),
+            getattr(contract, "right", ""),
+            exc,
+        )
+        return {}
+    finally:
+        try:
+            ib.cancelMktData(req_id)
+        except Exception:
+            pass
+        ib.option_quotes.pop(req_id, None)
+        ib.option_quotes_ready.pop(req_id, None)
+        time.sleep(THETA_OPTION_REQUEST_DELAY_SEC)
+
+
+def _fetch_theta_option_quote_cached(
+    ib: IBApi | None,
+    quote_cache: dict,
+    *,
+    symbol: str,
+    expiration: date | str,
+    strike: float,
+    trading_class: str,
+    multiplier: str,
+) -> dict:
+    expiration_key = _format_option_expiration(expiration)
+    strike_key = round(float(strike), 4)
+    cache_key = (str(symbol).strip().upper(), expiration_key, strike_key, str(trading_class or ""), str(multiplier or "100"))
+    if cache_key not in quote_cache:
+        contract = create_option_contract(
+            symbol,
+            expiration_key,
+            strike_key,
+            right="P",
+            trading_class=trading_class,
+            multiplier=multiplier,
+        )
+        quote_cache[cache_key] = _fetch_ib_option_quote(ib, contract)
+    return quote_cache.get(cache_key, {})
+
+
+def _enrich_sold_put_row_with_ib_options(
+    ib: IBApi | None,
+    row: dict,
+    chain: dict,
+    quote_cache: dict,
+    reference_date: date,
+) -> None:
+    expirations = _select_option_expirations(
+        chain.get("expirations", []),
+        reference_date,
+        row,
+        min_market_days=1,
+        max_market_days=THETA_PUT_MAX_EXPIRATION_MARKET_DAYS,
+        limit=THETA_PUT_MAX_EXPIRATIONS,
+    )
+    strikes = _normalize_option_strikes(chain.get("strikes", []))
+    strike_candidates = _sold_put_candidate_strikes(row, strikes)[:THETA_PUT_MAX_STRIKES_PER_EXPIRATION]
+    quote_rows = []
+    for expiration_info in expirations:
+        for strike_candidate in strike_candidates:
+            quote = _fetch_theta_option_quote_cached(
+                ib,
+                quote_cache,
+                symbol=str(row.get("symbol") or ""),
+                expiration=expiration_info["expiration"],
+                strike=float(strike_candidate["strike"]),
+                trading_class=str(chain.get("tradingClass") or row.get("symbol") or ""),
+                multiplier=str(chain.get("multiplier") or "100"),
+            )
+            quote_rows.append(
+                {
+                    **strike_candidate,
+                    **expiration_info,
+                    "quote": quote,
+                }
+            )
+    recommendations = _rank_sold_put_option_recommendations(row, quote_rows)
+    _apply_best_option_to_theta_row(row, recommendations, unavailable_reason="no_quote")
+
+
+def _enrich_pcs_row_with_ib_options(
+    ib: IBApi | None,
+    row: dict,
+    chain: dict,
+    quote_cache: dict,
+    reference_date: date,
+) -> None:
+    expirations = _select_option_expirations(
+        chain.get("expirations", []),
+        reference_date,
+        row,
+        min_market_days=THETA_PCS_MIN_EXPIRATION_MARKET_DAYS,
+        max_market_days=THETA_PCS_MAX_EXPIRATION_MARKET_DAYS,
+        limit=THETA_PCS_MAX_EXPIRATIONS,
+    )
+    strikes = _normalize_option_strikes(chain.get("strikes", []))
+    close_value = _coerce_float(row.get("last_close")) or 0.0
+    short_candidates = _pcs_short_strike_candidates(row, strikes)[:THETA_PCS_MAX_SHORT_STRIKES_PER_EXPIRATION]
+    spread_rows = []
+    for expiration_info in expirations:
+        for short_candidate in short_candidates:
+            short_strike = float(short_candidate["short_strike"])
+            short_quote = _fetch_theta_option_quote_cached(
+                ib,
+                quote_cache,
+                symbol=str(row.get("symbol") or ""),
+                expiration=expiration_info["expiration"],
+                strike=short_strike,
+                trading_class=str(chain.get("tradingClass") or row.get("symbol") or ""),
+                multiplier=str(chain.get("multiplier") or "100"),
+            )
+            for long_strike in _pcs_long_strike_choices(short_strike, strikes, close_value):
+                long_quote = _fetch_theta_option_quote_cached(
+                    ib,
+                    quote_cache,
+                    symbol=str(row.get("symbol") or ""),
+                    expiration=expiration_info["expiration"],
+                    strike=float(long_strike),
+                    trading_class=str(chain.get("tradingClass") or row.get("symbol") or ""),
+                    multiplier=str(chain.get("multiplier") or "100"),
+                )
+                spread_rows.append(
+                    {
+                        **short_candidate,
+                        **expiration_info,
+                        "long_strike": float(long_strike),
+                        "short_quote": short_quote,
+                        "long_quote": long_quote,
+                    }
+                )
+    recommendations = _rank_pcs_option_recommendations(row, spread_rows)
+    _apply_best_option_to_theta_row(row, recommendations, unavailable_reason="no_quote")
+
+
+def enrich_theta_rows_with_ib_option_premiums(
+    ib: IBApi | None,
+    theta_rows: list[dict],
+    pcs_rows: list[dict],
+    reference_date: date,
+) -> None:
+    rows_by_symbol: dict[str, dict] = {}
+    for row in list(theta_rows or []) + list(pcs_rows or []):
+        row.setdefault("base_score", row.get("score", 0))
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if symbol:
+            rows_by_symbol.setdefault(symbol, {})
+
+    if not rows_by_symbol:
+        return
+    if not is_daily_data_client_connected(ib):
+        for row in list(theta_rows or []) + list(pcs_rows or []):
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="ib_unavailable")
+        return
+
+    chain_cache: dict[str, dict] = {}
+    quote_cache: dict = {}
+    try:
+        ib.reqMarketDataType(1)
+    except Exception:
+        pass
+
+    for symbol in rows_by_symbol:
+        definitions = _fetch_ib_option_chain_definitions(ib, symbol)
+        chain_cache[symbol] = _select_ib_option_chain(definitions, symbol)
+
+    for row in theta_rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        chain = chain_cache.get(symbol, {})
+        if not chain:
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_option_chain")
+            continue
+        try:
+            _enrich_sold_put_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
+        except Exception as exc:
+            logging.warning("%s: sold-put option enrichment failed: %s", symbol, exc)
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
+
+    for row in pcs_rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        chain = chain_cache.get(symbol, {})
+        if not chain:
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_option_chain")
+            continue
+        try:
+            _enrich_pcs_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
+        except Exception as exc:
+            logging.warning("%s: PCS option enrichment failed: %s", symbol, exc)
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
+
 
 def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
     """Fetch daily OHLCV bars from Yahoo Finance."""
@@ -10522,6 +10992,31 @@ def _build_theta_strike_bands(supports: list[dict], atr20: float) -> list[dict]:
     for rank, band in enumerate(bands, start=1):
         band["rank"] = rank
     return bands
+
+
+def _format_theta_strike_band(band: dict) -> str:
+    lower_bound = _coerce_float(band.get("lower_bound"))
+    upper_bound = _coerce_float(band.get("upper_bound"))
+    if lower_bound is None or upper_bound is None:
+        return ""
+    if abs(upper_bound - lower_bound) < 0.005:
+        price_text = f"{upper_bound:.2f}"
+    else:
+        price_text = f"{lower_bound:.2f}-{upper_bound:.2f}"
+    labels = [str(label or "").strip() for label in band.get("support_labels", []) if str(label or "").strip()]
+    label_text = ", ".join(labels[:4])
+    if len(labels) > 4:
+        label_text += f", +{len(labels) - 4} more"
+    support_count = int(band.get("support_count", 0) or 0)
+    diversity_count = int(band.get("source_diversity_count", 0) or 0)
+    suffix = f"{support_count} support{'s' if support_count != 1 else ''}"
+    if diversity_count:
+        suffix += f", {diversity_count} source{'s' if diversity_count != 1 else ''}"
+    if label_text:
+        suffix += f"; {label_text}"
+    return f"{price_text} ({suffix})"
+
+
 def _theta_earnings_window_summary(
     last_trade_date: date,
     recent_earnings_dates: list[str],
@@ -10583,6 +11078,9 @@ def evaluate_theta_put_candidate(
     compression_summary: dict | None,
     recent_earnings_dates: list[str],
     upcoming_earnings_dates: list[str],
+    *,
+    min_support_levels: int = THETA_MIN_SUPPORT_LEVELS,
+    play_type: str = "sold_put",
 ) -> dict | None:
     if normalize_side(side) != "LONG":
         return None
@@ -10665,15 +11163,26 @@ def evaluate_theta_put_candidate(
                 )
 
     supports = _dedupe_theta_supports([entry for entry in raw_supports if entry])
-    if len(supports) < THETA_MIN_SUPPORT_LEVELS:
+    min_support_levels = max(1, int(min_support_levels or THETA_MIN_SUPPORT_LEVELS))
+    if len(supports) < min_support_levels:
         return None
+    sources = {
+        str(entry.get("source") or "").strip().lower()
+        for entry in supports
+        if str(entry.get("source") or "").strip()
+    }
+    ranked_strike_bands = _build_theta_strike_bands(supports, atr_value)
+    formatted_strike_bands = [_format_theta_strike_band(band) for band in ranked_strike_bands]
+    formatted_strike_bands = [band for band in formatted_strike_bands if band]
+    primary_strike_band = formatted_strike_bands[0] if formatted_strike_bands else ""
+    secondary_strike_bands = formatted_strike_bands[1:]
 
     source_weights = {
-        "avwape": 1.2,
-        "previous_avwape": 1.0,
-        "trendline": 1.25,
-        "sma": 0.85,
-        "compression": 1.05,
+        "avwape": 1.30,
+        "previous_avwape": 1.15,
+        "trendline": 1.35,
+        "sma": 1.10,
+        "compression": 0.85,
     }
     proximity_tiers = (
         (0.20, 1.50),
@@ -10767,7 +11276,7 @@ def evaluate_theta_put_candidate(
     notes = [
         f"{len(supports)} supports",
         earnings_summary["note"],
-        "manual IV/premium check",
+        "IBKR option premium check pending",
     ]
     if bool((compression_summary or {}).get("is_compressed")):
         notes.append((compression_summary or {}).get("compression_note", "compression zone"))
@@ -10777,11 +11286,13 @@ def evaluate_theta_put_candidate(
     return {
         "symbol": str(symbol or "").strip().upper(),
         "side": "LONG",
+        "play_type": str(play_type or "sold_put"),
         "score": int(score),
         "last_trade_date": last_trade_date.isoformat() if hasattr(last_trade_date, "isoformat") else str(last_trade_date),
         "last_close": float(close_value),
         "atr20": float(atr_value),
         "support_count": int(len(supports)),
+        "min_support_levels": int(min_support_levels),
         "supports": supports,
         "score_breakdown": {
             "proximity_score": round(proximity_score, 2),
@@ -10808,53 +11319,688 @@ def evaluate_theta_put_candidate(
     }
 
 
-def write_theta_put_report(path: Path, theta_rows: list[dict]) -> None:
-    rows = sorted(
-        theta_rows or [],
+def evaluate_theta_pcs_candidate(
+    symbol: str,
+    side: str,
+    df: pd.DataFrame,
+    last_trade_date: date,
+    last_close: float | None,
+    atr20: float | None,
+    current_anchor_meta: dict | None,
+    previous_anchor_meta: dict | None,
+    indicator_row: pd.Series | dict | None,
+    compression_summary: dict | None,
+    recent_earnings_dates: list[str],
+    upcoming_earnings_dates: list[str],
+) -> dict | None:
+    candidate = evaluate_theta_put_candidate(
+        symbol=symbol,
+        side=side,
+        df=df,
+        last_trade_date=last_trade_date,
+        last_close=last_close,
+        atr20=atr20,
+        current_anchor_meta=current_anchor_meta,
+        previous_anchor_meta=previous_anchor_meta,
+        indicator_row=indicator_row,
+        compression_summary=compression_summary,
+        recent_earnings_dates=recent_earnings_dates,
+        upcoming_earnings_dates=upcoming_earnings_dates,
+        min_support_levels=THETA_PCS_MIN_SUPPORT_LEVELS,
+        play_type="pcs",
+    )
+    if candidate:
+        candidate["premium_target"] = ">=20% of spread width"
+        candidate["top_score_drivers"] = (
+            f"{candidate.get('support_count', 0)} support stack; PCS 2-support minimum; "
+            + str(candidate.get("top_score_drivers") or "")
+        ).strip("; ")
+    return candidate
+
+
+def _format_currency(value: float | None, decimals: int = 2) -> str:
+    number = _coerce_float(value)
+    if number is None:
+        return "n/a"
+    return f"${number:,.{decimals}f}"
+
+
+def _format_option_decimal(value: float | None) -> str:
+    number = _coerce_float(value)
+    if number is None or number <= 0:
+        return "n/a"
+    return f"{number:.2f}"
+
+
+def _format_option_expiration(expiration: date | str | None) -> str:
+    if isinstance(expiration, date):
+        return expiration.strftime("%Y%m%d")
+    parsed = _parse_ib_option_expiration(expiration)
+    if parsed is not None:
+        return parsed.strftime("%Y%m%d")
+    return str(expiration or "").strip()
+
+
+def _parse_ib_option_expiration(value) -> date | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw[:10] if fmt == "%Y-%m-%d" else raw[:8], fmt).date()
+        except ValueError:
+            continue
+    return _parse_iso_date_or_none(raw)
+
+
+def _market_days_between(start_date: date | None, end_date: date | None) -> int | None:
+    if start_date is None or end_date is None:
+        return None
+    if end_date <= start_date:
+        return 0
+    return int(len(pd.bdate_range(start=start_date + timedelta(days=1), end=end_date)))
+
+
+def _option_expiration_clears_earnings(row: dict, expiration_date: date | None) -> bool:
+    if expiration_date is None:
+        return False
+    next_earnings = _parse_iso_date_or_none(row.get("next_earnings_date"))
+    if next_earnings is None:
+        return True
+    return expiration_date < next_earnings
+
+
+def _normalize_option_strikes(strikes) -> list[float]:
+    normalized = []
+    seen = set()
+    for value in strikes or []:
+        strike = _coerce_float(value)
+        if strike is None or strike <= 0:
+            continue
+        key = round(strike, 4)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(float(strike))
+    return sorted(normalized)
+
+
+def _normalize_option_expirations(expirations) -> list[date]:
+    normalized = []
+    seen = set()
+    for value in expirations or []:
+        parsed = _parse_ib_option_expiration(value)
+        if parsed is None or parsed in seen:
+            continue
+        seen.add(parsed)
+        normalized.append(parsed)
+    return sorted(normalized)
+
+
+def _select_option_expirations(
+    expirations,
+    reference_date: date,
+    row: dict,
+    *,
+    min_market_days: int,
+    max_market_days: int,
+    limit: int,
+) -> list[dict]:
+    selected = []
+    for expiration_date in _normalize_option_expirations(expirations):
+        market_days = _market_days_between(reference_date, expiration_date)
+        if market_days is None:
+            continue
+        if market_days < min_market_days or market_days > max_market_days:
+            continue
+        if not _option_expiration_clears_earnings(row, expiration_date):
+            continue
+        selected.append(
+            {
+                "expiration": _format_option_expiration(expiration_date),
+                "expiration_date": expiration_date,
+                "market_days": market_days,
+            }
+        )
+    selected.sort(key=lambda item: (int(item["market_days"]), item["expiration"]))
+    return selected[: max(1, int(limit or 1))]
+
+
+def _support_source_weight(source: str) -> float:
+    source_key = str(source or "").strip().lower()
+    return {
+        "trendline": 1.35,
+        "avwape": 1.30,
+        "previous_avwape": 1.15,
+        "sma": 1.10,
+        "compression": 0.85,
+    }.get(source_key, 0.75)
+
+
+def _theta_support_quality(entry: dict) -> float:
+    distance_atr = _coerce_float(entry.get("distance_atr"))
+    proximity_bonus = 1.0
+    if distance_atr is not None:
+        proximity_bonus = max(0.35, 1.35 - (distance_atr * 0.18))
+    return float(_support_source_weight(str(entry.get("source") or "")) * proximity_bonus)
+
+
+def _strike_support_context(
+    supports: list[dict],
+    strike: float,
+    *,
+    min_support_levels: int,
+    max_surrendered_supports: int | None = None,
+) -> dict:
+    strike_value = float(strike)
+    ordered_supports = sorted(
+        [entry for entry in supports or [] if _coerce_float(entry.get("level")) is not None],
+        key=lambda entry: float(entry.get("level", 0.0) or 0.0),
+        reverse=True,
+    )
+    covered = [
+        entry
+        for entry in ordered_supports
+        if float(entry.get("level", 0.0) or 0.0) + 0.005 >= strike_value
+    ]
+    surrendered = max(0, len(ordered_supports) - len(covered))
+    source_count = len(
+        {
+            str(entry.get("source") or "").strip().lower()
+            for entry in covered
+            if str(entry.get("source") or "").strip()
+        }
+    )
+    quality_score = sum(_theta_support_quality(entry) for entry in covered)
+    eligible = len(covered) >= int(min_support_levels or 1)
+    if max_surrendered_supports is not None and surrendered > max_surrendered_supports:
+        eligible = False
+    return {
+        "eligible": bool(eligible),
+        "covered_support_count": len(covered),
+        "total_support_count": len(ordered_supports),
+        "surrendered_support_count": surrendered,
+        "covered_supports": covered,
+        "covered_support_summary": _format_theta_support_stack(covered, limit=5),
+        "covered_source_count": source_count,
+        "support_quality_score": round(float(quality_score), 3),
+    }
+
+
+def _quote_value(quote: dict | None, key: str) -> float | None:
+    if not isinstance(quote, dict):
+        return None
+    value = _coerce_float(quote.get(key))
+    if value is None or value <= 0:
+        return None
+    return value
+
+
+def _option_quote_mid(quote: dict | None) -> float | None:
+    bid = _quote_value(quote, "bid")
+    ask = _quote_value(quote, "ask")
+    if bid is not None and ask is not None and ask >= bid:
+        return (bid + ask) / 2.0
+    return bid or _quote_value(quote, "last") or _quote_value(quote, "model_price") or _quote_value(quote, "close")
+
+
+def _option_quote_spread_pct(quote: dict | None) -> float | None:
+    bid = _quote_value(quote, "bid")
+    ask = _quote_value(quote, "ask")
+    mid = _option_quote_mid(quote)
+    if bid is None or ask is None or mid is None or mid <= 0:
+        return None
+    return max(0.0, (ask - bid) / mid * 100.0)
+
+
+def _contracts_needed_for_target_credit(credit: float | None) -> int | None:
+    credit_value = _coerce_float(credit)
+    if credit_value is None or credit_value <= 0:
+        return None
+    return int(math.ceil(THETA_PUT_TARGET_TOTAL_CREDIT / (credit_value * 100.0)))
+
+
+def _sold_put_candidate_strikes(row: dict, strikes: list[float]) -> list[dict]:
+    close_value = _coerce_float(row.get("last_close"))
+    if close_value is None or close_value <= 0:
+        return []
+    supports = row.get("supports") if isinstance(row.get("supports"), list) else []
+    candidates = []
+    for strike in _normalize_option_strikes(strikes):
+        if strike >= close_value:
+            continue
+        distance_pct = (close_value - strike) / close_value * 100.0
+        if distance_pct > max(THETA_SUPPORT_MAX_PCT + 8.0, 24.0):
+            continue
+        support_context = _strike_support_context(
+            supports,
+            strike,
+            min_support_levels=THETA_MIN_SUPPORT_LEVELS,
+            max_surrendered_supports=THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE,
+        )
+        if not support_context["eligible"]:
+            continue
+        support_score = float(support_context.get("support_quality_score", 0.0) or 0.0)
+        candidates.append(
+            {
+                "strike": float(strike),
+                **support_context,
+                "pre_quote_score": (strike / close_value * 100.0) + support_score * 7.0,
+            }
+        )
+    candidates.sort(
+        key=lambda item: (
+            -float(item.get("pre_quote_score", 0.0) or 0.0),
+            -float(item.get("strike", 0.0) or 0.0),
+        )
+    )
+    return candidates
+
+
+def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> list[dict]:
+    ranked = []
+    base_score = int(row.get("base_score", row.get("score", 0)) or 0)
+    close_value = _coerce_float(row.get("last_close")) or 0.0
+    for quote_row in quote_rows or []:
+        quote = quote_row.get("quote") if isinstance(quote_row, dict) else None
+        credit = _option_quote_mid(quote)
+        if credit is None or credit <= 0:
+            continue
+        strike = _coerce_float(quote_row.get("strike"))
+        if strike is None:
+            continue
+        contracts_needed = _contracts_needed_for_target_credit(credit)
+        total_credit_at_cap = credit * 100.0 * THETA_PUT_MAX_CONTRACTS
+        status = "below_target"
+        status_rank = 2
+        if credit >= THETA_PUT_TARGET_MIN_CREDIT and contracts_needed is not None and contracts_needed <= THETA_PUT_MAX_CONTRACTS:
+            status = "recommended"
+            status_rank = 0
+        elif credit >= THETA_PUT_CUSP_MIN_CREDIT:
+            status = "cusp"
+            status_rank = 1
+        spread_pct = _option_quote_spread_pct(quote)
+        spread_penalty = min(18.0, (spread_pct or 0.0) * 0.12) if spread_pct is not None else 6.0
+        support_quality = float(quote_row.get("support_quality_score", 0.0) or 0.0)
+        surrendered = int(quote_row.get("surrendered_support_count", 0) or 0)
+        moneyness_penalty = 0.0
+        if close_value > 0:
+            moneyness_penalty = max(0.0, ((close_value - strike) / close_value * 100.0) - 8.0) * 0.6
+        rank_score = (
+            base_score
+            + credit * 90.0
+            + support_quality * 9.0
+            - surrendered * 8.0
+            - spread_penalty
+            - moneyness_penalty
+            - status_rank * 55.0
+        )
+        ranked.append(
+            {
+                "play_type": "sold_put",
+                "status": status,
+                "rank_score": round(float(rank_score), 2),
+                "expiration": _format_option_expiration(quote_row.get("expiration")),
+                "expiration_date": quote_row.get("expiration_date"),
+                "market_days": quote_row.get("market_days"),
+                "strike": float(strike),
+                "credit": round(float(credit), 3),
+                "bid": _quote_value(quote, "bid"),
+                "ask": _quote_value(quote, "ask"),
+                "last": _quote_value(quote, "last"),
+                "model_price": _quote_value(quote, "model_price"),
+                "spread_pct": round(float(spread_pct), 1) if spread_pct is not None else None,
+                "contracts_needed_for_100": contracts_needed,
+                "max_contracts": THETA_PUT_MAX_CONTRACTS,
+                "total_credit_at_contract_cap": round(float(total_credit_at_cap), 2),
+                "covered_support_count": int(quote_row.get("covered_support_count", 0) or 0),
+                "total_support_count": int(quote_row.get("total_support_count", 0) or 0),
+                "surrendered_support_count": int(quote_row.get("surrendered_support_count", 0) or 0),
+                "covered_support_summary": quote_row.get("covered_support_summary", ""),
+                "support_quality_score": round(float(support_quality), 3),
+            }
+        )
+    ranked.sort(
+        key=lambda item: (
+            0 if item.get("status") == "recommended" else 1 if item.get("status") == "cusp" else 2,
+            -float(item.get("rank_score", 0.0) or 0.0),
+            -float(item.get("credit", 0.0) or 0.0),
+            -float(item.get("strike", 0.0) or 0.0),
+        )
+    )
+    return ranked
+
+
+def _preferred_pcs_width(close_value: float) -> float:
+    if close_value < 50:
+        return 2.5
+    if close_value < 250:
+        return 5.0
+    return 10.0
+
+
+def _pcs_short_strike_candidates(row: dict, strikes: list[float]) -> list[dict]:
+    close_value = _coerce_float(row.get("last_close"))
+    if close_value is None or close_value <= 0:
+        return []
+    supports = row.get("supports") if isinstance(row.get("supports"), list) else []
+    candidates = []
+    for strike in _normalize_option_strikes(strikes):
+        if strike >= close_value:
+            continue
+        distance_pct = (close_value - strike) / close_value * 100.0
+        if distance_pct > max(THETA_SUPPORT_MAX_PCT + 10.0, 28.0):
+            continue
+        support_context = _strike_support_context(
+            supports,
+            strike,
+            min_support_levels=THETA_PCS_MIN_SUPPORT_LEVELS,
+        )
+        if not support_context["eligible"]:
+            continue
+        support_score = float(support_context.get("support_quality_score", 0.0) or 0.0)
+        candidates.append(
+            {
+                "short_strike": float(strike),
+                **support_context,
+                "pre_quote_score": (strike / close_value * 100.0) + support_score * 6.0,
+            }
+        )
+    candidates.sort(
+        key=lambda item: (
+            -float(item.get("pre_quote_score", 0.0) or 0.0),
+            -float(item.get("short_strike", 0.0) or 0.0),
+        )
+    )
+    return candidates
+
+
+def _pcs_long_strike_choices(short_strike: float, strikes: list[float], close_value: float) -> list[float]:
+    preferred_width = _preferred_pcs_width(close_value)
+    max_width = max(1.0, min(max(10.0, preferred_width), close_value * 0.10))
+    min_width = 0.5 if close_value < 30 else 1.0
+    lower_strikes = [
+        strike
+        for strike in _normalize_option_strikes(strikes)
+        if strike < short_strike and min_width <= (short_strike - strike) <= max_width
+    ]
+    lower_strikes.sort(key=lambda strike: (abs((short_strike - strike) - preferred_width), short_strike - strike))
+    return lower_strikes[:THETA_PCS_MAX_WIDTH_CHOICES_PER_SHORT]
+
+
+def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list[dict]:
+    ranked = []
+    base_score = int(row.get("base_score", row.get("score", 0)) or 0)
+    for spread_row in spread_rows or []:
+        short_quote = spread_row.get("short_quote") if isinstance(spread_row, dict) else None
+        long_quote = spread_row.get("long_quote") if isinstance(spread_row, dict) else None
+        short_bid = _quote_value(short_quote, "bid")
+        long_ask = _quote_value(long_quote, "ask")
+        short_mid = _option_quote_mid(short_quote)
+        long_mid = _option_quote_mid(long_quote)
+        credit = None
+        credit_source = "mid"
+        if short_bid is not None and long_ask is not None:
+            credit = short_bid - long_ask
+            credit_source = "bid/ask"
+        elif short_mid is not None and long_mid is not None:
+            credit = short_mid - long_mid
+        if credit is None or credit <= 0:
+            continue
+        short_strike = _coerce_float(spread_row.get("short_strike"))
+        long_strike = _coerce_float(spread_row.get("long_strike"))
+        if short_strike is None or long_strike is None or long_strike >= short_strike:
+            continue
+        width = short_strike - long_strike
+        if width <= 0:
+            continue
+        credit_ratio = credit / width
+        status = "below_target"
+        status_rank = 2
+        if credit_ratio >= THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:
+            status = "recommended"
+            status_rank = 0
+        elif credit_ratio >= THETA_PCS_CUSP_CREDIT_WIDTH_RATIO:
+            status = "cusp"
+            status_rank = 1
+        short_spread_pct = _option_quote_spread_pct(short_quote)
+        long_spread_pct = _option_quote_spread_pct(long_quote)
+        spread_penalty = 0.0
+        for value in (short_spread_pct, long_spread_pct):
+            spread_penalty += min(10.0, (value or 0.0) * 0.08) if value is not None else 4.0
+        support_quality = float(spread_row.get("support_quality_score", 0.0) or 0.0)
+        surrendered = int(spread_row.get("surrendered_support_count", 0) or 0)
+        rank_score = (
+            base_score
+            + credit_ratio * 240.0
+            + credit * 28.0
+            + support_quality * 8.0
+            - surrendered * 5.0
+            - spread_penalty
+            - status_rank * 55.0
+        )
+        ranked.append(
+            {
+                "play_type": "pcs",
+                "status": status,
+                "rank_score": round(float(rank_score), 2),
+                "expiration": _format_option_expiration(spread_row.get("expiration")),
+                "expiration_date": spread_row.get("expiration_date"),
+                "market_days": spread_row.get("market_days"),
+                "short_strike": float(short_strike),
+                "long_strike": float(long_strike),
+                "width": round(float(width), 3),
+                "credit": round(float(credit), 3),
+                "credit_source": credit_source,
+                "credit_width_ratio": round(float(credit_ratio), 4),
+                "credit_width_pct": round(float(credit_ratio * 100.0), 1),
+                "max_loss": round(float((width - credit) * 100.0), 2),
+                "short_bid": short_bid,
+                "short_ask": _quote_value(short_quote, "ask"),
+                "long_bid": _quote_value(long_quote, "bid"),
+                "long_ask": long_ask,
+                "covered_support_count": int(spread_row.get("covered_support_count", 0) or 0),
+                "total_support_count": int(spread_row.get("total_support_count", 0) or 0),
+                "surrendered_support_count": int(spread_row.get("surrendered_support_count", 0) or 0),
+                "covered_support_summary": spread_row.get("covered_support_summary", ""),
+                "support_quality_score": round(float(support_quality), 3),
+            }
+        )
+    ranked.sort(
+        key=lambda item: (
+            0 if item.get("status") == "recommended" else 1 if item.get("status") == "cusp" else 2,
+            -float(item.get("rank_score", 0.0) or 0.0),
+            -float(item.get("credit_width_ratio", 0.0) or 0.0),
+            -float(item.get("credit", 0.0) or 0.0),
+        )
+    )
+    return ranked
+
+
+def _apply_best_option_to_theta_row(row: dict, recommendations: list[dict], unavailable_reason: str = "") -> None:
+    row.setdefault("base_score", row.get("score", 0))
+    row["option_recommendations"] = recommendations or []
+    if recommendations:
+        best = recommendations[0]
+        row["best_option"] = best
+        row["option_status"] = best.get("status", "below_target")
+        row["option_score"] = best.get("rank_score")
+        try:
+            row["score"] = int(round(float(best.get("rank_score", row.get("score", 0)) or 0.0)))
+        except (TypeError, ValueError):
+            pass
+        return
+    row["best_option"] = {}
+    row["option_status"] = unavailable_reason or "no_quote"
+    row["option_score"] = row.get("base_score", row.get("score", 0))
+
+
+def _theta_status_sort_rank(row: dict) -> int:
+    status = str(row.get("option_status") or (row.get("best_option") or {}).get("status") or "").lower()
+    if status == "recommended":
+        return 0
+    if status == "cusp":
+        return 1
+    if status in {"no_quote", "ib_unavailable", "no_option_chain"}:
+        return 2
+    return 3
+
+
+def _sort_theta_report_rows(rows: list[dict]) -> list[dict]:
+    return sorted(
+        rows or [],
         key=lambda row: (
+            _theta_status_sort_rank(row),
+            -float(row.get("option_score", row.get("score", 0)) or 0.0),
+            -float((row.get("best_option") or {}).get("credit", 0.0) or 0.0),
             -int(row.get("support_count", 0) or 0),
-            -int(row.get("score", 0) or 0),
             str(row.get("symbol") or ""),
         ),
     )
+
+
+def _split_theta_rows_by_status(rows: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    recommended = []
+    cusp = []
+    fallback = []
+    for row in rows or []:
+        rank = _theta_status_sort_rank(row)
+        if rank == 0:
+            recommended.append(row)
+        elif rank == 1:
+            cusp.append(row)
+        else:
+            fallback.append(row)
+    return recommended, cusp, fallback
+
+
+def _format_sold_put_option_line(option: dict) -> str:
+    if not option:
+        return "option=no IBKR put quote recommendation available"
+    contracts = option.get("contracts_needed_for_100")
+    contracts_text = f"{contracts} contract{'s' if contracts != 1 else ''}" if contracts else "n/a contracts"
+    return (
+        f"option=SELL {option.get('expiration')} {float(option.get('strike', 0.0) or 0.0):.2f}P "
+        f"@ mid={_format_option_decimal(option.get('credit'))} "
+        f"(bid={_format_option_decimal(option.get('bid'))}, ask={_format_option_decimal(option.get('ask'))}) "
+        f"| {contracts_text} for >=$100 target | cap_credit={_format_currency(option.get('total_credit_at_contract_cap'))} "
+        f"| {option.get('market_days', 'n/a')} market days"
+    )
+
+
+def _format_pcs_option_line(option: dict) -> str:
+    if not option:
+        return "option=no IBKR PCS quote recommendation available"
+    return (
+        f"option=SELL {option.get('expiration')} {float(option.get('short_strike', 0.0) or 0.0):.2f}P / "
+        f"BUY {option.get('expiration')} {float(option.get('long_strike', 0.0) or 0.0):.2f}P "
+        f"@ credit={_format_option_decimal(option.get('credit'))} "
+        f"({option.get('credit_width_pct', 'n/a')}% of {float(option.get('width', 0.0) or 0.0):.2f} width) "
+        f"| max_loss={_format_currency(option.get('max_loss'))} "
+        f"| {option.get('market_days', 'n/a')} market days"
+    )
+
+
+def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> None:
+    option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
+    next_earnings = row.get("next_earnings_date") or f">{THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS}d/unknown"
+    days_to_next = row.get("days_to_next_earnings")
+    next_suffix = f" ({days_to_next}d)" if days_to_next is not None else ""
+    last_earnings = row.get("last_earnings_date") or "unknown"
+    days_since_last = row.get("days_since_last_earnings")
+    last_suffix = f" ({days_since_last}d ago)" if days_since_last is not None else ""
+    status = str(row.get("option_status") or option.get("status") or "support_only")
+    credit = option.get("credit") if option else None
+    credit_text = f" | credit={_format_option_decimal(credit)}" if credit else ""
+    handle.write(
+        f"{idx}. {row.get('symbol')} | close={float(row.get('last_close')):.2f} "
+        f"| score={int(row.get('score', 0) or 0)} "
+        f"| supports={int(row.get('support_count', 0) or 0)} "
+        f"| option_status={status}{credit_text}\n"
+    )
+    if play_type == "pcs":
+        handle.write(f"   {_format_pcs_option_line(option)}\n")
+        if option:
+            handle.write(
+                f"   strikes={float(option.get('short_strike', 0.0) or 0.0):.2f}/"
+                f"{float(option.get('long_strike', 0.0) or 0.0):.2f} "
+                f"| credit_width={option.get('credit_width_pct', 'n/a')}% "
+                f"| protected_by={option.get('covered_support_count', 0)}/{option.get('total_support_count', 0)} supports\n"
+            )
+    else:
+        handle.write(f"   {_format_sold_put_option_line(option)}\n")
+        if option:
+            handle.write(
+                f"   strike={float(option.get('strike', 0.0) or 0.0):.2f} "
+                f"| protected_by={option.get('covered_support_count', 0)}/{option.get('total_support_count', 0)} supports "
+                f"| gave_up_supports={option.get('surrendered_support_count', 0)}\n"
+            )
+    handle.write(f"   strike_zone={row.get('strike_zone')}\n")
+    if option and option.get("covered_support_summary"):
+        handle.write(f"   option_supports={option.get('covered_support_summary')}\n")
+    handle.write(f"   support_stack={row.get('support_summary')}\n")
+    handle.write(f"   earnings=last {last_earnings}{last_suffix}; next {next_earnings}{next_suffix}\n")
+    handle.write(f"   reason={row.get('top_score_drivers') or 'n/a'}\n")
+    handle.write(f"   risk={', '.join(row.get('risk_flags') or []) or 'n/a'}\n")
+    handle.write(f"   notes={row.get('notes')}\n")
+
+
+def _write_theta_section(handle, title: str, rows: list[dict], *, play_type: str) -> None:
+    handle.write(f"{title}\n")
+    handle.write("-" * len(title) + "\n")
+    if not rows:
+        handle.write("No candidates in this bucket.\n")
+        return
+    for idx, row in enumerate(rows, start=1):
+        _write_theta_row_details(handle, idx, row, play_type=play_type)
+
+
+def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[dict] | None = None) -> None:
+    sold_put_rows = _sort_theta_report_rows(theta_rows or [])
+    pcs_rows = _sort_theta_report_rows(pcs_rows or [])
     buffer = io.StringIO()
     handle = buffer
-    handle.write("Master AVWAP theta put-selling candidates\n")
+    handle.write("Master AVWAP theta option candidates\n")
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     handle.write(
-        "Rules: LONG watchlist only; recommendation-only; >=3 nearby support references; "
+        "Sold put rules: LONG watchlist only; recommendation-only; >=3 nearby SMA/Trendline/AVWAPE support references; "
+        f"short put expiration <= {THETA_PUT_MAX_EXPIRATION_MARKET_DAYS} market days; "
+        f"target >= {_format_option_decimal(THETA_PUT_TARGET_MIN_CREDIT)} credit so <= {THETA_PUT_MAX_CONTRACTS} contracts can reach ~$100.\n"
+    )
+    handle.write(
+        "PCS rules: LONG watchlist only; recommendation-only; >=2 nearby support references; "
+        f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
+        f"target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width.\n"
+    )
+    handle.write(
+        "Earnings filter: "
         f"no known earnings within {THETA_MIN_EARNINGS_BUFFER_DAYS} calendar days before/after scan date.\n"
     )
     handle.write(
-        "Premium targets are manual 1-2 week reference ranges. Live IBKR IV/chain filtering is not enabled yet.\n\n"
+        "IBKR option quotes are snapshot-based. Cusp rows are below target credit now but may improve on pullbacks.\n\n"
     )
 
-    if not rows:
-        handle.write("No theta put-selling candidates found.\n")
+    if not sold_put_rows and not pcs_rows:
+        handle.write("No theta option candidates found.\n")
         _write_text_atomic(path, buffer.getvalue())
         return
 
-    handle.write("Recommended theta candidates\n")
-    handle.write("----------------------------\n")
-    for idx, row in enumerate(rows, start=1):
-        next_earnings = row.get("next_earnings_date") or f">{THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS}d/unknown"
-        days_to_next = row.get("days_to_next_earnings")
-        next_suffix = f" ({days_to_next}d)" if days_to_next is not None else ""
-        last_earnings = row.get("last_earnings_date") or "unknown"
-        days_since_last = row.get("days_since_last_earnings")
-        last_suffix = f" ({days_since_last}d ago)" if days_since_last is not None else ""
-        handle.write(
-            f"{idx}. {row.get('symbol')} | close={float(row.get('last_close')):.2f} "
-            f"| score={int(row.get('score', 0) or 0)} "
-            f"| supports={int(row.get('support_count', 0) or 0)} "
-            f"| premium_target={row.get('premium_target')}\n"
-        )
-        handle.write(f"   strike_zone={row.get('strike_zone')}\n")
-        handle.write(f"   support_stack={row.get('support_summary')}\n")
-        handle.write(f"   earnings=last {last_earnings}{last_suffix}; next {next_earnings}{next_suffix}\n")
-        handle.write(f"   reason={row.get('top_score_drivers') or 'n/a'}\n")
-        handle.write(f"   risk={', '.join(row.get('risk_flags') or []) or 'n/a'}\n")
-        handle.write(f"   notes={row.get('notes')}\n")
+    sold_put_recommended, sold_put_cusp, sold_put_fallback = _split_theta_rows_by_status(sold_put_rows)
+    pcs_recommended, pcs_cusp, pcs_fallback = _split_theta_rows_by_status(pcs_rows)
+
+    _write_theta_section(handle, "Sold Put Plays", sold_put_recommended, play_type="sold_put")
+    handle.write("\n")
+    _write_theta_section(handle, "Sold Put Cusp / Pullback Watch", sold_put_cusp, play_type="sold_put")
+    if sold_put_fallback:
+        handle.write("\n")
+        _write_theta_section(handle, "Sold Put Support-Only / No Quote", sold_put_fallback, play_type="sold_put")
+    handle.write("\n")
+    _write_theta_section(handle, "PCS Plays", pcs_recommended, play_type="pcs")
+    handle.write("\n")
+    _write_theta_section(handle, "PCS Cusp / Pullback Watch", pcs_cusp, play_type="pcs")
+    if pcs_fallback:
+        handle.write("\n")
+        _write_theta_section(handle, "PCS Support-Only / No Quote", pcs_fallback, play_type="pcs")
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
@@ -10880,17 +12026,29 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
         re.IGNORECASE,
     )
     strike_zone_pattern = re.compile(r"^\s*strike_zone=(.+)$", re.IGNORECASE)
+    sold_put_option_pattern = re.compile(r"^\s*option=SELL\s+(\d{8})\s+([0-9]*\.?[0-9]+)P\s+@\s+mid=([0-9]*\.?[0-9]+)", re.IGNORECASE)
+    pcs_option_pattern = re.compile(
+        r"^\s*option=SELL\s+(\d{8})\s+([0-9]*\.?[0-9]+)P\s+/\s+BUY\s+\d{8}\s+([0-9]*\.?[0-9]+)P\s+@\s+credit=([0-9]*\.?[0-9]+)",
+        re.IGNORECASE,
+    )
     earnings_pattern = re.compile(r"next\s+([^;]+?)(?:\s+\(([-]?\d+)d\))?(?:$|;)", re.IGNORECASE)
 
     current = None
+    current_play_type = "sold_put"
     for raw_line in str(text or "").splitlines():
         line = raw_line.strip()
+        lower_line = line.lower()
+        if lower_line.startswith("pcs "):
+            current_play_type = "pcs"
+        elif lower_line.startswith("sold put"):
+            current_play_type = "sold_put"
         header_match = row_header_pattern.match(line)
         if header_match:
             if current:
                 rows.append(current)
             current = {
                 "symbol": header_match.group(1).upper(),
+                "play_type": current_play_type,
                 "close": float(header_match.group(2)),
                 "score": int(header_match.group(3)),
                 "support_count": int(header_match.group(4)),
@@ -10905,7 +12063,20 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
             continue
         strike_match = strike_zone_pattern.match(line)
         if strike_match:
-            current["primary_strike_band"] = strike_match.group(1).strip()
+            if not current.get("primary_strike_band"):
+                current["primary_strike_band"] = strike_match.group(1).strip()
+            continue
+        sold_put_match = sold_put_option_pattern.match(line)
+        if sold_put_match:
+            current["play_type"] = "sold_put"
+            current["primary_strike_band"] = f"{sold_put_match.group(2)}P {sold_put_match.group(1)}"
+            current["liquidity_score"] = f"mid {sold_put_match.group(3)}"
+            continue
+        pcs_match = pcs_option_pattern.match(line)
+        if pcs_match:
+            current["play_type"] = "pcs"
+            current["primary_strike_band"] = f"{pcs_match.group(2)}/{pcs_match.group(3)} PCS {pcs_match.group(1)}"
+            current["liquidity_score"] = f"credit {pcs_match.group(4)}"
             continue
         if line.lower().startswith("earnings="):
             earnings_match = earnings_pattern.search(line)
@@ -10917,6 +12088,53 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
     if current:
         rows.append(current)
     return rows
+
+
+def extract_theta_reason_risk_rows(text: str) -> list[dict]:
+    rows = []
+    row_header_pattern = re.compile(r"^\s*\d+\.\s+([A-Z0-9.\-]+)\b", re.IGNORECASE)
+    field_pattern = re.compile(r"^\s*(reason|risk|notes)=(.*)$", re.IGNORECASE)
+
+    current = None
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        header_match = row_header_pattern.match(line)
+        if header_match:
+            if current:
+                rows.append(current)
+            current = {
+                "symbol": header_match.group(1).upper(),
+                "reason": "",
+                "risk": "",
+                "notes": "",
+            }
+            continue
+        if not current:
+            continue
+
+        field_match = field_pattern.match(line)
+        if not field_match:
+            continue
+        field_name = field_match.group(1).lower()
+        current[field_name] = field_match.group(2).strip()
+
+    if current:
+        rows.append(current)
+
+    parsed_rows = []
+    for row in rows:
+        reason = row.get("reason") or row.get("notes") or "n/a"
+        risk = row.get("risk")
+        if not risk:
+            risk = "legacy report; risk unavailable"
+        parsed_rows.append(
+            {
+                "symbol": row.get("symbol", ""),
+                "reason": reason,
+                "risk": risk,
+            }
+        )
+    return parsed_rows
 
 
 def build_combined_avwap_output_text(
@@ -10934,7 +12152,7 @@ def build_combined_avwap_output_text(
         + "MASTER AVWAP THETA PLAYS\n"
         + "=" * 80
         + "\n"
-        + (theta_section or "No theta put-selling output yet.")
+        + (theta_section or "No theta option output yet.")
         + "\n\n"
         + "MASTER AVWAP EVENT TICKERS\n"
         + "=" * 80
@@ -11395,6 +12613,9 @@ def apply_priority_rejection_score_caps(
 
 def _is_post_earnings_play_ready(row: dict) -> bool:
     if not isinstance(row, dict) or not row.get("post_earnings_active"):
+        return False
+    sessions_since_gap = _coerce_int(row.get("post_earnings_sessions_since_gap"))
+    if sessions_since_gap is None or sessions_since_gap < 0 or sessions_since_gap > POST_EARNINGS_MAX_SESSIONS:
         return False
     signals = set(row.get("favorite_signals") or []) | set(row.get("context_signals") or [])
     return bool(
@@ -12171,7 +13392,10 @@ def build_market_prep_payload(
             "post_earnings_potential_plays",
             [row.get("symbol", "") for row in post_earnings_rows],
             details=post_earnings_details,
-            note="Qualified post-earnings 52-week close continuation watches and triggers.",
+            note=(
+                f"Qualified post-earnings 52-week close continuation watches and triggers "
+                f"from the past {POST_EARNINGS_MAX_SESSIONS} market days."
+            ),
         ),
     ]
 
@@ -12431,14 +13655,6 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
 # ============================================================================
 # MAIN MASTER RUN
 # ============================================================================
-
-def _run_anchor_watchlist_scan_safe():
-    try:
-        anchor_events = run_anchor_watchlist_scan(archive_expired=False)
-        logging.info(f"Anchor watchlist AVWAP scan complete. Events: {len(anchor_events)}")
-    except Exception as exc:
-        logging.exception(f"Anchor watchlist scan failed: {exc}")
-
 
 def _evaluate_priority_snapshot_for_date(
     symbol: str,
@@ -13282,14 +14498,14 @@ def run_master(
 
     if not symbols:
         logging.warning(
-            f"No symbols found in {watchlist_label}. Running anchor-watchlist scan only."
+            f"No symbols found in {watchlist_label}. Skipping Master AVWAP scan."
         )
-        _run_anchor_watchlist_scan_safe()
         write_theta_put_report(THETA_PUTS_FILE, [])
         return {
             "watchlist_label": watchlist_label,
             "tracked_rows": [],
             "theta_put_rows": [],
+            "theta_pcs_rows": [],
             "ai_state": {},
             "feature_rows_by_symbol": {},
             "daily_frames_by_symbol": {},
@@ -13368,6 +14584,7 @@ def run_master(
     daily_frames_by_symbol = {}
     priority_rows = []
     theta_put_rows = []
+    theta_pcs_rows = []
     positions = {
         "current": {lvl: [] for lvl in POSITION_LEVELS},
         "previous": {lvl: [] for lvl in POSITION_LEVELS},
@@ -14035,6 +15252,24 @@ def run_master(
             theta_put_rows.append(theta_candidate)
             symbol_entry["theta_put_candidate"] = theta_candidate
 
+        theta_pcs_candidate = evaluate_theta_pcs_candidate(
+            symbol=sym,
+            side=side,
+            df=df,
+            last_trade_date=last_trade_date,
+            last_close=last_close,
+            atr20=atr20,
+            current_anchor_meta=current_anchor_meta,
+            previous_anchor_meta=prev_anchor_meta,
+            indicator_row=indicator_row,
+            compression_summary=compression_summary,
+            recent_earnings_dates=recent_earnings_dates,
+            upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
+        )
+        if theta_pcs_candidate:
+            theta_pcs_rows.append(theta_pcs_candidate)
+            symbol_entry["theta_pcs_candidate"] = theta_pcs_candidate
+
         priority_summary = build_priority_setup_summary(
             symbol=sym,
             side=side,
@@ -14293,6 +15528,7 @@ def run_master(
     apply_market_regime_score_adjustments(priority_rows, ai_state, feature_rows_by_symbol)
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
+    enrich_theta_rows_with_ib_option_premiums(ib, theta_put_rows, theta_pcs_rows, today_run)
     tracked_rows = [
         row
         for row in priority_rows
@@ -14303,6 +15539,7 @@ def run_master(
         "watchlist_label": watchlist_label,
         "tracked_rows": tracked_rows,
         "theta_put_rows": theta_put_rows,
+        "theta_pcs_rows": theta_pcs_rows,
         "ai_state": ai_state,
         "feature_rows_by_symbol": feature_rows_by_symbol,
         "daily_frames_by_symbol": daily_frames_by_symbol,
@@ -14412,7 +15649,7 @@ def run_master(
     # trim history to last N days
     trim_history(history)
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
-    write_theta_put_report(THETA_PUTS_FILE, theta_put_rows)
+    write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
     write_master_avwap_focus_feed(MASTER_AVWAP_FOCUS_FILE, priority_rows, ai_state)
 
     # write human-readable events file (grouped for easier scanning)
@@ -14651,8 +15888,6 @@ def run_master(
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
 
-    _run_anchor_watchlist_scan_safe()
-
     logging.info(
         f"Master AVWAP run complete. "
         f"Events: {OUTPUT_FILE}, AI state: {AI_STATE_FILE}, history: {HISTORY_FILE}"
@@ -14684,13 +15919,7 @@ class MasterAvwapGUI:
 
         self.status_var = tk.StringVar(value="Ready")
         self.tracker_storage_var = tk.StringVar(value="")
-        self.ticker_var = tk.StringVar()
-        self.anchor_var = tk.StringVar()
-        self.side_var = tk.StringVar(value="LONG")
-        self.notes_var = tk.StringVar()
         self.user_favorite_notes_var = tk.StringVar()
-        self.bulk_side_var = tk.StringVar(value="LONG")
-        self.earnings_lookback_var = tk.IntVar(value=1)
         self.tracker_backfill_sessions_var = tk.IntVar(value=5)
         self.shared_scheduler_button_var = tk.StringVar(value="Start Scheduler")
         self.shared_scheduler_status_var = tk.StringVar(value="")
@@ -14704,21 +15933,28 @@ class MasterAvwapGUI:
         self.shared_scheduler_note = "Hourly shared-watchlist scheduler is off."
         self.shared_scheduler_day = ""
         self.shared_scheduler_slots_state = {}
+        self.setup_tracker_payload = _default_setup_tracker_payload()
+        self.setup_tracker_setup_type_rows = []
+        self.setup_tracker_playbook_rows = []
+        self.setup_tracker_best_playbook_rows = []
+        self.setup_tracker_factor_rows = []
+        self.setup_tracker_view_loaded = False
+        self.setup_tracker_view_stale = True
         self.theta_sort_column = "score"
         self.theta_sort_descending = True
         self.theta_table_rows = []
+        self.theta_pcs_table_rows = []
         self.theta_min_score_var = tk.StringVar(value="")
         self.theta_min_support_count_var = tk.StringVar(value="")
         self.theta_max_earnings_days_var = tk.StringVar(value="")
         self.theta_symbol_filter_var = tk.StringVar(value="")
 
         self._build_layout()
-        self.refresh_table()
+        self._show_setup_tracker_lazy_placeholder()
         self.refresh_avwap_output_view()
         self.refresh_theta_output_view()
-        self.refresh_anchor_output_view()
         self.refresh_market_prep_view()
-        self.refresh_setup_tracker_view()
+        self.notebook.select(self.avwap_tab)
         self._refresh_shared_watchlist_scheduler_status()
         self.root.after(SHARED_WATCHLIST_SCHEDULER_TICK_MS, self._shared_watchlist_scheduler_tick)
 
@@ -14818,8 +16054,6 @@ class MasterAvwapGUI:
             self.setup_type_symbols_text,
             self.theta_text,
             self.theta_symbols_text,
-            self.bulk_anchor_text,
-            self.anchor_scan_text,
             self.setup_tracker_stats_text,
         ]
         widgets.extend(getattr(self, "market_prep_text_widgets", []))
@@ -14842,17 +16076,6 @@ class MasterAvwapGUI:
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill="x", padx=10, pady=8)
 
-        ttk.Label(toolbar, text="Earnings gap lookback:").pack(side="left", padx=(0, 4))
-        lookback_spin = ttk.Spinbox(
-            toolbar,
-            from_=1,
-            to=20,
-            width=4,
-            textvariable=self.earnings_lookback_var,
-        )
-        lookback_spin.pack(side="left", padx=(0, 10))
-
-        ttk.Button(toolbar, text="Run Earnings Gap Scan", command=self.run_earnings_scan).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Shared Watchlist Scan", command=self.run_master_once).pack(side="left", padx=4)
         ttk.Button(
             toolbar,
@@ -14860,7 +16083,6 @@ class MasterAvwapGUI:
             command=self.toggle_shared_watchlist_scheduler,
         ).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Run Local Watchlist Scan", command=self.run_local_watchlist_scan_once).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Run Anchor Watchlist Scan", command=self.run_anchor_scan_once).pack(side="left", padx=4)
 
         ttk.Label(
             self.root,
@@ -14885,6 +16107,7 @@ class MasterAvwapGUI:
         tracker_toolbar = ttk.Frame(tracker_tab)
         tracker_toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(tracker_toolbar, text="Copy Active Symbols", command=self.copy_setup_tracker_symbols).pack(side="left", padx=(8, 0))
+        ttk.Button(tracker_toolbar, text="Refresh Tracker", command=self.refresh_setup_tracker_view).pack(side="left", padx=(8, 0))
         ttk.Label(tracker_toolbar, text="Backfill sessions:").pack(side="left", padx=(16, 4))
         tracker_backfill_spin = ttk.Spinbox(
             tracker_toolbar,
@@ -15238,87 +16461,6 @@ class MasterAvwapGUI:
         )
         self.setup_tracker_factor_text.pack(fill="both", expand=True, padx=8, pady=8)
 
-        anchors_tab = ttk.Frame(self.notebook)
-        self.anchors_tab = anchors_tab
-        self.notebook.add(anchors_tab, text="Earnings Anchors")
-
-        ttk.Label(
-            anchors_tab,
-            text="Anchor rows refresh automatically after scans, imports, edits, and when you reopen this tab.",
-            justify="left",
-            wraplength=1100,
-        ).pack(fill="x", pady=(0, 8))
-
-        form = ttk.LabelFrame(anchors_tab, text="Manual Anchor Entry")
-        form.pack(fill="x", padx=0, pady=(0, 8))
-
-        ttk.Label(form, text="Ticker").grid(row=0, column=0, padx=6, pady=6, sticky="w")
-        ttk.Entry(form, textvariable=self.ticker_var, width=12).grid(row=0, column=1, padx=6, pady=6, sticky="w")
-        ttk.Label(form, text="Anchor Date (YYYY-MM-DD)").grid(row=0, column=2, padx=6, pady=6, sticky="w")
-        ttk.Entry(form, textvariable=self.anchor_var, width=16).grid(row=0, column=3, padx=6, pady=6, sticky="w")
-        ttk.Label(form, text="Side").grid(row=0, column=4, padx=6, pady=6, sticky="w")
-        ttk.Combobox(form, textvariable=self.side_var, values=("LONG", "SHORT"), width=8, state="readonly").grid(row=0, column=5, padx=6, pady=6, sticky="w")
-        ttk.Label(form, text="Notes").grid(row=0, column=6, padx=6, pady=6, sticky="w")
-        ttk.Entry(form, textvariable=self.notes_var, width=32).grid(row=0, column=7, padx=6, pady=6, sticky="we")
-        ttk.Button(form, text="Add Manual Entry", command=self.add_manual_entry).grid(row=0, column=8, padx=8, pady=6)
-        ttk.Button(form, text="Set Side on Selected", command=self.set_selected_anchor_side).grid(row=0, column=9, padx=8, pady=6)
-        ttk.Button(form, text="Delete Selected", command=self.delete_selected_anchor).grid(row=0, column=10, padx=8, pady=6)
-        form.columnconfigure(7, weight=1)
-
-        anchors_body = ttk.Frame(anchors_tab)
-        anchors_body.pack(fill="both", expand=True, padx=0, pady=0)
-
-        table_frame = ttk.Frame(anchors_body)
-        table_frame.pack(side="left", fill="both", expand=True)
-
-        self.table = ttk.Treeview(table_frame, columns=EARNINGS_ANCHOR_COLUMNS, show="headings", style="Dark.Treeview")
-        for col in EARNINGS_ANCHOR_COLUMNS:
-            self.table.heading(col, text=col)
-            width = 120 if col not in {"notes"} else 260
-            self.table.column(col, width=width, anchor="w")
-
-        yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
-        self.table.configure(yscrollcommand=yscroll.set)
-
-        self.table.pack(side="left", fill="both", expand=True)
-        yscroll.pack(side="right", fill="y")
-
-        anchors_side = ttk.Frame(anchors_body, width=340)
-        anchors_side.pack(side="right", fill="y", padx=(12, 0))
-        anchors_side.pack_propagate(False)
-
-        bulk_frame = ttk.LabelFrame(anchors_side, text="Bulk Watchlist Import")
-        bulk_frame.pack(fill="both", expand=True)
-        ttk.Label(
-            bulk_frame,
-            text=(
-                "Paste comma or newline separated tickers here. Bulk imports resolve the latest earnings event "
-                "and anchor the pre-gap day automatically: morning releases anchor the prior session, and "
-                "after-close releases anchor the earnings session."
-            ),
-            justify="left",
-            wraplength=300,
-        ).pack(fill="x", padx=8, pady=(8, 8))
-
-        bulk_side_row = ttk.Frame(bulk_frame)
-        bulk_side_row.pack(fill="x", padx=8, pady=(0, 8))
-        ttk.Label(bulk_side_row, text="Fallback side:").pack(side="left")
-        ttk.Combobox(
-            bulk_side_row,
-            textvariable=self.bulk_side_var,
-            values=("LONG", "SHORT"),
-            width=8,
-            state="readonly",
-        ).pack(side="left", padx=(8, 0))
-
-        self.bulk_anchor_text = tk.Text(bulk_frame, wrap="word", height=12, font=("Courier New", 10))
-        self.bulk_anchor_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-        bulk_actions = ttk.Frame(bulk_frame)
-        bulk_actions.pack(fill="x", padx=8, pady=(0, 8))
-        ttk.Button(bulk_actions, text="Add Pasted Tickers", command=self.add_pasted_tickers_to_anchors).pack(side="left")
-        ttk.Button(bulk_actions, text="Clear", command=self.clear_bulk_anchor_text).pack(side="left", padx=(8, 0))
-
         avwap_tab = ttk.Frame(self.notebook)
         self.avwap_tab = avwap_tab
         self.notebook.add(avwap_tab, text="AVWAP Results")
@@ -15346,7 +16488,7 @@ class MasterAvwapGUI:
         avwap_side.pack_propagate(False)
         ttk.Label(
             avwap_side,
-            text="Comma-separated ticker groups for TradingView paste and bulk watchlist imports.",
+            text="Comma-separated ticker groups for TradingView paste.",
             justify="left",
             wraplength=300,
         ).pack(fill="x", pady=(0, 8))
@@ -15427,7 +16569,7 @@ class MasterAvwapGUI:
 
         ttk.Label(
             theta_tab,
-            text="Theta put-selling candidates are recommendation-only and are not added to the setup tracker.",
+            text="Theta option candidates are recommendation-only and are not added to the setup tracker.",
             justify="left",
             wraplength=1100,
         ).pack(fill="x", pady=(0, 8))
@@ -15450,10 +16592,18 @@ class MasterAvwapGUI:
         ttk.Button(theta_filter_frame, text="Apply", command=self._refresh_theta_table).grid(row=0, column=8, padx=(0, 8), pady=8, sticky="w")
         ttk.Button(theta_filter_frame, text="Clear", command=self._clear_theta_filters).grid(row=0, column=9, padx=(0, 8), pady=8, sticky="w")
 
-        theta_table_frame = ttk.LabelFrame(theta_main, text="Theta Candidates")
+        theta_table_frame = ttk.LabelFrame(theta_main, text="Theta Option Candidates")
         theta_table_frame.pack(fill="both", expand=True, pady=(0, 8))
+        theta_table_notebook = ttk.Notebook(theta_table_frame)
+        theta_table_notebook.pack(fill="both", expand=True, padx=8, pady=8)
+
+        theta_sold_put_frame = ttk.Frame(theta_table_notebook)
+        theta_pcs_frame = ttk.Frame(theta_table_notebook)
+        theta_table_notebook.add(theta_sold_put_frame, text="Sold Puts")
+        theta_table_notebook.add(theta_pcs_frame, text="PCS")
+
         columns = ("symbol", "score", "support_count", "close", "atr", "next_earnings_days", "primary_strike_band", "liquidity_score")
-        self.theta_table = ttk.Treeview(theta_table_frame, columns=columns, show="headings", style="Dark.Treeview")
+        self.theta_table = ttk.Treeview(theta_sold_put_frame, columns=columns, show="headings", style="Dark.Treeview")
         headings = {
             "symbol": "Symbol",
             "score": "Score",
@@ -15461,8 +16611,8 @@ class MasterAvwapGUI:
             "close": "Close",
             "atr": "ATR",
             "next_earnings_days": "Next Earnings (days)",
-            "primary_strike_band": "Primary Strike Band",
-            "liquidity_score": "Liquidity Score (future)",
+            "primary_strike_band": "Recommended Strike",
+            "liquidity_score": "Premium",
         }
         for key, label in headings.items():
             self.theta_table.heading(key, text=label, command=lambda c=key: self._sort_theta_table(c))
@@ -15474,10 +16624,29 @@ class MasterAvwapGUI:
         self.theta_table.column("next_earnings_days", width=145, anchor="center")
         self.theta_table.column("primary_strike_band", width=360, anchor="w")
         self.theta_table.column("liquidity_score", width=145, anchor="center")
-        self.theta_table.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
-        theta_table_scroll = ttk.Scrollbar(theta_table_frame, orient="vertical", command=self.theta_table.yview)
+        self.theta_table.pack(side="left", fill="both", expand=True)
+        theta_table_scroll = ttk.Scrollbar(theta_sold_put_frame, orient="vertical", command=self.theta_table.yview)
         self.theta_table.configure(yscrollcommand=theta_table_scroll.set)
-        theta_table_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        theta_table_scroll.pack(side="right", fill="y")
+
+        self.theta_pcs_table = ttk.Treeview(theta_pcs_frame, columns=columns, show="headings", style="Dark.Treeview")
+        pcs_headings = dict(headings)
+        pcs_headings["primary_strike_band"] = "Recommended Spread"
+        pcs_headings["liquidity_score"] = "Credit"
+        for key, label in pcs_headings.items():
+            self.theta_pcs_table.heading(key, text=label, command=lambda c=key: self._sort_theta_table(c))
+        self.theta_pcs_table.column("symbol", width=90, anchor="w")
+        self.theta_pcs_table.column("score", width=70, anchor="center")
+        self.theta_pcs_table.column("support_count", width=120, anchor="center")
+        self.theta_pcs_table.column("close", width=85, anchor="e")
+        self.theta_pcs_table.column("atr", width=85, anchor="e")
+        self.theta_pcs_table.column("next_earnings_days", width=145, anchor="center")
+        self.theta_pcs_table.column("primary_strike_band", width=360, anchor="w")
+        self.theta_pcs_table.column("liquidity_score", width=145, anchor="center")
+        self.theta_pcs_table.pack(side="left", fill="both", expand=True)
+        theta_pcs_scroll = ttk.Scrollbar(theta_pcs_frame, orient="vertical", command=self.theta_pcs_table.yview)
+        self.theta_pcs_table.configure(yscrollcommand=theta_pcs_scroll.set)
+        theta_pcs_scroll.pack(side="right", fill="y")
 
         theta_details_frame = ttk.LabelFrame(theta_main, text="Details")
         theta_details_frame.pack(fill="both", expand=True)
@@ -15506,22 +16675,6 @@ class MasterAvwapGUI:
         self.theta_reason_risk_text.tag_configure("risk_green", foreground="#1e7f37")
         self.theta_reason_risk_text.tag_configure("risk_yellow", foreground="#9a6700")
         self.theta_reason_risk_text.tag_configure("risk_red", foreground="#b42318")
-
-        anchor_scan_tab = ttk.Frame(self.notebook)
-        self.anchor_scan_tab = anchor_scan_tab
-        self.notebook.add(anchor_scan_tab, text="Anchor Results")
-
-        ttk.Label(
-            anchor_scan_tab,
-            text="Anchor watchlist output refreshes automatically after scans and when you open this tab.",
-            justify="left",
-            wraplength=1100,
-        ).pack(fill="x", pady=(0, 8))
-        self.anchor_scan_text = tk.Text(anchor_scan_tab, wrap="word", font=("Courier New", 10))
-        self.anchor_scan_text.pack(side="left", fill="both", expand=True)
-        anchor_output_scroll = ttk.Scrollbar(anchor_scan_tab, orient="vertical", command=self.anchor_scan_text.yview)
-        self.anchor_scan_text.configure(yscrollcommand=anchor_output_scroll.set)
-        anchor_output_scroll.pack(side="right", fill="y")
 
         market_prep_tab = ttk.Frame(self.notebook)
         self.market_prep_tab = market_prep_tab
@@ -15554,6 +16707,7 @@ class MasterAvwapGUI:
         market_prep_grid.columnconfigure(0, weight=1)
         market_prep_grid.columnconfigure(1, weight=1)
         self.market_prep_section_widgets = {}
+        self.market_prep_section_frames = {}
         self.market_prep_text_widgets = []
         for idx, definition in enumerate(MARKET_PREP_SECTION_DEFINITIONS):
             row = idx // 2
@@ -15573,6 +16727,7 @@ class MasterAvwapGUI:
                 command=lambda sid=section_id: self.copy_market_prep_section(sid),
             ).pack(side="left")
             self.market_prep_section_widgets[section_id] = section_text
+            self.market_prep_section_frames[section_id] = section_frame
             self.market_prep_text_widgets.append(section_text)
 
         market_prep_detail_frame = ttk.LabelFrame(market_prep_body, text="Market Prep Details")
@@ -15700,15 +16855,11 @@ class MasterAvwapGUI:
     def _refresh_active_tab(self):
         selected_tab = self.notebook.select()
         if selected_tab == str(self.tracker_tab):
-            self.refresh_setup_tracker_view()
-        elif selected_tab == str(self.anchors_tab):
-            self.refresh_table()
+            self._refresh_setup_tracker_view_if_needed()
         elif selected_tab == str(self.avwap_tab):
             self.refresh_avwap_output_view()
         elif selected_tab == str(self.theta_tab):
             self.refresh_theta_output_view()
-        elif selected_tab == str(self.anchor_scan_tab):
-            self.refresh_anchor_output_view()
         elif selected_tab == str(self.market_prep_tab):
             self.refresh_market_prep_view()
 
@@ -15736,6 +16887,52 @@ class MasterAvwapGUI:
     def _load_setup_tracker_payload(self) -> dict:
         payload = load_setup_tracker_payload()
         return payload if isinstance(payload, dict) else _default_setup_tracker_payload()
+
+    def _show_setup_tracker_lazy_placeholder(self):
+        self.refresh_tracker_storage_summary()
+        self.setup_tracker_row_map = {}
+        self.setup_tracker_payload = _default_setup_tracker_payload()
+        self.setup_tracker_setup_type_rows = []
+        self.setup_tracker_playbook_rows = []
+        self.setup_tracker_best_playbook_rows = []
+        self.setup_tracker_factor_rows = []
+        for table in (
+            getattr(self, "setup_tracker_table", None),
+            getattr(self, "setup_tracker_scenario_table", None),
+            getattr(self, "setup_tracker_setup_type_table", None),
+            getattr(self, "setup_tracker_playbook_table", None),
+            getattr(self, "setup_tracker_factor_table", None),
+        ):
+            if table is None:
+                continue
+            for item in table.get_children():
+                table.delete(item)
+        placeholder = (
+            "Setup tracker dashboard is lazy-loaded to keep GUI startup fast.\n\n"
+            "Open this tab or click Refresh Tracker to load the historical dashboard. "
+            "Live scan scoring still reads setup-tracker history inside run_master even if this dashboard is never opened."
+        )
+        for widget_name in (
+            "setup_tracker_stats_text",
+            "setup_tracker_setup_type_text",
+            "setup_tracker_playbook_text",
+            "setup_tracker_factor_text",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                self._set_text_widget_contents(widget, placeholder)
+
+    def _mark_setup_tracker_view_stale(self):
+        self.setup_tracker_view_stale = True
+        if not self.setup_tracker_view_loaded:
+            return
+        if self.notebook.select() == str(self.tracker_tab):
+            self.refresh_setup_tracker_view()
+
+    def _refresh_setup_tracker_view_if_needed(self):
+        if self.setup_tracker_view_loaded and not self.setup_tracker_view_stale:
+            return
+        self.refresh_setup_tracker_view()
 
     def copy_setup_tracker_symbols(self):
         symbols = []
@@ -16536,6 +17733,8 @@ class MasterAvwapGUI:
         self._render_setup_tracker_stats_text(self.setup_tracker_payload, setup)
 
     def refresh_setup_tracker_view(self):
+        self.status_var.set("Loading setup tracker dashboard...")
+        self.root.update_idletasks()
         self.refresh_tracker_storage_summary()
         payload = self._load_setup_tracker_payload()
         self.setup_tracker_payload = payload
@@ -16622,6 +17821,9 @@ class MasterAvwapGUI:
         else:
             self._populate_setup_tracker_scenarios(None)
             self._render_setup_tracker_stats_text(payload, None)
+        self.setup_tracker_view_loaded = True
+        self.setup_tracker_view_stale = False
+        self.status_var.set("Setup tracker dashboard refreshed.")
         self._notify_output_changed()
 
     def _highlight_trendline_candidates_in_avwap_output(self):
@@ -16862,6 +18064,26 @@ class MasterAvwapGUI:
         payload = load_json(MARKET_PREP_FILE, default={})
         return payload if isinstance(payload, dict) else {}
 
+    def _market_prep_section_symbol_count(self, section: dict, text: str) -> int:
+        symbols = section.get("symbols") if isinstance(section, dict) else []
+        if isinstance(symbols, list):
+            return len([symbol for symbol in symbols if str(symbol).strip()])
+        clean_text = str(text or "").strip()
+        if not clean_text or clean_text == "None":
+            return 0
+        return len(_ordered_unique_symbols(WATCHLIST_SYMBOL_RE.findall(clean_text.upper())))
+
+    def _style_market_prep_section_widget(self, section_id: str, widget, count: int) -> None:
+        if count <= 0:
+            widget.configure(bg="#202428", fg="#7F8A96")
+            return
+        if "short" in section_id:
+            widget.configure(bg=GUI_DARK_INPUT, fg="#FF9A9A")
+        elif "earnings" in section_id:
+            widget.configure(bg=GUI_DARK_INPUT, fg="#F0C76E")
+        else:
+            widget.configure(bg=GUI_DARK_INPUT, fg="#8FD19E")
+
     def refresh_market_prep_view(self):
         payload = self._load_market_prep_payload()
         sections = payload.get("sections", []) if isinstance(payload, dict) else []
@@ -16877,7 +18099,12 @@ class MasterAvwapGUI:
                 continue
             section = section_map.get(definition["id"], {})
             text = str(section.get("copy_text") or definition.get("empty_message") or "None").strip() or "None"
+            count = self._market_prep_section_symbol_count(section, text)
+            frame = getattr(self, "market_prep_section_frames", {}).get(definition["id"])
+            if frame is not None:
+                frame.configure(text=f"{definition['title']} ({count})")
             self._set_text_widget_contents(widget, text)
+            self._style_market_prep_section_widget(definition["id"], widget, count)
 
         if MARKET_PREP_REPORT_FILE.exists():
             report_text = self._read_text_file(MARKET_PREP_REPORT_FILE)
@@ -16915,10 +18142,6 @@ class MasterAvwapGUI:
             return
         self._copy_to_clipboard("\n".join(chunks))
         self.status_var.set("Copied all market prep lists to clipboard.")
-    def clear_bulk_anchor_text(self):
-        self.bulk_anchor_text.delete("1.0", tk.END)
-        self.status_var.set("Cleared pasted ticker input.")
-
     def refresh_avwap_output_view(self):
         priority_section = self._read_text_file(PRIORITY_SETUPS_FILE)
         theta_section = self._read_text_file(THETA_PUTS_FILE)
@@ -16938,9 +18161,15 @@ class MasterAvwapGUI:
 
     def refresh_theta_output_view(self):
         theta_section = self._read_text_file(THETA_PUTS_FILE)
-        text = theta_section or "No theta put-selling output yet."
+        text = theta_section or "No theta option output yet."
         self._set_text_widget_contents(self.theta_text, text)
-        self.theta_table_rows = extract_theta_rows_from_report(text)
+        parsed_theta_rows = extract_theta_rows_from_report(text)
+        self.theta_table_rows = [
+            row for row in parsed_theta_rows if str(row.get("play_type") or "sold_put") != "pcs"
+        ]
+        self.theta_pcs_table_rows = [
+            row for row in parsed_theta_rows if str(row.get("play_type") or "") == "pcs"
+        ]
         self._refresh_theta_table()
 
         symbols = extract_theta_symbols_from_report(text)
@@ -16999,28 +18228,34 @@ class MasterAvwapGUI:
 
     def _refresh_theta_table(self):
         table = getattr(self, "theta_table", None)
+        pcs_table = getattr(self, "theta_pcs_table", None)
         if table is None:
             return
         for row_id in table.get_children():
             table.delete(row_id)
+        if pcs_table is not None:
+            for row_id in pcs_table.get_children():
+                pcs_table.delete(row_id)
 
         min_score = self._safe_int_filter(self.theta_min_score_var.get())
         min_supports = self._safe_int_filter(self.theta_min_support_count_var.get())
         max_earnings_days = self._safe_int_filter(self.theta_max_earnings_days_var.get())
         symbol_filter = str(self.theta_symbol_filter_var.get() or "").strip().upper()
 
-        filtered_rows = []
-        for row in self.theta_table_rows:
-            if min_score is not None and int(row.get("score", 0) or 0) < min_score:
-                continue
-            if min_supports is not None and int(row.get("support_count", 0) or 0) < min_supports:
-                continue
-            next_days = row.get("next_earnings_days")
-            if max_earnings_days is not None and isinstance(next_days, int) and next_days > max_earnings_days:
-                continue
-            if symbol_filter and symbol_filter not in str(row.get("symbol", "")).upper():
-                continue
-            filtered_rows.append(row)
+        def filter_rows(source_rows):
+            filtered_rows = []
+            for row in source_rows or []:
+                if min_score is not None and int(row.get("score", 0) or 0) < min_score:
+                    continue
+                if min_supports is not None and int(row.get("support_count", 0) or 0) < min_supports:
+                    continue
+                next_days = row.get("next_earnings_days")
+                if max_earnings_days is not None and isinstance(next_days, int) and next_days > max_earnings_days:
+                    continue
+                if symbol_filter and symbol_filter not in str(row.get("symbol", "")).upper():
+                    continue
+                filtered_rows.append(row)
+            return filtered_rows
 
         def sort_key(entry: dict):
             if self.theta_sort_column in {"score", "support_count", "next_earnings_days"}:
@@ -17031,28 +18266,28 @@ class MasterAvwapGUI:
                 return float(value or 0.0)
             return str(entry.get(self.theta_sort_column, "") or "").upper()
 
-        filtered_rows.sort(key=sort_key, reverse=self.theta_sort_descending)
+        def populate_table(target_table, source_rows):
+            filtered_rows = filter_rows(source_rows)
+            filtered_rows.sort(key=sort_key, reverse=self.theta_sort_descending)
+            for row in filtered_rows:
+                target_table.insert(
+                    "",
+                    "end",
+                    values=(
+                        row.get("symbol", ""),
+                        row.get("score", ""),
+                        row.get("support_count", ""),
+                        f"{float(row.get('close', 0.0) or 0.0):.2f}" if row.get("close") is not None else "",
+                        row.get("atr", ""),
+                        row.get("next_earnings_days", "unknown"),
+                        row.get("primary_strike_band", ""),
+                        row.get("liquidity_score", ""),
+                    ),
+                )
 
-        for row in filtered_rows:
-            table.insert(
-                "",
-                "end",
-                values=(
-                    row.get("symbol", ""),
-                    row.get("score", ""),
-                    row.get("support_count", ""),
-                    f"{float(row.get('close', 0.0) or 0.0):.2f}" if row.get("close") is not None else "",
-                    row.get("atr", ""),
-                    row.get("next_earnings_days", "unknown"),
-                    row.get("primary_strike_band", ""),
-                    row.get("liquidity_score", ""),
-                ),
-            )
-
-    def refresh_anchor_output_view(self):
-        text = self._read_text_file(ANCHOR_AVWAP_OUTPUT_FILE)
-        self._set_text_widget_contents(self.anchor_scan_text, text or "No anchor AVWAP output yet.")
-        self._notify_output_changed()
+        populate_table(table, self.theta_table_rows)
+        if pcs_table is not None:
+            populate_table(pcs_table, self.theta_pcs_table_rows)
 
     def _copy_to_clipboard(self, text: str):
         self.root.clipboard_clear()
@@ -17188,9 +18423,8 @@ class MasterAvwapGUI:
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_theta_output_view(),
-                self.refresh_anchor_output_view(),
                 self.refresh_market_prep_view(),
-                self.refresh_setup_tracker_view(),
+                self._mark_setup_tracker_view_stale(),
             ),
             finish_callback=lambda success, error_text, slots=list(covered_slots), slot=trigger_slot: (
                 self._finish_shared_watchlist_scheduler_run(slots, slot, success, error_text)
@@ -17272,7 +18506,6 @@ class MasterAvwapGUI:
                     self.status_var.set(f"Error: {error_text}")
                 else:
                     self.status_var.set(done_msg)
-                    self.refresh_table()
                     if done_callback:
                         done_callback()
                 if finish_callback:
@@ -17285,21 +18518,6 @@ class MasterAvwapGUI:
         threading.Thread(target=_task, daemon=True).start()
         return True
 
-    def run_earnings_scan(self):
-        try:
-            lookback_days = max(1, int(self.earnings_lookback_var.get()))
-        except Exception:
-            lookback_days = 1
-            self.earnings_lookback_var.set(1)
-
-        self.notebook.select(self.anchors_tab)
-        self._run_background(
-            lambda: scan_last_session_earnings_for_anchors(lookback_days=lookback_days),
-            f"Running earnings gap anchor scan (last {lookback_days} session(s))...",
-            "Earnings gap candidate scan complete.",
-            done_callback=lambda: self.notebook.select(self.anchors_tab),
-        )
-
     def run_master_once(self):
         self.notebook.select(self.avwap_tab)
         self._run_background(
@@ -17309,9 +18527,8 @@ class MasterAvwapGUI:
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_theta_output_view(),
-                self.refresh_anchor_output_view(),
                 self.refresh_market_prep_view(),
-                self.refresh_setup_tracker_view(),
+                self._mark_setup_tracker_view_stale(),
             ),
         )
 
@@ -17324,9 +18541,8 @@ class MasterAvwapGUI:
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_theta_output_view(),
-                self.refresh_anchor_output_view(),
                 self.refresh_market_prep_view(),
-                self.refresh_setup_tracker_view(),
+                self._mark_setup_tracker_view_stale(),
             ),
         )
 
@@ -17348,176 +18564,11 @@ class MasterAvwapGUI:
     def run_shared_watchlist_scan_once(self):
         self.run_master_once()
 
-    def run_anchor_scan_once(self):
-        self.notebook.select(self.anchor_scan_tab)
-        self._run_background(
-            run_anchor_watchlist_scan,
-            "Running anchor watchlist AVWAP scan...",
-            "Anchor watchlist AVWAP scan complete.",
-            done_callback=self.refresh_anchor_output_view,
-        )
-
-    def refresh_table(self):
-        ensure_anchor_file()
-        df = pd.read_csv(EARNINGS_ANCHORS_FILE)
-
-        for item in self.table.get_children():
-            self.table.delete(item)
-
-        if df.empty:
-            return
-
-        df = df.fillna("")
-        for _, row in df.iterrows():
-            self.table.insert("", "end", values=[row.get(col, "") for col in EARNINGS_ANCHOR_COLUMNS])
-
-    def add_pasted_tickers_to_anchors(self):
-        symbols = _extract_symbols_from_text(self.bulk_anchor_text.get("1.0", tk.END))
-        if not symbols:
-            self.status_var.set("No tickers found in the pasted input.")
-            return
-
-        fallback_side = normalize_side(self.bulk_side_var.get())
-        self.status_var.set(f"Resolving anchors for {len(symbols)} pasted ticker(s)...")
-
-        def _task():
-            try:
-                result = resolve_bulk_anchor_candidates(
-                    symbols,
-                    default_side=fallback_side,
-                    focus_side_map=self.focus_side_map,
-                )
-                candidates = result.get("candidates", [])
-                unresolved = result.get("unresolved", [])
-                added = append_anchor_candidates(candidates)
-                duplicates = len(candidates) - added
-
-                def _finish():
-                    self.refresh_table()
-                    self.notebook.select(self.anchors_tab)
-                    summary = (
-                        f"Added {added} anchor row(s)"
-                        f" ({result.get('candidate_matches', 0)} from earnings scan, "
-                        f"{result.get('earnings_matches', 0)} from direct earnings resolution)."
-                    )
-                    if duplicates > 0:
-                        summary += f" {duplicates} already existed."
-                    if unresolved:
-                        preview = ", ".join(unresolved[:6])
-                        more = "" if len(unresolved) <= 6 else f" (+{len(unresolved) - 6} more)"
-                        summary += f" Unresolved: {preview}{more}."
-                    self.status_var.set(summary)
-
-                self.root.after(0, _finish)
-            except Exception as exc:
-                logging.exception("Bulk anchor import failed")
-                error_message = f"Bulk import failed: {exc}"
-                self.root.after(0, lambda msg=error_message: self.status_var.set(msg))
-
-        threading.Thread(target=_task, daemon=True).start()
-
-    def set_selected_anchor_side(self):
-        selected = self.table.selection()
-        if not selected:
-            self.status_var.set("No row selected to update side.")
-            return
-
-        values = self.table.item(selected[0], "values")
-        if not values:
-            return
-
-        ticker = str(values[0]).upper().strip()
-        anchor_date = str(values[2]).strip()
-        side = normalize_side(self.side_var.get())
-
-        ensure_anchor_file()
-        df = pd.read_csv(EARNINGS_ANCHORS_FILE)
-        mask = (df["ticker"].astype(str).str.upper() == ticker) & (df["anchor_date"].astype(str) == anchor_date)
-        if not mask.any():
-            self.status_var.set(f"Entry not found: {ticker} {anchor_date}")
-            return
-
-        df.loc[mask, "side"] = side
-        df.to_csv(EARNINGS_ANCHORS_FILE, index=False)
-        self.status_var.set(f"Updated side for {ticker} {anchor_date} -> {side}")
-        self.refresh_table()
-
-    def delete_selected_anchor(self):
-        selected = self.table.selection()
-        if not selected:
-            self.status_var.set("No row selected to delete.")
-            return
-
-        values = self.table.item(selected[0], "values")
-        if not values:
-            return
-
-        ticker = str(values[0]).upper().strip()
-        anchor_date = str(values[2]).strip()
-
-        ensure_anchor_file()
-        df = pd.read_csv(EARNINGS_ANCHORS_FILE)
-        before = len(df)
-        if before == 0:
-            return
-
-        mask = ~((df["ticker"].astype(str).str.upper() == ticker) & (df["anchor_date"].astype(str) == anchor_date))
-        df = df[mask]
-        if len(df) == before:
-            self.status_var.set(f"Entry not found: {ticker} {anchor_date}")
-            return
-
-        df.to_csv(EARNINGS_ANCHORS_FILE, index=False)
-        self.status_var.set(f"Deleted anchor entry: {ticker} {anchor_date}")
-        self.refresh_table()
-
-    def add_manual_entry(self):
-        ticker = self.ticker_var.get().strip().upper()
-        anchor_date = self.anchor_var.get().strip()
-        side = normalize_side(self.side_var.get())
-        notes = self.notes_var.get().strip()
-
-        if not ticker or not anchor_date:
-            if messagebox:
-                messagebox.showerror("Missing data", "Ticker and anchor date are required.")
-            return
-
-        try:
-            datetime.fromisoformat(anchor_date)
-        except ValueError:
-            if messagebox:
-                messagebox.showerror("Invalid date", "Anchor date must be in YYYY-MM-DD format.")
-            return
-
-        manual_candidate = EarningsGapAnchorCandidate(
-            ticker=ticker,
-            anchor_date=anchor_date,
-            side=side,
-            gap_date="",
-            earnings_date="",
-            release_session="manual",
-            gap_atr_multiple=0.0,
-            price=0.0,
-            avg_volume20=0,
-            market_cap=0,
-            notes=notes,
-            source="manual",
-        )
-
-        added = append_anchor_candidates([manual_candidate])
-        if added == 0:
-            self.status_var.set(f"Entry already exists: {ticker} {anchor_date}")
-        else:
-            self.status_var.set(f"Manual entry added: {ticker} {anchor_date}")
-        self.refresh_table()
-
 def launch_gui():
     if tk is None or ttk is None:
         logging.error("tkinter is unavailable in this Python environment; cannot launch GUI.")
         return
 
-    ensure_anchor_file()
-    ensure_anchor_candidate_file()
     root = tk.Tk()
     MasterAvwapGUI(root, standalone=True)
     root.mainloop()
@@ -17541,20 +18592,8 @@ def main():
             f"{tracker_window_start}-{tracker_window_end} local live-update window."
         ),
     )
-    parser.add_argument(
-        "--scan-earnings",
-        action="store_true",
-        help="Scan the last market session for earnings gap anchor candidates and write the review list.",
-    )
     parser.add_argument("--gui", action="store_true", help="Launch the Master AVWAP management GUI.")
-    parser.add_argument("--anchor-scan", action="store_true", help="Run only the anchor watchlist AVWAP scan.")
     args = parser.parse_args()
-
-    if args.scan_earnings:
-        scan_last_session_earnings_for_anchors()
-
-    if args.anchor_scan:
-        run_anchor_watchlist_scan(archive_expired=True)
 
     if args.once:
         run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
@@ -17570,7 +18609,7 @@ def main():
             logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run…")
             time.sleep(sleep_seconds)
 
-    if args.gui or (not args.once and not args.loop and not args.scan_earnings and not args.anchor_scan):
+    if args.gui or (not args.once and not args.loop):
         launch_gui()
 
 

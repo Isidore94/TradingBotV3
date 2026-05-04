@@ -748,9 +748,19 @@ class MasterAvwapSetupTests(unittest.TestCase):
                     "side": "SHORT",
                     "score": 121.5,
                     "post_earnings_active": True,
+                    "post_earnings_sessions_since_gap": 3,
                     "post_earnings_break_intraday": True,
                     "post_earnings_break_close": True,
                     "post_earnings_note": "new 52-week closing low; close confirmed",
+                },
+                {
+                    "symbol": "OLD",
+                    "side": "LONG",
+                    "score": 300,
+                    "post_earnings_active": True,
+                    "post_earnings_sessions_since_gap": 11,
+                    "post_earnings_break_intraday": True,
+                    "post_earnings_note": "stale post-earnings setup",
                 },
                 {
                     "symbol": "SMCI",
@@ -868,6 +878,19 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(summary["break_age_sessions"], 4)
         self.assertNotIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
         self.assertIn("break stale", summary["note"])
+
+    def test_post_earnings_setup_requires_past_10_market_days(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=10)
+        context = _build_post_earnings_52w_release_context(df)
+        self.assertEqual(context["sessions_since_gap"], 11)
+        self.assertTrue(context["in_post_earnings_window"])
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertFalse(summary["active"])
+        self.assertFalse(summary["qualified_gap"])
+        self.assertFalse(summary["break_signal"])
+        self.assertEqual(summary["events"], [])
 
     def test_stale_post_earnings_52w_break_can_still_be_avwape_retest(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=4)
@@ -1510,6 +1533,80 @@ class MasterAvwapSetupTests(unittest.TestCase):
         )
 
         self.assertIsNone(candidate)
+
+    def test_sold_put_option_ranking_requires_three_covered_supports(self):
+        row = {
+            "symbol": "CIEN",
+            "last_close": 105.0,
+            "score": 80,
+            "base_score": 80,
+            "supports": [
+                {"label": "SMA_20", "level": 100.0, "source": "sma", "distance_atr": 0.2},
+                {"label": "CURRENT_AVWAPE", "level": 98.0, "source": "avwape", "distance_atr": 0.4},
+                {"label": "TRENDLINE_SUPPORT", "level": 96.0, "source": "trendline", "distance_atr": 0.7},
+                {"label": "SMA_50", "level": 94.0, "source": "sma", "distance_atr": 1.0},
+                {"label": "PREV_AVWAPE", "level": 92.0, "source": "previous_avwape", "distance_atr": 1.3},
+            ],
+        }
+
+        candidates = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94, 92])
+        self.assertNotIn(98.0, [candidate["strike"] for candidate in candidates])
+
+        credits = {96.0: 0.30, 94.0: 0.20, 92.0: 0.12}
+        quote_rows = []
+        for candidate in candidates:
+            credit = credits[candidate["strike"]]
+            quote_rows.append(
+                {
+                    **candidate,
+                    "expiration": "20260508",
+                    "expiration_date": date(2026, 5, 8),
+                    "market_days": 4,
+                    "quote": {"bid": credit - 0.01, "ask": credit + 0.01},
+                }
+            )
+
+        ranked = master_avwap._rank_sold_put_option_recommendations(row, quote_rows)
+        self.assertEqual(ranked[0]["strike"], 96.0)
+        self.assertEqual(ranked[0]["status"], "recommended")
+        self.assertEqual(ranked[0]["contracts_needed_for_100"], 4)
+        self.assertEqual(ranked[0]["covered_support_count"], 3)
+
+    def test_pcs_ranking_uses_two_supports_and_credit_width_target(self):
+        row = {
+            "symbol": "NVDA",
+            "last_close": 205.0,
+            "score": 75,
+            "base_score": 75,
+            "supports": [
+                {"label": "SMA_20", "level": 200.0, "source": "sma", "distance_atr": 0.4},
+                {"label": "CURRENT_AVWAPE", "level": 190.0, "source": "avwape", "distance_atr": 1.0},
+            ],
+        }
+
+        short_candidates = master_avwap._pcs_short_strike_candidates(row, [195, 190, 185])
+        self.assertEqual(short_candidates[0]["short_strike"], 190.0)
+
+        ranked = master_avwap._rank_pcs_option_recommendations(
+            row,
+            [
+                {
+                    **short_candidates[0],
+                    "expiration": "20260522",
+                    "expiration_date": date(2026, 5, 22),
+                    "market_days": 14,
+                    "long_strike": 185.0,
+                    "short_quote": {"bid": 2.00, "ask": 2.10},
+                    "long_quote": {"bid": 0.95, "ask": 1.00},
+                }
+            ],
+        )
+
+        self.assertEqual(ranked[0]["status"], "recommended")
+        self.assertEqual(ranked[0]["short_strike"], 190.0)
+        self.assertEqual(ranked[0]["long_strike"], 185.0)
+        self.assertEqual(ranked[0]["credit"], 1.0)
+        self.assertEqual(ranked[0]["credit_width_pct"], 20.0)
 
     def test_master_scan_watchlists_include_master_only_swing_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:

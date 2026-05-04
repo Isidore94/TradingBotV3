@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +19,10 @@ from .report_builder import (
     build_youtube_links_report,
 )
 from .services.economic_calendar_service import (
-    get_current_week_economic_events,
     get_economic_events_for_date,
     get_upcoming_economic_events,
 )
 from .services.earnings_service import (
-    get_current_week_earnings,
     get_earnings_for_today_and_tomorrow,
     get_upcoming_earnings,
 )
@@ -106,19 +104,25 @@ class MarketPrepOrchestrator:
     def run_weekly_prep(self) -> dict[str, Any]:
         self.logger.info("Market Prep weekly prep started.")
         generated_at = datetime.now().isoformat(timespec="seconds")
-        economic_calendar = self._load_current_week_events()
-        week_start = _parse_date_or_default(economic_calendar.get("start_date"), _current_week_start(datetime.now().date()))
-        fed_calendar = self._load_fed_calendar(days=6, start_date=week_start)
-        treasury_calendar = self._load_treasury_calendar(days=6, start_date=week_start)
-        earnings_calendar = self._load_current_week_earnings()
-        today_tomorrow_earnings = self._load_today_tomorrow_earnings()
+        weekly_window = resolve_weekly_prep_window()
+        week_start = weekly_window["week_start"]
+        window_start = weekly_window["window_start"]
+        window_end = weekly_window["week_end"]
+        days_remaining = max(0, (window_end - window_start).days)
+        economic_calendar = self._load_upcoming_events(days=days_remaining, start_date=window_start)
+        fed_calendar = self._load_fed_calendar(days=days_remaining, start_date=window_start)
+        treasury_calendar = self._load_treasury_calendar(days=days_remaining, start_date=window_start)
+        earnings_calendar = self._load_upcoming_earnings(days=days_remaining, start_date=window_start)
+        todays_events = self._load_todays_events(target_date=window_start)
+        today_tomorrow_earnings = self._load_today_tomorrow_earnings(target_date=window_start)
         watchlist_risk = self._load_watchlist_risk(
-            todays_events=self._load_todays_events(),
+            todays_events=todays_events,
             today_tomorrow_earnings=today_tomorrow_earnings,
-            upcoming_earnings=self._load_upcoming_earnings(days=14),
+            upcoming_earnings=self._load_upcoming_earnings(days=14, start_date=window_start),
+            start_date=window_start,
         )
         watchlist_tickers = _watchlist_tickers(watchlist_risk)
-        sec_filings = self._load_sec_filings(tickers=watchlist_tickers)
+        sec_filings = self._load_sec_filings(tickers=watchlist_tickers, start_date=window_start)
         rss_headlines = self._load_rss_headlines(limit=25, tickers=watchlist_tickers)
         youtube_links = self._load_youtube_links(limit=25)
         weekly_report = build_weekly_report_object(
@@ -130,12 +134,15 @@ class MarketPrepOrchestrator:
             fed_calendar=fed_calendar,
             treasury_calendar=treasury_calendar,
             sec_filings=sec_filings,
-            report_date=str(economic_calendar.get("start_date") or datetime.now().date().isoformat()),
+            report_date=week_start.isoformat(),
             generated_at=generated_at,
         )
         return {
             "action": "Run Weekly Prep",
             "generated_at": generated_at,
+            "week_start": week_start.isoformat(),
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
             "economic_calendar": economic_calendar,
             "fed_calendar": fed_calendar,
             "treasury_calendar": treasury_calendar,
@@ -272,15 +279,13 @@ class MarketPrepOrchestrator:
             return _event_error_payload(start, start + timedelta(days=max(0, int(days))), exc)
 
     def _load_current_week_events(self, *, refresh_forexfactory: bool = False) -> dict[str, Any]:
-        try:
-            return get_current_week_economic_events(
-                config=self.config,
-                refresh_forexfactory=refresh_forexfactory,
-            )
-        except Exception as exc:
-            self.logger.exception("Failed loading current-week economic events.")
-            start = _current_week_start(datetime.now().date())
-            return _event_error_payload(start, start + timedelta(days=6), exc)
+        weekly_window = resolve_weekly_prep_window()
+        days_remaining = max(0, (weekly_window["week_end"] - weekly_window["window_start"]).days)
+        return self._load_upcoming_events(
+            days=days_remaining,
+            start_date=weekly_window["window_start"],
+            refresh_forexfactory=refresh_forexfactory,
+        )
 
     def _load_today_tomorrow_earnings(self, *, target_date=None) -> dict[str, Any]:
         try:
@@ -299,12 +304,9 @@ class MarketPrepOrchestrator:
             return _earnings_error_payload(start, start + timedelta(days=max(0, int(days))), exc)
 
     def _load_current_week_earnings(self) -> dict[str, Any]:
-        try:
-            return get_current_week_earnings(config=self.config)
-        except Exception as exc:
-            self.logger.exception("Failed loading current-week earnings.")
-            start = _current_week_start(datetime.now().date())
-            return _earnings_error_payload(start, start + timedelta(days=6), exc)
+        weekly_window = resolve_weekly_prep_window()
+        days_remaining = max(0, (weekly_window["week_end"] - weekly_window["window_start"]).days)
+        return self._load_upcoming_earnings(days=days_remaining, start_date=weekly_window["window_start"])
 
     def _load_fed_calendar(self, *, days: int, start_date=None) -> dict[str, Any]:
         try:
@@ -453,6 +455,30 @@ def resolve_daily_prep_date(reference=None):
     while target.weekday() >= 5:
         target += timedelta(days=1)
     return target
+
+
+def resolve_weekly_prep_window(reference=None) -> dict[str, date]:
+    if reference is None:
+        target = datetime.now().date()
+    elif isinstance(reference, datetime):
+        target = reference.date()
+    else:
+        target = reference
+
+    if target.weekday() >= 5:
+        next_monday = target + timedelta(days=7 - target.weekday())
+        return {
+            "week_start": next_monday,
+            "window_start": next_monday,
+            "week_end": next_monday + timedelta(days=6),
+        }
+
+    week_start = target - timedelta(days=target.weekday())
+    return {
+        "week_start": week_start,
+        "window_start": target,
+        "week_end": week_start + timedelta(days=6),
+    }
 
 
 def _event_error_payload(start: datetime.date, end: datetime.date, exc: Exception) -> dict[str, Any]:

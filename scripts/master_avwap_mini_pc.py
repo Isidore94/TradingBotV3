@@ -859,7 +859,7 @@ def write_status_file(
         theta_preview = "\n".join(theta_report.splitlines()[:24]).strip()
         lines.extend(["Theta report preview:", theta_preview or "(No theta report details.)"])
     else:
-        lines.append("(No theta put-selling report has been written yet.)")
+        lines.append("(No theta option report has been written yet.)")
 
     lines.extend(
         [
@@ -1501,7 +1501,6 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                 else:
                     final_note = done_msg
                     self.status_var.set(done_msg)
-                    self.refresh_table()
                     if done_callback:
                         done_callback()
                 phase = "waiting" if self.scheduler_enabled else "paused"
@@ -1657,12 +1656,10 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                 self.scheduler_scan_active = False
                 self.scheduler_active_slot = ""
 
-                self.refresh_table()
                 self.refresh_avwap_output_view()
                 self.refresh_theta_output_view()
-                self.refresh_anchor_output_view()
                 self.refresh_market_prep_view()
-                self.refresh_setup_tracker_view()
+                self._mark_setup_tracker_view_stale()
                 self.refresh_tracker_storage_summary()
                 self.status_var.set(done_note)
 

@@ -19,6 +19,7 @@ from market_prep.models import MarketPrepConfig
 FED_CALENDAR_CACHE_FILE_NAME = "fed_calendar_cache.json"
 FED_BASE_URL = "https://www.federalreserve.gov"
 FED_MONTH_CALENDAR_URL = FED_BASE_URL + "/newsevents/{year:04d}-{month:02d}.htm"
+FED_MONTH_NAME_CALENDAR_URL = FED_BASE_URL + "/newsevents/{year:04d}-{month_name}.htm"
 FED_RSS_FEEDS = (
     ("Federal Reserve Monetary Policy RSS", FED_BASE_URL + "/feeds/press_monetary.xml"),
     ("Federal Reserve Speeches RSS", FED_BASE_URL + "/feeds/speeches.xml"),
@@ -32,6 +33,21 @@ DEFAULT_SETTINGS = {
 HIGH_TERMS = ("FOMC", "BEIGE BOOK", "MONETARY POLICY REPORT")
 MEDIUM_TERMS = ("SPEECH", "TESTIMONY", "DISCUSSION", "CHAIR", "GOVERNOR", "VICE CHAIR")
 EASTERN = ZoneInfo("America/New_York")
+MONTH_SLUGS = (
+    "",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
 
 
 def get_fed_calendar_events(
@@ -175,8 +191,7 @@ def _fetch_fed_events(start: date, end: date, settings: dict[str, Any]) -> list[
 
 
 def _parse_month_calendar(year: int, month: int, *, timeout: int) -> list[dict[str, Any]]:
-    url = FED_MONTH_CALENDAR_URL.format(year=year, month=month)
-    text = _fetch_text(url, timeout=timeout)
+    text = _fetch_month_calendar_text(year, month, timeout=timeout)
     events: list[dict[str, Any]] = []
     section_pattern = re.compile(
         r'<div class="row cal-nojs__rowTitle">\s*<h4 class="col-md-12">(?P<section>.*?)</h4>\s*</div>(?P<body>.*?)(?=<div class="row cal-nojs__rowTitle">|</main>|</div>\s*</div>\s*</div>\s*<footer)',
@@ -222,6 +237,33 @@ def _parse_month_calendar(year: int, month: int, *, timeout: int) -> list[dict[s
                     }
                 )
     return events
+
+
+def _month_calendar_urls(year: int, month: int) -> list[str]:
+    urls = [FED_MONTH_CALENDAR_URL.format(year=year, month=month)]
+    if 1 <= month < len(MONTH_SLUGS):
+        urls.append(FED_MONTH_NAME_CALENDAR_URL.format(year=year, month_name=MONTH_SLUGS[month]))
+    return urls
+
+
+def _fetch_month_calendar_text(year: int, month: int, *, timeout: int) -> str:
+    last_http_error = None
+    for url in _month_calendar_urls(year, month):
+        try:
+            return _fetch_text(url, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            last_http_error = exc
+            if exc.code != 404:
+                raise
+    if last_http_error is not None:
+        raise last_http_error
+    raise urllib.error.HTTPError(
+        FED_MONTH_CALENDAR_URL.format(year=year, month=month),
+        404,
+        "No Fed monthly calendar URL candidates available",
+        hdrs=None,
+        fp=None,
+    )
 
 
 def _parse_rss_feed(feed_name: str, url: str, *, timeout: int) -> list[dict[str, Any]]:

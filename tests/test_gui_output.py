@@ -34,7 +34,6 @@ class _FakeAvwapGui:
         self,
         *,
         avwap_output: str,
-        anchor_output: str,
         favorites: str,
         near_favorites: str,
         long_focus: str,
@@ -45,7 +44,6 @@ class _FakeAvwapGui:
     ):
         self.status_var = _FakeVar(status)
         self.avwap_text = _FakeText(avwap_output)
-        self.anchor_scan_text = _FakeText(anchor_output)
         self.favorite_symbols_text = _FakeText(favorites)
         self.near_favorite_symbols_text = _FakeText(near_favorites)
         self.long_focus_symbols_text = _FakeText(long_focus)
@@ -66,7 +64,6 @@ class GuiOutputTests(unittest.TestCase):
 
             avwap_gui = _FakeAvwapGui(
                 avwap_output="Priority output here",
-                anchor_output="Anchor output here",
                 favorites="AAPL, NVDA",
                 near_favorites="TSLA",
                 long_focus="AAPL, MSFT",
@@ -143,7 +140,6 @@ class GuiOutputTests(unittest.TestCase):
 
             avwap_gui = _FakeAvwapGui(
                 avwap_output="Priority output here",
-                anchor_output="Anchor output here",
                 favorites="",
                 near_favorites="",
                 long_focus="",

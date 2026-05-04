@@ -68,7 +68,7 @@ from master_avwap import (
     run_master,
     run_master_with_shared_watchlists,
 )
-from market_prep_tab import MarketPrepTab
+from market_prep_tab import MarketPrepTab, TickerLookupTab
 from master_avwap_shared import load_tradingview_groups
 
 DARK_GREY = "#2E2E2E"
@@ -275,7 +275,6 @@ def build_consolidated_gui_output(
             _read_text_file(STDEV_RANGE_FILE),
         )
     )
-    anchor_output = _read_widget_text(getattr(avwap_gui, "anchor_scan_text", None)) or "No anchor AVWAP output yet."
     market_prep_output = _read_widget_text(getattr(avwap_gui, "market_prep_report_text", None))
     if not market_prep_output:
         market_prep_output = _read_text_file(MASTER_AVWAP_MARKET_PREP_REPORT_FILE)
@@ -347,10 +346,6 @@ def build_consolidated_gui_output(
         "Market Prep",
         "-" * 80,
         market_prep_output or "No market prep output yet.",
-        "",
-        "Latest Anchor Results",
-        "-" * 80,
-        anchor_output,
         "",
         "Recent BounceBot Alerts",
         "-" * 80,
@@ -1441,6 +1436,7 @@ class ConsolidatedTradingGUI:
         self.bounce_panel: BaseBounceBotPanel | None = None
         self.avwap_gui: MasterAvwapGUI | None = None
         self.market_prep_panel: MarketPrepTab | None = None
+        self.ticker_lookup_panel: TickerLookupTab | None = None
         self._output_write_after_id = None
         self._output_refresh_after_id = None
         self._output_traces: list[tuple[tk.Variable, str]] = []
@@ -1473,6 +1469,10 @@ class ConsolidatedTradingGUI:
         self.market_prep_tab = market_prep_tab
         notebook.add(market_prep_tab, text="Market Prep")
 
+        ticker_lookup_tab = ttk.Frame(notebook)
+        self.ticker_lookup_tab = ticker_lookup_tab
+        notebook.add(ticker_lookup_tab, text="Ticker Lookup")
+
         if self.mode == "full":
             self.bounce_panel = FullBounceBotPanel(bounce_tab, switch_mode_callback=lambda: self.switch_mode("simple"))
             self.bounce_panel.pack(fill=tk.BOTH, expand=True)
@@ -1483,6 +1483,8 @@ class ConsolidatedTradingGUI:
         self.avwap_gui = MasterAvwapGUI(master_tab, standalone=False)
         self.market_prep_panel = MarketPrepTab(market_prep_tab, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
         self.market_prep_panel.pack(fill=tk.BOTH, expand=True)
+        self.ticker_lookup_panel = TickerLookupTab(ticker_lookup_tab, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
+        self.ticker_lookup_panel.pack(fill=tk.BOTH, expand=True)
 
         main_pane.add(notebook, stretch="always")
         notebook.bind("<<NotebookTabChanged>>", self._on_main_tab_changed)
