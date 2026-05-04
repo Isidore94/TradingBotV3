@@ -10767,6 +10767,12 @@ def extract_theta_reason_risk_rows(text: str) -> list[dict]:
             current["reason"] = line.split("=", 1)[1].strip()
         elif line.startswith("risk="):
             current["risk"] = line.split("=", 1)[1].strip()
+        elif line.startswith("notes="):
+            # Backward compatibility for reports generated before reason/risk lines existed.
+            if not current.get("reason"):
+                current["reason"] = line.split("=", 1)[1].strip()
+            if not current.get("risk"):
+                current["risk"] = "legacy report (no explicit risk flags)"
     if current:
         rows.append(current)
     return rows
@@ -16746,9 +16752,13 @@ class MasterAvwapGUI:
         symbols = extract_theta_symbols_from_report(text)
         symbol_text = _format_symbol_group(symbols) if symbols else "None"
         self._set_text_widget_contents(self.theta_symbols_text, symbol_text)
+        reason_widget = getattr(self, "theta_reason_risk_text", None)
+        if reason_widget is None:
+            self._notify_output_changed()
+            return
         reason_rows = extract_theta_reason_risk_rows(text)
-        self.theta_reason_risk_text.configure(state="normal")
-        self.theta_reason_risk_text.delete("1.0", tk.END)
+        reason_widget.configure(state="normal")
+        reason_widget.delete("1.0", tk.END)
         if reason_rows:
             for row in reason_rows:
                 risk_text = str(row.get("risk") or "none")
@@ -16760,13 +16770,13 @@ class MasterAvwapGUI:
                     tag = "risk_red"
                 else:
                     tag = "risk_yellow"
-                self.theta_reason_risk_text.insert(tk.END, f"{row.get('symbol')}\n")
-                self.theta_reason_risk_text.insert(tk.END, f"  Reason: {row.get('reason') or 'n/a'}\n", "risk_green")
-                self.theta_reason_risk_text.insert(tk.END, "  Risk: ")
-                self.theta_reason_risk_text.insert(tk.END, f"{risk_text}\n\n", tag)
+                reason_widget.insert(tk.END, f"{row.get('symbol')}\n")
+                reason_widget.insert(tk.END, f"  Reason: {row.get('reason') or 'n/a'}\n", "risk_green")
+                reason_widget.insert(tk.END, "  Risk: ")
+                reason_widget.insert(tk.END, f"{risk_text}\n\n", tag)
         else:
-            self.theta_reason_risk_text.insert("1.0", "No theta reason/risk details yet.")
-        self.theta_reason_risk_text.configure(state="normal")
+            reason_widget.insert("1.0", "No theta reason/risk details yet.")
+        reason_widget.configure(state="normal")
         self._notify_output_changed()
 
     def refresh_anchor_output_view(self):

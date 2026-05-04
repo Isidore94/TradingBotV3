@@ -1580,6 +1580,18 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertEqual(parsed[0]["symbol"], "NVDA")
             self.assertIn("AVWAPE+Trendline", parsed[0]["reason"])
 
+    def test_theta_reason_risk_parser_supports_legacy_notes_only_reports(self):
+        text = "\n".join(
+            [
+                "1. NVDA | close=100.00 | score=80",
+                "   notes=legacy-only theta note",
+            ]
+        )
+        parsed = extract_theta_reason_risk_rows(text)
+        self.assertEqual(parsed[0]["symbol"], "NVDA")
+        self.assertEqual(parsed[0]["reason"], "legacy-only theta note")
+        self.assertIn("legacy report", parsed[0]["risk"])
+
 
 if __name__ == "__main__":
     unittest.main()
