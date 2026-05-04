@@ -10474,7 +10474,7 @@ def _build_theta_strike_bands(supports: list[dict], atr20: float) -> list[dict]:
     if atr_value is None or atr_value <= 0:
         return []
 
-    cluster_threshold = max(0.25 * atr_value, min(0.5 * atr_value, 1.0))
+    cluster_threshold = min(max(0.35 * atr_value, 0.25 * atr_value), 0.5 * atr_value)
     ordered = sorted(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0), reverse=True)
 
     clusters: list[list[dict]] = []
@@ -10687,6 +10687,7 @@ def evaluate_theta_put_candidate(
 
     primary_strike_band = strike_bands[0]
     secondary_strike_bands = strike_bands[1:]
+    ranked_strike_bands = strike_bands
     strike_zone = (
         f"primary {primary_strike_band['upper_bound']:.2f}-{primary_strike_band['lower_bound']:.2f} "
         f"(strength={primary_strike_band['cluster_strength_score']:.1f}, "
@@ -10717,6 +10718,7 @@ def evaluate_theta_put_candidate(
         "support_summary": _format_theta_support_stack(supports),
         "primary_strike_band": primary_strike_band,
         "secondary_strike_bands": secondary_strike_bands,
+        "ranked_strike_bands": ranked_strike_bands,
         "strike_zone": strike_zone,
         "premium_target": _format_theta_premium_target(close_value),
         "last_earnings_date": earnings_summary.get("last_earnings_date", ""),
@@ -10731,8 +10733,6 @@ def write_theta_put_report(path: Path, theta_rows: list[dict]) -> None:
     rows = sorted(
         theta_rows or [],
         key=lambda row: (
-            -float((row.get("primary_strike_band") or {}).get("cluster_strength_score", 0.0) or 0.0),
-            -int((row.get("primary_strike_band") or {}).get("source_diversity_count", 0) or 0),
             -int(row.get("support_count", 0) or 0),
             -int(row.get("score", 0) or 0),
             str(row.get("symbol") or ""),

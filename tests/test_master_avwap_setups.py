@@ -1469,6 +1469,16 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertGreaterEqual(candidate["support_count"], 3)
         self.assertEqual(candidate["side"], "LONG")
+        self.assertIn("primary_strike_band", candidate)
+        self.assertIn("secondary_strike_bands", candidate)
+        self.assertIn("ranked_strike_bands", candidate)
+        self.assertIsInstance(candidate["ranked_strike_bands"], list)
+        self.assertGreaterEqual(len(candidate["ranked_strike_bands"]), 1)
+        self.assertEqual(candidate["ranked_strike_bands"][0], candidate["primary_strike_band"])
+        self.assertIn("upper_bound", candidate["primary_strike_band"])
+        self.assertIn("lower_bound", candidate["primary_strike_band"])
+        self.assertIn("cluster_strength_score", candidate["primary_strike_band"])
+        self.assertIn("source_diversity_count", candidate["primary_strike_band"])
 
     def test_theta_put_candidate_rejects_recent_earnings(self):
         dates = pd.bdate_range("2025-08-01", periods=180)
