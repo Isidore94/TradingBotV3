@@ -10723,6 +10723,52 @@ def extract_theta_symbols_from_report(text: str) -> list[str]:
     return symbols
 
 
+def extract_theta_rows_from_report(text: str) -> list[dict]:
+    rows = []
+    row_header_pattern = re.compile(
+        r"^\s*\d+\.\s+([A-Z0-9.\-]+)\s+\|\s+close=([0-9]*\.?[0-9]+)\s+\|\s+score=(-?\d+)\s+\|\s+supports=(\d+)\b",
+        re.IGNORECASE,
+    )
+    strike_zone_pattern = re.compile(r"^\s*strike_zone=(.+)$", re.IGNORECASE)
+    earnings_pattern = re.compile(r"next\s+([^;]+?)(?:\s+\(([-]?\d+)d\))?(?:$|;)", re.IGNORECASE)
+
+    current = None
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        header_match = row_header_pattern.match(line)
+        if header_match:
+            if current:
+                rows.append(current)
+            current = {
+                "symbol": header_match.group(1).upper(),
+                "close": float(header_match.group(2)),
+                "score": int(header_match.group(3)),
+                "support_count": int(header_match.group(4)),
+                "atr": "",
+                "next_earnings_days": None,
+                "next_earnings_label": "",
+                "primary_strike_band": "",
+                "liquidity_score": "",
+            }
+            continue
+        if not current:
+            continue
+        strike_match = strike_zone_pattern.match(line)
+        if strike_match:
+            current["primary_strike_band"] = strike_match.group(1).strip()
+            continue
+        if line.lower().startswith("earnings="):
+            earnings_match = earnings_pattern.search(line)
+            if earnings_match:
+                current["next_earnings_label"] = earnings_match.group(1).strip()
+                if earnings_match.group(2):
+                    current["next_earnings_days"] = int(earnings_match.group(2))
+
+    if current:
+        rows.append(current)
+    return rows
+
+
 def build_combined_avwap_output_text(
     priority_section: str,
     theta_section: str,
@@ -14508,6 +14554,13 @@ class MasterAvwapGUI:
         self.shared_scheduler_note = "Hourly shared-watchlist scheduler is off."
         self.shared_scheduler_day = ""
         self.shared_scheduler_slots_state = {}
+        self.theta_sort_column = "score"
+        self.theta_sort_descending = True
+        self.theta_table_rows = []
+        self.theta_min_score_var = tk.StringVar(value="")
+        self.theta_min_support_count_var = tk.StringVar(value="")
+        self.theta_max_earnings_days_var = tk.StringVar(value="")
+        self.theta_symbol_filter_var = tk.StringVar(value="")
 
         self._build_layout()
         self.refresh_table()
@@ -15234,11 +15287,55 @@ class MasterAvwapGUI:
 
         theta_main = ttk.Frame(theta_body)
         theta_main.pack(side="left", fill="both", expand=True)
-        self.theta_text = tk.Text(theta_main, wrap="word", font=("Courier New", 10))
-        self.theta_text.pack(side="left", fill="both", expand=True)
-        theta_scroll = ttk.Scrollbar(theta_main, orient="vertical", command=self.theta_text.yview)
+        theta_filter_frame = ttk.LabelFrame(theta_main, text="Filters")
+        theta_filter_frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(theta_filter_frame, text="Min score").grid(row=0, column=0, padx=(8, 4), pady=8, sticky="w")
+        ttk.Entry(theta_filter_frame, textvariable=self.theta_min_score_var, width=8).grid(row=0, column=1, padx=(0, 8), pady=8, sticky="w")
+        ttk.Label(theta_filter_frame, text="Min supports").grid(row=0, column=2, padx=(0, 4), pady=8, sticky="w")
+        ttk.Entry(theta_filter_frame, textvariable=self.theta_min_support_count_var, width=8).grid(row=0, column=3, padx=(0, 8), pady=8, sticky="w")
+        ttk.Label(theta_filter_frame, text="Max days to earnings").grid(row=0, column=4, padx=(0, 4), pady=8, sticky="w")
+        ttk.Entry(theta_filter_frame, textvariable=self.theta_max_earnings_days_var, width=10).grid(row=0, column=5, padx=(0, 8), pady=8, sticky="w")
+        ttk.Label(theta_filter_frame, text="Symbol").grid(row=0, column=6, padx=(0, 4), pady=8, sticky="w")
+        ttk.Entry(theta_filter_frame, textvariable=self.theta_symbol_filter_var, width=12).grid(row=0, column=7, padx=(0, 8), pady=8, sticky="w")
+        ttk.Button(theta_filter_frame, text="Apply", command=self._refresh_theta_table).grid(row=0, column=8, padx=(0, 8), pady=8, sticky="w")
+        ttk.Button(theta_filter_frame, text="Clear", command=self._clear_theta_filters).grid(row=0, column=9, padx=(0, 8), pady=8, sticky="w")
+
+        theta_table_frame = ttk.LabelFrame(theta_main, text="Theta Candidates")
+        theta_table_frame.pack(fill="both", expand=True, pady=(0, 8))
+        columns = ("symbol", "score", "support_count", "close", "atr", "next_earnings_days", "primary_strike_band", "liquidity_score")
+        self.theta_table = ttk.Treeview(theta_table_frame, columns=columns, show="headings", style="Dark.Treeview")
+        headings = {
+            "symbol": "Symbol",
+            "score": "Score",
+            "support_count": "Support Count",
+            "close": "Close",
+            "atr": "ATR",
+            "next_earnings_days": "Next Earnings (days)",
+            "primary_strike_band": "Primary Strike Band",
+            "liquidity_score": "Liquidity Score (future)",
+        }
+        for key, label in headings.items():
+            self.theta_table.heading(key, text=label, command=lambda c=key: self._sort_theta_table(c))
+        self.theta_table.column("symbol", width=90, anchor="w")
+        self.theta_table.column("score", width=70, anchor="center")
+        self.theta_table.column("support_count", width=120, anchor="center")
+        self.theta_table.column("close", width=85, anchor="e")
+        self.theta_table.column("atr", width=85, anchor="e")
+        self.theta_table.column("next_earnings_days", width=145, anchor="center")
+        self.theta_table.column("primary_strike_band", width=360, anchor="w")
+        self.theta_table.column("liquidity_score", width=145, anchor="center")
+        self.theta_table.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        theta_table_scroll = ttk.Scrollbar(theta_table_frame, orient="vertical", command=self.theta_table.yview)
+        self.theta_table.configure(yscrollcommand=theta_table_scroll.set)
+        theta_table_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+
+        theta_details_frame = ttk.LabelFrame(theta_main, text="Details")
+        theta_details_frame.pack(fill="both", expand=True)
+        self.theta_text = tk.Text(theta_details_frame, wrap="word", font=("Courier New", 10), height=12)
+        self.theta_text.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        theta_scroll = ttk.Scrollbar(theta_details_frame, orient="vertical", command=self.theta_text.yview)
         self.theta_text.configure(yscrollcommand=theta_scroll.set)
-        theta_scroll.pack(side="right", fill="y")
+        theta_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
 
         theta_side = ttk.Frame(theta_body, width=340)
         theta_side.pack(side="right", fill="y", padx=(12, 0))
@@ -16686,11 +16783,89 @@ class MasterAvwapGUI:
         theta_section = self._read_text_file(THETA_PUTS_FILE)
         text = theta_section or "No theta put-selling output yet."
         self._set_text_widget_contents(self.theta_text, text)
+        self.theta_table_rows = extract_theta_rows_from_report(text)
+        self._refresh_theta_table()
 
         symbols = extract_theta_symbols_from_report(text)
         symbol_text = _format_symbol_group(symbols) if symbols else "None"
         self._set_text_widget_contents(self.theta_symbols_text, symbol_text)
         self._notify_output_changed()
+
+    def _clear_theta_filters(self):
+        self.theta_min_score_var.set("")
+        self.theta_min_support_count_var.set("")
+        self.theta_max_earnings_days_var.set("")
+        self.theta_symbol_filter_var.set("")
+        self._refresh_theta_table()
+
+    def _sort_theta_table(self, column: str):
+        if self.theta_sort_column == column:
+            self.theta_sort_descending = not self.theta_sort_descending
+        else:
+            self.theta_sort_column = column
+            self.theta_sort_descending = True
+        self._refresh_theta_table()
+
+    def _safe_int_filter(self, value: str) -> int | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _refresh_theta_table(self):
+        table = getattr(self, "theta_table", None)
+        if table is None:
+            return
+        for row_id in table.get_children():
+            table.delete(row_id)
+
+        min_score = self._safe_int_filter(self.theta_min_score_var.get())
+        min_supports = self._safe_int_filter(self.theta_min_support_count_var.get())
+        max_earnings_days = self._safe_int_filter(self.theta_max_earnings_days_var.get())
+        symbol_filter = str(self.theta_symbol_filter_var.get() or "").strip().upper()
+
+        filtered_rows = []
+        for row in self.theta_table_rows:
+            if min_score is not None and int(row.get("score", 0) or 0) < min_score:
+                continue
+            if min_supports is not None and int(row.get("support_count", 0) or 0) < min_supports:
+                continue
+            next_days = row.get("next_earnings_days")
+            if max_earnings_days is not None and isinstance(next_days, int) and next_days > max_earnings_days:
+                continue
+            if symbol_filter and symbol_filter not in str(row.get("symbol", "")).upper():
+                continue
+            filtered_rows.append(row)
+
+        def sort_key(entry: dict):
+            if self.theta_sort_column in {"score", "support_count", "next_earnings_days"}:
+                value = entry.get(self.theta_sort_column)
+                return -10**9 if value is None else int(value)
+            if self.theta_sort_column in {"close", "atr"}:
+                value = entry.get(self.theta_sort_column)
+                return float(value or 0.0)
+            return str(entry.get(self.theta_sort_column, "") or "").upper()
+
+        filtered_rows.sort(key=sort_key, reverse=self.theta_sort_descending)
+
+        for row in filtered_rows:
+            table.insert(
+                "",
+                "end",
+                values=(
+                    row.get("symbol", ""),
+                    row.get("score", ""),
+                    row.get("support_count", ""),
+                    f"{float(row.get('close', 0.0) or 0.0):.2f}" if row.get("close") is not None else "",
+                    row.get("atr", ""),
+                    row.get("next_earnings_days", "unknown"),
+                    row.get("primary_strike_band", ""),
+                    row.get("liquidity_score", ""),
+                ),
+            )
 
     def refresh_anchor_output_view(self):
         text = self._read_text_file(ANCHOR_AVWAP_OUTPUT_FILE)
