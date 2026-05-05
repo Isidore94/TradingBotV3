@@ -56,9 +56,11 @@ YFINANCE_NOISY_LOGGER_NAMES = (
 
 from master_avwap_shared import (
     build_master_avwap_active_level_map,
+    build_master_avwap_d1_flag_events,
     build_master_avwap_second_stdev_cross_map,
     describe_master_avwap_focus,
     describe_master_avwap_second_stdev_cross,
+    load_master_avwap_d1_watchlist as load_master_avwap_d1_watchlist_map,
     load_master_avwap_events_for_date,
     load_master_avwap_focus_map,
     normalize_master_avwap_event_row,
@@ -84,6 +86,7 @@ from project_paths import (
     INDUSTRY_ETF_MAP_FILE,
     SYMBOL_CLASSIFICATION_CACHE_FILE,
     MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_D1_WATCHLIST_FILE,
     APP_LOG_BACKUP_COUNT,
     get_tracker_storage_details,
     get_local_setting,
@@ -105,6 +108,7 @@ INTRADAY_BOUNCE_OUTCOME_STATE_JSON = INTRADAY_BOUNCE_OUTCOME_STATE_FILE
 INTRADAY_BOUNCE_FEEDBACK_CSV = INTRADAY_BOUNCE_FEEDBACK_FILE
 MASTER_AVWAP_SIGNALS_FILENAME = AVWAP_SIGNALS_FILE
 MASTER_AVWAP_FOCUS_FILENAME = MASTER_AVWAP_FOCUS_FILE
+MASTER_AVWAP_D1_WATCHLIST_FILENAME = MASTER_AVWAP_D1_WATCHLIST_FILE
 STRENGTH_SCAN_LOG_FILENAME = RRS_STRENGTH_LOG_FILE
 GROUP_STRENGTH_SCAN_LOG_FILENAME = RRS_GROUP_STRENGTH_LOG_FILE
 ENVIRONMENT_FOCUS_HISTORY_FILENAME = RRS_ENVIRONMENT_FOCUS_HISTORY_FILE
@@ -1010,8 +1014,10 @@ class BounceBot(EWrapper, EClient):
         self.emitted_master_avwap_events = set()
         self.master_avwap_focus_map = {}
         self.master_avwap_second_stdev_cross_map = {}
+        self.master_avwap_d1_watchlist = {}
         self.emitted_master_avwap_focus_alerts = set()
         self.emitted_master_avwap_second_stdev_alerts = set()
+        self.emitted_master_avwap_d1_flags = set()
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -1146,7 +1152,7 @@ class BounceBot(EWrapper, EClient):
             "sector_etf": sector_etf,
             "industry_etf": industry_etf,
             "market_environment": self.get_market_environment(),
-            "watchlist_bias": "long" if symbol in self.longs else "short" if symbol in self.shorts else "",
+            "watchlist_bias": self.get_symbol_direction(symbol),
             "symbol_context": symbol_context,
         }
 
@@ -1711,6 +1717,99 @@ class BounceBot(EWrapper, EClient):
             focus_path=MASTER_AVWAP_FOCUS_FILENAME,
         )
 
+    def load_master_avwap_d1_watchlist(self):
+        self.master_avwap_d1_watchlist = load_master_avwap_d1_watchlist_map(
+            watchlist_path=MASTER_AVWAP_D1_WATCHLIST_FILENAME,
+        )
+
+    def get_master_avwap_d1_watch_symbols(self):
+        return sorted(self.master_avwap_d1_watchlist.keys())
+
+    def get_symbol_direction(self, symbol):
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return ""
+        long_symbols = {str(item or "").strip().upper() for item in self.longs}
+        short_symbols = {str(item or "").strip().upper() for item in self.shorts}
+        if symbol in long_symbols:
+            return "long"
+        if symbol in short_symbols:
+            return "short"
+
+        watch_entry = self.master_avwap_d1_watchlist.get(symbol) or {}
+        side = str(watch_entry.get("side") or "").strip().upper()
+        if side == "LONG":
+            return "long"
+        if side == "SHORT":
+            return "short"
+
+        focus_entry = self.master_avwap_focus_map.get(symbol) or {}
+        side = str(focus_entry.get("side") or "").strip().upper()
+        if side == "LONG":
+            return "long"
+        if side == "SHORT":
+            return "short"
+        return ""
+
+    def get_scan_symbol_set(self):
+        base_symbols = {
+            str(item or "").strip().upper()
+            for item in (self.longs + self.shorts)
+            if str(item or "").strip()
+        }
+        return base_symbols | set(self.get_master_avwap_d1_watch_symbols())
+
+    def _format_master_avwap_d1_flag_event(self, event):
+        symbol = str(event.get("symbol") or "").strip().upper()
+        direction = str(event.get("direction") or "").strip().lower()
+        label = str(event.get("label") or "D1 flag").strip()
+        reason = str(event.get("reason") or "").strip()
+        source = str(event.get("source") or "").strip()
+        score = event.get("priority_score")
+        suffix_parts = []
+        if reason:
+            suffix_parts.append(reason)
+        if score is not None:
+            try:
+                suffix_parts.append(f"score={float(score):.0f}")
+            except (TypeError, ValueError):
+                pass
+        if source:
+            suffix_parts.append(f"source={source}")
+        suffix = f" [{'; '.join(suffix_parts)}]" if suffix_parts else ""
+        return f"MASTER_AVWAP_D1_FLAG: {symbol} ({direction or 'watch'}) {label}{suffix}"
+
+    def emit_master_avwap_d1_flags(self):
+        if not self.gui_callback:
+            return
+        events = build_master_avwap_d1_flag_events(
+            self.master_avwap_focus_map,
+            self.master_avwap_events,
+            self.master_avwap_d1_watchlist,
+            trade_date=datetime.now().date(),
+        )
+        today_iso = datetime.now().date().isoformat()
+        for event in events:
+            symbol = str(event.get("symbol") or "").strip().upper()
+            event_key = (
+                today_iso,
+                symbol,
+                event.get("side"),
+                event.get("event_type"),
+                event.get("label"),
+                event.get("reason"),
+            )
+            if event_key in self.emitted_master_avwap_d1_flags:
+                continue
+            self.emitted_master_avwap_d1_flags.add(event_key)
+            direction = str(event.get("direction") or "").strip().lower()
+            if not direction:
+                direction = self.get_symbol_direction(symbol) or "watch"
+            message = self._format_master_avwap_d1_flag_event({**event, "direction": direction})
+            gui_tag = "d1_flag_long" if direction == "long" else "d1_flag_short" if direction == "short" else "d1_flag_watch"
+            self.gui_callback(message, gui_tag)
+            self.log_symbol(symbol, message)
+
     def _describe_master_avwap_focus(self, focus_entry):
         return describe_master_avwap_focus(focus_entry)
 
@@ -1852,9 +1951,7 @@ class BounceBot(EWrapper, EClient):
             logging.info("Master AVWAP: no new cross/bounce events for today.")
             return
 
-        current_longs = set(self.longs)
-        current_shorts = set(self.shorts)
-        monitored = current_longs | current_shorts
+        monitored = self.get_scan_symbol_set()
         matched_symbols = sorted(event_symbols & monitored)
         if not matched_symbols:
             logging.info(
@@ -1864,7 +1961,7 @@ class BounceBot(EWrapper, EClient):
 
         for symbol in matched_symbols:
             levels = active_level_map.get(symbol, [])
-            side = "LONG" if symbol in current_longs else "SHORT"
+            side = "LONG" if self.get_symbol_direction(symbol) == "long" else "SHORT"
             symbol_events = self.master_avwap_events.get(symbol, [])
             newly_emitted = 0
             for event in symbol_events:
@@ -2401,7 +2498,8 @@ class BounceBot(EWrapper, EClient):
             if not profile:
                 continue
 
-            if symbol in self.longs:
+            direction = self.get_symbol_direction(symbol)
+            if direction == "long":
                 overall_summary = summarize_bucket(profile, "long")
                 context_summary = summarize_bucket(profile, "long", "long_eval")
                 compression_summary = summarize_bucket(profile, "long", "compression")
@@ -2416,7 +2514,7 @@ class BounceBot(EWrapper, EClient):
                 if candidate:
                     long_candidates.append(candidate)
 
-            if symbol in self.shorts:
+            if direction == "short":
                 overall_summary = summarize_bucket(profile, "short")
                 context_summary = summarize_bucket(profile, "short", "short_eval")
                 compression_summary = summarize_bucket(profile, "short", "compression")
@@ -3329,6 +3427,7 @@ class BounceBot(EWrapper, EClient):
 
     def run_rrs_scan(self, timeframe_key_override=None, emit_gui=True):
         self.load_master_avwap_focus()
+        self.load_master_avwap_d1_watchlist()
         threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
         if timeframe_key_override in RRS_TIMEFRAMES:
             timeframe_key = timeframe_key_override
@@ -3360,7 +3459,7 @@ class BounceBot(EWrapper, EClient):
             current_market_date,
             previous_market_date,
         )
-        raw_symbols = sorted(set(self.longs + self.shorts) - {"SPY"})
+        raw_symbols = sorted(self.get_scan_symbol_set() - {"SPY"})
         earnings_reaction_symbols = [
             symbol for symbol in raw_symbols
             if self._symbol_matches_alias_set(symbol, earnings_reaction_aliases)
@@ -3399,6 +3498,7 @@ class BounceBot(EWrapper, EClient):
             elif rrs_value <= -threshold:
                 environment_signal = "RW"
 
+            symbol_direction = self.get_symbol_direction(symbol)
             if environment_signal:
                 symbol_context.append(
                     {
@@ -3408,15 +3508,13 @@ class BounceBot(EWrapper, EClient):
                         "move_ratio": symbol_move_ratio,
                         "excess_move_ratio": excess_move_ratio,
                         "power_index": power_index,
-                        "watchlist_bias": (
-                            "long" if symbol in self.longs else "short" if symbol in self.shorts else ""
-                        ),
+                        "watchlist_bias": symbol_direction,
                     }
                 )
 
-            if symbol in self.longs and rrs_value >= threshold:
+            if symbol_direction == "long" and rrs_value >= threshold:
                 results.append(("RS", symbol, rrs_value, power_index))
-            elif symbol in self.shorts and rrs_value <= -threshold:
+            elif symbol_direction == "short" and rrs_value <= -threshold:
                 results.append(("RW", symbol, rrs_value, power_index))
 
             classification = self.get_symbol_classification(symbol)
@@ -3439,9 +3537,9 @@ class BounceBot(EWrapper, EClient):
                 aligned_sym_sec, aligned_sec = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in sec_bars})
                 sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
                 if sec_rrs is not None:
-                    if symbol in self.longs and sec_rrs >= threshold:
+                    if symbol_direction == "long" and sec_rrs >= threshold:
                         sector_results.append(("RS", symbol, sec_rrs, sec_power))
-                    elif symbol in self.shorts and sec_rrs <= -threshold:
+                    elif symbol_direction == "short" and sec_rrs <= -threshold:
                         sector_results.append(("RW", symbol, sec_rrs, sec_power))
 
             industry_ref = resolve_industry_ref_etf(industry_key, sector_key)
@@ -3451,9 +3549,9 @@ class BounceBot(EWrapper, EClient):
                 aligned_sym_ind, aligned_ind = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in ind_bars})
                 ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
                 if ind_rrs is not None:
-                    if symbol in self.longs and ind_rrs >= threshold:
+                    if symbol_direction == "long" and ind_rrs >= threshold:
                         industry_results.append(("RS", symbol, ind_rrs, ind_power))
-                    elif symbol in self.shorts and ind_rrs <= -threshold:
+                    elif symbol_direction == "short" and ind_rrs <= -threshold:
                         industry_results.append(("RW", symbol, ind_rrs, ind_power))
 
         strongest = sorted(all_scores, key=lambda row: row[1], reverse=True)[:SCAN_EXTREME_COUNT]
@@ -3975,7 +4073,7 @@ class BounceBot(EWrapper, EClient):
 
 
     def build_atr_cache(self):
-        all_symbols = set(self.longs + self.shorts)
+        all_symbols = self.get_scan_symbol_set()
         to_fetch = [s for s in all_symbols if s not in self.atr_cache]
         if not to_fetch:
             logging.debug("No new symbols for ATR update.")
@@ -4024,9 +4122,10 @@ class BounceBot(EWrapper, EClient):
         if "ATR" in msg:
             logging.info(msg)
         else:
-            if symbol in self.longs:
+            direction = self.get_symbol_direction(symbol)
+            if direction == "long":
                 colored_msg = Fore.GREEN + msg + Style.RESET_ALL
-            elif symbol in self.shorts:
+            elif direction == "short":
                 colored_msg = Fore.RED + msg + Style.RESET_ALL
             else:
                 colored_msg = msg
@@ -4055,9 +4154,10 @@ class BounceBot(EWrapper, EClient):
         msg += f"Dynamic VWAP: {dynamic_vwap:.2f}, " if dynamic_vwap is not None else "Dynamic VWAP: N/A, "
         msg += f"EOD VWAP: {eod_vwap:.2f}, " if eod_vwap is not None else "EOD VWAP: N/A, "
         
-        if symbol in self.longs:
+        direction = self.get_symbol_direction(symbol)
+        if direction == "long":
             msg += f"Prev Day High: {prev_high:.2f}, " if prev_high is not None else "Prev Day High: N/A, "
-        elif symbol in self.shorts:
+        elif direction == "short":
             msg += f"Prev Day Low: {prev_low:.2f}, " if prev_low is not None else "Prev Day Low: N/A, "
         
         msg += f"ATR: {atr_val:.2f}"
@@ -4096,7 +4196,10 @@ class BounceBot(EWrapper, EClient):
 
         # Set threshold for proximity to levels
         threshold = THRESHOLD_MULTIPLIER * atr
-        direction = "long" if symbol in self.longs else "short"
+        direction = self.get_symbol_direction(symbol)
+        if direction not in {"long", "short"}:
+            logging.debug(f"{symbol}: No long/short direction available, skipping bounce evaluation")
+            return None
         
         # Get the metrics from the cache
         metrics = self.symbol_metrics.get(symbol, {})
@@ -4929,6 +5032,12 @@ class BounceBot(EWrapper, EClient):
 
 
     def request_and_detect_bounce(self, symbol, allowed_bounce_types=None):
+        symbol = str(symbol or "").strip().upper()
+        direction = self.get_symbol_direction(symbol)
+        if direction not in {"long", "short"}:
+            logging.debug(f"{symbol}: No long/short direction available, skipping bounce detection.")
+            return
+
         # Only scan within market hours (if enabled)
         if not SCAN_OUTSIDE_MARKET_HOURS:
             current_time = get_market_local_now()
@@ -5062,7 +5171,6 @@ class BounceBot(EWrapper, EClient):
 
         # 6. Get current price
         current_price = today_df["close"].iloc[-1] if not today_df.empty else None
-        direction = "long" if symbol in self.longs else "short"
         
         # Calculate standard VWAP with bands
         vwap_value, vwap_upper_band, vwap_lower_band = self.calculate_vwap_with_stdev_bands(today_df)
@@ -5123,9 +5231,9 @@ class BounceBot(EWrapper, EClient):
             msg += f"EOD VWAP 1SD Lower: {eod_lower_band:.4f}, " if eod_lower_band is not None else "EOD VWAP 1SD Lower: N/A, "
             msg += f"21 EMA: {ema_21:.4f}, " if ema_21 is not None else "21 EMA: N/A, "
             
-            if symbol in self.longs:
+            if direction == "long":
                 msg += f"Prev Day High: {prev_high:.4f}, " if prev_high is not None else "Prev Day High: N/A, "
-            elif symbol in self.shorts:
+            elif direction == "short":
                 msg += f"Prev Day Low: {prev_low:.4f}, " if prev_low is not None else "Prev Day Low: N/A, "
             
             atr = self.atr_cache.get(symbol, None)
@@ -5166,7 +5274,6 @@ class BounceBot(EWrapper, EClient):
             bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
             if self.gui_callback:
                 self.gui_callback(bounce_payload, "green" if direction == "long" else "red")
-            self._emit_master_avwap_focus_bounce_alert(symbol, direction, levels_list)
             self._emit_master_avwap_second_stdev_bounce_alert(symbol, direction, levels_list)
             self.log_symbol(symbol, f"ALERT: {bounce_msg}")
             self.log_bounce_to_file(
@@ -5496,6 +5603,7 @@ class BounceBot(EWrapper, EClient):
                     self.emitted_master_avwap_events.clear()
                     self.emitted_master_avwap_focus_alerts.clear()
                     self.emitted_master_avwap_second_stdev_alerts.clear()
+                    self.emitted_master_avwap_d1_flags.clear()
                     self.logged_near_miss_events.clear()
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
@@ -5503,7 +5611,9 @@ class BounceBot(EWrapper, EClient):
                 self.longs = read_tickers(LONGS_FILENAME)
                 self.shorts = read_tickers(SHORTS_FILENAME)
                 self.load_master_avwap_focus()
+                self.load_master_avwap_d1_watchlist()
                 self.update_watchlists_from_master_avwap()
+                self.emit_master_avwap_d1_flags()
                 self.alerted_symbols.clear()
                 self.symbol_metrics = {}
                 self.latest_bars = {}
@@ -5515,9 +5625,10 @@ class BounceBot(EWrapper, EClient):
                 # Keep the GUI view synced with user-selected RRS timeframe.
                 self.run_rrs_scan()
 
-                monitored_symbols = self.get_monitored_extreme_symbols()
+                d1_watch_symbols = set(self.get_master_avwap_d1_watch_symbols())
+                monitored_symbols = self.get_monitored_extreme_symbols() | d1_watch_symbols
                 logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
-                all_symbols = set(self.longs + self.shorts)
+                all_symbols = self.get_scan_symbol_set()
                 processed_symbols = set()
                 enabled_bounce_types = {
                     bounce_type for bounce_type, enabled in self.bounce_type_toggles.items() if enabled
@@ -5555,7 +5666,7 @@ class BounceBot(EWrapper, EClient):
 
     def check_dynamic_vwap_touches(self):
         results = []
-        all_symbols = set(self.longs + self.shorts)
+        all_symbols = self.get_scan_symbol_set()
         for symbol in all_symbols:
             reqId = self.getReqId()
             self.data[reqId] = []
@@ -5587,7 +5698,7 @@ class BounceBot(EWrapper, EClient):
 
     def check_dynamic_vwap2_touches(self):
         results = []
-        all_symbols = set(self.longs + self.shorts)
+        all_symbols = self.get_scan_symbol_set()
         for symbol in all_symbols:
             reqId = self.getReqId()
             self.data[reqId] = []
@@ -5621,7 +5732,7 @@ class BounceBot(EWrapper, EClient):
     
     def check_eod_vwap_touches(self):
         results = []
-        all_symbols = set(self.longs + self.shorts)
+        all_symbols = self.get_scan_symbol_set()
         for symbol in all_symbols:
             reqId = self.getReqId()
             self.data[reqId] = []
@@ -6368,7 +6479,10 @@ def append_alert_message(
         text_area.insert(tk.END, f"{timestamp} - ", prefix_tag)
         prefix_inserted = True
 
-    if display_msg.startswith("MASTER_AVWAP_FAVORITE_BOUNCE:"):
+    if display_msg.startswith("MASTER_AVWAP_D1_FLAG:"):
+        insert_prefix(tag)
+        text_area.insert(tk.END, f"{display_msg}\n", tag)
+    elif display_msg.startswith("MASTER_AVWAP_FAVORITE_BOUNCE:"):
         insert_prefix(tag)
         text_area.insert(tk.END, f"{display_msg}\n", tag)
     elif "Bounce confirmed" in display_msg:
@@ -6424,6 +6538,9 @@ def configure_alert_tags(text_area, font_size=12):
     text_area.tag_config("master_avwap_favorite_short", foreground="#FFD166", font=("Courier", font_size, "bold"))
     text_area.tag_config("master_avwap_focus_long", foreground="#7DF9FF", font=("Courier", font_size, "bold"))
     text_area.tag_config("master_avwap_focus_short", foreground="#FFB000", font=("Courier", font_size, "bold"))
+    text_area.tag_config("d1_flag_long", foreground="#7DF9FF", font=("Courier", font_size, "bold"))
+    text_area.tag_config("d1_flag_short", foreground="#FFB000", font=("Courier", font_size, "bold"))
+    text_area.tag_config("d1_flag_watch", foreground="#BD93F9", font=("Courier", font_size, "bold"))
     text_area.tag_config("candle_line", foreground="#BD93F9", overstrike=1)
     text_area.tag_config("approaching", foreground="#FF79C6", font=("Courier", font_size))
     text_area.tag_config("approaching_green", foreground="#50FA7B", font=("Courier", font_size))
@@ -6739,10 +6856,21 @@ def start_gui(mode="prompt"):
     content_pane.pack(fill=tk.BOTH, expand=True)
 
     alerts_frame = tk.Frame(content_pane, bg=dark_grey)
-    text_area = scrolledtext.ScrolledText(
+    alerts_split = tk.PanedWindow(
         alerts_frame,
+        orient=tk.HORIZONTAL,
+        sashrelief=tk.RAISED,
+        sashwidth=8,
+        showhandle=True,
+        bg=dark_grey,
+    )
+    alerts_split.pack(fill=tk.BOTH, expand=True)
+
+    confirmed_frame = tk.LabelFrame(alerts_split, text="Confirmed Bounces", bg=dark_grey, fg=text_color)
+    text_area = scrolledtext.ScrolledText(
+        confirmed_frame,
         wrap=tk.WORD,
-        width=80,
+        width=68,
         height=30,
         font=('Courier', 12),
         state='disabled',
@@ -6750,9 +6878,25 @@ def start_gui(mode="prompt"):
         fg=text_color  # Add text color
     )
     text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    alerts_split.add(confirmed_frame, stretch="always")
+
+    d1_flags_frame = tk.LabelFrame(alerts_split, text="D1 Master AVWAP Flags", bg=dark_grey, fg=text_color)
+    d1_flags_text = scrolledtext.ScrolledText(
+        d1_flags_frame,
+        wrap=tk.WORD,
+        width=58,
+        height=30,
+        font=('Courier', 11),
+        state='disabled',
+        bg=dark_grey,
+        fg=text_color,
+    )
+    d1_flags_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    alerts_split.add(d1_flags_frame, stretch="always")
     content_pane.add(alerts_frame, stretch="always")
 
     configure_alert_tags(text_area, font_size=12)
+    configure_alert_tags(d1_flags_text, font_size=11)
 
     # Create RRS panel inside main window
     rrs_container = tk.Frame(content_pane, bg=dark_grey)
@@ -7087,16 +7231,17 @@ def start_gui(mode="prompt"):
         while True:
             try:
                 msg, tag = bounce_queue.get_nowait()
-                text_area.config(state='normal')
+                target_area = d1_flags_text if str(tag).startswith("d1_flag") else text_area
+                target_area.config(state='normal')
                 append_alert_message(
-                    text_area,
+                    target_area,
                     msg,
                     str(tag),
                     datetime.now().strftime('%H:%M:%S'),
                     feedback_source="bounce_bot_full_gui",
                 )
-                text_area.config(state='disabled')
-                text_area.see(tk.END)
+                target_area.config(state='disabled')
+                target_area.see(tk.END)
                 root.update()
             except queue.Empty:
                 break

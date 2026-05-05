@@ -12,8 +12,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from master_avwap_shared import (  # noqa: E402
     build_master_avwap_active_level_map,
+    build_master_avwap_d1_flag_events,
     build_master_avwap_second_stdev_cross_map,
     describe_master_avwap_focus,
+    load_master_avwap_d1_watchlist,
     load_master_avwap_events_for_date,
     load_master_avwap_focus_map,
     load_tradingview_groups,
@@ -134,6 +136,101 @@ class MasterAvwapSharedTests(unittest.TestCase):
             self.assertEqual(groups["favorites"]["SHORT"], ["TSLA"])
             self.assertEqual(groups["near_favorite_zones"]["LONG"], ["MSFT"])
             self.assertEqual(groups["near_favorite_zones"]["SHORT"], [])
+
+    def test_d1_watchlist_and_flag_events(self):
+        trade_date = date.today()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            watchlist_path = Path(temp_dir) / "master_avwap_d1_watchlist.json"
+            watchlist_path.write_text(
+                json.dumps(
+                    {
+                        "symbols": {
+                            "NVDA": {
+                                "side": "LONG",
+                                "last_seen": trade_date.isoformat(),
+                                "priority_score": 260,
+                                "watch_reasons": ["favorite_setup", "sold_put_premium_viable"],
+                                "theta": {
+                                    "play_type": "sold_put",
+                                    "status": "recommended",
+                                    "credit": 1.05,
+                                    "strike": 190,
+                                    "expiration": "20260515",
+                                },
+                            },
+                            "APLD": {
+                                "side": "LONG",
+                                "last_seen": trade_date.isoformat(),
+                                "priority_score": 190,
+                                "watch_reasons": ["sold_put_premium_cusp"],
+                                "theta": {
+                                    "play_type": "sold_put",
+                                    "status": "cusp",
+                                    "credit": 0.18,
+                                    "strike": 33,
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            d1_watchlist = load_master_avwap_d1_watchlist(watchlist_path=watchlist_path)
+            self.assertEqual(d1_watchlist["NVDA"]["theta"]["status"], "recommended")
+
+            focus_map = {
+                "AAPL": {
+                    "symbol": "AAPL",
+                    "side": "LONG",
+                    "priority_score": 240,
+                    "mid_earnings_ema15_trigger": True,
+                    "mid_earnings_note": "held 15EMA after earnings drift",
+                },
+                "TSLA": {
+                    "symbol": "TSLA",
+                    "side": "SHORT",
+                    "priority_score": 210,
+                    "trendline_break_recent": True,
+                    "trendline_break_note": "broke rising support line",
+                },
+            }
+            events_by_symbol = {
+                "AAPL": [
+                    {
+                        "symbol": "AAPL",
+                        "trade_date": trade_date,
+                        "signal_type": "CROSS_UP_VWAP",
+                        "anchor_type": "CURRENT",
+                        "anchor_date": "2026-04-01",
+                        "side": "LONG",
+                        "level": "VWAP",
+                    }
+                ],
+                "TSLA": [
+                    {
+                        "symbol": "TSLA",
+                        "trade_date": trade_date,
+                        "signal_type": "BOUNCE_LOWER_1",
+                        "anchor_type": "CURRENT",
+                        "anchor_date": "2026-04-02",
+                        "side": "SHORT",
+                        "level": "LOWER_1",
+                    }
+                ],
+            }
+
+            flags = build_master_avwap_d1_flag_events(focus_map, events_by_symbol, d1_watchlist, trade_date)
+            labels_by_symbol = {}
+            for event in flags:
+                labels_by_symbol.setdefault(event["symbol"], set()).add(event["label"])
+
+            self.assertIn("AVWAPE breakthrough", labels_by_symbol["AAPL"])
+            self.assertIn("15EMA D1 bounce", labels_by_symbol["AAPL"])
+            self.assertIn("1st-dev D1 bounce", labels_by_symbol["TSLA"])
+            self.assertIn("Trendline breakthrough", labels_by_symbol["TSLA"])
+            self.assertIn("Put premium viable", labels_by_symbol["NVDA"])
+            self.assertIn("Put premium cusp", labels_by_symbol["APLD"])
 
 
 if __name__ == "__main__":

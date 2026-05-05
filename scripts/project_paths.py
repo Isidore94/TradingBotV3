@@ -103,6 +103,7 @@ MASTER_POSITIONS_FILE = RUNTIME_DATA_DIR / "master_positions.json"
 PREVIOUS_GAP_UPS_FILE = RUNTIME_DATA_DIR / "previous_gap_ups.csv"
 ANCHOR_AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "master_anchor_avwap_signals.csv"
 MASTER_AVWAP_FOCUS_FILE = RUNTIME_DATA_DIR / "master_avwap_focus.json"
+MASTER_AVWAP_D1_WATCHLIST_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_watchlist.json"
 MASTER_AVWAP_SETUP_TRACKER_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_tracker.json"
 MASTER_AVWAP_SETUP_SCENARIOS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_scenarios.csv"
 MASTER_AVWAP_SETUP_DAILY_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_daily.csv"
@@ -363,6 +364,7 @@ def migrate_legacy_layout() -> None:
         (REPO_DATA_DIR / "runtime" / "previous_gap_ups.csv", PREVIOUS_GAP_UPS_FILE),
         (REPO_DATA_DIR / "runtime" / "master_anchor_avwap_signals.csv", ANCHOR_AVWAP_SIGNALS_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_focus.json", MASTER_AVWAP_FOCUS_FILE),
+        (REPO_DATA_DIR / "runtime" / "master_avwap_d1_watchlist.json", MASTER_AVWAP_D1_WATCHLIST_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_market_prep.json", MASTER_AVWAP_MARKET_PREP_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_setup_tracker.json", MASTER_AVWAP_SETUP_TRACKER_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_setup_scenarios.csv", MASTER_AVWAP_SETUP_SCENARIOS_FILE),
@@ -431,6 +433,7 @@ def migrate_legacy_layout() -> None:
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "previous_gap_ups.csv", PREVIOUS_GAP_UPS_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_anchor_avwap_signals.csv", ANCHOR_AVWAP_SIGNALS_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_focus.json", MASTER_AVWAP_FOCUS_FILE),
+        (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_d1_watchlist.json", MASTER_AVWAP_D1_WATCHLIST_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_market_prep.json", MASTER_AVWAP_MARKET_PREP_FILE),
         (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_tracker.json", MASTER_AVWAP_SETUP_TRACKER_FILE),
         (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_scenarios.csv", MASTER_AVWAP_SETUP_SCENARIOS_FILE),

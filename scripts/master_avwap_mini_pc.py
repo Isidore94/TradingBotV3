@@ -8,7 +8,6 @@ import atexit
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -75,6 +74,7 @@ from project_paths import (
     SWING_SHORTS_FILE,
     get_tracker_storage_details,
 )
+from watchlist_utils import WATCHLIST_SYMBOL_RE, count_watchlist_symbols
 
 STATUS_FILE = LONGS_FILE.parent / "master_avwap_mini_pc_status.txt"
 STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc_state.json"
@@ -88,7 +88,6 @@ GUI_TICK_MS = 15_000
 WATCHLIST_FILTER_CLIENT_ID = 1005
 SETUP_TRACKER_SYNC_CLIENT_ID = 1006
 WATCHLIST_FILTER_DAYS = 5
-WATCHLIST_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 
 _LOCK_ACQUIRED = False
@@ -286,19 +285,6 @@ def get_next_pending_slot(state: dict[str, Any], schedule: list[str], now: datet
         if slot_datetime(slot, now) > now:
             return slot
     return None
-
-
-def count_watchlist_symbols(path: Path) -> int:
-    if not path.exists():
-        return 0
-    seen = set()
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            symbol = str(line).strip().upper()
-            if not symbol or symbol.startswith("SYMBOLS FROM TC2000"):
-                continue
-            seen.add(symbol)
-    return len(seen)
 
 
 def read_text(path: Path) -> str:

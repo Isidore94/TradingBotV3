@@ -76,6 +76,7 @@ from project_paths import (
     MASTER_AVWAP_MARKET_PREP_FILE,
     MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
     MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_D1_WATCHLIST_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
     MASTER_AVWAP_SETUP_SCENARIOS_FILE,
     MASTER_AVWAP_SETUP_DAILY_FILE,
@@ -141,8 +142,8 @@ FAVORITE_CURRENT_SIGNALS = {
     "LONG": {
         "CROSS_UP_VWAP": 88,
         "CROSS_UP_UPPER_1": 112,
-        "CROSS_UP_UPPER_2": 136,
-        "CROSS_UP_UPPER_3": 142,
+        "BOUNCE_VWAP": 96,
+        "BOUNCE_UPPER_1": 116,
         "EXTREME_MOVE_RETEST": 112,
         "POST_EARNINGS_52W_BREAK": 150,
         "POST_EARNINGS_AVWAPE_BOUNCE": 128,
@@ -153,8 +154,8 @@ FAVORITE_CURRENT_SIGNALS = {
     "SHORT": {
         "CROSS_DOWN_VWAP": 88,
         "CROSS_DOWN_LOWER_1": 112,
-        "CROSS_DOWN_LOWER_2": 136,
-        "CROSS_DOWN_LOWER_3": 142,
+        "BOUNCE_VWAP": 96,
+        "BOUNCE_LOWER_1": 116,
         "EXTREME_MOVE_RETEST": 112,
         "POST_EARNINGS_52W_BREAK": 150,
         "POST_EARNINGS_AVWAPE_BOUNCE": 128,
@@ -168,8 +169,6 @@ FAVORITE_CONTEXT_SIGNALS = {
     "LONG": {
         "PREV_CROSS_UP_VWAP": 18,
         "PREV_CROSS_UP_UPPER_1": 24,
-        "PREV_CROSS_UP_UPPER_2": 28,
-        "PREV_CROSS_UP_UPPER_3": 30,
         "PREV_BOUNCE_VWAP": 10,
         "POST_EARNINGS_CLOSE_CONFIRM": 20,
         "MID_EARNINGS_EMA8_CONFLUENCE": 8,
@@ -179,8 +178,6 @@ FAVORITE_CONTEXT_SIGNALS = {
     "SHORT": {
         "PREV_CROSS_DOWN_VWAP": 18,
         "PREV_CROSS_DOWN_LOWER_1": 24,
-        "PREV_CROSS_DOWN_LOWER_2": 28,
-        "PREV_CROSS_DOWN_LOWER_3": 30,
         "PREV_BOUNCE_VWAP": 10,
         "POST_EARNINGS_CLOSE_CONFIRM": 20,
         "MID_EARNINGS_EMA8_CONFLUENCE": 8,
@@ -317,6 +314,9 @@ PRIORITY_SCORING_CONFIG_SCHEMA_VERSION = 1
 D1_FEATURE_HISTORY_SCHEMA_VERSION = 1
 SETUP_CANDIDATE_SCHEMA_VERSION = 1
 USER_FAVORITES_SCHEMA_VERSION = 1
+D1_WATCHLIST_SCHEMA_VERSION = 1
+D1_WATCHLIST_KEEP_DAYS = 10
+D1_WATCHLIST_MAX_SYMBOLS = 80
 USER_FAVORITE_COLUMNS = [
     "schema_version",
     "feedback_id",
@@ -365,7 +365,7 @@ TRACKER_POSITIVE_DELTA_MEDIUM_CLOSED_MAX = 24
 TRACKER_POSITIVE_DELTA_SMALL_SAMPLE_SCORE_CAP = 3
 TRACKER_POSITIVE_DELTA_MEDIUM_SAMPLE_SCORE_CAP = 12
 FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS = 252
-POST_EARNINGS_MAX_SESSIONS = 10
+POST_EARNINGS_MAX_SESSIONS = 15
 POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
 POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
@@ -2467,21 +2467,19 @@ def analyze_extreme_move_retest_setup(
 
     if normalized_side == "LONG":
         retest_levels = [
-            ("UPPER_1", _coerce_float(current_bands.get("UPPER_1")), "band"),
-            ("UPPER_2", _coerce_float(current_bands.get("UPPER_2")), "band"),
-            ("UPPER_3", _coerce_float(current_bands.get("UPPER_3")), "band"),
-            ("EMA_8", latest_ema8, "ema"),
             ("EMA_15", latest_ema15, "ema"),
             ("EMA_21", latest_ema21, "ema"),
+            ("UPPER_1", _coerce_float(current_bands.get("UPPER_1")), "band"),
+            ("AVWAPE", _coerce_float(current_anchor_meta.get("vwap")), "avwape"),
+            ("EMA_8", latest_ema8, "ema"),
         ]
     else:
         retest_levels = [
-            ("LOWER_1", _coerce_float(current_bands.get("LOWER_1")), "band"),
-            ("LOWER_2", _coerce_float(current_bands.get("LOWER_2")), "band"),
-            ("LOWER_3", _coerce_float(current_bands.get("LOWER_3")), "band"),
-            ("EMA_8", latest_ema8, "ema"),
             ("EMA_15", latest_ema15, "ema"),
             ("EMA_21", latest_ema21, "ema"),
+            ("LOWER_1", _coerce_float(current_bands.get("LOWER_1")), "band"),
+            ("AVWAPE", _coerce_float(current_anchor_meta.get("vwap")), "avwape"),
+            ("EMA_8", latest_ema8, "ema"),
         ]
 
     retest_level = ""
@@ -7959,23 +7957,24 @@ def analyze_post_earnings_setups(
         bool(release_context.get("in_post_earnings_window"))
         and sessions_since_gap <= POST_EARNINGS_MAX_SESSIONS
     )
-    qualified_gap = (
+    gap_atr_multiple = _coerce_float(release_context.get("gap_atr_multiple"))
+    qualified_pre_earnings_avwap_gap = (
         directional_gap
         and in_post_earnings_window
-        and _coerce_float(release_context.get("gap_atr_multiple")) is not None
-        and float(release_context.get("gap_atr_multiple")) >= MIN_GAP_ATR_MULTIPLE
-        and is_new_price_extreme
+        and gap_atr_multiple is not None
+        and float(gap_atr_multiple) >= MIN_GAP_ATR_MULTIPLE
     )
+    qualified_52w_gap = bool(qualified_pre_earnings_avwap_gap and is_new_price_extreme)
 
-    if qualified_gap and len(df) > int(gap_idx) + 1:
+    if qualified_pre_earnings_avwap_gap:
         first_break_idx = _find_first_post_earnings_break_index(df, side, gap_extreme, int(gap_idx) + 1)
         first_break_date = ""
         break_age_sessions = None
-        if first_break_idx is not None:
+        if qualified_52w_gap and first_break_idx is not None:
             first_break_date = _trade_date_text_from_bar(df.iloc[first_break_idx])
             break_age_sessions = max(0, len(df) - 1 - int(first_break_idx))
         break_fresh = break_age_sessions is not None and break_age_sessions <= POST_EARNINGS_BREAK_FRESH_SESSIONS
-        break_intraday = bool(break_fresh)
+        break_intraday = bool(qualified_52w_gap and break_fresh)
         break_close = bool(break_fresh and _is_close_beyond_level(side, last_close, gap_extreme))
         bounce_signal = False
         if anchor_meta:
@@ -7997,26 +7996,31 @@ def analyze_post_earnings_setups(
                 family = POST_EARNINGS_BOUNCE_SIGNAL
 
         note_parts = [
-            f"gap {gap_date} {float(release_context.get('gap_atr_multiple')):.2f} ATR",
-            (
-                f"new 52-week {'high' if side_norm == 'LONG' else 'low'} "
-                f"{float(gap_extreme):.2f}"
-            ),
-            f"anchor {release_context.get('anchor_date')}",
+            f"gap {gap_date} {float(gap_atr_multiple):.2f} ATR",
+            f"pre-earnings AVWAPE anchor {release_context.get('anchor_date')}",
             f"window day {sessions_since_gap}/{POST_EARNINGS_MAX_SESSIONS}",
         ]
+        if qualified_52w_gap:
+            note_parts.append(
+                f"new 52-week {'high' if side_norm == 'LONG' else 'low'} "
+                f"{float(gap_extreme):.2f}"
+            )
+        else:
+            note_parts.append(
+                f"not a new 52-week {'high' if side_norm == 'LONG' else 'low'}; bounce watch only"
+            )
         if break_intraday:
             note_parts.append("fresh earnings-candle break triggered")
             if first_break_date:
                 note_parts.append(f"first break {first_break_date}")
-        elif break_age_sessions is not None:
+        elif qualified_52w_gap and break_age_sessions is not None:
             note_parts.append(
-                f"52-week break stale after {int(break_age_sessions)} session(s); waiting for post-earnings AVWAPE retest"
+                f"52-week break stale after {int(break_age_sessions)} session(s); waiting for pre-earnings AVWAPE retest"
             )
         if break_close:
             note_parts.append("close confirmed")
         if bounce_signal:
-            note_parts.append("post-earnings AVWAPE bounce")
+            note_parts.append("pre-earnings AVWAPE bounce")
 
         result.update(
             {
@@ -8045,26 +8049,6 @@ def analyze_post_earnings_setups(
         )
         return result
 
-    if qualified_gap:
-        result.update(
-            {
-                "active": True,
-                "qualified_gap": True,
-                "monitor_level": float(gap_extreme),
-                "monitor_level_label": "52W_HIGH" if side_norm == "LONG" else "52W_LOW",
-                "anchor_date": str(release_context.get("anchor_date") or ""),
-                "gap_date": gap_date,
-                "earnings_date": str(release_context.get("earnings_date") or ""),
-                "release_session": str(release_context.get("release_session") or ""),
-                "gap_atr_multiple": _coerce_float(release_context.get("gap_atr_multiple")),
-                "sessions_since_gap": sessions_since_gap,
-                "note": (
-                    f"Qualified post-earnings {'high' if side_norm == 'LONG' else 'low'} watch "
-                    f"from {gap_date} at {float(gap_extreme):.2f}"
-                ),
-                "anchor_meta": anchor_meta,
-            }
-        )
     return result
 
 
@@ -10086,8 +10070,8 @@ def format_signal_label(signal: str) -> str:
 
 def _priority_breakout_levels(side: str) -> set[str]:
     if normalize_side(side) == "SHORT":
-        return {"VWAP", "LOWER_1", "LOWER_2", "LOWER_3"}
-    return {"VWAP", "UPPER_1", "UPPER_2", "UPPER_3"}
+        return {"VWAP", "LOWER_1"}
+    return {"VWAP", "UPPER_1"}
 
 
 def _priority_breakout_signal_level(event_name: str, side: str, include_previous: bool = False) -> str:
@@ -10118,6 +10102,17 @@ def _bounce_signal_level(event_name: str) -> str:
     if not normalized_event.startswith("BOUNCE_"):
         return ""
     return normalized_event[len("BOUNCE_"):]
+
+
+def _priority_bounce_levels(side: str) -> set[str]:
+    if normalize_side(side) == "SHORT":
+        return {"VWAP", "LOWER_1"}
+    return {"VWAP", "UPPER_1"}
+
+
+def _is_priority_bounce_signal(event_name: str, side: str) -> bool:
+    level = _bounce_signal_level(event_name)
+    return bool(level and level in _priority_bounce_levels(side))
 
 
 def _is_custom_priority_setup_signal(event_name: str) -> bool:
@@ -10168,6 +10163,8 @@ def _derive_setup_family(
         return MID_EARNINGS_FIRST_DEV_RETEST_FAMILY, tags
     if mid_earnings_active_second_stdev_hold:
         return MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY, tags
+    if tags and all(tag in {"BOUNCE_VWAP", "BOUNCE_UPPER_1", "BOUNCE_LOWER_1"} for tag in tags):
+        return "avwap_band_bounce", tags
     if extreme_move_favorite_ready:
         return "extreme_move_retest", tags
     if retest_followthrough:
@@ -10179,7 +10176,7 @@ def _derive_setup_family(
     return "general", tags
 
 
-def _compute_bounce_support_bonus(events_today: list[str], setup_active: bool) -> tuple[int, list[str]]:
+def _compute_bounce_support_bonus(events_today: list[str], setup_active: bool, side: str) -> tuple[int, list[str]]:
     if not setup_active:
         return 0, []
 
@@ -10187,7 +10184,7 @@ def _compute_bounce_support_bonus(events_today: list[str], setup_active: bool) -
     bounce_signals = []
     for event_name in sorted(set(events_today or [])):
         level = _bounce_signal_level(event_name)
-        if not level:
+        if not level or level not in _priority_bounce_levels(side):
             continue
         bounce_signals.append(event_name)
         bonus += int(PRIORITY_BOUNCE_SUPPORT_BONUSES.get(level, 0) or 0)
@@ -10279,6 +10276,7 @@ def build_priority_setup_summary(
         if evt in current_weights
         and (
             _is_priority_breakout_signal(evt, side)
+            or _is_priority_bounce_signal(evt, side)
             or evt == "EXTREME_MOVE_RETEST"
             or _is_custom_priority_setup_signal(evt)
         )
@@ -10293,6 +10291,7 @@ def build_priority_setup_summary(
             or bool(breakout_5d)
             or bool(previous_day_range_break)
         ),
+        side=side,
     )
 
     score = sum(current_weights.get(evt, 0) for evt in current_setup_signals)
@@ -13034,6 +13033,307 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
     save_json(path, payload)
 
 
+def _d1_watchlist_priority_reasons(row: dict) -> list[str]:
+    reasons = []
+    bucket = str(row.get("priority_bucket") or "").strip().lower()
+    if bucket == "favorite_setup":
+        reasons.append("favorite_setup")
+    elif bucket == "near_favorite_zone":
+        reasons.append("near_favorite_zone")
+
+    if row.get("retest_followthrough"):
+        level = str(row.get("retest_reference_level") or "level").strip()
+        reasons.append(f"retest_followthrough:{level}")
+    if row.get("mid_earnings_ema15_trigger"):
+        reasons.append("ema15_d1_bounce")
+    if row.get("mid_earnings_ema21_trigger"):
+        reasons.append("ema21_d1_bounce")
+    if row.get("mid_earnings_first_dev_trigger"):
+        reasons.append("first_dev_d1_bounce")
+    if row.get("mid_earnings_active_second_stdev_hold"):
+        reasons.append("mid_earnings_2nd_stdev_watch")
+    if row.get("trendline_break_recent"):
+        reasons.append("trendline_break")
+    if row.get("previous_day_range_break"):
+        reasons.append("previous_day_range_break")
+    if row.get("breakout_5d"):
+        reasons.append("five_day_breakout")
+    if row.get("extreme_move_watch"):
+        reasons.append("extreme_move_watch")
+    if row.get("post_earnings_active"):
+        reasons.append("post_earnings_active")
+    return reasons
+
+
+def _theta_watchlist_payload(row: dict, play_type: str) -> dict:
+    option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
+    status = str(row.get("option_status") or option.get("status") or "").strip().lower()
+    if status not in {"recommended", "cusp"}:
+        return {}
+
+    strike = option.get("strike")
+    short_strike = option.get("short_strike")
+    long_strike = option.get("long_strike")
+    return {
+        "play_type": play_type,
+        "status": status,
+        "credit": _coerce_float(option.get("credit")),
+        "strike": _coerce_float(strike if strike is not None else short_strike),
+        "short_strike": _coerce_float(short_strike),
+        "long_strike": _coerce_float(long_strike),
+        "expiration": option.get("expiration") or "",
+        "market_days": option.get("market_days"),
+        "credit_width_ratio": _coerce_float(option.get("credit_width_ratio")),
+        "contracts_needed": option.get("contracts_needed_for_100"),
+        "covered_support_count": int(option.get("covered_support_count", 0) or 0),
+        "total_support_count": int(option.get("total_support_count", 0) or 0),
+        "surrendered_support_count": int(option.get("surrendered_support_count", 0) or 0),
+        "support_summary": option.get("covered_support_summary") or row.get("support_summary") or "",
+    }
+
+
+def _merge_d1_watchlist_entry(
+    symbols: dict[str, dict],
+    existing_symbols: dict,
+    row: dict,
+    *,
+    today_iso: str,
+    reasons: list[str],
+    theta: dict | None = None,
+) -> None:
+    symbol = str(row.get("symbol") or "").strip().upper()
+    if not symbol:
+        return
+    previous_entry = existing_symbols.get(symbol, {}) if isinstance(existing_symbols, dict) else {}
+    previous_entry = previous_entry if isinstance(previous_entry, dict) else {}
+    existing_entry = symbols.get(symbol, {})
+    watch_reasons = list(existing_entry.get("watch_reasons") or previous_entry.get("watch_reasons") or [])
+    for reason in reasons:
+        if reason and reason not in watch_reasons:
+            watch_reasons.append(reason)
+
+    ai_symbol_state = row.get("_symbol_state") if isinstance(row.get("_symbol_state"), dict) else {}
+    entry_feature_snapshot = (
+        ai_symbol_state.get("entry_feature_snapshot")
+        if isinstance(ai_symbol_state.get("entry_feature_snapshot"), dict)
+        else {}
+    )
+    entry = {
+        "symbol": symbol,
+        "side": normalize_side(row.get("side")),
+        "first_seen": previous_entry.get("first_seen") or today_iso,
+        "last_seen": today_iso,
+        "active_current_scan": True,
+        "priority_bucket": row.get("priority_bucket") or existing_entry.get("priority_bucket") or "",
+        "priority_score": _coerce_float(row.get("score", row.get("option_score"))),
+        "setup_family": row.get("setup_family") or existing_entry.get("setup_family") or "",
+        "favorite_zone": row.get("favorite_zone") or existing_entry.get("favorite_zone") or "",
+        "watch_reasons": watch_reasons,
+        "reason_summary": ", ".join(watch_reasons[:6]),
+        "last_close": _coerce_float(
+            row.get("last_close")
+            or row.get("close")
+            or ai_symbol_state.get("last_close")
+            or entry_feature_snapshot.get("current_close")
+        ),
+        "atr20": _coerce_float(row.get("atr20") or row.get("atr")),
+        "ema15": _coerce_float(
+            row.get("ema15")
+            or row.get("ema_15")
+            or ai_symbol_state.get("ema15")
+            or ai_symbol_state.get("ema_15")
+            or entry_feature_snapshot.get("ema15")
+            or entry_feature_snapshot.get("ema_15")
+        ),
+        "ema15_distance_atr": _coerce_float(
+            row.get("ema15_distance_atr")
+            or ai_symbol_state.get("ema15_distance_atr")
+            or entry_feature_snapshot.get("ema15_distance_atr")
+        ),
+        "previous_day_date": ai_symbol_state.get("previous_day_date") or previous_entry.get("previous_day_date") or "",
+        "previous_day_high": _coerce_float(ai_symbol_state.get("previous_day_high") or row.get("previous_day_high")),
+        "previous_day_low": _coerce_float(ai_symbol_state.get("previous_day_low") or row.get("previous_day_low")),
+        "retest_reference_level": row.get("retest_reference_level") or existing_entry.get("retest_reference_level") or "",
+        "retest_followthrough": bool(row.get("retest_followthrough") or existing_entry.get("retest_followthrough")),
+        "retest_note": row.get("retest_note") or existing_entry.get("retest_note") or "",
+        "previous_day_range_break": bool(row.get("previous_day_range_break") or existing_entry.get("previous_day_range_break")),
+        "previous_day_range_note": row.get("previous_day_range_note") or existing_entry.get("previous_day_range_note") or "",
+        "breakout_5d": bool(row.get("breakout_5d") or existing_entry.get("breakout_5d")),
+        "extreme_move_watch": bool(row.get("extreme_move_watch") or existing_entry.get("extreme_move_watch")),
+        "post_earnings_active": bool(row.get("post_earnings_active") or existing_entry.get("post_earnings_active")),
+        "mid_earnings_ema15_trigger": bool(row.get("mid_earnings_ema15_trigger") or existing_entry.get("mid_earnings_ema15_trigger")),
+        "mid_earnings_ema21_trigger": bool(row.get("mid_earnings_ema21_trigger") or existing_entry.get("mid_earnings_ema21_trigger")),
+        "mid_earnings_first_dev_trigger": bool(
+            row.get("mid_earnings_first_dev_trigger")
+            or existing_entry.get("mid_earnings_first_dev_trigger")
+        ),
+        "mid_earnings_active_second_stdev_hold": bool(
+            row.get("mid_earnings_active_second_stdev_hold")
+            or existing_entry.get("mid_earnings_active_second_stdev_hold")
+        ),
+        "mid_earnings_note": row.get("mid_earnings_note") or existing_entry.get("mid_earnings_note") or "",
+        "trendline_break_recent": bool(row.get("trendline_break_recent") or existing_entry.get("trendline_break_recent")),
+        "trendline_break_note": row.get("trendline_break_note") or existing_entry.get("trendline_break_note") or "",
+        "trendline_note": row.get("trendline_note") or existing_entry.get("trendline_note") or "",
+        "last_trade_date": row.get("last_trade_date") or today_iso,
+    }
+    if existing_entry.get("theta"):
+        entry["theta"] = existing_entry["theta"]
+    elif previous_entry.get("theta"):
+        entry["theta"] = previous_entry["theta"]
+    if theta:
+        entry["theta"] = theta
+    symbols[symbol] = entry
+
+
+def _d1_watchlist_ema15_removal(symbol: str, entry: dict, ai_symbol_state: dict | None = None) -> dict | None:
+    state = ai_symbol_state if isinstance(ai_symbol_state, dict) else {}
+    feature_snapshot = state.get("entry_feature_snapshot") if isinstance(state.get("entry_feature_snapshot"), dict) else {}
+    side = normalize_side(entry.get("side") or state.get("side"))
+    last_close = _coerce_float(
+        state.get("last_close")
+        or feature_snapshot.get("current_close")
+        or entry.get("last_close")
+        or entry.get("close")
+    )
+    ema15 = _coerce_float(
+        state.get("ema15")
+        or state.get("ema_15")
+        or feature_snapshot.get("ema15")
+        or feature_snapshot.get("ema_15")
+        or entry.get("ema15")
+        or entry.get("ema_15")
+    )
+    if last_close is None or ema15 is None:
+        return None
+
+    invalidated = (
+        (side == "LONG" and last_close < ema15)
+        or (side == "SHORT" and last_close > ema15)
+    )
+    if not invalidated:
+        return None
+
+    relation = "below" if side == "LONG" else "above"
+    return {
+        "symbol": str(symbol or entry.get("symbol") or "").strip().upper(),
+        "side": side,
+        "reason": "ema15_invalidation",
+        "last_close": round(float(last_close), 4),
+        "ema15": round(float(ema15), 4),
+        "note": f"{side} close {last_close:.2f} is {relation} 15EMA {ema15:.2f}",
+        "last_seen": entry.get("last_seen") or "",
+        "was_active_current_scan": bool(entry.get("active_current_scan")),
+    }
+
+
+def update_master_avwap_d1_watchlist(
+    path: Path,
+    priority_rows: list[dict],
+    theta_put_rows: list[dict],
+    theta_pcs_rows: list[dict],
+    ai_state: dict,
+) -> dict:
+    today = datetime.now().date()
+    today_iso = today.isoformat()
+    existing_payload = load_json(path, default={})
+    existing_symbols = existing_payload.get("symbols", {}) if isinstance(existing_payload, dict) else {}
+    existing_symbols = existing_symbols if isinstance(existing_symbols, dict) else {}
+    symbols: dict[str, dict] = {}
+    ai_symbols = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
+    ai_symbols = ai_symbols if isinstance(ai_symbols, dict) else {}
+
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        reasons = _d1_watchlist_priority_reasons(row)
+        if not reasons:
+            continue
+        row_for_entry = dict(row)
+        symbol_state = ai_symbols.get(str(row.get("symbol") or "").strip().upper(), {})
+        row_for_entry["_symbol_state"] = symbol_state if isinstance(symbol_state, dict) else {}
+        _merge_d1_watchlist_entry(
+            symbols,
+            existing_symbols,
+            row_for_entry,
+            today_iso=today_iso,
+            reasons=reasons,
+        )
+
+    for play_type, rows in (("sold_put", theta_put_rows or []), ("pcs", theta_pcs_rows or [])):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            theta = _theta_watchlist_payload(row, play_type)
+            if not theta:
+                continue
+            status = theta.get("status")
+            reason = f"{play_type}_premium_{'viable' if status == 'recommended' else 'cusp'}"
+            row_for_entry = dict(row)
+            row_for_entry.setdefault("side", "LONG")
+            symbol_state = ai_symbols.get(str(row.get("symbol") or "").strip().upper(), {})
+            row_for_entry["_symbol_state"] = symbol_state if isinstance(symbol_state, dict) else {}
+            _merge_d1_watchlist_entry(
+                symbols,
+                existing_symbols,
+                row_for_entry,
+                today_iso=today_iso,
+                reasons=[reason],
+                theta=theta,
+            )
+
+    for symbol, entry in existing_symbols.items():
+        if symbol in symbols or not isinstance(entry, dict):
+            continue
+        last_seen = entry.get("last_seen") or entry.get("first_seen")
+        try:
+            last_seen_date = datetime.fromisoformat(str(last_seen)[:10]).date()
+        except (TypeError, ValueError):
+            continue
+        if (today - last_seen_date).days > D1_WATCHLIST_KEEP_DAYS:
+            continue
+        preserved = dict(entry)
+        preserved["active_current_scan"] = False
+        symbols[str(symbol).strip().upper()] = preserved
+
+    removed_symbols = []
+    for symbol, entry in list(symbols.items()):
+        removal = _d1_watchlist_ema15_removal(symbol, entry, ai_symbols.get(symbol, {}))
+        if not removal:
+            continue
+        removed_symbols.append(removal)
+        symbols.pop(symbol, None)
+
+    def _last_seen_sort_value(entry: dict) -> int:
+        try:
+            return datetime.fromisoformat(str(entry.get("last_seen") or "")[:10]).date().toordinal()
+        except (TypeError, ValueError):
+            return 0
+
+    ranked_symbols = sorted(
+        symbols.items(),
+        key=lambda item: (
+            not bool(item[1].get("active_current_scan")),
+            -float(item[1].get("priority_score") or 0.0),
+            -_last_seen_sort_value(item[1]),
+            item[0],
+        ),
+    )[:D1_WATCHLIST_MAX_SYMBOLS]
+    symbol_map = {symbol: entry for symbol, entry in ranked_symbols}
+    payload = {
+        "schema_version": D1_WATCHLIST_SCHEMA_VERSION,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "run_date": today_iso,
+        "keep_days": D1_WATCHLIST_KEEP_DAYS,
+        "max_symbols": D1_WATCHLIST_MAX_SYMBOLS,
+        "removal_policy": "LONG close below 15EMA; SHORT close above 15EMA",
+        "removed_symbols": removed_symbols,
+        "symbols": symbol_map,
+    }
+    save_json(path, payload, pretty=True)
+    return payload
+
+
 def closes_between_bands(
     df: pd.DataFrame,
     lower: float,
@@ -15651,6 +15951,13 @@ def run_master(
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
     write_master_avwap_focus_feed(MASTER_AVWAP_FOCUS_FILE, priority_rows, ai_state)
+    update_master_avwap_d1_watchlist(
+        MASTER_AVWAP_D1_WATCHLIST_FILE,
+        priority_rows,
+        theta_put_rows,
+        theta_pcs_rows,
+        ai_state,
+    )
 
     # write human-readable events file (grouped for easier scanning)
     sorted_events = sort_events_for_output(events_for_output)

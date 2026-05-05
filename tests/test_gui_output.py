@@ -10,7 +10,7 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import gui  # noqa: E402
+import gui_output  # noqa: E402
 
 
 class _FakeVar:
@@ -80,12 +80,12 @@ class GuiOutputTests(unittest.TestCase):
             }
 
             with (
-                patch.object(gui, "LONGS_FILE", longs_path),
-                patch.object(gui, "SHORTS_FILE", shorts_path),
-                patch.object(gui, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
-                patch.object(gui, "get_tracker_storage_details", return_value=storage_details),
+                patch.object(gui_output, "LONGS_FILE", longs_path),
+                patch.object(gui_output, "SHORTS_FILE", shorts_path),
+                patch.object(gui_output, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
+                patch.object(gui_output, "get_tracker_storage_details", return_value=storage_details),
             ):
-                output = gui.build_consolidated_gui_output("full", None, avwap_gui)
+                output = gui_output.build_consolidated_gui_output("full", None, avwap_gui)
 
             self.assertIn("AVWAP Copy/Paste Lists", output)
             self.assertIn("Favorite Setups\nAAPL, NVDA", output)
@@ -155,15 +155,15 @@ class GuiOutputTests(unittest.TestCase):
             }
 
             with (
-                patch.object(gui, "LONGS_FILE", longs_path),
-                patch.object(gui, "SHORTS_FILE", shorts_path),
-                patch.object(gui, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
-                patch.object(gui, "MASTER_AVWAP_FOCUS_FILE", focus_path),
-                patch.object(gui, "MASTER_AVWAP_TRADINGVIEW_REPORT_FILE", tradingview_path),
-                patch.object(gui, "THETA_PUTS_FILE", theta_path),
-                patch.object(gui, "get_tracker_storage_details", return_value=storage_details),
+                patch.object(gui_output, "LONGS_FILE", longs_path),
+                patch.object(gui_output, "SHORTS_FILE", shorts_path),
+                patch.object(gui_output, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
+                patch.object(gui_output, "MASTER_AVWAP_FOCUS_FILE", focus_path),
+                patch.object(gui_output, "MASTER_AVWAP_TRADINGVIEW_REPORT_FILE", tradingview_path),
+                patch.object(gui_output, "THETA_PUTS_FILE", theta_path),
+                patch.object(gui_output, "get_tracker_storage_details", return_value=storage_details),
             ):
-                output = gui.build_consolidated_gui_output("full", None, avwap_gui)
+                output = gui_output.build_consolidated_gui_output("full", None, avwap_gui)
 
             self.assertIn("Favorite Setups\nAAPL", output)
             self.assertIn("Near Favorite Zones\nMSFT, TSLA", output)
