@@ -40,6 +40,11 @@ DEFAULT_EARNINGS_SETTINGS = {
     "include_manual": True,
     "nasdaq_cache_ttl_hours": 6,
     "request_delay_seconds": 0.15,
+    "filter_by_market_cap_and_volume": False,
+    "min_market_cap": 1_000_000_000,
+    "min_average_volume": 1_000_000,
+    "exclude_unknown_market_cap": True,
+    "exclude_unknown_average_volume": True,
 }
 
 
@@ -116,9 +121,18 @@ def get_upcoming_earnings(
     rows = active_provider.get_earnings(start_date=start, end_date=end)
     rows = _dedupe_earnings_rows(rows)
     rows.sort(key=_earnings_sort_key)
+    settings = get_earnings_settings(config)
+    filter_enabled = _earnings_filter_enabled(config, settings)
+    filter_stats: dict[str, Any] = {}
+    if filter_enabled:
+        rows, prefilter_stats = _prefilter_earnings_rows_by_market_cap(rows, settings)
+        filter_stats.update(prefilter_stats)
     metadata_payload = _empty_yfinance_status(config)
     if config is not None and is_yfinance_metadata_enabled(config):
         rows, metadata_payload = enrich_events_with_metadata(rows, config=config)
+    if filter_enabled:
+        rows, postfilter_stats = _filter_earnings_rows_by_market_cap_and_volume(rows, settings)
+        filter_stats = _combine_filter_stats(filter_stats, postfilter_stats)
     rows.sort(key=_earnings_sort_key)
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -126,6 +140,7 @@ def get_upcoming_earnings(
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "earnings": rows,
+        "filters": filter_stats if filter_enabled else {},
         "yfinance_status": _status_from_metadata_payload(metadata_payload),
         "message": "" if rows else NO_CONFIGURED_EARNINGS_MESSAGE,
     }
@@ -341,6 +356,9 @@ def _normalize_earnings_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "market_cap",
         "market_cap_fmt",
         "market_cap_source",
+        "average_volume",
+        "average_volume_10d",
+        "regular_market_volume",
         "sector",
         "industry",
         "metadata_source",
@@ -519,6 +537,16 @@ def _safe_int(value: Any, default: int) -> int:
         return default
 
 
+def _safe_int_optional(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        numeric = int(float(value))
+        return numeric if numeric >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _safe_float(value: Any, default: float) -> float:
     try:
         return float(value)
@@ -606,6 +634,102 @@ def _load_yfinance_earnings_fallback(
             }
         )
     return rows, _combine_yfinance_status(*statuses)
+
+
+def _earnings_filter_enabled(config: MarketPrepConfig | None, settings: dict[str, Any]) -> bool:
+    return config is not None and bool(settings.get("filter_by_market_cap_and_volume", False))
+
+
+def _prefilter_earnings_rows_by_market_cap(
+    rows: list[dict[str, Any]],
+    settings: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    min_market_cap = max(0, _safe_int(settings.get("min_market_cap"), 0))
+    if min_market_cap <= 0:
+        return rows, _base_earnings_filter_stats(settings, prefilter_removed=0, removed=0)
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for row in rows:
+        market_cap = _safe_market_cap(row.get("market_cap"))
+        if market_cap is not None and market_cap < min_market_cap:
+            removed += 1
+            continue
+        kept.append(row)
+    return kept, _base_earnings_filter_stats(settings, prefilter_removed=removed, removed=0)
+
+
+def _filter_earnings_rows_by_market_cap_and_volume(
+    rows: list[dict[str, Any]],
+    settings: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    min_market_cap = max(0, _safe_int(settings.get("min_market_cap"), 1_000_000_000))
+    min_average_volume = max(0, _safe_int(settings.get("min_average_volume"), 1_000_000))
+    exclude_unknown_market_cap = bool(settings.get("exclude_unknown_market_cap", True))
+    exclude_unknown_average_volume = bool(settings.get("exclude_unknown_average_volume", True))
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    removed_unknown = 0
+    for row in rows:
+        market_cap = _safe_market_cap(row.get("market_cap"))
+        average_volume = _average_volume_from_row(row)
+        missing_market_cap = market_cap is None
+        missing_volume = average_volume is None
+        if (
+            (missing_market_cap and exclude_unknown_market_cap)
+            or (missing_volume and exclude_unknown_average_volume)
+        ):
+            removed += 1
+            removed_unknown += 1
+            continue
+        if market_cap is not None and market_cap < min_market_cap:
+            removed += 1
+            continue
+        if average_volume is not None and average_volume < min_average_volume:
+            removed += 1
+            continue
+        kept.append(row)
+    return kept, _base_earnings_filter_stats(
+        settings,
+        prefilter_removed=0,
+        removed=removed,
+        removed_unknown=removed_unknown,
+    )
+
+
+def _base_earnings_filter_stats(
+    settings: dict[str, Any],
+    *,
+    prefilter_removed: int,
+    removed: int,
+    removed_unknown: int = 0,
+) -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "min_market_cap": max(0, _safe_int(settings.get("min_market_cap"), 1_000_000_000)),
+        "min_average_volume": max(0, _safe_int(settings.get("min_average_volume"), 1_000_000)),
+        "prefilter_removed_count": int(prefilter_removed),
+        "removed_count": int(removed),
+        "removed_unknown_count": int(removed_unknown),
+    }
+
+
+def _combine_filter_stats(*stats_items: dict[str, Any]) -> dict[str, Any]:
+    combined: dict[str, Any] = {}
+    for stats in stats_items:
+        if not isinstance(stats, dict):
+            continue
+        combined.update({key: value for key, value in stats.items() if key not in {"prefilter_removed_count", "removed_count", "removed_unknown_count"}})
+        for key in ("prefilter_removed_count", "removed_count", "removed_unknown_count"):
+            combined[key] = int(combined.get(key) or 0) + int(stats.get(key) or 0)
+    return combined
+
+
+def _average_volume_from_row(row: dict[str, Any]) -> int | None:
+    for key in ("average_volume", "avg_daily_volume", "average_volume_10d", "regular_market_volume"):
+        value = _safe_int_optional(row.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def _dedupe_earnings_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

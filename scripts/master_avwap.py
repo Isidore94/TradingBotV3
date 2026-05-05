@@ -261,6 +261,7 @@ PRIORITY_TRENDLINE_MIN_SEPARATION_BARS = 10
 PRIORITY_TRENDLINE_BREAK_RECENT_BARS = 3
 PRIORITY_TRENDLINE_BREAK_MAX_ATR = 1.5
 PRIORITY_TRENDLINE_BREAK_SCORE_BONUS = 18
+PRIORITY_PRE_EARNINGS_BLOCK_DAYS = 10
 THETA_MIN_EARNINGS_BUFFER_DAYS = 21
 THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS = 63
 THETA_MIN_SUPPORT_LEVELS = 3
@@ -268,6 +269,7 @@ THETA_SUPPORT_MAX_ATR = 3.0
 THETA_SUPPORT_MAX_PCT = 14.0
 THETA_SUPPORT_ABOVE_TOL_ATR = 0.05
 THETA_COMPRESSION_SUPPORT_LOOKBACK_BARS = 20
+THETA_SMA_SUPPORT_LABELS = ("SMA_50", "SMA_100", "SMA_200")
 THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 11
 THETA_PUT_TARGET_TOTAL_CREDIT = 100.0
 THETA_PUT_MAX_CONTRACTS = 4
@@ -287,6 +289,7 @@ THETA_PCS_MAX_WIDTH_CHOICES_PER_SHORT = 2
 THETA_OPTION_QUOTE_TIMEOUT_SEC = 4.0
 THETA_OPTION_CHAIN_TIMEOUT_SEC = 8.0
 THETA_OPTION_REQUEST_DELAY_SEC = 0.08
+THETA_WEEKLY_EXPIRATION_MAX_GAP_DAYS = 8
 PRIORITY_RETEST_LOOKBACK_BARS = 5
 PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
 PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
@@ -1107,6 +1110,10 @@ YF_EARNINGS_LOOKUP_DISABLED_LOGGED = False
 DAILY_BAR_CACHE_MAX_AGE_MINUTES = 30
 DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS = 10
 DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
+DAILY_BAR_IBKR_TIMEOUT_SEC = 6.0
+DAILY_BAR_IBKR_POLL_INTERVAL_SEC = 0.2
+DAILY_BAR_YAHOO_TIMEOUT_SEC = 6.0
+DAILY_BAR_LIVE_FAILURE_COOLDOWN_MINUTES = 15
 SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
 EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES = 30
 DAILY_BAR_COLUMNS = ["datetime", "open", "high", "low", "close", "volume"]
@@ -1217,8 +1224,30 @@ def should_update_setup_tracker_now(
     default_start, default_end = get_setup_tracker_update_window_labels(reference=reference)
     current_time = reference.time()
     start_time = _parse_clock_time(window_start or default_start)
-    end_time = _parse_clock_time(window_end or default_end)
-    return start_time <= current_time < end_time
+    # EOD-only outputs are allowed from the final market hour onward. This
+    # keeps intraday scans from rewriting watchlists while still allowing a
+    # manual scan after the close to refresh the stored lists.
+    return current_time >= start_time
+
+
+def get_favorite_zone_watchlist_update_window_labels(
+    reference: datetime | date | None = None,
+) -> tuple[str, str]:
+    return get_last_hour_window_labels(reference=reference)
+
+
+def should_update_favorite_zone_watchlists_now(
+    now: datetime | None = None,
+    window_start: str | None = None,
+    window_end: str | None = None,
+) -> bool:
+    reference = now or datetime.now()
+    default_start, default_end = get_favorite_zone_watchlist_update_window_labels(reference=reference)
+    return should_update_setup_tracker_now(
+        now=reference,
+        window_start=window_start or default_start,
+        window_end=window_end or default_end,
+    )
 
 
 def connect_daily_data_client(client_id: int, startup_wait: float = 1.0) -> IBApi | None:
@@ -1398,6 +1427,7 @@ _EARNINGS_CALENDAR_ROWS_CACHE: dict | None = None
 _SYMBOL_METADATA_CACHE: dict | None = None
 _DAILY_BAR_FRAME_CACHE: dict[str, pd.DataFrame] = {}
 _DAILY_BAR_CACHE_TOUCHED_AT: dict[str, datetime] = {}
+_DAILY_BAR_LIVE_FAILURE_AT: dict[str, datetime] = {}
 
 
 def _is_timestamp_within_minutes(value, minutes: int) -> bool:
@@ -1578,6 +1608,27 @@ def _daily_bar_cache_is_recent(symbol: str) -> bool:
             return False
         touched_at = datetime.fromtimestamp(cache_path.stat().st_mtime)
     return (datetime.now() - touched_at) <= timedelta(minutes=DAILY_BAR_CACHE_MAX_AGE_MINUTES)
+
+
+def _daily_bar_live_failure_in_cooldown(symbol: str) -> bool:
+    symbol = str(symbol or "").strip().upper()
+    failed_at = _DAILY_BAR_LIVE_FAILURE_AT.get(symbol)
+    if failed_at is None:
+        return False
+    if (datetime.now() - failed_at) <= timedelta(minutes=DAILY_BAR_LIVE_FAILURE_COOLDOWN_MINUTES):
+        return True
+    _DAILY_BAR_LIVE_FAILURE_AT.pop(symbol, None)
+    return False
+
+
+def _mark_daily_bar_live_fetch_result(symbol: str, succeeded: bool) -> None:
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return
+    if succeeded:
+        _DAILY_BAR_LIVE_FAILURE_AT.pop(symbol, None)
+    else:
+        _DAILY_BAR_LIVE_FAILURE_AT[symbol] = datetime.now()
 
 
 def _get_cached_symbol_metadata(symbol: str, ticker_obj=None) -> dict:
@@ -7486,13 +7537,7 @@ def has_weekly_options(symbol: str, ticker_obj=None, metadata: dict | None = Non
             continue
 
     expirations = sorted(set(expirations))
-    if len(expirations) < 2:
-        return False
-
-    for prev, curr in zip(expirations, expirations[1:]):
-        if (curr - prev).days <= 8:
-            return True
-    return False
+    return _has_weekly_option_expirations(expirations)
 
 
 
@@ -9349,10 +9394,12 @@ def _select_ib_option_chain(definitions: list[dict], symbol: str) -> dict:
         trading_class = str(definition.get("tradingClass") or "").strip().upper()
         exchange_rank = 0 if exchange == "SMART" else 1
         trading_class_rank = 0 if trading_class == symbol_key else 1
+        weekly_rank = 0 if _has_weekly_option_expirations(expirations) else 1
         candidates.append(
             (
-                exchange_rank,
                 trading_class_rank,
+                weekly_rank,
+                exchange_rank,
                 -len(expirations),
                 -len(strikes),
                 {
@@ -9366,8 +9413,8 @@ def _select_ib_option_chain(definitions: list[dict], symbol: str) -> dict:
         )
     if not candidates:
         return {}
-    candidates.sort(key=lambda item: item[:4])
-    return candidates[0][4]
+    candidates.sort(key=lambda item: item[:5])
+    return candidates[0][5]
 
 
 def _fetch_ib_option_quote(
@@ -9527,6 +9574,61 @@ def _enrich_pcs_row_with_ib_options(
     _apply_best_option_to_theta_row(row, recommendations, unavailable_reason="no_quote")
 
 
+def _theta_filter_reason_text(reason: str) -> str:
+    return {
+        "ib_unavailable": "IBKR unavailable for PCS premium check",
+        "no_option_chain": "no IBKR option chain",
+        "no_weekly_options": "no IBKR weekly expirations",
+        "no_pcs_quote": "no IBKR PCS quote",
+        "pcs_premium_below_target": f"PCS credit below {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} of spread width",
+    }.get(str(reason or "").strip(), str(reason or "filtered").strip())
+
+
+def _mark_theta_row_filtered(row: dict, reason: str) -> None:
+    _apply_best_option_to_theta_row(row, [], unavailable_reason=reason)
+    row["theta_filter_out"] = True
+    row["theta_filter_reason"] = reason
+    filter_note = f"filtered: {_theta_filter_reason_text(reason)}"
+    existing_notes = str(row.get("notes") or "").strip()
+    if filter_note.lower() not in existing_notes.lower():
+        row["notes"] = f"{existing_notes}; {filter_note}" if existing_notes else filter_note
+
+
+def _pcs_credit_width_ratio(option: dict | None) -> float | None:
+    if not isinstance(option, dict):
+        return None
+    ratio = _coerce_float(option.get("credit_width_ratio"))
+    if ratio is not None:
+        return ratio
+    credit = _coerce_float(option.get("credit"))
+    width = _coerce_float(option.get("width"))
+    if credit is None or width is None or width <= 0:
+        return None
+    return credit / width
+
+
+def _pcs_row_meets_credit_target(row: dict | None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
+    status = str(row.get("option_status") or option.get("status") or "").strip().lower()
+    if status != "recommended":
+        return False
+    ratio = _pcs_credit_width_ratio(option)
+    return ratio is not None and ratio + 1e-9 >= THETA_PCS_TARGET_CREDIT_WIDTH_RATIO
+
+
+def _pcs_filter_reason(row: dict | None) -> str:
+    if not isinstance(row, dict):
+        return "pcs_premium_below_target"
+    status = str(row.get("option_status") or "").strip().lower()
+    if status in {"ib_unavailable", "no_quote", "no_option_chain", "no_weekly_options"}:
+        return "no_pcs_quote" if status == "no_quote" else status
+    if not row.get("best_option"):
+        return "no_pcs_quote"
+    return "pcs_premium_below_target"
+
+
 def enrich_theta_rows_with_ib_option_premiums(
     ib: IBApi | None,
     theta_rows: list[dict],
@@ -9543,8 +9645,18 @@ def enrich_theta_rows_with_ib_option_premiums(
     if not rows_by_symbol:
         return
     if not is_daily_data_client_connected(ib):
-        for row in list(theta_rows or []) + list(pcs_rows or []):
+        for row in list(theta_rows or []):
             _apply_best_option_to_theta_row(row, [], unavailable_reason="ib_unavailable")
+        if isinstance(pcs_rows, list):
+            removed_count = len(pcs_rows)
+            for row in pcs_rows:
+                _mark_theta_row_filtered(row, "ib_unavailable")
+            pcs_rows[:] = []
+            if removed_count:
+                logging.info(
+                    "Theta PCS premium filter removed %d row(s) because IBKR was unavailable.",
+                    removed_count,
+                )
         return
 
     chain_cache: dict[str, dict] = {}
@@ -9562,7 +9674,10 @@ def enrich_theta_rows_with_ib_option_premiums(
         symbol = str(row.get("symbol") or "").strip().upper()
         chain = chain_cache.get(symbol, {})
         if not chain:
-            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_option_chain")
+            _mark_theta_row_filtered(row, "no_option_chain")
+            continue
+        if not _has_weekly_option_expirations(chain.get("expirations", [])):
+            _mark_theta_row_filtered(row, "no_weekly_options")
             continue
         try:
             _enrich_sold_put_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
@@ -9574,13 +9689,52 @@ def enrich_theta_rows_with_ib_option_premiums(
         symbol = str(row.get("symbol") or "").strip().upper()
         chain = chain_cache.get(symbol, {})
         if not chain:
-            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_option_chain")
+            _mark_theta_row_filtered(row, "no_option_chain")
+            continue
+        if not _has_weekly_option_expirations(chain.get("expirations", [])):
+            _mark_theta_row_filtered(row, "no_weekly_options")
             continue
         try:
             _enrich_pcs_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
         except Exception as exc:
             logging.warning("%s: PCS option enrichment failed: %s", symbol, exc)
             _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
+        if not _pcs_row_meets_credit_target(row):
+            _mark_theta_row_filtered(row, _pcs_filter_reason(row))
+
+    sold_put_removed = 0
+    pcs_removed = 0
+    if isinstance(theta_rows, list):
+        original_count = len(theta_rows)
+        theta_rows[:] = [row for row in theta_rows if not row.get("theta_filter_out")]
+        sold_put_removed = original_count - len(theta_rows)
+    if isinstance(pcs_rows, list):
+        original_count = len(pcs_rows)
+        pcs_rows[:] = [row for row in pcs_rows if not row.get("theta_filter_out")]
+        pcs_removed = original_count - len(pcs_rows)
+    if sold_put_removed or pcs_removed:
+        logging.info(
+            "Theta availability/premium filter removed %d sold-put row(s) and %d PCS row(s).",
+            sold_put_removed,
+            pcs_removed,
+        )
+
+
+def _flatten_yahoo_daily_bar_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame) or not isinstance(df.columns, pd.MultiIndex):
+        return df
+    expected_names = {"date", "datetime", "open", "high", "low", "close", "adj close", "volume"}
+    flattened = df.copy()
+    columns = []
+    for column in flattened.columns:
+        if not isinstance(column, tuple):
+            columns.append(column)
+            continue
+        parts = [str(part).strip() for part in column if str(part).strip()]
+        selected = next((part for part in parts if part.lower() in expected_names), parts[0] if parts else "")
+        columns.append(selected)
+    flattened.columns = columns
+    return flattened
 
 
 def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
@@ -9588,7 +9742,16 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
 
     period = f"{max(days, ATR_LENGTH + 5)}d"
     try:
-        df = yf.download(symbol, period=period, interval="1d", auto_adjust=False, progress=False)
+        df = yf.download(
+            symbol,
+            period=period,
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+            timeout=DAILY_BAR_YAHOO_TIMEOUT_SEC,
+            multi_level_index=False,
+        )
     except Exception as e:
         logging.error(f"{symbol}: failed to download daily bars from Yahoo: {e}")
         return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
@@ -9599,11 +9762,9 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
 
     df = df.reset_index()
 
-    # Handle potential MultiIndex columns (e.g., when yfinance returns columns like
-    # ('Open', 'SPGI')) by flattening to the last element of the tuple and then
-    # normalising to lowercase for easier downstream handling.
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[-1] if isinstance(c, tuple) else c for c in df.columns]
+    # Handle potential MultiIndex columns (e.g., ('Open', 'AL')). The OHLCV
+    # field can be the first tuple item, so pick the recognized price field.
+    df = _flatten_yahoo_daily_bar_columns(df)
 
     date_col = "Date" if "Date" in df.columns else df.columns[0]
     df.rename(columns={date_col: "datetime"}, inplace=True)
@@ -9629,6 +9790,8 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         return fetch_daily_bars_from_yahoo(symbol, days)
 
     # Try IBKR first
+    reqId = None
+    request_completed = False
     try:
         reqId = int(time.time() * 1000) % (2**31 - 1)
         ib.data[reqId] = []
@@ -9652,10 +9815,18 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
             []
         )
 
-        for _ in range(60):
+        deadline = time.monotonic() + DAILY_BAR_IBKR_TIMEOUT_SEC
+        while time.monotonic() < deadline:
             if ib.ready.get(reqId):
+                request_completed = True
                 break
-            time.sleep(0.5)
+            time.sleep(DAILY_BAR_IBKR_POLL_INTERVAL_SEC)
+
+        if not request_completed and hasattr(ib, "cancelHistoricalData"):
+            try:
+                ib.cancelHistoricalData(reqId)
+            except Exception:
+                pass
 
         bars = ib.data.pop(reqId, [])
         ib.ready.pop(reqId, None)
@@ -9668,6 +9839,13 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         logging.warning(f"{symbol}: no daily bars returned from IBKR, falling back to Yahoo.")
     except Exception as e:
         logging.error(f"{symbol}: IBKR daily fetch failed ({e}), falling back to Yahoo.")
+    finally:
+        if reqId is not None:
+            try:
+                ib.data.pop(reqId, None)
+                ib.ready.pop(reqId, None)
+            except Exception:
+                pass
 
     return fetch_daily_bars_from_yahoo(symbol, days)
 
@@ -9677,11 +9855,13 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     requested_days = max(int(days), ATR_LENGTH + 5)
     cached = _load_cached_daily_bar_frame(normalized_symbol)
     cache_has_history = _daily_bar_cache_covers_history(cached, requested_days)
-    ib_connected = is_daily_data_client_connected(ib)
 
-    # If IBKR comes online later in the day, keep retrying live refreshes on
-    # later scans instead of staying pinned to an earlier Yahoo/cached result.
-    if cache_has_history and _daily_bar_cache_is_recent(normalized_symbol) and not ib_connected:
+    # Prefer fresh local bars. A full IBKR->Yahoo miss can cost seconds per
+    # symbol, so do not refresh symbols whose cache was updated recently.
+    if cache_has_history and _daily_bar_cache_is_recent(normalized_symbol):
+        return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
+
+    if cache_has_history and _daily_bar_live_failure_in_cooldown(normalized_symbol):
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
     refresh_days = (
@@ -9691,10 +9871,12 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     )
     fresh = _fetch_live_daily_bars(ib, normalized_symbol, refresh_days)
     if fresh is not None and not fresh.empty:
+        _mark_daily_bar_live_fetch_result(normalized_symbol, succeeded=True)
         merged = _merge_daily_bar_frames(cached, fresh)
         _write_cached_daily_bar_frame(normalized_symbol, merged)
         return _set_daily_bar_source(merged.copy(), _get_daily_bar_source(fresh))
 
+    _mark_daily_bar_live_fetch_result(normalized_symbol, succeeded=False)
     if not cached.empty:
         logging.info(f"{normalized_symbol}: using cached daily bars because live refresh was unavailable.")
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
@@ -10385,8 +10567,99 @@ def build_priority_setup_summary(
     }
 
 
+def _priority_pre_earnings_block_reason(next_earnings_date: str, days_to_next: int) -> str:
+    date_text = str(next_earnings_date or "unknown").strip() or "unknown"
+    return (
+        f"non-theta setup blocked: earnings {date_text} in {int(days_to_next)}d "
+        f"(<{PRIORITY_PRE_EARNINGS_BLOCK_DAYS}d)"
+    )
+
+
+def _append_unique_reason(existing: str, reason: str) -> str:
+    existing = str(existing or "").strip()
+    reason = str(reason or "").strip()
+    if not reason:
+        return existing
+    if not existing:
+        return reason
+    existing_parts = [part.strip() for part in existing.split(";") if part.strip()]
+    if reason.lower() not in {part.lower() for part in existing_parts}:
+        existing_parts.append(reason)
+    return "; ".join(existing_parts)
+
+
+def _is_priority_recommendation_blocked(row: dict | None) -> bool:
+    return bool(isinstance(row, dict) and row.get("pre_earnings_setup_blocked"))
+
+
+def apply_pre_earnings_priority_blocks(
+    priority_rows: list[dict],
+    ai_state: dict,
+    feature_rows_by_symbol: dict[str, dict],
+) -> None:
+    symbol_map = ai_state.setdefault("symbols", {}) if isinstance(ai_state, dict) else {}
+    blocked_count = 0
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        symbol_entry = symbol_map.get(symbol, {}) if isinstance(symbol_map, dict) else {}
+        if not isinstance(symbol_entry, dict):
+            symbol_entry = {}
+
+        next_earnings_date = str(
+            row.get("next_earnings_date")
+            or symbol_entry.get("next_earnings_date")
+            or ""
+        ).strip()
+        days_to_next = _coerce_int(row.get("days_to_next_earnings"))
+        if days_to_next is None:
+            days_to_next = _coerce_int(symbol_entry.get("days_to_next_earnings"))
+
+        blocked = (
+            days_to_next is not None
+            and 0 <= int(days_to_next) < PRIORITY_PRE_EARNINGS_BLOCK_DAYS
+        )
+        reason = str(row.get("pre_earnings_setup_block_reason") or "").strip()
+        if blocked:
+            blocked_count += 1
+            reason = reason or _priority_pre_earnings_block_reason(next_earnings_date, int(days_to_next))
+            row["ranking_blocked"] = True
+            row["ranking_block_reason"] = _append_unique_reason(row.get("ranking_block_reason"), reason)
+            row["ranking_note"] = _append_unique_reason(row.get("ranking_note"), reason)
+
+        updates = {
+            "next_earnings_date": next_earnings_date,
+            "days_to_next_earnings": days_to_next,
+            "pre_earnings_setup_blocked": bool(blocked),
+            "pre_earnings_setup_block_reason": reason if blocked else "",
+        }
+        row.update(updates)
+        if isinstance(symbol_entry, dict):
+            symbol_entry.update(updates)
+            symbol_entry["priority_ranking_blocked"] = bool(row.get("ranking_blocked"))
+            symbol_entry["priority_ranking_note"] = row.get("ranking_note", "")
+            symbol_entry["priority_ranking_block_reason"] = row.get("ranking_block_reason", "")
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if isinstance(feature_row, dict):
+            feature_row.update(updates)
+            feature_row["ranking_blocked"] = bool(row.get("ranking_blocked"))
+            feature_row["ranking_block_reason"] = row.get("ranking_block_reason", "")
+
+    if blocked_count:
+        logging.info(
+            "Pre-earnings filter blocked %d non-theta priority setup(s) inside %d day(s) of earnings.",
+            blocked_count,
+            PRIORITY_PRE_EARNINGS_BLOCK_DAYS,
+        )
+
+
 def _priority_rejection_reasons(row: dict) -> list[str]:
     reasons = []
+    if row.get("pre_earnings_setup_blocked"):
+        reasons.append(
+            str(row.get("pre_earnings_setup_block_reason") or "Non-theta setup blocked before earnings")
+        )
     if row.get("ranking_blocked"):
         reasons.append(str(row.get("ranking_block_reason") or row.get("ranking_note") or "Ranking blocked"))
     if row.get("compression_flag") and int(row.get("compression_penalty", 0) or 0) > 0:
@@ -10397,7 +10670,15 @@ def _priority_rejection_reasons(row: dict) -> list[str]:
         reasons.append(str(row.get("first_dev_note") or "First-dev chop penalty"))
     if row.get("rejection_score_cap_note"):
         reasons.append(str(row.get("rejection_score_cap_note")))
-    return [reason for reason in reasons if reason]
+    deduped = []
+    seen = set()
+    for reason in reasons:
+        reason = str(reason or "").strip()
+        if not reason or reason.lower() in seen:
+            continue
+        seen.add(reason.lower())
+        deduped.append(reason)
+    return deduped
 
 
 def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
@@ -10459,6 +10740,9 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
             "trend_20d": row.get("trend_20d") or symbol_entry.get("trend_20d") or "",
             "market_regime": symbol_entry.get("market_regime_label") or "",
             "daily_bar_source": symbol_entry.get("daily_bar_source") or "",
+            "next_earnings_date": row.get("next_earnings_date") or symbol_entry.get("next_earnings_date") or "",
+            "days_to_next_earnings": row.get("days_to_next_earnings", symbol_entry.get("days_to_next_earnings")),
+            "pre_earnings_setup_blocked": bool(row.get("pre_earnings_setup_blocked")),
             "bouncebot_relevant_focus_hit_today": bool(symbol_entry.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(symbol_entry.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(symbol_entry.get("bouncebot_relevant_focus_max_score")),
@@ -10902,6 +11186,13 @@ def _theta_support_entry(
     }
 
 
+def _is_valid_theta_support_entry(entry: dict | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    label = re.sub(r"[^A-Z0-9]+", "_", str(entry.get("label") or "").upper()).strip("_")
+    return label not in {"SMA_20", "SMA20"}
+
+
 def _dedupe_theta_supports(supports: list[dict]) -> list[dict]:
     seen_labels = set()
     out = []
@@ -10912,6 +11203,8 @@ def _dedupe_theta_supports(supports: list[dict]) -> list[dict]:
             str(item.get("label") or ""),
         ),
     ):
+        if not _is_valid_theta_support_entry(entry):
+            continue
         label = str(entry.get("label") or "").strip()
         if not label or label in seen_labels:
             continue
@@ -11064,6 +11357,48 @@ def _theta_earnings_window_summary(
     }
 
 
+def _next_earnings_window_summary(
+    last_trade_date: date | None,
+    upcoming_earnings_dates: list[str],
+) -> dict:
+    if last_trade_date is None:
+        return {
+            "next_earnings_date": "",
+            "days_to_next_earnings": None,
+            "pre_earnings_setup_blocked": False,
+            "pre_earnings_setup_block_reason": "",
+        }
+
+    upcoming = []
+    for value in upcoming_earnings_dates or []:
+        parsed = _parse_iso_date_or_none(value)
+        if parsed is not None and parsed >= last_trade_date:
+            upcoming.append(parsed)
+
+    next_earnings_date = min(upcoming) if upcoming else None
+    days_to_next = (
+        (next_earnings_date - last_trade_date).days
+        if next_earnings_date is not None
+        else None
+    )
+    blocked = (
+        days_to_next is not None
+        and 0 <= int(days_to_next) < PRIORITY_PRE_EARNINGS_BLOCK_DAYS
+    )
+    reason = ""
+    if blocked:
+        reason = (
+            f"non-theta setup blocked: earnings {next_earnings_date.isoformat()} "
+            f"in {int(days_to_next)}d (<{PRIORITY_PRE_EARNINGS_BLOCK_DAYS}d)"
+        )
+    return {
+        "next_earnings_date": next_earnings_date.isoformat() if next_earnings_date else "",
+        "days_to_next_earnings": days_to_next,
+        "pre_earnings_setup_blocked": bool(blocked),
+        "pre_earnings_setup_block_reason": reason,
+    }
+
+
 def evaluate_theta_put_candidate(
     symbol: str,
     side: str,
@@ -11097,7 +11432,7 @@ def evaluate_theta_put_candidate(
         return None
 
     raw_supports = []
-    for label in ("SMA_20", "SMA_50", "SMA_100", "SMA_200"):
+    for label in THETA_SMA_SUPPORT_LABELS:
         raw_supports.append(
             _theta_support_entry(
                 label,
@@ -11436,6 +11771,16 @@ def _normalize_option_expirations(expirations) -> list[date]:
     return sorted(normalized)
 
 
+def _has_weekly_option_expirations(expirations) -> bool:
+    normalized = _normalize_option_expirations(expirations)
+    if len(normalized) < 2:
+        return False
+    for prev, curr in zip(normalized, normalized[1:]):
+        if (curr - prev).days <= THETA_WEEKLY_EXPIRATION_MAX_GAP_DAYS:
+            return True
+    return False
+
+
 def _select_option_expirations(
     expirations,
     reference_date: date,
@@ -11493,7 +11838,12 @@ def _strike_support_context(
 ) -> dict:
     strike_value = float(strike)
     ordered_supports = sorted(
-        [entry for entry in supports or [] if _coerce_float(entry.get("level")) is not None],
+        [
+            entry
+            for entry in supports or []
+            if _is_valid_theta_support_entry(entry)
+            and _coerce_float(entry.get("level")) is not None
+        ],
         key=lambda entry: float(entry.get("level", 0.0) or 0.0),
         reverse=True,
     )
@@ -11536,11 +11886,20 @@ def _quote_value(quote: dict | None, key: str) -> float | None:
 
 
 def _option_quote_mid(quote: dict | None) -> float | None:
+    credit, _source = _option_quote_credit_with_source(quote)
+    return credit
+
+
+def _option_quote_credit_with_source(quote: dict | None) -> tuple[float | None, str]:
     bid = _quote_value(quote, "bid")
     ask = _quote_value(quote, "ask")
     if bid is not None and ask is not None and ask >= bid:
-        return (bid + ask) / 2.0
-    return bid or _quote_value(quote, "last") or _quote_value(quote, "model_price") or _quote_value(quote, "close")
+        return (bid + ask) / 2.0, "mid"
+    for key, source in (("last", "last"), ("model_price", "model"), ("close", "close"), ("bid", "bid")):
+        value = _quote_value(quote, key)
+        if value is not None:
+            return value, source
+    return None, ""
 
 
 def _option_quote_spread_pct(quote: dict | None) -> float | None:
@@ -11602,7 +11961,7 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
     close_value = _coerce_float(row.get("last_close")) or 0.0
     for quote_row in quote_rows or []:
         quote = quote_row.get("quote") if isinstance(quote_row, dict) else None
-        credit = _option_quote_mid(quote)
+        credit, credit_source = _option_quote_credit_with_source(quote)
         if credit is None or credit <= 0:
             continue
         strike = _coerce_float(quote_row.get("strike"))
@@ -11644,6 +12003,7 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
                 "market_days": quote_row.get("market_days"),
                 "strike": float(strike),
                 "credit": round(float(credit), 3),
+                "credit_source": credit_source,
                 "bid": _quote_value(quote, "bid"),
                 "ask": _quote_value(quote, "ask"),
                 "last": _quote_value(quote, "last"),
@@ -11840,7 +12200,7 @@ def _theta_status_sort_rank(row: dict) -> int:
         return 0
     if status == "cusp":
         return 1
-    if status in {"no_quote", "ib_unavailable", "no_option_chain"}:
+    if status in {"no_quote", "ib_unavailable", "no_option_chain", "no_weekly_options"}:
         return 2
     return 3
 
@@ -11878,10 +12238,12 @@ def _format_sold_put_option_line(option: dict) -> str:
         return "option=no IBKR put quote recommendation available"
     contracts = option.get("contracts_needed_for_100")
     contracts_text = f"{contracts} contract{'s' if contracts != 1 else ''}" if contracts else "n/a contracts"
+    credit_source = str(option.get("credit_source") or "mid").strip() or "mid"
     return (
         f"option=SELL {option.get('expiration')} {float(option.get('strike', 0.0) or 0.0):.2f}P "
-        f"@ mid={_format_option_decimal(option.get('credit'))} "
-        f"(bid={_format_option_decimal(option.get('bid'))}, ask={_format_option_decimal(option.get('ask'))}) "
+        f"@ approx_credit={_format_option_decimal(option.get('credit'))} "
+        f"(source={credit_source}, bid={_format_option_decimal(option.get('bid'))}, "
+        f"ask={_format_option_decimal(option.get('ask'))}, last={_format_option_decimal(option.get('last'))}) "
         f"| {contracts_text} for >=$100 target | cap_credit={_format_currency(option.get('total_credit_at_contract_cap'))} "
         f"| {option.get('market_days', 'n/a')} market days"
     )
@@ -11890,11 +12252,13 @@ def _format_sold_put_option_line(option: dict) -> str:
 def _format_pcs_option_line(option: dict) -> str:
     if not option:
         return "option=no IBKR PCS quote recommendation available"
+    credit_source = str(option.get("credit_source") or "mid").strip() or "mid"
     return (
         f"option=SELL {option.get('expiration')} {float(option.get('short_strike', 0.0) or 0.0):.2f}P / "
         f"BUY {option.get('expiration')} {float(option.get('long_strike', 0.0) or 0.0):.2f}P "
-        f"@ credit={_format_option_decimal(option.get('credit'))} "
-        f"({option.get('credit_width_pct', 'n/a')}% of {float(option.get('width', 0.0) or 0.0):.2f} width) "
+        f"@ approx_credit={_format_option_decimal(option.get('credit'))} "
+        f"(source={credit_source}, {option.get('credit_width_pct', 'n/a')}% of "
+        f"{float(option.get('width', 0.0) or 0.0):.2f} width) "
         f"| max_loss={_format_currency(option.get('max_loss'))} "
         f"| {option.get('market_days', 'n/a')} market days"
     )
@@ -11956,24 +12320,28 @@ def _write_theta_section(handle, title: str, rows: list[dict], *, play_type: str
 
 def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[dict] | None = None) -> None:
     sold_put_rows = _sort_theta_report_rows(theta_rows or [])
-    pcs_rows = _sort_theta_report_rows(pcs_rows or [])
+    pcs_rows = _sort_theta_report_rows([row for row in (pcs_rows or []) if _pcs_row_meets_credit_target(row)])
     buffer = io.StringIO()
     handle = buffer
     handle.write("Master AVWAP theta option candidates\n")
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     handle.write(
-        "Sold put rules: LONG watchlist only; recommendation-only; >=3 nearby SMA/Trendline/AVWAPE support references; "
+        "Sold put rules: LONG watchlist only; recommendation-only; >=3 nearby SMA50/100/200, Trendline, AVWAPE, or compression support references; "
         f"short put expiration <= {THETA_PUT_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"target >= {_format_option_decimal(THETA_PUT_TARGET_MIN_CREDIT)} credit so <= {THETA_PUT_MAX_CONTRACTS} contracts can reach ~$100.\n"
     )
     handle.write(
         "PCS rules: LONG watchlist only; recommendation-only; >=2 nearby support references; "
         f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
-        f"target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width.\n"
+        f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width; "
+        "non-target/no-quote PCS rows are filtered out.\n"
     )
     handle.write(
         "Earnings filter: "
         f"no known earnings within {THETA_MIN_EARNINGS_BUFFER_DAYS} calendar days before/after scan date.\n"
+    )
+    handle.write(
+        "Weekly options filter: when IBKR is connected, sold puts/PCS require an IBKR chain with weekly expirations.\n"
     )
     handle.write(
         "IBKR option quotes are snapshot-based. Cusp rows are below target credit now but may improve on pullbacks.\n\n"
@@ -11985,7 +12353,7 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
         return
 
     sold_put_recommended, sold_put_cusp, sold_put_fallback = _split_theta_rows_by_status(sold_put_rows)
-    pcs_recommended, pcs_cusp, pcs_fallback = _split_theta_rows_by_status(pcs_rows)
+    pcs_recommended, _, _ = _split_theta_rows_by_status(pcs_rows)
 
     _write_theta_section(handle, "Sold Put Plays", sold_put_recommended, play_type="sold_put")
     handle.write("\n")
@@ -11995,11 +12363,6 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
         _write_theta_section(handle, "Sold Put Support-Only / No Quote", sold_put_fallback, play_type="sold_put")
     handle.write("\n")
     _write_theta_section(handle, "PCS Plays", pcs_recommended, play_type="pcs")
-    handle.write("\n")
-    _write_theta_section(handle, "PCS Cusp / Pullback Watch", pcs_cusp, play_type="pcs")
-    if pcs_fallback:
-        handle.write("\n")
-        _write_theta_section(handle, "PCS Support-Only / No Quote", pcs_fallback, play_type="pcs")
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
@@ -12025,9 +12388,16 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
         re.IGNORECASE,
     )
     strike_zone_pattern = re.compile(r"^\s*strike_zone=(.+)$", re.IGNORECASE)
-    sold_put_option_pattern = re.compile(r"^\s*option=SELL\s+(\d{8})\s+([0-9]*\.?[0-9]+)P\s+@\s+mid=([0-9]*\.?[0-9]+)", re.IGNORECASE)
+    sold_put_option_pattern = re.compile(
+        r"^\s*option=SELL\s+(\d{8})\s+([0-9]*\.?[0-9]+)P\s+@\s+"
+        r"(?:approx_credit|mid|credit)=([0-9]*\.?[0-9]+)"
+        r"(?:\s+\(source=([^,\)]+))?",
+        re.IGNORECASE,
+    )
     pcs_option_pattern = re.compile(
-        r"^\s*option=SELL\s+(\d{8})\s+([0-9]*\.?[0-9]+)P\s+/\s+BUY\s+\d{8}\s+([0-9]*\.?[0-9]+)P\s+@\s+credit=([0-9]*\.?[0-9]+)",
+        r"^\s*option=SELL\s+(\d{8})\s+([0-9]*\.?[0-9]+)P\s+/\s+BUY\s+\d{8}\s+([0-9]*\.?[0-9]+)P\s+@\s+"
+        r"(?:approx_credit|credit)=([0-9]*\.?[0-9]+)"
+        r"(?:\s+\(source=([^,\)]+))?",
         re.IGNORECASE,
     )
     earnings_pattern = re.compile(r"next\s+([^;]+?)(?:\s+\(([-]?\d+)d\))?(?:$|;)", re.IGNORECASE)
@@ -12056,6 +12426,11 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
                 "next_earnings_label": "",
                 "primary_strike_band": "",
                 "liquidity_score": "",
+                "recommended_expiration": "",
+                "recommended_strike": None,
+                "recommended_long_strike": None,
+                "recommended_credit": None,
+                "recommended_credit_source": "",
             }
             continue
         if not current:
@@ -12068,14 +12443,25 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
         sold_put_match = sold_put_option_pattern.match(line)
         if sold_put_match:
             current["play_type"] = "sold_put"
+            credit_source = (sold_put_match.group(4) or "mid").strip()
+            current["recommended_expiration"] = sold_put_match.group(1)
+            current["recommended_strike"] = float(sold_put_match.group(2))
+            current["recommended_credit"] = float(sold_put_match.group(3))
+            current["recommended_credit_source"] = credit_source
             current["primary_strike_band"] = f"{sold_put_match.group(2)}P {sold_put_match.group(1)}"
-            current["liquidity_score"] = f"mid {sold_put_match.group(3)}"
+            current["liquidity_score"] = credit_source
             continue
         pcs_match = pcs_option_pattern.match(line)
         if pcs_match:
             current["play_type"] = "pcs"
+            credit_source = (pcs_match.group(5) or "credit").strip()
+            current["recommended_expiration"] = pcs_match.group(1)
+            current["recommended_strike"] = float(pcs_match.group(2))
+            current["recommended_long_strike"] = float(pcs_match.group(3))
+            current["recommended_credit"] = float(pcs_match.group(4))
+            current["recommended_credit_source"] = credit_source
             current["primary_strike_band"] = f"{pcs_match.group(2)}/{pcs_match.group(3)} PCS {pcs_match.group(1)}"
-            current["liquidity_score"] = f"credit {pcs_match.group(4)}"
+            current["liquidity_score"] = credit_source
             continue
         if line.lower().startswith("earnings="):
             earnings_match = earnings_pattern.search(line)
@@ -12611,6 +12997,8 @@ def apply_priority_rejection_score_caps(
 
 
 def _is_post_earnings_play_ready(row: dict) -> bool:
+    if _is_priority_recommendation_blocked(row):
+        return False
     if not isinstance(row, dict) or not row.get("post_earnings_active"):
         return False
     sessions_since_gap = _coerce_int(row.get("post_earnings_sessions_since_gap"))
@@ -12639,7 +13027,7 @@ def apply_final_priority_buckets(
             row["compression_flag"] = bool(symbol_entry.get("compression_flag"))
 
     def _classify_priority_bucket(row: dict | None) -> tuple[str, bool, bool]:
-        if not row or row.get("ranking_blocked"):
+        if not row or row.get("ranking_blocked") or _is_priority_recommendation_blocked(row):
             return "", False, False
         if (
             row.get("has_favorite_signal")
@@ -12756,6 +13144,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("setup type", "setup_type_score_note"),
         ("clean zone", "clean_first_zone_score_note"),
         ("market regime", "market_regime_score_note"),
+        ("pre-earnings", "pre_earnings_setup_block_reason"),
         ("score cap", "rejection_score_cap_note"),
     )
     for label, key in note_keys:
@@ -12880,6 +13269,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         [
             row for row in priority_rows
             if row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
+            and not _is_priority_recommendation_blocked(row)
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
@@ -12893,6 +13283,10 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     handle.write(
         "Focus: generalized high-quality setups across AVWAP breaks, post-earnings gap structures, and mid-earnings continuation retests\n\n"
+    )
+    handle.write(
+        f"Pre-earnings filter: non-theta setups inside {PRIORITY_PRE_EARNINGS_BLOCK_DAYS} calendar days of earnings are omitted. "
+        "Theta sold-put/PCS candidates keep their own earnings rules.\n\n"
     )
     handle.write("Copy/paste lists\n")
     handle.write("================\n")
@@ -13008,6 +13402,10 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "has_bounce_event_today": bool(symbol_state.get("has_bounce_event_today")),
             "daily_bar_source": symbol_state.get("daily_bar_source") or "",
             "market_regime_label": symbol_state.get("market_regime_label") or "",
+            "next_earnings_date": row.get("next_earnings_date") or symbol_state.get("next_earnings_date") or "",
+            "days_to_next_earnings": row.get("days_to_next_earnings", symbol_state.get("days_to_next_earnings")),
+            "pre_earnings_setup_blocked": bool(row.get("pre_earnings_setup_blocked")),
+            "pre_earnings_setup_block_reason": row.get("pre_earnings_setup_block_reason") or "",
             "candidate_rejection_reasons": list(row.get("candidate_rejection_reasons") or []),
             "setup_candidate": row.get("setup_candidate") or symbol_state.get("setup_candidate") or {},
             "last_trade_date": symbol_state.get("last_trade_date"),
@@ -13034,6 +13432,8 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
 
 
 def _d1_watchlist_priority_reasons(row: dict) -> list[str]:
+    if _is_priority_recommendation_blocked(row):
+        return []
     reasons = []
     bucket = str(row.get("priority_bucket") or "").strip().lower()
     if bucket == "favorite_setup":
@@ -13066,6 +13466,8 @@ def _d1_watchlist_priority_reasons(row: dict) -> list[str]:
 
 
 def _theta_watchlist_payload(row: dict, play_type: str) -> dict:
+    if str(play_type or "").strip().lower() == "pcs" and not _pcs_row_meets_credit_target(row):
+        return {}
     option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
     status = str(row.get("option_status") or option.get("status") or "").strip().lower()
     if status not in {"recommended", "cusp"}:
@@ -13334,6 +13736,64 @@ def update_master_avwap_d1_watchlist(
     return payload
 
 
+def write_favorite_zone_watchlist_outputs(
+    *,
+    focus_path: Path,
+    d1_watchlist_path: Path,
+    priority_rows: list[dict],
+    theta_put_rows: list[dict],
+    theta_pcs_rows: list[dict],
+    ai_state: dict,
+    now: datetime | None = None,
+    window_start: str | None = None,
+    window_end: str | None = None,
+) -> dict:
+    reference = now or datetime.now()
+    default_start, default_end = get_favorite_zone_watchlist_update_window_labels(reference=reference)
+    update_allowed = should_update_favorite_zone_watchlists_now(
+        now=reference,
+        window_start=window_start or default_start,
+        window_end=window_end or default_end,
+    )
+    if not update_allowed:
+        message = (
+            "Favorite-zone watchlist writes skipped because local time is before the final-hour/"
+            f"after-close update window (starts {window_start or default_start}; close {window_end or default_end})."
+        )
+        logging.info(message)
+        return {
+            "updated": False,
+            "allowed": False,
+            "skip_reason": message,
+            "window_start": window_start or default_start,
+            "window_end": window_end or default_end,
+            "d1_watchlist": None,
+        }
+
+    write_master_avwap_focus_feed(focus_path, priority_rows, ai_state)
+    d1_payload = update_master_avwap_d1_watchlist(
+        d1_watchlist_path,
+        priority_rows,
+        theta_put_rows,
+        theta_pcs_rows,
+        ai_state,
+    )
+    logging.info(
+        "Favorite-zone watchlists updated for final-hour/after-close scan "
+        "(window starts %s; close %s).",
+        window_start or default_start,
+        window_end or default_end,
+    )
+    return {
+        "updated": True,
+        "allowed": True,
+        "skip_reason": "",
+        "window_start": window_start or default_start,
+        "window_end": window_end or default_end,
+        "d1_watchlist": d1_payload,
+    }
+
+
 def closes_between_bands(
     df: pd.DataFrame,
     lower: float,
@@ -13378,6 +13838,7 @@ def write_stdev_range_report(
         [
             row for row in (priority_rows or [])
             if row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
+            and not _is_priority_recommendation_blocked(row)
         ],
         key=lambda row: (-row.get("score", 0), row.get("symbol", "")),
     )
@@ -13426,6 +13887,7 @@ def write_tradingview_report(
         [
             row for row in priority_rows
             if row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
+            and not _is_priority_recommendation_blocked(row)
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
@@ -14720,6 +15182,7 @@ def backfill_setup_tracker_from_recent_sessions(
                 ib,
                 daily_frames_by_symbol=daily_frames_by_symbol,
             )
+            apply_pre_earnings_priority_blocks(priority_rows, ai_state, feature_rows_by_symbol)
             apply_final_priority_buckets(priority_rows, ai_state, [], feature_rows_by_symbol)
             apply_clean_first_zone_score_bonus(priority_rows, ai_state, feature_rows_by_symbol)
             apply_recent_tracker_setup_family_adjustments(
@@ -14939,6 +15402,10 @@ def run_master(
 
         last_trade_date = df["datetime"].iloc[-1].date()
         dstr = df["datetime"].iloc[-1].strftime("%m/%d")
+        next_earnings_summary = _next_earnings_window_summary(
+            last_trade_date,
+            upcoming_earnings_map.get(sym, []),
+        )
 
         logging.info(f"-> Processing {sym} ({side}) with {len(df)} daily bars; last date {last_trade_date}")
 
@@ -15505,6 +15972,10 @@ def run_master(
             "latest_release_gap_date": latest_release_context.get("gap_date", ""),
             "latest_release_anchor_date": latest_release_context.get("anchor_date", ""),
             "latest_release_gap_atr_multiple": _coerce_float(latest_release_context.get("gap_atr_multiple")),
+            "next_earnings_date": next_earnings_summary.get("next_earnings_date", ""),
+            "days_to_next_earnings": next_earnings_summary.get("days_to_next_earnings"),
+            "pre_earnings_setup_blocked": bool(next_earnings_summary.get("pre_earnings_setup_blocked")),
+            "pre_earnings_setup_block_reason": next_earnings_summary.get("pre_earnings_setup_block_reason", ""),
             "post_earnings_active": bool(post_earnings_summary.get("active")),
             "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
             "post_earnings_monitor_level_label": post_earnings_summary.get("monitor_level_label", ""),
@@ -15606,6 +16077,10 @@ def run_master(
         priority_summary["post_earnings_break_close"] = bool(post_earnings_summary.get("break_close"))
         priority_summary["post_earnings_sessions_since_gap"] = post_earnings_summary.get("sessions_since_gap")
         priority_summary["post_earnings_gap_atr_multiple"] = _coerce_float(post_earnings_summary.get("gap_atr_multiple"))
+        priority_summary["next_earnings_date"] = next_earnings_summary.get("next_earnings_date", "")
+        priority_summary["days_to_next_earnings"] = next_earnings_summary.get("days_to_next_earnings")
+        priority_summary["pre_earnings_setup_blocked"] = bool(next_earnings_summary.get("pre_earnings_setup_blocked"))
+        priority_summary["pre_earnings_setup_block_reason"] = next_earnings_summary.get("pre_earnings_setup_block_reason", "")
         priority_summary["post_earnings_anchor_date"] = post_earnings_summary.get("anchor_date", "")
         priority_summary["post_earnings_gap_date"] = post_earnings_summary.get("gap_date", "")
         priority_summary["post_earnings_monitor_level"] = _coerce_float(post_earnings_summary.get("monitor_level"))
@@ -15749,6 +16224,10 @@ def run_master(
             "compression_note": effective_compression_note,
             "setup_family": priority_summary.get("setup_family", ""),
             "setup_tags": ";".join(priority_summary.get("setup_tags") or []),
+            "next_earnings_date": priority_summary.get("next_earnings_date", ""),
+            "days_to_next_earnings": priority_summary.get("days_to_next_earnings"),
+            "pre_earnings_setup_blocked": bool(priority_summary.get("pre_earnings_setup_blocked")),
+            "pre_earnings_setup_block_reason": priority_summary.get("pre_earnings_setup_block_reason", ""),
             "post_earnings_active": bool(post_earnings_summary.get("active")),
             "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
             "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
@@ -15812,6 +16291,7 @@ def run_master(
         ib,
         daily_frames_by_symbol=daily_frames_by_symbol,
     )
+    apply_pre_earnings_priority_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     apply_clean_first_zone_score_bonus(priority_rows, ai_state, feature_rows_by_symbol)
     apply_recent_tracker_setup_family_adjustments(
@@ -15910,7 +16390,7 @@ def run_master(
         elif update_setup_tracker is None:
             window_start, window_end = get_setup_tracker_update_window_labels()
             logging.info(
-                "Setup tracker refresh skipped for this run because local time is outside the live update window (%s-%s).",
+                "Setup tracker refresh skipped for this run because local time is before the final-hour/after-close update window (starts %s; close %s).",
                 window_start,
                 window_end,
             )
@@ -15950,14 +16430,17 @@ def run_master(
     trim_history(history)
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
-    write_master_avwap_focus_feed(MASTER_AVWAP_FOCUS_FILE, priority_rows, ai_state)
-    update_master_avwap_d1_watchlist(
-        MASTER_AVWAP_D1_WATCHLIST_FILE,
-        priority_rows,
-        theta_put_rows,
-        theta_pcs_rows,
-        ai_state,
+    favorite_watchlist_result = write_favorite_zone_watchlist_outputs(
+        focus_path=MASTER_AVWAP_FOCUS_FILE,
+        d1_watchlist_path=MASTER_AVWAP_D1_WATCHLIST_FILE,
+        priority_rows=priority_rows,
+        theta_put_rows=theta_put_rows,
+        theta_pcs_rows=theta_pcs_rows,
+        ai_state=ai_state,
     )
+    run_result["favorite_zone_watchlists_updated"] = bool(favorite_watchlist_result.get("updated"))
+    run_result["favorite_zone_watchlists_allowed"] = bool(favorite_watchlist_result.get("allowed"))
+    run_result["favorite_zone_watchlists_skip_reason"] = favorite_watchlist_result.get("skip_reason", "")
 
     # write human-readable events file (grouped for easier scanning)
     sorted_events = sort_events_for_output(events_for_output)
@@ -16096,6 +16579,10 @@ def run_master(
         "favorite_zone",
         "setup_family",
         "setup_tags",
+        "next_earnings_date",
+        "days_to_next_earnings",
+        "pre_earnings_setup_blocked",
+        "pre_earnings_setup_block_reason",
         "recent_band_extension_days",
         "recent_second_band_test_days",
         "second_band_penalty",
@@ -16909,7 +17396,18 @@ class MasterAvwapGUI:
         theta_table_notebook.add(theta_sold_put_frame, text="Sold Puts")
         theta_table_notebook.add(theta_pcs_frame, text="PCS")
 
-        columns = ("symbol", "score", "support_count", "close", "atr", "next_earnings_days", "primary_strike_band", "liquidity_score")
+        columns = (
+            "symbol",
+            "score",
+            "support_count",
+            "close",
+            "atr",
+            "next_earnings_days",
+            "recommended_strike",
+            "recommended_credit",
+            "primary_strike_band",
+            "liquidity_score",
+        )
         self.theta_table = ttk.Treeview(theta_sold_put_frame, columns=columns, show="headings", style="Dark.Treeview")
         headings = {
             "symbol": "Symbol",
@@ -16918,8 +17416,10 @@ class MasterAvwapGUI:
             "close": "Close",
             "atr": "ATR",
             "next_earnings_days": "Next Earnings (days)",
-            "primary_strike_band": "Recommended Strike",
-            "liquidity_score": "Premium",
+            "recommended_strike": "Sell Strike",
+            "recommended_credit": "Approx Credit",
+            "primary_strike_band": "Strike Context",
+            "liquidity_score": "Quote Source",
         }
         for key, label in headings.items():
             self.theta_table.heading(key, text=label, command=lambda c=key: self._sort_theta_table(c))
@@ -16929,8 +17429,10 @@ class MasterAvwapGUI:
         self.theta_table.column("close", width=85, anchor="e")
         self.theta_table.column("atr", width=85, anchor="e")
         self.theta_table.column("next_earnings_days", width=145, anchor="center")
-        self.theta_table.column("primary_strike_band", width=360, anchor="w")
-        self.theta_table.column("liquidity_score", width=145, anchor="center")
+        self.theta_table.column("recommended_strike", width=105, anchor="e")
+        self.theta_table.column("recommended_credit", width=115, anchor="e")
+        self.theta_table.column("primary_strike_band", width=260, anchor="w")
+        self.theta_table.column("liquidity_score", width=115, anchor="center")
         self.theta_table.pack(side="left", fill="both", expand=True)
         theta_table_scroll = ttk.Scrollbar(theta_sold_put_frame, orient="vertical", command=self.theta_table.yview)
         self.theta_table.configure(yscrollcommand=theta_table_scroll.set)
@@ -16938,8 +17440,8 @@ class MasterAvwapGUI:
 
         self.theta_pcs_table = ttk.Treeview(theta_pcs_frame, columns=columns, show="headings", style="Dark.Treeview")
         pcs_headings = dict(headings)
-        pcs_headings["primary_strike_band"] = "Recommended Spread"
-        pcs_headings["liquidity_score"] = "Credit"
+        pcs_headings["primary_strike_band"] = "Spread Context"
+        pcs_headings["liquidity_score"] = "Quote Source"
         for key, label in pcs_headings.items():
             self.theta_pcs_table.heading(key, text=label, command=lambda c=key: self._sort_theta_table(c))
         self.theta_pcs_table.column("symbol", width=90, anchor="w")
@@ -16948,8 +17450,10 @@ class MasterAvwapGUI:
         self.theta_pcs_table.column("close", width=85, anchor="e")
         self.theta_pcs_table.column("atr", width=85, anchor="e")
         self.theta_pcs_table.column("next_earnings_days", width=145, anchor="center")
-        self.theta_pcs_table.column("primary_strike_band", width=360, anchor="w")
-        self.theta_pcs_table.column("liquidity_score", width=145, anchor="center")
+        self.theta_pcs_table.column("recommended_strike", width=105, anchor="e")
+        self.theta_pcs_table.column("recommended_credit", width=115, anchor="e")
+        self.theta_pcs_table.column("primary_strike_band", width=260, anchor="w")
+        self.theta_pcs_table.column("liquidity_score", width=115, anchor="center")
         self.theta_pcs_table.pack(side="left", fill="both", expand=True)
         theta_pcs_scroll = ttk.Scrollbar(theta_pcs_frame, orient="vertical", command=self.theta_pcs_table.yview)
         self.theta_pcs_table.configure(yscrollcommand=theta_pcs_scroll.set)
@@ -18568,10 +19072,18 @@ class MasterAvwapGUI:
             if self.theta_sort_column in {"score", "support_count", "next_earnings_days"}:
                 value = entry.get(self.theta_sort_column)
                 return -10**9 if value is None else int(value)
-            if self.theta_sort_column in {"close", "atr"}:
+            if self.theta_sort_column in {"close", "atr", "recommended_strike", "recommended_credit"}:
                 value = entry.get(self.theta_sort_column)
                 return float(value or 0.0)
             return str(entry.get(self.theta_sort_column, "") or "").upper()
+
+        def format_option_table_decimal(value) -> str:
+            if value is None or value == "":
+                return ""
+            try:
+                return _format_option_decimal(float(value))
+            except (TypeError, ValueError):
+                return str(value)
 
         def populate_table(target_table, source_rows):
             filtered_rows = filter_rows(source_rows)
@@ -18587,6 +19099,8 @@ class MasterAvwapGUI:
                         f"{float(row.get('close', 0.0) or 0.0):.2f}" if row.get("close") is not None else "",
                         row.get("atr", ""),
                         row.get("next_earnings_days", "unknown"),
+                        format_option_table_decimal(row.get("recommended_strike")),
+                        format_option_table_decimal(row.get("recommended_credit")),
                         row.get("primary_strike_band", ""),
                         row.get("liquidity_score", ""),
                     ),

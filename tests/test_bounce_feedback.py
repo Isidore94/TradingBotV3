@@ -2,7 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -40,6 +40,46 @@ class BounceFeedbackTests(unittest.TestCase):
             self.assertEqual(rows.loc[0, "symbol"], "AAPL")
             self.assertEqual(rows.loc[0, "rating"], "issue")
             self.assertIn("VWAP/EOD", rows.loc[0, "reason"])
+
+    def test_d1_flags_prime_without_startup_gui_spam(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        bot.emitted_master_avwap_d1_flags = set()
+        bot.master_avwap_d1_flags_primed_date = None
+        bot.gui_callback = Mock()
+        bot.log_symbol = Mock()
+
+        first_event = {
+            "symbol": "TSN",
+            "side": "LONG",
+            "direction": "long",
+            "event_type": "breakout_5d",
+            "label": "5D breakout",
+            "reason": "D1 breakout over recent range",
+            "priority_score": 26,
+            "source": "focus",
+        }
+        second_event = {
+            **first_event,
+            "symbol": "WFC",
+            "side": "SHORT",
+            "direction": "short",
+            "priority_score": 25,
+        }
+        bot._build_master_avwap_d1_flag_events = Mock(return_value=[first_event])
+
+        bot.emit_master_avwap_d1_flags()
+
+        bot.gui_callback.assert_not_called()
+        self.assertEqual(len(bot.emitted_master_avwap_d1_flags), 1)
+
+        bot._build_master_avwap_d1_flag_events.return_value = [first_event, second_event]
+        bot.emit_master_avwap_d1_flags()
+
+        bot.gui_callback.assert_called_once()
+        message, tag = bot.gui_callback.call_args.args
+        self.assertIn("MASTER_AVWAP_D1_FLAG: WFC", message)
+        self.assertEqual(tag, "d1_flag_short")
+        self.assertEqual(len(bot.emitted_master_avwap_d1_flags), 2)
 
 
 if __name__ == "__main__":

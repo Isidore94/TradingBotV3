@@ -151,6 +151,13 @@ def enrich_event_with_metadata(event: dict[str, Any], metadata_by_ticker: dict[s
     enriched["industry"] = metadata.get("industry") or ""
     enriched["exchange"] = metadata.get("exchange") or ""
     enriched["currency"] = metadata.get("currency") or ""
+    enriched["average_volume"] = _safe_int_optional(
+        metadata.get("average_volume")
+        or metadata.get("average_volume_10d")
+        or enriched.get("average_volume")
+    )
+    enriched["average_volume_10d"] = _safe_int_optional(metadata.get("average_volume_10d"))
+    enriched["regular_market_volume"] = _safe_int_optional(metadata.get("regular_market_volume"))
     if metadata.get("source") == "yfinance" and (yfinance_market_cap is not None or company_name):
         enriched["metadata_source"] = "yfinance"
     else:
@@ -261,6 +268,9 @@ def _fetch_ticker_metadata(symbol: str) -> dict[str, Any]:
         "industry": str(info.get("industry") or "").strip(),
         "market_cap": _safe_market_cap(info.get("marketCap")),
         "market_cap_fmt": format_market_cap(info.get("marketCap")),
+        "average_volume": _safe_int_optional(info.get("averageVolume")),
+        "average_volume_10d": _safe_int_optional(info.get("averageDailyVolume10Day") or info.get("averageVolume10days")),
+        "regular_market_volume": _safe_int_optional(info.get("regularMarketVolume") or info.get("volume")),
         "exchange": str(info.get("exchange") or "").strip(),
         "currency": str(info.get("currency") or "").strip(),
         "quoteType": str(info.get("quoteType") or "").strip(),
@@ -284,6 +294,9 @@ def _empty_metadata(ticker: Any) -> dict[str, Any]:
         "industry": "",
         "market_cap": None,
         "market_cap_fmt": "Market cap unknown",
+        "average_volume": None,
+        "average_volume_10d": None,
+        "regular_market_volume": None,
         "exchange": "",
         "currency": "",
         "quoteType": "",
@@ -412,7 +425,12 @@ def _is_metadata_entry_fresh(entry: Any, now: datetime, ttl: timedelta) -> bool:
         fetched_at = datetime.fromisoformat(str(entry.get("fetched_at") or ""))
     except ValueError:
         return False
-    return now - fetched_at <= ttl and isinstance(entry.get("metadata"), dict)
+    metadata = entry.get("metadata")
+    return (
+        now - fetched_at <= ttl
+        and isinstance(metadata, dict)
+        and "average_volume" in metadata
+    )
 
 
 def _is_earnings_entry_fresh(entry: Any, now: datetime, ttl: timedelta) -> bool:
@@ -455,6 +473,16 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _safe_int_optional(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        numeric = int(float(value))
+        return numeric if numeric >= 0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_float(value: Any, default: float) -> float:

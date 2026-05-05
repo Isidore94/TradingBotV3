@@ -485,6 +485,7 @@ class BaseBounceBotPanel:
         self.container = ttk.Frame(parent)
         self._queue_after_id = None
         self.alert_text: scrolledtext.ScrolledText | None = None
+        self.d1_alert_text: scrolledtext.ScrolledText | None = None
         self.on_output_changed = None
 
     def pack(self, **kwargs) -> None:
@@ -503,20 +504,26 @@ class BaseBounceBotPanel:
         configure_alert_tags(text_area, font_size=font_size)
         return text_area
 
+    def _alert_widget_for_tag(self, tag: str) -> scrolledtext.ScrolledText | None:
+        if str(tag).startswith("d1_flag") and self.d1_alert_text is not None:
+            return self.d1_alert_text
+        return self.alert_text
+
     def _append_alert_with_timestamp(self, message: Any, tag: str) -> None:
-        if self.alert_text is None:
+        target = self._alert_widget_for_tag(tag)
+        if target is None:
             return
-        self.alert_text.config(state="normal")
+        target.config(state="normal")
         append_alert_message(
-            self.alert_text,
+            target,
             message,
             tag,
             datetime.now().strftime("%H:%M:%S"),
             feedback_callback=self._record_bounce_feedback,
             feedback_source="consolidated_gui",
         )
-        self.alert_text.config(state="disabled")
-        self.alert_text.see(tk.END)
+        target.config(state="disabled")
+        target.see(tk.END)
         self._notify_output_changed()
 
     def _record_bounce_feedback(self, context: dict, rating: str, reason: str, source: str) -> None:
@@ -526,11 +533,12 @@ class BaseBounceBotPanel:
         self._notify_output_changed()
 
     def clear_alerts(self) -> None:
-        if self.alert_text is None:
-            return
-        self.alert_text.config(state="normal")
-        self.alert_text.delete("1.0", tk.END)
-        self.alert_text.config(state="disabled")
+        for widget in (self.alert_text, self.d1_alert_text):
+            if widget is None:
+                continue
+            widget.config(state="normal")
+            widget.delete("1.0", tk.END)
+            widget.config(state="disabled")
         self._notify_output_changed()
 
     def _notify_output_changed(self) -> None:
@@ -647,10 +655,18 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
                 activeforeground=TEXT_COLOR,
             ).pack(side=tk.LEFT, padx=2)
 
-        alerts_frame = ttk.Frame(self.container)
-        alerts_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        alerts_split = ttk.PanedWindow(self.container, orient=tk.HORIZONTAL)
+        alerts_split.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        alerts_frame = ttk.LabelFrame(alerts_split, text="BounceBot Alerts")
         self.alert_text = self._create_alerts_widget(alerts_frame, font_size=11)
-        self.alert_text.pack(fill=tk.BOTH, expand=True)
+        self.alert_text.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        alerts_split.add(alerts_frame, weight=3)
+
+        d1_frame = ttk.LabelFrame(alerts_split, text="D1 Master AVWAP Events")
+        self.d1_alert_text = self._create_alerts_widget(d1_frame, font_size=10)
+        self.d1_alert_text.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        alerts_split.add(d1_frame, weight=2)
 
         bounce_toggle_frame = tk.LabelFrame(
             self.container,
@@ -799,9 +815,26 @@ class FullBounceBotPanel(BaseBounceBotPanel):
         content_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
 
         alerts_frame = tk.Frame(content_pane, bg=DARK_GREY)
-        tk.Label(alerts_frame, text="BounceBot Alerts", bg=DARK_GREY, fg=TEXT_COLOR).pack(anchor="w", padx=5, pady=(6, 2))
-        self.alert_text = self._create_alerts_widget(alerts_frame, font_size=11)
-        self.alert_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        alerts_split = tk.PanedWindow(
+            alerts_frame,
+            orient=tk.HORIZONTAL,
+            sashrelief=tk.RAISED,
+            sashwidth=8,
+            showhandle=True,
+            bg=DARK_GREY,
+        )
+        alerts_split.pack(fill=tk.BOTH, expand=True)
+
+        bounce_alerts_frame = tk.LabelFrame(alerts_split, text="BounceBot Alerts", bg=DARK_GREY, fg=TEXT_COLOR)
+        self.alert_text = self._create_alerts_widget(bounce_alerts_frame, font_size=11)
+        self.alert_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        alerts_split.add(bounce_alerts_frame, stretch="always")
+
+        d1_frame = tk.LabelFrame(alerts_split, text="D1 Master AVWAP Events", bg=DARK_GREY, fg=TEXT_COLOR)
+        self.d1_alert_text = self._create_alerts_widget(d1_frame, font_size=10)
+        self.d1_alert_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        alerts_split.add(d1_frame, stretch="always")
+
         content_pane.add(alerts_frame, stretch="always")
 
         self.rrs_panel = create_rrs_confirmed_panel(

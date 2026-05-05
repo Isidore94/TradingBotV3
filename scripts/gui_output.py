@@ -181,6 +181,10 @@ def build_consolidated_gui_output(
         _read_widget_text(getattr(bounce_panel, "alert_text", None)),
         MAIN_GUI_BOUNCE_ALERT_LINES,
     )
+    d1_alerts = _tail_lines(
+        _read_widget_text(getattr(bounce_panel, "d1_alert_text", None)),
+        MAIN_GUI_BOUNCE_ALERT_LINES,
+    )
     avwap_status = (
         str(avwap_gui.status_var.get()).strip()
         if avwap_gui and hasattr(avwap_gui, "status_var")
@@ -269,5 +273,9 @@ def build_consolidated_gui_output(
         "Recent BounceBot Alerts",
         "-" * 80,
         bounce_alerts or "No BounceBot alerts yet.",
+        "",
+        "Recent D1 Master AVWAP Events",
+        "-" * 80,
+        d1_alerts or "No D1 Master AVWAP events yet.",
     ]
     return "\n".join(lines).rstrip() + "\n"

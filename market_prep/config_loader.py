@@ -39,6 +39,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "social": False,
         "options_flow": False,
         "sec_filings": False,
+        "llm_summary": True,
     },
     "earnings": {
         "provider": "nasdaq",
@@ -124,6 +125,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "oil prices Middle East",
         ],
     },
+    "llm_summary": {
+        "model": "gpt-5-mini",
+        "max_output_tokens": 300,
+        "headline_limit": 20,
+        "article_limit": 4,
+        "article_char_limit": 2000,
+        "request_timeout_seconds": 45,
+        "article_timeout_seconds": 8,
+    },
     "ticker_lookup": {
         "days_ahead": 60,
         "news_limit": 40,
@@ -190,6 +200,53 @@ def set_forexfactory_enabled(enabled: bool, config_path: Path | None = None) -> 
     return load_market_prep_config(path)
 
 
+def save_llm_summary_settings(settings: dict[str, Any], config_path: Path | None = None) -> MarketPrepConfig:
+    path = Path(config_path) if config_path else CONFIG_FILE
+    ensure_default_config(path)
+    payload = _read_json(path, default=copy.deepcopy(DEFAULT_CONFIG))
+    if not isinstance(payload, dict):
+        payload = copy.deepcopy(DEFAULT_CONFIG)
+    payload = _merge_defaults(payload)
+    llm_summary = payload.setdefault("llm_summary", {})
+    if not isinstance(llm_summary, dict):
+        llm_summary = {}
+        payload["llm_summary"] = llm_summary
+    for key, value in settings.items():
+        if key in DEFAULT_CONFIG["llm_summary"]:
+            llm_summary[str(key)] = value
+    features = payload.setdefault("features", {})
+    if isinstance(features, dict):
+        features["llm_summary"] = True
+    _write_json_atomic(path, payload)
+    return load_market_prep_config(path)
+
+
+def get_market_prep_openai_api_key(config: MarketPrepConfig | None = None) -> str:
+    env_value = os.environ.get("OPENAI_API_KEY", "").strip()
+    if env_value:
+        return env_value
+    local_value = str(_load_local_secret("openai_api_key") or "").strip()
+    if local_value:
+        return local_value
+    if config is not None:
+        return str(config.api_keys.get("openai") or "").strip()
+    return ""
+
+
+def get_market_prep_openai_key_source(config: MarketPrepConfig | None = None) -> str:
+    if os.environ.get("OPENAI_API_KEY", "").strip():
+        return "environment"
+    if str(_load_local_secret("openai_api_key") or "").strip():
+        return "local_secret"
+    if config is not None and str(config.api_keys.get("openai") or "").strip():
+        return "config"
+    return "missing"
+
+
+def save_market_prep_openai_api_key(api_key: str) -> Path:
+    return _save_local_secret("openai_api_key", str(api_key or "").strip())
+
+
 def ensure_default_config(config_path: Path = CONFIG_FILE) -> bool:
     path = Path(config_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -248,3 +305,36 @@ def _write_json_atomic(path: Path, payload: Any) -> None:
     finally:
         if temp_path is not None and temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+def _local_market_prep_secret_file() -> Path:
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        return Path(local_appdata) / "TradingBotV3" / "market_prep_secrets.json"
+    return Path.home() / ".local" / "share" / "TradingBotV3" / "market_prep_secrets.json"
+
+
+def _load_local_secrets() -> dict[str, Any]:
+    path = _local_market_prep_secret_file()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_local_secret(name: str) -> str:
+    return str(_load_local_secrets().get(name) or "")
+
+
+def _save_local_secret(name: str, value: str) -> Path:
+    path = _local_market_prep_secret_file()
+    payload = _load_local_secrets()
+    if value:
+        payload[name] = value
+    else:
+        payload.pop(name, None)
+    _write_json_atomic(path, payload)
+    return path

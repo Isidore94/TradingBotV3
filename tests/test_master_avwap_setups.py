@@ -1,7 +1,7 @@
 import sys
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,6 +33,7 @@ from master_avwap import (  # noqa: E402
     build_recent_tracker_setup_family_rows,
     compute_indicator_frame,
     evaluate_theta_put_candidate,
+    extract_theta_rows_from_report,
     extract_theta_reason_risk_rows,
     extract_theta_symbols_from_report,
     format_market_prep_payload_report,
@@ -72,6 +73,24 @@ def _build_history_with_gap() -> pd.DataFrame:
             }
         )
 
+    return pd.DataFrame(rows)
+
+
+def _build_daily_bar_cache_frame(days: int = 120) -> pd.DataFrame:
+    dates = pd.bdate_range(end=pd.Timestamp(datetime.now().date()), periods=days)
+    rows = []
+    for idx, dt_value in enumerate(dates):
+        close = 100.0 + idx * 0.1
+        rows.append(
+            {
+                "datetime": dt_value,
+                "open": close - 0.2,
+                "high": close + 0.8,
+                "low": close - 0.8,
+                "close": close,
+                "volume": 1_000_000 + idx,
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -1477,6 +1496,107 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("setup_candidate_json", feature_rows_by_symbol["AAPL"])
         self.assertEqual(ai_state["symbols"]["AAPL"]["setup_candidate"]["family"], "avwap_breakout")
 
+    def test_pre_earnings_priority_block_uses_less_than_ten_day_boundary(self):
+        blocked = master_avwap._next_earnings_window_summary(
+            date(2026, 5, 5),
+            ["2026-05-14"],
+        )
+        allowed = master_avwap._next_earnings_window_summary(
+            date(2026, 5, 5),
+            ["2026-05-15"],
+        )
+
+        self.assertTrue(blocked["pre_earnings_setup_blocked"])
+        self.assertEqual(blocked["days_to_next_earnings"], 9)
+        self.assertFalse(allowed["pre_earnings_setup_blocked"])
+        self.assertEqual(allowed["days_to_next_earnings"], 10)
+
+    def test_pre_earnings_priority_block_removes_non_theta_recommendation_bucket(self):
+        priority_rows = [
+            {
+                "symbol": "AAPL",
+                "side": "LONG",
+                "score": 120,
+                "favorite_signals": ["CROSS_UP_VWAP"],
+                "context_signals": [],
+                "has_favorite_signal": True,
+                "favorite_zone": "AVWAPE to UPPER_1",
+                "next_earnings_date": "2026-05-14",
+                "days_to_next_earnings": 9,
+            },
+            {
+                "symbol": "MSFT",
+                "side": "LONG",
+                "score": 118,
+                "favorite_signals": ["CROSS_UP_VWAP"],
+                "context_signals": [],
+                "has_favorite_signal": True,
+                "favorite_zone": "AVWAPE to UPPER_1",
+                "next_earnings_date": "2026-05-15",
+                "days_to_next_earnings": 10,
+            },
+        ]
+        ai_state = {"symbols": {"AAPL": {}, "MSFT": {}}}
+        feature_rows_by_symbol = {"AAPL": {}, "MSFT": {}}
+
+        master_avwap.apply_pre_earnings_priority_blocks(
+            priority_rows,
+            ai_state,
+            feature_rows_by_symbol,
+        )
+        master_avwap.apply_final_priority_buckets(
+            priority_rows,
+            ai_state,
+            [],
+            feature_rows_by_symbol,
+        )
+        attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
+
+        self.assertTrue(priority_rows[0]["ranking_blocked"])
+        self.assertTrue(priority_rows[0]["pre_earnings_setup_blocked"])
+        self.assertEqual(priority_rows[0]["priority_bucket"], "")
+        self.assertIn("non-theta setup blocked", priority_rows[0]["candidate_rejection_reasons"][0])
+        self.assertFalse(priority_rows[1]["pre_earnings_setup_blocked"])
+        self.assertEqual(priority_rows[1]["priority_bucket"], "favorite_setup")
+
+    def test_pre_earnings_priority_block_keeps_theta_d1_exception(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "master_avwap_d1_watchlist.json"
+            priority_rows = [
+                {
+                    "symbol": "AAPL",
+                    "side": "LONG",
+                    "priority_bucket": "favorite_setup",
+                    "score": 120,
+                    "pre_earnings_setup_blocked": True,
+                    "pre_earnings_setup_block_reason": "non-theta setup blocked",
+                }
+            ]
+            theta_rows = [
+                {
+                    "symbol": "AAPL",
+                    "score": 88,
+                    "option_status": "recommended",
+                    "best_option": {
+                        "status": "recommended",
+                        "credit": 0.35,
+                        "strike": 95.0,
+                        "expiration": "20260508",
+                        "market_days": 3,
+                        "contracts_needed_for_100": 3,
+                        "covered_support_count": 3,
+                        "total_support_count": 4,
+                    },
+                    "support_summary": "SMA_20@100.00",
+                }
+            ]
+
+            payload = update_master_avwap_d1_watchlist(path, priority_rows, theta_rows, [], {"symbols": {}})
+
+        entry = payload["symbols"]["AAPL"]
+        self.assertIn("sold_put_premium_viable", entry["watch_reasons"])
+        self.assertNotIn("favorite_setup", entry["watch_reasons"])
+
     def test_append_d1_feature_history_adds_run_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             history_path = Path(temp_dir) / "d1_features_history.csv"
@@ -1569,6 +1689,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(candidate["side"], "LONG")
         self.assertTrue(candidate["top_score_drivers"])
         self.assertIsInstance(candidate["risk_flags"], list)
+        self.assertNotIn("SMA_20", [support["label"] for support in candidate["supports"]])
 
     def test_theta_put_candidate_rejects_recent_earnings(self):
         dates = pd.bdate_range("2025-08-01", periods=180)
@@ -1623,9 +1744,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
         }
 
         candidates = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94, 92])
+        self.assertNotIn(96.0, [candidate["strike"] for candidate in candidates])
         self.assertNotIn(98.0, [candidate["strike"] for candidate in candidates])
 
-        credits = {96.0: 0.30, 94.0: 0.20, 92.0: 0.12}
+        credits = {94.0: 0.30, 92.0: 0.12}
         quote_rows = []
         for candidate in candidates:
             credit = credits[candidate["strike"]]
@@ -1640,10 +1762,11 @@ class MasterAvwapSetupTests(unittest.TestCase):
             )
 
         ranked = master_avwap._rank_sold_put_option_recommendations(row, quote_rows)
-        self.assertEqual(ranked[0]["strike"], 96.0)
+        self.assertEqual(ranked[0]["strike"], 94.0)
         self.assertEqual(ranked[0]["status"], "recommended")
         self.assertEqual(ranked[0]["contracts_needed_for_100"], 4)
         self.assertEqual(ranked[0]["covered_support_count"], 3)
+        self.assertNotIn("SMA_20", ranked[0]["covered_support_summary"])
 
     def test_pcs_ranking_uses_two_supports_and_credit_width_target(self):
         row = {
@@ -1653,12 +1776,15 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "base_score": 75,
             "supports": [
                 {"label": "SMA_20", "level": 200.0, "source": "sma", "distance_atr": 0.4},
+                {"label": "SMA_50", "level": 195.0, "source": "sma", "distance_atr": 0.7},
                 {"label": "CURRENT_AVWAPE", "level": 190.0, "source": "avwape", "distance_atr": 1.0},
             ],
         }
 
         short_candidates = master_avwap._pcs_short_strike_candidates(row, [195, 190, 185])
         self.assertEqual(short_candidates[0]["short_strike"], 190.0)
+        self.assertNotIn(195.0, [candidate["short_strike"] for candidate in short_candidates])
+        self.assertNotIn("SMA_20", short_candidates[0]["covered_support_summary"])
 
         ranked = master_avwap._rank_pcs_option_recommendations(
             row,
@@ -1680,6 +1806,287 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(ranked[0]["long_strike"], 185.0)
         self.assertEqual(ranked[0]["credit"], 1.0)
         self.assertEqual(ranked[0]["credit_width_pct"], 20.0)
+        self.assertTrue(
+            master_avwap._pcs_row_meets_credit_target(
+                {"option_status": ranked[0]["status"], "best_option": ranked[0]}
+            )
+        )
+
+        below_target = master_avwap._rank_pcs_option_recommendations(
+            row,
+            [
+                {
+                    **short_candidates[0],
+                    "expiration": "20260522",
+                    "expiration_date": date(2026, 5, 22),
+                    "market_days": 14,
+                    "long_strike": 185.0,
+                    "short_quote": {"bid": 1.95, "ask": 2.05},
+                    "long_quote": {"bid": 0.95, "ask": 1.00},
+                }
+            ],
+        )
+
+        self.assertEqual(below_target[0]["credit"], 0.95)
+        self.assertEqual(below_target[0]["credit_width_pct"], 19.0)
+        self.assertFalse(
+            master_avwap._pcs_row_meets_credit_target(
+                {"option_status": below_target[0]["status"], "best_option": below_target[0]}
+            )
+        )
+
+    def test_option_quote_credit_prefers_mid_then_last(self):
+        mid_credit, mid_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.20, "ask": 0.40, "last": 0.55}
+        )
+        last_credit, last_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.50, "ask": 0.40, "last": 0.45}
+        )
+
+        self.assertAlmostEqual(mid_credit, 0.30)
+        self.assertEqual(mid_source, "mid")
+        self.assertEqual(last_credit, 0.45)
+        self.assertEqual(last_source, "last")
+
+    def test_fetch_daily_bars_uses_recent_cache_before_live_refresh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir) / "daily_bars"
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+            with (
+                patch.object(master_avwap, "DAILY_BARS_CACHE_DIR", cache_dir),
+                patch.object(master_avwap, "_fetch_live_daily_bars") as live_fetch,
+            ):
+                master_avwap._write_cached_daily_bar_frame("AL", _build_daily_bar_cache_frame())
+
+                result = master_avwap.fetch_daily_bars(object(), "AL", 40)
+
+            live_fetch.assert_not_called()
+            self.assertFalse(result.empty)
+            self.assertEqual(master_avwap._get_daily_bar_source(result), master_avwap.DAILY_BAR_SOURCE_CACHE)
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+
+    def test_fetch_daily_bars_uses_cache_during_live_failure_cooldown(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir) / "daily_bars"
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+            with (
+                patch.object(master_avwap, "DAILY_BARS_CACHE_DIR", cache_dir),
+                patch.object(master_avwap, "_fetch_live_daily_bars") as live_fetch,
+            ):
+                master_avwap._write_cached_daily_bar_frame("AL", _build_daily_bar_cache_frame())
+                master_avwap._DAILY_BAR_CACHE_TOUCHED_AT["AL"] = datetime.now() - timedelta(minutes=90)
+                master_avwap._DAILY_BAR_LIVE_FAILURE_AT["AL"] = datetime.now()
+
+                result = master_avwap.fetch_daily_bars(object(), "AL", 40)
+
+            live_fetch.assert_not_called()
+            self.assertFalse(result.empty)
+            self.assertEqual(master_avwap._get_daily_bar_source(result), master_avwap.DAILY_BAR_SOURCE_CACHE)
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+
+    def test_yahoo_daily_bar_parser_handles_multiindex_columns(self):
+        dates = pd.date_range("2026-01-01", periods=3)
+        raw = pd.DataFrame(
+            {
+                ("Open", "AL"): [10.0, 10.5, 10.8],
+                ("High", "AL"): [11.0, 11.3, 11.4],
+                ("Low", "AL"): [9.8, 10.1, 10.4],
+                ("Close", "AL"): [10.7, 10.9, 11.0],
+                ("Adj Close", "AL"): [10.7, 10.9, 11.0],
+                ("Volume", "AL"): [1000, 1200, 1100],
+            },
+            index=dates,
+        )
+        raw.index.name = "Date"
+
+        with patch.object(master_avwap.yf, "download", return_value=raw):
+            result = master_avwap.fetch_daily_bars_from_yahoo("AL", 30)
+
+        self.assertEqual(list(result.columns), master_avwap.DAILY_BAR_COLUMNS)
+        self.assertEqual(master_avwap._get_daily_bar_source(result), master_avwap.DAILY_BAR_SOURCE_YAHOO)
+        self.assertEqual(float(result.iloc[-1]["close"]), 11.0)
+
+    def test_ib_weekly_expiration_detection_uses_close_expiry_spacing(self):
+        self.assertTrue(
+            master_avwap._has_weekly_option_expirations(
+                ["20260508", "20260515", "20260619"]
+            )
+        )
+        self.assertFalse(
+            master_avwap._has_weekly_option_expirations(
+                ["20260515", "20260619", "20260717"]
+            )
+        )
+
+    def test_ib_option_chain_selector_prefers_weekly_expirations(self):
+        chain = master_avwap._select_ib_option_chain(
+            [
+                {
+                    "exchange": "SMART",
+                    "tradingClass": "ABC",
+                    "multiplier": "100",
+                    "expirations": {"20260515", "20260619", "20260717"},
+                    "strikes": {90, 95, 100},
+                },
+                {
+                    "exchange": "BOX",
+                    "tradingClass": "ABC",
+                    "multiplier": "100",
+                    "expirations": {"20260508", "20260515", "20260619"},
+                    "strikes": {90, 95},
+                },
+            ],
+            "ABC",
+        )
+
+        self.assertEqual(chain["exchange"], "BOX")
+        self.assertTrue(master_avwap._has_weekly_option_expirations(chain["expirations"]))
+
+    def test_theta_ib_enrichment_filters_rows_without_weekly_expirations(self):
+        class FakeIb:
+            def reqMarketDataType(self, market_data_type):
+                self.market_data_type = market_data_type
+
+        sold_put_row = {"symbol": "ABC", "score": 80, "notes": "theta setup"}
+        pcs_row = {"symbol": "ABC", "score": 75, "notes": "pcs setup"}
+        sold_put_rows = [sold_put_row]
+        pcs_rows = [pcs_row]
+        monthly_only_chain = [
+            {
+                "exchange": "SMART",
+                "tradingClass": "ABC",
+                "multiplier": "100",
+                "expirations": {"20260515", "20260619", "20260717"},
+                "strikes": {90, 95, 100},
+            }
+        ]
+
+        with (
+            patch.object(master_avwap, "is_daily_data_client_connected", return_value=True),
+            patch.object(master_avwap, "_fetch_ib_option_chain_definitions", return_value=monthly_only_chain),
+            patch.object(master_avwap, "_enrich_sold_put_row_with_ib_options") as sold_put_enrich,
+            patch.object(master_avwap, "_enrich_pcs_row_with_ib_options") as pcs_enrich,
+        ):
+            master_avwap.enrich_theta_rows_with_ib_option_premiums(
+                FakeIb(),
+                sold_put_rows,
+                pcs_rows,
+                date(2026, 5, 5),
+            )
+
+        sold_put_enrich.assert_not_called()
+        pcs_enrich.assert_not_called()
+        self.assertEqual(sold_put_rows, [])
+        self.assertEqual(pcs_rows, [])
+        self.assertEqual(sold_put_row["theta_filter_reason"], "no_weekly_options")
+        self.assertEqual(pcs_row["theta_filter_reason"], "no_weekly_options")
+        self.assertIn("filtered: no IBKR weekly expirations", sold_put_row["notes"])
+
+    def test_theta_ib_enrichment_keeps_rows_with_weekly_expirations(self):
+        class FakeIb:
+            def reqMarketDataType(self, market_data_type):
+                self.market_data_type = market_data_type
+
+        sold_put_rows = [{"symbol": "ABC", "score": 80}]
+        pcs_rows = [{"symbol": "ABC", "score": 75}]
+        weekly_chain = [
+            {
+                "exchange": "SMART",
+                "tradingClass": "ABC",
+                "multiplier": "100",
+                "expirations": {"20260508", "20260515", "20260619"},
+                "strikes": {90, 95, 100},
+            }
+        ]
+
+        def mark_sold_put(_ib, row, _chain, _quote_cache, _reference_date):
+            row["ib_weekly_checked"] = "sold_put"
+
+        def mark_pcs(_ib, row, _chain, _quote_cache, _reference_date):
+            row["ib_weekly_checked"] = "pcs"
+            row["option_status"] = "recommended"
+            row["best_option"] = {
+                "play_type": "pcs",
+                "status": "recommended",
+                "short_strike": 190.0,
+                "long_strike": 185.0,
+                "width": 5.0,
+                "credit": 1.0,
+                "credit_width_ratio": 0.20,
+                "credit_width_pct": 20.0,
+            }
+
+        with (
+            patch.object(master_avwap, "is_daily_data_client_connected", return_value=True),
+            patch.object(master_avwap, "_fetch_ib_option_chain_definitions", return_value=weekly_chain),
+            patch.object(master_avwap, "_enrich_sold_put_row_with_ib_options", side_effect=mark_sold_put),
+            patch.object(master_avwap, "_enrich_pcs_row_with_ib_options", side_effect=mark_pcs),
+        ):
+            master_avwap.enrich_theta_rows_with_ib_option_premiums(
+                FakeIb(),
+                sold_put_rows,
+                pcs_rows,
+                date(2026, 5, 5),
+            )
+
+        self.assertEqual(len(sold_put_rows), 1)
+        self.assertEqual(len(pcs_rows), 1)
+        self.assertEqual(sold_put_rows[0]["ib_weekly_checked"], "sold_put")
+        self.assertEqual(pcs_rows[0]["ib_weekly_checked"], "pcs")
+
+    def test_theta_ib_enrichment_filters_pcs_below_twenty_percent_width_credit(self):
+        class FakeIb:
+            def reqMarketDataType(self, market_data_type):
+                self.market_data_type = market_data_type
+
+        pcs_row = {"symbol": "ABC", "score": 75, "notes": "pcs setup"}
+        pcs_rows = [pcs_row]
+        weekly_chain = [
+            {
+                "exchange": "SMART",
+                "tradingClass": "ABC",
+                "multiplier": "100",
+                "expirations": {"20260508", "20260515", "20260619"},
+                "strikes": {185, 190, 195},
+            }
+        ]
+
+        def mark_below_target(_ib, row, _chain, _quote_cache, _reference_date):
+            row["option_status"] = "cusp"
+            row["best_option"] = {
+                "play_type": "pcs",
+                "status": "cusp",
+                "short_strike": 190.0,
+                "long_strike": 185.0,
+                "width": 5.0,
+                "credit": 0.95,
+                "credit_width_ratio": 0.19,
+                "credit_width_pct": 19.0,
+            }
+
+        with (
+            patch.object(master_avwap, "is_daily_data_client_connected", return_value=True),
+            patch.object(master_avwap, "_fetch_ib_option_chain_definitions", return_value=weekly_chain),
+            patch.object(master_avwap, "_enrich_pcs_row_with_ib_options", side_effect=mark_below_target),
+        ):
+            master_avwap.enrich_theta_rows_with_ib_option_premiums(
+                FakeIb(),
+                [],
+                pcs_rows,
+                date(2026, 5, 5),
+            )
+
+        self.assertEqual(pcs_rows, [])
+        self.assertEqual(pcs_row["theta_filter_reason"], "pcs_premium_below_target")
+        self.assertIn("PCS credit below 20%", pcs_row["notes"])
 
     def test_master_scan_watchlists_include_master_only_swing_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1706,6 +2113,85 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertIn("swing watchlists", label)
             self.assertEqual(longs, ["AAPL", "MSFT", "NVDA"])
             self.assertEqual(shorts, ["TSLA", "AMD"])
+
+    def test_eod_write_gate_allows_final_hour_and_after_close(self):
+        self.assertFalse(
+            master_avwap.should_update_setup_tracker_now(
+                now=datetime(2026, 5, 5, 11, 30),
+                window_start="12:00",
+                window_end="13:00",
+            )
+        )
+        self.assertTrue(
+            master_avwap.should_update_setup_tracker_now(
+                now=datetime(2026, 5, 5, 12, 30),
+                window_start="12:00",
+                window_end="13:00",
+            )
+        )
+        self.assertTrue(
+            master_avwap.should_update_setup_tracker_now(
+                now=datetime(2026, 5, 5, 14, 30),
+                window_start="12:00",
+                window_end="13:00",
+            )
+        )
+
+    def test_favorite_zone_watchlist_writes_wait_until_eod_window(self):
+        priority_rows = [
+            {
+                "symbol": "AAPL",
+                "side": "LONG",
+                "score": 120,
+                "priority_bucket": "favorite_setup",
+                "setup_family": "favorite_zone_watch",
+                "favorite_zone": "AVWAPE to UPPER_1",
+                "favorite_signals": [],
+                "context_signals": [],
+            }
+        ]
+        ai_state = {"symbols": {"AAPL": {"last_close": 101.0}}}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            focus_path = root / "focus.json"
+            d1_path = root / "d1.json"
+            focus_path.write_text("existing focus", encoding="utf-8")
+            d1_path.write_text("existing d1", encoding="utf-8")
+
+            skipped = master_avwap.write_favorite_zone_watchlist_outputs(
+                focus_path=focus_path,
+                d1_watchlist_path=d1_path,
+                priority_rows=priority_rows,
+                theta_put_rows=[],
+                theta_pcs_rows=[],
+                ai_state=ai_state,
+                now=datetime(2026, 5, 5, 11, 30),
+                window_start="12:00",
+                window_end="13:00",
+            )
+
+            self.assertFalse(skipped["updated"])
+            self.assertEqual(focus_path.read_text(encoding="utf-8"), "existing focus")
+            self.assertEqual(d1_path.read_text(encoding="utf-8"), "existing d1")
+
+            written = master_avwap.write_favorite_zone_watchlist_outputs(
+                focus_path=focus_path,
+                d1_watchlist_path=d1_path,
+                priority_rows=priority_rows,
+                theta_put_rows=[],
+                theta_pcs_rows=[],
+                ai_state=ai_state,
+                now=datetime(2026, 5, 5, 14, 30),
+                window_start="12:00",
+                window_end="13:00",
+            )
+
+            self.assertTrue(written["updated"])
+            focus_payload = master_avwap.load_json(focus_path, default={})
+            d1_payload = master_avwap.load_json(d1_path, default={})
+            self.assertEqual(focus_payload["favorites"][0]["symbol"], "AAPL")
+            self.assertIn("AAPL", d1_payload["symbols"])
 
     def test_d1_watchlist_prunes_side_aware_ema15_failures(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1774,6 +2260,76 @@ class MasterAvwapSetupTests(unittest.TestCase):
             parsed = extract_theta_reason_risk_rows(text)
             self.assertEqual(parsed[0]["symbol"], "NVDA")
             self.assertIn("AVWAPE+Trendline", parsed[0]["reason"])
+
+    def test_theta_report_parser_surfaces_sell_strike_and_approx_credit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "theta.txt"
+            write_theta_put_report(
+                path,
+                [
+                    {
+                        "symbol": "NVDA",
+                        "last_close": 100.0,
+                        "score": 88,
+                        "support_count": 5,
+                        "strike_zone": "at/below CURRENT_AVWAPE 99.00",
+                        "support_summary": "CURRENT_AVWAPE@99.00",
+                        "option_status": "recommended",
+                        "best_option": {
+                            "status": "recommended",
+                            "expiration": "20260508",
+                            "market_days": 3,
+                            "strike": 95.0,
+                            "credit": 0.35,
+                            "credit_source": "last",
+                            "last": 0.35,
+                            "contracts_needed_for_100": 3,
+                            "total_credit_at_contract_cap": 105.0,
+                            "covered_support_count": 3,
+                            "total_support_count": 4,
+                        },
+                    }
+                ],
+                [
+                    {
+                        "symbol": "MSFT",
+                        "last_close": 200.0,
+                        "score": 92,
+                        "support_count": 3,
+                        "strike_zone": "near AVWAPE 190.00",
+                        "support_summary": "AVWAPE@190.00",
+                        "option_status": "recommended",
+                        "best_option": {
+                            "status": "recommended",
+                            "expiration": "20260522",
+                            "market_days": 14,
+                            "short_strike": 190.0,
+                            "long_strike": 185.0,
+                            "width": 5.0,
+                            "credit": 1.0,
+                            "credit_source": "bid/ask",
+                            "credit_width_ratio": 0.20,
+                            "credit_width_pct": 20.0,
+                            "max_loss": 400.0,
+                            "covered_support_count": 2,
+                            "total_support_count": 3,
+                        },
+                    }
+                ],
+            )
+
+            text = path.read_text(encoding="utf-8")
+            rows = {row["symbol"]: row for row in extract_theta_rows_from_report(text)}
+
+            self.assertIn("@ approx_credit=0.35 (source=last", text)
+            self.assertIn("@ approx_credit=1.00 (source=bid/ask", text)
+            self.assertEqual(rows["NVDA"]["recommended_strike"], 95.0)
+            self.assertEqual(rows["NVDA"]["recommended_credit"], 0.35)
+            self.assertEqual(rows["NVDA"]["recommended_credit_source"], "last")
+            self.assertEqual(rows["MSFT"]["recommended_strike"], 190.0)
+            self.assertEqual(rows["MSFT"]["recommended_long_strike"], 185.0)
+            self.assertEqual(rows["MSFT"]["recommended_credit"], 1.0)
+            self.assertEqual(rows["MSFT"]["recommended_credit_source"], "bid/ask")
 
     def test_theta_reason_risk_parser_supports_legacy_notes_only_reports(self):
         text = "\n".join(

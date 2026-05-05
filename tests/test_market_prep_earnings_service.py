@@ -2,6 +2,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+from market_prep.models import MarketPrepConfig
 from market_prep.report_builder import build_earnings_report
 from market_prep.services.earnings_service import NasdaqEarningsProvider, get_upcoming_earnings
 from market_prep.services.yfinance_service import enrich_event_with_metadata
@@ -50,6 +51,59 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["source"], "nasdaq")
         self.assertIn("EPS est $2.50", rows[0]["notes"])
 
+    def test_upcoming_earnings_filters_small_and_illiquid_names_when_configured(self):
+        provider = NasdaqEarningsProvider(config=None, include_manual=False)
+        config = MarketPrepConfig.from_mapping(
+            {
+                "features": {"yfinance_metadata": True},
+                "earnings": {
+                    "filter_by_market_cap_and_volume": True,
+                    "min_market_cap": 1_000_000_000,
+                    "min_average_volume": 1_000_000,
+                    "exclude_unknown_market_cap": True,
+                    "exclude_unknown_average_volume": True,
+                },
+            }
+        )
+
+        def fake_fetch(date_str: str, *, config=None):
+            return [
+                {"symbol": "BIG", "name": "Big Liquid", "marketCap": "$250,000,000,000"},
+                {"symbol": "ILLQ", "name": "Illiquid Large", "marketCap": "$50,000,000,000"},
+                {"symbol": "SMOL", "name": "Small Cap", "marketCap": "$500,000,000"},
+                {"symbol": "UNKN", "name": "Unknown Volume", "marketCap": "$2,000,000,000"},
+            ]
+
+        enriched_input = []
+
+        def fake_enrich(rows, *, config=None):
+            enriched_input.extend(row["ticker"] for row in rows)
+            overrides = {
+                "BIG": {"average_volume": 2_500_000},
+                "ILLQ": {"average_volume": 500_000},
+                "UNKN": {"average_volume": None},
+            }
+            return [
+                {**row, **overrides.get(row["ticker"], {})}
+                for row in rows
+            ], {"status": "cache", "status_label": "Loaded metadata from cache"}
+
+        with (
+            patch("market_prep.services.earnings_service.fetch_nasdaq_earnings_for_date", fake_fetch),
+            patch("market_prep.services.earnings_service.enrich_events_with_metadata", side_effect=fake_enrich),
+        ):
+            payload = get_upcoming_earnings(
+                start_date=date(2026, 4, 27),
+                days=0,
+                provider=provider,
+                config=config,
+            )
+
+        self.assertEqual([row["ticker"] for row in payload["earnings"]], ["BIG"])
+        self.assertEqual(enriched_input, ["BIG", "ILLQ", "UNKN"])
+        self.assertEqual(payload["filters"]["prefilter_removed_count"], 1)
+        self.assertEqual(payload["filters"]["removed_count"], 2)
+
     def test_yfinance_enrichment_preserves_nasdaq_market_cap_when_metadata_is_empty(self):
         event = {
             "ticker": "BIG",
@@ -67,6 +121,7 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
                     "ticker": "BIG",
                     "company_name": "",
                     "market_cap": None,
+                    "average_volume": 1_500_000,
                     "source": "yfinance",
                 }
             },
@@ -74,6 +129,7 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
 
         self.assertEqual(enriched["market_cap"], 250_000_000_000)
         self.assertEqual(enriched["market_cap_fmt"], "$250.00B")
+        self.assertEqual(enriched["average_volume"], 1_500_000)
         self.assertEqual(enriched["importance"], "HIGH")
         self.assertEqual(enriched["metadata_source"], "nasdaq")
 
@@ -94,10 +150,20 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
                         "market_cap": 250_000_000_000,
                     }
                 ],
+                "filters": {
+                    "enabled": True,
+                    "min_market_cap": 1_000_000_000,
+                    "min_average_volume": 1_000_000,
+                    "prefilter_removed_count": 4,
+                    "removed_count": 2,
+                    "removed_unknown_count": 1,
+                },
             },
             title="Earnings Next 7 Days",
         )
 
+        self.assertIn("Filter: min market cap $1.00B; min avg volume 1.0M shares", report)
+        self.assertIn("filtered out 6 row(s)", report)
         self.assertIn("Market-moving focus:", report)
         self.assertIn("BIG | 2026-04-27 AMC | HIGH | $250.00B | Big Market Mover", report)
 

@@ -13,6 +13,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from market_prep import get_market_prep_logger, load_market_prep_config
+from market_prep.config_loader import (
+    get_market_prep_openai_key_source,
+    save_llm_summary_settings,
+    save_market_prep_openai_api_key,
+)
 from market_prep.orchestrator import MarketPrepOrchestrator
 from market_prep.report_builder import build_catalyst_clock
 from market_prep.services.ticker_lookup_service import lookup_ticker_context
@@ -26,6 +31,7 @@ MARKET_PREP_NAV_ITEMS = (
     ("Earnings", "earnings"),
     ("Macro/Fed/Treasury", "macro"),
     ("News/SEC", "news_sec"),
+    ("AI Summary", "ai_summary"),
     ("Raw Markdown", "raw"),
 )
 HIGH_PRIORITY_VALUES = {"HIGH", "MEGA"}
@@ -62,10 +68,18 @@ class MarketPrepTab:
         self.earnings_text: scrolledtext.ScrolledText | None = None
         self.macro_text: scrolledtext.ScrolledText | None = None
         self.news_sec_text: scrolledtext.ScrolledText | None = None
+        self.ai_summary_text: scrolledtext.ScrolledText | None = None
         self.catalyst_tree: ttk.Treeview | None = None
         self.watchlist_tree: ttk.Treeview | None = None
         self.catalyst_status_var = tk.StringVar(value="No catalyst clock loaded.")
         self.watchlist_status_var = tk.StringVar(value="No watchlist risk loaded.")
+        llm_settings = self.config.llm_summary if isinstance(self.config.llm_summary, dict) else {}
+        self.openai_key_var = tk.StringVar()
+        self.openai_key_status_var = tk.StringVar(value=self._openai_key_status_text())
+        self.ai_model_var = tk.StringVar(value=str(llm_settings.get("model") or "gpt-5-mini"))
+        self.ai_max_tokens_var = tk.StringVar(value=str(llm_settings.get("max_output_tokens") or 300))
+        self.ai_article_limit_var = tk.StringVar(value=str(llm_settings.get("article_limit") or 4))
+        self.ai_article_chars_var = tk.StringVar(value=str(llm_settings.get("article_char_limit") or 2000))
         self.buttons: dict[str, ttk.Button] = {}
         self.background_task_active = False
         self.latest_report: dict | None = None
@@ -100,6 +114,7 @@ class MarketPrepTab:
         self._refresh_forexfactory_button()
 
         self._build_command_center()
+        self._build_ai_summary_controls()
 
         body = ttk.Frame(self.container)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
@@ -136,6 +151,7 @@ class MarketPrepTab:
         self._build_text_tab("earnings", "Earnings")
         self._build_text_tab("macro", "Macro/Fed/Treasury")
         self._build_text_tab("news_sec", "News/SEC")
+        self._build_text_tab("ai_summary", "AI Summary")
         self._build_raw_tab()
 
         status = ttk.Label(self.container, textvariable=self.status_var, relief="sunken", anchor="w")
@@ -170,6 +186,84 @@ class MarketPrepTab:
             padx=8,
             pady=(5, 7),
         )
+
+    def _build_ai_summary_controls(self) -> None:
+        frame = ttk.LabelFrame(self.container, text="AI Summary (optional)")
+        frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+        instructions = (
+            "Run Daily Prep or Weekly Prep first, then click Run AI Summary when you want a brief LLM macro read. "
+            "The API key can come from OPENAI_API_KEY, or you can paste it here and save it locally on this PC. "
+            "Article reading is capped so only a few relevant snippets are sent."
+        )
+        ttk.Label(frame, text=instructions, justify="left", wraplength=1500).grid(
+            row=0,
+            column=0,
+            columnspan=10,
+            sticky="we",
+            padx=8,
+            pady=(6, 4),
+        )
+
+        ttk.Label(frame, text="OpenAI API key").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=4)
+        ttk.Entry(frame, textvariable=self.openai_key_var, show="*", width=42).grid(
+            row=1,
+            column=1,
+            sticky="we",
+            padx=(0, 8),
+            pady=4,
+        )
+        ttk.Button(frame, text="Save AI Settings", command=self.save_ai_settings).grid(
+            row=1,
+            column=2,
+            sticky="w",
+            padx=(0, 8),
+            pady=4,
+        )
+        ttk.Label(frame, textvariable=self.openai_key_status_var).grid(
+            row=1,
+            column=3,
+            columnspan=6,
+            sticky="w",
+            padx=(0, 8),
+            pady=4,
+        )
+
+        ttk.Label(frame, text="Model").grid(row=2, column=0, sticky="w", padx=(8, 4), pady=(2, 6))
+        ttk.Entry(frame, textvariable=self.ai_model_var, width=18).grid(
+            row=2,
+            column=1,
+            sticky="w",
+            padx=(0, 8),
+            pady=(2, 6),
+        )
+        ttk.Label(frame, text="Max tokens").grid(row=2, column=2, sticky="w", padx=(0, 4), pady=(2, 6))
+        ttk.Spinbox(frame, from_=120, to=1000, increment=20, textvariable=self.ai_max_tokens_var, width=7).grid(
+            row=2,
+            column=3,
+            sticky="w",
+            padx=(0, 8),
+            pady=(2, 6),
+        )
+        ttk.Label(frame, text="Articles").grid(row=2, column=4, sticky="w", padx=(0, 4), pady=(2, 6))
+        ttk.Spinbox(frame, from_=0, to=8, increment=1, textvariable=self.ai_article_limit_var, width=5).grid(
+            row=2,
+            column=5,
+            sticky="w",
+            padx=(0, 8),
+            pady=(2, 6),
+        )
+        ttk.Label(frame, text="Chars/article").grid(row=2, column=6, sticky="w", padx=(0, 4), pady=(2, 6))
+        ttk.Spinbox(frame, from_=500, to=5000, increment=250, textvariable=self.ai_article_chars_var, width=7).grid(
+            row=2,
+            column=7,
+            sticky="w",
+            padx=(0, 8),
+            pady=(2, 6),
+        )
+        run_button = ttk.Button(frame, text="Run AI Summary", command=self.run_ai_summary)
+        run_button.grid(row=2, column=8, sticky="w", padx=(0, 8), pady=(2, 6))
+        self.buttons["Run AI Summary"] = run_button
+        frame.columnconfigure(1, weight=1)
 
     def _build_overview_tab(self) -> None:
         frame = ttk.Frame(self.view_notebook)
@@ -222,6 +316,8 @@ class MarketPrepTab:
             self.macro_text = widget
         elif tab_id == "news_sec":
             self.news_sec_text = widget
+        elif tab_id == "ai_summary":
+            self.ai_summary_text = widget
 
     def _build_raw_tab(self) -> None:
         frame = ttk.Frame(self.view_notebook)
@@ -319,13 +415,15 @@ class MarketPrepTab:
         report_key: str | None = None,
         export_prefix: str | None = None,
         report_type: str | None = None,
+        preserve_latest_report: bool = False,
     ) -> None:
         if self.background_task_active:
             self.status_var.set("Market Prep task already running.")
             return
 
         self.background_task_active = True
-        self.latest_report = None
+        if not preserve_latest_report:
+            self.latest_report = None
         button = self.buttons.get(button_label)
         if button is not None:
             button.configure(state="disabled")
@@ -392,6 +490,7 @@ class MarketPrepTab:
         self._set_text(self.earnings_text, "")
         self._set_text(self.macro_text, "")
         self._set_text(self.news_sec_text, "")
+        self._set_text(self.ai_summary_text, "")
         self.set_display_text(text)
 
     def _render_report(self, report: dict, *, fallback_markdown: str = "") -> None:
@@ -404,6 +503,7 @@ class MarketPrepTab:
         self._render_earnings(report)
         self._render_macro(report)
         self._render_news_sec(report)
+        self._render_ai_summary(report)
 
     def _reset_summary_cards(self) -> None:
         defaults = {
@@ -447,6 +547,10 @@ class MarketPrepTab:
 
     def _render_overview(self, report: dict, markdown: str) -> None:
         sections: list[str] = []
+        ai_summary = report.get("ai_summary") if isinstance(report.get("ai_summary"), dict) else {}
+        if ai_summary.get("summary"):
+            sections.append("AI Macro Brief\n" + str(ai_summary.get("summary")).strip())
+
         focus = self._markdown_section(markdown, "## 1. Highest Importance Focus", "## 2.")
         if focus:
             sections.append("Highest Importance Focus\n" + focus)
@@ -614,6 +718,47 @@ class MarketPrepTab:
 
         self._set_text(self.news_sec_text, "\n".join(lines).strip() or "No News/SEC rows found.")
 
+    def _render_ai_summary(self, report: dict) -> None:
+        payload = report.get("ai_summary") if isinstance(report.get("ai_summary"), dict) else {}
+        if not payload:
+            self._set_text(
+                self.ai_summary_text,
+                "No AI summary generated yet.\n\nRun Daily Prep or Weekly Prep, then click Run AI Summary.",
+            )
+            return
+
+        lines = [
+            "AI Macro Brief",
+            "=" * 80,
+            f"Status: {payload.get('status_label') or payload.get('status') or 'n/a'}",
+            f"Generated at: {payload.get('generated_at') or 'n/a'}",
+            f"Model: {payload.get('model') or 'n/a'}",
+            "",
+        ]
+        summary = str(payload.get("summary") or "").strip()
+        message = str(payload.get("message") or "").strip()
+        lines.append(summary or message or "No AI summary text returned.")
+
+        used_articles = payload.get("used_articles") if isinstance(payload.get("used_articles"), list) else []
+        if used_articles:
+            lines.extend(["", "Articles Read", "-" * 80])
+            for row in used_articles[:8]:
+                if not isinstance(row, dict):
+                    continue
+                parts = [
+                    str(row.get("title") or "").strip(),
+                    str(row.get("source") or "").strip(),
+                    str(row.get("url") or "").strip(),
+                ]
+                lines.append("- " + " | ".join(part for part in parts if part))
+
+        warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
+        if warnings:
+            lines.extend(["", "Notes", "-" * 80])
+            lines.extend(f"- {warning}" for warning in warnings[:8])
+
+        self._set_text(self.ai_summary_text, "\n".join(lines).strip())
+
     def _report_catalyst_clock(self, report: dict) -> list[dict]:
         clock = report.get("catalyst_clock") if isinstance(report, dict) else []
         if isinstance(clock, list) and clock:
@@ -668,6 +813,7 @@ class MarketPrepTab:
             ("Treasury", report.get("treasury_calendar")),
             ("SEC", report.get("sec_filings")),
             ("RSS", report.get("rss_headlines")),
+            ("OpenAI", report.get("ai_summary")),
         ):
             if isinstance(payload, dict):
                 self._append_status(items, label, payload)
@@ -888,6 +1034,50 @@ class MarketPrepTab:
             self.config.forexfactory.get("enabled")
         )
 
+    def _openai_key_status_text(self) -> str:
+        source = get_market_prep_openai_key_source(self.config)
+        if source == "environment":
+            return "Key source: OPENAI_API_KEY environment variable."
+        if source == "local_secret":
+            return "Key source: saved locally on this PC."
+        if source == "config":
+            return "Key source: config file."
+        return "Key source: not set."
+
+    def _int_from_var(self, var: tk.StringVar, *, default: int, minimum: int, maximum: int) -> int:
+        try:
+            value = int(var.get())
+        except (TypeError, ValueError):
+            value = default
+        value = min(max(value, minimum), maximum)
+        var.set(str(value))
+        return value
+
+    def save_ai_settings(self, *, quiet: bool = False) -> bool:
+        key_text = self.openai_key_var.get().strip()
+        settings = {
+            "model": self.ai_model_var.get().strip() or "gpt-5-mini",
+            "max_output_tokens": self._int_from_var(self.ai_max_tokens_var, default=300, minimum=120, maximum=1000),
+            "article_limit": self._int_from_var(self.ai_article_limit_var, default=4, minimum=0, maximum=8),
+            "article_char_limit": self._int_from_var(self.ai_article_chars_var, default=2000, minimum=500, maximum=5000),
+        }
+        try:
+            if key_text:
+                save_market_prep_openai_api_key(key_text)
+                self.openai_key_var.set("")
+            self.config = save_llm_summary_settings(settings)
+            self.orchestrator.config = self.config
+            self.openai_key_status_var.set(self._openai_key_status_text())
+        except Exception as exc:
+            self.logger.exception("Failed saving AI summary settings.")
+            if not quiet:
+                messagebox.showerror("AI Summary Settings", f"Could not save AI settings:\n\n{exc}")
+            self.status_var.set(f"AI settings save failed: {exc}")
+            return False
+        if not quiet:
+            self.status_var.set("AI summary settings saved.")
+        return True
+
     def _refresh_forexfactory_button(self) -> None:
         button = self.buttons.get("Toggle ForexFactory")
         if button is None:
@@ -990,6 +1180,25 @@ class MarketPrepTab:
             done_status="Watchlist risk scan complete.",
             export_prefix="watchlist_risk_scan",
             report_type="watchlist_risk",
+        )
+
+    def run_ai_summary(self) -> None:
+        if not self.latest_report:
+            message = "Run Daily Prep or Weekly Prep before requesting an AI summary."
+            self.status_var.set(message)
+            self._set_text(self.ai_summary_text, message)
+            return
+        if not self.save_ai_settings(quiet=True):
+            return
+        current_report = dict(self.latest_report)
+        self._run_background_task(
+            button_label="Run AI Summary",
+            running_status="Generating AI macro summary...",
+            loading_text="Reading selected headlines/articles and sending a compact digest to OpenAI...",
+            worker_func=lambda report=current_report: self.orchestrator.run_ai_summary(report),
+            done_status="AI macro summary ready.",
+            report_key="market_prep_report",
+            preserve_latest_report=True,
         )
 
     def export_markdown(self) -> None:

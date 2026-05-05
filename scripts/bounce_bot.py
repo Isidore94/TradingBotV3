@@ -1018,6 +1018,7 @@ class BounceBot(EWrapper, EClient):
         self.emitted_master_avwap_focus_alerts = set()
         self.emitted_master_avwap_second_stdev_alerts = set()
         self.emitted_master_avwap_d1_flags = set()
+        self.master_avwap_d1_flags_primed_date = None
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -1779,26 +1780,48 @@ class BounceBot(EWrapper, EClient):
         suffix = f" [{'; '.join(suffix_parts)}]" if suffix_parts else ""
         return f"MASTER_AVWAP_D1_FLAG: {symbol} ({direction or 'watch'}) {label}{suffix}"
 
-    def emit_master_avwap_d1_flags(self):
-        if not self.gui_callback:
-            return
-        events = build_master_avwap_d1_flag_events(
+    def _build_master_avwap_d1_flag_events(self):
+        return build_master_avwap_d1_flag_events(
             self.master_avwap_focus_map,
             self.master_avwap_events,
             self.master_avwap_d1_watchlist,
             trade_date=datetime.now().date(),
         )
+
+    def _master_avwap_d1_flag_key(self, event, today_iso=None):
+        symbol = str(event.get("symbol") or "").strip().upper()
+        return (
+            today_iso or datetime.now().date().isoformat(),
+            symbol,
+            event.get("side"),
+            event.get("event_type"),
+            event.get("label"),
+            event.get("reason"),
+        )
+
+    def prime_master_avwap_d1_flags(self, events=None):
         today_iso = datetime.now().date().isoformat()
+        active_events = events if events is not None else self._build_master_avwap_d1_flag_events()
+        for event in active_events:
+            self.emitted_master_avwap_d1_flags.add(self._master_avwap_d1_flag_key(event, today_iso=today_iso))
+        self.master_avwap_d1_flags_primed_date = today_iso
+        logging.info(
+            "Master AVWAP D1 flags primed without GUI emission for %s existing flag(s).",
+            len(active_events),
+        )
+        return len(active_events)
+
+    def emit_master_avwap_d1_flags(self):
+        events = self._build_master_avwap_d1_flag_events()
+        today_iso = datetime.now().date().isoformat()
+        if self.master_avwap_d1_flags_primed_date != today_iso:
+            self.prime_master_avwap_d1_flags(events)
+            return
+        if not self.gui_callback:
+            return
         for event in events:
             symbol = str(event.get("symbol") or "").strip().upper()
-            event_key = (
-                today_iso,
-                symbol,
-                event.get("side"),
-                event.get("event_type"),
-                event.get("label"),
-                event.get("reason"),
-            )
+            event_key = self._master_avwap_d1_flag_key(event, today_iso=today_iso)
             if event_key in self.emitted_master_avwap_d1_flags:
                 continue
             self.emitted_master_avwap_d1_flags.add(event_key)
@@ -5604,6 +5627,7 @@ class BounceBot(EWrapper, EClient):
                     self.emitted_master_avwap_focus_alerts.clear()
                     self.emitted_master_avwap_second_stdev_alerts.clear()
                     self.emitted_master_avwap_d1_flags.clear()
+                    self.master_avwap_d1_flags_primed_date = None
                     self.logged_near_miss_events.clear()
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
@@ -6640,9 +6664,10 @@ def start_lightweight_gui():
     tk.Button(header, text="Disconnect", command=disconnect_bot, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT, padx=(0, 8))
 
     def clear_alerts():
-        text_area.config(state="normal")
-        text_area.delete("1.0", tk.END)
-        text_area.config(state="disabled")
+        for widget in (text_area, d1_flags_text):
+            widget.config(state="normal")
+            widget.delete("1.0", tk.END)
+            widget.config(state="disabled")
 
     tk.Button(header, text="Clear", command=clear_alerts, relief=tk.RAISED, padx=10, bg=panel_grey, fg=text_color).pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -6722,10 +6747,18 @@ def start_lightweight_gui():
             activeforeground=text_color,
         ).pack(side=tk.LEFT, padx=2)
 
-    alerts_frame = tk.Frame(container, bg=dark_grey)
+    alerts_frame = tk.PanedWindow(
+        container,
+        orient=tk.HORIZONTAL,
+        sashrelief=tk.RAISED,
+        sashwidth=8,
+        showhandle=True,
+        bg=dark_grey,
+    )
     alerts_frame.pack(fill=tk.BOTH, expand=True)
+    bounce_frame = tk.LabelFrame(alerts_frame, text="BounceBot Alerts", bg=dark_grey, fg=text_color)
     text_area = scrolledtext.ScrolledText(
-        alerts_frame,
+        bounce_frame,
         wrap=tk.WORD,
         width=80,
         height=30,
@@ -6735,8 +6768,25 @@ def start_lightweight_gui():
         fg=text_color,
         insertbackground=text_color,
     )
-    text_area.pack(fill=tk.BOTH, expand=True)
+    text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    alerts_frame.add(bounce_frame, stretch="always")
+
+    d1_frame = tk.LabelFrame(alerts_frame, text="D1 Master AVWAP Events", bg=dark_grey, fg=text_color)
+    d1_flags_text = scrolledtext.ScrolledText(
+        d1_frame,
+        wrap=tk.WORD,
+        width=58,
+        height=30,
+        font=("Courier", 10),
+        state="disabled",
+        bg=input_grey,
+        fg=text_color,
+        insertbackground=text_color,
+    )
+    d1_flags_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    alerts_frame.add(d1_frame, stretch="always")
     configure_alert_tags(text_area, font_size=11)
+    configure_alert_tags(d1_flags_text, font_size=10)
 
     def process_bounce_queue():
         scanning_active = bool(bot_instance is not None and bot_instance.is_scanning_enabled())
@@ -6747,9 +6797,10 @@ def start_lightweight_gui():
                 msg, tag = bounce_queue.get_nowait()
             except queue.Empty:
                 break
-            text_area.config(state="normal")
+            target_area = d1_flags_text if str(tag).startswith("d1_flag") else text_area
+            target_area.config(state="normal")
             append_alert_message(
-                text_area,
+                target_area,
                 msg,
                 str(tag),
                 datetime.now().strftime("%H:%M:%S"),
@@ -6762,8 +6813,8 @@ def start_lightweight_gui():
                 ),
                 feedback_source="bounce_bot_lightweight_gui",
             )
-            text_area.config(state="disabled")
-            text_area.see(tk.END)
+            target_area.config(state="disabled")
+            target_area.see(tk.END)
             root.update()
         root.after(150, process_bounce_queue)
 

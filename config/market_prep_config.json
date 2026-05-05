@@ -21,13 +21,19 @@
     "treasury_calendar": true,
     "social": false,
     "options_flow": false,
-    "sec_filings": false
+    "sec_filings": false,
+    "llm_summary": true
   },
   "earnings": {
     "provider": "nasdaq",
     "include_manual": true,
     "nasdaq_cache_ttl_hours": 6,
-    "request_delay_seconds": 0.15
+    "request_delay_seconds": 0.15,
+    "filter_by_market_cap_and_volume": true,
+    "min_market_cap": 1000000000,
+    "min_average_volume": 1000000,
+    "exclude_unknown_market_cap": true,
+    "exclude_unknown_average_volume": true
   },
   "forexfactory": {
     "enabled": true,
@@ -127,6 +133,15 @@
       "semiconductor export controls",
       "oil prices Middle East"
     ]
+  },
+  "llm_summary": {
+    "model": "gpt-5-mini",
+    "max_output_tokens": 300,
+    "headline_limit": 20,
+    "article_limit": 4,
+    "article_char_limit": 2000,
+    "request_timeout_seconds": 45,
+    "article_timeout_seconds": 8
   },
   "ticker_lookup": {
     "days_ahead": 60,
