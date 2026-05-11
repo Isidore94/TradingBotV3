@@ -137,6 +137,50 @@ class MasterAvwapSharedTests(unittest.TestCase):
             self.assertEqual(groups["near_favorite_zones"]["LONG"], ["MSFT"])
             self.assertEqual(groups["near_favorite_zones"]["SHORT"], [])
 
+    def test_tradingview_report_preferred_over_stale_focus_feed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            focus_path = Path(temp_dir) / "master_avwap_focus.json"
+            tradingview_path = Path(temp_dir) / "master_avwap_tradingview.txt"
+            focus_path.write_text(
+                json.dumps(
+                    {
+                        "symbols": {"OLD": {"side": "LONG"}},
+                        "favorites": [{"symbol": "OLD", "side": "LONG"}],
+                        "near_favorite_zones": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            tradingview_path.write_text(
+                "\n".join(
+                    [
+                        "Master AVWAP TradingView lists",
+                        "Generated at 2026-05-06 10:00:00",
+                        "",
+                        "Best current favorite setups",
+                        "----------------------------",
+                        "LONG: AAPL",
+                        "SHORT: NONE",
+                        "",
+                        "Near favorite zones",
+                        "-------------------",
+                        "LONG: NVDA",
+                        "SHORT: TSLA",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            groups = load_tradingview_groups(
+                focus_path=focus_path,
+                tradingview_path=tradingview_path,
+            )
+
+            self.assertEqual(groups["source"], "tradingview_report")
+            self.assertEqual(groups["favorites"]["LONG"], ["AAPL"])
+            self.assertEqual(groups["near_favorite_zones"]["LONG"], ["NVDA"])
+            self.assertEqual(groups["near_favorite_zones"]["SHORT"], ["TSLA"])
+
     def test_d1_watchlist_and_flag_events(self):
         trade_date = date.today()
 
@@ -149,8 +193,20 @@ class MasterAvwapSharedTests(unittest.TestCase):
                             "NVDA": {
                                 "side": "LONG",
                                 "last_seen": trade_date.isoformat(),
+                                "active_current_scan": True,
                                 "priority_score": 260,
                                 "watch_reasons": ["favorite_setup", "sold_put_premium_viable"],
+                                "trigger_levels": [
+                                    {
+                                        "trigger_id": "first_dev_break:UPPER_1:102.0000",
+                                        "label": "UPPER_1",
+                                        "level": 102.0,
+                                        "action": "break_above",
+                                        "event_type": "first_dev_break",
+                                        "alert_label": "1st-dev break",
+                                        "armed_price": 101.0,
+                                    }
+                                ],
                                 "theta": {
                                     "play_type": "sold_put",
                                     "status": "recommended",
@@ -178,6 +234,8 @@ class MasterAvwapSharedTests(unittest.TestCase):
             )
             d1_watchlist = load_master_avwap_d1_watchlist(watchlist_path=watchlist_path)
             self.assertEqual(d1_watchlist["NVDA"]["theta"]["status"], "recommended")
+            self.assertEqual(d1_watchlist["NVDA"]["trigger_levels"][0]["level"], 102.0)
+            self.assertEqual(d1_watchlist["NVDA"]["trigger_levels"][0]["action"], "break_above")
 
             focus_map = {
                 "AAPL": {

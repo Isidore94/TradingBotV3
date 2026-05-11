@@ -1,7 +1,10 @@
 import unittest
 from datetime import date
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
+from scripts import earnings_history
 from market_prep.models import MarketPrepConfig
 from market_prep.report_builder import build_earnings_report
 from market_prep.services.earnings_service import NasdaqEarningsProvider, get_upcoming_earnings
@@ -35,7 +38,13 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
                 },
             ]
 
-        with patch("market_prep.services.earnings_service.fetch_nasdaq_earnings_for_date", fake_fetch):
+        with (
+            patch("market_prep.services.earnings_service.fetch_nasdaq_earnings_for_date", fake_fetch),
+            patch(
+                "market_prep.services.earnings_service.merge_shared_earnings_events",
+                side_effect=lambda events: list(events or []),
+            ),
+        ):
             payload = get_upcoming_earnings(
                 start_date=date(2026, 4, 27),
                 days=0,
@@ -91,6 +100,10 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
         with (
             patch("market_prep.services.earnings_service.fetch_nasdaq_earnings_for_date", fake_fetch),
             patch("market_prep.services.earnings_service.enrich_events_with_metadata", side_effect=fake_enrich),
+            patch(
+                "market_prep.services.earnings_service.merge_shared_earnings_events",
+                side_effect=lambda events: list(events or []),
+            ),
         ):
             payload = get_upcoming_earnings(
                 start_date=date(2026, 4, 27),
@@ -103,6 +116,39 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
         self.assertEqual(enriched_input, ["BIG", "ILLQ", "UNKN"])
         self.assertEqual(payload["filters"]["prefilter_removed_count"], 1)
         self.assertEqual(payload["filters"]["removed_count"], 2)
+
+    def test_nasdaq_provider_writes_shared_earnings_history(self):
+        provider = NasdaqEarningsProvider(config=None, include_manual=False)
+
+        def fake_fetch(date_str: str, *, config=None):
+            return [
+                {
+                    "symbol": "BIG",
+                    "name": "Big Market Mover",
+                    "time": "time-after-hours",
+                    "marketCap": "$250,000,000,000",
+                    "epsForecast": "$2.50",
+                    "noOfEsts": "19",
+                    "fiscalQuarterEnding": "Mar/2026",
+                }
+            ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "earnings_calendar_history.json"
+            with (
+                patch("market_prep.services.earnings_service.fetch_nasdaq_earnings_for_date", fake_fetch),
+                patch.object(earnings_history, "DEFAULT_HISTORY_FILE", history_path),
+            ):
+                payload = get_upcoming_earnings(
+                    start_date=date(2026, 4, 27),
+                    days=0,
+                    provider=provider,
+                    config=None,
+                )
+            stored = earnings_history.get_events_for_symbols(["BIG"], path=history_path)["BIG"]
+
+        self.assertEqual(payload["earnings"][0]["ticker"], "BIG")
+        self.assertEqual(stored[0]["release_session"], "AMC")
 
     def test_yfinance_enrichment_preserves_nasdaq_market_cap_when_metadata_is_empty(self):
         event = {

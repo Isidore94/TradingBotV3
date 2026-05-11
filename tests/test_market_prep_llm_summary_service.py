@@ -74,6 +74,7 @@ class MarketPrepLlmSummaryServiceTests(unittest.TestCase):
                 "article_char_limit": 900,
                 "request_timeout_seconds": 12,
                 "article_timeout_seconds": 5,
+                "user_context": "Focus on rates, semis, and whether today is a size-down day.",
             }
         )
         article_html = """
@@ -86,9 +87,13 @@ class MarketPrepLlmSummaryServiceTests(unittest.TestCase):
         def fake_post(_url, *, headers, json, timeout):
             self.assertEqual(headers["Authorization"], "Bearer sk-test")
             self.assertEqual(json["model"], "gpt-5-mini")
-            self.assertEqual(json["max_output_tokens"], 220)
+            self.assertEqual(json["max_output_tokens"], 600)
+            self.assertEqual(json["reasoning"]["effort"], "low")
+            self.assertEqual(json["text"]["verbosity"], "low")
             self.assertIn("Article snippets", json["input"])
             self.assertIn("Treasury yields rise before CPI", json["input"])
+            self.assertIn("User extra context/instructions", json["input"])
+            self.assertIn("size-down day", json["input"])
             self.assertEqual(timeout, 12)
             return FakeResponse(payload={"output_text": "Macro risk is CPI/rates-led. Used: Test News."})
 
@@ -116,6 +121,32 @@ class MarketPrepLlmSummaryServiceTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "missing_key")
         post_mock.assert_not_called()
+
+    def test_incomplete_response_reports_output_token_exhaustion(self):
+        config = MarketPrepConfig(
+            llm_summary={
+                "model": "gpt-5-mini",
+                "max_output_tokens": 600,
+                "article_limit": 0,
+            }
+        )
+        response_payload = {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"output_tokens": 600},
+            "output": [],
+        }
+
+        with patch.object(llm_summary_service.requests, "post", return_value=FakeResponse(payload=response_payload)):
+            result = llm_summary_service.generate_market_prep_llm_summary(
+                self._report(),
+                config=config,
+                api_key="sk-test",
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["model"], "gpt-5-mini")
+        self.assertIn("max_output_tokens was exhausted", result["message"])
 
     def test_attach_ai_summary_to_daily_report_adds_markdown_section(self):
         report = {

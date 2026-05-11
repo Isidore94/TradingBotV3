@@ -68,7 +68,7 @@ class GuiOutputTests(unittest.TestCase):
                 near_favorites="TSLA",
                 long_focus="AAPL, MSFT",
                 short_focus="TSLA",
-                setup_types="avwap_breakout\nLONG: AAPL, MSFT",
+                setup_types="AAPL LONG score=99 family=avwap_breakout bucket=favorite_setup",
                 theta="NVDA",
             )
 
@@ -93,7 +93,10 @@ class GuiOutputTests(unittest.TestCase):
             self.assertIn("Theta Plays\nNVDA", output)
             self.assertIn("Directional Longs\nAAPL, MSFT", output)
             self.assertIn("Directional Shorts\nTSLA", output)
-            self.assertIn("Setup Type Copy Lists\navwap_breakout\nLONG: AAPL, MSFT", output)
+            self.assertIn(
+                "Score-Ranked Setups\nAAPL LONG score=99 family=avwap_breakout bucket=favorite_setup",
+                output,
+            )
 
     def test_build_consolidated_gui_output_falls_back_to_focus_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -170,8 +173,8 @@ class GuiOutputTests(unittest.TestCase):
             self.assertIn("Theta Plays\nNVDA", output)
             self.assertIn("Directional Longs\nAAPL, MSFT", output)
             self.assertIn("Directional Shorts\nTSLA", output)
-            self.assertIn("Setup Type Copy Lists\navwap_breakout\nLONG: AAPL, MSFT", output)
-            self.assertIn("avwap_breakdown\nSHORT: TSLA", output)
+            self.assertIn("Score-Ranked Setups\nAAPL LONG", output)
+            self.assertIn("TSLA SHORT", output)
 
 
 if __name__ == "__main__":

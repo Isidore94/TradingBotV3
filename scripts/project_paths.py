@@ -81,6 +81,7 @@ INDUSTRY_ETF_MAP_FILE = DATA_DIR / "industry_etf_map.json"
 SYMBOL_CLASSIFICATION_CACHE_FILE = DATA_DIR / "symbol_classification.csv"
 EARNINGS_ANCHORS_FILE = DATA_DIR / "earnings_avwap_anchors.csv"
 EARNINGS_ANCHOR_CANDIDATES_FILE = RUNTIME_DATA_DIR / "earnings_anchor_candidates.csv"
+EARNINGS_CALENDAR_HISTORY_FILE = DATA_DIR / "earnings_calendar_history.json"
 
 EARNINGS_CACHE_FILE = CACHE_DIR / "earnings_cache.json"
 PREV_EARNINGS_CACHE_FILE = CACHE_DIR / "prev_earnings_cache.json"

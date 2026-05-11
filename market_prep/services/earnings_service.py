@@ -24,6 +24,25 @@ from market_prep.services.yfinance_service import (
     is_yfinance_metadata_enabled,
 )
 
+try:
+    from scripts.earnings_history import (
+        merge_events as merge_shared_earnings_events,
+        normalize_manual_event,
+        normalize_nasdaq_event,
+        normalize_release_session,
+        record_yfinance_rows,
+        shared_event_to_market_prep_row,
+    )
+except ImportError:  # pragma: no cover - used when Market Prep is launched from scripts/
+    from earnings_history import (
+        merge_events as merge_shared_earnings_events,
+        normalize_manual_event,
+        normalize_nasdaq_event,
+        normalize_release_session,
+        record_yfinance_rows,
+        shared_event_to_market_prep_row,
+    )
+
 
 MANUAL_EARNINGS_CALENDAR_FILE = CONFIG_DIR / "manual_earnings_calendar.json"
 NO_CONFIGURED_EARNINGS_MESSAGE = "No configured earnings found."
@@ -63,12 +82,13 @@ class ManualEarningsProvider:
 
     def get_earnings(self, *, start_date: date, end_date: date) -> list[dict[str, Any]]:
         rows = load_manual_earnings_calendar(self.path)
-        normalized = [
-            _normalize_earnings_row(row)
+        normalized_events = [
+            normalize_manual_event(row)
             for row in rows
             if _is_earnings_in_window(row, start_date, end_date)
         ]
-        return [row for row in normalized if row is not None]
+        merged_events = merge_shared_earnings_events([row for row in normalized_events if row is not None])
+        return [_shared_event_to_earnings_row(event) for event in merged_events]
 
 
 class NasdaqEarningsProvider:
@@ -80,9 +100,14 @@ class NasdaqEarningsProvider:
         self.include_manual = bool(settings.get("include_manual", True) if include_manual is None else include_manual)
 
     def get_earnings(self, *, start_date: date, end_date: date) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
         if self.include_manual:
-            rows.extend(ManualEarningsProvider().get_earnings(start_date=start_date, end_date=end_date))
+            manual_rows = load_manual_earnings_calendar()
+            events.extend(
+                event
+                for event in (normalize_manual_event(row) for row in manual_rows if _is_earnings_in_window(row, start_date, end_date))
+                if event is not None
+            )
 
         settings = get_earnings_settings(self.config)
         delay_seconds = max(0.0, _safe_float(settings.get("request_delay_seconds"), 0.15))
@@ -90,14 +115,15 @@ class NasdaqEarningsProvider:
         while current <= end_date:
             raw_rows = fetch_nasdaq_earnings_for_date(current.isoformat(), config=self.config)
             for raw_row in raw_rows:
-                normalized = _normalize_nasdaq_earnings_row(raw_row, current)
-                if normalized is not None:
-                    rows.append(normalized)
+                event = normalize_nasdaq_event(raw_row, current)
+                if event is not None:
+                    events.append(event)
             current += timedelta(days=1)
             if delay_seconds and current <= end_date:
                 time.sleep(delay_seconds)
 
-        return _dedupe_earnings_rows(rows)
+        merged_events = merge_shared_earnings_events(events)
+        return _dedupe_earnings_rows([_shared_event_to_earnings_row(event) for event in merged_events])
 
 
 class ProviderStub:
@@ -130,6 +156,8 @@ def get_upcoming_earnings(
     metadata_payload = _empty_yfinance_status(config)
     if config is not None and is_yfinance_metadata_enabled(config):
         rows, metadata_payload = enrich_events_with_metadata(rows, config=config)
+        if rows:
+            merge_shared_earnings_events(rows)
     if filter_enabled:
         rows, postfilter_stats = _filter_earnings_rows_by_market_cap_and_volume(rows, settings)
         filter_stats = _combine_filter_stats(filter_stats, postfilter_stats)
@@ -375,45 +403,44 @@ def _normalize_earnings_row(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _normalize_nasdaq_earnings_row(row: dict[str, Any], event_date: date) -> dict[str, Any] | None:
-    if not isinstance(row, dict):
-        return None
-    ticker = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
-    if not ticker:
-        return None
-    market_cap = _parse_market_cap(row.get("marketCap") or row.get("market_cap"))
-    market_impact = classify_market_cap_importance(market_cap)
-    return {
-        "date": event_date.isoformat(),
-        "time": _normalize_nasdaq_release_time(row.get("time")),
-        "ticker": ticker,
-        "company": str(row.get("name") or row.get("company") or "").strip(),
-        "importance": market_impact if market_impact != "UNKNOWN" else "LOW",
-        "notes": _nasdaq_earnings_notes(row),
-        "source": "nasdaq",
-        "market_cap": market_cap,
-        "market_cap_fmt": format_market_cap(market_cap),
-        "market_cap_source": "nasdaq" if market_cap is not None else "",
-        "metadata_source": "nasdaq" if market_cap is not None else "",
-        "market_impact": market_impact,
-        "eps_forecast": str(row.get("epsForecast") or "").strip(),
-        "estimate_count": str(row.get("noOfEsts") or "").strip(),
-        "fiscal_quarter_ending": str(row.get("fiscalQuarterEnding") or "").strip(),
-        "last_year_report_date": str(row.get("lastYearRptDt") or "").strip(),
-        "last_year_eps": str(row.get("lastYearEPS") or "").strip(),
-    }
+    event = normalize_nasdaq_event(row, event_date)
+    return _shared_event_to_earnings_row(event) if event is not None else None
 
 
 def _normalize_nasdaq_release_time(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    if not text:
-        return ""
-    if "pre" in text or "before" in text:
-        return "BMO"
-    if "after" in text or "post" in text:
-        return "AMC"
-    if "not" in text and "supplied" in text:
-        return "TBD"
-    return str(value or "").strip().upper()
+    return normalize_release_session(value)
+
+
+def _shared_event_to_earnings_row(event: dict[str, Any]) -> dict[str, Any]:
+    row = shared_event_to_market_prep_row(event)
+    market_cap = _safe_market_cap(row.get("market_cap"))
+    market_impact = classify_market_cap_importance(market_cap)
+    row.update(
+        {
+            "importance": market_impact if market_impact != "UNKNOWN" else "LOW",
+            "notes": _earnings_notes_from_normalized_row(row),
+            "market_cap": market_cap,
+            "market_cap_fmt": format_market_cap(market_cap),
+            "market_cap_source": row.get("source") if market_cap is not None else "",
+            "metadata_source": row.get("source") if market_cap is not None else "",
+            "market_impact": market_impact,
+        }
+    )
+    return row
+
+
+def _earnings_notes_from_normalized_row(row: dict[str, Any]) -> str:
+    parts = []
+    eps = str(row.get("eps_forecast") or "").strip()
+    estimates = str(row.get("estimate_count") or "").strip()
+    quarter = str(row.get("fiscal_quarter_ending") or "").strip()
+    if eps:
+        parts.append(f"EPS est {eps}")
+    if estimates:
+        parts.append(f"{estimates} ests")
+    if quarter:
+        parts.append(f"quarter {quarter}")
+    return "; ".join(parts)
 
 
 def _nasdaq_earnings_notes(row: dict[str, Any]) -> str:
@@ -633,6 +660,8 @@ def _load_yfinance_earnings_fallback(
                 "skipped_count": len(symbols) - max_tickers,
             }
         )
+    if rows:
+        record_yfinance_rows(rows)
     return rows, _combine_yfinance_status(*statuses)
 
 

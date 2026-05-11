@@ -263,7 +263,7 @@ def build_consolidated_gui_output(
         "Directional Shorts",
         copy_lists["short_focus"],
         "",
-        "Setup Type Copy Lists",
+        "Score-Ranked Setups",
         copy_lists["setup_types"],
         "",
         "Market Prep",

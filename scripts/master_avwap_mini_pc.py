@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import importlib
 import json
 import logging
 import os
@@ -46,7 +47,6 @@ from master_avwap import (
     fetch_daily_bars,
     is_daily_data_client_connected,
     load_tickers,
-    run_master,
     update_setup_tracker_from_scan,
 )
 from project_paths import (
@@ -603,18 +603,24 @@ def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
     return summary
 
 
+def run_master_avwap_shared_scan(update_setup_tracker: bool = True) -> dict[str, Any]:
+    master_avwap_module = importlib.import_module("master_avwap")
+    scan_result = master_avwap_module.run_master(
+        use_shared_watchlists=True,
+        update_setup_tracker=update_setup_tracker,
+        require_ib_for_setup_tracker=True,
+    )
+    return scan_result if isinstance(scan_result, dict) else {}
+
+
 def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
     filter_summary = filter_watchlists_by_previous_day_levels()
     try:
-        scan_result = run_master(
-            use_shared_watchlists=True,
-            update_setup_tracker=update_setup_tracker,
-            require_ib_for_setup_tracker=True,
-        )
+        scan_result = run_master_avwap_shared_scan(update_setup_tracker=update_setup_tracker)
     except Exception as exc:
         setattr(exc, "watchlist_filter_summary", filter_summary)
         raise
-    return filter_summary, scan_result if isinstance(scan_result, dict) else {}
+    return filter_summary, scan_result
 
 
 def get_setup_tracker_refresh_slot_for_schedule(

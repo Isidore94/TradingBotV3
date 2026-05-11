@@ -112,6 +112,61 @@ def _clean_string_list(values: Any, *, uppercase: bool = False) -> list[str]:
     return cleaned
 
 
+def _normalize_d1_trigger_levels(values: Any, side: Any = "") -> list[dict[str, Any]]:
+    if isinstance(values, dict):
+        raw_values = values.values()
+    elif isinstance(values, (list, tuple)):
+        raw_values = values
+    else:
+        raw_values = []
+
+    normalized_side = _normalize_side(side)
+    default_action = "break_below" if normalized_side == "SHORT" else "break_above"
+    trigger_levels: list[dict[str, Any]] = []
+    seen = set()
+    for raw_entry in raw_values:
+        if not isinstance(raw_entry, dict):
+            continue
+        level = _coerce_float(raw_entry.get("level") or raw_entry.get("price"))
+        if level is None:
+            continue
+        label = str(raw_entry.get("label") or raw_entry.get("level_label") or "").strip().upper()
+        if not label:
+            label = "LEVEL"
+        action = str(raw_entry.get("action") or raw_entry.get("trigger_action") or default_action).strip().lower()
+        if action not in {"break_above", "break_below"}:
+            action = default_action
+        event_type = str(raw_entry.get("event_type") or "preloaded_level_break").strip().lower()
+        trigger_id = str(raw_entry.get("trigger_id") or "").strip()
+        if not trigger_id:
+            trigger_id = f"{event_type}:{label}:{round(float(level), 4):.4f}"
+        key = (trigger_id, label, round(float(level), 4), action)
+        if key in seen:
+            continue
+        seen.add(key)
+        trigger_levels.append(
+            {
+                "schema_version": raw_entry.get("schema_version"),
+                "trigger_id": trigger_id,
+                "side": _normalize_side(raw_entry.get("side") or normalized_side),
+                "action": action,
+                "event_type": event_type,
+                "label": label,
+                "alert_label": str(raw_entry.get("alert_label") or label).strip(),
+                "level": float(level),
+                "reason": str(raw_entry.get("reason") or "").strip(),
+                "source": str(raw_entry.get("source") or "").strip(),
+                "armed_at": str(raw_entry.get("armed_at") or "").strip(),
+                "armed_price": _coerce_float(raw_entry.get("armed_price")),
+                "anchor_type": str(raw_entry.get("anchor_type") or "").strip(),
+                "anchor_date": str(raw_entry.get("anchor_date") or "").strip(),
+                "priority_bucket": str(raw_entry.get("priority_bucket") or "").strip(),
+                "setup_family": str(raw_entry.get("setup_family") or "").strip(),
+            }
+        )
+    return trigger_levels
+
+
 def _empty_focus_groups(
     source: str = "none",
     source_label: str = "No focus output yet",
@@ -338,6 +393,8 @@ def load_master_avwap_d1_watchlist(
     if not isinstance(raw_symbols, dict):
         return {}
 
+    generated_at = str(payload.get("generated_at") or "").strip()
+    run_date = str(payload.get("run_date") or "").strip()
     watchlist = {}
     for raw_symbol, raw_entry in raw_symbols.items():
         entry = raw_entry if isinstance(raw_entry, dict) else {}
@@ -369,6 +426,15 @@ def load_master_avwap_d1_watchlist(
             "retest_reference_level": str(entry.get("retest_reference_level") or "").strip(),
             "trendline_break_recent": bool(entry.get("trendline_break_recent")),
             "trendline_break_note": str(entry.get("trendline_break_note") or "").strip(),
+            "post_earnings_active": bool(entry.get("post_earnings_active")),
+            "post_earnings_monitor_level": _coerce_float(entry.get("post_earnings_monitor_level")),
+            "post_earnings_monitor_level_label": str(entry.get("post_earnings_monitor_level_label") or "").strip(),
+            "post_earnings_break_intraday": bool(entry.get("post_earnings_break_intraday")),
+            "post_earnings_note": str(entry.get("post_earnings_note") or "").strip(),
+            "trigger_levels": _normalize_d1_trigger_levels(entry.get("trigger_levels"), entry.get("side")),
+            "trigger_summary": str(entry.get("trigger_summary") or "").strip(),
+            "watchlist_generated_at": generated_at,
+            "watchlist_run_date": run_date,
             "theta": {
                 "play_type": str(theta.get("play_type") or "").strip(),
                 "status": str(theta.get("status") or "").strip().lower(),
@@ -713,37 +779,42 @@ def load_tradingview_groups(
     focus_path: Path = MASTER_AVWAP_FOCUS_FILE,
     tradingview_path: Path = MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
 ) -> dict[str, Any]:
+    text = _read_text(tradingview_path)
+    groups = _empty_focus_groups(source="tradingview_report", source_label="TradingView report")
+    if text:
+        section_lookup = {
+            "Best current favorite setups": "favorites",
+            "Near favorite zones": "near_favorite_zones",
+        }
+        current_section = None
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                current_section = None
+                continue
+            if line in section_lookup:
+                current_section = section_lookup[line]
+                continue
+            if line.startswith("-") or current_section not in groups or ":" not in line:
+                continue
+
+            side_label, values = line.split(":", 1)
+            side = side_label.strip().upper()
+            if side not in VALID_SIDES:
+                continue
+            groups[current_section][side] = _extract_symbols_from_text(values)
+
+        has_report_symbols = any(
+            groups[section][side]
+            for section in ("favorites", "near_favorite_zones")
+            for side in VALID_SIDES
+        )
+        if has_report_symbols:
+            return groups
+
     focus_groups = _load_focus_groups_from_feed(focus_path=focus_path)
     if focus_groups.get("source") != "none":
         return focus_groups
-
-    text = _read_text(tradingview_path)
-    groups = _empty_focus_groups(source="tradingview_report", source_label="TradingView report")
-    if not text:
-        return groups
-
-    section_lookup = {
-        "Best current favorite setups": "favorites",
-        "Near favorite zones": "near_favorite_zones",
-    }
-    current_section = None
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            current_section = None
-            continue
-        if line in section_lookup:
-            current_section = section_lookup[line]
-            continue
-        if line.startswith("-") or current_section not in groups or ":" not in line:
-            continue
-
-        side_label, values = line.split(":", 1)
-        side = side_label.strip().upper()
-        if side not in VALID_SIDES:
-            continue
-        groups[current_section][side] = _extract_symbols_from_text(values)
-
     return groups
 
 

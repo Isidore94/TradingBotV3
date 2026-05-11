@@ -255,6 +255,15 @@ class MarketPrepOrchestrator:
                 "report": message,
             }
         ai_summary = generate_market_prep_llm_summary(report, config=self.config)
+        status = str(ai_summary.get("status") or "").lower() if isinstance(ai_summary, dict) else ""
+        if status == "ok":
+            self.logger.info("Market Prep AI summary completed.")
+        else:
+            self.logger.warning(
+                "Market Prep AI summary returned status %s: %s",
+                ai_summary.get("status") or "unknown",
+                ai_summary.get("message") or ai_summary.get("status_label") or "",
+            )
         updated_report = attach_ai_summary_to_report(report, ai_summary)
         return {
             "action": "Run AI Summary",
