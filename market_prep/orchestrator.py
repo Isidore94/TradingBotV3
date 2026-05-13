@@ -17,7 +17,9 @@ from .report_builder import (
     build_watchlist_risk_report,
     build_weekly_report_object,
     build_youtube_links_report,
+    attach_ai_summary_to_report,
 )
+from .services.llm_summary_service import generate_market_prep_llm_summary
 from .services.economic_calendar_service import (
     get_economic_events_for_date,
     get_upcoming_economic_events,
@@ -240,6 +242,35 @@ class MarketPrepOrchestrator:
             "generated_at": payload.get("generated_at") or datetime.now().isoformat(timespec="seconds"),
             "youtube_links": payload,
             "report": build_youtube_links_report(payload),
+        }
+
+    def run_ai_summary(self, report: dict) -> dict[str, Any]:
+        self.logger.info("Market Prep AI summary started.")
+        if not isinstance(report, dict) or not report:
+            message = "Run Daily Prep or Weekly Prep before requesting an AI summary."
+            return {
+                "action": "Run AI Summary",
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "ai_summary": {"status": "failed", "status_label": "Failed", "message": message},
+                "report": message,
+            }
+        ai_summary = generate_market_prep_llm_summary(report, config=self.config)
+        status = str(ai_summary.get("status") or "").lower() if isinstance(ai_summary, dict) else ""
+        if status == "ok":
+            self.logger.info("Market Prep AI summary completed.")
+        else:
+            self.logger.warning(
+                "Market Prep AI summary returned status %s: %s",
+                ai_summary.get("status") or "unknown",
+                ai_summary.get("message") or ai_summary.get("status_label") or "",
+            )
+        updated_report = attach_ai_summary_to_report(report, ai_summary)
+        return {
+            "action": "Run AI Summary",
+            "generated_at": ai_summary.get("generated_at") or datetime.now().isoformat(timespec="seconds"),
+            "ai_summary": ai_summary,
+            "market_prep_report": updated_report,
+            "report": updated_report.get("markdown") or ai_summary.get("summary") or ai_summary.get("message") or "",
         }
 
     def _load_todays_events(

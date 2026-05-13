@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from .._legacy_bridge import expose_legacy_names
+
+expose_legacy_names(
+    globals(),
+    (
+        "EarningsGapAnchorCandidate",
+        "load_earnings_date_cache",
+        "save_earnings_date_cache",
+        "fetch_earnings_for_date",
+        "collect_earnings_dates",
+        "collect_upcoming_earnings_dates",
+        "dry_run_collect_earnings_dates_short_circuit",
+        "pick_current_earnings_anchor",
+        "pick_previous_earnings_anchor",
+        "pick_current_earnings_anchor_for_reference_date",
+        "pick_previous_earnings_anchor_for_reference_date",
+        "yf_earnings_dates",
+        "load_or_refresh_earnings",
+        "ensure_anchor_file",
+        "ensure_anchor_candidate_file",
+        "ensure_previous_gap_file",
+        "infer_release_session",
+        "get_last_market_session_date",
+        "get_recent_market_session_dates",
+        "build_market_regime_snapshot",
+        "fetch_earnings_calendar_rows",
+        "has_weekly_options",
+        "load_latest_earnings_release_map",
+        "load_scan_earnings_context",
+        "build_earnings_anchor_candidate",
+        "evaluate_earnings_gap_candidate",
+        "append_anchor_candidates",
+        "load_latest_anchor_candidate_rows",
+        "resolve_bulk_anchor_candidates",
+        "write_anchor_candidates_output",
+        "scan_last_session_earnings_for_anchors",
+    ),
+)

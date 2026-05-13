@@ -21,13 +21,19 @@
     "treasury_calendar": true,
     "social": false,
     "options_flow": false,
-    "sec_filings": false
+    "sec_filings": false,
+    "llm_summary": true
   },
   "earnings": {
     "provider": "nasdaq",
     "include_manual": true,
     "nasdaq_cache_ttl_hours": 6,
-    "request_delay_seconds": 0.15
+    "request_delay_seconds": 0.15,
+    "filter_by_market_cap_and_volume": true,
+    "min_market_cap": 1000000000,
+    "min_average_volume": 1000000,
+    "exclude_unknown_market_cap": true,
+    "exclude_unknown_average_volume": true
   },
   "forexfactory": {
     "enabled": true,
@@ -128,8 +134,20 @@
       "oil prices Middle East"
     ]
   },
+  "llm_summary": {
+    "model": "gpt-5-mini",
+    "max_output_tokens": 2000,
+    "headline_limit": 20,
+    "article_limit": 8,
+    "article_char_limit": 2000,
+    "request_timeout_seconds": 45,
+    "article_timeout_seconds": 8,
+    "reasoning_effort": "low",
+    "text_verbosity": "low",
+    "user_context": "Focus on this weeks headlines and econ provide a summary of whats moving markets"
+  },
   "ticker_lookup": {
-    "days_ahead": 60,
+    "days_ahead": 10,
     "news_limit": 40,
     "max_peer_tickers": 8,
     "include_sec_filings": true,

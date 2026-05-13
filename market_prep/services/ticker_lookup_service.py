@@ -13,7 +13,7 @@ from market_prep.services.yfinance_service import get_ticker_metadata
 
 
 DEFAULT_TICKER_LOOKUP_SETTINGS = {
-    "days_ahead": 60,
+    "days_ahead": 10,
     "news_limit": 40,
     "max_peer_tickers": 8,
     "include_sec_filings": True,
@@ -68,7 +68,7 @@ def lookup_ticker_context(
     if not symbol:
         raise ValueError("Enter a ticker symbol before running lookup.")
 
-    window_days = _safe_int(days_ahead, _safe_int(settings.get("days_ahead"), 60))
+    window_days = _safe_int(days_ahead, _safe_int(settings.get("days_ahead"), 10))
     generated_at = datetime.now().isoformat(timespec="seconds")
     start = datetime.now().date()
     metadata = get_ticker_metadata(symbol, config=active_config)

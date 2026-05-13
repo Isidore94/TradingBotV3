@@ -130,6 +130,7 @@ def fetch_rss_headlines(
                     "url": str(entry.get("url") or "").strip(),
                     "category": category,
                     "query": query,
+                    "summary": summary,
                     "tags": tags,
                 }
             )
