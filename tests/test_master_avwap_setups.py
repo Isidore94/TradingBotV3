@@ -116,7 +116,7 @@ def _build_post_earnings_52w_history(
                 open_price = 119.25
                 high_price = 120.0
                 low_price = 117.5
-                close_price = 118.7
+                close_price = 119.7
             elif idx == gap_idx + 1:
                 open_price = 119.0
                 high_price = 121.0
@@ -137,7 +137,7 @@ def _build_post_earnings_52w_history(
                 open_price = 80.75
                 high_price = 82.0
                 low_price = 80.0
-                close_price = 81.3
+                close_price = 80.3
             elif idx == gap_idx + 1:
                 open_price = 80.8
                 high_price = 81.2
@@ -300,6 +300,11 @@ def _build_tracker_setup(
     side: str = "LONG",
     priority_bucket: str = "favorite_setup",
     setup_family: str = "avwap_breakout",
+    favorite_zone: str = "",
+    setup_tags: list[str] | None = None,
+    favorite_signals: list[str] | None = None,
+    retest_followthrough: bool = False,
+    retest_reference_level: str = "",
     scenario_status: str = "TARGET_HIT",
 ) -> dict:
     setup_status = "OPEN"
@@ -312,6 +317,11 @@ def _build_tracker_setup(
         "scan_date": scan_date,
         "priority_bucket": priority_bucket,
         "setup_family": setup_family,
+        "favorite_zone": favorite_zone,
+        "setup_tags": list(setup_tags or []),
+        "favorite_signals": list(favorite_signals or []),
+        "retest_followthrough": bool(retest_followthrough),
+        "retest_reference_level": retest_reference_level,
         "setup_status": setup_status,
         "scenarios": {
             "baseline": {
@@ -399,7 +409,7 @@ def _build_avwape_retest_daily_rows() -> list[dict]:
 
 
 class MasterAvwapSetupTests(unittest.TestCase):
-    def test_mid_earnings_hold_requires_15_sessions_after_gap(self):
+    def test_mid_earnings_hold_requires_ten_sessions_after_gap(self):
         df = _build_mid_earnings_history()
         anchor_date = df.iloc[3]["datetime"].date().isoformat()
         gap_date = df.iloc[6]["datetime"].date().isoformat()
@@ -420,7 +430,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "active": True,
             "anchor_date": anchor_date,
             "gap_date": gap_date,
-            "sessions_since_gap": 14,
+            "sessions_since_gap": 9,
             "anchor_meta": {
                 "date": anchor_date,
                 "bands": {
@@ -545,6 +555,41 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(short_summary["favorite_signals"], ["BOUNCE_LOWER_1"])
         self.assertEqual(short_summary["setup_family"], "avwap_band_bounce")
 
+    def test_avwape_to_first_dev_family_starts_after_ten_post_earnings_sessions(self):
+        early_summary = build_priority_setup_summary(
+            symbol="NOK",
+            side="LONG",
+            events_today=["CROSS_UP_UPPER_1"],
+            all_events=["CROSS_UP_UPPER_1"],
+            trend_label="UP",
+            favorite_zone="AVWAPE to UPPER_1",
+            post_earnings_sessions_since_gap=9,
+        )
+        ready_summary = build_priority_setup_summary(
+            symbol="NOK",
+            side="LONG",
+            events_today=["CROSS_UP_UPPER_1"],
+            all_events=["CROSS_UP_UPPER_1"],
+            trend_label="UP",
+            favorite_zone="AVWAPE to UPPER_1",
+            post_earnings_sessions_since_gap=10,
+        )
+        retest_summary = build_priority_setup_summary(
+            symbol="NOK",
+            side="LONG",
+            events_today=[],
+            all_events=[],
+            trend_label="UP",
+            favorite_zone="AVWAPE to UPPER_1",
+            retest_followthrough=True,
+            retest_reference_level="AVWAPE",
+            post_earnings_sessions_since_gap=10,
+        )
+
+        self.assertEqual(early_summary["setup_family"], "avwap_breakout")
+        self.assertEqual(ready_summary["setup_family"], master_avwap.AVWAPE_TO_FIRST_DEV_FAMILY)
+        self.assertEqual(retest_summary["setup_family"], master_avwap.AVWAPE_TO_FIRST_DEV_FAMILY)
+
     def test_avwape_retest_detects_same_day_long_bounce(self):
         rows = _build_avwape_retest_daily_rows()
         rows[-1].update({"open": 99.8, "high": 101.2, "low": 99.2, "close": 100.7})
@@ -649,6 +694,39 @@ class MasterAvwapSetupTests(unittest.TestCase):
         )
 
         self.assertEqual(summary["setup_family"], "mid_earnings_ema21_retest")
+
+    def test_mid_earnings_retester_can_start_at_ten_sessions_after_gap(self):
+        df = _build_mid_earnings_retest_history("LONG")
+        release_context = _build_mid_earnings_release_context(df, sessions_since_gap=10)
+        release_context["anchor_meta"]["bands"]["UPPER_1"] = 112.0
+        band_history = _build_mid_earnings_band_history(df)
+        for state in band_history.values():
+            state["bands"]["UPPER_1"] = 112.0
+        indicator_frame = pd.DataFrame(
+            [
+                {
+                    "trade_date": df.iloc[-1]["datetime"].date().isoformat(),
+                    "ema_8": 119.0,
+                    "ema_15": 118.0,
+                    "ema_21": 116.0,
+                }
+            ]
+        )
+
+        with patch(
+            "master_avwap.calc_anchored_vwap_band_history",
+            return_value=band_history,
+        ):
+            result = analyze_mid_earnings_ema_retest_setup(
+                df,
+                "LONG",
+                release_context,
+                indicator_frame=indicator_frame,
+            )
+
+        self.assertTrue(result["favorite_signal"])
+        self.assertEqual(result["sessions_since_gap"], 10)
+        self.assertEqual(result["primary_trigger_level"], "EMA_21")
 
     def test_mid_earnings_recent_second_dev_hold_waits_for_actual_retest(self):
         df = _build_mid_earnings_retest_history("LONG")
@@ -1195,12 +1273,48 @@ class MasterAvwapSetupTests(unittest.TestCase):
         summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
 
         self.assertTrue(summary["qualified_gap"])
+        self.assertTrue(summary["qualified_52w_gap"])
+        self.assertTrue(summary["gap_candle_directional"])
         self.assertEqual(summary["monitor_level"], 120.0)
         self.assertEqual(summary["monitor_level_label"], "52W_HIGH")
+        self.assertEqual(summary["earnings_candle_stop_level"], 117.5)
+        self.assertEqual(summary["earnings_candle_stop_label"], master_avwap.POST_EARNINGS_CANDLE_STOP_LABEL_LONG)
         self.assertTrue(summary["break_signal"])
         self.assertTrue(summary["break_fresh"])
         self.assertEqual(summary["break_age_sessions"], 0)
+        self.assertEqual(summary["break_sessions_after_gap"], 1)
         self.assertIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
+
+    def test_post_earnings_52w_break_requires_green_gap_candle_for_longs(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=0)
+        gap_idx = 30
+        df.loc[df.index[gap_idx], "close"] = df.loc[df.index[gap_idx], "open"] - 0.25
+        context = _build_post_earnings_52w_release_context(df)
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertFalse(summary["qualified_gap"])
+        self.assertFalse(summary["qualified_52w_gap"])
+        self.assertFalse(summary["break_signal"])
+        self.assertEqual(summary["events"], [])
+
+    def test_post_earnings_52w_break_must_happen_within_three_candles(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=3)
+        gap_idx = 30
+        for idx in range(gap_idx + 1, gap_idx + 4):
+            df.loc[df.index[idx], "high"] = 119.5
+        df.loc[df.index[gap_idx + 4], "high"] = 121.0
+        df.loc[df.index[gap_idx + 4], "close"] = 120.5
+        context = _build_post_earnings_52w_release_context(df)
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertTrue(summary["qualified_52w_gap"])
+        self.assertFalse(summary["break_signal"])
+        self.assertFalse(summary["break_fresh"])
+        self.assertEqual(summary["break_sessions_after_gap"], 4)
+        self.assertNotIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
+        self.assertIn("outside the 1-3 setup window", summary["note"])
 
     def test_post_earnings_52w_break_goes_stale_after_two_candles(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=4)
@@ -1240,7 +1354,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertFalse(summary["qualified_gap"])
         self.assertEqual(summary["events"], [])
 
-    def test_post_earnings_avwape_bounce_requires_52w_gap(self):
+    def test_post_earnings_avwape_bounce_does_not_require_52w_gap(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=4)
         df.loc[:29, "high"] = 130.0
         context = _build_post_earnings_52w_release_context(df)
@@ -1248,12 +1362,16 @@ class MasterAvwapSetupTests(unittest.TestCase):
         with patch("master_avwap.bounce_up_at_level", return_value=True) as bounce_mock:
             summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
 
-        bounce_mock.assert_not_called()
-        self.assertFalse(summary["active"])
-        self.assertFalse(summary["qualified_gap"])
+        bounce_mock.assert_called()
+        self.assertTrue(summary["active"])
+        self.assertTrue(summary["qualified_gap"])
+        self.assertTrue(summary["qualified_pre_earnings_avwap_gap"])
+        self.assertFalse(summary["qualified_52w_gap"])
         self.assertFalse(summary["break_signal"])
-        self.assertFalse(summary["bounce_signal"])
-        self.assertEqual(summary["events"], [])
+        self.assertTrue(summary["bounce_signal"])
+        self.assertEqual(summary["monitor_level"], 115.0)
+        self.assertEqual(summary["monitor_level_label"], "PRE_EARN_AVWAP")
+        self.assertEqual(summary["events"], [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL])
 
     def test_post_earnings_avwape_bounce_can_fire_within_10_day_window(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=4)
@@ -1341,14 +1459,65 @@ class MasterAvwapSetupTests(unittest.TestCase):
                     "vwap": 51.5,
                     "bands": {"UPPER_1": 53.0},
                 },
+                "post_earnings_earnings_candle_stop_level": 54.0,
+                "post_earnings_earnings_candle_stop_label": master_avwap.POST_EARNINGS_CANDLE_STOP_LABEL_SHORT,
                 "atr20": 2.0,
             },
         )
 
         post_stop = next(item for item in candidates if item["label"] == POST_EARNINGS_STOP_LABEL)
+        candle_stop = next(item for item in candidates if item["label"] == master_avwap.POST_EARNINGS_CANDLE_STOP_LABEL_SHORT)
         self.assertEqual(post_stop["source_type"], "post_earnings_anchor")
         self.assertEqual(post_stop["level"], 51.5)
         self.assertEqual(post_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
+        self.assertEqual(candle_stop["source_type"], "post_earnings_candle")
+        self.assertEqual(candle_stop["level"], 54.0)
+        self.assertEqual(candle_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
+
+    def test_post_earnings_tracker_targets_can_use_pre_earnings_anchor_overrides(self):
+        scenario = {
+            "tradeable": True,
+            "entry_price": 100.0,
+            "initial_risk_per_share": 5.0,
+            "initial_risk_usd": 500.0,
+            "direction": 1.0,
+            "shares": 100,
+            "remaining_shares": 100,
+            "status": "OPEN",
+            "events": [],
+            "partial_taken": False,
+            "partial_shares": 0,
+            "realized_pnl": 0.0,
+            "realized_r": 0.0,
+            "unrealized_pnl": 0.0,
+            "unrealized_r": 0.0,
+            "total_pnl": 0.0,
+            "total_r": 0.0,
+            "close_failure_count": 0,
+            "stop_reference_label": POST_EARNINGS_STOP_LABEL,
+            "active_stop_label": POST_EARNINGS_STOP_LABEL,
+            "final_target_label": "UPPER_2",
+            "partial_target_label": None,
+            "trail_after_partial_label": None,
+        }
+
+        events = master_avwap._evaluate_tracker_scenario_bar(
+            scenario,
+            "LONG",
+            "2026-05-07",
+            pd.Series({"open": 103.0, "high": 110.5, "low": 102.0, "close": 108.0}),
+            {"bands": {"UPPER_2": 200.0}, "vwap": 95.0},
+            None,
+            is_entry_day=False,
+            dynamic_level_overrides={
+                POST_EARNINGS_STOP_LABEL: 95.0,
+                "UPPER_2": 110.0,
+            },
+        )
+
+        self.assertEqual(scenario["status"], "TARGET_HIT")
+        self.assertEqual(events[0]["reason"], "FINAL_TARGET")
+        self.assertEqual(events[0]["price"], 110.0)
 
     def test_post_earnings_dynamic_stop_fails_on_first_close(self):
         scenario = {
@@ -1527,6 +1696,33 @@ class MasterAvwapSetupTests(unittest.TestCase):
         )
 
         self.assertEqual(priority_rows[0]["score"], boosted_score)
+
+    def test_tracker_family_stats_alias_legacy_favorite_zone_to_avwape_to_first_dev(self):
+        reference_date = date(2026, 5, 12)
+        setups = {
+            "legacy_1": _build_tracker_setup(
+                "NOK",
+                "2026-05-08",
+                1.2,
+                setup_family="avwap_breakout",
+                favorite_zone="AVWAPE to UPPER_1",
+                favorite_signals=["CROSS_UP_UPPER_1"],
+            ),
+            "legacy_2": _build_tracker_setup(
+                "SNDK",
+                "2026-05-07",
+                1.5,
+                setup_family="favorite_zone_watch",
+                favorite_zone="AVWAPE to UPPER_1",
+            ),
+        }
+
+        recent_rows = build_recent_tracker_setup_family_rows(setups, reference_date=reference_date)
+        family_names = {row["setup_family"] for row in recent_rows}
+
+        self.assertIn(master_avwap.AVWAPE_TO_FIRST_DEV_FAMILY, family_names)
+        self.assertNotIn("avwap_breakout", family_names)
+        self.assertNotIn("favorite_zone_watch", family_names)
 
     def test_rank_tracker_setup_type_rows_prefers_best_context_within_side_bucket(self):
         setup_type_rows = [
@@ -1723,6 +1919,51 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("setup type rank", priority_rows[0]["setup_type_score_note"])
         self.assertEqual(feature_rows_by_symbol["AAPL"]["priority_score"], priority_rows[0]["score"])
         self.assertEqual(ai_state["symbols"]["AAPL"]["priority_score"], priority_rows[0]["score"])
+
+    def test_setup_type_adjustment_uses_legacy_favorite_zone_stats_for_new_family(self):
+        tracker_payload = {
+            "setup_type_stats": [
+                _build_setup_type_stat(
+                    side="LONG",
+                    favorite_zone="AVWAPE to UPPER_1",
+                    retest_label="None",
+                    setup_family="avwap_breakout",
+                    tracked_setups=30,
+                    closed_setups=16,
+                    avg_closed_r=1.10,
+                    baseline_avg_closed_r=0.15,
+                    target_hit_rate=0.70,
+                    baseline_target_hit_rate=0.45,
+                    stop_rate=0.30,
+                    baseline_stop_rate=0.55,
+                ),
+            ]
+        }
+        priority_rows = [
+            {
+                "symbol": "NOK",
+                "side": "LONG",
+                "priority_bucket": "favorite_setup",
+                "setup_family": master_avwap.AVWAPE_TO_FIRST_DEV_FAMILY,
+                "favorite_zone": "AVWAPE to UPPER_1",
+                "retest_followthrough": False,
+                "retest_reference_level": "",
+                "compression_flag": False,
+                "score": 100.0,
+            },
+        ]
+        ai_state = {"symbols": {"NOK": {}}}
+        feature_rows_by_symbol = {"NOK": {"priority_score": 100.0}}
+
+        apply_tracker_setup_type_adjustments(
+            priority_rows,
+            ai_state,
+            feature_rows_by_symbol,
+            tracker_payload=tracker_payload,
+        )
+
+        self.assertGreater(priority_rows[0]["score"], 100.0)
+        self.assertIn("setup type rank", priority_rows[0]["setup_type_score_note"])
 
     def test_market_regime_penalizes_countertrend_without_fresh_trigger(self):
         priority_rows = [
@@ -2023,6 +2264,44 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("demoted from favorite", priority_rows[0]["favorite_score_gate_note"])
         self.assertEqual(feature_rows_by_symbol["SEDG"]["priority_bucket"], "near_favorite_zone")
 
+    def test_final_priority_bucket_keeps_only_main_swing_setups_as_favorites(self):
+        priority_rows = [
+            {
+                "symbol": "NOK",
+                "side": "LONG",
+                "score": 125,
+                "setup_family": master_avwap.AVWAPE_TO_FIRST_DEV_FAMILY,
+                "favorite_signals": ["CROSS_UP_UPPER_1"],
+                "context_signals": [],
+                "has_favorite_signal": True,
+                "favorite_zone": "AVWAPE to UPPER_1",
+            },
+            {
+                "symbol": "CHOP",
+                "side": "LONG",
+                "score": 180,
+                "setup_family": "extreme_move_retest",
+                "favorite_signals": ["EXTREME_MOVE_RETEST"],
+                "context_signals": [],
+                "has_favorite_signal": True,
+            },
+        ]
+        ai_state = {"symbols": {"NOK": {}, "CHOP": {}}}
+        feature_rows_by_symbol = {"NOK": {}, "CHOP": {}}
+
+        master_avwap.apply_final_priority_buckets(
+            priority_rows,
+            ai_state,
+            [],
+            feature_rows_by_symbol,
+        )
+
+        self.assertEqual(priority_rows[0]["priority_bucket"], "favorite_setup")
+        self.assertEqual(priority_rows[1]["priority_bucket"], "near_favorite_zone")
+        self.assertIn("tracker-only", priority_rows[1]["favorite_score_gate_note"])
+        self.assertEqual(feature_rows_by_symbol["NOK"]["priority_bucket"], "favorite_setup")
+        self.assertEqual(feature_rows_by_symbol["CHOP"]["priority_bucket"], "near_favorite_zone")
+
     def test_post_earnings_hard_rule_blocks_non_post_earnings_setups_inside_10_sessions(self):
         priority_rows = [
             {
@@ -2060,15 +2339,31 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 "latest_release_gap_date": "2026-05-01",
                 "latest_release_sessions_since_gap": 4,
             },
+            {
+                "symbol": "NOK",
+                "side": "LONG",
+                "score": 122,
+                "setup_family": master_avwap.AVWAPE_TO_FIRST_DEV_FAMILY,
+                "favorite_zone": "AVWAPE to UPPER_1",
+                "favorite_signals": ["CROSS_UP_UPPER_1"],
+                "context_signals": [],
+                "latest_release_earnings_date": "2026-04-30",
+                "latest_known_earnings_date": "2026-04-30",
+                "latest_known_earnings_sessions_since": 10,
+                "latest_known_earnings_in_post_window": True,
+                "latest_release_gap_date": "2026-05-01",
+                "latest_release_sessions_since_gap": 10,
+            },
         ]
         ai_state = {
             "symbols": {
                 "ARIS": {"setup_family": "avwap_retest_followthrough"},
                 "BRKR": {"setup_family": "favorite_zone_watch"},
                 "NVDA": {"setup_family": "post_earnings_52w_break"},
+                "NOK": {"setup_family": master_avwap.AVWAPE_TO_FIRST_DEV_FAMILY},
             }
         }
-        feature_rows_by_symbol = {"ARIS": {}, "BRKR": {}, "NVDA": {}}
+        feature_rows_by_symbol = {"ARIS": {}, "BRKR": {}, "NVDA": {}, "NOK": {}}
 
         master_avwap.apply_post_earnings_hard_rule_blocks(
             priority_rows,
@@ -2085,6 +2380,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[1]["priority_bucket"], "")
         self.assertFalse(priority_rows[2]["post_earnings_hard_rule_blocked"])
         self.assertEqual(priority_rows[2]["priority_bucket"], "near_favorite_zone")
+        self.assertFalse(priority_rows[3]["post_earnings_hard_rule_blocked"])
+        self.assertEqual(priority_rows[3]["priority_bucket"], "near_favorite_zone")
 
     def test_post_earnings_hard_rule_blocks_stale_gap_context_with_fresh_known_earnings(self):
         priority_rows = [
@@ -2215,11 +2512,21 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(aapl_trigger["label"], "UPPER_1")
         self.assertEqual(aapl_trigger["action"], "break_above")
         self.assertEqual(aapl_trigger["level"], 102.0)
+        aapl_retest_trigger = payload["symbols"]["AAPL"]["trigger_levels"][1]
+        self.assertEqual(aapl_retest_trigger["event_type"], "avwape_retest_watch")
+        self.assertEqual(aapl_retest_trigger["label"], "AVWAPE")
+        self.assertEqual(aapl_retest_trigger["action"], "break_below")
+        self.assertEqual(aapl_retest_trigger["level"], 100.0)
 
         tsla_trigger = payload["symbols"]["TSLA"]["trigger_levels"][0]
         self.assertEqual(tsla_trigger["label"], "LOWER_1")
         self.assertEqual(tsla_trigger["action"], "break_below")
         self.assertEqual(tsla_trigger["level"], 98.0)
+        tsla_retest_trigger = payload["symbols"]["TSLA"]["trigger_levels"][1]
+        self.assertEqual(tsla_retest_trigger["event_type"], "avwape_retest_watch")
+        self.assertEqual(tsla_retest_trigger["label"], "AVWAPE")
+        self.assertEqual(tsla_retest_trigger["action"], "break_above")
+        self.assertEqual(tsla_retest_trigger["level"], 100.0)
 
         nvda_trigger = payload["symbols"]["NVDA"]["trigger_levels"][0]
         self.assertEqual(nvda_trigger["event_type"], "post_earnings_52w_break")
@@ -2330,6 +2637,47 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(added, 2)
         self.assertEqual(longs, ["AAPL", "MSFT"])
         self.assertEqual(shorts, ["NVDA", "TSLA"])
+
+    def test_save_json_serializes_date_like_runtime_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "payload.json"
+
+            master_avwap.save_json(
+                path,
+                {
+                    "run_date": date(2026, 5, 12),
+                    "generated_at": datetime(2026, 5, 12, 17, 55, 44),
+                    "pandas_timestamp": pd.Timestamp("2026-05-12 17:55:44"),
+                    "path": Path("runtime/ai_state.json"),
+                    "symbols": {"AAPL", "MSFT"},
+                },
+                pretty=True,
+            )
+
+            payload = master_avwap.load_json(path, default={})
+
+        self.assertEqual(payload["run_date"], "2026-05-12")
+        self.assertEqual(payload["generated_at"], "2026-05-12T17:55:44")
+        self.assertEqual(payload["pandas_timestamp"], "2026-05-12T17:55:44")
+        self.assertEqual(payload["path"], "runtime\\ai_state.json" if sys.platform.startswith("win") else "runtime/ai_state.json")
+        self.assertEqual(payload["symbols"], ["AAPL", "MSFT"])
+
+    def test_ib_status_and_request_failures_are_not_logged_as_errors(self):
+        ib = master_avwap.IBApi()
+        ib.ready[123] = False
+
+        with (
+            patch.object(master_avwap.logging, "error") as log_error,
+            patch.object(master_avwap.logging, "info") as log_info,
+            patch.object(master_avwap.logging, "warning") as log_warning,
+        ):
+            ib.error(-1, 2108, "Market data farm connection is inactive but should be available upon demand.usopt")
+            ib.error(123, 200, "No security definition has been found for the request")
+
+        log_error.assert_not_called()
+        log_info.assert_called_once()
+        log_warning.assert_called_once()
+        self.assertTrue(ib.ready[123])
 
     def test_append_d1_feature_history_adds_run_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2665,6 +3013,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 self.option_quotes = {}
                 self.option_quotes_ready = {}
                 self.market_data_types = []
+                self.market_data_requests = []
                 self.next_id = 10
 
             def isConnected(self):
@@ -2679,6 +3028,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 self.market_data_type = market_data_type
 
             def reqMktData(self, req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, options):
+                self.market_data_requests.append((generic_tick_list, snapshot, regulatory_snapshot))
                 if getattr(self, "market_data_type", None) == 3:
                     self.option_quotes[req_id] = {"bid": 0.20, "ask": 0.40}
                 self.option_quotes_ready[req_id] = True
@@ -2695,6 +3045,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(quote["market_data_type"], 3)
         self.assertAlmostEqual(quote["bid"], 0.20)
         self.assertEqual(fake_ib.market_data_types[:2], [1, 3])
+        self.assertTrue(fake_ib.market_data_requests)
+        self.assertTrue(all(request == ("", True, False) for request in fake_ib.market_data_requests))
 
     def test_sold_put_enrichment_scans_lower_strikes_and_prefers_furthest_viable_premium(self):
         row = {
@@ -3103,7 +3455,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertFalse(master_avwap._pcs_row_meets_credit_target(pcs_rows[0]))
         self.assertNotIn("theta_filter_reason", pcs_row)
 
-    def test_theta_ib_enrichment_filters_pcs_below_cusp_credit(self):
+    def test_theta_ib_enrichment_keeps_pcs_below_target_credit_for_monitoring(self):
         class FakeIb:
             def reqMarketDataType(self, market_data_type):
                 self.market_data_type = market_data_type
@@ -3145,9 +3497,47 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 date(2026, 5, 5),
             )
 
-        self.assertEqual(pcs_rows, [])
-        self.assertEqual(pcs_row["theta_filter_reason"], "pcs_premium_below_target")
-        self.assertIn("PCS credit below 20%", pcs_row["notes"])
+        self.assertEqual(len(pcs_rows), 1)
+        self.assertEqual(pcs_row["option_status"], "below_target")
+        self.assertEqual(pcs_row["best_option"]["short_strike"], 190.0)
+        self.assertEqual(pcs_row["best_option"]["credit"], 0.5)
+        self.assertFalse(pcs_row.get("theta_filter_out", False))
+        self.assertNotIn("theta_filter_reason", pcs_row)
+
+    def test_sold_put_below_cusp_quote_is_kept_for_monitoring(self):
+        row = {
+            "symbol": "ABC",
+            "last_close": 105.0,
+            "score": 80,
+            "supports": [
+                {"label": "SMA_50", "level": 100.0, "source": "sma", "distance_atr": 0.5},
+                {"label": "CURRENT_AVWAPE", "level": 98.0, "source": "avwape", "distance_atr": 0.7},
+                {"label": "PREV_AVWAPE", "level": 96.0, "source": "previous_avwape", "distance_atr": 0.9},
+            ],
+        }
+        chain = {
+            "tradingClass": "ABC",
+            "multiplier": "100",
+            "expirations": {"20260508"},
+            "strikes": {100, 99, 98, 97, 96, 95},
+        }
+
+        with patch.object(
+            master_avwap,
+            "_fetch_theta_option_quote_cached",
+            return_value={"bid": 0.04, "ask": 0.08},
+        ):
+            master_avwap._enrich_sold_put_row_with_ib_options(
+                object(),
+                row,
+                chain,
+                {},
+                date(2026, 5, 5),
+            )
+
+        self.assertEqual(row["option_status"], "below_target")
+        self.assertIn("strike", row["best_option"])
+        self.assertAlmostEqual(row["best_option"]["credit"], 0.06)
 
     def test_theta_ib_unavailable_keeps_pcs_support_only_rows(self):
         sold_put_row = {"symbol": "ABC", "score": 80, "notes": "theta setup"}

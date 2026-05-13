@@ -21,7 +21,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from statistics import mean, median
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, is_dataclass
 
 try:
     import tkinter as tk
@@ -413,6 +413,7 @@ TRACKER_POSITIVE_DELTA_SMALL_SAMPLE_SCORE_CAP = 3
 TRACKER_POSITIVE_DELTA_MEDIUM_SAMPLE_SCORE_CAP = 12
 FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS = 252
 POST_EARNINGS_MAX_SESSIONS = 10
+POST_EARNINGS_BREAK_MAX_SESSIONS_AFTER_GAP = 3
 POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
 POST_EARNINGS_BOUNCE_MAX_AGE_SESSIONS = 2
 POST_EARNINGS_BOUNCE_MIN_SESSIONS_SINCE_GAP = 1
@@ -421,7 +422,11 @@ POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
 POST_EARNINGS_CLOSE_CONFIRM_SIGNAL = "POST_EARNINGS_CLOSE_CONFIRM"
 POST_EARNINGS_STOP_LABEL = "POST_EARNINGS_AVWAPE"
+POST_EARNINGS_CANDLE_STOP_LABEL_LONG = "POST_EARNINGS_CANDLE_LOW"
+POST_EARNINGS_CANDLE_STOP_LABEL_SHORT = "POST_EARNINGS_CANDLE_HIGH"
 POST_EARNINGS_STOP_FAILURE_CLOSES = 1
+AVWAPE_TO_FIRST_DEV_FAMILY = "avwape_to_1stdev"
+AVWAPE_TO_FIRST_DEV_MIN_SESSIONS_AFTER_GAP = 10
 MID_EARNINGS_EMA15_RETEST_SIGNAL = "MID_EARNINGS_EMA15_RETEST"
 MID_EARNINGS_EMA21_RETEST_SIGNAL = "MID_EARNINGS_EMA21_RETEST"
 MID_EARNINGS_FIRST_DEV_RETEST_SIGNAL = "MID_EARNINGS_FIRST_DEV_RETEST"
@@ -429,15 +434,31 @@ MID_EARNINGS_EMA8_CONFLUENCE_SIGNAL = "MID_EARNINGS_EMA8_CONFLUENCE"
 MID_EARNINGS_EMA21_CONFLUENCE_SIGNAL = "MID_EARNINGS_EMA21_CONFLUENCE"
 MID_EARNINGS_FIRST_DEV_CONFLUENCE_SIGNAL = "MID_EARNINGS_FIRST_DEV_CONFLUENCE"
 MID_EARNINGS_ZONE_MIN_DAYS = 2
-MID_EARNINGS_MIN_SESSIONS_AFTER_GAP = 15
-MID_EARNINGS_EMA_RECLAIM_UNDERCUT_ATR = 0.55
-MID_EARNINGS_RECENT_ZONE_LOOKBACK_DAYS = 7
-MID_EARNINGS_RETEST_MAX_SESSIONS_AFTER_ZONE = 4
+MID_EARNINGS_MIN_SESSIONS_AFTER_GAP = 10
+MID_EARNINGS_EMA_RECLAIM_UNDERCUT_ATR = 0.90
+MID_EARNINGS_RECENT_ZONE_LOOKBACK_DAYS = 10
+MID_EARNINGS_RETEST_MAX_SESSIONS_AFTER_ZONE = 7
 MID_EARNINGS_RETEST_CONFIRM_LOOKBACK_DAYS = 2
 MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY = "mid_earnings_above_2nd_stdev"
 MID_EARNINGS_EMA15_RETEST_FAMILY = "mid_earnings_ema15_retest"
 MID_EARNINGS_EMA21_RETEST_FAMILY = "mid_earnings_ema21_retest"
 MID_EARNINGS_FIRST_DEV_RETEST_FAMILY = "mid_earnings_1stdev_retest"
+MAIN_SWING_SETUP_FAMILIES = {
+    "post_earnings_52w_break",
+    "post_earnings_avwap_bounce",
+    AVWAPE_TO_FIRST_DEV_FAMILY,
+    MID_EARNINGS_EMA15_RETEST_FAMILY,
+    MID_EARNINGS_EMA21_RETEST_FAMILY,
+    MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
+}
+TRACKER_AVWAPE_TO_FIRST_DEV_LEGACY_FAMILIES = {
+    "avwap_breakout",
+    "avwap_breakdown",
+    "avwap_band_bounce",
+    "avwap_retest_followthrough",
+    "favorite_zone_watch",
+    "general",
+}
 PRIORITY_CLEAN_FIRST_ZONE_SCORE_BONUS = 10
 PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS = 8
 PRIORITY_SHORT_MID_EARNINGS_FIRST_DEV_SCORE_BONUS = 8
@@ -1451,6 +1472,28 @@ def load_json(path: Path, default):
     return default
 
 
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, set):
+        return sorted(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if value is pd.NA:
+        return None
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return item()
+        except Exception:
+            pass
+    return str(value)
+
+
 def _write_text_atomic(path: Path, text: str, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = None
@@ -1477,6 +1520,7 @@ def save_json(path: Path, obj, *, pretty: bool = False):
         indent=2 if pretty else None,
         separators=None if pretty else (",", ":"),
         ensure_ascii=False,
+        default=_json_default,
     )
     _write_text_atomic(path, json_text.rstrip() + "\n")
 
@@ -1519,7 +1563,7 @@ def append_d1_feature_history(df_features: pd.DataFrame, metadata: dict) -> None
         existing_columns = []
     new_columns = list(history_frame.columns)
     if existing_columns and existing_columns != new_columns:
-        existing_frame = pd.read_csv(D1_FEATURE_HISTORY_FILE)
+        existing_frame = pd.read_csv(D1_FEATURE_HISTORY_FILE, low_memory=False)
         merged_columns = existing_columns + [column for column in new_columns if column not in existing_columns]
         existing_frame = existing_frame.reindex(columns=merged_columns)
         history_frame = history_frame.reindex(columns=merged_columns)
@@ -3103,6 +3147,14 @@ def _protective_band_label(side: str) -> str:
     return "LOWER_1" if normalize_side(side) == "LONG" else "UPPER_1"
 
 
+def _post_earnings_candle_stop_label(side: str) -> str:
+    return (
+        POST_EARNINGS_CANDLE_STOP_LABEL_LONG
+        if normalize_side(side) == "LONG"
+        else POST_EARNINGS_CANDLE_STOP_LABEL_SHORT
+    )
+
+
 def summarize_anchor_compression(price_slice: pd.DataFrame, anchor_stdev: float, atr20: float) -> dict:
     result = {
         "is_compressed": False,
@@ -4479,6 +4531,98 @@ def save_setup_tracker_payload(payload: dict) -> None:
     save_json(SETUP_TRACKER_FILE, payload)
 
 
+def _normalized_setup_family_text(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _setup_signal_set(setup: dict | None) -> set[str]:
+    if not isinstance(setup, dict):
+        return set()
+    signals: set[str] = set()
+    for field in ("setup_tags", "favorite_signals", "context_signals"):
+        values = setup.get(field)
+        if isinstance(values, str):
+            iterable = [part.strip() for part in values.replace(";", ",").split(",")]
+        elif isinstance(values, (list, tuple, set)):
+            iterable = values
+        else:
+            iterable = []
+        for value in iterable:
+            text = str(value or "").strip().upper()
+            if text:
+                signals.add(text)
+    return signals
+
+
+def _is_avwape_to_first_dev_like_setup(setup: dict | None) -> bool:
+    if not isinstance(setup, dict):
+        return False
+    side = normalize_side(setup.get("side") or "")
+    favorite_zone = str(setup.get("favorite_zone") or "").strip()
+    expected_zone = "LOWER_1 to AVWAPE" if side == "SHORT" else "AVWAPE to UPPER_1"
+    family = _normalized_setup_family_text(setup.get("setup_family"))
+    signals = _setup_signal_set(setup)
+
+    if side == "SHORT":
+        matching_signals = {"CROSS_DOWN_VWAP", "CROSS_DOWN_LOWER_1", "BOUNCE_VWAP", "BOUNCE_LOWER_1"}
+    else:
+        matching_signals = {"CROSS_UP_VWAP", "CROSS_UP_UPPER_1", "BOUNCE_VWAP", "BOUNCE_UPPER_1"}
+
+    retest_label = str(
+        setup.get("retest_reference_level")
+        or setup.get("retest_label")
+        or ""
+    ).strip().upper()
+    if retest_label == "NONE":
+        retest_label = ""
+
+    return bool(
+        family == AVWAPE_TO_FIRST_DEV_FAMILY
+        or favorite_zone == expected_zone
+        or bool(signals & matching_signals)
+        or retest_label in {"AVWAPE", "VWAP"}
+    )
+
+
+def _canonical_tracker_setup_family(setup: dict | None) -> str:
+    family = _normalized_setup_family_text(setup.get("setup_family") if isinstance(setup, dict) else "")
+    if not family:
+        family = "general"
+
+    signals = _setup_signal_set(setup)
+    if POST_EARNINGS_BREAK_SIGNAL in signals:
+        return "post_earnings_52w_break"
+    if POST_EARNINGS_BOUNCE_SIGNAL in signals:
+        return "post_earnings_avwap_bounce"
+    if MID_EARNINGS_EMA15_RETEST_SIGNAL in signals:
+        return MID_EARNINGS_EMA15_RETEST_FAMILY
+    if MID_EARNINGS_EMA21_RETEST_SIGNAL in signals:
+        return MID_EARNINGS_EMA21_RETEST_FAMILY
+    if MID_EARNINGS_FIRST_DEV_RETEST_SIGNAL in signals:
+        return MID_EARNINGS_FIRST_DEV_RETEST_FAMILY
+    if family in MAIN_SWING_SETUP_FAMILIES:
+        return family
+    if family in TRACKER_AVWAPE_TO_FIRST_DEV_LEGACY_FAMILIES and _is_avwape_to_first_dev_like_setup(setup):
+        return AVWAPE_TO_FIRST_DEV_FAMILY
+    return family
+
+
+def _tracker_priority_bucket(setup: dict | None, setup_family: str | None = None) -> str:
+    if not isinstance(setup, dict):
+        return "tracked"
+    bucket = str(setup.get("priority_bucket") or "tracked").strip() or "tracked"
+    family = _normalized_setup_family_text(setup_family) or _canonical_tracker_setup_family(setup)
+    if bucket == "favorite_setup" and family not in MAIN_SWING_SETUP_FAMILIES:
+        return "near_favorite_zone"
+    return bucket
+
+
+def _is_main_swing_or_favorite_zone_setup(row: dict | None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return _canonical_tracker_setup_family(row) in MAIN_SWING_SETUP_FAMILIES
+
+
 def _setup_id_for_row(row: dict, symbol_entry: dict, scan_date: str | None = None) -> str:
     scan_date = str(scan_date or symbol_entry.get("last_trade_date") or datetime.now().date().isoformat())
     anchor_date = ((symbol_entry.get("current_anchor") or {}).get("date")) or scan_date
@@ -4522,6 +4666,20 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
             POST_EARNINGS_STOP_LABEL,
             _anchor_level_value(post_earnings_anchor, "AVWAPE"),
             "post_earnings_anchor",
+            close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
+        )
+        candle_stop_label = str(
+            row.get("post_earnings_earnings_candle_stop_label")
+            or symbol_entry.get("post_earnings_earnings_candle_stop_label")
+            or _post_earnings_candle_stop_label(side)
+        ).strip()
+        _add(
+            candle_stop_label,
+            _coerce_float(
+                row.get("post_earnings_earnings_candle_stop_level")
+                or symbol_entry.get("post_earnings_earnings_candle_stop_level")
+            ),
+            "post_earnings_candle",
             close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
         )
 
@@ -4614,6 +4772,8 @@ def build_tracker_setup_record(
         priority_bucket=str(row.get("priority_bucket") or ""),
     )
     setup_id = _setup_id_for_row(row, symbol_entry, scan_date=scan_date)
+    tracker_setup_family = _canonical_tracker_setup_family(row)
+    tracker_priority_bucket = _tracker_priority_bucket(row, tracker_setup_family)
 
     return {
         "setup_id": setup_id,
@@ -4629,6 +4789,8 @@ def build_tracker_setup_record(
         "priority_score": float(row.get("score", 0) or 0),
         "favorite_zone": row.get("favorite_zone") or "",
         "setup_family": str(row.get("setup_family") or symbol_entry.get("setup_family") or ""),
+        "tracker_setup_family": tracker_setup_family,
+        "tracker_priority_bucket": tracker_priority_bucket,
         "setup_tags": list(row.get("setup_tags") or symbol_entry.get("setup_tags") or []),
         "setup_candidate": row.get("setup_candidate") or symbol_entry.get("setup_candidate") or {},
         "candidate_rejection_reasons": list(
@@ -4676,6 +4838,27 @@ def build_tracker_setup_record(
         "post_earnings_anchor_date": row.get("post_earnings_anchor_date") or symbol_entry.get("latest_release_anchor_date") or "",
         "post_earnings_gap_date": row.get("post_earnings_gap_date") or symbol_entry.get("latest_release_gap_date") or "",
         "post_earnings_monitor_level": _coerce_float(row.get("post_earnings_monitor_level") or symbol_entry.get("post_earnings_monitor_level")),
+        "post_earnings_qualified_52w_gap": bool(
+            row.get("post_earnings_qualified_52w_gap")
+            or symbol_entry.get("post_earnings_qualified_52w_gap")
+        ),
+        "post_earnings_qualified_pre_earnings_avwap_gap": bool(
+            row.get("post_earnings_qualified_pre_earnings_avwap_gap")
+            or symbol_entry.get("post_earnings_qualified_pre_earnings_avwap_gap")
+        ),
+        "post_earnings_break_sessions_after_gap": row.get(
+            "post_earnings_break_sessions_after_gap",
+            symbol_entry.get("post_earnings_break_sessions_after_gap"),
+        ),
+        "post_earnings_earnings_candle_stop_level": _coerce_float(
+            row.get("post_earnings_earnings_candle_stop_level")
+            or symbol_entry.get("post_earnings_earnings_candle_stop_level")
+        ),
+        "post_earnings_earnings_candle_stop_label": (
+            row.get("post_earnings_earnings_candle_stop_label")
+            or symbol_entry.get("post_earnings_earnings_candle_stop_label")
+            or ""
+        ),
         "post_earnings_gap_atr_multiple": _coerce_float(row.get("post_earnings_gap_atr_multiple") or symbol_entry.get("latest_release_gap_atr_multiple")),
         "mid_earnings_watch": bool(row.get("mid_earnings_watch") or symbol_entry.get("mid_earnings_watch")),
         "mid_earnings_active_second_stdev_hold": bool(
@@ -5029,8 +5212,11 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
 
         scenario_events = []
         dynamic_level_overrides = {}
-        if post_earnings_levels:
+        is_post_earnings_setup = str(setup.get("setup_family") or "").strip().lower().startswith("post_earnings_")
+        if post_earnings_levels and is_post_earnings_setup:
             dynamic_level_overrides[POST_EARNINGS_STOP_LABEL] = _anchor_level_value(post_earnings_levels, "AVWAPE")
+            for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
+                dynamic_level_overrides[label] = _anchor_level_value(post_earnings_levels, label)
         for scenario in working_scenarios.values():
             scenario_events.extend(
                 _evaluate_tracker_scenario_bar(
@@ -5378,9 +5564,10 @@ def build_recent_tracker_setup_family_rows(
         if int(outcome_summary.get("tradeable_scenario_count", 0) or 0) <= 0:
             continue
 
-        side = normalize_side(setup.get("side") or "")
-        priority_bucket = str(setup.get("priority_bucket") or "").strip()
-        setup_family = str(setup.get("setup_family") or "").strip() or "general"
+        context = _tracker_setup_context(setup)
+        side = str(context.get("side") or "")
+        priority_bucket = str(context.get("priority_bucket") or "").strip()
+        setup_family = str(context.get("setup_family") or "general")
         if not side or not priority_bucket:
             continue
 
@@ -5595,10 +5782,11 @@ def apply_recent_tracker_setup_family_adjustments(
         symbol = str(row.get("symbol") or "").strip().upper()
         previous_delta = int(row.get("recent_tracker_score_delta", 0) or 0)
         base_score = float(row.get("score", 0.0) or 0.0) - float(previous_delta)
+        context = _tracker_setup_context(row)
         key = (
-            normalize_side(row.get("side") or ""),
-            str(row.get("priority_bucket") or "").strip(),
-            str(row.get("setup_family") or "").strip() or "general",
+            str(context.get("side") or ""),
+            str(context.get("priority_bucket") or "").strip(),
+            str(context.get("setup_family") or "general"),
         )
         family_row = lookup.get(key)
         score_delta = int(family_row.get("score_delta", 0) or 0) if family_row else 0
@@ -5723,6 +5911,28 @@ def rank_tracker_setup_type_rows(setup_type_rows: list[dict]) -> list[dict]:
         if not isinstance(raw_row, dict):
             continue
         row = dict(raw_row)
+        context = _tracker_setup_context(row)
+        row["side"] = str(context.get("side") or "")
+        row["priority_bucket"] = str(context.get("priority_bucket") or "")
+        row["setup_family"] = str(context.get("setup_family") or "general")
+        row["favorite_zone"] = str(context.get("favorite_zone") or "None")
+        row["retest_label"] = str(context.get("retest_label") or "None")
+        row["compression_label"] = str(context.get("compression_label") or "N")
+        row["compression_flag"] = bool(context.get("compression_flag"))
+        row["setup_type_id"] = " | ".join(
+            [
+                row["side"],
+                row["priority_bucket"],
+                row["setup_family"],
+                row["favorite_zone"],
+                row["retest_label"],
+                row["compression_label"],
+            ]
+        )
+        row["type_label"] = (
+            f"{row['side']} | {row['priority_bucket']} | family={row['setup_family']} "
+            f"| zone={row['favorite_zone']} | retest={row['retest_label']} | comp={row['compression_label']}"
+        )
         ranking_score, ranking_metric = _compute_tracker_setup_type_ranking_score(row)
         row["ranking_score"] = ranking_score
         row["ranking_metric"] = ranking_metric
@@ -6400,19 +6610,25 @@ def _summarize_tracker_value_counts(values: list[str], limit: int = 4) -> str:
 
 def _tracker_setup_context(setup: dict) -> dict[str, object]:
     side = normalize_side(setup.get("side") or "")
-    priority_bucket = str(setup.get("priority_bucket") or "tracked")
-    setup_family = str(setup.get("setup_family") or "").strip() or "general"
+    setup_family = _canonical_tracker_setup_family(setup)
+    priority_bucket = _tracker_priority_bucket(setup, setup_family)
     favorite_zone = str(setup.get("favorite_zone") or "").strip() or "None"
     retest_followthrough = bool(setup.get("retest_followthrough"))
     retest_reference_level = str(setup.get("retest_reference_level") or "").strip()
     mid_earnings_primary_trigger_level = str(setup.get("mid_earnings_primary_trigger_level") or "").strip()
+    explicit_retest_label = str(setup.get("retest_label") or "").strip()
     retest_label = (
         mid_earnings_primary_trigger_level
         if mid_earnings_primary_trigger_level
-        else (retest_reference_level if retest_followthrough and retest_reference_level else "None")
+        else (
+            explicit_retest_label
+            if explicit_retest_label
+            else (retest_reference_level if retest_followthrough and retest_reference_level else "None")
+        )
     )
     compression_flag = bool(setup.get("compression_flag"))
-    compression_label = "Y" if compression_flag else "N"
+    explicit_compression_label = str(setup.get("compression_label") or "").strip().upper()
+    compression_label = explicit_compression_label if explicit_compression_label in {"Y", "N"} else ("Y" if compression_flag else "N")
     context_parts = [side, priority_bucket, setup_family, favorite_zone, retest_label, compression_label]
     return {
         "context_key": tuple(context_parts),
@@ -8487,7 +8703,7 @@ def _build_latest_known_earnings_context(
     calendar_days_since = int((reference_date - earnings_date).days)
     in_session_window = (
         sessions_since_earnings is not None
-        and 0 <= int(sessions_since_earnings) <= POST_EARNINGS_MAX_SESSIONS
+        and 0 <= int(sessions_since_earnings) < POST_EARNINGS_MAX_SESSIONS
     )
     in_calendar_window = 0 <= calendar_days_since <= POST_EARNINGS_MAX_CALENDAR_DAYS
 
@@ -8629,8 +8845,13 @@ def analyze_post_earnings_setups(
     result = {
         "active": False,
         "qualified_gap": False,
+        "qualified_52w_gap": False,
+        "qualified_pre_earnings_avwap_gap": False,
+        "gap_candle_directional": False,
         "monitor_level": None,
         "monitor_level_label": "",
+        "earnings_candle_stop_level": None,
+        "earnings_candle_stop_label": "",
         "anchor_date": "",
         "gap_date": "",
         "earnings_date": "",
@@ -8642,6 +8863,7 @@ def analyze_post_earnings_setups(
         "break_signal": False,
         "break_fresh": False,
         "break_age_sessions": None,
+        "break_sessions_after_gap": None,
         "first_break_date": "",
         "bounce_signal": False,
         "bounce_date": "",
@@ -8664,11 +8886,19 @@ def analyze_post_earnings_setups(
     gap_row = df.iloc[int(gap_idx)]
     monitor_column = "high" if side_norm == "LONG" else "low"
     gap_extreme = _coerce_float(gap_row.get(monitor_column))
+    earnings_candle_stop_level = _coerce_float(gap_row.get("low" if side_norm == "LONG" else "high"))
+    gap_open = _coerce_float(gap_row.get("open"))
+    gap_close = _coerce_float(gap_row.get("close"))
     last_close = _coerce_float(df.iloc[-1].get("close"))
-    if gap_extreme is None or last_close is None:
+    if gap_extreme is None or earnings_candle_stop_level is None or gap_open is None or gap_close is None or last_close is None:
         return result
 
     directional_gap = bool(release_context.get("gap_is_up")) if side_norm == "LONG" else bool(release_context.get("gap_is_down"))
+    gap_candle_directional = (
+        float(gap_close) > float(gap_open)
+        if side_norm == "LONG"
+        else float(gap_close) < float(gap_open)
+    )
     prior_extreme = _rolling_price_extreme_before_index(df, int(gap_idx), side)
     is_new_price_extreme = False
     if prior_extreme is not None:
@@ -8687,112 +8917,149 @@ def analyze_post_earnings_setups(
     gap_atr_multiple = _coerce_float(release_context.get("gap_atr_multiple"))
     qualified_pre_earnings_avwap_gap = (
         directional_gap
+        and gap_candle_directional
         and gap_atr_multiple is not None
         and float(gap_atr_multiple) >= MIN_GAP_ATR_MULTIPLE
     )
     qualified_52w_gap = bool(qualified_pre_earnings_avwap_gap and is_new_price_extreme)
 
-    if qualified_52w_gap:
-        if in_post_earnings_window:
-            first_break_idx = _find_first_post_earnings_break_index(df, side, gap_extreme, int(gap_idx) + 1)
-        else:
-            first_break_idx = None
-        first_break_date = ""
-        break_age_sessions = None
-        if first_break_idx is not None:
-            first_break_date = _trade_date_text_from_bar(df.iloc[first_break_idx])
-            break_age_sessions = max(0, len(df) - 1 - int(first_break_idx))
-        break_fresh = break_age_sessions is not None and break_age_sessions <= POST_EARNINGS_BREAK_FRESH_SESSIONS
-        break_intraday = bool(break_fresh)
-        break_close = bool(break_fresh and _is_close_beyond_level(side, last_close, gap_extreme))
-        bounce_info = (
-            _find_recent_post_earnings_avwap_bounce(
-                df,
-                side,
-                anchor_meta.get("vwap"),
-                int(gap_idx),
-            )
-            if anchor_meta
-            else {}
+    if not qualified_pre_earnings_avwap_gap:
+        return result
+
+    if not in_post_earnings_window:
+        return result
+
+    first_break_idx = (
+        _find_first_post_earnings_break_index(df, side, gap_extreme, int(gap_idx) + 1)
+        if qualified_52w_gap
+        else None
+    )
+    first_break_date = ""
+    break_age_sessions = None
+    break_sessions_after_gap = None
+    if first_break_idx is not None:
+        first_break_date = _trade_date_text_from_bar(df.iloc[first_break_idx])
+        break_age_sessions = max(0, len(df) - 1 - int(first_break_idx))
+        break_sessions_after_gap = int(first_break_idx) - int(gap_idx)
+    break_in_setup_window = (
+        break_sessions_after_gap is not None
+        and 1 <= int(break_sessions_after_gap) <= POST_EARNINGS_BREAK_MAX_SESSIONS_AFTER_GAP
+    )
+    break_fresh = (
+        break_in_setup_window
+        and break_age_sessions is not None
+        and break_age_sessions <= POST_EARNINGS_BREAK_FRESH_SESSIONS
+    )
+    break_intraday = bool(break_fresh)
+    break_close = bool(break_fresh and _is_close_beyond_level(side, last_close, gap_extreme))
+    bounce_info = (
+        _find_recent_post_earnings_avwap_bounce(
+            df,
+            side,
+            anchor_meta.get("vwap"),
+            int(gap_idx),
         )
-        bounce_signal = bool(bounce_info.get("bounce_signal"))
-        if not in_post_earnings_window and not bounce_signal:
-            return result
+        if anchor_meta
+        else {}
+    )
+    bounce_signal = bool(bounce_info.get("bounce_signal"))
 
-        events = []
-        family = ""
-        if break_intraday:
-            events.append(POST_EARNINGS_BREAK_SIGNAL)
-            family = POST_EARNINGS_BREAK_SIGNAL
-            if break_close:
-                events.append(POST_EARNINGS_CLOSE_CONFIRM_SIGNAL)
-        if bounce_signal:
-            events.append(POST_EARNINGS_BOUNCE_SIGNAL)
-            if not family:
-                family = POST_EARNINGS_BOUNCE_SIGNAL
+    events = []
+    family = ""
+    if break_intraday:
+        events.append(POST_EARNINGS_BREAK_SIGNAL)
+        family = POST_EARNINGS_BREAK_SIGNAL
+        if break_close:
+            events.append(POST_EARNINGS_CLOSE_CONFIRM_SIGNAL)
+    if bounce_signal:
+        events.append(POST_EARNINGS_BOUNCE_SIGNAL)
+        if not family:
+            family = POST_EARNINGS_BOUNCE_SIGNAL
 
-        note_parts = [
-            f"gap {gap_date} {float(gap_atr_multiple):.2f} ATR",
-            f"pre-earnings AVWAPE anchor {release_context.get('anchor_date')}",
-            f"window day {sessions_since_gap}/{POST_EARNINGS_MAX_SESSIONS}",
-        ]
+    note_parts = [
+        f"gap {gap_date} {float(gap_atr_multiple):.2f} ATR",
+        f"pre-earnings AVWAPE anchor {release_context.get('anchor_date')}",
+        f"window day {sessions_since_gap}/{POST_EARNINGS_MAX_SESSIONS}",
+    ]
+    if qualified_52w_gap:
         note_parts.append(
             f"new 52-week {'high' if side_norm == 'LONG' else 'low'} "
             f"{float(gap_extreme):.2f}"
         )
         if break_intraday:
-            note_parts.append("fresh earnings-candle break triggered")
+            note_parts.append(
+                f"fresh earnings-candle break triggered within "
+                f"{POST_EARNINGS_BREAK_MAX_SESSIONS_AFTER_GAP} candle(s)"
+            )
             if first_break_date:
                 note_parts.append(f"first break {first_break_date}")
-        elif in_post_earnings_window and sessions_since_gap == 0:
+        elif sessions_since_gap == 0:
             note_parts.append("waiting for post-gap break of earnings-candle extreme")
-        elif qualified_52w_gap and break_age_sessions is not None:
+        elif break_sessions_after_gap is not None and not break_in_setup_window:
+            note_parts.append(
+                f"52-week break occurred after {int(break_sessions_after_gap)} candle(s), "
+                f"outside the 1-{POST_EARNINGS_BREAK_MAX_SESSIONS_AFTER_GAP} setup window"
+            )
+        elif break_age_sessions is not None:
             note_parts.append(
                 f"52-week break stale after {int(break_age_sessions)} session(s); waiting for pre-earnings AVWAPE retest"
             )
-        if break_close:
-            note_parts.append("close confirmed")
-        if bounce_signal:
-            note_parts.append("pre-earnings AVWAPE bounce")
-            if bounce_info.get("bounce_age_sessions") is not None:
-                note_parts.append(
-                    f"bounce age {int(bounce_info['bounce_age_sessions'])}/"
-                    f"{POST_EARNINGS_BOUNCE_MAX_AGE_SESSIONS} session(s)"
-                )
-        else:
-            note_parts.append(
-                f"no AVWAPE bounce in last {POST_EARNINGS_BOUNCE_MAX_AGE_SESSIONS} session(s)"
-            )
-
-        result.update(
-            {
-                "active": True,
-                "qualified_gap": True,
-                "monitor_level": float(gap_extreme),
-                "monitor_level_label": "52W_HIGH" if side_norm == "LONG" else "52W_LOW",
-                "anchor_date": str(release_context.get("anchor_date") or ""),
-                "gap_date": gap_date,
-                "earnings_date": str(release_context.get("earnings_date") or ""),
-                "release_session": str(release_context.get("release_session") or ""),
-                "gap_atr_multiple": _coerce_float(release_context.get("gap_atr_multiple")),
-                "sessions_since_gap": sessions_since_gap,
-                "break_intraday": bool(break_intraday),
-                "break_close": bool(break_close),
-                "break_signal": bool(break_intraday),
-                "break_fresh": bool(break_fresh),
-                "break_age_sessions": break_age_sessions,
-                "first_break_date": first_break_date,
-                "bounce_signal": bool(bounce_signal),
-                "bounce_date": str(bounce_info.get("bounce_date") or ""),
-                "bounce_age_sessions": bounce_info.get("bounce_age_sessions"),
-                "events": events,
-                "note": "; ".join(note_parts),
-                "anchor_meta": anchor_meta,
-                "family": family,
-            }
+    else:
+        note_parts.append(
+            f"not a new 52-week {'high' if side_norm == 'LONG' else 'low'}; "
+            "pre-earnings AVWAPE rejection watch"
         )
-        return result
+    if break_close:
+        note_parts.append("close confirmed")
+    if bounce_signal:
+        note_parts.append("pre-earnings AVWAPE bounce")
+        if bounce_info.get("bounce_age_sessions") is not None:
+            note_parts.append(
+                f"bounce age {int(bounce_info['bounce_age_sessions'])}/"
+                f"{POST_EARNINGS_BOUNCE_MAX_AGE_SESSIONS} session(s)"
+            )
+    else:
+        note_parts.append(
+            f"no AVWAPE bounce in last {POST_EARNINGS_BOUNCE_MAX_AGE_SESSIONS} session(s)"
+        )
 
+    result.update(
+        {
+            "active": True,
+            "qualified_gap": True,
+            "qualified_52w_gap": bool(qualified_52w_gap),
+            "qualified_pre_earnings_avwap_gap": True,
+            "gap_candle_directional": bool(gap_candle_directional),
+            "monitor_level": float(gap_extreme if qualified_52w_gap else anchor_meta.get("vwap"))
+            if qualified_52w_gap or anchor_meta
+            else None,
+            "monitor_level_label": (
+                "52W_HIGH" if side_norm == "LONG" else "52W_LOW"
+            ) if qualified_52w_gap else "PRE_EARN_AVWAP",
+            "earnings_candle_stop_level": float(earnings_candle_stop_level),
+            "earnings_candle_stop_label": _post_earnings_candle_stop_label(side_norm),
+            "anchor_date": str(release_context.get("anchor_date") or ""),
+            "gap_date": gap_date,
+            "earnings_date": str(release_context.get("earnings_date") or ""),
+            "release_session": str(release_context.get("release_session") or ""),
+            "gap_atr_multiple": _coerce_float(release_context.get("gap_atr_multiple")),
+            "sessions_since_gap": sessions_since_gap,
+            "break_intraday": bool(break_intraday),
+            "break_close": bool(break_close),
+            "break_signal": bool(break_intraday),
+            "break_fresh": bool(break_fresh),
+            "break_age_sessions": break_age_sessions,
+            "break_sessions_after_gap": break_sessions_after_gap,
+            "first_break_date": first_break_date,
+            "bounce_signal": bool(bounce_signal),
+            "bounce_date": str(bounce_info.get("bounce_date") or ""),
+            "bounce_age_sessions": bounce_info.get("bounce_age_sessions"),
+            "events": events,
+            "note": "; ".join(note_parts),
+            "anchor_meta": anchor_meta,
+            "family": family,
+        }
+    )
     return result
 
 
@@ -9973,13 +10240,19 @@ class IBApi(EWrapper, EClient):
         self.option_quotes_ready[reqId] = True
 
     def error(self, reqId, code, msg):
+        if reqId in self.ready:
+            self.ready[reqId] = True
         if reqId in self.contract_details_ready:
             self.contract_details_ready[reqId] = True
         if reqId in self.option_chain_ready:
             self.option_chain_ready[reqId] = True
         if reqId in self.option_quotes_ready:
             self.option_quotes_ready[reqId] = True
-        if code not in (2104, 2106, 2158, 2176):
+        if code in (2104, 2106, 2107, 2108, 2158, 2176):
+            logging.info(f"IB Status. ReqId={reqId}, Code={code}, Msg={msg}")
+        elif code in (200, 300, 321, 366):
+            logging.warning(f"IB Warning {code}[{reqId}]: {msg}")
+        else:
             logging.error(f"IB Error {code}[{reqId}]: {msg}")
 
 def create_contract(symbol: str) -> Contract:
@@ -10145,7 +10418,8 @@ def _fetch_ib_option_quote_once(
     ib.option_quotes[req_id] = {}
     ib.option_quotes_ready[req_id] = False
     try:
-        ib.reqMktData(req_id, contract, "100,101,106", True, False, [])
+        # IBKR rejects snapshot requests when generic ticks are requested.
+        ib.reqMktData(req_id, contract, "", True, False, [])
         _wait_for_ib_flag(ib.option_quotes_ready, req_id, timeout_sec)
         quote = dict(ib.option_quotes.get(req_id, {}) or {})
         if quote:
@@ -10406,7 +10680,7 @@ def _pcs_row_is_reportable(row: dict | None) -> bool:
         return False
     option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
     status = str(row.get("option_status") or option.get("status") or "").strip().lower()
-    if status in {"recommended", "cusp"}:
+    if status in {"recommended", "cusp", "below_target"}:
         return True
     if status in {"", "support_only", "no_quote", "ib_unavailable"}:
         return True
@@ -10488,7 +10762,7 @@ def enrich_theta_rows_with_ib_option_premiums(
         ).strip().lower()
         if (
             not _pcs_row_meets_credit_target(row)
-            and option_status not in {"cusp", "no_quote", "ib_unavailable"}
+            and option_status not in {"cusp", "below_target", "no_quote", "ib_unavailable"}
         ):
             _mark_theta_row_filtered(row, _pcs_filter_reason(row))
 
@@ -11121,17 +11395,69 @@ def _mid_earnings_setup_family_from_trigger_level(trigger_level: str) -> str:
     return ""
 
 
+def _is_late_earnings_window(sessions_since_gap: int | None) -> bool:
+    return (
+        sessions_since_gap is not None
+        and int(sessions_since_gap) >= AVWAPE_TO_FIRST_DEV_MIN_SESSIONS_AFTER_GAP
+    )
+
+
+def _is_avwape_to_first_dev_phase(
+    tags: list[str],
+    *,
+    side: str,
+    favorite_zone: str | None,
+    retest_followthrough: bool,
+    retest_reference_level: str,
+) -> bool:
+    side_norm = normalize_side(side)
+    tag_set = {str(tag or "").strip().upper() for tag in tags}
+    if side_norm == "SHORT":
+        first_dev_break = "CROSS_DOWN_LOWER_1"
+        first_dev_bounce = "BOUNCE_LOWER_1"
+        favorite_zone_name = "LOWER_1 to AVWAPE"
+    else:
+        first_dev_break = "CROSS_UP_UPPER_1"
+        first_dev_bounce = "BOUNCE_UPPER_1"
+        favorite_zone_name = "AVWAPE to UPPER_1"
+    return bool(
+        "BOUNCE_VWAP" in tag_set
+        or first_dev_break in tag_set
+        or first_dev_bounce in tag_set
+        or str(favorite_zone or "").strip() == favorite_zone_name
+        or (
+            retest_followthrough
+            and str(retest_reference_level or "").strip().upper() in {"AVWAPE", "VWAP"}
+        )
+    )
+
+
 def _derive_setup_family(
     current_setup_signals: list[str],
     *,
+    side: str,
     retest_followthrough: bool,
+    retest_reference_level: str,
     extreme_move_favorite_ready: bool,
     mid_earnings_active_second_stdev_hold: bool,
     mid_earnings_primary_trigger_level: str,
     favorite_zone: str | None,
+    post_earnings_sessions_since_gap: int | None = None,
 ) -> tuple[str, list[str]]:
     tags = [str(signal or "").strip().upper() for signal in current_setup_signals if str(signal or "").strip()]
     tags = list(dict.fromkeys(tags))
+
+    if (
+        _is_late_earnings_window(post_earnings_sessions_since_gap)
+        and _is_avwape_to_first_dev_phase(
+            tags,
+            side=side,
+            favorite_zone=favorite_zone,
+            retest_followthrough=bool(retest_followthrough),
+            retest_reference_level=retest_reference_level,
+        )
+    ):
+        return AVWAPE_TO_FIRST_DEV_FAMILY, tags
 
     if POST_EARNINGS_BREAK_SIGNAL in tags:
         return "post_earnings_52w_break", tags
@@ -11251,6 +11577,7 @@ def build_priority_setup_summary(
     previous_day_range_note: str = "",
     mid_earnings_active_second_stdev_hold: bool = False,
     mid_earnings_primary_trigger_level: str = "",
+    post_earnings_sessions_since_gap: int | None = None,
 ) -> dict:
     current_weights = get_priority_signal_weights(side, "current")
     context_weights = get_priority_signal_weights(side, "context")
@@ -11323,11 +11650,14 @@ def build_priority_setup_summary(
 
     setup_family, setup_tags = _derive_setup_family(
         current_setup_signals,
+        side=side,
         retest_followthrough=bool(retest_followthrough),
+        retest_reference_level=retest_reference_level,
         extreme_move_favorite_ready=bool(extreme_move_favorite_ready),
         mid_earnings_active_second_stdev_hold=bool(mid_earnings_active_second_stdev_hold),
         mid_earnings_primary_trigger_level=mid_earnings_primary_trigger_level,
         favorite_zone=favorite_zone,
+        post_earnings_sessions_since_gap=_coerce_int(post_earnings_sessions_since_gap),
     )
 
     return {
@@ -11411,7 +11741,7 @@ def _post_earnings_hard_rule_reason(sessions_since_gap: int, gap_date: str, setu
     return (
         f"post-earnings hard rule: {family_text} blocked {int(sessions_since_gap)} session(s) "
         f"after earnings gap {gap_text}; only post_earnings_52w_break and "
-        f"post_earnings_avwap_bounce are allowed for the first {POST_EARNINGS_MAX_SESSIONS} session(s)"
+        f"post_earnings_avwap_bounce are allowed before session {POST_EARNINGS_MAX_SESSIONS}"
     )
 
 
@@ -11472,6 +11802,11 @@ def apply_post_earnings_hard_rule_blocks(
             or symbol_entry.get("latest_release_earnings_date")
             or ""
         ).strip()
+        latest_release_earnings_date = str(
+            row.get("latest_release_earnings_date")
+            or symbol_entry.get("latest_release_earnings_date")
+            or ""
+        ).strip()
         latest_known_calendar_days = _coerce_int(row.get("latest_known_earnings_calendar_days_since"))
         if latest_known_calendar_days is None:
             latest_known_calendar_days = _coerce_int(
@@ -11492,18 +11827,35 @@ def apply_post_earnings_hard_rule_blocks(
         ).strip()
         in_session_hard_rule_window = (
             sessions_since_gap is not None
-            and 0 <= int(sessions_since_gap) <= POST_EARNINGS_MAX_SESSIONS
+            and 0 <= int(sessions_since_gap) < POST_EARNINGS_MAX_SESSIONS
+        )
+        known_date_matches_release = bool(
+            latest_known_earnings_date
+            and latest_release_earnings_date
+            and latest_known_earnings_date == latest_release_earnings_date
+        )
+        known_window_can_block = not (
+            sessions_since_gap is not None
+            and int(sessions_since_gap) >= POST_EARNINGS_MAX_SESSIONS
+            and known_date_matches_release
+            and (
+                latest_known_sessions_since is None
+                or int(latest_known_sessions_since) >= POST_EARNINGS_MAX_SESSIONS
+            )
         )
         in_known_earnings_window = bool(
-            (row.get("latest_known_earnings_in_post_window") is True)
-            or (symbol_entry.get("latest_known_earnings_in_post_window") is True)
-            or (
-                latest_known_sessions_since is not None
-                and 0 <= int(latest_known_sessions_since) <= POST_EARNINGS_MAX_SESSIONS
-            )
-            or (
-                latest_known_calendar_days is not None
-                and 0 <= int(latest_known_calendar_days) <= POST_EARNINGS_MAX_CALENDAR_DAYS
+            known_window_can_block
+            and (
+                (row.get("latest_known_earnings_in_post_window") is True)
+                or (symbol_entry.get("latest_known_earnings_in_post_window") is True)
+                or (
+                    latest_known_sessions_since is not None
+                    and 0 <= int(latest_known_sessions_since) < POST_EARNINGS_MAX_SESSIONS
+                )
+                or (
+                    latest_known_calendar_days is not None
+                    and 0 <= int(latest_known_calendar_days) <= POST_EARNINGS_MAX_CALENDAR_DAYS
+                )
             )
         )
         blocked = bool(
@@ -11559,7 +11911,7 @@ def apply_post_earnings_hard_rule_blocks(
 
     if blocked_count:
         logging.info(
-            "Post-earnings hard rule blocked %d non-post-earnings setup(s) inside %d session(s) of earnings gap.",
+            "Post-earnings hard rule blocked %d non-post-earnings setup(s) before post-gap session %d.",
             blocked_count,
             POST_EARNINGS_MAX_SESSIONS,
         )
@@ -13000,8 +13352,6 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
         credit, credit_source = _option_quote_credit_with_source(quote)
         if credit is None or credit <= 0:
             continue
-        if credit + 1e-9 < THETA_PUT_CUSP_MIN_CREDIT:
-            continue
         strike = _coerce_float(quote_row.get("strike"))
         if strike is None:
             continue
@@ -13069,7 +13419,12 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
             -float(item.get("rank_score", 0.0) or 0.0),
         )
     )
-    return ranked
+    actionable = [
+        item
+        for item in ranked
+        if str(item.get("status") or "").strip().lower() in {"recommended", "cusp"}
+    ]
+    return actionable if actionable else ranked
 
 
 def _preferred_pcs_width(close_value: float) -> float:
@@ -13220,7 +13575,12 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
             -float(item.get("rank_score", 0.0) or 0.0),
         )
     )
-    return ranked
+    actionable = [
+        item
+        for item in ranked
+        if str(item.get("status") or "").strip().lower() in {"recommended", "cusp"}
+    ]
+    return actionable if actionable else ranked
 
 
 def _apply_best_option_to_theta_row(row: dict, recommendations: list[dict], unavailable_reason: str = "") -> None:
@@ -13247,9 +13607,11 @@ def _theta_status_sort_rank(row: dict) -> int:
         return 0
     if status == "cusp":
         return 1
-    if status in {"no_quote", "ib_unavailable", "no_option_chain", "no_weekly_options"}:
+    if status == "below_target":
         return 2
-    return 3
+    if status in {"no_quote", "ib_unavailable", "no_option_chain", "no_weekly_options"}:
+        return 3
+    return 4
 
 
 def _sort_theta_report_rows(rows: list[dict]) -> list[dict]:
@@ -13416,7 +13778,7 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
         "PCS rules: LONG watchlist only; recommendation-only; >=2 nearby support references; "
         f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width; "
-        "target-hit rows are trade-ready while cusp/no-quote rows stay visible as pullback/support watches.\n"
+        "target-hit rows are trade-ready while cusp/below-target/no-quote rows stay visible as pullback/support watches.\n"
     )
     handle.write(
         "Earnings filter: "
@@ -14298,12 +14660,18 @@ def apply_final_priority_buckets(
         if not row or row.get("ranking_blocked") or _is_priority_recommendation_blocked(row):
             return "", False, False
         row.pop("favorite_score_gate_note", None)
-        favorite_ready = (
+        setup_ready = (
             row.get("has_favorite_signal")
             or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
             or _is_clean_first_zone_setup(row)
         )
-        if favorite_ready:
+        primary_favorite_ready = bool(setup_ready and _is_main_swing_or_favorite_zone_setup(row))
+        if setup_ready and not primary_favorite_ready:
+            setup_family = _canonical_tracker_setup_family(row)
+            row["favorite_score_gate_note"] = (
+                f"demoted from favorite: {setup_family} is tracker-only"
+            )
+        if primary_favorite_ready:
             if _priority_row_meets_favorite_score(row):
                 return "favorite_setup", True, False
             row["favorite_score_gate_note"] = (
@@ -14313,7 +14681,8 @@ def apply_final_priority_buckets(
         if (
             row.get("favorite_zone")
             or row.get("retest_followthrough")
-            or favorite_ready
+            or setup_ready
+            or row.get("favorite_signals")
             or row.get("extreme_move_watch")
             or _is_post_earnings_play_ready(row)
             or row.get("mid_earnings_watch")
@@ -14357,6 +14726,7 @@ def _priority_setup_family_label(setup_family: str) -> str:
     text = raw.replace("_", " ")
     replacements = {
         "avwap": "AVWAP",
+        "avwape": "AVWAPE",
         "vwape": "AVWAPE",
         "ema": "EMA",
         "52w": "52w",
@@ -14670,6 +15040,15 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "post_earnings_break_intraday": bool(row.get("post_earnings_break_intraday")),
             "post_earnings_break_close": bool(row.get("post_earnings_break_close")),
             "post_earnings_sessions_since_gap": int(row.get("post_earnings_sessions_since_gap", 0) or 0),
+            "post_earnings_qualified_52w_gap": bool(row.get("post_earnings_qualified_52w_gap")),
+            "post_earnings_qualified_pre_earnings_avwap_gap": bool(
+                row.get("post_earnings_qualified_pre_earnings_avwap_gap")
+            ),
+            "post_earnings_break_sessions_after_gap": row.get("post_earnings_break_sessions_after_gap"),
+            "post_earnings_earnings_candle_stop_level": _coerce_float(
+                row.get("post_earnings_earnings_candle_stop_level")
+            ),
+            "post_earnings_earnings_candle_stop_label": row.get("post_earnings_earnings_candle_stop_label") or "",
             "post_earnings_gap_atr_multiple": _coerce_float(row.get("post_earnings_gap_atr_multiple")),
             "post_earnings_anchor_date": row.get("post_earnings_anchor_date") or "",
             "post_earnings_gap_date": row.get("post_earnings_gap_date") or "",
@@ -14973,6 +15352,24 @@ def _build_d1_watchlist_trigger_levels(
             priority_bucket=priority_bucket,
             setup_family=setup_family,
         )
+        _append_d1_trigger_level(
+            trigger_levels,
+            seen,
+            side=side,
+            label="AVWAPE",
+            level=_anchor_level_value(current_anchor, "AVWAPE"),
+            event_type="avwape_retest_watch",
+            alert_label="AVWAPE retest",
+            reason="Armed from AVWAPE-to-UPPER_1 zone; alert on pullback into AVWAPE support.",
+            source="favorite_zone",
+            today_iso=today_iso,
+            armed_price=last_close,
+            anchor_type="CURRENT",
+            anchor_date=current_anchor_date,
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+            action="break_below",
+        )
     elif side == "SHORT" and favorite_zone == "LOWER_1 to AVWAPE":
         _append_d1_trigger_level(
             trigger_levels,
@@ -14990,6 +15387,24 @@ def _build_d1_watchlist_trigger_levels(
             anchor_date=current_anchor_date,
             priority_bucket=priority_bucket,
             setup_family=setup_family,
+        )
+        _append_d1_trigger_level(
+            trigger_levels,
+            seen,
+            side=side,
+            label="AVWAPE",
+            level=_anchor_level_value(current_anchor, "AVWAPE"),
+            event_type="avwape_retest_watch",
+            alert_label="AVWAPE retest",
+            reason="Armed from LOWER_1-to-AVWAPE zone; alert on push into AVWAPE rejection.",
+            source="favorite_zone",
+            today_iso=today_iso,
+            armed_price=last_close,
+            anchor_type="CURRENT",
+            anchor_date=current_anchor_date,
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+            action="break_above",
         )
     elif side == "LONG" and current_band_zone == "VWAP to UPPER_1":
         _append_d1_trigger_level(
@@ -15009,6 +15424,24 @@ def _build_d1_watchlist_trigger_levels(
             priority_bucket=priority_bucket,
             setup_family=setup_family,
         )
+        _append_d1_trigger_level(
+            trigger_levels,
+            seen,
+            side=side,
+            label="AVWAPE",
+            level=_anchor_level_value(current_anchor, "AVWAPE"),
+            event_type="avwape_retest_watch",
+            alert_label="AVWAPE retest",
+            reason="Armed from current VWAP-to-UPPER_1 band zone; alert on pullback into AVWAPE support.",
+            source="current_band_zone",
+            today_iso=today_iso,
+            armed_price=last_close,
+            anchor_type="CURRENT",
+            anchor_date=current_anchor_date,
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+            action="break_below",
+        )
     elif side == "SHORT" and current_band_zone == "VWAP to LOWER_1":
         _append_d1_trigger_level(
             trigger_levels,
@@ -15026,6 +15459,24 @@ def _build_d1_watchlist_trigger_levels(
             anchor_date=current_anchor_date,
             priority_bucket=priority_bucket,
             setup_family=setup_family,
+        )
+        _append_d1_trigger_level(
+            trigger_levels,
+            seen,
+            side=side,
+            label="AVWAPE",
+            level=_anchor_level_value(current_anchor, "AVWAPE"),
+            event_type="avwape_retest_watch",
+            alert_label="AVWAPE retest",
+            reason="Armed from current VWAP-to-LOWER_1 band zone; alert on push into AVWAPE rejection.",
+            source="current_band_zone",
+            today_iso=today_iso,
+            armed_price=last_close,
+            anchor_type="CURRENT",
+            anchor_date=current_anchor_date,
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+            action="break_above",
         )
 
     post_earnings_active = bool(row.get("post_earnings_active") or state.get("post_earnings_active"))
@@ -15175,6 +15626,15 @@ def _merge_d1_watchlist_entry(
         "post_earnings_break_intraday": bool(
             row.get("post_earnings_break_intraday")
         ),
+        "post_earnings_qualified_52w_gap": bool(row.get("post_earnings_qualified_52w_gap")),
+        "post_earnings_qualified_pre_earnings_avwap_gap": bool(
+            row.get("post_earnings_qualified_pre_earnings_avwap_gap")
+        ),
+        "post_earnings_break_sessions_after_gap": row.get("post_earnings_break_sessions_after_gap"),
+        "post_earnings_earnings_candle_stop_level": _coerce_float(
+            row.get("post_earnings_earnings_candle_stop_level")
+        ),
+        "post_earnings_earnings_candle_stop_label": row.get("post_earnings_earnings_candle_stop_label") or "",
         "post_earnings_bounce_date": row.get("post_earnings_bounce_date") or "",
         "post_earnings_bounce_age_sessions": row.get("post_earnings_bounce_age_sessions"),
         "post_earnings_note": row.get("post_earnings_note") or "",
@@ -16511,6 +16971,15 @@ def _evaluate_priority_snapshot_for_date(
         "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
         "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
         "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
+        "post_earnings_qualified_52w_gap": bool(post_earnings_summary.get("qualified_52w_gap")),
+        "post_earnings_qualified_pre_earnings_avwap_gap": bool(
+            post_earnings_summary.get("qualified_pre_earnings_avwap_gap")
+        ),
+        "post_earnings_break_sessions_after_gap": post_earnings_summary.get("break_sessions_after_gap"),
+        "post_earnings_earnings_candle_stop_level": _coerce_float(
+            post_earnings_summary.get("earnings_candle_stop_level")
+        ),
+        "post_earnings_earnings_candle_stop_label": post_earnings_summary.get("earnings_candle_stop_label", ""),
         "post_earnings_note": post_earnings_summary.get("note", ""),
         "post_earnings_anchor": post_earnings_summary.get("anchor_meta"),
         "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
@@ -16564,6 +17033,7 @@ def _evaluate_priority_snapshot_for_date(
         extension_note=extension_note,
         mid_earnings_active_second_stdev_hold=bool(mid_earnings_summary.get("active_second_stdev_hold")),
         mid_earnings_primary_trigger_level=mid_earnings_summary.get("primary_trigger_level", ""),
+        post_earnings_sessions_since_gap=latest_release_context.get("sessions_since_gap"),
     )
     priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
     priority_summary["latest_release_earnings_date"] = (
@@ -16581,6 +17051,18 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
     priority_summary["post_earnings_break_close"] = bool(post_earnings_summary.get("break_close"))
     priority_summary["post_earnings_sessions_since_gap"] = post_earnings_summary.get("sessions_since_gap")
+    priority_summary["post_earnings_qualified_52w_gap"] = bool(post_earnings_summary.get("qualified_52w_gap"))
+    priority_summary["post_earnings_qualified_pre_earnings_avwap_gap"] = bool(
+        post_earnings_summary.get("qualified_pre_earnings_avwap_gap")
+    )
+    priority_summary["post_earnings_break_sessions_after_gap"] = post_earnings_summary.get("break_sessions_after_gap")
+    priority_summary["post_earnings_earnings_candle_stop_level"] = _coerce_float(
+        post_earnings_summary.get("earnings_candle_stop_level")
+    )
+    priority_summary["post_earnings_earnings_candle_stop_label"] = post_earnings_summary.get(
+        "earnings_candle_stop_label",
+        "",
+    )
     priority_summary["post_earnings_gap_atr_multiple"] = _coerce_float(post_earnings_summary.get("gap_atr_multiple"))
     priority_summary["post_earnings_anchor_date"] = post_earnings_summary.get("anchor_date", "")
     priority_summary["post_earnings_gap_date"] = post_earnings_summary.get("gap_date", "")
@@ -16692,6 +17174,15 @@ def _evaluate_priority_snapshot_for_date(
         "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
         "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
         "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
+        "post_earnings_qualified_52w_gap": bool(post_earnings_summary.get("qualified_52w_gap")),
+        "post_earnings_qualified_pre_earnings_avwap_gap": bool(
+            post_earnings_summary.get("qualified_pre_earnings_avwap_gap")
+        ),
+        "post_earnings_break_sessions_after_gap": post_earnings_summary.get("break_sessions_after_gap"),
+        "post_earnings_earnings_candle_stop_level": _coerce_float(
+            post_earnings_summary.get("earnings_candle_stop_level")
+        ),
+        "post_earnings_earnings_candle_stop_label": post_earnings_summary.get("earnings_candle_stop_label", ""),
         "post_earnings_gap_atr_multiple": _coerce_float(post_earnings_summary.get("gap_atr_multiple")),
         "post_earnings_bounce_date": post_earnings_summary.get("bounce_date", ""),
         "post_earnings_bounce_age_sessions": post_earnings_summary.get("bounce_age_sessions"),
