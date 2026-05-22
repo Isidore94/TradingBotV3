@@ -23,6 +23,12 @@ class MarketPrepLlmSummaryServiceTests(unittest.TestCase):
             "report_type": "daily",
             "report_date": "2026-05-05",
             "generated_at": "2026-05-05T06:00:00",
+            "markdown": (
+                "# Daily Market Prep - 2026-05-05\n\n"
+                "## 1. Highest Importance Focus\n\n"
+                "- CPI/rates risk is the main scheduled catalyst.\n"
+                "- Source: https://example.com/cpi\n"
+            ),
             "trading_posture": ["Reduce size around scheduled macro event."],
             "catalyst_clock": [
                 {
@@ -62,27 +68,38 @@ class MarketPrepLlmSummaryServiceTests(unittest.TestCase):
                     },
                 ]
             },
+            "youtube_links": {
+                "videos": [
+                    {
+                        "creator": "Market Creator",
+                        "title": "Morning CPI prep",
+                        "published": "2026-05-05T05:30:00Z",
+                        "url": "https://youtube.com/watch?v=test",
+                    }
+                ]
+            },
+            "sec_filings": {
+                "filings": [
+                    {
+                        "ticker": "NVDA",
+                        "form": "8-K",
+                        "filing_date": "2026-05-04",
+                        "url": "https://www.sec.gov/Archives/edgar/data/1/test.htm",
+                    }
+                ]
+            },
         }
 
-    def test_generate_summary_fetches_capped_articles_and_calls_openai(self):
+    def test_generate_summary_sends_raw_markdown_and_links_to_openai(self):
         config = MarketPrepConfig(
             llm_summary={
                 "model": "gpt-5-mini",
                 "max_output_tokens": 220,
                 "headline_limit": 10,
-                "article_limit": 1,
-                "article_char_limit": 900,
                 "request_timeout_seconds": 12,
-                "article_timeout_seconds": 5,
                 "user_context": "Focus on rates, semis, and whether today is a size-down day.",
             }
         )
-        article_html = """
-        <html><body><article>
-        <p>Treasury yields moved higher as traders prepared for CPI and the next auction cycle.</p>
-        <p>Investors focused on whether inflation would keep the Federal Reserve cautious.</p>
-        </article></body></html>
-        """
 
         def fake_post(_url, *, headers, json, timeout):
             self.assertEqual(headers["Authorization"], "Bearer sk-test")
@@ -90,14 +107,20 @@ class MarketPrepLlmSummaryServiceTests(unittest.TestCase):
             self.assertEqual(json["max_output_tokens"], 600)
             self.assertEqual(json["reasoning"]["effort"], "low")
             self.assertEqual(json["text"]["verbosity"], "low")
-            self.assertIn("Article snippets", json["input"])
+            self.assertIn("Current raw markdown", json["input"])
+            self.assertIn("# Daily Market Prep - 2026-05-05", json["input"])
+            self.assertIn("Links found", json["input"])
             self.assertIn("Treasury yields rise before CPI", json["input"])
+            self.assertIn("https://example.com/cpi", json["input"])
+            self.assertIn("https://youtube.com/watch?v=test", json["input"])
+            self.assertIn("https://www.sec.gov/Archives/edgar/data/1/test.htm", json["input"])
             self.assertIn("User extra context/instructions", json["input"])
             self.assertIn("size-down day", json["input"])
+            self.assertNotIn("Article snippets", json["input"])
             self.assertEqual(timeout, 12)
             return FakeResponse(payload={"output_text": "Macro risk is CPI/rates-led. Used: Test News."})
 
-        with patch.object(llm_summary_service.requests, "get", return_value=FakeResponse(text=article_html)) as get_mock:
+        with patch.object(llm_summary_service.requests, "get") as get_mock:
             with patch.object(llm_summary_service.requests, "post", side_effect=fake_post) as post_mock:
                 result = llm_summary_service.generate_market_prep_llm_summary(
                     self._report(),
@@ -106,9 +129,10 @@ class MarketPrepLlmSummaryServiceTests(unittest.TestCase):
                 )
 
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["article_count"], 1)
+        self.assertEqual(result["article_count"], 0)
+        self.assertGreaterEqual(result["link_count"], 3)
         self.assertIn("CPI/rates-led", result["summary"])
-        get_mock.assert_called_once()
+        get_mock.assert_not_called()
         post_mock.assert_called_once()
 
     def test_missing_key_skips_request(self):

@@ -267,6 +267,34 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(bot.emit_master_avwap_intraday_trigger_flags("AAPL", today_df), 0)
         bot.gui_callback.assert_not_called()
 
+    def test_master_avwap_events_today_reuses_file_cache_until_signals_change(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        bot.master_avwap_events = {}
+        bot.master_avwap_last_scan_date = None
+        bot._master_avwap_events_cache_key = None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            signals_path = Path(temp_dir) / "avwap_signals.csv"
+            signals_path.write_text("header\nfirst\n", encoding="utf-8")
+
+            with patch.object(bounce_bot, "MASTER_AVWAP_SIGNALS_FILENAME", signals_path):
+                with patch.object(
+                    bounce_bot,
+                    "load_master_avwap_events_for_date",
+                    side_effect=[{"AAPL": []}, {"TSLA": []}],
+                ) as load_mock:
+                    bot.load_master_avwap_events_today()
+                    bot.load_master_avwap_events_today()
+
+                    self.assertEqual(load_mock.call_count, 1)
+                    self.assertEqual(bot.master_avwap_events, {"AAPL": []})
+
+                    signals_path.write_text("header\nchanged\nwith_more_bytes\n", encoding="utf-8")
+                    bot.load_master_avwap_events_today()
+
+                    self.assertEqual(load_mock.call_count, 2)
+                    self.assertEqual(bot.master_avwap_events, {"TSLA": []})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1012,6 +1012,7 @@ class BounceBot(EWrapper, EClient):
 
         self.master_avwap_events = {}
         self.master_avwap_last_scan_date = None
+        self._master_avwap_events_cache_key = None
         self.emitted_master_avwap_events = set()
         self.master_avwap_focus_map = {}
         self.master_avwap_second_stdev_cross_map = {}
@@ -1678,11 +1679,24 @@ class BounceBot(EWrapper, EClient):
         Keeps parsing generic so new signal/level names continue to work.
         """
         today = datetime.now().date()
+        try:
+            stat = Path(MASTER_AVWAP_SIGNALS_FILENAME).stat()
+            cache_key = (today, stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            cache_key = (today, None, None)
+
+        if (
+            self.master_avwap_last_scan_date == today
+            and getattr(self, "_master_avwap_events_cache_key", None) == cache_key
+        ):
+            return
+
         self.master_avwap_events = load_master_avwap_events_for_date(
             trade_date=today,
             signals_path=MASTER_AVWAP_SIGNALS_FILENAME,
         )
         self.master_avwap_last_scan_date = today
+        self._master_avwap_events_cache_key = cache_key
 
     def _build_master_avwap_active_level_map(self):
         return build_master_avwap_active_level_map(self.master_avwap_events)

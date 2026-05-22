@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from . import app as _app
 
 globals().update(
@@ -232,6 +234,7 @@ class BaseBounceBotPanel:
         self.alert_text: scrolledtext.ScrolledText | None = None
         self.d1_alert_text: scrolledtext.ScrolledText | None = None
         self.on_output_changed = None
+        self._last_active_bounce_refresh = 0.0
 
     def pack(self, **kwargs) -> None:
         self.container.pack(**kwargs)
@@ -293,7 +296,15 @@ class BaseBounceBotPanel:
 
     def start(self) -> None:
         self.controller.start()
+        self._refresh_active_bounces_if_due(force=True)
         self._process_queues()
+
+    def _refresh_active_bounces_if_due(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_active_bounce_refresh < 5.0:
+            return
+        self._last_active_bounce_refresh = now
+        self.controller.refresh_active_bounces()
 
     def _process_queues(self) -> None:
         raise NotImplementedError
@@ -495,7 +506,7 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
                 break
             self._append_alert_with_timestamp(message, str(tag))
 
-        self.controller.refresh_active_bounces()
+        self._refresh_active_bounces_if_due()
         self._queue_after_id = self.container.after(150, self._process_queues)
 
 
@@ -647,7 +658,7 @@ class FullBounceBotPanel(BaseBounceBotPanel):
                 break
             self._append_alert_with_timestamp(message, str(tag))
 
-        self.controller.refresh_active_bounces()
+        self._refresh_active_bounces_if_due()
         self._queue_after_id = self.container.after(150, self._process_queues)
 
 __all__ = ["BounceBotController", "BaseBounceBotPanel", "SimpleBounceBotPanel", "FullBounceBotPanel"]

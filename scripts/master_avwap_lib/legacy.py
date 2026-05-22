@@ -330,10 +330,13 @@ THETA_MAX_OPTION_ALTERNATIVES = 3
 THETA_OPTION_QUOTE_TIMEOUT_SEC = 4.0
 THETA_OPTION_CHAIN_TIMEOUT_SEC = 8.0
 THETA_OPTION_REQUEST_DELAY_SEC = 0.08
+THETA_OPTION_ENRICHMENT_MAX_SECONDS = 240.0
+THETA_OPTION_ENRICHMENT_MAX_QUOTES = 160
 THETA_WEEKLY_EXPIRATION_MAX_GAP_DAYS = 8
 THETA_OPTION_CLIENT_ID = 1005
 THETA_OPTION_CONNECT_STARTUP_WAIT_SEC = 1.5
 THETA_OPTION_MARKET_DATA_TYPES = (1, 3, 4)  # live, delayed, delayed-frozen
+_THETA_OPTION_BUDGET_KEY = object()
 PRIORITY_RETEST_LOOKBACK_BARS = 5
 PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
 PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
@@ -10124,6 +10127,7 @@ class IBApi(EWrapper, EClient):
         self.option_chain_ready = {}
         self.option_quotes = {}
         self.option_quotes_ready = {}
+        self.request_errors = {}
         self._req_id_lock = threading.Lock()
         self._next_req_id = int(time.time() * 1000) % (2**31 - 100000)
 
@@ -10240,6 +10244,10 @@ class IBApi(EWrapper, EClient):
         self.option_quotes_ready[reqId] = True
 
     def error(self, reqId, code, msg):
+        if reqId is not None and reqId >= 0:
+            self.request_errors.setdefault(reqId, []).append(
+                {"code": int(code or 0), "message": str(msg or "")}
+            )
         if reqId in self.ready:
             self.ready[reqId] = True
         if reqId in self.contract_details_ready:
@@ -10312,6 +10320,7 @@ def _fetch_ib_stock_contract_details(ib: IBApi | None, symbol: str, timeout_sec:
     finally:
         ib.contract_details.pop(req_id, None)
         ib.contract_details_ready.pop(req_id, None)
+        getattr(ib, "request_errors", {}).pop(req_id, None)
 
 
 def _fetch_ib_option_chain_definitions(
@@ -10346,6 +10355,7 @@ def _fetch_ib_option_chain_definitions(
     finally:
         ib.option_chain_params.pop(req_id, None)
         ib.option_chain_ready.pop(req_id, None)
+        getattr(ib, "request_errors", {}).pop(req_id, None)
 
 
 def _select_ib_option_chain(definitions: list[dict], symbol: str) -> dict:
@@ -10393,6 +10403,15 @@ def _ib_quote_has_price(quote: dict | None) -> bool:
     return False
 
 
+def _wait_for_ib_option_quote(ib: IBApi, req_id: int, timeout_sec: float) -> bool:
+    deadline = time.monotonic() + max(0.5, float(timeout_sec or 0.5))
+    while time.monotonic() < deadline:
+        if ib.option_quotes_ready.get(req_id) or _ib_quote_has_price(ib.option_quotes.get(req_id)):
+            return True
+        time.sleep(0.05)
+    return bool(ib.option_quotes_ready.get(req_id) or _ib_quote_has_price(ib.option_quotes.get(req_id)))
+
+
 def _set_theta_option_market_data_type(ib: IBApi | None, market_data_type: int) -> bool:
     if ib is None:
         return False
@@ -10420,12 +10439,20 @@ def _fetch_ib_option_quote_once(
     try:
         # IBKR rejects snapshot requests when generic ticks are requested.
         ib.reqMktData(req_id, contract, "", True, False, [])
-        _wait_for_ib_flag(ib.option_quotes_ready, req_id, timeout_sec)
+        _wait_for_ib_option_quote(ib, req_id, timeout_sec)
         quote = dict(ib.option_quotes.get(req_id, {}) or {})
+        request_errors = list(getattr(ib, "request_errors", {}).get(req_id, []) or [])
         if quote:
             quote["snapshot_received"] = bool(ib.option_quotes_ready.get(req_id))
             if market_data_type is not None:
                 quote["market_data_type"] = int(market_data_type)
+        if request_errors:
+            quote["ib_error_codes"] = [int(item.get("code", 0) or 0) for item in request_errors]
+            quote["ib_error_messages"] = [
+                str(item.get("message") or "")
+                for item in request_errors
+                if str(item.get("message") or "").strip()
+            ]
         return quote
     except Exception as exc:
         logging.warning(
@@ -10444,6 +10471,7 @@ def _fetch_ib_option_quote_once(
             pass
         ib.option_quotes.pop(req_id, None)
         ib.option_quotes_ready.pop(req_id, None)
+        getattr(ib, "request_errors", {}).pop(req_id, None)
         time.sleep(THETA_OPTION_REQUEST_DELAY_SEC)
 
 
@@ -10472,7 +10500,52 @@ def _fetch_ib_option_quote(
             last_quote = quote
         if _ib_quote_has_price(quote):
             return quote
+        if quote and 200 in {int(code or 0) for code in quote.get("ib_error_codes", [])}:
+            return quote
     return last_quote
+
+
+def _new_theta_option_budget() -> dict:
+    return {
+        "started_at": time.monotonic(),
+        "quote_requests": 0,
+        "quotes_with_price": 0,
+        "empty_quotes": 0,
+        "stopped": False,
+        "stop_reason": "",
+    }
+
+
+def _theta_option_budget_exhausted(budget: dict | None) -> bool:
+    if not isinstance(budget, dict):
+        return False
+    if budget.get("stopped"):
+        return True
+    elapsed = time.monotonic() - float(budget.get("started_at", time.monotonic()) or time.monotonic())
+    if elapsed >= THETA_OPTION_ENRICHMENT_MAX_SECONDS:
+        budget["stopped"] = True
+        budget["stop_reason"] = (
+            f"theta option enrichment reached {int(THETA_OPTION_ENRICHMENT_MAX_SECONDS)}s runtime budget"
+        )
+        return True
+    if int(budget.get("quote_requests", 0) or 0) >= THETA_OPTION_ENRICHMENT_MAX_QUOTES:
+        budget["stopped"] = True
+        budget["stop_reason"] = (
+            f"theta option enrichment reached {THETA_OPTION_ENRICHMENT_MAX_QUOTES} option quote request budget"
+        )
+        return True
+    return False
+
+
+def _theta_option_budget_note(budget: dict | None) -> str:
+    if not isinstance(budget, dict):
+        return "IBKR theta option enrichment stopped before this row could be quoted"
+    return str(budget.get("stop_reason") or "IBKR theta option enrichment stopped before this row could be quoted")
+
+
+def _mark_theta_row_budget_exhausted(row: dict, budget: dict | None) -> None:
+    _append_theta_note(row, _theta_option_budget_note(budget))
+    _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
 
 
 def _fetch_theta_option_quote_cached(
@@ -10489,6 +10562,11 @@ def _fetch_theta_option_quote_cached(
     strike_key = round(float(strike), 4)
     cache_key = (str(symbol).strip().upper(), expiration_key, strike_key, str(trading_class or ""), str(multiplier or "100"))
     if cache_key not in quote_cache:
+        budget = quote_cache.get(_THETA_OPTION_BUDGET_KEY) if isinstance(quote_cache, dict) else None
+        if _theta_option_budget_exhausted(budget):
+            return {}
+        if isinstance(budget, dict):
+            budget["quote_requests"] = int(budget.get("quote_requests", 0) or 0) + 1
         contract = create_option_contract(
             symbol,
             expiration_key,
@@ -10497,7 +10575,13 @@ def _fetch_theta_option_quote_cached(
             trading_class=trading_class,
             multiplier=multiplier,
         )
-        quote_cache[cache_key] = _fetch_ib_option_quote(ib, contract)
+        quote = _fetch_ib_option_quote(ib, contract)
+        if isinstance(budget, dict):
+            if _ib_quote_has_price(quote):
+                budget["quotes_with_price"] = int(budget.get("quotes_with_price", 0) or 0) + 1
+            else:
+                budget["empty_quotes"] = int(budget.get("empty_quotes", 0) or 0) + 1
+        quote_cache[cache_key] = quote
     return quote_cache.get(cache_key, {})
 
 
@@ -10524,9 +10608,14 @@ def _enrich_sold_put_row_with_ib_options(
         THETA_PUT_MAX_STRIKES_PER_EXPIRATION,
     )
     row["sell_strike_candidates_checked"] = int(len(strike_candidates))
+    budget = quote_cache.get(_THETA_OPTION_BUDGET_KEY) if isinstance(quote_cache, dict) else None
     quote_rows = []
     for expiration_info in expirations:
+        if _theta_option_budget_exhausted(budget):
+            break
         for strike_candidate in strike_candidates:
+            if _theta_option_budget_exhausted(budget):
+                break
             quote = _fetch_theta_option_quote_cached(
                 ib,
                 quote_cache,
@@ -10545,8 +10634,13 @@ def _enrich_sold_put_row_with_ib_options(
             )
     row["sell_strike_quotes_checked"] = int(len(quote_rows))
     recommendations = _rank_sold_put_option_recommendations(row, quote_rows)
+    if _theta_option_budget_exhausted(budget):
+        _append_theta_note(row, _theta_option_budget_note(budget))
     if not recommendations:
-        if not strike_candidates:
+        if _theta_option_budget_exhausted(budget):
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
+            return
+        elif not strike_candidates:
             _append_theta_note(row, "IBKR sell-strike scan found no eligible strikes below the support stack")
         else:
             _append_theta_note(
@@ -10583,9 +10677,14 @@ def _enrich_pcs_row_with_ib_options(
         THETA_PCS_MAX_SHORT_STRIKES_PER_EXPIRATION,
     )
     row["sell_strike_candidates_checked"] = int(len(short_candidates))
+    budget = quote_cache.get(_THETA_OPTION_BUDGET_KEY) if isinstance(quote_cache, dict) else None
     spread_rows = []
     for expiration_info in expirations:
+        if _theta_option_budget_exhausted(budget):
+            break
         for short_candidate in short_candidates:
+            if _theta_option_budget_exhausted(budget):
+                break
             short_strike = float(short_candidate["short_strike"])
             short_quote = _fetch_theta_option_quote_cached(
                 ib,
@@ -10597,6 +10696,8 @@ def _enrich_pcs_row_with_ib_options(
                 multiplier=str(chain.get("multiplier") or "100"),
             )
             for long_strike in _pcs_long_strike_choices(short_strike, strikes, close_value):
+                if _theta_option_budget_exhausted(budget):
+                    break
                 long_quote = _fetch_theta_option_quote_cached(
                     ib,
                     quote_cache,
@@ -10617,8 +10718,13 @@ def _enrich_pcs_row_with_ib_options(
                 )
     row["sell_strike_quotes_checked"] = int(len(spread_rows))
     recommendations = _rank_pcs_option_recommendations(row, spread_rows)
+    if _theta_option_budget_exhausted(budget):
+        _append_theta_note(row, _theta_option_budget_note(budget))
     if not recommendations:
-        if not short_candidates:
+        if _theta_option_budget_exhausted(budget):
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
+            return
+        elif not short_candidates:
             _append_theta_note(row, "IBKR PCS sell-strike scan found no eligible short strikes below the support stack")
         else:
             _append_theta_note(
@@ -10704,6 +10810,8 @@ def enrich_theta_rows_with_ib_option_premiums(
     pcs_rows: list[dict],
     reference_date: date,
 ) -> None:
+    total_sold_put_rows = len(theta_rows or [])
+    total_pcs_rows = len(pcs_rows or [])
     rows_by_symbol: dict[str, dict] = {}
     for row in list(theta_rows or []) + list(pcs_rows or []):
         row.setdefault("base_score", row.get("score", 0))
@@ -10713,23 +10821,50 @@ def enrich_theta_rows_with_ib_option_premiums(
 
     if not rows_by_symbol:
         return
+    logging.info(
+        "Theta option enrichment starting for %d symbol(s): %d sold-put row(s), %d PCS row(s).",
+        len(rows_by_symbol),
+        total_sold_put_rows,
+        total_pcs_rows,
+    )
     if not is_daily_data_client_connected(ib):
         for row in list(theta_rows or []):
             _apply_best_option_to_theta_row(row, [], unavailable_reason="ib_unavailable")
         for row in list(pcs_rows or []):
             _apply_best_option_to_theta_row(row, [], unavailable_reason="ib_unavailable")
+        logging.info("Theta option enrichment skipped because the IBKR option client is unavailable.")
         return
 
     chain_cache: dict[str, dict] = {}
-    quote_cache: dict = {}
+    budget = _new_theta_option_budget()
+    quote_cache: dict = {_THETA_OPTION_BUDGET_KEY: budget}
     _set_theta_option_market_data_type(ib, THETA_OPTION_MARKET_DATA_TYPES[0])
 
-    for symbol in rows_by_symbol:
+    for index, symbol in enumerate(rows_by_symbol, start=1):
+        if _theta_option_budget_exhausted(budget):
+            logging.warning("Theta option enrichment stopped during chain lookups: %s.", _theta_option_budget_note(budget))
+            break
+        logging.info("Theta option chain lookup %d/%d: %s.", index, len(rows_by_symbol), symbol)
         definitions = _fetch_ib_option_chain_definitions(ib, symbol)
         chain_cache[symbol] = _select_ib_option_chain(definitions, symbol)
+        chain = chain_cache.get(symbol, {})
+        if chain:
+            logging.info(
+                "%s: option chain selected with %d expiration(s), %d strike(s), tradingClass=%s.",
+                symbol,
+                len(_normalize_option_expirations(chain.get("expirations", []))),
+                len(_normalize_option_strikes(chain.get("strikes", []))),
+                str(chain.get("tradingClass") or symbol),
+            )
+        else:
+            logging.warning("%s: no usable IBKR option chain selected.", symbol)
 
-    for row in theta_rows or []:
+    for index, row in enumerate(theta_rows or [], start=1):
         symbol = str(row.get("symbol") or "").strip().upper()
+        if _theta_option_budget_exhausted(budget):
+            logging.warning("%s: sold-put enrichment skipped: %s.", symbol, _theta_option_budget_note(budget))
+            _mark_theta_row_budget_exhausted(row, budget)
+            continue
         chain = chain_cache.get(symbol, {})
         if not chain:
             _mark_theta_row_filtered(row, "no_option_chain")
@@ -10738,13 +10873,25 @@ def enrich_theta_rows_with_ib_option_premiums(
             _mark_theta_row_filtered(row, "no_weekly_options")
             continue
         try:
+            logging.info("Theta sold-put quote scan %d/%d: %s.", index, total_sold_put_rows, symbol)
             _enrich_sold_put_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
+            logging.info(
+                "%s: sold-put option scan status=%s, candidates=%s, quote_rows=%s.",
+                symbol,
+                row.get("option_status") or "unknown",
+                row.get("sell_strike_candidates_checked", 0),
+                row.get("sell_strike_quotes_checked", 0),
+            )
         except Exception as exc:
             logging.warning("%s: sold-put option enrichment failed: %s", symbol, exc)
             _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
 
-    for row in pcs_rows or []:
+    for index, row in enumerate(pcs_rows or [], start=1):
         symbol = str(row.get("symbol") or "").strip().upper()
+        if _theta_option_budget_exhausted(budget):
+            logging.warning("%s: PCS enrichment skipped: %s.", symbol, _theta_option_budget_note(budget))
+            _mark_theta_row_budget_exhausted(row, budget)
+            continue
         chain = chain_cache.get(symbol, {})
         if not chain:
             _mark_theta_row_filtered(row, "no_option_chain")
@@ -10753,7 +10900,15 @@ def enrich_theta_rows_with_ib_option_premiums(
             _mark_theta_row_filtered(row, "no_weekly_options")
             continue
         try:
+            logging.info("Theta PCS quote scan %d/%d: %s.", index, total_pcs_rows, symbol)
             _enrich_pcs_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
+            logging.info(
+                "%s: PCS option scan status=%s, candidates=%s, quote_combinations=%s.",
+                symbol,
+                row.get("option_status") or "unknown",
+                row.get("sell_strike_candidates_checked", 0),
+                row.get("sell_strike_quotes_checked", 0),
+            )
         except Exception as exc:
             logging.warning("%s: PCS option enrichment failed: %s", symbol, exc)
             _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
@@ -10782,6 +10937,14 @@ def enrich_theta_rows_with_ib_option_premiums(
             sold_put_removed,
             pcs_removed,
         )
+    if budget.get("stopped"):
+        logging.warning("Theta option enrichment stopped early: %s.", _theta_option_budget_note(budget))
+    logging.info(
+        "Theta option enrichment complete: quote_requests=%d, priced_quotes=%d, empty_quotes=%d.",
+        int(budget.get("quote_requests", 0) or 0),
+        int(budget.get("quotes_with_price", 0) or 0),
+        int(budget.get("empty_quotes", 0) or 0),
+    )
 
 
 def _flatten_yahoo_daily_bar_columns(df: pd.DataFrame) -> pd.DataFrame:

@@ -1698,6 +1698,9 @@ def _ai_summary_markdown(payload) -> list[str]:
     articles = payload.get("used_articles") if isinstance(payload.get("used_articles"), list) else []
     if articles:
         lines.append("- Articles read: " + ", ".join(str(item.get("title") or "").strip() for item in articles[:5] if isinstance(item, dict) and str(item.get("title") or "").strip()))
+    links = payload.get("used_links") if isinstance(payload.get("used_links"), list) else []
+    if links:
+        lines.append("- Links sent: " + ", ".join(str(item.get("title") or item.get("url") or "").strip() for item in links[:5] if isinstance(item, dict) and str(item.get("title") or item.get("url") or "").strip()))
     return lines
 
 

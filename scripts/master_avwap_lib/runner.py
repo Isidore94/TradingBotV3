@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+from copy import deepcopy
+
 from . import legacy as _legacy
 
 # Scanner orchestration is extracted while helper functions continue to migrate.
@@ -14,6 +17,196 @@ globals().update(
 
 def run_master_with_shared_watchlists():
     return run_master(use_shared_watchlists=True)
+
+
+_theta_enrichment_state_lock = threading.Lock()
+_latest_theta_enrichment_run_id = ""
+
+
+def _mark_latest_theta_enrichment_run(run_id: str) -> None:
+    global _latest_theta_enrichment_run_id
+    with _theta_enrichment_state_lock:
+        _latest_theta_enrichment_run_id = str(run_id or "")
+
+
+def _theta_enrichment_run_is_latest(run_id: str) -> bool:
+    with _theta_enrichment_state_lock:
+        return str(run_id or "") == _latest_theta_enrichment_run_id
+
+
+def _write_master_avwap_output_file(sorted_events: list, range_buckets: dict) -> None:
+    output_buffer = io.StringIO()
+    f = output_buffer
+    priority_text = PRIORITY_SETUPS_FILE.read_text(encoding="utf-8").strip()
+    theta_text = THETA_PUTS_FILE.read_text(encoding="utf-8").strip()
+    if priority_text:
+        f.write(priority_text)
+        f.write("\n\n")
+    if theta_text:
+        f.write("MASTER AVWAP THETA PLAYS\n")
+        f.write("=" * 80)
+        f.write("\n")
+        f.write(theta_text)
+        f.write("\n\n")
+    for s, d, lbl, side in sorted_events:
+        f.write(f"{s},{d},{lbl},{side}\n")
+
+    def _write_range_line(label, tickers):
+        items = ", ".join(sorted(set(tickers))) if tickers else "None"
+        f.write(f"{label}: {items}\n")
+
+    f.write("\nPrice ranges (current anchors):\n")
+    _write_range_line(
+        "Longs between AVWAP and UPPER_1",
+        range_buckets["long_avwap_to_upper_1"],
+    )
+    _write_range_line(
+        "Longs between UPPER_1 and UPPER_2",
+        range_buckets["long_upper_1_to_upper_2"],
+    )
+    _write_range_line(
+        "Shorts between AVWAP and LOWER_1",
+        range_buckets["short_avwap_to_lower_1"],
+    )
+    _write_range_line(
+        "Shorts between LOWER_1 and LOWER_2",
+        range_buckets["short_lower_1_to_lower_2"],
+    )
+    f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
+    _write_text_atomic(OUTPUT_FILE, output_buffer.getvalue().rstrip() + "\n")
+
+
+def _copy_range_buckets_for_background(range_buckets: dict) -> dict:
+    return {key: list(value or []) for key, value in (range_buckets or {}).items()}
+
+
+def _refresh_ai_state_theta_candidate(ai_state: dict, row: dict, key: str) -> None:
+    symbol = str(row.get("symbol") or "").strip().upper()
+    if not symbol:
+        return
+    symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else None
+    if not isinstance(symbols, dict):
+        return
+    entry = symbols.get(symbol)
+    if isinstance(entry, dict):
+        entry[key] = row
+
+
+def _run_deferred_theta_enrichment(
+    *,
+    run_id: str,
+    theta_put_rows: list[dict],
+    theta_pcs_rows: list[dict],
+    priority_rows: list[dict],
+    ai_state: dict,
+    sorted_events: list,
+    range_buckets: dict,
+    reference_date,
+    favorite_watchlist_context: dict,
+) -> None:
+    theta_ib = None
+    theta_ib_owned = False
+    sold_put_rows_all = list(theta_put_rows or [])
+    pcs_rows_all = list(theta_pcs_rows or [])
+    sold_put_rows = list(sold_put_rows_all)
+    pcs_rows = list(pcs_rows_all)
+    try:
+        logging.info(
+            "Deferred theta option premium enrichment starting for run %s: %d sold-put row(s), %d PCS row(s).",
+            run_id,
+            len(sold_put_rows),
+            len(pcs_rows),
+        )
+        theta_ib, theta_ib_owned = ensure_theta_option_data_client(None)
+        try:
+            enrich_theta_rows_with_ib_option_premiums(theta_ib, sold_put_rows, pcs_rows, reference_date)
+        finally:
+            if theta_ib_owned:
+                disconnect_daily_data_client(theta_ib)
+                theta_ib = None
+
+        for row in sold_put_rows_all:
+            _refresh_ai_state_theta_candidate(ai_state, row, "theta_put_candidate")
+        for row in pcs_rows_all:
+            _refresh_ai_state_theta_candidate(ai_state, row, "theta_pcs_candidate")
+
+        if not _theta_enrichment_run_is_latest(run_id):
+            logging.info(
+                "Deferred theta enrichment for run %s finished but skipped file writes because a newer scan is active.",
+                run_id,
+            )
+            return
+
+        write_theta_put_report(THETA_PUTS_FILE, sold_put_rows, pcs_rows)
+        save_json(AI_STATE_FILE, ai_state)
+
+        if favorite_watchlist_context.get("allowed"):
+            write_favorite_zone_watchlist_outputs(
+                focus_path=MASTER_AVWAP_FOCUS_FILE,
+                d1_watchlist_path=MASTER_AVWAP_D1_WATCHLIST_FILE,
+                priority_rows=priority_rows,
+                theta_put_rows=sold_put_rows,
+                theta_pcs_rows=pcs_rows,
+                ai_state=ai_state,
+                now=favorite_watchlist_context.get("reference_time"),
+                window_start=favorite_watchlist_context.get("window_start"),
+                window_end=favorite_watchlist_context.get("window_end"),
+            )
+
+        _write_master_avwap_output_file(sorted_events, range_buckets)
+        logging.info(
+            "Deferred theta option premium enrichment finished for run %s: %d sold-put row(s), %d PCS row(s).",
+            run_id,
+            len(sold_put_rows),
+            len(pcs_rows),
+        )
+    except Exception:
+        logging.exception("Deferred theta option premium enrichment failed for run %s.", run_id)
+    finally:
+        if theta_ib is not None and theta_ib_owned:
+            disconnect_daily_data_client(theta_ib)
+
+
+def _schedule_deferred_theta_enrichment(
+    *,
+    run_id: str,
+    theta_put_rows: list[dict],
+    theta_pcs_rows: list[dict],
+    priority_rows: list[dict],
+    ai_state: dict,
+    sorted_events: list,
+    range_buckets: dict,
+    reference_date,
+    favorite_watchlist_context: dict,
+) -> bool:
+    if not (theta_put_rows or theta_pcs_rows):
+        logging.info("No theta rows found; no deferred option premium enrichment needed.")
+        return False
+
+    worker = threading.Thread(
+        target=_run_deferred_theta_enrichment,
+        kwargs={
+            "run_id": run_id,
+            "theta_put_rows": deepcopy(theta_put_rows),
+            "theta_pcs_rows": deepcopy(theta_pcs_rows),
+            "priority_rows": deepcopy(priority_rows),
+            "ai_state": deepcopy(ai_state),
+            "sorted_events": list(sorted_events or []),
+            "range_buckets": _copy_range_buckets_for_background(range_buckets),
+            "reference_date": reference_date,
+            "favorite_watchlist_context": dict(favorite_watchlist_context or {}),
+        },
+        name=f"theta-option-enrichment-{run_id}",
+        daemon=False,
+    )
+    worker.start()
+    logging.info(
+        "Theta option strike/price enrichment deferred in background for run %s (%d sold-put row(s), %d PCS row(s)).",
+        run_id,
+        len(theta_put_rows or []),
+        len(theta_pcs_rows or []),
+    )
+    return True
 
 # ============================================================================
 # CACHE HELPERS
@@ -128,6 +321,7 @@ def run_master(
     today_run = datetime.now().date()
     run_timestamp = datetime.now().isoformat(timespec="seconds")
     run_id = f"{today_run.isoformat()}-{datetime.now().strftime('%H%M%S')}"
+    _mark_latest_theta_enrichment_run(run_id)
     scoring_config_metadata = get_scoring_config_metadata()
     market_regime_snapshot = build_market_regime_snapshot(ib, today_run)
     events_for_output = []
@@ -1146,12 +1340,12 @@ def run_master(
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
-    theta_ib, theta_ib_owned = ensure_theta_option_data_client(ib)
-    try:
-        enrich_theta_rows_with_ib_option_premiums(theta_ib, theta_put_rows, theta_pcs_rows, today_run)
-    finally:
-        if theta_ib_owned:
-            disconnect_daily_data_client(theta_ib)
+    logging.info(
+        "Priority scoring complete; theta option strike/price enrichment will run after ranking outputs are written "
+        "(%d sold-put row(s), %d PCS row(s)).",
+        len(theta_put_rows),
+        len(theta_pcs_rows),
+    )
     tracked_rows = [
         row
         for row in priority_rows
@@ -1170,6 +1364,8 @@ def run_master(
         "setup_tracker_updated": False,
         "setup_tracker_allowed": False,
         "setup_tracker_skip_reason": "",
+        "theta_enrichment_pending": False,
+        "theta_enrichment_mode": "deferred",
     }
     setup_tracker_allowed = (
         bool(update_setup_tracker)
@@ -1274,6 +1470,7 @@ def run_master(
     trim_history(history)
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
+    favorite_watchlist_reference = datetime.now()
     favorite_watchlist_result = write_favorite_zone_watchlist_outputs(
         focus_path=MASTER_AVWAP_FOCUS_FILE,
         d1_watchlist_path=MASTER_AVWAP_D1_WATCHLIST_FILE,
@@ -1281,52 +1478,21 @@ def run_master(
         theta_put_rows=theta_put_rows,
         theta_pcs_rows=theta_pcs_rows,
         ai_state=ai_state,
+        now=favorite_watchlist_reference,
     )
     run_result["favorite_zone_watchlists_updated"] = bool(favorite_watchlist_result.get("updated"))
     run_result["favorite_zone_watchlists_allowed"] = bool(favorite_watchlist_result.get("allowed"))
     run_result["favorite_zone_watchlists_skip_reason"] = favorite_watchlist_result.get("skip_reason", "")
+    favorite_watchlist_context = {
+        "allowed": bool(favorite_watchlist_result.get("allowed")),
+        "reference_time": favorite_watchlist_reference,
+        "window_start": favorite_watchlist_result.get("window_start"),
+        "window_end": favorite_watchlist_result.get("window_end"),
+    }
 
     # write human-readable events file (grouped for easier scanning)
     sorted_events = sort_events_for_output(events_for_output)
-    output_buffer = io.StringIO()
-    f = output_buffer
-    priority_text = PRIORITY_SETUPS_FILE.read_text(encoding="utf-8").strip()
-    theta_text = THETA_PUTS_FILE.read_text(encoding="utf-8").strip()
-    if priority_text:
-        f.write(priority_text)
-        f.write("\n\n")
-    if theta_text:
-        f.write("MASTER AVWAP THETA PLAYS\n")
-        f.write("=" * 80)
-        f.write("\n")
-        f.write(theta_text)
-        f.write("\n\n")
-    for s, d, lbl, side in sorted_events:
-        f.write(f"{s},{d},{lbl},{side}\n")
-
-    def _write_range_line(label, tickers):
-        items = ", ".join(sorted(set(tickers))) if tickers else "None"
-        f.write(f"{label}: {items}\n")
-
-    f.write("\nPrice ranges (current anchors):\n")
-    _write_range_line(
-        "Longs between AVWAP and UPPER_1",
-        range_buckets["long_avwap_to_upper_1"],
-    )
-    _write_range_line(
-        "Longs between UPPER_1 and UPPER_2",
-        range_buckets["long_upper_1_to_upper_2"],
-    )
-    _write_range_line(
-        "Shorts between AVWAP and LOWER_1",
-        range_buckets["short_avwap_to_lower_1"],
-    )
-    _write_range_line(
-        "Shorts between LOWER_1 and LOWER_2",
-        range_buckets["short_lower_1_to_lower_2"],
-    )
-    f.write(f"\nRun completed at {datetime.now().strftime('%H:%M:%S')}\n")
-    _write_text_atomic(OUTPUT_FILE, output_buffer.getvalue().rstrip() + "\n")
+    _write_master_avwap_output_file(sorted_events, range_buckets)
 
     # write grouped ticker lists for easy copy/paste into TradingView/TC2000
     event_buckets = {}
@@ -1535,6 +1701,21 @@ def run_master(
     save_json(PREV_CACHE_FILE, prev_cache)
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
+
+    theta_enrichment_pending = _schedule_deferred_theta_enrichment(
+        run_id=run_id,
+        theta_put_rows=theta_put_rows,
+        theta_pcs_rows=theta_pcs_rows,
+        priority_rows=priority_rows,
+        ai_state=ai_state,
+        sorted_events=sorted_events,
+        range_buckets=range_buckets,
+        reference_date=today_run,
+        favorite_watchlist_context=favorite_watchlist_context,
+    )
+    run_result["theta_enrichment_pending"] = theta_enrichment_pending
+    if not theta_enrichment_pending:
+        run_result["theta_enrichment_mode"] = "not_needed"
 
     logging.info(
         f"Master AVWAP run complete. "

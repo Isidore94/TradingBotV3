@@ -86,8 +86,6 @@ class MarketPrepTab:
         self.openai_key_status_var = tk.StringVar(value=self._openai_key_status_text())
         self.ai_model_var = tk.StringVar(value=str(llm_settings.get("model") or "gpt-5-mini"))
         self.ai_max_tokens_var = tk.StringVar(value=str(llm_settings.get("max_output_tokens") or 800))
-        self.ai_article_limit_var = tk.StringVar(value=str(llm_settings.get("article_limit") or 4))
-        self.ai_article_chars_var = tk.StringVar(value=str(llm_settings.get("article_char_limit") or 2000))
         self.buttons: dict[str, ttk.Button] = {}
         self.background_task_active = False
         self.latest_report: dict | None = None
@@ -202,7 +200,7 @@ class MarketPrepTab:
         instructions = (
             "Run Daily Prep or Weekly Prep first, then click Run AI Summary when you want a brief LLM macro read. "
             "The API key can come from OPENAI_API_KEY, or you can paste it here and save it locally on this PC. "
-            "Article reading is capped so only a few relevant snippets are sent."
+            "The current raw markdown report and links found during the prep run are sent."
         )
         ttk.Label(frame, text=instructions, justify="left", wraplength=1500).grid(
             row=0,
@@ -253,24 +251,8 @@ class MarketPrepTab:
             padx=(0, 8),
             pady=(2, 6),
         )
-        ttk.Label(frame, text="Articles").grid(row=2, column=4, sticky="w", padx=(0, 4), pady=(2, 6))
-        ttk.Spinbox(frame, from_=0, to=8, increment=1, textvariable=self.ai_article_limit_var, width=5).grid(
-            row=2,
-            column=5,
-            sticky="w",
-            padx=(0, 8),
-            pady=(2, 6),
-        )
-        ttk.Label(frame, text="Chars/article").grid(row=2, column=6, sticky="w", padx=(0, 4), pady=(2, 6))
-        ttk.Spinbox(frame, from_=500, to=5000, increment=250, textvariable=self.ai_article_chars_var, width=7).grid(
-            row=2,
-            column=7,
-            sticky="w",
-            padx=(0, 8),
-            pady=(2, 6),
-        )
         run_button = ttk.Button(frame, text="Run AI Summary", command=self.run_ai_summary)
-        run_button.grid(row=2, column=8, sticky="w", padx=(0, 8), pady=(2, 6))
+        run_button.grid(row=2, column=4, sticky="w", padx=(0, 8), pady=(2, 6))
         self.buttons["Run AI Summary"] = run_button
 
         ttk.Label(frame, text="Extra AI context/instructions").grid(
@@ -889,6 +871,20 @@ class MarketPrepTab:
                 ]
                 lines.append("- " + " | ".join(part for part in parts if part))
 
+        used_links = payload.get("used_links") if isinstance(payload.get("used_links"), list) else []
+        if used_links:
+            lines.extend(["", "Links Sent", "-" * 80])
+            for row in used_links[:12]:
+                if not isinstance(row, dict):
+                    continue
+                parts = [
+                    str(row.get("kind") or "").strip(),
+                    str(row.get("title") or "").strip(),
+                    str(row.get("source") or "").strip(),
+                    str(row.get("url") or "").strip(),
+                ]
+                lines.append("- " + " | ".join(part for part in parts if part))
+
         warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
         if warnings:
             lines.extend(["", "Notes", "-" * 80])
@@ -1200,8 +1196,6 @@ class MarketPrepTab:
         settings = {
             "model": self.ai_model_var.get().strip() or "gpt-5-mini",
             "max_output_tokens": self._int_from_var(self.ai_max_tokens_var, default=800, minimum=600, maximum=2000),
-            "article_limit": self._int_from_var(self.ai_article_limit_var, default=4, minimum=0, maximum=8),
-            "article_char_limit": self._int_from_var(self.ai_article_chars_var, default=2000, minimum=500, maximum=5000),
             "user_context": self._ai_context_value(),
         }
         try:
@@ -1339,7 +1333,7 @@ class MarketPrepTab:
         self._run_background_task(
             button_label="Run AI Summary",
             running_status="Generating AI macro summary...",
-            loading_text="Reading selected headlines/articles and sending a compact digest to OpenAI...",
+            loading_text="Sending the current raw markdown and found source links to OpenAI...",
             worker_func=lambda report=current_report: self.orchestrator.run_ai_summary(report),
             done_status="AI macro summary ready.",
             report_key="market_prep_report",

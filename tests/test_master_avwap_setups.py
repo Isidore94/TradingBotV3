@@ -3048,6 +3048,81 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertTrue(fake_ib.market_data_requests)
         self.assertTrue(all(request == ("", True, False) for request in fake_ib.market_data_requests))
 
+    def test_ib_option_quote_returns_when_price_arrives_before_snapshot_end(self):
+        class FakeIb:
+            def __init__(self):
+                self.option_quotes = {}
+                self.option_quotes_ready = {}
+                self.request_errors = {}
+                self.market_data_types = []
+                self.next_id = 20
+
+            def isConnected(self):
+                return True
+
+            def next_request_id(self):
+                self.next_id += 1
+                return self.next_id
+
+            def reqMarketDataType(self, market_data_type):
+                self.market_data_types.append(market_data_type)
+
+            def reqMktData(self, req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, options):
+                self.option_quotes[req_id] = {"last": 0.25}
+                self.option_quotes_ready[req_id] = False
+
+            def cancelMktData(self, req_id):
+                pass
+
+        fake_ib = FakeIb()
+        with patch.object(master_avwap.time, "sleep") as sleep:
+            quote = master_avwap._fetch_ib_option_quote(
+                fake_ib,
+                master_avwap.create_option_contract("ABC", "20260515", 95.0),
+                timeout_sec=1.0,
+            )
+
+        self.assertEqual(quote["last"], 0.25)
+        sleep.assert_called_once_with(master_avwap.THETA_OPTION_REQUEST_DELAY_SEC)
+
+    def test_ib_option_quote_stops_fallback_after_security_definition_error(self):
+        class FakeIb:
+            def __init__(self):
+                self.option_quotes = {}
+                self.option_quotes_ready = {}
+                self.request_errors = {}
+                self.market_data_types = []
+                self.next_id = 30
+
+            def isConnected(self):
+                return True
+
+            def next_request_id(self):
+                self.next_id += 1
+                return self.next_id
+
+            def reqMarketDataType(self, market_data_type):
+                self.market_data_types.append(market_data_type)
+
+            def reqMktData(self, req_id, contract, generic_tick_list, snapshot, regulatory_snapshot, options):
+                self.request_errors[req_id] = [
+                    {"code": 200, "message": "No security definition has been found for the request"}
+                ]
+                self.option_quotes_ready[req_id] = True
+
+            def cancelMktData(self, req_id):
+                pass
+
+        fake_ib = FakeIb()
+        quote = master_avwap._fetch_ib_option_quote(
+            fake_ib,
+            master_avwap.create_option_contract("ABC", "20260515", 95.0),
+            timeout_sec=1.0,
+        )
+
+        self.assertEqual(fake_ib.market_data_types, [1])
+        self.assertEqual(quote["ib_error_codes"], [200])
+
     def test_sold_put_enrichment_scans_lower_strikes_and_prefers_furthest_viable_premium(self):
         row = {
             "symbol": "ABC",
