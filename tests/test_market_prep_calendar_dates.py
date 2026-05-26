@@ -144,6 +144,8 @@ class MarketPrepCalendarDateTests(unittest.TestCase):
             patch.object(orchestrator, "_load_watchlist_risk", side_effect=fake_watchlist_risk),
             patch.object(orchestrator, "_load_rss_headlines", return_value={"headlines": [], "message": ""}),
             patch.object(orchestrator, "_load_youtube_links", return_value={"videos": [], "message": ""}),
+            patch.object(orchestrator, "_load_market_snapshot", return_value={"classification": {}, "rows": []}),
+            patch.object(orchestrator, "_attach_ai_brief", side_effect=lambda report: report),
         ):
             result = orchestrator.run_daily_prep()
 
@@ -200,6 +202,8 @@ class MarketPrepCalendarDateTests(unittest.TestCase):
             patch.object(orchestrator, "_load_sec_filings", return_value={"filings": [], "message": ""}),
             patch.object(orchestrator, "_load_rss_headlines", return_value={"headlines": [], "message": ""}),
             patch.object(orchestrator, "_load_youtube_links", return_value={"videos": [], "message": ""}),
+            patch.object(orchestrator, "_load_market_snapshot", return_value={"classification": {}, "rows": []}),
+            patch.object(orchestrator, "_attach_ai_brief", side_effect=lambda report: report),
         ):
             result = orchestrator.run_weekly_prep()
 

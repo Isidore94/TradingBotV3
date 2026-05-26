@@ -20,7 +20,7 @@ from market_prep.services.ticker_lookup_service import lookup_ticker_context
 
 MARKET_PREP_PLACEHOLDER_TEXT = "Market Prep tab loaded. Phase 1 skeleton ready."
 MARKET_PREP_NAV_ITEMS = (
-    ("Overview", "overview"),
+    ("Command Center", "overview"),
     ("Catalyst Clock", "catalyst"),
     ("Watchlist Risk", "watchlist"),
     ("Earnings", "earnings"),
@@ -82,6 +82,8 @@ class MarketPrepTab:
         toolbar.pack(fill=tk.X, padx=10, pady=(10, 8))
 
         buttons = (
+            ("Start Day", self.start_day),
+            ("Start Week", self.start_week),
             ("Run Daily Prep", self.run_daily_prep),
             ("Run Weekly Prep", self.run_weekly_prep),
             ("Refresh Earnings", self.refresh_earnings),
@@ -147,10 +149,11 @@ class MarketPrepTab:
 
         cards = (
             ("report", "Report"),
-            ("high_priority", "High Priority"),
-            ("watchlist_earnings", "Watchlist Earnings"),
-            ("next_catalyst", "Next Catalyst"),
-            ("posture", "Posture"),
+            ("market_regime", "Market Regime"),
+            ("risk_level", "Week/Day Risk"),
+            ("next_catalyst", "Next Landmine"),
+            ("watchlist_holds", "Watchlist Holds"),
+            ("ai_brief", "AI Brief"),
         )
         for key, title in cards:
             frame = ttk.LabelFrame(center, text=title)
@@ -173,7 +176,7 @@ class MarketPrepTab:
 
     def _build_overview_tab(self) -> None:
         frame = ttk.Frame(self.view_notebook)
-        self.view_notebook.add(frame, text="Overview")
+        self.view_notebook.add(frame, text="Command Center")
         self.overview_text = self._make_text(frame)
 
     def _build_catalyst_tab(self) -> None:
@@ -408,10 +411,11 @@ class MarketPrepTab:
     def _reset_summary_cards(self) -> None:
         defaults = {
             "report": "Waiting for run",
-            "high_priority": "Waiting for run",
-            "watchlist_earnings": "Waiting for run",
+            "market_regime": "Waiting for run",
+            "risk_level": "Waiting for run",
             "next_catalyst": "Waiting for run",
-            "posture": "Waiting for run",
+            "watchlist_holds": "Waiting for run",
+            "ai_brief": "Waiting for run",
         }
         for key, value in defaults.items():
             if key in self.summary_vars:
@@ -422,31 +426,49 @@ class MarketPrepTab:
         report_date = str(report.get("report_date") or datetime.now().date().isoformat())
         generated_at = str(report.get("generated_at") or "n/a")
         clock_items = self._report_catalyst_clock(report)
-        high_count = sum(
-            1
-            for item in clock_items
-            if str(item.get("priority") or "").upper() in HIGH_PRIORITY_VALUES
-        )
         watchlist_rows = self._watchlist_rows_for_report(report)
-        watchlist_earnings_count = sum(
-            1
-            for row in watchlist_rows
-            if "Earnings" in str(row.get("classification") or "")
-            and "Clean" not in str(row.get("classification") or "")
-        )
+        hold_warning_count = len(report.get("overnight_hold_warnings") or [])
         next_item = clock_items[0] if clock_items else {}
         next_catalyst = self._format_clock_item_compact(next_item) if next_item else "None in current window"
-        posture = self._posture_text(report)
+        market_regime = self._market_regime_text(report)
+        risk_level = self._risk_level_text(report)
+        ai_status = self._ai_status_text(report)
 
         self.summary_vars["report"].set(f"{report_type}\n{report_date}\n{generated_at}")
-        self.summary_vars["high_priority"].set(f"{high_count} high/mega catalyst(s)")
-        self.summary_vars["watchlist_earnings"].set(f"{watchlist_earnings_count} flagged ticker(s)")
+        self.summary_vars["market_regime"].set(market_regime or "Market snapshot unavailable")
+        self.summary_vars["risk_level"].set(risk_level or "No risk level generated")
         self.summary_vars["next_catalyst"].set(next_catalyst)
-        self.summary_vars["posture"].set(posture or "No posture generated")
+        self.summary_vars["watchlist_holds"].set(f"{hold_warning_count} warning(s)\n{self._watchlist_hold_text(watchlist_rows)}")
+        self.summary_vars["ai_brief"].set(ai_status)
         self.source_status_var.set(self._source_health_text(report, markdown))
 
     def _render_overview(self, report: dict, markdown: str) -> None:
         sections: list[str] = []
+        ai_brief = report.get("ai_brief") if isinstance(report.get("ai_brief"), dict) else {}
+        ai_summary = str(ai_brief.get("summary") or "").strip()
+        if ai_summary:
+            sections.append("AI Brief\n" + ai_summary)
+        elif ai_brief:
+            prompt = str(ai_brief.get("prompt") or "").strip()
+            status = str(ai_brief.get("status_label") or ai_brief.get("status") or "").strip()
+            if prompt:
+                sections.append("AI Prompt / Status\n" + (status or "AI brief unavailable") + "\n\n" + prompt)
+
+        for title, key in (
+            ("Weekly Thesis Checklist", "weekly_thesis_checklist"),
+            ("Daily Landmine Checklist", "daily_landmine_checklist"),
+            ("No-Trade / Reduced-Size Windows", "no_trade_windows"),
+            ("Overnight Hold Warnings", "overnight_hold_warnings"),
+        ):
+            rows = report.get(key)
+            if isinstance(rows, list) and rows:
+                sections.append(title + "\n" + "\n".join(f"- {row}" for row in rows if str(row).strip()))
+
+        market = report.get("market_snapshot") if isinstance(report.get("market_snapshot"), dict) else {}
+        market_text = self._market_snapshot_text(market)
+        if market_text:
+            sections.append("Market Snapshot\n" + market_text)
+
         focus = self._markdown_section(markdown, "## 1. Highest Importance Focus", "## 2.")
         if focus:
             sections.append("Highest Importance Focus\n" + focus)
@@ -653,6 +675,64 @@ class MarketPrepTab:
             return f"{week_risk.get('level') or 'LOW'}: {week_risk.get('reason') or ''}".strip()
         return ""
 
+    def _risk_level_text(self, report: dict) -> str:
+        week_risk = report.get("week_risk_level") if isinstance(report.get("week_risk_level"), dict) else {}
+        if week_risk:
+            return f"{week_risk.get('level') or 'LOW'}\n{week_risk.get('reason') or ''}".strip()
+        landmines = report.get("daily_landmine_checklist") if isinstance(report.get("daily_landmine_checklist"), list) else []
+        no_trade = report.get("no_trade_windows") if isinstance(report.get("no_trade_windows"), list) else []
+        if no_trade:
+            return f"HIGH\n{len(no_trade)} timing window(s)"
+        if landmines:
+            return f"WATCH\n{len(landmines)} checklist item(s)"
+        return ""
+
+    def _market_regime_text(self, report: dict) -> str:
+        market = report.get("market_snapshot") if isinstance(report.get("market_snapshot"), dict) else {}
+        classification = market.get("classification") if isinstance(market.get("classification"), dict) else {}
+        if not classification:
+            return ""
+        return f"{classification.get('label') or 'n/a'}\n{classification.get('reason') or 'n/a'}"
+
+    def _ai_status_text(self, report: dict) -> str:
+        ai = report.get("ai_brief") if isinstance(report.get("ai_brief"), dict) else {}
+        if not ai:
+            return "Not requested"
+        if str(ai.get("summary") or "").strip():
+            return "Ready\nOpenAI brief generated"
+        return str(ai.get("status_label") or ai.get("status") or "Unavailable")
+
+    def _watchlist_hold_text(self, rows: list[dict]) -> str:
+        flagged = [
+            str(row.get("ticker") or "").strip().upper()
+            for row in rows
+            if "Clean" not in str(row.get("classification") or "")
+        ]
+        return ", ".join(flagged[:10]) if flagged else "No flagged holds"
+
+    def _market_snapshot_text(self, snapshot: dict) -> str:
+        classification = snapshot.get("classification") if isinstance(snapshot.get("classification"), dict) else {}
+        lines = []
+        if classification:
+            lines.append(f"- {classification.get('label') or 'n/a'}: {classification.get('reason') or 'n/a'}")
+        rows = self._payload_rows(snapshot, "rows")
+        for row in rows[:12]:
+            ticker = str(row.get("ticker") or "").strip()
+            ret_5d = self._pct_text(row.get("return_5d_pct"))
+            ret_20d = self._pct_text(row.get("return_20d_pct"))
+            above_21 = "above 21SMA" if row.get("above_21_sma") is True else "below 21SMA" if row.get("above_21_sma") is False else "21SMA n/a"
+            lines.append(f"- {ticker}: 5D {ret_5d}, 20D {ret_20d}, {above_21}")
+        errors = snapshot.get("errors") if isinstance(snapshot, dict) else []
+        if isinstance(errors, list) and errors:
+            lines.append(f"- Warning: {errors[0]}")
+        return "\n".join(lines)
+
+    def _pct_text(self, value) -> str:
+        try:
+            return f"{float(value):+.2f}%"
+        except (TypeError, ValueError):
+            return "n/a"
+
     def _source_health_text(self, report: dict, markdown: str) -> str:
         items: list[str] = []
         for payload in (
@@ -668,6 +748,8 @@ class MarketPrepTab:
             ("Treasury", report.get("treasury_calendar")),
             ("SEC", report.get("sec_filings")),
             ("RSS", report.get("rss_headlines")),
+            ("Market Snapshot", report.get("market_snapshot")),
+            ("OpenAI", report.get("ai_brief")),
         ):
             if isinstance(payload, dict):
                 self._append_status(items, label, payload)
@@ -937,6 +1019,26 @@ class MarketPrepTab:
             report_key="weekly_report",
         )
 
+    def start_day(self) -> None:
+        self._run_background_task(
+            button_label="Start Day",
+            running_status="Building start-of-day command center...",
+            loading_text="Fetching daily landmines, market snapshot, watchlist risk, and optional AI brief...",
+            worker_func=self.orchestrator.start_day_prep,
+            done_status="Start-of-day command center ready.",
+            report_key="daily_report",
+        )
+
+    def start_week(self) -> None:
+        self._run_background_task(
+            button_label="Start Week",
+            running_status="Building start-of-week thesis...",
+            loading_text="Fetching weekly catalysts, market snapshot, watchlist risk, and optional AI brief...",
+            worker_func=self.orchestrator.start_week_prep,
+            done_status="Start-of-week thesis ready.",
+            report_key="weekly_report",
+        )
+
     def refresh_earnings(self) -> None:
         self._run_background_task(
             button_label="Refresh Earnings",
@@ -1045,7 +1147,7 @@ class TickerLookupTab:
         self.logger = get_market_prep_logger()
         self.container = ttk.Frame(parent)
         self.ticker_var = tk.StringVar()
-        self.days_var = tk.StringVar(value=str(self.config.ticker_lookup.get("days_ahead", 60)))
+        self.days_var = tk.StringVar(value=str(self.config.ticker_lookup.get("days_ahead", 10)))
         self.status_var = tk.StringVar(value="Enter a ticker and run lookup.")
         self.summary_var = tk.StringVar(value="No ticker loaded.")
         self.latest_lookup: dict | None = None
@@ -1223,8 +1325,8 @@ class TickerLookupTab:
         try:
             days = int(self.days_var.get())
         except ValueError:
-            days = 60
-            self.days_var.set("60")
+            days = 10
+            self.days_var.set("10")
 
         self.background_task_active = True
         if self.lookup_button is not None:
@@ -1287,6 +1389,10 @@ class TickerLookupTab:
             f"Market cap: {metadata.get('market_cap_fmt') or 'n/a'}",
             f"Peer context: {payload.get('peer_reason') or 'n/a'}",
             f"Peer tickers: {', '.join(peers) or 'None'}",
+            "",
+            "AI Swing Query",
+            "-" * 80,
+            str(payload.get("ai_swing_query") or "").strip() or "No AI swing query available.",
             "",
             "Source Status",
             "-" * 80,

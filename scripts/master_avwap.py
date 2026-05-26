@@ -9135,6 +9135,7 @@ class IBApi(EWrapper, EClient):
         self.option_chain_ready = {}
         self.option_quotes = {}
         self.option_quotes_ready = {}
+        self.option_quote_cancelled_ids = set()
         self._req_id_lock = threading.Lock()
         self._next_req_id = int(time.time() * 1000) % (2**31 - 100000)
 
@@ -9200,6 +9201,7 @@ class IBApi(EWrapper, EClient):
             quote["last"] = float(price)
         elif tickType in (TickTypeEnum.CLOSE, TickTypeEnum.DELAYED_CLOSE):
             quote["close"] = float(price)
+        self._mark_option_quote_ready_if_enough(reqId)
 
     def tickSize(self, reqId, tickType, size):
         quote = self.option_quotes.setdefault(reqId, {})
@@ -9215,6 +9217,7 @@ class IBApi(EWrapper, EClient):
             quote["open_interest"] = int(size)
         elif tickType == TickTypeEnum.OPTION_PUT_VOLUME:
             quote["volume"] = int(size)
+        self._mark_option_quote_ready_if_enough(reqId)
 
     def tickOptionComputation(
         self,
@@ -9246,9 +9249,32 @@ class IBApi(EWrapper, EClient):
             quote["theta"] = float(theta)
         if undPrice is not None and undPrice > 0:
             quote["underlying_price"] = float(undPrice)
+        self._mark_option_quote_ready_if_enough(reqId)
 
     def tickSnapshotEnd(self, reqId: int):
         self.option_quotes_ready[reqId] = True
+
+    def _mark_option_quote_ready_if_enough(self, reqId: int) -> None:
+        if reqId not in self.option_quotes_ready:
+            return
+        quote = self.option_quotes.get(reqId, {}) or {}
+        has_market = (
+            ("bid" in quote and "ask" in quote)
+            or "last" in quote
+            or "close" in quote
+        )
+        has_model = any(
+            key in quote
+            for key in (
+                "model_price",
+                "bid_model_price",
+                "ask_model_price",
+                "implied_vol",
+                "delta",
+            )
+        )
+        if has_market or has_model:
+            self.option_quotes_ready[reqId] = True
 
     def error(self, reqId, code, msg):
         if reqId in self.contract_details_ready:
@@ -9256,7 +9282,13 @@ class IBApi(EWrapper, EClient):
         if reqId in self.option_chain_ready:
             self.option_chain_ready[reqId] = True
         if reqId in self.option_quotes_ready:
+            quote = self.option_quotes.setdefault(reqId, {})
+            quote["error_code"] = code
+            quote["error"] = str(msg or "")
             self.option_quotes_ready[reqId] = True
+        if code == 300 and reqId in self.option_quote_cancelled_ids:
+            self.option_quote_cancelled_ids.discard(reqId)
+            return
         if code not in (2104, 2106, 2158, 2176):
             logging.error(f"IB Error {code}[{reqId}]: {msg}")
 
@@ -9397,7 +9429,7 @@ def _fetch_ib_option_quote(
     ib.option_quotes[req_id] = {}
     ib.option_quotes_ready[req_id] = False
     try:
-        ib.reqMktData(req_id, contract, "100,101,106", True, False, [])
+        ib.reqMktData(req_id, contract, "100,101,106", False, False, [])
         _wait_for_ib_flag(ib.option_quotes_ready, req_id, timeout_sec)
         quote = dict(ib.option_quotes.get(req_id, {}) or {})
         if quote:
@@ -9414,8 +9446,12 @@ def _fetch_ib_option_quote(
         )
         return {}
     finally:
+        quote = ib.option_quotes.get(req_id, {}) or {}
+        request_rejected = int(quote.get("error_code") or 0) in {300, 321}
         try:
-            ib.cancelMktData(req_id)
+            if not request_rejected:
+                ib.option_quote_cancelled_ids.add(req_id)
+                ib.cancelMktData(req_id)
         except Exception:
             pass
         ib.option_quotes.pop(req_id, None)

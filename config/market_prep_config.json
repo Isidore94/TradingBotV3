@@ -129,7 +129,7 @@
     ]
   },
   "ticker_lookup": {
-    "days_ahead": 60,
+    "days_ahead": 10,
     "news_limit": 40,
     "max_peer_tickers": 8,
     "include_sec_filings": true,
@@ -138,15 +138,31 @@
     "queries": [
       "{ticker} earnings",
       "{ticker} guidance",
+      "{ticker} analyst rating",
+      "{ticker} price target",
+      "{ticker} upgrade downgrade",
       "{ticker} investor day",
       "{ticker} conference",
       "{ticker} presentation",
+      "{ticker} catalyst",
       "{ticker} announces",
       "{ticker} partnership",
       "{ticker} product launch",
       "{ticker} acquisition",
-      "{ticker} lawsuit"
+      "{ticker} contract",
+      "{ticker} shipment",
+      "{ticker} demand",
+      "{ticker} regulation",
+      "{ticker} lawsuit",
+      "{ticker} offering",
+      "{ticker} insider selling"
     ]
+  },
+  "market_prep_ai": {
+    "enabled": true,
+    "model": "gpt-5.2",
+    "timeout_seconds": 30,
+    "max_context_chars": 12000
   },
   "paths": {
     "longs_file": "longs.txt",

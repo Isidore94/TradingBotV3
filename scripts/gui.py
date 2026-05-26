@@ -12,6 +12,7 @@ import queue
 import sys
 import threading
 import tkinter as tk
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -100,6 +101,37 @@ MAIN_GUI_OUTPUT_FILE = LONGS_FILE.parent / "consolidated_gui_output.txt"
 MAIN_GUI_OUTPUT_DEBOUNCE_MS = 750
 MAIN_GUI_OUTPUT_REFRESH_MS = 30_000
 MAIN_GUI_BOUNCE_ALERT_LINES = 120
+VALID_GUI_MODES = {"full", "simple", "combined"}
+PERFORMANCE_OUTPUT_DEBOUNCE_MS = 5_000
+PERFORMANCE_OUTPUT_REFRESH_MS = 120_000
+BOUNCE_QUEUE_POLL_MS = 150
+PERFORMANCE_BOUNCE_QUEUE_POLL_MS = 750
+BOUNCE_ACTIVE_REFRESH_MS = 1_500
+PERFORMANCE_BOUNCE_ACTIVE_REFRESH_MS = 7_500
+
+
+def normalize_gui_mode(mode: str | None) -> str:
+    normalized = str(mode or "full").strip().lower()
+    return normalized if normalized in VALID_GUI_MODES else "full"
+
+
+def coerce_bool_setting(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def performance_delay(enabled: bool, normal_ms: int, performance_ms: int) -> int:
+    return int(performance_ms if enabled else normal_ms)
 
 
 def _count_watchlist_symbols(path: Path) -> int:
@@ -482,14 +514,12 @@ def configure_theme(root: tk.Misc) -> None:
 
 
 def choose_gui_mode() -> str:
-    preferred_mode = str(get_local_setting("gui_mode", "full") or "full").strip().lower()
-    if preferred_mode not in {"full", "simple"}:
-        preferred_mode = "full"
+    preferred_mode = normalize_gui_mode(get_local_setting("gui_mode", "full"))
     selection = {"mode": preferred_mode}
 
     picker = tk.Tk()
     picker.title("Consolidated GUI Mode")
-    picker.geometry("400x170")
+    picker.geometry("480x190")
     picker.configure(bg=DARK_GREY)
     picker.resizable(False, False)
 
@@ -506,7 +536,7 @@ def choose_gui_mode() -> str:
         text=(
             "Full mode uses the full BounceBot layout.\n"
             "Simple mode uses the laptop BounceBot layout.\n"
-            "Master AVWAP stays full in both modes.\n"
+            "Combined mode shows all major workspaces at once.\n"
             f"Default on this computer: {preferred_mode.title()}"
         ),
         bg=DARK_GREY,
@@ -524,6 +554,7 @@ def choose_gui_mode() -> str:
 
     tk.Button(button_row, text="Full", width=12, command=lambda: select_mode("full")).pack(side=tk.LEFT, padx=8)
     tk.Button(button_row, text="Simple", width=12, command=lambda: select_mode("simple")).pack(side=tk.LEFT, padx=8)
+    tk.Button(button_row, text="Combined", width=12, command=lambda: select_mode("combined")).pack(side=tk.LEFT, padx=8)
 
     picker.protocol("WM_DELETE_WINDOW", lambda: select_mode("full"))
     picker.mainloop()
@@ -742,12 +773,20 @@ class BounceBotController:
 
 
 class BaseBounceBotPanel:
-    def __init__(self, parent: tk.Misc, controller: BounceBotController, switch_mode_callback=None):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        controller: BounceBotController,
+        switch_mode_callback=None,
+        performance_delay_provider=None,
+    ):
         self.parent = parent
         self.controller = controller
         self.switch_mode_callback = switch_mode_callback
+        self.performance_delay_provider = performance_delay_provider or (lambda normal_ms, _performance_ms: normal_ms)
         self.container = ttk.Frame(parent)
         self._queue_after_id = None
+        self._last_active_refresh_at = 0.0
         self.alert_text: scrolledtext.ScrolledText | None = None
         self.on_output_changed = None
 
@@ -806,6 +845,19 @@ class BaseBounceBotPanel:
         self.controller.start()
         self._process_queues()
 
+    def _queue_poll_delay_ms(self) -> int:
+        return int(self.performance_delay_provider(BOUNCE_QUEUE_POLL_MS, PERFORMANCE_BOUNCE_QUEUE_POLL_MS))
+
+    def _active_refresh_delay_ms(self) -> int:
+        return int(self.performance_delay_provider(BOUNCE_ACTIVE_REFRESH_MS, PERFORMANCE_BOUNCE_ACTIVE_REFRESH_MS))
+
+    def _refresh_active_bounces_if_due(self) -> None:
+        now = time.monotonic()
+        if now - self._last_active_refresh_at < self._active_refresh_delay_ms() / 1000:
+            return
+        self._last_active_refresh_at = now
+        self.controller.refresh_active_bounces()
+
     def _process_queues(self) -> None:
         raise NotImplementedError
 
@@ -819,7 +871,7 @@ class BaseBounceBotPanel:
 
 
 class SimpleBounceBotPanel(BaseBounceBotPanel):
-    def __init__(self, parent: tk.Misc, switch_mode_callback=None):
+    def __init__(self, parent: tk.Misc, switch_mode_callback=None, performance_delay_provider=None):
         super().__init__(
             parent,
             BounceBotController(
@@ -828,6 +880,7 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
                 start_scanning_enabled=False,
             ),
             switch_mode_callback=switch_mode_callback,
+            performance_delay_provider=performance_delay_provider,
         )
         self._syncing_controls = False
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
@@ -998,12 +1051,12 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
                 break
             self._append_alert_with_timestamp(message, str(tag))
 
-        self.controller.refresh_active_bounces()
-        self._queue_after_id = self.container.after(150, self._process_queues)
+        self._refresh_active_bounces_if_due()
+        self._queue_after_id = self.container.after(self._queue_poll_delay_ms(), self._process_queues)
 
 
 class FullBounceBotPanel(BaseBounceBotPanel):
-    def __init__(self, parent: tk.Misc, switch_mode_callback=None):
+    def __init__(self, parent: tk.Misc, switch_mode_callback=None, performance_delay_provider=None):
         super().__init__(
             parent,
             BounceBotController(
@@ -1012,6 +1065,7 @@ class FullBounceBotPanel(BaseBounceBotPanel):
                 start_scanning_enabled=False,
             ),
             switch_mode_callback=switch_mode_callback,
+            performance_delay_provider=performance_delay_provider,
         )
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self._build_layout()
@@ -1133,8 +1187,8 @@ class FullBounceBotPanel(BaseBounceBotPanel):
                 break
             self._append_alert_with_timestamp(message, str(tag))
 
-        self.controller.refresh_active_bounces()
-        self._queue_after_id = self.container.after(150, self._process_queues)
+        self._refresh_active_bounces_if_due()
+        self._queue_after_id = self.container.after(self._queue_poll_delay_ms(), self._process_queues)
 
 
 class SimpleMasterAvwapPanel:
@@ -1427,23 +1481,65 @@ class WatchlistEditorArea:
 class ConsolidatedTradingGUI:
     def __init__(self, root: tk.Tk, mode: str):
         self.root = root
-        self.mode = mode
+        self.mode = normalize_gui_mode(mode)
         self.root.title("Consolidated Trading GUI")
-        self.root.geometry("1880x1040" if mode == "full" else "1380x900")
+        self.root.geometry(self._geometry_for_mode(self.mode))
         self.root.configure(bg=DARK_GREY)
         configure_theme(self.root)
 
+        self.performance_mode_var = tk.BooleanVar(
+            value=coerce_bool_setting(get_local_setting("gui_performance_mode", False))
+        )
+        self.performance_status_var = tk.StringVar()
         self.bounce_panel: BaseBounceBotPanel | None = None
         self.avwap_gui: MasterAvwapGUI | None = None
         self.market_prep_panel: MarketPrepTab | None = None
         self.ticker_lookup_panel: TickerLookupTab | None = None
+        self.main_notebook: ttk.Notebook | None = None
+        self.master_tab = None
         self._output_write_after_id = None
         self._output_refresh_after_id = None
         self._output_traces: list[tuple[tk.Variable, str]] = []
+        self._deferred_tab_refresh_after_id = None
         self._build_layout()
+        self._sync_performance_status()
         self._configure_output_snapshot_updates()
 
+    def _geometry_for_mode(self, mode: str) -> str:
+        if mode == "combined":
+            return "1920x2160+0+0"
+        return "1880x1040" if mode == "full" else "1380x900"
+
     def _build_layout(self) -> None:
+        self._build_global_toolbar()
+        if self.mode == "combined":
+            self._build_combined_layout()
+        else:
+            self._build_tabbed_layout()
+
+    def _build_global_toolbar(self) -> None:
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(fill=tk.X, padx=10, pady=(8, 4))
+
+        ttk.Label(toolbar, text="Mode").pack(side=tk.LEFT)
+        for label, target_mode in (("Full", "full"), ("Simple", "simple"), ("Combined", "combined")):
+            state = "disabled" if target_mode == self.mode else "normal"
+            ttk.Button(
+                toolbar,
+                text=label,
+                state=state,
+                command=lambda m=target_mode: self.switch_mode(m),
+            ).pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Checkbutton(
+            toolbar,
+            text="Performance Mode",
+            variable=self.performance_mode_var,
+            command=lambda: self.set_performance_mode(bool(self.performance_mode_var.get())),
+        ).pack(side=tk.RIGHT, padx=(12, 0))
+        ttk.Label(toolbar, textvariable=self.performance_status_var).pack(side=tk.RIGHT)
+
+    def _build_tabbed_layout(self) -> None:
         main_pane = tk.PanedWindow(
             self.root,
             orient=tk.VERTICAL,
@@ -1474,10 +1570,18 @@ class ConsolidatedTradingGUI:
         notebook.add(ticker_lookup_tab, text="Ticker Lookup")
 
         if self.mode == "full":
-            self.bounce_panel = FullBounceBotPanel(bounce_tab, switch_mode_callback=lambda: self.switch_mode("simple"))
+            self.bounce_panel = FullBounceBotPanel(
+                bounce_tab,
+                switch_mode_callback=lambda: self.switch_mode("simple"),
+                performance_delay_provider=self.performance_delay,
+            )
             self.bounce_panel.pack(fill=tk.BOTH, expand=True)
         else:
-            self.bounce_panel = SimpleBounceBotPanel(bounce_tab, switch_mode_callback=lambda: self.switch_mode("full"))
+            self.bounce_panel = SimpleBounceBotPanel(
+                bounce_tab,
+                switch_mode_callback=lambda: self.switch_mode("full"),
+                performance_delay_provider=self.performance_delay,
+            )
             self.bounce_panel.pack(fill=tk.BOTH, expand=True)
 
         self.avwap_gui = MasterAvwapGUI(master_tab, standalone=False)
@@ -1510,7 +1614,87 @@ class ConsolidatedTradingGUI:
         self._sync_watchlist_editor_to_selected_tab()
         main_pane.add(watchlist_container)
 
+    def _build_combined_layout(self) -> None:
+        main_pane = tk.PanedWindow(
+            self.root,
+            orient=tk.VERTICAL,
+            sashrelief=tk.RAISED,
+            sashwidth=10,
+            showhandle=True,
+            bg=DARK_GREY,
+        )
+        main_pane.pack(fill=tk.BOTH, expand=True)
+
+        top_pane = tk.PanedWindow(
+            main_pane,
+            orient=tk.HORIZONTAL,
+            sashrelief=tk.RAISED,
+            sashwidth=10,
+            showhandle=True,
+            bg=DARK_GREY,
+        )
+        middle_pane = tk.PanedWindow(
+            main_pane,
+            orient=tk.HORIZONTAL,
+            sashrelief=tk.RAISED,
+            sashwidth=10,
+            showhandle=True,
+            bg=DARK_GREY,
+        )
+        watchlist_tabs = ttk.Notebook(main_pane)
+
+        bounce_frame = ttk.Frame(top_pane)
+        master_frame = ttk.Frame(top_pane)
+        market_frame = ttk.Frame(middle_pane)
+        ticker_frame = ttk.Frame(middle_pane)
+
+        self.bounce_panel = FullBounceBotPanel(
+            bounce_frame,
+            switch_mode_callback=lambda: self.switch_mode("simple"),
+            performance_delay_provider=self.performance_delay,
+        )
+        self.bounce_panel.pack(fill=tk.BOTH, expand=True)
+        self.avwap_gui = MasterAvwapGUI(master_frame, standalone=False)
+        self.market_prep_panel = MarketPrepTab(market_frame, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
+        self.market_prep_panel.pack(fill=tk.BOTH, expand=True)
+        self.ticker_lookup_panel = TickerLookupTab(ticker_frame, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
+        self.ticker_lookup_panel.pack(fill=tk.BOTH, expand=True)
+
+        top_pane.add(bounce_frame, stretch="always")
+        top_pane.add(master_frame, stretch="always")
+        middle_pane.add(market_frame, stretch="always")
+        middle_pane.add(ticker_frame, stretch="always")
+
+        bounce_watchlist_frame = ttk.Frame(watchlist_tabs)
+        master_watchlist_frame = ttk.Frame(watchlist_tabs)
+        watchlist_tabs.add(bounce_watchlist_frame, text="BounceBot Watchlists")
+        watchlist_tabs.add(master_watchlist_frame, text="Master Watchlists")
+        self.bounce_watchlist_area = WatchlistEditorArea(
+            bounce_watchlist_frame,
+            long_title="BounceBot Longs",
+            long_path=LONGS_FILE,
+            short_title="BounceBot Shorts",
+            short_path=SHORTS_FILE,
+        )
+        self.master_watchlist_area = WatchlistEditorArea(
+            master_watchlist_frame,
+            long_title="Master Swing Longs",
+            long_path=SWING_LONGS_FILE,
+            short_title="Master Short Swings",
+            short_path=SWING_SHORTS_FILE,
+        )
+        self.bounce_watchlist_area.pack(fill=tk.BOTH, expand=True)
+        self.master_watchlist_area.pack(fill=tk.BOTH, expand=True)
+        self.watchlist_area = self.bounce_watchlist_area
+        self._visible_watchlist_area = self.bounce_watchlist_area
+
+        main_pane.add(top_pane, stretch="always")
+        main_pane.add(middle_pane, stretch="always")
+        main_pane.add(watchlist_tabs)
+
     def _sync_watchlist_editor_to_selected_tab(self) -> None:
+        if self.main_notebook is None:
+            return
         selected_tab = self.main_notebook.select()
         next_area = (
             self.master_watchlist_area
@@ -1528,7 +1712,44 @@ class ConsolidatedTradingGUI:
         self._visible_watchlist_area = next_area
 
     def _on_main_tab_changed(self, _event=None) -> None:
+        if self.is_performance_mode_enabled():
+            if self._deferred_tab_refresh_after_id:
+                try:
+                    self.root.after_cancel(self._deferred_tab_refresh_after_id)
+                except Exception:
+                    pass
+            self._deferred_tab_refresh_after_id = self.root.after(750, self._run_deferred_tab_refresh)
+            return
         self._sync_watchlist_editor_to_selected_tab()
+
+    def _run_deferred_tab_refresh(self) -> None:
+        self._deferred_tab_refresh_after_id = None
+        self._sync_watchlist_editor_to_selected_tab()
+
+    def is_performance_mode_enabled(self) -> bool:
+        return bool(self.performance_mode_var.get())
+
+    def set_performance_mode(self, enabled: bool) -> None:
+        self.performance_mode_var.set(bool(enabled))
+        save_local_setting("gui_performance_mode", bool(enabled))
+        self._sync_performance_status()
+        if self._output_refresh_after_id:
+            try:
+                self.root.after_cancel(self._output_refresh_after_id)
+            except Exception:
+                pass
+            self._output_refresh_after_id = None
+            self._schedule_periodic_output_snapshot()
+
+    def performance_delay(self, normal_ms: int, performance_ms: int) -> int:
+        return performance_delay(self.is_performance_mode_enabled(), normal_ms, performance_ms)
+
+    def _sync_performance_status(self) -> None:
+        self.performance_status_var.set(
+            "Performance mode: slower background refreshes"
+            if self.is_performance_mode_enabled()
+            else "Performance mode: off"
+        )
 
     def _configure_output_snapshot_updates(self) -> None:
         if self.bounce_panel:
@@ -1542,7 +1763,7 @@ class ConsolidatedTradingGUI:
             self.avwap_gui.on_output_changed = self.request_output_snapshot
             self._bind_output_var(self.avwap_gui.status_var)
             self._bind_output_var(self.avwap_gui.tracker_storage_var)
-        self.request_output_snapshot(delay_ms=250)
+        self.request_output_snapshot(delay_ms=self.performance_delay(250, 2_000))
         self._schedule_periodic_output_snapshot()
 
     def _bind_output_var(self, variable: tk.Variable | None) -> None:
@@ -1551,12 +1772,14 @@ class ConsolidatedTradingGUI:
         trace_id = variable.trace_add("write", lambda *_args: self.request_output_snapshot())
         self._output_traces.append((variable, trace_id))
 
-    def request_output_snapshot(self, delay_ms: int = MAIN_GUI_OUTPUT_DEBOUNCE_MS) -> None:
+    def request_output_snapshot(self, delay_ms: int | None = None) -> None:
         try:
             if not self.root.winfo_exists():
                 return
         except tk.TclError:
             return
+        if delay_ms is None:
+            delay_ms = self.performance_delay(MAIN_GUI_OUTPUT_DEBOUNCE_MS, PERFORMANCE_OUTPUT_DEBOUNCE_MS)
 
         if self._output_write_after_id:
             try:
@@ -1577,7 +1800,7 @@ class ConsolidatedTradingGUI:
     def _schedule_periodic_output_snapshot(self) -> None:
         try:
             self._output_refresh_after_id = self.root.after(
-                MAIN_GUI_OUTPUT_REFRESH_MS,
+                self.performance_delay(MAIN_GUI_OUTPUT_REFRESH_MS, PERFORMANCE_OUTPUT_REFRESH_MS),
                 self._run_periodic_output_snapshot,
             )
         except tk.TclError:
@@ -1585,7 +1808,7 @@ class ConsolidatedTradingGUI:
 
     def _run_periodic_output_snapshot(self) -> None:
         self._output_refresh_after_id = None
-        self.request_output_snapshot(delay_ms=0)
+        self.request_output_snapshot(delay_ms=self.performance_delay(0, PERFORMANCE_OUTPUT_DEBOUNCE_MS))
         self._schedule_periodic_output_snapshot()
 
     def _cancel_output_snapshot_updates(self) -> None:
@@ -1601,6 +1824,12 @@ class ConsolidatedTradingGUI:
             except Exception:
                 pass
             self._output_refresh_after_id = None
+        if self._deferred_tab_refresh_after_id:
+            try:
+                self.root.after_cancel(self._deferred_tab_refresh_after_id)
+            except Exception:
+                pass
+            self._deferred_tab_refresh_after_id = None
         for variable, trace_id in self._output_traces:
             try:
                 variable.trace_remove("write", trace_id)
@@ -1618,6 +1847,7 @@ class ConsolidatedTradingGUI:
             self.root.destroy()
 
     def switch_mode(self, next_mode: str) -> None:
+        next_mode = normalize_gui_mode(next_mode)
         if next_mode == self.mode:
             return
         save_local_setting("gui_mode", next_mode)
@@ -1633,9 +1863,9 @@ class ConsolidatedTradingGUI:
 
 def launch(mode: str = "prompt") -> None:
     if mode == "prompt":
-        mode = str(get_local_setting("gui_mode", "full") or "full").strip().lower()
-        if mode not in {"full", "simple"}:
-            mode = "full"
+        mode = normalize_gui_mode(get_local_setting("gui_mode", "full"))
+    else:
+        mode = normalize_gui_mode(mode)
 
     root = tk.Tk()
     app = ConsolidatedTradingGUI(root, mode=mode)
@@ -1647,12 +1877,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Launch the consolidated BounceBot + Master AVWAP GUI.")
     parser.add_argument(
         "--mode",
-        choices=("prompt", "full", "simple"),
+        choices=("prompt", "full", "simple", "combined"),
         default="full",
-        help="Launch directly in full/simple mode, or use prompt to choose and save a preference.",
+        help="Launch directly in full/simple/combined mode, or use prompt to choose and save a preference.",
     )
     args = parser.parse_args()
-    if args.mode in {"full", "simple"}:
+    if args.mode in VALID_GUI_MODES:
         save_local_setting("gui_mode", args.mode)
     launch(mode=args.mode)
 

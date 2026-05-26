@@ -19,6 +19,14 @@ class TickerLookupServiceTests(unittest.TestCase):
         self.assertIn("AMD", peers)
         self.assertNotIn("TSM", peers)
 
+    def test_default_lookup_settings_use_short_swing_window_and_expanded_queries(self):
+        settings = ticker_lookup_service.get_ticker_lookup_settings(None)
+
+        self.assertEqual(settings["days_ahead"], 10)
+        self.assertIn("{ticker} catalyst", settings["queries"])
+        self.assertIn("{ticker} analyst rating", settings["queries"])
+        self.assertIn("{ticker} offering", settings["queries"])
+
     def test_lookup_ticker_context_composes_earnings_news_sec_and_peers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -92,6 +100,8 @@ class TickerLookupServiceTests(unittest.TestCase):
         self.assertEqual(payload["peer_earnings"][0]["ticker"], "NVDA")
         self.assertEqual(payload["target_headlines"][0]["title"], "TSM conference update")
         self.assertEqual(payload["industry_headlines"][0]["title"], "NVDA earnings preview")
+        self.assertIn("brief swing-trade read", payload["ai_swing_query"])
+        self.assertIn("AI Swing Query", payload["markdown"])
         self.assertIn("Ticker Lookup - TSM", payload["markdown"])
 
 

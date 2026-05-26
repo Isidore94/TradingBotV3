@@ -13,7 +13,7 @@ from market_prep.services.yfinance_service import get_ticker_metadata
 
 
 DEFAULT_TICKER_LOOKUP_SETTINGS = {
-    "days_ahead": 60,
+    "days_ahead": 10,
     "news_limit": 40,
     "max_peer_tickers": 8,
     "include_sec_filings": True,
@@ -22,14 +22,24 @@ DEFAULT_TICKER_LOOKUP_SETTINGS = {
     "queries": [
         "{ticker} earnings",
         "{ticker} guidance",
+        "{ticker} analyst rating",
+        "{ticker} price target",
+        "{ticker} upgrade downgrade",
         "{ticker} investor day",
         "{ticker} conference",
         "{ticker} presentation",
+        "{ticker} catalyst",
         "{ticker} announces",
         "{ticker} partnership",
         "{ticker} product launch",
         "{ticker} acquisition",
+        "{ticker} contract",
+        "{ticker} shipment",
+        "{ticker} demand",
+        "{ticker} regulation",
         "{ticker} lawsuit",
+        "{ticker} offering",
+        "{ticker} insider selling",
     ],
 }
 
@@ -68,7 +78,7 @@ def lookup_ticker_context(
     if not symbol:
         raise ValueError("Enter a ticker symbol before running lookup.")
 
-    window_days = _safe_int(days_ahead, _safe_int(settings.get("days_ahead"), 60))
+    window_days = _safe_int(days_ahead, _safe_int(settings.get("days_ahead"), 10))
     generated_at = datetime.now().isoformat(timespec="seconds")
     start = datetime.now().date()
     metadata = get_ticker_metadata(symbol, config=active_config)
@@ -123,6 +133,7 @@ def lookup_ticker_context(
         "industry_headlines": industry_headlines,
         "source_status": build_source_status(earnings_payload, sec_filings, news_payload),
     }
+    payload["ai_swing_query"] = build_ai_swing_query(payload)
     payload["markdown"] = build_ticker_lookup_markdown(payload)
     return payload
 
@@ -247,10 +258,30 @@ def build_ticker_lookup_markdown(payload: dict[str, Any]) -> str:
     lines.extend(["", "## Industry / Big Player Headlines", ""])
     industry_headlines = payload.get("industry_headlines") if isinstance(payload.get("industry_headlines"), list) else []
     lines.extend(_headline_lines(industry_headlines[:25]) or ["No industry headlines found."])
+    lines.extend(["", "## AI Swing Query", ""])
+    lines.append(str(payload.get("ai_swing_query") or build_ai_swing_query(payload)).strip())
     lines.extend(["", "## Source Status", ""])
     statuses = payload.get("source_status") if isinstance(payload.get("source_status"), list) else []
     lines.extend([f"- {status}" for status in statuses] or ["No source status available."])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_ai_swing_query(payload: dict[str, Any]) -> str:
+    ticker = str(payload.get("ticker") or "").strip().upper() or "THIS STOCK"
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    peers = ", ".join(payload.get("peer_tickers") or []) or "n/a"
+    return (
+        f"Using the Market Prep context below for {ticker}, give a brief swing-trade read. "
+        "Focus on possible catalysts, roadblocks, timing risk over the lookup window, and any trade-management ideas. "
+        "Separate confirmed facts from speculation, flag earnings/SEC/news risks, and keep it concise.\n\n"
+        f"Ticker: {ticker}\n"
+        f"Company: {metadata.get('company_name') or 'n/a'}\n"
+        f"Sector/industry: {metadata.get('sector') or 'n/a'} / {metadata.get('industry') or 'n/a'}\n"
+        f"Market cap: {metadata.get('market_cap_fmt') or 'n/a'}\n"
+        f"Lookup window: next {payload.get('window_days') or 'n/a'} day(s)\n"
+        f"Peer context: {payload.get('peer_reason') or 'n/a'}\n"
+        f"Peer tickers: {peers}"
+    )
 
 
 def _news_lookup_config(
@@ -265,14 +296,24 @@ def _news_lookup_config(
     industry = str(metadata.get("industry") or "").strip()
     sector = str(metadata.get("sector") or "").strip()
     if company:
-        queries.extend([f"{company} earnings", f"{company} conference", f"{company} announces"])
+        queries.extend(
+            [
+                f"{company} earnings",
+                f"{company} guidance",
+                f"{company} analyst rating",
+                f"{company} price target",
+                f"{company} conference",
+                f"{company} announces",
+                f"{company} catalyst",
+            ]
+        )
     if bool(settings.get("include_industry_news", True)):
         if industry:
-            queries.extend([f"{industry} news", f"{industry} earnings"])
+            queries.extend([f"{industry} news", f"{industry} earnings", f"{industry} demand", f"{industry} regulation"])
         if sector:
-            queries.extend([f"{sector} sector news"])
+            queries.extend([f"{sector} sector news", f"{sector} analyst outlook"])
     for peer in peer_tickers[: max(0, _safe_int(settings.get("max_peer_tickers"), 8))]:
-        queries.extend([f"{peer} earnings", f"{peer} conference", f"{peer} guidance"])
+        queries.extend([f"{peer} earnings", f"{peer} conference", f"{peer} guidance", f"{peer} analyst rating"])
 
     news_settings = dict(config.google_news_rss if isinstance(config.google_news_rss, dict) else {})
     news_settings.update(

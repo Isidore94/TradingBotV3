@@ -53,6 +53,24 @@ class _FakeAvwapGui:
 
 
 class GuiOutputTests(unittest.TestCase):
+    def test_normalize_gui_mode_accepts_combined_and_falls_back_to_full(self):
+        self.assertEqual(gui.normalize_gui_mode("combined"), "combined")
+        self.assertEqual(gui.normalize_gui_mode("simple"), "simple")
+        self.assertEqual(gui.normalize_gui_mode("FULL"), "full")
+        self.assertEqual(gui.normalize_gui_mode("unknown"), "full")
+        self.assertEqual(gui.normalize_gui_mode(None), "full")
+
+    def test_performance_delay_uses_slower_delay_when_enabled(self):
+        self.assertEqual(gui.performance_delay(False, 150, 750), 150)
+        self.assertEqual(gui.performance_delay(True, 150, 750), 750)
+
+    def test_bool_setting_parser_handles_saved_string_values(self):
+        self.assertTrue(gui.coerce_bool_setting("true"))
+        self.assertTrue(gui.coerce_bool_setting("on"))
+        self.assertFalse(gui.coerce_bool_setting("false", default=True))
+        self.assertFalse(gui.coerce_bool_setting("off", default=True))
+        self.assertTrue(gui.coerce_bool_setting("not-a-bool", default=True))
+
     def test_build_consolidated_gui_output_includes_widget_copy_lists(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
