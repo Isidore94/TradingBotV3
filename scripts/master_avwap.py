@@ -293,7 +293,9 @@ THETA_OPTION_REQUEST_DELAY_SEC = 0.08
 PRIORITY_RETEST_LOOKBACK_BARS = 5
 PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
 PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
+PRIORITY_RETEST_MAX_FIRST_DEV_OVERSHOOT_ATR = 0.35
 PRIORITY_FAVORITE_ZONE_SCORE_BONUS = 18
+PRIORITY_HIGH_CONVICTION_MIN_SCORE = 0
 PRIORITY_SECOND_BAND_TEST_LOOKBACK_DAYS = 8
 PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY = 10
 PRIORITY_SECOND_BAND_REPEAT_TEST_SCORE_PENALTY = 4
@@ -367,6 +369,9 @@ TRACKER_POSITIVE_DELTA_MEDIUM_SAMPLE_SCORE_CAP = 12
 FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS = 252
 POST_EARNINGS_MAX_SESSIONS = 10
 POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
+POST_EARNINGS_BAND_EXPANSION_LOOKBACK = 4
+POST_EARNINGS_MIN_BAND_EXPANSION_RATIO = 1.10
+POST_EARNINGS_MIN_BAND_EXPANSION_ATR = 0.10
 POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
 POST_EARNINGS_CLOSE_CONFIRM_SIGNAL = "POST_EARNINGS_CLOSE_CONFIRM"
@@ -395,6 +400,7 @@ PRIORITY_REJECTION_CAP_SMA_OBSTACLE = 260
 PRIORITY_REJECTION_CAP_FIRST_DEV_CHOP = 260
 PRIORITY_REJECTION_CAP_COMPRESSION = 220
 PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND = 240
+PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY = 160
 PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX = 0.90
 PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
 PRIORITY_COMPRESSION_STDEV_ATR_STRONG_MAX = 0.60
@@ -517,8 +523,63 @@ GUI_DARK_INPUT = "#252525"
 # Softer light-gray text improves readability on platforms where pure white
 # foreground can appear blown out against themed widget backgrounds.
 GUI_DARK_TEXT = "#C7CDD4"
+GUI_ACCENT_BLUE = "#8AB4F8"
+GUI_ACCENT_CYAN = "#7DD3FC"
+GUI_ACCENT_GREEN = "#8FD19E"
+GUI_ACCENT_YELLOW = "#F0C76E"
+GUI_ACCENT_RED = "#FF9A9A"
+GUI_MUTED_TEXT = "#8A939E"
+GUI_LINE_GREEN_BG = "#203226"
+GUI_LINE_RED_BG = "#3A2527"
+GUI_LINE_YELLOW_BG = "#3A3322"
 SHARED_WATCHLIST_SCHEDULER_TICK_MS = 15_000
 WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
+GUI_TEXT_TAG_NAMES = (
+    "output_heading",
+    "output_separator",
+    "output_ticker",
+    "output_link",
+    "output_long_line",
+    "output_short_line",
+    "output_alert_line",
+    "output_warning_line",
+    "output_clean_line",
+    "output_high",
+    "output_medium",
+    "output_clean",
+    "output_positive",
+    "output_negative",
+)
+GUI_TICKER_STOPWORDS = {
+    "AI",
+    "AMC",
+    "API",
+    "AVWAP",
+    "AVWAPE",
+    "BMO",
+    "D1",
+    "EMA",
+    "ET",
+    "ETF",
+    "FOMC",
+    "HIGH",
+    "LOW",
+    "MEGA",
+    "MEDIUM",
+    "PCS",
+    "RS",
+    "SEC",
+    "SMA",
+    "TBD",
+    "USD",
+    "VWAP",
+}
+GUI_OUTPUT_TICKER_RE = re.compile(r"\b[A-Z][A-Z0-9.\-]{1,5}\b")
+GUI_OUTPUT_URL_RE = re.compile(r"https?://\S+")
+GUI_OUTPUT_SIGNED_PCT_RE = re.compile(r"(?<!\w)([+-]\d+(?:\.\d+)?%)")
+GUI_OUTPUT_HIGH_RE = re.compile(r"\b(MEGA|HIGH|NO-TRADE|FAIL(?:ED)?|ERRORS?|SHORT)\b", re.IGNORECASE)
+GUI_OUTPUT_MEDIUM_RE = re.compile(r"\b(MEDIUM|WATCH|WARNING|WARNINGS|REDUCED-SIZE|EARNINGS)\b", re.IGNORECASE)
+GUI_OUTPUT_CLEAN_RE = re.compile(r"\b(CLEAN|READY|OK|LONG|AVAILABLE|GENERATED)\b", re.IGNORECASE)
 
 MARKET_PREP_SCHEMA_VERSION = 1
 MARKET_PREP_SECTION_DEFINITIONS = [
@@ -1303,6 +1364,19 @@ def _format_watchlist_path_group(paths: list[Path] | tuple[Path, ...]) -> str:
 def run_master_with_shared_watchlists():
     return run_master(use_shared_watchlists=True)
 
+
+def run_master_with_shared_watchlists_and_theta():
+    return run_master(use_shared_watchlists=True, include_theta=True)
+
+
+def run_theta_scan_with_shared_watchlists():
+    return run_master(
+        use_shared_watchlists=True,
+        include_theta=True,
+        theta_only=True,
+        update_setup_tracker=False,
+    )
+
 # ============================================================================
 # CACHE HELPERS
 # ============================================================================
@@ -1343,6 +1417,7 @@ def save_json(path: Path, obj, *, pretty: bool = False):
         indent=2 if pretty else None,
         separators=None if pretty else (",", ":"),
         ensure_ascii=False,
+        default=str,
     )
     _write_text_atomic(path, json_text.rstrip() + "\n")
 
@@ -1385,7 +1460,7 @@ def append_d1_feature_history(df_features: pd.DataFrame, metadata: dict) -> None
         existing_columns = []
     new_columns = list(history_frame.columns)
     if existing_columns and existing_columns != new_columns:
-        existing_frame = pd.read_csv(D1_FEATURE_HISTORY_FILE)
+        existing_frame = pd.read_csv(D1_FEATURE_HISTORY_FILE, low_memory=False)
         merged_columns = existing_columns + [column for column in new_columns if column not in existing_columns]
         existing_frame = existing_frame.reindex(columns=merged_columns)
         history_frame = history_frame.reindex(columns=merged_columns)
@@ -1474,6 +1549,22 @@ def _set_daily_bar_source(df: pd.DataFrame | None, source: str | None) -> pd.Dat
 
 def _empty_daily_bar_frame(source: str | None = None) -> pd.DataFrame:
     return _set_daily_bar_source(pd.DataFrame(columns=DAILY_BAR_COLUMNS), source)
+
+
+def _flatten_yahoo_download_columns(columns, symbol: str = "") -> list[str]:
+    normalized_symbol = str(symbol or "").strip().upper()
+    known_columns = {"open", "high", "low", "close", "adj close", "volume", "date", "datetime"}
+    flattened = []
+    for column in columns:
+        if not isinstance(column, tuple):
+            flattened.append(column)
+            continue
+        parts = [str(part).strip() for part in column if str(part).strip() and str(part).lower() != "nan"]
+        preferred = next((part for part in parts if part.lower() in known_columns), "")
+        if not preferred and normalized_symbol:
+            preferred = next((part for part in parts if part.upper() != normalized_symbol), "")
+        flattened.append(preferred or (parts[0] if parts else ""))
+    return flattened
 
 
 def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
@@ -2209,9 +2300,14 @@ def analyze_avwap_retest_behavior(
     current_high = float(current["high"])
     touch_tol = max(BOUNCE_LEVEL_ATR_TOL_PCT * float(atr20), PRIORITY_RETEST_TOUCH_TOL_ATR * float(atr20))
     confirm_push = max(ATR_MULT * float(atr20), PRIORITY_RETEST_CONFIRM_PUSH_ATR * float(atr20))
+    max_first_dev_overshoot = PRIORITY_RETEST_MAX_FIRST_DEV_OVERSHOOT_ATR * float(atr20)
     retest_window = prior[-3:]
 
     if side == "SHORT":
+        if current_lower_1 is not None and current_close < float(current_lower_1) - max_first_dev_overshoot:
+            result["retest_note"] = "Retest follow-through skipped: overextended below LOWER_1"
+            return result
+
         candidate_levels = [
             ("UPPER_1", current_upper_1),
             ("AVWAPE", current_vwap),
@@ -2241,6 +2337,10 @@ def analyze_avwap_retest_behavior(
             result["retest_note"] = f"Retested {label} and continued lower"
             return result
 
+        return result
+
+    if current_upper_1 is not None and current_close > float(current_upper_1) + max_first_dev_overshoot:
+        result["retest_note"] = "Retest follow-through skipped: overextended above UPPER_1"
         return result
 
     candidate_levels = [
@@ -2767,6 +2867,62 @@ def evaluate_anchor_compression(
         & (df["datetime"].dt.date <= last_trade_date)
     ].copy()
     return summarize_anchor_compression(price_slice, anchor_stdev, atr20)
+
+
+def analyze_anchor_band_expansion(
+    df: pd.DataFrame,
+    anchor_date_iso: str | None,
+    atr20: float | None,
+    lookback_sessions: int = POST_EARNINGS_BAND_EXPANSION_LOOKBACK,
+) -> dict:
+    result = {
+        "bands_expanding": False,
+        "band_expansion_note": "",
+        "band_expansion_start_stdev_atr": None,
+        "band_expansion_latest_stdev_atr": None,
+        "band_expansion_delta_atr": None,
+    }
+    if df is None or df.empty or not anchor_date_iso or atr20 is None or atr20 <= 0:
+        return result
+
+    band_history = calc_anchored_vwap_band_history(df, str(anchor_date_iso))
+    stdev_values = [
+        _coerce_float(entry.get("stdev"))
+        for _, entry in sorted(band_history.items())
+        if isinstance(entry, dict)
+    ]
+    stdev_values = [float(value) for value in stdev_values if value is not None and value > 0]
+    if len(stdev_values) < 3:
+        result["band_expansion_note"] = "not enough post-anchor bars to confirm band expansion"
+        return result
+
+    lookback = max(1, int(lookback_sessions or 1))
+    start_stdev = stdev_values[-(lookback + 1)] if len(stdev_values) > lookback else stdev_values[0]
+    latest_stdev = stdev_values[-1]
+    start_atr = float(start_stdev) / float(atr20)
+    latest_atr = float(latest_stdev) / float(atr20)
+    delta_atr = latest_atr - start_atr
+    ratio = latest_stdev / start_stdev if start_stdev > 0 else float("inf")
+    expanding = (
+        ratio >= POST_EARNINGS_MIN_BAND_EXPANSION_RATIO
+        and delta_atr >= POST_EARNINGS_MIN_BAND_EXPANSION_ATR
+    )
+
+    result["bands_expanding"] = bool(expanding)
+    result["band_expansion_start_stdev_atr"] = float(start_atr)
+    result["band_expansion_latest_stdev_atr"] = float(latest_atr)
+    result["band_expansion_delta_atr"] = float(delta_atr)
+    if expanding:
+        result["band_expansion_note"] = (
+            f"post-earnings bands widening "
+            f"({start_atr:.2f}->{latest_atr:.2f} ATR over ~{lookback} session(s))"
+        )
+    else:
+        result["band_expansion_note"] = (
+            f"post-earnings bands not expanding "
+            f"({start_atr:.2f}->{latest_atr:.2f} ATR over ~{lookback} session(s))"
+        )
+    return result
 
 
 def _directional_distance_atr(side: str, raw_distance_atr: float | None) -> float | None:
@@ -6880,6 +7036,46 @@ def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, sid
     return result
 
 
+def assess_current_day_direction(daily_rows, last_trade_date, last_close, side):
+    last_row = get_last_daily_row_for_date(daily_rows, last_trade_date)
+    previous_row = get_previous_daily_row_for_date(daily_rows, last_trade_date)
+    open_value = _coerce_float(last_row.get("open")) if last_row else None
+    previous_close = _coerce_float(previous_row.get("close")) if previous_row else None
+    close_value = _coerce_float(last_close)
+    result = {
+        "current_day_open": open_value,
+        "previous_close": previous_close,
+        "current_day_change_pct": None,
+        "current_candle_change_pct": None,
+        "side_aligned_day": None,
+        "side_alignment_note": "",
+    }
+    if close_value is None:
+        return result
+
+    if previous_close not in (None, 0):
+        day_change_pct = (float(close_value) - float(previous_close)) / float(previous_close) * 100.0
+        side = normalize_side(side)
+        if side == "LONG":
+            aligned = day_change_pct >= 0
+            if not aligned:
+                result["side_alignment_note"] = f"Long setup closed down on day ({day_change_pct:+.2f}%)"
+        elif side == "SHORT":
+            aligned = day_change_pct <= 0
+            if not aligned:
+                result["side_alignment_note"] = f"Short setup closed up on day ({day_change_pct:+.2f}%)"
+        else:
+            aligned = None
+        result["current_day_change_pct"] = float(day_change_pct)
+        result["side_aligned_day"] = aligned
+
+    if open_value not in (None, 0):
+        candle_change_pct = (float(close_value) - float(open_value)) / float(open_value) * 100.0
+        result["current_candle_change_pct"] = float(candle_change_pct)
+
+    return result
+
+
 def sessions_since_date(df: pd.DataFrame, event_date: date) -> int | None:
     """
     Count trading-session candles from event_date (exclusive) through the latest
@@ -8296,11 +8492,28 @@ def _mid_earnings_reclaim_bounce_details(
     return None
 
 
+def _directional_close_confirms_strength(
+    side: str,
+    open_value: float | None,
+    close_value: float | None,
+    intraday_vwap: float | None,
+) -> bool:
+    open_value = _coerce_float(open_value)
+    close_value = _coerce_float(close_value)
+    intraday_vwap = _coerce_float(intraday_vwap)
+    if open_value is None or close_value is None or intraday_vwap is None:
+        return False
+    if normalize_side(side) == "LONG":
+        return float(close_value) > float(open_value) and float(close_value) > float(intraday_vwap)
+    return float(close_value) < float(open_value) and float(close_value) < float(intraday_vwap)
+
+
 def analyze_mid_earnings_ema_retest_setup(
     df: pd.DataFrame,
     side: str,
     release_context: dict | None,
     indicator_frame: pd.DataFrame | None,
+    intraday_vwap: float | None = None,
 ) -> dict[str, Any]:
     result = {
         "watch": False,
@@ -8486,6 +8699,13 @@ def analyze_mid_earnings_ema_retest_setup(
     if ema8_detail:
         events.append(MID_EARNINGS_EMA8_CONFLUENCE_SIGNAL)
     primary_trigger_value = _coerce_float(primary_trigger_detail.get("level_value"))
+    latest_row = ordered_rows[-1]
+    strength_confirmed = _directional_close_confirms_strength(
+        side,
+        latest_row.get("open"),
+        latest_row.get("close"),
+        intraday_vwap,
+    )
 
     note_parts = [
         f"{sessions_since_gap} sessions since post-earnings gap",
@@ -8512,12 +8732,17 @@ def analyze_mid_earnings_ema_retest_setup(
         note_parts.append("1st-dev confluence")
     if ema8_detail:
         note_parts.append("EMA8 confluence")
+    if not strength_confirmed:
+        if normalized_side == "LONG":
+            note_parts.append("waiting for close above open and intraday VWAP")
+        else:
+            note_parts.append("waiting for close below open and intraday VWAP")
 
     result.update(
         {
             "watch": True,
-            "favorite_signal": True,
-            "events": events,
+            "favorite_signal": bool(strength_confirmed),
+            "events": events if strength_confirmed else [],
             "zone_streak_days": int(qualifying_streak["length"]),
             "zone_start_date": qualifying_streak["start_date"],
             "zone_end_date": qualifying_streak["end_date"],
@@ -9129,12 +9354,15 @@ class IBApi(EWrapper, EClient):
         EClient.__init__(self, self)
         self.data = {}
         self.ready = {}
+        self.historical_symbols = {}
         self.contract_details = {}
         self.contract_details_ready = {}
+        self.contract_detail_symbols = {}
         self.option_chain_params = {}
         self.option_chain_ready = {}
         self.option_quotes = {}
         self.option_quotes_ready = {}
+        self.option_quote_contracts = {}
         self.option_quote_cancelled_ids = set()
         self._req_id_lock = threading.Lock()
         self._next_req_id = int(time.time() * 1000) % (2**31 - 100000)
@@ -9277,8 +9505,18 @@ class IBApi(EWrapper, EClient):
             self.option_quotes_ready[reqId] = True
 
     def error(self, reqId, code, msg):
+        if reqId in self.ready:
+            self.ready[reqId] = True
+            if code == 200:
+                symbol = self.historical_symbols.get(reqId, "")
+                logging.warning("%s: IBKR daily bars unavailable: %s", symbol or f"reqId={reqId}", msg)
+                return
         if reqId in self.contract_details_ready:
             self.contract_details_ready[reqId] = True
+            if code == 200:
+                symbol = self.contract_detail_symbols.get(reqId, "")
+                logging.debug("%s: IBKR contract details unavailable: %s", symbol or f"reqId={reqId}", msg)
+                return
         if reqId in self.option_chain_ready:
             self.option_chain_ready[reqId] = True
         if reqId in self.option_quotes_ready:
@@ -9288,6 +9526,17 @@ class IBApi(EWrapper, EClient):
             self.option_quotes_ready[reqId] = True
         if code == 300 and reqId in self.option_quote_cancelled_ids:
             self.option_quote_cancelled_ids.discard(reqId)
+            return
+        if code == 200 and reqId in self.option_quote_contracts:
+            contract = self.option_quote_contracts.get(reqId)
+            logging.debug(
+                "IB option contract unavailable %s %s %.2f%s: %s",
+                getattr(contract, "symbol", ""),
+                getattr(contract, "lastTradeDateOrContractMonth", ""),
+                float(getattr(contract, "strike", 0.0) or 0.0),
+                getattr(contract, "right", ""),
+                msg,
+            )
             return
         if code not in (2104, 2106, 2158, 2176):
             logging.error(f"IB Error {code}[{reqId}]: {msg}")
@@ -9339,6 +9588,7 @@ def _fetch_ib_stock_contract_details(ib: IBApi | None, symbol: str, timeout_sec:
     req_id = ib.next_request_id()
     ib.contract_details[req_id] = []
     ib.contract_details_ready[req_id] = False
+    ib.contract_detail_symbols[req_id] = str(symbol or "").strip().upper()
     try:
         ib.reqContractDetails(req_id, create_contract(symbol))
         _wait_for_ib_flag(ib.contract_details_ready, req_id, timeout_sec)
@@ -9349,6 +9599,7 @@ def _fetch_ib_stock_contract_details(ib: IBApi | None, symbol: str, timeout_sec:
     finally:
         ib.contract_details.pop(req_id, None)
         ib.contract_details_ready.pop(req_id, None)
+        ib.contract_detail_symbols.pop(req_id, None)
 
 
 def _fetch_ib_option_chain_definitions(
@@ -9428,6 +9679,7 @@ def _fetch_ib_option_quote(
     req_id = ib.next_request_id()
     ib.option_quotes[req_id] = {}
     ib.option_quotes_ready[req_id] = False
+    ib.option_quote_contracts[req_id] = contract
     try:
         ib.reqMktData(req_id, contract, "100,101,106", False, False, [])
         _wait_for_ib_flag(ib.option_quotes_ready, req_id, timeout_sec)
@@ -9447,7 +9699,7 @@ def _fetch_ib_option_quote(
         return {}
     finally:
         quote = ib.option_quotes.get(req_id, {}) or {}
-        request_rejected = int(quote.get("error_code") or 0) in {300, 321}
+        request_rejected = int(quote.get("error_code") or 0) in {200, 300, 321}
         try:
             if not request_rejected:
                 ib.option_quote_cancelled_ids.add(req_id)
@@ -9456,6 +9708,7 @@ def _fetch_ib_option_quote(
             pass
         ib.option_quotes.pop(req_id, None)
         ib.option_quotes_ready.pop(req_id, None)
+        ib.option_quote_contracts.pop(req_id, None)
         time.sleep(THETA_OPTION_REQUEST_DELAY_SEC)
 
 
@@ -9651,11 +9904,10 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
 
     df = df.reset_index()
 
-    # Handle potential MultiIndex columns (e.g., when yfinance returns columns like
-    # ('Open', 'SPGI')) by flattening to the last element of the tuple and then
-    # normalising to lowercase for easier downstream handling.
+    # Handle potential MultiIndex columns (e.g., yfinance tuples like
+    # ('Open', 'SPY')) by keeping the OHLCV field instead of the ticker.
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[-1] if isinstance(c, tuple) else c for c in df.columns]
+        df.columns = _flatten_yahoo_download_columns(df.columns, symbol=symbol)
 
     date_col = "Date" if "Date" in df.columns else df.columns[0]
     df.rename(columns={date_col: "datetime"}, inplace=True)
@@ -9685,6 +9937,7 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         reqId = int(time.time() * 1000) % (2**31 - 1)
         ib.data[reqId] = []
         ib.ready[reqId] = False
+        ib.historical_symbols[reqId] = str(symbol or "").strip().upper()
 
         if days > 365:
             dur = f"{max(1, days // 365)} Y"
@@ -9711,6 +9964,7 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
 
         bars = ib.data.pop(reqId, [])
         ib.ready.pop(reqId, None)
+        ib.historical_symbols.pop(reqId, None)
 
         df = pd.DataFrame(bars)
         if not df.empty:
@@ -9752,6 +10006,55 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
     return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
+
+
+def fetch_intraday_session_vwap(symbol: str, interval: str = "5m") -> float | None:
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return None
+    try:
+        df = yf.download(
+            normalized_symbol,
+            period="1d",
+            interval=interval,
+            auto_adjust=False,
+            progress=False,
+            prepost=False,
+        )
+    except Exception as exc:
+        logging.warning("%s: failed to download intraday VWAP bars: %s", normalized_symbol, exc)
+        return None
+
+    if df is None or df.empty:
+        logging.info("%s: no intraday bars available for VWAP confirmation.", normalized_symbol)
+        return None
+
+    df = df.reset_index()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = _flatten_yahoo_download_columns(df.columns, symbol=normalized_symbol)
+    df.rename(columns={c: str(c).lower() for c in df.columns}, inplace=True)
+    required = {"high", "low", "close", "volume"}
+    if required - set(df.columns):
+        logging.info("%s: intraday bars missing OHLCV fields for VWAP confirmation.", normalized_symbol)
+        return None
+
+    bars = df.dropna(subset=list(required)).copy()
+    bars["volume"] = pd.to_numeric(bars["volume"], errors="coerce")
+    bars = bars[bars["volume"] > 0]
+    if bars.empty:
+        return None
+
+    typical_price = (
+        pd.to_numeric(bars["high"], errors="coerce")
+        + pd.to_numeric(bars["low"], errors="coerce")
+        + pd.to_numeric(bars["close"], errors="coerce")
+    ) / 3.0
+    volume = pd.to_numeric(bars["volume"], errors="coerce")
+    total_volume = volume.sum()
+    if not total_volume or pd.isna(total_volume):
+        return None
+    vwap_value = (typical_price * volume).sum() / total_volume
+    return _coerce_float(vwap_value)
 
 # ============================================================================
 # AVWAP CALCULATION
@@ -10426,6 +10729,8 @@ def _priority_rejection_reasons(row: dict) -> list[str]:
     reasons = []
     if row.get("ranking_blocked"):
         reasons.append(str(row.get("ranking_block_reason") or row.get("ranking_note") or "Ranking blocked"))
+    if _priority_is_side_opposite_day(row):
+        reasons.append(_priority_side_opposite_day_note(row))
     if row.get("compression_flag") and int(row.get("compression_penalty", 0) or 0) > 0:
         reasons.append(str(row.get("compression_note") or "Compression penalty active"))
     if int(row.get("second_band_penalty", 0) or 0) > 0:
@@ -10467,6 +10772,7 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
         "market_regime_score_delta": int(row.get("market_regime_score_delta", 0) or 0),
         "rejection_score_cap": _coerce_float(row.get("rejection_score_cap")),
         "rejection_score_cap_delta": _coerce_float(row.get("rejection_score_cap_delta")),
+        "side_aligned_day": row.get("side_aligned_day"),
     }
     return {
         "schema_version": SETUP_CANDIDATE_SCHEMA_VERSION,
@@ -10496,6 +10802,9 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
             "trend_20d": row.get("trend_20d") or symbol_entry.get("trend_20d") or "",
             "market_regime": symbol_entry.get("market_regime_label") or "",
             "daily_bar_source": symbol_entry.get("daily_bar_source") or "",
+            "current_day_change_pct": _coerce_float(row.get("current_day_change_pct")),
+            "current_candle_change_pct": _coerce_float(row.get("current_candle_change_pct")),
+            "side_aligned_day": row.get("side_aligned_day"),
             "bouncebot_relevant_focus_hit_today": bool(symbol_entry.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(symbol_entry.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(symbol_entry.get("bouncebot_relevant_focus_max_score")),
@@ -11494,7 +11803,7 @@ def _select_option_expirations(
         selected.append(
             {
                 "expiration": _format_option_expiration(expiration_date),
-                "expiration_date": expiration_date,
+                "expiration_date": expiration_date.isoformat(),
                 "market_days": market_days,
             }
         )
@@ -12593,6 +12902,25 @@ def _is_mid_earnings_retest_family(row: dict) -> bool:
     }
 
 
+def _priority_is_side_opposite_day(row: dict) -> bool:
+    value = row.get("side_aligned_day")
+    if isinstance(value, str):
+        value = value.strip().lower() in {"1", "true", "yes"}
+    return value is False
+
+
+def _priority_side_opposite_day_note(row: dict) -> str:
+    note = str(row.get("side_alignment_note") or "").strip()
+    if note:
+        return note
+    side = normalize_side(row.get("side", ""))
+    change_pct = _coerce_float(row.get("current_day_change_pct"))
+    change_text = f" ({change_pct:+.2f}%)" if change_pct is not None else ""
+    if side == "SHORT":
+        return f"short setup closed up on day{change_text}"
+    return f"long setup closed down on day{change_text}"
+
+
 def _priority_rejection_score_cap(row: dict) -> tuple[float | None, str]:
     caps = []
     notes = []
@@ -12612,6 +12940,9 @@ def _priority_rejection_score_cap(row: dict) -> tuple[float | None, str]:
     ):
         caps.append(PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND)
         notes.append("repeated 2nd-dev tests")
+    if _priority_is_side_opposite_day(row):
+        caps.append(PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY)
+        notes.append(_priority_side_opposite_day_note(row))
     if not caps:
         return None, ""
     score_cap = float(min(caps))
@@ -12647,11 +12978,118 @@ def apply_priority_rejection_score_caps(
         )
 
 
-def _is_post_earnings_play_ready(row: dict) -> bool:
+def _priority_signal_levels(row: dict) -> set[str]:
+    side = normalize_side(row.get("side", ""))
+    return {
+        level
+        for level in (
+            _priority_breakout_signal_level(signal_name, side)
+            for signal_name in list(row.get("favorite_signals") or [])
+        )
+        if level
+    }
+
+
+def _priority_has_compression(row: dict) -> bool:
+    return bool(row.get("compression_flag")) or int(row.get("compression_penalty", 0) or 0) > 0
+
+
+def _priority_has_first_dev_chop(row: dict) -> bool:
+    return int(row.get("first_dev_chop_penalty", 0) or 0) > 0 or bool(str(row.get("first_dev_note") or "").strip())
+
+
+def _priority_is_first_zone_retest(row: dict) -> bool:
+    return bool(row.get("retest_followthrough")) and _priority_is_actionable_band_zone(row)
+
+
+def _priority_is_clean_retest_watch(row: dict) -> bool:
+    if not row.get("retest_followthrough") or _priority_has_compression(row):
+        return False
+    if int(row.get("recent_second_band_test_days", 0) or 0) > 1:
+        return False
+    side = normalize_side(row.get("side", ""))
+    band_zone = _priority_current_band_zone(row)
+    if side == "LONG":
+        return band_zone in {"VWAP to UPPER_1", "UPPER_1 to UPPER_2"}
+    if side == "SHORT":
+        return band_zone in {"VWAP to LOWER_1", "LOWER_1 to LOWER_2"}
+    return False
+
+
+def _priority_is_actionable_avwap_breakout(row: dict) -> bool:
+    if str(row.get("setup_family") or "") != "avwap_breakout":
+        return False
+    if _priority_has_compression(row) or _priority_has_first_dev_chop(row):
+        return False
+    levels = _priority_signal_levels(row)
+    if not levels:
+        return False
+    side = normalize_side(row.get("side", ""))
+    band_zone = _priority_current_band_zone(row)
+    if side == "LONG":
+        if not levels.issubset({"VWAP", "UPPER_1"}):
+            return False
+        return band_zone in {"VWAP to UPPER_1", "UPPER_1 to UPPER_2"}
+    if side == "SHORT":
+        if not levels.issubset({"VWAP", "LOWER_1"}):
+            return False
+        return band_zone in {"VWAP to LOWER_1", "LOWER_1 to LOWER_2"}
+    return False
+
+
+def _priority_is_preferred_custom_setup(row: dict) -> bool:
+    setup_family = str(row.get("setup_family") or "")
+    if setup_family in {
+        MID_EARNINGS_EMA15_RETEST_FAMILY,
+        MID_EARNINGS_EMA21_RETEST_FAMILY,
+        MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
+        "extreme_move_retest",
+    }:
+        return True
+    if setup_family == "post_earnings_avwap_bounce":
+        return _is_post_earnings_play_ready(row)
+    if setup_family == "post_earnings_52w_break":
+        return _is_post_earnings_play_ready(row) and bool(row.get("post_earnings_break_close"))
+    return False
+
+
+def _priority_requires_strength_confirmation(row: dict) -> bool:
+    setup_family = str(row.get("setup_family") or "")
+    if setup_family in {
+        MID_EARNINGS_EMA15_RETEST_FAMILY,
+        MID_EARNINGS_EMA21_RETEST_FAMILY,
+        MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
+    }:
+        return True
+    if bool(row.get("mid_earnings_first_dev_trigger")) or bool(row.get("mid_earnings_first_dev_confluence")):
+        return True
+    if int(row.get("first_dev_break_bonus", 0) or 0) > 0:
+        return True
+    return bool(_priority_signal_levels(row) & {"UPPER_1", "LOWER_1"})
+
+
+def _priority_has_strength_confirmation(row: dict) -> bool:
+    if not _priority_requires_strength_confirmation(row):
+        return True
+    return _directional_close_confirms_strength(
+        row.get("side", ""),
+        row.get("current_day_open"),
+        row.get("last_close"),
+        row.get("intraday_vwap"),
+    )
+
+
+def _priority_is_fresh_post_earnings_window(row: dict) -> bool:
     if not isinstance(row, dict) or not row.get("post_earnings_active"):
         return False
     sessions_since_gap = _coerce_int(row.get("post_earnings_sessions_since_gap"))
     if sessions_since_gap is None or sessions_since_gap < 0 or sessions_since_gap > POST_EARNINGS_MAX_SESSIONS:
+        return False
+    return True
+
+
+def _is_post_earnings_play_ready(row: dict) -> bool:
+    if not _priority_is_fresh_post_earnings_window(row):
         return False
     signals = set(row.get("favorite_signals") or []) | set(row.get("context_signals") or [])
     return bool(
@@ -12661,6 +13099,47 @@ def _is_post_earnings_play_ready(row: dict) -> bool:
         or POST_EARNINGS_BREAK_SIGNAL in signals
         or POST_EARNINGS_BOUNCE_SIGNAL in signals
     )
+
+
+def _priority_is_extended_stdev_zone(row: dict) -> bool:
+    band_zone = _priority_current_band_zone(row)
+    active_level = str(row.get("current_active_level") or "").strip().upper()
+    signal_levels = _priority_signal_levels(row)
+    extended_zones = {
+        "UPPER_2 to UPPER_3",
+        "UPPER_3",
+        "LOWER_2 to LOWER_3",
+        "LOWER_3 to LOWER_2",
+        "LOWER_3",
+    }
+    extended_levels = {"UPPER_2", "UPPER_3", "LOWER_2", "LOWER_3"}
+    return bool(
+        band_zone in extended_zones
+        or active_level in extended_levels
+        or bool(signal_levels & extended_levels)
+    )
+
+
+def _priority_should_track_extended_stdev(row: dict) -> bool:
+    if not isinstance(row, dict) or _priority_is_fresh_post_earnings_window(row):
+        return False
+    return bool(
+        _priority_is_extended_stdev_zone(row)
+        or row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
+        or row.get("mid_earnings_active_second_stdev_hold")
+    )
+
+
+def _priority_stdev_tracking_rows(rows: list[dict]) -> list[dict]:
+    tracking_rows = _priority_unique_rows_by_symbol(
+        [row for row in rows or [] if _priority_should_track_extended_stdev(row)]
+    )
+
+    def sort_key(row: dict) -> tuple[float, str]:
+        score = _coerce_float(row.get("score"))
+        return (-(score if score is not None else -10**9), str(row.get("symbol") or ""))
+
+    return sorted(tracking_rows, key=sort_key)
 
 
 def apply_final_priority_buckets(
@@ -12678,15 +13157,24 @@ def apply_final_priority_buckets(
     def _classify_priority_bucket(row: dict | None) -> tuple[str, bool, bool]:
         if not row or row.get("ranking_blocked"):
             return "", False, False
-        if (
-            row.get("has_favorite_signal")
-            or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-            or _is_clean_first_zone_setup(row)
-        ):
+        if _priority_should_track_extended_stdev(row):
+            return "", False, False
+        favorite_candidate = (
+            (
+                _priority_is_actionable_avwap_breakout(row)
+                or _priority_is_first_zone_retest(row)
+                or _is_clean_first_zone_setup(row)
+                or _priority_is_preferred_custom_setup(row)
+            )
+            and _priority_has_strength_confirmation(row)
+        )
+        if favorite_candidate:
+            if _priority_is_side_opposite_day(row):
+                return "near_favorite_zone", False, True
             return "favorite_setup", True, False
         if (
             row.get("favorite_zone")
-            or row.get("retest_followthrough")
+            or _priority_is_clean_retest_watch(row)
             or row.get("extreme_move_watch")
             or _is_post_earnings_play_ready(row)
             or row.get("mid_earnings_watch")
@@ -12771,6 +13259,68 @@ def _priority_unique_rows_by_symbol(rows: list[dict]) -> list[dict]:
     return unique_rows
 
 
+def _priority_current_band_zone(row: dict) -> str:
+    setup_candidate = row.get("setup_candidate") if isinstance(row.get("setup_candidate"), dict) else {}
+    trigger = setup_candidate.get("trigger") if isinstance(setup_candidate.get("trigger"), dict) else {}
+    return str(
+        row.get("current_band_zone")
+        or trigger.get("current_band_zone")
+        or row.get("favorite_zone")
+        or ""
+    ).strip()
+
+
+def _priority_is_trend_aligned(row: dict) -> bool:
+    side = normalize_side(row.get("side", ""))
+    trend = str(row.get("trend_20d") or "").strip().upper()
+    return bool((side == "LONG" and trend == "UP") or (side == "SHORT" and trend == "DOWN"))
+
+
+def _priority_is_actionable_band_zone(row: dict) -> bool:
+    side = normalize_side(row.get("side", ""))
+    band_zone = _priority_current_band_zone(row)
+    if side == "LONG":
+        return band_zone == "VWAP to UPPER_1"
+    if side == "SHORT":
+        return band_zone == "VWAP to LOWER_1"
+    return False
+
+
+def _priority_has_specific_trigger(row: dict) -> bool:
+    setup_family = str(row.get("setup_family") or "").strip()
+    return bool(
+        row.get("favorite_signals")
+        or row.get("favorite_zone")
+        or setup_family.startswith("mid_earnings_")
+        or setup_family == "extreme_move_retest"
+        or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+    )
+
+
+def _priority_is_high_conviction(row: dict) -> bool:
+    if row.get("priority_bucket") not in {"favorite_setup", "near_favorite_zone"}:
+        return False
+    if _priority_is_side_opposite_day(row):
+        return False
+    score = _coerce_float(row.get("score"))
+    if score is None or score < PRIORITY_HIGH_CONVICTION_MIN_SCORE:
+        return False
+    if not _priority_is_actionable_band_zone(row):
+        return False
+    if not _priority_has_specific_trigger(row):
+        return False
+    if str(row.get("setup_family") or "").startswith("post_earnings_") and not row.get("favorite_zone"):
+        return False
+    return True
+
+
+def _priority_high_conviction_rows(rows: list[dict]) -> list[dict]:
+    return sorted(
+        [row for row in rows or [] if _priority_is_high_conviction(row)],
+        key=lambda row: (-row["score"], row["symbol"]),
+    )
+
+
 def _priority_symbols(rows: list[dict], side: str | None = None) -> str:
     symbols = []
     normalized_side = normalize_side(side or "") if side else ""
@@ -12779,6 +13329,47 @@ def _priority_symbols(rows: list[dict], side: str | None = None) -> str:
             continue
         symbols.append(row.get("symbol"))
     return _format_symbols_for_tc2000(symbols)
+
+
+def _priority_last_trade_date_counts(rows: list[dict]) -> list[tuple[str, int]]:
+    counts: dict[str, int] = {}
+    for row in rows or []:
+        trade_date = str(row.get("last_trade_date") or "").strip()
+        if not trade_date:
+            continue
+        counts[trade_date] = counts.get(trade_date, 0) + 1
+    return sorted(counts.items(), key=lambda item: item[0], reverse=True)
+
+
+def _write_priority_data_freshness(handle, rows: list[dict]) -> None:
+    date_counts = _priority_last_trade_date_counts(rows)
+    if not date_counts:
+        return
+
+    latest_trade_date = date_counts[0][0]
+    source_counts: dict[str, int] = {}
+    for row in rows or []:
+        source = str(row.get("daily_bar_source") or "unknown").strip() or "unknown"
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    handle.write("Data freshness\n")
+    handle.write("==============\n")
+    handle.write(f"Latest daily bar date in ranked rows: {latest_trade_date}\n")
+    if source_counts:
+        sources = ", ".join(f"{source}={count}" for source, count in sorted(source_counts.items()))
+        handle.write(f"Daily bar sources: {sources}\n")
+
+    try:
+        latest_date = date.fromisoformat(latest_trade_date)
+    except ValueError:
+        latest_date = None
+    run_date = datetime.now().date()
+    if latest_date is not None and latest_date < run_date:
+        handle.write(
+            "Note: ranked setups are based on completed daily bars through "
+            f"{latest_trade_date}; current-session intraday moves are not reflected.\n"
+        )
+    handle.write("\n")
 
 
 def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
@@ -12803,6 +13394,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
     setup_note_keys = (
         ("retest", "retest_note"),
         ("extension", "extension_note"),
+        ("day direction", "side_alignment_note"),
         ("prev day", "previous_day_range_note"),
         ("first dev", "first_dev_note"),
         ("extreme move", "extreme_move_note"),
@@ -12843,6 +13435,47 @@ def _write_priority_setup_copy_lists(handle, title: str, rows: list[dict]) -> No
     handle.write("\n")
 
 
+def _priority_bucket_label(bucket: str) -> str:
+    normalized = str(bucket or "").strip().lower()
+    return {
+        "favorite_setup": "favorite",
+        "near_favorite_zone": "near-zone",
+        "post_earnings_play": "post-earnings",
+        "stdev_retest_tracking": "stdev-track",
+    }.get(normalized, normalized or "unbucketed")
+
+
+def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None:
+    handle.write(f"{title}\n")
+    handle.write("-" * len(title) + "\n")
+    unique_rows = _priority_unique_rows_by_symbol(rows)
+    if not unique_rows:
+        handle.write("None\n\n")
+        return
+
+    def sort_key(row: dict) -> tuple[float, str]:
+        score = _coerce_float(row.get("score"))
+        return (-(score if score is not None else -10**9), str(row.get("symbol") or ""))
+
+    for rank, row in enumerate(sorted(unique_rows, key=sort_key), start=1):
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = normalize_side(row.get("side", ""))
+        score = _priority_score_text(row)
+        bucket_value = "stdev_retest_tracking" if _priority_should_track_extended_stdev(row) else str(row.get("priority_bucket") or "")
+        bucket = _priority_bucket_label(bucket_value)
+        family = _priority_setup_family_label(str(row.get("setup_family") or "general"))
+        zone = _priority_current_band_zone(row) or "None"
+        trend = str(row.get("trend_20d") or "SIDEWAYS").strip().upper()
+        warning_count = len(row.get("candidate_rejection_reasons") or [])
+        warning_text = "clean" if warning_count <= 0 else f"{warning_count} warning(s)"
+        handle.write(
+            f"{rank:>3}. {symbol:<6} {side:<5} score={score:<5} "
+            f"bucket={bucket:<13} family={family:<28} zone={zone:<18} "
+            f"trend={trend:<8} {warning_text}\n"
+        )
+    handle.write("\n")
+
+
 def _write_priority_detail_rows(handle, title: str, rows: list[dict]) -> None:
     handle.write(f"{title}\n")
     handle.write("-" * len(title) + "\n")
@@ -12862,7 +13495,7 @@ def _write_priority_detail_rows(handle, title: str, rows: list[dict]) -> None:
             bounce_support = ", ".join(
                 format_signal_label(evt) for evt in row.get("bounce_support_signals", [])
             ) or "None"
-            zone = row.get("favorite_zone") or "None"
+            zone = _priority_current_band_zone(row) or "None"
             trend = row.get("trend_20d") or "SIDEWAYS"
             extension_days = int(row.get("recent_band_extension_days", 0) or 0)
             second_band_tests = int(row.get("recent_second_band_test_days", 0) or 0)
@@ -12913,16 +13546,11 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
-    mid_earnings_hold_rows = sorted(
-        [
-            row for row in priority_rows
-            if row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
-        ],
-        key=lambda row: (-row["score"], row["symbol"]),
-    )
+    stdev_tracking_rows = _priority_stdev_tracking_rows(priority_rows)
     all_priority_rows = _priority_unique_rows_by_symbol(
-        favorites + watchlist + post_earnings_rows + mid_earnings_hold_rows
+        favorites + watchlist + post_earnings_rows + stdev_tracking_rows
     )
+    high_conviction_rows = _priority_high_conviction_rows(all_priority_rows)
 
     buffer = io.StringIO()
     handle = buffer
@@ -12931,18 +13559,24 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     handle.write(
         "Focus: generalized high-quality setups across AVWAP breaks, post-earnings gap structures, and mid-earnings continuation retests\n\n"
     )
+    _write_priority_data_freshness(handle, all_priority_rows)
     handle.write("Copy/paste lists\n")
     handle.write("================\n")
+    _write_priority_copy_lists(handle, "High conviction shortlist", high_conviction_rows)
     _write_priority_copy_lists(handle, "Favorite setups", favorites)
     _write_priority_copy_lists(handle, "Near favorite zones", watchlist)
+    _write_priority_copy_lists(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
     _write_priority_setup_copy_lists(handle, "By setup type", all_priority_rows)
+
+    _write_priority_score_rankings(handle, "Overall score rankings", all_priority_rows)
 
     handle.write("Detailed setup notes\n")
     handle.write("====================\n")
+    _write_priority_detail_rows(handle, "High conviction shortlist", high_conviction_rows)
     _write_priority_detail_rows(handle, "Best current favorite setups", favorites)
     _write_priority_detail_rows(handle, "Near favorite zones", watchlist)
     _write_priority_detail_rows(handle, "Post earnings plays", post_earnings_rows)
-    _write_priority_detail_rows(handle, "Mid earnings above 2nd stdev", mid_earnings_hold_rows)
+    _write_priority_detail_rows(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
@@ -12956,10 +13590,12 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         row for row in ranked_rows
         if row.get("priority_bucket") == "near_favorite_zone"
     ]
+    high_conviction_rows = _priority_high_conviction_rows(favorite_rows + near_rows)
     post_earnings_rows = [
         row for row in ranked_rows
         if _is_post_earnings_play_ready(row)
     ]
+    stdev_tracking_rows = _priority_stdev_tracking_rows(ranked_rows)
 
     def _build_entry(row: dict, bucket: str, rank: int) -> dict:
         symbol = row["symbol"]
@@ -13000,6 +13636,12 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "previous_day_range_break": bool(row.get("previous_day_range_break")),
             "previous_day_range_break_bonus": int(row.get("previous_day_range_break_bonus", 0) or 0),
             "previous_day_range_note": row.get("previous_day_range_note") or "",
+            "current_day_open": _coerce_float(row.get("current_day_open")),
+            "previous_close": _coerce_float(row.get("previous_close")),
+            "current_day_change_pct": _coerce_float(row.get("current_day_change_pct")),
+            "current_candle_change_pct": _coerce_float(row.get("current_candle_change_pct")),
+            "side_aligned_day": row.get("side_aligned_day"),
+            "side_alignment_note": row.get("side_alignment_note") or "",
             "extreme_move_watch": bool(row.get("extreme_move_watch")),
             "extreme_move_favorite_ready": bool(row.get("extreme_move_favorite_ready")),
             "extreme_move_retest_level": row.get("extreme_move_retest_level") or "",
@@ -13016,6 +13658,8 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "post_earnings_gap_date": row.get("post_earnings_gap_date") or "",
             "post_earnings_monitor_level": _coerce_float(row.get("post_earnings_monitor_level")),
             "post_earnings_note": row.get("post_earnings_note") or "",
+            "post_earnings_bands_expanding": bool(row.get("post_earnings_bands_expanding")),
+            "post_earnings_band_expansion_note": row.get("post_earnings_band_expansion_note") or "",
             "mid_earnings_watch": bool(row.get("mid_earnings_watch")),
             "mid_earnings_active_second_stdev_hold": bool(row.get("mid_earnings_active_second_stdev_hold")),
             "mid_earnings_sessions_since_gap": int(row.get("mid_earnings_sessions_since_gap", 0) or 0),
@@ -13052,9 +13696,17 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
 
     favorites = [_build_entry(row, "favorite_setup", idx + 1) for idx, row in enumerate(favorite_rows)]
     near_favorites = [_build_entry(row, "near_favorite_zone", idx + 1) for idx, row in enumerate(near_rows)]
+    high_conviction = [
+        _build_entry(row, "high_conviction", idx + 1)
+        for idx, row in enumerate(high_conviction_rows)
+    ]
     post_earnings_entries = [_build_entry(row, "post_earnings_play", idx + 1) for idx, row in enumerate(post_earnings_rows)]
+    stdev_tracking_entries = [
+        _build_entry(row, "stdev_retest_tracking", idx + 1)
+        for idx, row in enumerate(stdev_tracking_rows)
+    ]
     symbol_map = {}
-    for entry in favorites + near_favorites + post_earnings_entries:
+    for entry in favorites + near_favorites + post_earnings_entries + high_conviction + stdev_tracking_entries:
         symbol_map.setdefault(entry["symbol"], entry)
 
     payload = {
@@ -13062,9 +13714,11 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         "run_date": datetime.now().date().isoformat(),
         "scoring_config": ai_state.get("scoring_config", {}),
         "market_regime": ai_state.get("market_regime", {}),
+        "high_conviction": high_conviction,
         "favorites": favorites,
         "near_favorite_zones": near_favorites,
         "post_earnings_plays": post_earnings_entries,
+        "stdev_retest_tracking": stdev_tracking_entries,
         "symbols": symbol_map,
     }
     save_json(path, payload)
@@ -13110,6 +13764,17 @@ def write_stdev_range_report(
     buffer.write(f"Longs crossing/bouncing at UPPER_2: {long_cross}\n")
     buffer.write(f"Shorts crossing/bouncing at LOWER_2: {short_cross}\n")
 
+    stdev_tracking_rows = _priority_stdev_tracking_rows(priority_rows or [])
+    long_tracking = ", ".join(
+        row["symbol"] for row in stdev_tracking_rows if row.get("side") == "LONG"
+    ) or "None"
+    short_tracking = ", ".join(
+        row["symbol"] for row in stdev_tracking_rows if row.get("side") == "SHORT"
+    ) or "None"
+    buffer.write("\nCurrent 2nd/3rd stdev retest tracking list\n")
+    buffer.write(f"Longs tracked for later retest: {long_tracking}\n")
+    buffer.write(f"Shorts tracked for later retest: {short_tracking}\n")
+
     mid_earnings_rows = sorted(
         [
             row for row in (priority_rows or [])
@@ -13151,6 +13816,7 @@ def write_tradingview_report(
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
+    high_conviction_rows = _priority_high_conviction_rows(favorites + near_favorites)
     post_earnings_rows = sorted(
         [
             row for row in priority_rows
@@ -13158,13 +13824,7 @@ def write_tradingview_report(
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
-    mid_earnings_hold_rows = sorted(
-        [
-            row for row in priority_rows
-            if row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
-        ],
-        key=lambda row: (-row["score"], row["symbol"]),
-    )
+    stdev_tracking_rows = _priority_stdev_tracking_rows(priority_rows)
 
     def _symbols(rows, side: str) -> str:
         values = [row["symbol"] for row in rows if row.get("side") == side]
@@ -13209,6 +13869,11 @@ def write_tradingview_report(
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     _write_block(
         handle,
+        "High conviction shortlist",
+        [("LONG", _symbols(high_conviction_rows, "LONG")), ("SHORT", _symbols(high_conviction_rows, "SHORT"))],
+    )
+    _write_block(
+        handle,
         "Best current favorite setups",
         [("LONG", _symbols(favorites, "LONG")), ("SHORT", _symbols(favorites, "SHORT"))],
     )
@@ -13224,8 +13889,8 @@ def write_tradingview_report(
     )
     _write_block(
         handle,
-        "Mid earnings above 2nd stdev",
-        [("LONG", _symbols(mid_earnings_hold_rows, "LONG")), ("SHORT", _symbols(mid_earnings_hold_rows, "SHORT"))],
+        "2nd/3rd stdev retest tracking",
+        [("LONG", _symbols(stdev_tracking_rows, "LONG")), ("SHORT", _symbols(stdev_tracking_rows, "SHORT"))],
     )
     _write_block(handle, "Event tickers", event_lines)
     _write_block(handle, "Price ranges (current anchors)", range_lines)
@@ -13844,9 +14509,16 @@ def _evaluate_priority_snapshot_for_date(
     last_row = get_last_daily_row_for_date(daily_ohlc, last_trade_date)
     last_close = float(last_row["close"]) if last_row else None
     last_volume = float(last_row["volume"]) if last_row else None
+    intraday_vwap = fetch_intraday_session_vwap(symbol) if evaluation_date == datetime.now().date() else None
     atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
     trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
     previous_day_range_summary = assess_previous_day_range_break(
+        daily_ohlc,
+        last_trade_date,
+        last_close,
+        side,
+    )
+    current_day_direction = assess_current_day_direction(
         daily_ohlc,
         last_trade_date,
         last_close,
@@ -13944,6 +14616,7 @@ def _evaluate_priority_snapshot_for_date(
         side,
         latest_release_context,
         indicator_frame,
+        intraday_vwap=intraday_vwap,
     )
     if mid_earnings_summary.get("favorite_signal"):
         mid_anchor_meta = mid_earnings_summary.get("anchor_meta") if isinstance(mid_earnings_summary.get("anchor_meta"), dict) else {}
@@ -14058,6 +14731,11 @@ def _evaluate_priority_snapshot_for_date(
         atr20,
         last_trade_date,
     )
+    post_earnings_band_expansion = analyze_anchor_band_expansion(
+        df,
+        post_earnings_summary.get("anchor_date", ""),
+        atr20,
+    )
     entry_bar = pd.Series(last_row or {"open": last_close, "high": last_close, "low": last_close, "close": last_close})
     entry_feature_snapshot = build_tracker_feature_snapshot(
         normalize_side(side),
@@ -14084,6 +14762,7 @@ def _evaluate_priority_snapshot_for_date(
         "daily_ohlc": daily_ohlc,
         "last_close": last_close,
         "last_volume": last_volume,
+        "intraday_vwap": intraday_vwap,
         "atr20": atr20,
         "current_active_level": current_band_context["active_level"],
         "current_nearby_bands": list(current_band_context["nearby_levels"]),
@@ -14104,6 +14783,12 @@ def _evaluate_priority_snapshot_for_date(
         "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
         "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+        "current_day_open": current_day_direction.get("current_day_open"),
+        "previous_close": current_day_direction.get("previous_close"),
+        "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
+        "current_candle_change_pct": current_day_direction.get("current_candle_change_pct"),
+        "side_aligned_day": current_day_direction.get("side_aligned_day"),
+        "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
         "recent_band_extension_days": recent_band_extension_days,
@@ -14139,6 +14824,8 @@ def _evaluate_priority_snapshot_for_date(
         "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
         "post_earnings_note": post_earnings_summary.get("note", ""),
         "post_earnings_anchor": post_earnings_summary.get("anchor_meta"),
+        "post_earnings_bands_expanding": bool(post_earnings_band_expansion.get("bands_expanding")),
+        "post_earnings_band_expansion_note": post_earnings_band_expansion.get("band_expansion_note", ""),
         "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
         "mid_earnings_active_second_stdev_hold": bool(mid_earnings_summary.get("active_second_stdev_hold")),
         "mid_earnings_sessions_since_gap": mid_earnings_summary.get("sessions_since_gap"),
@@ -14200,6 +14887,8 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["post_earnings_gap_date"] = post_earnings_summary.get("gap_date", "")
     priority_summary["post_earnings_monitor_level"] = _coerce_float(post_earnings_summary.get("monitor_level"))
     priority_summary["post_earnings_note"] = post_earnings_summary.get("note", "")
+    priority_summary["post_earnings_bands_expanding"] = bool(post_earnings_band_expansion.get("bands_expanding"))
+    priority_summary["post_earnings_band_expansion_note"] = post_earnings_band_expansion.get("band_expansion_note", "")
     priority_summary["mid_earnings_watch"] = bool(mid_earnings_summary.get("watch"))
     priority_summary["mid_earnings_active_second_stdev_hold"] = bool(mid_earnings_summary.get("active_second_stdev_hold"))
     priority_summary["mid_earnings_sessions_since_gap"] = mid_earnings_summary.get("sessions_since_gap")
@@ -14225,6 +14914,16 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["score"] = float(priority_summary["score"] - effective_compression_penalty)
     priority_summary["current_active_level"] = current_band_context["active_level"]
     priority_summary["current_band_zone"] = current_band_context["zone"]
+    priority_summary["last_trade_date"] = last_trade_date.isoformat()
+    priority_summary["last_close"] = last_close
+    priority_summary["intraday_vwap"] = intraday_vwap
+    priority_summary["daily_bar_source"] = _get_daily_bar_source(df_full)
+    priority_summary["current_day_open"] = current_day_direction.get("current_day_open")
+    priority_summary["previous_close"] = current_day_direction.get("previous_close")
+    priority_summary["current_day_change_pct"] = current_day_direction.get("current_day_change_pct")
+    priority_summary["current_candle_change_pct"] = current_day_direction.get("current_candle_change_pct")
+    priority_summary["side_aligned_day"] = current_day_direction.get("side_aligned_day")
+    priority_summary["side_alignment_note"] = current_day_direction.get("side_alignment_note", "")
     priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
     priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
     priority_summary["compression_note"] = effective_compression_note
@@ -14242,6 +14941,7 @@ def _evaluate_priority_snapshot_for_date(
         "last_trade_date": last_trade_date.isoformat(),
         "last_close": last_close,
         "last_volume": last_volume,
+        "intraday_vwap": intraday_vwap,
         "atr20": atr20,
         "current_active_level": current_band_context["active_level"],
         "current_nearby_bands": ";".join(current_band_context["nearby_levels"]),
@@ -14265,6 +14965,12 @@ def _evaluate_priority_snapshot_for_date(
         "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
         "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+        "current_day_open": current_day_direction.get("current_day_open"),
+        "previous_close": current_day_direction.get("previous_close"),
+        "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
+        "current_candle_change_pct": current_day_direction.get("current_candle_change_pct"),
+        "side_aligned_day": current_day_direction.get("side_aligned_day"),
+        "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
         "recent_band_extension_days": recent_band_extension_days,
@@ -14294,6 +15000,8 @@ def _evaluate_priority_snapshot_for_date(
         "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
         "post_earnings_gap_atr_multiple": _coerce_float(post_earnings_summary.get("gap_atr_multiple")),
         "post_earnings_note": post_earnings_summary.get("note", ""),
+        "post_earnings_bands_expanding": bool(post_earnings_band_expansion.get("bands_expanding")),
+        "post_earnings_band_expansion_note": post_earnings_band_expansion.get("band_expansion_note", ""),
         "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
         "mid_earnings_active_second_stdev_hold": bool(mid_earnings_summary.get("active_second_stdev_hold")),
         "mid_earnings_sessions_since_gap": mid_earnings_summary.get("sessions_since_gap"),
@@ -14516,7 +15224,10 @@ def run_master(
     use_shared_watchlists: bool = False,
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
+    include_theta: bool = False,
+    theta_only: bool = False,
 ):
+    include_theta = bool(include_theta or theta_only)
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
         shorts_path=shorts_path,
@@ -14536,7 +15247,8 @@ def run_master(
         logging.warning(
             f"No symbols found in {watchlist_label}. Skipping Master AVWAP scan."
         )
-        write_theta_put_report(THETA_PUTS_FILE, [])
+        if include_theta:
+            write_theta_put_report(THETA_PUTS_FILE, [])
         return {
             "watchlist_label": watchlist_label,
             "tracked_rows": [],
@@ -14555,7 +15267,7 @@ def run_master(
     history = load_history()
 
     earnings_data, latest_release_map = load_scan_earnings_context(symbols)
-    upcoming_earnings_map = collect_upcoming_earnings_dates(symbols)
+    upcoming_earnings_map = collect_upcoming_earnings_dates(symbols) if include_theta else {}
     today_iso = datetime.now().date().isoformat()
     earnings_cache_updated = False
 
@@ -14861,10 +15573,17 @@ def run_master(
         last_row = get_last_daily_row_for_date(daily_ohlc, last_trade_date)
         last_close = float(last_row["close"]) if last_row else None
         last_volume = float(last_row["volume"]) if last_row else None
+        intraday_vwap = fetch_intraday_session_vwap(sym)
 
         atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
         trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
         previous_day_range_summary = assess_previous_day_range_break(
+            daily_ohlc,
+            last_trade_date,
+            last_close,
+            side,
+        )
+        current_day_direction = assess_current_day_direction(
             daily_ohlc,
             last_trade_date,
             last_close,
@@ -14980,6 +15699,7 @@ def run_master(
             side,
             latest_release_context,
             indicator_frame,
+            intraday_vwap=intraday_vwap,
         )
         if mid_earnings_summary.get("favorite_signal"):
             mid_anchor_meta = mid_earnings_summary.get("anchor_meta") if isinstance(mid_earnings_summary.get("anchor_meta"), dict) else {}
@@ -15129,6 +15849,11 @@ def run_master(
             atr20,
             last_trade_date,
         )
+        post_earnings_band_expansion = analyze_anchor_band_expansion(
+            df,
+            post_earnings_summary.get("anchor_date", ""),
+            atr20,
+        )
         entry_bar = pd.Series(last_row or {"open": last_close, "high": last_close, "low": last_close, "close": last_close})
         entry_feature_snapshot = build_tracker_feature_snapshot(
             normalize_side(side),
@@ -15194,6 +15919,7 @@ def run_master(
             "market_regime_score": market_regime_snapshot.get("directional_score"),
             "last_close": last_close,
             "last_volume": last_volume,
+            "intraday_vwap": intraday_vwap,
             "atr20": atr20,
             "current_active_level": current_band_context["active_level"],
             "current_nearby_bands": list(current_band_context["nearby_levels"]),
@@ -15214,6 +15940,12 @@ def run_master(
             "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
             "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
             "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+            "current_day_open": current_day_direction.get("current_day_open"),
+            "previous_close": current_day_direction.get("previous_close"),
+            "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
+            "current_candle_change_pct": current_day_direction.get("current_candle_change_pct"),
+            "side_aligned_day": current_day_direction.get("side_aligned_day"),
+            "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
             "recent_band_extension_days": recent_band_extension_days,
@@ -15249,6 +15981,8 @@ def run_master(
             "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
             "post_earnings_note": post_earnings_summary.get("note", ""),
             "post_earnings_anchor": post_earnings_summary.get("anchor_meta"),
+            "post_earnings_bands_expanding": bool(post_earnings_band_expansion.get("bands_expanding")),
+            "post_earnings_band_expansion_note": post_earnings_band_expansion.get("band_expansion_note", ""),
             "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
             "mid_earnings_active_second_stdev_hold": bool(mid_earnings_summary.get("active_second_stdev_hold")),
             "mid_earnings_sessions_since_gap": mid_earnings_summary.get("sessions_since_gap"),
@@ -15270,41 +16004,42 @@ def run_master(
             **bouncebot_focus_context,
         }
 
-        theta_candidate = evaluate_theta_put_candidate(
-            symbol=sym,
-            side=side,
-            df=df,
-            last_trade_date=last_trade_date,
-            last_close=last_close,
-            atr20=atr20,
-            current_anchor_meta=current_anchor_meta,
-            previous_anchor_meta=prev_anchor_meta,
-            indicator_row=indicator_row,
-            compression_summary=compression_summary,
-            recent_earnings_dates=recent_earnings_dates,
-            upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
-        )
-        if theta_candidate:
-            theta_put_rows.append(theta_candidate)
-            symbol_entry["theta_put_candidate"] = theta_candidate
+        if include_theta:
+            theta_candidate = evaluate_theta_put_candidate(
+                symbol=sym,
+                side=side,
+                df=df,
+                last_trade_date=last_trade_date,
+                last_close=last_close,
+                atr20=atr20,
+                current_anchor_meta=current_anchor_meta,
+                previous_anchor_meta=prev_anchor_meta,
+                indicator_row=indicator_row,
+                compression_summary=compression_summary,
+                recent_earnings_dates=recent_earnings_dates,
+                upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
+            )
+            if theta_candidate:
+                theta_put_rows.append(theta_candidate)
+                symbol_entry["theta_put_candidate"] = theta_candidate
 
-        theta_pcs_candidate = evaluate_theta_pcs_candidate(
-            symbol=sym,
-            side=side,
-            df=df,
-            last_trade_date=last_trade_date,
-            last_close=last_close,
-            atr20=atr20,
-            current_anchor_meta=current_anchor_meta,
-            previous_anchor_meta=prev_anchor_meta,
-            indicator_row=indicator_row,
-            compression_summary=compression_summary,
-            recent_earnings_dates=recent_earnings_dates,
-            upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
-        )
-        if theta_pcs_candidate:
-            theta_pcs_rows.append(theta_pcs_candidate)
-            symbol_entry["theta_pcs_candidate"] = theta_pcs_candidate
+            theta_pcs_candidate = evaluate_theta_pcs_candidate(
+                symbol=sym,
+                side=side,
+                df=df,
+                last_trade_date=last_trade_date,
+                last_close=last_close,
+                atr20=atr20,
+                current_anchor_meta=current_anchor_meta,
+                previous_anchor_meta=prev_anchor_meta,
+                indicator_row=indicator_row,
+                compression_summary=compression_summary,
+                recent_earnings_dates=recent_earnings_dates,
+                upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
+            )
+            if theta_pcs_candidate:
+                theta_pcs_rows.append(theta_pcs_candidate)
+                symbol_entry["theta_pcs_candidate"] = theta_pcs_candidate
 
         priority_summary = build_priority_setup_summary(
             symbol=sym,
@@ -15346,6 +16081,8 @@ def run_master(
         priority_summary["post_earnings_gap_date"] = post_earnings_summary.get("gap_date", "")
         priority_summary["post_earnings_monitor_level"] = _coerce_float(post_earnings_summary.get("monitor_level"))
         priority_summary["post_earnings_note"] = post_earnings_summary.get("note", "")
+        priority_summary["post_earnings_bands_expanding"] = bool(post_earnings_band_expansion.get("bands_expanding"))
+        priority_summary["post_earnings_band_expansion_note"] = post_earnings_band_expansion.get("band_expansion_note", "")
         priority_summary["mid_earnings_watch"] = bool(mid_earnings_summary.get("watch"))
         priority_summary["mid_earnings_active_second_stdev_hold"] = bool(mid_earnings_summary.get("active_second_stdev_hold"))
         priority_summary["mid_earnings_sessions_since_gap"] = mid_earnings_summary.get("sessions_since_gap")
@@ -15371,6 +16108,16 @@ def run_master(
         priority_summary["score"] = float(priority_summary["score"] - effective_compression_penalty)
         priority_summary["current_active_level"] = current_band_context["active_level"]
         priority_summary["current_band_zone"] = current_band_context["zone"]
+        priority_summary["last_trade_date"] = last_trade_date.isoformat()
+        priority_summary["last_close"] = last_close
+        priority_summary["intraday_vwap"] = intraday_vwap
+        priority_summary["daily_bar_source"] = daily_bar_source
+        priority_summary["current_day_open"] = current_day_direction.get("current_day_open")
+        priority_summary["previous_close"] = current_day_direction.get("previous_close")
+        priority_summary["current_day_change_pct"] = current_day_direction.get("current_day_change_pct")
+        priority_summary["current_candle_change_pct"] = current_day_direction.get("current_candle_change_pct")
+        priority_summary["side_aligned_day"] = current_day_direction.get("side_aligned_day")
+        priority_summary["side_alignment_note"] = current_day_direction.get("side_alignment_note", "")
         priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
         priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
         priority_summary["compression_note"] = effective_compression_note
@@ -15440,6 +16187,7 @@ def run_master(
             "spy_above_sma50": (market_regime_snapshot.get("benchmarks", {}).get("SPY", {}) or {}).get("above_sma50"),
             "last_close": last_close,
             "last_volume": last_volume,
+            "intraday_vwap": intraday_vwap,
             "atr20": atr20,
             "current_active_level": current_band_context["active_level"],
             "current_nearby_bands": ";".join(current_band_context["nearby_levels"]),
@@ -15463,6 +16211,12 @@ def run_master(
             "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
             "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
             "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+            "current_day_open": current_day_direction.get("current_day_open"),
+            "previous_close": current_day_direction.get("previous_close"),
+            "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
+            "current_candle_change_pct": current_day_direction.get("current_candle_change_pct"),
+            "side_aligned_day": current_day_direction.get("side_aligned_day"),
+            "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
             "recent_band_extension_days": recent_band_extension_days,
@@ -15492,6 +16246,8 @@ def run_master(
             "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
             "post_earnings_gap_atr_multiple": _coerce_float(post_earnings_summary.get("gap_atr_multiple")),
             "post_earnings_note": post_earnings_summary.get("note", ""),
+            "post_earnings_bands_expanding": bool(post_earnings_band_expansion.get("bands_expanding")),
+            "post_earnings_band_expansion_note": post_earnings_band_expansion.get("band_expansion_note", ""),
             "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
             "mid_earnings_active_second_stdev_hold": bool(mid_earnings_summary.get("active_second_stdev_hold")),
             "mid_earnings_sessions_since_gap": mid_earnings_summary.get("sessions_since_gap"),
@@ -15542,6 +16298,29 @@ def run_master(
             f"multi_day={symbol_multi_day}"
         )
 
+    if theta_only:
+        enrich_theta_rows_with_ib_option_premiums(ib, theta_put_rows, theta_pcs_rows, today_run)
+        write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
+        disconnect_daily_data_client(ib)
+        logging.info(
+            "Theta scan complete. Sold puts=%s, PCS=%s, report=%s",
+            len(theta_put_rows),
+            len(theta_pcs_rows),
+            THETA_PUTS_FILE,
+        )
+        return {
+            "watchlist_label": watchlist_label,
+            "tracked_rows": [],
+            "theta_put_rows": theta_put_rows,
+            "theta_pcs_rows": theta_pcs_rows,
+            "ai_state": ai_state,
+            "feature_rows_by_symbol": feature_rows_by_symbol,
+            "daily_frames_by_symbol": daily_frames_by_symbol,
+            "setup_tracker_updated": False,
+            "setup_tracker_allowed": False,
+            "setup_tracker_skip_reason": "Theta-only scan.",
+        }
+
     refine_priority_rows_with_directional_filters(
         priority_rows,
         ai_state,
@@ -15564,7 +16343,8 @@ def run_master(
     apply_market_regime_score_adjustments(priority_rows, ai_state, feature_rows_by_symbol)
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
-    enrich_theta_rows_with_ib_option_premiums(ib, theta_put_rows, theta_pcs_rows, today_run)
+    if include_theta:
+        enrich_theta_rows_with_ib_option_premiums(ib, theta_put_rows, theta_pcs_rows, today_run)
     tracked_rows = [
         row
         for row in priority_rows
@@ -15685,7 +16465,8 @@ def run_master(
     # trim history to last N days
     trim_history(history)
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
-    write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
+    if include_theta:
+        write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
     write_master_avwap_focus_feed(MASTER_AVWAP_FOCUS_FILE, priority_rows, ai_state)
 
     # write human-readable events file (grouped for easier scanning)
@@ -15797,7 +16578,14 @@ def run_master(
         "spy_above_sma20",
         "spy_above_sma50",
         "last_close",
+        "current_day_open",
+        "previous_close",
+        "current_day_change_pct",
+        "current_candle_change_pct",
+        "side_aligned_day",
+        "side_alignment_note",
         "last_volume",
+        "intraday_vwap",
         "atr20",
         "previous_day_date",
         "previous_day_high",
@@ -16092,6 +16880,16 @@ class MasterAvwapGUI:
             self.theta_symbols_text,
             self.setup_tracker_stats_text,
         ]
+        widgets.extend(
+            widget
+            for widget in (
+                getattr(self, "theta_reason_risk_text", None),
+                getattr(self, "setup_tracker_playbook_text", None),
+                getattr(self, "setup_tracker_setup_type_text", None),
+                getattr(self, "setup_tracker_factor_text", None),
+            )
+            if widget is not None
+        )
         widgets.extend(getattr(self, "market_prep_text_widgets", []))
         if getattr(self, "market_prep_report_text", None) is not None:
             widgets.append(self.market_prep_report_text)
@@ -16106,7 +16904,136 @@ class MasterAvwapGUI:
                 highlightbackground=GUI_DARK_BG,
                 highlightcolor=GUI_DARK_PANEL,
             )
+            self._configure_output_text_tags(widget)
         self.avwap_text.tag_configure("trendline_bold", font=("Courier New", 10, "bold"))
+
+    def _configure_output_text_tags(self, widget):
+        bold_font = ("Courier New", 10, "bold")
+        widget.tag_configure("output_heading", foreground=GUI_ACCENT_CYAN, font=bold_font, spacing1=4, spacing3=3)
+        widget.tag_configure("output_separator", foreground=GUI_MUTED_TEXT)
+        widget.tag_configure("output_ticker", foreground=GUI_ACCENT_BLUE, font=bold_font)
+        widget.tag_configure("output_link", foreground=GUI_ACCENT_BLUE, underline=True)
+        widget.tag_configure("output_long_line", background=GUI_LINE_GREEN_BG)
+        widget.tag_configure("output_short_line", background=GUI_LINE_RED_BG)
+        widget.tag_configure("output_alert_line", background=GUI_LINE_RED_BG)
+        widget.tag_configure("output_warning_line", background=GUI_LINE_YELLOW_BG)
+        widget.tag_configure("output_clean_line", background=GUI_LINE_GREEN_BG)
+        widget.tag_configure("output_high", foreground=GUI_ACCENT_RED, font=bold_font)
+        widget.tag_configure("output_medium", foreground=GUI_ACCENT_YELLOW, font=bold_font)
+        widget.tag_configure("output_clean", foreground=GUI_ACCENT_GREEN, font=bold_font)
+        widget.tag_configure("output_positive", foreground=GUI_ACCENT_GREEN)
+        widget.tag_configure("output_negative", foreground=GUI_ACCENT_RED)
+        for tag in (
+            "output_heading",
+            "output_ticker",
+            "output_link",
+            "output_high",
+            "output_medium",
+            "output_clean",
+        ):
+            widget.tag_raise(tag)
+
+    def _should_highlight_output_widget(self, widget) -> bool:
+        section_widgets = getattr(self, "market_prep_section_widgets", {}) or {}
+        if any(widget is section_widget for section_widget in section_widgets.values()):
+            return False
+        highlight_widgets = (
+            getattr(self, "avwap_text", None),
+            getattr(self, "theta_text", None),
+            getattr(self, "theta_reason_risk_text", None),
+            getattr(self, "market_prep_report_text", None),
+            getattr(self, "setup_tracker_stats_text", None),
+            getattr(self, "setup_tracker_playbook_text", None),
+            getattr(self, "setup_tracker_setup_type_text", None),
+            getattr(self, "setup_tracker_factor_text", None),
+        )
+        return any(widget is highlight_widget for highlight_widget in highlight_widgets if highlight_widget is not None)
+
+    def _clear_output_text_tags(self, widget) -> None:
+        for tag in GUI_TEXT_TAG_NAMES:
+            widget.tag_remove(tag, "1.0", tk.END)
+
+    def _looks_like_output_heading(self, line: str, next_line: str = "") -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if stripped.startswith("#") or stripped.startswith("MASTER AVWAP"):
+            return True
+        if re.fullmatch(r"[-=]{3,}", stripped):
+            return False
+        if next_line.strip() and re.fullmatch(r"[-=]{3,}", next_line.strip()):
+            return True
+        if stripped.startswith(("-", "*")) or stripped.endswith(".") or len(stripped) > 58:
+            return False
+        if ":" in stripped and not stripped.endswith(":"):
+            return False
+        heading_terms = {
+            "avwap",
+            "candidates",
+            "catalyst",
+            "details",
+            "earnings",
+            "event",
+            "favorites",
+            "focus",
+            "landmine",
+            "market",
+            "plays",
+            "priority",
+            "reason",
+            "report",
+            "risk",
+            "setup",
+            "stdev",
+            "theta",
+            "ticker",
+            "watchlist",
+        }
+        words = {word.lower().strip("/:") for word in re.findall(r"[A-Za-z/]+", stripped)}
+        return bool(words & heading_terms)
+
+    def _add_output_regex_tag(self, widget, line_no: int, line: str, pattern: re.Pattern, tag: str) -> None:
+        for match in pattern.finditer(line):
+            widget.tag_add(tag, f"{line_no}.{match.start()}", f"{line_no}.{match.end()}")
+
+    def _apply_output_text_highlights(self, widget, text: str) -> None:
+        self._clear_output_text_tags(widget)
+        lines = str(text or "").splitlines()
+        for line_no, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            line_start = f"{line_no}.0"
+            line_end = f"{line_no}.end"
+            next_line = lines[line_no] if line_no < len(lines) else ""
+            if re.fullmatch(r"[-=]{3,}", stripped):
+                widget.tag_add("output_separator", line_start, line_end)
+                continue
+            upper_line = f" {stripped.upper()} "
+            if self._looks_like_output_heading(line, next_line):
+                widget.tag_add("output_heading", line_start, line_end)
+            if " SCORE=" in upper_line and " LONG " in upper_line:
+                widget.tag_add("output_long_line", line_start, line_end)
+            elif " SCORE=" in upper_line and " SHORT " in upper_line:
+                widget.tag_add("output_short_line", line_start, line_end)
+            elif GUI_OUTPUT_HIGH_RE.search(line):
+                widget.tag_add("output_alert_line", line_start, line_end)
+            elif GUI_OUTPUT_MEDIUM_RE.search(line):
+                widget.tag_add("output_warning_line", line_start, line_end)
+            elif GUI_OUTPUT_CLEAN_RE.search(line):
+                widget.tag_add("output_clean_line", line_start, line_end)
+            self._add_output_regex_tag(widget, line_no, line, GUI_OUTPUT_URL_RE, "output_link")
+            self._add_output_regex_tag(widget, line_no, line, GUI_OUTPUT_HIGH_RE, "output_high")
+            self._add_output_regex_tag(widget, line_no, line, GUI_OUTPUT_MEDIUM_RE, "output_medium")
+            self._add_output_regex_tag(widget, line_no, line, GUI_OUTPUT_CLEAN_RE, "output_clean")
+            for match in GUI_OUTPUT_TICKER_RE.finditer(line):
+                token = match.group(0).strip(".-")
+                if token in GUI_TICKER_STOPWORDS:
+                    continue
+                widget.tag_add("output_ticker", f"{line_no}.{match.start()}", f"{line_no}.{match.end()}")
+            for match in GUI_OUTPUT_SIGNED_PCT_RE.finditer(line):
+                tag = "output_positive" if match.group(1).startswith("+") else "output_negative"
+                widget.tag_add(tag, f"{line_no}.{match.start()}", f"{line_no}.{match.end()}")
 
     def _build_layout(self):
         toolbar = ttk.Frame(self.root)
@@ -16118,7 +17045,7 @@ class MasterAvwapGUI:
             textvariable=self.shared_scheduler_button_var,
             command=self.toggle_shared_watchlist_scheduler,
         ).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Run Local Watchlist Scan", command=self.run_local_watchlist_scan_once).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Run Theta Scans", command=self.run_theta_scan_once).pack(side="left", padx=4)
 
         ttk.Label(
             self.root,
@@ -16708,9 +17635,9 @@ class MasterAvwapGUI:
         theta_reason_risk_frame.pack(fill="both", expand=True, pady=(8, 0))
         self.theta_reason_risk_text = tk.Text(theta_reason_risk_frame, wrap="word", height=14, font=("Courier New", 10))
         self.theta_reason_risk_text.pack(fill="both", expand=True, padx=8, pady=(8, 8))
-        self.theta_reason_risk_text.tag_configure("risk_green", foreground="#1e7f37")
-        self.theta_reason_risk_text.tag_configure("risk_yellow", foreground="#9a6700")
-        self.theta_reason_risk_text.tag_configure("risk_red", foreground="#b42318")
+        self.theta_reason_risk_text.tag_configure("risk_green", foreground=GUI_ACCENT_GREEN)
+        self.theta_reason_risk_text.tag_configure("risk_yellow", foreground=GUI_ACCENT_YELLOW)
+        self.theta_reason_risk_text.tag_configure("risk_red", foreground=GUI_ACCENT_RED)
 
         market_prep_tab = ttk.Frame(self.notebook)
         self.market_prep_tab = market_prep_tab
@@ -16914,6 +17841,8 @@ class MasterAvwapGUI:
         widget.configure(state="normal")
         widget.delete("1.0", tk.END)
         widget.insert("1.0", text)
+        if self._should_highlight_output_widget(widget):
+            self._apply_output_text_highlights(widget, text)
         widget.configure(state="normal")
 
     def _load_ai_state_payload(self) -> dict:
@@ -18451,11 +19380,11 @@ class MasterAvwapGUI:
 
         self.notebook.select(self.avwap_tab)
         self.shared_scheduler_active_slot = trigger_slot
-        running_msg = f"Running scheduled shared-watchlist scan for {trigger_slot}..."
+        running_msg = f"Running scheduled shared-watchlist scan + theta for {trigger_slot}..."
         started = self._run_background(
-            run_master_with_shared_watchlists,
+            run_master_with_shared_watchlists_and_theta,
             running_msg,
-            f"Scheduled shared-watchlist scan for {trigger_slot} complete.",
+            f"Scheduled shared-watchlist scan + theta for {trigger_slot} complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_theta_output_view(),
@@ -18568,17 +19497,15 @@ class MasterAvwapGUI:
             ),
         )
 
-    def run_local_watchlist_scan_once(self):
-        self.notebook.select(self.avwap_tab)
+    def run_theta_scan_once(self):
+        self.notebook.select(self.theta_tab)
         self._run_background(
-            run_master,
-            "Running Master AVWAP scan from local project watchlists...",
-            "Local-watchlist Master AVWAP scan complete.",
+            run_theta_scan_with_shared_watchlists,
+            "Running theta scans from shared home-folder longs.txt / shorts.txt...",
+            "Theta scans complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_theta_output_view(),
-                self.refresh_market_prep_view(),
-                self._mark_setup_tracker_view_stale(),
             ),
         )
 
@@ -18629,17 +19556,25 @@ def main():
         ),
     )
     parser.add_argument("--gui", action="store_true", help="Launch the Master AVWAP management GUI.")
+    parser.add_argument("--theta", action="store_true", help="Run theta option scans only.")
     args = parser.parse_args()
+
+    if args.theta:
+        run_theta_scan_with_shared_watchlists()
+        return
 
     if args.once:
         run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
         return
 
     if args.loop:
-        logging.info("Starting hourly Master AVWAP loop (once per hour)…")
+        logging.info("Starting hourly Master AVWAP loop with theta scans (once per hour)...")
         while True:
             start = time.time()
-            run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
+            run_master(
+                update_setup_tracker=True if args.force_setup_tracker_update else None,
+                include_theta=True,
+            )
             elapsed = time.time() - start
             sleep_seconds = max(0, 3600 - elapsed)
             logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run…")

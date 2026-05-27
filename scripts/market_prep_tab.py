@@ -3,11 +3,20 @@ from __future__ import annotations
 import sys
 import threading
 import tkinter as tk
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
-from project_paths import OUTPUT_DIR, ROOT_DIR, open_path_in_file_manager
+from project_paths import (
+    LOCAL_SETTINGS_FILE,
+    OUTPUT_DIR,
+    ROOT_DIR,
+    get_local_setting,
+    open_path_in_file_manager,
+    save_local_setting,
+)
 
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -21,6 +30,8 @@ from market_prep.services.ticker_lookup_service import lookup_ticker_context
 MARKET_PREP_PLACEHOLDER_TEXT = "Market Prep tab loaded. Phase 1 skeleton ready."
 MARKET_PREP_NAV_ITEMS = (
     ("Command Center", "overview"),
+    ("AI Summary", "ai_summary"),
+    ("API Key", "api_key"),
     ("Catalyst Clock", "catalyst"),
     ("Watchlist Risk", "watchlist"),
     ("Earnings", "earnings"),
@@ -31,6 +42,199 @@ MARKET_PREP_NAV_ITEMS = (
 HIGH_PRIORITY_VALUES = {"HIGH", "MEGA"}
 MEDIUM_PRIORITY_VALUES = {"MEDIUM"}
 TEXT_FONT = ("Courier New", 10)
+OPENAI_LOCAL_SETTING_KEY = "market_prep_openai_api_key"
+
+ACCENT_BLUE = "#8AB4F8"
+ACCENT_CYAN = "#7DD3FC"
+ACCENT_GREEN = "#8FD19E"
+ACCENT_YELLOW = "#F0C76E"
+ACCENT_RED = "#FF9A9A"
+ACCENT_PURPLE = "#C7B8FF"
+MUTED_TEXT = "#8A939E"
+TREE_SELECTED_BG = "#53606C"
+TREE_HEADER_BG = "#36414B"
+TREE_HEADER_ACTIVE_BG = "#45525F"
+TREE_RISK_HIGH_BG = "#3A2527"
+TREE_RISK_MEDIUM_BG = "#3A3322"
+TREE_RISK_LOW_BG = "#252B31"
+TREE_RISK_CLEAN_BG = "#223027"
+TEXT_TAG_NAMES = (
+    "mp_heading",
+    "mp_separator",
+    "mp_bullet",
+    "mp_ticker",
+    "mp_link",
+    "mp_high",
+    "mp_medium",
+    "mp_clean",
+    "mp_muted",
+    "mp_positive",
+    "mp_negative",
+    "mp_alert_line",
+    "mp_warning_line",
+    "mp_clean_line",
+)
+HEADING_HINTS = {
+    "ai",
+    "brief",
+    "catalyst",
+    "checklist",
+    "company",
+    "details",
+    "earnings",
+    "fed",
+    "headline",
+    "landmine",
+    "lookup",
+    "macro",
+    "market",
+    "overview",
+    "posture",
+    "prompt",
+    "risk",
+    "sec",
+    "snapshot",
+    "source",
+    "status",
+    "treasury",
+    "warnings",
+    "watchlist",
+}
+TICKER_STOPWORDS = {
+    "AI",
+    "AMC",
+    "API",
+    "BMO",
+    "ET",
+    "ETF",
+    "FED",
+    "FOMC",
+    "HIGH",
+    "LOW",
+    "MEGA",
+    "MEDIUM",
+    "RSS",
+    "SEC",
+    "TBD",
+    "USD",
+    "URL",
+}
+TICKER_RE = re.compile(r"\b[A-Z][A-Z0-9.\-]{1,5}\b")
+URL_RE = re.compile(r"https?://\S+")
+SIGNED_PCT_RE = re.compile(r"(?<!\w)([+-]\d+(?:\.\d+)?%)")
+HIGH_RISK_RE = re.compile(r"\b(MEGA|HIGH|NO-TRADE|TODAY/TOMORROW|ERRORS?|FAIL(?:ED)?)\b", re.IGNORECASE)
+MEDIUM_RISK_RE = re.compile(r"\b(MEDIUM|WATCH|WARNING|WARNINGS|REDUCED-SIZE|EARNINGS WITHIN)\b", re.IGNORECASE)
+CLEAN_RE = re.compile(r"\b(CLEAN|READY|OK|AVAILABLE|GENERATED)\b", re.IGNORECASE)
+
+
+def _configure_readable_tree_style(parent: tk.Misc, text_bg: str, text_fg: str) -> None:
+    style = ttk.Style(parent)
+    style.configure(
+        "Readable.Treeview",
+        background=text_bg,
+        fieldbackground=text_bg,
+        foreground=text_fg,
+        bordercolor="#15191E",
+        rowheight=25,
+    )
+    style.map(
+        "Readable.Treeview",
+        background=[("selected", TREE_SELECTED_BG)],
+        foreground=[("selected", "#FFFFFF")],
+    )
+    style.configure(
+        "Readable.Treeview.Heading",
+        background=TREE_HEADER_BG,
+        foreground="#F2F5F8",
+        relief="flat",
+    )
+    style.map("Readable.Treeview.Heading", background=[("active", TREE_HEADER_ACTIVE_BG)])
+
+
+def _configure_text_tags(widget: tk.Text) -> None:
+    bold_font = (TEXT_FONT[0], TEXT_FONT[1], "bold")
+    widget.tag_configure("mp_heading", foreground=ACCENT_CYAN, font=bold_font, spacing1=4, spacing3=3)
+    widget.tag_configure("mp_separator", foreground=MUTED_TEXT)
+    widget.tag_configure("mp_bullet", foreground=MUTED_TEXT)
+    widget.tag_configure("mp_ticker", foreground=ACCENT_BLUE, font=bold_font)
+    widget.tag_configure("mp_link", foreground=ACCENT_BLUE, underline=True)
+    widget.tag_configure("mp_high", foreground=ACCENT_RED, font=bold_font)
+    widget.tag_configure("mp_medium", foreground=ACCENT_YELLOW, font=bold_font)
+    widget.tag_configure("mp_clean", foreground=ACCENT_GREEN, font=bold_font)
+    widget.tag_configure("mp_muted", foreground=MUTED_TEXT)
+    widget.tag_configure("mp_positive", foreground=ACCENT_GREEN)
+    widget.tag_configure("mp_negative", foreground=ACCENT_RED)
+    widget.tag_configure("mp_alert_line", background=TREE_RISK_HIGH_BG)
+    widget.tag_configure("mp_warning_line", background=TREE_RISK_MEDIUM_BG)
+    widget.tag_configure("mp_clean_line", background=TREE_RISK_CLEAN_BG)
+    for tag in ("mp_heading", "mp_ticker", "mp_link", "mp_high", "mp_medium", "mp_clean"):
+        widget.tag_raise(tag)
+
+
+def _clear_text_tags(widget: tk.Text) -> None:
+    for tag in TEXT_TAG_NAMES:
+        widget.tag_remove(tag, "1.0", tk.END)
+
+
+def _add_regex_tag(widget: tk.Text, line_no: int, line: str, pattern: re.Pattern, tag: str) -> None:
+    for match in pattern.finditer(line):
+        widget.tag_add(tag, f"{line_no}.{match.start()}", f"{line_no}.{match.end()}")
+
+
+def _looks_like_heading(line: str, next_line: str = "") -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("#"):
+        return True
+    if re.fullmatch(r"[-=]{3,}", stripped):
+        return False
+    if next_line.strip() and re.fullmatch(r"[-=]{3,}", next_line.strip()):
+        return True
+    if stripped.startswith(("-", "*")) or stripped.endswith(".") or len(stripped) > 54:
+        return False
+    if ":" in stripped and not stripped.endswith(":"):
+        return False
+    words = {word.lower().strip("/:") for word in re.findall(r"[A-Za-z/]+", stripped)}
+    return bool(words & HEADING_HINTS)
+
+
+def _apply_text_highlights(widget: tk.Text, text: str) -> None:
+    _clear_text_tags(widget)
+    lines = str(text or "").splitlines()
+    for line_no, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        line_start = f"{line_no}.0"
+        line_end = f"{line_no}.end"
+        next_line = lines[line_no] if line_no < len(lines) else ""
+        if re.fullmatch(r"[-=]{3,}", stripped):
+            widget.tag_add("mp_separator", line_start, line_end)
+            continue
+        if _looks_like_heading(line, next_line):
+            widget.tag_add("mp_heading", line_start, line_end)
+        if HIGH_RISK_RE.search(line):
+            widget.tag_add("mp_alert_line", line_start, line_end)
+        elif MEDIUM_RISK_RE.search(line):
+            widget.tag_add("mp_warning_line", line_start, line_end)
+        elif CLEAN_RE.search(line):
+            widget.tag_add("mp_clean_line", line_start, line_end)
+        bullet_pos = line.find("- ")
+        if 0 <= bullet_pos <= 4:
+            widget.tag_add("mp_bullet", f"{line_no}.{bullet_pos}", f"{line_no}.{bullet_pos + 1}")
+        _add_regex_tag(widget, line_no, line, URL_RE, "mp_link")
+        _add_regex_tag(widget, line_no, line, HIGH_RISK_RE, "mp_high")
+        _add_regex_tag(widget, line_no, line, MEDIUM_RISK_RE, "mp_medium")
+        _add_regex_tag(widget, line_no, line, CLEAN_RE, "mp_clean")
+        for match in TICKER_RE.finditer(line):
+            token = match.group(0).strip(".-")
+            if token in TICKER_STOPWORDS:
+                continue
+            widget.tag_add("mp_ticker", f"{line_no}.{match.start()}", f"{line_no}.{match.end()}")
+        for match in SIGNED_PCT_RE.finditer(line):
+            tag = "mp_positive" if match.group(1).startswith("+") else "mp_negative"
+            widget.tag_add(tag, f"{line_no}.{match.start()}", f"{line_no}.{match.end()}")
 
 
 class MarketPrepTab:
@@ -43,11 +247,13 @@ class MarketPrepTab:
         output_dir: Path = OUTPUT_DIR,
         text_bg: str = "#252525",
         text_fg: str = "#E0E0E0",
+        compact_layout: bool = False,
     ):
         self.parent = parent
         self.output_dir = Path(output_dir)
         self.text_bg = text_bg
         self.text_fg = text_fg
+        self.compact_layout = bool(compact_layout)
         self.config = load_market_prep_config()
         resolved_paths = self.config.resolved_paths()
         self.output_dir = resolved_paths.get("output_dir", self.output_dir)
@@ -55,10 +261,13 @@ class MarketPrepTab:
         self.orchestrator = MarketPrepOrchestrator()
         self.status_var = tk.StringVar(value="Ready")
         self.source_status_var = tk.StringVar(value="Sources: waiting for first run.")
+        self.openai_key_var = tk.StringVar(value=self._saved_openai_key())
+        self.openai_key_status_var = tk.StringVar()
         self.summary_vars: dict[str, tk.StringVar] = {}
         self.container = ttk.Frame(parent)
         self.display_text: scrolledtext.ScrolledText | None = None
         self.overview_text: scrolledtext.ScrolledText | None = None
+        self.ai_summary_text: scrolledtext.ScrolledText | None = None
         self.earnings_text: scrolledtext.ScrolledText | None = None
         self.macro_text: scrolledtext.ScrolledText | None = None
         self.news_sec_text: scrolledtext.ScrolledText | None = None
@@ -70,6 +279,7 @@ class MarketPrepTab:
         self.background_task_active = False
         self.latest_report: dict | None = None
         self._nav_syncing = False
+        _configure_readable_tree_style(parent, self.text_bg, self.text_fg)
         self._build_layout()
         self._render_plain_text(MARKET_PREP_PLACEHOLDER_TEXT)
         self.logger.info("Market Prep loaded")
@@ -79,11 +289,12 @@ class MarketPrepTab:
 
     def _build_layout(self) -> None:
         toolbar = ttk.Frame(self.container)
-        toolbar.pack(fill=tk.X, padx=10, pady=(10, 8))
+        toolbar.pack(fill=tk.X, padx=6 if self.compact_layout else 10, pady=(4 if self.compact_layout else 10, 4))
 
-        buttons = (
+        buttons = [
             ("Start Day", self.start_day),
             ("Start Week", self.start_week),
+            ("Run AI Summary", self.run_ai_summary),
             ("Run Daily Prep", self.run_daily_prep),
             ("Run Weekly Prep", self.run_weekly_prep),
             ("Refresh Earnings", self.refresh_earnings),
@@ -94,31 +305,43 @@ class MarketPrepTab:
             ("Scan Watchlists", self.scan_watchlists),
             ("Export Markdown", self.export_markdown),
             ("Open Output Folder", self.open_output_folder),
-        )
+        ]
+        if self.compact_layout:
+            buttons = [
+                ("Start Day", self.start_day),
+                ("Start Week", self.start_week),
+                ("Run AI Summary", self.run_ai_summary),
+                ("Scan Watchlists", self.scan_watchlists),
+                ("Export", self.export_markdown),
+                ("Folder", self.open_output_folder),
+            ]
         for label, command in buttons:
             button = ttk.Button(toolbar, text=label, command=command)
-            button.pack(side=tk.LEFT, padx=(0, 8), pady=(0, 4))
+            button.pack(side=tk.LEFT, padx=(0, 4 if self.compact_layout else 8), pady=(0, 2 if self.compact_layout else 4))
             self.buttons[label] = button
         self._refresh_forexfactory_button()
 
         self._build_command_center()
 
         body = ttk.Frame(self.container)
-        body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+        body.pack(fill=tk.BOTH, expand=True, padx=6 if self.compact_layout else 10, pady=(0, 4 if self.compact_layout else 8))
 
         nav_frame = ttk.LabelFrame(body, text="Sections")
-        nav_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        if not self.compact_layout:
+            nav_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         self.nav_list = tk.Listbox(
             nav_frame,
-            width=24,
+            width=24 if not self.compact_layout else 18,
             height=len(MARKET_PREP_NAV_ITEMS),
             exportselection=False,
-            bg=self.text_bg,
+            bg="#202428",
             fg=self.text_fg,
-            selectbackground="#4A4A4A",
-            selectforeground=self.text_fg,
+            selectbackground=TREE_SELECTED_BG,
+            selectforeground="#FFFFFF",
             activestyle="none",
-            highlightthickness=0,
+            highlightthickness=1,
+            highlightbackground="#15191E",
+            highlightcolor=ACCENT_BLUE,
         )
         for label, _tab_id in MARKET_PREP_NAV_ITEMS:
             self.nav_list.insert(tk.END, label)
@@ -133,6 +356,8 @@ class MarketPrepTab:
         self.view_notebook.bind("<<NotebookTabChanged>>", self._on_view_tab_changed)
 
         self._build_overview_tab()
+        self._build_ai_summary_tab()
+        self._build_api_key_tab()
         self._build_catalyst_tab()
         self._build_watchlist_tab()
         self._build_text_tab("earnings", "Earnings")
@@ -141,32 +366,42 @@ class MarketPrepTab:
         self._build_raw_tab()
 
         status = ttk.Label(self.container, textvariable=self.status_var, relief="sunken", anchor="w")
-        status.pack(fill=tk.X, padx=10, pady=(0, 10))
+        status.pack(fill=tk.X, padx=6 if self.compact_layout else 10, pady=(0, 6 if self.compact_layout else 10))
 
     def _build_command_center(self) -> None:
         center = ttk.Frame(self.container)
-        center.pack(fill=tk.X, padx=10, pady=(0, 8))
+        center.pack(fill=tk.X, padx=6 if self.compact_layout else 10, pady=(0, 4 if self.compact_layout else 8))
 
-        cards = (
+        cards = [
             ("report", "Report"),
             ("market_regime", "Market Regime"),
             ("risk_level", "Week/Day Risk"),
             ("next_catalyst", "Next Landmine"),
             ("watchlist_holds", "Watchlist Holds"),
             ("ai_brief", "AI Brief"),
-        )
+        ]
+        if self.compact_layout:
+            cards = [
+                ("next_catalyst", "Next Landmine"),
+                ("watchlist_holds", "Watchlist Holds"),
+                ("ai_brief", "AI Brief"),
+            ]
+            for key in {"report", "market_regime", "risk_level"}:
+                self.summary_vars[key] = tk.StringVar(value="Waiting for run")
         for key, title in cards:
             frame = ttk.LabelFrame(center, text=title)
             frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
             var = tk.StringVar(value="Waiting for run")
             self.summary_vars[key] = var
-            ttk.Label(frame, textvariable=var, justify="left", wraplength=270).pack(
+            ttk.Label(frame, textvariable=var, justify="left", wraplength=220 if self.compact_layout else 270).pack(
                 fill=tk.X,
-                padx=8,
-                pady=(6, 8),
+                padx=6 if self.compact_layout else 8,
+                pady=(3 if self.compact_layout else 6, 4 if self.compact_layout else 8),
             )
 
         source_frame = ttk.LabelFrame(self.container, text="Source Health")
+        if self.compact_layout:
+            return
         source_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
         ttk.Label(source_frame, textvariable=self.source_status_var, justify="left", wraplength=1600).pack(
             fill=tk.X,
@@ -178,6 +413,91 @@ class MarketPrepTab:
         frame = ttk.Frame(self.view_notebook)
         self.view_notebook.add(frame, text="Command Center")
         self.overview_text = self._make_text(frame)
+
+    def _build_ai_summary_tab(self) -> None:
+        frame = ttk.Frame(self.view_notebook)
+        self.view_notebook.add(frame, text="AI Summary")
+        self.ai_summary_text = self._make_text(frame)
+
+    def _build_api_key_tab(self) -> None:
+        frame = ttk.Frame(self.view_notebook)
+        self.view_notebook.add(frame, text="API Key")
+
+        row = ttk.Frame(frame)
+        row.pack(fill=tk.X, padx=8, pady=(8, 4))
+        ttk.Label(row, text="OpenAI API Key").pack(side=tk.LEFT, padx=(0, 8))
+        self.openai_key_entry = ttk.Entry(row, textvariable=self.openai_key_var, show="*", width=54)
+        self.openai_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Button(row, text="Save", command=self.save_openai_api_key).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(row, text="Clear", command=self.clear_openai_api_key).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(row, text="Reload", command=self.reload_openai_api_key).pack(side=tk.LEFT)
+
+        status = ttk.LabelFrame(frame, text="Status")
+        status.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 8))
+        ttk.Label(status, textvariable=self.openai_key_status_var, justify="left", wraplength=900).pack(
+            fill=tk.X,
+            padx=8,
+            pady=(6, 8),
+        )
+        self._refresh_openai_key_status()
+
+    def _saved_openai_key(self) -> str:
+        return str(get_local_setting(OPENAI_LOCAL_SETTING_KEY, "") or "").strip()
+
+    def _config_openai_key(self) -> str:
+        keys = self.config.api_keys if isinstance(self.config.api_keys, dict) else {}
+        return str(keys.get("openai") or "").strip()
+
+    def _refresh_openai_key_status(self) -> None:
+        env_key = str(os.environ.get("OPENAI_API_KEY") or "").strip()
+        local_key = self._saved_openai_key()
+        config_key = self._config_openai_key()
+        lines = []
+        if env_key:
+            lines.append(f"OPENAI_API_KEY is set: {self._mask_secret(env_key)}")
+            lines.append("Environment key takes priority.")
+        if local_key:
+            lines.append(f"Saved local key: {self._mask_secret(local_key)}")
+        if config_key:
+            lines.append(f"Repo config fallback key: {self._mask_secret(config_key)}")
+        if not env_key and not local_key and not config_key:
+            lines.append("No OpenAI API key saved.")
+        lines.append(f"Local settings: {LOCAL_SETTINGS_FILE}")
+        self.openai_key_status_var.set("\n".join(lines))
+
+    def _mask_secret(self, value: str) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            return ""
+        if len(cleaned) <= 8:
+            return "*" * len(cleaned)
+        return f"{cleaned[:4]}...{cleaned[-4:]}"
+
+    def save_openai_api_key(self) -> None:
+        key = self.openai_key_var.get().strip()
+        try:
+            save_local_setting(OPENAI_LOCAL_SETTING_KEY, key)
+            self.orchestrator = MarketPrepOrchestrator()
+        except Exception as exc:
+            self.logger.exception("Failed saving OpenAI API key.")
+            messagebox.showerror("OpenAI API Key", f"Could not save OpenAI API key:\n\n{exc}")
+            self.openai_key_status_var.set(f"Save failed: {exc}")
+            return
+        self.openai_key_var.set(self._saved_openai_key())
+        self._refresh_openai_key_status()
+        self.status_var.set("OpenAI API key saved.")
+
+    def clear_openai_api_key(self) -> None:
+        self.openai_key_var.set("")
+        self.save_openai_api_key()
+        self.status_var.set("OpenAI API key cleared.")
+
+    def reload_openai_api_key(self) -> None:
+        self.config = load_market_prep_config(self.config.config_path)
+        self.output_dir = self.config.resolved_paths().get("output_dir", self.output_dir)
+        self.openai_key_var.set(self._saved_openai_key())
+        self._refresh_openai_key_status()
+        self.status_var.set("OpenAI API key reloaded.")
 
     def _build_catalyst_tab(self) -> None:
         frame = ttk.Frame(self.view_notebook)
@@ -242,7 +562,8 @@ class MarketPrepTab:
             selectbackground="#4A4A4A",
             selectforeground=self.text_fg,
         )
-        widget.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        widget.pack(fill=tk.BOTH, expand=True, padx=6 if self.compact_layout else 8, pady=4 if self.compact_layout else 8)
+        _configure_text_tags(widget)
         widget.configure(state="disabled")
         return widget
 
@@ -253,8 +574,8 @@ class MarketPrepTab:
         headings: dict[str, tuple[str, int, str]],
     ) -> ttk.Treeview:
         frame = ttk.Frame(parent)
-        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        frame.pack(fill=tk.BOTH, expand=True, padx=6 if self.compact_layout else 8, pady=(0, 4 if self.compact_layout else 8))
+        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="Readable.Treeview")
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
@@ -263,10 +584,10 @@ class MarketPrepTab:
             label, width, anchor = headings[column]
             tree.heading(column, text=label, command=lambda col=column, t=tree: self._sort_tree(t, col, False))
             tree.column(column, width=width, anchor=anchor, stretch=column in {"text", "reason", "company"})
-        tree.tag_configure("risk_high", foreground="#FF9A9A")
-        tree.tag_configure("risk_medium", foreground="#F0C76E")
-        tree.tag_configure("risk_low", foreground="#A9B4C0")
-        tree.tag_configure("risk_clean", foreground="#8FD19E")
+        tree.tag_configure("risk_high", foreground=ACCENT_RED, background=TREE_RISK_HIGH_BG)
+        tree.tag_configure("risk_medium", foreground=ACCENT_YELLOW, background=TREE_RISK_MEDIUM_BG)
+        tree.tag_configure("risk_low", foreground="#C8D0DA", background=TREE_RISK_LOW_BG)
+        tree.tag_configure("risk_clean", foreground=ACCENT_GREEN, background=TREE_RISK_CLEAN_BG)
         return tree
 
     def _on_nav_selected(self, _event=None) -> None:
@@ -302,6 +623,7 @@ class MarketPrepTab:
         widget.configure(state="normal")
         widget.delete("1.0", tk.END)
         widget.insert("1.0", text)
+        _apply_text_highlights(widget, text)
         widget.configure(state="disabled")
 
     def _set_placeholder_status(self, action: str) -> None:
@@ -392,6 +714,10 @@ class MarketPrepTab:
         self._clear_tree(self.catalyst_tree)
         self._clear_tree(self.watchlist_tree)
         self._set_text(self.overview_text, text)
+        self._set_text(
+            self.ai_summary_text,
+            "AI summary will appear here after Start Day or Start Week runs.",
+        )
         self._set_text(self.earnings_text, "")
         self._set_text(self.macro_text, "")
         self._set_text(self.news_sec_text, "")
@@ -402,6 +728,7 @@ class MarketPrepTab:
         self.set_display_text(markdown)
         self._render_summary(report, markdown)
         self._render_overview(report, markdown)
+        self._render_ai_summary(report)
         self._render_catalyst_clock(report)
         self._render_watchlist(report)
         self._render_earnings(report)
@@ -493,6 +820,48 @@ class MarketPrepTab:
         if not sections:
             sections.append(markdown or "No Market Prep output available.")
         self._set_text(self.overview_text, "\n\n".join(sections).strip())
+
+    def _render_ai_summary(self, report: dict) -> None:
+        ai_brief = report.get("ai_brief") if isinstance(report.get("ai_brief"), dict) else {}
+        if not ai_brief:
+            self._set_text(
+                self.ai_summary_text,
+                "AI summary was not requested for this report. Run Start Day or Start Week to request it.",
+            )
+            return
+
+        sections: list[str] = []
+        summary = str(ai_brief.get("summary") or "").strip()
+        status = str(ai_brief.get("status_label") or ai_brief.get("status") or "").strip()
+        model = str(ai_brief.get("model") or "").strip()
+        generated_at = str(ai_brief.get("generated_at") or "").strip()
+        prompt = str(ai_brief.get("prompt") or "").strip()
+        warnings = [
+            str(item).strip()
+            for item in (ai_brief.get("warnings") or [])
+            if str(item).strip()
+        ]
+
+        if summary:
+            sections.append(summary)
+        else:
+            sections.append(status or "AI summary unavailable.")
+
+        details = []
+        if model:
+            details.append(f"Model: {model}")
+        if generated_at:
+            details.append(f"Generated: {generated_at}")
+        if status and summary:
+            details.append(f"Status: {status}")
+        if details:
+            sections.append("Details\n" + "\n".join(details))
+        if warnings:
+            sections.append("Warnings\n" + "\n".join(f"- {warning}" for warning in warnings))
+        if prompt and not summary and not warnings:
+            sections.append("Prompt\n" + prompt)
+
+        self._set_text(self.ai_summary_text, "\n\n".join(sections).strip())
 
     def _render_catalyst_clock(self, report: dict) -> None:
         self._clear_tree(self.catalyst_tree)
@@ -1039,6 +1408,77 @@ class MarketPrepTab:
             report_key="weekly_report",
         )
 
+    def run_ai_summary(self) -> None:
+        if self.background_task_active:
+            self.status_var.set("Market Prep task already running.")
+            return
+        if not isinstance(self.latest_report, dict):
+            message = "Run Start Day or Start Week before running the AI summary."
+            self.status_var.set(message)
+            self._set_text(self.ai_summary_text, message)
+            self._select_market_prep_tab("AI Summary")
+            return
+        report_type = str(self.latest_report.get("report_type") or "").strip().lower()
+        if report_type not in {"daily", "weekly"}:
+            message = "Run Start Day or Start Week before running the AI summary."
+            self.status_var.set(message)
+            self._set_text(self.ai_summary_text, message)
+            self._select_market_prep_tab("AI Summary")
+            return
+
+        self.background_task_active = True
+        button = self.buttons.get("Run AI Summary")
+        if button is not None:
+            button.configure(state="disabled")
+        self.status_var.set("Generating Market Prep AI summary...")
+        self.summary_vars["ai_brief"].set("Running\nOpenAI summary requested")
+        self._set_text(self.ai_summary_text, "Generating Market Prep AI summary...")
+        self._select_market_prep_tab("AI Summary")
+        report = dict(self.latest_report)
+
+        def worker() -> None:
+            try:
+                updated_report = self.orchestrator.run_ai_summary(report)
+                error = ""
+            except Exception as exc:
+                self.logger.exception("Run AI Summary failed.")
+                updated_report = None
+                error = str(exc)
+
+            def finish() -> None:
+                self.background_task_active = False
+                if button is not None:
+                    button.configure(state="normal")
+                if updated_report is None:
+                    message = f"Run AI Summary failed: {error}"
+                    self.status_var.set(message)
+                    self.summary_vars["ai_brief"].set(error or "AI summary failed")
+                    self._set_text(self.ai_summary_text, message)
+                    self._select_market_prep_tab("AI Summary")
+                    return
+                self.latest_report = updated_report
+                self._render_report(updated_report)
+                self._select_market_prep_tab("AI Summary")
+                self.status_var.set("Market Prep AI summary ready.")
+
+            try:
+                self.container.after(0, finish)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _select_market_prep_tab(self, title: str) -> None:
+        if not hasattr(self, "view_notebook"):
+            return
+        try:
+            for tab_id in self.view_notebook.tabs():
+                if str(self.view_notebook.tab(tab_id, "text")) == title:
+                    self.view_notebook.select(tab_id)
+                    return
+        except tk.TclError:
+            return
+
     def refresh_earnings(self) -> None:
         self._run_background_task(
             button_label="Refresh Earnings",
@@ -1137,11 +1577,13 @@ class TickerLookupTab:
         output_dir: Path = OUTPUT_DIR,
         text_bg: str = "#252525",
         text_fg: str = "#E0E0E0",
+        compact_layout: bool = False,
     ):
         self.parent = parent
         self.output_dir = Path(output_dir)
         self.text_bg = text_bg
         self.text_fg = text_fg
+        self.compact_layout = bool(compact_layout)
         self.config = load_market_prep_config()
         self.output_dir = self.config.resolved_paths().get("output_dir", self.output_dir)
         self.logger = get_market_prep_logger()
@@ -1158,7 +1600,9 @@ class TickerLookupTab:
         self.headline_tree: ttk.Treeview | None = None
         self.sec_tree: ttk.Treeview | None = None
         self.overview_text: scrolledtext.ScrolledText | None = None
+        self.ticker_ai_text: scrolledtext.ScrolledText | None = None
         self.raw_text: scrolledtext.ScrolledText | None = None
+        _configure_readable_tree_style(parent, self.text_bg, self.text_fg)
         self._build_layout()
 
     def pack(self, **kwargs) -> None:
@@ -1166,39 +1610,43 @@ class TickerLookupTab:
 
     def _build_layout(self) -> None:
         toolbar = ttk.Frame(self.container)
-        toolbar.pack(fill=tk.X, padx=10, pady=(10, 8))
+        toolbar.pack(fill=tk.X, padx=6 if self.compact_layout else 10, pady=(4 if self.compact_layout else 10, 4))
         ttk.Label(toolbar, text="Ticker").pack(side=tk.LEFT, padx=(0, 6))
-        entry = ttk.Entry(toolbar, textvariable=self.ticker_var, width=14)
-        entry.pack(side=tk.LEFT, padx=(0, 8))
+        entry = ttk.Entry(toolbar, textvariable=self.ticker_var, width=10 if self.compact_layout else 14)
+        entry.pack(side=tk.LEFT, padx=(0, 6 if self.compact_layout else 8))
         entry.bind("<Return>", lambda _event: self.run_lookup())
         ttk.Label(toolbar, text="Days").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Spinbox(toolbar, from_=7, to=180, increment=1, textvariable=self.days_var, width=6).pack(
+        ttk.Spinbox(toolbar, from_=7, to=180, increment=1, textvariable=self.days_var, width=4 if self.compact_layout else 6).pack(
             side=tk.LEFT,
-            padx=(0, 8),
+            padx=(0, 6 if self.compact_layout else 8),
         )
         self.lookup_button = ttk.Button(toolbar, text="Lookup", command=self.run_lookup)
-        self.lookup_button.pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(toolbar, text="Export Markdown", command=self.export_markdown).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(toolbar, text="Open Output Folder", command=self.open_output_folder).pack(side=tk.LEFT)
+        self.lookup_button.pack(side=tk.LEFT, padx=(0, 6 if self.compact_layout else 8))
+        ttk.Button(toolbar, text="Export" if self.compact_layout else "Export Markdown", command=self.export_markdown).pack(
+            side=tk.LEFT,
+            padx=(0, 6 if self.compact_layout else 8),
+        )
+        ttk.Button(toolbar, text="Folder" if self.compact_layout else "Open Output Folder", command=self.open_output_folder).pack(side=tk.LEFT)
 
         summary = ttk.LabelFrame(self.container, text="Lookup Summary")
-        summary.pack(fill=tk.X, padx=10, pady=(0, 8))
-        ttk.Label(summary, textvariable=self.summary_var, justify="left", wraplength=1500).pack(
+        summary.pack(fill=tk.X, padx=6 if self.compact_layout else 10, pady=(0, 4 if self.compact_layout else 8))
+        ttk.Label(summary, textvariable=self.summary_var, justify="left", wraplength=700 if self.compact_layout else 1500).pack(
             fill=tk.X,
-            padx=8,
-            pady=(6, 8),
+            padx=6 if self.compact_layout else 8,
+            pady=(3 if self.compact_layout else 6, 4 if self.compact_layout else 8),
         )
 
         self.notebook = ttk.Notebook(self.container)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=6 if self.compact_layout else 10, pady=(0, 4 if self.compact_layout else 8))
         self._build_overview_tab()
+        self._build_ai_tab()
         self._build_earnings_tab()
         self._build_news_tab()
         self._build_sec_tab()
         self._build_raw_tab()
 
         status = ttk.Label(self.container, textvariable=self.status_var, relief="sunken", anchor="w")
-        status.pack(fill=tk.X, padx=10, pady=(0, 10))
+        status.pack(fill=tk.X, padx=6 if self.compact_layout else 10, pady=(0, 6 if self.compact_layout else 10))
 
     def _build_overview_tab(self) -> None:
         frame = ttk.Frame(self.notebook)
@@ -1206,11 +1654,20 @@ class TickerLookupTab:
         self.overview_text = self._make_text(frame)
         self._set_text(self.overview_text, "Ticker Lookup is ready. Enter a symbol such as TSM, NVDA, AAPL, or AMD.")
 
+    def _build_ai_tab(self) -> None:
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="AI Brief")
+        self.ticker_ai_text = self._make_text(frame)
+        self._set_text(
+            self.ticker_ai_text,
+            "Ticker AI brief will appear here after lookup. Save an OpenAI key in Market Prep > API Key first.",
+        )
+
     def _build_earnings_tab(self) -> None:
         frame = ttk.Frame(self.notebook)
         self.notebook.add(frame, text="Earnings / Events")
         target_frame = ttk.LabelFrame(frame, text="Ticker Earnings")
-        target_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 4))
+        target_frame.pack(fill=tk.BOTH, expand=True, padx=6 if self.compact_layout else 8, pady=(4 if self.compact_layout else 8, 2 if self.compact_layout else 4))
         self.earnings_tree = self._make_tree(
             target_frame,
             ("date", "ticker", "company", "time", "importance", "market_cap", "notes"),
@@ -1225,7 +1682,7 @@ class TickerLookupTab:
             },
         )
         peer_frame = ttk.LabelFrame(frame, text="Major Peer Earnings / Events")
-        peer_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 8))
+        peer_frame.pack(fill=tk.BOTH, expand=True, padx=6 if self.compact_layout else 8, pady=(2 if self.compact_layout else 4, 4 if self.compact_layout else 8))
         self.peer_tree = self._make_tree(
             peer_frame,
             ("date", "ticker", "company", "time", "importance", "market_cap", "notes"),
@@ -1289,6 +1746,7 @@ class TickerLookupTab:
             selectforeground=self.text_fg,
         )
         widget.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        _configure_text_tags(widget)
         widget.configure(state="disabled")
         return widget
 
@@ -1299,8 +1757,8 @@ class TickerLookupTab:
         headings: dict[str, tuple[str, int, str]],
     ) -> ttk.Treeview:
         frame = ttk.Frame(parent)
-        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        frame.pack(fill=tk.BOTH, expand=True, padx=6 if self.compact_layout else 8, pady=4 if self.compact_layout else 8)
+        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse", style="Readable.Treeview")
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
@@ -1309,9 +1767,11 @@ class TickerLookupTab:
             label, width, anchor = headings[column]
             tree.heading(column, text=label, command=lambda col=column, t=tree: self._sort_tree(t, col, False))
             tree.column(column, width=width, anchor=anchor, stretch=column in {"title", "notes", "url"})
-        tree.tag_configure("risk_high", foreground="#FF9A9A")
-        tree.tag_configure("risk_medium", foreground="#F0C76E")
-        tree.tag_configure("risk_low", foreground="#A9B4C0")
+        tree.tag_configure("risk_high", foreground=ACCENT_RED, background=TREE_RISK_HIGH_BG)
+        tree.tag_configure("risk_medium", foreground=ACCENT_YELLOW, background=TREE_RISK_MEDIUM_BG)
+        tree.tag_configure("risk_low", foreground="#C8D0DA", background=TREE_RISK_LOW_BG)
+        tree.tag_configure("scope_ticker", foreground=ACCENT_BLUE, background="#202B38")
+        tree.tag_configure("scope_industry", foreground=ACCENT_PURPLE, background="#2B2838")
         return tree
 
     def run_lookup(self) -> None:
@@ -1333,7 +1793,11 @@ class TickerLookupTab:
             self.lookup_button.configure(state="disabled")
         self.status_var.set(f"Looking up {ticker}...")
         self.summary_var.set(f"{ticker}: lookup running.")
-        self._set_text(self.overview_text, "Fetching ticker metadata, earnings, filings, and Google News RSS context...")
+        self._set_text(
+            self.overview_text,
+            "Fetching ticker metadata, earnings, filings, broad Google News RSS context, and optional AI brief...",
+        )
+        self._set_text(self.ticker_ai_text, "Ticker AI brief running...")
 
         def worker() -> None:
             try:
@@ -1370,15 +1834,17 @@ class TickerLookupTab:
         peer_earnings = payload.get("peer_earnings") if isinstance(payload.get("peer_earnings"), list) else []
         target_headlines = payload.get("target_headlines") if isinstance(payload.get("target_headlines"), list) else []
         industry_headlines = payload.get("industry_headlines") if isinstance(payload.get("industry_headlines"), list) else []
+        landmine_headlines = payload.get("landmine_headlines") if isinstance(payload.get("landmine_headlines"), list) else []
         peers = payload.get("peer_tickers") if isinstance(payload.get("peer_tickers"), list) else []
         statuses = payload.get("source_status") if isinstance(payload.get("source_status"), list) else []
+        ai_brief = payload.get("ai_brief") if isinstance(payload.get("ai_brief"), dict) else {}
         self.summary_var.set(
             f"{ticker} | {metadata.get('company_name') or 'Company unknown'} | "
             f"{metadata.get('sector') or 'sector n/a'} / {metadata.get('industry') or 'industry n/a'} | "
             f"Market cap: {metadata.get('market_cap_fmt') or 'n/a'} | "
             f"Peers: {', '.join(peers) or 'None'} | "
             f"Earnings: {len(target_earnings)} ticker, {len(peer_earnings)} peer | "
-            f"Headlines: {len(target_headlines)} ticker, {len(industry_headlines)} industry"
+            f"Headlines: {len(target_headlines)} ticker, {len(industry_headlines)} industry, {len(landmine_headlines)} landmine"
         )
         overview = [
             f"{ticker} Lookup",
@@ -1389,21 +1855,57 @@ class TickerLookupTab:
             f"Market cap: {metadata.get('market_cap_fmt') or 'n/a'}",
             f"Peer context: {payload.get('peer_reason') or 'n/a'}",
             f"Peer tickers: {', '.join(peers) or 'None'}",
+            f"Landmine-tagged headlines: {len(landmine_headlines)}",
             "",
-            "AI Swing Query",
+            "AI Brief Status",
             "-" * 80,
-            str(payload.get("ai_swing_query") or "").strip() or "No AI swing query available.",
+            str(ai_brief.get("status_label") or ai_brief.get("status") or "AI brief not generated.").strip(),
             "",
             "Source Status",
             "-" * 80,
         ]
         overview.extend(f"- {status}" for status in statuses)
         self._set_text(self.overview_text, "\n".join(overview).rstrip())
+        self._render_ticker_ai_brief(ai_brief, payload)
         self._set_text(self.raw_text, str(payload.get("markdown") or ""))
         self._render_earnings_tree(self.earnings_tree, target_earnings)
         self._render_earnings_tree(self.peer_tree, peer_earnings)
-        self._render_headlines(target_headlines, industry_headlines)
+        self._render_headlines(target_headlines, industry_headlines, landmine_headlines)
         self._render_sec(payload.get("sec_filings") if isinstance(payload.get("sec_filings"), dict) else {})
+
+    def _render_ticker_ai_brief(self, ai_brief: dict, payload: dict) -> None:
+        if not ai_brief:
+            self._set_text(self.ticker_ai_text, "AI brief was not generated.")
+            return
+        sections: list[str] = []
+        summary = str(ai_brief.get("summary") or "").strip()
+        status = str(ai_brief.get("status_label") or ai_brief.get("status") or "").strip()
+        model = str(ai_brief.get("model") or "").strip()
+        generated_at = str(ai_brief.get("generated_at") or "").strip()
+        prompt = str(ai_brief.get("prompt") or "").strip()
+        warnings = [
+            str(item).strip()
+            for item in (ai_brief.get("warnings") or [])
+            if str(item).strip()
+        ]
+        if summary:
+            sections.append(summary)
+        else:
+            sections.append(status or "AI brief unavailable.")
+        details = []
+        if model:
+            details.append(f"Model: {model}")
+        if generated_at:
+            details.append(f"Generated: {generated_at}")
+        if status and summary:
+            details.append(f"Status: {status}")
+        if details:
+            sections.append("Details\n" + "\n".join(details))
+        if warnings:
+            sections.append("Warnings\n" + "\n".join(f"- {warning}" for warning in warnings))
+        if not summary and str(payload.get("ai_swing_query") or "").strip():
+            sections.append("Manual AI Query\n" + str(payload.get("ai_swing_query") or "").strip())
+        self._set_text(self.ticker_ai_text, "\n\n".join(sections).strip())
 
     def _render_earnings_tree(self, tree: ttk.Treeview | None, rows: list[dict]) -> None:
         self._clear_tree(tree)
@@ -1428,11 +1930,20 @@ class TickerLookupTab:
                 tags=(self._risk_tag(importance),),
             )
 
-    def _render_headlines(self, target_rows: list[dict], industry_rows: list[dict]) -> None:
+    def _render_headlines(
+        self,
+        target_rows: list[dict],
+        industry_rows: list[dict],
+        landmine_rows: list[dict] | None = None,
+    ) -> None:
         self._clear_tree(self.headline_tree)
         if self.headline_tree is None:
             return
-        for scope, rows in (("Ticker", target_rows), ("Industry", industry_rows)):
+        for scope, rows, tag in (
+            ("Ticker", target_rows, "scope_ticker"),
+            ("Industry", industry_rows, "scope_industry"),
+            ("Landmine", landmine_rows or [], "risk_high"),
+        ):
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -1447,6 +1958,7 @@ class TickerLookupTab:
                         row.get("published") or "",
                         row.get("url") or "",
                     ),
+                    tags=(tag,),
                 )
 
     def _render_sec(self, payload: dict) -> None:
@@ -1502,6 +2014,7 @@ class TickerLookupTab:
         widget.configure(state="normal")
         widget.delete("1.0", tk.END)
         widget.insert("1.0", text)
+        _apply_text_highlights(widget, text)
         widget.configure(state="disabled")
 
     def _clear_tree(self, tree: ttk.Treeview | None) -> None:

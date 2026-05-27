@@ -26,6 +26,25 @@ class TickerLookupServiceTests(unittest.TestCase):
         self.assertIn("{ticker} catalyst", settings["queries"])
         self.assertIn("{ticker} analyst rating", settings["queries"])
         self.assertIn("{ticker} offering", settings["queries"])
+        self.assertIn("{ticker} strategic investment", settings["queries"])
+        self.assertIn("{ticker} stake", settings["queries"])
+        self.assertIn("{ticker} Anthropic", settings["queries"])
+
+    def test_landmine_headline_ranking_flags_hidden_exposure_terms(self):
+        rows = ticker_lookup_service.rank_landmine_headlines(
+            [
+                {
+                    "title": "SK Telecom expands Anthropic investment stake",
+                    "query": "SK Telecom Anthropic",
+                    "source": "Google News",
+                },
+                {"title": "Routine product update", "query": "SKM product", "source": "Google News"},
+            ]
+        )
+
+        self.assertEqual(rows[0]["title"], "SK Telecom expands Anthropic investment stake")
+        self.assertIn("AI/private exposure", rows[0]["landmine_tags"])
+        self.assertIn("strategic stake", rows[0]["landmine_tags"])
 
     def test_lookup_ticker_context_composes_earnings_news_sec_and_peers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -34,7 +53,12 @@ class TickerLookupServiceTests(unittest.TestCase):
                 {
                     "features": {"sec_filings": True, "yfinance_metadata": True},
                     "paths": {"cache_dir": "cache", "output_dir": "output"},
-                    "ticker_lookup": {"days_ahead": 45, "max_peer_tickers": 3, "news_limit": 10},
+                    "ticker_lookup": {
+                        "days_ahead": 45,
+                        "max_peer_tickers": 3,
+                        "news_limit": 10,
+                        "include_ai_brief": False,
+                    },
                 },
                 repo_root=root,
             )

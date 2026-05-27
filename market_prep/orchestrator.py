@@ -471,6 +471,14 @@ class MarketPrepOrchestrator:
             report["markdown"] = build_daily_markdown(report)
         return report
 
+    def run_ai_summary(self, report: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(report, dict):
+            raise ValueError("Run Start Day or Start Week before running the AI summary.")
+        report_type = str(report.get("report_type") or "").strip().lower()
+        if report_type not in {"daily", "weekly"}:
+            raise ValueError("Run Start Day or Start Week before running the AI summary.")
+        return self._attach_ai_brief(report)
+
     def export_daily_markdown(self, daily_report: dict) -> dict[str, Any]:
         return self.export_markdown(daily_report)
 

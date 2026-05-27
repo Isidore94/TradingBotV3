@@ -66,8 +66,8 @@ from master_avwap import (
     build_master_avwap_focus_setup_type_text,
     build_master_avwap_focus_side_groups,
     extract_theta_symbols_from_report,
-    run_master,
     run_master_with_shared_watchlists,
+    run_theta_scan_with_shared_watchlists,
 )
 from market_prep_tab import MarketPrepTab, TickerLookupTab
 from master_avwap_shared import load_tradingview_groups
@@ -108,6 +108,9 @@ BOUNCE_QUEUE_POLL_MS = 150
 PERFORMANCE_BOUNCE_QUEUE_POLL_MS = 750
 BOUNCE_ACTIVE_REFRESH_MS = 1_500
 PERFORMANCE_BOUNCE_ACTIVE_REFRESH_MS = 7_500
+MASTER_AVWAP_OUTPUT_WATCH_MS = 2_000
+PERFORMANCE_MASTER_AVWAP_OUTPUT_WATCH_MS = 10_000
+MASTER_AVWAP_OUTPUT_REFRESH_DEBOUNCE_MS = 500
 
 
 def normalize_gui_mode(mode: str | None) -> str:
@@ -1056,7 +1059,13 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
 
 
 class FullBounceBotPanel(BaseBounceBotPanel):
-    def __init__(self, parent: tk.Misc, switch_mode_callback=None, performance_delay_provider=None):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        switch_mode_callback=None,
+        performance_delay_provider=None,
+        compact_layout: bool = False,
+    ):
         super().__init__(
             parent,
             BounceBotController(
@@ -1067,13 +1076,19 @@ class FullBounceBotPanel(BaseBounceBotPanel):
             switch_mode_callback=switch_mode_callback,
             performance_delay_provider=performance_delay_provider,
         )
+        self.compact_layout = bool(compact_layout)
         self.toggle_vars: dict[str, tk.BooleanVar] = {}
         self._build_layout()
         self.start()
 
     def _build_layout(self) -> None:
+        outer_pad = 6 if self.compact_layout else 10
+        header_bottom_pad = 4 if self.compact_layout else 8
+        button_padx = 6 if self.compact_layout else 10
+        alert_font_size = 10 if self.compact_layout else 11
+
         header = ttk.Frame(self.container)
-        header.pack(fill=tk.X, padx=10, pady=(10, 8))
+        header.pack(fill=tk.X, padx=outer_pad, pady=(6 if self.compact_layout else 10, header_bottom_pad))
 
         ttk.Label(header, text="BounceBot Full").pack(side=tk.LEFT)
         ttk.Label(header, textvariable=self.controller.connection_var).pack(side=tk.LEFT, padx=(12, 0))
@@ -1088,7 +1103,7 @@ class FullBounceBotPanel(BaseBounceBotPanel):
             text="Start Scanning",
             command=self.controller.start_scanning,
             relief=tk.RAISED,
-            padx=10,
+            padx=button_padx,
             bg=PANEL_GREY,
             fg=TEXT_COLOR,
         )
@@ -1098,13 +1113,26 @@ class FullBounceBotPanel(BaseBounceBotPanel):
             text="Stop Scanning",
             command=self.controller.stop_scanning,
             relief=tk.RAISED,
-            padx=10,
+            padx=button_padx,
             bg=PANEL_GREY,
             fg=TEXT_COLOR,
         )
         self.stop_scanning_button.pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(controls_frame, text="Clear", command=self.clear_alerts).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(controls_frame, text="Reconnect", command=self.controller.restart).pack(side=tk.LEFT, padx=(8, 0))
+
+        bounce_toggle_frame = tk.LabelFrame(
+            self.container,
+            text="Bounce Filters",
+            bg=DARK_GREY,
+            fg=TEXT_COLOR,
+            padx=6 if self.compact_layout else 8,
+            pady=3 if self.compact_layout else 6,
+            highlightbackground="#444444",
+            highlightcolor="#444444",
+        )
+        if self.compact_layout:
+            bounce_toggle_frame.pack(fill=tk.X, padx=outer_pad, pady=(0, 6))
 
         content_pane = tk.PanedWindow(
             self.container,
@@ -1114,11 +1142,15 @@ class FullBounceBotPanel(BaseBounceBotPanel):
             showhandle=True,
             bg=DARK_GREY,
         )
-        content_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+        content_pane.pack(fill=tk.BOTH, expand=True, padx=outer_pad, pady=(0, 6 if self.compact_layout else 8))
 
         alerts_frame = tk.Frame(content_pane, bg=DARK_GREY)
-        tk.Label(alerts_frame, text="BounceBot Alerts", bg=DARK_GREY, fg=TEXT_COLOR).pack(anchor="w", padx=5, pady=(6, 2))
-        self.alert_text = self._create_alerts_widget(alerts_frame, font_size=11)
+        tk.Label(alerts_frame, text="BounceBot Alerts", bg=DARK_GREY, fg=TEXT_COLOR).pack(
+            anchor="w",
+            padx=5,
+            pady=(3 if self.compact_layout else 6, 1 if self.compact_layout else 2),
+        )
+        self.alert_text = self._create_alerts_widget(alerts_frame, font_size=alert_font_size)
         self.alert_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
         content_pane.add(alerts_frame, stretch="always")
 
@@ -1130,18 +1162,10 @@ class FullBounceBotPanel(BaseBounceBotPanel):
         )
         content_pane.add(self.rrs_panel["container"], stretch="always")
 
-        bounce_toggle_frame = tk.LabelFrame(
-            self.container,
-            text="Bounce Filters",
-            bg=DARK_GREY,
-            fg=TEXT_COLOR,
-            padx=8,
-            pady=6,
-            highlightbackground="#444444",
-            highlightcolor="#444444",
-        )
-        bounce_toggle_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        if not self.compact_layout:
+            bounce_toggle_frame.pack(fill=tk.X, padx=outer_pad, pady=(0, 10))
 
+        column_count = 3 if self.compact_layout else 4
         for idx, bounce_key in enumerate(BOUNCE_TOGGLE_ORDER):
             var = tk.BooleanVar(value=self.controller.is_bounce_type_enabled(bounce_key))
             self.toggle_vars[bounce_key] = var
@@ -1155,7 +1179,15 @@ class FullBounceBotPanel(BaseBounceBotPanel):
                 selectcolor="#444444",
                 activebackground="#444444",
                 activeforeground=TEXT_COLOR,
-            ).grid(row=idx // 4, column=idx % 4, sticky="w", padx=6, pady=2)
+            ).grid(
+                row=idx // column_count,
+                column=idx % column_count,
+                sticky="w",
+                padx=4 if self.compact_layout else 6,
+                pady=1 if self.compact_layout else 2,
+            )
+        for col in range(column_count):
+            bounce_toggle_frame.grid_columnconfigure(col, weight=1, uniform="bounce_filters")
 
     def _sync_toggle_state(self) -> None:
         for bounce_key, var in self.toggle_vars.items():
@@ -1208,7 +1240,7 @@ class SimpleMasterAvwapPanel:
 
         ttk.Label(toolbar, text="Master AVWAP Simple").pack(side=tk.LEFT)
         ttk.Button(toolbar, text="Run Shared Watchlist Scan", command=self.run_master_once).pack(side=tk.LEFT, padx=(12, 4))
-        ttk.Button(toolbar, text="Run Local Watchlist Scan", command=self.run_local_watchlists_once).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="Run Theta Scans", command=self.run_theta_scans_once).pack(side=tk.LEFT, padx=4)
         ttk.Button(toolbar, text="Refresh Output", command=self.refresh_output_view).pack(side=tk.LEFT, padx=4)
 
         hint = ttk.Label(
@@ -1272,20 +1304,21 @@ class SimpleMasterAvwapPanel:
             "Shared-watchlist Master AVWAP scan complete.",
         )
 
-    def run_local_watchlists_once(self) -> None:
+    def run_theta_scans_once(self) -> None:
         self._run_background(
-            run_master,
-            "Running Master AVWAP scan from local project watchlists...",
-            "Local-watchlist Master AVWAP scan complete.",
+            run_theta_scan_with_shared_watchlists,
+            "Running theta scans from shared home-folder longs.txt / shorts.txt...",
+            "Theta scans complete.",
         )
 
 
 class WatchlistEditorPanel:
-    def __init__(self, parent: tk.Misc, title: str, path: Path, on_symbols_saved):
+    def __init__(self, parent: tk.Misc, title: str, path: Path, on_symbols_saved, compact_layout: bool = False):
         self.parent = parent
         self.title = title
         self.path = path
         self.on_symbols_saved = on_symbols_saved
+        self.compact_layout = bool(compact_layout)
         self.container = ttk.Frame(parent)
         self._loading = False
         self._save_after_id = None
@@ -1298,32 +1331,39 @@ class WatchlistEditorPanel:
 
     def _build_layout(self) -> None:
         header = ttk.Frame(self.container)
-        header.pack(fill=tk.X, padx=10, pady=(10, 6))
+        header.pack(fill=tk.X, padx=6 if self.compact_layout else 10, pady=(4 if self.compact_layout else 10, 3))
 
         ttk.Label(header, text=self.title).pack(side=tk.LEFT)
         actions = ttk.Frame(header)
         actions.pack(side=tk.RIGHT)
-        self.add_symbol_entry = ttk.Entry(actions, textvariable=self.add_symbol_var, width=12)
+        self.add_symbol_entry = ttk.Entry(actions, textvariable=self.add_symbol_var, width=9 if self.compact_layout else 12)
         self.add_symbol_entry.pack(side=tk.LEFT)
         self.add_symbol_entry.bind("<Return>", self._on_add_symbol_return)
-        ttk.Button(actions, text="Add", command=self.add_symbol).pack(side=tk.LEFT, padx=(6, 12))
+        ttk.Button(actions, text="Add", command=self.add_symbol).pack(side=tk.LEFT, padx=(4, 8 if self.compact_layout else 12))
         ttk.Button(actions, text="Dedupe", command=self.force_save).pack(side=tk.LEFT)
-        ttk.Button(actions, text="Paste", command=self.paste_symbols).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(actions, text="Copy", command=self.copy_symbols).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(actions, text="Refresh", command=self.refresh_from_disk).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(actions, text="Paste", command=self.paste_symbols).pack(side=tk.LEFT, padx=(4 if self.compact_layout else 6, 0))
+        ttk.Button(actions, text="Copy", command=self.copy_symbols).pack(side=tk.LEFT, padx=(4 if self.compact_layout else 6, 0))
+        ttk.Button(actions, text="Refresh", command=self.refresh_from_disk).pack(side=tk.LEFT, padx=(4 if self.compact_layout else 6, 0))
 
-        hint = ttk.Label(self.container, text=f"{self.path.name} auto-saves and removes duplicates.")
-        hint.pack(anchor="w", padx=10, pady=(0, 6))
+        if not self.compact_layout:
+            hint = ttk.Label(self.container, text=f"{self.path.name} auto-saves and removes duplicates.")
+            hint.pack(anchor="w", padx=10, pady=(0, 6))
 
         self.text_area = scrolledtext.ScrolledText(
             self.container,
             wrap=tk.WORD,
+            height=5 if self.compact_layout else 10,
             font=("Courier New", 10),
             bg=INPUT_GREY,
             fg=TEXT_COLOR,
             insertbackground=TEXT_COLOR,
         )
-        self.text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.text_area.pack(
+            fill=tk.BOTH,
+            expand=True,
+            padx=6 if self.compact_layout else 10,
+            pady=(0, 6 if self.compact_layout else 10),
+        )
         self.text_area.bind("<<Modified>>", self._on_modified)
 
     def _normalize_symbols(self, raw_text: str) -> list[str]:
@@ -1435,12 +1475,14 @@ class WatchlistEditorArea:
         long_path: Path = LONGS_FILE,
         short_title: str = "Shorts Watchlist",
         short_path: Path = SHORTS_FILE,
+        compact_layout: bool = False,
     ):
         self.parent = parent
         self.long_title = long_title
         self.long_path = long_path
         self.short_title = short_title
         self.short_path = short_path
+        self.compact_layout = bool(compact_layout)
         self.container = ttk.Frame(parent)
         self._build_layout()
 
@@ -1459,6 +1501,7 @@ class WatchlistEditorArea:
             self.long_title,
             self.long_path,
             self._handle_symbols_saved,
+            compact_layout=self.compact_layout,
         )
         self.longs_panel.pack(fill=tk.BOTH, expand=True)
 
@@ -1467,6 +1510,7 @@ class WatchlistEditorArea:
             self.short_title,
             self.short_path,
             self._handle_symbols_saved,
+            compact_layout=self.compact_layout,
         )
         self.shorts_panel.pack(fill=tk.BOTH, expand=True)
 
@@ -1501,13 +1545,17 @@ class ConsolidatedTradingGUI:
         self._output_refresh_after_id = None
         self._output_traces: list[tuple[tk.Variable, str]] = []
         self._deferred_tab_refresh_after_id = None
+        self._avwap_output_watch_after_id = None
+        self._avwap_output_refresh_after_id = None
+        self._avwap_output_mtimes: dict[Path, int | None] = {}
         self._build_layout()
         self._sync_performance_status()
         self._configure_output_snapshot_updates()
+        self._configure_master_avwap_output_watcher()
 
     def _geometry_for_mode(self, mode: str) -> str:
         if mode == "combined":
-            return "1920x2160+0+0"
+            return "1910x2160+0+0"
         return "1880x1040" if mode == "full" else "1380x900"
 
     def _build_layout(self) -> None:
@@ -1652,18 +1700,29 @@ class ConsolidatedTradingGUI:
             bounce_frame,
             switch_mode_callback=lambda: self.switch_mode("simple"),
             performance_delay_provider=self.performance_delay,
+            compact_layout=True,
         )
         self.bounce_panel.pack(fill=tk.BOTH, expand=True)
         self.avwap_gui = MasterAvwapGUI(master_frame, standalone=False)
-        self.market_prep_panel = MarketPrepTab(market_frame, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
+        self.market_prep_panel = MarketPrepTab(
+            market_frame,
+            text_bg=INPUT_GREY,
+            text_fg=TEXT_COLOR,
+            compact_layout=True,
+        )
         self.market_prep_panel.pack(fill=tk.BOTH, expand=True)
-        self.ticker_lookup_panel = TickerLookupTab(ticker_frame, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
+        self.ticker_lookup_panel = TickerLookupTab(
+            ticker_frame,
+            text_bg=INPUT_GREY,
+            text_fg=TEXT_COLOR,
+            compact_layout=True,
+        )
         self.ticker_lookup_panel.pack(fill=tk.BOTH, expand=True)
 
-        top_pane.add(bounce_frame, stretch="always")
-        top_pane.add(master_frame, stretch="always")
-        middle_pane.add(market_frame, stretch="always")
-        middle_pane.add(ticker_frame, stretch="always")
+        top_pane.add(bounce_frame, minsize=820, width=955, stretch="always")
+        top_pane.add(master_frame, minsize=820, width=955, stretch="always")
+        middle_pane.add(market_frame, minsize=980, width=1350, stretch="always")
+        middle_pane.add(ticker_frame, minsize=420, width=560, stretch="always")
 
         bounce_watchlist_frame = ttk.Frame(watchlist_tabs)
         master_watchlist_frame = ttk.Frame(watchlist_tabs)
@@ -1675,6 +1734,7 @@ class ConsolidatedTradingGUI:
             long_path=LONGS_FILE,
             short_title="BounceBot Shorts",
             short_path=SHORTS_FILE,
+            compact_layout=True,
         )
         self.master_watchlist_area = WatchlistEditorArea(
             master_watchlist_frame,
@@ -1682,15 +1742,39 @@ class ConsolidatedTradingGUI:
             long_path=SWING_LONGS_FILE,
             short_title="Master Short Swings",
             short_path=SWING_SHORTS_FILE,
+            compact_layout=True,
         )
         self.bounce_watchlist_area.pack(fill=tk.BOTH, expand=True)
         self.master_watchlist_area.pack(fill=tk.BOTH, expand=True)
         self.watchlist_area = self.bounce_watchlist_area
         self._visible_watchlist_area = self.bounce_watchlist_area
 
-        main_pane.add(top_pane, stretch="always")
-        main_pane.add(middle_pane, stretch="always")
-        main_pane.add(watchlist_tabs)
+        main_pane.add(top_pane, minsize=980, height=1260, stretch="always")
+        main_pane.add(middle_pane, minsize=360, height=530, stretch="never")
+        main_pane.add(watchlist_tabs, minsize=150, height=260, stretch="never")
+        self.root.after_idle(lambda: self._set_combined_initial_panes(main_pane, top_pane, middle_pane))
+        self.root.after(250, lambda: self._set_combined_initial_panes(main_pane, top_pane, middle_pane))
+
+    def _set_combined_initial_panes(
+        self,
+        main_pane: tk.PanedWindow,
+        top_pane: tk.PanedWindow | None = None,
+        middle_pane: tk.PanedWindow | None = None,
+    ) -> None:
+        try:
+            self.root.update_idletasks()
+            height = max(900, main_pane.winfo_height())
+            width = max(1200, main_pane.winfo_width())
+            first_sash_y = int(height * 0.62)
+            second_sash_y = int(height * 0.88)
+            main_pane.sash_place(0, 0, first_sash_y)
+            main_pane.sash_place(1, 0, second_sash_y)
+            if top_pane is not None:
+                top_pane.sash_place(0, int(width * 0.50), 0)
+            if middle_pane is not None:
+                middle_pane.sash_place(0, int(width * 0.71), 0)
+        except tk.TclError:
+            return
 
     def _sync_watchlist_editor_to_selected_tab(self) -> None:
         if self.main_notebook is None:
@@ -1766,6 +1850,85 @@ class ConsolidatedTradingGUI:
         self.request_output_snapshot(delay_ms=self.performance_delay(250, 2_000))
         self._schedule_periodic_output_snapshot()
 
+    def _master_avwap_output_watch_paths(self) -> list[Path]:
+        return [
+            PRIORITY_SETUPS_FILE,
+            THETA_PUTS_FILE,
+            EVENT_TICKERS_FILE,
+            STDEV_RANGE_FILE,
+            MASTER_AVWAP_FOCUS_FILE,
+            MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
+            MASTER_AVWAP_MARKET_PREP_FILE,
+            MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
+        ]
+
+    def _path_mtime_ns(self, path: Path) -> int | None:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _configure_master_avwap_output_watcher(self) -> None:
+        if not self.avwap_gui:
+            return
+        self._avwap_output_mtimes = {
+            path: self._path_mtime_ns(path)
+            for path in self._master_avwap_output_watch_paths()
+        }
+        self._schedule_master_avwap_output_watch()
+
+    def _schedule_master_avwap_output_watch(self) -> None:
+        try:
+            self._avwap_output_watch_after_id = self.root.after(
+                self.performance_delay(
+                    MASTER_AVWAP_OUTPUT_WATCH_MS,
+                    PERFORMANCE_MASTER_AVWAP_OUTPUT_WATCH_MS,
+                ),
+                self._run_master_avwap_output_watch,
+            )
+        except tk.TclError:
+            self._avwap_output_watch_after_id = None
+
+    def _run_master_avwap_output_watch(self) -> None:
+        self._avwap_output_watch_after_id = None
+        try:
+            changed = False
+            for path in self._master_avwap_output_watch_paths():
+                current_mtime = self._path_mtime_ns(path)
+                if self._avwap_output_mtimes.get(path) != current_mtime:
+                    self._avwap_output_mtimes[path] = current_mtime
+                    changed = True
+            if changed:
+                self._request_master_avwap_output_refresh()
+        finally:
+            self._schedule_master_avwap_output_watch()
+
+    def _request_master_avwap_output_refresh(self) -> None:
+        if self._avwap_output_refresh_after_id:
+            try:
+                self.root.after_cancel(self._avwap_output_refresh_after_id)
+            except Exception:
+                pass
+        self._avwap_output_refresh_after_id = self.root.after(
+            MASTER_AVWAP_OUTPUT_REFRESH_DEBOUNCE_MS,
+            self._refresh_master_avwap_output_from_disk,
+        )
+
+    def _refresh_master_avwap_output_from_disk(self) -> None:
+        self._avwap_output_refresh_after_id = None
+        avwap_gui = self.avwap_gui
+        if not avwap_gui:
+            return
+        try:
+            avwap_gui.refresh_avwap_output_view()
+            avwap_gui.refresh_theta_output_view()
+            avwap_gui.refresh_market_prep_view()
+            mark_stale = getattr(avwap_gui, "_mark_setup_tracker_view_stale", None)
+            if callable(mark_stale):
+                mark_stale()
+        except Exception:
+            logging.exception("Failed refreshing Master AVWAP GUI after report output changed.")
+
     def _bind_output_var(self, variable: tk.Variable | None) -> None:
         if variable is None:
             return
@@ -1830,6 +1993,18 @@ class ConsolidatedTradingGUI:
             except Exception:
                 pass
             self._deferred_tab_refresh_after_id = None
+        if self._avwap_output_watch_after_id:
+            try:
+                self.root.after_cancel(self._avwap_output_watch_after_id)
+            except Exception:
+                pass
+            self._avwap_output_watch_after_id = None
+        if self._avwap_output_refresh_after_id:
+            try:
+                self.root.after_cancel(self._avwap_output_refresh_after_id)
+            except Exception:
+                pass
+            self._avwap_output_refresh_after_id = None
         for variable, trace_id in self._output_traces:
             try:
                 variable.trace_remove("write", trace_id)
