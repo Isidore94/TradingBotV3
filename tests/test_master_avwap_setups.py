@@ -1,5 +1,5 @@
-import sys
 import json
+import sys
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -20,9 +20,12 @@ from master_avwap import (  # noqa: E402
     _build_latest_earnings_release_context,
     _evaluate_tracker_scenario_bar,
     _find_tracker_stop_candidates,
+    analyze_avwap_retest_behavior,
     analyze_mid_earnings_ema_retest_setup,
     append_d1_feature_history,
     append_master_avwap_user_favorites,
+    apply_final_priority_buckets,
+    apply_priority_rejection_score_caps,
     apply_tracker_setup_type_adjustments,
     apply_tracker_scoring_guardrails,
     apply_recent_tracker_setup_family_adjustments,
@@ -237,10 +240,11 @@ def _build_mid_earnings_retest_history(side: str = "LONG") -> pd.DataFrame:
                 close_price = 103.5
             elif idx == 24:
                 close_price = 104.0
+        open_price = close_price - 1.0 if side == "LONG" else close_price + 1.0
         rows.append(
             {
                 "datetime": dt_value,
-                "open": close_price - 1.0,
+                "open": open_price,
                 "high": close_price + 1.0,
                 "low": close_price - 2.0,
                 "close": close_price,
@@ -260,7 +264,7 @@ def _build_mid_earnings_band_history(df: pd.DataFrame) -> dict:
         "LOWER_3": 95.0,
     }
     return {
-        row["datetime"].date().isoformat(): {"bands": dict(bands)}
+        row["datetime"].date().isoformat(): {"vwap": 114.0, "bands": dict(bands)}
         for _, row in df.iterrows()
     }
 
@@ -409,7 +413,51 @@ def _build_avwape_retest_daily_rows() -> list[dict]:
 
 
 class MasterAvwapSetupTests(unittest.TestCase):
-    def test_mid_earnings_hold_requires_ten_sessions_after_gap(self):
+    def test_avwap_retest_followthrough_rejects_overextended_long(self):
+        rows = [
+            {"date": "2026-05-18", "open": 99.0, "high": 102.0, "low": 98.0, "close": 100.0},
+            {"date": "2026-05-19", "open": 100.0, "high": 103.0, "low": 99.2, "close": 101.0},
+            {"date": "2026-05-20", "open": 101.0, "high": 103.0, "low": 99.8, "close": 102.0},
+            {"date": "2026-05-21", "open": 102.0, "high": 105.0, "low": 101.0, "close": 103.0},
+            {"date": "2026-05-22", "open": 104.0, "high": 116.0, "low": 103.5, "close": 115.0},
+        ]
+
+        result = analyze_avwap_retest_behavior(
+            rows,
+            date(2026, 5, 22),
+            current_vwap=100.0,
+            side="LONG",
+            current_upper_1=108.0,
+            current_lower_1=95.0,
+            atr20=4.0,
+        )
+
+        self.assertFalse(result["retest_followthrough"])
+        self.assertIn("overextended", result["retest_note"])
+
+    def test_avwap_retest_followthrough_allows_actionable_long(self):
+        rows = [
+            {"date": "2026-05-18", "open": 99.0, "high": 102.0, "low": 98.0, "close": 100.0},
+            {"date": "2026-05-19", "open": 100.0, "high": 103.0, "low": 99.2, "close": 101.0},
+            {"date": "2026-05-20", "open": 101.0, "high": 103.0, "low": 99.8, "close": 102.0},
+            {"date": "2026-05-21", "open": 102.0, "high": 105.0, "low": 101.0, "close": 103.0},
+            {"date": "2026-05-22", "open": 104.0, "high": 108.6, "low": 103.5, "close": 107.8},
+        ]
+
+        result = analyze_avwap_retest_behavior(
+            rows,
+            date(2026, 5, 22),
+            current_vwap=100.0,
+            side="LONG",
+            current_upper_1=108.0,
+            current_lower_1=95.0,
+            atr20=4.0,
+        )
+
+        self.assertTrue(result["retest_followthrough"])
+        self.assertEqual(result["retest_reference_level"], "AVWAPE")
+
+    def test_mid_earnings_hold_requires_15_sessions_after_gap(self):
         df = _build_mid_earnings_history()
         anchor_date = df.iloc[3]["datetime"].date().isoformat()
         gap_date = df.iloc[6]["datetime"].date().isoformat()
@@ -430,7 +478,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "active": True,
             "anchor_date": anchor_date,
             "gap_date": gap_date,
-            "sessions_since_gap": 9,
+            "sessions_since_gap": 14,
             "anchor_meta": {
                 "date": anchor_date,
                 "bands": {
@@ -673,6 +721,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 "LONG",
                 release_context,
                 indicator_frame=indicator_frame,
+                intraday_vwap=114.0,
             )
 
         self.assertTrue(result["favorite_signal"])
@@ -764,6 +813,38 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(result["sessions_after_zone"], 3)
         self.assertIn("waiting for a quick EMA15 / EMA21 / UPPER_1 retest", result["note"])
 
+    def test_mid_earnings_retest_requires_strength_confirmation(self):
+        df = _build_mid_earnings_retest_history("LONG")
+        df.loc[df.index[-1], "open"] = df.loc[df.index[-1], "close"] + 1.0
+        release_context = _build_mid_earnings_release_context(df, sessions_since_gap=16)
+        indicator_frame = pd.DataFrame(
+            [
+                {
+                    "trade_date": df.iloc[-1]["datetime"].date().isoformat(),
+                    "ema_8": 119.0,
+                    "ema_15": 116.0,
+                    "ema_21": 115.0,
+                }
+            ]
+        )
+
+        with patch(
+            "master_avwap.calc_anchored_vwap_band_history",
+            return_value=_build_mid_earnings_band_history(df),
+        ):
+            result = analyze_mid_earnings_ema_retest_setup(
+                df,
+                "LONG",
+                release_context,
+                indicator_frame=indicator_frame,
+                intraday_vwap=114.0,
+            )
+
+        self.assertTrue(result["watch"])
+        self.assertFalse(result["favorite_signal"])
+        self.assertEqual(result["events"], [])
+        self.assertIn("waiting for close above open and intraday VWAP", result["note"])
+
     def test_mid_earnings_first_dev_short_trigger_uses_post_earnings_anchor_stop(self):
         df = _build_mid_earnings_retest_history("SHORT")
         release_context = _build_mid_earnings_release_context(df, sessions_since_gap=17)
@@ -787,6 +868,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 "SHORT",
                 release_context,
                 indicator_frame=indicator_frame,
+                intraday_vwap=114.0,
             )
 
         self.assertTrue(result["favorite_signal"])
@@ -859,6 +941,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
             text = report_path.read_text(encoding="utf-8")
 
         self.assertIn("15+ sessions after earnings and above 2nd stdev for >= 2 days", text)
+        self.assertIn("Current 2nd/3rd stdev retest tracking list", text)
+        self.assertIn("Longs tracked for later retest: AAPL", text)
+        self.assertIn("Shorts tracked for later retest: TSLA", text)
         self.assertIn("Longs (above UPPER_2): AAPL", text)
         self.assertIn("Shorts (below LOWER_2): TSLA", text)
 
@@ -926,6 +1011,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                         "favorite_signals": ["CROSS_UP_VWAP"],
                         "context_signals": [],
                         "favorite_zone": "AVWAPE to UPPER_1",
+                        "current_band_zone": "VWAP to UPPER_1",
                         "trend_20d": "UP",
                     },
                     {
@@ -937,6 +1023,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                         "favorite_signals": [],
                         "context_signals": ["BOUNCE_VWAP"],
                         "favorite_zone": "LOWER_1 to AVWAPE",
+                        "current_band_zone": "VWAP to LOWER_1",
                         "trend_20d": "DOWN",
                     },
                 ],
@@ -945,12 +1032,236 @@ class MasterAvwapSetupTests(unittest.TestCase):
             text = report_path.read_text(encoding="utf-8")
 
         self.assertIn("Copy/paste lists", text)
-        self.assertIn("Ranked by total score", text)
+        self.assertIn("High conviction shortlist", text)
+        self.assertIn("LONG: AAPL", text)
+        self.assertIn("SHORT: TSLA", text)
         self.assertIn("By setup type", text)
         self.assertLess(text.index("AAPL LONG score=101"), text.index("TSLA SHORT score=98"))
         self.assertIn("AVWAP breakout\n  LONG: AAPL", text)
         self.assertIn("AVWAP breakdown\n  LONG: None\n  SHORT: TSLA", text)
+        self.assertIn("Overall score rankings", text)
+        self.assertLess(text.index("Overall score rankings"), text.index("Detailed setup notes"))
+        ranking_block = text[text.index("Overall score rankings"):text.index("Detailed setup notes")]
+        self.assertIn("1. AAPL", ranking_block)
+        self.assertIn("2. TSLA", ranking_block)
         self.assertIn("Detailed setup notes", text)
+
+    def test_priority_setup_report_outputs_stdev_tracking_list(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "priority_report.txt"
+            write_priority_setup_report(
+                report_path,
+                [
+                    {
+                        "symbol": "EXT",
+                        "side": "LONG",
+                        "score": 88,
+                        "priority_bucket": "",
+                        "setup_family": "mid_earnings_above_2nd_stdev",
+                        "favorite_signals": [],
+                        "context_signals": [],
+                        "current_band_zone": "UPPER_2 to UPPER_3",
+                        "trend_20d": "UP",
+                    }
+                ],
+            )
+
+            text = report_path.read_text(encoding="utf-8")
+
+        self.assertIn("2nd/3rd stdev retest tracking", text)
+        self.assertIn("LONG: EXT", text)
+        ranking_block = text[text.index("Overall score rankings"):text.index("Detailed setup notes")]
+        self.assertIn("bucket=stdev-track", ranking_block)
+
+    def test_focus_feed_outputs_extended_stdev_tracker_for_bot(self):
+        row = {
+            "symbol": "EXT",
+            "side": "LONG",
+            "score": 88,
+            "priority_bucket": "",
+            "setup_family": "mid_earnings_above_2nd_stdev",
+            "favorite_signals": [],
+            "context_signals": [],
+            "current_band_zone": "UPPER_2 to UPPER_3",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feed_path = Path(temp_dir) / "focus.json"
+            master_avwap.write_master_avwap_focus_feed(feed_path, [row], {"symbols": {"EXT": {}}})
+            payload = json.loads(feed_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["stdev_retest_tracking"][0]["symbol"], "EXT")
+        self.assertEqual(payload["symbols"]["EXT"]["priority_bucket"], "stdev_retest_tracking")
+
+    def test_final_priority_buckets_drop_compressed_extended_retest(self):
+        row = {
+            "symbol": "AAON",
+            "side": "LONG",
+            "score": 53,
+            "setup_family": "avwap_retest_followthrough",
+            "favorite_signals": [],
+            "context_signals": [],
+            "favorite_zone": "",
+            "has_favorite_signal": False,
+            "retest_followthrough": True,
+            "previous_anchor_path_clear": True,
+            "current_band_zone": "UPPER_2 to UPPER_3",
+            "compression_flag": True,
+            "compression_penalty": 8,
+            "recent_second_band_test_days": 2,
+        }
+        ai_state = {"symbols": {"AAON": {"current_band_zone": "UPPER_2 to UPPER_3", "compression_flag": True}}}
+
+        apply_final_priority_buckets([row], ai_state, [], {})
+
+        self.assertEqual(row["priority_bucket"], "")
+        self.assertFalse(row["is_favorite_setup"])
+
+    def test_final_priority_buckets_do_not_promote_second_dev_breakout(self):
+        row = {
+            "symbol": "APLE",
+            "side": "LONG",
+            "score": 13,
+            "setup_family": "avwap_breakout",
+            "favorite_signals": ["CROSS_UP_UPPER_2"],
+            "context_signals": [],
+            "favorite_zone": "",
+            "has_favorite_signal": True,
+            "current_band_zone": "UPPER_2 to UPPER_3",
+            "compression_flag": False,
+            "compression_penalty": 0,
+        }
+        ai_state = {"symbols": {"APLE": {"current_band_zone": "UPPER_2 to UPPER_3"}}}
+
+        apply_final_priority_buckets([row], ai_state, [], {})
+
+        self.assertEqual(row["priority_bucket"], "")
+        self.assertFalse(row["is_favorite_setup"])
+
+    def test_final_priority_buckets_track_extended_mid_earnings_not_recommend(self):
+        row = {
+            "symbol": "MID",
+            "side": "LONG",
+            "score": 80,
+            "setup_family": "mid_earnings_above_2nd_stdev",
+            "favorite_signals": [],
+            "context_signals": [],
+            "has_favorite_signal": False,
+            "mid_earnings_watch": True,
+            "mid_earnings_active_second_stdev_hold": True,
+            "current_band_zone": "UPPER_2 to UPPER_3",
+            "compression_flag": False,
+            "compression_penalty": 0,
+        }
+        ai_state = {"symbols": {"MID": {"current_band_zone": "UPPER_2 to UPPER_3"}}}
+
+        apply_final_priority_buckets([row], ai_state, [], {})
+
+        self.assertEqual(row["priority_bucket"], "")
+        self.assertFalse(row["is_near_favorite_zone"])
+
+    def test_side_opposite_day_downgrades_and_caps_long_favorite(self):
+        row = {
+            "symbol": "RED",
+            "side": "LONG",
+            "score": 226,
+            "setup_family": "mid_earnings_ema15_retest",
+            "favorite_signals": ["MID_EARNINGS_EMA15_RETEST", "MID_EARNINGS_FIRST_DEV_RETEST"],
+            "context_signals": ["MID_EARNINGS_EMA8_CONFLUENCE"],
+            "favorite_zone": "AVWAPE to UPPER_1",
+            "has_favorite_signal": True,
+            "mid_earnings_watch": True,
+            "current_band_zone": "VWAP to UPPER_1",
+            "trend_20d": "UP",
+            "side_aligned_day": False,
+            "current_day_change_pct": -1.1,
+            "side_alignment_note": "Long setup closed down on day (-1.10%)",
+        }
+        ai_state = {"symbols": {"RED": {"current_band_zone": "VWAP to UPPER_1"}}}
+        feature_row = {}
+
+        apply_final_priority_buckets([row], ai_state, [], {"RED": feature_row})
+        apply_priority_rejection_score_caps([row], ai_state, {"RED": feature_row})
+
+        self.assertEqual(row["priority_bucket"], "near_favorite_zone")
+        self.assertFalse(row["is_favorite_setup"])
+        self.assertEqual(row["score"], 160)
+        self.assertIn("down on day", row["rejection_score_cap_note"])
+
+    def test_first_dev_play_without_strength_stays_near_favorite(self):
+        row = {
+            "symbol": "FDEV",
+            "side": "LONG",
+            "score": 180,
+            "setup_family": "mid_earnings_1stdev_retest",
+            "favorite_signals": ["MID_EARNINGS_FIRST_DEV_RETEST"],
+            "context_signals": [],
+            "has_favorite_signal": True,
+            "mid_earnings_watch": True,
+            "mid_earnings_first_dev_trigger": True,
+            "current_band_zone": "VWAP to UPPER_1",
+            "current_day_open": 101.0,
+            "last_close": 100.5,
+            "intraday_vwap": 99.0,
+        }
+        ai_state = {"symbols": {"FDEV": {"current_band_zone": "VWAP to UPPER_1"}}}
+
+        apply_final_priority_buckets([row], ai_state, [], {})
+
+        self.assertEqual(row["priority_bucket"], "near_favorite_zone")
+        self.assertFalse(row["is_favorite_setup"])
+
+    def test_first_dev_play_with_strength_can_be_favorite(self):
+        row = {
+            "symbol": "FDEV",
+            "side": "LONG",
+            "score": 180,
+            "setup_family": "mid_earnings_1stdev_retest",
+            "favorite_signals": ["MID_EARNINGS_FIRST_DEV_RETEST"],
+            "context_signals": [],
+            "has_favorite_signal": True,
+            "mid_earnings_watch": True,
+            "mid_earnings_first_dev_trigger": True,
+            "current_band_zone": "VWAP to UPPER_1",
+            "current_day_open": 99.0,
+            "last_close": 101.0,
+            "intraday_vwap": 100.0,
+        }
+        ai_state = {"symbols": {"FDEV": {"current_band_zone": "VWAP to UPPER_1"}}}
+
+        apply_final_priority_buckets([row], ai_state, [], {})
+
+        self.assertEqual(row["priority_bucket"], "favorite_setup")
+        self.assertTrue(row["is_favorite_setup"])
+
+    def test_post_earnings_break_ignores_extended_stdev_inside_window(self):
+        row = {
+            "symbol": "PE",
+            "side": "LONG",
+            "score": 150,
+            "setup_family": "post_earnings_52w_break",
+            "favorite_signals": ["POST_EARNINGS_52W_BREAK"],
+            "context_signals": [],
+            "has_favorite_signal": True,
+            "post_earnings_active": True,
+            "post_earnings_sessions_since_gap": 2,
+            "post_earnings_break_intraday": True,
+            "post_earnings_break_close": True,
+            "post_earnings_bands_expanding": False,
+            "compression_flag": True,
+            "compression_penalty": 12,
+            "current_band_zone": "UPPER_2 to UPPER_3",
+        }
+        ai_state = {
+            "symbols": {
+                "PE": {
+                    "current_band_zone": "UPPER_2 to UPPER_3",
+                    "compression_flag": True,
+                }
+            }
+        }
+
+        apply_final_priority_buckets([row], ai_state, [], {})
+        self.assertEqual(row["priority_bucket"], "favorite_setup")
 
     def test_market_prep_payload_builds_requested_copy_sections(self):
         payload = build_market_prep_payload(
@@ -970,6 +1281,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                     "post_earnings_sessions_since_gap": 3,
                     "post_earnings_break_intraday": True,
                     "post_earnings_break_close": True,
+                    "post_earnings_bands_expanding": True,
                     "post_earnings_note": "new 52-week closing low; close confirmed",
                 },
                 {

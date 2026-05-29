@@ -9,3 +9,4 @@ requests
 scikit-learn
 yfinance
 lxml
+openai

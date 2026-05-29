@@ -370,6 +370,8 @@ def describe_master_avwap_focus(focus_entry: dict[str, Any] | None) -> str:
         return "best current favorite setup"
     if bucket == "near_favorite_zone":
         return "near favorite zone"
+    if bucket == "stdev_retest_tracking":
+        return "2nd/3rd stdev retest tracker"
     return "master avwap focus"
 
 

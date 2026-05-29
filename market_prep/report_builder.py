@@ -96,6 +96,8 @@ def build_daily_prep_report(
     fed_calendar: dict | None = None,
     treasury_calendar: dict | None = None,
     sec_filings: dict | None = None,
+    market_snapshot: dict | None = None,
+    ai_brief: dict | None = None,
 ) -> str:
     return build_daily_report_object(
         todays_events,
@@ -108,6 +110,8 @@ def build_daily_prep_report(
         fed_calendar=fed_calendar or {},
         treasury_calendar=treasury_calendar or {},
         sec_filings=sec_filings or {},
+        market_snapshot=market_snapshot or {},
+        ai_brief=ai_brief or {},
     )["markdown"]
 
 
@@ -122,6 +126,8 @@ def build_daily_report_object(
     fed_calendar: dict | None = None,
     treasury_calendar: dict | None = None,
     sec_filings: dict | None = None,
+    market_snapshot: dict | None = None,
+    ai_brief: dict | None = None,
     *,
     report_date: str | None = None,
     generated_at: str | None = None,
@@ -138,7 +144,23 @@ def build_daily_report_object(
     fed_calendar = fed_calendar or {}
     treasury_calendar = treasury_calendar or {}
     sec_filings = sec_filings or {}
-    trading_posture = build_daily_trading_posture(todays_events, today_tomorrow_earnings, watchlist_risk)
+    market_snapshot = market_snapshot or {}
+    ai_brief = ai_brief or {}
+    trading_posture = build_daily_trading_posture(
+        todays_events,
+        today_tomorrow_earnings,
+        watchlist_risk,
+        market_snapshot=market_snapshot,
+    )
+    daily_landmine_checklist = build_daily_landmine_checklist(
+        todays_events,
+        today_tomorrow_earnings,
+        watchlist_risk,
+        sec_filings=sec_filings,
+        market_snapshot=market_snapshot,
+    )
+    no_trade_windows = build_no_trade_windows(todays_events, fed_calendar=fed_calendar, treasury_calendar=treasury_calendar)
+    overnight_hold_warnings = build_overnight_hold_warnings(watchlist_risk, today_tomorrow_earnings)
     report = {
         "report_type": "daily",
         "report_date": report_date,
@@ -156,6 +178,7 @@ def build_daily_report_object(
         "fed_calendar": fed_calendar,
         "treasury_calendar": treasury_calendar,
         "sec_filings": sec_filings,
+        "market_snapshot": market_snapshot,
         "catalyst_clock": build_catalyst_clock(
             next_7_events,
             next_7_earnings,
@@ -165,6 +188,10 @@ def build_daily_report_object(
             sec_filings=sec_filings,
         ),
         "trading_posture": trading_posture,
+        "daily_landmine_checklist": daily_landmine_checklist,
+        "no_trade_windows": no_trade_windows,
+        "overnight_hold_warnings": overnight_hold_warnings,
+        "ai_brief": ai_brief,
     }
     report["markdown"] = build_daily_markdown(report)
     return report
@@ -179,6 +206,8 @@ def build_weekly_report_object(
     fed_calendar: dict | None = None,
     treasury_calendar: dict | None = None,
     sec_filings: dict | None = None,
+    market_snapshot: dict | None = None,
+    ai_brief: dict | None = None,
     *,
     report_date: str | None = None,
     generated_at: str | None = None,
@@ -193,6 +222,8 @@ def build_weekly_report_object(
     fed_calendar = fed_calendar or {}
     treasury_calendar = treasury_calendar or {}
     sec_filings = sec_filings or {}
+    market_snapshot = market_snapshot or {}
+    ai_brief = ai_brief or {}
     major_earnings = _major_earnings_payload(earnings_calendar)
     week_risk = build_week_risk_level(
         economic_calendar,
@@ -202,7 +233,25 @@ def build_weekly_report_object(
         treasury_calendar=treasury_calendar,
         sec_filings=sec_filings,
     )
-    swing_conditions = build_swing_trading_conditions(week_risk)
+    swing_conditions = build_swing_trading_conditions(week_risk, market_snapshot=market_snapshot)
+    no_trade_windows = build_no_trade_windows(
+        economic_calendar,
+        fed_calendar=fed_calendar,
+        treasury_calendar=treasury_calendar,
+    )
+    overnight_hold_warnings = build_overnight_hold_warnings(watchlist_risk, major_earnings)
+    weekly_thesis_checklist = build_weekly_thesis_checklist(
+        economic_calendar,
+        major_earnings,
+        watchlist_risk,
+        week_risk,
+        fed_calendar=fed_calendar,
+        treasury_calendar=treasury_calendar,
+        sec_filings=sec_filings,
+        market_snapshot=market_snapshot,
+        no_trade_windows=no_trade_windows,
+        overnight_hold_warnings=overnight_hold_warnings,
+    )
     report = {
         "report_type": "weekly",
         "report_date": report_date,
@@ -217,7 +266,12 @@ def build_weekly_report_object(
         "sec_filings": sec_filings,
         "rss_headlines": rss_headlines,
         "youtube_links": youtube_links,
+        "market_snapshot": market_snapshot,
         "swing_trading_conditions": swing_conditions,
+        "weekly_thesis_checklist": weekly_thesis_checklist,
+        "no_trade_windows": no_trade_windows,
+        "overnight_hold_warnings": overnight_hold_warnings,
+        "ai_brief": ai_brief,
     }
     report["markdown"] = build_weekly_markdown(report)
     return report
@@ -244,8 +298,17 @@ def build_daily_markdown(report: dict) -> str:
     fed_calendar = report.get("fed_calendar") if isinstance(report.get("fed_calendar"), dict) else {}
     treasury_calendar = report.get("treasury_calendar") if isinstance(report.get("treasury_calendar"), dict) else {}
     sec_filings = report.get("sec_filings") if isinstance(report.get("sec_filings"), dict) else {}
+    market_snapshot = report.get("market_snapshot") if isinstance(report.get("market_snapshot"), dict) else {}
+    ai_brief = report.get("ai_brief") if isinstance(report.get("ai_brief"), dict) else {}
     catalyst_clock = report.get("catalyst_clock") if isinstance(report.get("catalyst_clock"), list) else []
     posture = report.get("trading_posture") if isinstance(report.get("trading_posture"), list) else []
+    daily_checklist = (
+        report.get("daily_landmine_checklist") if isinstance(report.get("daily_landmine_checklist"), list) else []
+    )
+    no_trade_windows = report.get("no_trade_windows") if isinstance(report.get("no_trade_windows"), list) else []
+    overnight_warnings = (
+        report.get("overnight_hold_warnings") if isinstance(report.get("overnight_hold_warnings"), list) else []
+    )
 
     lines = [
         f"# Daily Market Prep - {report_date}",
@@ -269,7 +332,43 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 2. Catalyst Clock",
+            "## 2. Daily Landmine Checklist",
+            "",
+        ]
+    )
+    lines.extend(_list_or_empty(daily_checklist, "No daily landmine checklist items generated."))
+    lines.extend(
+        [
+            "",
+            "## 3. Timing Windows",
+            "",
+            "No-trade / reduced-size windows:",
+            "",
+        ]
+    )
+    lines.extend(_list_or_empty(no_trade_windows, "No high-priority timing windows found."))
+    lines.extend(["", "Overnight hold warnings:", ""])
+    lines.extend(_list_or_empty(overnight_warnings, "No configured overnight hold warnings."))
+    lines.extend(
+        [
+            "",
+            "## 4. Market Snapshot",
+            "",
+        ]
+    )
+    lines.extend(_market_snapshot_summary_markdown(market_snapshot))
+    lines.extend(
+        [
+            "",
+            "## 5. AI Brief",
+            "",
+        ]
+    )
+    lines.extend(_ai_brief_markdown(ai_brief))
+    lines.extend(
+        [
+            "",
+            "## 6. Catalyst Clock",
             "",
         ]
     )
@@ -277,7 +376,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 3. Scheduled Landmines Today",
+            "## 7. Scheduled Landmines Today",
             "",
         ]
     )
@@ -285,7 +384,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 4. Economic Speedbumps",
+            "## 8. Economic Speedbumps",
             "",
             "Today:",
             "",
@@ -297,7 +396,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 5. Fed Risk",
+            "## 9. Fed Risk",
             "",
         ]
     )
@@ -305,7 +404,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 6. Treasury Auction Risk",
+            "## 10. Treasury Auction Risk",
             "",
         ]
     )
@@ -313,7 +412,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 7. Earnings Risk",
+            "## 11. Earnings Risk",
             "",
         ]
     )
@@ -321,7 +420,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 8. Watchlist Risk",
+            "## 12. Watchlist Risk",
             "",
         ]
     )
@@ -329,7 +428,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 9. SEC Filing Risk",
+            "## 13. SEC Filing Risk",
             "",
         ]
     )
@@ -337,7 +436,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 10. Sympathy Risk",
+            "## 14. Sympathy Risk",
             "",
         ]
     )
@@ -345,7 +444,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 11. Google News/RSS Headline Risk",
+            "## 15. Google News/RSS Headline Risk",
             "",
         ]
     )
@@ -353,7 +452,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 12. YouTube Links",
+            "## 16. YouTube Links",
             "",
         ]
     )
@@ -361,7 +460,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 13. Trading Posture",
+            "## 17. Trading Posture",
             "",
         ]
     )
@@ -385,10 +484,19 @@ def build_weekly_markdown(report: dict) -> str:
     sec_filings = report.get("sec_filings") if isinstance(report.get("sec_filings"), dict) else {}
     headlines = report.get("rss_headlines") if isinstance(report.get("rss_headlines"), dict) else {}
     youtube_links = report.get("youtube_links") if isinstance(report.get("youtube_links"), dict) else {}
+    market_snapshot = report.get("market_snapshot") if isinstance(report.get("market_snapshot"), dict) else {}
+    ai_brief = report.get("ai_brief") if isinstance(report.get("ai_brief"), dict) else {}
     swing_conditions = (
         report.get("swing_trading_conditions")
         if isinstance(report.get("swing_trading_conditions"), list)
         else []
+    )
+    weekly_checklist = (
+        report.get("weekly_thesis_checklist") if isinstance(report.get("weekly_thesis_checklist"), list) else []
+    )
+    no_trade_windows = report.get("no_trade_windows") if isinstance(report.get("no_trade_windows"), list) else []
+    overnight_warnings = (
+        report.get("overnight_hold_warnings") if isinstance(report.get("overnight_hold_warnings"), list) else []
     )
 
     lines = [
@@ -416,7 +524,43 @@ def build_weekly_markdown(report: dict) -> str:
             f"- Level: {week_risk.get('level') or 'LOW'}",
             f"- Reason: {week_risk.get('reason') or 'No meaningful scheduled events found.'}",
             "",
-            "## 3. Economic Calendar",
+            "## 3. Weekly Thesis Checklist",
+            "",
+        ]
+    )
+    lines.extend(_list_or_empty(weekly_checklist, "No weekly thesis checklist items generated."))
+    lines.extend(
+        [
+            "",
+            "## 4. Timing Windows",
+            "",
+            "No-swing / reduced-size windows:",
+            "",
+        ]
+    )
+    lines.extend(_list_or_empty(no_trade_windows, "No high-priority timing windows found."))
+    lines.extend(["", "No-overnight / review-before-hold warnings:", ""])
+    lines.extend(_list_or_empty(overnight_warnings, "No configured overnight hold warnings."))
+    lines.extend(
+        [
+            "",
+            "## 5. Market Snapshot",
+            "",
+        ]
+    )
+    lines.extend(_market_snapshot_summary_markdown(market_snapshot))
+    lines.extend(
+        [
+            "",
+            "## 6. AI Brief",
+            "",
+        ]
+    )
+    lines.extend(_ai_brief_markdown(ai_brief))
+    lines.extend(
+        [
+            "",
+            "## 7. Economic Calendar",
             "",
         ]
     )
@@ -424,7 +568,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 4. Fed Calendar",
+            "## 8. Fed Calendar",
             "",
         ]
     )
@@ -432,7 +576,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 5. Treasury Calendar",
+            "## 9. Treasury Calendar",
             "",
         ]
     )
@@ -440,7 +584,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 6. Major Earnings",
+            "## 10. Major Earnings",
             "",
         ]
     )
@@ -448,7 +592,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 7. Watchlist Risks",
+            "## 11. Watchlist Risks",
             "",
         ]
     )
@@ -456,7 +600,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 8. SEC Filing Risks",
+            "## 12. SEC Filing Risks",
             "",
         ]
     )
@@ -464,7 +608,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 9. Sympathy Map Risks",
+            "## 13. Sympathy Map Risks",
             "",
         ]
     )
@@ -472,7 +616,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 10. Google News/RSS Headline Risk",
+            "## 14. Google News/RSS Headline Risk",
             "",
         ]
     )
@@ -480,7 +624,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 11. YouTube Links",
+            "## 15. YouTube Links",
             "",
         ]
     )
@@ -488,7 +632,7 @@ def build_weekly_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 12. Swing Trading Conditions",
+            "## 16. Swing Trading Conditions",
             "",
         ]
     )
@@ -692,9 +836,18 @@ def build_daily_trading_posture(
     todays_events: dict,
     today_tomorrow_earnings: dict,
     watchlist_risk: dict,
+    *,
+    market_snapshot: dict | None = None,
 ) -> list[str]:
     posture: list[str] = []
     landmines = build_scheduled_landmines(todays_events, today_tomorrow_earnings, watchlist_risk)
+    market_label = str(_market_tone(market_snapshot or {}).get("label") or "")
+    if "Clean" in market_label:
+        posture.append("Broad market is risk-on; still respect scheduled catalyst windows.")
+    elif "Noisy" in market_label:
+        posture.append("Broad market is noisy/risk-off; wait for confirmation and reduce overnight exposure.")
+    elif "Watch" in market_label:
+        posture.append("Broad market is mixed; favor cleaner setups and avoid chasing into events.")
     if landmines["high_priority_events"]:
         posture.append("Reduce size around scheduled macro event.")
     if landmines["watchlist_earnings_today_tomorrow"]:
@@ -703,6 +856,74 @@ def build_daily_trading_posture(
         posture.append("No major scheduled landmines configured. Still verify manually.")
     posture.append("This report is based only on configured sources.")
     return posture
+
+
+def build_daily_landmine_checklist(
+    todays_events: dict,
+    today_tomorrow_earnings: dict,
+    watchlist_risk: dict,
+    *,
+    sec_filings: dict | None = None,
+    market_snapshot: dict | None = None,
+) -> list[str]:
+    lines: list[str] = []
+    tone = _market_tone(market_snapshot or {})
+    if tone:
+        lines.append(f"Market regime: {tone.get('label') or 'n/a'} - {tone.get('reason') or 'n/a'}")
+    for event in _sort_events_for_display(_payload_rows(todays_events, "events")):
+        if str(event.get("priority") or "").upper() == "HIGH":
+            lines.append("High-priority macro today: " + _economic_event_line(event)[2:])
+    watchlist_today = [
+        row for row in _watchlist_rows(watchlist_risk)
+        if "Earnings Today/Tomorrow" in str(row.get("classification") or "")
+    ]
+    for row in watchlist_today[:12]:
+        lines.append("Watchlist landmine: " + _watchlist_earnings_line(row)[2:])
+    for row in _sort_earnings_for_display(_payload_rows(today_tomorrow_earnings, "earnings")):
+        if _is_high_or_mega_earnings(row):
+            lines.append("Market-moving earnings: " + _dated_earnings_line(row)[2:])
+    for row in _sec_filing_rows(sec_filings or {}):
+        if str(row.get("risk_classification") or "").upper() == "HIGH":
+            lines.append("SEC risk: " + _sec_filing_line(row)[2:])
+    if not lines:
+        lines.append("No configured high-priority landmines found; verify live calendar/news manually.")
+    lines.append("Before trading: check next catalyst time, market regime, and whether the ticker has earnings/SEC risk.")
+    lines.append("Before holding overnight: re-check watchlist earnings, SEC filings, and next-morning macro events.")
+    return lines
+
+
+def build_no_trade_windows(
+    economic_calendar: dict,
+    *,
+    fed_calendar: dict | None = None,
+    treasury_calendar: dict | None = None,
+) -> list[str]:
+    rows = []
+    for label, payload in (
+        ("Macro", economic_calendar),
+        ("Fed", fed_calendar or {}),
+        ("Treasury", treasury_calendar or {}),
+    ):
+        for event in _sort_events_for_display(_payload_rows(payload, "events")):
+            if str(event.get("priority") or "").upper() not in {"HIGH", "MEDIUM"}:
+                continue
+            prefix = "No-trade" if str(event.get("priority") or "").upper() == "HIGH" else "Reduced-size"
+            rows.append(f"{prefix}: {label} - {_economic_event_line(event)[2:]}")
+    return rows
+
+
+def build_overnight_hold_warnings(watchlist_risk: dict, earnings_payload: dict | None = None) -> list[str]:
+    warnings: list[str] = []
+    for row in _watchlist_rows(watchlist_risk):
+        classification = str(row.get("classification") or "")
+        if "Clean" in classification:
+            continue
+        if "Earnings" in classification or "Risk" in classification:
+            warnings.append("Review before overnight hold: " + _watchlist_earnings_line(row)[2:])
+    for row in _sort_earnings_for_display(_payload_rows(earnings_payload or {}, "earnings")):
+        if str(row.get("importance") or "").upper() in {"MEGA", "HIGH"}:
+            warnings.append("Market-impact earnings near window: " + _dated_earnings_line(row)[2:])
+    return _dedupe_lines(warnings)
 
 
 def build_week_risk_level(
@@ -780,13 +1001,72 @@ def build_week_risk_level(
     }
 
 
-def build_swing_trading_conditions(week_risk: dict) -> list[str]:
+def build_swing_trading_conditions(week_risk: dict, *, market_snapshot: dict | None = None) -> list[str]:
     risk_level = str(week_risk.get("level") or "LOW").upper()
+    market_label = str(_market_tone(market_snapshot or {}).get("label") or "")
+    prefix = ""
+    if "Noisy" in market_label:
+        prefix = "Noisy tape: "
+    elif "Watch" in market_label:
+        prefix = "Mixed tape: "
+    elif "Clean" in market_label:
+        prefix = "Clean tape: "
     if risk_level == "HIGH":
-        return ["Be careful initiating swing positions before scheduled catalysts."]
+        return [prefix + "Be careful initiating swing positions before scheduled catalysts."]
     if risk_level == "MEDIUM":
-        return ["Swing trades are acceptable but event timing matters."]
-    return ["No major configured weekly catalysts. Still verify manually."]
+        return [prefix + "Swing trades are acceptable but event timing matters."]
+    return [prefix + "No major configured weekly catalysts. Still verify manually."]
+
+
+def build_weekly_thesis_checklist(
+    economic_calendar: dict,
+    major_earnings: dict,
+    watchlist_risk: dict,
+    week_risk: dict,
+    *,
+    fed_calendar: dict | None = None,
+    treasury_calendar: dict | None = None,
+    sec_filings: dict | None = None,
+    market_snapshot: dict | None = None,
+    no_trade_windows: list[str] | None = None,
+    overnight_hold_warnings: list[str] | None = None,
+) -> list[str]:
+    lines: list[str] = []
+    tone = _market_tone(market_snapshot or {})
+    if tone:
+        lines.append(f"Market regime: {tone.get('label') or 'n/a'} - {tone.get('reason') or 'n/a'}")
+    lines.append(f"Week risk: {week_risk.get('level') or 'LOW'} - {week_risk.get('reason') or 'No reason generated.'}")
+    key_events = []
+    for payload in (economic_calendar, fed_calendar or {}, treasury_calendar or {}):
+        for event in _sort_events_for_display(_payload_rows(payload, "events")):
+            if str(event.get("priority") or "").upper() == "HIGH" or _is_key_weekly_risk_event(event):
+                key_events.append(_economic_event_line(event)[2:])
+    if key_events:
+        lines.append("Main catalyst days: " + " ; ".join(key_events[:5]))
+    earnings = _sort_earnings_for_display(_payload_rows(major_earnings, "earnings"))
+    if earnings:
+        lines.append("Key earnings to respect: " + " ; ".join(_dated_earnings_line(row)[2:] for row in earnings[:5]))
+    watchlist_rows = [
+        row for row in _watchlist_rows(watchlist_risk)
+        if "Clean" not in str(row.get("classification") or "")
+    ]
+    if watchlist_rows:
+        lines.append(
+            "Watchlist names needing review: "
+            + ", ".join(str(row.get("ticker") or "").strip().upper() for row in watchlist_rows[:20])
+        )
+    high_sec = [
+        row for row in _sec_filing_rows(sec_filings or {})
+        if str(row.get("risk_classification") or "").upper() == "HIGH"
+    ]
+    if high_sec:
+        lines.append("High-risk SEC filings: " + " ; ".join(_sec_filing_line(row)[2:] for row in high_sec[:5]))
+    if no_trade_windows:
+        lines.append("No-swing windows: " + " ; ".join(no_trade_windows[:5]))
+    if overnight_hold_warnings:
+        lines.append("No-overnight/review warnings: " + " ; ".join(overnight_hold_warnings[:5]))
+    lines.append("Thesis prompt: define bullish and bearish invalidation before adding new swing exposure.")
+    return lines
 
 
 def build_catalyst_clock(
@@ -1126,6 +1406,40 @@ def _market_snapshot_markdown_table(snapshot: dict) -> list[str]:
             + " |"
         )
     return lines
+
+
+def _market_snapshot_summary_markdown(snapshot: dict) -> list[str]:
+    tone = _market_tone(snapshot)
+    lines = []
+    if tone:
+        lines.append(f"- Regime: {tone.get('label') or 'n/a'} - {tone.get('reason') or 'n/a'}")
+    errors = snapshot.get("errors") if isinstance(snapshot, dict) else []
+    if isinstance(errors, list) and errors:
+        lines.append(f"- Snapshot warning: {errors[0]}")
+    lines.extend(_market_snapshot_markdown_table(snapshot))
+    lines.extend(["", "Sector rotation:"])
+    lines.extend(_sector_rotation_markdown(snapshot))
+    return lines
+
+
+def _ai_brief_markdown(payload: dict) -> list[str]:
+    if not isinstance(payload, dict) or not payload:
+        return ["AI brief not requested."]
+    summary = str(payload.get("summary") or "").strip()
+    status = str(payload.get("status_label") or payload.get("status") or "").strip()
+    if summary:
+        return summary.splitlines()
+    prompt = str(payload.get("prompt") or "").strip()
+    lines = [status or "AI brief unavailable; deterministic checklist remains available."]
+    if prompt:
+        lines.extend(["", "Prompt used:", ""])
+        lines.extend(prompt.splitlines()[:80])
+    return lines
+
+
+def _list_or_empty(values: list, empty_message: str) -> list[str]:
+    lines = [f"- {str(value).strip()}" for value in values if str(value).strip()]
+    return lines or [empty_message]
 
 
 def _economic_events_markdown(payload: dict) -> list[str]:

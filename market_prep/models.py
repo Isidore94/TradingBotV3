@@ -50,6 +50,7 @@ class MarketPrepConfig:
     google_news_rss: dict[str, Any] = field(default_factory=dict)
     llm_summary: dict[str, Any] = field(default_factory=dict)
     ticker_lookup: dict[str, Any] = field(default_factory=dict)
+    market_prep_ai: dict[str, Any] = field(default_factory=dict)
     paths: MarketPrepPaths = field(default_factory=MarketPrepPaths)
     config_path: Path | None = None
     repo_root: Path | None = None
@@ -73,6 +74,7 @@ class MarketPrepConfig:
         google_news_rss = payload.get("google_news_rss")
         llm_summary = payload.get("llm_summary")
         ticker_lookup = payload.get("ticker_lookup")
+        market_prep_ai = payload.get("market_prep_ai")
         return cls(
             timezone=str(payload.get("timezone") or cls.timezone),
             market_timezone=str(payload.get("market_timezone") or cls.market_timezone),
@@ -91,6 +93,7 @@ class MarketPrepConfig:
             google_news_rss=dict(google_news_rss) if isinstance(google_news_rss, dict) else {},
             llm_summary=dict(llm_summary) if isinstance(llm_summary, dict) else {},
             ticker_lookup=dict(ticker_lookup) if isinstance(ticker_lookup, dict) else {},
+            market_prep_ai=dict(market_prep_ai) if isinstance(market_prep_ai, dict) else {},
             paths=MarketPrepPaths.from_mapping(payload.get("paths")),
             config_path=config_path,
             repo_root=repo_root,

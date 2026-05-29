@@ -29,6 +29,8 @@ from .services.earnings_service import (
     get_upcoming_earnings,
 )
 from .services.fed_calendar_service import get_fed_calendar_events
+from .services.ai_service import build_market_prep_ai_brief
+from .services.prices_service import fetch_market_snapshot
 from .services.rss_news_service import fetch_rss_headlines
 from .services.sec_service import get_sec_filing_risk
 from .services.treasury_calendar_service import get_treasury_calendar_events
@@ -71,6 +73,7 @@ class MarketPrepOrchestrator:
         sec_filings = self._load_sec_filings(start_date=prep_date, tickers=watchlist_tickers)
         rss_headlines = self._load_rss_headlines(limit=25, tickers=watchlist_tickers)
         youtube_links = self._load_youtube_links(limit=25)
+        market_snapshot = self._load_market_snapshot()
         daily_report = build_daily_report_object(
             todays_events=todays_events,
             next_7_events=next_7_events,
@@ -82,9 +85,11 @@ class MarketPrepOrchestrator:
             fed_calendar=fed_calendar,
             treasury_calendar=treasury_calendar,
             sec_filings=sec_filings,
+            market_snapshot=market_snapshot,
             generated_at=generated_at,
             report_date=prep_date.isoformat(),
         )
+        daily_report = self._attach_ai_brief(daily_report)
         return {
             "action": "Run Daily Prep",
             "generated_at": generated_at,
@@ -99,6 +104,7 @@ class MarketPrepOrchestrator:
             "sec_filings": sec_filings,
             "rss_headlines": rss_headlines,
             "youtube_links": youtube_links,
+            "market_snapshot": market_snapshot,
             "daily_report": daily_report,
             "report": daily_report["markdown"],
         }
@@ -127,6 +133,7 @@ class MarketPrepOrchestrator:
         sec_filings = self._load_sec_filings(tickers=watchlist_tickers, start_date=window_start)
         rss_headlines = self._load_rss_headlines(limit=25, tickers=watchlist_tickers)
         youtube_links = self._load_youtube_links(limit=25)
+        market_snapshot = self._load_market_snapshot()
         weekly_report = build_weekly_report_object(
             economic_calendar=economic_calendar,
             earnings_calendar=earnings_calendar,
@@ -136,9 +143,11 @@ class MarketPrepOrchestrator:
             fed_calendar=fed_calendar,
             treasury_calendar=treasury_calendar,
             sec_filings=sec_filings,
+            market_snapshot=market_snapshot,
             report_date=week_start.isoformat(),
             generated_at=generated_at,
         )
+        weekly_report = self._attach_ai_brief(weekly_report)
         return {
             "action": "Run Weekly Prep",
             "generated_at": generated_at,
@@ -153,9 +162,16 @@ class MarketPrepOrchestrator:
             "sec_filings": sec_filings,
             "rss_headlines": rss_headlines,
             "youtube_links": youtube_links,
+            "market_snapshot": market_snapshot,
             "weekly_report": weekly_report,
             "report": weekly_report["markdown"],
         }
+
+    def start_day_prep(self) -> dict[str, Any]:
+        return self.run_daily_prep()
+
+    def start_week_prep(self) -> dict[str, Any]:
+        return self.run_weekly_prep()
 
     def refresh_economic_calendar(self, days: int = 7) -> dict[str, Any]:
         self.logger.info("Refreshing manual economic calendar for next %s day(s).", days)
@@ -443,6 +459,56 @@ class MarketPrepOrchestrator:
                 "warnings": [str(exc)],
                 "message": f"No configured YouTube links found. Error: {exc}",
             }
+
+    def _load_market_snapshot(self) -> dict[str, Any]:
+        try:
+            return fetch_market_snapshot()
+        except Exception as exc:
+            self.logger.exception("Failed loading market snapshot.")
+            return {
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "source": "yfinance",
+                "classification": {
+                    "label": "Noisy",
+                    "reason": f"Market snapshot unavailable: {exc}",
+                },
+                "rows": [],
+                "errors": [str(exc)],
+            }
+
+    def _attach_ai_brief(self, report: dict[str, Any]) -> dict[str, Any]:
+        try:
+            ai_brief = build_market_prep_ai_brief(report, config=self.config)
+        except Exception as exc:
+            self.logger.exception("Failed building Market Prep AI brief.")
+            ai_brief = {
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "source": "openai",
+                "status": "failed",
+                "status_label": f"AI brief failed: {exc}",
+                "summary": "",
+                "prompt": "",
+                "warnings": [str(exc)],
+            }
+        report = dict(report)
+        report["ai_brief"] = ai_brief
+        if str(report.get("report_type") or "").lower() == "weekly":
+            from .report_builder import build_weekly_markdown
+
+            report["markdown"] = build_weekly_markdown(report)
+        else:
+            from .report_builder import build_daily_markdown
+
+            report["markdown"] = build_daily_markdown(report)
+        return report
+
+    def run_ai_summary(self, report: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(report, dict):
+            raise ValueError("Run Start Day or Start Week before running the AI summary.")
+        report_type = str(report.get("report_type") or "").strip().lower()
+        if report_type not in {"daily", "weekly"}:
+            raise ValueError("Run Start Day or Start Week before running the AI summary.")
+        return self._attach_ai_brief(report)
 
     def export_daily_markdown(self, daily_report: dict) -> dict[str, Any]:
         return self.export_markdown(daily_report)

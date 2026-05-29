@@ -7,6 +7,7 @@ from typing import Any
 from market_prep.config_loader import load_market_prep_config
 from market_prep.models import MarketPrepConfig
 from market_prep.services.earnings_service import get_watchlist_earnings
+from market_prep.services.ai_service import build_ticker_lookup_ai_brief
 from market_prep.services.rss_news_service import fetch_rss_headlines
 from market_prep.services.sec_service import get_sec_filing_risk
 from market_prep.services.yfinance_service import get_ticker_metadata
@@ -14,22 +15,48 @@ from market_prep.services.yfinance_service import get_ticker_metadata
 
 DEFAULT_TICKER_LOOKUP_SETTINGS = {
     "days_ahead": 10,
-    "news_limit": 40,
-    "max_peer_tickers": 8,
+    "news_limit": 80,
+    "max_peer_tickers": 12,
     "include_sec_filings": True,
     "include_peer_earnings": True,
     "include_industry_news": True,
+    "include_ai_brief": True,
     "queries": [
         "{ticker} earnings",
         "{ticker} guidance",
+        "{ticker} analyst rating",
+        "{ticker} price target",
+        "{ticker} upgrade downgrade",
         "{ticker} investor day",
         "{ticker} conference",
         "{ticker} presentation",
+        "{ticker} catalyst",
         "{ticker} announces",
         "{ticker} partnership",
         "{ticker} product launch",
         "{ticker} acquisition",
+        "{ticker} contract",
+        "{ticker} shipment",
+        "{ticker} demand",
+        "{ticker} regulation",
         "{ticker} lawsuit",
+        "{ticker} offering",
+        "{ticker} financing",
+        "{ticker} debt",
+        "{ticker} strategic investment",
+        "{ticker} investment",
+        "{ticker} stake",
+        "{ticker} ownership",
+        "{ticker} portfolio",
+        "{ticker} subsidiary",
+        "{ticker} joint venture",
+        "{ticker} customer",
+        "{ticker} supplier",
+        "{ticker} revenue exposure",
+        "{ticker} AI investment",
+        "{ticker} Anthropic",
+        "{ticker} OpenAI",
+        "{ticker} insider selling",
     ],
 }
 
@@ -52,6 +79,21 @@ TICKER_PEER_OVERRIDES = {
     "AMD": ["NVDA", "TSM", "AVGO", "INTC", "QCOM", "MU", "ARM"],
     "NVDA": ["AMD", "TSM", "AVGO", "ASML", "QCOM", "MU", "ARM"],
     "AAPL": ["MSFT", "GOOGL", "AMZN", "META", "TSM", "QCOM", "AVGO"],
+    "SKM": ["KT", "VZ", "T", "TMUS", "ERIC", "NOK", "MSFT", "GOOGL", "AMZN", "NVDA"],
+}
+
+LANDMINE_KEYWORD_BUCKETS = {
+    "AI/private exposure": ("anthropic", "openai", "artificial intelligence", "ai investment", "private company"),
+    "strategic stake": ("stake", "investment", "invests", "invested", "ownership", "portfolio", "holding"),
+    "subsidiary/JV": ("subsidiary", "joint venture", "jv", "affiliate", "spin off", "spinoff"),
+    "customer/supplier": ("customer", "supplier", "supply", "contract", "deal", "partnership", "partner"),
+    "financing/dilution": ("offering", "atm", "at-the-market", "shelf", "financing", "convertible", "dilution"),
+    "debt/credit": ("debt", "credit", "loan", "refinancing", "liquidity", "default", "downgrade"),
+    "legal/regulatory": ("lawsuit", "probe", "investigation", "regulator", "regulatory", "sec", "doj", "ftc"),
+    "earnings/guidance": ("earnings", "guidance", "forecast", "profit warning", "revenue", "margin"),
+    "M&A": ("merger", "acquisition", "acquires", "buyout", "takeover", "strategic alternatives"),
+    "geopolitical": ("tariff", "sanction", "china", "export control", "korea", "taiwan", "trade restriction"),
+    "analyst": ("downgrade", "upgrade", "rating", "price target", "initiates", "cuts target"),
 }
 
 
@@ -103,7 +145,13 @@ def lookup_ticker_context(
     )
     headline_rows = news_payload.get("headlines") if isinstance(news_payload, dict) else []
     headline_rows = [row for row in headline_rows if isinstance(row, dict)] if isinstance(headline_rows, list) else []
-    target_headlines, industry_headlines = split_lookup_headlines(symbol, peer_tickers, headline_rows)
+    target_headlines, industry_headlines = split_lookup_headlines(
+        symbol,
+        peer_tickers,
+        headline_rows,
+        target_terms=target_terms_for_lookup(symbol, metadata),
+    )
+    landmine_headlines = rank_landmine_headlines(target_headlines + industry_headlines)
 
     payload = {
         "report_type": "ticker_lookup",
@@ -121,8 +169,16 @@ def lookup_ticker_context(
         "news_headlines": news_payload,
         "target_headlines": target_headlines,
         "industry_headlines": industry_headlines,
+        "landmine_headlines": landmine_headlines,
         "source_status": build_source_status(earnings_payload, sec_filings, news_payload),
     }
+    payload["ai_swing_query"] = build_ai_swing_query(payload)
+    payload["markdown"] = build_ticker_lookup_markdown(payload)
+    payload["ai_brief"] = (
+        build_ticker_lookup_ai_brief(payload, config=active_config)
+        if bool(settings.get("include_ai_brief", True))
+        else _disabled_payload("OpenAI", "Ticker Lookup AI disabled.")
+    )
     payload["markdown"] = build_ticker_lookup_markdown(payload)
     return payload
 
@@ -175,20 +231,73 @@ def split_lookup_headlines(
     ticker: str,
     peer_tickers: list[str],
     headlines: list[dict[str, Any]],
+    *,
+    target_terms: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     symbol = normalize_lookup_ticker(ticker)
     peers = {normalize_lookup_ticker(peer) for peer in peer_tickers}
+    target_tokens = {term.upper() for term in (target_terms or [symbol]) if str(term).strip()}
     target_rows: list[dict[str, Any]] = []
     industry_rows: list[dict[str, Any]] = []
     for row in headlines:
         text = f"{row.get('title') or ''} {row.get('query') or ''}".upper()
-        if symbol and symbol in text:
+        if any(term and term in text for term in target_tokens):
             target_rows.append(row)
         elif any(peer and peer in text for peer in peers):
             industry_rows.append(row)
         else:
             industry_rows.append(row)
     return target_rows, industry_rows
+
+
+def target_terms_for_lookup(ticker: str, metadata: dict[str, Any] | None) -> list[str]:
+    symbol = normalize_lookup_ticker(ticker)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    terms = [symbol]
+    company = str(metadata.get("company_name") or metadata.get("short_name") or "").strip()
+    if company:
+        terms.append(company)
+        cleaned = company.replace(",", " ").replace(".", " ")
+        words = [word for word in cleaned.split() if len(word) > 1]
+        stop_words = {"INC", "CORP", "CO", "LTD", "PLC", "SA", "ADR", "THE", "COMPANY", "LIMITED"}
+        core_words = [word for word in words if word.upper() not in stop_words]
+        if len(core_words) >= 2:
+            terms.append(" ".join(core_words[:2]))
+        if core_words:
+            terms.append(core_words[0])
+    return _dedupe_text([term for term in terms if len(str(term).strip()) >= 2])
+
+
+def rank_landmine_headlines(headlines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for row in headlines:
+        if not isinstance(row, dict):
+            continue
+        text = " ".join(
+            str(value or "")
+            for value in (
+                row.get("title"),
+                row.get("summary"),
+                row.get("query"),
+                " ".join(row.get("tags") or []),
+            )
+        ).lower()
+        buckets = []
+        score = 0
+        for bucket, keywords in LANDMINE_KEYWORD_BUCKETS.items():
+            hits = [keyword for keyword in keywords if keyword in text]
+            if not hits:
+                continue
+            buckets.append(bucket)
+            score += 2 + min(3, len(hits))
+        if not buckets:
+            continue
+        enriched = dict(row)
+        enriched["landmine_tags"] = buckets
+        enriched["landmine_score"] = score
+        ranked.append(enriched)
+    ranked.sort(key=lambda row: int(row.get("landmine_score") or 0), reverse=True)
+    return ranked[:30]
 
 
 def build_source_status(*payloads: dict[str, Any]) -> list[str]:
@@ -241,16 +350,49 @@ def build_ticker_lookup_markdown(payload: dict[str, Any]) -> str:
     sec_payload = payload.get("sec_filings") if isinstance(payload.get("sec_filings"), dict) else {}
     sec_rows = sec_payload.get("filings") if isinstance(sec_payload.get("filings"), list) else []
     lines.extend(_sec_lines([row for row in sec_rows if isinstance(row, dict)]) or [str(sec_payload.get("message") or "No SEC filing risk found.")])
+    lines.extend(["", "## Landmine / Exposure Headlines", ""])
+    landmine_headlines = payload.get("landmine_headlines") if isinstance(payload.get("landmine_headlines"), list) else []
+    lines.extend(_headline_lines(landmine_headlines[:20]) or ["No landmine-tagged headlines found."])
     lines.extend(["", "## Ticker Headlines", ""])
     target_headlines = payload.get("target_headlines") if isinstance(payload.get("target_headlines"), list) else []
     lines.extend(_headline_lines(target_headlines[:15]) or ["No ticker-specific headlines found."])
     lines.extend(["", "## Industry / Big Player Headlines", ""])
     industry_headlines = payload.get("industry_headlines") if isinstance(payload.get("industry_headlines"), list) else []
     lines.extend(_headline_lines(industry_headlines[:25]) or ["No industry headlines found."])
+    lines.extend(["", "## AI Brief", ""])
+    ai_brief = payload.get("ai_brief") if isinstance(payload.get("ai_brief"), dict) else {}
+    ai_summary = str(ai_brief.get("summary") or "").strip()
+    if ai_summary:
+        lines.append(ai_summary)
+    elif ai_brief:
+        lines.append(str(ai_brief.get("status_label") or ai_brief.get("status") or "AI brief unavailable."))
+    else:
+        lines.append("AI brief not generated yet.")
+    lines.extend(["", "## AI Swing Query", ""])
+    lines.append(str(payload.get("ai_swing_query") or build_ai_swing_query(payload)).strip())
     lines.extend(["", "## Source Status", ""])
     statuses = payload.get("source_status") if isinstance(payload.get("source_status"), list) else []
     lines.extend([f"- {status}" for status in statuses] or ["No source status available."])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_ai_swing_query(payload: dict[str, Any]) -> str:
+    ticker = str(payload.get("ticker") or "").strip().upper() or "THIS STOCK"
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    peers = ", ".join(payload.get("peer_tickers") or []) or "n/a"
+    return (
+        f"Using the Market Prep context below for {ticker}, give a brief swing-trade read plus a ticker landmine and swing-risk read. "
+        "Focus on catalysts, roadblocks, hidden exposure, strategic stakes/investments, customers/suppliers, "
+        "financing/dilution, legal/regulatory risk, timing risk over the lookup window, and trade-management reminders. "
+        "Separate confirmed facts from speculation and explicitly list missing facts to verify.\n\n"
+        f"Ticker: {ticker}\n"
+        f"Company: {metadata.get('company_name') or 'n/a'}\n"
+        f"Sector/industry: {metadata.get('sector') or 'n/a'} / {metadata.get('industry') or 'n/a'}\n"
+        f"Market cap: {metadata.get('market_cap_fmt') or 'n/a'}\n"
+        f"Lookup window: next {payload.get('window_days') or 'n/a'} day(s)\n"
+        f"Peer context: {payload.get('peer_reason') or 'n/a'}\n"
+        f"Peer tickers: {peers}"
+    )
 
 
 def _news_lookup_config(
@@ -265,14 +407,43 @@ def _news_lookup_config(
     industry = str(metadata.get("industry") or "").strip()
     sector = str(metadata.get("sector") or "").strip()
     if company:
-        queries.extend([f"{company} earnings", f"{company} conference", f"{company} announces"])
+        queries.extend(
+            [
+                f"{company} earnings",
+                f"{company} guidance",
+                f"{company} analyst rating",
+                f"{company} price target",
+                f"{company} conference",
+                f"{company} announces",
+                f"{company} catalyst",
+                f"{company} strategic investment",
+                f"{company} investment",
+                f"{company} stake",
+                f"{company} ownership",
+                f"{company} portfolio",
+                f"{company} subsidiary",
+                f"{company} joint venture",
+                f"{company} partnership",
+                f"{company} customer",
+                f"{company} supplier",
+                f"{company} contract",
+                f"{company} revenue exposure",
+                f"{company} financing",
+                f"{company} debt",
+                f"{company} lawsuit",
+                f"{company} regulatory",
+                f"{company} Anthropic",
+                f"{company} OpenAI",
+                f"{company} AI investment",
+            ]
+        )
     if bool(settings.get("include_industry_news", True)):
         if industry:
-            queries.extend([f"{industry} news", f"{industry} earnings"])
+            queries.extend([f"{industry} news", f"{industry} earnings", f"{industry} demand", f"{industry} regulation"])
         if sector:
-            queries.extend([f"{sector} sector news"])
+            queries.extend([f"{sector} sector news", f"{sector} analyst outlook"])
     for peer in peer_tickers[: max(0, _safe_int(settings.get("max_peer_tickers"), 8))]:
-        queries.extend([f"{peer} earnings", f"{peer} conference", f"{peer} guidance"])
+        queries.extend([f"{peer} earnings", f"{peer} conference", f"{peer} guidance", f"{peer} analyst rating"])
 
     news_settings = dict(config.google_news_rss if isinstance(config.google_news_rss, dict) else {})
     news_settings.update(
