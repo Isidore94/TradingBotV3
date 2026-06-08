@@ -139,53 +139,56 @@ EVENT_LEVEL_SORT_ORDER = [
 
 FAVORITE_CURRENT_SIGNALS = {
     "LONG": {
-        "CROSS_UP_VWAP": 88,
-        "CROSS_UP_UPPER_1": 112,
-        "CROSS_UP_UPPER_2": 136,
-        "CROSS_UP_UPPER_3": 142,
-        "EXTREME_MOVE_RETEST": 112,
-        "POST_EARNINGS_52W_BREAK": 150,
-        "POST_EARNINGS_AVWAPE_BOUNCE": 128,
-        "MID_EARNINGS_EMA15_RETEST": 138,
-        "MID_EARNINGS_EMA21_RETEST": 130,
-        "MID_EARNINGS_FIRST_DEV_RETEST": 134,
+        "CROSS_UP_VWAP": 66,
+        "CROSS_UP_UPPER_1": 78,
+        "CROSS_UP_UPPER_2": 84,
+        "CROSS_UP_UPPER_3": 88,
+        "SMA_BREAKOUT_50_RECLAIM": 82,
+        "SMA_BREAKOUT_100_RECLAIM": 92,
+        "SMA_BREAKOUT_200_RECLAIM": 108,
+        "EXTREME_MOVE_RETEST": 88,
+        "POST_EARNINGS_52W_BREAK": 110,
+        "POST_EARNINGS_AVWAPE_BOUNCE": 98,
+        "MID_EARNINGS_EMA15_RETEST": 104,
+        "MID_EARNINGS_EMA21_RETEST": 96,
+        "MID_EARNINGS_FIRST_DEV_RETEST": 92,
     },
     "SHORT": {
-        "CROSS_DOWN_VWAP": 88,
-        "CROSS_DOWN_LOWER_1": 112,
-        "CROSS_DOWN_LOWER_2": 136,
-        "CROSS_DOWN_LOWER_3": 142,
-        "EXTREME_MOVE_RETEST": 112,
-        "POST_EARNINGS_52W_BREAK": 150,
-        "POST_EARNINGS_AVWAPE_BOUNCE": 128,
-        "MID_EARNINGS_EMA15_RETEST": 138,
-        "MID_EARNINGS_EMA21_RETEST": 130,
-        "MID_EARNINGS_FIRST_DEV_RETEST": 134,
+        "CROSS_DOWN_VWAP": 66,
+        "CROSS_DOWN_LOWER_1": 78,
+        "CROSS_DOWN_LOWER_2": 84,
+        "CROSS_DOWN_LOWER_3": 88,
+        "EXTREME_MOVE_RETEST": 88,
+        "POST_EARNINGS_52W_BREAK": 110,
+        "POST_EARNINGS_AVWAPE_BOUNCE": 98,
+        "MID_EARNINGS_EMA15_RETEST": 104,
+        "MID_EARNINGS_EMA21_RETEST": 96,
+        "MID_EARNINGS_FIRST_DEV_RETEST": 92,
     },
 }
 
 FAVORITE_CONTEXT_SIGNALS = {
     "LONG": {
-        "PREV_CROSS_UP_VWAP": 18,
-        "PREV_CROSS_UP_UPPER_1": 24,
-        "PREV_CROSS_UP_UPPER_2": 28,
-        "PREV_CROSS_UP_UPPER_3": 30,
-        "PREV_BOUNCE_VWAP": 10,
-        "POST_EARNINGS_CLOSE_CONFIRM": 20,
-        "MID_EARNINGS_EMA8_CONFLUENCE": 8,
-        "MID_EARNINGS_EMA21_CONFLUENCE": 10,
-        "MID_EARNINGS_FIRST_DEV_CONFLUENCE": 12,
+        "PREV_CROSS_UP_VWAP": 10,
+        "PREV_CROSS_UP_UPPER_1": 12,
+        "PREV_CROSS_UP_UPPER_2": 14,
+        "PREV_CROSS_UP_UPPER_3": 15,
+        "PREV_BOUNCE_VWAP": 6,
+        "POST_EARNINGS_CLOSE_CONFIRM": 14,
+        "MID_EARNINGS_EMA8_CONFLUENCE": 6,
+        "MID_EARNINGS_EMA21_CONFLUENCE": 7,
+        "MID_EARNINGS_FIRST_DEV_CONFLUENCE": 8,
     },
     "SHORT": {
-        "PREV_CROSS_DOWN_VWAP": 18,
-        "PREV_CROSS_DOWN_LOWER_1": 24,
-        "PREV_CROSS_DOWN_LOWER_2": 28,
-        "PREV_CROSS_DOWN_LOWER_3": 30,
-        "PREV_BOUNCE_VWAP": 10,
-        "POST_EARNINGS_CLOSE_CONFIRM": 20,
-        "MID_EARNINGS_EMA8_CONFLUENCE": 8,
-        "MID_EARNINGS_EMA21_CONFLUENCE": 10,
-        "MID_EARNINGS_FIRST_DEV_CONFLUENCE": 12,
+        "PREV_CROSS_DOWN_VWAP": 10,
+        "PREV_CROSS_DOWN_LOWER_1": 12,
+        "PREV_CROSS_DOWN_LOWER_2": 14,
+        "PREV_CROSS_DOWN_LOWER_3": 15,
+        "PREV_BOUNCE_VWAP": 6,
+        "POST_EARNINGS_CLOSE_CONFIRM": 14,
+        "MID_EARNINGS_EMA8_CONFLUENCE": 6,
+        "MID_EARNINGS_EMA21_CONFLUENCE": 7,
+        "MID_EARNINGS_FIRST_DEV_CONFLUENCE": 8,
     },
 }
 
@@ -304,6 +307,8 @@ PRIORITY_FIRST_DEV_FRESH_BREAK_SCORE_BONUS = 12
 PRIORITY_FIRST_DEV_REPEAT_FAILURE_PENALTY = 14
 PRIORITY_FIRST_DEV_CHOP_PENALTY = 10
 PRIORITY_FIRST_DEV_LOOKBACK_DAYS = 5
+BEST_SWING_TRADES_PER_SIDE = 5
+BEST_SWING_TRADES_TOTAL_LIMIT = 10
 PRIORITY_RETEST_FOLLOWTHROUGH_SCORE_BONUS = 30
 PRIORITY_RETEST_LEVEL_SCORE_BONUS = {
     "AVWAPE": 12,
@@ -351,21 +356,25 @@ TRACKER_SUMMARY_MIN_CLOSED_SAMPLES = 25
 TRACKER_TUNER_MIN_CLOSED_SETUPS = 12
 TRACKER_PLAYBOOK_MIN_CLOSED_SAMPLES = 8
 TRACKER_PLAYBOOK_R_CLIP = 4.0
+TRACKER_SCORING_R_CLIP = TRACKER_PLAYBOOK_R_CLIP
+TRACKER_MIN_RISK_PER_SHARE = 0.05
+TRACKER_MIN_RISK_PCT_OF_ENTRY = 0.001
 TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
 TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
 TRACKER_RECENT_FAMILY_MIN_TRACKED_SETUPS = 3
 TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS = 2
 TRACKER_RECENT_FAMILY_MIN_SCORE_DELTA = 2
-TRACKER_RECENT_FAMILY_MAX_SCORE_DELTA = 12
+TRACKER_RECENT_FAMILY_MAX_SCORE_DELTA = 24
 TRACKER_SETUP_TYPE_MIN_TRACKED_SETUPS = 4
 TRACKER_SETUP_TYPE_MIN_CLOSED_SETUPS = 3
 TRACKER_SETUP_TYPE_MIN_SCORE_DELTA = 2
-TRACKER_SETUP_TYPE_MAX_SCORE_DELTA = 20
+TRACKER_SETUP_TYPE_MAX_SCORE_DELTA = 36
+TRACKER_SETUP_TYPE_RANKING_SCORE_MAGNITUDE_CAP = 24
 TRACKER_POSITIVE_DELTA_SMALL_CLOSED_MAX = 3
 TRACKER_POSITIVE_DELTA_MEDIUM_CLOSED_MIN = 8
 TRACKER_POSITIVE_DELTA_MEDIUM_CLOSED_MAX = 24
 TRACKER_POSITIVE_DELTA_SMALL_SAMPLE_SCORE_CAP = 3
-TRACKER_POSITIVE_DELTA_MEDIUM_SAMPLE_SCORE_CAP = 12
+TRACKER_POSITIVE_DELTA_MEDIUM_SAMPLE_SCORE_CAP = 20
 FIFTY_TWO_WEEK_CLOSE_LOOKBACK_SESSIONS = 252
 POST_EARNINGS_MAX_SESSIONS = 10
 POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
@@ -393,14 +402,45 @@ MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY = "mid_earnings_above_2nd_stdev"
 MID_EARNINGS_EMA15_RETEST_FAMILY = "mid_earnings_ema15_retest"
 MID_EARNINGS_EMA21_RETEST_FAMILY = "mid_earnings_ema21_retest"
 MID_EARNINGS_FIRST_DEV_RETEST_FAMILY = "mid_earnings_1stdev_retest"
+SMA_BREAKOUT_FAMILY = "sma_breakout"
+SMA_BREAKOUT_TRACKING_FAMILY = "sma_breakout_retest_tracking"
+SMA_BREAKOUT_PERIODS = (50, 100, 200)
+SMA_BREAKOUT_RECLAIM_SIGNALS = {
+    50: "SMA_BREAKOUT_50_RECLAIM",
+    100: "SMA_BREAKOUT_100_RECLAIM",
+    200: "SMA_BREAKOUT_200_RECLAIM",
+}
+SMA_BREAKOUT_MIN_SESSIONS_AFTER_BREAK = 3
+SMA_BREAKOUT_MAX_SESSIONS_AFTER_BREAK = 10
+SMA_BREAKOUT_MIN_HISTORY_BARS = max(SMA_BREAKOUT_PERIODS) + SMA_BREAKOUT_MAX_SESSIONS_AFTER_BREAK + 1
+SMA_BREAKOUT_PRIOR_BELOW_SESSIONS = 3
+SMA_BREAKOUT_RETEST_TOL_ATR = 0.02
+SMA_BREAKOUT_TRACKING_SCORE_BONUS = {
+    50: 24,
+    100: 30,
+    200: 40,
+}
 PRIORITY_CLEAN_FIRST_ZONE_SCORE_BONUS = 10
-PRIORITY_MARKET_REGIME_COUNTER_TREND_PENALTY = 18
-PRIORITY_MARKET_REGIME_COUNTER_TREND_SOFT_PENALTY = 10
-PRIORITY_REJECTION_CAP_SMA_OBSTACLE = 260
-PRIORITY_REJECTION_CAP_FIRST_DEV_CHOP = 260
-PRIORITY_REJECTION_CAP_COMPRESSION = 220
-PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND = 240
-PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY = 160
+PRIORITY_MARKET_REGIME_COUNTER_TREND_PENALTY = 30
+PRIORITY_MARKET_REGIME_COUNTER_TREND_SOFT_PENALTY = 16
+PRIORITY_REJECTION_CAP_SMA_OBSTACLE = 180
+PRIORITY_REJECTION_CAP_FIRST_DEV_CHOP = 180
+PRIORITY_REJECTION_CAP_COMPRESSION = 150
+PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND = 160
+PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY = 120
+PRIORITY_SHORT_NEAR_FAVORITE_GATE_PENALTY = 36
+PRIORITY_CURRENT_SIGNAL_WEIGHT_DEFAULT_CAP = 110
+PRIORITY_CONTEXT_SIGNAL_WEIGHT_CAP = 28
+PRIORITY_CURRENT_SIGNAL_WEIGHT_CAPS = {
+    "POST_EARNINGS_52W_BREAK": 120,
+    "POST_EARNINGS_AVWAPE_BOUNCE": 112,
+    "MID_EARNINGS_EMA15_RETEST": 118,
+    "MID_EARNINGS_EMA21_RETEST": 112,
+    "MID_EARNINGS_FIRST_DEV_RETEST": 108,
+    "SMA_BREAKOUT_50_RECLAIM": 108,
+    "SMA_BREAKOUT_100_RECLAIM": 116,
+    "SMA_BREAKOUT_200_RECLAIM": 124,
+}
 PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX = 0.90
 PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
 PRIORITY_COMPRESSION_STDEV_ATR_STRONG_MAX = 0.60
@@ -757,6 +797,42 @@ def default_priority_scoring_config() -> dict:
     return copy.deepcopy(DEFAULT_PRIORITY_SCORING_CONFIG)
 
 
+def _priority_signal_weight_cap(bucket: str, signal_name: str) -> int:
+    normalized_bucket = "context" if str(bucket).strip().lower() == "context" else "current"
+    if normalized_bucket == "context":
+        return PRIORITY_CONTEXT_SIGNAL_WEIGHT_CAP
+    signal_key = str(signal_name or "").strip().upper()
+    return int(
+        PRIORITY_CURRENT_SIGNAL_WEIGHT_CAPS.get(
+            signal_key,
+            PRIORITY_CURRENT_SIGNAL_WEIGHT_DEFAULT_CAP,
+        )
+    )
+
+
+def normalize_priority_signal_weight(bucket: str, signal_name: str, weight: object) -> int:
+    try:
+        parsed = int(weight)
+    except (TypeError, ValueError):
+        parsed = 0
+    return max(0, min(_priority_signal_weight_cap(bucket, signal_name), parsed))
+
+
+def _normalize_priority_scoring_signal_weights(config: dict) -> None:
+    weights_root = config.setdefault("signal_weights", {})
+    for bucket in ("current", "context"):
+        bucket_payload = weights_root.setdefault(bucket, {})
+        if not isinstance(bucket_payload, dict):
+            weights_root[bucket] = {}
+            continue
+        for side, weights in list(bucket_payload.items()):
+            if not isinstance(weights, dict):
+                bucket_payload[side] = {}
+                continue
+            for signal_name, weight in list(weights.items()):
+                weights[signal_name] = normalize_priority_signal_weight(bucket, signal_name, weight)
+
+
 def load_priority_scoring_config(force_reload: bool = False) -> dict:
     global _PRIORITY_SCORING_CONFIG_CACHE
 
@@ -788,6 +864,7 @@ def load_priority_scoring_config(force_reload: bool = False) -> dict:
         if isinstance(raw_adjustments, list):
             config["attribute_adjustments"] = [item for item in raw_adjustments if isinstance(item, dict)]
 
+    _normalize_priority_scoring_signal_weights(config)
     _PRIORITY_SCORING_CONFIG_CACHE = copy.deepcopy(config)
     return copy.deepcopy(config)
 
@@ -817,6 +894,7 @@ def save_priority_scoring_config(payload: dict) -> None:
         if isinstance(raw_adjustments, list):
             config["attribute_adjustments"] = [dict(item) for item in raw_adjustments if isinstance(item, dict)]
 
+    _normalize_priority_scoring_signal_weights(config)
     config["schema_version"] = PRIORITY_SCORING_CONFIG_SCHEMA_VERSION
     config["updated_at"] = datetime.now().isoformat(timespec="seconds")
     save_json(SCORING_CONFIG_FILE, config, pretty=True)
@@ -860,6 +938,12 @@ def _tracker_experimental_filter_reason(
     return ""
 
 
+def _tracker_min_risk_per_share(entry_price: float | None) -> float:
+    price_value = _coerce_float(entry_price)
+    price_floor = abs(float(price_value)) * float(TRACKER_MIN_RISK_PCT_OF_ENTRY) if price_value is not None else 0.0
+    return max(float(TRACKER_MIN_RISK_PER_SHARE), price_floor)
+
+
 def _build_tracker_scenario(
     entry_price: float | None,
     stop_candidate: dict,
@@ -869,9 +953,14 @@ def _build_tracker_scenario(
 ) -> dict:
     stop_level = _coerce_float(stop_candidate.get("level"))
     risk_per_share = abs(float(entry_price) - float(stop_level)) if entry_price is not None and stop_level is not None else None
-    shares = int(STANDARDIZED_RISK_USD // risk_per_share) if risk_per_share and risk_per_share > 0 else 0
+    min_risk_per_share = _tracker_min_risk_per_share(entry_price)
+    risk_is_tradeable = bool(
+        risk_per_share is not None
+        and risk_per_share >= min_risk_per_share
+    )
+    shares = int(STANDARDIZED_RISK_USD // risk_per_share) if risk_is_tradeable else 0
     filter_reason = _tracker_experimental_filter_reason(template, side, priority_bucket, stop_candidate)
-    tradeable = bool(not filter_reason and shares > 0 and risk_per_share and risk_per_share > 0)
+    tradeable = bool(not filter_reason and shares > 0 and risk_is_tradeable)
     inactive_status = ""
     inactive_reason = ""
     if filter_reason:
@@ -879,7 +968,13 @@ def _build_tracker_scenario(
         inactive_reason = filter_reason
     elif not tradeable:
         inactive_status = "UNTRADEABLE"
-        inactive_reason = "Risk too tight for $500 standard risk"
+        if risk_per_share is not None and risk_per_share < min_risk_per_share:
+            inactive_reason = (
+                f"Risk per share below tracker floor "
+                f"({float(risk_per_share):.4f} < {float(min_risk_per_share):.4f})"
+            )
+        else:
+            inactive_reason = "Risk too tight for $500 standard risk"
 
     template_id = str(template.get("id") or "").strip()
     scenario_id = _tracker_scenario_id(str(stop_candidate.get("label") or ""), template_id)
@@ -909,6 +1004,7 @@ def _build_tracker_scenario(
         "cohort_filter_reason": filter_reason,
         "shares": int(shares),
         "initial_risk_per_share": risk_per_share,
+        "risk_floor_per_share": float(min_risk_per_share),
         "initial_risk_usd": float(shares * risk_per_share) if shares and risk_per_share else 0.0,
         "direction": 1.0 if normalize_side(side) == "LONG" else -1.0,
         "tradeable": tradeable,
@@ -1009,10 +1105,10 @@ def _priority_attribute_rule_source_rank(rule: dict) -> int:
     source = str(rule.get("source") or "").strip().lower()
     if source in {"user_preference", "manual_preference", "manual"}:
         return 4
+    if source == "auto_tuner":
+        return 3
     if source == "default":
         return 2
-    if source == "auto_tuner":
-        return 1
     return 0
 
 
@@ -2664,6 +2760,203 @@ def compute_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
+def analyze_sma_breakout_setup(
+    df: pd.DataFrame,
+    side: str,
+    indicator_frame: pd.DataFrame | None = None,
+    atr20: float | None = None,
+) -> dict:
+    result = {
+        "watch": False,
+        "confirmed": False,
+        "tracking": False,
+        "favorite_signal": False,
+        "signal": "",
+        "setup_family": "",
+        "breakout_sma_label": "",
+        "breakout_sma_period": 0,
+        "breakout_sma_level": None,
+        "breakout_date": "",
+        "breakout_age_sessions": 0,
+        "retest_level": "",
+        "retest_level_value": None,
+        "retest_date": "",
+        "retest_age_sessions": 0,
+        "retest_distance_atr": None,
+        "confirmation_date": "",
+        "score_bonus": 0,
+        "note": "",
+    }
+    if normalize_side(side) != "LONG" or df is None or df.empty:
+        return result
+
+    work = indicator_frame.copy() if isinstance(indicator_frame, pd.DataFrame) and not indicator_frame.empty else compute_indicator_frame(df)
+    if work.empty:
+        return result
+    work = work.reset_index(drop=True)
+    if len(work) < SMA_BREAKOUT_MIN_HISTORY_BARS:
+        return result
+    last_idx = len(work) - 1
+    if last_idx < SMA_BREAKOUT_MAX_SESSIONS_AFTER_BREAK:
+        return result
+
+    latest = work.iloc[last_idx]
+    latest_close = _coerce_float(latest.get("close_num", latest.get("close")))
+    if latest_close is None:
+        return result
+
+    atr_value = _coerce_float(atr20) or _coerce_float(latest.get("atr_20"))
+    if atr_value is None or atr_value <= 0:
+        return result
+
+    min_break_idx = max(1, last_idx - SMA_BREAKOUT_MAX_SESSIONS_AFTER_BREAK)
+    max_break_idx = last_idx - SMA_BREAKOUT_MIN_SESSIONS_AFTER_BREAK
+    if max_break_idx < min_break_idx:
+        return result
+
+    period_rank = {50: 1, 100: 2, 200: 3}
+    touch_preference = {"EMA_15": 0, "EMA_21": 1}
+    candidates = []
+
+    def _row_date(row: pd.Series) -> str:
+        value = row.get("trade_date")
+        if value:
+            return str(value)
+        try:
+            return pd.to_datetime(row.get("datetime")).date().isoformat()
+        except Exception:
+            return ""
+
+    for period in SMA_BREAKOUT_PERIODS:
+        sma_col = f"sma_{period}"
+        if sma_col not in work.columns:
+            continue
+        sma_label = f"SMA_{period}"
+        signal_name = SMA_BREAKOUT_RECLAIM_SIGNALS.get(period, "")
+
+        for breakout_idx in range(min_break_idx, max_break_idx + 1):
+            breakout_row = work.iloc[breakout_idx]
+            prev_row = work.iloc[breakout_idx - 1]
+            prev_close = _coerce_float(prev_row.get("close_num", prev_row.get("close")))
+            prev_sma = _coerce_float(prev_row.get(sma_col))
+            breakout_close = _coerce_float(breakout_row.get("close_num", breakout_row.get("close")))
+            breakout_sma = _coerce_float(breakout_row.get(sma_col))
+            if None in (prev_close, prev_sma, breakout_close, breakout_sma):
+                continue
+            if not (float(prev_close) <= float(prev_sma) and float(breakout_close) > float(breakout_sma)):
+                continue
+            prior_window_start = breakout_idx - SMA_BREAKOUT_PRIOR_BELOW_SESSIONS
+            if prior_window_start < 0:
+                continue
+            prior_window = work.iloc[prior_window_start:breakout_idx]
+            prior_valid = True
+            for _, prior_row in prior_window.iterrows():
+                prior_close = _coerce_float(prior_row.get("close_num", prior_row.get("close")))
+                prior_sma = _coerce_float(prior_row.get(sma_col))
+                if prior_close is None or prior_sma is None or float(prior_close) > float(prior_sma):
+                    prior_valid = False
+                    break
+            if not prior_valid:
+                continue
+
+            for retest_idx in range(breakout_idx + 1, last_idx + 1):
+                retest_row = work.iloc[retest_idx]
+                retest_low = _coerce_float(retest_row.get("low_num", retest_row.get("low")))
+                retest_close = _coerce_float(retest_row.get("close_num", retest_row.get("close")))
+                if None in (retest_low, retest_close):
+                    continue
+
+                bar_atr = atr_value
+                if bar_atr is None or bar_atr <= 0:
+                    continue
+                touch_tolerance = float(bar_atr) * SMA_BREAKOUT_RETEST_TOL_ATR
+                level_specs = [
+                    ("EMA_15", _coerce_float(retest_row.get("ema_15"))),
+                    ("EMA_21", _coerce_float(retest_row.get("ema_21"))),
+                    (sma_label, _coerce_float(retest_row.get(sma_col))),
+                ]
+                touches = []
+                for label, level in level_specs:
+                    if level is None:
+                        continue
+                    distance = abs(float(retest_low) - float(level))
+                    if distance > touch_tolerance:
+                        continue
+                    if float(retest_close) < float(level):
+                        continue
+                    touches.append(
+                        {
+                            "label": label,
+                            "level": float(level),
+                            "distance": float(distance),
+                            "distance_atr": float(distance / float(bar_atr)),
+                        }
+                    )
+                if not touches:
+                    continue
+
+                touches.sort(
+                    key=lambda item: (
+                        item["distance"],
+                        touch_preference.get(item["label"], 2),
+                    )
+                )
+                touch = touches[0]
+                latest_sma = _coerce_float(latest.get(sma_col))
+                confirmed = latest_sma is not None and float(latest_close) > float(latest_sma)
+                breakout_age = last_idx - breakout_idx
+                retest_age = last_idx - retest_idx
+                note = (
+                    f"Broke up through {sma_label} {breakout_age} session(s) ago; "
+                    f"retested {touch['label']} on {_row_date(retest_row)} "
+                    f"within {touch['distance_atr']:.3f} ATR"
+                )
+                if confirmed:
+                    note = f"{note}; latest close reclaimed {sma_label}"
+                else:
+                    note = f"{note}; awaiting close back above {sma_label}"
+
+                candidates.append(
+                    {
+                        "watch": True,
+                        "confirmed": bool(confirmed),
+                        "tracking": not bool(confirmed),
+                        "favorite_signal": bool(confirmed),
+                        "signal": signal_name if confirmed else "",
+                        "setup_family": SMA_BREAKOUT_FAMILY if confirmed else SMA_BREAKOUT_TRACKING_FAMILY,
+                        "breakout_sma_label": sma_label,
+                        "breakout_sma_period": int(period),
+                        "breakout_sma_level": float(latest_sma if latest_sma is not None else breakout_sma),
+                        "breakout_date": _row_date(breakout_row),
+                        "breakout_age_sessions": int(breakout_age),
+                        "retest_level": touch["label"],
+                        "retest_level_value": float(touch["level"]),
+                        "retest_date": _row_date(retest_row),
+                        "retest_age_sessions": int(retest_age),
+                        "retest_distance_atr": float(touch["distance_atr"]),
+                        "confirmation_date": _row_date(latest) if confirmed else "",
+                        "score_bonus": int(SMA_BREAKOUT_TRACKING_SCORE_BONUS.get(period, 0)),
+                        "note": note,
+                    }
+                )
+                break
+
+    if not candidates:
+        return result
+
+    candidates.sort(
+        key=lambda item: (
+            bool(item.get("confirmed")),
+            period_rank.get(int(item.get("breakout_sma_period", 0) or 0), 0),
+            -int(item.get("retest_age_sessions", 0) or 0),
+            -int(item.get("breakout_age_sessions", 0) or 0),
+        ),
+        reverse=True,
+    )
+    result.update(candidates[0])
+    return result
+
+
 def calc_anchored_vwap_band_history(df: pd.DataFrame, anchor_date_iso: str) -> dict[str, dict]:
     try:
         anchor_date = datetime.fromisoformat(str(anchor_date_iso)).date()
@@ -3213,6 +3506,30 @@ def build_tracker_entry_attributes(
         label="Setup tags",
         value_type="list",
         description="Normalized priority setup tags active for this setup family.",
+    )
+    add(
+        "setup.sma_breakout_sma_label",
+        row.get("sma_breakout_sma_label") or symbol_entry.get("sma_breakout_sma_label") or "",
+        group="setup",
+        label="SMA breakout level",
+        value_type="text",
+        description="The 50/100/200 SMA level used by the SMA breakout setup.",
+    )
+    add(
+        "setup.sma_breakout_retest_level",
+        row.get("sma_breakout_retest_level") or symbol_entry.get("sma_breakout_retest_level") or "",
+        group="setup",
+        label="SMA breakout retest level",
+        value_type="text",
+        description="The EMA/SMA level touched during the SMA breakout retest.",
+    )
+    add(
+        "setup.sma_breakout_confirmed",
+        bool(row.get("sma_breakout_confirmed") or symbol_entry.get("sma_breakout_confirmed")),
+        group="setup",
+        label="SMA breakout confirmed",
+        value_type="bool",
+        description="Whether the latest close reclaimed the breakout SMA after the retest.",
     )
     add(
         "signals.favorite_signals",
@@ -4258,6 +4575,18 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
         first_dev_source = "post_earnings_anchor" if post_earnings_anchor else "current_anchor"
         _add(first_dev_label, _anchor_level_value(first_dev_anchor, first_dev_label), first_dev_source)
 
+    if setup_family.startswith("sma_breakout"):
+        retest_label = str(row.get("sma_breakout_retest_level") or symbol_entry.get("sma_breakout_retest_level") or "")
+        retest_level = _coerce_float(
+            row.get("sma_breakout_retest_level_value") or symbol_entry.get("sma_breakout_retest_level_value")
+        )
+        if retest_label and retest_level is not None:
+            _add(retest_label, retest_level, "ema" if retest_label.startswith("EMA_") else "sma")
+        sma_label = str(row.get("sma_breakout_sma_label") or symbol_entry.get("sma_breakout_sma_label") or "")
+        sma_level = _coerce_float(row.get("sma_breakout_sma_level") or symbol_entry.get("sma_breakout_sma_level"))
+        if sma_label and sma_level is not None:
+            _add(sma_label, sma_level, "sma")
+
     sma_levels = row.get("sma_levels") or symbol_entry.get("priority_sma_levels") or {}
     if primary_stop_level is not None and atr20 and atr20 > 0:
         for label, level in sorted(sma_levels.items()):
@@ -4380,6 +4709,8 @@ def build_tracker_setup_record(
         "recent_tracker_score_note": row.get("recent_tracker_score_note") or "",
         "setup_type_score_delta": int(row.get("setup_type_score_delta", 0) or 0),
         "setup_type_score_note": row.get("setup_type_score_note") or "",
+        "short_near_favorite_gate_delta": int(row.get("short_near_favorite_gate_delta", 0) or 0),
+        "short_near_favorite_gate_note": row.get("short_near_favorite_gate_note") or "",
         "market_regime_score_delta": int(row.get("market_regime_score_delta", 0) or 0),
         "market_regime_score_note": row.get("market_regime_score_note") or "",
         "rejection_score_cap": _coerce_float(row.get("rejection_score_cap")),
@@ -4435,6 +4766,24 @@ def build_tracker_setup_record(
         "mid_earnings_first_dev_confluence": bool(
             row.get("mid_earnings_first_dev_confluence") or symbol_entry.get("mid_earnings_first_dev_confluence")
         ),
+        "sma_breakout_watch": bool(row.get("sma_breakout_watch") or symbol_entry.get("sma_breakout_watch")),
+        "sma_breakout_confirmed": bool(row.get("sma_breakout_confirmed") or symbol_entry.get("sma_breakout_confirmed")),
+        "sma_breakout_signal": row.get("sma_breakout_signal") or symbol_entry.get("sma_breakout_signal") or "",
+        "sma_breakout_sma_label": row.get("sma_breakout_sma_label") or symbol_entry.get("sma_breakout_sma_label") or "",
+        "sma_breakout_sma_period": int(row.get("sma_breakout_sma_period", symbol_entry.get("sma_breakout_sma_period", 0)) or 0),
+        "sma_breakout_sma_level": _coerce_float(row.get("sma_breakout_sma_level") or symbol_entry.get("sma_breakout_sma_level")),
+        "sma_breakout_breakout_date": row.get("sma_breakout_breakout_date") or symbol_entry.get("sma_breakout_breakout_date") or "",
+        "sma_breakout_retest_level": row.get("sma_breakout_retest_level") or symbol_entry.get("sma_breakout_retest_level") or "",
+        "sma_breakout_retest_level_value": _coerce_float(
+            row.get("sma_breakout_retest_level_value") or symbol_entry.get("sma_breakout_retest_level_value")
+        ),
+        "sma_breakout_retest_date": row.get("sma_breakout_retest_date") or symbol_entry.get("sma_breakout_retest_date") or "",
+        "sma_breakout_confirmation_date": (
+            row.get("sma_breakout_confirmation_date")
+            or symbol_entry.get("sma_breakout_confirmation_date")
+            or ""
+        ),
+        "sma_breakout_note": row.get("sma_breakout_note") or symbol_entry.get("sma_breakout_note") or "",
         "sma_levels_entry": row.get("sma_levels") or {},
         "entry_feature_snapshot": entry_snapshot,
         "entry_attributes": entry_attributes,
@@ -4836,6 +5185,7 @@ def _flatten_tracker_scenarios(setups: dict[str, dict]) -> list[dict]:
                     "cohort_filter_reason": scenario.get("cohort_filter_reason", ""),
                     "shares": int(scenario.get("shares", 0) or 0),
                     "initial_risk_per_share": _coerce_float(scenario.get("initial_risk_per_share")),
+                    "risk_floor_per_share": _coerce_float(scenario.get("risk_floor_per_share")),
                     "initial_risk_usd": _coerce_float(scenario.get("initial_risk_usd")),
                     "status": scenario.get("status"),
                     "remaining_shares": int(scenario.get("remaining_shares", 0) or 0),
@@ -4929,16 +5279,31 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
         for scenario in closed
         if _coerce_float(scenario.get("total_r")) is not None
     ]
-    avg_total_r = mean(total_rs) if total_rs else None
-    avg_closed_r = mean(closed_rs) if closed_rs else None
+    clipped_total_rs = [
+        clipped
+        for clipped in (_clip_tracker_r_value(value, TRACKER_SCORING_R_CLIP) for value in total_rs)
+        if clipped is not None
+    ]
+    clipped_closed_rs = [
+        clipped
+        for clipped in (_clip_tracker_r_value(value, TRACKER_SCORING_R_CLIP) for value in closed_rs)
+        if clipped is not None
+    ]
+    raw_avg_total_r = mean(total_rs) if total_rs else None
+    raw_avg_closed_r = mean(closed_rs) if closed_rs else None
+    avg_total_r = mean(clipped_total_rs) if clipped_total_rs else None
+    avg_closed_r = mean(clipped_closed_rs) if clipped_closed_rs else None
+    max_abs_r = max((abs(value) for value in total_rs), default=0.0)
     days_held_values = [int(scenario.get("days_held", 0) or 0) for scenario in tradeable]
     return {
         "tradeable_scenario_count": len(tradeable),
         "open_tradeable_scenario_count": len(open_tradeable),
         "closed_tradeable_scenario_count": len(closed),
         "avg_total_r": avg_total_r,
-        "median_total_r": median(total_rs) if total_rs else None,
+        "raw_avg_total_r": raw_avg_total_r,
+        "median_total_r": median(clipped_total_rs) if clipped_total_rs else None,
         "avg_closed_r": avg_closed_r,
+        "raw_avg_closed_r": raw_avg_closed_r,
         "open_distortion": (
             avg_total_r - avg_closed_r
             if avg_total_r is not None and avg_closed_r is not None
@@ -4946,6 +5311,8 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
         ),
         "best_total_r": max(total_rs) if total_rs else None,
         "worst_total_r": min(total_rs) if total_rs else None,
+        "max_abs_total_r": max_abs_r if total_rs else None,
+        "outlier_clipped": bool(max_abs_r > TRACKER_SCORING_R_CLIP),
         "avg_days_held": mean(days_held_values) if days_held_values else None,
         "max_days_held": max(days_held_values) if days_held_values else 0,
         "any_target_hit": any(str(scenario.get("status", "")).upper() == "TARGET_HIT" for scenario in tradeable),
@@ -4971,8 +5338,8 @@ def _weighted_mean(values_with_weights: list[tuple[object, object]]) -> float | 
 def _recent_tracker_family_metric_pair(group_row: dict, baseline_row: dict) -> tuple[float | None, float | None, str]:
     group_closed = int(group_row.get("closed_setups", 0) or 0)
     baseline_closed = int(baseline_row.get("closed_setups", 0) or 0)
-    group_closed_r = _coerce_float(group_row.get("avg_closed_r"))
-    baseline_closed_r = _coerce_float(baseline_row.get("avg_closed_r"))
+    group_closed_r = _clip_tracker_r_value(group_row.get("avg_closed_r"), TRACKER_SCORING_R_CLIP)
+    baseline_closed_r = _clip_tracker_r_value(baseline_row.get("avg_closed_r"), TRACKER_SCORING_R_CLIP)
     if (
         group_closed >= TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS
         and baseline_closed >= TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS
@@ -4981,8 +5348,8 @@ def _recent_tracker_family_metric_pair(group_row: dict, baseline_row: dict) -> t
     ):
         return group_closed_r, baseline_closed_r, "avg_closed_r"
     return (
-        _coerce_float(group_row.get("avg_total_r")),
-        _coerce_float(baseline_row.get("avg_total_r")),
+        _clip_tracker_r_value(group_row.get("avg_total_r"), TRACKER_SCORING_R_CLIP),
+        _clip_tracker_r_value(baseline_row.get("avg_total_r"), TRACKER_SCORING_R_CLIP),
         "avg_total_r",
     )
 
@@ -5349,8 +5716,8 @@ def apply_recent_tracker_setup_family_adjustments(
 def _tracker_setup_type_metric_pair(group_row: dict, baseline_row: dict) -> tuple[float | None, float | None, str]:
     group_closed = int(group_row.get("closed_setups", 0) or 0)
     baseline_closed = int(baseline_row.get("closed_setups", 0) or 0)
-    group_closed_r = _coerce_float(group_row.get("avg_closed_r"))
-    baseline_closed_r = _coerce_float(baseline_row.get("baseline_avg_closed_r"))
+    group_closed_r = _clip_tracker_r_value(group_row.get("avg_closed_r"), TRACKER_SCORING_R_CLIP)
+    baseline_closed_r = _clip_tracker_r_value(baseline_row.get("baseline_avg_closed_r"), TRACKER_SCORING_R_CLIP)
     if (
         group_closed >= TRACKER_SETUP_TYPE_MIN_CLOSED_SETUPS
         and baseline_closed >= TRACKER_SETUP_TYPE_MIN_CLOSED_SETUPS
@@ -5359,8 +5726,8 @@ def _tracker_setup_type_metric_pair(group_row: dict, baseline_row: dict) -> tupl
     ):
         return group_closed_r, baseline_closed_r, "avg_closed_r"
     return (
-        _coerce_float(group_row.get("avg_total_r")),
-        _coerce_float(baseline_row.get("baseline_avg_total_r")),
+        _clip_tracker_r_value(group_row.get("avg_total_r"), TRACKER_SCORING_R_CLIP),
+        _clip_tracker_r_value(baseline_row.get("baseline_avg_total_r"), TRACKER_SCORING_R_CLIP),
         "avg_total_r",
     )
 
@@ -5410,11 +5777,11 @@ def _tracker_setup_type_rank_bonus(rank_within_group: int, group_size: int) -> i
     if rank_within_group <= 0 or group_size <= 1:
         return 0
     if rank_within_group == 1:
-        return 8
+        return 12
     if rank_within_group == 2:
-        return 6
+        return 8
     if rank_within_group == 3:
-        return 4
+        return 5
 
     top_quartile = max(1, math.ceil(group_size * 0.25))
     upper_mid = max(top_quartile + 1, math.ceil(group_size * 0.45))
@@ -5422,15 +5789,15 @@ def _tracker_setup_type_rank_bonus(rank_within_group: int, group_size: int) -> i
     bottom_mid_start = max(1, group_size - math.ceil(group_size * 0.45) + 1)
 
     if rank_within_group <= top_quartile:
-        return 3
+        return 4
     if rank_within_group <= upper_mid:
-        return 1
+        return 2
     if rank_within_group == group_size:
-        return -6
+        return -12
     if rank_within_group >= bottom_quartile_start:
-        return -4
+        return -8
     if rank_within_group >= bottom_mid_start:
-        return -2
+        return -4
     return 0
 
 
@@ -5473,7 +5840,14 @@ def rank_tracker_setup_type_rows(setup_type_rows: list[dict]) -> list[dict]:
             rank_bonus = _tracker_setup_type_rank_bonus(rank_within_group, group_size)
             magnitude_component = 0
             if ranking_score is not None:
-                magnitude_component = int(round(max(-12.0, min(12.0, float(ranking_score)))))
+                magnitude_component = int(
+                    round(
+                        max(
+                            -float(TRACKER_SETUP_TYPE_RANKING_SCORE_MAGNITUDE_CAP),
+                            min(float(TRACKER_SETUP_TYPE_RANKING_SCORE_MAGNITUDE_CAP), float(ranking_score)),
+                        )
+                    )
+                )
             score_delta = int(
                 round(
                     max(
@@ -5615,6 +5989,65 @@ def apply_tracker_setup_type_adjustments(
     return ranked_setup_type_rows
 
 
+def _short_near_favorite_gate_reason(row: dict) -> str:
+    if normalize_side(row.get("side") or "") != "SHORT":
+        return ""
+    if str(row.get("priority_bucket") or "").strip() != "near_favorite_zone":
+        return ""
+
+    missing = []
+    if not _priority_is_trend_aligned(row):
+        missing.append("downtrend alignment")
+    fresh_trigger = bool(
+        row.get("retest_followthrough")
+        or row.get("breakout_5d")
+        or row.get("previous_day_range_break")
+        or row.get("trendline_break_recent")
+        or row.get("post_earnings_break_intraday")
+        or row.get("post_earnings_break_close")
+    )
+    if not fresh_trigger:
+        missing.append("fresh downside trigger")
+    if bool(row.get("compression_flag")):
+        missing.append("clean, non-compressed structure")
+    tracker_edge_delta = max(
+        int(row.get("setup_type_score_delta", 0) or 0),
+        int(row.get("recent_tracker_score_delta", 0) or 0),
+    )
+    if tracker_edge_delta <= 0:
+        missing.append("positive tracker edge")
+
+    if not missing:
+        return ""
+    return "Short near-favorite gate: needs " + ", ".join(missing)
+
+
+def apply_short_near_favorite_quality_gates(
+    priority_rows: list[dict],
+    ai_state: dict,
+    feature_rows_by_symbol: dict[str, dict],
+) -> None:
+    for row in priority_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        previous_delta = int(row.get("short_near_favorite_gate_delta", 0) or 0)
+        base_score = float(row.get("score", 0.0) or 0.0) - float(previous_delta)
+        reason = _short_near_favorite_gate_reason(row)
+        score_delta = -PRIORITY_SHORT_NEAR_FAVORITE_GATE_PENALTY if reason else 0
+        row["short_near_favorite_gate_delta"] = int(score_delta)
+        row["short_near_favorite_gate_note"] = reason
+        row["score"] = base_score + float(score_delta)
+        _update_priority_score_outputs(
+            symbol,
+            row,
+            ai_state,
+            feature_rows_by_symbol,
+            {
+                "short_near_favorite_gate_delta": int(score_delta),
+                "short_near_favorite_gate_note": reason,
+            },
+        )
+
+
 def _format_tracker_attribute_text(value) -> str:
     if value is None:
         return ""
@@ -5682,10 +6115,13 @@ def _flatten_tracker_attributes(setups: dict[str, dict], attribute_registry: dic
                     "tradeable_scenario_count": int(outcome_summary.get("tradeable_scenario_count", 0) or 0),
                     "closed_tradeable_scenario_count": int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0),
                     "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
+                    "raw_avg_total_r": _coerce_float(outcome_summary.get("raw_avg_total_r")),
                     "median_total_r": _coerce_float(outcome_summary.get("median_total_r")),
                     "avg_closed_r": _coerce_float(outcome_summary.get("avg_closed_r")),
+                    "raw_avg_closed_r": _coerce_float(outcome_summary.get("raw_avg_closed_r")),
                     "best_total_r": _coerce_float(outcome_summary.get("best_total_r")),
                     "worst_total_r": _coerce_float(outcome_summary.get("worst_total_r")),
+                    "outlier_clipped": bool(outcome_summary.get("outlier_clipped")),
                     "any_target_hit": bool(outcome_summary.get("any_target_hit")),
                     "any_stopped": bool(outcome_summary.get("any_stopped")),
                     "attribute_key": attribute_key,
@@ -5732,7 +6168,9 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
                 "tradeable_scenario_count": int(row.get("tradeable_scenario_count", 0) or 0),
                 "closed_tradeable_scenario_count": int(row.get("closed_tradeable_scenario_count", 0) or 0),
                 "avg_total_r": _coerce_float(row.get("avg_total_r")),
+                "raw_avg_total_r": _coerce_float(row.get("raw_avg_total_r")),
                 "avg_closed_r": _coerce_float(row.get("avg_closed_r")),
+                "raw_avg_closed_r": _coerce_float(row.get("raw_avg_closed_r")),
                 "any_target_hit": bool(row.get("any_target_hit")),
                 "any_stopped": bool(row.get("any_stopped")),
             }
@@ -5751,8 +6189,10 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
             "tradeable_scenario_count": int(row.get("tradeable_scenario_count", 0) or 0),
             "closed_tradeable_scenario_count": int(row.get("closed_tradeable_scenario_count", 0) or 0),
             "avg_total_r": _coerce_float(row.get("avg_total_r")),
+            "raw_avg_total_r": _coerce_float(row.get("raw_avg_total_r")),
             "median_total_r": _coerce_float(row.get("median_total_r")),
             "avg_closed_r": _coerce_float(row.get("avg_closed_r")),
+            "raw_avg_closed_r": _coerce_float(row.get("raw_avg_closed_r")),
             "best_total_r": _coerce_float(row.get("best_total_r")),
             "worst_total_r": _coerce_float(row.get("worst_total_r")),
             "any_target_hit": bool(row.get("any_target_hit")),
@@ -5818,8 +6258,10 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
                 "tradeable_scenario_count": int(row.get("tradeable_scenario_count", 0) or 0),
                 "closed_tradeable_scenario_count": int(row.get("closed_tradeable_scenario_count", 0) or 0),
                 "avg_total_r": _coerce_float(row.get("avg_total_r")),
+                "raw_avg_total_r": _coerce_float(row.get("raw_avg_total_r")),
                 "median_total_r": _coerce_float(row.get("median_total_r")),
                 "avg_closed_r": _coerce_float(row.get("avg_closed_r")),
+                "raw_avg_closed_r": _coerce_float(row.get("raw_avg_closed_r")),
                 "best_total_r": _coerce_float(row.get("best_total_r")),
                 "worst_total_r": _coerce_float(row.get("worst_total_r")),
                 "any_target_hit": bool(row.get("any_target_hit")),
@@ -6025,6 +6467,16 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
         open_rows = [row for row in tradeable if _scenario_is_open(row.get("status", ""))]
         closed_rs = [float(row.get("total_r", 0.0) or 0.0) for row in closed]
         total_rs = [float(row.get("total_r", 0.0) or 0.0) for row in tradeable]
+        clipped_closed_rs = [
+            clipped
+            for clipped in (_clip_tracker_r_value(value, TRACKER_SCORING_R_CLIP) for value in closed_rs)
+            if clipped is not None
+        ]
+        clipped_total_rs = [
+            clipped
+            for clipped in (_clip_tracker_r_value(value, TRACKER_SCORING_R_CLIP) for value in total_rs)
+            if clipped is not None
+        ]
         pnl_values = [float(row.get("total_pnl", 0.0) or 0.0) for row in closed]
         wins = [value for value in closed_rs if value > 0]
         stats_rows.append(
@@ -6042,14 +6494,17 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
                 "closed_setups": len(closed),
                 "open_setups": len(open_rows),
                 "win_rate_closed": (len(wins) / len(closed)) if closed else None,
-                "avg_closed_r": mean(closed_rs) if closed_rs else None,
-                "median_closed_r": median(closed_rs) if closed_rs else None,
-                "avg_total_r": mean(total_rs) if total_rs else None,
+                "avg_closed_r": mean(clipped_closed_rs) if clipped_closed_rs else None,
+                "raw_avg_closed_r": mean(closed_rs) if closed_rs else None,
+                "median_closed_r": median(clipped_closed_rs) if clipped_closed_rs else None,
+                "avg_total_r": mean(clipped_total_rs) if clipped_total_rs else None,
+                "raw_avg_total_r": mean(total_rs) if total_rs else None,
                 "open_distortion": (
-                    (mean(total_rs) - mean(closed_rs))
-                    if total_rs and closed_rs
+                    (mean(clipped_total_rs) - mean(clipped_closed_rs))
+                    if clipped_total_rs and clipped_closed_rs
                     else None
                 ),
+                "outlier_clipped": bool(max((abs(value) for value in total_rs), default=0.0) > TRACKER_SCORING_R_CLIP),
                 "avg_closed_pnl": mean(pnl_values) if pnl_values else None,
             }
         )
@@ -7978,6 +8433,36 @@ def _find_first_post_earnings_break_index(
     return None
 
 
+def _find_post_earnings_52w_breakout_candle(
+    df: pd.DataFrame,
+    side: str,
+    gap_idx: int,
+) -> dict[str, Any] | None:
+    if df is None or df.empty:
+        return None
+    side_norm = normalize_side(side)
+    monitor_column = "high" if side_norm == "LONG" else "low"
+    for idx in (int(gap_idx), int(gap_idx) + 1):
+        if idx < 0 or idx >= len(df):
+            continue
+        breakout_level = _coerce_float(df.iloc[idx].get(monitor_column))
+        prior_extreme = _rolling_price_extreme_before_index(df, idx, side)
+        if breakout_level is None or prior_extreme is None:
+            continue
+        is_breakout = (
+            float(breakout_level) > float(prior_extreme)
+            if side_norm == "LONG"
+            else float(breakout_level) < float(prior_extreme)
+        )
+        if is_breakout:
+            return {
+                "idx": idx,
+                "level": float(breakout_level),
+                "date": _trade_date_text_from_bar(df.iloc[idx]),
+            }
+    return None
+
+
 def _trade_date_text_from_bar(row: pd.Series) -> str:
     bar_datetime = pd.to_datetime(row.get("datetime"), errors="coerce")
     if pd.notna(bar_datetime):
@@ -8132,21 +8617,15 @@ def analyze_post_earnings_setups(
         return result
 
     side_norm = normalize_side(side)
-    gap_row = df.iloc[int(gap_idx)]
-    monitor_column = "high" if side_norm == "LONG" else "low"
-    gap_extreme = _coerce_float(gap_row.get(monitor_column))
     last_close = _coerce_float(df.iloc[-1].get("close"))
-    if gap_extreme is None or last_close is None:
+    if last_close is None:
         return result
 
     directional_gap = bool(release_context.get("gap_is_up")) if side_norm == "LONG" else bool(release_context.get("gap_is_down"))
-    prior_extreme = _rolling_price_extreme_before_index(df, int(gap_idx), side)
-    is_new_price_extreme = False
-    if prior_extreme is not None:
-        if side_norm == "LONG":
-            is_new_price_extreme = float(gap_extreme) >= float(prior_extreme)
-        else:
-            is_new_price_extreme = float(gap_extreme) <= float(prior_extreme)
+    breakout_candle = _find_post_earnings_52w_breakout_candle(df, side, int(gap_idx))
+    breakout_idx = _coerce_int(breakout_candle.get("idx")) if breakout_candle else None
+    breakout_extreme = _coerce_float(breakout_candle.get("level")) if breakout_candle else None
+    breakout_date = str(breakout_candle.get("date") or "").strip() if breakout_candle else ""
 
     sessions_since_gap = _coerce_int(release_context.get("sessions_since_gap"))
     if sessions_since_gap is None or sessions_since_gap < 0:
@@ -8160,11 +8639,12 @@ def analyze_post_earnings_setups(
         and in_post_earnings_window
         and _coerce_float(release_context.get("gap_atr_multiple")) is not None
         and float(release_context.get("gap_atr_multiple")) >= MIN_GAP_ATR_MULTIPLE
-        and is_new_price_extreme
+        and breakout_idx is not None
+        and breakout_extreme is not None
     )
 
-    if qualified_gap and len(df) > int(gap_idx) + 1:
-        first_break_idx = _find_first_post_earnings_break_index(df, side, gap_extreme, int(gap_idx) + 1)
+    if qualified_gap and len(df) > int(breakout_idx) + 1:
+        first_break_idx = _find_first_post_earnings_break_index(df, side, breakout_extreme, int(breakout_idx) + 1)
         first_break_date = ""
         break_age_sessions = None
         if first_break_idx is not None:
@@ -8172,7 +8652,7 @@ def analyze_post_earnings_setups(
             break_age_sessions = max(0, len(df) - 1 - int(first_break_idx))
         break_fresh = break_age_sessions is not None and break_age_sessions <= POST_EARNINGS_BREAK_FRESH_SESSIONS
         break_intraday = bool(break_fresh)
-        break_close = bool(break_fresh and _is_close_beyond_level(side, last_close, gap_extreme))
+        break_close = bool(break_fresh and _is_close_beyond_level(side, last_close, breakout_extreme))
         bounce_signal = False
         if anchor_meta:
             if side_norm == "LONG":
@@ -8196,18 +8676,19 @@ def analyze_post_earnings_setups(
             f"gap {gap_date} {float(release_context.get('gap_atr_multiple')):.2f} ATR",
             (
                 f"new 52-week {'high' if side_norm == 'LONG' else 'low'} "
-                f"{float(gap_extreme):.2f}"
+                f"{float(breakout_extreme):.2f}"
             ),
+            f"breakout candle {breakout_date}",
             f"anchor {release_context.get('anchor_date')}",
             f"window day {sessions_since_gap}/{POST_EARNINGS_MAX_SESSIONS}",
         ]
         if break_intraday:
-            note_parts.append("fresh earnings-candle break triggered")
+            note_parts.append("fresh breakout-candle break triggered")
             if first_break_date:
                 note_parts.append(f"first break {first_break_date}")
         elif break_age_sessions is not None:
             note_parts.append(
-                f"52-week break stale after {int(break_age_sessions)} session(s); waiting for post-earnings AVWAPE retest"
+                f"trigger break stale after {int(break_age_sessions)} session(s); waiting for post-earnings AVWAPE retest"
             )
         if break_close:
             note_parts.append("close confirmed")
@@ -8218,7 +8699,7 @@ def analyze_post_earnings_setups(
             {
                 "active": True,
                 "qualified_gap": True,
-                "monitor_level": float(gap_extreme),
+                "monitor_level": float(breakout_extreme),
                 "monitor_level_label": "52W_HIGH" if side_norm == "LONG" else "52W_LOW",
                 "anchor_date": str(release_context.get("anchor_date") or ""),
                 "gap_date": gap_date,
@@ -8246,7 +8727,7 @@ def analyze_post_earnings_setups(
             {
                 "active": True,
                 "qualified_gap": True,
-                "monitor_level": float(gap_extreme),
+                "monitor_level": float(breakout_extreme),
                 "monitor_level_label": "52W_HIGH" if side_norm == "LONG" else "52W_LOW",
                 "anchor_date": str(release_context.get("anchor_date") or ""),
                 "gap_date": gap_date,
@@ -8256,7 +8737,7 @@ def analyze_post_earnings_setups(
                 "sessions_since_gap": sessions_since_gap,
                 "note": (
                     f"Qualified post-earnings {'high' if side_norm == 'LONG' else 'low'} watch "
-                    f"from {gap_date} at {float(gap_extreme):.2f}"
+                    f"from {breakout_date or gap_date} at {float(breakout_extreme):.2f}"
                 ),
                 "anchor_meta": anchor_meta,
             }
@@ -9064,6 +9545,7 @@ def _focus_priority_bucket_sort_value(bucket: str) -> int:
         "favorite_setup": 0,
         "near_favorite_zone": 1,
         "post_earnings_play": 2,
+        "sma_breakout_tracking": 3,
     }
     return lookup.get(str(bucket or "").strip().lower(), len(lookup))
 
@@ -9078,6 +9560,7 @@ def build_master_avwap_focus_entries(payload: dict) -> list[dict]:
         ("favorites", "favorite_setup"),
         ("near_favorite_zones", "near_favorite_zone"),
         ("post_earnings_plays", "post_earnings_play"),
+        ("sma_breakout_tracking", "sma_breakout_tracking"),
     ):
         rows = payload.get(payload_key)
         if not isinstance(rows, list):
@@ -9940,7 +10423,7 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         ib.historical_symbols[reqId] = str(symbol or "").strip().upper()
 
         if days > 365:
-            dur = f"{max(1, days // 365)} Y"
+            dur = f"{max(1, math.ceil(days / 365))} Y"
         else:
             dur = f"{max(2, days)} D"
 
@@ -10466,6 +10949,7 @@ def _is_custom_priority_setup_signal(event_name: str) -> bool:
         MID_EARNINGS_EMA15_RETEST_SIGNAL,
         MID_EARNINGS_EMA21_RETEST_SIGNAL,
         MID_EARNINGS_FIRST_DEV_RETEST_SIGNAL,
+        *SMA_BREAKOUT_RECLAIM_SIGNALS.values(),
     }
 
 
@@ -10487,6 +10971,8 @@ def _derive_setup_family(
     extreme_move_favorite_ready: bool,
     mid_earnings_active_second_stdev_hold: bool,
     mid_earnings_primary_trigger_level: str,
+    sma_breakout_watch: bool = False,
+    sma_breakout_confirmed: bool = False,
     favorite_zone: str | None,
 ) -> tuple[str, list[str]]:
     tags = [str(signal or "").strip().upper() for signal in current_setup_signals if str(signal or "").strip()]
@@ -10507,6 +10993,10 @@ def _derive_setup_family(
         return MID_EARNINGS_FIRST_DEV_RETEST_FAMILY, tags
     if mid_earnings_active_second_stdev_hold:
         return MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY, tags
+    if sma_breakout_confirmed or any(signal in SMA_BREAKOUT_RECLAIM_SIGNALS.values() for signal in tags):
+        return SMA_BREAKOUT_FAMILY, tags
+    if sma_breakout_watch:
+        return SMA_BREAKOUT_TRACKING_FAMILY, tags
     if extreme_move_favorite_ready:
         return "extreme_move_retest", tags
     if retest_followthrough:
@@ -10608,6 +11098,19 @@ def build_priority_setup_summary(
     previous_day_range_note: str = "",
     mid_earnings_active_second_stdev_hold: bool = False,
     mid_earnings_primary_trigger_level: str = "",
+    sma_breakout_watch: bool = False,
+    sma_breakout_confirmed: bool = False,
+    sma_breakout_signal: str = "",
+    sma_breakout_score_bonus: int = 0,
+    sma_breakout_note: str = "",
+    sma_breakout_sma_label: str = "",
+    sma_breakout_sma_period: int = 0,
+    sma_breakout_sma_level: float | None = None,
+    sma_breakout_retest_level: str = "",
+    sma_breakout_retest_level_value: float | None = None,
+    sma_breakout_breakout_date: str = "",
+    sma_breakout_retest_date: str = "",
+    sma_breakout_confirmation_date: str = "",
 ) -> dict:
     current_weights = get_priority_signal_weights(side, "current")
     context_weights = get_priority_signal_weights(side, "context")
@@ -10623,7 +11126,12 @@ def build_priority_setup_summary(
         )
     )
     context_signals = sorted(evt for evt in events_today if evt in context_weights)
-    setup_active = bool(current_setup_signals) or bool(first_dev_break_bonus) or bool(extreme_move_favorite_ready)
+    setup_active = (
+        bool(current_setup_signals)
+        or bool(first_dev_break_bonus)
+        or bool(extreme_move_favorite_ready)
+        or bool(sma_breakout_confirmed)
+    )
     bounce_support_bonus, bounce_support_signals = _compute_bounce_support_bonus(
         events_today,
         setup_active=(
@@ -10659,6 +11167,9 @@ def build_priority_setup_summary(
     if extreme_move_watch:
         score += PRIORITY_EXTREME_MOVE_WATCH_SCORE_BONUS
 
+    if sma_breakout_watch and not sma_breakout_confirmed:
+        score += max(0, int(sma_breakout_score_bonus or 0))
+
     score += max(0, int(previous_day_range_break_bonus or 0))
     score += max(0, int(first_dev_break_bonus or 0))
 
@@ -10682,6 +11193,8 @@ def build_priority_setup_summary(
         extreme_move_favorite_ready=bool(extreme_move_favorite_ready),
         mid_earnings_active_second_stdev_hold=bool(mid_earnings_active_second_stdev_hold),
         mid_earnings_primary_trigger_level=mid_earnings_primary_trigger_level,
+        sma_breakout_watch=bool(sma_breakout_watch),
+        sma_breakout_confirmed=bool(sma_breakout_confirmed),
         favorite_zone=favorite_zone,
     )
 
@@ -10722,6 +11235,19 @@ def build_priority_setup_summary(
         "previous_day_range_break_bonus": int(previous_day_range_break_bonus or 0),
         "previous_day_range_note": previous_day_range_note or "",
         "mid_earnings_primary_trigger_level": mid_earnings_primary_trigger_level or "",
+        "sma_breakout_watch": bool(sma_breakout_watch),
+        "sma_breakout_confirmed": bool(sma_breakout_confirmed),
+        "sma_breakout_signal": sma_breakout_signal or "",
+        "sma_breakout_score_bonus": int(sma_breakout_score_bonus or 0),
+        "sma_breakout_note": sma_breakout_note or "",
+        "sma_breakout_sma_label": sma_breakout_sma_label or "",
+        "sma_breakout_sma_period": int(sma_breakout_sma_period or 0),
+        "sma_breakout_sma_level": _coerce_float(sma_breakout_sma_level),
+        "sma_breakout_retest_level": sma_breakout_retest_level or "",
+        "sma_breakout_retest_level_value": _coerce_float(sma_breakout_retest_level_value),
+        "sma_breakout_breakout_date": sma_breakout_breakout_date or "",
+        "sma_breakout_retest_date": sma_breakout_retest_date or "",
+        "sma_breakout_confirmation_date": sma_breakout_confirmation_date or "",
     }
 
 
@@ -10737,6 +11263,8 @@ def _priority_rejection_reasons(row: dict) -> list[str]:
         reasons.append(str(row.get("extension_note") or "Recent second-band extension penalty"))
     if int(row.get("first_dev_chop_penalty", 0) or 0) > 0:
         reasons.append(str(row.get("first_dev_note") or "First-dev chop penalty"))
+    if row.get("short_near_favorite_gate_note"):
+        reasons.append(str(row.get("short_near_favorite_gate_note")))
     if row.get("rejection_score_cap_note"):
         reasons.append(str(row.get("rejection_score_cap_note")))
     return [reason for reason in reasons if reason]
@@ -10768,6 +11296,7 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
         "adaptive_score_delta": int(row.get("adaptive_score_delta", 0) or 0),
         "recent_tracker_score_delta": int(row.get("recent_tracker_score_delta", 0) or 0),
         "setup_type_score_delta": int(row.get("setup_type_score_delta", 0) or 0),
+        "short_near_favorite_gate_delta": int(row.get("short_near_favorite_gate_delta", 0) or 0),
         "clean_first_zone_score_bonus": int(row.get("clean_first_zone_score_bonus", 0) or 0),
         "market_regime_score_delta": int(row.get("market_regime_score_delta", 0) or 0),
         "rejection_score_cap": _coerce_float(row.get("rejection_score_cap")),
@@ -10790,6 +11319,12 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
             "retest_reference_level": row.get("retest_reference_level") or "",
             "post_earnings_active": bool(row.get("post_earnings_active")),
             "mid_earnings_watch": bool(row.get("mid_earnings_watch")),
+            "sma_breakout_watch": bool(row.get("sma_breakout_watch")),
+            "sma_breakout_confirmed": bool(row.get("sma_breakout_confirmed")),
+            "sma_breakout_sma_label": row.get("sma_breakout_sma_label") or "",
+            "sma_breakout_sma_level": _coerce_float(row.get("sma_breakout_sma_level")),
+            "sma_breakout_retest_level": row.get("sma_breakout_retest_level") or "",
+            "sma_breakout_retest_level_value": _coerce_float(row.get("sma_breakout_retest_level_value")),
         },
         "invalidation": {
             "label": invalidation_label,
@@ -12642,6 +13177,8 @@ def refine_priority_rows_with_directional_filters(
             or row.get("favorite_zone")
             or row.get("retest_followthrough")
             or row.get("extreme_move_watch")
+            or row.get("sma_breakout_watch")
+            or row.get("sma_breakout_confirmed")
             or int(row.get("first_dev_break_bonus", 0) or 0) > 0
             or bool(row.get("breakout_5d"))
         )
@@ -13044,6 +13581,7 @@ def _priority_is_preferred_custom_setup(row: dict) -> bool:
         MID_EARNINGS_EMA21_RETEST_FAMILY,
         MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
         "extreme_move_retest",
+        SMA_BREAKOUT_FAMILY,
     }:
         return True
     if setup_family == "post_earnings_avwap_bounce":
@@ -13123,10 +13661,24 @@ def _priority_is_extended_stdev_zone(row: dict) -> bool:
 def _priority_should_track_extended_stdev(row: dict) -> bool:
     if not isinstance(row, dict) or _priority_is_fresh_post_earnings_window(row):
         return False
+    if row.get("sma_breakout_confirmed"):
+        return False
+    if _is_mid_earnings_retest_family(row) and row.get("favorite_signals"):
+        return False
     return bool(
         _priority_is_extended_stdev_zone(row)
         or row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
         or row.get("mid_earnings_active_second_stdev_hold")
+    )
+
+
+def _priority_should_track_sma_breakout(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return bool(
+        row.get("sma_breakout_watch")
+        and not row.get("sma_breakout_confirmed")
+        and str(row.get("setup_family") or "") == SMA_BREAKOUT_TRACKING_FAMILY
     )
 
 
@@ -13138,6 +13690,19 @@ def _priority_stdev_tracking_rows(rows: list[dict]) -> list[dict]:
     def sort_key(row: dict) -> tuple[float, str]:
         score = _coerce_float(row.get("score"))
         return (-(score if score is not None else -10**9), str(row.get("symbol") or ""))
+
+    return sorted(tracking_rows, key=sort_key)
+
+
+def _priority_sma_breakout_tracking_rows(rows: list[dict]) -> list[dict]:
+    tracking_rows = _priority_unique_rows_by_symbol(
+        [row for row in rows or [] if _priority_should_track_sma_breakout(row)]
+    )
+
+    def sort_key(row: dict) -> tuple[float, int, str]:
+        score = _coerce_float(row.get("score"))
+        period = int(row.get("sma_breakout_sma_period", 0) or 0)
+        return (-(score if score is not None else -10**9), -period, str(row.get("symbol") or ""))
 
     return sorted(tracking_rows, key=sort_key)
 
@@ -13157,7 +13722,7 @@ def apply_final_priority_buckets(
     def _classify_priority_bucket(row: dict | None) -> tuple[str, bool, bool]:
         if not row or row.get("ranking_blocked"):
             return "", False, False
-        if _priority_should_track_extended_stdev(row):
+        if _priority_should_track_extended_stdev(row) or _priority_should_track_sma_breakout(row):
             return "", False, False
         favorite_candidate = (
             (
@@ -13220,6 +13785,7 @@ def _priority_setup_family_label(setup_family: str) -> str:
         "avwap": "AVWAP",
         "vwape": "AVWAPE",
         "ema": "EMA",
+        "sma": "SMA",
         "52w": "52w",
         "2nd": "2nd",
         "1stdev": "1st-dev",
@@ -13311,6 +13877,8 @@ def _priority_is_high_conviction(row: dict) -> bool:
         return False
     if str(row.get("setup_family") or "").startswith("post_earnings_") and not row.get("favorite_zone"):
         return False
+    if row.get("short_near_favorite_gate_note"):
+        return False
     return True
 
 
@@ -13382,6 +13950,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("adaptive", "adaptive_score_note"),
         ("recent tracker", "recent_tracker_score_note"),
         ("setup type", "setup_type_score_note"),
+        ("short gate", "short_near_favorite_gate_note"),
         ("clean zone", "clean_first_zone_score_note"),
         ("market regime", "market_regime_score_note"),
         ("score cap", "rejection_score_cap_note"),
@@ -13403,6 +13972,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("trendline break", "trendline_break_note"),
         ("post earnings", "post_earnings_note"),
         ("mid earnings", "mid_earnings_note"),
+        ("SMA breakout", "sma_breakout_note"),
     )
     for label, key in setup_note_keys:
         value = str(row.get(key) or "").strip()
@@ -13442,6 +14012,7 @@ def _priority_bucket_label(bucket: str) -> str:
         "near_favorite_zone": "near-zone",
         "post_earnings_play": "post-earnings",
         "stdev_retest_tracking": "stdev-track",
+        "sma_breakout_tracking": "sma-track",
     }.get(normalized, normalized or "unbucketed")
 
 
@@ -13461,7 +14032,12 @@ def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None
         symbol = str(row.get("symbol") or "").strip().upper()
         side = normalize_side(row.get("side", ""))
         score = _priority_score_text(row)
-        bucket_value = "stdev_retest_tracking" if _priority_should_track_extended_stdev(row) else str(row.get("priority_bucket") or "")
+        if _priority_should_track_sma_breakout(row):
+            bucket_value = "sma_breakout_tracking"
+        elif _priority_should_track_extended_stdev(row):
+            bucket_value = "stdev_retest_tracking"
+        else:
+            bucket_value = str(row.get("priority_bucket") or "")
         bucket = _priority_bucket_label(bucket_value)
         family = _priority_setup_family_label(str(row.get("setup_family") or "general"))
         zone = _priority_current_band_zone(row) or "None"
@@ -13473,6 +14049,102 @@ def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None
             f"bucket={bucket:<13} family={family:<28} zone={zone:<18} "
             f"trend={trend:<8} {warning_text}\n"
         )
+    handle.write("\n")
+
+
+def _best_swing_trade_sort_key(row: dict) -> tuple[float, int, int, str]:
+    score = _coerce_float(row.get("score"))
+    tracker_delta = int(row.get("setup_type_score_delta", 0) or 0) + int(row.get("recent_tracker_score_delta", 0) or 0)
+    clean_bonus = int(row.get("clean_first_zone_score_bonus", 0) or 0)
+    return (
+        -(score if score is not None else -10**9),
+        -tracker_delta,
+        -clean_bonus,
+        str(row.get("symbol") or ""),
+    )
+
+
+def _priority_best_swing_trade_rows(
+    rows: list[dict],
+    *,
+    per_side: int = BEST_SWING_TRADES_PER_SIDE,
+    total_limit: int = BEST_SWING_TRADES_TOTAL_LIMIT,
+) -> list[dict]:
+    candidates = []
+    for row in _priority_unique_rows_by_symbol(rows):
+        if row.get("priority_bucket") not in {"favorite_setup", "near_favorite_zone"}:
+            continue
+        if row.get("ranking_blocked"):
+            continue
+        if _priority_is_side_opposite_day(row):
+            continue
+        if row.get("short_near_favorite_gate_note"):
+            continue
+        if bool(row.get("compression_flag")) and int(row.get("compression_penalty", 0) or 0) >= PRIORITY_COMPRESSION_SCORE_PENALTY_SEVERE:
+            continue
+        if not _priority_has_specific_trigger(row):
+            continue
+        candidates.append(row)
+
+    best_rows = []
+    for side in ("LONG", "SHORT"):
+        side_rows = [
+            row for row in candidates
+            if normalize_side(row.get("side") or "") == side
+        ]
+        best_rows.extend(sorted(side_rows, key=_best_swing_trade_sort_key)[:max(1, int(per_side))])
+
+    best_rows = _priority_unique_rows_by_symbol(sorted(best_rows, key=_best_swing_trade_sort_key))
+    return best_rows[:max(1, int(total_limit))]
+
+
+def _best_swing_trade_evidence(row: dict) -> str:
+    evidence = []
+    if row.get("favorite_signals"):
+        evidence.append(
+            "signals="
+            + ", ".join(format_signal_label(evt) for evt in list(row.get("favorite_signals") or [])[:3])
+        )
+    if row.get("retest_followthrough"):
+        evidence.append("retest")
+    if row.get("breakout_5d"):
+        evidence.append("5d breakout")
+    if row.get("previous_day_range_break"):
+        evidence.append("prev-day range break")
+    if int(row.get("setup_type_score_delta", 0) or 0):
+        evidence.append(f"setup type {int(row.get('setup_type_score_delta', 0) or 0):+d}")
+    if int(row.get("recent_tracker_score_delta", 0) or 0):
+        evidence.append(f"recent tracker {int(row.get('recent_tracker_score_delta', 0) or 0):+d}")
+    if row.get("market_regime_score_note"):
+        evidence.append(str(row.get("market_regime_score_note")))
+    if not evidence:
+        _, setup_notes = _priority_note_parts(row)
+        evidence.extend(setup_notes[:2])
+    return "; ".join(evidence[:5]) or "final score rank"
+
+
+def _write_best_swing_trade_rows(handle, title: str, rows: list[dict]) -> None:
+    handle.write(f"{title}\n")
+    handle.write("-" * len(title) + "\n")
+    if not rows:
+        handle.write("None\n\n")
+        return
+
+    for rank, row in enumerate(rows, start=1):
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = normalize_side(row.get("side", ""))
+        bucket = _priority_bucket_label(str(row.get("priority_bucket") or ""))
+        family = _priority_setup_family_label(str(row.get("setup_family") or "general"))
+        zone = _priority_current_band_zone(row) or "None"
+        trend = str(row.get("trend_20d") or "SIDEWAYS").strip().upper()
+        warnings = row.get("candidate_rejection_reasons") or []
+        warning_text = "clean" if not warnings else "; ".join(str(item) for item in warnings[:2])
+        handle.write(
+            f"{rank:>2}. {symbol:<6} {side:<5} score={_priority_score_text(row):<5} "
+            f"{bucket:<10} {family:<26} zone={zone:<18} trend={trend:<8}\n"
+        )
+        handle.write(f"    evidence: {_best_swing_trade_evidence(row)}\n")
+        handle.write(f"    risk: {warning_text}\n")
     handle.write("\n")
 
 
@@ -13546,11 +14218,16 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
+    sma_breakout_tracking_rows = _priority_sma_breakout_tracking_rows(priority_rows)
     stdev_tracking_rows = _priority_stdev_tracking_rows(priority_rows)
-    all_priority_rows = _priority_unique_rows_by_symbol(
-        favorites + watchlist + post_earnings_rows + stdev_tracking_rows
+    actionable_priority_rows = _priority_unique_rows_by_symbol(
+        favorites + watchlist + post_earnings_rows
     )
-    high_conviction_rows = _priority_high_conviction_rows(all_priority_rows)
+    report_rows = _priority_unique_rows_by_symbol(
+        actionable_priority_rows + sma_breakout_tracking_rows + stdev_tracking_rows
+    )
+    high_conviction_rows = _priority_high_conviction_rows(actionable_priority_rows)
+    best_swing_rows = _priority_best_swing_trade_rows(actionable_priority_rows)
 
     buffer = io.StringIO()
     handle = buffer
@@ -13559,16 +14236,19 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     handle.write(
         "Focus: generalized high-quality setups across AVWAP breaks, post-earnings gap structures, and mid-earnings continuation retests\n\n"
     )
-    _write_priority_data_freshness(handle, all_priority_rows)
+    _write_priority_data_freshness(handle, report_rows)
     handle.write("Copy/paste lists\n")
     handle.write("================\n")
     _write_priority_copy_lists(handle, "High conviction shortlist", high_conviction_rows)
+    _write_priority_copy_lists(handle, "Best swing trades today", best_swing_rows)
     _write_priority_copy_lists(handle, "Favorite setups", favorites)
     _write_priority_copy_lists(handle, "Near favorite zones", watchlist)
+    _write_priority_copy_lists(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
     _write_priority_copy_lists(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
-    _write_priority_setup_copy_lists(handle, "By setup type", all_priority_rows)
+    _write_priority_setup_copy_lists(handle, "By setup type", actionable_priority_rows)
 
-    _write_priority_score_rankings(handle, "Overall score rankings", all_priority_rows)
+    _write_best_swing_trade_rows(handle, "Best swing trades today", best_swing_rows)
+    _write_priority_score_rankings(handle, "Overall score rankings", actionable_priority_rows)
 
     handle.write("Detailed setup notes\n")
     handle.write("====================\n")
@@ -13576,6 +14256,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     _write_priority_detail_rows(handle, "Best current favorite setups", favorites)
     _write_priority_detail_rows(handle, "Near favorite zones", watchlist)
     _write_priority_detail_rows(handle, "Post earnings plays", post_earnings_rows)
+    _write_priority_detail_rows(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
     _write_priority_detail_rows(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
@@ -13595,6 +14276,7 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         row for row in ranked_rows
         if _is_post_earnings_play_ready(row)
     ]
+    sma_breakout_tracking_rows = _priority_sma_breakout_tracking_rows(ranked_rows)
     stdev_tracking_rows = _priority_stdev_tracking_rows(ranked_rows)
 
     def _build_entry(row: dict, bucket: str, rank: int) -> dict:
@@ -13611,6 +14293,8 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "recent_tracker_score_note": row.get("recent_tracker_score_note") or "",
             "setup_type_score_delta": int(row.get("setup_type_score_delta", 0) or 0),
             "setup_type_score_note": row.get("setup_type_score_note") or "",
+            "short_near_favorite_gate_delta": int(row.get("short_near_favorite_gate_delta", 0) or 0),
+            "short_near_favorite_gate_note": row.get("short_near_favorite_gate_note") or "",
             "clean_first_zone_score_bonus": int(row.get("clean_first_zone_score_bonus", 0) or 0),
             "clean_first_zone_score_note": row.get("clean_first_zone_score_note") or "",
             "market_regime_score_delta": int(row.get("market_regime_score_delta", 0) or 0),
@@ -13677,6 +14361,18 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "mid_earnings_ema21_confluence": bool(row.get("mid_earnings_ema21_confluence")),
             "mid_earnings_first_dev_confluence": bool(row.get("mid_earnings_first_dev_confluence")),
             "mid_earnings_note": row.get("mid_earnings_note") or "",
+            "sma_breakout_watch": bool(row.get("sma_breakout_watch")),
+            "sma_breakout_confirmed": bool(row.get("sma_breakout_confirmed")),
+            "sma_breakout_signal": row.get("sma_breakout_signal") or "",
+            "sma_breakout_sma_label": row.get("sma_breakout_sma_label") or "",
+            "sma_breakout_sma_period": int(row.get("sma_breakout_sma_period", 0) or 0),
+            "sma_breakout_sma_level": _coerce_float(row.get("sma_breakout_sma_level")),
+            "sma_breakout_retest_level": row.get("sma_breakout_retest_level") or "",
+            "sma_breakout_retest_level_value": _coerce_float(row.get("sma_breakout_retest_level_value")),
+            "sma_breakout_breakout_date": row.get("sma_breakout_breakout_date") or "",
+            "sma_breakout_retest_date": row.get("sma_breakout_retest_date") or "",
+            "sma_breakout_confirmation_date": row.get("sma_breakout_confirmation_date") or "",
+            "sma_breakout_note": row.get("sma_breakout_note") or "",
             "extension_note": row.get("extension_note") or "",
             "first_dev_note": row.get("first_dev_note") or "",
             "compression_flag": bool(row.get("compression_flag")),
@@ -13701,12 +14397,23 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         for idx, row in enumerate(high_conviction_rows)
     ]
     post_earnings_entries = [_build_entry(row, "post_earnings_play", idx + 1) for idx, row in enumerate(post_earnings_rows)]
+    sma_breakout_tracking_entries = [
+        _build_entry(row, "sma_breakout_tracking", idx + 1)
+        for idx, row in enumerate(sma_breakout_tracking_rows)
+    ]
     stdev_tracking_entries = [
         _build_entry(row, "stdev_retest_tracking", idx + 1)
         for idx, row in enumerate(stdev_tracking_rows)
     ]
     symbol_map = {}
-    for entry in favorites + near_favorites + post_earnings_entries + high_conviction + stdev_tracking_entries:
+    for entry in (
+        favorites
+        + near_favorites
+        + post_earnings_entries
+        + high_conviction
+        + sma_breakout_tracking_entries
+        + stdev_tracking_entries
+    ):
         symbol_map.setdefault(entry["symbol"], entry)
 
     payload = {
@@ -13718,6 +14425,7 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         "favorites": favorites,
         "near_favorite_zones": near_favorites,
         "post_earnings_plays": post_earnings_entries,
+        "sma_breakout_tracking": sma_breakout_tracking_entries,
         "stdev_retest_tracking": stdev_tracking_entries,
         "symbols": symbol_map,
     }
@@ -14646,6 +15354,22 @@ def _evaluate_priority_snapshot_for_date(
                 mid_signal_levels.get(signal_name),
             )
 
+    sma_breakout_summary = analyze_sma_breakout_setup(
+        df,
+        side,
+        indicator_frame=indicator_frame,
+        atr20=atr20,
+    )
+    if sma_breakout_summary.get("favorite_signal") and sma_breakout_summary.get("signal"):
+        add_signal(
+            sma_breakout_summary.get("signal"),
+            "SMA",
+            sma_breakout_summary.get("breakout_date", ""),
+            None,
+            None,
+            sma_breakout_summary.get("breakout_sma_level"),
+        )
+
     symbol_events_today = sorted(set(symbol_events_today))
     previous_entries = history_state.get(symbol, [])
     previous_events = previous_entries[-1]["events"] if previous_entries else []
@@ -14843,6 +15567,18 @@ def _evaluate_priority_snapshot_for_date(
         "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
         "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
         "mid_earnings_note": mid_earnings_summary.get("note", ""),
+        "sma_breakout_watch": bool(sma_breakout_summary.get("watch")),
+        "sma_breakout_confirmed": bool(sma_breakout_summary.get("confirmed")),
+        "sma_breakout_signal": sma_breakout_summary.get("signal", ""),
+        "sma_breakout_sma_label": sma_breakout_summary.get("breakout_sma_label", ""),
+        "sma_breakout_sma_period": int(sma_breakout_summary.get("breakout_sma_period", 0) or 0),
+        "sma_breakout_sma_level": _coerce_float(sma_breakout_summary.get("breakout_sma_level")),
+        "sma_breakout_breakout_date": sma_breakout_summary.get("breakout_date", ""),
+        "sma_breakout_retest_level": sma_breakout_summary.get("retest_level", ""),
+        "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
+        "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
+        "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+        "sma_breakout_note": sma_breakout_summary.get("note", ""),
         "entry_feature_snapshot": entry_feature_snapshot,
         **bouncebot_focus_context,
     }
@@ -14877,6 +15613,19 @@ def _evaluate_priority_snapshot_for_date(
         extension_note=extension_note,
         mid_earnings_active_second_stdev_hold=bool(mid_earnings_summary.get("active_second_stdev_hold")),
         mid_earnings_primary_trigger_level=mid_earnings_summary.get("primary_trigger_level", ""),
+        sma_breakout_watch=bool(sma_breakout_summary.get("watch")),
+        sma_breakout_confirmed=bool(sma_breakout_summary.get("confirmed")),
+        sma_breakout_signal=sma_breakout_summary.get("signal", ""),
+        sma_breakout_score_bonus=int(sma_breakout_summary.get("score_bonus", 0) or 0),
+        sma_breakout_note=sma_breakout_summary.get("note", ""),
+        sma_breakout_sma_label=sma_breakout_summary.get("breakout_sma_label", ""),
+        sma_breakout_sma_period=int(sma_breakout_summary.get("breakout_sma_period", 0) or 0),
+        sma_breakout_sma_level=_coerce_float(sma_breakout_summary.get("breakout_sma_level")),
+        sma_breakout_retest_level=sma_breakout_summary.get("retest_level", ""),
+        sma_breakout_retest_level_value=_coerce_float(sma_breakout_summary.get("retest_level_value")),
+        sma_breakout_breakout_date=sma_breakout_summary.get("breakout_date", ""),
+        sma_breakout_retest_date=sma_breakout_summary.get("retest_date", ""),
+        sma_breakout_confirmation_date=sma_breakout_summary.get("confirmation_date", ""),
     )
     priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
     priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
@@ -15019,6 +15768,18 @@ def _evaluate_priority_snapshot_for_date(
         "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
         "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
         "mid_earnings_note": mid_earnings_summary.get("note", ""),
+        "sma_breakout_watch": bool(sma_breakout_summary.get("watch")),
+        "sma_breakout_confirmed": bool(sma_breakout_summary.get("confirmed")),
+        "sma_breakout_signal": sma_breakout_summary.get("signal", ""),
+        "sma_breakout_sma_label": sma_breakout_summary.get("breakout_sma_label", ""),
+        "sma_breakout_sma_period": int(sma_breakout_summary.get("breakout_sma_period", 0) or 0),
+        "sma_breakout_sma_level": _coerce_float(sma_breakout_summary.get("breakout_sma_level")),
+        "sma_breakout_breakout_date": sma_breakout_summary.get("breakout_date", ""),
+        "sma_breakout_retest_level": sma_breakout_summary.get("retest_level", ""),
+        "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
+        "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
+        "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+        "sma_breakout_note": sma_breakout_summary.get("note", ""),
         "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
         "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
         "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
@@ -15034,6 +15795,8 @@ def _evaluate_priority_snapshot_for_date(
         "recent_tracker_score_note": "",
         "setup_type_score_delta": 0,
         "setup_type_score_note": "",
+        "short_near_favorite_gate_delta": 0,
+        "short_near_favorite_gate_note": "",
         "market_regime_score_delta": 0,
         "market_regime_score_note": "",
         "rejection_score_cap": None,
@@ -15092,7 +15855,11 @@ def backfill_setup_tracker_from_recent_sessions(
             ]
             symbol_earnings = [value for value in symbol_earnings if value is not None]
 
-            days_needed = max(ATR_LENGTH + 220, (datetime.now().date() - earliest_eval_date).days + ATR_LENGTH + 20)
+            days_needed = max(
+                PRIORITY_SMA_LOOKBACK_DAYS,
+                ATR_LENGTH + 220,
+                (datetime.now().date() - earliest_eval_date).days + ATR_LENGTH + 20,
+            )
             if symbol_earnings:
                 oldest_relevant_anchor = min(symbol_earnings)
                 days_needed = max(days_needed, (datetime.now().date() - oldest_relevant_anchor).days + ATR_LENGTH + 20)
@@ -15177,6 +15944,7 @@ def backfill_setup_tracker_from_recent_sessions(
                 ai_state,
                 feature_rows_by_symbol,
             )
+            apply_short_near_favorite_quality_gates(priority_rows, ai_state, feature_rows_by_symbol)
             apply_market_regime_score_adjustments(priority_rows, ai_state, feature_rows_by_symbol)
             apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
             attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
@@ -15363,11 +16131,10 @@ def run_master(
         prev_iso = prev_cache.get(sym)
 
         if not curr_iso and not prev_iso:
-            logging.warning(f"{sym}: no earnings anchors available.")
-            continue
+            logging.warning(f"{sym}: no earnings anchors available; scanning non-anchor setups only.")
 
         # Determine days needed for a single daily fetch
-        days_needed = ATR_LENGTH + 5
+        days_needed = max(ATR_LENGTH + 5, PRIORITY_SMA_LOOKBACK_DAYS)
         anchor_dates = []
         if curr_iso:
             anchor_dates.append(datetime.fromisoformat(curr_iso).date())
@@ -15729,6 +16496,22 @@ def run_master(
                     mid_signal_levels.get(signal_name),
                 )
 
+        sma_breakout_summary = analyze_sma_breakout_setup(
+            df,
+            side,
+            indicator_frame=indicator_frame,
+            atr20=atr20,
+        )
+        if sma_breakout_summary.get("favorite_signal") and sma_breakout_summary.get("signal"):
+            add_signal(
+                sma_breakout_summary.get("signal"),
+                "SMA",
+                sma_breakout_summary.get("breakout_date", ""),
+                None,
+                None,
+                sma_breakout_summary.get("breakout_sma_level"),
+            )
+
         # dedupe and sort events for consistency
         symbol_events_today = sorted(set(symbol_events_today))
 
@@ -16000,6 +16783,18 @@ def run_master(
             "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
             "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
             "mid_earnings_note": mid_earnings_summary.get("note", ""),
+            "sma_breakout_watch": bool(sma_breakout_summary.get("watch")),
+            "sma_breakout_confirmed": bool(sma_breakout_summary.get("confirmed")),
+            "sma_breakout_signal": sma_breakout_summary.get("signal", ""),
+            "sma_breakout_sma_label": sma_breakout_summary.get("breakout_sma_label", ""),
+            "sma_breakout_sma_period": int(sma_breakout_summary.get("breakout_sma_period", 0) or 0),
+            "sma_breakout_sma_level": _coerce_float(sma_breakout_summary.get("breakout_sma_level")),
+            "sma_breakout_breakout_date": sma_breakout_summary.get("breakout_date", ""),
+            "sma_breakout_retest_level": sma_breakout_summary.get("retest_level", ""),
+            "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
+            "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
+            "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+            "sma_breakout_note": sma_breakout_summary.get("note", ""),
             "entry_feature_snapshot": entry_feature_snapshot,
             **bouncebot_focus_context,
         }
@@ -16071,6 +16866,19 @@ def run_master(
             extension_note=extension_note,
             mid_earnings_active_second_stdev_hold=bool(mid_earnings_summary.get("active_second_stdev_hold")),
             mid_earnings_primary_trigger_level=mid_earnings_summary.get("primary_trigger_level", ""),
+            sma_breakout_watch=bool(sma_breakout_summary.get("watch")),
+            sma_breakout_confirmed=bool(sma_breakout_summary.get("confirmed")),
+            sma_breakout_signal=sma_breakout_summary.get("signal", ""),
+            sma_breakout_score_bonus=int(sma_breakout_summary.get("score_bonus", 0) or 0),
+            sma_breakout_note=sma_breakout_summary.get("note", ""),
+            sma_breakout_sma_label=sma_breakout_summary.get("breakout_sma_label", ""),
+            sma_breakout_sma_period=int(sma_breakout_summary.get("breakout_sma_period", 0) or 0),
+            sma_breakout_sma_level=_coerce_float(sma_breakout_summary.get("breakout_sma_level")),
+            sma_breakout_retest_level=sma_breakout_summary.get("retest_level", ""),
+            sma_breakout_retest_level_value=_coerce_float(sma_breakout_summary.get("retest_level_value")),
+            sma_breakout_breakout_date=sma_breakout_summary.get("breakout_date", ""),
+            sma_breakout_retest_date=sma_breakout_summary.get("retest_date", ""),
+            sma_breakout_confirmation_date=sma_breakout_summary.get("confirmation_date", ""),
         )
         priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
         priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
@@ -16265,6 +17073,18 @@ def run_master(
             "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
             "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
             "mid_earnings_note": mid_earnings_summary.get("note", ""),
+            "sma_breakout_watch": bool(sma_breakout_summary.get("watch")),
+            "sma_breakout_confirmed": bool(sma_breakout_summary.get("confirmed")),
+            "sma_breakout_signal": sma_breakout_summary.get("signal", ""),
+            "sma_breakout_sma_label": sma_breakout_summary.get("breakout_sma_label", ""),
+            "sma_breakout_sma_period": int(sma_breakout_summary.get("breakout_sma_period", 0) or 0),
+            "sma_breakout_sma_level": _coerce_float(sma_breakout_summary.get("breakout_sma_level")),
+            "sma_breakout_breakout_date": sma_breakout_summary.get("breakout_date", ""),
+            "sma_breakout_retest_level": sma_breakout_summary.get("retest_level", ""),
+            "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
+            "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
+            "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+            "sma_breakout_note": sma_breakout_summary.get("note", ""),
             "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
@@ -16280,6 +17100,8 @@ def run_master(
             "recent_tracker_score_note": "",
             "setup_type_score_delta": 0,
             "setup_type_score_note": "",
+            "short_near_favorite_gate_delta": 0,
+            "short_near_favorite_gate_note": "",
             "market_regime_score_delta": 0,
             "market_regime_score_note": "",
             "rejection_score_cap": None,
@@ -16340,6 +17162,7 @@ def run_master(
         ai_state,
         feature_rows_by_symbol,
     )
+    apply_short_near_favorite_quality_gates(priority_rows, ai_state, feature_rows_by_symbol)
     apply_market_regime_score_adjustments(priority_rows, ai_state, feature_rows_by_symbol)
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
@@ -16655,6 +17478,18 @@ def run_master(
         "mid_earnings_ema21_confluence",
         "mid_earnings_first_dev_confluence",
         "mid_earnings_note",
+        "sma_breakout_watch",
+        "sma_breakout_confirmed",
+        "sma_breakout_signal",
+        "sma_breakout_sma_label",
+        "sma_breakout_sma_period",
+        "sma_breakout_sma_level",
+        "sma_breakout_breakout_date",
+        "sma_breakout_retest_level",
+        "sma_breakout_retest_level_value",
+        "sma_breakout_retest_date",
+        "sma_breakout_confirmation_date",
+        "sma_breakout_note",
         "priority_score",
         "priority_bucket",
         "is_favorite_setup",
@@ -16665,6 +17500,8 @@ def run_master(
         "recent_tracker_score_note",
         "setup_type_score_delta",
         "setup_type_score_note",
+        "short_near_favorite_gate_delta",
+        "short_near_favorite_gate_note",
         "market_regime_score_delta",
         "market_regime_score_note",
         "rejection_score_cap",

@@ -9,9 +9,11 @@ from pathlib import Path
 import pandas as pd
 
 from master_avwap import (
+    default_priority_scoring_config,
     export_setup_tracker_views,
     load_priority_scoring_config,
     load_setup_tracker_payload,
+    normalize_priority_signal_weight,
     save_priority_scoring_config,
 )
 from project_paths import (
@@ -66,6 +68,10 @@ RULE_WHITELIST = {
 
 DEFAULT_MIN_SETUPS = 8
 DEFAULT_MIN_CLOSED_SETUPS = 12
+CURRENT_SIGNAL_TUNER_DELTA_MAX = 10
+CONTEXT_SIGNAL_TUNER_DELTA_MAX = 6
+ATTRIBUTE_RULE_DELTA_MAX = 18
+TRACKER_TUNER_R_CLIP = 4.0
 
 
 def _load_csv(path: Path) -> pd.DataFrame:
@@ -87,14 +93,22 @@ def _coerce_float(value):
     return parsed
 
 
+def _clip_outcome_r(value, limit: float = TRACKER_TUNER_R_CLIP) -> float | None:
+    parsed = _coerce_float(value)
+    if parsed is None:
+        return None
+    clip_limit = max(0.5, float(limit))
+    return max(-clip_limit, min(clip_limit, float(parsed)))
+
+
 def _select_outcome_avg_r(row) -> float | None:
     closed_count = _coerce_float(
         row.get("closed_tradeable_setup_count", row.get("closed_tradeable_scenario_count", 0))
     )
     avg_closed_r = _coerce_float(row.get("avg_closed_r"))
     if closed_count and closed_count > 0 and avg_closed_r is not None:
-        return avg_closed_r
-    return _coerce_float(row.get("avg_total_r"))
+        return _clip_outcome_r(avg_closed_r)
+    return _clip_outcome_r(row.get("avg_total_r"))
 
 
 def _row_closed_count(row) -> int:
@@ -231,6 +245,7 @@ def _recommend_signal_changes(
     if signal_rows.empty:
         return recommendations
 
+    default_config = default_priority_scoring_config()
     aggregated: dict[tuple[str, str, str], dict] = {}
     for _, row in signal_rows.iterrows():
         side = str(row.get("side") or "").strip().upper()
@@ -243,7 +258,7 @@ def _recommend_signal_changes(
             baseline,
             min_setups=min_setups,
             min_closed_setups=min_closed_setups,
-            max_abs=12 if bucket == "current" else 8,
+            max_abs=CURRENT_SIGNAL_TUNER_DELTA_MAX if bucket == "current" else CONTEXT_SIGNAL_TUNER_DELTA_MAX,
         )
         if score_delta == 0:
             continue
@@ -301,12 +316,24 @@ def _recommend_signal_changes(
             .get(aggregate["signal"], 0)
             or 0
         )
-        weight_delta = int(round(float(aggregate.get("weighted_delta", 0.0) or 0.0) / evidence_count))
-        if abs(weight_delta) < 2:
+        default_weight = int(
+            default_config.get("signal_weights", {})
+            .get(aggregate["bucket"], {})
+            .get(aggregate["side"], {})
+            .get(aggregate["signal"], 0)
+            or 0
+        )
+        evidence_delta = int(round(float(aggregate.get("weighted_delta", 0.0) or 0.0) / evidence_count))
+        if abs(evidence_delta) < 2:
             continue
-        new_weight = max(0, current_weight + weight_delta)
+        new_weight = normalize_priority_signal_weight(
+            aggregate["bucket"],
+            aggregate["signal"],
+            default_weight + evidence_delta,
+        )
         if new_weight == current_weight:
             continue
+        config_delta = int(new_weight) - int(current_weight)
 
         recommendations.append(
             {
@@ -326,7 +353,8 @@ def _recommend_signal_changes(
                 "stop_rate": float(aggregate.get("weighted_stop_rate", 0.0) or 0.0) / evidence_count,
                 "baseline_stop_rate": float(aggregate.get("weighted_baseline_stop_rate", 0.0) or 0.0) / evidence_count,
                 "priority_bucket_summary": ", ".join(aggregate.get("priority_bucket_summary", [])),
-                "weight_delta": int(weight_delta),
+                "weight_delta": int(config_delta),
+                "evidence_delta": int(evidence_delta),
                 "old_weight": int(current_weight),
                 "new_weight": int(new_weight),
             }
@@ -373,7 +401,7 @@ def _recommend_attribute_rules(
             baseline,
             min_setups=min_setups,
             min_closed_setups=min_closed_setups,
-            max_abs=10,
+            max_abs=ATTRIBUTE_RULE_DELTA_MAX,
         )
         if delta == 0:
             continue
@@ -467,6 +495,7 @@ def _build_report_text(
     lines = []
     lines.append("Master AVWAP scoring tuner")
     lines.append("=" * 80)
+    lines.append(f"Outcome R is clipped to +/-{TRACKER_TUNER_R_CLIP:.1f}R before tuning recommendations.")
     lines.append("")
     lines.append("Baselines")
     lines.append("-" * 80)
@@ -487,9 +516,12 @@ def _build_report_text(
         lines.append("No signal weight changes recommended.")
     else:
         for change in signal_changes[:24]:
+            evidence_text = ""
+            if int(change.get("evidence_delta", change.get("weight_delta", 0)) or 0) != int(change["weight_delta"]):
+                evidence_text = f", evidence {int(change.get('evidence_delta', 0) or 0):+d}"
             lines.append(
                 f"{change['side']} {change['bucket']} {change['signal']}: "
-                f"{change['old_weight']} -> {change['new_weight']} ({change['weight_delta']:+d}) "
+                f"{change['old_weight']} -> {change['new_weight']} ({change['weight_delta']:+d}{evidence_text}) "
                 f"setups={change['setup_count']} closed={change.get('closed_setup_count', 0)} "
                 f"avg_outcome_r={change['avg_outcome_r']:.2f}"
             )

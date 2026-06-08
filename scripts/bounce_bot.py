@@ -69,6 +69,7 @@ from project_paths import (
     ROOT_DIR,
     LONGS_FILE,
     SHORTS_FILE,
+    REPORTS_DIR,
     BOUNCE_LOG_FILE,
     TRADING_BOT_LOG_FILE,
     INTRADAY_BOUNCES_FILE,
@@ -103,6 +104,8 @@ INTRADAY_BOUNCE_CANDIDATES_CSV = INTRADAY_BOUNCE_CANDIDATES_FILE
 INTRADAY_BOUNCE_OUTCOMES_CSV = INTRADAY_BOUNCE_OUTCOMES_FILE
 INTRADAY_BOUNCE_OUTCOME_STATE_JSON = INTRADAY_BOUNCE_OUTCOME_STATE_FILE
 INTRADAY_BOUNCE_FEEDBACK_CSV = INTRADAY_BOUNCE_FEEDBACK_FILE
+INTRADAY_BOUNCE_PERFORMANCE_CSV = INTRADAY_BOUNCE_CANDIDATES_CSV.with_name("intraday_bounce_performance.csv")
+INTRADAY_BOUNCE_PERFORMANCE_REPORT = REPORTS_DIR / "intraday_bounce_performance.txt"
 MASTER_AVWAP_SIGNALS_FILENAME = AVWAP_SIGNALS_FILE
 MASTER_AVWAP_FOCUS_FILENAME = MASTER_AVWAP_FOCUS_FILE
 STRENGTH_SCAN_LOG_FILENAME = RRS_STRENGTH_LOG_FILE
@@ -125,6 +128,12 @@ ATR_PERIOD = 20
 THRESHOLD_MULTIPLIER = 0.02
 EMA_21_TOUCH_BUFFER_ATR = 0.002
 EMA_21_TOUCH_BUFFER_MIN = 0.01
+MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY = "mid_earnings_above_2nd_stdev"
+H1_MID_EARNINGS_BOUNCE_LEVELS = {
+    "h1_ema_15": "H1 15 EMA",
+    "h1_sma_20": "H1 20 SMA",
+}
+H1_MID_EARNINGS_MIN_BARS = 21
 EMA_FRESH_TOUCH_LOOKBACK_BARS = 3
 EMA_FRESH_TOUCH_BUFFER_ATR = 0.03
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
@@ -199,6 +208,8 @@ BOUNCE_TYPE_LABELS = {
     "ema_8": "8 EMA",
     "ema_15": "15 EMA",
     "ema_21": "21 EMA",
+    "h1_ema_15": "H1 15 EMA",
+    "h1_sma_20": "H1 20 SMA",
     "vwap_upper_band": "VWAP 1SD Upper",
     "vwap_lower_band": "VWAP 1SD Lower",
     "dynamic_vwap_upper_band": "Dynamic VWAP 1SD Upper",
@@ -338,6 +349,8 @@ PREV_DAY_LEVEL_MAX_WRONG_SIDE_CLOSES = 1
 PREV_DAY_LEVEL_RECENT_RESPECT_BARS = 6
 BOUNCE_LEARNING_SCHEMA_VERSION = 1
 BOUNCE_OUTCOME_MILESTONE_BARS = (1, 3, 6, 12)
+BOUNCE_PERFORMANCE_MIN_SAMPLES = 5
+BOUNCE_PERFORMANCE_R_CLIP = 4.0
 BOUNCE_CANDIDATE_EVENT_COLUMNS = [
     "schema_version",
     "event_id",
@@ -725,6 +738,392 @@ def record_bounce_feedback(feedback_context, rating, reason="", source="gui") ->
     return INTRADAY_BOUNCE_FEEDBACK_CSV
 
 
+def _bounce_perf_float(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(parsed):
+        return None
+    return parsed
+
+
+def _bounce_perf_clip_r(value, limit: float = BOUNCE_PERFORMANCE_R_CLIP):
+    numeric = _bounce_perf_float(value)
+    if numeric is None:
+        return None
+    clip_limit = max(0.5, float(limit))
+    return max(-clip_limit, min(clip_limit, float(numeric)))
+
+
+def _bounce_perf_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y"}
+
+
+def _split_bounce_type_text(value) -> list[str]:
+    items = []
+    for item in re.split(r"[;,]", str(value or "")):
+        item = item.strip()
+        if item:
+            items.append(item)
+    return sorted(set(items))
+
+
+def _read_bounce_learning_csv(path: Path, columns: list[str]) -> pd.DataFrame:
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    desired = set(columns)
+    try:
+        return pd.read_csv(path, usecols=lambda column: column in desired)
+    except Exception:
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            return pd.DataFrame()
+
+
+def _bounce_time_bucket(value) -> str:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return "unknown"
+    minutes = int(parsed.hour) * 60 + int(parsed.minute)
+    if minutes < (10 * 60 + 30):
+        return "opening_drive"
+    if minutes < (12 * 60):
+        return "late_morning"
+    if minutes < (14 * 60):
+        return "midday"
+    if minutes < (15 * 60 + 30):
+        return "afternoon"
+    return "closing_window"
+
+
+def _bounce_rrs_alignment(row: dict) -> str:
+    direction = str(row.get("direction") or "").strip().lower()
+    rrs_value = _bounce_perf_float(row.get("rrs_spy"))
+    if rrs_value is None:
+        return "unknown"
+    if direction == "long":
+        if rrs_value >= 2.0:
+            return "strong_aligned"
+        if rrs_value > 0:
+            return "aligned"
+        return "counter"
+    if direction == "short":
+        if rrs_value <= -2.0:
+            return "strong_aligned"
+        if rrs_value < 0:
+            return "aligned"
+        return "counter"
+    return "unknown"
+
+
+def _latest_bounce_outcome_rows(outcomes_df: pd.DataFrame) -> pd.DataFrame:
+    if outcomes_df.empty or "event_id" not in outcomes_df.columns:
+        return pd.DataFrame()
+    outcomes = outcomes_df.copy()
+    event_type_series = (
+        outcomes["event_type"]
+        if "event_type" in outcomes.columns
+        else pd.Series([""] * len(outcomes), index=outcomes.index)
+    )
+    event_priority = {
+        "registered": 0,
+        "1_bar": 1,
+        "3_bar": 2,
+        "6_bar": 3,
+        "12_bar": 4,
+        "update": 5,
+        "final": 6,
+    }
+    outcomes["_event_priority"] = event_type_series.map(
+        lambda value: event_priority.get(str(value or "").strip().lower(), 0)
+    )
+    bars_elapsed_series = (
+        outcomes["bars_elapsed"]
+        if "bars_elapsed" in outcomes.columns
+        else pd.Series([0] * len(outcomes), index=outcomes.index)
+    )
+    logged_at_series = (
+        outcomes["logged_at"]
+        if "logged_at" in outcomes.columns
+        else pd.Series([""] * len(outcomes), index=outcomes.index)
+    )
+    outcomes["_bars_elapsed"] = pd.to_numeric(bars_elapsed_series, errors="coerce").fillna(0)
+    outcomes["_logged_at"] = pd.to_datetime(
+        logged_at_series,
+        errors="coerce",
+    )
+    outcomes = outcomes.sort_values(["event_id", "_event_priority", "_bars_elapsed", "_logged_at"])
+    return outcomes.drop_duplicates(subset=["event_id"], keep="last")
+
+
+def build_intraday_bounce_performance_rows(
+    *,
+    candidates_path: Path = INTRADAY_BOUNCE_CANDIDATES_CSV,
+    outcomes_path: Path = INTRADAY_BOUNCE_OUTCOMES_CSV,
+    min_samples: int = BOUNCE_PERFORMANCE_MIN_SAMPLES,
+) -> list[dict]:
+    candidate_columns = [
+        "event_id",
+        "event_type",
+        "logged_at",
+        "trade_date",
+        "symbol",
+        "direction",
+        "bounce_types",
+        "score",
+        "risk_per_share",
+        "rrs_spy",
+        "rrs_sector",
+        "rrs_industry",
+        "market_environment",
+    ]
+    outcome_columns = [
+        "event_id",
+        "event_type",
+        "logged_at",
+        "entry_time",
+        "bars_elapsed",
+        "close_r",
+        "mfe_r",
+        "mae_r",
+        "target_1r_hit",
+        "target_2r_hit",
+        "stop_hit",
+        "status",
+    ]
+    candidates = _read_bounce_learning_csv(candidates_path, candidate_columns)
+    outcomes = _read_bounce_learning_csv(outcomes_path, outcome_columns)
+    if candidates.empty or outcomes.empty or "event_id" not in candidates.columns:
+        return []
+
+    if "event_type" not in candidates.columns:
+        return []
+    candidates = candidates[candidates["event_type"].astype(str).str.lower() == "confirmed"].copy()
+    if candidates.empty:
+        return []
+    candidate_logged_series = (
+        candidates["logged_at"]
+        if "logged_at" in candidates.columns
+        else pd.Series([""] * len(candidates), index=candidates.index)
+    )
+    candidates["_logged_at"] = pd.to_datetime(candidate_logged_series, errors="coerce")
+    candidates = candidates.sort_values(["event_id", "_logged_at"]).drop_duplicates(subset=["event_id"], keep="last")
+    latest_outcomes = _latest_bounce_outcome_rows(outcomes)
+    if latest_outcomes.empty:
+        return []
+
+    joined = candidates.merge(latest_outcomes, on="event_id", how="inner", suffixes=("", "_outcome"))
+    if joined.empty:
+        return []
+
+    observations = []
+    for record in joined.to_dict("records"):
+        close_r = _bounce_perf_clip_r(record.get("close_r"))
+        if close_r is None:
+            continue
+        direction = str(record.get("direction") or "").strip().lower() or "unknown"
+        bounce_types = _split_bounce_type_text(record.get("bounce_types"))
+        combo = "+".join(bounce_types) if bounce_types else "unknown"
+        common = {
+            "direction": direction,
+            "event_id": record.get("event_id"),
+            "symbol": str(record.get("symbol") or "").strip().upper(),
+            "score": _bounce_perf_float(record.get("score")),
+            "risk_per_share": _bounce_perf_float(record.get("risk_per_share")),
+            "close_r": close_r,
+            "mfe_r": _bounce_perf_clip_r(record.get("mfe_r")),
+            "mae_r": _bounce_perf_clip_r(record.get("mae_r")),
+            "target_1r_hit": _bounce_perf_bool(record.get("target_1r_hit")),
+            "target_2r_hit": _bounce_perf_bool(record.get("target_2r_hit")),
+            "stop_hit": _bounce_perf_bool(record.get("stop_hit")),
+        }
+        dimensions = [
+            ("bounce_combo", combo),
+            ("market_environment", str(record.get("market_environment") or "unknown").strip() or "unknown"),
+            ("rrs_alignment", _bounce_rrs_alignment(record)),
+            ("time_bucket", _bounce_time_bucket(record.get("entry_time") or record.get("logged_at"))),
+        ]
+        dimensions.extend(("bounce_type", bounce_type) for bounce_type in bounce_types)
+        for dimension, segment in dimensions:
+            observations.append({**common, "dimension": dimension, "segment": segment})
+
+    if not observations:
+        return []
+
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    for observation in observations:
+        key = (
+            str(observation.get("dimension") or ""),
+            str(observation.get("direction") or ""),
+            str(observation.get("segment") or ""),
+        )
+        grouped.setdefault(key, []).append(observation)
+
+    rows = []
+    min_samples = max(1, int(min_samples or 1))
+    for (dimension, direction, segment), group_rows in grouped.items():
+        close_values = [row["close_r"] for row in group_rows if row.get("close_r") is not None]
+        mfe_values = [row["mfe_r"] for row in group_rows if row.get("mfe_r") is not None]
+        mae_values = [row["mae_r"] for row in group_rows if row.get("mae_r") is not None]
+        score_values = [row["score"] for row in group_rows if row.get("score") is not None]
+        risk_values = [row["risk_per_share"] for row in group_rows if row.get("risk_per_share") is not None]
+        sample_count = len(close_values)
+        if sample_count <= 0:
+            continue
+        target_1r_rate = sum(1 for row in group_rows if row.get("target_1r_hit")) / float(len(group_rows))
+        target_2r_rate = sum(1 for row in group_rows if row.get("target_2r_hit")) / float(len(group_rows))
+        stop_rate = sum(1 for row in group_rows if row.get("stop_hit")) / float(len(group_rows))
+        avg_close_r = sum(close_values) / float(len(close_values))
+        median_close_r = float(pd.Series(close_values).median())
+        edge_score = (
+            avg_close_r
+            + (target_1r_rate * 0.35)
+            + (target_2r_rate * 0.65)
+            - (stop_rate * 0.50)
+        ) * min(1.0, math.log1p(sample_count) / math.log1p(max(min_samples, 2)))
+        if sample_count < min_samples:
+            recommendation = "watch_more_samples"
+        elif avg_close_r >= 0.25 and target_1r_rate >= 0.45 and stop_rate <= 0.65:
+            recommendation = "boost"
+        elif avg_close_r <= -0.20 or stop_rate >= 0.75:
+            recommendation = "avoid_or_cut"
+        else:
+            recommendation = "neutral"
+        rows.append(
+            {
+                "dimension": dimension,
+                "direction": direction,
+                "segment": segment,
+                "sample_count": sample_count,
+                "avg_score": (sum(score_values) / float(len(score_values))) if score_values else None,
+                "avg_risk_per_share": (sum(risk_values) / float(len(risk_values))) if risk_values else None,
+                "avg_close_r": avg_close_r,
+                "median_close_r": median_close_r,
+                "avg_mfe_r": (sum(mfe_values) / float(len(mfe_values))) if mfe_values else None,
+                "avg_mae_r": (sum(mae_values) / float(len(mae_values))) if mae_values else None,
+                "target_1r_rate": target_1r_rate,
+                "target_2r_rate": target_2r_rate,
+                "stop_rate": stop_rate,
+                "edge_score": edge_score,
+                "recommendation": recommendation,
+                "example_symbols": ", ".join(
+                    sorted({str(row.get("symbol") or "") for row in group_rows if row.get("symbol")})[:8]
+                ),
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            row.get("recommendation") != "boost",
+            -float(row.get("edge_score", 0.0) or 0.0),
+            -int(row.get("sample_count", 0) or 0),
+            str(row.get("dimension") or ""),
+            str(row.get("direction") or ""),
+            str(row.get("segment") or ""),
+        )
+    )
+    return rows
+
+
+def _format_bounce_perf_r(value) -> str:
+    numeric = _bounce_perf_float(value)
+    return "n/a" if numeric is None else f"{numeric:+.2f}R"
+
+
+def _format_bounce_perf_pct(value) -> str:
+    numeric = _bounce_perf_float(value)
+    return "n/a" if numeric is None else f"{numeric * 100:.0f}%"
+
+
+def write_intraday_bounce_performance_report(
+    rows: list[dict],
+    *,
+    report_path: Path = INTRADAY_BOUNCE_PERFORMANCE_REPORT,
+) -> Path:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "Intraday BounceBot performance",
+        "=" * 80,
+        f"Generated at {get_market_local_now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Outcome R clipped to +/-{BOUNCE_PERFORMANCE_R_CLIP:.1f}R for ranking.",
+        "",
+    ]
+    if not rows:
+        lines.append("No confirmed bounce outcomes were available.")
+        report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return report_path
+
+    def add_section(title: str, section_rows: list[dict]) -> None:
+        lines.append(title)
+        lines.append("-" * len(title))
+        if not section_rows:
+            lines.append("None")
+            lines.append("")
+            return
+        for idx, row in enumerate(section_rows[:12], start=1):
+            lines.append(
+                f"{idx:>2}. {row.get('direction')} {row.get('dimension')}={row.get('segment')} "
+                f"samples={int(row.get('sample_count', 0) or 0)} "
+                f"avg={_format_bounce_perf_r(row.get('avg_close_r'))} "
+                f"median={_format_bounce_perf_r(row.get('median_close_r'))} "
+                f"1R={_format_bounce_perf_pct(row.get('target_1r_rate'))} "
+                f"2R={_format_bounce_perf_pct(row.get('target_2r_rate'))} "
+                f"stop={_format_bounce_perf_pct(row.get('stop_rate'))} "
+                f"rec={row.get('recommendation')}"
+            )
+            if row.get("example_symbols"):
+                lines.append(f"    examples: {row.get('example_symbols')}")
+        lines.append("")
+
+    boost_rows = [
+        row for row in rows
+        if row.get("recommendation") == "boost"
+        and int(row.get("sample_count", 0) or 0) >= BOUNCE_PERFORMANCE_MIN_SAMPLES
+    ]
+    weak_rows = [
+        row for row in rows
+        if row.get("recommendation") == "avoid_or_cut"
+        and int(row.get("sample_count", 0) or 0) >= BOUNCE_PERFORMANCE_MIN_SAMPLES
+    ]
+    weak_rows = sorted(
+        weak_rows,
+        key=lambda row: (
+            float(row.get("edge_score", 0.0) or 0.0),
+            -int(row.get("sample_count", 0) or 0),
+        ),
+    )
+    add_section("Potential score boosts", boost_rows)
+    add_section("Potential score cuts / avoid", weak_rows)
+    add_section(
+        "Best individual bounce types",
+        [
+            row for row in rows
+            if row.get("dimension") == "bounce_type"
+            and int(row.get("sample_count", 0) or 0) >= BOUNCE_PERFORMANCE_MIN_SAMPLES
+        ],
+    )
+    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return report_path
+
+
+def refresh_intraday_bounce_performance_report(
+    *,
+    performance_path: Path = INTRADAY_BOUNCE_PERFORMANCE_CSV,
+    report_path: Path = INTRADAY_BOUNCE_PERFORMANCE_REPORT,
+    min_samples: int = BOUNCE_PERFORMANCE_MIN_SAMPLES,
+) -> tuple[Path, Path, int]:
+    rows = build_intraday_bounce_performance_rows(min_samples=min_samples)
+    performance_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(performance_path, index=False)
+    written_report = write_intraday_bounce_performance_report(rows, report_path=report_path)
+    return performance_path, written_report, len(rows)
+
+
 def reset_log_files():
     try:
         TRADING_BOT_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
@@ -880,6 +1279,105 @@ def _aggregate_bars_timeframe(bars, timeframe_minutes):
     return result
 
 
+def _ib_bar_to_candle_dict(bar):
+    return {
+        "time": bar.dt.strftime("%Y%m%d  %H:%M:%S"),
+        "open": float(bar.open),
+        "high": float(bar.high),
+        "low": float(bar.low),
+        "close": float(bar.close),
+    }
+
+
+def detect_mid_earnings_h1_bounce(h1_bars, direction, atr20, reference_date=None):
+    bars = _dedupe_bars(h1_bars or [])
+    if len(bars) < H1_MID_EARNINGS_MIN_BARS:
+        return None
+
+    normalized_direction = str(direction or "").strip().lower()
+    if normalized_direction not in {"long", "short"}:
+        return None
+
+    try:
+        atr_value = float(atr20)
+    except (TypeError, ValueError):
+        return None
+    if atr_value <= 0:
+        return None
+
+    frame = pd.DataFrame(
+        {
+            "dt": [bar.dt for bar in bars],
+            "open": [float(bar.open) for bar in bars],
+            "high": [float(bar.high) for bar in bars],
+            "low": [float(bar.low) for bar in bars],
+            "close": [float(bar.close) for bar in bars],
+        }
+    ).sort_values("dt")
+    frame["h1_ema_15"] = frame["close"].ewm(span=15, adjust=False).mean()
+    frame["h1_sma_20"] = frame["close"].rolling(20).mean()
+
+    touch_row = frame.iloc[-2]
+    confirm_row = frame.iloc[-1]
+    confirm_dt = confirm_row["dt"]
+    if reference_date is not None and confirm_dt.date() != reference_date:
+        return None
+
+    threshold = THRESHOLD_MULTIPLIER * atr_value
+    levels = {}
+    triggered_levels = []
+    labels = []
+    for level_key, level_label in H1_MID_EARNINGS_BOUNCE_LEVELS.items():
+        level_value = touch_row.get(level_key)
+        if pd.isna(level_value):
+            continue
+        level_value = float(level_value)
+        if normalized_direction == "long":
+            touched = abs(float(touch_row["low"]) - level_value) <= threshold
+            confirmed = float(confirm_row["close"]) > level_value
+        else:
+            touched = abs(float(touch_row["high"]) - level_value) <= threshold
+            confirmed = float(confirm_row["close"]) < level_value
+        if touched and confirmed:
+            levels[level_key] = level_value
+            triggered_levels.append(level_key)
+            labels.append(level_label)
+
+    if not triggered_levels:
+        return None
+
+    touch_bar = IbBar(
+        dt=touch_row["dt"],
+        open=float(touch_row["open"]),
+        high=float(touch_row["high"]),
+        low=float(touch_row["low"]),
+        close=float(touch_row["close"]),
+    )
+    confirm_bar = IbBar(
+        dt=confirm_row["dt"],
+        open=float(confirm_row["open"]),
+        high=float(confirm_row["high"]),
+        low=float(confirm_row["low"]),
+        close=float(confirm_row["close"]),
+    )
+    close_side = "above" if normalized_direction == "long" else "below"
+    touch_side = "low" if normalized_direction == "long" else "high"
+    joined_labels = "/".join(labels)
+    return {
+        "levels": levels,
+        "triggered_levels": triggered_levels,
+        "candle": _ib_bar_to_candle_dict(touch_bar),
+        "confirmation_candle": _ib_bar_to_candle_dict(confirm_bar),
+        "confirm_immediately": True,
+        "max_confirmation_candles": 1,
+        "threshold": threshold,
+        "reason": (
+            f"H1 confirmation candle closed {close_side} {joined_labels} "
+            f"after prior H1 {touch_side} touched the level."
+        ),
+    }
+
+
 def _wilder_atr_last(bars, length):
     if len(bars) < length + 1:
         return None
@@ -1012,6 +1510,7 @@ class BounceBot(EWrapper, EClient):
         self.master_avwap_second_stdev_cross_map = {}
         self.emitted_master_avwap_focus_alerts = set()
         self.emitted_master_avwap_second_stdev_alerts = set()
+        self.emitted_h1_mid_earnings_bounce_alerts = set()
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -1713,6 +2212,62 @@ class BounceBot(EWrapper, EClient):
 
     def _describe_master_avwap_focus(self, focus_entry):
         return describe_master_avwap_focus(focus_entry)
+
+    def _is_mid_earnings_h1_bounce_focus(self, symbol, direction):
+        focus_entry = self.master_avwap_focus_map.get(symbol)
+        if not isinstance(focus_entry, dict):
+            return False
+        focus_side = str(focus_entry.get("side") or "").strip().upper()
+        if direction == "long" and focus_side != "LONG":
+            return False
+        if direction == "short" and focus_side != "SHORT":
+            return False
+
+        setup_family = str(focus_entry.get("setup_family") or "").strip().lower()
+        bucket = str(focus_entry.get("priority_bucket") or "").strip().lower()
+        return bool(
+            setup_family == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
+            or (
+                bucket == "stdev_retest_tracking"
+                and focus_entry.get("mid_earnings_active_second_stdev_hold")
+            )
+        )
+
+    def _evaluate_master_avwap_mid_earnings_h1_bounce(self, symbol, direction, reference_date):
+        if not self._is_mid_earnings_h1_bounce_focus(symbol, direction):
+            return None
+        atr = self.atr_cache.get(symbol)
+        bars = self.latest_bars.get(symbol, [])
+        h1_bars = _aggregate_bars_timeframe(bars, 60)
+        candidate = detect_mid_earnings_h1_bounce(
+            h1_bars,
+            direction,
+            atr,
+            reference_date=reference_date,
+        )
+        if not candidate:
+            return None
+
+        confirmation_candle = candidate.get("confirmation_candle") or {}
+        confirmation_time = str(confirmation_candle.get("time") or "")
+        confirmation_dt = self._parse_bar_time(confirmation_time)
+        alert_date = (
+            confirmation_dt.date().isoformat()
+            if confirmation_dt is not None
+            else get_market_local_now().date().isoformat()
+        )
+        event_key = (
+            alert_date,
+            "h1_mid_earnings_bounce",
+            symbol,
+            direction,
+            confirmation_time,
+            tuple(sorted(str(level) for level in candidate.get("triggered_levels", []))),
+        )
+        if event_key in self.emitted_h1_mid_earnings_bounce_alerts:
+            return None
+        candidate["h1_event_key"] = event_key
+        return candidate
 
     def _emit_master_avwap_focus_bounce_alert(self, symbol, direction, levels_list):
         if not self.gui_callback:
@@ -3604,6 +4159,14 @@ class BounceBot(EWrapper, EClient):
         symbols = set()
         for entries in self.latest_scan_extremes.values():
             symbols.update(item[0] for item in entries)
+        for symbol, entry in self.master_avwap_focus_map.items():
+            if not isinstance(entry, dict):
+                continue
+            focus_side = str(entry.get("side") or "").upper()
+            if focus_side == "LONG" and symbol in self.longs:
+                symbols.add(symbol)
+            elif focus_side == "SHORT" and symbol in self.shorts:
+                symbols.add(symbol)
         return symbols
 
     def has_minimum_candles_completed(self, required=CONSECUTIVE_CANDLES):
@@ -5135,6 +5698,13 @@ class BounceBot(EWrapper, EClient):
 
         # Continue with evaluating bounce candidates
         candidate_info = self.evaluate_bounce_candidate(symbol, df, allowed_bounce_types=allowed_bounce_types)
+        h1_mid_earnings_candidate = self._evaluate_master_avwap_mid_earnings_h1_bounce(
+            symbol,
+            direction,
+            current_date,
+        )
+        if h1_mid_earnings_candidate:
+            candidate_info = h1_mid_earnings_candidate
 
         def confirm_bounce_alert(
             levels,
@@ -5187,6 +5757,28 @@ class BounceBot(EWrapper, EClient):
             )
             self.alerted_symbols.add(symbol)
 
+        if h1_mid_earnings_candidate and h1_mid_earnings_candidate.get("confirm_immediately"):
+            levels = h1_mid_earnings_candidate["levels"]
+            levels_list = h1_mid_earnings_candidate.get("triggered_levels") or list(levels.keys())
+            h1_event_key = h1_mid_earnings_candidate.get("h1_event_key")
+            if h1_event_key and h1_event_key not in self.emitted_h1_mid_earnings_bounce_alerts:
+                candidate_id = self._make_bounce_event_id(
+                    symbol,
+                    direction,
+                    h1_mid_earnings_candidate["candle"],
+                    levels,
+                )
+                confirm_bounce_alert(
+                    levels,
+                    levels_list,
+                    h1_mid_earnings_candidate["candle"],
+                    h1_mid_earnings_candidate.get("confirmation_candle", today_df.iloc[-1]),
+                    candidate_id=candidate_id,
+                    reason=h1_mid_earnings_candidate.get("reason"),
+                )
+                self.emitted_h1_mid_earnings_bounce_alerts.add(h1_event_key)
+                self.bounce_candidates.pop(symbol, None)
+                return
         
         # STEP 1: First check if we have an existing bounce candidate to confirm
         if symbol in self.bounce_candidates:
@@ -5351,6 +5943,10 @@ class BounceBot(EWrapper, EClient):
             if candidate_info.get("confirm_immediately"):
                 levels = candidate_info["levels"]
                 levels_list = candidate_info.get("triggered_levels") or list(levels.keys())
+                h1_event_key = candidate_info.get("h1_event_key")
+                if h1_event_key and h1_event_key in self.emitted_h1_mid_earnings_bounce_alerts:
+                    return
+                confirmation_candle = candidate_info.get("confirmation_candle", today_df.iloc[-1])
                 logging.debug(
                     f"{symbol}: Fast-confirming bounce on signal candle from {levels_list}"
                 )
@@ -5358,10 +5954,12 @@ class BounceBot(EWrapper, EClient):
                     levels,
                     levels_list,
                     candidate_info["candle"],
-                    today_df.iloc[-1],
+                    confirmation_candle,
                     candidate_id=candidate_id,
-                    reason="Fast-confirmed on signal candle.",
+                    reason=candidate_info.get("reason") or "Fast-confirmed on signal candle.",
                 )
+                if h1_event_key:
+                    self.emitted_h1_mid_earnings_bounce_alerts.add(h1_event_key)
                 return
 
             self.bounce_candidates[symbol] = {
@@ -5496,6 +6094,7 @@ class BounceBot(EWrapper, EClient):
                     self.emitted_master_avwap_events.clear()
                     self.emitted_master_avwap_focus_alerts.clear()
                     self.emitted_master_avwap_second_stdev_alerts.clear()
+                    self.emitted_h1_mid_earnings_bounce_alerts.clear()
                     self.logged_near_miss_events.clear()
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
@@ -7206,8 +7805,11 @@ def start_gui(mode="prompt"):
 ##########################################
 if __name__ == "__main__":
     print("Starting script...")
-    reset_log_files()  # Use the new function instead of reset_log_file()
-    print("Runtime files prepared.")
+    if "--analyze_bounce_performance" not in sys.argv:
+        reset_log_files()  # Use the new function instead of reset_log_file()
+        print("Runtime files prepared.")
+    else:
+        print("Analysis-only mode; live runtime files left untouched.")
     
     # Rest of the code remains the same...
 
@@ -7225,10 +7827,30 @@ if __name__ == "__main__":
             default="prompt",
             help="Choose GUI startup mode when launching with the GUI.",
         )
+        parser.add_argument(
+            "--analyze_bounce_performance",
+            action="store_true",
+            help="Refresh intraday bounce performance CSV/report and exit without connecting to IB.",
+        )
+        parser.add_argument(
+            "--bounce_perf_min_samples",
+            type=int,
+            default=BOUNCE_PERFORMANCE_MIN_SAMPLES,
+            help="Minimum sample count used for intraday bounce boost/cut recommendations.",
+        )
         print("Parser created.")
         
         args = parser.parse_args()
         print(f"Arguments parsed: {args}")
+
+        if args.analyze_bounce_performance:
+            performance_path, report_path, row_count = refresh_intraday_bounce_performance_report(
+                min_samples=args.bounce_perf_min_samples,
+            )
+            print(f"Intraday bounce performance rows: {row_count}")
+            print(f"CSV: {performance_path}")
+            print(f"Report: {report_path}")
+            sys.exit(0)
         
         # Determine whether to use GUI based on args or global setting
         use_gui = args.use_gui if args.use_gui else USE_GUI
