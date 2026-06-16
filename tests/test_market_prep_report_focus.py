@@ -1,6 +1,16 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from market_prep.report_builder import build_daily_markdown, build_daily_report_object, build_weekly_markdown, build_weekly_report_object
+from market_prep.models import MarketPrepConfig
+from market_prep.report_builder import (
+    build_catalyst_clock,
+    build_daily_markdown,
+    build_daily_report_object,
+    build_weekly_markdown,
+    build_weekly_report_object,
+)
+from market_prep.services.future_roadmap_service import build_future_roadmap
 
 
 class MarketPrepReportFocusTests(unittest.TestCase):
@@ -73,15 +83,15 @@ class MarketPrepReportFocusTests(unittest.TestCase):
 
         markdown = build_daily_markdown(report)
 
-        self.assertLess(markdown.index("## 1. Highest Importance Focus"), markdown.index("## 6. Catalyst Clock"))
-        self.assertLess(markdown.index("## 6. Catalyst Clock"), markdown.index("## 7. Scheduled Landmines Today"))
+        self.assertLess(markdown.index("## 1. Highest Importance Focus"), markdown.index("## 2. Next 5 Days Roadmap"))
+        self.assertLess(markdown.index("## 7. Catalyst Clock"), markdown.index("## 8. Scheduled Landmines Today"))
         self.assertIn("UPCOMING MACRO: 2026-04-29 14:00 ET [HIGH] USD FOMC Statement", markdown)
         self.assertIn("UPCOMING EARNINGS: 2026-04-30 | AAPL", markdown)
         self.assertIn("Market-moving earnings today/tomorrow:", markdown)
         self.assertIn("VZ | Verizon", markdown)
         self.assertIn("lower-priority earnings hidden", markdown)
 
-        landmine_block = markdown.split("## 7. Scheduled Landmines Today", 1)[1].split("## 8. Economic Speedbumps", 1)[0]
+        landmine_block = markdown.split("## 8. Scheduled Landmines Today", 1)[1].split("## 9. Economic Speedbumps", 1)[0]
         self.assertNotIn("SMOL | Small Co", landmine_block)
 
     def test_daily_report_adds_landmine_checklist_market_snapshot_and_hold_warnings(self):
@@ -118,11 +128,117 @@ class MarketPrepReportFocusTests(unittest.TestCase):
 
         markdown = report["markdown"]
 
-        self.assertIn("## 2. Daily Landmine Checklist", markdown)
+        self.assertIn("## 3. Daily Landmine Checklist", markdown)
         self.assertIn("Market regime: Noisy", markdown)
         self.assertIn("No-trade: Macro - 2026-04-27 10:00 ET [HIGH] USD CPI", markdown)
         self.assertIn("Review before overnight hold: NVDA", markdown)
         self.assertIn("Broad market is noisy/risk-off", " ".join(report["trading_posture"]))
+
+    def test_daily_report_renders_five_day_roadmap_with_major_future_news(self):
+        roadmap = build_future_roadmap(
+            report_date="2026-06-11",
+            next_7_events={
+                "events": [
+                    {
+                        "date": "2026-06-12",
+                        "time_et": "08:30",
+                        "priority": "HIGH",
+                        "currency": "USD",
+                        "event": "CPI",
+                        "forecast": "3.4%",
+                        "previous": "3.3%",
+                    }
+                ]
+            },
+            rss_headlines={
+                "headlines": [
+                    {
+                        "title": "SpaceX IPO expected to begin trading Friday",
+                        "query": "SpaceX IPO June 12",
+                        "source": "Google News",
+                        "published": "2026-06-11T09:00:00",
+                        "summary": "The stock is expected to begin trading on Friday, June 12.",
+                    },
+                    {
+                        "title": "Should you buy the new IPO?",
+                        "query": "IPO begins trading tomorrow Nasdaq",
+                        "source": "Google News",
+                        "published": "2026-06-11T09:05:00",
+                    },
+                ]
+            },
+            persist=False,
+        )
+        report = build_daily_report_object(
+            todays_events={"events": []},
+            next_7_events={"events": []},
+            today_tomorrow_earnings={"earnings": []},
+            next_7_earnings={"earnings": []},
+            watchlist_risk={"risks": []},
+            future_roadmap=roadmap,
+            report_date="2026-06-11",
+        )
+
+        markdown = report["markdown"]
+
+        self.assertIn("## 2. Next 5 Days Roadmap", markdown)
+        self.assertIn("Tomorrow, 2026-06-12", markdown)
+        self.assertIn("Economic [HIGH] | USD CPI", markdown)
+        self.assertIn("Major News [HIGH] | SpaceX IPO expected to begin trading Friday", markdown)
+        self.assertIn("UPCOMING NEWS: 2026-06-12", markdown)
+        self.assertNotIn("Should you buy the new IPO?", markdown)
+
+    def test_future_roadmap_memory_fills_previous_macro_actuals(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = MarketPrepConfig.from_mapping(
+                {
+                    "paths": {"cache_dir": "cache", "output_dir": "output"},
+                    "future_roadmap": {"days_ahead": 5, "persist": True},
+                },
+                repo_root=root,
+            )
+            first = build_future_roadmap(
+                report_date="2026-06-10",
+                next_7_events={
+                    "events": [
+                        {
+                            "date": "2026-06-10",
+                            "time_et": "08:30",
+                            "priority": "HIGH",
+                            "currency": "USD",
+                            "event": "CPI",
+                            "forecast": "3.4%",
+                            "previous": "3.3%",
+                        }
+                    ]
+                },
+                config=config,
+            )
+            self.assertIn("USD CPI", first["items"][0]["title"])
+
+            second = build_future_roadmap(
+                report_date="2026-06-11",
+                recent_economic_events={
+                    "events": [
+                        {
+                            "date": "2026-06-10",
+                            "time_et": "08:30",
+                            "priority": "HIGH",
+                            "currency": "USD",
+                            "event": "CPI",
+                            "actual": "3.5%",
+                            "forecast": "3.4%",
+                            "previous": "3.3%",
+                        }
+                    ]
+                },
+                config=config,
+            )
+
+        self.assertEqual(second["recaps"][0]["title"], "USD CPI")
+        self.assertIn("Actual 3.5%", second["recaps"][0]["detail"])
+        self.assertIn("Forecast 3.4%", second["recaps"][0]["detail"])
 
     def test_weekly_report_focus_and_major_earnings_sort_by_importance_before_date(self):
         report = {
@@ -229,6 +345,89 @@ class MarketPrepReportFocusTests(unittest.TestCase):
         self.assertIn("Main catalyst days:", markdown)
         self.assertIn("Watchlist names needing review: TSLA", markdown)
         self.assertIn("Clean tape:", " ".join(report["swing_trading_conditions"]))
+
+    def test_market_prep_filters_routine_fed_speakers_but_keeps_powell_and_fomc(self):
+        fed_calendar = {
+            "source": "Federal Reserve",
+            "status_label": "Loaded",
+            "events": [
+                {
+                    "date": "2026-04-28",
+                    "time_et": "10:00",
+                    "priority": "MEDIUM",
+                    "currency": "USD",
+                    "event": "Governor Waller speech",
+                },
+                {
+                    "date": "2026-04-29",
+                    "time_et": "14:00",
+                    "priority": "HIGH",
+                    "currency": "USD",
+                    "event": "FOMC Statement",
+                },
+                {
+                    "date": "2026-04-30",
+                    "time_et": "12:00",
+                    "priority": "HIGH",
+                    "currency": "USD",
+                    "event": "Chair Powell speaks",
+                },
+            ],
+        }
+        report = build_daily_report_object(
+            todays_events={"events": []},
+            today_tomorrow_earnings={"earnings": []},
+            watchlist_risk={"risks": []},
+            fed_calendar=fed_calendar,
+            report_date="2026-04-28",
+        )
+
+        markdown = report["markdown"]
+        fed_block = markdown.split("## 10. Fed Risk", 1)[1].split("## 11. Treasury Auction Risk", 1)[0]
+        clock_text = "\n".join(
+            item["text"]
+            for item in build_catalyst_clock({}, {}, {}, fed_calendar=fed_calendar)
+        )
+
+        self.assertIn("FOMC Statement", fed_block)
+        self.assertIn("Chair Powell speaks", fed_block)
+        self.assertNotIn("Governor Waller speech", fed_block)
+        self.assertIn("FOMC Statement", clock_text)
+        self.assertIn("Chair Powell speaks", clock_text)
+        self.assertNotIn("Governor Waller speech", clock_text)
+
+    def test_market_prep_prioritizes_trump_iran_market_moving_headlines(self):
+        report = build_daily_report_object(
+            todays_events={"events": []},
+            today_tomorrow_earnings={"earnings": []},
+            watchlist_risk={"risks": []},
+            rss_headlines={
+                "headlines": [
+                    {
+                        "title": "Company announces routine product update",
+                        "source": "Google News",
+                        "published": "2026-04-28T09:00:00",
+                        "tags": [],
+                    },
+                    {
+                        "title": "Trump warns Iran as oil jumps on Middle East risk",
+                        "source": "Google News",
+                        "published": "2026-04-28T09:05:00",
+                        "query": "Trump Iran market",
+                        "tags": ["geopolitics", "oil/energy", "tariffs/trade"],
+                    },
+                ]
+            },
+            report_date="2026-04-28",
+        )
+
+        markdown = report["markdown"]
+        focus_block = markdown.split("## 1. Highest Importance Focus", 1)[1].split("## 2. Next 5 Days Roadmap", 1)[0]
+        headline_block = markdown.split("## 16. Google News/RSS Headline Risk", 1)[1].split("## 17. YouTube Links", 1)[0]
+
+        self.assertIn("Trump warns Iran", focus_block)
+        self.assertIn("Trump warns Iran", headline_block)
+        self.assertNotIn("routine product update", headline_block)
 
 
 if __name__ == "__main__":

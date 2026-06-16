@@ -46,9 +46,15 @@ DEFAULT_GOOGLE_NEWS_SETTINGS = {
         "{ticker} downgrade",
         "{ticker} lawsuit",
         "{ticker} acquisition",
-        "Federal Reserve inflation",
-        "Treasury auction yields",
+        "FOMC Powell Federal Reserve",
+        "CPI PCE payrolls market",
+        "Trump tariffs market",
+        "Trump Iran market",
+        "Trump Middle East oil market",
+        "Iran Israel oil market",
+        "Treasury yields market",
         "semiconductor export controls",
+        "China export controls semiconductors",
         "oil prices Middle East",
     ],
 }
@@ -57,12 +63,25 @@ KEYWORD_BUCKETS = {
     "Fed/rates": ("fed", "fomc", "rate", "rates", "powell", "yield", "treasury"),
     "inflation": ("inflation", "cpi", "ppi", "pce", "prices"),
     "employment": ("jobs", "payroll", "payrolls", "unemployment", "employment", "jobless", "adp"),
-    "geopolitics": ("geopolitical", "war", "conflict", "sanction", "ukraine", "russia", "israel", "iran"),
+    "geopolitics": (
+        "geopolitical",
+        "war",
+        "conflict",
+        "sanction",
+        "sanctions",
+        "ukraine",
+        "russia",
+        "israel",
+        "iran",
+        "middle east",
+        "missile",
+        "strike",
+    ),
     "oil/energy": ("oil", "crude", "energy", "opec", "gasoline", "natural gas"),
-    "China": ("china", "chinese", "beijing"),
+    "China": ("china", "chinese", "beijing", "export controls"),
     "AI/semis": ("ai", "artificial intelligence", "semiconductor", "semis", "chips", "nvidia", "nvda"),
     "banking/credit": ("bank", "banks", "credit", "lending", "default", "debt"),
-    "tariffs/trade": ("tariff", "tariffs", "trade", "imports", "exports"),
+    "tariffs/trade": ("trump", "tariff", "tariffs", "trade", "imports", "exports"),
     "earnings": ("earnings", "guidance", "revenue", "profit", "eps"),
     "regulation": ("regulation", "regulator", "sec", "doj", "ftc", "lawsuit"),
     "M&A": ("merger", "acquisition", "buyout", "deal"),
@@ -128,6 +147,7 @@ def fetch_rss_headlines(
                     "source": name,
                     "published": str(entry.get("published") or "").strip(),
                     "url": str(entry.get("url") or "").strip(),
+                    "summary": summary,
                     "category": category,
                     "query": query,
                     "tags": tags,
@@ -173,6 +193,42 @@ def tag_headline(text: str) -> list[str]:
         if any(keyword.lower() in lowered for keyword in keywords):
             tags.append(bucket)
     return tags
+
+
+def market_moving_headline_score(headline: dict[str, Any]) -> int:
+    text = " ".join(
+        str(headline.get(key) or "")
+        for key in ("title", "summary", "query", "category")
+    ).lower()
+    tags = headline.get("tags") if isinstance(headline.get("tags"), list) else tag_headline(text)
+    score = 0
+    high_terms = (
+        "trump",
+        "tariff",
+        "tariffs",
+        "iran",
+        "israel",
+        "middle east",
+        "oil",
+        "opec",
+        "sanction",
+        "sanctions",
+        "china",
+        "export controls",
+        "fomc",
+        "powell",
+        "cpi",
+        "pce",
+        "payroll",
+        "jobs",
+    )
+    score += 4 * sum(1 for term in high_terms if term in text)
+    score += 3 * len(set(tags) & {"Fed/rates", "inflation", "employment", "geopolitics", "oil/energy", "China", "AI/semis", "tariffs/trade"})
+    if "trump" in text and any(term in text for term in ("iran", "tariff", "tariffs", "china", "oil", "sanction")):
+        score += 10
+    if any(term in text for term in ("breaking", "strike", "missile", "attack")):
+        score += 4
+    return score
 
 
 def _configured_feeds(
@@ -295,10 +351,11 @@ def _dedupe_headlines(headlines: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def _headline_sort_key(headline: dict[str, Any]) -> tuple[int, str, str]:
+def _headline_sort_key(headline: dict[str, Any]) -> tuple[int, int, str, str]:
     tags = headline.get("tags") if isinstance(headline.get("tags"), list) else []
-    priority = 0 if tags else 1
-    return (priority, str(headline.get("published") or ""), str(headline.get("title") or ""))
+    priority = -market_moving_headline_score(headline)
+    tagged_rank = 0 if tags else 1
+    return (priority, tagged_rank, str(headline.get("published") or ""), str(headline.get("title") or ""))
 
 
 def _payload(

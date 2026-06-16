@@ -30,8 +30,18 @@ DEFAULT_SETTINGS = {
     "days_ahead": 14,
     "request_timeout_seconds": 15,
 }
-HIGH_TERMS = ("FOMC", "BEIGE BOOK", "MONETARY POLICY REPORT")
-MEDIUM_TERMS = ("SPEECH", "TESTIMONY", "DISCUSSION", "CHAIR", "GOVERNOR", "VICE CHAIR")
+HIGH_TERMS = ("FOMC",)
+CHAIR_TERMS = ("POWELL", "CHAIR POWELL", "FED CHAIR", "CHAIRMAN")
+MEDIUM_TERMS = (
+    "BEIGE BOOK",
+    "MONETARY POLICY REPORT",
+    "SPEECH",
+    "TESTIMONY",
+    "DISCUSSION",
+    "CHAIR",
+    "GOVERNOR",
+    "VICE CHAIR",
+)
 EASTERN = ZoneInfo("America/New_York")
 MONTH_SLUGS = (
     "",
@@ -395,7 +405,7 @@ def _normalize_rss_event_name(title: str) -> str:
 
 def _fed_priority(event_name: str, notes: str = "") -> str:
     upper = f"{event_name} {notes}".upper()
-    if any(term in upper for term in ("FOMC", "BEIGE BOOK", "MONETARY POLICY REPORT", "POWELL", "CHAIR ")):
+    if any(term in upper for term in HIGH_TERMS + CHAIR_TERMS):
         return "HIGH"
     if any(term in upper for term in MEDIUM_TERMS):
         return "MEDIUM"

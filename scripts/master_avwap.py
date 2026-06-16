@@ -270,6 +270,7 @@ PRIORITY_TRENDLINE_BREAK_SCORE_BONUS = 18
 THETA_MIN_EARNINGS_BUFFER_DAYS = 21
 THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS = 63
 THETA_MIN_SUPPORT_LEVELS = 3
+THETA_REQUIRED_MAJOR_SMA_SUPPORT_LABELS = ("SMA_50", "SMA_100", "SMA_200")
 THETA_SUPPORT_MAX_ATR = 3.0
 THETA_SUPPORT_MAX_PCT = 14.0
 THETA_SUPPORT_ABOVE_TOL_ATR = 0.05
@@ -381,6 +382,8 @@ POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
 POST_EARNINGS_BAND_EXPANSION_LOOKBACK = 4
 POST_EARNINGS_MIN_BAND_EXPANSION_RATIO = 1.10
 POST_EARNINGS_MIN_BAND_EXPANSION_ATR = 0.10
+POST_EARNINGS_EMA15_ADD_ZONE_ATR = 0.75
+POST_EARNINGS_EMA15_RECLAIM_BUFFER_ATR = 0.10
 POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
 POST_EARNINGS_CLOSE_CONFIRM_SIGNAL = "POST_EARNINGS_CLOSE_CONFIRM"
@@ -3250,6 +3253,8 @@ def build_tracker_feature_snapshot(
 ) -> dict:
     atr20 = _coerce_float(indicator_row.get("atr_20")) if isinstance(indicator_row, pd.Series) else None
     close_value = _coerce_float(bar_row.get("close"))
+    high_value = _coerce_float(bar_row.get("high"))
+    low_value = _coerce_float(bar_row.get("low"))
     prev_avwape = _anchor_level_value(previous_anchor_levels, "AVWAPE")
     prev_distance_atr = None
     prev_near_flag = False
@@ -3303,6 +3308,8 @@ def build_tracker_feature_snapshot(
             )
 
     directional_ema21_distance_atr = _directional_distance_atr(side, ema21_distance_atr)
+    directional_ema15_distance_atr = _directional_distance_atr(side, ema15_distance_atr)
+    directional_ema15_bucket = _directional_ema21_bucket(side, ema15_distance_atr)
     directional_ema21_bucket = _directional_ema21_bucket(side, ema21_distance_atr)
     directional_sma_support = None
     directional_sma_stack_aligned = None
@@ -3315,6 +3322,16 @@ def build_tracker_feature_snapshot(
             directional_sma_support = close_value > sma20 and close_value > sma50
             directional_sma_stack_aligned = close_value > sma20 > sma50
 
+    ema15_touch = False
+    ema15_reclaim = False
+    if ema15 is not None and high_value is not None and low_value is not None:
+        ema15_touch = low_value <= float(ema15) <= high_value
+        if close_value is not None and ema15_touch:
+            if normalized_side == "SHORT":
+                ema15_reclaim = close_value <= float(ema15)
+            else:
+                ema15_reclaim = close_value >= float(ema15)
+
     current_vwap = _anchor_level_value(current_anchor_levels, "AVWAPE")
     current_upper_1 = _anchor_level_value(current_anchor_levels, "UPPER_1")
     current_lower_1 = _anchor_level_value(current_anchor_levels, "LOWER_1")
@@ -3322,6 +3339,8 @@ def build_tracker_feature_snapshot(
     snapshot = {
         "atr20": atr20,
         "current_close": close_value,
+        "current_high": high_value,
+        "current_low": low_value,
         "current_avwape": current_vwap,
         "current_upper_1": current_upper_1,
         "current_lower_1": current_lower_1,
@@ -3334,6 +3353,10 @@ def build_tracker_feature_snapshot(
         "ema8_distance_atr": ema8_distance_atr,
         "ema15_distance_atr": ema15_distance_atr,
         "ema21_distance_atr": ema21_distance_atr,
+        "directional_ema15_distance_atr": directional_ema15_distance_atr,
+        "directional_ema15_bucket": directional_ema15_bucket,
+        "ema15_touch": ema15_touch,
+        "ema15_reclaim": ema15_reclaim,
         "directional_ema21_distance_atr": directional_ema21_distance_atr,
         "directional_ema21_bucket": directional_ema21_bucket,
         "ema21_consolidation": ema21_consolidation,
@@ -3450,6 +3473,17 @@ def build_tracker_entry_attributes(
     favorite_signals = list(row.get("favorite_signals") or [])
     context_signals = list(row.get("context_signals") or [])
     events_today = list(symbol_entry.get("events_today") or [])
+    post_earnings_active = bool(row.get("post_earnings_active") or symbol_entry.get("post_earnings_active"))
+    directional_ema15_distance_atr = _coerce_float(entry_snapshot.get("directional_ema15_distance_atr"))
+    ema15_pullback_ready = False
+    if post_earnings_active:
+        if bool(entry_snapshot.get("ema15_reclaim")):
+            ema15_pullback_ready = True
+        elif directional_ema15_distance_atr is not None:
+            ema15_pullback_ready = (
+                directional_ema15_distance_atr >= -POST_EARNINGS_EMA15_RECLAIM_BUFFER_ATR
+                and directional_ema15_distance_atr <= POST_EARNINGS_EMA15_ADD_ZONE_ATR
+            )
 
     add(
         "setup.side",
@@ -3757,7 +3791,7 @@ def build_tracker_entry_attributes(
     )
     add(
         "pattern.post_earnings_active",
-        bool(row.get("post_earnings_active") or symbol_entry.get("post_earnings_active")),
+        post_earnings_active,
         group="pattern",
         label="Post-earnings watch active",
         value_type="bool",
@@ -3794,6 +3828,22 @@ def build_tracker_entry_attributes(
         label="Post-earnings gap ATR multiple",
         value_type="number",
         description="Gap size measured against ATR(20) for the qualifying earnings reaction.",
+    )
+    add(
+        "pattern.post_earnings_ema15_pullback_ready",
+        ema15_pullback_ready,
+        group="pattern",
+        label="Post-earnings EMA15 pullback/add zone",
+        value_type="bool",
+        description="Whether a post-earnings setup is touching, reclaiming, or sitting close enough to EMA15 for a starter/add plan.",
+    )
+    add(
+        "pattern.post_earnings_ema15_distance_atr",
+        directional_ema15_distance_atr,
+        group="pattern",
+        label="Post-earnings directional EMA15 distance ATR",
+        value_type="number",
+        description="ATR-normalized distance from EMA15 in the setup direction for post-earnings pullback planning.",
     )
     add(
         "pattern.mid_earnings_watch",
@@ -4045,6 +4095,30 @@ def build_tracker_entry_attributes(
         label="EMA21 consolidation span ATR",
         value_type="number",
         description="Width of the recent consolidation range measured in ATR.",
+    )
+    add(
+        "structure.directional_ema15_distance_atr",
+        directional_ema15_distance_atr,
+        group="structure",
+        label="Directional EMA15 distance ATR",
+        value_type="number",
+        description="ATR-normalized distance from EMA15, flipped so positive values align with the setup direction.",
+    )
+    add(
+        "structure.directional_ema15_bucket",
+        entry_snapshot.get("directional_ema15_bucket") or "",
+        group="structure",
+        label="Directional EMA15 bucket",
+        value_type="text",
+        description="Directional EMA15 posture bucket: tight, clean extension, overextended, or against the setup.",
+    )
+    add(
+        "structure.ema15_reclaim",
+        bool(entry_snapshot.get("ema15_reclaim")),
+        group="structure",
+        label="EMA15 touch/reclaim",
+        value_type="bool",
+        description="Whether the entry-day range touched EMA15 and closed back on the setup side.",
     )
     add(
         "structure.directional_ema21_distance_atr",
@@ -4559,6 +4633,12 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
             POST_EARNINGS_STOP_LABEL,
             _anchor_level_value(post_earnings_anchor, "AVWAPE"),
             "post_earnings_anchor",
+            close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
+        )
+        _add(
+            "EMA_15",
+            _coerce_float(symbol_entry.get("ema_15")),
+            "ema",
             close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
         )
 
@@ -12046,6 +12126,14 @@ def evaluate_theta_put_candidate(
     min_support_levels = max(1, int(min_support_levels or THETA_MIN_SUPPORT_LEVELS))
     if len(supports) < min_support_levels:
         return None
+    required_major_sma_labels = set(THETA_REQUIRED_MAJOR_SMA_SUPPORT_LABELS)
+    major_sma_supports = [
+        entry
+        for entry in supports
+        if str(entry.get("label") or "").strip().upper() in required_major_sma_labels
+    ]
+    if not major_sma_supports:
+        return None
     sources = {
         str(entry.get("source") or "").strip().lower()
         for entry in supports
@@ -12130,7 +12218,10 @@ def evaluate_theta_put_candidate(
     if deepest_support["label"] != nearest_support["label"]:
         strike_zone += f"; deeper stack to {deepest_support['label']} {deepest_support['level']:.2f}"
 
+    major_sma_labels = [str(entry.get("label") or "").strip() for entry in major_sma_supports if entry.get("label")]
     driver_parts = [f"{len(supports)} support stack"]
+    if major_sma_labels:
+        driver_parts.append(f"major SMA support: {', '.join(major_sma_labels)}")
     if "avwape" in sources and "trendline" in sources:
         driver_parts.append("AVWAPE+Trendline confluence")
     elif "avwape" in sources:
@@ -12155,6 +12246,7 @@ def evaluate_theta_put_candidate(
 
     notes = [
         f"{len(supports)} supports",
+        f"major SMA support: {', '.join(major_sma_labels)}",
         earnings_summary["note"],
         "IBKR option premium check pending",
     ]
@@ -12173,6 +12265,7 @@ def evaluate_theta_put_candidate(
         "atr20": float(atr_value),
         "support_count": int(len(supports)),
         "min_support_levels": int(min_support_levels),
+        "major_sma_supports": major_sma_labels,
         "supports": supports,
         "score_breakdown": {
             "proximity_score": round(proximity_score, 2),
@@ -12819,6 +12912,9 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
     if option and option.get("covered_support_summary"):
         handle.write(f"   option_supports={option.get('covered_support_summary')}\n")
     handle.write(f"   support_stack={row.get('support_summary')}\n")
+    major_sma_text = ", ".join(row.get("major_sma_supports") or [])
+    if major_sma_text:
+        handle.write(f"   major_sma_support={major_sma_text}\n")
     handle.write(f"   earnings=last {last_earnings}{last_suffix}; next {next_earnings}{next_suffix}\n")
     handle.write(f"   reason={row.get('top_score_drivers') or 'n/a'}\n")
     handle.write(f"   risk={', '.join(row.get('risk_flags') or []) or 'n/a'}\n")
@@ -12844,11 +12940,13 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     handle.write(
         "Sold put rules: LONG watchlist only; recommendation-only; >=3 nearby SMA/Trendline/AVWAPE support references; "
+        f"requires >=1 of {', '.join(THETA_REQUIRED_MAJOR_SMA_SUPPORT_LABELS)}; "
         f"short put expiration <= {THETA_PUT_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"target >= {_format_option_decimal(THETA_PUT_TARGET_MIN_CREDIT)} credit so <= {THETA_PUT_MAX_CONTRACTS} contracts can reach ~$100.\n"
     )
     handle.write(
         "PCS rules: LONG watchlist only; recommendation-only; >=2 nearby support references; "
+        f"requires >=1 of {', '.join(THETA_REQUIRED_MAJOR_SMA_SUPPORT_LABELS)}; "
         f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width.\n"
     )

@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 import urllib.error
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,7 +20,7 @@ class MarketPrepCalendarDateTests(unittest.TestCase):
             cache_path.write_text(
                 json.dumps(
                     {
-                        "generated_at": "2026-04-26T12:00:00",
+                        "generated_at": datetime.now().isoformat(timespec="seconds"),
                         "source": "ForexFactory",
                         "start_date": "2026-04-26",
                         "end_date": "2026-05-10",

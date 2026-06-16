@@ -1520,6 +1520,51 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(post_stop["level"], 51.5)
         self.assertEqual(post_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
 
+    def test_post_earnings_stop_candidates_include_ema15_add_reference(self):
+        candidates = _find_tracker_stop_candidates(
+            {
+                "side": "LONG",
+                "priority_bucket": "favorite_setup",
+                "setup_family": "post_earnings_52w_break",
+            },
+            {
+                "current_anchor": {
+                    "vwap": 48.0,
+                    "bands": {"LOWER_1": 46.0},
+                },
+                "post_earnings_anchor": {
+                    "vwap": 47.5,
+                    "bands": {"LOWER_1": 45.0},
+                },
+                "ema_15": 49.25,
+                "atr20": 2.0,
+            },
+        )
+
+        ema15_stop = next(item for item in candidates if item["label"] == "EMA_15")
+        self.assertEqual(ema15_stop["source_type"], "ema")
+        self.assertEqual(ema15_stop["level"], 49.25)
+        self.assertEqual(ema15_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
+
+    def test_post_earnings_attributes_flag_ema15_pullback_ready(self):
+        attributes, _ = master_avwap.build_tracker_entry_attributes(
+            {
+                "side": "LONG",
+                "symbol": "AAPL",
+                "priority_bucket": "favorite_setup",
+                "post_earnings_active": True,
+            },
+            {"side": "LONG", "symbol": "AAPL"},
+            {
+                "directional_ema15_distance_atr": 0.25,
+                "directional_ema15_bucket": "TIGHT_TO_EMA15",
+                "ema15_reclaim": True,
+            },
+        )
+
+        self.assertTrue(attributes["pattern.post_earnings_ema15_pullback_ready"])
+        self.assertEqual(attributes["structure.directional_ema15_bucket"], "TIGHT_TO_EMA15")
+
     def test_post_earnings_dynamic_stop_fails_on_first_close(self):
         scenario = {
             "tradeable": True,
@@ -2138,8 +2183,56 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertGreaterEqual(candidate["support_count"], 3)
         self.assertEqual(candidate["side"], "LONG")
+        self.assertIn("SMA_50", candidate["major_sma_supports"])
         self.assertTrue(candidate["top_score_drivers"])
         self.assertIsInstance(candidate["risk_flags"], list)
+
+    def test_theta_put_candidate_requires_major_sma_support(self):
+        dates = pd.bdate_range("2025-08-01", periods=80)
+        rows = []
+        for idx, dt_value in enumerate(dates):
+            close_price = 100.0 + (idx * 0.01)
+            rows.append(
+                {
+                    "datetime": dt_value,
+                    "open": close_price - 0.2,
+                    "high": close_price + 0.8,
+                    "low": close_price - 0.8,
+                    "close": close_price,
+                    "volume": 1_000_000,
+                }
+            )
+        df = pd.DataFrame(rows)
+        last_trade_date = df.iloc[-1]["datetime"].date()
+        last_close = float(df.iloc[-1]["close"])
+
+        candidate = evaluate_theta_put_candidate(
+            symbol="EXT",
+            side="LONG",
+            df=df,
+            last_trade_date=last_trade_date,
+            last_close=last_close,
+            atr20=10.0,
+            current_anchor_meta={
+                "vwap": last_close - 1.0,
+                "bands": {"LOWER_1": last_close - 2.0, "UPPER_1": last_close - 0.5},
+            },
+            previous_anchor_meta={
+                "vwap": last_close - 3.0,
+                "bands": {"LOWER_1": last_close - 4.0, "UPPER_1": last_close - 1.5},
+            },
+            indicator_row={
+                "sma_20": last_close - 0.75,
+                "sma_50": last_close - 45.0,
+                "sma_100": last_close - 50.0,
+                "sma_200": last_close - 55.0,
+            },
+            compression_summary={"is_compressed": False},
+            recent_earnings_dates=[(last_trade_date - timedelta(days=35)).isoformat()],
+            upcoming_earnings_dates=[(last_trade_date + timedelta(days=35)).isoformat()],
+        )
+
+        self.assertIsNone(candidate)
 
     def test_theta_put_candidate_rejects_recent_earnings(self):
         dates = pd.bdate_range("2025-08-01", periods=180)

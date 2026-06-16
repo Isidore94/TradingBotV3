@@ -16,6 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+import tkinter.font as tkfont
 from typing import Any
 
 from project_paths import (
@@ -70,12 +71,43 @@ from master_avwap import (
     run_theta_scan_with_shared_watchlists,
 )
 from market_prep_tab import MarketPrepTab, TickerLookupTab
+from journal_tab import JournalTab
 from master_avwap_shared import load_tradingview_groups
 
 DARK_GREY = "#2E2E2E"
 TEXT_COLOR = "#E0E0E0"
 PANEL_GREY = "#3A3A3A"
 INPUT_GREY = "#252525"
+UI_FONT_FAMILY = "Segoe UI"
+MONO_FONT_FAMILY = "Courier New"
+GUI_BASE_FONT_SIZE = 11
+GUI_TEXT_FONT_SIZE = 12
+GUI_TREE_ROW_HEIGHT = 30
+GUI_COMBINED_WIDTH_RATIO = 0.75
+
+TEXT_TAGS_WITH_BOLD_FONT = {
+    "bounce_feedback_issue",
+    "master_avwap_favorite_long",
+    "master_avwap_favorite_short",
+    "master_avwap_focus_long",
+    "master_avwap_focus_short",
+    "mp_clean",
+    "mp_heading",
+    "mp_high",
+    "mp_medium",
+    "mp_ticker",
+    "orange_symbol",
+    "output_clean",
+    "output_heading",
+    "output_high",
+    "output_medium",
+    "output_ticker",
+    "pink_symbol",
+    "rrs_hdr",
+    "rrs_rs",
+    "rrs_rw",
+    "trendline_bold",
+}
 
 BOUNCE_TOGGLE_ORDER = [
     "10_candle",
@@ -111,6 +143,86 @@ PERFORMANCE_BOUNCE_ACTIVE_REFRESH_MS = 7_500
 MASTER_AVWAP_OUTPUT_WATCH_MS = 2_000
 PERFORMANCE_MASTER_AVWAP_OUTPUT_WATCH_MS = 10_000
 MASTER_AVWAP_OUTPUT_REFRESH_DEBOUNCE_MS = 500
+
+
+def _font_option(family: str, size: int, weight: str | None = None) -> str:
+    suffix = f" {weight}" if weight else ""
+    return f"{{{family}}} {size}{suffix}"
+
+
+def _set_named_font(name: str, *, family: str, size: int, weight: str | None = None) -> None:
+    try:
+        named_font = tkfont.nametofont(name)
+    except tk.TclError:
+        return
+    options = {"family": family, "size": size}
+    if weight:
+        options["weight"] = weight
+    try:
+        named_font.configure(**options)
+    except tk.TclError:
+        return
+
+
+def _configure_readable_styles(root: tk.Misc) -> None:
+    style = ttk.Style(root)
+    text_font = (UI_FONT_FAMILY, GUI_BASE_FONT_SIZE)
+    heading_font = (UI_FONT_FAMILY, GUI_BASE_FONT_SIZE, "bold")
+
+    for style_name in ("Treeview", "Dark.Treeview", "Readable.Treeview"):
+        style.configure(style_name, font=text_font, rowheight=GUI_TREE_ROW_HEIGHT)
+    for style_name in ("Treeview.Heading", "Dark.Treeview.Heading", "Readable.Treeview.Heading"):
+        style.configure(style_name, font=heading_font)
+
+
+def _configure_text_widget_readability(widget: tk.Text, font_size: int = GUI_TEXT_FONT_SIZE) -> None:
+    try:
+        widget.configure(
+            font=(MONO_FONT_FAMILY, font_size),
+            spacing1=1,
+            spacing3=1,
+        )
+    except tk.TclError:
+        return
+
+    try:
+        tag_names = widget.tag_names()
+    except tk.TclError:
+        return
+    for tag_name in tag_names:
+        try:
+            existing_font = str(widget.tag_cget(tag_name, "font") or "")
+        except tk.TclError:
+            continue
+        if not existing_font and tag_name not in TEXT_TAGS_WITH_BOLD_FONT:
+            continue
+        use_bold = "bold" in existing_font.lower() or tag_name in TEXT_TAGS_WITH_BOLD_FONT
+        font_spec = (
+            (MONO_FONT_FAMILY, font_size, "bold")
+            if use_bold
+            else (MONO_FONT_FAMILY, font_size)
+        )
+        try:
+            widget.tag_configure(tag_name, font=font_spec)
+        except tk.TclError:
+            continue
+
+
+def _apply_readable_fonts_to_subtree(widget: tk.Misc, *, text_size: int = GUI_TEXT_FONT_SIZE) -> None:
+    if isinstance(widget, tk.Text):
+        _configure_text_widget_readability(widget, font_size=text_size)
+    else:
+        try:
+            widget.configure(font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
+        except tk.TclError:
+            pass
+
+    try:
+        children = widget.winfo_children()
+    except tk.TclError:
+        return
+    for child in children:
+        _apply_readable_fonts_to_subtree(child, text_size=text_size)
 
 
 def normalize_gui_mode(mode: str | None) -> str:
@@ -488,32 +600,72 @@ def configure_theme(root: tk.Misc) -> None:
     style = ttk.Style(root)
     style.theme_use("clam")
 
+    for font_name in (
+        "TkDefaultFont",
+        "TkTextFont",
+        "TkMenuFont",
+        "TkCaptionFont",
+        "TkSmallCaptionFont",
+        "TkIconFont",
+        "TkTooltipFont",
+    ):
+        _set_named_font(font_name, family=UI_FONT_FAMILY, size=GUI_BASE_FONT_SIZE)
+    _set_named_font("TkFixedFont", family=MONO_FONT_FAMILY, size=GUI_TEXT_FONT_SIZE)
+
     root.option_add("*Background", DARK_GREY)
     root.option_add("*Foreground", TEXT_COLOR)
+    root.option_add("*Font", _font_option(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
     root.option_add("*Label*Background", DARK_GREY)
     root.option_add("*Entry*Background", INPUT_GREY)
     root.option_add("*Entry*Foreground", TEXT_COLOR)
+    root.option_add("*Entry*Font", _font_option(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
     root.option_add("*Text*Background", INPUT_GREY)
     root.option_add("*Text*Foreground", TEXT_COLOR)
+    root.option_add("*Text*Font", _font_option(MONO_FONT_FAMILY, GUI_TEXT_FONT_SIZE))
+    root.option_add("*Listbox*Font", _font_option(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
 
     style.configure(".", background=DARK_GREY, foreground=TEXT_COLOR)
     style.configure("TFrame", background=DARK_GREY)
-    style.configure("TLabel", background=DARK_GREY, foreground=TEXT_COLOR)
-    style.configure("TButton", background=PANEL_GREY, foreground=TEXT_COLOR)
+    style.configure("TLabel", background=DARK_GREY, foreground=TEXT_COLOR, font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
+    style.configure("TButton", background=PANEL_GREY, foreground=TEXT_COLOR, font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
     style.map("TButton", background=[("active", "#4A4A4A")])
-    style.configure("TEntry", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
-    style.configure("TSpinbox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
-    style.configure("TCombobox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+    style.configure("TEntry", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR, font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
+    style.configure("TSpinbox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR, font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
+    style.configure("TCombobox", fieldbackground=INPUT_GREY, foreground=TEXT_COLOR, font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE))
     style.configure("TNotebook", background=DARK_GREY, borderwidth=0)
-    style.configure("TNotebook.Tab", background=PANEL_GREY, foreground=TEXT_COLOR, padding=(12, 6))
+    style.configure(
+        "TNotebook.Tab",
+        background=PANEL_GREY,
+        foreground=TEXT_COLOR,
+        padding=(12, 7),
+        font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE),
+    )
     style.map("TNotebook.Tab", background=[("selected", "#4A4A4A")])
     style.configure("TLabelframe", background=DARK_GREY, foreground=TEXT_COLOR)
-    style.configure("TLabelframe.Label", background=DARK_GREY, foreground=TEXT_COLOR)
-    style.configure("Treeview", background=INPUT_GREY, fieldbackground=INPUT_GREY, foreground=TEXT_COLOR)
+    style.configure(
+        "TLabelframe.Label",
+        background=DARK_GREY,
+        foreground=TEXT_COLOR,
+        font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE, "bold"),
+    )
+    style.configure(
+        "Treeview",
+        background=INPUT_GREY,
+        fieldbackground=INPUT_GREY,
+        foreground=TEXT_COLOR,
+        font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE),
+        rowheight=GUI_TREE_ROW_HEIGHT,
+    )
     style.map("Treeview", background=[("selected", "#4A4A4A")], foreground=[("selected", TEXT_COLOR)])
-    style.configure("Treeview.Heading", background=PANEL_GREY, foreground=TEXT_COLOR)
+    style.configure(
+        "Treeview.Heading",
+        background=PANEL_GREY,
+        foreground=TEXT_COLOR,
+        font=(UI_FONT_FAMILY, GUI_BASE_FONT_SIZE, "bold"),
+    )
     style.configure("Horizontal.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
     style.configure("Vertical.TScrollbar", background=PANEL_GREY, troughcolor=INPUT_GREY)
+    _configure_readable_styles(root)
 
 
 def choose_gui_mode() -> str:
@@ -800,11 +952,13 @@ class BaseBounceBotPanel:
         text_area = scrolledtext.ScrolledText(
             parent,
             wrap=tk.WORD,
-            font=("Courier", font_size),
+            font=(MONO_FONT_FAMILY, font_size),
             state="disabled",
             bg=INPUT_GREY,
             fg=TEXT_COLOR,
             insertbackground=TEXT_COLOR,
+            spacing1=1,
+            spacing3=1,
         )
         configure_alert_tags(text_area, font_size=font_size)
         return text_area
@@ -969,7 +1123,7 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
 
         alerts_frame = ttk.Frame(self.container)
         alerts_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.alert_text = self._create_alerts_widget(alerts_frame, font_size=11)
+        self.alert_text = self._create_alerts_widget(alerts_frame, font_size=GUI_TEXT_FONT_SIZE)
         self.alert_text.pack(fill=tk.BOTH, expand=True)
 
         bounce_toggle_frame = tk.LabelFrame(
@@ -1085,7 +1239,7 @@ class FullBounceBotPanel(BaseBounceBotPanel):
         outer_pad = 6 if self.compact_layout else 10
         header_bottom_pad = 4 if self.compact_layout else 8
         button_padx = 6 if self.compact_layout else 10
-        alert_font_size = 10 if self.compact_layout else 11
+        alert_font_size = GUI_TEXT_FONT_SIZE
 
         header = ttk.Frame(self.container)
         header.pack(fill=tk.X, padx=outer_pad, pady=(6 if self.compact_layout else 10, header_bottom_pad))
@@ -1254,10 +1408,12 @@ class SimpleMasterAvwapPanel:
         self.text_area = scrolledtext.ScrolledText(
             self.container,
             wrap=tk.WORD,
-            font=("Courier New", 10),
+            font=(MONO_FONT_FAMILY, GUI_TEXT_FONT_SIZE),
             bg=INPUT_GREY,
             fg=TEXT_COLOR,
             insertbackground=TEXT_COLOR,
+            spacing1=1,
+            spacing3=1,
         )
         self.text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
 
@@ -1353,10 +1509,12 @@ class WatchlistEditorPanel:
             self.container,
             wrap=tk.WORD,
             height=5 if self.compact_layout else 10,
-            font=("Courier New", 10),
+            font=(MONO_FONT_FAMILY, GUI_TEXT_FONT_SIZE),
             bg=INPUT_GREY,
             fg=TEXT_COLOR,
             insertbackground=TEXT_COLOR,
+            spacing1=1,
+            spacing3=1,
         )
         self.text_area.pack(
             fill=tk.BOTH,
@@ -1539,8 +1697,10 @@ class ConsolidatedTradingGUI:
         self.avwap_gui: MasterAvwapGUI | None = None
         self.market_prep_panel: MarketPrepTab | None = None
         self.ticker_lookup_panel: TickerLookupTab | None = None
+        self.journal_panel: JournalTab | None = None
         self.main_notebook: ttk.Notebook | None = None
         self.master_tab = None
+        self.journal_tab = None
         self._output_write_after_id = None
         self._output_refresh_after_id = None
         self._output_traces: list[tuple[tk.Variable, str]] = []
@@ -1549,14 +1709,26 @@ class ConsolidatedTradingGUI:
         self._avwap_output_refresh_after_id = None
         self._avwap_output_mtimes: dict[Path, int | None] = {}
         self._build_layout()
+        self._apply_readability()
+        self.root.after_idle(self._apply_readability)
         self._sync_performance_status()
         self._configure_output_snapshot_updates()
         self._configure_master_avwap_output_watcher()
 
     def _geometry_for_mode(self, mode: str) -> str:
         if mode == "combined":
-            return "1910x2160+0+0"
+            try:
+                screen_width = max(1200, int(self.root.winfo_screenwidth()))
+                screen_height = max(900, int(self.root.winfo_screenheight()))
+            except tk.TclError:
+                return "1910x2160+0+0"
+            width = min(screen_width, max(1910, int(screen_width * GUI_COMBINED_WIDTH_RATIO)))
+            return f"{width}x{screen_height}+0+0"
         return "1880x1040" if mode == "full" else "1380x900"
+
+    def _apply_readability(self) -> None:
+        _configure_readable_styles(self.root)
+        _apply_readable_fonts_to_subtree(self.root, text_size=GUI_TEXT_FONT_SIZE)
 
     def _build_layout(self) -> None:
         self._build_global_toolbar()
@@ -1617,6 +1789,10 @@ class ConsolidatedTradingGUI:
         self.ticker_lookup_tab = ticker_lookup_tab
         notebook.add(ticker_lookup_tab, text="Ticker Lookup")
 
+        journal_tab = ttk.Frame(notebook)
+        self.journal_tab = journal_tab
+        notebook.add(journal_tab, text="Journal")
+
         if self.mode == "full":
             self.bounce_panel = FullBounceBotPanel(
                 bounce_tab,
@@ -1637,6 +1813,8 @@ class ConsolidatedTradingGUI:
         self.market_prep_panel.pack(fill=tk.BOTH, expand=True)
         self.ticker_lookup_panel = TickerLookupTab(ticker_lookup_tab, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
         self.ticker_lookup_panel.pack(fill=tk.BOTH, expand=True)
+        self.journal_panel = JournalTab(journal_tab, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
+        self.journal_panel.pack(fill=tk.BOTH, expand=True)
 
         main_pane.add(notebook, stretch="always")
         notebook.bind("<<NotebookTabChanged>>", self._on_main_tab_changed)

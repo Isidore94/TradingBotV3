@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, time as dt_time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -36,6 +36,7 @@ from market_session import (
     get_default_stop_time_label,
     get_market_session_window,
 )
+from journal_runner import run_journal_import_for_date
 from master_avwap_shared import load_tradingview_groups
 from master_avwap import (
     ATR_LENGTH,
@@ -52,6 +53,7 @@ from master_avwap import (
 )
 from project_paths import (
     APP_LOG_BACKUP_COUNT,
+    JOURNAL_DB_FILE,
     LOG_DIR,
     LONGS_FILE,
     MASTER_AVWAP_EVENT_TICKERS_FILE,
@@ -85,6 +87,8 @@ STATUS_PREVIEW_RUNS = 8
 SLEEP_POLL_SECONDS = 30
 STALE_LOCK_MAX_AGE = timedelta(hours=12)
 GUI_TICK_MS = 15_000
+JOURNAL_EOD_TRIGGER = "mini_pc_eod"
+JOURNAL_EOD_FINAL_STATUSES = {"success", "failed", "dry_run"}
 WATCHLIST_FILTER_CLIENT_ID = 1005
 SETUP_TRACKER_SYNC_CLIENT_ID = 1006
 WATCHLIST_FILTER_DAYS = 5
@@ -139,6 +143,7 @@ def default_state(schedule: list[str]) -> dict[str, Any]:
         "last_error": "",
         "last_success_at": None,
         "last_filter_summary": None,
+        "journal_eod_import": None,
         "updated_at": now_iso,
     }
 
@@ -249,6 +254,8 @@ def load_state(schedule: list[str]) -> dict[str, Any]:
 
     runs = state.get("runs")
     state["runs"] = runs if isinstance(runs, list) else []
+    journal_eod_import = state.get("journal_eod_import")
+    state["journal_eod_import"] = journal_eod_import if isinstance(journal_eod_import, dict) else None
     state["updated_at"] = datetime.now().isoformat(timespec="seconds")
     return state
 
@@ -465,6 +472,135 @@ def format_watchlist_filter_summary(summary: Any) -> str:
     return "No watchlist filter summary available."
 
 
+def should_run_eod_journal_import(state: dict[str, Any], target_date: date | None = None) -> bool:
+    day = target_date or datetime.now().date()
+    entry = state.get("journal_eod_import")
+    if not isinstance(entry, dict):
+        return True
+    if str(entry.get("date") or "") != day.isoformat():
+        return True
+    return str(entry.get("status") or "").strip().lower() not in (
+        JOURNAL_EOD_FINAL_STATUSES | {"running"}
+    )
+
+
+def format_eod_journal_import_summary(entry: Any) -> str:
+    if not isinstance(entry, dict):
+        return "Not run yet."
+
+    status = str(entry.get("status") or "unknown").strip()
+    target_date = str(entry.get("date") or "unknown date")
+    finished_at = str(entry.get("finished_at") or "")
+    summary = entry.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    total_imported = summary.get("total_imported")
+    trade_count = summary.get("trade_count")
+    message = str(entry.get("message") or "").strip()
+    parts = [f"{status} for {target_date}"]
+    if finished_at:
+        parts.append(f"finished {finished_at}")
+    if total_imported is not None:
+        parts.append(f"executions={total_imported}")
+    if trade_count is not None:
+        parts.append(f"grouped_trades={trade_count}")
+    if message:
+        parts.append(message)
+    return "; ".join(parts)
+
+
+def run_eod_journal_import(
+    state: dict[str, Any],
+    schedule: list[str],
+    stop_at: str,
+    *,
+    dry_run: bool = False,
+    target_date: date | None = None,
+) -> tuple[bool, str]:
+    day = target_date or datetime.now().date()
+    if not should_run_eod_journal_import(state, day):
+        message = f"EOD journal import already recorded for {day.isoformat()}."
+        logging.info(message)
+        return True, message
+
+    started_at = datetime.now()
+    record: dict[str, Any] = {
+        "date": day.isoformat(),
+        "status": "running",
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "trigger": JOURNAL_EOD_TRIGGER,
+    }
+    state["journal_eod_import"] = record
+    save_state(state)
+    write_status_file(
+        state,
+        schedule,
+        stop_at,
+        phase="journal_import",
+        note=f"Running EOD journal import for {day.isoformat()}.",
+    )
+
+    success = True
+    summary: dict[str, Any]
+    message = ""
+    try:
+        if dry_run:
+            summary = {
+                "status": "DRY_RUN",
+                "target_date": day.isoformat(),
+                "trigger": JOURNAL_EOD_TRIGGER,
+                "total_imported": 0,
+                "trade_count": None,
+                "messages": ["Dry-run mode skipped broker journal import."],
+                "source_results": [],
+            }
+            final_status = "dry_run"
+            message = "Dry-run mode skipped EOD journal import."
+        else:
+            summary = run_journal_import_for_date(day, trigger=JOURNAL_EOD_TRIGGER)
+            success = summary.get("status") != "FAILED"
+            final_status = "success" if success else "failed"
+            message = "; ".join(str(item) for item in summary.get("messages") or [])
+    except Exception as exc:
+        logging.exception("EOD journal import failed.")
+        success = False
+        final_status = "failed"
+        message = str(exc)
+        summary = {
+            "status": "FAILED",
+            "target_date": day.isoformat(),
+            "trigger": JOURNAL_EOD_TRIGGER,
+            "total_imported": 0,
+            "trade_count": None,
+            "messages": [message],
+            "source_results": [],
+        }
+
+    finished_at = datetime.now()
+    record.update(
+        {
+            "status": final_status,
+            "finished_at": finished_at.isoformat(timespec="seconds"),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 2),
+            "summary": summary,
+            "message": message,
+        }
+    )
+    state["journal_eod_import"] = record
+    if not success:
+        state["last_status"] = "journal_import_failed"
+        state["last_error"] = message
+    save_state(state)
+    write_status_file(
+        state,
+        schedule,
+        stop_at,
+        phase="journal_import_done",
+        note=f"EOD journal import {final_status}: {message}",
+    )
+    logging.info("EOD journal import %s for %s: %s", final_status, day.isoformat(), message)
+    return success, f"EOD journal import {final_status}: {message}"
+
+
 def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
     started_at = datetime.now()
     watchlists = [
@@ -624,6 +760,7 @@ def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> tuple
             use_shared_watchlists=True,
             update_setup_tracker=update_setup_tracker,
             require_ib_for_setup_tracker=True,
+            include_theta=True,
         )
     except Exception as exc:
         setattr(exc, "watchlist_filter_summary", filter_summary)
@@ -795,6 +932,7 @@ def write_status_file(
     theta_report = read_text(THETA_PUTS_FILE)
     theta_symbols = extract_theta_symbols_from_report(theta_report)
     filter_summary = state.get("last_filter_summary")
+    journal_eod_import = state.get("journal_eod_import")
     tradingview_groups = load_tradingview_groups()
     favorite_symbols = (
         tradingview_groups["favorites"]["LONG"]
@@ -825,6 +963,8 @@ def write_status_file(
         f"Master swing long count: {swing_longs_count} ({SWING_LONGS_FILE})",
         f"Master short swing count: {swing_shorts_count} ({SWING_SHORTS_FILE})",
         f"Last watchlist filter: {format_watchlist_filter_summary(filter_summary)}",
+        f"EOD journal import: {format_eod_journal_import_summary(journal_eod_import)}",
+        f"Journal DB: {JOURNAL_DB_FILE}",
         f"TV paste source: {tradingview_groups.get('source_label', 'Unknown')}",
         f"Setup tracker: {MASTER_AVWAP_SETUP_TRACKER_FILE}",
         f"Setup scenarios CSV: {MASTER_AVWAP_SETUP_SCENARIOS_FILE}",
@@ -1268,13 +1408,25 @@ def run_schedule(schedule: list[str], stop_at: str, dry_run: bool = False, shutd
 
     state = load_state(schedule)
     state["last_status"] = state.get("last_status", "idle") or "idle"
+    journal_message = ""
+    if should_run_eod_journal_import(state, datetime.now().date()):
+        _, journal_message = run_eod_journal_import(
+            state,
+            schedule,
+            stop_at,
+            dry_run=dry_run,
+        )
+        state = load_state(schedule)
     save_state(state)
     write_status_file(
         state,
         schedule,
         stop_at,
         phase="completed",
-        note=f"Schedule window ended at {stop_at}.",
+        note=(
+            f"Schedule window ended at {stop_at}."
+            + (f" {journal_message}" if journal_message else "")
+        ),
     )
     logging.info("Mini-PC schedule finished for %s.", datetime.now().date().isoformat())
     if shutdown_at_end:
@@ -1682,16 +1834,70 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
             return
 
         state = load_state(self.schedule)
+        target_date = datetime.now().date()
+        if should_run_eod_journal_import(state, target_date):
+            self.completed_window_date = today_iso
+            self._start_eod_journal_import(target_date)
+            return
+
+        self._finish_completed_schedule_window(today_iso, f"Schedule window ended at {self.stop_at}.")
+
+    def _finish_completed_schedule_window(self, today_iso: str, note: str):
+        state = load_state(self.schedule)
         state["last_status"] = state.get("last_status", "idle") or "idle"
         save_state(state)
         self.completed_window_date = today_iso
-        self._write_scheduler_status("completed", f"Schedule window ended at {self.stop_at}.")
+        self._write_scheduler_status("completed", note)
         logging.info("Mini-PC GUI schedule finished for %s.", today_iso)
 
         if self.shutdown_at_end and self.shutdown_issued_date != today_iso:
             self.shutdown_issued_date = today_iso
             self.status_var.set("Schedule window ended. Shutting down Windows...")
             self.root.after(1500, self._shutdown_host)
+
+    def _start_eod_journal_import(self, target_date: date):
+        if self.background_task_active:
+            return
+
+        target_iso = target_date.isoformat()
+        running_note = f"Running EOD journal import for {target_iso}."
+        self.background_task_active = True
+        self.current_background_label = running_note
+        self.status_var.set(running_note)
+        self._write_scheduler_status("journal_import", running_note)
+
+        def _task():
+            success = False
+            journal_message = ""
+            try:
+                state = load_state(self.schedule)
+                success, journal_message = run_eod_journal_import(
+                    state,
+                    self.schedule,
+                    self.stop_at,
+                    dry_run=self.dry_run,
+                    target_date=target_date,
+                )
+            except Exception as exc:
+                logging.exception("Mini-PC GUI EOD journal import failed.")
+                journal_message = f"EOD journal import failed: {exc}"
+
+            def _finish():
+                self.background_task_active = False
+                self.current_background_label = ""
+                final_note = journal_message or (
+                    "EOD journal import complete." if success else "EOD journal import failed."
+                )
+                self.status_var.set(final_note)
+                self.refresh_mini_pc_status_view()
+                self._finish_completed_schedule_window(
+                    target_iso,
+                    f"Schedule window ended at {self.stop_at}. {final_note}",
+                )
+
+            self.root.after(0, _finish)
+
+        threading.Thread(target=_task, daemon=True).start()
 
     def _shutdown_host(self):
         maybe_shutdown_windows()

@@ -113,6 +113,9 @@ MASTER_AVWAP_SCORING_CONFIG_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_s
 MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_recommendations.json"
 MASTER_AVWAP_SCORING_TUNER_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_tuner_report.txt"
 MASTER_AVWAP_USER_FAVORITES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_user_favorites.csv"
+JOURNAL_DB_FILE = PERSISTENT_RUNTIME_DATA_DIR / "trade_journal.sqlite3"
+JOURNAL_FX_CACHE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "trade_journal_fx_rates.json"
+JOURNAL_EXPORT_DIR = OUTPUT_DIR / "journal"
 
 MASTER_AVWAP_REPORT_FILE = REPORTS_DIR / "master_avwap_events.txt"
 MASTER_AVWAP_EVENT_TICKERS_FILE = REPORTS_DIR / "master_avwap_event_tickers.txt"
@@ -238,6 +241,7 @@ def _ensure_directories() -> None:
         DATA_DIR,
         OUTPUT_DIR,
         LOG_DIR,
+        JOURNAL_EXPORT_DIR,
     ):
         path.mkdir(parents=True, exist_ok=True)
 

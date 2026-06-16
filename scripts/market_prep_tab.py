@@ -800,6 +800,10 @@ class MarketPrepTab:
         if focus:
             sections.append("Highest Importance Focus\n" + focus)
 
+        roadmap = self._markdown_section(markdown, "## 2. Next 5 Days Roadmap", "## 3.")
+        if roadmap:
+            sections.append("Next 5 Days Roadmap\n" + roadmap)
+
         if str(report.get("report_type") or "").lower() == "weekly":
             week_risk = report.get("week_risk_level") if isinstance(report.get("week_risk_level"), dict) else {}
             if week_risk:
@@ -809,7 +813,7 @@ class MarketPrepTab:
                     f"- Reason: {week_risk.get('reason') or 'No meaningful scheduled events found.'}"
                 )
         else:
-            landmines = self._markdown_section(markdown, "## 3. Scheduled Landmines Today", "## 4.")
+            landmines = self._markdown_section(markdown, "## 8. Scheduled Landmines Today", "## 9.")
             if landmines:
                 sections.append("Scheduled Landmines Today\n" + landmines)
 
@@ -1795,7 +1799,7 @@ class TickerLookupTab:
         self.summary_var.set(f"{ticker}: lookup running.")
         self._set_text(
             self.overview_text,
-            "Fetching ticker metadata, earnings, filings, broad Google News RSS context, and optional AI brief...",
+            "Fetching ticker metadata, earnings, filings, recent major Google News RSS context, and optional AI brief...",
         )
         self._set_text(self.ticker_ai_text, "Ticker AI brief running...")
 
@@ -1838,8 +1842,13 @@ class TickerLookupTab:
         peers = payload.get("peer_tickers") if isinstance(payload.get("peer_tickers"), list) else []
         statuses = payload.get("source_status") if isinstance(payload.get("source_status"), list) else []
         ai_brief = payload.get("ai_brief") if isinstance(payload.get("ai_brief"), dict) else {}
+        swing_risk = payload.get("swing_risk") if isinstance(payload.get("swing_risk"), dict) else {}
+        risk_items = swing_risk.get("risk_items") if isinstance(swing_risk.get("risk_items"), list) else []
+        catalysts = swing_risk.get("upcoming_catalysts") if isinstance(swing_risk.get("upcoming_catalysts"), list) else []
         self.summary_var.set(
-            f"{ticker} | {metadata.get('company_name') or 'Company unknown'} | "
+            f"{ticker} | Swing: {swing_risk.get('verdict') or 'n/a'} "
+            f"({swing_risk.get('risk_score', 0)}/100) | "
+            f"{metadata.get('company_name') or 'Company unknown'} | "
             f"{metadata.get('sector') or 'sector n/a'} / {metadata.get('industry') or 'industry n/a'} | "
             f"Market cap: {metadata.get('market_cap_fmt') or 'n/a'} | "
             f"Peers: {', '.join(peers) or 'None'} | "
@@ -1857,13 +1866,40 @@ class TickerLookupTab:
             f"Peer tickers: {', '.join(peers) or 'None'}",
             f"Landmine-tagged headlines: {len(landmine_headlines)}",
             "",
-            "AI Brief Status",
+            "Swing Safety",
             "-" * 80,
-            str(ai_brief.get("status_label") or ai_brief.get("status") or "AI brief not generated.").strip(),
+            f"Verdict: {swing_risk.get('verdict') or 'n/a'}",
+            f"Risk score: {swing_risk.get('risk_score', 0)}/100",
+            f"Confidence: {swing_risk.get('confidence') or 'n/a'}",
+            f"Read: {swing_risk.get('summary') or 'n/a'}",
             "",
-            "Source Status",
+            "Top Road Bumps",
             "-" * 80,
         ]
+        overview.extend(self._format_risk_rows(risk_items[:8]) or ["None found in configured sources."])
+        overview.extend(
+            [
+                "",
+                "Upcoming Catalysts / Things To Verify",
+                "-" * 80,
+            ]
+        )
+        overview.extend(self._format_risk_rows(catalysts[:8]) or ["No explicit catalyst headlines or calendar events found."])
+        missing_checks = swing_risk.get("missing_checks") if isinstance(swing_risk.get("missing_checks"), list) else []
+        if missing_checks:
+            overview.extend(["", "Missing Checks", "-" * 80])
+            overview.extend(f"- {item}" for item in missing_checks)
+        overview.extend(
+            [
+                "",
+                "AI Brief Status",
+                "-" * 80,
+                str(ai_brief.get("status_label") or ai_brief.get("status") or "AI brief not generated.").strip(),
+                "",
+                "Source Status",
+                "-" * 80,
+            ]
+        )
         overview.extend(f"- {status}" for status in statuses)
         self._set_text(self.overview_text, "\n".join(overview).rstrip())
         self._render_ticker_ai_brief(ai_brief, payload)
@@ -1906,6 +1942,21 @@ class TickerLookupTab:
         if not summary and str(payload.get("ai_swing_query") or "").strip():
             sections.append("Manual AI Query\n" + str(payload.get("ai_swing_query") or "").strip())
         self._set_text(self.ticker_ai_text, "\n\n".join(sections).strip())
+
+    def _format_risk_rows(self, rows: list[dict]) -> list[str]:
+        lines = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parts = [
+                str(row.get("severity") or "").strip().upper(),
+                str(row.get("category") or "").strip(),
+                str(row.get("date") or "").strip(),
+                str(row.get("title") or "").strip(),
+                str(row.get("reason") or "").strip(),
+            ]
+            lines.append("- " + " | ".join(part for part in parts if part))
+        return lines
 
     def _render_earnings_tree(self, tree: ttk.Treeview | None, rows: list[dict]) -> None:
         self._clear_tree(tree)

@@ -27,6 +27,7 @@ from .services.earnings_service import (
     get_upcoming_earnings,
 )
 from .services.fed_calendar_service import get_fed_calendar_events
+from .services.future_roadmap_service import build_future_roadmap, get_future_roadmap_settings
 from .services.ai_service import build_market_prep_ai_brief
 from .services.prices_service import fetch_market_snapshot
 from .services.rss_news_service import fetch_rss_headlines
@@ -59,6 +60,7 @@ class MarketPrepOrchestrator:
         fed_calendar = self._load_fed_calendar(days=7, start_date=prep_date)
         treasury_calendar = self._load_treasury_calendar(days=7, start_date=prep_date)
         todays_events = self._load_todays_events(target_date=prep_date)
+        recent_events = self._load_recent_events(days_back=5, end_date=prep_date)
         today_tomorrow_earnings = self._load_today_tomorrow_earnings(target_date=prep_date)
         next_7_earnings = self._load_upcoming_earnings(days=7, start_date=prep_date)
         watchlist_risk = self._load_watchlist_risk(
@@ -72,6 +74,17 @@ class MarketPrepOrchestrator:
         rss_headlines = self._load_rss_headlines(limit=25, tickers=watchlist_tickers)
         youtube_links = self._load_youtube_links(limit=25)
         market_snapshot = self._load_market_snapshot()
+        future_roadmap = build_future_roadmap(
+            report_date=prep_date,
+            next_7_events=next_7_events,
+            fed_calendar=fed_calendar,
+            treasury_calendar=treasury_calendar,
+            next_7_earnings=next_7_earnings,
+            watchlist_risk=watchlist_risk,
+            rss_headlines=rss_headlines,
+            recent_economic_events=recent_events,
+            config=self.config,
+        )
         daily_report = build_daily_report_object(
             todays_events=todays_events,
             next_7_events=next_7_events,
@@ -84,6 +97,7 @@ class MarketPrepOrchestrator:
             treasury_calendar=treasury_calendar,
             sec_filings=sec_filings,
             market_snapshot=market_snapshot,
+            future_roadmap=future_roadmap,
             generated_at=generated_at,
             report_date=prep_date.isoformat(),
         )
@@ -93,6 +107,7 @@ class MarketPrepOrchestrator:
             "generated_at": generated_at,
             "prep_date": prep_date.isoformat(),
             "todays_events": todays_events,
+            "recent_events": recent_events,
             "next_7_events": next_7_events,
             "fed_calendar": fed_calendar,
             "treasury_calendar": treasury_calendar,
@@ -103,6 +118,7 @@ class MarketPrepOrchestrator:
             "rss_headlines": rss_headlines,
             "youtube_links": youtube_links,
             "market_snapshot": market_snapshot,
+            "future_roadmap": future_roadmap,
             "daily_report": daily_report,
             "report": daily_report["markdown"],
         }
@@ -293,6 +309,21 @@ class MarketPrepOrchestrator:
             self.logger.exception("Failed loading upcoming economic events.")
             start = datetime.now().date()
             return _event_error_payload(start, start + timedelta(days=max(0, int(days))), exc)
+
+    def _load_recent_events(self, *, days_back: int, end_date=None) -> dict[str, Any]:
+        end = end_date or datetime.now().date()
+        start = end - timedelta(days=max(1, int(days_back)))
+        settings = get_future_roadmap_settings(self.config)
+        try:
+            return get_upcoming_economic_events(
+                start_date=start,
+                days=max(1, (end - start).days),
+                config=self.config,
+                refresh_forexfactory=bool(settings.get("refresh_recaps", True)),
+            )
+        except Exception as exc:
+            self.logger.exception("Failed loading recent economic events for roadmap recaps.")
+            return _event_error_payload(start, end, exc)
 
     def _load_current_week_events(self, *, refresh_forexfactory: bool = False) -> dict[str, Any]:
         weekly_window = resolve_weekly_prep_window()

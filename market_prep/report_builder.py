@@ -5,6 +5,77 @@ from datetime import datetime
 from .models import MarketPrepConfig
 
 KEY_WEEKLY_RISK_EVENT_TERMS = ("CPI", "FOMC", "NFP", "NONFARM PAYROLLS", "PCE")
+MARKET_MOVING_MACRO_TERMS = (
+    "FOMC",
+    "FEDERAL FUNDS",
+    "RATE DECISION",
+    "CPI",
+    "PCE",
+    "PPI",
+    "NONFARM",
+    "NFP",
+    "PAYROLL",
+    "UNEMPLOYMENT",
+    "AVERAGE HOURLY EARNINGS",
+    "JOBLESS CLAIMS",
+    "ADP",
+    "ISM",
+    "RETAIL SALES",
+    "GDP",
+    "JOLTS",
+    "CONSUMER SENTIMENT",
+)
+FED_MARKET_MOVING_TERMS = ("FOMC", "POWELL", "FED CHAIR", "CHAIR POWELL", "CHAIRMAN")
+TREASURY_MARKET_MOVING_TERMS = (
+    "2-YEAR",
+    "2Y",
+    "5-YEAR",
+    "5Y",
+    "7-YEAR",
+    "7Y",
+    "10-YEAR",
+    "10Y",
+    "20-YEAR",
+    "20Y",
+    "30-YEAR",
+    "30Y",
+    "TREASURY AUCTION",
+)
+MARKET_MOVING_HEADLINE_TERMS = (
+    "TRUMP",
+    "TARIFF",
+    "TARIFFS",
+    "IRAN",
+    "ISRAEL",
+    "MIDDLE EAST",
+    "MISSILE",
+    "SANCTION",
+    "OIL",
+    "OPEC",
+    "CHINA",
+    "EXPORT CONTROLS",
+    "SEMICONDUCTOR",
+    "NVIDIA",
+    "NVDA",
+    "FED",
+    "FOMC",
+    "POWELL",
+    "CPI",
+    "PCE",
+    "PAYROLL",
+    "NONFARM",
+    "JOBS",
+)
+MARKET_MOVING_HEADLINE_TAGS = {
+    "Fed/rates",
+    "inflation",
+    "employment",
+    "geopolitics",
+    "oil/energy",
+    "China",
+    "AI/semis",
+    "tariffs/trade",
+}
 MEGA_CAP_TICKERS = {
     "AAPL",
     "MSFT",
@@ -97,6 +168,7 @@ def build_daily_prep_report(
     treasury_calendar: dict | None = None,
     sec_filings: dict | None = None,
     market_snapshot: dict | None = None,
+    future_roadmap: dict | None = None,
     ai_brief: dict | None = None,
 ) -> str:
     return build_daily_report_object(
@@ -111,6 +183,7 @@ def build_daily_prep_report(
         treasury_calendar=treasury_calendar or {},
         sec_filings=sec_filings or {},
         market_snapshot=market_snapshot or {},
+        future_roadmap=future_roadmap or {},
         ai_brief=ai_brief or {},
     )["markdown"]
 
@@ -127,6 +200,7 @@ def build_daily_report_object(
     treasury_calendar: dict | None = None,
     sec_filings: dict | None = None,
     market_snapshot: dict | None = None,
+    future_roadmap: dict | None = None,
     ai_brief: dict | None = None,
     *,
     report_date: str | None = None,
@@ -145,6 +219,7 @@ def build_daily_report_object(
     treasury_calendar = treasury_calendar or {}
     sec_filings = sec_filings or {}
     market_snapshot = market_snapshot or {}
+    future_roadmap = future_roadmap or {}
     ai_brief = ai_brief or {}
     trading_posture = build_daily_trading_posture(
         todays_events,
@@ -179,6 +254,7 @@ def build_daily_report_object(
         "treasury_calendar": treasury_calendar,
         "sec_filings": sec_filings,
         "market_snapshot": market_snapshot,
+        "future_roadmap": future_roadmap,
         "catalyst_clock": build_catalyst_clock(
             next_7_events,
             next_7_earnings,
@@ -299,6 +375,7 @@ def build_daily_markdown(report: dict) -> str:
     treasury_calendar = report.get("treasury_calendar") if isinstance(report.get("treasury_calendar"), dict) else {}
     sec_filings = report.get("sec_filings") if isinstance(report.get("sec_filings"), dict) else {}
     market_snapshot = report.get("market_snapshot") if isinstance(report.get("market_snapshot"), dict) else {}
+    future_roadmap = report.get("future_roadmap") if isinstance(report.get("future_roadmap"), dict) else {}
     ai_brief = report.get("ai_brief") if isinstance(report.get("ai_brief"), dict) else {}
     catalyst_clock = report.get("catalyst_clock") if isinstance(report.get("catalyst_clock"), list) else []
     posture = report.get("trading_posture") if isinstance(report.get("trading_posture"), list) else []
@@ -327,12 +404,21 @@ def build_daily_markdown(report: dict) -> str:
             treasury_calendar=treasury_calendar,
             sec_filings=sec_filings,
             headlines=headlines,
+            future_roadmap=future_roadmap,
         )
     )
     lines.extend(
         [
             "",
-            "## 2. Daily Landmine Checklist",
+            "## 2. Next 5 Days Roadmap",
+            "",
+        ]
+    )
+    lines.extend(_future_roadmap_markdown(future_roadmap))
+    lines.extend(
+        [
+            "",
+            "## 3. Daily Landmine Checklist",
             "",
         ]
     )
@@ -340,7 +426,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 3. Timing Windows",
+            "## 4. Timing Windows",
             "",
             "No-trade / reduced-size windows:",
             "",
@@ -352,7 +438,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 4. Market Snapshot",
+            "## 5. Market Snapshot",
             "",
         ]
     )
@@ -360,7 +446,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 5. AI Brief",
+            "## 6. AI Brief",
             "",
         ]
     )
@@ -368,7 +454,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 6. Catalyst Clock",
+            "## 7. Catalyst Clock",
             "",
         ]
     )
@@ -376,7 +462,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 7. Scheduled Landmines Today",
+            "## 8. Scheduled Landmines Today",
             "",
         ]
     )
@@ -384,35 +470,47 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 8. Economic Speedbumps",
+            "## 9. Economic Speedbumps",
             "",
             "Today:",
             "",
         ]
     )
-    lines.extend(_economic_events_markdown(todays_events))
+    lines.extend(_economic_events_markdown(todays_events, market_moving_only=True))
     lines.extend(["", "Next 7 Days:", ""])
-    lines.extend(_economic_events_markdown(next_7_events))
+    lines.extend(_economic_events_markdown(next_7_events, market_moving_only=True))
     lines.extend(
         [
             "",
-            "## 9. Fed Risk",
+            "## 10. Fed Risk",
             "",
         ]
     )
-    lines.extend(_calendar_risk_markdown(fed_calendar, empty_message="No Fed calendar risk found."))
+    lines.extend(
+        _calendar_risk_markdown(
+            fed_calendar,
+            empty_message="No market-moving Fed risk found.",
+            event_filter=_is_fed_market_moving_event,
+        )
+    )
     lines.extend(
         [
             "",
-            "## 10. Treasury Auction Risk",
+            "## 11. Treasury Auction Risk",
             "",
         ]
     )
-    lines.extend(_calendar_risk_markdown(treasury_calendar, empty_message="No Treasury auction risk found."))
+    lines.extend(
+        _calendar_risk_markdown(
+            treasury_calendar,
+            empty_message="No market-moving Treasury auction risk found.",
+            event_filter=_is_treasury_market_moving_event,
+        )
+    )
     lines.extend(
         [
             "",
-            "## 11. Earnings Risk",
+            "## 12. Earnings Risk",
             "",
         ]
     )
@@ -420,7 +518,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 12. Watchlist Risk",
+            "## 13. Watchlist Risk",
             "",
         ]
     )
@@ -428,7 +526,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 13. SEC Filing Risk",
+            "## 14. SEC Filing Risk",
             "",
         ]
     )
@@ -436,7 +534,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 14. Sympathy Risk",
+            "## 15. Sympathy Risk",
             "",
         ]
     )
@@ -444,7 +542,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 15. Google News/RSS Headline Risk",
+            "## 16. Google News/RSS Headline Risk",
             "",
         ]
     )
@@ -452,7 +550,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 16. YouTube Links",
+            "## 17. YouTube Links",
             "",
         ]
     )
@@ -460,7 +558,7 @@ def build_daily_markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "## 17. Trading Posture",
+            "## 18. Trading Posture",
             "",
         ]
     )
@@ -563,7 +661,7 @@ def build_weekly_markdown(report: dict) -> str:
             "",
         ]
     )
-    lines.extend(_economic_events_markdown(economic))
+    lines.extend(_economic_events_markdown(economic, market_moving_only=True))
     lines.extend(
         [
             "",
@@ -571,7 +669,13 @@ def build_weekly_markdown(report: dict) -> str:
             "",
         ]
     )
-    lines.extend(_calendar_risk_markdown(fed_calendar, empty_message="No Fed calendar risk found."))
+    lines.extend(
+        _calendar_risk_markdown(
+            fed_calendar,
+            empty_message="No market-moving Fed risk found.",
+            event_filter=_is_fed_market_moving_event,
+        )
+    )
     lines.extend(
         [
             "",
@@ -579,7 +683,13 @@ def build_weekly_markdown(report: dict) -> str:
             "",
         ]
     )
-    lines.extend(_calendar_risk_markdown(treasury_calendar, empty_message="No Treasury auction risk found."))
+    lines.extend(
+        _calendar_risk_markdown(
+            treasury_calendar,
+            empty_message="No market-moving Treasury auction risk found.",
+            event_filter=_is_treasury_market_moving_event,
+        )
+    )
     lines.extend(
         [
             "",
@@ -650,6 +760,7 @@ def _daily_top_focus_markdown(
     treasury_calendar: dict | None = None,
     sec_filings: dict | None = None,
     headlines: dict | None = None,
+    future_roadmap: dict | None = None,
     limit: int = 12,
 ) -> list[str]:
     items: list[tuple[tuple, str]] = []
@@ -662,7 +773,7 @@ def _daily_top_focus_markdown(
         items.append(((0, 0, str(row.get("ticker") or "")), "WATCHLIST: " + _watchlist_earnings_line(row)[2:]))
 
     for event in _sort_events_for_display(_payload_rows(todays_events, "events")):
-        if str(event.get("priority") or "").upper() == "HIGH":
+        if _is_market_moving_macro_event(event):
             items.append(((1, *_event_display_sort_key(event)), "TODAY MACRO: " + _economic_event_line(event)[2:]))
 
     for row in _sort_earnings_for_display(_payload_rows(today_tomorrow_earnings, "earnings")):
@@ -674,15 +785,15 @@ def _daily_top_focus_markdown(
     for event in _sort_events_for_display(_payload_rows(next_7_events, "events")):
         if _event_identity(event) in today_event_keys:
             continue
-        if str(event.get("priority") or "").upper() == "HIGH":
+        if _is_market_moving_macro_event(event):
             items.append(((3, *_event_display_sort_key(event)), "UPCOMING MACRO: " + _economic_event_line(event)[2:]))
 
     for event in _sort_events_for_display(_payload_rows(fed_calendar or {}, "events")):
-        if str(event.get("priority") or "").upper() == "HIGH":
+        if _is_fed_market_moving_event(event):
             items.append(((3, *_event_display_sort_key(event)), "FED: " + _economic_event_line(event)[2:]))
 
     for event in _sort_events_for_display(_payload_rows(treasury_calendar or {}, "events")):
-        if str(event.get("priority") or "").upper() in {"HIGH", "MEDIUM"}:
+        if _is_treasury_market_moving_event(event):
             items.append(((4, *_event_display_sort_key(event)), "TREASURY: " + _economic_event_line(event)[2:]))
 
     for row in _sort_earnings_for_display(_payload_rows(next_7_earnings, "earnings")):
@@ -699,16 +810,23 @@ def _daily_top_focus_markdown(
         if "Sympathy Risk" in str(row.get("classification") or ""):
             items.append(((7, 0, str(row.get("ticker") or "")), "SYMPATHY: " + _watchlist_earnings_line(row)[2:]))
 
+    for item in _future_roadmap_items(future_roadmap or {}):
+        bucket = str(item.get("bucket") or "")
+        priority = str(item.get("priority") or "").upper()
+        if bucket != "Major News" or priority not in {"HIGH", "MEGA"}:
+            continue
+        items.append(((8, str(item.get("date") or ""), str(item.get("title") or "")), "UPCOMING NEWS: " + _future_roadmap_item_text(item)))
+
     if not items:
         for event in _sort_events_for_display(_payload_rows(next_7_events, "events")):
             if str(event.get("priority") or "").upper() == "MEDIUM":
-                items.append(((8, *_event_display_sort_key(event)), "MEDIUM MACRO: " + _economic_event_line(event)[2:]))
+                items.append(((9, *_event_display_sort_key(event)), "MEDIUM MACRO: " + _economic_event_line(event)[2:]))
         for row in _sort_earnings_for_display(_payload_rows(next_7_earnings, "earnings")):
             if str(row.get("importance") or "").upper() == "MEDIUM":
-                items.append(((9, *_earnings_display_sort_key(row)), "MEDIUM EARNINGS: " + _dated_earnings_line(row)[2:]))
+                items.append(((10, *_earnings_display_sort_key(row)), "MEDIUM EARNINGS: " + _dated_earnings_line(row)[2:]))
 
     for headline in _top_headline_rows(headlines or {}, limit=3):
-        items.append(((10, str(headline.get("published") or ""), str(headline.get("title") or "")), "HEADLINE: " + _headline_line(headline)[2:]))
+        items.append(((11, str(headline.get("published") or ""), str(headline.get("title") or "")), "HEADLINE: " + _headline_line(headline)[2:]))
 
     return _focus_lines(items, limit=limit)
 
@@ -731,15 +849,15 @@ def _weekly_top_focus_markdown(
 
     for event in _sort_events_for_display(_payload_rows(economic, "events")):
         priority = str(event.get("priority") or "").upper()
-        if priority == "HIGH" or _is_key_weekly_risk_event(event):
+        if _is_market_moving_macro_event(event):
             items.append(((1, *_event_display_sort_key(event)), "MACRO: " + _economic_event_line(event)[2:]))
 
     for event in _sort_events_for_display(_payload_rows(fed_calendar or {}, "events")):
-        if str(event.get("priority") or "").upper() == "HIGH":
+        if _is_fed_market_moving_event(event):
             items.append(((1, *_event_display_sort_key(event)), "FED: " + _economic_event_line(event)[2:]))
 
     for event in _sort_events_for_display(_payload_rows(treasury_calendar or {}, "events")):
-        if str(event.get("priority") or "").upper() in {"HIGH", "MEDIUM"}:
+        if _is_treasury_market_moving_event(event):
             items.append(((2, *_event_display_sort_key(event)), "TREASURY: " + _economic_event_line(event)[2:]))
 
     for row in _sort_earnings_for_display(_payload_rows(major_earnings, "earnings")):
@@ -775,6 +893,77 @@ def _focus_lines(items: list[tuple[tuple, str]], *, limit: int) -> list[str]:
     return lines
 
 
+def _future_roadmap_markdown(payload: dict) -> list[str]:
+    if not isinstance(payload, dict) or not payload:
+        return ["No future roadmap generated for this run."]
+    lines: list[str] = []
+    recaps = payload.get("recaps") if isinstance(payload.get("recaps"), list) else []
+    if recaps:
+        lines.append("Post-event recaps / data fills:")
+        for recap in recaps[:12]:
+            if isinstance(recap, dict):
+                lines.append(_future_roadmap_recap_line(recap))
+        lines.append("")
+    days = payload.get("days") if isinstance(payload.get("days"), list) else []
+    if not days:
+        items = _future_roadmap_items(payload)
+        if not items:
+            return lines + [str(payload.get("message") or "No major upcoming roadmap items found.")]
+        days = [{"label": "Upcoming", "items": items, "hidden_count": 0}]
+    lines.append(f"Roadmap source: {payload.get('source') or 'configured sources'}")
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        day_items = day.get("items") if isinstance(day.get("items"), list) else []
+        hidden_count = max(0, _safe_int(day.get("hidden_count"), 0))
+        lines.append("")
+        lines.append(str(day.get("label") or day.get("date") or "Upcoming"))
+        if not day_items:
+            lines.append("- No major scheduled/news event found.")
+            continue
+        for item in day_items:
+            if isinstance(item, dict):
+                lines.append("- " + _future_roadmap_item_text(item))
+        if hidden_count:
+            lines.append(f"- ... {hidden_count} more roadmap item(s) hidden.")
+    return lines or [str(payload.get("message") or "No major upcoming roadmap items found.")]
+
+
+def _future_roadmap_items(payload: dict) -> list[dict]:
+    rows = payload.get("items") if isinstance(payload, dict) else []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _future_roadmap_item_text(item: dict) -> str:
+    date_value = str(item.get("date") or "").strip()
+    time_value = str(item.get("time_et") or "").strip()
+    when = " ".join(part for part in (date_value, f"{time_value} ET" if time_value else "") if part)
+    priority = str(item.get("priority") or "").strip().upper()
+    bucket = str(item.get("bucket") or "Event").strip()
+    title = str(item.get("title") or "").strip()
+    detail = str(item.get("detail") or "").strip()
+    source = str(item.get("source") or "").strip()
+    parts = [when, bucket + (f" [{priority}]" if priority else ""), title, detail, source]
+    return " | ".join(part for part in parts if part)
+
+
+def _future_roadmap_recap_line(recap: dict) -> str:
+    date_value = str(recap.get("date") or "").strip()
+    bucket = str(recap.get("bucket") or "Event").strip()
+    priority = str(recap.get("priority") or "").strip().upper()
+    title = str(recap.get("title") or "").strip()
+    detail = str(recap.get("detail") or "").strip()
+    parts = [date_value, bucket + (f" [{priority}]" if priority else ""), title, detail]
+    return "- " + " | ".join(part for part in parts if part)
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_trading_posture(snapshot: dict, todays_events: dict, watchlist_earnings: dict) -> list[str]:
     posture: list[str] = []
     if _has_high_priority_event(todays_events):
@@ -801,7 +990,7 @@ def build_scheduled_landmines(
 ) -> dict[str, list[dict]]:
     high_priority_events = [
         event for event in _payload_rows(todays_events, "events")
-        if str(event.get("priority") or "").upper() == "HIGH"
+        if _is_market_moving_macro_event(event)
     ]
     earnings = _payload_rows(today_tomorrow_earnings, "earnings")
     watchlist_earnings = [
@@ -854,7 +1043,7 @@ def build_daily_landmine_checklist(
     if tone:
         lines.append(f"Market regime: {tone.get('label') or 'n/a'} - {tone.get('reason') or 'n/a'}")
     for event in _sort_events_for_display(_payload_rows(todays_events, "events")):
-        if str(event.get("priority") or "").upper() == "HIGH":
+        if _is_market_moving_macro_event(event):
             lines.append("High-priority macro today: " + _economic_event_line(event)[2:])
     watchlist_today = [
         row for row in _watchlist_rows(watchlist_risk)
@@ -888,7 +1077,11 @@ def build_no_trade_windows(
         ("Treasury", treasury_calendar or {}),
     ):
         for event in _sort_events_for_display(_payload_rows(payload, "events")):
-            if str(event.get("priority") or "").upper() not in {"HIGH", "MEDIUM"}:
+            if label == "Fed" and not _is_fed_market_moving_event(event):
+                continue
+            if label == "Treasury" and not _is_treasury_market_moving_event(event):
+                continue
+            if label == "Macro" and not _is_market_moving_macro_event(event):
                 continue
             prefix = "No-trade" if str(event.get("priority") or "").upper() == "HIGH" else "Reduced-size"
             rows.append(f"{prefix}: {label} - {_economic_event_line(event)[2:]}")
@@ -923,12 +1116,20 @@ def build_week_risk_level(
     treasury_events = _payload_rows(treasury_calendar or {}, "events")
     all_events = events + fed_events + treasury_events
     earnings = _payload_rows(major_earnings, "earnings")
-    key_events = [event for event in all_events if _is_key_weekly_risk_event(event)]
+    key_events = [
+        event
+        for event in all_events
+        if _is_market_moving_macro_event(event)
+        or _is_fed_market_moving_event(event)
+        or _is_treasury_market_moving_event(event)
+    ]
     mega_earnings = [row for row in earnings if _is_major_mega_cap_earnings(row)]
     meaningful_events = [
         event
         for event in all_events
-        if str(event.get("priority") or "").upper() in {"HIGH", "MEDIUM"}
+        if _is_market_moving_macro_event(event)
+        or _is_fed_market_moving_event(event)
+        or _is_treasury_market_moving_event(event)
     ]
     meaningful_earnings = [
         row
@@ -1022,7 +1223,11 @@ def build_weekly_thesis_checklist(
     key_events = []
     for payload in (economic_calendar, fed_calendar or {}, treasury_calendar or {}):
         for event in _sort_events_for_display(_payload_rows(payload, "events")):
-            if str(event.get("priority") or "").upper() == "HIGH" or _is_key_weekly_risk_event(event):
+            if (
+                _is_market_moving_macro_event(event)
+                or _is_fed_market_moving_event(event)
+                or _is_treasury_market_moving_event(event)
+            ):
                 key_events.append(_economic_event_line(event)[2:])
     if key_events:
         lines.append("Main catalyst days: " + " ; ".join(key_events[:5]))
@@ -1064,6 +1269,8 @@ def build_catalyst_clock(
 ) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     for event in _payload_rows(economic_calendar, "events"):
+        if not _is_market_moving_macro_event(event):
+            continue
         items.append(
             _clock_item(
                 date_value=str(event.get("date") or ""),
@@ -1074,6 +1281,8 @@ def build_catalyst_clock(
             )
         )
     for event in _payload_rows(fed_calendar or {}, "events"):
+        if not _is_fed_market_moving_event(event):
+            continue
         items.append(
             _clock_item(
                 date_value=str(event.get("date") or ""),
@@ -1084,7 +1293,7 @@ def build_catalyst_clock(
             )
         )
     for event in _payload_rows(treasury_calendar or {}, "events"):
-        if str(event.get("priority") or "").upper() == "LOW":
+        if not _is_treasury_market_moving_event(event):
             continue
         items.append(
             _clock_item(
@@ -1405,16 +1614,19 @@ def _list_or_empty(values: list, empty_message: str) -> list[str]:
     return lines or [empty_message]
 
 
-def _economic_events_markdown(payload: dict) -> list[str]:
+def _economic_events_markdown(payload: dict, *, market_moving_only: bool = False) -> list[str]:
     events = payload.get("events") if isinstance(payload, dict) else []
     events = events if isinstance(events, list) else []
     lines = _forexfactory_status_markdown(payload)
-    if not events:
-        lines.append(str(payload.get("message") or "No configured economic events found."))
+    display_events = [
+        event for event in events
+        if isinstance(event, dict) and (not market_moving_only or _is_market_moving_macro_event(event))
+    ]
+    if not display_events:
+        fallback = "No market-moving economic events found." if market_moving_only and events else "No configured economic events found."
+        lines.append(str(payload.get("message") or fallback))
         return lines
-    for event in _sort_events_for_display(events):
-        if not isinstance(event, dict):
-            continue
+    for event in _sort_events_for_display(display_events):
         lines.append(_economic_event_line(event))
     return lines
 
@@ -1437,11 +1649,13 @@ def _economic_event_line(event: dict) -> str:
     return line
 
 
-def _calendar_risk_markdown(payload: dict, *, empty_message: str) -> list[str]:
+def _calendar_risk_markdown(payload: dict, *, empty_message: str, event_filter=None) -> list[str]:
     lines = _source_status_markdown(payload)
     events = _payload_rows(payload, "events")
+    if event_filter is not None:
+        events = [event for event in events if event_filter(event)]
     if not events:
-        lines.append(str(payload.get("message") or empty_message))
+        lines.append(empty_message)
         return lines
     lines.extend(_economic_event_line(event) for event in _sort_events_for_display(events))
     return lines
@@ -1916,18 +2130,29 @@ def _rss_headlines_markdown(payload: dict, *, limit: int = 10) -> list[str]:
     if not headlines:
         return [str(payload.get("message") or "No RSS headlines found.")]
     lines = []
-    for headline in headlines[:limit]:
+    market_movers = _top_headline_rows(payload, limit=limit)
+    for headline in market_movers:
         if not isinstance(headline, dict):
             continue
         lines.append(_headline_line(headline))
-    return lines or [str(payload.get("message") or "No RSS headlines found.")]
+    if lines:
+        return lines
+    return [str(payload.get("message") or "No market-moving RSS headlines found.")]
 
 
 def _top_headline_rows(payload: dict, *, limit: int) -> list[dict]:
     headlines = payload.get("headlines") if isinstance(payload, dict) else []
     rows = [row for row in headlines if isinstance(row, dict)] if isinstance(headlines, list) else []
-    tagged = [row for row in rows if row.get("tags")]
-    return (tagged or rows)[:limit]
+    market_movers = [row for row in rows if _is_market_moving_headline(row)]
+    ordered = sorted(
+        market_movers,
+        key=lambda row: (
+            -_headline_market_moving_score(row),
+            str(row.get("published") or ""),
+            str(row.get("title") or ""),
+        ),
+    )
+    return ordered[:limit]
 
 
 def _headline_line(headline: dict) -> str:
@@ -2190,6 +2415,60 @@ def _is_major_mega_cap_earnings(row: dict) -> bool:
 def _is_key_weekly_risk_event(event: dict) -> bool:
     event_name = str(event.get("event") or "").upper()
     return any(term in event_name for term in KEY_WEEKLY_RISK_EVENT_TERMS)
+
+
+def _event_text(event: dict) -> str:
+    return " ".join(
+        str(event.get(key) or "")
+        for key in ("event", "notes", "source", "currency")
+    ).upper()
+
+
+def _is_market_moving_macro_event(event: dict) -> bool:
+    if not isinstance(event, dict):
+        return False
+    text = _event_text(event)
+    priority = str(event.get("priority") or "").upper()
+    if "FOMC" in text or "FEDERAL FUNDS" in text:
+        return True
+    return priority == "HIGH" and any(term in text for term in MARKET_MOVING_MACRO_TERMS)
+
+
+def _is_fed_market_moving_event(event: dict) -> bool:
+    if not isinstance(event, dict):
+        return False
+    text = _event_text(event)
+    return any(term in text for term in FED_MARKET_MOVING_TERMS)
+
+
+def _is_treasury_market_moving_event(event: dict) -> bool:
+    if not isinstance(event, dict):
+        return False
+    text = _event_text(event)
+    priority = str(event.get("priority") or "").upper()
+    return priority in {"HIGH", "MEDIUM"} and any(term in text for term in TREASURY_MARKET_MOVING_TERMS)
+
+
+def _headline_market_moving_score(headline: dict) -> int:
+    if not isinstance(headline, dict):
+        return 0
+    text = " ".join(
+        str(headline.get(key) or "")
+        for key in ("title", "summary", "query", "category")
+    ).upper()
+    tags = set(headline.get("tags") or []) if isinstance(headline.get("tags"), list) else set()
+    score = 0
+    score += 4 * sum(1 for term in MARKET_MOVING_HEADLINE_TERMS if term in text)
+    score += 3 * len(tags & MARKET_MOVING_HEADLINE_TAGS)
+    if "TRUMP" in text and any(term in text for term in ("IRAN", "TARIFF", "TARIFFS", "CHINA", "OIL", "SANCTION")):
+        score += 10
+    if any(term in text for term in ("BREAKING", "STRIKE", "MISSILE", "ATTACK", "INVASION")):
+        score += 4
+    return score
+
+
+def _is_market_moving_headline(headline: dict) -> bool:
+    return _headline_market_moving_score(headline) > 0
 
 
 def _clustered_major_event_dates(economic_calendar: dict, major_earnings: dict) -> list[str]:

@@ -204,10 +204,10 @@ class MarketPrepEnricherTests(unittest.TestCase):
         )
         markdown = report["markdown"]
 
-        self.assertIn("## 6. Catalyst Clock", markdown)
-        self.assertIn("## 9. Fed Risk", markdown)
-        self.assertIn("## 10. Treasury Auction Risk", markdown)
-        self.assertIn("## 13. SEC Filing Risk", markdown)
+        self.assertIn("## 7. Catalyst Clock", markdown)
+        self.assertIn("## 10. Fed Risk", markdown)
+        self.assertIn("## 11. Treasury Auction Risk", markdown)
+        self.assertIn("## 14. SEC Filing Risk", markdown)
         self.assertLess(markdown.index("2026-04-27 TBD ET | Treasury"), markdown.index("2026-04-28 08:00 ET | Earnings"))
 
 

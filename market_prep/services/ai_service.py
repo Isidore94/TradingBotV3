@@ -129,12 +129,14 @@ def build_market_prep_ai_prompt(report: dict[str, Any], *, max_chars: int = 1200
         )
     else:
         task = (
-            "Create a start-of-day landmine checklist with: today's risk windows, confirmed catalysts, "
-            "watchlist tickers to avoid blind holds in, market posture, and trade-management reminders."
+            "Create a start-of-day landmine checklist with: today's risk windows, the next 5 trading/calendar days roadmap, "
+            "confirmed catalysts/news events, post-event data recaps, watchlist tickers to avoid blind holds in, "
+            "market posture, and trade-management reminders."
         )
     return (
         f"{task}\n\n"
-        "Rules: use only the context below, keep it concise, label speculation clearly, and do not give buy/sell instructions.\n\n"
+        "Rules: use only the context below, prioritize scheduled events and confirmed major news over generic headlines, "
+        "keep it concise, label speculation clearly, and do not give buy/sell instructions.\n\n"
         f"Context:\n{context}"
     )
 
@@ -148,12 +150,16 @@ def build_ticker_lookup_ai_prompt(payload: dict[str, Any], *, max_chars: int = 1
     return (
         f"Create a ticker landmine brief for {ticker}.\n\n"
         "Include:\n"
+        "- Start with exactly one swing safety rating: CLEAN, CAUTION, or AVOID/WAIT, with one sentence why.\n"
         "- Company/exposure snapshot, including strategic stakes, investments, subsidiaries, customers, suppliers, or partners if present.\n"
         "- Scheduled catalysts and timing risk over the lookup window.\n"
+        "- Recent major announcements/news, upcoming investor events, earnings, guidance, product/customer events, and peer earnings that could move the ticker.\n"
         "- SEC, financing, dilution, debt, legal/regulatory, rating, guidance, and macro/industry risks.\n"
         "- Any hidden or second-order exposure that should be manually verified, such as AI/private-company stakes.\n"
         "- A short checklist of missing facts to verify before treating the ticker as clean.\n\n"
         "Rules: use only the context below, label speculation clearly, cite headline/source names when available, "
+        "do not treat stale previews, analyst expectations, or thesis headlines as roadblocks unless the context shows a confirmed material event, "
+        "do not call a ticker clean if earnings, high-risk SEC filings, financing/dilution, or major legal/regulatory risk are unresolved, "
         "and do not give buy/sell instructions.\n\n"
         f"Context:\n{context}"
     )
@@ -206,6 +212,26 @@ def _ticker_lookup_context(payload: dict[str, Any]) -> str:
         f"Market cap: {metadata.get('market_cap_fmt') or 'n/a'}",
         f"Peer tickers: {', '.join(payload.get('peer_tickers') or []) or 'n/a'}",
     ]
+    swing_risk = payload.get("swing_risk") if isinstance(payload.get("swing_risk"), dict) else {}
+    if swing_risk:
+        lines.extend(
+            [
+                f"Swing verdict: {swing_risk.get('verdict') or 'n/a'}",
+                f"Swing risk score: {swing_risk.get('risk_score', 0)}/100",
+                f"Swing summary: {swing_risk.get('summary') or 'n/a'}",
+            ]
+        )
+        risk_rows = swing_risk.get("risk_items") if isinstance(swing_risk.get("risk_items"), list) else []
+        if risk_rows:
+            lines.append("Deterministic road bumps:")
+            for row in risk_rows[:15]:
+                if isinstance(row, dict):
+                    parts = [
+                        str(row.get(key) or "")
+                        for key in ("severity", "category", "date", "title", "reason")
+                        if str(row.get(key) or "").strip()
+                    ]
+                    lines.append("- " + " | ".join(parts))
     for title, key in (
         ("Landmine headlines", "landmine_headlines"),
         ("Target headlines", "target_headlines"),
@@ -235,6 +261,10 @@ def _ticker_lookup_context(payload: dict[str, Any]) -> str:
 
 def _deterministic_context(report: dict[str, Any]) -> str:
     blocks = []
+    future_roadmap = report.get("future_roadmap") if isinstance(report.get("future_roadmap"), dict) else {}
+    roadmap_lines = _future_roadmap_context(future_roadmap)
+    if roadmap_lines:
+        blocks.append("Next 5 days roadmap:\n" + "\n".join(roadmap_lines))
     for title, key in (
         ("Daily landmine checklist", "daily_landmine_checklist"),
         ("Weekly thesis checklist", "weekly_thesis_checklist"),
@@ -254,6 +284,35 @@ def _deterministic_context(report: dict[str, Any]) -> str:
             f"- {classification.get('label') or 'n/a'}: {classification.get('reason') or 'n/a'}"
         )
     return "\n\n".join(blocks)
+
+
+def _future_roadmap_context(payload: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    recaps = payload.get("recaps") if isinstance(payload.get("recaps"), list) else []
+    for recap in recaps[:8]:
+        if isinstance(recap, dict):
+            parts = [
+                "RECAP",
+                str(recap.get("date") or ""),
+                str(recap.get("bucket") or ""),
+                str(recap.get("title") or ""),
+                str(recap.get("detail") or ""),
+            ]
+            lines.append("- " + " | ".join(part for part in parts if part))
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    for item in items[:18]:
+        if isinstance(item, dict):
+            parts = [
+                "UPCOMING",
+                str(item.get("date") or ""),
+                str(item.get("time_et") or ""),
+                str(item.get("bucket") or ""),
+                str(item.get("priority") or ""),
+                str(item.get("title") or ""),
+                str(item.get("detail") or ""),
+            ]
+            lines.append("- " + " | ".join(part for part in parts if part))
+    return lines
 
 
 def _fallback_payload(status: str, message: str, prompt: str, generated_at: str) -> dict[str, Any]:
