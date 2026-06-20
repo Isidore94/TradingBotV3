@@ -129,10 +129,12 @@ THRESHOLD_MULTIPLIER = 0.02
 EMA_21_TOUCH_BUFFER_ATR = 0.002
 EMA_21_TOUCH_BUFFER_MIN = 0.01
 MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY = "mid_earnings_above_2nd_stdev"
+TOP_PATTERN_FAMILIES = {"top_pattern", "top_pattern_tracking"}
 H1_MID_EARNINGS_BOUNCE_LEVELS = {
     "h1_ema_15": "H1 15 EMA",
     "h1_sma_20": "H1 20 SMA",
 }
+H1_TOP_PATTERN_ENTRY_LEVELS = {"h1_ema_15"}
 H1_MID_EARNINGS_MIN_BARS = 21
 EMA_FRESH_TOUCH_LOOKBACK_BARS = 3
 EMA_FRESH_TOUCH_BUFFER_ATR = 0.03
@@ -347,8 +349,9 @@ PREV_DAY_LEVEL_MIN_PRIOR_BARS = 4
 PREV_DAY_LEVEL_RESPECT_RATIO = 0.85
 PREV_DAY_LEVEL_MAX_WRONG_SIDE_CLOSES = 1
 PREV_DAY_LEVEL_RECENT_RESPECT_BARS = 6
-BOUNCE_LEARNING_SCHEMA_VERSION = 1
+BOUNCE_LEARNING_SCHEMA_VERSION = 2
 BOUNCE_OUTCOME_MILESTONE_BARS = (1, 3, 6, 12)
+BOUNCE_EOD_FINALIZE_GRACE_MINUTES = 10
 BOUNCE_PERFORMANCE_MIN_SAMPLES = 5
 BOUNCE_PERFORMANCE_R_CLIP = 4.0
 BOUNCE_CANDIDATE_EVENT_COLUMNS = [
@@ -379,6 +382,9 @@ BOUNCE_CANDIDATE_EVENT_COLUMNS = [
     "sector_etf",
     "industry_etf",
     "market_environment",
+    "master_avwap_focus_label",
+    "master_avwap_priority_bucket",
+    "master_avwap_setup_family",
     "candles_waited",
     "levels_json",
     "candle_json",
@@ -410,6 +416,11 @@ BOUNCE_OUTCOME_COLUMNS = [
     "status",
     "milestone_bar",
     "context_json",
+    "outcome_mode",
+    "eod_close",
+    "eod_move_pct",
+    "mfe_pct",
+    "mae_pct",
 ]
 BOUNCE_FEEDBACK_COLUMNS = [
     "schema_version",
@@ -830,18 +841,17 @@ def _latest_bounce_outcome_rows(outcomes_df: pd.DataFrame) -> pd.DataFrame:
         if "event_type" in outcomes.columns
         else pd.Series([""] * len(outcomes), index=outcomes.index)
     )
-    event_priority = {
-        "registered": 0,
-        "1_bar": 1,
-        "3_bar": 2,
-        "6_bar": 3,
-        "12_bar": 4,
-        "update": 5,
-        "final": 6,
-    }
-    outcomes["_event_priority"] = event_type_series.map(
-        lambda value: event_priority.get(str(value or "").strip().lower(), 0)
+    status_series = (
+        outcomes["status"]
+        if "status" in outcomes.columns
+        else pd.Series([""] * len(outcomes), index=outcomes.index)
     )
+    outcomes = outcomes[
+        (event_type_series.astype(str).str.lower() == "final")
+        & (status_series.astype(str).str.lower() == "eod_complete")
+    ].copy()
+    if outcomes.empty:
+        return pd.DataFrame()
     bars_elapsed_series = (
         outcomes["bars_elapsed"]
         if "bars_elapsed" in outcomes.columns
@@ -857,7 +867,7 @@ def _latest_bounce_outcome_rows(outcomes_df: pd.DataFrame) -> pd.DataFrame:
         logged_at_series,
         errors="coerce",
     )
-    outcomes = outcomes.sort_values(["event_id", "_event_priority", "_bars_elapsed", "_logged_at"])
+    outcomes = outcomes.sort_values(["event_id", "_bars_elapsed", "_logged_at"])
     return outcomes.drop_duplicates(subset=["event_id"], keep="last")
 
 
@@ -881,6 +891,9 @@ def build_intraday_bounce_performance_rows(
         "rrs_sector",
         "rrs_industry",
         "market_environment",
+        "master_avwap_focus_label",
+        "master_avwap_priority_bucket",
+        "master_avwap_setup_family",
     ]
     outcome_columns = [
         "event_id",
@@ -895,6 +908,11 @@ def build_intraday_bounce_performance_rows(
         "target_2r_hit",
         "stop_hit",
         "status",
+        "outcome_mode",
+        "eod_close",
+        "eod_move_pct",
+        "mfe_pct",
+        "mae_pct",
     ]
     candidates = _read_bounce_learning_csv(candidates_path, candidate_columns)
     outcomes = _read_bounce_learning_csv(outcomes_path, outcome_columns)
@@ -935,9 +953,13 @@ def build_intraday_bounce_performance_rows(
             "symbol": str(record.get("symbol") or "").strip().upper(),
             "score": _bounce_perf_float(record.get("score")),
             "risk_per_share": _bounce_perf_float(record.get("risk_per_share")),
+            "eod_r": close_r,
             "close_r": close_r,
             "mfe_r": _bounce_perf_clip_r(record.get("mfe_r")),
             "mae_r": _bounce_perf_clip_r(record.get("mae_r")),
+            "eod_move_pct": _bounce_perf_float(record.get("eod_move_pct")),
+            "mfe_pct": _bounce_perf_float(record.get("mfe_pct")),
+            "mae_pct": _bounce_perf_float(record.get("mae_pct")),
             "target_1r_hit": _bounce_perf_bool(record.get("target_1r_hit")),
             "target_2r_hit": _bounce_perf_bool(record.get("target_2r_hit")),
             "stop_hit": _bounce_perf_bool(record.get("stop_hit")),
@@ -947,6 +969,18 @@ def build_intraday_bounce_performance_rows(
             ("market_environment", str(record.get("market_environment") or "unknown").strip() or "unknown"),
             ("rrs_alignment", _bounce_rrs_alignment(record)),
             ("time_bucket", _bounce_time_bucket(record.get("entry_time") or record.get("logged_at"))),
+            (
+                "master_avwap_focus",
+                str(record.get("master_avwap_focus_label") or "none").strip() or "none",
+            ),
+            (
+                "master_avwap_priority_bucket",
+                str(record.get("master_avwap_priority_bucket") or "none").strip() or "none",
+            ),
+            (
+                "master_avwap_setup_family",
+                str(record.get("master_avwap_setup_family") or "none").strip() or "none",
+            ),
         ]
         dimensions.extend(("bounce_type", bounce_type) for bounce_type in bounce_types)
         for dimension, segment in dimensions:
@@ -967,9 +1001,14 @@ def build_intraday_bounce_performance_rows(
     rows = []
     min_samples = max(1, int(min_samples or 1))
     for (dimension, direction, segment), group_rows in grouped.items():
-        close_values = [row["close_r"] for row in group_rows if row.get("close_r") is not None]
+        close_values = [row["eod_r"] for row in group_rows if row.get("eod_r") is not None]
         mfe_values = [row["mfe_r"] for row in group_rows if row.get("mfe_r") is not None]
         mae_values = [row["mae_r"] for row in group_rows if row.get("mae_r") is not None]
+        eod_move_pct_values = [
+            row["eod_move_pct"] for row in group_rows if row.get("eod_move_pct") is not None
+        ]
+        mfe_pct_values = [row["mfe_pct"] for row in group_rows if row.get("mfe_pct") is not None]
+        mae_pct_values = [row["mae_pct"] for row in group_rows if row.get("mae_pct") is not None]
         score_values = [row["score"] for row in group_rows if row.get("score") is not None]
         risk_values = [row["risk_per_share"] for row in group_rows if row.get("risk_per_share") is not None]
         sample_count = len(close_values)
@@ -980,18 +1019,19 @@ def build_intraday_bounce_performance_rows(
         stop_rate = sum(1 for row in group_rows if row.get("stop_hit")) / float(len(group_rows))
         avg_close_r = sum(close_values) / float(len(close_values))
         median_close_r = float(pd.Series(close_values).median())
+        positive_eod_rate = sum(1 for value in close_values if value > 0.0) / float(len(close_values))
+        sample_weight = min(1.0, math.log1p(sample_count) / math.log1p(max(min_samples, 2)))
         edge_score = (
-            avg_close_r
-            + (target_1r_rate * 0.35)
-            + (target_2r_rate * 0.65)
-            - (stop_rate * 0.50)
-        ) * min(1.0, math.log1p(sample_count) / math.log1p(max(min_samples, 2)))
+            (0.70 * avg_close_r)
+            + (0.30 * median_close_r)
+            + (0.50 * (positive_eod_rate - 0.50))
+        ) * sample_weight
         if sample_count < min_samples:
             recommendation = "watch_more_samples"
-        elif avg_close_r >= 0.25 and target_1r_rate >= 0.45 and stop_rate <= 0.65:
-            recommendation = "boost"
-        elif avg_close_r <= -0.20 or stop_rate >= 0.75:
-            recommendation = "avoid_or_cut"
+        elif avg_close_r >= 0.25 and median_close_r >= 0.0 and positive_eod_rate >= 0.55:
+            recommendation = "focus"
+        elif avg_close_r <= -0.20 or positive_eod_rate <= 0.40:
+            recommendation = "avoid"
         else:
             recommendation = "neutral"
         rows.append(
@@ -1002,10 +1042,20 @@ def build_intraday_bounce_performance_rows(
                 "sample_count": sample_count,
                 "avg_score": (sum(score_values) / float(len(score_values))) if score_values else None,
                 "avg_risk_per_share": (sum(risk_values) / float(len(risk_values))) if risk_values else None,
+                "avg_eod_r": avg_close_r,
+                "median_eod_r": median_close_r,
                 "avg_close_r": avg_close_r,
                 "median_close_r": median_close_r,
                 "avg_mfe_r": (sum(mfe_values) / float(len(mfe_values))) if mfe_values else None,
                 "avg_mae_r": (sum(mae_values) / float(len(mae_values))) if mae_values else None,
+                "avg_eod_move_pct": (
+                    sum(eod_move_pct_values) / float(len(eod_move_pct_values))
+                    if eod_move_pct_values
+                    else None
+                ),
+                "avg_mfe_pct": (sum(mfe_pct_values) / float(len(mfe_pct_values))) if mfe_pct_values else None,
+                "avg_mae_pct": (sum(mae_pct_values) / float(len(mae_pct_values))) if mae_pct_values else None,
+                "positive_eod_rate": positive_eod_rate,
                 "target_1r_rate": target_1r_rate,
                 "target_2r_rate": target_2r_rate,
                 "stop_rate": stop_rate,
@@ -1019,7 +1069,7 @@ def build_intraday_bounce_performance_rows(
 
     rows.sort(
         key=lambda row: (
-            row.get("recommendation") != "boost",
+            row.get("recommendation") != "focus",
             -float(row.get("edge_score", 0.0) or 0.0),
             -int(row.get("sample_count", 0) or 0),
             str(row.get("dimension") or ""),
@@ -1040,6 +1090,11 @@ def _format_bounce_perf_pct(value) -> str:
     return "n/a" if numeric is None else f"{numeric * 100:.0f}%"
 
 
+def _format_bounce_price_pct(value) -> str:
+    numeric = _bounce_perf_float(value)
+    return "n/a" if numeric is None else f"{numeric:+.2f}%"
+
+
 def write_intraday_bounce_performance_report(
     rows: list[dict],
     *,
@@ -1050,11 +1105,12 @@ def write_intraday_bounce_performance_report(
         "Intraday BounceBot performance",
         "=" * 80,
         f"Generated at {get_market_local_now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Outcome R clipped to +/-{BOUNCE_PERFORMANCE_R_CLIP:.1f}R for ranking.",
+        "Primary metric: confirmed bounce EOD R from confirmation close to regular-session close.",
+        f"EOD R is clipped to +/-{BOUNCE_PERFORMANCE_R_CLIP:.1f}R for ranking.",
         "",
     ]
     if not rows:
-        lines.append("No confirmed bounce outcomes were available.")
+        lines.append("No confirmed EOD bounce outcomes were available.")
         report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
         return report_path
 
@@ -1069,42 +1125,53 @@ def write_intraday_bounce_performance_report(
             lines.append(
                 f"{idx:>2}. {row.get('direction')} {row.get('dimension')}={row.get('segment')} "
                 f"samples={int(row.get('sample_count', 0) or 0)} "
-                f"avg={_format_bounce_perf_r(row.get('avg_close_r'))} "
-                f"median={_format_bounce_perf_r(row.get('median_close_r'))} "
-                f"1R={_format_bounce_perf_pct(row.get('target_1r_rate'))} "
-                f"2R={_format_bounce_perf_pct(row.get('target_2r_rate'))} "
-                f"stop={_format_bounce_perf_pct(row.get('stop_rate'))} "
+                f"avgEOD={_format_bounce_perf_r(row.get('avg_eod_r', row.get('avg_close_r')))} "
+                f"medianEOD={_format_bounce_perf_r(row.get('median_eod_r', row.get('median_close_r')))} "
+                f"green={_format_bounce_perf_pct(row.get('positive_eod_rate'))} "
+                f"avgMove={_format_bounce_price_pct(row.get('avg_eod_move_pct'))} "
+                f"MFE={_format_bounce_perf_r(row.get('avg_mfe_r'))} "
+                f"MAE={_format_bounce_perf_r(row.get('avg_mae_r'))} "
+                f"1Rseen={_format_bounce_perf_pct(row.get('target_1r_rate'))} "
+                f"stopSeen={_format_bounce_perf_pct(row.get('stop_rate'))} "
                 f"rec={row.get('recommendation')}"
             )
             if row.get("example_symbols"):
                 lines.append(f"    examples: {row.get('example_symbols')}")
         lines.append("")
 
-    boost_rows = [
+    focus_rows = [
         row for row in rows
-        if row.get("recommendation") == "boost"
-        and int(row.get("sample_count", 0) or 0) >= BOUNCE_PERFORMANCE_MIN_SAMPLES
+        if row.get("recommendation") == "focus"
     ]
-    weak_rows = [
+    avoid_rows = [
         row for row in rows
-        if row.get("recommendation") == "avoid_or_cut"
-        and int(row.get("sample_count", 0) or 0) >= BOUNCE_PERFORMANCE_MIN_SAMPLES
+        if row.get("recommendation") == "avoid"
     ]
-    weak_rows = sorted(
-        weak_rows,
+    avoid_rows = sorted(
+        avoid_rows,
         key=lambda row: (
             float(row.get("edge_score", 0.0) or 0.0),
             -int(row.get("sample_count", 0) or 0),
         ),
     )
-    add_section("Potential score boosts", boost_rows)
-    add_section("Potential score cuts / avoid", weak_rows)
+    add_section("DT focus candidates", focus_rows)
+    add_section("Weak DT cohorts / avoid", avoid_rows)
     add_section(
         "Best individual bounce types",
         [
             row for row in rows
             if row.get("dimension") == "bounce_type"
-            and int(row.get("sample_count", 0) or 0) >= BOUNCE_PERFORMANCE_MIN_SAMPLES
+        ],
+    )
+    add_section(
+        "Best bounce combos",
+        [row for row in rows if row.get("dimension") == "bounce_combo"],
+    )
+    add_section(
+        "Master AVWAP focus context",
+        [
+            row for row in rows
+            if str(row.get("dimension") or "").startswith("master_avwap_")
         ],
     )
     report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
@@ -1289,7 +1356,13 @@ def _ib_bar_to_candle_dict(bar):
     }
 
 
-def detect_mid_earnings_h1_bounce(h1_bars, direction, atr20, reference_date=None):
+def detect_mid_earnings_h1_bounce(
+    h1_bars,
+    direction,
+    atr20,
+    reference_date=None,
+    allowed_level_keys=None,
+):
     bars = _dedupe_bars(h1_bars or [])
     if len(bars) < H1_MID_EARNINGS_MIN_BARS:
         return None
@@ -1324,10 +1397,17 @@ def detect_mid_earnings_h1_bounce(h1_bars, direction, atr20, reference_date=None
         return None
 
     threshold = THRESHOLD_MULTIPLIER * atr_value
+    allowed_level_keys = (
+        {str(level_key) for level_key in allowed_level_keys}
+        if allowed_level_keys is not None
+        else None
+    )
     levels = {}
     triggered_levels = []
     labels = []
     for level_key, level_label in H1_MID_EARNINGS_BOUNCE_LEVELS.items():
+        if allowed_level_keys is not None and level_key not in allowed_level_keys:
+            continue
         level_value = touch_row.get(level_key)
         if pd.isna(level_value):
             continue
@@ -1543,15 +1623,47 @@ class BounceBot(EWrapper, EClient):
         except Exception as exc:
             logging.debug(f"Failed saving pending bounce outcome state: {exc}")
 
+    def _learning_csv_header(self, path, fieldnames):
+        if not path.exists() or path.stat().st_size == 0:
+            return list(fieldnames)
+        try:
+            with path.open("r", newline="", encoding="utf-8") as csvfile:
+                reader = csv.reader(csvfile)
+                existing_header = next(reader, [])
+        except Exception:
+            return list(fieldnames)
+        existing_header = [str(item or "").strip() for item in existing_header if str(item or "").strip()]
+        if not existing_header:
+            return list(fieldnames)
+        missing = [field for field in fieldnames if field not in existing_header]
+        if not missing:
+            return existing_header
+
+        widened_header = existing_header + missing
+        try:
+            with path.open("r", newline="", encoding="utf-8") as csvfile:
+                reader = csv.DictReader(csvfile, restkey="_extra")
+                existing_rows = list(reader)
+            with path.open("w", newline="", encoding="utf-8") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=widened_header, extrasaction="ignore")
+                writer.writeheader()
+                for existing_row in existing_rows:
+                    writer.writerow({key: existing_row.get(key, "") for key in widened_header})
+        except Exception as exc:
+            logging.debug(f"Failed widening learning CSV header for {path}: {exc}")
+            return existing_header
+        return widened_header
+
     def _append_learning_row(self, path, fieldnames, row):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             write_header = not path.exists() or path.stat().st_size == 0
+            writer_fieldnames = self._learning_csv_header(path, fieldnames)
             with path.open("a", newline="", encoding="utf-8") as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
+                writer = csv.DictWriter(csvfile, fieldnames=writer_fieldnames, extrasaction="ignore")
                 if write_header:
                     writer.writeheader()
-                writer.writerow({key: row.get(key, "") for key in fieldnames})
+                writer.writerow({key: row.get(key, "") for key in writer_fieldnames})
         except Exception as exc:
             logging.debug(f"Failed writing learning row to {path}: {exc}")
 
@@ -1743,6 +1855,8 @@ class BounceBot(EWrapper, EClient):
         plan = self._build_bounce_trade_plan(direction, levels, bounce_candle, current_candle or None)
         atr = self.atr_cache.get(symbol)
         metrics = self.symbol_metrics.get(symbol, {})
+        focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
+        focus_label = self._describe_master_avwap_focus(focus_entry) if isinstance(focus_entry, dict) else ""
         row = {
             "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
             "event_id": event_id,
@@ -1771,6 +1885,17 @@ class BounceBot(EWrapper, EClient):
             "sector_etf": context.get("sector_etf", ""),
             "industry_etf": context.get("industry_etf", ""),
             "market_environment": context.get("market_environment", ""),
+            "master_avwap_focus_label": focus_label,
+            "master_avwap_priority_bucket": (
+                str(focus_entry.get("priority_bucket") or "").strip()
+                if isinstance(focus_entry, dict)
+                else ""
+            ),
+            "master_avwap_setup_family": (
+                str(focus_entry.get("setup_family") or "").strip()
+                if isinstance(focus_entry, dict)
+                else ""
+            ),
             "candles_waited": int(candles_waited or 0),
             "levels_json": self._json_for_learning(levels or {}),
             "candle_json": self._json_for_learning({"bounce": bounce_candle, "current": current_candle}),
@@ -1894,6 +2019,47 @@ class BounceBot(EWrapper, EClient):
             candles_waited=0,
         )
 
+    def _pending_bounce_symbols(self):
+        symbols = set()
+        for state in getattr(self, "pending_bounce_outcomes", {}).values():
+            if not isinstance(state, dict):
+                continue
+            symbol = str(state.get("symbol") or "").strip().upper()
+            if symbol:
+                symbols.add(symbol)
+        return symbols
+
+    def _rows_after_bounce_entry_for_session(self, state, df, entry_dt):
+        if df is None or df.empty or "datetime" not in df.columns:
+            return pd.DataFrame()
+        trade_date = _parse_iso_date_safe(state.get("trade_date")) or entry_dt.date()
+        session = get_market_session_window(reference=entry_dt)
+        open_naive = session.open_local.replace(tzinfo=None)
+        close_naive = session.close_local.replace(tzinfo=None)
+
+        frame = df.copy()
+        frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+        frame = frame.dropna(subset=["datetime"])
+        if frame.empty:
+            return pd.DataFrame()
+        session_rows = frame[
+            (frame["datetime"].dt.date == trade_date)
+            & (frame["datetime"] > pd.Timestamp(entry_dt))
+            & (frame["datetime"] >= pd.Timestamp(open_naive))
+            & (frame["datetime"] <= pd.Timestamp(close_naive))
+        ].copy()
+        return session_rows.sort_values("datetime").reset_index(drop=True)
+
+    def _is_eod_finalization_due(self, entry_dt):
+        session = get_market_session_window(reference=entry_dt)
+        close_with_grace = session.close_local + timedelta(minutes=BOUNCE_EOD_FINALIZE_GRACE_MINUTES)
+        now_local = get_market_local_now()
+        if now_local.tzinfo is None:
+            now_local = now_local.replace(tzinfo=session.close_local.tzinfo)
+        else:
+            now_local = now_local.astimezone(session.close_local.tzinfo)
+        return now_local >= close_with_grace
+
     def _register_bounce_outcome(self, symbol, direction, levels, bounce_candle, current_candle, candidate_id):
         if isinstance(current_candle, pd.Series):
             current_candle = current_candle.to_dict()
@@ -1921,12 +2087,13 @@ class BounceBot(EWrapper, EClient):
             "target_1r": float(plan["target_1r"]) if plan["target_1r"] != "" else None,
             "target_2r": float(plan["target_2r"]) if plan["target_2r"] != "" else None,
             "milestones_logged": [],
+            "outcome_mode": "eod_hold",
             "context": context,
         }
         self._save_pending_bounce_outcomes()
         self._append_bounce_outcome_row(self.pending_bounce_outcomes[event_id], "registered", 0, None, pd.DataFrame())
 
-    def _append_bounce_outcome_row(self, state, event_type, bars_elapsed, milestone_bar, rows_after_entry):
+    def _append_bounce_outcome_row(self, state, event_type, bars_elapsed, milestone_bar, rows_after_entry, *, finalize_eod=False):
         direction = state.get("direction")
         entry_price = float(state.get("entry_price"))
         risk = float(state.get("risk_per_share"))
@@ -1940,13 +2107,17 @@ class BounceBot(EWrapper, EClient):
         stop_hit = False
         minutes_elapsed = ""
         status = "open"
+        eod_close = ""
+        eod_move_pct = ""
+        mfe_pct = ""
+        mae_pct = ""
+        entry_dt = self._parse_bar_time(state.get("entry_time"))
         if rows_after_entry is not None and not rows_after_entry.empty and risk > 0:
             high_max = float(rows_after_entry["high"].max())
             low_min = float(rows_after_entry["low"].min())
             last_row = rows_after_entry.iloc[-1]
             last_close = float(last_row["close"])
             last_dt = last_row.get("datetime")
-            entry_dt = self._parse_bar_time(state.get("entry_time"))
             if entry_dt is not None and isinstance(last_dt, pd.Timestamp):
                 minutes_elapsed = int((last_dt.to_pydatetime() - entry_dt).total_seconds() // 60)
             if direction == "long":
@@ -1955,6 +2126,10 @@ class BounceBot(EWrapper, EClient):
                 mfe_r = (high_max - entry_price) / risk
                 mae_r = (low_min - entry_price) / risk
                 close_r = (last_close - entry_price) / risk
+                if entry_price > 0:
+                    mfe_pct = ((high_max - entry_price) / entry_price) * 100.0
+                    mae_pct = ((low_min - entry_price) / entry_price) * 100.0
+                    eod_move_pct = ((last_close - entry_price) / entry_price) * 100.0
                 target_1r_hit = state.get("target_1r") is not None and high_max >= float(state["target_1r"])
                 target_2r_hit = state.get("target_2r") is not None and high_max >= float(state["target_2r"])
                 stop_hit = low_min <= float(state.get("stop_price"))
@@ -1964,17 +2139,30 @@ class BounceBot(EWrapper, EClient):
                 mfe_r = (entry_price - low_min) / risk
                 mae_r = (entry_price - high_max) / risk
                 close_r = (entry_price - last_close) / risk
+                if entry_price > 0:
+                    mfe_pct = ((entry_price - low_min) / entry_price) * 100.0
+                    mae_pct = ((entry_price - high_max) / entry_price) * 100.0
+                    eod_move_pct = ((entry_price - last_close) / entry_price) * 100.0
                 target_1r_hit = state.get("target_1r") is not None and low_min <= float(state["target_1r"])
                 target_2r_hit = state.get("target_2r") is not None and low_min <= float(state["target_2r"])
                 stop_hit = high_max >= float(state.get("stop_price"))
-            if stop_hit and target_2r_hit:
-                status = "stop_and_target2_seen"
-            elif target_2r_hit:
-                status = "target2_seen"
-            elif stop_hit:
-                status = "stop_seen"
-            elif bars_elapsed >= max(BOUNCE_OUTCOME_MILESTONE_BARS):
-                status = "complete"
+            eod_close = last_close if finalize_eod else ""
+        elif finalize_eod and risk > 0:
+            best_price = entry_price
+            worst_price = entry_price
+            close_r = 0.0
+            mfe_r = 0.0
+            mae_r = 0.0
+            eod_close = entry_price
+            eod_move_pct = 0.0
+            mfe_pct = 0.0
+            mae_pct = 0.0
+        if finalize_eod:
+            status = "eod_complete"
+            if minutes_elapsed == "" and entry_dt is not None:
+                session = get_market_session_window(reference=entry_dt)
+                close_naive = session.close_local.replace(tzinfo=None)
+                minutes_elapsed = int((close_naive - entry_dt).total_seconds() // 60)
         row = {
             "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
             "event_id": state.get("event_id"),
@@ -2000,6 +2188,11 @@ class BounceBot(EWrapper, EClient):
             "status": status,
             "milestone_bar": "" if milestone_bar is None else int(milestone_bar),
             "context_json": self._json_for_learning(state.get("context", {})),
+            "outcome_mode": state.get("outcome_mode") or "eod_hold",
+            "eod_close": round(eod_close, 4) if eod_close != "" else "",
+            "eod_move_pct": round(eod_move_pct, 4) if eod_move_pct != "" else "",
+            "mfe_pct": round(mfe_pct, 4) if mfe_pct != "" else "",
+            "mae_pct": round(mae_pct, 4) if mae_pct != "" else "",
         }
         self._append_learning_row(INTRADAY_BOUNCE_OUTCOMES_CSV, BOUNCE_OUTCOME_COLUMNS, row)
         return status
@@ -2019,12 +2212,12 @@ class BounceBot(EWrapper, EClient):
                 self.pending_bounce_outcomes.pop(event_id, None)
                 changed = True
                 continue
-            rows_after_entry = df[df["datetime"] > pd.Timestamp(entry_dt)].copy()
-            if rows_after_entry.empty:
-                continue
+            rows_after_entry = self._rows_after_bounce_entry_for_session(state, df, entry_dt)
             bars_elapsed = len(rows_after_entry)
+            eod_due = self._is_eod_finalization_due(entry_dt)
+            if rows_after_entry.empty and not eod_due:
+                continue
             logged = set(int(item) for item in state.get("milestones_logged", []) if str(item).isdigit())
-            status = "open"
             for milestone in BOUNCE_OUTCOME_MILESTONE_BARS:
                 if bars_elapsed < milestone or milestone in logged:
                     continue
@@ -2039,24 +2232,22 @@ class BounceBot(EWrapper, EClient):
                 logged.add(milestone)
                 changed = True
             state["milestones_logged"] = sorted(logged)
-            if status == "open":
-                status = self._append_bounce_outcome_row(
+            if not rows_after_entry.empty:
+                self._append_bounce_outcome_row(
                     state,
                     "update",
                     bars_elapsed=bars_elapsed,
                     milestone_bar=None,
                     rows_after_entry=rows_after_entry,
                 )
-            if (
-                status in {"target2_seen", "stop_seen", "stop_and_target2_seen", "complete"}
-                or bars_elapsed >= max(BOUNCE_OUTCOME_MILESTONE_BARS)
-            ):
+            if eod_due:
                 self._append_bounce_outcome_row(
                     state,
                     "final",
                     bars_elapsed=bars_elapsed,
                     milestone_bar=None,
                     rows_after_entry=rows_after_entry,
+                    finalize_eod=True,
                 )
                 self.pending_bounce_outcomes.pop(event_id, None)
                 changed = True
@@ -2233,8 +2424,28 @@ class BounceBot(EWrapper, EClient):
             )
         )
 
+    def _is_top_pattern_h1_entry_focus(self, symbol, direction):
+        if str(direction or "").strip().lower() != "long":
+            return False
+        focus_entry = self.master_avwap_focus_map.get(symbol)
+        if not isinstance(focus_entry, dict):
+            return False
+        focus_side = str(focus_entry.get("side") or "").strip().upper()
+        if focus_side != "LONG":
+            return False
+        setup_family = str(focus_entry.get("setup_family") or "").strip().lower()
+        bucket = str(focus_entry.get("priority_bucket") or "").strip().lower()
+        return bool(
+            setup_family in TOP_PATTERN_FAMILIES
+            or bucket in {"top_pattern_tracking", "top_strength_watchlist"}
+            or focus_entry.get("top_pattern_watch")
+            or focus_entry.get("top_pattern_entry")
+        )
+
     def _evaluate_master_avwap_mid_earnings_h1_bounce(self, symbol, direction, reference_date):
-        if not self._is_mid_earnings_h1_bounce_focus(symbol, direction):
+        top_pattern_focus = self._is_top_pattern_h1_entry_focus(symbol, direction)
+        mid_earnings_focus = self._is_mid_earnings_h1_bounce_focus(symbol, direction)
+        if not top_pattern_focus and not mid_earnings_focus:
             return None
         atr = self.atr_cache.get(symbol)
         bars = self.latest_bars.get(symbol, [])
@@ -2244,10 +2455,12 @@ class BounceBot(EWrapper, EClient):
             direction,
             atr,
             reference_date=reference_date,
+            allowed_level_keys=H1_TOP_PATTERN_ENTRY_LEVELS if top_pattern_focus else None,
         )
         if not candidate:
             return None
 
+        h1_event_type = "h1_top_pattern_15ema_entry" if top_pattern_focus else "h1_mid_earnings_bounce"
         confirmation_candle = candidate.get("confirmation_candle") or {}
         confirmation_time = str(confirmation_candle.get("time") or "")
         confirmation_dt = self._parse_bar_time(confirmation_time)
@@ -2258,7 +2471,7 @@ class BounceBot(EWrapper, EClient):
         )
         event_key = (
             alert_date,
-            "h1_mid_earnings_bounce",
+            h1_event_type,
             symbol,
             direction,
             confirmation_time,
@@ -2267,6 +2480,7 @@ class BounceBot(EWrapper, EClient):
         if event_key in self.emitted_h1_mid_earnings_bounce_alerts:
             return None
         candidate["h1_event_key"] = event_key
+        candidate["master_avwap_h1_focus_type"] = "top_pattern" if top_pattern_focus else "mid_earnings"
         return candidate
 
     def _emit_master_avwap_focus_bounce_alert(self, symbol, direction, levels_list):
@@ -5491,7 +5705,7 @@ class BounceBot(EWrapper, EClient):
 
 
 
-    def request_and_detect_bounce(self, symbol, allowed_bounce_types=None):
+    def request_and_detect_bounce(self, symbol, allowed_bounce_types=None, *, scan_for_new_bounces=True):
         # Only scan within market hours (if enabled)
         if not SCAN_OUTSIDE_MARKET_HOURS:
             current_time = get_market_local_now()
@@ -5575,6 +5789,8 @@ class BounceBot(EWrapper, EClient):
             return
 
         self._update_pending_bounce_outcomes(symbol, df)
+        if not scan_for_new_bounces:
+            return
         
         # 1. Calculate Standard VWAP (today only)
         standard_vwap = self.calculate_standard_vwap(df)
@@ -6117,7 +6333,9 @@ class BounceBot(EWrapper, EClient):
                 monitored_symbols = self.get_monitored_extreme_symbols()
                 logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
                 all_symbols = set(self.longs + self.shorts)
+                pending_outcome_symbols = self._pending_bounce_symbols()
                 processed_symbols = set()
+                outcome_update_symbols = set()
                 enabled_bounce_types = {
                     bounce_type for bounce_type, enabled in self.bounce_type_toggles.items() if enabled
                 }
@@ -6131,6 +6349,7 @@ class BounceBot(EWrapper, EClient):
                         continue
                     self.request_and_detect_bounce(sym, allowed_bounce_types=enabled_bounce_types)
                     processed_symbols.add(sym)
+                    outcome_update_symbols.add(sym)
 
                 # 2) Then scan all remaining symbols for non-EMA-8/15 bounce types.
                 for sym in sorted(all_symbols - processed_symbols):
@@ -6139,6 +6358,19 @@ class BounceBot(EWrapper, EClient):
                     if self.atr_cache.get(sym) is None:
                         continue
                     self.request_and_detect_bounce(sym, allowed_bounce_types=non_ema_extreme_bounce_types)
+                    outcome_update_symbols.add(sym)
+
+                # Keep EOD outcome tracking alive even if a confirmed bounce was
+                # removed from the watchlist or skipped by live-scan gates before
+                # the session close.
+                for sym in sorted(pending_outcome_symbols - outcome_update_symbols):
+                    if not self.is_scanning_enabled():
+                        break
+                    self.request_and_detect_bounce(
+                        sym,
+                        allowed_bounce_types=set(),
+                        scan_for_new_bounces=False,
+                    )
 
                 if not self.is_scanning_enabled():
                     continue
@@ -7836,7 +8068,7 @@ if __name__ == "__main__":
             "--bounce_perf_min_samples",
             type=int,
             default=BOUNCE_PERFORMANCE_MIN_SAMPLES,
-            help="Minimum sample count used for intraday bounce boost/cut recommendations.",
+            help="Minimum sample count used for intraday bounce focus/avoid recommendations.",
         )
         print("Parser created.")
         

@@ -40,19 +40,20 @@ from project_paths import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-
 ROOT_DIR = SCRIPT_DIR.parent
 WATCHLIST_SYMBOL_RE = re.compile(r"[A-Z0-9.\-]+")
 
 from bounce_bot import (
     BOUNCE_TYPE_DEFAULTS,
     BOUNCE_TYPE_LABELS,
+    INTRADAY_BOUNCE_PERFORMANCE_REPORT,
     MARKET_ENVIRONMENTS,
     RRS_TIMEFRAMES,
     append_alert_message,
     configure_alert_tags,
     create_rrs_confirmed_panel,
     record_bounce_feedback,
+    refresh_intraday_bounce_performance_report,
     run_bot_with_gui,
 )
 from master_avwap import (
@@ -453,6 +454,7 @@ def build_consolidated_gui_output(
         f"Connection: {bounce_connection}",
         f"Status: {bounce_status}",
         f"Active bounces: {bounce_active}",
+        f"DT performance report: {INTRADAY_BOUNCE_PERFORMANCE_REPORT}",
         "",
         "Master AVWAP",
         "-" * 80,
@@ -993,6 +995,20 @@ class BaseBounceBotPanel:
         self.alert_text.config(state="disabled")
         self._notify_output_changed()
 
+    def refresh_dt_stats(self) -> None:
+        try:
+            _performance_path, report_path, row_count = refresh_intraday_bounce_performance_report()
+        except Exception as exc:
+            logging.exception("Failed refreshing BounceBot DT stats.")
+            self.controller.status_var.set(f"DT stats refresh failed: {exc}")
+            messagebox.showerror("Refresh DT Stats", str(exc))
+            return
+        self.controller.status_var.set(f"DT stats refreshed: {row_count} rows")
+        self._append_alert_with_timestamp(
+            f"DT stats refreshed: {row_count} rows -> {report_path}",
+            "blue",
+        )
+
     def _notify_output_changed(self) -> None:
         callback = getattr(self, "on_output_changed", None)
         if callable(callback):
@@ -1063,6 +1079,7 @@ class SimpleBounceBotPanel(BaseBounceBotPanel):
         self.start_scanning_button = ttk.Button(header, text="Start Scanning", command=self.controller.start_scanning)
         self.start_scanning_button.pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(header, text="Disconnect", command=self.controller.stop).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(header, text="Refresh DT Stats", command=self.refresh_dt_stats).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Button(header, text="Clear", command=self.clear_alerts).pack(side=tk.RIGHT, padx=(0, 8))
 
         controls = tk.Frame(self.container, bg=DARK_GREY)
@@ -1273,6 +1290,7 @@ class FullBounceBotPanel(BaseBounceBotPanel):
         )
         self.stop_scanning_button.pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(controls_frame, text="Clear", command=self.clear_alerts).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(controls_frame, text="Refresh DT Stats", command=self.refresh_dt_stats).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(controls_frame, text="Reconnect", command=self.controller.restart).pack(side=tk.LEFT, padx=(8, 0))
 
         bounce_toggle_frame = tk.LabelFrame(

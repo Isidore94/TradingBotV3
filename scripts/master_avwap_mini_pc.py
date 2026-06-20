@@ -317,6 +317,30 @@ def read_text(path: Path) -> str:
         return ""
 
 
+def extract_priority_tier_preview(report_text: str, max_lines: int = 18) -> str:
+    lines = str(report_text or "").splitlines()
+    if not lines:
+        return ""
+
+    start_index = None
+    for idx, line in enumerate(lines):
+        if line.strip().lower() == "cream of the crop copy/paste":
+            start_index = idx
+            break
+    if start_index is None:
+        return ""
+
+    end_index = len(lines)
+    for idx in range(start_index + 1, len(lines)):
+        if lines[idx].strip().lower() == "cream of the crop details":
+            end_index = idx
+            break
+
+    preview_lines = [line.rstrip() for line in lines[start_index:end_index]]
+    preview_lines = [line for line in preview_lines if line.strip() and set(line.strip()) != {"="}]
+    return "\n".join(preview_lines[:max(1, int(max_lines))]).strip()
+
+
 def format_duration(seconds: float | None) -> str:
     if seconds is None:
         return "n/a"
@@ -929,6 +953,8 @@ def write_status_file(
     swing_longs_count = count_watchlist_symbols(SWING_LONGS_FILE)
     swing_shorts_count = count_watchlist_symbols(SWING_SHORTS_FILE)
     main_report = read_text(MASTER_AVWAP_REPORT_FILE)
+    priority_report = read_text(MASTER_AVWAP_PRIORITY_SETUPS_FILE)
+    priority_tier_preview = extract_priority_tier_preview(priority_report)
     theta_report = read_text(THETA_PUTS_FILE)
     theta_symbols = extract_theta_symbols_from_report(theta_report)
     filter_summary = state.get("last_filter_summary")
@@ -987,6 +1013,14 @@ def write_status_file(
 
     if note:
         lines.extend(["", f"Note: {note}"])
+
+    lines.extend(
+        [
+            "",
+            "Cream of the Crop",
+            priority_tier_preview or "(No S/A/B priority tier output has been written yet.)",
+        ]
+    )
 
     lines.extend(
         [

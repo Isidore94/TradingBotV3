@@ -228,6 +228,7 @@ def load_master_avwap_focus_map(
             "setup_family": str(entry.get("setup_family") or "").strip(),
             "priority_rank": entry.get("priority_rank"),
             "priority_score": entry.get("priority_score"),
+            "preferred_swing_focus": bool(entry.get("preferred_swing_focus")),
             "favorite_zone": str(entry.get("favorite_zone") or "").strip(),
             "favorite_signals": [
                 str(value).strip().upper()
@@ -249,8 +250,17 @@ def load_master_avwap_focus_map(
             "mid_earnings_zone_streak_days": entry.get("mid_earnings_zone_streak_days"),
             "sma_breakout_watch": bool(entry.get("sma_breakout_watch")),
             "sma_breakout_confirmed": bool(entry.get("sma_breakout_confirmed")),
+            "sma_breakout_higher_high_confirmed": bool(entry.get("sma_breakout_higher_high_confirmed")),
+            "sma_breakout_previous_day_high_break": bool(entry.get("sma_breakout_previous_day_high_break")),
+            "sma_breakout_confirmation_trigger": str(entry.get("sma_breakout_confirmation_trigger") or "").strip(),
             "sma_breakout_sma_label": str(entry.get("sma_breakout_sma_label") or "").strip(),
             "sma_breakout_retest_level": str(entry.get("sma_breakout_retest_level") or "").strip(),
+            "top_pattern_watch": bool(entry.get("top_pattern_watch")),
+            "top_pattern_entry": bool(entry.get("top_pattern_entry")),
+            "top_pattern_entry_trigger": str(entry.get("top_pattern_entry_trigger") or "").strip(),
+            "top_pattern_weekly_return_13w_pct": entry.get("top_pattern_weekly_return_13w_pct"),
+            "top_pattern_weekly_return_26w_pct": entry.get("top_pattern_weekly_return_26w_pct"),
+            "top_pattern_note": str(entry.get("top_pattern_note") or "").strip(),
         }
     return focus_map
 
@@ -258,8 +268,27 @@ def load_master_avwap_focus_map(
 def describe_master_avwap_focus(focus_entry: dict[str, Any] | None) -> str:
     bucket = str((focus_entry or {}).get("priority_bucket") or "").strip().lower()
     setup_family = str((focus_entry or {}).get("setup_family") or "").strip().lower()
+    if setup_family in {"top_pattern", "top_pattern_tracking"} or (focus_entry or {}).get("top_pattern_watch"):
+        if (focus_entry or {}).get("top_pattern_entry"):
+            trigger = str((focus_entry or {}).get("top_pattern_entry_trigger") or "").replace("_", " ").strip()
+            return f"TOP long entry {trigger}".strip()
+        return "TOP long leader, H1 15EMA entry watch"
     if setup_family == "sma_breakout":
+        if (focus_entry or {}).get("sma_breakout_previous_day_high_break"):
+            return "SMA breakout setup, prior-day high break"
         return "SMA breakout setup"
+    if setup_family == "post_earnings_52w_break":
+        return "post-earnings 52w high break"
+    if setup_family == "post_earnings_avwap_bounce":
+        return "post-earnings AVWAPE bounce"
+    if setup_family == "avwap_retest_followthrough":
+        return "AVWAPE pullback bounce"
+    if setup_family == "mid_earnings_ema15_retest":
+        return "2nd stdev runner 15EMA retest"
+    if setup_family == "mid_earnings_1stdev_retest":
+        return "2nd stdev runner 1st-dev retest"
+    if setup_family == "extreme_move_retest":
+        return "2nd stdev runner 15EMA/1st-dev retest"
     if bucket == "sma_breakout_tracking" or setup_family == "sma_breakout_retest_tracking":
         sma_label = str((focus_entry or {}).get("sma_breakout_sma_label") or "").strip()
         retest_label = str((focus_entry or {}).get("sma_breakout_retest_level") or "").strip()

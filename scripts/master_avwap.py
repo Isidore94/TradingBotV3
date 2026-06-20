@@ -108,6 +108,7 @@ from project_paths import (
 EVENT_TICKERS_FILE = MASTER_AVWAP_EVENT_TICKERS_FILE
 PRIORITY_SETUPS_FILE = MASTER_AVWAP_PRIORITY_SETUPS_FILE
 THETA_PUTS_FILE = PRIORITY_SETUPS_FILE.with_name("master_avwap_theta_puts.txt")
+TOP_STRENGTH_WATCHLIST_FILE = PRIORITY_SETUPS_FILE.with_name("master_avwap_top_strength_watchlist.txt")
 AVWAP_CSV_COLUMNS = [
     "run_date",
     "symbol",
@@ -125,6 +126,12 @@ AVWAP_CSV_COLUMNS = [
     "favorite_zone",
     "favorite_signals",
     "favorite_context_signals",
+    "top_pattern_watch",
+    "top_pattern_entry",
+    "top_pattern_entry_trigger",
+    "top_pattern_score_bonus",
+    "daily_relative_strength_score",
+    "daily_relative_strength_bonus",
 ]
 
 EVENT_LEVEL_SORT_ORDER = [
@@ -152,6 +159,7 @@ FAVORITE_CURRENT_SIGNALS = {
         "MID_EARNINGS_EMA15_RETEST": 104,
         "MID_EARNINGS_EMA21_RETEST": 96,
         "MID_EARNINGS_FIRST_DEV_RETEST": 92,
+        "TOP_PATTERN_ENTRY": 110,
     },
     "SHORT": {
         "CROSS_DOWN_VWAP": 66,
@@ -257,6 +265,18 @@ PRIORITY_SMA_PERIODS = (20, 50, 100, 200)
 PRIORITY_SMA_DQ_ATR = 2.0
 PRIORITY_SMA_WARN_ATR = 3.0
 PRIORITY_PREV_AVWAP_WARN_ATR = 3.0
+PREVIOUS_AVWAPE_BOUNCE_SIGNAL = "PREV_BOUNCE_VWAP"
+PREVIOUS_ANCHOR_SR_LEVEL_LABELS = ("AVWAPE", "UPPER_1", "LOWER_1", "UPPER_2", "LOWER_2", "UPPER_3", "LOWER_3")
+PREVIOUS_ANCHOR_CRITICAL_SR_LABELS = {"AVWAPE", "UPPER_1", "LOWER_1"}
+PREVIOUS_ANCHOR_SR_NEAR_ATR = 0.5
+PREVIOUS_ANCHOR_SR_TOUCH_ATR = 0.12
+PRIORITY_PREVIOUS_AVWAPE_BOUNCE_SCORE_BONUS = 30
+PRIORITY_PREVIOUS_CRITICAL_SR_NEAR_PENALTY = 35
+PRIORITY_PREVIOUS_CRITICAL_SR_WARN_PENALTY = 24
+PRIORITY_PREVIOUS_CRITICAL_SR_FAR_PENALTY = 12
+PRIORITY_PREVIOUS_NONCRITICAL_SR_NEAR_PENALTY = 8
+PRIORITY_PREVIOUS_NONCRITICAL_SR_WARN_PENALTY = 4
+PRIORITY_PREVIOUS_ANCHOR_MAX_SCORE_PENALTY = 60
 PRIORITY_TRENDLINE_LOOKBACK_BARS = 200
 PRIORITY_TRENDLINE_MIN_ANGLE_DEG = 30.0
 PRIORITY_TRENDLINE_MAX_ANGLE_DEG = 60.0
@@ -317,6 +337,7 @@ PRIORITY_RETEST_LEVEL_SCORE_BONUS = {
     "LOWER_1": 16,
 }
 PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS = 12
+PRIORITY_VWAP_RANGE_CONFIRMATION_SCORE_BONUS = 28
 PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS = 10
 PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS = 8
 PRIORITY_RETEST_CLEAR_PATH_SCORE_BONUS = 14
@@ -405,6 +426,7 @@ MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY = "mid_earnings_above_2nd_stdev"
 MID_EARNINGS_EMA15_RETEST_FAMILY = "mid_earnings_ema15_retest"
 MID_EARNINGS_EMA21_RETEST_FAMILY = "mid_earnings_ema21_retest"
 MID_EARNINGS_FIRST_DEV_RETEST_FAMILY = "mid_earnings_1stdev_retest"
+PREFERRED_SWING_STDEV_RETEST_LEVELS = {"EMA_15", "UPPER_1", "LOWER_1"}
 SMA_BREAKOUT_FAMILY = "sma_breakout"
 SMA_BREAKOUT_TRACKING_FAMILY = "sma_breakout_retest_tracking"
 SMA_BREAKOUT_PERIODS = (50, 100, 200)
@@ -423,6 +445,29 @@ SMA_BREAKOUT_TRACKING_SCORE_BONUS = {
     100: 30,
     200: 40,
 }
+TOP_PATTERN_SIGNAL = "TOP_PATTERN_ENTRY"
+TOP_PATTERN_FAMILY = "top_pattern"
+TOP_PATTERN_TRACKING_FAMILY = "top_pattern_tracking"
+TOP_PATTERN_DAILY_LOOKBACK_DAYS = 760
+TOP_PATTERN_WEEKLY_MIN_BARS = 52
+TOP_PATTERN_WEEKLY_EMA15_HOLD_WEEKS = 8
+TOP_PATTERN_WEEKLY_EMA15_RATIO_LOOKBACK = 20
+TOP_PATTERN_WEEKLY_EMA15_MIN_RATIO = 0.85
+TOP_PATTERN_WEEKLY_MIN_13W_RETURN_PCT = 18.0
+TOP_PATTERN_WEEKLY_MIN_26W_RETURN_PCT = 35.0
+TOP_PATTERN_MAX_PULLBACK_FROM_52W_HIGH_PCT = 22.0
+TOP_PATTERN_DAILY_ENTRY_TOL_ATR = 0.35
+TOP_PATTERN_SCORE_BONUS = 38
+TOP_PATTERN_SMA50_ENTRY_BONUS = 14
+TOP_PATTERN_AVWAPE_ENTRY_BONUS = 12
+TOP_PATTERN_WEEKLY_SMA50_ENTRY_BONUS = 18
+TOP_PATTERN_WEEKLY_SMA100_BONUS = 10
+TOP_STRENGTH_WATCHLIST_LIMIT = 80
+TOP_STRENGTH_WATCHLIST_FOCUS_LIMIT = 40
+DAILY_RELATIVE_STRENGTH_BONUS = 18
+DAILY_RELATIVE_STRENGTH_WEAKNESS_BONUS = 18
+DAILY_RELATIVE_STRENGTH_THRESHOLD = 1.0
+DAILY_RELATIVE_STRENGTH_LOOKBACK_DAYS = 5
 PRIORITY_CLEAN_FIRST_ZONE_SCORE_BONUS = 10
 PRIORITY_MARKET_REGIME_COUNTER_TREND_PENALTY = 30
 PRIORITY_MARKET_REGIME_COUNTER_TREND_SOFT_PENALTY = 16
@@ -443,6 +488,7 @@ PRIORITY_CURRENT_SIGNAL_WEIGHT_CAPS = {
     "SMA_BREAKOUT_50_RECLAIM": 108,
     "SMA_BREAKOUT_100_RECLAIM": 116,
     "SMA_BREAKOUT_200_RECLAIM": 124,
+    "TOP_PATTERN_ENTRY": 120,
 }
 PRIORITY_COMPRESSION_STDEV_ATR_SOFT_MAX = 0.90
 PRIORITY_COMPRESSION_STDEV_ATR_MAX = 0.75
@@ -470,6 +516,13 @@ PRIORITY_DIRECTIONAL_REJECTION_TOUCH_TOL_ATR = 0.18
 PRIORITY_DIRECTIONAL_REJECTION_BASE_PENALTY = 6
 PRIORITY_DIRECTIONAL_REJECTION_LEVEL_PENALTY = 4
 PRIORITY_DIRECTIONAL_REJECTION_EXTREME_PENALTY = 4
+PRIORITY_ADVERSE_REJECTION_MIN_WICK_RANGE_RATIO = 0.30
+PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MAX = 0.35
+PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MIN = 0.65
+PRIORITY_ADVERSE_REJECTION_MIN_RANGE_ATR = 0.45
+PRIORITY_ADVERSE_REJECTION_MIN_BODY_RANGE_RATIO = 0.45
+PRIORITY_ADVERSE_REJECTION_SCORE_PENALTY = 24
+PRIORITY_REJECTION_CAP_ADVERSE_CANDLE = 120
 PRIORITY_EXTREME_MOVE_LOOKBACK_DAYS = 8
 PRIORITY_EXTREME_MOVE_MIN_BAND_CROSSES = 2
 PRIORITY_EXTREME_MOVE_MIN_BODY_ATR = 0.75
@@ -625,6 +678,7 @@ GUI_OUTPUT_MEDIUM_RE = re.compile(r"\b(MEDIUM|WATCH|WARNING|WARNINGS|REDUCED-SIZ
 GUI_OUTPUT_CLEAN_RE = re.compile(r"\b(CLEAN|READY|OK|LONG|AVAILABLE|GENERATED)\b", re.IGNORECASE)
 
 MARKET_PREP_SCHEMA_VERSION = 1
+MARKET_PREP_STRENGTH_DECILE_FRACTION = 0.10
 MARKET_PREP_SECTION_DEFINITIONS = [
     {
         "id": "post_earnings_potential_plays",
@@ -636,6 +690,18 @@ MARKET_PREP_SECTION_DEFINITIONS = [
         "id": "earnings_last_night_or_today",
         "title": "Earnings Last Night / Today",
         "copy_label": "Copy Earnings",
+        "empty_message": "None",
+    },
+    {
+        "id": "strongest_stocks_top_decile",
+        "title": "Strongest Stocks: Top 10% D1 vs SPY",
+        "copy_label": "Copy Strongest",
+        "empty_message": "None",
+    },
+    {
+        "id": "weakest_stocks_bottom_decile",
+        "title": "Weakest Stocks: Bottom 10% D1 vs SPY",
+        "copy_label": "Copy Weakest",
         "empty_message": "None",
     },
     {
@@ -2366,6 +2432,91 @@ def assess_directional_rejection_candle(
     return result
 
 
+def assess_adverse_entry_candle(
+    daily_rows,
+    last_trade_date,
+    side: str,
+    atr20: float | None,
+) -> dict:
+    result = {
+        "adverse_entry_candle": False,
+        "adverse_entry_candle_note": "",
+        "adverse_entry_wick_ratio": None,
+        "adverse_entry_close_position": None,
+        "adverse_entry_range_atr": None,
+    }
+    if not daily_rows or not last_trade_date:
+        return result
+
+    target = last_trade_date.isoformat() if hasattr(last_trade_date, "isoformat") else str(last_trade_date)
+    relevant = [row for row in daily_rows if str(row.get("date") or "") == target]
+    if not relevant:
+        return result
+    candle = relevant[-1]
+    open_value = _coerce_float(candle.get("open"))
+    high_value = _coerce_float(candle.get("high"))
+    low_value = _coerce_float(candle.get("low"))
+    close_value = _coerce_float(candle.get("close"))
+    if None in (open_value, high_value, low_value, close_value):
+        return result
+
+    range_size = float(high_value) - float(low_value)
+    if range_size <= 0:
+        return result
+    body_size = abs(float(close_value) - float(open_value))
+    upper_wick = max(0.0, float(high_value) - max(float(open_value), float(close_value)))
+    lower_wick = max(0.0, min(float(open_value), float(close_value)) - float(low_value))
+    close_position = (float(close_value) - float(low_value)) / range_size
+    range_atr = (range_size / float(atr20)) if atr20 is not None and atr20 > 0 else None
+    body_range_ratio = body_size / range_size
+    normalized_side = normalize_side(side)
+
+    if normalized_side == "SHORT":
+        adverse_wick = lower_wick
+        wick_ratio = lower_wick / range_size
+        bad_close = close_position >= PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MIN
+        bad_body = float(close_value) > float(open_value)
+        close_label = "high"
+        wick_label = "lower tail"
+    else:
+        adverse_wick = upper_wick
+        wick_ratio = upper_wick / range_size
+        bad_close = close_position <= PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MAX
+        bad_body = float(close_value) < float(open_value)
+        close_label = "low"
+        wick_label = "upper wick"
+
+    large_enough = range_atr is None or range_atr >= PRIORITY_ADVERSE_REJECTION_MIN_RANGE_ATR
+    wick_rejection = (
+        wick_ratio >= PRIORITY_ADVERSE_REJECTION_MIN_WICK_RANGE_RATIO
+        and bad_close
+        and large_enough
+    )
+    close_rejection = (
+        bad_body
+        and bad_close
+        and body_range_ratio >= PRIORITY_ADVERSE_REJECTION_MIN_BODY_RANGE_RATIO
+        and large_enough
+    )
+
+    result["adverse_entry_wick_ratio"] = round(float(wick_ratio), 3)
+    result["adverse_entry_close_position"] = round(float(close_position), 3)
+    result["adverse_entry_range_atr"] = None if range_atr is None else round(float(range_atr), 3)
+    if not (wick_rejection or close_rejection):
+        return result
+
+    note_bits = []
+    if wick_rejection:
+        note_bits.append(f"big {wick_label} rejection ({wick_ratio:.0%} of range)")
+    if close_rejection:
+        note_bits.append(f"closed near {close_label} on adverse body")
+    if range_atr is not None:
+        note_bits.append(f"range={range_atr:.2f} ATR")
+    result["adverse_entry_candle"] = True
+    result["adverse_entry_candle_note"] = "; ".join(note_bits)
+    return result
+
+
 def analyze_avwap_retest_behavior(
     daily_rows,
     last_trade_date,
@@ -2666,21 +2817,21 @@ def analyze_extreme_move_retest_setup(
 
     if normalized_side == "LONG":
         retest_levels = [
+            ("EMA_15", latest_ema15, "ema"),
             ("UPPER_1", _coerce_float(current_bands.get("UPPER_1")), "band"),
+            ("EMA_21", latest_ema21, "ema"),
             ("UPPER_2", _coerce_float(current_bands.get("UPPER_2")), "band"),
             ("UPPER_3", _coerce_float(current_bands.get("UPPER_3")), "band"),
             ("EMA_8", latest_ema8, "ema"),
-            ("EMA_15", latest_ema15, "ema"),
-            ("EMA_21", latest_ema21, "ema"),
         ]
     else:
         retest_levels = [
+            ("EMA_15", latest_ema15, "ema"),
             ("LOWER_1", _coerce_float(current_bands.get("LOWER_1")), "band"),
+            ("EMA_21", latest_ema21, "ema"),
             ("LOWER_2", _coerce_float(current_bands.get("LOWER_2")), "band"),
             ("LOWER_3", _coerce_float(current_bands.get("LOWER_3")), "band"),
             ("EMA_8", latest_ema8, "ema"),
-            ("EMA_15", latest_ema15, "ema"),
-            ("EMA_21", latest_ema21, "ema"),
         ]
 
     retest_level = ""
@@ -2698,6 +2849,7 @@ def analyze_extreme_move_retest_setup(
         break
 
     wide_enough_for_favorite = best["band_width_atr"] >= PRIORITY_EXTREME_MOVE_FAVORITE_STDEV_ATR
+    preferred_retest_for_favorite = retest_level in PREFERRED_SWING_STDEV_RETEST_LEVELS
     direction_label = "long" if normalized_side == "LONG" else "short"
     note_parts = [
         f"Recent {best['band_crosses']}-band {direction_label} displacement on {best['trade_date']}",
@@ -2708,13 +2860,19 @@ def analyze_extreme_move_retest_setup(
         note_parts.append(f"{retest_level} {action}")
         if not wide_enough_for_favorite:
             note_parts.append("bands not wide enough for favorite bucket")
+        if wide_enough_for_favorite and not preferred_retest_for_favorite:
+            note_parts.append("tracking until 15EMA/1st-dev retest")
     else:
-        note_parts.append("awaiting clean band/EMA retest")
+        note_parts.append("awaiting clean 15EMA/1st-dev retest")
 
     result.update(
         {
             "watch": True,
-            "favorite_signal": bool(retest_level and wide_enough_for_favorite),
+            "favorite_signal": bool(
+                retest_level
+                and wide_enough_for_favorite
+                and preferred_retest_for_favorite
+            ),
             "displacement_date": best["trade_date"],
             "displacement_target_level": best["target_level"],
             "band_crosses": int(best["band_crosses"]),
@@ -2763,6 +2921,281 @@ def compute_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
+def compute_weekly_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    work = df.copy()
+    work["datetime"] = pd.to_datetime(work["datetime"], errors="coerce")
+    work = work.dropna(subset=["datetime"]).sort_values("datetime")
+    if work.empty:
+        return pd.DataFrame()
+    for column in ("open", "high", "low", "close", "volume"):
+        work[column] = pd.to_numeric(work[column], errors="coerce")
+    work = work.dropna(subset=["open", "high", "low", "close"])
+    if work.empty:
+        return pd.DataFrame()
+
+    weekly = (
+        work.set_index("datetime")
+        .resample("W-FRI")
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }
+        )
+        .dropna(subset=["open", "high", "low", "close"])
+        .reset_index()
+    )
+    weekly["close_num"] = pd.to_numeric(weekly["close"], errors="coerce")
+    weekly["high_num"] = pd.to_numeric(weekly["high"], errors="coerce")
+    weekly["low_num"] = pd.to_numeric(weekly["low"], errors="coerce")
+    for period in (20, 50, 100):
+        weekly[f"sma_{period}"] = weekly["close_num"].rolling(period).mean()
+        weekly[f"sma_{period}_prev"] = weekly[f"sma_{period}"].shift(1)
+    weekly["ema_15"] = weekly["close_num"].ewm(span=15, adjust=False).mean()
+    weekly["high_52w"] = weekly["high_num"].rolling(52, min_periods=1).max()
+    weekly["trade_date"] = pd.to_datetime(weekly["datetime"]).dt.date.astype(str)
+    return weekly
+
+
+def _top_pattern_level_test(
+    *,
+    low_value: float | None,
+    close_value: float | None,
+    level_value: float | None,
+    atr_value: float | None,
+    tolerance_atr: float = TOP_PATTERN_DAILY_ENTRY_TOL_ATR,
+) -> bool:
+    low_value = _coerce_float(low_value)
+    close_value = _coerce_float(close_value)
+    level_value = _coerce_float(level_value)
+    atr_value = _coerce_float(atr_value)
+    if low_value is None or close_value is None or level_value is None:
+        return False
+    tolerance = max(0.0, float(atr_value or 0.0) * float(tolerance_atr))
+    return float(low_value) <= float(level_value) + tolerance and float(close_value) >= float(level_value)
+
+
+def analyze_top_pattern_setup(
+    df: pd.DataFrame,
+    *,
+    side: str,
+    current_anchor_meta: dict | None = None,
+    indicator_frame: pd.DataFrame | None = None,
+    atr20: float | None = None,
+) -> dict:
+    result = {
+        "watch": False,
+        "favorite_signal": False,
+        "signal": "",
+        "setup_family": "",
+        "score_bonus": 0,
+        "entry_trigger": "",
+        "entry_triggers": [],
+        "entry_level": None,
+        "weekly_return_13w_pct": None,
+        "weekly_return_26w_pct": None,
+        "weekly_pullback_from_52w_high_pct": None,
+        "weekly_ema15_hold": False,
+        "weekly_ema15_hold_ratio": None,
+        "weekly_above_sma100": False,
+        "weekly_sma50_retest_recent": False,
+        "daily_sma50_reclaim": False,
+        "daily_sma50_bounce": False,
+        "weekly_sma50_entry": False,
+        "avwape_retest": False,
+        "note": "",
+    }
+    if normalize_side(side) != "LONG" or df is None or df.empty:
+        return result
+
+    weekly = compute_weekly_indicator_frame(df)
+    if weekly.empty or len(weekly) < TOP_PATTERN_WEEKLY_MIN_BARS:
+        return result
+    weekly = weekly.reset_index(drop=True)
+    latest_week = weekly.iloc[-1]
+    latest_week_close = _coerce_float(latest_week.get("close_num", latest_week.get("close")))
+    latest_week_high52 = _coerce_float(latest_week.get("high_52w"))
+    latest_week_ema15 = _coerce_float(latest_week.get("ema_15"))
+    latest_week_sma50 = _coerce_float(latest_week.get("sma_50"))
+    latest_week_sma100 = _coerce_float(latest_week.get("sma_100"))
+    if latest_week_close is None or latest_week_ema15 is None:
+        return result
+
+    ema_window = weekly.dropna(subset=["close_num", "ema_15"]).tail(TOP_PATTERN_WEEKLY_EMA15_RATIO_LOOKBACK)
+    if ema_window.empty:
+        return result
+    ema_hold_ratio = float((ema_window["close_num"] >= ema_window["ema_15"]).mean())
+    recent_ema_window = ema_window.tail(TOP_PATTERN_WEEKLY_EMA15_HOLD_WEEKS)
+    ema15_recent_hold = bool(
+        len(recent_ema_window) >= TOP_PATTERN_WEEKLY_EMA15_HOLD_WEEKS
+        and (recent_ema_window["close_num"] >= recent_ema_window["ema_15"]).all()
+    )
+
+    close_13 = _coerce_float(weekly.iloc[-14].get("close_num")) if len(weekly) >= 14 else None
+    close_26 = _coerce_float(weekly.iloc[-27].get("close_num")) if len(weekly) >= 27 else None
+    return_13 = (
+        ((float(latest_week_close) - float(close_13)) / float(close_13)) * 100
+        if close_13 not in (None, 0)
+        else None
+    )
+    return_26 = (
+        ((float(latest_week_close) - float(close_26)) / float(close_26)) * 100
+        if close_26 not in (None, 0)
+        else None
+    )
+    pullback_52w = (
+        ((float(latest_week_high52) - float(latest_week_close)) / float(latest_week_high52)) * 100
+        if latest_week_high52 not in (None, 0)
+        else None
+    )
+    going_crazy = bool(
+        (return_13 is not None and float(return_13) >= TOP_PATTERN_WEEKLY_MIN_13W_RETURN_PCT)
+        or (return_26 is not None and float(return_26) >= TOP_PATTERN_WEEKLY_MIN_26W_RETURN_PCT)
+    )
+    near_high = bool(pullback_52w is not None and float(pullback_52w) <= TOP_PATTERN_MAX_PULLBACK_FROM_52W_HIGH_PCT)
+    above_sma100 = bool(
+        latest_week_sma100 is not None
+        and float(latest_week_close) >= float(latest_week_sma100)
+    )
+    weekly_sma50_rising = bool(
+        latest_week_sma50 is not None
+        and _coerce_float(latest_week.get("sma_50_prev")) is not None
+        and float(latest_week_sma50) >= float(_coerce_float(latest_week.get("sma_50_prev")))
+    )
+    weekly_sma50_retest_recent = False
+    if latest_week_sma50 is not None:
+        for _, week in weekly.tail(8).iterrows():
+            week_low = _coerce_float(week.get("low_num", week.get("low")))
+            week_close = _coerce_float(week.get("close_num", week.get("close")))
+            week_sma50 = _coerce_float(week.get("sma_50"))
+            if week_low is None or week_close is None or week_sma50 is None:
+                continue
+            if float(week_low) <= float(week_sma50) * 1.04 and float(week_close) >= float(week_sma50):
+                weekly_sma50_retest_recent = True
+                break
+
+    top_structure = bool(
+        ema15_recent_hold
+        and ema_hold_ratio >= TOP_PATTERN_WEEKLY_EMA15_MIN_RATIO
+        and going_crazy
+        and near_high
+    )
+    if not top_structure:
+        return result
+
+    work = indicator_frame.copy() if isinstance(indicator_frame, pd.DataFrame) and not indicator_frame.empty else compute_indicator_frame(df)
+    if work.empty:
+        return result
+    work = work.reset_index(drop=True)
+    latest = work.iloc[-1]
+    previous = work.iloc[-2] if len(work) >= 2 else pd.Series(dtype=object)
+    latest_close = _coerce_float(latest.get("close_num", latest.get("close")))
+    latest_low = _coerce_float(latest.get("low_num", latest.get("low")))
+    daily_sma50 = _coerce_float(latest.get("sma_50"))
+    prev_close = _coerce_float(previous.get("close_num", previous.get("close")))
+    prev_sma50 = _coerce_float(previous.get("sma_50"))
+    atr_value = _coerce_float(atr20) or _coerce_float(latest.get("atr_20"))
+    current_vwap = _anchor_level_value(current_anchor_meta or {}, "AVWAPE")
+
+    daily_sma50_bounce = _top_pattern_level_test(
+        low_value=latest_low,
+        close_value=latest_close,
+        level_value=daily_sma50,
+        atr_value=atr_value,
+    )
+    daily_sma50_reclaim = bool(
+        latest_close is not None
+        and daily_sma50 is not None
+        and prev_close is not None
+        and prev_sma50 is not None
+        and float(prev_close) < float(prev_sma50)
+        and float(latest_close) >= float(daily_sma50)
+    )
+    weekly_sma50_entry = _top_pattern_level_test(
+        low_value=latest_low,
+        close_value=latest_close,
+        level_value=latest_week_sma50,
+        atr_value=atr_value,
+    )
+    avwape_retest = _top_pattern_level_test(
+        low_value=latest_low,
+        close_value=latest_close,
+        level_value=current_vwap,
+        atr_value=atr_value,
+    )
+
+    entry_triggers = []
+    entry_level = None
+    score_bonus = TOP_PATTERN_SCORE_BONUS
+    if daily_sma50_reclaim:
+        entry_triggers.append("daily_50sma_reclaim")
+        entry_level = daily_sma50
+        score_bonus += TOP_PATTERN_SMA50_ENTRY_BONUS
+    if daily_sma50_bounce:
+        entry_triggers.append("daily_50sma_bounce")
+        entry_level = entry_level if entry_level is not None else daily_sma50
+        score_bonus += TOP_PATTERN_SMA50_ENTRY_BONUS
+    if weekly_sma50_entry:
+        entry_triggers.append("weekly_50sma_test")
+        entry_level = entry_level if entry_level is not None else latest_week_sma50
+        score_bonus += TOP_PATTERN_WEEKLY_SMA50_ENTRY_BONUS
+    if avwape_retest:
+        entry_triggers.append("avwape_test")
+        entry_level = entry_level if entry_level is not None else current_vwap
+        score_bonus += TOP_PATTERN_AVWAPE_ENTRY_BONUS
+    if above_sma100:
+        score_bonus += TOP_PATTERN_WEEKLY_SMA100_BONUS
+
+    note_parts = [
+        "TOP weekly trend",
+        f"13w={return_13:+.1f}%" if return_13 is not None else "",
+        f"26w={return_26:+.1f}%" if return_26 is not None else "",
+        f"weekly EMA15 hold={ema_hold_ratio:.0%}",
+    ]
+    if above_sma100:
+        note_parts.append("above weekly SMA100")
+    if weekly_sma50_retest_recent:
+        note_parts.append("recent weekly 50SMA support")
+    if weekly_sma50_rising:
+        note_parts.append("weekly 50SMA rising")
+    if entry_triggers:
+        note_parts.append("entry=" + ",".join(entry_triggers))
+    else:
+        note_parts.append("tracking for 50SMA/AVWAPE entry")
+
+    result.update(
+        {
+            "watch": True,
+            "favorite_signal": bool(entry_triggers),
+            "signal": TOP_PATTERN_SIGNAL if entry_triggers else "",
+            "setup_family": TOP_PATTERN_FAMILY if entry_triggers else TOP_PATTERN_TRACKING_FAMILY,
+            "score_bonus": int(score_bonus if entry_triggers else max(0, score_bonus // 2)),
+            "entry_trigger": entry_triggers[0] if entry_triggers else "",
+            "entry_triggers": entry_triggers,
+            "entry_level": _coerce_float(entry_level),
+            "weekly_return_13w_pct": None if return_13 is None else round(float(return_13), 3),
+            "weekly_return_26w_pct": None if return_26 is None else round(float(return_26), 3),
+            "weekly_pullback_from_52w_high_pct": None if pullback_52w is None else round(float(pullback_52w), 3),
+            "weekly_ema15_hold": bool(ema15_recent_hold),
+            "weekly_ema15_hold_ratio": round(float(ema_hold_ratio), 3),
+            "weekly_above_sma100": bool(above_sma100),
+            "weekly_sma50_retest_recent": bool(weekly_sma50_retest_recent),
+            "daily_sma50_reclaim": bool(daily_sma50_reclaim),
+            "daily_sma50_bounce": bool(daily_sma50_bounce),
+            "weekly_sma50_entry": bool(weekly_sma50_entry),
+            "avwape_retest": bool(avwape_retest),
+            "note": "; ".join(part for part in note_parts if part),
+        }
+    )
+    return result
+
+
 def analyze_sma_breakout_setup(
     df: pd.DataFrame,
     side: str,
@@ -2787,6 +3220,11 @@ def analyze_sma_breakout_setup(
         "retest_age_sessions": 0,
         "retest_distance_atr": None,
         "confirmation_date": "",
+        "higher_high_confirmed": False,
+        "previous_day_high_break": False,
+        "confirmation_trigger": "",
+        "latest_high": None,
+        "previous_day_high": None,
         "score_bonus": 0,
         "note": "",
     }
@@ -2805,8 +3243,19 @@ def analyze_sma_breakout_setup(
 
     latest = work.iloc[last_idx]
     latest_close = _coerce_float(latest.get("close_num", latest.get("close")))
+    latest_high = _coerce_float(latest.get("high_num", latest.get("high")))
     if latest_close is None:
         return result
+
+    previous_day_high = None
+    if last_idx > 0:
+        previous_row = work.iloc[last_idx - 1]
+        previous_day_high = _coerce_float(previous_row.get("high_num", previous_row.get("high")))
+    previous_day_high_break = (
+        latest_high is not None
+        and previous_day_high is not None
+        and float(latest_high) > float(previous_day_high)
+    )
 
     atr_value = _coerce_float(atr20) or _coerce_float(latest.get("atr_20"))
     if atr_value is None or atr_value <= 0:
@@ -2906,7 +3355,9 @@ def analyze_sma_breakout_setup(
                 )
                 touch = touches[0]
                 latest_sma = _coerce_float(latest.get(sma_col))
-                confirmed = latest_sma is not None and float(latest_close) > float(latest_sma)
+                sma_reclaimed = latest_sma is not None and float(latest_close) > float(latest_sma)
+                confirmed = bool(sma_reclaimed and previous_day_high_break)
+                confirmation_trigger = "previous_day_high_break" if confirmed else ""
                 breakout_age = last_idx - breakout_idx
                 retest_age = last_idx - retest_idx
                 note = (
@@ -2915,7 +3366,9 @@ def analyze_sma_breakout_setup(
                     f"within {touch['distance_atr']:.3f} ATR"
                 )
                 if confirmed:
-                    note = f"{note}; latest close reclaimed {sma_label}"
+                    note = f"{note}; latest close reclaimed {sma_label} and broke prior-day high"
+                elif sma_reclaimed:
+                    note = f"{note}; latest close reclaimed {sma_label}; awaiting higher high / prior-day high break"
                 else:
                     note = f"{note}; awaiting close back above {sma_label}"
 
@@ -2938,6 +3391,11 @@ def analyze_sma_breakout_setup(
                         "retest_age_sessions": int(retest_age),
                         "retest_distance_atr": float(touch["distance_atr"]),
                         "confirmation_date": _row_date(latest) if confirmed else "",
+                        "higher_high_confirmed": bool(previous_day_high_break),
+                        "previous_day_high_break": bool(previous_day_high_break),
+                        "confirmation_trigger": confirmation_trigger,
+                        "latest_high": _coerce_float(latest_high),
+                        "previous_day_high": _coerce_float(previous_day_high),
                         "score_bonus": int(SMA_BREAKOUT_TRACKING_SCORE_BONUS.get(period, 0)),
                         "note": note,
                     }
@@ -3261,6 +3719,15 @@ def build_tracker_feature_snapshot(
     if close_value is not None and prev_avwape is not None and atr20 and atr20 > 0:
         prev_distance_atr = (close_value - prev_avwape) / atr20
         prev_near_flag = abs(prev_distance_atr) <= TRACKER_PREV_AVWAPE_NEAR_ATR
+    previous_anchor_sr_summary = analyze_previous_anchor_sr_context(
+        [bar_row.to_dict() if isinstance(bar_row, pd.Series) else dict(bar_row or {})],
+        None,
+        close_value,
+        side,
+        previous_anchor_levels,
+        atr20,
+        events_today=[],
+    )
 
     ema8 = _indicator_level_value(indicator_row, "EMA_8")
     ema15 = _indicator_level_value(indicator_row, "EMA_15")
@@ -3347,6 +3814,13 @@ def build_tracker_feature_snapshot(
         "previous_avwape": prev_avwape,
         "previous_avwape_distance_atr": prev_distance_atr,
         "previous_avwape_near_0_5atr": prev_near_flag,
+        "previous_anchor_sr_summary": previous_anchor_sr_summary,
+        "previous_anchor_nearest_level": previous_anchor_sr_summary.get("nearest_level", ""),
+        "previous_anchor_nearest_distance_atr": previous_anchor_sr_summary.get("nearest_distance_atr"),
+        "previous_anchor_near_levels": list(previous_anchor_sr_summary.get("near_levels") or []),
+        "previous_anchor_touched_levels": list(previous_anchor_sr_summary.get("touched_levels") or []),
+        "previous_anchor_bounce_levels": list(previous_anchor_sr_summary.get("bounce_levels") or []),
+        "previous_anchor_critical_near_levels": list(previous_anchor_sr_summary.get("critical_near_levels") or []),
         "ema8": ema8,
         "ema15": ema15,
         "ema21": ema21,
@@ -3473,6 +3947,23 @@ def build_tracker_entry_attributes(
     favorite_signals = list(row.get("favorite_signals") or [])
     context_signals = list(row.get("context_signals") or [])
     events_today = list(symbol_entry.get("events_today") or [])
+    previous_anchor_sr_summary = symbol_entry.get("previous_anchor_sr_summary")
+    if not isinstance(previous_anchor_sr_summary, dict):
+        previous_anchor_sr_summary = entry_snapshot.get("previous_anchor_sr_summary")
+    if not isinstance(previous_anchor_sr_summary, dict):
+        previous_anchor_sr_summary = {}
+
+    def _sr_labels(value) -> list[str]:
+        labels = []
+        for item in value or []:
+            if isinstance(item, dict):
+                label = str(item.get("label") or "").strip()
+            else:
+                label = str(item or "").strip()
+            if label:
+                labels.append(label)
+        return sorted(set(labels))
+
     post_earnings_active = bool(row.get("post_earnings_active") or symbol_entry.get("post_earnings_active"))
     directional_ema15_distance_atr = _coerce_float(entry_snapshot.get("directional_ema15_distance_atr"))
     ema15_pullback_ready = False
@@ -3563,7 +4054,55 @@ def build_tracker_entry_attributes(
         group="setup",
         label="SMA breakout confirmed",
         value_type="bool",
-        description="Whether the latest close reclaimed the breakout SMA after the retest.",
+        description="Whether the latest close reclaimed the breakout SMA after the retest and broke the prior-day high.",
+    )
+    add(
+        "setup.sma_breakout_confirmation_trigger",
+        row.get("sma_breakout_confirmation_trigger") or symbol_entry.get("sma_breakout_confirmation_trigger") or "",
+        group="setup",
+        label="SMA breakout trigger",
+        value_type="text",
+        description="The higher-high style trigger that confirmed the SMA breakout setup.",
+    )
+    add(
+        "setup.sma_breakout_previous_day_high_break",
+        bool(row.get("sma_breakout_previous_day_high_break") or symbol_entry.get("sma_breakout_previous_day_high_break")),
+        group="setup",
+        label="SMA prior-day high break",
+        value_type="bool",
+        description="Whether the SMA breakout setup broke the previous daily high.",
+    )
+    add(
+        "setup.top_pattern_watch",
+        bool(row.get("top_pattern_watch") or symbol_entry.get("top_pattern_watch")),
+        group="setup",
+        label="TOP pattern watch",
+        value_type="bool",
+        description="Whether the symbol has the weekly TOP pattern profile and is being tracked for a disciplined entry.",
+    )
+    add(
+        "setup.top_pattern_entry",
+        bool(row.get("top_pattern_entry") or symbol_entry.get("top_pattern_entry")),
+        group="setup",
+        label="TOP pattern entry",
+        value_type="bool",
+        description="Whether the TOP pattern has an active daily 50SMA, weekly 50SMA, or AVWAPE entry trigger.",
+    )
+    add(
+        "setup.top_pattern_entry_trigger",
+        row.get("top_pattern_entry_trigger") or symbol_entry.get("top_pattern_entry_trigger") or "",
+        group="setup",
+        label="TOP entry trigger",
+        value_type="text",
+        description="The specific trigger that made the weekly TOP pattern actionable.",
+    )
+    add(
+        "setup.preferred_swing_focus",
+        bool(row.get("preferred_swing_focus") or symbol_entry.get("preferred_swing_focus")),
+        group="setup",
+        label="Preferred swing focus",
+        value_type="bool",
+        description="Whether the setup matches the current preferred Master AVWAP swing focus list.",
     )
     add(
         "signals.favorite_signals",
@@ -3961,6 +4500,70 @@ def build_tracker_entry_attributes(
         description="Whether the mid-earnings retest also lined up with the first deviation band.",
     )
     add(
+        "pattern.top_pattern_weekly_return_13w_pct",
+        _coerce_float(row.get("top_pattern_weekly_return_13w_pct") or symbol_entry.get("top_pattern_weekly_return_13w_pct")),
+        group="pattern",
+        label="TOP 13-week return %",
+        value_type="number",
+        description="Recent 13-week return used to identify weekly momentum leaders.",
+    )
+    add(
+        "pattern.top_pattern_weekly_return_26w_pct",
+        _coerce_float(row.get("top_pattern_weekly_return_26w_pct") or symbol_entry.get("top_pattern_weekly_return_26w_pct")),
+        group="pattern",
+        label="TOP 26-week return %",
+        value_type="number",
+        description="Recent 26-week return used to identify sustained weekly momentum leaders.",
+    )
+    add(
+        "pattern.top_pattern_weekly_ema15_hold_ratio",
+        _coerce_float(row.get("top_pattern_weekly_ema15_hold_ratio") or symbol_entry.get("top_pattern_weekly_ema15_hold_ratio")),
+        group="pattern",
+        label="TOP weekly EMA15 hold ratio",
+        value_type="number",
+        description="Share of recent weekly closes holding above the weekly EMA15.",
+    )
+    add(
+        "pattern.top_pattern_weekly_above_sma100",
+        bool(row.get("top_pattern_weekly_above_sma100") or symbol_entry.get("top_pattern_weekly_above_sma100")),
+        group="pattern",
+        label="TOP above weekly 100SMA",
+        value_type="bool",
+        description="Whether the latest weekly close is above the weekly 100SMA.",
+    )
+    add(
+        "pattern.top_pattern_weekly_sma50_retest_recent",
+        bool(row.get("top_pattern_weekly_sma50_retest_recent") or symbol_entry.get("top_pattern_weekly_sma50_retest_recent")),
+        group="pattern",
+        label="TOP weekly 50SMA retest recent",
+        value_type="bool",
+        description="Whether the weekly TOP pattern recently tested and held the weekly 50SMA.",
+    )
+    add(
+        "pattern.top_pattern_daily_sma50_reclaim",
+        bool(row.get("top_pattern_daily_sma50_reclaim") or symbol_entry.get("top_pattern_daily_sma50_reclaim")),
+        group="pattern",
+        label="TOP daily 50SMA reclaim",
+        value_type="bool",
+        description="Whether the latest daily candle reclaimed the 50SMA for a TOP entry.",
+    )
+    add(
+        "pattern.top_pattern_daily_sma50_bounce",
+        bool(row.get("top_pattern_daily_sma50_bounce") or symbol_entry.get("top_pattern_daily_sma50_bounce")),
+        group="pattern",
+        label="TOP daily 50SMA bounce",
+        value_type="bool",
+        description="Whether the latest daily candle tested and held the 50SMA for a TOP entry.",
+    )
+    add(
+        "pattern.top_pattern_avwape_retest",
+        bool(row.get("top_pattern_avwape_retest") or symbol_entry.get("top_pattern_avwape_retest")),
+        group="pattern",
+        label="TOP AVWAPE retest",
+        value_type="bool",
+        description="Whether the latest daily candle tested and held the earnings AVWAPE for a TOP entry.",
+    )
+    add(
         "pattern.recent_band_extension_days",
         int(symbol_entry.get("recent_band_extension_days", 0) or 0),
         group="pattern",
@@ -4160,6 +4763,185 @@ def build_tracker_entry_attributes(
         value_type="bool",
         description="Whether the prior anchor AVWAPE was within 0.5 ATR of price.",
     )
+    previous_anchor_near_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_near_levels")
+        or previous_anchor_sr_summary.get("near_levels")
+        or entry_snapshot.get("previous_anchor_near_levels")
+    )
+    previous_anchor_touched_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_touched_levels")
+        or previous_anchor_sr_summary.get("touched_levels")
+        or entry_snapshot.get("previous_anchor_touched_levels")
+    )
+    previous_anchor_bounce_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_bounce_levels")
+        or previous_anchor_sr_summary.get("bounce_levels")
+        or entry_snapshot.get("previous_anchor_bounce_levels")
+    )
+    previous_anchor_obstacle_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_obstacle_levels")
+        or previous_anchor_sr_summary.get("obstacle_levels")
+    )
+    previous_anchor_critical_near_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_critical_near_levels")
+        or previous_anchor_sr_summary.get("critical_near_levels")
+        or entry_snapshot.get("previous_anchor_critical_near_levels")
+    )
+    previous_anchor_critical_touched_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_critical_touched_levels")
+        or previous_anchor_sr_summary.get("critical_touched_levels")
+    )
+    previous_anchor_critical_bounce_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_critical_bounce_levels")
+        or previous_anchor_sr_summary.get("critical_bounce_levels")
+    )
+    previous_anchor_critical_obstacle_levels = _sr_labels(
+        symbol_entry.get("previous_anchor_critical_obstacle_levels")
+        or previous_anchor_sr_summary.get("critical_obstacle_levels")
+        or row.get("previous_anchor_critical_obstacles")
+    )
+    add(
+        "sr.previous_anchor_nearest_level",
+        symbol_entry.get("previous_anchor_nearest_level")
+        or previous_anchor_sr_summary.get("nearest_level")
+        or entry_snapshot.get("previous_anchor_nearest_level")
+        or "",
+        group="sr",
+        label="Nearest previous-anchor S/R",
+        value_type="text",
+        description="Closest prior-anchor AVWAPE or deviation level to entry price.",
+    )
+    add(
+        "sr.previous_anchor_nearest_distance_atr",
+        _coerce_float(
+            symbol_entry.get("previous_anchor_nearest_distance_atr")
+            or previous_anchor_sr_summary.get("nearest_distance_atr")
+            or entry_snapshot.get("previous_anchor_nearest_distance_atr")
+        ),
+        group="sr",
+        label="Nearest previous S/R distance ATR",
+        value_type="number",
+        description="ATR-normalized absolute distance to the nearest prior-anchor S/R level.",
+    )
+    add(
+        "sr.previous_anchor_near_levels",
+        previous_anchor_near_levels,
+        group="sr",
+        label="Previous S/R near levels",
+        value_type="list",
+        description="Prior-anchor AVWAPE or deviation levels within the near threshold at entry.",
+    )
+    add(
+        "sr.previous_anchor_touched_levels",
+        previous_anchor_touched_levels,
+        group="sr",
+        label="Previous S/R touched levels",
+        value_type="list",
+        description="Prior-anchor AVWAPE or deviation levels touched by the entry-day range.",
+    )
+    add(
+        "sr.previous_anchor_bounce_levels",
+        previous_anchor_bounce_levels,
+        group="sr",
+        label="Previous S/R bounce levels",
+        value_type="list",
+        description="Prior-anchor AVWAPE or deviation levels that produced a same-day bounce.",
+    )
+    add(
+        "sr.previous_anchor_obstacle_levels",
+        previous_anchor_obstacle_levels,
+        group="sr",
+        label="Previous S/R obstacle levels",
+        value_type="list",
+        description="Prior-anchor S/R levels directly ahead of price in the setup direction.",
+    )
+    add(
+        "sr.previous_anchor_critical_near_levels",
+        previous_anchor_critical_near_levels,
+        group="sr",
+        label="Critical previous S/R near",
+        value_type="list",
+        description="Critical prior-anchor levels near entry: previous AVWAPE, UPPER_1, and LOWER_1.",
+    )
+    add(
+        "sr.previous_anchor_critical_touched_levels",
+        previous_anchor_critical_touched_levels,
+        group="sr",
+        label="Critical previous S/R touched",
+        value_type="list",
+        description="Critical prior-anchor levels touched by the entry-day range.",
+    )
+    add(
+        "sr.previous_anchor_critical_bounce_levels",
+        previous_anchor_critical_bounce_levels,
+        group="sr",
+        label="Critical previous S/R bounced",
+        value_type="list",
+        description="Critical prior-anchor levels that produced a same-day bounce.",
+    )
+    add(
+        "sr.previous_anchor_critical_obstacle_levels",
+        previous_anchor_critical_obstacle_levels,
+        group="sr",
+        label="Critical previous S/R ahead",
+        value_type="list",
+        description="Critical prior-anchor levels directly ahead of price in the setup direction.",
+    )
+    add(
+        "sr.previous_anchor_critical_obstacle",
+        bool(previous_anchor_critical_obstacle_levels or row.get("previous_anchor_critical_obstacle")),
+        group="sr",
+        label="Critical previous S/R obstacle",
+        value_type="bool",
+        description="Whether a critical prior-anchor level was directly ahead of the setup.",
+    )
+    add(
+        "sr.previous_avwape_bounce",
+        bool(row.get("previous_avwape_bounce") or symbol_entry.get("previous_avwape_bounce")),
+        group="sr",
+        label="Previous AVWAPE bounce",
+        value_type="bool",
+        description="Whether the setup bounced from the previous earnings AVWAPE.",
+    )
+    add(
+        "sr.previous_avwape_distance_atr",
+        _coerce_float(
+            symbol_entry.get("previous_avwape_distance_atr")
+            or previous_anchor_sr_summary.get("previous_avwape_distance_atr")
+            or entry_snapshot.get("previous_avwape_distance_atr")
+        ),
+        group="sr",
+        label="Previous AVWAPE signed distance ATR",
+        value_type="number",
+        description="ATR-normalized distance from previous AVWAPE; positive means price is above it.",
+    )
+    sr_level_labels = {
+        "AVWAPE": "Previous AVWAPE",
+        "UPPER_1": "Previous upper 1",
+        "LOWER_1": "Previous lower 1",
+        "UPPER_2": "Previous upper 2",
+        "LOWER_2": "Previous lower 2",
+        "UPPER_3": "Previous upper 3",
+        "LOWER_3": "Previous lower 3",
+    }
+    for level_label, label_text in sr_level_labels.items():
+        output_label = _previous_anchor_sr_output_label(level_label)
+        key_suffix = level_label.lower().replace("upper", "upper").replace("lower", "lower")
+        if level_label == "AVWAPE":
+            key_suffix = "avwape"
+        for suffix, source_labels, display_suffix, description_suffix in (
+            ("near", previous_anchor_near_levels, "near", "was within the near threshold at entry"),
+            ("touched", previous_anchor_touched_levels, "touched", "was touched by the entry-day range"),
+            ("bounce", previous_anchor_bounce_levels, "bounce", "produced a same-day bounce"),
+        ):
+            add(
+                f"sr.previous_{key_suffix}_{suffix}",
+                output_label in source_labels,
+                group="sr",
+                label=f"{label_text} {display_suffix}",
+                value_type="bool",
+                description=f"Whether {label_text} {description_suffix}.",
+            )
     add(
         "structure.previous_day_range_break",
         bool(row.get("previous_day_range_break") or symbol_entry.get("previous_day_range_break")),
@@ -4167,6 +4949,78 @@ def build_tracker_entry_attributes(
         label="Previous day range break",
         value_type="bool",
         description="Whether price closed through the prior session trigger level for the setup direction.",
+    )
+    add(
+        "structure.previous_day_range_intraday_break",
+        bool(row.get("previous_day_range_intraday_break") or symbol_entry.get("previous_day_range_intraday_break")),
+        group="structure",
+        label="Previous day range intraday break",
+        value_type="bool",
+        description="Whether price tagged the prior session high for longs or low for shorts intraday, even without a closing break.",
+    )
+    add(
+        "structure.previous_day_range_intraday_note",
+        row.get("previous_day_range_intraday_note") or symbol_entry.get("previous_day_range_intraday_note") or "",
+        group="structure",
+        label="Previous day intraday break note",
+        value_type="text",
+        description="Scanner note describing any intraday prior-day high/low break.",
+    )
+    add(
+        "structure.adverse_entry_candle",
+        bool(row.get("adverse_entry_candle") or symbol_entry.get("priority_adverse_entry_candle")),
+        group="structure",
+        label="Adverse entry candle",
+        value_type="bool",
+        description="Whether the entry candle rejected in the wrong direction or closed near the adverse extreme.",
+    )
+    add(
+        "structure.adverse_entry_candle_note",
+        row.get("adverse_entry_candle_note") or symbol_entry.get("priority_adverse_entry_candle_note") or "",
+        group="structure",
+        label="Adverse candle note",
+        value_type="text",
+        description="Scanner note explaining the adverse entry candle.",
+    )
+    add(
+        "sr.current_first_dev_obstacle",
+        bool(row.get("current_first_dev_obstacle") or symbol_entry.get("priority_current_first_dev_obstacle")),
+        group="sr",
+        label="Current first-dev obstacle",
+        value_type="bool",
+        description="Whether current UPPER_1 for longs or LOWER_1 for shorts was directly ahead of price.",
+    )
+    add(
+        "structure.vwap_range_confirmation",
+        bool(row.get("vwap_range_confirmation") or symbol_entry.get("vwap_range_confirmation")),
+        group="structure",
+        label="VWAP + prior-day confirmation",
+        value_type="bool",
+        description="Whether price is holding beyond intraday VWAP and the prior session trigger level in the setup direction.",
+    )
+    add(
+        "relative_strength.daily_relative_strength_score",
+        _coerce_float(row.get("daily_relative_strength_score") or symbol_entry.get("daily_relative_strength_score")),
+        group="relative_strength",
+        label="D1 relative strength score",
+        value_type="number",
+        description="One-day and five-day symbol return spread versus SPY, signed for the setup direction.",
+    )
+    add(
+        "relative_strength.daily_relative_strength_bonus",
+        int(row.get("daily_relative_strength_bonus", symbol_entry.get("daily_relative_strength_bonus", 0)) or 0),
+        group="relative_strength",
+        label="D1 relative strength bonus",
+        value_type="number",
+        description="Priority bonus awarded when the stock is materially stronger or weaker than SPY on D1.",
+    )
+    add(
+        "relative_strength.daily_relative_strength_note",
+        row.get("daily_relative_strength_note") or symbol_entry.get("daily_relative_strength_note") or "",
+        group="relative_strength",
+        label="D1 relative strength note",
+        value_type="text",
+        description="Scanner note comparing the symbol's one-day and five-day move with SPY.",
     )
     add(
         "filters.ranking_blocked",
@@ -4251,6 +5105,26 @@ def build_tracker_entry_attributes(
         label="Previous day range note",
         value_type="text",
         description="Scanner note describing the prior-day range break bonus.",
+    )
+    add(
+        "filters.vwap_range_confirmation_bonus",
+        int(
+            row.get("vwap_range_confirmation_bonus", 0)
+            or symbol_entry.get("vwap_range_confirmation_bonus", 0)
+            or 0
+        ),
+        group="filters",
+        label="VWAP + prior-day bonus",
+        value_type="number",
+        description="Bonus added when price holds beyond intraday VWAP and the prior-day trigger level.",
+    )
+    add(
+        "filters.vwap_range_confirmation_note",
+        row.get("vwap_range_confirmation_note") or symbol_entry.get("vwap_range_confirmation_note") or "",
+        group="filters",
+        label="VWAP + prior-day note",
+        value_type="text",
+        description="Scanner note describing the intraday VWAP plus prior-day trigger confirmation.",
     )
     add(
         "levels.current_active_level",
@@ -4667,6 +5541,17 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
         if sma_label and sma_level is not None:
             _add(sma_label, sma_level, "sma")
 
+    if setup_family == TOP_PATTERN_FAMILY:
+        top_trigger = str(row.get("top_pattern_entry_trigger") or symbol_entry.get("top_pattern_entry_trigger") or "")
+        top_level = _coerce_float(row.get("top_pattern_entry_level") or symbol_entry.get("top_pattern_entry_level"))
+        if top_level is not None:
+            if top_trigger.startswith("weekly_50sma"):
+                _add("WEEKLY_SMA_50", top_level, "weekly_sma")
+            elif top_trigger.startswith("daily_50sma"):
+                _add("SMA_50", top_level, "sma")
+            elif top_trigger.startswith("avwape"):
+                _add("AVWAPE", top_level, "current_anchor")
+
     sma_levels = row.get("sma_levels") or symbol_entry.get("priority_sma_levels") or {}
     if primary_stop_level is not None and atr20 and atr20 > 0:
         for label, level in sorted(sma_levels.items()):
@@ -4756,7 +5641,17 @@ def build_tracker_setup_record(
         "previous_anchor_date": str(previous_anchor.get("date") or ""),
         "priority_bucket": str(row.get("priority_bucket") or ""),
         "priority_score": float(row.get("score", 0) or 0),
+        "preferred_swing_focus": bool(row.get("preferred_swing_focus") or symbol_entry.get("preferred_swing_focus")),
         "favorite_zone": row.get("favorite_zone") or "",
+        "vwap_range_confirmation": bool(row.get("vwap_range_confirmation") or symbol_entry.get("vwap_range_confirmation")),
+        "vwap_range_confirmation_bonus": int(
+            row.get("vwap_range_confirmation_bonus", symbol_entry.get("vwap_range_confirmation_bonus", 0)) or 0
+        ),
+        "vwap_range_confirmation_note": (
+            row.get("vwap_range_confirmation_note")
+            or symbol_entry.get("vwap_range_confirmation_note")
+            or ""
+        ),
         "setup_family": str(row.get("setup_family") or symbol_entry.get("setup_family") or ""),
         "setup_tags": list(row.get("setup_tags") or symbol_entry.get("setup_tags") or []),
         "setup_candidate": row.get("setup_candidate") or symbol_entry.get("setup_candidate") or {},
@@ -4862,6 +5757,25 @@ def build_tracker_setup_record(
             row.get("sma_breakout_confirmation_date")
             or symbol_entry.get("sma_breakout_confirmation_date")
             or ""
+        ),
+        "sma_breakout_higher_high_confirmed": bool(
+            row.get("sma_breakout_higher_high_confirmed")
+            or symbol_entry.get("sma_breakout_higher_high_confirmed")
+        ),
+        "sma_breakout_previous_day_high_break": bool(
+            row.get("sma_breakout_previous_day_high_break")
+            or symbol_entry.get("sma_breakout_previous_day_high_break")
+        ),
+        "sma_breakout_confirmation_trigger": (
+            row.get("sma_breakout_confirmation_trigger")
+            or symbol_entry.get("sma_breakout_confirmation_trigger")
+            or ""
+        ),
+        "sma_breakout_latest_high": _coerce_float(
+            row.get("sma_breakout_latest_high") or symbol_entry.get("sma_breakout_latest_high")
+        ),
+        "sma_breakout_previous_day_high": _coerce_float(
+            row.get("sma_breakout_previous_day_high") or symbol_entry.get("sma_breakout_previous_day_high")
         ),
         "sma_breakout_note": row.get("sma_breakout_note") or symbol_entry.get("sma_breakout_note") or "",
         "sma_levels_entry": row.get("sma_levels") or {},
@@ -7110,6 +8024,7 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             "current_band_zone": str(entry_attributes.get("levels.current_band_zone") or ""),
             "trend_20d": str(entry_attributes.get("trend.trend_20d") or ""),
             "previous_day_range_break": bool(entry_attributes.get("structure.previous_day_range_break")),
+            "vwap_range_confirmation": bool(entry_attributes.get("structure.vwap_range_confirmation")),
             "extreme_move_watch": bool(
                 setup.get("extreme_move_watch")
                 or entry_attributes.get("pattern.extreme_move_watch")
@@ -7274,6 +8189,11 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
                 ),
                 "previous_day_range_break_rate": (
                     mean(1.0 if row.get("previous_day_range_break") else 0.0 for row in rows_for_group)
+                    if rows_for_group
+                    else None
+                ),
+                "vwap_range_confirmation_rate": (
+                    mean(1.0 if row.get("vwap_range_confirmation") else 0.0 for row in rows_for_group)
                     if rows_for_group
                     else None
                 ),
@@ -7542,10 +8462,17 @@ def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, sid
     previous_row = get_previous_daily_row_for_date(daily_rows, last_trade_date)
     previous_day_high = _coerce_float(previous_row.get("high")) if previous_row else None
     previous_day_low = _coerce_float(previous_row.get("low")) if previous_row else None
+    target = last_trade_date.isoformat() if hasattr(last_trade_date, "isoformat") else str(last_trade_date)
+    current_rows = [row for row in daily_rows or [] if str(row.get("date") or "") == target]
+    current_row = current_rows[-1] if current_rows else {}
+    current_day_high = _coerce_float(current_row.get("high"))
+    current_day_low = _coerce_float(current_row.get("low"))
     result = {
         "previous_day_date": str(previous_row.get("date") or "") if previous_row else "",
         "previous_day_high": previous_day_high,
         "previous_day_low": previous_day_low,
+        "previous_day_range_intraday_break": False,
+        "previous_day_range_intraday_note": "",
         "previous_day_range_break": False,
         "previous_day_range_break_bonus": 0,
         "previous_day_range_note": "",
@@ -7554,6 +8481,13 @@ def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, sid
         return result
 
     side = normalize_side(side)
+    if side == "LONG" and previous_day_high is not None and current_day_high is not None and float(current_day_high) > float(previous_day_high):
+        result["previous_day_range_intraday_break"] = True
+        result["previous_day_range_intraday_note"] = f"Tagged previous day high {float(previous_day_high):.2f} intraday"
+    elif side == "SHORT" and previous_day_low is not None and current_day_low is not None and float(current_day_low) < float(previous_day_low):
+        result["previous_day_range_intraday_break"] = True
+        result["previous_day_range_intraday_note"] = f"Tagged previous day low {float(previous_day_low):.2f} intraday"
+
     if side == "LONG" and previous_day_high is not None and float(last_close) > float(previous_day_high):
         result["previous_day_range_break"] = True
         result["previous_day_range_break_bonus"] = PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS
@@ -7567,6 +8501,50 @@ def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, sid
         result["previous_day_range_note"] = (
             f"Below previous day low {float(previous_day_low):.2f} "
             f"(+{PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS})"
+        )
+    return result
+
+
+def assess_vwap_range_confirmation(last_close, intraday_vwap, side, previous_day_range_summary: dict | None):
+    close_value = _coerce_float(last_close)
+    vwap_value = _coerce_float(intraday_vwap)
+    previous_summary = previous_day_range_summary if isinstance(previous_day_range_summary, dict) else {}
+    previous_day_high = _coerce_float(previous_summary.get("previous_day_high"))
+    previous_day_low = _coerce_float(previous_summary.get("previous_day_low"))
+    result = {
+        "vwap_range_confirmation": False,
+        "vwap_range_confirmation_bonus": 0,
+        "vwap_range_confirmation_note": "",
+    }
+    if close_value is None or vwap_value is None:
+        return result
+
+    side = normalize_side(side)
+    if (
+        side == "LONG"
+        and previous_day_high is not None
+        and float(close_value) > float(vwap_value)
+        and float(close_value) > float(previous_day_high)
+    ):
+        result["vwap_range_confirmation"] = True
+        result["vwap_range_confirmation_bonus"] = PRIORITY_VWAP_RANGE_CONFIRMATION_SCORE_BONUS
+        result["vwap_range_confirmation_note"] = (
+            f"Holding above intraday VWAP {float(vwap_value):.2f} "
+            f"and previous day high {float(previous_day_high):.2f} "
+            f"(+{PRIORITY_VWAP_RANGE_CONFIRMATION_SCORE_BONUS})"
+        )
+    elif (
+        side == "SHORT"
+        and previous_day_low is not None
+        and float(close_value) < float(vwap_value)
+        and float(close_value) < float(previous_day_low)
+    ):
+        result["vwap_range_confirmation"] = True
+        result["vwap_range_confirmation_bonus"] = PRIORITY_VWAP_RANGE_CONFIRMATION_SCORE_BONUS
+        result["vwap_range_confirmation_note"] = (
+            f"Holding below intraday VWAP {float(vwap_value):.2f} "
+            f"and previous day low {float(previous_day_low):.2f} "
+            f"(+{PRIORITY_VWAP_RANGE_CONFIRMATION_SCORE_BONUS})"
         )
     return result
 
@@ -7608,6 +8586,84 @@ def assess_current_day_direction(daily_rows, last_trade_date, last_close, side):
         candle_change_pct = (float(close_value) - float(open_value)) / float(open_value) * 100.0
         result["current_candle_change_pct"] = float(candle_change_pct)
 
+    return result
+
+
+def assess_daily_relative_strength(
+    daily_rows,
+    last_trade_date,
+    side,
+    spy_benchmark: dict | None,
+    lookback_days: int = DAILY_RELATIVE_STRENGTH_LOOKBACK_DAYS,
+) -> dict:
+    result = {
+        "daily_relative_strength_score": None,
+        "daily_relative_strength_bonus": 0,
+        "daily_relative_strength_note": "",
+        "symbol_one_day_return_pct": None,
+        "symbol_five_day_return_pct": None,
+        "spy_one_day_return_pct": _coerce_float((spy_benchmark or {}).get("one_day_return_pct")),
+        "spy_five_day_return_pct": _coerce_float((spy_benchmark or {}).get("five_day_return_pct")),
+    }
+    if not daily_rows or not last_trade_date or not isinstance(spy_benchmark, dict):
+        return result
+    target = last_trade_date.isoformat() if isinstance(last_trade_date, date) else str(last_trade_date)
+    relevant = [row for row in daily_rows if str(row.get("date") or "") <= target]
+    if len(relevant) < max(2, int(lookback_days) + 1):
+        return result
+    latest = relevant[-1]
+    previous = relevant[-2]
+    lookback = relevant[-(int(lookback_days) + 1)]
+    latest_close = _coerce_float(latest.get("close"))
+    previous_close = _coerce_float(previous.get("close"))
+    lookback_close = _coerce_float(lookback.get("close"))
+    symbol_one_day = (
+        ((float(latest_close) - float(previous_close)) / float(previous_close)) * 100
+        if latest_close is not None and previous_close not in (None, 0)
+        else None
+    )
+    symbol_five_day = (
+        ((float(latest_close) - float(lookback_close)) / float(lookback_close)) * 100
+        if latest_close is not None and lookback_close not in (None, 0)
+        else None
+    )
+    spy_one_day = result["spy_one_day_return_pct"]
+    spy_five_day = result["spy_five_day_return_pct"]
+    result["symbol_one_day_return_pct"] = None if symbol_one_day is None else round(float(symbol_one_day), 3)
+    result["symbol_five_day_return_pct"] = None if symbol_five_day is None else round(float(symbol_five_day), 3)
+    if symbol_one_day is None or symbol_five_day is None or spy_one_day is None or spy_five_day is None:
+        return result
+
+    one_day_excess = float(symbol_one_day) - float(spy_one_day)
+    five_day_excess = float(symbol_five_day) - float(spy_five_day)
+    rs_score = (0.35 * one_day_excess) + (0.65 * five_day_excess)
+    normalized_side = normalize_side(side)
+    directional_bonus = 0
+    if normalized_side == "LONG" and rs_score >= DAILY_RELATIVE_STRENGTH_THRESHOLD:
+        directional_bonus = DAILY_RELATIVE_STRENGTH_BONUS
+    elif normalized_side == "SHORT" and rs_score <= -DAILY_RELATIVE_STRENGTH_THRESHOLD:
+        directional_bonus = DAILY_RELATIVE_STRENGTH_WEAKNESS_BONUS
+
+    if directional_bonus:
+        direction_text = "stronger than SPY" if normalized_side == "LONG" else "weaker than SPY"
+        note = (
+            f"D1 {direction_text}: rs={rs_score:+.2f}, "
+            f"1d excess={one_day_excess:+.2f}%, 5d excess={five_day_excess:+.2f}% "
+            f"(+{directional_bonus})"
+        )
+    else:
+        note = (
+            f"D1 vs SPY neutral: rs={rs_score:+.2f}, "
+            f"1d excess={one_day_excess:+.2f}%, 5d excess={five_day_excess:+.2f}%"
+        )
+
+    result.update(
+        {
+            "daily_relative_strength_score": round(float(rs_score), 3),
+            "daily_relative_strength_bonus": int(directional_bonus),
+            "daily_relative_strength_note": note,
+        }
+    )
     return result
 
 
@@ -9625,7 +10681,8 @@ def _focus_priority_bucket_sort_value(bucket: str) -> int:
         "favorite_setup": 0,
         "near_favorite_zone": 1,
         "post_earnings_play": 2,
-        "sma_breakout_tracking": 3,
+        "top_pattern_tracking": 3,
+        "sma_breakout_tracking": 4,
     }
     return lookup.get(str(bucket or "").strip().lower(), len(lookup))
 
@@ -9640,6 +10697,7 @@ def build_master_avwap_focus_entries(payload: dict) -> list[dict]:
         ("favorites", "favorite_setup"),
         ("near_favorite_zones", "near_favorite_zone"),
         ("post_earnings_plays", "post_earnings_play"),
+        ("top_pattern_tracking", "top_pattern_tracking"),
         ("sma_breakout_tracking", "sma_breakout_tracking"),
     ):
         rows = payload.get(payload_key)
@@ -11017,9 +12075,12 @@ def _is_priority_breakout_signal(event_name: str, side: str, include_previous: b
 
 def _bounce_signal_level(event_name: str) -> str:
     normalized_event = str(event_name or "").strip().upper()
-    if not normalized_event.startswith("BOUNCE_"):
-        return ""
-    return normalized_event[len("BOUNCE_"):]
+    if normalized_event.startswith("PREV_BOUNCE_"):
+        level = normalized_event[len("PREV_BOUNCE_"):]
+        return "VWAP" if level in {"VWAP", "AVWAPE"} else level
+    if normalized_event.startswith("BOUNCE_"):
+        return normalized_event[len("BOUNCE_"):]
+    return ""
 
 
 def _is_custom_priority_setup_signal(event_name: str) -> bool:
@@ -11029,6 +12090,7 @@ def _is_custom_priority_setup_signal(event_name: str) -> bool:
         MID_EARNINGS_EMA15_RETEST_SIGNAL,
         MID_EARNINGS_EMA21_RETEST_SIGNAL,
         MID_EARNINGS_FIRST_DEV_RETEST_SIGNAL,
+        TOP_PATTERN_SIGNAL,
         *SMA_BREAKOUT_RECLAIM_SIGNALS.values(),
     }
 
@@ -11053,6 +12115,8 @@ def _derive_setup_family(
     mid_earnings_primary_trigger_level: str,
     sma_breakout_watch: bool = False,
     sma_breakout_confirmed: bool = False,
+    top_pattern_watch: bool = False,
+    top_pattern_entry: bool = False,
     favorite_zone: str | None,
 ) -> tuple[str, list[str]]:
     tags = [str(signal or "").strip().upper() for signal in current_setup_signals if str(signal or "").strip()]
@@ -11071,6 +12135,12 @@ def _derive_setup_family(
         return MID_EARNINGS_EMA21_RETEST_FAMILY, tags
     if MID_EARNINGS_FIRST_DEV_RETEST_SIGNAL in tags:
         return MID_EARNINGS_FIRST_DEV_RETEST_FAMILY, tags
+    if TOP_PATTERN_SIGNAL in tags:
+        return TOP_PATTERN_FAMILY, tags
+    if top_pattern_entry:
+        return TOP_PATTERN_FAMILY, tags
+    if top_pattern_watch:
+        return TOP_PATTERN_TRACKING_FAMILY, tags
     if mid_earnings_active_second_stdev_hold:
         return MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY, tags
     if sma_breakout_confirmed or any(signal in SMA_BREAKOUT_RECLAIM_SIGNALS.values() for signal in tags):
@@ -11176,6 +12246,11 @@ def build_priority_setup_summary(
     previous_day_range_break: bool = False,
     previous_day_range_break_bonus: int = 0,
     previous_day_range_note: str = "",
+    previous_day_range_intraday_break: bool = False,
+    previous_day_range_intraday_note: str = "",
+    vwap_range_confirmation: bool = False,
+    vwap_range_confirmation_bonus: int = 0,
+    vwap_range_confirmation_note: str = "",
     mid_earnings_active_second_stdev_hold: bool = False,
     mid_earnings_primary_trigger_level: str = "",
     sma_breakout_watch: bool = False,
@@ -11191,6 +12266,20 @@ def build_priority_setup_summary(
     sma_breakout_breakout_date: str = "",
     sma_breakout_retest_date: str = "",
     sma_breakout_confirmation_date: str = "",
+    sma_breakout_higher_high_confirmed: bool = False,
+    sma_breakout_previous_day_high_break: bool = False,
+    sma_breakout_confirmation_trigger: str = "",
+    sma_breakout_latest_high: float | None = None,
+    sma_breakout_previous_day_high: float | None = None,
+    top_pattern_watch: bool = False,
+    top_pattern_entry: bool = False,
+    top_pattern_signal: str = "",
+    top_pattern_score_bonus: int = 0,
+    top_pattern_note: str = "",
+    top_pattern_entry_trigger: str = "",
+    daily_relative_strength_score: float | None = None,
+    daily_relative_strength_bonus: int = 0,
+    daily_relative_strength_note: str = "",
 ) -> dict:
     current_weights = get_priority_signal_weights(side, "current")
     context_weights = get_priority_signal_weights(side, "context")
@@ -11206,11 +12295,17 @@ def build_priority_setup_summary(
         )
     )
     context_signals = sorted(evt for evt in events_today if evt in context_weights)
+    previous_avwape_bounce = PREVIOUS_AVWAPE_BOUNCE_SIGNAL in set(events_today or [])
+    previous_avwape_bounce_bonus = (
+        PRIORITY_PREVIOUS_AVWAPE_BOUNCE_SCORE_BONUS if previous_avwape_bounce else 0
+    )
     setup_active = (
         bool(current_setup_signals)
         or bool(first_dev_break_bonus)
         or bool(extreme_move_favorite_ready)
         or bool(sma_breakout_confirmed)
+        or bool(top_pattern_entry)
+        or bool(previous_avwape_bounce)
     )
     bounce_support_bonus, bounce_support_signals = _compute_bounce_support_bonus(
         events_today,
@@ -11225,6 +12320,7 @@ def build_priority_setup_summary(
     score = sum(current_weights.get(evt, 0) for evt in current_setup_signals)
     score += sum(context_weights.get(evt, 0) for evt in context_signals)
     score += bounce_support_bonus
+    score += previous_avwape_bounce_bonus
     trend_is_aligned = (
         (side == "LONG" and trend_label == "UP")
         or (side == "SHORT" and trend_label == "DOWN")
@@ -11250,7 +12346,12 @@ def build_priority_setup_summary(
     if sma_breakout_watch and not sma_breakout_confirmed:
         score += max(0, int(sma_breakout_score_bonus or 0))
 
+    if top_pattern_watch or top_pattern_entry:
+        score += max(0, int(top_pattern_score_bonus or 0))
+
+    score += max(0, int(daily_relative_strength_bonus or 0))
     score += max(0, int(previous_day_range_break_bonus or 0))
+    score += max(0, int(vwap_range_confirmation_bonus or 0))
     score += max(0, int(first_dev_break_bonus or 0))
 
     if recent_band_extension_days <= 2:
@@ -11275,8 +12376,13 @@ def build_priority_setup_summary(
         mid_earnings_primary_trigger_level=mid_earnings_primary_trigger_level,
         sma_breakout_watch=bool(sma_breakout_watch),
         sma_breakout_confirmed=bool(sma_breakout_confirmed),
+        top_pattern_watch=bool(top_pattern_watch),
+        top_pattern_entry=bool(top_pattern_entry),
         favorite_zone=favorite_zone,
     )
+    if previous_avwape_bounce and setup_family in {"general", "favorite_zone_watch"}:
+        setup_family = "previous_avwape_bounce"
+        setup_tags = list(dict.fromkeys([*setup_tags, PREVIOUS_AVWAPE_BOUNCE_SIGNAL]))
 
     return {
         "symbol": symbol,
@@ -11286,6 +12392,13 @@ def build_priority_setup_summary(
         "context_signals": context_signals,
         "bounce_support_signals": bounce_support_signals,
         "bounce_support_bonus": int(bounce_support_bonus or 0),
+        "previous_avwape_bounce": bool(previous_avwape_bounce),
+        "previous_avwape_bounce_bonus": int(previous_avwape_bounce_bonus or 0),
+        "previous_avwape_bounce_note": (
+            f"Previous AVWAPE bounce +{previous_avwape_bounce_bonus}"
+            if previous_avwape_bounce_bonus
+            else ""
+        ),
         "favorite_zone": favorite_zone,
         "trend_20d": trend_label,
         "has_favorite_signal": bool(setup_active),
@@ -11314,6 +12427,11 @@ def build_priority_setup_summary(
         "previous_day_range_break": bool(previous_day_range_break),
         "previous_day_range_break_bonus": int(previous_day_range_break_bonus or 0),
         "previous_day_range_note": previous_day_range_note or "",
+        "previous_day_range_intraday_break": bool(previous_day_range_intraday_break),
+        "previous_day_range_intraday_note": previous_day_range_intraday_note or "",
+        "vwap_range_confirmation": bool(vwap_range_confirmation),
+        "vwap_range_confirmation_bonus": int(vwap_range_confirmation_bonus or 0),
+        "vwap_range_confirmation_note": vwap_range_confirmation_note or "",
         "mid_earnings_primary_trigger_level": mid_earnings_primary_trigger_level or "",
         "sma_breakout_watch": bool(sma_breakout_watch),
         "sma_breakout_confirmed": bool(sma_breakout_confirmed),
@@ -11328,6 +12446,20 @@ def build_priority_setup_summary(
         "sma_breakout_breakout_date": sma_breakout_breakout_date or "",
         "sma_breakout_retest_date": sma_breakout_retest_date or "",
         "sma_breakout_confirmation_date": sma_breakout_confirmation_date or "",
+        "sma_breakout_higher_high_confirmed": bool(sma_breakout_higher_high_confirmed),
+        "sma_breakout_previous_day_high_break": bool(sma_breakout_previous_day_high_break),
+        "sma_breakout_confirmation_trigger": sma_breakout_confirmation_trigger or "",
+        "sma_breakout_latest_high": _coerce_float(sma_breakout_latest_high),
+        "sma_breakout_previous_day_high": _coerce_float(sma_breakout_previous_day_high),
+        "top_pattern_watch": bool(top_pattern_watch),
+        "top_pattern_entry": bool(top_pattern_entry),
+        "top_pattern_signal": top_pattern_signal or "",
+        "top_pattern_score_bonus": int(top_pattern_score_bonus or 0),
+        "top_pattern_note": top_pattern_note or "",
+        "top_pattern_entry_trigger": top_pattern_entry_trigger or "",
+        "daily_relative_strength_score": _coerce_float(daily_relative_strength_score),
+        "daily_relative_strength_bonus": int(daily_relative_strength_bonus or 0),
+        "daily_relative_strength_note": daily_relative_strength_note or "",
     }
 
 
@@ -11347,6 +12479,8 @@ def _priority_rejection_reasons(row: dict) -> list[str]:
         reasons.append(str(row.get("short_near_favorite_gate_note")))
     if row.get("rejection_score_cap_note"):
         reasons.append(str(row.get("rejection_score_cap_note")))
+    if row.get("adverse_entry_candle_note"):
+        reasons.append(str(row.get("adverse_entry_candle_note")))
     return [reason for reason in reasons if reason]
 
 
@@ -11369,9 +12503,14 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
         "final_score": _coerce_float(row.get("score")),
         "base_score": _coerce_float(row.get("base_score")),
         "bounce_support_bonus": int(row.get("bounce_support_bonus", 0) or 0),
+        "previous_avwape_bounce_bonus": int(row.get("previous_avwape_bounce_bonus", 0) or 0),
         "first_dev_break_bonus": int(row.get("first_dev_break_bonus", 0) or 0),
         "previous_day_range_break_bonus": int(row.get("previous_day_range_break_bonus", 0) or 0),
+        "vwap_range_confirmation_bonus": int(row.get("vwap_range_confirmation_bonus", 0) or 0),
+        "top_pattern_score_bonus": int(row.get("top_pattern_score_bonus", 0) or 0),
+        "daily_relative_strength_bonus": int(row.get("daily_relative_strength_bonus", 0) or 0),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
+        "previous_anchor_penalty": int(row.get("score_penalty_previous_anchor", 0) or 0),
         "second_band_penalty": int(row.get("second_band_penalty", 0) or 0),
         "adaptive_score_delta": int(row.get("adaptive_score_delta", 0) or 0),
         "recent_tracker_score_delta": int(row.get("recent_tracker_score_delta", 0) or 0),
@@ -11401,10 +12540,19 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
             "mid_earnings_watch": bool(row.get("mid_earnings_watch")),
             "sma_breakout_watch": bool(row.get("sma_breakout_watch")),
             "sma_breakout_confirmed": bool(row.get("sma_breakout_confirmed")),
+            "sma_breakout_higher_high_confirmed": bool(row.get("sma_breakout_higher_high_confirmed")),
+            "sma_breakout_previous_day_high_break": bool(row.get("sma_breakout_previous_day_high_break")),
+            "sma_breakout_confirmation_trigger": row.get("sma_breakout_confirmation_trigger") or "",
             "sma_breakout_sma_label": row.get("sma_breakout_sma_label") or "",
             "sma_breakout_sma_level": _coerce_float(row.get("sma_breakout_sma_level")),
             "sma_breakout_retest_level": row.get("sma_breakout_retest_level") or "",
             "sma_breakout_retest_level_value": _coerce_float(row.get("sma_breakout_retest_level_value")),
+            "top_pattern_watch": bool(row.get("top_pattern_watch")),
+            "top_pattern_entry": bool(row.get("top_pattern_entry")),
+            "top_pattern_entry_trigger": row.get("top_pattern_entry_trigger") or "",
+            "top_pattern_entry_triggers": list(row.get("top_pattern_entry_triggers") or []),
+            "top_pattern_entry_level": _coerce_float(row.get("top_pattern_entry_level")),
+            "previous_avwape_bounce": bool(row.get("previous_avwape_bounce") or symbol_entry.get("previous_avwape_bounce")),
         },
         "invalidation": {
             "label": invalidation_label,
@@ -11420,6 +12568,34 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
             "current_day_change_pct": _coerce_float(row.get("current_day_change_pct")),
             "current_candle_change_pct": _coerce_float(row.get("current_candle_change_pct")),
             "side_aligned_day": row.get("side_aligned_day"),
+            "previous_day_range_break": bool(row.get("previous_day_range_break")),
+            "previous_day_range_intraday_break": bool(row.get("previous_day_range_intraday_break")),
+            "previous_day_range_intraday_note": row.get("previous_day_range_intraday_note") or "",
+            "vwap_range_confirmation": bool(row.get("vwap_range_confirmation")),
+            "vwap_range_confirmation_note": row.get("vwap_range_confirmation_note") or "",
+            "adverse_entry_candle": bool(row.get("adverse_entry_candle")),
+            "adverse_entry_candle_note": row.get("adverse_entry_candle_note") or "",
+            "previous_anchor_sr_note": symbol_entry.get("previous_anchor_sr_note") or "",
+            "previous_anchor_nearest_level": symbol_entry.get("previous_anchor_nearest_level") or "",
+            "previous_anchor_nearest_distance_atr": _coerce_float(
+                symbol_entry.get("previous_anchor_nearest_distance_atr")
+            ),
+            "previous_anchor_near_levels": list(symbol_entry.get("previous_anchor_near_levels") or []),
+            "previous_anchor_touched_levels": list(symbol_entry.get("previous_anchor_touched_levels") or []),
+            "previous_anchor_bounce_levels": list(symbol_entry.get("previous_anchor_bounce_levels") or []),
+            "previous_anchor_critical_obstacle_levels": list(
+                symbol_entry.get("previous_anchor_critical_obstacle_levels")
+                or row.get("previous_anchor_critical_obstacles")
+                or []
+            ),
+            "daily_relative_strength_score": _coerce_float(row.get("daily_relative_strength_score")),
+            "daily_relative_strength_note": row.get("daily_relative_strength_note") or "",
+            "symbol_one_day_return_pct": _coerce_float(row.get("symbol_one_day_return_pct")),
+            "symbol_five_day_return_pct": _coerce_float(row.get("symbol_five_day_return_pct")),
+            "top_pattern_weekly_return_13w_pct": _coerce_float(row.get("top_pattern_weekly_return_13w_pct")),
+            "top_pattern_weekly_return_26w_pct": _coerce_float(row.get("top_pattern_weekly_return_26w_pct")),
+            "top_pattern_weekly_ema15_hold_ratio": _coerce_float(row.get("top_pattern_weekly_ema15_hold_ratio")),
+            "top_pattern_weekly_above_sma100": bool(row.get("top_pattern_weekly_above_sma100")),
             "bouncebot_relevant_focus_hit_today": bool(symbol_entry.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(symbol_entry.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(symbol_entry.get("bouncebot_relevant_focus_max_score")),
@@ -11499,6 +12675,229 @@ def _format_obstacle_labels(obstacles: list[dict], limit: int = 4) -> str:
     if len(obstacles) > limit:
         parts.append(f"+{len(obstacles) - limit} more")
     return ", ".join(parts)
+
+
+def _previous_anchor_sr_output_label(level_label: str) -> str:
+    normalized = str(level_label or "").strip().upper()
+    if normalized in {"AVWAPE", "VWAP"}:
+        return "PREV_AVWAPE"
+    return f"PREV_{normalized}" if normalized else ""
+
+
+def _previous_anchor_sr_event_level(event_name: str) -> str:
+    normalized_event = str(event_name or "").strip().upper()
+    if not normalized_event.startswith("PREV_BOUNCE_"):
+        return ""
+    level = normalized_event[len("PREV_BOUNCE_"):]
+    if level in {"VWAP", "AVWAPE"}:
+        return "AVWAPE"
+    return level if level in PREVIOUS_ANCHOR_SR_LEVEL_LABELS else ""
+
+
+def _previous_anchor_sr_level_values(previous_anchor_meta: dict | None) -> dict[str, float]:
+    levels = {}
+    if not isinstance(previous_anchor_meta, dict) or not previous_anchor_meta:
+        return levels
+    for label in PREVIOUS_ANCHOR_SR_LEVEL_LABELS:
+        level_value = _anchor_level_value(previous_anchor_meta, label)
+        if level_value is not None:
+            levels[label] = float(level_value)
+    return levels
+
+
+def _daily_row_matches_trade_date(row: dict | pd.Series, last_trade_date) -> bool:
+    if last_trade_date is None:
+        return True
+    target = str(last_trade_date)
+    if hasattr(last_trade_date, "isoformat"):
+        target = last_trade_date.isoformat()
+    row_date = None
+    if isinstance(row, pd.Series):
+        row_date = row.get("date", row.get("trade_date", row.get("datetime")))
+    elif isinstance(row, dict):
+        row_date = row.get("date", row.get("trade_date", row.get("datetime")))
+    if row_date is None:
+        return False
+    if hasattr(row_date, "date"):
+        row_date = row_date.date()
+    if hasattr(row_date, "isoformat"):
+        row_date = row_date.isoformat()
+    return str(row_date)[:10] == target[:10]
+
+
+def _latest_daily_row_for_sr(daily_rows, last_trade_date) -> dict:
+    if isinstance(daily_rows, pd.DataFrame):
+        rows = [daily_rows.iloc[idx] for idx in range(len(daily_rows))]
+    else:
+        rows = list(daily_rows or [])
+    if not rows:
+        return {}
+    for row in reversed(rows):
+        if _daily_row_matches_trade_date(row, last_trade_date):
+            return dict(row)
+    return dict(rows[-1])
+
+
+def analyze_previous_anchor_sr_context(
+    daily_rows,
+    last_trade_date,
+    last_close: float | None,
+    side: str,
+    previous_anchor_meta: dict | None,
+    atr20: float | None,
+    events_today: list[str] | None = None,
+) -> dict:
+    close_value = _coerce_float(last_close)
+    atr_value = _coerce_float(atr20)
+    level_values = _previous_anchor_sr_level_values(previous_anchor_meta)
+    event_levels = sorted(
+        set(
+            level
+            for level in (_previous_anchor_sr_event_level(event_name) for event_name in events_today or [])
+            if level
+        )
+    )
+    empty_summary = {
+        "levels": [],
+        "nearest_level": "",
+        "nearest_distance_atr": None,
+        "near_levels": [],
+        "touched_levels": [],
+        "bounce_levels": [],
+        "obstacle_levels": [],
+        "critical_near_levels": [],
+        "critical_touched_levels": [],
+        "critical_bounce_levels": [],
+        "critical_obstacle_levels": [],
+        "previous_avwape_bounce": "AVWAPE" in event_levels,
+        "previous_avwape_near": False,
+        "previous_avwape_distance_atr": None,
+        "note": "",
+    }
+    if close_value is None or not atr_value or atr_value <= 0 or not level_values:
+        if event_levels:
+            empty_summary["bounce_levels"] = [_previous_anchor_sr_output_label(level) for level in event_levels]
+            empty_summary["critical_bounce_levels"] = [
+                _previous_anchor_sr_output_label(level)
+                for level in event_levels
+                if level in PREVIOUS_ANCHOR_CRITICAL_SR_LABELS
+            ]
+        return empty_summary
+
+    latest_row = _latest_daily_row_for_sr(daily_rows, last_trade_date)
+    high_value = _coerce_float(latest_row.get("high"))
+    low_value = _coerce_float(latest_row.get("low"))
+    if high_value is None:
+        high_value = close_value
+    if low_value is None:
+        low_value = close_value
+
+    levels = []
+    near_levels = []
+    touched_levels = []
+    bounce_levels = []
+    obstacle_levels = []
+    critical_near_levels = []
+    critical_touched_levels = []
+    critical_bounce_levels = []
+    critical_obstacle_levels = []
+    nearest_record = None
+    normalized_side = normalize_side(side)
+
+    for level_label, level in level_values.items():
+        output_label = _previous_anchor_sr_output_label(level_label)
+        signed_distance_atr = (close_value - float(level)) / float(atr_value)
+        abs_distance_atr = abs(signed_distance_atr)
+        directional_distance_atr = _directional_atr_distance(close_value, float(level), atr_value, normalized_side)
+        touched = (
+            (low_value - (PREVIOUS_ANCHOR_SR_TOUCH_ATR * atr_value)) <= float(level)
+            <= (high_value + (PREVIOUS_ANCHOR_SR_TOUCH_ATR * atr_value))
+        )
+        event_bounce = level_label in event_levels
+        bounce = bool(event_bounce)
+        if not bounce and touched:
+            if normalized_side == "SHORT":
+                bounce = close_value <= float(level)
+            else:
+                bounce = close_value >= float(level)
+        near = abs_distance_atr <= PREVIOUS_ANCHOR_SR_NEAR_ATR
+        obstacle = (
+            directional_distance_atr is not None
+            and directional_distance_atr <= PRIORITY_PREV_AVWAP_WARN_ATR
+        )
+        critical = level_label in PREVIOUS_ANCHOR_CRITICAL_SR_LABELS
+        record = {
+            "label": output_label,
+            "level_label": level_label,
+            "level": float(level),
+            "signed_distance_atr": float(signed_distance_atr),
+            "abs_distance_atr": float(abs_distance_atr),
+            "directional_distance_atr": None if directional_distance_atr is None else float(directional_distance_atr),
+            "near": bool(near),
+            "touched": bool(touched),
+            "bounce": bool(bounce),
+            "obstacle": bool(obstacle),
+            "critical": bool(critical),
+        }
+        levels.append(record)
+        if nearest_record is None or abs_distance_atr < nearest_record["abs_distance_atr"]:
+            nearest_record = record
+        if near:
+            near_levels.append(output_label)
+            if critical:
+                critical_near_levels.append(output_label)
+        if touched:
+            touched_levels.append(output_label)
+            if critical:
+                critical_touched_levels.append(output_label)
+        if bounce:
+            bounce_levels.append(output_label)
+            if critical:
+                critical_bounce_levels.append(output_label)
+        if obstacle:
+            obstacle_entry = {
+                "label": output_label,
+                "level": float(level),
+                "atr_distance": float(directional_distance_atr),
+                "critical": bool(critical),
+            }
+            obstacle_levels.append(obstacle_entry)
+            if critical:
+                critical_obstacle_levels.append(obstacle_entry)
+
+    levels.sort(key=lambda item: item["abs_distance_atr"])
+    obstacle_levels.sort(key=lambda item: item["atr_distance"])
+    critical_obstacle_levels.sort(key=lambda item: item["atr_distance"])
+    note_parts = []
+    if "PREV_AVWAPE" in bounce_levels:
+        note_parts.append(f"Previous AVWAPE bounce +{PRIORITY_PREVIOUS_AVWAPE_BOUNCE_SCORE_BONUS}")
+    if critical_obstacle_levels:
+        note_parts.append(f"Critical previous S/R ahead: {_format_obstacle_labels(critical_obstacle_levels)}")
+    elif obstacle_levels:
+        note_parts.append(f"Previous S/R ahead: {_format_obstacle_labels(obstacle_levels)}")
+    if critical_near_levels:
+        note_parts.append(f"Near critical previous S/R: {', '.join(critical_near_levels[:4])}")
+
+    return {
+        "levels": levels,
+        "nearest_level": nearest_record.get("label", "") if nearest_record else "",
+        "nearest_distance_atr": nearest_record.get("abs_distance_atr") if nearest_record else None,
+        "near_levels": sorted(set(near_levels)),
+        "touched_levels": sorted(set(touched_levels)),
+        "bounce_levels": sorted(set(bounce_levels)),
+        "obstacle_levels": obstacle_levels,
+        "critical_near_levels": sorted(set(critical_near_levels)),
+        "critical_touched_levels": sorted(set(critical_touched_levels)),
+        "critical_bounce_levels": sorted(set(critical_bounce_levels)),
+        "critical_obstacle_levels": critical_obstacle_levels,
+        "previous_avwape_bounce": "PREV_AVWAPE" in bounce_levels,
+        "previous_avwape_near": any(item.get("label") == "PREV_AVWAPE" and item.get("near") for item in levels),
+        "previous_avwape_distance_atr": next(
+            (item.get("signed_distance_atr") for item in levels if item.get("label") == "PREV_AVWAPE"),
+            None,
+        ),
+        "note": " | ".join(note_parts),
+    }
 
 
 def _find_trendline_pivots(df: pd.DataFrame, price_col: str, mode: str, window: int = PRIORITY_TRENDLINE_PIVOT_WINDOW):
@@ -13177,37 +14576,71 @@ def assess_priority_directional_obstacles(
     prev_anchor_obstacles = []
     prev_avwap_obstacles = []
     prev_band_obstacles = []
+    prev_anchor_critical_obstacles = []
+    prev_anchor_measurement_obstacles = []
     prev_anchor_penalty = 0
-    if previous_anchor_meta:
-        prev_levels = [("PREV_AVWAPE", previous_anchor_meta.get("vwap"))]
-        prev_bands = previous_anchor_meta.get("bands", {}) or {}
-        prev_levels.extend(
-            [
-                ("PREV_UPPER_1", prev_bands.get("UPPER_1")),
-                ("PREV_LOWER_1", prev_bands.get("LOWER_1")),
-            ]
-        )
+    current_anchor_obstacles = []
+    current_anchor_penalty = 0
+    normalized_side = normalize_side(side)
+    if current_anchor_meta:
+        current_bands = current_anchor_meta.get("bands", {}) if isinstance(current_anchor_meta.get("bands"), dict) else {}
+        current_first_label = "UPPER_1" if normalized_side == "LONG" else "LOWER_1"
+        current_first_level = current_bands.get(current_first_label)
+        atr_distance = _directional_atr_distance(last_close, current_first_level, atr20, normalized_side)
+        if atr_distance is not None and atr_distance <= PREVIOUS_ANCHOR_SR_NEAR_ATR:
+            obstacle = {
+                "label": f"CURRENT_{current_first_label}",
+                "level_label": current_first_label,
+                "level": float(current_first_level),
+                "atr_distance": float(atr_distance),
+                "critical": True,
+            }
+            current_anchor_obstacles.append(obstacle)
+            current_anchor_penalty = PRIORITY_PREVIOUS_CRITICAL_SR_WARN_PENALTY
 
-        for label, level in prev_levels:
+    if previous_anchor_meta:
+        prev_levels = [
+            (
+                _previous_anchor_sr_output_label(level_label),
+                level_label,
+                level,
+                level_label in PREVIOUS_ANCHOR_CRITICAL_SR_LABELS,
+            )
+            for level_label, level in _previous_anchor_sr_level_values(previous_anchor_meta).items()
+        ]
+
+        for label, level_label, level, critical in prev_levels:
             atr_distance = _directional_atr_distance(last_close, level, atr20, side)
             if atr_distance is None or atr_distance > PRIORITY_PREV_AVWAP_WARN_ATR:
                 continue
             obstacle = {
                 "label": label,
+                "level_label": level_label,
                 "level": float(level),
                 "atr_distance": float(atr_distance),
+                "critical": bool(critical),
             }
             prev_anchor_obstacles.append(obstacle)
             if label == "PREV_AVWAPE":
                 prev_avwap_obstacles.append(obstacle)
             else:
                 prev_band_obstacles.append(obstacle)
-            if atr_distance <= 1.0:
-                prev_anchor_penalty += 10
-            elif atr_distance <= 2.0:
-                prev_anchor_penalty += 6
+            if critical:
+                prev_anchor_critical_obstacles.append(obstacle)
+                if atr_distance <= PREVIOUS_ANCHOR_SR_NEAR_ATR:
+                    prev_anchor_penalty += PRIORITY_PREVIOUS_CRITICAL_SR_NEAR_PENALTY
+                elif atr_distance <= 1.0:
+                    prev_anchor_penalty += PRIORITY_PREVIOUS_CRITICAL_SR_WARN_PENALTY
+                else:
+                    prev_anchor_penalty += PRIORITY_PREVIOUS_CRITICAL_SR_FAR_PENALTY
             else:
-                prev_anchor_penalty += 3
+                prev_anchor_measurement_obstacles.append(obstacle)
+                if atr_distance <= 1.0:
+                    prev_anchor_penalty += PRIORITY_PREVIOUS_NONCRITICAL_SR_NEAR_PENALTY
+                else:
+                    prev_anchor_penalty += PRIORITY_PREVIOUS_NONCRITICAL_SR_WARN_PENALTY
+
+        prev_anchor_penalty = min(prev_anchor_penalty, PRIORITY_PREVIOUS_ANCHOR_MAX_SCORE_PENALTY)
 
     directional_rejection = assess_directional_rejection_candle(
         daily_rows=daily_rows,
@@ -13218,6 +14651,12 @@ def assess_priority_directional_obstacles(
         current_anchor_meta=current_anchor_meta,
         previous_anchor_meta=previous_anchor_meta,
     )
+    adverse_entry_candle = assess_adverse_entry_candle(
+        daily_rows=daily_rows,
+        last_trade_date=last_trade_date,
+        side=side,
+        atr20=atr20,
+    )
 
     ranking_blocked = bool(sma_blockers)
     notes = []
@@ -13227,12 +14666,21 @@ def assess_priority_directional_obstacles(
         notes.append(f"SMAs ahead: {_format_obstacle_labels(sma_obstacles)}")
     if prev_avwap_obstacles:
         notes.append(f"Prev AVWAPE ahead: {_format_obstacle_labels(prev_avwap_obstacles)}")
-    if prev_band_obstacles:
+    if prev_anchor_critical_obstacles:
+        notes.append(f"Critical previous S/R ahead: {_format_obstacle_labels(prev_anchor_critical_obstacles)}")
+    elif prev_band_obstacles:
         notes.append(f"Prev stdev bands ahead: {_format_obstacle_labels(prev_band_obstacles)}")
+    if current_anchor_obstacles:
+        notes.append(f"Current first-dev ahead: {_format_obstacle_labels(current_anchor_obstacles)}")
     if directional_rejection.get("directional_rejection_note"):
         notes.append(
             f"{directional_rejection['directional_rejection_note']} "
             f"(-{int(directional_rejection.get('directional_rejection_penalty', 0) or 0)})"
+        )
+    if adverse_entry_candle.get("adverse_entry_candle_note"):
+        notes.append(
+            f"{adverse_entry_candle['adverse_entry_candle_note']} "
+            f"(-{PRIORITY_ADVERSE_REJECTION_SCORE_PENALTY})"
         )
 
     return {
@@ -13240,14 +14688,22 @@ def assess_priority_directional_obstacles(
         "ranking_block_reason": _format_obstacle_labels(sma_blockers) if ranking_blocked else "",
         "sma_obstacles": sma_obstacles,
         "sma_blockers": sma_blockers,
+        "current_anchor_obstacles": current_anchor_obstacles,
+        "current_first_dev_obstacle": bool(current_anchor_obstacles),
         "previous_anchor_obstacles": prev_anchor_obstacles,
+        "previous_anchor_critical_obstacles": prev_anchor_critical_obstacles,
+        "previous_anchor_measurement_obstacles": prev_anchor_measurement_obstacles,
+        "previous_anchor_critical_obstacle": bool(prev_anchor_critical_obstacles),
         "previous_anchor_path_clear": bool(previous_anchor_meta) and not prev_anchor_obstacles,
         "score_penalty": (
             sma_penalty
+            + current_anchor_penalty
             + prev_anchor_penalty
             + int(directional_rejection.get("directional_rejection_penalty", 0) or 0)
+            + (PRIORITY_ADVERSE_REJECTION_SCORE_PENALTY if adverse_entry_candle.get("adverse_entry_candle") else 0)
         ),
         "score_penalty_sma": sma_penalty,
+        "score_penalty_current_anchor": current_anchor_penalty,
         "score_penalty_previous_anchor": prev_anchor_penalty,
         "score_penalty_directional_rejection": int(
             directional_rejection.get("directional_rejection_penalty", 0) or 0
@@ -13256,6 +14712,11 @@ def assess_priority_directional_obstacles(
         "directional_rejection_levels": list(directional_rejection.get("directional_rejection_levels") or []),
         "directional_rejection_range_ratio": directional_rejection.get("directional_rejection_range_ratio"),
         "directional_rejection_atr_ratio": directional_rejection.get("directional_rejection_atr_ratio"),
+        "adverse_entry_candle": bool(adverse_entry_candle.get("adverse_entry_candle")),
+        "adverse_entry_candle_note": adverse_entry_candle.get("adverse_entry_candle_note", ""),
+        "adverse_entry_wick_ratio": adverse_entry_candle.get("adverse_entry_wick_ratio"),
+        "adverse_entry_close_position": adverse_entry_candle.get("adverse_entry_close_position"),
+        "adverse_entry_range_atr": adverse_entry_candle.get("adverse_entry_range_atr"),
         "ranking_note": " | ".join(notes),
     }
 
@@ -13377,10 +14838,26 @@ def refine_priority_rows_with_directional_filters(
         symbol_entry["priority_ranking_note"] = row.get("ranking_note", "")
         symbol_entry["priority_sma_levels"] = sma_levels
         symbol_entry["priority_sma_obstacles"] = list(row.get("sma_obstacles") or [])
+        symbol_entry["priority_current_anchor_obstacles"] = list(row.get("current_anchor_obstacles") or [])
+        symbol_entry["priority_current_first_dev_obstacle"] = bool(row.get("current_first_dev_obstacle"))
         symbol_entry["priority_previous_anchor_obstacles"] = list(row.get("previous_anchor_obstacles") or [])
+        symbol_entry["priority_previous_anchor_critical_obstacles"] = list(
+            row.get("previous_anchor_critical_obstacles") or []
+        )
+        symbol_entry["priority_previous_anchor_critical_obstacle"] = bool(
+            row.get("previous_anchor_critical_obstacle")
+        )
+        symbol_entry["priority_previous_anchor_score_penalty"] = int(
+            row.get("score_penalty_previous_anchor", 0) or 0
+        )
         symbol_entry["priority_previous_anchor_path_clear"] = bool(row.get("previous_anchor_path_clear"))
         symbol_entry["priority_directional_rejection_penalty"] = int(row.get("score_penalty_directional_rejection", 0) or 0)
         symbol_entry["priority_directional_rejection_note"] = row.get("directional_rejection_note", "")
+        symbol_entry["priority_adverse_entry_candle"] = bool(row.get("adverse_entry_candle"))
+        symbol_entry["priority_adverse_entry_candle_note"] = row.get("adverse_entry_candle_note", "")
+        symbol_entry["priority_adverse_entry_wick_ratio"] = row.get("adverse_entry_wick_ratio")
+        symbol_entry["priority_adverse_entry_close_position"] = row.get("adverse_entry_close_position")
+        symbol_entry["priority_adverse_entry_range_atr"] = row.get("adverse_entry_range_atr")
         symbol_entry["priority_trendline_candidate"] = row.get("trendline_candidate")
         symbol_entry["priority_trendline_note"] = row.get("trendline_note", "")
         symbol_entry["priority_trendline_within_alert_range"] = bool(row.get("trendline_within_alert_range"))
@@ -13474,9 +14951,11 @@ def _has_countertrend_confirmation(row: dict, symbol_entry: dict | None = None) 
     fresh_trigger = bool(
         row.get("breakout_5d")
         or row.get("previous_day_range_break")
+        or row.get("previous_day_range_intraday_break")
         or row.get("trendline_break_recent")
         or row.get("post_earnings_break_intraday")
         or row.get("post_earnings_break_close")
+        or row.get("top_pattern_entry")
         or symbol_entry.get("bouncebot_relevant_focus_hit_today")
         or row.get("bouncebot_relevant_focus_hit_today")
     )
@@ -13563,7 +15042,13 @@ def _priority_rejection_score_cap(row: dict) -> tuple[float | None, str]:
     if any(_coerce_float(item.get("atr_distance")) is not None and float(item["atr_distance"]) <= 2.5 for item in sma_obstacles if isinstance(item, dict)):
         caps.append(PRIORITY_REJECTION_CAP_SMA_OBSTACLE)
         notes.append("nearby SMA obstacle")
-    if int(row.get("first_dev_chop_penalty", 0) or 0) >= PRIORITY_FIRST_DEV_CHOP_PENALTY:
+    if (
+        int(row.get("first_dev_chop_penalty", 0) or 0) >= PRIORITY_FIRST_DEV_CHOP_PENALTY
+        and not (
+            _priority_is_mid_earnings_swing_retest_ready(row)
+            and _priority_has_range_break_confirmation(row)
+        )
+    ):
         caps.append(PRIORITY_REJECTION_CAP_FIRST_DEV_CHOP)
         notes.append("first-dev chop/failure")
     if bool(row.get("compression_flag")) and int(row.get("compression_penalty", 0) or 0) >= PRIORITY_COMPRESSION_SCORE_PENALTY_SEVERE:
@@ -13575,6 +15060,9 @@ def _priority_rejection_score_cap(row: dict) -> tuple[float | None, str]:
     ):
         caps.append(PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND)
         notes.append("repeated 2nd-dev tests")
+    if row.get("adverse_entry_candle"):
+        caps.append(PRIORITY_REJECTION_CAP_ADVERSE_CANDLE)
+        notes.append("adverse rejection candle")
     if _priority_is_side_opposite_day(row):
         caps.append(PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY)
         notes.append(_priority_side_opposite_day_note(row))
@@ -13672,20 +15160,114 @@ def _priority_is_actionable_avwap_breakout(row: dict) -> bool:
     return False
 
 
-def _priority_is_preferred_custom_setup(row: dict) -> bool:
+def _priority_is_sma_breakout_trigger_confirmed(row: dict) -> bool:
+    if str(row.get("setup_family") or "") != SMA_BREAKOUT_FAMILY:
+        return False
+    if not row.get("sma_breakout_confirmed"):
+        return False
+    if (
+        "sma_breakout_higher_high_confirmed" not in row
+        and "sma_breakout_previous_day_high_break" not in row
+    ):
+        return True
+    return bool(
+        row.get("sma_breakout_higher_high_confirmed")
+        or row.get("sma_breakout_previous_day_high_break")
+    )
+
+
+def _priority_has_range_break_confirmation(row: dict) -> bool:
+    return bool(
+        row.get("previous_day_range_break")
+        or row.get("sma_breakout_previous_day_high_break")
+        or row.get("sma_breakout_higher_high_confirmed")
+    )
+
+
+def _priority_is_swing_entry_band_zone(row: dict) -> bool:
+    side = normalize_side(row.get("side", ""))
+    band_zone = _priority_current_band_zone(row)
+    if side == "LONG":
+        return band_zone in {"VWAP to UPPER_1", "UPPER_1 to UPPER_2"}
+    if side == "SHORT":
+        return band_zone in {"VWAP to LOWER_1", "LOWER_1 to LOWER_2"}
+    return False
+
+
+def _priority_is_mid_earnings_swing_retest_ready(row: dict) -> bool:
     setup_family = str(row.get("setup_family") or "")
-    if setup_family in {
+    if setup_family not in {
         MID_EARNINGS_EMA15_RETEST_FAMILY,
         MID_EARNINGS_EMA21_RETEST_FAMILY,
         MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
-        "extreme_move_retest",
-        SMA_BREAKOUT_FAMILY,
     }:
-        return True
+        return False
+    if not _priority_is_swing_entry_band_zone(row):
+        return False
+    if not _priority_has_strength_confirmation(row):
+        return False
+    return bool(
+        row.get("mid_earnings_ema15_trigger")
+        or row.get("mid_earnings_first_dev_trigger")
+    )
+
+
+def _priority_is_sma_breakout_swing_ready(row: dict) -> bool:
+    if not _priority_is_sma_breakout_trigger_confirmed(row):
+        return False
+    if not _priority_has_range_break_confirmation(row):
+        return False
+    if not _priority_is_swing_entry_band_zone(row):
+        return False
+    return str(row.get("sma_breakout_retest_level") or "").strip().upper() == "EMA_15"
+
+
+def _priority_is_preferred_swing_focus(row: dict) -> bool:
+    setup_family = str(row.get("setup_family") or "")
+    if setup_family in {
+        MID_EARNINGS_EMA15_RETEST_FAMILY,
+        MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
+    }:
+        return _priority_is_mid_earnings_swing_retest_ready(row)
+    if setup_family == "extreme_move_retest":
+        return str(row.get("extreme_move_retest_level") or "").strip().upper() in PREFERRED_SWING_STDEV_RETEST_LEVELS
     if setup_family == "post_earnings_avwap_bounce":
         return _is_post_earnings_play_ready(row)
+    if setup_family == "previous_avwape_bounce":
+        return bool(row.get("previous_avwape_bounce"))
     if setup_family == "post_earnings_52w_break":
         return _is_post_earnings_play_ready(row) and bool(row.get("post_earnings_break_close"))
+    if setup_family == SMA_BREAKOUT_FAMILY:
+        return _priority_is_sma_breakout_swing_ready(row)
+    if setup_family == TOP_PATTERN_FAMILY:
+        return bool(row.get("top_pattern_entry"))
+    if setup_family == "avwap_retest_followthrough":
+        return bool(
+            row.get("retest_followthrough")
+            and str(row.get("retest_reference_level") or "").strip().upper() in {"AVWAPE", "VWAP"}
+        )
+    if setup_family == "avwap_breakout":
+        levels = _priority_signal_levels(row)
+        return bool(
+            _priority_is_actionable_avwap_breakout(row)
+            and (
+                row.get("retest_followthrough")
+                or bool(levels & {"VWAP"})
+            )
+        )
+    return False
+
+
+def _priority_is_preferred_custom_setup(row: dict) -> bool:
+    setup_family = str(row.get("setup_family") or "")
+    if _priority_is_preferred_swing_focus(row):
+        return True
+    if setup_family in {
+        MID_EARNINGS_EMA21_RETEST_FAMILY,
+    }:
+        return True
+    if setup_family == TOP_PATTERN_FAMILY and row.get("top_pattern_entry"):
+        return True
     return False
 
 
@@ -13761,6 +15343,8 @@ def _priority_should_track_extended_stdev(row: dict) -> bool:
         return False
     if row.get("sma_breakout_confirmed"):
         return False
+    if _priority_is_preferred_swing_focus(row):
+        return False
     if _is_mid_earnings_retest_family(row) and row.get("favorite_signals"):
         return False
     return bool(
@@ -13777,6 +15361,29 @@ def _priority_should_track_sma_breakout(row: dict) -> bool:
         row.get("sma_breakout_watch")
         and not row.get("sma_breakout_confirmed")
         and str(row.get("setup_family") or "") == SMA_BREAKOUT_TRACKING_FAMILY
+    )
+
+
+def _priority_should_track_top_pattern(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return bool(
+        row.get("top_pattern_watch")
+        and not row.get("top_pattern_entry")
+        and str(row.get("setup_family") or "") == TOP_PATTERN_TRACKING_FAMILY
+    )
+
+
+def _priority_is_top_strength_watchlist(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if normalize_side(row.get("side") or "") != "LONG":
+        return False
+    setup_family = str(row.get("setup_family") or "").strip()
+    return bool(
+        setup_family in {TOP_PATTERN_FAMILY, TOP_PATTERN_TRACKING_FAMILY}
+        or row.get("top_pattern_watch")
+        or row.get("top_pattern_entry")
     )
 
 
@@ -13805,6 +15412,52 @@ def _priority_sma_breakout_tracking_rows(rows: list[dict]) -> list[dict]:
     return sorted(tracking_rows, key=sort_key)
 
 
+def _priority_top_pattern_tracking_rows(rows: list[dict]) -> list[dict]:
+    tracking_rows = _priority_unique_rows_by_symbol(
+        [row for row in rows or [] if _priority_should_track_top_pattern(row)]
+    )
+
+    def sort_key(row: dict) -> tuple[float, float, str]:
+        score = _coerce_float(row.get("score"))
+        return_26w = _coerce_float(row.get("top_pattern_weekly_return_26w_pct"))
+        return (
+            -(score if score is not None else -10**9),
+            -(return_26w if return_26w is not None else -10**9),
+            str(row.get("symbol") or ""),
+        )
+
+    return sorted(tracking_rows, key=sort_key)
+
+
+def _priority_top_strength_watchlist_rows(
+    rows: list[dict],
+    *,
+    limit: int = TOP_STRENGTH_WATCHLIST_LIMIT,
+) -> list[dict]:
+    top_rows = _priority_unique_rows_by_symbol(
+        [row for row in rows or [] if _priority_is_top_strength_watchlist(row)]
+    )
+
+    def sort_key(row: dict) -> tuple[int, float, float, float, float, str]:
+        score = _coerce_float(row.get("score"))
+        return_26w = _coerce_float(row.get("top_pattern_weekly_return_26w_pct"))
+        return_13w = _coerce_float(row.get("top_pattern_weekly_return_13w_pct"))
+        rs_score = _coerce_float(row.get("daily_relative_strength_score"))
+        return (
+            0 if row.get("top_pattern_entry") else 1,
+            -(score if score is not None else -10**9),
+            -(return_26w if return_26w is not None else -10**9),
+            -(return_13w if return_13w is not None else -10**9),
+            -(rs_score if rs_score is not None else -10**9),
+            str(row.get("symbol") or ""),
+        )
+
+    sorted_rows = sorted(top_rows, key=sort_key)
+    if limit <= 0:
+        return sorted_rows
+    return sorted_rows[: int(limit)]
+
+
 def apply_final_priority_buckets(
     priority_rows: list[dict],
     ai_state: dict,
@@ -13820,7 +15473,11 @@ def apply_final_priority_buckets(
     def _classify_priority_bucket(row: dict | None) -> tuple[str, bool, bool]:
         if not row or row.get("ranking_blocked"):
             return "", False, False
-        if _priority_should_track_extended_stdev(row) or _priority_should_track_sma_breakout(row):
+        if (
+            _priority_should_track_extended_stdev(row)
+            or _priority_should_track_sma_breakout(row)
+            or _priority_should_track_top_pattern(row)
+        ):
             return "", False, False
         favorite_candidate = (
             (
@@ -13853,14 +15510,17 @@ def apply_final_priority_buckets(
         if row:
             _enrich_priority_bucket_context(row, symbol_entry)
         priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_priority_bucket(row)
+        preferred_swing_focus = bool(row and _priority_is_preferred_swing_focus(row))
 
         symbol_entry["priority_bucket"] = priority_bucket
         symbol_entry["is_favorite_setup"] = is_favorite_setup
         symbol_entry["is_near_favorite_zone"] = is_near_favorite_zone
+        symbol_entry["preferred_swing_focus"] = preferred_swing_focus
         if row:
             row["priority_bucket"] = priority_bucket
             row["is_favorite_setup"] = is_favorite_setup
             row["is_near_favorite_zone"] = is_near_favorite_zone
+            row["preferred_swing_focus"] = preferred_swing_focus
 
         feature_row = feature_rows_by_symbol.get(symbol)
         if row and feature_row is not None:
@@ -13868,6 +15528,7 @@ def apply_final_priority_buckets(
             feature_row["priority_bucket"] = priority_bucket
             feature_row["is_favorite_setup"] = is_favorite_setup
             feature_row["is_near_favorite_zone"] = is_near_favorite_zone
+            feature_row["preferred_swing_focus"] = preferred_swing_focus
 
     for record in csv_rows:
         row = priority_map.get(record.get("symbol"))
@@ -13875,6 +15536,7 @@ def apply_final_priority_buckets(
         record["priority_bucket"] = priority_bucket
         record["is_favorite_setup"] = is_favorite_setup
         record["is_near_favorite_zone"] = is_near_favorite_zone
+        record["preferred_swing_focus"] = bool(row and _priority_is_preferred_swing_focus(row))
 
 def _priority_setup_family_label(setup_family: str) -> str:
     raw = str(setup_family or "general").strip() or "general"
@@ -13888,6 +15550,7 @@ def _priority_setup_family_label(setup_family: str) -> str:
         "2nd": "2nd",
         "1stdev": "1st-dev",
         "stdev": "stdev",
+        "top": "TOP",
     }
     return " ".join(replacements.get(part.lower(), part) for part in text.split())
 
@@ -13954,11 +15617,60 @@ def _priority_has_specific_trigger(row: dict) -> bool:
     setup_family = str(row.get("setup_family") or "").strip()
     return bool(
         row.get("favorite_signals")
-        or row.get("favorite_zone")
+        or row.get("previous_avwape_bounce")
+        or _priority_is_preferred_swing_focus(row)
+        or row.get("top_pattern_entry")
         or setup_family.startswith("mid_earnings_")
-        or setup_family == "extreme_move_retest"
-        or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
+        or row.get("retest_followthrough")
     )
+
+
+def _priority_has_buying_interest_confirmation(row: dict) -> bool:
+    return bool(
+        row.get("previous_day_range_break")
+        or row.get("previous_day_range_intraday_break")
+        or row.get("vwap_range_confirmation")
+        or row.get("breakout_5d")
+        or row.get("trendline_break_recent")
+        or row.get("post_earnings_break_intraday")
+        or row.get("post_earnings_break_close")
+        or row.get("sma_breakout_previous_day_high_break")
+        or row.get("sma_breakout_higher_high_confirmed")
+        or row.get("top_pattern_entry")
+    )
+
+
+def _priority_has_high_conviction_entry(row: dict) -> bool:
+    setup_family = str(row.get("setup_family") or "")
+    if _is_post_earnings_play_ready(row):
+        return bool(
+            row.get("post_earnings_break_intraday")
+            or row.get("post_earnings_break_close")
+            or row.get("previous_day_range_intraday_break")
+            or row.get("previous_day_range_break")
+        )
+    if setup_family == TOP_PATTERN_FAMILY:
+        return bool(row.get("top_pattern_entry"))
+    if setup_family == SMA_BREAKOUT_FAMILY:
+        return _priority_is_sma_breakout_swing_ready(row)
+    if setup_family in {
+        MID_EARNINGS_EMA15_RETEST_FAMILY,
+        MID_EARNINGS_EMA21_RETEST_FAMILY,
+        MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
+    }:
+        return bool(
+            _priority_is_mid_earnings_swing_retest_ready(row)
+            and _priority_has_buying_interest_confirmation(row)
+        )
+    if setup_family == "avwap_retest_followthrough":
+        return bool(row.get("retest_followthrough") and _priority_is_swing_entry_band_zone(row))
+    if setup_family == "previous_avwape_bounce":
+        return bool(row.get("previous_avwape_bounce") and _priority_has_buying_interest_confirmation(row))
+    if setup_family == "extreme_move_retest":
+        return bool(_priority_is_preferred_swing_focus(row) and _priority_has_buying_interest_confirmation(row))
+    if setup_family == "avwap_breakout":
+        return bool(_priority_is_actionable_avwap_breakout(row) and _priority_has_buying_interest_confirmation(row))
+    return bool(_priority_has_specific_trigger(row) and _priority_has_buying_interest_confirmation(row))
 
 
 def _priority_is_high_conviction(row: dict) -> bool:
@@ -13973,9 +15685,35 @@ def _priority_is_high_conviction(row: dict) -> bool:
         return False
     if not _priority_has_specific_trigger(row):
         return False
+    if not _priority_has_high_conviction_entry(row):
+        return False
     if str(row.get("setup_family") or "").startswith("post_earnings_") and not row.get("favorite_zone"):
         return False
     if row.get("short_near_favorite_gate_note"):
+        return False
+    if row.get("adverse_entry_candle"):
+        return False
+    if (
+        bool(row.get("compression_flag"))
+        and int(row.get("compression_penalty", 0) or 0) >= PRIORITY_COMPRESSION_SCORE_PENALTY_SEVERE
+        and not row.get("previous_day_range_break")
+    ):
+        return False
+    if (
+        _priority_has_first_dev_chop(row)
+        and not _priority_has_buying_interest_confirmation(row)
+    ):
+        return False
+    if (
+        row.get("previous_anchor_critical_obstacle")
+        and not _priority_has_buying_interest_confirmation(row)
+    ):
+        return False
+    if (
+        row.get("current_first_dev_obstacle")
+        and row.get("previous_anchor_critical_obstacle")
+        and not row.get("previous_day_range_break")
+    ):
         return False
     return True
 
@@ -14051,6 +15789,8 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("short gate", "short_near_favorite_gate_note"),
         ("clean zone", "clean_first_zone_score_note"),
         ("market regime", "market_regime_score_note"),
+        ("D1 relative strength", "daily_relative_strength_note"),
+        ("prev AVWAPE bounce", "previous_avwape_bounce_note"),
         ("score cap", "rejection_score_cap_note"),
     )
     for label, key in note_keys:
@@ -14063,6 +15803,8 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("extension", "extension_note"),
         ("day direction", "side_alignment_note"),
         ("prev day", "previous_day_range_note"),
+        ("prev day intraday", "previous_day_range_intraday_note"),
+        ("adverse candle", "adverse_entry_candle_note"),
         ("first dev", "first_dev_note"),
         ("extreme move", "extreme_move_note"),
         ("compression", "compression_note"),
@@ -14071,6 +15813,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("post earnings", "post_earnings_note"),
         ("mid earnings", "mid_earnings_note"),
         ("SMA breakout", "sma_breakout_note"),
+        ("TOP pattern", "top_pattern_note"),
     )
     for label, key in setup_note_keys:
         value = str(row.get(key) or "").strip()
@@ -14109,8 +15852,10 @@ def _priority_bucket_label(bucket: str) -> str:
         "favorite_setup": "favorite",
         "near_favorite_zone": "near-zone",
         "post_earnings_play": "post-earnings",
+        "top_strength_watchlist": "TOP-watch",
         "stdev_retest_tracking": "stdev-track",
         "sma_breakout_tracking": "sma-track",
+        "top_pattern_tracking": "top-track",
     }.get(normalized, normalized or "unbucketed")
 
 
@@ -14130,7 +15875,9 @@ def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None
         symbol = str(row.get("symbol") or "").strip().upper()
         side = normalize_side(row.get("side", ""))
         score = _priority_score_text(row)
-        if _priority_should_track_sma_breakout(row):
+        if _priority_should_track_top_pattern(row):
+            bucket_value = "top_pattern_tracking"
+        elif _priority_should_track_sma_breakout(row):
             bucket_value = "sma_breakout_tracking"
         elif _priority_should_track_extended_stdev(row):
             bucket_value = "stdev_retest_tracking"
@@ -14162,6 +15909,51 @@ def _best_swing_trade_sort_key(row: dict) -> tuple[float, int, int, str]:
     )
 
 
+def _priority_is_best_swing_trade_candidate(row: dict) -> bool:
+    setup_family = str(row.get("setup_family") or "")
+    if _is_post_earnings_play_ready(row):
+        signals = set(row.get("favorite_signals") or []) | set(row.get("context_signals") or [])
+        return bool(
+            row.get("post_earnings_break_close")
+            or row.get("post_earnings_break_intraday")
+            or POST_EARNINGS_BOUNCE_SIGNAL in signals
+        )
+    if setup_family in {
+        MID_EARNINGS_EMA15_RETEST_FAMILY,
+        MID_EARNINGS_EMA21_RETEST_FAMILY,
+        MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
+    }:
+        return _priority_is_mid_earnings_swing_retest_ready(row)
+    if setup_family == SMA_BREAKOUT_FAMILY:
+        return _priority_is_sma_breakout_swing_ready(row)
+    if setup_family == TOP_PATTERN_FAMILY:
+        return bool(
+            row.get("top_pattern_entry")
+            and (
+                row.get("top_pattern_daily_sma50_reclaim")
+                or row.get("top_pattern_daily_sma50_bounce")
+                or row.get("top_pattern_weekly_sma50_entry")
+                or row.get("top_pattern_avwape_retest")
+            )
+        )
+    if setup_family == "avwap_retest_followthrough":
+        return bool(
+            row.get("retest_followthrough")
+            and _priority_is_swing_entry_band_zone(row)
+        )
+    if setup_family == "previous_avwape_bounce":
+        return bool(
+            row.get("previous_avwape_bounce")
+            and _priority_is_swing_entry_band_zone(row)
+            and _priority_has_range_break_confirmation(row)
+        )
+    if setup_family == "extreme_move_retest":
+        return bool(_priority_is_preferred_swing_focus(row) and _priority_has_range_break_confirmation(row))
+    if setup_family == "avwap_breakout":
+        return bool(_priority_is_actionable_avwap_breakout(row) and _priority_has_range_break_confirmation(row))
+    return False
+
+
 def _priority_best_swing_trade_rows(
     rows: list[dict],
     *,
@@ -14182,6 +15974,8 @@ def _priority_best_swing_trade_rows(
             continue
         if not _priority_has_specific_trigger(row):
             continue
+        if not _priority_is_best_swing_trade_candidate(row):
+            continue
         candidates.append(row)
 
     best_rows = []
@@ -14198,6 +15992,8 @@ def _priority_best_swing_trade_rows(
 
 def _best_swing_trade_evidence(row: dict) -> str:
     evidence = []
+    if row.get("preferred_swing_focus"):
+        evidence.append("preferred swing focus")
     if row.get("favorite_signals"):
         evidence.append(
             "signals="
@@ -14209,6 +16005,18 @@ def _best_swing_trade_evidence(row: dict) -> str:
         evidence.append("5d breakout")
     if row.get("previous_day_range_break"):
         evidence.append("prev-day range break")
+    if row.get("vwap_range_confirmation"):
+        if normalize_side(row.get("side", "")) == "SHORT":
+            evidence.append("below VWAP + prev low")
+        else:
+            evidence.append("above VWAP + prev high")
+    if row.get("sma_breakout_confirmation_trigger"):
+        evidence.append(str(row.get("sma_breakout_confirmation_trigger")).replace("_", " "))
+    if row.get("top_pattern_entry"):
+        trigger = str(row.get("top_pattern_entry_trigger") or "TOP entry").replace("_", " ")
+        evidence.append(f"TOP {trigger}")
+    if row.get("daily_relative_strength_note"):
+        evidence.append(str(row.get("daily_relative_strength_note")))
     if int(row.get("setup_type_score_delta", 0) or 0):
         evidence.append(f"setup type {int(row.get('setup_type_score_delta', 0) or 0):+d}")
     if int(row.get("recent_tracker_score_delta", 0) or 0):
@@ -14244,6 +16052,107 @@ def _write_best_swing_trade_rows(handle, title: str, rows: list[dict]) -> None:
         handle.write(f"    evidence: {_best_swing_trade_evidence(row)}\n")
         handle.write(f"    risk: {warning_text}\n")
     handle.write("\n")
+
+
+def _priority_tier_sort_key(row: dict) -> tuple[float, int, int, str]:
+    score = _coerce_float(row.get("score"))
+    tracker_delta = (
+        int(row.get("setup_type_score_delta", 0) or 0)
+        + int(row.get("recent_tracker_score_delta", 0) or 0)
+        + int(row.get("adaptive_score_delta", 0) or 0)
+    )
+    clean_bonus = int(row.get("clean_first_zone_score_bonus", 0) or 0)
+    return (
+        -(score if score is not None else -10**9),
+        -tracker_delta,
+        -clean_bonus,
+        str(row.get("symbol") or ""),
+    )
+
+
+def _priority_partition_tier_rows(
+    *,
+    actionable_rows: list[dict],
+    report_rows: list[dict],
+    high_conviction_rows: list[dict],
+    best_swing_rows: list[dict],
+) -> list[dict]:
+    assigned_symbols: set[str] = set()
+
+    def symbol_for(row: dict) -> str:
+        return str(row.get("symbol") or "").strip().upper()
+
+    def sorted_unique(rows: list[dict]) -> list[dict]:
+        return sorted(_priority_unique_rows_by_symbol(rows), key=_priority_tier_sort_key)
+
+    def take_rows(rows: list[dict]) -> list[dict]:
+        selected = []
+        for row in sorted_unique(rows):
+            symbol = symbol_for(row)
+            if not symbol or symbol in assigned_symbols:
+                continue
+            assigned_symbols.add(symbol)
+            selected.append(row)
+        return selected
+
+    s_rows = take_rows(best_swing_rows + high_conviction_rows)
+    a_rows = take_rows(
+        [
+            row for row in actionable_rows
+            if (
+                row.get("priority_bucket") == "favorite_setup"
+                or row.get("preferred_swing_focus")
+                or _is_post_earnings_play_ready(row)
+            )
+        ]
+    )
+    b_rows = take_rows(report_rows)
+
+    return [
+        {
+            "label": "S Tier",
+            "title": "S Tier - act first",
+            "note": "Cleanest actionable setups now; this is the cream-of-the-crop shortlist.",
+            "rows": s_rows,
+        },
+        {
+            "label": "A Tier",
+            "title": "A Tier - next best",
+            "note": "Strong setups or favorites that are close, but need a little more confirmation or have a small flaw.",
+            "rows": a_rows,
+        },
+        {
+            "label": "B Tier",
+            "title": "B Tier - stalk list",
+            "note": "Useful watchlist tier: strength/tracking names that can upgrade after the entry actually starts.",
+            "rows": b_rows,
+        },
+    ]
+
+
+def _write_priority_tier_copy_lists(handle, tiers: list[dict]) -> None:
+    handle.write("Cream of the crop copy/paste\n")
+    handle.write("============================\n")
+    for tier in tiers:
+        rows = list(tier.get("rows") or [])
+        handle.write(f"{tier.get('title') or tier.get('label')}\n")
+        handle.write(f"  LONG: {_priority_symbols(rows, 'LONG')}\n")
+        handle.write(f"  SHORT: {_priority_symbols(rows, 'SHORT')}\n")
+        note = str(tier.get("note") or "").strip()
+        if note:
+            handle.write(f"  note: {note}\n")
+    handle.write("\n")
+
+
+def _write_priority_tier_details(handle, tiers: list[dict]) -> None:
+    handle.write("Cream of the crop details\n")
+    handle.write("=========================\n")
+    for tier in tiers:
+        _write_best_swing_trade_rows(
+            handle,
+            str(tier.get("title") or tier.get("label") or "Tier"),
+            list(tier.get("rows") or []),
+        )
 
 
 def _write_priority_detail_rows(handle, title: str, rows: list[dict]) -> None:
@@ -14294,6 +16203,55 @@ def _write_priority_detail_rows(handle, title: str, rows: list[dict]) -> None:
     handle.write("\n")
 
 
+def write_top_strength_watchlist_report(path: Path, rows: list[dict]) -> None:
+    top_rows = _priority_top_strength_watchlist_rows(rows, limit=TOP_STRENGTH_WATCHLIST_LIMIT)
+    buffer = io.StringIO()
+    handle = buffer
+    handle.write("Master AVWAP TOP strength watchlist\n")
+    handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    handle.write(
+        "Long-only leader list. Use this as the TOP/strongest-stock stalking list; "
+        "intraday entry preference is an H1 15EMA touch/reclaim confirmation, plus any D1 50SMA/AVWAPE entry already flagged by Master AVWAP.\n\n"
+    )
+    handle.write("Copy/paste TOP leaders\n")
+    handle.write("======================\n")
+    handle.write(f"LONG: {_priority_symbols(top_rows, 'LONG')}\n")
+    handle.write("SHORT: None\n\n")
+    handle.write("Entry plan\n")
+    handle.write("==========\n")
+    handle.write(
+        "H1 15EMA long entry: prior H1 candle tags/touches H1 EMA15, then the next H1 candle closes back above EMA15. "
+        "Prefer names that are also above VWAP and above the previous day's high.\n\n"
+    )
+    handle.write("TOP leaders\n")
+    handle.write("===========\n")
+    if not top_rows:
+        handle.write("None\n")
+    for rank, row in enumerate(top_rows, start=1):
+        symbol = str(row.get("symbol") or "").strip().upper()
+        status = "ENTRY" if row.get("top_pattern_entry") else "WATCH"
+        entry_trigger = str(row.get("top_pattern_entry_trigger") or "").replace("_", " ") or "waiting for H1 15EMA / D1 50SMA / AVWAPE entry"
+        return_26w = _coerce_float(row.get("top_pattern_weekly_return_26w_pct"))
+        return_13w = _coerce_float(row.get("top_pattern_weekly_return_13w_pct"))
+        rs_score = _coerce_float(row.get("daily_relative_strength_score"))
+        return_text = []
+        if return_26w is not None:
+            return_text.append(f"26w={return_26w:+.1f}%")
+        if return_13w is not None:
+            return_text.append(f"13w={return_13w:+.1f}%")
+        if rs_score is not None:
+            return_text.append(f"D1vsSPY={rs_score:+.2f}")
+        details = " | ".join(return_text) or "strength metrics n/a"
+        note = str(row.get("top_pattern_note") or "").strip()
+        handle.write(
+            f"{rank:>2}. {symbol:<6} {status:<5} score={_priority_score_text(row):<5} "
+            f"{details} | trigger={entry_trigger}\n"
+        )
+        if note:
+            handle.write(f"    note: {note}\n")
+    _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
+
+
 def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     favorites = sorted(
         [
@@ -14316,36 +16274,49 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
+    top_pattern_tracking_rows = _priority_top_pattern_tracking_rows(priority_rows)
+    top_strength_rows = _priority_top_strength_watchlist_rows(priority_rows)
     sma_breakout_tracking_rows = _priority_sma_breakout_tracking_rows(priority_rows)
     stdev_tracking_rows = _priority_stdev_tracking_rows(priority_rows)
     actionable_priority_rows = _priority_unique_rows_by_symbol(
         favorites + watchlist + post_earnings_rows
     )
     report_rows = _priority_unique_rows_by_symbol(
-        actionable_priority_rows + sma_breakout_tracking_rows + stdev_tracking_rows
+        actionable_priority_rows + top_pattern_tracking_rows + sma_breakout_tracking_rows + stdev_tracking_rows
     )
     high_conviction_rows = _priority_high_conviction_rows(actionable_priority_rows)
     best_swing_rows = _priority_best_swing_trade_rows(actionable_priority_rows)
+    priority_tiers = _priority_partition_tier_rows(
+        actionable_rows=actionable_priority_rows,
+        report_rows=report_rows,
+        high_conviction_rows=high_conviction_rows,
+        best_swing_rows=best_swing_rows,
+    )
 
     buffer = io.StringIO()
     handle = buffer
     handle.write("Master AVWAP priority setups\n")
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     handle.write(
-        "Focus: generalized high-quality setups across AVWAP breaks, post-earnings gap structures, and mid-earnings continuation retests\n\n"
+        "Focus: preferred swings across TOP weekly leaders, 2nd-stdev 15EMA/1st-dev retests, AVWAPE pullback bounces, post-earnings 52w breaks, and SMA breakouts after a prior-day high break\n\n"
     )
     _write_priority_data_freshness(handle, report_rows)
+    _write_priority_tier_copy_lists(handle, priority_tiers)
+    _write_priority_tier_details(handle, priority_tiers)
+
     handle.write("Copy/paste lists\n")
     handle.write("================\n")
     _write_priority_copy_lists(handle, "High conviction shortlist", high_conviction_rows)
     _write_priority_copy_lists(handle, "Best swing trades today", best_swing_rows)
+    _write_priority_copy_lists(handle, "TOP strength watchlist (long only)", top_strength_rows)
     _write_priority_copy_lists(handle, "Favorite setups", favorites)
     _write_priority_copy_lists(handle, "Near favorite zones", watchlist)
+    _write_priority_copy_lists(handle, "TOP pattern tracking", top_pattern_tracking_rows)
     _write_priority_copy_lists(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
     _write_priority_copy_lists(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
-    _write_priority_setup_copy_lists(handle, "By setup type", actionable_priority_rows)
 
     _write_best_swing_trade_rows(handle, "Best swing trades today", best_swing_rows)
+    _write_priority_detail_rows(handle, "TOP strength watchlist (long only)", top_strength_rows)
     _write_priority_score_rankings(handle, "Overall score rankings", actionable_priority_rows)
 
     handle.write("Detailed setup notes\n")
@@ -14354,8 +16325,12 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     _write_priority_detail_rows(handle, "Best current favorite setups", favorites)
     _write_priority_detail_rows(handle, "Near favorite zones", watchlist)
     _write_priority_detail_rows(handle, "Post earnings plays", post_earnings_rows)
+    _write_priority_detail_rows(handle, "TOP pattern tracking", top_pattern_tracking_rows)
     _write_priority_detail_rows(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
     _write_priority_detail_rows(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
+    handle.write("Appendix: setup-type copy lists\n")
+    handle.write("===============================\n")
+    _write_priority_setup_copy_lists(handle, "By setup type", actionable_priority_rows)
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
@@ -14374,6 +16349,11 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         row for row in ranked_rows
         if _is_post_earnings_play_ready(row)
     ]
+    top_strength_rows = _priority_top_strength_watchlist_rows(
+        ranked_rows,
+        limit=TOP_STRENGTH_WATCHLIST_FOCUS_LIMIT,
+    )
+    top_pattern_tracking_rows = _priority_top_pattern_tracking_rows(ranked_rows)
     sma_breakout_tracking_rows = _priority_sma_breakout_tracking_rows(ranked_rows)
     stdev_tracking_rows = _priority_stdev_tracking_rows(ranked_rows)
 
@@ -14418,6 +16398,9 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "previous_day_range_break": bool(row.get("previous_day_range_break")),
             "previous_day_range_break_bonus": int(row.get("previous_day_range_break_bonus", 0) or 0),
             "previous_day_range_note": row.get("previous_day_range_note") or "",
+            "vwap_range_confirmation": bool(row.get("vwap_range_confirmation")),
+            "vwap_range_confirmation_bonus": int(row.get("vwap_range_confirmation_bonus", 0) or 0),
+            "vwap_range_confirmation_note": row.get("vwap_range_confirmation_note") or "",
             "current_day_open": _coerce_float(row.get("current_day_open")),
             "previous_close": _coerce_float(row.get("previous_close")),
             "current_day_change_pct": _coerce_float(row.get("current_day_change_pct")),
@@ -14461,6 +16444,7 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "mid_earnings_note": row.get("mid_earnings_note") or "",
             "sma_breakout_watch": bool(row.get("sma_breakout_watch")),
             "sma_breakout_confirmed": bool(row.get("sma_breakout_confirmed")),
+            "preferred_swing_focus": bool(row.get("preferred_swing_focus")),
             "sma_breakout_signal": row.get("sma_breakout_signal") or "",
             "sma_breakout_sma_label": row.get("sma_breakout_sma_label") or "",
             "sma_breakout_sma_period": int(row.get("sma_breakout_sma_period", 0) or 0),
@@ -14470,7 +16454,36 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "sma_breakout_breakout_date": row.get("sma_breakout_breakout_date") or "",
             "sma_breakout_retest_date": row.get("sma_breakout_retest_date") or "",
             "sma_breakout_confirmation_date": row.get("sma_breakout_confirmation_date") or "",
+            "sma_breakout_higher_high_confirmed": bool(row.get("sma_breakout_higher_high_confirmed")),
+            "sma_breakout_previous_day_high_break": bool(row.get("sma_breakout_previous_day_high_break")),
+            "sma_breakout_confirmation_trigger": row.get("sma_breakout_confirmation_trigger") or "",
+            "sma_breakout_latest_high": _coerce_float(row.get("sma_breakout_latest_high")),
+            "sma_breakout_previous_day_high": _coerce_float(row.get("sma_breakout_previous_day_high")),
             "sma_breakout_note": row.get("sma_breakout_note") or "",
+            "top_pattern_watch": bool(row.get("top_pattern_watch")),
+            "top_pattern_entry": bool(row.get("top_pattern_entry")),
+            "top_pattern_signal": row.get("top_pattern_signal") or "",
+            "top_pattern_entry_trigger": row.get("top_pattern_entry_trigger") or "",
+            "top_pattern_entry_triggers": list(row.get("top_pattern_entry_triggers") or []),
+            "top_pattern_entry_level": _coerce_float(row.get("top_pattern_entry_level")),
+            "top_pattern_score_bonus": int(row.get("top_pattern_score_bonus", 0) or 0),
+            "top_pattern_note": row.get("top_pattern_note") or "",
+            "top_pattern_weekly_return_13w_pct": _coerce_float(row.get("top_pattern_weekly_return_13w_pct")),
+            "top_pattern_weekly_return_26w_pct": _coerce_float(row.get("top_pattern_weekly_return_26w_pct")),
+            "top_pattern_weekly_pullback_from_52w_high_pct": _coerce_float(row.get("top_pattern_weekly_pullback_from_52w_high_pct")),
+            "top_pattern_weekly_ema15_hold": bool(row.get("top_pattern_weekly_ema15_hold")),
+            "top_pattern_weekly_ema15_hold_ratio": _coerce_float(row.get("top_pattern_weekly_ema15_hold_ratio")),
+            "top_pattern_weekly_above_sma100": bool(row.get("top_pattern_weekly_above_sma100")),
+            "top_pattern_weekly_sma50_retest_recent": bool(row.get("top_pattern_weekly_sma50_retest_recent")),
+            "top_pattern_daily_sma50_reclaim": bool(row.get("top_pattern_daily_sma50_reclaim")),
+            "top_pattern_daily_sma50_bounce": bool(row.get("top_pattern_daily_sma50_bounce")),
+            "top_pattern_weekly_sma50_entry": bool(row.get("top_pattern_weekly_sma50_entry")),
+            "top_pattern_avwape_retest": bool(row.get("top_pattern_avwape_retest")),
+            "daily_relative_strength_score": _coerce_float(row.get("daily_relative_strength_score")),
+            "daily_relative_strength_bonus": int(row.get("daily_relative_strength_bonus", 0) or 0),
+            "daily_relative_strength_note": row.get("daily_relative_strength_note") or "",
+            "symbol_one_day_return_pct": _coerce_float(row.get("symbol_one_day_return_pct")),
+            "symbol_five_day_return_pct": _coerce_float(row.get("symbol_five_day_return_pct")),
             "extension_note": row.get("extension_note") or "",
             "first_dev_note": row.get("first_dev_note") or "",
             "compression_flag": bool(row.get("compression_flag")),
@@ -14495,9 +16508,17 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         for idx, row in enumerate(high_conviction_rows)
     ]
     post_earnings_entries = [_build_entry(row, "post_earnings_play", idx + 1) for idx, row in enumerate(post_earnings_rows)]
+    top_strength_entries = [
+        _build_entry(row, "top_strength_watchlist", idx + 1)
+        for idx, row in enumerate(top_strength_rows)
+    ]
     sma_breakout_tracking_entries = [
         _build_entry(row, "sma_breakout_tracking", idx + 1)
         for idx, row in enumerate(sma_breakout_tracking_rows)
+    ]
+    top_pattern_tracking_entries = [
+        _build_entry(row, "top_pattern_tracking", idx + 1)
+        for idx, row in enumerate(top_pattern_tracking_rows)
     ]
     stdev_tracking_entries = [
         _build_entry(row, "stdev_retest_tracking", idx + 1)
@@ -14509,6 +16530,8 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         + near_favorites
         + post_earnings_entries
         + high_conviction
+        + top_strength_entries
+        + top_pattern_tracking_entries
         + sma_breakout_tracking_entries
         + stdev_tracking_entries
     ):
@@ -14523,6 +16546,8 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         "favorites": favorites,
         "near_favorite_zones": near_favorites,
         "post_earnings_plays": post_earnings_entries,
+        "top_strength_watchlist": top_strength_entries,
+        "top_pattern_tracking": top_pattern_tracking_entries,
         "sma_breakout_tracking": sma_breakout_tracking_entries,
         "stdev_retest_tracking": stdev_tracking_entries,
         "symbols": symbol_map,
@@ -14630,6 +16655,8 @@ def write_tradingview_report(
         ],
         key=lambda row: (-row["score"], row["symbol"]),
     )
+    top_strength_rows = _priority_top_strength_watchlist_rows(priority_rows)
+    top_pattern_tracking_rows = _priority_top_pattern_tracking_rows(priority_rows)
     stdev_tracking_rows = _priority_stdev_tracking_rows(priority_rows)
 
     def _symbols(rows, side: str) -> str:
@@ -14692,6 +16719,16 @@ def write_tradingview_report(
         handle,
         "Post earnings plays",
         [("LONG", _symbols(post_earnings_rows, "LONG")), ("SHORT", _symbols(post_earnings_rows, "SHORT"))],
+    )
+    _write_block(
+        handle,
+        "TOP strength watchlist",
+        [("LONG", _symbols(top_strength_rows, "LONG")), ("SHORT", "None")],
+    )
+    _write_block(
+        handle,
+        "TOP pattern tracking",
+        [("LONG", _symbols(top_pattern_tracking_rows, "LONG")), ("SHORT", _symbols(top_pattern_tracking_rows, "SHORT"))],
     )
     _write_block(
         handle,
@@ -14814,6 +16851,73 @@ def _build_market_prep_section(
     }
 
 
+def _market_prep_strength_score(row: dict) -> float | None:
+    if not isinstance(row, dict):
+        return None
+    return _coerce_float(row.get("daily_relative_strength_score"))
+
+
+def _market_prep_unique_strength_rows(priority_rows: list[dict] | None) -> list[dict]:
+    best_by_symbol: dict[str, dict] = {}
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        rs_score = _market_prep_strength_score(row)
+        if not symbol or rs_score is None:
+            continue
+        existing = best_by_symbol.get(symbol)
+        if existing is None:
+            best_by_symbol[symbol] = row
+            continue
+        existing_score = _market_prep_strength_score(existing)
+        if existing_score is None or abs(float(rs_score)) > abs(float(existing_score)):
+            best_by_symbol[symbol] = row
+    return list(best_by_symbol.values())
+
+
+def _market_prep_strength_decile_rows(
+    priority_rows: list[dict] | None,
+    *,
+    strongest: bool,
+    fraction: float = MARKET_PREP_STRENGTH_DECILE_FRACTION,
+) -> tuple[list[dict], int]:
+    strength_rows = _market_prep_unique_strength_rows(priority_rows)
+    if not strength_rows:
+        return [], 0
+    fraction = max(0.01, min(1.0, float(fraction or MARKET_PREP_STRENGTH_DECILE_FRACTION)))
+    decile_count = max(1, int(math.ceil(len(strength_rows) * fraction)))
+    ranked = sorted(
+        strength_rows,
+        key=lambda row: (
+            -float(_market_prep_strength_score(row) or 0.0) if strongest else float(_market_prep_strength_score(row) or 0.0),
+            str(row.get("symbol") or ""),
+        ),
+    )
+    return ranked[:decile_count], len(strength_rows)
+
+
+def _market_prep_strength_details(rows: list[dict]) -> list[str]:
+    details = []
+    for row in rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = normalize_side(row.get("side") or "")
+        rs_score = _market_prep_strength_score(row)
+        one_day = _coerce_float(row.get("symbol_one_day_return_pct"))
+        five_day = _coerce_float(row.get("symbol_five_day_return_pct"))
+        score = _coerce_float(row.get("score"))
+        family = _priority_setup_family_label(str(row.get("setup_family") or "general"))
+        rs_text = "n/a" if rs_score is None else f"{float(rs_score):+.2f}"
+        one_day_text = "n/a" if one_day is None else f"{float(one_day):+.1f}%"
+        five_day_text = "n/a" if five_day is None else f"{float(five_day):+.1f}%"
+        score_text = "n/a" if score is None else _priority_score_text(row)
+        details.append(
+            f"{symbol:<6} {side:<5} rs={rs_text:<7} 1d={one_day_text:<7} "
+            f"5d={five_day_text:<7} score={score_text:<5} family={family}"
+        )
+    return details
+
+
 def build_market_prep_payload(
     *,
     range_buckets: dict | None = None,
@@ -14870,7 +16974,37 @@ def build_market_prep_payload(
             ).strip()
         )
 
+    strongest_rows, strength_universe_count = _market_prep_strength_decile_rows(
+        priority_rows,
+        strongest=True,
+    )
+    weakest_rows, _ = _market_prep_strength_decile_rows(
+        priority_rows,
+        strongest=False,
+    )
+    strength_percent = int(round(MARKET_PREP_STRENGTH_DECILE_FRACTION * 100))
+    strongest_note = (
+        f"Top {strength_percent}% by D1 relative strength versus SPY "
+        f"({len(strongest_rows)} of {strength_universe_count} symbols with RS data)."
+    )
+    weakest_note = (
+        f"Bottom {strength_percent}% by D1 relative strength versus SPY "
+        f"({len(weakest_rows)} of {strength_universe_count} symbols with RS data)."
+    )
+
     sections = [
+        _build_market_prep_section(
+            "strongest_stocks_top_decile",
+            [row.get("symbol", "") for row in strongest_rows],
+            details=_market_prep_strength_details(strongest_rows),
+            note=strongest_note,
+        ),
+        _build_market_prep_section(
+            "weakest_stocks_bottom_decile",
+            [row.get("symbol", "") for row in weakest_rows],
+            details=_market_prep_strength_details(weakest_rows),
+            note=weakest_note,
+        ),
         _build_market_prep_section(
             "long_avwape_to_1stdev",
             range_buckets.get("long_avwap_to_upper_1", []),
@@ -14911,6 +17045,7 @@ def build_market_prep_payload(
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "run_date": reference_date.isoformat(),
         "previous_session_date": previous_session_date.isoformat(),
+        "strength_decile_fraction": MARKET_PREP_STRENGTH_DECILE_FRACTION,
         "sections": sections,
     }
 
@@ -15324,6 +17459,12 @@ def _evaluate_priority_snapshot_for_date(
         last_close,
         side,
     )
+    vwap_range_summary = assess_vwap_range_confirmation(
+        last_close,
+        intraday_vwap,
+        side,
+        previous_day_range_summary,
+    )
     current_day_direction = assess_current_day_direction(
         daily_ohlc,
         last_trade_date,
@@ -15468,6 +17609,23 @@ def _evaluate_priority_snapshot_for_date(
             sma_breakout_summary.get("breakout_sma_level"),
         )
 
+    top_pattern_summary = analyze_top_pattern_setup(
+        df,
+        side=side,
+        current_anchor_meta=current_anchor_meta,
+        indicator_frame=indicator_frame,
+        atr20=atr20,
+    )
+    if top_pattern_summary.get("favorite_signal") and top_pattern_summary.get("signal"):
+        add_signal(
+            top_pattern_summary.get("signal"),
+            "TOP_PATTERN",
+            top_pattern_summary.get("entry_trigger", ""),
+            current_anchor_meta.get("vwap") if isinstance(current_anchor_meta, dict) else None,
+            current_anchor_meta.get("stdev") if isinstance(current_anchor_meta, dict) else None,
+            top_pattern_summary.get("entry_level"),
+        )
+
     symbol_events_today = sorted(set(symbol_events_today))
     previous_entries = history_state.get(symbol, [])
     previous_events = previous_entries[-1]["events"] if previous_entries else []
@@ -15572,6 +17730,29 @@ def _evaluate_priority_snapshot_for_date(
         side,
         trade_date=last_trade_date.isoformat(),
     )
+    previous_anchor_sr_summary = analyze_previous_anchor_sr_context(
+        daily_ohlc,
+        last_trade_date.isoformat(),
+        last_close,
+        side,
+        prev_anchor_meta,
+        atr20,
+        events_today=symbol_events_today,
+    )
+    if isinstance(entry_feature_snapshot, dict):
+        entry_feature_snapshot.update(
+            {
+                "previous_anchor_sr_summary": previous_anchor_sr_summary,
+                "previous_anchor_nearest_level": previous_anchor_sr_summary.get("nearest_level", ""),
+                "previous_anchor_nearest_distance_atr": previous_anchor_sr_summary.get("nearest_distance_atr"),
+                "previous_anchor_near_levels": list(previous_anchor_sr_summary.get("near_levels") or []),
+                "previous_anchor_touched_levels": list(previous_anchor_sr_summary.get("touched_levels") or []),
+                "previous_anchor_bounce_levels": list(previous_anchor_sr_summary.get("bounce_levels") or []),
+                "previous_anchor_critical_near_levels": list(
+                    previous_anchor_sr_summary.get("critical_near_levels") or []
+                ),
+            }
+        )
 
     symbol_entry = {
         "side": side,
@@ -15605,6 +17786,33 @@ def _evaluate_priority_snapshot_for_date(
         "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
         "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+        "previous_day_range_intraday_break": bool(previous_day_range_summary.get("previous_day_range_intraday_break")),
+        "previous_day_range_intraday_note": previous_day_range_summary.get("previous_day_range_intraday_note", ""),
+        "previous_anchor_sr_summary": previous_anchor_sr_summary,
+        "previous_anchor_sr_note": previous_anchor_sr_summary.get("note", ""),
+        "previous_anchor_nearest_level": previous_anchor_sr_summary.get("nearest_level", ""),
+        "previous_anchor_nearest_distance_atr": previous_anchor_sr_summary.get("nearest_distance_atr"),
+        "previous_anchor_near_levels": list(previous_anchor_sr_summary.get("near_levels") or []),
+        "previous_anchor_touched_levels": list(previous_anchor_sr_summary.get("touched_levels") or []),
+        "previous_anchor_bounce_levels": list(previous_anchor_sr_summary.get("bounce_levels") or []),
+        "previous_anchor_obstacle_levels": list(previous_anchor_sr_summary.get("obstacle_levels") or []),
+        "previous_anchor_critical_near_levels": list(previous_anchor_sr_summary.get("critical_near_levels") or []),
+        "previous_anchor_critical_touched_levels": list(
+            previous_anchor_sr_summary.get("critical_touched_levels") or []
+        ),
+        "previous_anchor_critical_bounce_levels": list(
+            previous_anchor_sr_summary.get("critical_bounce_levels") or []
+        ),
+        "previous_anchor_critical_obstacle_levels": list(
+            previous_anchor_sr_summary.get("critical_obstacle_levels") or []
+        ),
+        "previous_avwape_bounce": bool(previous_anchor_sr_summary.get("previous_avwape_bounce")),
+        "previous_avwape_distance_atr": _coerce_float(
+            previous_anchor_sr_summary.get("previous_avwape_distance_atr")
+        ),
+        "vwap_range_confirmation": bool(vwap_range_summary["vwap_range_confirmation"]),
+        "vwap_range_confirmation_bonus": int(vwap_range_summary["vwap_range_confirmation_bonus"] or 0),
+        "vwap_range_confirmation_note": vwap_range_summary["vwap_range_confirmation_note"],
         "current_day_open": current_day_direction.get("current_day_open"),
         "previous_close": current_day_direction.get("previous_close"),
         "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
@@ -15613,6 +17821,7 @@ def _evaluate_priority_snapshot_for_date(
         "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
+        "preferred_swing_focus": False,
         "recent_band_extension_days": recent_band_extension_days,
         "recent_second_band_test_days": recent_second_band_test_days,
         "second_band_penalty": second_band_penalty,
@@ -15676,7 +17885,31 @@ def _evaluate_priority_snapshot_for_date(
         "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
         "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
         "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+        "sma_breakout_higher_high_confirmed": bool(sma_breakout_summary.get("higher_high_confirmed")),
+        "sma_breakout_previous_day_high_break": bool(sma_breakout_summary.get("previous_day_high_break")),
+        "sma_breakout_confirmation_trigger": sma_breakout_summary.get("confirmation_trigger", ""),
+        "sma_breakout_latest_high": _coerce_float(sma_breakout_summary.get("latest_high")),
+        "sma_breakout_previous_day_high": _coerce_float(sma_breakout_summary.get("previous_day_high")),
         "sma_breakout_note": sma_breakout_summary.get("note", ""),
+        "top_pattern_watch": bool(top_pattern_summary.get("watch")),
+        "top_pattern_entry": bool(top_pattern_summary.get("favorite_signal")),
+        "top_pattern_signal": top_pattern_summary.get("signal", ""),
+        "top_pattern_entry_trigger": top_pattern_summary.get("entry_trigger", ""),
+        "top_pattern_entry_triggers": list(top_pattern_summary.get("entry_triggers") or []),
+        "top_pattern_entry_level": _coerce_float(top_pattern_summary.get("entry_level")),
+        "top_pattern_score_bonus": int(top_pattern_summary.get("score_bonus", 0) or 0),
+        "top_pattern_note": top_pattern_summary.get("note", ""),
+        "top_pattern_weekly_return_13w_pct": _coerce_float(top_pattern_summary.get("weekly_return_13w_pct")),
+        "top_pattern_weekly_return_26w_pct": _coerce_float(top_pattern_summary.get("weekly_return_26w_pct")),
+        "top_pattern_weekly_pullback_from_52w_high_pct": _coerce_float(top_pattern_summary.get("weekly_pullback_from_52w_high_pct")),
+        "top_pattern_weekly_ema15_hold": bool(top_pattern_summary.get("weekly_ema15_hold")),
+        "top_pattern_weekly_ema15_hold_ratio": _coerce_float(top_pattern_summary.get("weekly_ema15_hold_ratio")),
+        "top_pattern_weekly_above_sma100": bool(top_pattern_summary.get("weekly_above_sma100")),
+        "top_pattern_weekly_sma50_retest_recent": bool(top_pattern_summary.get("weekly_sma50_retest_recent")),
+        "top_pattern_daily_sma50_reclaim": bool(top_pattern_summary.get("daily_sma50_reclaim")),
+        "top_pattern_daily_sma50_bounce": bool(top_pattern_summary.get("daily_sma50_bounce")),
+        "top_pattern_weekly_sma50_entry": bool(top_pattern_summary.get("weekly_sma50_entry")),
+        "top_pattern_avwape_retest": bool(top_pattern_summary.get("avwape_retest")),
         "entry_feature_snapshot": entry_feature_snapshot,
         **bouncebot_focus_context,
     }
@@ -15708,6 +17941,11 @@ def _evaluate_priority_snapshot_for_date(
         previous_day_range_break=bool(previous_day_range_summary["previous_day_range_break"]),
         previous_day_range_break_bonus=int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
+        previous_day_range_intraday_break=bool(previous_day_range_summary.get("previous_day_range_intraday_break")),
+        previous_day_range_intraday_note=previous_day_range_summary.get("previous_day_range_intraday_note", ""),
+        vwap_range_confirmation=bool(vwap_range_summary["vwap_range_confirmation"]),
+        vwap_range_confirmation_bonus=int(vwap_range_summary["vwap_range_confirmation_bonus"] or 0),
+        vwap_range_confirmation_note=vwap_range_summary["vwap_range_confirmation_note"],
         extension_note=extension_note,
         mid_earnings_active_second_stdev_hold=bool(mid_earnings_summary.get("active_second_stdev_hold")),
         mid_earnings_primary_trigger_level=mid_earnings_summary.get("primary_trigger_level", ""),
@@ -15724,6 +17962,17 @@ def _evaluate_priority_snapshot_for_date(
         sma_breakout_breakout_date=sma_breakout_summary.get("breakout_date", ""),
         sma_breakout_retest_date=sma_breakout_summary.get("retest_date", ""),
         sma_breakout_confirmation_date=sma_breakout_summary.get("confirmation_date", ""),
+        sma_breakout_higher_high_confirmed=bool(sma_breakout_summary.get("higher_high_confirmed")),
+        sma_breakout_previous_day_high_break=bool(sma_breakout_summary.get("previous_day_high_break")),
+        sma_breakout_confirmation_trigger=sma_breakout_summary.get("confirmation_trigger", ""),
+        sma_breakout_latest_high=_coerce_float(sma_breakout_summary.get("latest_high")),
+        sma_breakout_previous_day_high=_coerce_float(sma_breakout_summary.get("previous_day_high")),
+        top_pattern_watch=bool(top_pattern_summary.get("watch")),
+        top_pattern_entry=bool(top_pattern_summary.get("favorite_signal")),
+        top_pattern_signal=top_pattern_summary.get("signal", ""),
+        top_pattern_score_bonus=int(top_pattern_summary.get("score_bonus", 0) or 0),
+        top_pattern_note=top_pattern_summary.get("note", ""),
+        top_pattern_entry_trigger=top_pattern_summary.get("entry_trigger", ""),
     )
     priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
     priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
@@ -15736,6 +17985,21 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["post_earnings_note"] = post_earnings_summary.get("note", "")
     priority_summary["post_earnings_bands_expanding"] = bool(post_earnings_band_expansion.get("bands_expanding"))
     priority_summary["post_earnings_band_expansion_note"] = post_earnings_band_expansion.get("band_expansion_note", "")
+    priority_summary["top_pattern_entry_triggers"] = list(top_pattern_summary.get("entry_triggers") or [])
+    priority_summary["top_pattern_entry_level"] = _coerce_float(top_pattern_summary.get("entry_level"))
+    priority_summary["top_pattern_weekly_return_13w_pct"] = _coerce_float(top_pattern_summary.get("weekly_return_13w_pct"))
+    priority_summary["top_pattern_weekly_return_26w_pct"] = _coerce_float(top_pattern_summary.get("weekly_return_26w_pct"))
+    priority_summary["top_pattern_weekly_pullback_from_52w_high_pct"] = _coerce_float(
+        top_pattern_summary.get("weekly_pullback_from_52w_high_pct")
+    )
+    priority_summary["top_pattern_weekly_ema15_hold"] = bool(top_pattern_summary.get("weekly_ema15_hold"))
+    priority_summary["top_pattern_weekly_ema15_hold_ratio"] = _coerce_float(top_pattern_summary.get("weekly_ema15_hold_ratio"))
+    priority_summary["top_pattern_weekly_above_sma100"] = bool(top_pattern_summary.get("weekly_above_sma100"))
+    priority_summary["top_pattern_weekly_sma50_retest_recent"] = bool(top_pattern_summary.get("weekly_sma50_retest_recent"))
+    priority_summary["top_pattern_daily_sma50_reclaim"] = bool(top_pattern_summary.get("daily_sma50_reclaim"))
+    priority_summary["top_pattern_daily_sma50_bounce"] = bool(top_pattern_summary.get("daily_sma50_bounce"))
+    priority_summary["top_pattern_weekly_sma50_entry"] = bool(top_pattern_summary.get("weekly_sma50_entry"))
+    priority_summary["top_pattern_avwape_retest"] = bool(top_pattern_summary.get("avwape_retest"))
     priority_summary["mid_earnings_watch"] = bool(mid_earnings_summary.get("watch"))
     priority_summary["mid_earnings_active_second_stdev_hold"] = bool(mid_earnings_summary.get("active_second_stdev_hold"))
     priority_summary["mid_earnings_sessions_since_gap"] = mid_earnings_summary.get("sessions_since_gap")
@@ -15812,6 +18076,35 @@ def _evaluate_priority_snapshot_for_date(
         "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
         "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+        "previous_day_range_intraday_break": bool(previous_day_range_summary.get("previous_day_range_intraday_break")),
+        "previous_day_range_intraday_note": previous_day_range_summary.get("previous_day_range_intraday_note", ""),
+        "previous_anchor_sr_note": previous_anchor_sr_summary.get("note", ""),
+        "previous_anchor_nearest_level": previous_anchor_sr_summary.get("nearest_level", ""),
+        "previous_anchor_nearest_distance_atr": previous_anchor_sr_summary.get("nearest_distance_atr"),
+        "previous_anchor_near_levels": ";".join(previous_anchor_sr_summary.get("near_levels") or []),
+        "previous_anchor_touched_levels": ";".join(previous_anchor_sr_summary.get("touched_levels") or []),
+        "previous_anchor_bounce_levels": ";".join(previous_anchor_sr_summary.get("bounce_levels") or []),
+        "previous_anchor_obstacle_levels": ";".join(
+            item.get("label", "") for item in previous_anchor_sr_summary.get("obstacle_levels") or []
+        ),
+        "previous_anchor_critical_near_levels": ";".join(
+            previous_anchor_sr_summary.get("critical_near_levels") or []
+        ),
+        "previous_anchor_critical_touched_levels": ";".join(
+            previous_anchor_sr_summary.get("critical_touched_levels") or []
+        ),
+        "previous_anchor_critical_bounce_levels": ";".join(
+            previous_anchor_sr_summary.get("critical_bounce_levels") or []
+        ),
+        "previous_anchor_critical_obstacle_levels": ";".join(
+            item.get("label", "") for item in previous_anchor_sr_summary.get("critical_obstacle_levels") or []
+        ),
+        "previous_avwape_bounce": bool(previous_anchor_sr_summary.get("previous_avwape_bounce")),
+        "previous_avwape_bounce_bonus": int(priority_summary.get("previous_avwape_bounce_bonus", 0) or 0),
+        "previous_avwape_distance_atr": _coerce_float(previous_anchor_sr_summary.get("previous_avwape_distance_atr")),
+        "vwap_range_confirmation": bool(vwap_range_summary["vwap_range_confirmation"]),
+        "vwap_range_confirmation_bonus": int(vwap_range_summary["vwap_range_confirmation_bonus"] or 0),
+        "vwap_range_confirmation_note": vwap_range_summary["vwap_range_confirmation_note"],
         "current_day_open": current_day_direction.get("current_day_open"),
         "previous_close": current_day_direction.get("previous_close"),
         "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
@@ -15820,6 +18113,7 @@ def _evaluate_priority_snapshot_for_date(
         "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
+        "preferred_swing_focus": False,
         "recent_band_extension_days": recent_band_extension_days,
         "recent_second_band_test_days": recent_second_band_test_days,
         "second_band_penalty": second_band_penalty,
@@ -15877,6 +18171,11 @@ def _evaluate_priority_snapshot_for_date(
         "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
         "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
         "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+        "sma_breakout_higher_high_confirmed": bool(sma_breakout_summary.get("higher_high_confirmed")),
+        "sma_breakout_previous_day_high_break": bool(sma_breakout_summary.get("previous_day_high_break")),
+        "sma_breakout_confirmation_trigger": sma_breakout_summary.get("confirmation_trigger", ""),
+        "sma_breakout_latest_high": _coerce_float(sma_breakout_summary.get("latest_high")),
+        "sma_breakout_previous_day_high": _coerce_float(sma_breakout_summary.get("previous_day_high")),
         "sma_breakout_note": sma_breakout_summary.get("note", ""),
         "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
         "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
@@ -16232,7 +18531,7 @@ def run_master(
             logging.warning(f"{sym}: no earnings anchors available; scanning non-anchor setups only.")
 
         # Determine days needed for a single daily fetch
-        days_needed = max(ATR_LENGTH + 5, PRIORITY_SMA_LOOKBACK_DAYS)
+        days_needed = max(ATR_LENGTH + 5, PRIORITY_SMA_LOOKBACK_DAYS, TOP_PATTERN_DAILY_LOOKBACK_DAYS)
         anchor_dates = []
         if curr_iso:
             anchor_dates.append(datetime.fromisoformat(curr_iso).date())
@@ -16299,6 +18598,12 @@ def run_master(
                     "favorite_zone": "",
                     "favorite_signals": "",
                     "favorite_context_signals": "",
+                    "top_pattern_watch": False,
+                    "top_pattern_entry": False,
+                    "top_pattern_entry_trigger": "",
+                    "top_pattern_score_bonus": 0,
+                    "daily_relative_strength_score": None,
+                    "daily_relative_strength_bonus": 0,
                 }
 
         # Current earnings AVWAP
@@ -16447,6 +18752,18 @@ def run_master(
             last_trade_date,
             last_close,
             side,
+        )
+        vwap_range_summary = assess_vwap_range_confirmation(
+            last_close,
+            intraday_vwap,
+            side,
+            previous_day_range_summary,
+        )
+        daily_relative_strength_summary = assess_daily_relative_strength(
+            daily_ohlc,
+            last_trade_date,
+            side,
+            (market_regime_snapshot.get("benchmarks", {}) or {}).get("SPY", {}),
         )
         current_day_direction = assess_current_day_direction(
             daily_ohlc,
@@ -16610,6 +18927,23 @@ def run_master(
                 sma_breakout_summary.get("breakout_sma_level"),
             )
 
+        top_pattern_summary = analyze_top_pattern_setup(
+            df,
+            side=side,
+            current_anchor_meta=current_anchor_meta,
+            indicator_frame=indicator_frame,
+            atr20=atr20,
+        )
+        if top_pattern_summary.get("favorite_signal") and top_pattern_summary.get("signal"):
+            add_signal(
+                top_pattern_summary.get("signal"),
+                "TOP_PATTERN",
+                top_pattern_summary.get("entry_trigger", ""),
+                current_vwap,
+                current_anchor_meta.get("stdev") if current_anchor_meta else None,
+                top_pattern_summary.get("entry_level"),
+            )
+
         # dedupe and sort events for consistency
         symbol_events_today = sorted(set(symbol_events_today))
 
@@ -16749,6 +19083,29 @@ def run_master(
             side,
             trade_date=last_trade_date.isoformat(),
         )
+        previous_anchor_sr_summary = analyze_previous_anchor_sr_context(
+            daily_ohlc,
+            last_trade_date.isoformat(),
+            last_close,
+            side,
+            prev_anchor_meta,
+            atr20,
+            events_today=symbol_events_today,
+        )
+        if isinstance(entry_feature_snapshot, dict):
+            entry_feature_snapshot.update(
+                {
+                    "previous_anchor_sr_summary": previous_anchor_sr_summary,
+                    "previous_anchor_nearest_level": previous_anchor_sr_summary.get("nearest_level", ""),
+                    "previous_anchor_nearest_distance_atr": previous_anchor_sr_summary.get("nearest_distance_atr"),
+                    "previous_anchor_near_levels": list(previous_anchor_sr_summary.get("near_levels") or []),
+                    "previous_anchor_touched_levels": list(previous_anchor_sr_summary.get("touched_levels") or []),
+                    "previous_anchor_bounce_levels": list(previous_anchor_sr_summary.get("bounce_levels") or []),
+                    "previous_anchor_critical_near_levels": list(
+                        previous_anchor_sr_summary.get("critical_near_levels") or []
+                    ),
+                }
+            )
         if current_anchor_meta:
             if not stdev_blocked_by_recent_earnings:
                 if side == "LONG":
@@ -16821,6 +19178,33 @@ def run_master(
             "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
             "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
             "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+            "previous_day_range_intraday_break": bool(previous_day_range_summary.get("previous_day_range_intraday_break")),
+            "previous_day_range_intraday_note": previous_day_range_summary.get("previous_day_range_intraday_note", ""),
+            "previous_anchor_sr_summary": previous_anchor_sr_summary,
+            "previous_anchor_sr_note": previous_anchor_sr_summary.get("note", ""),
+            "previous_anchor_nearest_level": previous_anchor_sr_summary.get("nearest_level", ""),
+            "previous_anchor_nearest_distance_atr": previous_anchor_sr_summary.get("nearest_distance_atr"),
+            "previous_anchor_near_levels": list(previous_anchor_sr_summary.get("near_levels") or []),
+            "previous_anchor_touched_levels": list(previous_anchor_sr_summary.get("touched_levels") or []),
+            "previous_anchor_bounce_levels": list(previous_anchor_sr_summary.get("bounce_levels") or []),
+            "previous_anchor_obstacle_levels": list(previous_anchor_sr_summary.get("obstacle_levels") or []),
+            "previous_anchor_critical_near_levels": list(previous_anchor_sr_summary.get("critical_near_levels") or []),
+            "previous_anchor_critical_touched_levels": list(
+                previous_anchor_sr_summary.get("critical_touched_levels") or []
+            ),
+            "previous_anchor_critical_bounce_levels": list(
+                previous_anchor_sr_summary.get("critical_bounce_levels") or []
+            ),
+            "previous_anchor_critical_obstacle_levels": list(
+                previous_anchor_sr_summary.get("critical_obstacle_levels") or []
+            ),
+            "previous_avwape_bounce": bool(previous_anchor_sr_summary.get("previous_avwape_bounce")),
+            "previous_avwape_distance_atr": _coerce_float(
+                previous_anchor_sr_summary.get("previous_avwape_distance_atr")
+            ),
+            "vwap_range_confirmation": bool(vwap_range_summary["vwap_range_confirmation"]),
+            "vwap_range_confirmation_bonus": int(vwap_range_summary["vwap_range_confirmation_bonus"] or 0),
+            "vwap_range_confirmation_note": vwap_range_summary["vwap_range_confirmation_note"],
             "current_day_open": current_day_direction.get("current_day_open"),
             "previous_close": current_day_direction.get("previous_close"),
             "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
@@ -16829,6 +19213,7 @@ def run_master(
             "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
+            "preferred_swing_focus": False,
             "recent_band_extension_days": recent_band_extension_days,
             "recent_second_band_test_days": recent_second_band_test_days,
             "second_band_penalty": second_band_penalty,
@@ -16892,7 +19277,36 @@ def run_master(
             "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
             "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
             "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+            "sma_breakout_higher_high_confirmed": bool(sma_breakout_summary.get("higher_high_confirmed")),
+            "sma_breakout_previous_day_high_break": bool(sma_breakout_summary.get("previous_day_high_break")),
+            "sma_breakout_confirmation_trigger": sma_breakout_summary.get("confirmation_trigger", ""),
+            "sma_breakout_latest_high": _coerce_float(sma_breakout_summary.get("latest_high")),
+            "sma_breakout_previous_day_high": _coerce_float(sma_breakout_summary.get("previous_day_high")),
             "sma_breakout_note": sma_breakout_summary.get("note", ""),
+            "top_pattern_watch": bool(top_pattern_summary.get("watch")),
+            "top_pattern_entry": bool(top_pattern_summary.get("favorite_signal")),
+            "top_pattern_signal": top_pattern_summary.get("signal", ""),
+            "top_pattern_entry_trigger": top_pattern_summary.get("entry_trigger", ""),
+            "top_pattern_entry_triggers": list(top_pattern_summary.get("entry_triggers") or []),
+            "top_pattern_entry_level": _coerce_float(top_pattern_summary.get("entry_level")),
+            "top_pattern_score_bonus": int(top_pattern_summary.get("score_bonus", 0) or 0),
+            "top_pattern_note": top_pattern_summary.get("note", ""),
+            "top_pattern_weekly_return_13w_pct": _coerce_float(top_pattern_summary.get("weekly_return_13w_pct")),
+            "top_pattern_weekly_return_26w_pct": _coerce_float(top_pattern_summary.get("weekly_return_26w_pct")),
+            "top_pattern_weekly_pullback_from_52w_high_pct": _coerce_float(top_pattern_summary.get("weekly_pullback_from_52w_high_pct")),
+            "top_pattern_weekly_ema15_hold": bool(top_pattern_summary.get("weekly_ema15_hold")),
+            "top_pattern_weekly_ema15_hold_ratio": _coerce_float(top_pattern_summary.get("weekly_ema15_hold_ratio")),
+            "top_pattern_weekly_above_sma100": bool(top_pattern_summary.get("weekly_above_sma100")),
+            "top_pattern_weekly_sma50_retest_recent": bool(top_pattern_summary.get("weekly_sma50_retest_recent")),
+            "top_pattern_daily_sma50_reclaim": bool(top_pattern_summary.get("daily_sma50_reclaim")),
+            "top_pattern_daily_sma50_bounce": bool(top_pattern_summary.get("daily_sma50_bounce")),
+            "top_pattern_weekly_sma50_entry": bool(top_pattern_summary.get("weekly_sma50_entry")),
+            "top_pattern_avwape_retest": bool(top_pattern_summary.get("avwape_retest")),
+            "daily_relative_strength_score": _coerce_float(daily_relative_strength_summary.get("daily_relative_strength_score")),
+            "daily_relative_strength_bonus": int(daily_relative_strength_summary.get("daily_relative_strength_bonus", 0) or 0),
+            "daily_relative_strength_note": daily_relative_strength_summary.get("daily_relative_strength_note", ""),
+            "symbol_one_day_return_pct": _coerce_float(daily_relative_strength_summary.get("symbol_one_day_return_pct")),
+            "symbol_five_day_return_pct": _coerce_float(daily_relative_strength_summary.get("symbol_five_day_return_pct")),
             "entry_feature_snapshot": entry_feature_snapshot,
             **bouncebot_focus_context,
         }
@@ -16961,6 +19375,11 @@ def run_master(
             previous_day_range_break=bool(previous_day_range_summary["previous_day_range_break"]),
             previous_day_range_break_bonus=int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
             previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
+            previous_day_range_intraday_break=bool(previous_day_range_summary.get("previous_day_range_intraday_break")),
+            previous_day_range_intraday_note=previous_day_range_summary.get("previous_day_range_intraday_note", ""),
+            vwap_range_confirmation=bool(vwap_range_summary["vwap_range_confirmation"]),
+            vwap_range_confirmation_bonus=int(vwap_range_summary["vwap_range_confirmation_bonus"] or 0),
+            vwap_range_confirmation_note=vwap_range_summary["vwap_range_confirmation_note"],
             extension_note=extension_note,
             mid_earnings_active_second_stdev_hold=bool(mid_earnings_summary.get("active_second_stdev_hold")),
             mid_earnings_primary_trigger_level=mid_earnings_summary.get("primary_trigger_level", ""),
@@ -16977,6 +19396,20 @@ def run_master(
             sma_breakout_breakout_date=sma_breakout_summary.get("breakout_date", ""),
             sma_breakout_retest_date=sma_breakout_summary.get("retest_date", ""),
             sma_breakout_confirmation_date=sma_breakout_summary.get("confirmation_date", ""),
+            sma_breakout_higher_high_confirmed=bool(sma_breakout_summary.get("higher_high_confirmed")),
+            sma_breakout_previous_day_high_break=bool(sma_breakout_summary.get("previous_day_high_break")),
+            sma_breakout_confirmation_trigger=sma_breakout_summary.get("confirmation_trigger", ""),
+            sma_breakout_latest_high=_coerce_float(sma_breakout_summary.get("latest_high")),
+            sma_breakout_previous_day_high=_coerce_float(sma_breakout_summary.get("previous_day_high")),
+            top_pattern_watch=bool(top_pattern_summary.get("watch")),
+            top_pattern_entry=bool(top_pattern_summary.get("favorite_signal")),
+            top_pattern_signal=top_pattern_summary.get("signal", ""),
+            top_pattern_score_bonus=int(top_pattern_summary.get("score_bonus", 0) or 0),
+            top_pattern_note=top_pattern_summary.get("note", ""),
+            top_pattern_entry_trigger=top_pattern_summary.get("entry_trigger", ""),
+            daily_relative_strength_score=_coerce_float(daily_relative_strength_summary.get("daily_relative_strength_score")),
+            daily_relative_strength_bonus=int(daily_relative_strength_summary.get("daily_relative_strength_bonus", 0) or 0),
+            daily_relative_strength_note=daily_relative_strength_summary.get("daily_relative_strength_note", ""),
         )
         priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
         priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
@@ -16989,6 +19422,23 @@ def run_master(
         priority_summary["post_earnings_note"] = post_earnings_summary.get("note", "")
         priority_summary["post_earnings_bands_expanding"] = bool(post_earnings_band_expansion.get("bands_expanding"))
         priority_summary["post_earnings_band_expansion_note"] = post_earnings_band_expansion.get("band_expansion_note", "")
+        priority_summary["top_pattern_entry_triggers"] = list(top_pattern_summary.get("entry_triggers") or [])
+        priority_summary["top_pattern_entry_level"] = _coerce_float(top_pattern_summary.get("entry_level"))
+        priority_summary["top_pattern_weekly_return_13w_pct"] = _coerce_float(top_pattern_summary.get("weekly_return_13w_pct"))
+        priority_summary["top_pattern_weekly_return_26w_pct"] = _coerce_float(top_pattern_summary.get("weekly_return_26w_pct"))
+        priority_summary["top_pattern_weekly_pullback_from_52w_high_pct"] = _coerce_float(
+            top_pattern_summary.get("weekly_pullback_from_52w_high_pct")
+        )
+        priority_summary["top_pattern_weekly_ema15_hold"] = bool(top_pattern_summary.get("weekly_ema15_hold"))
+        priority_summary["top_pattern_weekly_ema15_hold_ratio"] = _coerce_float(top_pattern_summary.get("weekly_ema15_hold_ratio"))
+        priority_summary["top_pattern_weekly_above_sma100"] = bool(top_pattern_summary.get("weekly_above_sma100"))
+        priority_summary["top_pattern_weekly_sma50_retest_recent"] = bool(top_pattern_summary.get("weekly_sma50_retest_recent"))
+        priority_summary["top_pattern_daily_sma50_reclaim"] = bool(top_pattern_summary.get("daily_sma50_reclaim"))
+        priority_summary["top_pattern_daily_sma50_bounce"] = bool(top_pattern_summary.get("daily_sma50_bounce"))
+        priority_summary["top_pattern_weekly_sma50_entry"] = bool(top_pattern_summary.get("weekly_sma50_entry"))
+        priority_summary["top_pattern_avwape_retest"] = bool(top_pattern_summary.get("avwape_retest"))
+        priority_summary["symbol_one_day_return_pct"] = _coerce_float(daily_relative_strength_summary.get("symbol_one_day_return_pct"))
+        priority_summary["symbol_five_day_return_pct"] = _coerce_float(daily_relative_strength_summary.get("symbol_five_day_return_pct"))
         priority_summary["mid_earnings_watch"] = bool(mid_earnings_summary.get("watch"))
         priority_summary["mid_earnings_active_second_stdev_hold"] = bool(mid_earnings_summary.get("active_second_stdev_hold"))
         priority_summary["mid_earnings_sessions_since_gap"] = mid_earnings_summary.get("sessions_since_gap")
@@ -17072,6 +19522,12 @@ def run_master(
             record["favorite_zone"] = favorite_zone or ""
             record["favorite_signals"] = ";".join(priority_summary["favorite_signals"])
             record["favorite_context_signals"] = ";".join(priority_summary["context_signals"])
+            record["top_pattern_watch"] = bool(priority_summary.get("top_pattern_watch"))
+            record["top_pattern_entry"] = bool(priority_summary.get("top_pattern_entry"))
+            record["top_pattern_entry_trigger"] = priority_summary.get("top_pattern_entry_trigger", "")
+            record["top_pattern_score_bonus"] = int(priority_summary.get("top_pattern_score_bonus", 0) or 0)
+            record["daily_relative_strength_score"] = _coerce_float(priority_summary.get("daily_relative_strength_score"))
+            record["daily_relative_strength_bonus"] = int(priority_summary.get("daily_relative_strength_bonus", 0) or 0)
 
         for lbl in symbol_events_today:
             record = symbol_signal_info.get(lbl)
@@ -17091,6 +19547,11 @@ def run_master(
             "spy_five_day_return_pct": (market_regime_snapshot.get("benchmarks", {}).get("SPY", {}) or {}).get("five_day_return_pct"),
             "spy_above_sma20": (market_regime_snapshot.get("benchmarks", {}).get("SPY", {}) or {}).get("above_sma20"),
             "spy_above_sma50": (market_regime_snapshot.get("benchmarks", {}).get("SPY", {}) or {}).get("above_sma50"),
+            "daily_relative_strength_score": _coerce_float(daily_relative_strength_summary.get("daily_relative_strength_score")),
+            "daily_relative_strength_bonus": int(daily_relative_strength_summary.get("daily_relative_strength_bonus", 0) or 0),
+            "daily_relative_strength_note": daily_relative_strength_summary.get("daily_relative_strength_note", ""),
+            "symbol_one_day_return_pct": _coerce_float(daily_relative_strength_summary.get("symbol_one_day_return_pct")),
+            "symbol_five_day_return_pct": _coerce_float(daily_relative_strength_summary.get("symbol_five_day_return_pct")),
             "last_close": last_close,
             "last_volume": last_volume,
             "intraday_vwap": intraday_vwap,
@@ -17117,6 +19578,37 @@ def run_master(
             "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
             "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
             "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+            "previous_day_range_intraday_break": bool(previous_day_range_summary.get("previous_day_range_intraday_break")),
+            "previous_day_range_intraday_note": previous_day_range_summary.get("previous_day_range_intraday_note", ""),
+            "previous_anchor_sr_note": previous_anchor_sr_summary.get("note", ""),
+            "previous_anchor_nearest_level": previous_anchor_sr_summary.get("nearest_level", ""),
+            "previous_anchor_nearest_distance_atr": previous_anchor_sr_summary.get("nearest_distance_atr"),
+            "previous_anchor_near_levels": ";".join(previous_anchor_sr_summary.get("near_levels") or []),
+            "previous_anchor_touched_levels": ";".join(previous_anchor_sr_summary.get("touched_levels") or []),
+            "previous_anchor_bounce_levels": ";".join(previous_anchor_sr_summary.get("bounce_levels") or []),
+            "previous_anchor_obstacle_levels": ";".join(
+                item.get("label", "") for item in previous_anchor_sr_summary.get("obstacle_levels") or []
+            ),
+            "previous_anchor_critical_near_levels": ";".join(
+                previous_anchor_sr_summary.get("critical_near_levels") or []
+            ),
+            "previous_anchor_critical_touched_levels": ";".join(
+                previous_anchor_sr_summary.get("critical_touched_levels") or []
+            ),
+            "previous_anchor_critical_bounce_levels": ";".join(
+                previous_anchor_sr_summary.get("critical_bounce_levels") or []
+            ),
+            "previous_anchor_critical_obstacle_levels": ";".join(
+                item.get("label", "") for item in previous_anchor_sr_summary.get("critical_obstacle_levels") or []
+            ),
+            "previous_avwape_bounce": bool(previous_anchor_sr_summary.get("previous_avwape_bounce")),
+            "previous_avwape_bounce_bonus": int(priority_summary.get("previous_avwape_bounce_bonus", 0) or 0),
+            "previous_avwape_distance_atr": _coerce_float(
+                previous_anchor_sr_summary.get("previous_avwape_distance_atr")
+            ),
+            "vwap_range_confirmation": bool(vwap_range_summary["vwap_range_confirmation"]),
+            "vwap_range_confirmation_bonus": int(vwap_range_summary["vwap_range_confirmation_bonus"] or 0),
+            "vwap_range_confirmation_note": vwap_range_summary["vwap_range_confirmation_note"],
             "current_day_open": current_day_direction.get("current_day_open"),
             "previous_close": current_day_direction.get("previous_close"),
             "current_day_change_pct": current_day_direction.get("current_day_change_pct"),
@@ -17125,6 +19617,7 @@ def run_master(
             "side_alignment_note": current_day_direction.get("side_alignment_note", ""),
             "has_bounce_event_today": has_bounce_event_today,
             "favorite_zone": favorite_zone,
+            "preferred_swing_focus": False,
             "recent_band_extension_days": recent_band_extension_days,
             "recent_second_band_test_days": recent_second_band_test_days,
             "second_band_penalty": second_band_penalty,
@@ -17182,7 +19675,31 @@ def run_master(
             "sma_breakout_retest_level_value": _coerce_float(sma_breakout_summary.get("retest_level_value")),
             "sma_breakout_retest_date": sma_breakout_summary.get("retest_date", ""),
             "sma_breakout_confirmation_date": sma_breakout_summary.get("confirmation_date", ""),
+            "sma_breakout_higher_high_confirmed": bool(sma_breakout_summary.get("higher_high_confirmed")),
+            "sma_breakout_previous_day_high_break": bool(sma_breakout_summary.get("previous_day_high_break")),
+            "sma_breakout_confirmation_trigger": sma_breakout_summary.get("confirmation_trigger", ""),
+            "sma_breakout_latest_high": _coerce_float(sma_breakout_summary.get("latest_high")),
+            "sma_breakout_previous_day_high": _coerce_float(sma_breakout_summary.get("previous_day_high")),
             "sma_breakout_note": sma_breakout_summary.get("note", ""),
+            "top_pattern_watch": bool(top_pattern_summary.get("watch")),
+            "top_pattern_entry": bool(top_pattern_summary.get("favorite_signal")),
+            "top_pattern_signal": top_pattern_summary.get("signal", ""),
+            "top_pattern_entry_trigger": top_pattern_summary.get("entry_trigger", ""),
+            "top_pattern_entry_triggers": ";".join(top_pattern_summary.get("entry_triggers") or []),
+            "top_pattern_entry_level": _coerce_float(top_pattern_summary.get("entry_level")),
+            "top_pattern_score_bonus": int(top_pattern_summary.get("score_bonus", 0) or 0),
+            "top_pattern_note": top_pattern_summary.get("note", ""),
+            "top_pattern_weekly_return_13w_pct": _coerce_float(top_pattern_summary.get("weekly_return_13w_pct")),
+            "top_pattern_weekly_return_26w_pct": _coerce_float(top_pattern_summary.get("weekly_return_26w_pct")),
+            "top_pattern_weekly_pullback_from_52w_high_pct": _coerce_float(top_pattern_summary.get("weekly_pullback_from_52w_high_pct")),
+            "top_pattern_weekly_ema15_hold": bool(top_pattern_summary.get("weekly_ema15_hold")),
+            "top_pattern_weekly_ema15_hold_ratio": _coerce_float(top_pattern_summary.get("weekly_ema15_hold_ratio")),
+            "top_pattern_weekly_above_sma100": bool(top_pattern_summary.get("weekly_above_sma100")),
+            "top_pattern_weekly_sma50_retest_recent": bool(top_pattern_summary.get("weekly_sma50_retest_recent")),
+            "top_pattern_daily_sma50_reclaim": bool(top_pattern_summary.get("daily_sma50_reclaim")),
+            "top_pattern_daily_sma50_bounce": bool(top_pattern_summary.get("daily_sma50_bounce")),
+            "top_pattern_weekly_sma50_entry": bool(top_pattern_summary.get("weekly_sma50_entry")),
+            "top_pattern_avwape_retest": bool(top_pattern_summary.get("avwape_retest")),
             "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
@@ -17386,6 +19903,7 @@ def run_master(
     # trim history to last N days
     trim_history(history)
     write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
+    write_top_strength_watchlist_report(TOP_STRENGTH_WATCHLIST_FILE, priority_rows)
     if include_theta:
         write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
     write_master_avwap_focus_feed(MASTER_AVWAP_FOCUS_FILE, priority_rows, ai_state)
@@ -17498,6 +20016,11 @@ def run_master(
         "spy_five_day_return_pct",
         "spy_above_sma20",
         "spy_above_sma50",
+        "daily_relative_strength_score",
+        "daily_relative_strength_bonus",
+        "daily_relative_strength_note",
+        "symbol_one_day_return_pct",
+        "symbol_five_day_return_pct",
         "last_close",
         "current_day_open",
         "previous_close",
@@ -17530,8 +20053,28 @@ def run_master(
         "previous_day_range_break",
         "previous_day_range_break_bonus",
         "previous_day_range_note",
+        "previous_day_range_intraday_break",
+        "previous_day_range_intraday_note",
+        "previous_anchor_sr_note",
+        "previous_anchor_nearest_level",
+        "previous_anchor_nearest_distance_atr",
+        "previous_anchor_near_levels",
+        "previous_anchor_touched_levels",
+        "previous_anchor_bounce_levels",
+        "previous_anchor_obstacle_levels",
+        "previous_anchor_critical_near_levels",
+        "previous_anchor_critical_touched_levels",
+        "previous_anchor_critical_bounce_levels",
+        "previous_anchor_critical_obstacle_levels",
+        "previous_avwape_bounce",
+        "previous_avwape_bounce_bonus",
+        "previous_avwape_distance_atr",
+        "vwap_range_confirmation",
+        "vwap_range_confirmation_bonus",
+        "vwap_range_confirmation_note",
         "has_bounce_event_today",
         "favorite_zone",
+        "preferred_swing_focus",
         "setup_family",
         "setup_tags",
         "recent_band_extension_days",
@@ -17587,7 +20130,31 @@ def run_master(
         "sma_breakout_retest_level_value",
         "sma_breakout_retest_date",
         "sma_breakout_confirmation_date",
+        "sma_breakout_higher_high_confirmed",
+        "sma_breakout_previous_day_high_break",
+        "sma_breakout_confirmation_trigger",
+        "sma_breakout_latest_high",
+        "sma_breakout_previous_day_high",
         "sma_breakout_note",
+        "top_pattern_watch",
+        "top_pattern_entry",
+        "top_pattern_signal",
+        "top_pattern_entry_trigger",
+        "top_pattern_entry_triggers",
+        "top_pattern_entry_level",
+        "top_pattern_score_bonus",
+        "top_pattern_note",
+        "top_pattern_weekly_return_13w_pct",
+        "top_pattern_weekly_return_26w_pct",
+        "top_pattern_weekly_pullback_from_52w_high_pct",
+        "top_pattern_weekly_ema15_hold",
+        "top_pattern_weekly_ema15_hold_ratio",
+        "top_pattern_weekly_above_sma100",
+        "top_pattern_weekly_sma50_retest_recent",
+        "top_pattern_daily_sma50_reclaim",
+        "top_pattern_daily_sma50_bounce",
+        "top_pattern_weekly_sma50_entry",
+        "top_pattern_avwape_retest",
         "priority_score",
         "priority_bucket",
         "is_favorite_setup",
@@ -18405,6 +20972,16 @@ class MasterAvwapGUI:
             near_favorite_frame,
             text="Copy Near Favorites",
             command=self.copy_near_favorite_symbols,
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+
+        top_strength_frame = ttk.LabelFrame(avwap_side, text="TOP Strength Watchlist")
+        top_strength_frame.pack(fill="x", pady=(0, 10))
+        self.top_strength_symbols_text = tk.Text(top_strength_frame, wrap="word", height=4, font=("Courier New", 10))
+        self.top_strength_symbols_text.pack(fill="both", expand=True, padx=8, pady=(8, 8))
+        ttk.Button(
+            top_strength_frame,
+            text="Copy TOP Leaders",
+            command=self.copy_top_strength_symbols,
         ).pack(anchor="w", padx=8, pady=(0, 8))
 
         user_favorite_frame = ttk.LabelFrame(avwap_side, text="My Favorite Tickers Log")
@@ -19447,6 +22024,10 @@ class MasterAvwapGUI:
             lines.append(
                 f"Previous-day range break rate: {_fmt_pct(row.get('previous_day_range_break_rate'))}"
             )
+        if _coerce_float(row.get("vwap_range_confirmation_rate")) is not None:
+            lines.append(
+                f"VWAP + prior-day confirmation rate: {_fmt_pct(row.get('vwap_range_confirmation_rate'))}"
+            )
         if _coerce_float(row.get("extreme_move_rate")) is not None:
             lines.append(f"Extreme-move rate: {_fmt_pct(row.get('extreme_move_rate'))}")
         matching_playbooks, matching_min_closed = self._get_playbooks_for_context(
@@ -19825,6 +22406,12 @@ class MasterAvwapGUI:
             for entry in near_favorites
             if isinstance(entry, dict) and str(entry.get("symbol", "")).strip()
         ]
+        top_strength_entries = payload.get("top_strength_watchlist", [])
+        top_strength_symbols = [
+            str(entry.get("symbol", "")).strip().upper()
+            for entry in top_strength_entries
+            if isinstance(entry, dict) and str(entry.get("symbol", "")).strip()
+        ]
 
         if favorite_symbols or near_favorite_symbols:
             favorite_text = _format_symbol_group(favorite_symbols)
@@ -19865,6 +22452,10 @@ class MasterAvwapGUI:
         setup_type_text = build_master_avwap_focus_setup_type_text(payload)
         self._set_text_widget_contents(self.favorite_symbols_text, favorite_text)
         self._set_text_widget_contents(self.near_favorite_symbols_text, near_favorite_text)
+        self._set_text_widget_contents(
+            self.top_strength_symbols_text,
+            _format_symbol_group(top_strength_symbols) if top_strength_symbols else "None",
+        )
         self._set_text_widget_contents(self.long_focus_symbols_text, _format_symbol_group(side_groups.get("LONG", [])))
         self._set_text_widget_contents(self.short_focus_symbols_text, _format_symbol_group(side_groups.get("SHORT", [])))
         self._set_text_widget_contents(self.setup_type_symbols_text, setup_type_text or "None")
@@ -19889,6 +22480,13 @@ class MasterAvwapGUI:
             self.near_favorite_symbols_text,
             "No near favorite zone symbols to copy.",
             "Copied near favorite zone symbols to clipboard.",
+        )
+
+    def copy_top_strength_symbols(self):
+        self._copy_text_widget_contents(
+            self.top_strength_symbols_text,
+            "No TOP strength symbols to copy.",
+            "Copied TOP strength symbols to clipboard.",
         )
 
     def copy_long_focus_symbols(self):
@@ -19977,7 +22575,7 @@ class MasterAvwapGUI:
         if count <= 0:
             widget.configure(bg="#202428", fg="#7F8A96")
             return
-        if "short" in section_id:
+        if "short" in section_id or "weak" in section_id:
             widget.configure(bg=GUI_DARK_INPUT, fg="#FF9A9A")
         elif "earnings" in section_id:
             widget.configure(bg=GUI_DARK_INPUT, fg="#F0C76E")
