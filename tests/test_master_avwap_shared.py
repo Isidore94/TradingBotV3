@@ -81,6 +81,21 @@ class MasterAvwapSharedTests(unittest.TestCase):
                                 "priority_bucket": "near_favorite_zone",
                                 "favorite_zone": "lower_band",
                             },
+                            "SMAT": {
+                                "side": "LONG",
+                                "priority_bucket": "sma_breakout_tracking",
+                                "setup_family": "sma_breakout_retest_tracking",
+                                "sma_breakout_sma_label": "SMA_200",
+                                "sma_breakout_retest_level": "EMA_15",
+                            },
+                            "MIDE": {
+                                "side": "SHORT",
+                                "priority_bucket": "stdev_retest_tracking",
+                                "setup_family": "mid_earnings_above_2nd_stdev",
+                                "mid_earnings_active_second_stdev_hold": True,
+                                "mid_earnings_sessions_since_gap": 18,
+                                "mid_earnings_zone_streak_days": 3,
+                            },
                         },
                         "favorites": [{"symbol": "AAPL"}],
                         "near_favorite_zones": [{"symbol": "TSLA"}],
@@ -98,6 +113,15 @@ class MasterAvwapSharedTests(unittest.TestCase):
             self.assertEqual(
                 describe_master_avwap_focus(focus_map["AAPL"]),
                 "best current favorite setup",
+            )
+            self.assertEqual(
+                describe_master_avwap_focus(focus_map["SMAT"]),
+                "SMA breakout retest tracker SMA_200 EMA_15",
+            )
+            self.assertTrue(focus_map["MIDE"]["mid_earnings_active_second_stdev_hold"])
+            self.assertEqual(
+                describe_master_avwap_focus(focus_map["MIDE"]),
+                "mid-earnings 2nd stdev H1 bounce tracker",
             )
 
             groups = load_tradingview_groups(

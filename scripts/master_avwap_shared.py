@@ -328,6 +328,7 @@ def load_master_avwap_focus_map(
             "symbol": symbol,
             "side": _normalize_side(entry.get("side")),
             "priority_bucket": str(entry.get("priority_bucket") or "").strip().lower(),
+            "setup_family": str(entry.get("setup_family") or "").strip(),
             "priority_rank": entry.get("priority_rank"),
             "priority_score": _coerce_float(entry.get("priority_score")),
             "setup_family": str(entry.get("setup_family") or "").strip(),
@@ -360,17 +361,39 @@ def load_master_avwap_focus_map(
             "trendline_break_note": str(entry.get("trendline_break_note") or "").strip(),
             "trendline_note": str(entry.get("trendline_note") or "").strip(),
             "last_trade_date": str(entry.get("last_trade_date") or "").strip(),
+            "mid_earnings_watch": bool(entry.get("mid_earnings_watch")),
+            "mid_earnings_active_second_stdev_hold": bool(
+                entry.get("mid_earnings_active_second_stdev_hold")
+            ),
+            "mid_earnings_sessions_since_gap": entry.get("mid_earnings_sessions_since_gap"),
+            "mid_earnings_zone_streak_days": entry.get("mid_earnings_zone_streak_days"),
+            "sma_breakout_watch": bool(entry.get("sma_breakout_watch")),
+            "sma_breakout_confirmed": bool(entry.get("sma_breakout_confirmed")),
+            "sma_breakout_sma_label": str(entry.get("sma_breakout_sma_label") or "").strip(),
+            "sma_breakout_retest_level": str(entry.get("sma_breakout_retest_level") or "").strip(),
         }
     return focus_map
 
 
 def describe_master_avwap_focus(focus_entry: dict[str, Any] | None) -> str:
     bucket = str((focus_entry or {}).get("priority_bucket") or "").strip().lower()
+    setup_family = str((focus_entry or {}).get("setup_family") or "").strip().lower()
+    if setup_family == "sma_breakout":
+        return "SMA breakout setup"
+    if bucket == "sma_breakout_tracking" or setup_family == "sma_breakout_retest_tracking":
+        sma_label = str((focus_entry or {}).get("sma_breakout_sma_label") or "").strip()
+        retest_label = str((focus_entry or {}).get("sma_breakout_retest_level") or "").strip()
+        detail = " ".join(part for part in (sma_label, retest_label) if part)
+        return f"SMA breakout retest tracker {detail}".strip()
     if bucket == "favorite_setup":
         return "best current favorite setup"
     if bucket == "near_favorite_zone":
         return "near favorite zone"
     if bucket == "stdev_retest_tracking":
+        if setup_family == "mid_earnings_above_2nd_stdev" or (focus_entry or {}).get(
+            "mid_earnings_active_second_stdev_hold"
+        ):
+            return "mid-earnings 2nd stdev H1 bounce tracker"
         return "2nd/3rd stdev retest tracker"
     return "master avwap focus"
 
