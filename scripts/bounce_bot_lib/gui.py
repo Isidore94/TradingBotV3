@@ -1056,7 +1056,15 @@ def start_gui(mode="prompt"):
         fg=text_color,
     ).pack(side=tk.RIGHT, padx=(0, 8))
 
-    content_pane = tk.PanedWindow(frame, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=dark_grey)
+    main_notebook = ttk.Notebook(frame)
+    main_notebook.pack(fill=tk.BOTH, expand=True)
+
+    day_tab = tk.Frame(main_notebook, bg=dark_grey)
+    tracker_tab = tk.Frame(main_notebook, bg=dark_grey)
+    main_notebook.add(day_tab, text="Day Trading")
+    main_notebook.add(tracker_tab, text="Bounce Setup Tracker")
+
+    content_pane = tk.PanedWindow(day_tab, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, bg=dark_grey)
     content_pane.pack(fill=tk.BOTH, expand=True)
 
     alerts_frame = tk.Frame(content_pane, bg=dark_grey)
@@ -1314,11 +1322,227 @@ def start_gui(mode="prompt"):
         widget.tag_config("rrs_rw", foreground="#FF5555", font=('Courier', 11, 'bold'))
 
 
-    button_frame = tk.Frame(frame, bg=dark_grey)  # Add background color to button frame
+    tracker_loaded = {"value": False}
+
+    tracker_host = tk.Frame(tracker_tab, bg=dark_grey, padx=8, pady=8)
+    tracker_host.pack(fill=tk.BOTH, expand=True)
+
+    tracker_toolbar = tk.Frame(tracker_host, bg=dark_grey)
+    tracker_toolbar.pack(fill=tk.X, pady=(0, 6))
+    tracker_status_var = tk.StringVar(value="Open this tab or click Refresh Tracker to load bounce stats.")
+    tracker_min_samples_var = tk.IntVar(value=BOUNCE_PERFORMANCE_MIN_SAMPLES)
+
+    tk.Label(tracker_toolbar, text="Min samples", bg=dark_grey, fg=text_color).pack(side=tk.LEFT, padx=(0, 4))
+    tk.Spinbox(
+        tracker_toolbar,
+        from_=1,
+        to=100,
+        width=4,
+        textvariable=tracker_min_samples_var,
+        bg="#3A3A3A",
+        fg=text_color,
+        buttonbackground="#3A3A3A",
+        insertbackground=text_color,
+    ).pack(side=tk.LEFT, padx=(0, 8))
+
+    tracker_columns = (
+        "dimension",
+        "direction",
+        "segment",
+        "sample_count",
+        "avg_eod_r",
+        "median_eod_r",
+        "avg_mfe_r",
+        "avg_mae_r",
+        "positive_eod_rate",
+        "target_1r_rate",
+        "stop_rate",
+        "recommendation",
+        "example_symbols",
+    )
+    tracker_col_labels = {
+        "dimension": "Dimension",
+        "direction": "Dir",
+        "segment": "Segment",
+        "sample_count": "N",
+        "avg_eod_r": "Avg EOD",
+        "median_eod_r": "Med EOD",
+        "avg_mfe_r": "Avg Peak",
+        "avg_mae_r": "Avg MAE",
+        "positive_eod_rate": "Green",
+        "target_1r_rate": "1R Seen",
+        "stop_rate": "Stop",
+        "recommendation": "Rec",
+        "example_symbols": "Examples",
+    }
+    tracker_col_widths = {
+        "dimension": 165,
+        "direction": 55,
+        "segment": 190,
+        "sample_count": 45,
+        "avg_eod_r": 75,
+        "median_eod_r": 75,
+        "avg_mfe_r": 75,
+        "avg_mae_r": 75,
+        "positive_eod_rate": 65,
+        "target_1r_rate": 65,
+        "stop_rate": 65,
+        "recommendation": 95,
+        "example_symbols": 180,
+    }
+
+    tracker_table_host = tk.Frame(tracker_host, bg=dark_grey)
+    tracker_table_host.pack(fill=tk.BOTH, expand=True)
+    tracker_tree = ttk.Treeview(
+        tracker_table_host,
+        columns=tracker_columns,
+        show="headings",
+        height=14,
+    )
+    tracker_y_scroll = ttk.Scrollbar(tracker_table_host, orient=tk.VERTICAL, command=tracker_tree.yview)
+    tracker_x_scroll = ttk.Scrollbar(tracker_table_host, orient=tk.HORIZONTAL, command=tracker_tree.xview)
+    tracker_tree.configure(yscrollcommand=tracker_y_scroll.set, xscrollcommand=tracker_x_scroll.set)
+    tracker_tree.grid(row=0, column=0, sticky="nsew")
+    tracker_y_scroll.grid(row=0, column=1, sticky="ns")
+    tracker_x_scroll.grid(row=1, column=0, sticky="ew")
+    tracker_table_host.rowconfigure(0, weight=1)
+    tracker_table_host.columnconfigure(0, weight=1)
+    for col in tracker_columns:
+        tracker_tree.heading(col, text=tracker_col_labels[col])
+        tracker_tree.column(
+            col,
+            width=tracker_col_widths[col],
+            minwidth=45,
+            stretch=(col in {"segment", "example_symbols"}),
+            anchor=tk.W if col in {"dimension", "segment", "recommendation", "example_symbols"} else tk.CENTER,
+        )
+
+    tracker_report_frame = tk.LabelFrame(
+        tracker_host,
+        text="Current Bounce Performance Report",
+        bg=dark_grey,
+        fg=text_color,
+    )
+    tracker_report_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 4))
+    tracker_report_text = scrolledtext.ScrolledText(
+        tracker_report_frame,
+        wrap=tk.NONE,
+        height=11,
+        font=("Courier", 10),
+        state="disabled",
+        bg=dark_grey,
+        fg=text_color,
+    )
+    tracker_report_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+    tk.Label(tracker_host, textvariable=tracker_status_var, bg=dark_grey, fg=text_color).pack(fill=tk.X, anchor=tk.W)
+
+    def refresh_bounce_setup_tracker_view():
+        try:
+            try:
+                min_samples = max(1, int(tracker_min_samples_var.get() or BOUNCE_PERFORMANCE_MIN_SAMPLES))
+            except Exception:
+                min_samples = BOUNCE_PERFORMANCE_MIN_SAMPLES
+                tracker_min_samples_var.set(min_samples)
+
+            rows = build_intraday_bounce_performance_rows(min_samples=min_samples)
+            INTRADAY_BOUNCE_PERFORMANCE_CSV.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(rows).to_csv(INTRADAY_BOUNCE_PERFORMANCE_CSV, index=False)
+            write_intraday_bounce_performance_report(rows, report_path=INTRADAY_BOUNCE_PERFORMANCE_REPORT)
+
+            rec_rank = {"focus": 0, "neutral": 1, "watch_more_samples": 2, "avoid": 3}
+            dimension_rank = {
+                "bounce_type": 0,
+                "bounce_combo": 1,
+                "master_avwap_swing_trait": 2,
+                "master_avwap_focus": 3,
+                "master_avwap_priority_bucket": 4,
+                "master_avwap_setup_family": 5,
+                "master_avwap_h1_focus_type": 6,
+                "top_pattern_entry_timing": 7,
+                "market_environment": 8,
+                "rrs_alignment": 9,
+                "time_bucket": 10,
+            }
+            display_rows = sorted(
+                rows,
+                key=lambda row: (
+                    rec_rank.get(str(row.get("recommendation") or ""), 9),
+                    dimension_rank.get(str(row.get("dimension") or ""), 99),
+                    str(row.get("direction") or ""),
+                    -float(row.get("edge_score", 0.0) or 0.0),
+                    -int(row.get("sample_count", 0) or 0),
+                    str(row.get("segment") or ""),
+                ),
+            )
+
+            for item_id in tracker_tree.get_children():
+                tracker_tree.delete(item_id)
+            for row in display_rows:
+                tracker_tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        row.get("dimension", ""),
+                        row.get("direction", ""),
+                        row.get("segment", ""),
+                        int(row.get("sample_count", 0) or 0),
+                        _format_bounce_perf_r(row.get("avg_eod_r", row.get("avg_close_r"))),
+                        _format_bounce_perf_r(row.get("median_eod_r", row.get("median_close_r"))),
+                        _format_bounce_perf_r(row.get("avg_mfe_r")),
+                        _format_bounce_perf_r(row.get("avg_mae_r")),
+                        _format_bounce_perf_pct(row.get("positive_eod_rate")),
+                        _format_bounce_perf_pct(row.get("target_1r_rate")),
+                        _format_bounce_perf_pct(row.get("stop_rate")),
+                        row.get("recommendation", ""),
+                        row.get("example_symbols", ""),
+                    ),
+                )
+
+            report_text = INTRADAY_BOUNCE_PERFORMANCE_REPORT.read_text(encoding="utf-8")
+            tracker_report_text.config(state="normal")
+            tracker_report_text.delete("1.0", tk.END)
+            tracker_report_text.insert(tk.END, report_text)
+            tracker_report_text.config(state="disabled")
+            tracker_report_text.see("1.0")
+            tracker_status_var.set(
+                f"Rows: {len(rows)} | Min samples: {min_samples} | CSV: {INTRADAY_BOUNCE_PERFORMANCE_CSV}"
+            )
+        except Exception as exc:
+            tracker_status_var.set(f"Tracker refresh failed: {exc}")
+
+    def refresh_tracker_from_button():
+        tracker_loaded["value"] = True
+        refresh_bounce_setup_tracker_view()
+
+    tk.Button(
+        tracker_toolbar,
+        text="Refresh Tracker",
+        command=refresh_tracker_from_button,
+        relief=tk.RAISED,
+        padx=10,
+        bg="#3A3A3A",
+        fg=text_color,
+    ).pack(side=tk.LEFT, padx=(0, 8))
+    tk.Label(tracker_toolbar, text="Peak = MFE, EOD = final regular-session close.", bg=dark_grey, fg=text_color).pack(
+        side=tk.LEFT
+    )
+
+    def on_main_tab_changed(_event=None):
+        try:
+            selected_index = main_notebook.index(main_notebook.select())
+        except Exception:
+            selected_index = -1
+        if selected_index == 1 and not tracker_loaded["value"]:
+            tracker_loaded["value"] = True
+            refresh_bounce_setup_tracker_view()
+
+    main_notebook.bind("<<NotebookTabChanged>>", on_main_tab_changed)
+
+    button_frame = tk.Frame(day_tab, bg=dark_grey)  # Add background color to button frame
     button_frame.pack(fill=tk.X, pady=10)
 
     bounce_toggle_frame = tk.LabelFrame(
-        frame,
+        day_tab,
         text="Bounce Filters",
         bg=dark_grey,
         fg=text_color,

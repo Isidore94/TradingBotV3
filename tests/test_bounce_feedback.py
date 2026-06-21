@@ -562,6 +562,46 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["triggered_levels"], ["h1_ema_15"])
 
+    def test_bounce_type_learning_helpers_normalize_and_merge_all_levels(self):
+        self.assertEqual(
+            bounce_bot._split_bounce_type_text("10_candle_low;vwap;10_candle_high"),
+            ["10_candle", "vwap"],
+        )
+
+        bot = object.__new__(bounce_bot.BounceBot)
+        merged = bot._merge_bounce_candidate_learning_levels(
+            {
+                "levels": {"vwap": 100.0},
+                "triggered_levels": ["vwap"],
+            },
+            {
+                "levels": {"ema_21": 99.0, "10_candle_low": 98.0},
+                "triggered_levels": ["ema_21", "10_candle_low"],
+            },
+        )
+
+        self.assertEqual(set(merged["levels"]), {"vwap", "ema_21", "10_candle_low"})
+        self.assertEqual(merged["triggered_levels"], ["vwap", "ema_21", "10_candle_low"])
+        self.assertEqual(merged["learning_bounce_types"], ["10_candle", "ema_21", "vwap"])
+
+    def test_master_avwap_swing_trait_tags_include_swing_context(self):
+        bot = object.__new__(bounce_bot.BounceBot)
+        tags = bot._master_avwap_swing_trait_tags(
+            {
+                "preferred_swing_focus": True,
+                "top_pattern_entry": True,
+                "post_earnings_active": False,
+                "priority_bucket": "favorite_setup",
+                "setup_family": "top_pattern",
+            }
+        )
+
+        self.assertIn("preferred_swing_focus", tags)
+        self.assertIn("top_pattern_entry", tags)
+        self.assertIn("favorite_setup", tags)
+        self.assertIn("family:top_pattern", tags)
+        self.assertNotIn("post_earnings_active", tags)
+
     def test_pending_bounce_does_not_finalize_before_eod_even_if_stop_or_target_seen(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             outcomes_path = Path(temp_dir) / "intraday_bounce_outcomes.csv"
@@ -876,6 +916,94 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(h1_focus_row["sample_count"], 2)
         self.assertEqual(timing_row["sample_count"], 2)
         self.assertEqual(timing_row["recommendation"], "focus")
+
+    def test_intraday_bounce_performance_segments_master_avwap_swing_traits(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            candidates_path = temp_path / "intraday_bounce_candidates.csv"
+            outcomes_path = temp_path / "intraday_bounce_outcomes.csv"
+
+            pd.DataFrame(
+                [
+                    {
+                        "event_id": "SWING1_long_1",
+                        "event_type": "confirmed",
+                        "logged_at": "2026-06-01T10:00:00",
+                        "trade_date": "2026-06-01",
+                        "symbol": "SWING1",
+                        "direction": "long",
+                        "bounce_types": "vwap",
+                        "score": 42,
+                        "risk_per_share": 0.50,
+                        "rrs_spy": 1.0,
+                        "market_environment": "bullish",
+                        "master_avwap_swing_traits": "preferred_swing_focus;top_pattern_entry",
+                    },
+                    {
+                        "event_id": "SWING2_long_1",
+                        "event_type": "confirmed",
+                        "logged_at": "2026-06-01T11:00:00",
+                        "trade_date": "2026-06-01",
+                        "symbol": "SWING2",
+                        "direction": "long",
+                        "bounce_types": "ema_21",
+                        "score": 43,
+                        "risk_per_share": 0.55,
+                        "rrs_spy": 1.2,
+                        "market_environment": "bullish",
+                        "master_avwap_swing_traits": "preferred_swing_focus;top_pattern_entry",
+                    },
+                ]
+            ).to_csv(candidates_path, index=False)
+            pd.DataFrame(
+                [
+                    {
+                        "event_id": "SWING1_long_1",
+                        "event_type": "final",
+                        "logged_at": "2026-06-01T13:10:00",
+                        "entry_time": "2026-06-01T10:00:00",
+                        "bars_elapsed": 24,
+                        "close_r": 0.80,
+                        "mfe_r": 1.4,
+                        "mae_r": -0.1,
+                        "target_1r_hit": True,
+                        "target_2r_hit": False,
+                        "stop_hit": False,
+                        "status": "eod_complete",
+                    },
+                    {
+                        "event_id": "SWING2_long_1",
+                        "event_type": "final",
+                        "logged_at": "2026-06-01T13:10:00",
+                        "entry_time": "2026-06-01T11:00:00",
+                        "bars_elapsed": 18,
+                        "close_r": 0.60,
+                        "mfe_r": 1.0,
+                        "mae_r": -0.2,
+                        "target_1r_hit": True,
+                        "target_2r_hit": False,
+                        "stop_hit": False,
+                        "status": "eod_complete",
+                    },
+                ]
+            ).to_csv(outcomes_path, index=False)
+
+            rows = bounce_bot.build_intraday_bounce_performance_rows(
+                candidates_path=candidates_path,
+                outcomes_path=outcomes_path,
+                min_samples=2,
+            )
+
+        trait_row = next(
+            row for row in rows
+            if row["dimension"] == "master_avwap_swing_trait"
+            and row["segment"] == "top_pattern_entry"
+            and row["direction"] == "long"
+        )
+        self.assertEqual(trait_row["sample_count"], 2)
+        self.assertAlmostEqual(trait_row["avg_eod_r"], 0.70)
+        self.assertAlmostEqual(trait_row["avg_mfe_r"], 1.20)
+        self.assertEqual(trait_row["recommendation"], "focus")
 
     def test_intraday_bounce_performance_recommendation_categories_with_old_optional_columns_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:

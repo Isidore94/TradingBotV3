@@ -229,6 +229,7 @@ BOUNCE_TYPE_LABELS = {
     "prev_day_high": "Previous Day High",
     "prev_day_low": "Previous Day Low",
 }
+BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 
 # Connection & Request settings
 MAX_CONCURRENT_REQUESTS = 1
@@ -357,7 +358,7 @@ PREV_DAY_LEVEL_MIN_PRIOR_BARS = 4
 PREV_DAY_LEVEL_RESPECT_RATIO = 0.85
 PREV_DAY_LEVEL_MAX_WRONG_SIDE_CLOSES = 1
 PREV_DAY_LEVEL_RECENT_RESPECT_BARS = 6
-BOUNCE_LEARNING_SCHEMA_VERSION = 2
+BOUNCE_LEARNING_SCHEMA_VERSION = 3
 BOUNCE_OUTCOME_MILESTONE_BARS = (1, 3, 6, 12)
 BOUNCE_EOD_FINALIZE_GRACE_MINUTES = 10
 BOUNCE_PERFORMANCE_MIN_SAMPLES = 5
@@ -394,6 +395,7 @@ BOUNCE_CANDIDATE_EVENT_COLUMNS = [
     "master_avwap_priority_bucket",
     "master_avwap_setup_family",
     "master_avwap_h1_focus_type",
+    "master_avwap_swing_traits",
     "candles_waited",
     "levels_json",
     "candle_json",
@@ -783,13 +785,41 @@ def _bounce_perf_bool(value) -> bool:
     return text in {"1", "true", "yes", "y"}
 
 
-def _split_bounce_type_text(value) -> list[str]:
+def _split_delimited_text(value) -> list[str]:
     items = []
     for item in re.split(r"[;,]", str(value or "")):
         item = item.strip()
         if item:
             items.append(item)
     return sorted(set(items))
+
+
+def _normalize_bounce_type_key(value) -> str:
+    text = str(value or "").strip()
+    if text in {"10_candle_low", "10_candle_high"}:
+        return "10_candle"
+    return text
+
+
+def _bounce_type_keys_from_levels(levels) -> list[str]:
+    keys = levels.keys() if isinstance(levels, dict) else levels or []
+    return sorted(
+        {
+            normalized
+            for normalized in (_normalize_bounce_type_key(key) for key in keys)
+            if normalized
+        }
+    )
+
+
+def _split_bounce_type_text(value) -> list[str]:
+    return sorted(
+        {
+            normalized
+            for normalized in (_normalize_bounce_type_key(item) for item in _split_delimited_text(value))
+            if normalized
+        }
+    )
 
 
 def _read_bounce_learning_csv(path: Path, columns: list[str]) -> pd.DataFrame:
@@ -904,6 +934,7 @@ def build_intraday_bounce_performance_rows(
         "master_avwap_priority_bucket",
         "master_avwap_setup_family",
         "master_avwap_h1_focus_type",
+        "master_avwap_swing_traits",
     ]
     outcome_columns = [
         "event_id",
@@ -997,6 +1028,10 @@ def build_intraday_bounce_performance_rows(
             ),
         ]
         dimensions.extend(("bounce_type", bounce_type) for bounce_type in bounce_types)
+        dimensions.extend(
+            ("master_avwap_swing_trait", trait)
+            for trait in _split_delimited_text(record.get("master_avwap_swing_traits"))
+        )
         h1_focus_type = str(record.get("master_avwap_h1_focus_type") or "").strip().lower()
         if h1_focus_type == "top_pattern" and "h1_ema_15" in bounce_types:
             dimensions.append(("top_pattern_entry_timing", "h1_15ema_bounce"))
@@ -1851,6 +1886,67 @@ class BounceBot(EWrapper, EClient):
             score += 4
         return round(float(score), 2)
 
+    def _master_avwap_swing_trait_tags(self, focus_entry):
+        if not isinstance(focus_entry, dict):
+            return []
+
+        trait_specs = [
+            ("preferred_swing_focus", "preferred_swing_focus"),
+            ("top_pattern_watch", "top_pattern_watch"),
+            ("top_pattern_entry", "top_pattern_entry"),
+            ("post_earnings_active", "post_earnings_active"),
+            ("post_earnings_break_intraday", "post_earnings_break_intraday"),
+            ("post_earnings_break_close", "post_earnings_break_close"),
+            ("mid_earnings_active_second_stdev_hold", "mid_earnings_2nd_stdev_hold"),
+            ("sma_breakout_watch", "sma_breakout_watch"),
+            ("sma_breakout_confirmed", "sma_breakout_confirmed"),
+            ("retest_followthrough", "retest_followthrough"),
+            ("breakout_5d", "breakout_5d"),
+            ("previous_day_range_break", "previous_day_range_break"),
+            ("trendline_break_recent", "trendline_break_recent"),
+            ("extreme_move_watch", "extreme_move_watch"),
+        ]
+        tags = [
+            tag
+            for key, tag in trait_specs
+            if bool(focus_entry.get(key))
+        ]
+        bucket = str(focus_entry.get("priority_bucket") or "").strip().lower()
+        if bucket in {"favorite_setup", "near_favorite_zone"}:
+            tags.append(bucket)
+        setup_family = str(focus_entry.get("setup_family") or "").strip().lower()
+        if setup_family:
+            tags.append(f"family:{setup_family}")
+
+        seen = set()
+        deduped = []
+        for tag in tags:
+            if tag in seen:
+                continue
+            seen.add(tag)
+            deduped.append(tag)
+        return deduped
+
+    def _merge_bounce_candidate_learning_levels(self, candidate_info, learning_info):
+        if not isinstance(candidate_info, dict) or not isinstance(learning_info, dict):
+            return candidate_info
+
+        merged = dict(candidate_info)
+        merged_levels = dict(learning_info.get("levels") or {})
+        merged_levels.update(candidate_info.get("levels") or {})
+
+        merged_triggers = []
+        for source in (candidate_info, learning_info):
+            for level in source.get("triggered_levels") or []:
+                level = str(level or "").strip()
+                if level and level not in merged_triggers:
+                    merged_triggers.append(level)
+
+        merged["levels"] = merged_levels
+        merged["triggered_levels"] = merged_triggers
+        merged["learning_bounce_types"] = _bounce_type_keys_from_levels(merged_levels)
+        return merged
+
     def _log_bounce_candidate_event(
         self,
         event_type,
@@ -1879,6 +1975,7 @@ class BounceBot(EWrapper, EClient):
         metrics = self.symbol_metrics.get(symbol, {})
         focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
         focus_label = self._describe_master_avwap_focus(focus_entry) if isinstance(focus_entry, dict) else ""
+        swing_traits = self._master_avwap_swing_trait_tags(focus_entry)
         level_names = {str(key) for key in (levels or {}).keys()}
         master_avwap_h1_focus_type = ""
         if bool(level_names & {"h1_ema_15", "h1_sma_20"}):
@@ -1894,7 +1991,7 @@ class BounceBot(EWrapper, EClient):
             "trade_date": trade_date,
             "symbol": symbol,
             "direction": direction,
-            "bounce_types": ";".join(sorted(str(key) for key in (levels or {}).keys())),
+            "bounce_types": ";".join(_bounce_type_keys_from_levels(levels or {})),
             "reason": reason,
             "score": self._score_bounce_candidate_snapshot(direction, levels, context),
             "entry_trigger": plan["entry_trigger"],
@@ -1926,6 +2023,7 @@ class BounceBot(EWrapper, EClient):
                 else ""
             ),
             "master_avwap_h1_focus_type": master_avwap_h1_focus_type,
+            "master_avwap_swing_traits": ";".join(swing_traits),
             "candles_waited": int(candles_waited or 0),
             "levels_json": self._json_for_learning(levels or {}),
             "candle_json": self._json_for_learning({"bounce": bounce_candle, "current": current_candle}),
@@ -5178,7 +5276,7 @@ class BounceBot(EWrapper, EClient):
 
 
 
-    def evaluate_bounce_candidate(self, symbol, df, allowed_bounce_types=None):
+    def evaluate_bounce_candidate(self, symbol, df, allowed_bounce_types=None, *, include_disabled_bounce_types=False):
         if len(df) < 10:
             return None
 
@@ -5304,6 +5402,9 @@ class BounceBot(EWrapper, EClient):
 
         def bounce_type_allowed(bounce_type):
             return allowed_types is None or bounce_type in allowed_types
+
+        def bounce_type_enabled(bounce_type):
+            return bool(include_disabled_bounce_types or self.is_bounce_type_enabled(bounce_type))
 
         def mark_trigger(level_name):
             if level_name not in triggered_levels:
@@ -5745,7 +5846,7 @@ class BounceBot(EWrapper, EClient):
             return False
 
         # Check for 10-candle bounce if enabled
-        if bounce_type_allowed("10_candle") and self.is_bounce_type_enabled("10_candle") and len(df) >= 11:
+        if bounce_type_allowed("10_candle") and bounce_type_enabled("10_candle") and len(df) >= 11:
             if direction == "long":
                 # For longs, check if current candle creates a new lowest low
                 last_10_candles = df.iloc[-11:-1].copy()  # Exclude current candle
@@ -5768,7 +5869,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: 10-candle SHORT bounce candidate found. New high: {current_candle_data['high']:.2f}, Previous highest: {highest_high_prev:.2f}")
 
         # Check for standard VWAP bounces if enabled
-        if bounce_type_allowed("vwap") and self.is_bounce_type_enabled("vwap") and metrics.get("std_vwap") is not None:
+        if bounce_type_allowed("vwap") and bounce_type_enabled("vwap") and metrics.get("std_vwap") is not None:
             std_vwap = metrics.get("std_vwap")
             # Check if price respected standard VWAP for consecutive candles
             respected = check_consecutive_respect(std_vwap, "Standard VWAP")
@@ -5785,7 +5886,7 @@ class BounceBot(EWrapper, EClient):
                 )
 
         # Check for Dynamic VWAP bounces if enabled
-        if bounce_type_allowed("dynamic_vwap") and self.is_bounce_type_enabled("dynamic_vwap") and metrics.get("dynamic_vwap") is not None:
+        if bounce_type_allowed("dynamic_vwap") and bounce_type_enabled("dynamic_vwap") and metrics.get("dynamic_vwap") is not None:
             dynamic_vwap = metrics.get("dynamic_vwap")
             # Check if price respected dynamic VWAP for consecutive candles
             respected = check_consecutive_respect(dynamic_vwap, "Dynamic VWAP")
@@ -5802,7 +5903,7 @@ class BounceBot(EWrapper, EClient):
                 )
 
         # Check for EOD VWAP bounces if enabled
-        if bounce_type_allowed("eod_vwap") and self.is_bounce_type_enabled("eod_vwap") and metrics.get("eod_vwap") is not None:
+        if bounce_type_allowed("eod_vwap") and bounce_type_enabled("eod_vwap") and metrics.get("eod_vwap") is not None:
             eod_vwap = metrics.get("eod_vwap")
             # Check if price respected EOD VWAP for consecutive candles
             respected = check_consecutive_respect(eod_vwap, "EOD VWAP")
@@ -5820,7 +5921,7 @@ class BounceBot(EWrapper, EClient):
 
         if (
             bounce_type_allowed("vwap_eod_confluence")
-            and self.is_bounce_type_enabled("vwap_eod_confluence")
+            and bounce_type_enabled("vwap_eod_confluence")
         ):
             std_vwap = metrics.get("std_vwap")
             eod_vwap = metrics.get("eod_vwap")
@@ -5855,7 +5956,7 @@ class BounceBot(EWrapper, EClient):
 
         if (
             bounce_type_allowed("impulse_retest_vwap_eod")
-            and self.is_bounce_type_enabled("impulse_retest_vwap_eod")
+            and bounce_type_enabled("impulse_retest_vwap_eod")
         ):
             std_vwap = metrics.get("std_vwap")
             eod_vwap = metrics.get("eod_vwap")
@@ -5963,7 +6064,7 @@ class BounceBot(EWrapper, EClient):
 
         # Check EMA bounces (must also be on the correct side of standard VWAP)
         for ema_key, ema_label in (("ema_8", "8 EMA"), ("ema_15", "15 EMA"), ("ema_21", "21 EMA")):
-            if not bounce_type_allowed(ema_key) or not self.is_bounce_type_enabled(ema_key):
+            if not bounce_type_allowed(ema_key) or not bounce_type_enabled(ema_key):
                 continue
             ema_value = metrics.get(ema_key)
             std_vwap = metrics.get("std_vwap")
@@ -6012,7 +6113,7 @@ class BounceBot(EWrapper, EClient):
                     )
 
         # Check for VWAP upper band bounces for longs
-        if bounce_type_allowed("vwap_upper_band") and self.is_bounce_type_enabled("vwap_upper_band") and direction == "long" and metrics.get("vwap_1stdev_upper") is not None:
+        if bounce_type_allowed("vwap_upper_band") and bounce_type_enabled("vwap_upper_band") and direction == "long" and metrics.get("vwap_1stdev_upper") is not None:
             # Check if price respected upper band for consecutive candles
             if check_consecutive_respect(metrics.get("vwap_1stdev_upper"), "VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -6021,7 +6122,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for VWAP lower band bounces for shorts
-        if bounce_type_allowed("vwap_lower_band") and self.is_bounce_type_enabled("vwap_lower_band") and direction == "short" and metrics.get("vwap_1stdev_lower") is not None:
+        if bounce_type_allowed("vwap_lower_band") and bounce_type_enabled("vwap_lower_band") and direction == "short" and metrics.get("vwap_1stdev_lower") is not None:
             # Check if price respected lower band for consecutive candles
             if check_consecutive_respect(metrics.get("vwap_1stdev_lower"), "VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
@@ -6030,7 +6131,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for Dynamic VWAP upper band bounces for longs
-        if bounce_type_allowed("dynamic_vwap_upper_band") and self.is_bounce_type_enabled("dynamic_vwap_upper_band") and direction == "long" and metrics.get("dynamic_vwap_1stdev_upper") is not None:
+        if bounce_type_allowed("dynamic_vwap_upper_band") and bounce_type_enabled("dynamic_vwap_upper_band") and direction == "long" and metrics.get("dynamic_vwap_1stdev_upper") is not None:
             # Check if price respected upper band for consecutive candles
             if check_consecutive_respect(metrics.get("dynamic_vwap_1stdev_upper"), "Dynamic VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("dynamic_vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -6039,7 +6140,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: Dynamic VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('dynamic_vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for Dynamic VWAP lower band bounces for shorts
-        if bounce_type_allowed("dynamic_vwap_lower_band") and self.is_bounce_type_enabled("dynamic_vwap_lower_band") and direction == "short" and metrics.get("dynamic_vwap_1stdev_lower") is not None:
+        if bounce_type_allowed("dynamic_vwap_lower_band") and bounce_type_enabled("dynamic_vwap_lower_band") and direction == "short" and metrics.get("dynamic_vwap_1stdev_lower") is not None:
             # Check if price respected lower band for consecutive candles
             if check_consecutive_respect(metrics.get("dynamic_vwap_1stdev_lower"), "Dynamic VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("dynamic_vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
@@ -6048,7 +6149,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: Dynamic VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('dynamic_vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for EOD VWAP upper band bounces for longs
-        if bounce_type_allowed("eod_vwap_upper_band") and self.is_bounce_type_enabled("eod_vwap_upper_band") and direction == "long" and metrics.get("eod_vwap_1stdev_upper") is not None:
+        if bounce_type_allowed("eod_vwap_upper_band") and bounce_type_enabled("eod_vwap_upper_band") and direction == "long" and metrics.get("eod_vwap_1stdev_upper") is not None:
             # Check if price respected upper band for consecutive candles
             if check_consecutive_respect(metrics.get("eod_vwap_1stdev_upper"), "EOD VWAP 1SD Upper Band"):
                 if abs(current_candle_data["low"] - metrics.get("eod_vwap_1stdev_upper")) <= threshold and current_candle_data["close"] > current_candle_data["open"]:
@@ -6057,7 +6158,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: EOD VWAP 1SD Upper Band LONG bounce candidate found. Upper Band: {metrics.get('eod_vwap_1stdev_upper'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
         # Check for EOD VWAP lower band bounces for shorts
-        if bounce_type_allowed("eod_vwap_lower_band") and self.is_bounce_type_enabled("eod_vwap_lower_band") and direction == "short" and metrics.get("eod_vwap_1stdev_lower") is not None:
+        if bounce_type_allowed("eod_vwap_lower_band") and bounce_type_enabled("eod_vwap_lower_band") and direction == "short" and metrics.get("eod_vwap_1stdev_lower") is not None:
             # Check if price respected lower band for consecutive candles
             if check_consecutive_respect(metrics.get("eod_vwap_1stdev_lower"), "EOD VWAP 1SD Lower Band"):
                 if abs(current_candle_data["high"] - metrics.get("eod_vwap_1stdev_lower")) <= threshold and current_candle_data["close"] < current_candle_data["open"]:
@@ -6066,7 +6167,7 @@ class BounceBot(EWrapper, EClient):
                     logging.debug(f"{symbol}: EOD VWAP 1SD Lower Band SHORT bounce candidate found. Lower Band: {metrics.get('eod_vwap_1stdev_lower'):.2f}, Current High: {current_candle_data['high']:.2f}")
 
         # Check for previous day high/low bounces if enabled
-        if direction == "long" and bounce_type_allowed("prev_day_high") and self.is_bounce_type_enabled("prev_day_high") and metrics.get("prev_high") is not None:
+        if direction == "long" and bounce_type_allowed("prev_day_high") and bounce_type_enabled("prev_day_high") and metrics.get("prev_high") is not None:
             # Check if price respected previous day high for consecutive candles
             if (
                 check_consecutive_respect(metrics.get("prev_high"), "Previous Day High")
@@ -6078,7 +6179,7 @@ class BounceBot(EWrapper, EClient):
                     mark_trigger("prev_day_high")
                     logging.debug(f"{symbol}: Previous Day High LONG bounce candidate found. Prev High: {metrics.get('prev_high'):.2f}, Current Low: {current_candle_data['low']:.2f}")
 
-        elif direction == "short" and bounce_type_allowed("prev_day_low") and self.is_bounce_type_enabled("prev_day_low") and metrics.get("prev_low") is not None:
+        elif direction == "short" and bounce_type_allowed("prev_day_low") and bounce_type_enabled("prev_day_low") and metrics.get("prev_low") is not None:
             # Check if price respected previous day low for consecutive candles
             if (
                 check_consecutive_respect(metrics.get("prev_low"), "Previous Day Low")
@@ -6319,13 +6420,30 @@ class BounceBot(EWrapper, EClient):
 
         # Continue with evaluating bounce candidates
         candidate_info = self.evaluate_bounce_candidate(symbol, df, allowed_bounce_types=allowed_bounce_types)
+        learning_candidate_info = self.evaluate_bounce_candidate(
+            symbol,
+            df,
+            allowed_bounce_types=BOUNCE_LEARNING_TYPE_KEYS,
+            include_disabled_bounce_types=True,
+        )
         h1_mid_earnings_candidate = self._evaluate_master_avwap_mid_earnings_h1_bounce(
             symbol,
             direction,
             current_date,
         )
         if h1_mid_earnings_candidate:
-            candidate_info = h1_mid_earnings_candidate
+            candidate_info = self._merge_bounce_candidate_learning_levels(
+                h1_mid_earnings_candidate,
+                learning_candidate_info,
+            )
+        elif candidate_info:
+            candidate_info = self._merge_bounce_candidate_learning_levels(
+                candidate_info,
+                learning_candidate_info,
+            )
+        elif learning_candidate_info:
+            candidate_info = dict(learning_candidate_info)
+            candidate_info["learning_only"] = True
 
         def confirm_bounce_alert(
             levels,
@@ -6336,6 +6454,7 @@ class BounceBot(EWrapper, EClient):
             candidate_id="",
             candles_waited=0,
             reason=None,
+            learning_only=False,
         ):
             bounce_msg = f"{symbol}: Bounce confirmed ({direction}) from {levels_list}"
             event_row = self._log_bounce_candidate_event(
@@ -6354,6 +6473,18 @@ class BounceBot(EWrapper, EClient):
                 candidate_id=candidate_id,
                 candles_waited=candles_waited,
             )
+            self._register_bounce_outcome(
+                symbol,
+                direction,
+                levels,
+                bounce_candle,
+                current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
+                candidate_id,
+            )
+            if learning_only:
+                self.log_symbol(symbol, f"LEARNING_ONLY: {bounce_msg}")
+                return
+
             bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
             if self.gui_callback:
                 self.gui_callback(bounce_payload, "green" if direction == "long" else "red")
@@ -6367,34 +6498,28 @@ class BounceBot(EWrapper, EClient):
                 current_candle=current_candle,
                 threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0)
             )
-            self._register_bounce_outcome(
-                symbol,
-                direction,
-                levels,
-                bounce_candle,
-                current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
-                candidate_id,
-            )
             self.alerted_symbols.add(symbol)
 
         if h1_mid_earnings_candidate and h1_mid_earnings_candidate.get("confirm_immediately"):
-            levels = h1_mid_earnings_candidate["levels"]
-            levels_list = h1_mid_earnings_candidate.get("triggered_levels") or list(levels.keys())
+            active_h1_candidate = candidate_info or h1_mid_earnings_candidate
+            levels = active_h1_candidate["levels"]
+            levels_list = active_h1_candidate.get("triggered_levels") or list(levels.keys())
             h1_event_key = h1_mid_earnings_candidate.get("h1_event_key")
             if h1_event_key and h1_event_key not in self.emitted_h1_mid_earnings_bounce_alerts:
                 candidate_id = self._make_bounce_event_id(
                     symbol,
                     direction,
-                    h1_mid_earnings_candidate["candle"],
+                    active_h1_candidate["candle"],
                     levels,
                 )
                 confirm_bounce_alert(
                     levels,
                     levels_list,
-                    h1_mid_earnings_candidate["candle"],
-                    h1_mid_earnings_candidate.get("confirmation_candle", today_df.iloc[-1]),
+                    active_h1_candidate["candle"],
+                    active_h1_candidate.get("confirmation_candle", today_df.iloc[-1]),
                     candidate_id=candidate_id,
-                    reason=h1_mid_earnings_candidate.get("reason"),
+                    reason=active_h1_candidate.get("reason"),
+                    learning_only=bool(active_h1_candidate.get("learning_only")),
                 )
                 self.emitted_h1_mid_earnings_bounce_alerts.add(h1_event_key)
                 self.bounce_candidates.pop(symbol, None)
@@ -6477,6 +6602,7 @@ class BounceBot(EWrapper, EClient):
                             current_candle,
                             candidate_id=bounce_data.get("candidate_id", ""),
                             candles_waited=candles_waited,
+                            learning_only=bool(bounce_data.get("learning_only")),
                         )
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
@@ -6491,6 +6617,7 @@ class BounceBot(EWrapper, EClient):
                             current_candle,
                             candidate_id=bounce_data.get("candidate_id", ""),
                             candles_waited=candles_waited,
+                            learning_only=bool(bounce_data.get("learning_only")),
                         )
                         self.bounce_candidates.pop(symbol)
                         return  # Exit after confirming a bounce
@@ -6577,6 +6704,7 @@ class BounceBot(EWrapper, EClient):
                     confirmation_candle,
                     candidate_id=candidate_id,
                     reason=candidate_info.get("reason") or "Fast-confirmed on signal candle.",
+                    learning_only=bool(candidate_info.get("learning_only")),
                 )
                 if h1_event_key:
                     self.emitted_h1_mid_earnings_bounce_alerts.add(h1_event_key)
@@ -6593,6 +6721,7 @@ class BounceBot(EWrapper, EClient):
                     "max_confirmation_candles",
                     BOUNCE_CONFIRMATION_MAX_CANDLES,
                 ),
+                "learning_only": bool(candidate_info.get("learning_only")),
             }
             self._log_bounce_candidate_event(
                 "detected",
@@ -6608,7 +6737,7 @@ class BounceBot(EWrapper, EClient):
             )
 
                         # In the evaluate_bounce_candidate function, where price approaching is logged:
-            if LOG_PRICE_APPROACHING:
+            if LOG_PRICE_APPROACHING and not candidate_info.get("learning_only"):
                 # Filter out 10-candle levels for approaching alerts
                 display_level_names = set(candidate_info.get("triggered_levels", candidate_info["levels"].keys()))
                 approaching_levels = {k: v for k, v in candidate_info["levels"].items()
