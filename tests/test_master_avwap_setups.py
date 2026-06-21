@@ -1895,6 +1895,17 @@ class MasterAvwapSetupTests(unittest.TestCase):
                     "post_earnings_note": "new 52-week closing low; close confirmed",
                 },
                 {
+                    "symbol": "ADBE",
+                    "side": "SHORT",
+                    "score": 118,
+                    "setup_family": "post_earnings_avwap_bounce",
+                    "favorite_signals": [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL],
+                    "context_signals": [],
+                    "post_earnings_active": True,
+                    "post_earnings_sessions_since_gap": 5,
+                    "post_earnings_note": "pre-earnings AVWAPE rejection",
+                },
+                {
                     "symbol": "OLD",
                     "side": "LONG",
                     "score": 300,
@@ -1943,13 +1954,14 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(sections["long_2nd_to_3rd_stdev_2_sessions"]["copy_text"], "NVDA")
         self.assertEqual(sections["earnings_last_night_or_today"]["copy_text"], "META, NFLX")
         self.assertNotIn("LATE", sections["earnings_last_night_or_today"]["copy_text"])
-        self.assertEqual(sections["post_earnings_potential_plays"]["copy_text"], "AMD")
+        self.assertEqual(sections["post_earnings_potential_plays"]["copy_text"], "ADBE, AMD")
 
         report = format_market_prep_payload_report(payload)
 
         self.assertIn("Longs: AVWAPE to 1st Dev", report)
         self.assertIn("NFLX   last_night earnings=2026-04-23", report)
         self.assertIn("AMD    SHORT close_confirmed score=121.5", report)
+        self.assertIn("ADBE   SHORT watch score=118.0 | pre-earnings AVWAPE rejection", report)
 
     def test_market_prep_payload_builds_strength_and_weakness_deciles(self):
         symbols = [
@@ -2296,6 +2308,26 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(summary["break_sessions_after_gap"], 1)
         self.assertIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
 
+    def test_post_earnings_52w_break_handles_short_52w_low_adbe_style(self):
+        df = _build_post_earnings_52w_history(side="SHORT", extra_sessions_after_break=0)
+        context = _build_post_earnings_52w_release_context(df, side="SHORT")
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "SHORT", context)
+
+        self.assertTrue(summary["qualified_gap"])
+        self.assertTrue(summary["qualified_52w_gap"])
+        self.assertTrue(summary["gap_candle_directional"])
+        self.assertEqual(summary["monitor_level"], 80.0)
+        self.assertEqual(summary["monitor_level_label"], "52W_LOW")
+        self.assertEqual(summary["earnings_candle_stop_level"], 82.0)
+        self.assertEqual(summary["earnings_candle_stop_label"], master_avwap.POST_EARNINGS_CANDLE_STOP_LABEL_SHORT)
+        self.assertTrue(summary["break_signal"])
+        self.assertTrue(summary["break_fresh"])
+        self.assertTrue(summary["break_close"])
+        self.assertEqual(summary["family"], master_avwap.POST_EARNINGS_BREAK_SIGNAL)
+        self.assertIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
+        self.assertIn(master_avwap.POST_EARNINGS_CLOSE_CONFIRM_SIGNAL, summary["events"])
+
     def test_post_earnings_52w_break_requires_green_gap_candle_for_longs(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=0)
         gap_idx = 30
@@ -2425,6 +2457,28 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(summary["monitor_level"], 115.0)
         self.assertEqual(summary["monitor_level_label"], "PRE_EARN_AVWAP")
         self.assertEqual(summary["events"], [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL])
+
+    def test_post_earnings_avwape_rejection_allows_short_pierce_and_close_below_adbe_style(self):
+        df = _build_post_earnings_52w_history(side="SHORT", extra_sessions_after_break=4)
+        df.loc[:29, "low"] = 70.0
+        df.loc[df.index[-1], ["open", "high", "low", "close"]] = [84.8, 86.5, 83.8, 84.2]
+        context = _build_post_earnings_52w_release_context(df, side="SHORT")
+
+        self.assertFalse(master_avwap.bounce_down_at_level(df, 85.0))
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "SHORT", context)
+
+        self.assertTrue(summary["active"])
+        self.assertTrue(summary["qualified_gap"])
+        self.assertTrue(summary["qualified_pre_earnings_avwap_gap"])
+        self.assertFalse(summary["qualified_52w_gap"])
+        self.assertFalse(summary["break_signal"])
+        self.assertTrue(summary["bounce_signal"])
+        self.assertEqual(summary["monitor_level"], 85.0)
+        self.assertEqual(summary["monitor_level_label"], "PRE_EARN_AVWAP")
+        self.assertEqual(summary["family"], master_avwap.POST_EARNINGS_BOUNCE_SIGNAL)
+        self.assertEqual(summary["events"], [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL])
+        self.assertIn("pre-earnings AVWAPE rejection", summary["note"])
 
     def test_post_earnings_avwape_bounce_can_fire_within_10_day_window(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=4)

@@ -10724,11 +10724,18 @@ def _find_recent_post_earnings_avwap_bounce(
     side_norm = normalize_side(side)
     for idx in range(start_idx, end_idx - 1, -1):
         price_slice = df.iloc[: idx + 1]
-        bounced = (
+        strict_bounced = (
             bounce_up_at_level(price_slice, level)
             if side_norm == "LONG"
             else bounce_down_at_level(price_slice, level)
         )
+        bounced = strict_bounced
+        if not bounced and side_norm == "SHORT":
+            bounced = _generous_reclaim_bounce_at_level(
+                price_slice,
+                level,
+                side_norm,
+            )
         if not bounced:
             continue
         result.update(
@@ -11087,6 +11094,7 @@ def analyze_post_earnings_setups(
         if not family:
             family = POST_EARNINGS_BOUNCE_SIGNAL
 
+    avwap_retest_word = "bounce" if side_norm == "LONG" else "rejection"
     note_parts = [
         f"gap {gap_date} {float(gap_atr_multiple):.2f} ATR",
         f"pre-earnings AVWAPE anchor {release_context.get('anchor_date')}",
@@ -11123,12 +11131,12 @@ def analyze_post_earnings_setups(
     else:
         note_parts.append(
             f"not a new 52-week {'high' if side_norm == 'LONG' else 'low'}; "
-            "pre-earnings AVWAPE rejection watch"
+            f"pre-earnings AVWAPE {avwap_retest_word} watch"
         )
     if break_close:
         note_parts.append("close confirmed")
     if bounce_signal:
-        note_parts.append("pre-earnings AVWAPE bounce")
+        note_parts.append(f"pre-earnings AVWAPE {avwap_retest_word}")
         if bounce_info.get("bounce_age_sessions") is not None:
             note_parts.append(
                 f"bounce age {int(bounce_info['bounce_age_sessions'])}/"
