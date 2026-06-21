@@ -15,6 +15,7 @@ from master_avwap_shared import (  # noqa: E402
     build_master_avwap_d1_flag_events,
     build_master_avwap_second_stdev_cross_map,
     describe_master_avwap_focus,
+    load_master_avwap_d1_upgrade_alerts,
     load_master_avwap_d1_watchlist,
     load_master_avwap_events_for_date,
     load_master_avwap_focus_map,
@@ -231,6 +232,19 @@ class MasterAvwapSharedTests(unittest.TestCase):
                                         "armed_price": 101.0,
                                     }
                                 ],
+                                "upgrade_targets": [
+                                    {
+                                        "trigger_id": "first_dev_break:UPPER_1:102.0000",
+                                        "label": "UPPER_1",
+                                        "level": 102.0,
+                                        "action": "break_above",
+                                        "event_type": "first_dev_break",
+                                        "alert_label": "1st-dev break",
+                                        "armed_price": 101.0,
+                                        "target_tier": "A/S",
+                                        "reason": "A/S upgrade target: clear UPPER_1 resistance.",
+                                    }
+                                ],
                                 "theta": {
                                     "play_type": "sold_put",
                                     "status": "recommended",
@@ -311,8 +325,82 @@ class MasterAvwapSharedTests(unittest.TestCase):
             self.assertIn("15EMA D1 bounce", labels_by_symbol["AAPL"])
             self.assertIn("1st-dev D1 bounce", labels_by_symbol["TSLA"])
             self.assertIn("Trendline breakthrough", labels_by_symbol["TSLA"])
+            self.assertIn("A/S upgrade: 1st-dev break", labels_by_symbol["NVDA"])
             self.assertIn("Put premium viable", labels_by_symbol["NVDA"])
             self.assertIn("Put premium cusp", labels_by_symbol["APLD"])
+
+    def test_d1_upgrade_alert_file_feeds_fresh_watch_flags(self):
+        trade_date = date.today()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            alerts_path = Path(temp_dir) / "master_avwap_d1_upgrade_alerts.json"
+            alerts_path.write_text(
+                json.dumps(
+                    {
+                        "generated_at": f"{trade_date.isoformat()}T12:00:00",
+                        "run_date": trade_date.isoformat(),
+                        "symbols": {
+                            "MSFT": {
+                                "symbol": "MSFT",
+                                "side": "LONG",
+                                "last_trade_date": trade_date.isoformat(),
+                                "priority_score": 185,
+                                "upgrade_summary": "1st-dev break break above 103.00",
+                                "upgrade_targets": [
+                                    {
+                                        "trigger_id": "first_dev_break:UPPER_1:103.0000",
+                                        "side": "LONG",
+                                        "label": "UPPER_1",
+                                        "level": 103.0,
+                                        "action": "break_above",
+                                        "event_type": "first_dev_break",
+                                        "alert_label": "1st-dev break",
+                                        "reason": "A/S upgrade target: clear UPPER_1 resistance.",
+                                        "target_tier": "A/S",
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            upgrade_alerts = load_master_avwap_d1_upgrade_alerts(alerts_path)
+
+        inactive_watchlist = {
+            "OLD": {
+                "symbol": "OLD",
+                "side": "LONG",
+                "active_current_scan": False,
+                "upgrade_targets": [
+                    {
+                        "trigger_id": "first_dev_break:UPPER_1:50.0000",
+                        "side": "LONG",
+                        "label": "UPPER_1",
+                        "level": 50.0,
+                        "action": "break_above",
+                        "event_type": "first_dev_break",
+                        "alert_label": "1st-dev break",
+                        "reason": "stale target",
+                        "target_tier": "A/S",
+                    }
+                ],
+            }
+        }
+        flags = build_master_avwap_d1_flag_events(
+            {},
+            {},
+            inactive_watchlist,
+            trade_date,
+            d1_upgrade_alerts=upgrade_alerts,
+        )
+        labels_by_symbol = {}
+        for event in flags:
+            labels_by_symbol.setdefault(event["symbol"], set()).add(event["label"])
+
+        self.assertIn("A/S upgrade: 1st-dev break", labels_by_symbol["MSFT"])
+        self.assertNotIn("OLD", labels_by_symbol)
 
 
 if __name__ == "__main__":

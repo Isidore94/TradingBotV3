@@ -13,6 +13,7 @@ from typing import Any
 
 from project_paths import (
     AVWAP_SIGNALS_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
     MASTER_AVWAP_D1_WATCHLIST_FILE,
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
@@ -162,6 +163,8 @@ def _normalize_d1_trigger_levels(values: Any, side: Any = "") -> list[dict[str, 
                 "anchor_date": str(raw_entry.get("anchor_date") or "").strip(),
                 "priority_bucket": str(raw_entry.get("priority_bucket") or "").strip(),
                 "setup_family": str(raw_entry.get("setup_family") or "").strip(),
+                "target_tier": str(raw_entry.get("target_tier") or "").strip(),
+                "upgrade_only": bool(raw_entry.get("upgrade_only")),
             }
         )
     return trigger_levels
@@ -457,6 +460,11 @@ def load_master_avwap_d1_watchlist(
             "post_earnings_break_intraday": bool(entry.get("post_earnings_break_intraday")),
             "post_earnings_note": str(entry.get("post_earnings_note") or "").strip(),
             "trigger_levels": _normalize_d1_trigger_levels(entry.get("trigger_levels"), entry.get("side")),
+            "upgrade_targets": _normalize_d1_trigger_levels(
+                entry.get("upgrade_targets") or entry.get("trigger_levels"),
+                entry.get("side"),
+            ),
+            "upgrade_summary": str(entry.get("upgrade_summary") or "").strip(),
             "trigger_summary": str(entry.get("trigger_summary") or "").strip(),
             "watchlist_generated_at": generated_at,
             "watchlist_run_date": run_date,
@@ -474,6 +482,55 @@ def load_master_avwap_d1_watchlist(
             },
         }
     return watchlist
+
+
+def load_master_avwap_d1_upgrade_alerts(
+    alerts_path: Path = MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
+) -> dict[str, dict[str, Any]]:
+    payload = _read_json(alerts_path, default={})
+    if not isinstance(payload, dict):
+        return {}
+
+    raw_symbols = payload.get("symbols", {})
+    if not isinstance(raw_symbols, dict):
+        return {}
+
+    generated_at = str(payload.get("generated_at") or "").strip()
+    run_date = str(payload.get("run_date") or "").strip()
+    alerts: dict[str, dict[str, Any]] = {}
+    for raw_symbol, raw_entry in raw_symbols.items():
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
+        symbol = str(entry.get("symbol") or raw_symbol or "").strip().upper()
+        if not symbol:
+            continue
+        upgrade_targets = _normalize_d1_trigger_levels(
+            entry.get("upgrade_targets"),
+            entry.get("side"),
+        )
+        if not upgrade_targets:
+            continue
+        alerts[symbol] = {
+            "symbol": symbol,
+            "side": _normalize_side(entry.get("side")),
+            "direction": _direction_from_side(entry.get("side")),
+            "first_seen": run_date,
+            "last_seen": run_date,
+            "last_trade_date": str(entry.get("last_trade_date") or run_date).strip(),
+            "active_current_scan": True,
+            "priority_bucket": str(entry.get("priority_bucket") or "").strip().lower(),
+            "priority_score": _coerce_float(entry.get("priority_score")),
+            "setup_family": str(entry.get("setup_family") or "").strip(),
+            "favorite_zone": str(entry.get("favorite_zone") or "").strip(),
+            "current_band_zone": str(entry.get("current_band_zone") or "").strip(),
+            "watch_reasons": ["a_s_upgrade_target"],
+            "reason_summary": "A/S upgrade target",
+            "upgrade_targets": upgrade_targets,
+            "trigger_levels": [dict(item) for item in upgrade_targets],
+            "upgrade_summary": str(entry.get("upgrade_summary") or "").strip(),
+            "watchlist_generated_at": generated_at,
+            "watchlist_run_date": run_date,
+        }
+    return alerts
 
 
 def _event_side_from_signal(event: dict[str, Any]) -> str:
@@ -571,6 +628,42 @@ def _add_focus_like_d1_flags(
     side = entry.get("side")
     priority_score = _coerce_float(entry.get("priority_score"))
     trade_date = entry.get("last_trade_date") or entry.get("last_seen")
+
+    include_upgrade_targets = source != "watchlist" or bool(entry.get("active_current_scan"))
+    if include_upgrade_targets:
+        for target in entry.get("upgrade_targets") or []:
+            if not isinstance(target, dict):
+                continue
+            level = _coerce_float(target.get("level"))
+            if level is None:
+                continue
+            target_side = _normalize_side(target.get("side") or side)
+            alert_label = str(target.get("alert_label") or target.get("label") or "D1 upgrade target").strip()
+            tier = str(target.get("target_tier") or "A/S").strip() or "A/S"
+            reason = str(target.get("reason") or entry.get("upgrade_summary") or "D1 upgrade target").strip()
+            _add_d1_flag_event(
+                events,
+                seen,
+                symbol=symbol,
+                side=target_side,
+                event_type=str(target.get("event_type") or "a_s_upgrade_target").strip(),
+                label=f"{tier} upgrade: {alert_label}",
+                reason=reason,
+                sort_rank=9,
+                source="watchlist_upgrade_target",
+                priority_score=priority_score,
+                trade_date=target.get("armed_at") or trade_date,
+                extra={
+                    "trigger_id": str(target.get("trigger_id") or "").strip(),
+                    "trigger_action": str(target.get("action") or "").strip().lower(),
+                    "level_label": str(target.get("label") or "").strip().upper(),
+                    "level": level,
+                    "anchor_type": str(target.get("anchor_type") or "").strip(),
+                    "anchor_date": str(target.get("anchor_date") or "").strip(),
+                    "trigger_source": str(target.get("source") or "").strip(),
+                    "target_tier": tier,
+                },
+            )
 
     if entry.get("retest_followthrough"):
         level = str(entry.get("retest_reference_level") or "").strip()
@@ -706,6 +799,7 @@ def build_master_avwap_d1_flag_events(
     events_by_symbol: dict[str, list[dict[str, Any]]],
     d1_watchlist: dict[str, dict[str, Any]] | None = None,
     trade_date: date | None = None,
+    d1_upgrade_alerts: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     d1_events: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
@@ -746,6 +840,9 @@ def build_master_avwap_d1_flag_events(
 
     for symbol, entry in (focus_map or {}).items():
         _add_focus_like_d1_flags(d1_events, seen, symbol, entry, source="focus")
+
+    for symbol, entry in (d1_upgrade_alerts or {}).items():
+        _add_focus_like_d1_flags(d1_events, seen, symbol, entry, source="upgrade_alerts")
 
     for symbol, entry in (d1_watchlist or {}).items():
         _add_focus_like_d1_flags(d1_events, seen, symbol, entry, source="watchlist")
@@ -849,6 +946,7 @@ __all__ = [
     "build_master_avwap_second_stdev_cross_map",
     "describe_master_avwap_focus",
     "describe_master_avwap_second_stdev_cross",
+    "load_master_avwap_d1_upgrade_alerts",
     "load_master_avwap_d1_watchlist",
     "load_master_avwap_events_for_date",
     "load_master_avwap_focus_map",

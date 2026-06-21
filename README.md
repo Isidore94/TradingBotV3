@@ -81,7 +81,7 @@ These files should live in the selected home folder root. The app creates any mi
   .\.venv\Scripts\python.exe .\scripts\gui.py
   ```
 
-  Uses the same selected home folder and now writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well. The bottom watchlist editor shows `longs.txt` / `shorts.txt` on BounceBot and `swinglongs.txt` / `shortswings.txt` on Master AVWAP.
+  Uses the same selected home folder and now writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well. The top-level `Trading` tab contains BounceBot, Master AVWAP, and expanded watchlist editors for shared `longs.txt` / `shorts.txt` plus Master AVWAP-only `swinglongs.txt` / `shortswings.txt`; Market Prep and Ticker Lookup stay in separate tabs.
 
 - Intraday 5-minute bounce detector with optional GUI:
 

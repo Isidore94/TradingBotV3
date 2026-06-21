@@ -8,6 +8,7 @@ import re
 import math
 import csv
 import copy
+import ast
 import io
 import hashlib
 import importlib.util
@@ -83,12 +84,20 @@ from project_paths import (
     MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_D1_WATCHLIST_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
     MASTER_AVWAP_SETUP_SCENARIOS_FILE,
     MASTER_AVWAP_SETUP_DAILY_FILE,
     MASTER_AVWAP_SETUP_STATS_FILE,
     MASTER_AVWAP_SETUP_ATTRIBUTES_FILE,
     MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE,
+    MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE,
+    MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
+    MASTER_AVWAP_TIER_LIST_FILE,
+    MASTER_AVWAP_TIER_OUTCOMES_FILE,
+    MASTER_AVWAP_TIER_PERFORMANCE_FILE,
+    MASTER_AVWAP_TIER_CATCH_RATE_FILE,
     MASTER_AVWAP_SCORING_CONFIG_FILE,
     MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE,
     MASTER_AVWAP_SCORING_TUNER_REPORT_FILE,
@@ -250,6 +259,12 @@ SETUP_DAILY_FILE = MASTER_AVWAP_SETUP_DAILY_FILE
 SETUP_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE
 SETUP_ATTRIBUTES_FILE = MASTER_AVWAP_SETUP_ATTRIBUTES_FILE
 SETUP_ATTRIBUTE_LEADERBOARD_FILE = MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE
+SCAN_FACTOR_OBSERVATIONS_FILE = MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE
+SCAN_FACTOR_LEADERBOARD_FILE = MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE
+TIER_LIST_FILE = MASTER_AVWAP_TIER_LIST_FILE
+TIER_OUTCOMES_FILE = MASTER_AVWAP_TIER_OUTCOMES_FILE
+TIER_PERFORMANCE_FILE = MASTER_AVWAP_TIER_PERFORMANCE_FILE
+TIER_CATCH_RATE_FILE = MASTER_AVWAP_TIER_CATCH_RATE_FILE
 SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 SETUP_PLAYBOOKS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 D1_FEATURE_HISTORY_FILE = D1_FEATURES_HISTORY_FILE
@@ -321,6 +336,16 @@ THETA_SUPPORT_ABOVE_TOL_ATR = 0.05
 THETA_COMPRESSION_SUPPORT_LOOKBACK_BARS = 20
 THETA_SMA_SUPPORT_LABELS = ("SMA_50", "SMA_100", "SMA_200")
 THETA_MAJOR_SMA_SUPPORT_LABELS = frozenset(THETA_SMA_SUPPORT_LABELS)
+THETA_CURRENT_AVWAPE_SUPPORT_LABELS = frozenset(("AVWAPE", "CURRENT_AVWAPE"))
+THETA_PREVIOUS_AVWAPE_SUPPORT_LABELS = frozenset(("PREV_AVWAPE", "PREVIOUS_AVWAPE", "PREVIOUS_AVWAP"))
+THETA_PREVIOUS_FIRST_DEV_SUPPORT_LABELS = frozenset(
+    ("PREV_LOWER_1", "PREV_UPPER_1", "PREVIOUS_LOWER_1", "PREVIOUS_UPPER_1")
+)
+THETA_AVWAP_FAMILY_SUPPORT_LABELS = (
+    THETA_CURRENT_AVWAPE_SUPPORT_LABELS
+    | THETA_PREVIOUS_AVWAPE_SUPPORT_LABELS
+    | THETA_PREVIOUS_FIRST_DEV_SUPPORT_LABELS
+)
 THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 11
 THETA_PUT_TARGET_TOTAL_CREDIT = 100.0
 THETA_PUT_MAX_CONTRACTS = 4
@@ -352,6 +377,7 @@ PRIORITY_RETEST_LOOKBACK_BARS = 5
 PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
 PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
 PRIORITY_FAVORITE_ZONE_SCORE_BONUS = 18
+PRIORITY_HIGH_CONVICTION_MIN_SCORE = 0
 PRIORITY_SECOND_BAND_TEST_LOOKBACK_DAYS = 8
 PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY = 10
 PRIORITY_SECOND_BAND_REPEAT_TEST_SCORE_PENALTY = 4
@@ -377,9 +403,11 @@ PRIORITY_SCORING_CONFIG_SCHEMA_VERSION = 1
 D1_FEATURE_HISTORY_SCHEMA_VERSION = 1
 SETUP_CANDIDATE_SCHEMA_VERSION = 1
 USER_FAVORITES_SCHEMA_VERSION = 1
-D1_WATCHLIST_SCHEMA_VERSION = 2
+D1_WATCHLIST_SCHEMA_VERSION = 3
+D1_UPGRADE_ALERT_SCHEMA_VERSION = 1
 D1_WATCHLIST_KEEP_DAYS = 10
 D1_WATCHLIST_MAX_SYMBOLS = 80
+D1_UPGRADE_TARGETS_PER_SYMBOL = 4
 USER_FAVORITE_COLUMNS = [
     "schema_version",
     "feedback_id",
@@ -436,7 +464,7 @@ POST_EARNINGS_MAX_SESSIONS = 10
 POST_EARNINGS_BREAK_MAX_SESSIONS_AFTER_GAP = 3
 POST_EARNINGS_BREAK_FRESH_SESSIONS = 2
 POST_EARNINGS_BOUNCE_MAX_AGE_SESSIONS = 2
-POST_EARNINGS_BOUNCE_MIN_SESSIONS_SINCE_GAP = 1
+POST_EARNINGS_BOUNCE_MIN_SESSIONS_SINCE_GAP = 2
 POST_EARNINGS_MAX_CALENDAR_DAYS = 16
 POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
@@ -446,7 +474,7 @@ POST_EARNINGS_CANDLE_STOP_LABEL_LONG = "POST_EARNINGS_CANDLE_LOW"
 POST_EARNINGS_CANDLE_STOP_LABEL_SHORT = "POST_EARNINGS_CANDLE_HIGH"
 POST_EARNINGS_STOP_FAILURE_CLOSES = 1
 AVWAPE_TO_FIRST_DEV_FAMILY = "avwape_to_1stdev"
-AVWAPE_TO_FIRST_DEV_MIN_SESSIONS_AFTER_GAP = 15
+AVWAPE_TO_FIRST_DEV_MIN_SESSIONS_AFTER_GAP = 10
 MID_EARNINGS_EMA15_RETEST_SIGNAL = "MID_EARNINGS_EMA15_RETEST"
 MID_EARNINGS_EMA21_RETEST_SIGNAL = "MID_EARNINGS_EMA21_RETEST"
 MID_EARNINGS_FIRST_DEV_RETEST_SIGNAL = "MID_EARNINGS_FIRST_DEV_RETEST"
@@ -454,7 +482,9 @@ MID_EARNINGS_EMA8_CONFLUENCE_SIGNAL = "MID_EARNINGS_EMA8_CONFLUENCE"
 MID_EARNINGS_EMA21_CONFLUENCE_SIGNAL = "MID_EARNINGS_EMA21_CONFLUENCE"
 MID_EARNINGS_FIRST_DEV_CONFLUENCE_SIGNAL = "MID_EARNINGS_FIRST_DEV_CONFLUENCE"
 MID_EARNINGS_ZONE_MIN_DAYS = 2
-MID_EARNINGS_MIN_SESSIONS_AFTER_GAP = 15
+MID_EARNINGS_HOLD_MIN_SESSIONS_AFTER_GAP = 15
+MID_EARNINGS_RETEST_MIN_SESSIONS_AFTER_GAP = 10
+MID_EARNINGS_MIN_SESSIONS_AFTER_GAP = MID_EARNINGS_HOLD_MIN_SESSIONS_AFTER_GAP
 MID_EARNINGS_EMA_RECLAIM_UNDERCUT_ATR = 0.90
 MID_EARNINGS_RECENT_ZONE_LOOKBACK_DAYS = 10
 MID_EARNINGS_RETEST_MAX_SESSIONS_AFTER_ZONE = 7
@@ -503,12 +533,12 @@ PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS = 8
 PRIORITY_SHORT_MID_EARNINGS_FIRST_DEV_SCORE_BONUS = 8
 PRIORITY_SHORT_MID_EARNINGS_EMA_WATCH_ONLY_CAP = 95
 PRIORITY_SHORT_NEAR_FAVORITE_UNCONFIRMED_CAP = 85
-PRIORITY_MARKET_REGIME_COUNTER_TREND_PENALTY = 18
-PRIORITY_MARKET_REGIME_COUNTER_TREND_SOFT_PENALTY = 10
-PRIORITY_REJECTION_CAP_SMA_OBSTACLE = 260
-PRIORITY_REJECTION_CAP_FIRST_DEV_CHOP = 260
-PRIORITY_REJECTION_CAP_COMPRESSION = 220
-PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND = 240
+PRIORITY_MARKET_REGIME_COUNTER_TREND_PENALTY = 30
+PRIORITY_MARKET_REGIME_COUNTER_TREND_SOFT_PENALTY = 16
+PRIORITY_REJECTION_CAP_SMA_OBSTACLE = 180
+PRIORITY_REJECTION_CAP_FIRST_DEV_CHOP = 180
+PRIORITY_REJECTION_CAP_COMPRESSION = 150
+PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND = 160
 PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY = 120
 PRIORITY_SHORT_NEAR_FAVORITE_GATE_PENALTY = 36
 PRIORITY_CURRENT_SIGNAL_WEIGHT_DEFAULT_CAP = 110
@@ -1297,6 +1327,9 @@ DAILY_BAR_YAHOO_TIMEOUT_SEC = 6.0
 DAILY_BAR_LIVE_FAILURE_COOLDOWN_MINUTES = 15
 SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
 EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES = 30
+EARNINGS_CALENDAR_REQUEST_TIMEOUT_SECONDS = 10
+EARNINGS_CALENDAR_REQUEST_RETRIES = 2
+EARNINGS_CALENDAR_RETRY_BACKOFF_SECONDS = 0.4
 DAILY_BAR_COLUMNS = ["datetime", "open", "high", "low", "close", "volume"]
 DAILY_BAR_SOURCE_ATTR = "daily_bar_source"
 DAILY_BAR_SOURCE_IBKR = "ibkr"
@@ -2838,6 +2871,16 @@ def analyze_avwap_retest_behavior(
             and _bar_float(follow_bar, "close") <= level
             and _bar_float(follow_bar, "close") <= _bar_float(retest_bar, "close") + confirm_push
         )
+
+    current_close = _bar_float(current, "close")
+    if normalized_side == "LONG" and current_upper_1 is not None:
+        if current_close > float(current_upper_1) + touch_tol:
+            result["retest_note"] = "Retest followthrough rejected: overextended above UPPER_1"
+            return result
+    if normalized_side == "SHORT" and current_lower_1 is not None:
+        if current_close < float(current_lower_1) - touch_tol:
+            result["retest_note"] = "Retest followthrough rejected: overextended below LOWER_1"
+            return result
 
     if normalized_side == "SHORT":
         if _short_bounce(current):
@@ -4964,6 +5007,8 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
     side = normalize_side(row.get("side") or symbol_entry.get("side") or "LONG")
     current_anchor = symbol_entry.get("current_anchor") or {}
     post_earnings_anchor = symbol_entry.get("post_earnings_anchor") or {}
+    entry_snapshot = symbol_entry.get("entry_feature_snapshot")
+    entry_snapshot = entry_snapshot if isinstance(entry_snapshot, dict) else {}
     atr20 = _coerce_float(symbol_entry.get("atr20"))
     primary_stop_label = _protective_band_label(side)
     primary_stop_level = _anchor_level_value(current_anchor, primary_stop_label)
@@ -5012,15 +5057,68 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
             "post_earnings_candle",
             close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
         )
+        _add(
+            "EMA_15",
+            _first_coerced_float(
+                row.get("ema_15"),
+                row.get("ema15"),
+                symbol_entry.get("ema_15"),
+                symbol_entry.get("ema15"),
+                entry_snapshot.get("ema_15"),
+                entry_snapshot.get("ema15"),
+            ),
+            "ema",
+            close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
+        )
+        _add(
+            "EMA_8",
+            _first_coerced_float(
+                row.get("ema_8"),
+                row.get("ema8"),
+                symbol_entry.get("ema_8"),
+                symbol_entry.get("ema8"),
+                entry_snapshot.get("ema_8"),
+                entry_snapshot.get("ema8"),
+            ),
+            "ema",
+            close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
+        )
 
     if priority_bucket in {"favorite_setup", "near_favorite_zone"}:
         _add("AVWAPE", _anchor_level_value(current_anchor, "AVWAPE"), "current_anchor")
     _add(primary_stop_label, primary_stop_level, "current_anchor")
 
     if setup_family.startswith("mid_earnings_"):
-        _add("EMA_15", _coerce_float(symbol_entry.get("ema_15")), "ema")
-        _add("EMA_21", _coerce_float(symbol_entry.get("ema_21")), "ema")
-        _add("EMA_8", _coerce_float(symbol_entry.get("ema_8")), "ema")
+        _add(
+            "EMA_15",
+            _first_coerced_float(
+                symbol_entry.get("ema_15"),
+                symbol_entry.get("ema15"),
+                entry_snapshot.get("ema_15"),
+                entry_snapshot.get("ema15"),
+            ),
+            "ema",
+        )
+        _add(
+            "EMA_21",
+            _first_coerced_float(
+                symbol_entry.get("ema_21"),
+                symbol_entry.get("ema21"),
+                entry_snapshot.get("ema_21"),
+                entry_snapshot.get("ema21"),
+            ),
+            "ema",
+        )
+        _add(
+            "EMA_8",
+            _first_coerced_float(
+                symbol_entry.get("ema_8"),
+                symbol_entry.get("ema8"),
+                entry_snapshot.get("ema_8"),
+                entry_snapshot.get("ema8"),
+            ),
+            "ema",
+        )
         first_dev_label = "UPPER_1" if side == "LONG" else "LOWER_1"
         first_dev_anchor = post_earnings_anchor if post_earnings_anchor else current_anchor
         first_dev_source = "post_earnings_anchor" if post_earnings_anchor else "current_anchor"
@@ -5106,7 +5204,9 @@ def build_tracker_setup_record(
     if isinstance(attribute_registry, dict):
         attribute_registry.update(attribute_updates)
 
-    stop_candidates = _find_tracker_stop_candidates(row, symbol_entry)
+    symbol_entry_for_stops = dict(symbol_entry)
+    symbol_entry_for_stops["entry_feature_snapshot"] = entry_snapshot
+    stop_candidates = _find_tracker_stop_candidates(row, symbol_entry_for_stops)
     scenarios = _build_tracker_scenarios(
         entry_price,
         stop_candidates,
@@ -7718,6 +7818,1453 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
     return rank_tracker_setup_type_rows(setup_type_rows)
 
 
+SCAN_FACTOR_HORIZONS = (1, 3, 5, 10)
+SCAN_FACTOR_LOOKBACK_DAYS = 60
+SCAN_FACTOR_MIN_OBSERVATIONS = 8
+TIER_CATCH_TOP_SCAN_FACTORS_PER_SIDE_HORIZON = 20
+SCAN_FACTOR_OBSERVATION_COLUMNS = [
+    "observation_id",
+    "scan_row_id",
+    "run_id",
+    "run_timestamp",
+    "run_date",
+    "watchlist_label",
+    "symbol",
+    "side",
+    "scan_date",
+    "entry_close",
+    "future_scan_date",
+    "future_close",
+    "horizon_sessions",
+    "raw_return_pct",
+    "side_return_pct",
+    "win",
+    "spy_forward_return_pct",
+    "spy_relative_side_return_pct",
+]
+SCAN_FACTOR_LEADERBOARD_COLUMNS = [
+    "generated_at",
+    "lookback_days",
+    "window_start",
+    "window_end",
+    "horizon_sessions",
+    "side",
+    "factor_key",
+    "factor_group",
+    "factor_label",
+    "value_kind",
+    "value_label",
+    "observation_count",
+    "symbol_count",
+    "win_rate",
+    "avg_side_return_pct",
+    "median_side_return_pct",
+    "avg_raw_return_pct",
+    "avg_spy_relative_side_return_pct",
+    "baseline_observation_count",
+    "baseline_win_rate",
+    "baseline_avg_side_return_pct",
+    "baseline_avg_spy_relative_side_return_pct",
+    "side_return_edge_pct",
+    "win_rate_edge",
+    "spy_relative_edge_pct",
+    "success_score",
+    "impact_score",
+    "sample_observations",
+]
+TIER_LIST_COLUMNS = [
+    "generated_at",
+    "run_date",
+    "scan_date",
+    "scan_row_id",
+    "tier",
+    "symbol",
+    "side",
+    "priority_bucket",
+    "priority_score",
+    "setup_family",
+    "favorite_zone",
+    "current_band_zone",
+    "trend_20d",
+    "last_close",
+    "scan_factor_match_count",
+    "scan_factor_matches",
+]
+TIER_OUTCOME_COLUMNS = [
+    "observation_id",
+    "scan_row_id",
+    "run_id",
+    "run_timestamp",
+    "run_date",
+    "watchlist_label",
+    "scan_date",
+    "future_scan_date",
+    "horizon_sessions",
+    "tier",
+    "symbol",
+    "side",
+    "priority_bucket",
+    "priority_score",
+    "setup_family",
+    "favorite_zone",
+    "entry_close",
+    "future_close",
+    "raw_return_pct",
+    "side_return_pct",
+    "win",
+    "spy_forward_return_pct",
+    "spy_relative_side_return_pct",
+    "positive_scan_factor_match_count",
+    "positive_scan_factor_matches",
+]
+TIER_PERFORMANCE_COLUMNS = [
+    "generated_at",
+    "lookback_days",
+    "window_start",
+    "window_end",
+    "horizon_sessions",
+    "tier",
+    "side",
+    "observation_count",
+    "symbol_count",
+    "win_rate",
+    "avg_side_return_pct",
+    "median_side_return_pct",
+    "avg_spy_relative_side_return_pct",
+    "baseline_observation_count",
+    "baseline_win_rate",
+    "baseline_avg_side_return_pct",
+    "baseline_avg_spy_relative_side_return_pct",
+    "side_return_edge_pct",
+    "win_rate_edge",
+    "spy_relative_edge_pct",
+    "positive_scan_factor_match_rate",
+    "sample_observations",
+]
+TIER_CATCH_RATE_COLUMNS = [
+    "generated_at",
+    "lookback_days",
+    "window_start",
+    "window_end",
+    "horizon_sessions",
+    "side",
+    "factor_opportunity_count",
+    "factor_winner_count",
+    "caught_opportunity_count",
+    "caught_winner_count",
+    "caught_s_count",
+    "caught_a_count",
+    "caught_opportunity_rate",
+    "caught_winner_rate",
+    "missed_winner_count",
+    "top_factor_count",
+    "sample_caught_winners",
+    "sample_missed_winners",
+]
+SCAN_FACTOR_CATEGORICAL_FIELDS = {
+    "daily_bar_source": ("data", "Daily data source"),
+    "market_regime_label": ("market", "Market regime"),
+    "current_active_level": ("levels", "Current active level"),
+    "current_band_zone": ("levels", "Current band zone"),
+    "previous_active_level": ("levels", "Previous active level"),
+    "previous_band_zone": ("levels", "Previous band zone"),
+    "trend_20d": ("trend", "20d trend"),
+    "favorite_zone": ("setup", "Favorite zone"),
+    "setup_family": ("setup", "Setup family"),
+    "priority_bucket": ("setup", "Priority bucket"),
+    "breakout_5d": ("structure", "5d breakout"),
+    "retest_reference_level": ("structure", "Retest reference level"),
+    "extreme_move_retest_level": ("pattern", "Extreme move retest level"),
+    "post_earnings_monitor_level": ("earnings", "Post-earnings monitor level"),
+    "mid_earnings_primary_trigger_level": ("earnings", "Mid-earnings trigger level"),
+}
+SCAN_FACTOR_BOOL_FIELDS = {
+    "spy_above_sma20": ("market", "SPY above SMA20"),
+    "spy_above_sma50": ("market", "SPY above SMA50"),
+    "previous_day_range_break": ("structure", "Previous-day range break"),
+    "has_bounce_event_today": ("setup", "Bounce event today"),
+    "pre_earnings_setup_blocked": ("earnings", "Pre-earnings blocked"),
+    "post_earnings_hard_rule_blocked": ("earnings", "Post-earnings hard-rule blocked"),
+    "retest_followthrough": ("structure", "Retest followthrough"),
+    "extreme_move_watch": ("pattern", "Extreme move watch"),
+    "extreme_move_favorite_ready": ("pattern", "Extreme move favorite-ready"),
+    "compression_flag": ("structure", "Compression flag"),
+    "post_earnings_active": ("earnings", "Post-earnings active"),
+    "post_earnings_break_intraday": ("earnings", "Post-earnings intraday break"),
+    "post_earnings_break_close": ("earnings", "Post-earnings close break"),
+    "mid_earnings_watch": ("earnings", "Mid-earnings watch"),
+    "mid_earnings_active_second_stdev_hold": ("earnings", "Mid-earnings second-stdev hold"),
+    "mid_earnings_ema15_trigger": ("earnings", "Mid-earnings EMA15 trigger"),
+    "mid_earnings_ema21_trigger": ("earnings", "Mid-earnings EMA21 trigger"),
+    "mid_earnings_first_dev_trigger": ("earnings", "Mid-earnings first-dev trigger"),
+    "mid_earnings_ema8_confluence": ("earnings", "Mid-earnings EMA8 confluence"),
+    "mid_earnings_ema21_confluence": ("earnings", "Mid-earnings EMA21 confluence"),
+    "mid_earnings_first_dev_confluence": ("earnings", "Mid-earnings first-dev confluence"),
+    "is_favorite_setup": ("setup", "Favorite setup"),
+    "is_near_favorite_zone": ("setup", "Near favorite zone"),
+    "watch_only": ("setup", "Watch only"),
+}
+SCAN_FACTOR_LIST_FIELDS = {
+    "setup_tags": ("setup", "Setup tag"),
+    "favorite_signals": ("setup", "Favorite signal"),
+    "favorite_context_signals": ("setup", "Favorite context signal"),
+    "events_today": ("setup", "Event today"),
+    "candidate_rejection_reasons": ("setup", "Candidate rejection reason"),
+    "mid_earnings_trigger_levels": ("earnings", "Mid-earnings trigger level"),
+    "short_confirmation_reasons": ("setup", "Short confirmation reason"),
+}
+SCAN_FACTOR_NUMERIC_FIELDS = {
+    "priority_score": ("setup", "Priority score", (80, 100, 120, 140)),
+    "market_regime_score": ("market", "Market regime score", (-2, -1, 0, 1, 2)),
+    "market_regime_score_delta": ("market", "Market regime score delta", (-10, -2, 0, 2, 10)),
+    "last_close": ("price", "Last close", (10, 25, 50, 100, 200, 500)),
+    "last_volume": ("liquidity", "Last volume", (500_000, 1_000_000, 3_000_000, 10_000_000)),
+    "atr20": ("volatility", "ATR20", (1, 2, 5, 10, 20)),
+    "pct_from_current_vwap": ("levels", "% from current AVWAP", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
+    "pct_from_current_upper_1": ("levels", "% from current upper 1", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
+    "pct_from_current_lower_1": ("levels", "% from current lower 1", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
+    "days_to_next_earnings": ("earnings", "Days to next earnings", (0, 3, 7, 14, 30, 60)),
+    "latest_release_sessions_since_gap": ("earnings", "Sessions since latest release gap", (3, 5, 10, 20, 40)),
+    "recent_band_extension_days": ("levels", "Recent band extension days", (1, 2, 3, 5, 10)),
+    "recent_second_band_test_days": ("levels", "Recent second-band test days", (1, 2, 3, 5, 10)),
+    "second_band_penalty": ("levels", "Second-band penalty", (0, 1, 3, 5, 10)),
+    "extreme_move_band_crosses": ("pattern", "Extreme move band crosses", (0, 1, 2, 3, 5)),
+    "extreme_move_band_width_atr": ("pattern", "Extreme move band width ATR", (1, 2, 3, 5, 8)),
+    "compression_penalty": ("structure", "Compression penalty", (0, 1, 3, 5, 10)),
+    "post_earnings_sessions_since_gap": ("earnings", "Post-earnings sessions since gap", (3, 5, 10, 20, 40)),
+    "post_earnings_gap_atr_multiple": ("earnings", "Post-earnings gap ATR multiple", (-5, -3, -1, 0, 1, 3, 5)),
+    "post_earnings_bounce_age_sessions": ("earnings", "Post-earnings bounce age sessions", (1, 2, 3, 5, 10)),
+    "mid_earnings_sessions_since_gap": ("earnings", "Mid-earnings sessions since gap", (5, 10, 20, 40, 60)),
+    "mid_earnings_zone_streak_days": ("earnings", "Mid-earnings zone streak days", (1, 2, 3, 5, 10)),
+    "mid_earnings_sessions_after_zone": ("earnings", "Mid-earnings sessions after zone", (1, 2, 3, 5, 10)),
+    "clean_first_zone_score_bonus": ("setup", "Clean first-zone bonus", (0, 2, 5, 10)),
+    "recent_tracker_score_delta": ("tracker", "Recent tracker score delta", (-10, -2, 0, 2, 10)),
+    "setup_type_score_delta": ("tracker", "Setup-type score delta", (-10, -2, 0, 2, 10)),
+    "tracker_guardrail_score_delta": ("tracker", "Tracker guardrail score delta", (-10, -2, 0, 2, 10)),
+}
+
+
+def _scan_factor_is_missing(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"", "nan", "none", "nat", "null"}
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(missing, (list, tuple)):
+        return False
+    try:
+        return bool(missing)
+    except (TypeError, ValueError):
+        return False
+
+
+def _scan_factor_text(value) -> str:
+    if _scan_factor_is_missing(value):
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "nat", "null"} else text
+
+
+def _scan_factor_bool(value) -> bool | None:
+    if _scan_factor_is_missing(value):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return float(value) != 0.0
+        except (TypeError, ValueError):
+            return None
+    text = str(value).strip().lower()
+    if text in {"true", "t", "yes", "y", "1"}:
+        return True
+    if text in {"false", "f", "no", "n", "0"}:
+        return False
+    return None
+
+
+def _scan_factor_number(value) -> float | None:
+    if _scan_factor_is_missing(value):
+        return None
+    return _coerce_float(value)
+
+
+def _format_scan_factor_boundary(value: float) -> str:
+    numeric = float(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:g}"
+
+
+def _scan_factor_numeric_bucket(value, boundaries: tuple[float, ...]) -> str:
+    numeric = _scan_factor_number(value)
+    if numeric is None:
+        return ""
+    sorted_boundaries = [float(item) for item in boundaries]
+    previous = None
+    for boundary in sorted_boundaries:
+        if numeric < boundary:
+            if previous is None:
+                return f"< {_format_scan_factor_boundary(boundary)}"
+            return f"{_format_scan_factor_boundary(previous)} to < {_format_scan_factor_boundary(boundary)}"
+        previous = boundary
+    if previous is None:
+        return ""
+    return f">= {_format_scan_factor_boundary(previous)}"
+
+
+def _scan_factor_list_values(value) -> list[str]:
+    if _scan_factor_is_missing(value):
+        return []
+    parsed = value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = text
+        if isinstance(parsed, str):
+            separator = ";" if ";" in parsed else ","
+            parts = parsed.split(separator) if separator in parsed else [parsed]
+        else:
+            parts = list(parsed) if isinstance(parsed, (list, tuple, set)) else [parsed]
+    elif isinstance(value, (list, tuple, set)):
+        parts = list(value)
+    else:
+        parts = [value]
+
+    normalized = []
+    for part in parts:
+        text = _scan_factor_text(part)
+        if text:
+            normalized.append(text)
+    return sorted(set(normalized))
+
+
+def _scan_factor_items_from_row(row: dict) -> list[dict]:
+    if not isinstance(row, dict):
+        return []
+    factors = []
+    seen = set()
+
+    def add(key: str, group: str, label: str, kind: str, value_label: str) -> None:
+        value_text = _scan_factor_text(value_label)
+        if not value_text:
+            return
+        dedupe_key = (key, value_text)
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        factors.append(
+            {
+                "factor_key": key,
+                "factor_group": group,
+                "factor_label": label,
+                "value_kind": kind,
+                "value_label": value_text,
+            }
+        )
+
+    for key, (group, label) in SCAN_FACTOR_CATEGORICAL_FIELDS.items():
+        add(key, group, label, "category", row.get(key))
+
+    for key, (group, label) in SCAN_FACTOR_BOOL_FIELDS.items():
+        value = _scan_factor_bool(row.get(key))
+        if value is not None:
+            add(key, group, label, "bool", "true" if value else "false")
+
+    for key, (group, label) in SCAN_FACTOR_LIST_FIELDS.items():
+        for value in _scan_factor_list_values(row.get(key)):
+            add(key, group, label, "list_item", value)
+
+    for key, (group, label, boundaries) in SCAN_FACTOR_NUMERIC_FIELDS.items():
+        bucket = _scan_factor_numeric_bucket(row.get(key), boundaries)
+        if bucket:
+            add(key, group, label, "number_bucket", bucket)
+
+    return factors
+
+
+def _scan_factor_mean(values) -> float | None:
+    numeric_values = [
+        float(value)
+        for value in values
+        if _scan_factor_number(value) is not None
+    ]
+    return mean(numeric_values) if numeric_values else None
+
+
+def _scan_factor_median(values) -> float | None:
+    numeric_values = [
+        float(value)
+        for value in values
+        if _scan_factor_number(value) is not None
+    ]
+    return median(numeric_values) if numeric_values else None
+
+
+def _scan_factor_win_rate(values) -> float | None:
+    bool_values = [
+        1.0 if value else 0.0
+        for value in (_scan_factor_bool(item) for item in values)
+        if value is not None
+    ]
+    return mean(bool_values) if bool_values else None
+
+
+def _scan_factor_row_id(row: pd.Series | dict) -> str:
+    getter = row.get if hasattr(row, "get") else lambda key, default=None: default
+    symbol = str(getter("_symbol", getter("symbol", "")) or "").strip().upper()
+    scan_date = str(getter("_scan_date_text", getter("last_trade_date", "")) or "").strip()
+    run_id = str(getter("_run_id_text", getter("run_id", "")) or "").strip()
+    run_timestamp = str(getter("_run_timestamp_text", getter("run_timestamp", "")) or "").strip()
+    suffix = run_id or run_timestamp
+    return f"{symbol}:{scan_date}:{suffix}".rstrip(":")
+
+
+def _prepare_scan_factor_history_frame(history_df: pd.DataFrame | None) -> pd.DataFrame:
+    if history_df is None or not isinstance(history_df, pd.DataFrame) or history_df.empty:
+        return pd.DataFrame()
+    required_columns = {"symbol", "last_close"}
+    if not required_columns.issubset(set(history_df.columns)):
+        return pd.DataFrame()
+    if "last_trade_date" not in history_df.columns and "run_date" not in history_df.columns:
+        return pd.DataFrame()
+
+    frame = history_df.copy()
+    frame["_input_order"] = range(len(frame))
+    frame["_symbol"] = frame["symbol"].apply(lambda value: _scan_factor_text(value).upper())
+    date_source = frame["last_trade_date"] if "last_trade_date" in frame.columns else frame["run_date"]
+    frame["_scan_date_dt"] = pd.to_datetime(date_source, errors="coerce")
+    frame["_scan_date_text"] = frame["_scan_date_dt"].dt.strftime("%Y-%m-%d")
+    frame["_entry_close"] = pd.to_numeric(frame["last_close"], errors="coerce")
+    if "side" in frame.columns:
+        frame["_side"] = frame["side"].apply(normalize_side)
+    else:
+        frame["_side"] = "LONG"
+    frame["_run_id_text"] = frame["run_id"].fillna("").astype(str) if "run_id" in frame.columns else ""
+    frame["_run_timestamp_text"] = (
+        frame["run_timestamp"].fillna("").astype(str)
+        if "run_timestamp" in frame.columns
+        else ""
+    )
+
+    frame = frame[
+        (frame["_symbol"] != "")
+        & frame["_scan_date_dt"].notna()
+        & frame["_entry_close"].notna()
+        & (frame["_entry_close"] > 0)
+    ].copy()
+    if frame.empty:
+        return frame
+    frame.sort_values(
+        ["_symbol", "_scan_date_dt", "_run_timestamp_text", "_run_id_text", "_input_order"],
+        inplace=True,
+    )
+    frame.drop_duplicates(["_symbol", "_scan_date_text"], keep="last", inplace=True)
+    frame["_scan_row_id"] = frame.apply(_scan_factor_row_id, axis=1)
+    return frame
+
+
+def build_scan_factor_observation_rows(
+    history_df: pd.DataFrame | None,
+    *,
+    horizons: tuple[int, ...] = SCAN_FACTOR_HORIZONS,
+) -> list[dict]:
+    frame = _prepare_scan_factor_history_frame(history_df)
+    if frame.empty:
+        return []
+
+    benchmark_closes: dict[str, float] = {}
+    spy_rows = frame[frame["_symbol"] == "SPY"].sort_values("_scan_date_dt")
+    for _, spy_row in spy_rows.iterrows():
+        close_value = _scan_factor_number(spy_row.get("_entry_close"))
+        if close_value is not None and close_value > 0:
+            benchmark_closes[str(spy_row.get("_scan_date_text") or "")] = float(close_value)
+
+    normalized_horizons = tuple(sorted({int(horizon) for horizon in horizons if int(horizon) > 0}))
+    rows = []
+    for symbol, symbol_frame in frame.groupby("_symbol", sort=True):
+        symbol_frame = symbol_frame.sort_values("_scan_date_dt").reset_index(drop=True)
+        records = symbol_frame.to_dict("records")
+        for idx, entry in enumerate(records):
+            entry_close = _scan_factor_number(entry.get("_entry_close"))
+            if entry_close is None or entry_close <= 0:
+                continue
+            side = normalize_side(entry.get("_side") or entry.get("side") or "")
+            side_multiplier = -1.0 if side == "SHORT" else 1.0
+            for horizon in normalized_horizons:
+                future_idx = idx + horizon
+                if future_idx >= len(records):
+                    continue
+                future = records[future_idx]
+                future_close = _scan_factor_number(future.get("_entry_close"))
+                if future_close is None or future_close <= 0:
+                    continue
+                raw_return_pct = ((float(future_close) / float(entry_close)) - 1.0) * 100.0
+                side_return_pct = raw_return_pct * side_multiplier
+                scan_date = str(entry.get("_scan_date_text") or "")
+                future_scan_date = str(future.get("_scan_date_text") or "")
+                spy_forward_return_pct = None
+                spy_relative_side_return_pct = None
+                spy_entry_close = benchmark_closes.get(scan_date)
+                spy_future_close = benchmark_closes.get(future_scan_date)
+                if spy_entry_close and spy_entry_close > 0 and spy_future_close and spy_future_close > 0:
+                    spy_forward_return_pct = ((float(spy_future_close) / float(spy_entry_close)) - 1.0) * 100.0
+                    spy_relative_side_return_pct = side_multiplier * (raw_return_pct - spy_forward_return_pct)
+
+                scan_row_id = str(entry.get("_scan_row_id") or _scan_factor_row_id(entry))
+                rows.append(
+                    {
+                        "observation_id": f"{scan_row_id}:{horizon}",
+                        "scan_row_id": scan_row_id,
+                        "run_id": _scan_factor_text(entry.get("run_id")),
+                        "run_timestamp": _scan_factor_text(entry.get("run_timestamp")),
+                        "run_date": _scan_factor_text(entry.get("run_date")) or scan_date,
+                        "watchlist_label": _scan_factor_text(entry.get("watchlist_label")),
+                        "symbol": symbol,
+                        "side": side,
+                        "scan_date": scan_date,
+                        "entry_close": float(entry_close),
+                        "future_scan_date": future_scan_date,
+                        "future_close": float(future_close),
+                        "horizon_sessions": int(horizon),
+                        "raw_return_pct": raw_return_pct,
+                        "side_return_pct": side_return_pct,
+                        "win": side_return_pct > 0,
+                        "spy_forward_return_pct": spy_forward_return_pct,
+                        "spy_relative_side_return_pct": spy_relative_side_return_pct,
+                    }
+                )
+
+    rows.sort(
+        key=lambda item: (
+            str(item.get("scan_date") or ""),
+            str(item.get("symbol") or ""),
+            int(item.get("horizon_sessions", 0) or 0),
+        )
+    )
+    return rows
+
+
+def _scan_factor_baseline_summary(obs_df: pd.DataFrame) -> dict:
+    side_values = pd.to_numeric(obs_df.get("side_return_pct"), errors="coerce").dropna()
+    spy_relative_values = pd.to_numeric(obs_df.get("spy_relative_side_return_pct"), errors="coerce").dropna()
+    return {
+        "observation_count": int(obs_df["observation_id"].nunique()) if "observation_id" in obs_df.columns else len(obs_df),
+        "win_rate": _scan_factor_win_rate(obs_df.get("win", [])),
+        "avg_side_return_pct": float(side_values.mean()) if not side_values.empty else None,
+        "avg_spy_relative_side_return_pct": (
+            float(spy_relative_values.mean()) if not spy_relative_values.empty else None
+        ),
+    }
+
+
+def build_scan_factor_leaderboard_rows(
+    history_df: pd.DataFrame | None,
+    observation_rows: list[dict] | None = None,
+    *,
+    lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
+    min_observations: int = SCAN_FACTOR_MIN_OBSERVATIONS,
+    reference_date: date | datetime | str | None = None,
+) -> list[dict]:
+    observations = observation_rows if observation_rows is not None else build_scan_factor_observation_rows(history_df)
+    if not observations:
+        return []
+    frame = _prepare_scan_factor_history_frame(history_df)
+    if frame.empty:
+        return []
+
+    obs_df = pd.DataFrame(observations)
+    if obs_df.empty or "scan_row_id" not in obs_df.columns:
+        return []
+    obs_df["_scan_date_dt"] = pd.to_datetime(obs_df["scan_date"], errors="coerce")
+    obs_df = obs_df[obs_df["_scan_date_dt"].notna()].copy()
+    if obs_df.empty:
+        return []
+
+    if reference_date is None:
+        window_end_ts = obs_df["_scan_date_dt"].max()
+    else:
+        window_end_ts = pd.to_datetime(reference_date, errors="coerce")
+        if pd.isna(window_end_ts):
+            window_end_ts = obs_df["_scan_date_dt"].max()
+    lookback_days = max(1, int(lookback_days or SCAN_FACTOR_LOOKBACK_DAYS))
+    window_start_ts = window_end_ts - pd.Timedelta(days=lookback_days)
+    recent_obs = obs_df[
+        (obs_df["_scan_date_dt"] >= window_start_ts)
+        & (obs_df["_scan_date_dt"] <= window_end_ts)
+    ].copy()
+    if recent_obs.empty:
+        return []
+
+    source_rows = {
+        str(row.get("_scan_row_id") or ""): row
+        for row in frame.to_dict("records")
+        if str(row.get("_scan_row_id") or "")
+    }
+    baseline_map = {
+        (int(group_key[0]), str(group_key[1])): _scan_factor_baseline_summary(group_df)
+        for group_key, group_df in recent_obs.groupby(["horizon_sessions", "side"], dropna=False)
+    }
+
+    factor_observations = []
+    for obs in recent_obs.to_dict("records"):
+        source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
+        if not source_row:
+            continue
+        for factor in _scan_factor_items_from_row(source_row):
+            merged = dict(obs)
+            merged.update(factor)
+            factor_observations.append(merged)
+    if not factor_observations:
+        return []
+
+    factor_df = pd.DataFrame(factor_observations)
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    window_start = window_start_ts.strftime("%Y-%m-%d")
+    window_end = window_end_ts.strftime("%Y-%m-%d")
+    rows = []
+    group_cols = [
+        "horizon_sessions",
+        "side",
+        "factor_key",
+        "factor_group",
+        "factor_label",
+        "value_kind",
+        "value_label",
+    ]
+    for group_key, group_df in factor_df.groupby(group_cols, dropna=False):
+        unique_df = group_df.drop_duplicates(subset=["observation_id"])
+        observation_count = int(unique_df["observation_id"].nunique())
+        if observation_count < int(min_observations or 1):
+            continue
+        side_values = pd.to_numeric(unique_df["side_return_pct"], errors="coerce").dropna()
+        raw_values = pd.to_numeric(unique_df["raw_return_pct"], errors="coerce").dropna()
+        spy_relative_values = pd.to_numeric(unique_df["spy_relative_side_return_pct"], errors="coerce").dropna()
+        avg_side_return_pct = float(side_values.mean()) if not side_values.empty else None
+        median_side_return_pct = float(side_values.median()) if not side_values.empty else None
+        avg_raw_return_pct = float(raw_values.mean()) if not raw_values.empty else None
+        avg_spy_relative_side_return_pct = (
+            float(spy_relative_values.mean()) if not spy_relative_values.empty else None
+        )
+        win_rate = _scan_factor_win_rate(unique_df.get("win", []))
+        baseline = baseline_map.get((int(group_key[0]), str(group_key[1])), {})
+        baseline_avg_side_return_pct = _scan_factor_number(baseline.get("avg_side_return_pct"))
+        baseline_avg_spy_relative_side_return_pct = _scan_factor_number(
+            baseline.get("avg_spy_relative_side_return_pct")
+        )
+        baseline_win_rate = _scan_factor_number(baseline.get("win_rate"))
+        side_return_edge_pct = (
+            avg_side_return_pct - baseline_avg_side_return_pct
+            if avg_side_return_pct is not None and baseline_avg_side_return_pct is not None
+            else None
+        )
+        win_rate_edge = (
+            win_rate - baseline_win_rate
+            if win_rate is not None and baseline_win_rate is not None
+            else None
+        )
+        spy_relative_edge_pct = (
+            avg_spy_relative_side_return_pct - baseline_avg_spy_relative_side_return_pct
+            if avg_spy_relative_side_return_pct is not None
+            and baseline_avg_spy_relative_side_return_pct is not None
+            else None
+        )
+        success_score = (side_return_edge_pct or 0.0) + ((win_rate_edge or 0.0) * 10.0)
+        impact_score = (
+            abs(side_return_edge_pct or 0.0)
+            + abs((win_rate_edge or 0.0) * 10.0)
+            + abs(spy_relative_edge_pct or 0.0)
+        ) * math.log1p(max(1, observation_count))
+
+        sample_rows = unique_df.to_dict("records")
+        sample_rows.sort(
+            key=lambda item: (
+                str(item.get("scan_date") or ""),
+                _scan_factor_number(item.get("side_return_pct")) or -9999.0,
+                str(item.get("symbol") or ""),
+            ),
+            reverse=True,
+        )
+        samples = []
+        for item in sample_rows:
+            side_return = _scan_factor_number(item.get("side_return_pct"))
+            sample = f"{item.get('symbol')} {item.get('scan_date')}->{item.get('future_scan_date')}"
+            if side_return is not None:
+                sample += f" ({side_return:+.2f}%)"
+            samples.append(sample)
+            if len(samples) >= 8:
+                break
+
+        rows.append(
+            {
+                "generated_at": generated_at,
+                "lookback_days": lookback_days,
+                "window_start": window_start,
+                "window_end": window_end,
+                "horizon_sessions": int(group_key[0]),
+                "side": str(group_key[1]),
+                "factor_key": str(group_key[2]),
+                "factor_group": str(group_key[3]),
+                "factor_label": str(group_key[4]),
+                "value_kind": str(group_key[5]),
+                "value_label": str(group_key[6]),
+                "observation_count": observation_count,
+                "symbol_count": int(unique_df["symbol"].nunique()),
+                "win_rate": win_rate,
+                "avg_side_return_pct": avg_side_return_pct,
+                "median_side_return_pct": median_side_return_pct,
+                "avg_raw_return_pct": avg_raw_return_pct,
+                "avg_spy_relative_side_return_pct": avg_spy_relative_side_return_pct,
+                "baseline_observation_count": int(baseline.get("observation_count", 0) or 0),
+                "baseline_win_rate": baseline_win_rate,
+                "baseline_avg_side_return_pct": baseline_avg_side_return_pct,
+                "baseline_avg_spy_relative_side_return_pct": baseline_avg_spy_relative_side_return_pct,
+                "side_return_edge_pct": side_return_edge_pct,
+                "win_rate_edge": win_rate_edge,
+                "spy_relative_edge_pct": spy_relative_edge_pct,
+                "success_score": success_score,
+                "impact_score": impact_score,
+                "sample_observations": "; ".join(samples),
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            -(_scan_factor_number(item.get("success_score")) or 0.0),
+            -(_scan_factor_number(item.get("impact_score")) or 0.0),
+            -int(item.get("observation_count", 0) or 0),
+            int(item.get("horizon_sessions", 0) or 0),
+            str(item.get("factor_label") or ""),
+            str(item.get("value_label") or ""),
+        )
+    )
+    return rows
+
+
+def _write_scan_factor_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows, columns=columns).to_csv(path, index=False)
+
+
+def export_scan_factor_views(
+    history_path: Path | None = None,
+    observations_path: Path | None = None,
+    leaderboard_path: Path | None = None,
+    *,
+    lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
+    min_observations: int = SCAN_FACTOR_MIN_OBSERVATIONS,
+) -> dict:
+    history_path = Path(history_path or D1_FEATURE_HISTORY_FILE)
+    observations_path = Path(observations_path or SCAN_FACTOR_OBSERVATIONS_FILE)
+    leaderboard_path = Path(leaderboard_path or SCAN_FACTOR_LEADERBOARD_FILE)
+
+    if not history_path.exists() or history_path.stat().st_size == 0:
+        _write_scan_factor_csv(observations_path, [], SCAN_FACTOR_OBSERVATION_COLUMNS)
+        _write_scan_factor_csv(leaderboard_path, [], SCAN_FACTOR_LEADERBOARD_COLUMNS)
+        return {"observation_count": 0, "leaderboard_count": 0}
+
+    history_df = pd.read_csv(history_path, low_memory=False)
+    observation_rows = build_scan_factor_observation_rows(history_df)
+    leaderboard_rows = build_scan_factor_leaderboard_rows(
+        history_df,
+        observation_rows,
+        lookback_days=lookback_days,
+        min_observations=min_observations,
+    )
+    _write_scan_factor_csv(observations_path, observation_rows, SCAN_FACTOR_OBSERVATION_COLUMNS)
+    _write_scan_factor_csv(leaderboard_path, leaderboard_rows, SCAN_FACTOR_LEADERBOARD_COLUMNS)
+    return {
+        "observation_count": len(observation_rows),
+        "leaderboard_count": len(leaderboard_rows),
+        "observations_path": str(observations_path),
+        "leaderboard_path": str(leaderboard_path),
+    }
+
+
+def load_scan_factor_leaderboard_rows(path: Path | None = None) -> list[dict]:
+    path = Path(path or SCAN_FACTOR_LEADERBOARD_FILE)
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    try:
+        frame = pd.read_csv(path, low_memory=False)
+    except Exception:
+        logging.exception("Failed to load scan factor leaderboard from %s", path)
+        return []
+    if frame.empty:
+        return []
+    frame = frame.where(pd.notna(frame), None)
+    return frame.to_dict("records")
+
+
+def _tier_for_priority_bucket(priority_bucket: str | None) -> str:
+    bucket = str(priority_bucket or "").strip().lower()
+    if bucket == "favorite_setup":
+        return "S"
+    if bucket == "near_favorite_zone":
+        return "A"
+    return ""
+
+
+def _tier_rank_value(tier: str | None) -> int:
+    return {"S": 0, "A": 1, "S/A": 2}.get(str(tier or "").strip().upper(), 9)
+
+
+def _positive_scan_factor_groups(
+    leaderboard_rows: list[dict] | None,
+    *,
+    top_per_side_horizon: int = TIER_CATCH_TOP_SCAN_FACTORS_PER_SIDE_HORIZON,
+) -> dict[tuple[int, str], list[dict]]:
+    grouped: dict[tuple[int, str], list[dict]] = {}
+    for row in leaderboard_rows or []:
+        if not isinstance(row, dict):
+            continue
+        success_score = _scan_factor_number(row.get("success_score"))
+        if success_score is None or success_score <= 0:
+            continue
+        horizon = int(row.get("horizon_sessions", 0) or 0)
+        side = normalize_side(row.get("side"))
+        factor_key = str(row.get("factor_key") or "").strip()
+        value_label = str(row.get("value_label") or "").strip()
+        if horizon <= 0 or not factor_key or not value_label:
+            continue
+        grouped.setdefault((horizon, side), []).append(row)
+
+    limited: dict[tuple[int, str], list[dict]] = {}
+    for key, rows in grouped.items():
+        ranked = sorted(
+            rows,
+            key=lambda item: (
+                -(_scan_factor_number(item.get("success_score")) or 0.0),
+                -(_scan_factor_number(item.get("impact_score")) or 0.0),
+                -int(item.get("observation_count", 0) or 0),
+                str(item.get("factor_label") or ""),
+                str(item.get("value_label") or ""),
+            ),
+        )
+        limited[key] = ranked[: max(1, int(top_per_side_horizon or 1))]
+    return limited
+
+
+def _positive_scan_factor_matches_for_source_row(
+    source_row: dict,
+    *,
+    horizon: int | None = None,
+    side: str | None = None,
+    positive_factor_groups: dict[tuple[int, str], list[dict]] | None = None,
+) -> list[dict]:
+    groups = positive_factor_groups or {}
+    if not groups or not isinstance(source_row, dict):
+        return []
+
+    factor_keys = {
+        (str(item.get("factor_key") or ""), str(item.get("value_label") or ""))
+        for item in _scan_factor_items_from_row(source_row)
+    }
+    if not factor_keys:
+        return []
+
+    normalized_side = normalize_side(side or source_row.get("_side") or source_row.get("side"))
+    horizons = [int(horizon)] if horizon else sorted({key[0] for key in groups.keys()})
+    matches = []
+    seen = set()
+    for horizon_value in horizons:
+        for row in groups.get((int(horizon_value), normalized_side), []):
+            match_key = (str(row.get("factor_key") or ""), str(row.get("value_label") or ""))
+            if match_key not in factor_keys:
+                continue
+            dedupe_key = (int(horizon_value), match_key[0], match_key[1])
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            matches.append(row)
+    matches.sort(
+        key=lambda item: (
+            int(item.get("horizon_sessions", 0) or 0),
+            -(_scan_factor_number(item.get("success_score")) or 0.0),
+            str(item.get("factor_label") or ""),
+        )
+    )
+    return matches
+
+
+def _format_positive_scan_factor_matches(matches: list[dict], *, limit: int = 8) -> str:
+    labels = []
+    for row in matches[: max(1, int(limit or 1))]:
+        success_score = _scan_factor_number(row.get("success_score"))
+        score_text = f" {success_score:+.2f}" if success_score is not None else ""
+        labels.append(
+            f"{int(row.get('horizon_sessions', 0) or 0)}d "
+            f"{row.get('factor_label')}={row.get('value_label')}{score_text}"
+        )
+    if len(matches) > len(labels):
+        labels.append(f"+{len(matches) - len(labels)} more")
+    return "; ".join(labels)
+
+
+def build_bot_tier_pick_rows(
+    history_df: pd.DataFrame | None,
+    leaderboard_rows: list[dict] | None = None,
+) -> list[dict]:
+    frame = _prepare_scan_factor_history_frame(history_df)
+    if frame.empty:
+        return []
+    latest_scan_date = frame["_scan_date_dt"].max()
+    latest_frame = frame[frame["_scan_date_dt"] == latest_scan_date].copy()
+    positive_factor_groups = _positive_scan_factor_groups(leaderboard_rows)
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    rows = []
+    for source_row in latest_frame.to_dict("records"):
+        tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        if not tier:
+            continue
+        matches = _positive_scan_factor_matches_for_source_row(
+            source_row,
+            positive_factor_groups=positive_factor_groups,
+        )
+        rows.append(
+            {
+                "generated_at": generated_at,
+                "run_date": _scan_factor_text(source_row.get("run_date")) or source_row.get("_scan_date_text"),
+                "scan_date": source_row.get("_scan_date_text"),
+                "scan_row_id": source_row.get("_scan_row_id"),
+                "tier": tier,
+                "symbol": source_row.get("_symbol"),
+                "side": normalize_side(source_row.get("_side") or source_row.get("side")),
+                "priority_bucket": _scan_factor_text(source_row.get("priority_bucket")),
+                "priority_score": _scan_factor_number(source_row.get("priority_score")),
+                "setup_family": _scan_factor_text(source_row.get("setup_family")),
+                "favorite_zone": _scan_factor_text(source_row.get("favorite_zone")),
+                "current_band_zone": _scan_factor_text(source_row.get("current_band_zone")),
+                "trend_20d": _scan_factor_text(source_row.get("trend_20d")),
+                "last_close": _scan_factor_number(source_row.get("_entry_close")),
+                "scan_factor_match_count": len(matches),
+                "scan_factor_matches": _format_positive_scan_factor_matches(matches),
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            _tier_rank_value(item.get("tier")),
+            -(_scan_factor_number(item.get("priority_score")) or 0.0),
+            str(item.get("symbol") or ""),
+        )
+    )
+    return rows
+
+
+def build_bot_tier_outcome_rows(
+    history_df: pd.DataFrame | None,
+    observation_rows: list[dict] | None = None,
+    leaderboard_rows: list[dict] | None = None,
+) -> list[dict]:
+    frame = _prepare_scan_factor_history_frame(history_df)
+    if frame.empty:
+        return []
+    observations = observation_rows if observation_rows is not None else build_scan_factor_observation_rows(history_df)
+    if not observations:
+        return []
+    source_rows = {
+        str(row.get("_scan_row_id") or ""): row
+        for row in frame.to_dict("records")
+        if str(row.get("_scan_row_id") or "")
+    }
+    positive_factor_groups = _positive_scan_factor_groups(leaderboard_rows)
+    rows = []
+    for obs in observations:
+        if not isinstance(obs, dict):
+            continue
+        source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
+        if not source_row:
+            continue
+        tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        if not tier:
+            continue
+        horizon = int(obs.get("horizon_sessions", 0) or 0)
+        side = normalize_side(obs.get("side"))
+        matches = _positive_scan_factor_matches_for_source_row(
+            source_row,
+            horizon=horizon,
+            side=side,
+            positive_factor_groups=positive_factor_groups,
+        )
+        rows.append(
+            {
+                "observation_id": obs.get("observation_id"),
+                "scan_row_id": obs.get("scan_row_id"),
+                "run_id": obs.get("run_id"),
+                "run_timestamp": obs.get("run_timestamp"),
+                "run_date": obs.get("run_date"),
+                "watchlist_label": obs.get("watchlist_label"),
+                "scan_date": obs.get("scan_date"),
+                "future_scan_date": obs.get("future_scan_date"),
+                "horizon_sessions": horizon,
+                "tier": tier,
+                "symbol": obs.get("symbol"),
+                "side": side,
+                "priority_bucket": _scan_factor_text(source_row.get("priority_bucket")),
+                "priority_score": _scan_factor_number(source_row.get("priority_score")),
+                "setup_family": _scan_factor_text(source_row.get("setup_family")),
+                "favorite_zone": _scan_factor_text(source_row.get("favorite_zone")),
+                "entry_close": obs.get("entry_close"),
+                "future_close": obs.get("future_close"),
+                "raw_return_pct": obs.get("raw_return_pct"),
+                "side_return_pct": obs.get("side_return_pct"),
+                "win": bool(obs.get("win")),
+                "spy_forward_return_pct": obs.get("spy_forward_return_pct"),
+                "spy_relative_side_return_pct": obs.get("spy_relative_side_return_pct"),
+                "positive_scan_factor_match_count": len(matches),
+                "positive_scan_factor_matches": _format_positive_scan_factor_matches(matches),
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            str(item.get("scan_date") or ""),
+            _tier_rank_value(item.get("tier")),
+            str(item.get("symbol") or ""),
+            int(item.get("horizon_sessions", 0) or 0),
+        )
+    )
+    return rows
+
+
+def _tier_performance_summary_row(
+    group_df: pd.DataFrame,
+    baseline_df: pd.DataFrame,
+    *,
+    generated_at: str,
+    lookback_days: int,
+    window_start: str,
+    window_end: str,
+    horizon,
+    tier: str,
+    side: str,
+) -> dict:
+    side_values = pd.to_numeric(group_df.get("side_return_pct"), errors="coerce").dropna()
+    spy_relative_values = pd.to_numeric(group_df.get("spy_relative_side_return_pct"), errors="coerce").dropna()
+    baseline_side_values = pd.to_numeric(baseline_df.get("side_return_pct"), errors="coerce").dropna()
+    baseline_spy_values = pd.to_numeric(baseline_df.get("spy_relative_side_return_pct"), errors="coerce").dropna()
+    win_rate = _scan_factor_win_rate(group_df.get("win", []))
+    baseline_win_rate = _scan_factor_win_rate(baseline_df.get("win", []))
+    avg_side_return_pct = float(side_values.mean()) if not side_values.empty else None
+    baseline_avg_side_return_pct = float(baseline_side_values.mean()) if not baseline_side_values.empty else None
+    avg_spy_relative_side_return_pct = (
+        float(spy_relative_values.mean()) if not spy_relative_values.empty else None
+    )
+    baseline_avg_spy_relative_side_return_pct = (
+        float(baseline_spy_values.mean()) if not baseline_spy_values.empty else None
+    )
+    match_counts = pd.to_numeric(group_df.get("positive_scan_factor_match_count"), errors="coerce").fillna(0)
+    sample_rows = group_df.to_dict("records")
+    sample_rows.sort(
+        key=lambda item: (
+            str(item.get("scan_date") or ""),
+            _scan_factor_number(item.get("side_return_pct")) or -9999.0,
+            str(item.get("symbol") or ""),
+        ),
+        reverse=True,
+    )
+    samples = []
+    for item in sample_rows[:8]:
+        side_return = _scan_factor_number(item.get("side_return_pct"))
+        sample = f"{item.get('symbol')} {item.get('scan_date')}->{item.get('future_scan_date')}"
+        if side_return is not None:
+            sample += f" ({side_return:+.2f}%)"
+        samples.append(sample)
+    return {
+        "generated_at": generated_at,
+        "lookback_days": lookback_days,
+        "window_start": window_start,
+        "window_end": window_end,
+        "horizon_sessions": horizon,
+        "tier": tier,
+        "side": side,
+        "observation_count": int(group_df["observation_id"].nunique()) if "observation_id" in group_df.columns else len(group_df),
+        "symbol_count": int(group_df["symbol"].nunique()) if "symbol" in group_df.columns else 0,
+        "win_rate": win_rate,
+        "avg_side_return_pct": avg_side_return_pct,
+        "median_side_return_pct": float(side_values.median()) if not side_values.empty else None,
+        "avg_spy_relative_side_return_pct": avg_spy_relative_side_return_pct,
+        "baseline_observation_count": int(baseline_df["observation_id"].nunique()) if "observation_id" in baseline_df.columns else len(baseline_df),
+        "baseline_win_rate": baseline_win_rate,
+        "baseline_avg_side_return_pct": baseline_avg_side_return_pct,
+        "baseline_avg_spy_relative_side_return_pct": baseline_avg_spy_relative_side_return_pct,
+        "side_return_edge_pct": (
+            avg_side_return_pct - baseline_avg_side_return_pct
+            if avg_side_return_pct is not None and baseline_avg_side_return_pct is not None
+            else None
+        ),
+        "win_rate_edge": (
+            win_rate - baseline_win_rate
+            if win_rate is not None and baseline_win_rate is not None
+            else None
+        ),
+        "spy_relative_edge_pct": (
+            avg_spy_relative_side_return_pct - baseline_avg_spy_relative_side_return_pct
+            if avg_spy_relative_side_return_pct is not None
+            and baseline_avg_spy_relative_side_return_pct is not None
+            else None
+        ),
+        "positive_scan_factor_match_rate": float((match_counts > 0).mean()) if len(match_counts) else None,
+        "sample_observations": "; ".join(samples),
+    }
+
+
+def build_bot_tier_performance_rows(
+    tier_outcome_rows: list[dict] | None,
+    observation_rows: list[dict] | None,
+    *,
+    lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
+    reference_date: date | datetime | str | None = None,
+) -> list[dict]:
+    if not tier_outcome_rows:
+        return []
+    tier_df = pd.DataFrame(tier_outcome_rows)
+    all_obs_df = pd.DataFrame(observation_rows or [])
+    if tier_df.empty or all_obs_df.empty:
+        return []
+    tier_df["_scan_date_dt"] = pd.to_datetime(tier_df["scan_date"], errors="coerce")
+    all_obs_df["_scan_date_dt"] = pd.to_datetime(all_obs_df["scan_date"], errors="coerce")
+    tier_df = tier_df[tier_df["_scan_date_dt"].notna()].copy()
+    all_obs_df = all_obs_df[all_obs_df["_scan_date_dt"].notna()].copy()
+    if tier_df.empty or all_obs_df.empty:
+        return []
+    if reference_date is None:
+        window_end_ts = tier_df["_scan_date_dt"].max()
+    else:
+        window_end_ts = pd.to_datetime(reference_date, errors="coerce")
+        if pd.isna(window_end_ts):
+            window_end_ts = tier_df["_scan_date_dt"].max()
+    lookback_days = max(1, int(lookback_days or SCAN_FACTOR_LOOKBACK_DAYS))
+    window_start_ts = window_end_ts - pd.Timedelta(days=lookback_days)
+    tier_recent = tier_df[
+        (tier_df["_scan_date_dt"] >= window_start_ts)
+        & (tier_df["_scan_date_dt"] <= window_end_ts)
+    ].copy()
+    obs_recent = all_obs_df[
+        (all_obs_df["_scan_date_dt"] >= window_start_ts)
+        & (all_obs_df["_scan_date_dt"] <= window_end_ts)
+    ].copy()
+    if tier_recent.empty or obs_recent.empty:
+        return []
+
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    window_start = window_start_ts.strftime("%Y-%m-%d")
+    window_end = window_end_ts.strftime("%Y-%m-%d")
+    rows = []
+
+    def add_row(horizon, tier: str, side: str, group_df: pd.DataFrame) -> None:
+        if group_df.empty:
+            return
+        baseline = obs_recent[obs_recent["horizon_sessions"] == horizon]
+        if side != "ALL":
+            baseline = baseline[baseline["side"].apply(normalize_side) == side]
+        if baseline.empty:
+            return
+        rows.append(
+            _tier_performance_summary_row(
+                group_df,
+                baseline,
+                generated_at=generated_at,
+                lookback_days=lookback_days,
+                window_start=window_start,
+                window_end=window_end,
+                horizon=horizon,
+                tier=tier,
+                side=side,
+            )
+        )
+
+    for horizon in sorted({int(value) for value in tier_recent["horizon_sessions"].dropna().unique()}):
+        horizon_df = tier_recent[tier_recent["horizon_sessions"] == horizon]
+        for tier in ("S", "A"):
+            tier_df_for_horizon = horizon_df[horizon_df["tier"] == tier]
+            for side in ("LONG", "SHORT"):
+                add_row(horizon, tier, side, tier_df_for_horizon[tier_df_for_horizon["side"].apply(normalize_side) == side])
+            add_row(horizon, tier, "ALL", tier_df_for_horizon)
+        for side in ("LONG", "SHORT"):
+            add_row(horizon, "S/A", side, horizon_df[horizon_df["side"].apply(normalize_side) == side])
+        add_row(horizon, "S/A", "ALL", horizon_df)
+
+    rows.sort(
+        key=lambda item: (
+            int(item.get("horizon_sessions", 0) or 0),
+            _tier_rank_value(item.get("tier")),
+            str(item.get("side") or ""),
+        )
+    )
+    return rows
+
+
+def _build_tier_catch_summary_row(
+    opportunity_rows: list[dict],
+    *,
+    generated_at: str,
+    lookback_days: int,
+    window_start: str,
+    window_end: str,
+    horizon,
+    side: str,
+    top_factor_count: int,
+) -> dict:
+    winners = [row for row in opportunity_rows if (_scan_factor_number(row.get("side_return_pct")) or 0.0) > 0]
+    caught = [row for row in opportunity_rows if _tier_for_priority_bucket(row.get("priority_bucket"))]
+    caught_winners = [row for row in winners if _tier_for_priority_bucket(row.get("priority_bucket"))]
+    caught_s = [row for row in caught if _tier_for_priority_bucket(row.get("priority_bucket")) == "S"]
+    caught_a = [row for row in caught if _tier_for_priority_bucket(row.get("priority_bucket")) == "A"]
+    missed_winners = [row for row in winners if not _tier_for_priority_bucket(row.get("priority_bucket"))]
+
+    def _sample(rows: list[dict]) -> str:
+        ranked = sorted(
+            rows,
+            key=lambda item: (
+                _scan_factor_number(item.get("side_return_pct")) or -9999.0,
+                str(item.get("scan_date") or ""),
+                str(item.get("symbol") or ""),
+            ),
+            reverse=True,
+        )
+        samples = []
+        for item in ranked[:8]:
+            side_return = _scan_factor_number(item.get("side_return_pct"))
+            text = f"{item.get('symbol')} {item.get('scan_date')}->{item.get('future_scan_date')}"
+            if side_return is not None:
+                text += f" ({side_return:+.2f}%)"
+            tier = _tier_for_priority_bucket(item.get("priority_bucket"))
+            if tier:
+                text += f" tier={tier}"
+            samples.append(text)
+        return "; ".join(samples)
+
+    return {
+        "generated_at": generated_at,
+        "lookback_days": lookback_days,
+        "window_start": window_start,
+        "window_end": window_end,
+        "horizon_sessions": horizon,
+        "side": side,
+        "factor_opportunity_count": len(opportunity_rows),
+        "factor_winner_count": len(winners),
+        "caught_opportunity_count": len(caught),
+        "caught_winner_count": len(caught_winners),
+        "caught_s_count": len(caught_s),
+        "caught_a_count": len(caught_a),
+        "caught_opportunity_rate": (len(caught) / len(opportunity_rows)) if opportunity_rows else None,
+        "caught_winner_rate": (len(caught_winners) / len(winners)) if winners else None,
+        "missed_winner_count": len(missed_winners),
+        "top_factor_count": top_factor_count,
+        "sample_caught_winners": _sample(caught_winners),
+        "sample_missed_winners": _sample(missed_winners),
+    }
+
+
+def build_bot_tier_catch_rate_rows(
+    history_df: pd.DataFrame | None,
+    observation_rows: list[dict] | None,
+    leaderboard_rows: list[dict] | None,
+    *,
+    lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
+    reference_date: date | datetime | str | None = None,
+) -> list[dict]:
+    frame = _prepare_scan_factor_history_frame(history_df)
+    observations = observation_rows or []
+    positive_groups = _positive_scan_factor_groups(leaderboard_rows)
+    if frame.empty or not observations or not positive_groups:
+        return []
+
+    obs_df = pd.DataFrame(observations)
+    obs_df["_scan_date_dt"] = pd.to_datetime(obs_df["scan_date"], errors="coerce")
+    obs_df = obs_df[obs_df["_scan_date_dt"].notna()].copy()
+    if obs_df.empty:
+        return []
+    if reference_date is None:
+        window_end_ts = obs_df["_scan_date_dt"].max()
+    else:
+        window_end_ts = pd.to_datetime(reference_date, errors="coerce")
+        if pd.isna(window_end_ts):
+            window_end_ts = obs_df["_scan_date_dt"].max()
+    lookback_days = max(1, int(lookback_days or SCAN_FACTOR_LOOKBACK_DAYS))
+    window_start_ts = window_end_ts - pd.Timedelta(days=lookback_days)
+    obs_df = obs_df[
+        (obs_df["_scan_date_dt"] >= window_start_ts)
+        & (obs_df["_scan_date_dt"] <= window_end_ts)
+    ].copy()
+    if obs_df.empty:
+        return []
+
+    source_rows = {
+        str(row.get("_scan_row_id") or ""): row
+        for row in frame.to_dict("records")
+        if str(row.get("_scan_row_id") or "")
+    }
+    opportunities = []
+    for obs in obs_df.to_dict("records"):
+        source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
+        if not source_row:
+            continue
+        horizon = int(obs.get("horizon_sessions", 0) or 0)
+        side = normalize_side(obs.get("side"))
+        matches = _positive_scan_factor_matches_for_source_row(
+            source_row,
+            horizon=horizon,
+            side=side,
+            positive_factor_groups=positive_groups,
+        )
+        if not matches:
+            continue
+        item = dict(obs)
+        item["priority_bucket"] = _scan_factor_text(source_row.get("priority_bucket"))
+        item["tier"] = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        item["positive_scan_factor_match_count"] = len(matches)
+        item["positive_scan_factor_matches"] = _format_positive_scan_factor_matches(matches)
+        opportunities.append(item)
+    if not opportunities:
+        return []
+
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    window_start = window_start_ts.strftime("%Y-%m-%d")
+    window_end = window_end_ts.strftime("%Y-%m-%d")
+    rows = []
+
+    for horizon in sorted({int(row.get("horizon_sessions", 0) or 0) for row in opportunities}):
+        horizon_rows = [row for row in opportunities if int(row.get("horizon_sessions", 0) or 0) == horizon]
+        for side in ("LONG", "SHORT"):
+            side_rows = [row for row in horizon_rows if normalize_side(row.get("side")) == side]
+            if not side_rows:
+                continue
+            rows.append(
+                _build_tier_catch_summary_row(
+                    side_rows,
+                    generated_at=generated_at,
+                    lookback_days=lookback_days,
+                    window_start=window_start,
+                    window_end=window_end,
+                    horizon=horizon,
+                    side=side,
+                    top_factor_count=len(positive_groups.get((horizon, side), [])),
+                )
+            )
+        rows.append(
+            _build_tier_catch_summary_row(
+                horizon_rows,
+                generated_at=generated_at,
+                lookback_days=lookback_days,
+                window_start=window_start,
+                window_end=window_end,
+                horizon=horizon,
+                side="ALL",
+                top_factor_count=sum(len(positive_groups.get((horizon, side), [])) for side in ("LONG", "SHORT")),
+            )
+        )
+
+    rows.sort(
+        key=lambda item: (
+            int(item.get("horizon_sessions", 0) or 0),
+            str(item.get("side") or ""),
+        )
+    )
+    return rows
+
+
+def export_bot_tier_tracker_views(
+    history_path: Path | None = None,
+    tier_list_path: Path | None = None,
+    tier_outcomes_path: Path | None = None,
+    tier_performance_path: Path | None = None,
+    tier_catch_rate_path: Path | None = None,
+    *,
+    lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
+    min_observations: int = SCAN_FACTOR_MIN_OBSERVATIONS,
+) -> dict:
+    history_path = Path(history_path or D1_FEATURE_HISTORY_FILE)
+    tier_list_path = Path(tier_list_path or TIER_LIST_FILE)
+    tier_outcomes_path = Path(tier_outcomes_path or TIER_OUTCOMES_FILE)
+    tier_performance_path = Path(tier_performance_path or TIER_PERFORMANCE_FILE)
+    tier_catch_rate_path = Path(tier_catch_rate_path or TIER_CATCH_RATE_FILE)
+
+    if not history_path.exists() or history_path.stat().st_size == 0:
+        _write_scan_factor_csv(tier_list_path, [], TIER_LIST_COLUMNS)
+        _write_scan_factor_csv(tier_outcomes_path, [], TIER_OUTCOME_COLUMNS)
+        _write_scan_factor_csv(tier_performance_path, [], TIER_PERFORMANCE_COLUMNS)
+        _write_scan_factor_csv(tier_catch_rate_path, [], TIER_CATCH_RATE_COLUMNS)
+        return {"tier_pick_count": 0, "tier_outcome_count": 0, "tier_performance_count": 0, "tier_catch_rate_count": 0}
+
+    history_df = pd.read_csv(history_path, low_memory=False)
+    observation_rows = build_scan_factor_observation_rows(history_df)
+    leaderboard_rows = build_scan_factor_leaderboard_rows(
+        history_df,
+        observation_rows,
+        lookback_days=lookback_days,
+        min_observations=min_observations,
+    )
+    tier_pick_rows = build_bot_tier_pick_rows(history_df, leaderboard_rows)
+    tier_outcome_rows = build_bot_tier_outcome_rows(history_df, observation_rows, leaderboard_rows)
+    tier_performance_rows = build_bot_tier_performance_rows(
+        tier_outcome_rows,
+        observation_rows,
+        lookback_days=lookback_days,
+    )
+    tier_catch_rate_rows = build_bot_tier_catch_rate_rows(
+        history_df,
+        observation_rows,
+        leaderboard_rows,
+        lookback_days=lookback_days,
+    )
+    _write_scan_factor_csv(tier_list_path, tier_pick_rows, TIER_LIST_COLUMNS)
+    _write_scan_factor_csv(tier_outcomes_path, tier_outcome_rows, TIER_OUTCOME_COLUMNS)
+    _write_scan_factor_csv(tier_performance_path, tier_performance_rows, TIER_PERFORMANCE_COLUMNS)
+    _write_scan_factor_csv(tier_catch_rate_path, tier_catch_rate_rows, TIER_CATCH_RATE_COLUMNS)
+    return {
+        "tier_pick_count": len(tier_pick_rows),
+        "tier_outcome_count": len(tier_outcome_rows),
+        "tier_performance_count": len(tier_performance_rows),
+        "tier_catch_rate_count": len(tier_catch_rate_rows),
+        "tier_list_path": str(tier_list_path),
+        "tier_outcomes_path": str(tier_outcomes_path),
+        "tier_performance_path": str(tier_performance_path),
+        "tier_catch_rate_path": str(tier_catch_rate_path),
+    }
+
+
+def _load_csv_dict_rows(path: Path | str | None) -> list[dict]:
+    if not path:
+        return []
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    try:
+        frame = pd.read_csv(path, low_memory=False)
+    except Exception:
+        logging.exception("Failed to load CSV rows from %s", path)
+        return []
+    if frame.empty:
+        return []
+    frame = frame.where(pd.notna(frame), None)
+    return frame.to_dict("records")
+
+
+def load_bot_tier_list_rows(path: Path | str | None = None) -> list[dict]:
+    return _load_csv_dict_rows(path or TIER_LIST_FILE)
+
+
+def load_bot_tier_performance_rows(path: Path | str | None = None) -> list[dict]:
+    return _load_csv_dict_rows(path or TIER_PERFORMANCE_FILE)
+
+
+def load_bot_tier_catch_rate_rows(path: Path | str | None = None) -> list[dict]:
+    return _load_csv_dict_rows(path or TIER_CATCH_RATE_FILE)
+
+
 def build_tracker_factor_view_rows(attribute_leaderboard_rows: list[dict]) -> list[dict]:
     if not attribute_leaderboard_rows:
         return []
@@ -8045,51 +9592,94 @@ def _record_shared_yfinance_dates_safely(symbol: str, dates: list[str] | None) -
         logging.warning("%s: failed updating shared earnings history from yfinance: %s", symbol, exc)
 
 
+def _earnings_calendar_cache_entry_has_rows(entry) -> bool:
+    return isinstance(entry, list) or (isinstance(entry, dict) and isinstance(entry.get("rows"), list))
+
+
+def _earnings_calendar_rows_from_cache_entry(entry) -> list:
+    if isinstance(entry, dict):
+        rows = entry.get("rows", [])
+    else:
+        rows = entry
+    return rows if isinstance(rows, list) else []
+
+
+def _earnings_calendar_cache_fetched_at(entry) -> str:
+    return str(entry.get("fetched_at") or "unknown") if isinstance(entry, dict) else "unknown"
+
+
+def _earnings_calendar_cache_entry_is_fresh(date_str: str, entry) -> bool:
+    if not _earnings_calendar_cache_entry_has_rows(entry):
+        return False
+    event_date = _parse_iso_date_or_none(date_str)
+    if event_date is None:
+        return False
+    today = datetime.now().date()
+    if event_date < today:
+        return True
+    return _is_timestamp_within_minutes(
+        _earnings_calendar_cache_fetched_at(entry),
+        EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES,
+    )
+
+
+def _extract_nasdaq_earnings_rows(payload) -> list[dict]:
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    rows = data.get("rows", []) if isinstance(data, dict) else []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _fetch_nasdaq_earnings_rows_with_retries(date_str: str) -> tuple[list[dict], Exception | None]:
+    last_error = None
+    attempts = max(1, int(EARNINGS_CALENDAR_REQUEST_RETRIES) + 1)
+    for attempt in range(attempts):
+        try:
+            resp = requests.get(
+                API_URL.format(date=date_str),
+                headers=HEADERS,
+                timeout=EARNINGS_CALENDAR_REQUEST_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            return _extract_nasdaq_earnings_rows(resp.json()), None
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts - 1 and EARNINGS_CALENDAR_RETRY_BACKOFF_SECONDS:
+                time.sleep(float(EARNINGS_CALENDAR_RETRY_BACKOFF_SECONDS) * (2 ** attempt))
+    return [], last_error
+
+
 def fetch_earnings_for_date(date_str: str):
     cache = _load_earnings_calendar_rows_cache()
     cached_entry = cache.get(date_str) if isinstance(cache, dict) else None
-    cached_rows = cached_entry.get("rows", []) if isinstance(cached_entry, dict) else []
-    today_iso = datetime.now().date().isoformat()
-    if isinstance(cached_entry, dict):
-        if date_str < today_iso:
-            _record_shared_nasdaq_rows_safely(cached_rows, date_str)
-            return cached_rows if isinstance(cached_rows, list) else []
-        if date_str == today_iso and _is_timestamp_within_minutes(
-            cached_entry.get("fetched_at"),
-            EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES,
-        ):
-            _record_shared_nasdaq_rows_safely(cached_rows, date_str)
-            return cached_rows if isinstance(cached_rows, list) else []
-        if date_str > today_iso and _is_timestamp_within_minutes(
-            cached_entry.get("fetched_at"),
-            EARNINGS_CALENDAR_TODAY_CACHE_MAX_AGE_MINUTES,
-        ):
-            _record_shared_nasdaq_rows_safely(cached_rows, date_str)
-            return cached_rows if isinstance(cached_rows, list) else []
+    cached_rows = _earnings_calendar_rows_from_cache_entry(cached_entry)
+    if _earnings_calendar_cache_entry_is_fresh(date_str, cached_entry):
+        _record_shared_nasdaq_rows_safely(cached_rows, date_str)
+        return cached_rows
 
-    try:
-        resp = requests.get(API_URL.format(date=date_str),
-                            headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        payload = resp.json()
-        data = payload.get("data") if isinstance(payload, dict) else {}
-        rows = data.get("rows", []) if isinstance(data, dict) else []
-        rows = rows or []
+    rows, error = _fetch_nasdaq_earnings_rows_with_retries(date_str)
+    if error is None:
+        fetched_at = datetime.now().isoformat(timespec="seconds")
         cache[date_str] = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "rows": rows if isinstance(rows, list) else [],
+            "fetched_at": fetched_at,
+            "row_count": len(rows),
+            "rows": rows,
         }
         _save_earnings_calendar_rows_cache()
-        _record_shared_nasdaq_rows_safely(rows if isinstance(rows, list) else [], date_str)
-        return rows if isinstance(rows, list) else []
-    except Exception as e:
-        logging.warning(f"Failed fetch earnings for {date_str}: {e}")
-        if isinstance(cached_rows, list) and cached_rows:
-            logging.info(f"Using cached earnings calendar rows for {date_str} after fetch failure.")
+        _record_shared_nasdaq_rows_safely(rows, date_str)
+        return rows
+
+    logging.warning(f"Failed fetch earnings for {date_str}: {error}")
+    if _earnings_calendar_cache_entry_has_rows(cached_entry):
+        if cached_rows:
+            logging.info(
+                "Using cached earnings calendar rows for %s after fetch failure; fetched_at=%s row_count=%s.",
+                date_str,
+                _earnings_calendar_cache_fetched_at(cached_entry),
+                len(cached_rows),
+            )
             _record_shared_nasdaq_rows_safely(cached_rows, date_str)
-            return cached_rows
-        time.sleep(0.3)
-        return []
+        return cached_rows
+    return []
 
 def collect_earnings_dates(
     symbols,
@@ -8802,6 +10392,14 @@ def _coerce_int(value):
     return int(v)
 
 
+def _first_coerced_float(*values):
+    for value in values:
+        parsed = _coerce_float(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 
 def load_latest_earnings_release_map(
     symbols,
@@ -9098,6 +10696,7 @@ def _find_recent_post_earnings_avwap_bounce(
         "bounce_idx": None,
         "bounce_date": "",
         "bounce_age_sessions": None,
+        "bounce_sessions_after_gap": None,
     }
     if df is None or df.empty or level is None:
         return result
@@ -9126,6 +10725,7 @@ def _find_recent_post_earnings_avwap_bounce(
                 "bounce_idx": idx,
                 "bounce_date": _trade_date_text_from_bar(df.iloc[idx]),
                 "bounce_age_sessions": max(0, last_idx - idx),
+                "bounce_sessions_after_gap": int(idx - int(gap_idx)),
             }
         )
         return result
@@ -9365,6 +10965,7 @@ def analyze_post_earnings_setups(
         "bounce_signal": False,
         "bounce_date": "",
         "bounce_age_sessions": None,
+        "bounce_sessions_after_gap": None,
         "events": [],
         "note": "",
         "anchor_meta": None,
@@ -9404,7 +11005,6 @@ def analyze_post_earnings_setups(
     gap_atr_multiple = _coerce_float(release_context.get("gap_atr_multiple"))
     qualified_pre_earnings_avwap_gap = (
         directional_gap
-        and gap_candle_directional
         and gap_atr_multiple is not None
         and float(gap_atr_multiple) >= MIN_GAP_ATR_MULTIPLE
     )
@@ -9415,6 +11015,8 @@ def analyze_post_earnings_setups(
     breakout_idx = _coerce_int(breakout_candle.get("idx")) if breakout_candle else None
     breakout_extreme = _coerce_float(breakout_candle.get("level")) if breakout_candle else None
     breakout_date = str(breakout_candle.get("date") or "").strip() if breakout_candle else ""
+    if breakout_idx == int(gap_idx) and not gap_candle_directional:
+        return result
     qualified_52w_gap = bool(breakout_idx is not None and breakout_extreme is not None)
     monitor_level = float(breakout_extreme) if qualified_52w_gap else (
         _coerce_float(anchor_meta.get("vwap")) if anchor_meta else None
@@ -9457,6 +11059,9 @@ def analyze_post_earnings_setups(
         else {}
     )
     bounce_signal = bool(bounce_info.get("bounce_signal"))
+    if not qualified_52w_gap and not bounce_signal:
+        if sessions_since_gap >= POST_EARNINGS_BOUNCE_MIN_SESSIONS_SINCE_GAP:
+            return result
 
     events = []
     family = ""
@@ -9490,7 +11095,10 @@ def analyze_post_earnings_setups(
             if first_break_date:
                 note_parts.append(f"first break {first_break_date}")
         elif sessions_since_gap == 0 or len(df) <= int(breakout_idx) + 1:
-            note_parts.append("waiting for post-breakout confirmation candle")
+            if breakout_idx == int(gap_idx):
+                note_parts.append("waiting for post-gap break of earnings-candle extreme")
+            else:
+                note_parts.append("waiting for post-breakout confirmation candle")
         elif break_sessions_after_gap is not None and not break_in_setup_window:
             note_parts.append(
                 f"52-week break occurred after {int(break_sessions_after_gap)} candle(s), "
@@ -9548,6 +11156,7 @@ def analyze_post_earnings_setups(
             "bounce_signal": bool(bounce_signal),
             "bounce_date": str(bounce_info.get("bounce_date") or ""),
             "bounce_age_sessions": bounce_info.get("bounce_age_sessions"),
+            "bounce_sessions_after_gap": bounce_info.get("bounce_sessions_after_gap"),
             "events": events,
             "note": "; ".join(note_parts),
             "anchor_meta": anchor_meta,
@@ -9790,6 +11399,7 @@ def analyze_mid_earnings_ema_retest_setup(
     side: str,
     release_context: dict | None,
     indicator_frame: pd.DataFrame | None,
+    intraday_vwap: float | None = None,
 ) -> dict[str, Any]:
     result = {
         "watch": False,
@@ -9826,7 +11436,7 @@ def analyze_mid_earnings_ema_retest_setup(
         return result
     sessions_since_gap = int(release_context.get("sessions_since_gap") or 0)
     result["sessions_since_gap"] = sessions_since_gap
-    if sessions_since_gap < MID_EARNINGS_MIN_SESSIONS_AFTER_GAP:
+    if sessions_since_gap < MID_EARNINGS_RETEST_MIN_SESSIONS_AFTER_GAP:
         return result
 
     indicator_by_date: dict[str, pd.Series] = {}
@@ -9864,6 +11474,8 @@ def analyze_mid_earnings_ema_retest_setup(
     second_stdev_direction = "above" if normalized_side == "LONG" else "below"
     active_streak = _find_active_mid_earnings_second_stdev_streak(ordered_rows, side)
     if active_streak:
+        if sessions_since_gap < MID_EARNINGS_HOLD_MIN_SESSIONS_AFTER_GAP:
+            return result
         result.update(
             {
                 "watch": True,
@@ -9935,6 +11547,66 @@ def analyze_mid_earnings_ema_retest_setup(
                     f"held {second_stdev_direction} {second_stdev_label} for {qualifying_streak['length']} day(s) "
                     f"ending {sessions_since_zone_end} session(s) ago; waiting for a quick "
                     f"EMA15 / EMA21 / {first_dev_label} retest and bounce."
+                ),
+            }
+        )
+        return result
+
+    candidate_retest_details = [
+        ("EMA_15", ema15_detail),
+        ("EMA_21", ema21_detail),
+        (first_dev_label, first_dev_detail),
+    ]
+    primary_retest_level = next((label for label, detail in candidate_retest_details if detail), "")
+    primary_retest_detail = next((detail for _, detail in candidate_retest_details if detail), {})
+    latest_row = ordered_rows[-1]
+    latest_open = _coerce_float(latest_row.get("open"))
+    latest_close = _coerce_float(latest_row.get("close"))
+    intraday_vwap_value = _coerce_float(intraday_vwap)
+    if normalized_side == "LONG":
+        close_direction_ok = (
+            latest_open is not None
+            and latest_close is not None
+            and float(latest_close) > float(latest_open)
+        )
+        intraday_vwap_ok = (
+            intraday_vwap_value is None
+            or (latest_close is not None and float(latest_close) > float(intraday_vwap_value))
+        )
+        confirmation_note = "close above open"
+    else:
+        close_direction_ok = (
+            latest_open is not None
+            and latest_close is not None
+            and float(latest_close) < float(latest_open)
+        )
+        intraday_vwap_ok = (
+            intraday_vwap_value is None
+            or (latest_close is not None and float(latest_close) < float(intraday_vwap_value))
+        )
+        confirmation_note = "close below open"
+
+    if not (close_direction_ok and intraday_vwap_ok):
+        if intraday_vwap_value is not None:
+            confirmation_note = f"{confirmation_note} and intraday VWAP"
+        result.update(
+            {
+                "watch": True,
+                "zone_streak_days": int(qualifying_streak["length"]),
+                "zone_start_date": qualifying_streak["start_date"],
+                "zone_end_date": qualifying_streak["end_date"],
+                "sessions_since_gap": sessions_since_gap,
+                "anchor_date": str(anchor_meta.get("date") or ""),
+                "gap_date": gap_date,
+                "retest_level": primary_retest_level,
+                "retest_level_value": _coerce_float(primary_retest_detail.get("level_value")),
+                "retest_date": primary_retest_detail.get("retest_date") or "",
+                "sessions_after_zone": primary_retest_detail.get("sessions_after_zone"),
+                "primary_trigger_level": "",
+                "anchor_meta": anchor_meta,
+                "note": (
+                    f"{sessions_since_gap} sessions since post-earnings gap; "
+                    f"{primary_retest_level or 'Retest'} touched but waiting for {confirmation_note}."
                 ),
             }
         )
@@ -13232,17 +14904,21 @@ def _theta_support_entry(
     }
 
 
+def _normalize_theta_support_label(label: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", str(label or "").upper()).strip("_")
+
+
 def _is_valid_theta_support_entry(entry: dict | None) -> bool:
     if not isinstance(entry, dict):
         return False
-    label = re.sub(r"[^A-Z0-9]+", "_", str(entry.get("label") or "").upper()).strip("_")
+    label = _normalize_theta_support_label(entry.get("label"))
     return label not in {"SMA_20", "SMA20"}
 
 
 def _is_theta_major_sma_support(entry: dict | None) -> bool:
     if not isinstance(entry, dict):
         return False
-    label = re.sub(r"[^A-Z0-9]+", "_", str(entry.get("label") or "").upper()).strip("_")
+    label = _normalize_theta_support_label(entry.get("label"))
     return label in THETA_MAJOR_SMA_SUPPORT_LABELS or label.replace("_", "") in {"SMA50", "SMA100", "SMA200"}
 
 
@@ -13251,6 +14927,39 @@ def _theta_major_sma_supports(supports: list[dict] | None) -> list[dict]:
         entry
         for entry in supports or []
         if _is_valid_theta_support_entry(entry) and _is_theta_major_sma_support(entry)
+    ]
+
+
+def _is_theta_avwap_support(entry: dict | None) -> bool:
+    if not _is_valid_theta_support_entry(entry):
+        return False
+    label = _normalize_theta_support_label(entry.get("label"))
+    if label in THETA_AVWAP_FAMILY_SUPPORT_LABELS:
+        return True
+    source = str(entry.get("source") or "").strip().lower()
+    return source == "avwape" and label in THETA_CURRENT_AVWAPE_SUPPORT_LABELS
+
+
+def _theta_avwap_supports(supports: list[dict] | None) -> list[dict]:
+    return [
+        entry
+        for entry in supports or []
+        if _is_theta_avwap_support(entry)
+    ]
+
+
+def _is_theta_previous_first_dev_support(entry: dict | None) -> bool:
+    if not _is_theta_avwap_support(entry):
+        return False
+    label = _normalize_theta_support_label(entry.get("label"))
+    return label in THETA_PREVIOUS_FIRST_DEV_SUPPORT_LABELS
+
+
+def _theta_previous_first_dev_supports(supports: list[dict] | None) -> list[dict]:
+    return [
+        entry
+        for entry in supports or []
+        if _is_theta_previous_first_dev_support(entry)
     ]
 
 
@@ -13564,6 +15273,20 @@ def evaluate_theta_put_candidate(
     major_sma_supports = _theta_major_sma_supports(supports)
     if not major_sma_supports:
         return None
+    avwap_supports = _theta_avwap_supports(supports)
+    if not avwap_supports:
+        return None
+    current_avwape_supports = [
+        entry
+        for entry in supports
+        if _normalize_theta_support_label(entry.get("label")) in THETA_CURRENT_AVWAPE_SUPPORT_LABELS
+    ]
+    previous_avwape_supports = [
+        entry
+        for entry in supports
+        if _normalize_theta_support_label(entry.get("label")) in THETA_PREVIOUS_AVWAPE_SUPPORT_LABELS
+    ]
+    previous_first_dev_supports = _theta_previous_first_dev_supports(supports)
     sources = {
         str(entry.get("source") or "").strip().lower()
         for entry in supports
@@ -13650,10 +15373,19 @@ def evaluate_theta_put_candidate(
 
     driver_parts = [f"{len(supports)} support stack"]
     driver_parts.append("major SMA support")
+    avwap_driver_parts = []
+    if current_avwape_supports:
+        avwap_driver_parts.append("current AVWAPE")
+    if previous_avwape_supports:
+        avwap_driver_parts.append("previous AVWAPE")
+    if previous_first_dev_supports:
+        avwap_driver_parts.append("previous 1st-dev")
+    if avwap_driver_parts:
+        driver_parts.append(" + ".join(avwap_driver_parts) + " support")
+    else:
+        driver_parts.append("AVWAP-family support")
     if "avwape" in sources and "trendline" in sources:
         driver_parts.append("AVWAPE+Trendline confluence")
-    elif "avwape" in sources:
-        driver_parts.append("AVWAPE support confluence")
     elif "trendline" in sources:
         driver_parts.append("Trendline support confluence")
     if "compression" in sources:
@@ -13667,7 +15399,7 @@ def evaluate_theta_put_candidate(
     days_to_next = earnings_summary.get("days_to_next_earnings")
     if days_to_next is not None and int(days_to_next) <= 35:
         risk_flags.append("earnings soon")
-    if "previous_avwape" not in sources:
+    if not previous_avwape_supports and not previous_first_dev_supports:
         risk_flags.append("thin historical AVWAP stack")
     if not risk_flags:
         risk_flags.append("none")
@@ -13694,6 +15426,10 @@ def evaluate_theta_put_candidate(
         "min_support_levels": int(min_support_levels),
         "major_sma_support_count": int(len(major_sma_supports)),
         "major_sma_support_summary": _format_theta_support_stack(major_sma_supports, limit=3),
+        "avwap_support_count": int(len(avwap_supports)),
+        "avwap_support_summary": _format_theta_support_stack(avwap_supports, limit=5),
+        "previous_first_dev_support_count": int(len(previous_first_dev_supports)),
+        "previous_first_dev_support_summary": _format_theta_support_stack(previous_first_dev_supports, limit=3),
         "supports": supports,
         "score_breakdown": {
             "proximity_score": round(proximity_score, 2),
@@ -13903,6 +15639,7 @@ def _strike_support_context(
     min_support_levels: int,
     max_surrendered_supports: int | None = None,
     require_major_sma_support: bool = False,
+    require_avwap_support: bool = False,
 ) -> dict:
     strike_value = float(strike)
     ordered_supports = sorted(
@@ -13921,6 +15658,8 @@ def _strike_support_context(
         if float(entry.get("level", 0.0) or 0.0) + 0.005 >= strike_value
     ]
     covered_major_sma_supports = _theta_major_sma_supports(covered)
+    covered_avwap_supports = _theta_avwap_supports(covered)
+    covered_previous_first_dev_supports = _theta_previous_first_dev_supports(covered)
     surrendered = max(0, len(ordered_supports) - len(covered))
     source_count = len(
         {
@@ -13935,11 +15674,20 @@ def _strike_support_context(
         eligible = False
     if require_major_sma_support and not covered_major_sma_supports:
         eligible = False
+    if require_avwap_support and not covered_avwap_supports:
+        eligible = False
     return {
         "eligible": bool(eligible),
         "covered_support_count": len(covered),
         "covered_major_sma_support_count": len(covered_major_sma_supports),
         "covered_major_sma_support_summary": _format_theta_support_stack(covered_major_sma_supports, limit=3),
+        "covered_avwap_support_count": len(covered_avwap_supports),
+        "covered_avwap_support_summary": _format_theta_support_stack(covered_avwap_supports, limit=5),
+        "covered_previous_first_dev_support_count": len(covered_previous_first_dev_supports),
+        "covered_previous_first_dev_support_summary": _format_theta_support_stack(
+            covered_previous_first_dev_supports,
+            limit=3,
+        ),
         "total_support_count": len(ordered_supports),
         "surrendered_support_count": surrendered,
         "covered_supports": covered,
@@ -13958,17 +15706,20 @@ def _quote_value(quote: dict | None, key: str) -> float | None:
     return value
 
 
-def _option_quote_mid(quote: dict | None) -> float | None:
-    credit, _source = _option_quote_credit_with_source(quote)
-    return credit
-
-
-def _option_quote_credit_with_source(quote: dict | None) -> tuple[float | None, str]:
+def _option_quote_bid_ask_mid(quote: dict | None) -> float | None:
     bid = _quote_value(quote, "bid")
     ask = _quote_value(quote, "ask")
     if bid is not None and ask is not None and ask >= bid:
-        return (bid + ask) / 2.0, "mid"
-    for key, source in (("last", "last"), ("model_price", "model"), ("close", "close"), ("bid", "bid")):
+        return (bid + ask) / 2.0
+    return None
+
+
+def _option_quote_mid(quote: dict | None) -> float | None:
+    return _option_quote_bid_ask_mid(quote)
+
+
+def _option_quote_credit_with_source(quote: dict | None) -> tuple[float | None, str]:
+    for key, source in (("last", "last"), ("close", "close"), ("bid", "bid"), ("model_price", "model")):
         value = _quote_value(quote, key)
         if value is not None:
             return value, source
@@ -13978,7 +15729,7 @@ def _option_quote_credit_with_source(quote: dict | None) -> tuple[float | None, 
 def _option_quote_spread_pct(quote: dict | None) -> float | None:
     bid = _quote_value(quote, "bid")
     ask = _quote_value(quote, "ask")
-    mid = _option_quote_mid(quote)
+    mid = _option_quote_bid_ask_mid(quote)
     if bid is None or ask is None or mid is None or mid <= 0:
         return None
     return max(0.0, (ask - bid) / mid * 100.0)
@@ -14031,6 +15782,7 @@ def _sold_put_candidate_strikes(row: dict, strikes: list[float]) -> list[dict]:
             min_support_levels=THETA_MIN_SUPPORT_LEVELS,
             max_surrendered_supports=THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE,
             require_major_sma_support=True,
+            require_avwap_support=True,
         )
         if not support_context["eligible"]:
             continue
@@ -14077,6 +15829,8 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
         spread_penalty = min(18.0, (spread_pct or 0.0) * 0.12) if spread_pct is not None else 6.0
         support_quality = float(quote_row.get("support_quality_score", 0.0) or 0.0)
         surrendered = int(quote_row.get("surrendered_support_count", 0) or 0)
+        avwap_support_count = int(quote_row.get("covered_avwap_support_count", 0) or 0)
+        previous_first_dev_support_count = int(quote_row.get("covered_previous_first_dev_support_count", 0) or 0)
         moneyness_penalty = 0.0
         if close_value > 0:
             moneyness_penalty = max(0.0, ((close_value - strike) / close_value * 100.0) - 8.0) * 0.6
@@ -14084,6 +15838,8 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
             base_score
             + credit * 90.0
             + support_quality * 9.0
+            + avwap_support_count * 4.0
+            + previous_first_dev_support_count * 3.0
             - surrendered * 8.0
             - spread_penalty
             - moneyness_penalty
@@ -14111,6 +15867,15 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
                 "covered_support_count": int(quote_row.get("covered_support_count", 0) or 0),
                 "covered_major_sma_support_count": int(quote_row.get("covered_major_sma_support_count", 0) or 0),
                 "covered_major_sma_support_summary": quote_row.get("covered_major_sma_support_summary", ""),
+                "covered_avwap_support_count": int(quote_row.get("covered_avwap_support_count", 0) or 0),
+                "covered_avwap_support_summary": quote_row.get("covered_avwap_support_summary", ""),
+                "covered_previous_first_dev_support_count": int(
+                    quote_row.get("covered_previous_first_dev_support_count", 0) or 0
+                ),
+                "covered_previous_first_dev_support_summary": quote_row.get(
+                    "covered_previous_first_dev_support_summary",
+                    "",
+                ),
                 "total_support_count": int(quote_row.get("total_support_count", 0) or 0),
                 "surrendered_support_count": int(quote_row.get("surrendered_support_count", 0) or 0),
                 "covered_support_summary": quote_row.get("covered_support_summary", ""),
@@ -14160,6 +15925,7 @@ def _pcs_short_strike_candidates(row: dict, strikes: list[float]) -> list[dict]:
             strike,
             min_support_levels=THETA_PCS_MIN_SUPPORT_LEVELS,
             require_major_sma_support=True,
+            require_avwap_support=True,
         )
         if not support_context["eligible"]:
             continue
@@ -14235,11 +16001,15 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
             spread_penalty += min(10.0, (value or 0.0) * 0.08) if value is not None else 4.0
         support_quality = float(spread_row.get("support_quality_score", 0.0) or 0.0)
         surrendered = int(spread_row.get("surrendered_support_count", 0) or 0)
+        avwap_support_count = int(spread_row.get("covered_avwap_support_count", 0) or 0)
+        previous_first_dev_support_count = int(spread_row.get("covered_previous_first_dev_support_count", 0) or 0)
         rank_score = (
             base_score
             + credit_ratio * 240.0
             + credit * 28.0
             + support_quality * 8.0
+            + avwap_support_count * 4.0
+            + previous_first_dev_support_count * 3.0
             - surrendered * 5.0
             - spread_penalty
             - status_rank * 55.0
@@ -14267,6 +16037,15 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
                 "covered_support_count": int(spread_row.get("covered_support_count", 0) or 0),
                 "covered_major_sma_support_count": int(spread_row.get("covered_major_sma_support_count", 0) or 0),
                 "covered_major_sma_support_summary": spread_row.get("covered_major_sma_support_summary", ""),
+                "covered_avwap_support_count": int(spread_row.get("covered_avwap_support_count", 0) or 0),
+                "covered_avwap_support_summary": spread_row.get("covered_avwap_support_summary", ""),
+                "covered_previous_first_dev_support_count": int(
+                    spread_row.get("covered_previous_first_dev_support_count", 0) or 0
+                ),
+                "covered_previous_first_dev_support_summary": spread_row.get(
+                    "covered_previous_first_dev_support_summary",
+                    "",
+                ),
                 "total_support_count": int(spread_row.get("total_support_count", 0) or 0),
                 "surrendered_support_count": int(spread_row.get("surrendered_support_count", 0) or 0),
                 "covered_support_summary": spread_row.get("covered_support_summary", ""),
@@ -14355,7 +16134,7 @@ def _format_sold_put_option_line(option: dict) -> str:
         return "option=no IBKR put quote recommendation available"
     contracts = option.get("contracts_needed_for_100")
     contracts_text = f"{contracts} contract{'s' if contracts != 1 else ''}" if contracts else "n/a contracts"
-    credit_source = str(option.get("credit_source") or "mid").strip() or "mid"
+    credit_source = str(option.get("credit_source") or "last/bid").strip() or "last/bid"
     return (
         f"option=SELL {option.get('expiration')} {float(option.get('strike', 0.0) or 0.0):.2f}P "
         f"@ approx_credit={_format_option_decimal(option.get('credit'))} "
@@ -14437,7 +16216,9 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
                 f"   strikes={float(option.get('short_strike', 0.0) or 0.0):.2f}/"
                 f"{float(option.get('long_strike', 0.0) or 0.0):.2f} "
                 f"| credit_width={option.get('credit_width_pct', 'n/a')}% "
-                f"| protected_by={option.get('covered_support_count', 0)}/{option.get('total_support_count', 0)} supports\n"
+                f"| protected_by={option.get('covered_support_count', 0)}/{option.get('total_support_count', 0)} supports "
+                f"| major_sma={option.get('covered_major_sma_support_count', 0)} "
+                f"| avwap_supports={option.get('covered_avwap_support_count', 0)}\n"
             )
     else:
         handle.write(f"   {_format_sold_put_option_line(option)}\n")
@@ -14448,12 +16229,23 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
             handle.write(
                 f"   strike={float(option.get('strike', 0.0) or 0.0):.2f} "
                 f"| protected_by={option.get('covered_support_count', 0)}/{option.get('total_support_count', 0)} supports "
+                f"| major_sma={option.get('covered_major_sma_support_count', 0)} "
+                f"| avwap_supports={option.get('covered_avwap_support_count', 0)} "
+                f"| prev_1stdev={option.get('covered_previous_first_dev_support_count', 0)} "
                 f"| gave_up_supports={option.get('surrendered_support_count', 0)}\n"
             )
     handle.write(f"   strike_zone={row.get('strike_zone')}\n")
     if option and option.get("covered_support_summary"):
         handle.write(f"   option_supports={option.get('covered_support_summary')}\n")
+    if option and option.get("covered_major_sma_support_summary"):
+        handle.write(f"   option_major_sma_supports={option.get('covered_major_sma_support_summary')}\n")
+    if option and option.get("covered_avwap_support_summary"):
+        handle.write(f"   option_avwap_supports={option.get('covered_avwap_support_summary')}\n")
     handle.write(f"   support_stack={row.get('support_summary')}\n")
+    if row.get("major_sma_support_summary"):
+        handle.write(f"   major_sma_supports={row.get('major_sma_support_summary')}\n")
+    if row.get("avwap_support_summary"):
+        handle.write(f"   avwap_supports={row.get('avwap_support_summary')}\n")
     handle.write(f"   earnings=last {last_earnings}{last_suffix}; next {next_earnings}{next_suffix}\n")
     handle.write(f"   reason={row.get('top_score_drivers') or 'n/a'}\n")
     handle.write(f"   risk={', '.join(row.get('risk_flags') or []) or 'n/a'}\n")
@@ -14478,12 +16270,13 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
     handle.write("Master AVWAP theta option candidates\n")
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     handle.write(
-        "Sold put rules: LONG watchlist only; recommendation-only; >=3 nearby SMA50/100/200, Trendline, AVWAPE, or compression support references; "
+        "Sold put rules: LONG watchlist only; recommendation-only; >=3 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support "
+        "(current AVWAPE, previous AVWAPE, or previous 1st-dev); "
         f"short put expiration <= {THETA_PUT_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"target >= {_format_option_decimal(THETA_PUT_TARGET_MIN_CREDIT)} credit so <= {THETA_PUT_MAX_CONTRACTS} contracts can reach ~$100.\n"
     )
     handle.write(
-        "PCS rules: LONG watchlist only; recommendation-only; >=2 nearby support references; "
+        "PCS rules: LONG watchlist only; recommendation-only; >=2 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support; "
         f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width; "
         "target-hit rows are trade-ready while cusp/below-target/no-quote rows stay visible as pullback/support watches.\n"
@@ -14496,7 +16289,8 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
         "Weekly options filter: when IBKR is connected, sold puts/PCS require an IBKR chain with weekly expirations.\n"
     )
     handle.write(
-        "IBKR option quotes are snapshot-based. Cusp rows are below target credit now but may improve on pullbacks.\n\n"
+        "IBKR option quotes are snapshot-based. Sold-put credit uses the option last price first, then close/bid/model fallback; "
+        "bid/ask midpoint is not used for sold-put credit. Cusp rows are below target credit now but may improve on pullbacks.\n\n"
     )
 
     if not sold_put_rows and not pcs_rows:
@@ -14685,12 +16479,18 @@ def build_combined_avwap_output_text(
     theta_section: str,
     event_section: str,
     stdev_section: str,
+    d1_upgrade_section: str = "",
 ) -> str:
     return (
         "MASTER AVWAP PRIORITY SETUPS\n"
         + "=" * 80
         + "\n"
         + (priority_section or "No priority setup output yet.")
+        + "\n\n"
+        + "MASTER AVWAP A/S UPGRADE ALERTS\n"
+        + "=" * 80
+        + "\n"
+        + (d1_upgrade_section or "No A/S upgrade alert output yet.")
         + "\n\n"
         + "MASTER AVWAP THETA PLAYS\n"
         + "=" * 80
@@ -15308,10 +17108,32 @@ def _priority_rejection_score_cap(row: dict) -> tuple[float | None, str]:
     ):
         caps.append(PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND)
         notes.append("repeated 2nd-dev tests")
+    if _priority_is_side_opposite_day(row):
+        caps.append(PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY)
+        notes.append(_priority_side_opposite_day_note(row))
     if not caps:
         return None, ""
     score_cap = float(min(caps))
     return score_cap, f"capped at {score_cap:.0f} for {', '.join(notes)}"
+
+
+def _priority_is_side_opposite_day(row: dict) -> bool:
+    value = row.get("side_aligned_day")
+    if isinstance(value, str):
+        value = value.strip().lower() in {"1", "true", "yes"}
+    return value is False
+
+
+def _priority_side_opposite_day_note(row: dict) -> str:
+    note = str(row.get("side_alignment_note") or "").strip()
+    if note:
+        return note
+    side = normalize_side(row.get("side", ""))
+    change_pct = _coerce_float(row.get("current_day_change_pct"))
+    change_text = f" ({change_pct:+.2f}%)" if change_pct is not None else ""
+    if side == "SHORT":
+        return f"short setup closed up on day{change_text}"
+    return f"long setup closed down on day{change_text}"
 
 
 def apply_priority_rejection_score_caps(
@@ -15341,6 +17163,65 @@ def apply_priority_rejection_score_caps(
                 "rejection_score_cap_note": note,
             },
         )
+
+
+def _priority_signal_levels(row: dict) -> set[str]:
+    side = normalize_side(row.get("side", ""))
+    return {
+        level
+        for level in (
+            _priority_breakout_signal_level(signal_name, side)
+            for signal_name in list(row.get("favorite_signals") or [])
+        )
+        if level
+    }
+
+
+def _priority_has_compression(row: dict) -> bool:
+    return bool(row.get("compression_flag")) or int(row.get("compression_penalty", 0) or 0) > 0
+
+
+def _priority_has_first_dev_chop(row: dict) -> bool:
+    return int(row.get("first_dev_chop_penalty", 0) or 0) > 0 or bool(str(row.get("first_dev_note") or "").strip())
+
+
+def _priority_is_first_zone_retest(row: dict) -> bool:
+    return bool(row.get("retest_followthrough")) and _priority_is_actionable_band_zone(row)
+
+
+def _priority_is_clean_retest_watch(row: dict) -> bool:
+    if not row.get("retest_followthrough") or _priority_has_compression(row):
+        return False
+    if int(row.get("recent_second_band_test_days", 0) or 0) > 1:
+        return False
+    side = normalize_side(row.get("side", ""))
+    band_zone = _priority_current_band_zone(row)
+    if side == "LONG":
+        return band_zone in {"VWAP to UPPER_1", "UPPER_1 to UPPER_2"}
+    if side == "SHORT":
+        return band_zone in {"VWAP to LOWER_1", "LOWER_1 to LOWER_2"}
+    return False
+
+
+def _priority_is_actionable_avwap_breakout(row: dict) -> bool:
+    if str(row.get("setup_family") or "") != "avwap_breakout":
+        return False
+    if _priority_has_compression(row) or _priority_has_first_dev_chop(row):
+        return False
+    levels = _priority_signal_levels(row)
+    if not levels:
+        return False
+    side = normalize_side(row.get("side", ""))
+    band_zone = _priority_current_band_zone(row)
+    if side == "LONG":
+        if not levels.issubset({"VWAP", "UPPER_1"}):
+            return False
+        return band_zone in {"VWAP to UPPER_1", "UPPER_1 to UPPER_2"}
+    if side == "SHORT":
+        if not levels.issubset({"VWAP", "LOWER_1"}):
+            return False
+        return band_zone in {"VWAP to LOWER_1", "LOWER_1 to LOWER_2"}
+    return False
 
 
 def _priority_is_fresh_post_earnings_window(row: dict) -> bool:
@@ -15373,7 +17254,6 @@ def _priority_is_preferred_custom_setup(row: dict) -> bool:
         MID_EARNINGS_EMA15_RETEST_FAMILY,
         MID_EARNINGS_EMA21_RETEST_FAMILY,
         MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
-        "extreme_move_retest",
         SMA_BREAKOUT_FAMILY,
     }:
         return True
@@ -15386,6 +17266,8 @@ def _priority_is_preferred_custom_setup(row: dict) -> bool:
 
 def _priority_requires_strength_confirmation(row: dict) -> bool:
     setup_family = str(row.get("setup_family") or "")
+    if setup_family == AVWAPE_TO_FIRST_DEV_FAMILY:
+        return False
     if setup_family in {
         MID_EARNINGS_EMA15_RETEST_FAMILY,
         MID_EARNINGS_EMA21_RETEST_FAMILY,
@@ -15397,6 +17279,22 @@ def _priority_requires_strength_confirmation(row: dict) -> bool:
     if int(row.get("first_dev_break_bonus", 0) or 0) > 0:
         return True
     return bool(_priority_signal_levels(row) & {"UPPER_1", "LOWER_1"})
+
+
+def _directional_close_confirms_strength(
+    side: str,
+    open_value: float | None,
+    close_value: float | None,
+    intraday_vwap: float | None,
+) -> bool:
+    open_value = _coerce_float(open_value)
+    close_value = _coerce_float(close_value)
+    intraday_vwap = _coerce_float(intraday_vwap)
+    if open_value is None or close_value is None or intraday_vwap is None:
+        return False
+    if normalize_side(side) == "LONG":
+        return float(close_value) > float(open_value) and float(close_value) > float(intraday_vwap)
+    return float(close_value) < float(open_value) and float(close_value) < float(intraday_vwap)
 
 
 def _priority_has_strength_confirmation(row: dict) -> bool:
@@ -15496,7 +17394,7 @@ def apply_final_priority_buckets(
         if _priority_should_track_extended_stdev(row) or _priority_should_track_sma_breakout(row):
             return "", False, False
         row.pop("favorite_score_gate_note", None)
-        setup_ready = (
+        setup_ready = bool(
             row.get("has_favorite_signal")
             or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
             or _is_clean_first_zone_setup(row)
@@ -15507,7 +17405,18 @@ def apply_final_priority_buckets(
             row["favorite_score_gate_note"] = (
                 f"demoted from favorite: {setup_family} is tracker-only"
             )
-        if primary_favorite_ready:
+        favorite_candidate = (
+            (
+                primary_favorite_ready
+                or _priority_is_actionable_avwap_breakout(row)
+                or _priority_is_first_zone_retest(row)
+                or _priority_is_preferred_custom_setup(row)
+            )
+            and _priority_has_strength_confirmation(row)
+        )
+        if favorite_candidate:
+            if _priority_is_side_opposite_day(row):
+                return "near_favorite_zone", False, True
             if _priority_row_meets_favorite_score(row):
                 return "favorite_setup", True, False
             row["favorite_score_gate_note"] = (
@@ -15516,7 +17425,7 @@ def apply_final_priority_buckets(
             )
         if (
             row.get("favorite_zone")
-            or row.get("retest_followthrough")
+            or _priority_is_clean_retest_watch(row)
             or setup_ready
             or row.get("favorite_signals")
             or row.get("extreme_move_watch")
@@ -16093,6 +18002,7 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         row for row in ranked_rows
         if row.get("priority_bucket") == "near_favorite_zone"
     ]
+    high_conviction_rows = _priority_high_conviction_rows(favorite_rows + near_rows)
     post_earnings_rows = [
         row for row in ranked_rows
         if _is_post_earnings_play_ready(row)
@@ -16170,6 +18080,7 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "post_earnings_gap_date": row.get("post_earnings_gap_date") or "",
             "post_earnings_bounce_date": row.get("post_earnings_bounce_date") or "",
             "post_earnings_bounce_age_sessions": row.get("post_earnings_bounce_age_sessions"),
+            "post_earnings_bounce_sessions_after_gap": row.get("post_earnings_bounce_sessions_after_gap"),
             "post_earnings_monitor_level": _coerce_float(row.get("post_earnings_monitor_level")),
             "post_earnings_note": row.get("post_earnings_note") or "",
             "mid_earnings_watch": bool(row.get("mid_earnings_watch")),
@@ -16357,6 +18268,8 @@ def _append_d1_trigger_level(
     priority_bucket: str = "",
     setup_family: str = "",
     action: str = "",
+    target_tier: str = "A/S",
+    upgrade_only: bool = True,
 ) -> None:
     level_value = _coerce_float(level)
     if level_value is None:
@@ -16393,10 +18306,427 @@ def _append_d1_trigger_level(
         "anchor_date": str(anchor_date or "").strip(),
         "priority_bucket": str(priority_bucket or "").strip(),
         "setup_family": str(setup_family or "").strip(),
+        "target_tier": str(target_tier or "A/S").strip(),
+        "upgrade_only": bool(upgrade_only),
     }
     if armed_price is not None:
         trigger["armed_price"] = round(float(armed_price), 4)
     trigger_levels.append(trigger)
+
+
+def _d1_trigger_level_sort_key(trigger: dict) -> tuple[int, str, float]:
+    event_type = str(trigger.get("event_type") or "").strip().lower()
+    order = {
+        "avwape_reclaim": 5,
+        "avwape_breakdown": 5,
+        "post_earnings_52w_break": 8,
+        "first_dev_break": 10,
+        "second_dev_break": 12,
+        "mid_earnings_ema15_retest_watch": 16,
+        "mid_earnings_first_dev_retest_watch": 18,
+        "avwape_retest_watch": 20,
+        "ema15_retest_watch": 22,
+        "first_dev_retest_watch": 24,
+        "previous_day_high_break": 30,
+        "previous_day_low_break": 30,
+        "trendline_break_watch": 35,
+        "sma_obstacle_break": 40,
+        "previous_anchor_obstacle_break": 45,
+    }
+    level = _coerce_float(trigger.get("level")) or 0.0
+    return (order.get(event_type, 50), str(trigger.get("label") or ""), float(level))
+
+
+def _dedupe_d1_trigger_levels(trigger_levels: list[dict]) -> list[dict]:
+    seen_levels: set[tuple[str, str, float]] = set()
+    selected: list[dict] = []
+    for trigger in sorted(trigger_levels or [], key=_d1_trigger_level_sort_key):
+        if not isinstance(trigger, dict):
+            continue
+        level = _coerce_float(trigger.get("level"))
+        if level is None:
+            continue
+        key = (
+            str(trigger.get("label") or "").strip().upper(),
+            str(trigger.get("action") or "").strip().lower(),
+            round(float(level), 4),
+        )
+        if key in seen_levels:
+            continue
+        seen_levels.add(key)
+        selected.append(trigger)
+    return selected
+
+
+def _append_scan_context_upgrade_target(
+    trigger_levels: list[dict],
+    seen: set[tuple[str, str, float]],
+    *,
+    side: str,
+    label: str,
+    level: float | None,
+    event_type: str,
+    alert_label: str,
+    reason: str,
+    source: str,
+    today_iso: str,
+    armed_price: float | None,
+    anchor_type: str,
+    anchor_date: str = "",
+    priority_bucket: str = "",
+    setup_family: str = "",
+    action: str = "",
+) -> None:
+    _append_d1_trigger_level(
+        trigger_levels,
+        seen,
+        side=side,
+        label=label,
+        level=level,
+        event_type=event_type,
+        alert_label=alert_label,
+        reason=reason,
+        source=source,
+        today_iso=today_iso,
+        armed_price=armed_price,
+        anchor_type=anchor_type,
+        anchor_date=anchor_date,
+        priority_bucket=priority_bucket,
+        setup_family=setup_family,
+        action=action,
+        target_tier="A/S",
+        upgrade_only=True,
+    )
+
+
+def _append_scan_context_upgrade_targets(
+    trigger_levels: list[dict],
+    seen: set[tuple[str, str, float]],
+    row: dict,
+    state: dict,
+    *,
+    today_iso: str,
+    current_anchor: dict,
+    current_anchor_date: str,
+    side: str,
+    last_close: float | None,
+    priority_bucket: str,
+    setup_family: str,
+    entry_feature_snapshot: dict,
+) -> None:
+    if side not in {"LONG", "SHORT"} or last_close is None:
+        return
+
+    current_vwap = _anchor_level_value(current_anchor, "AVWAPE")
+    upper_1 = _anchor_level_value(current_anchor, "UPPER_1")
+    upper_2 = _anchor_level_value(current_anchor, "UPPER_2")
+    lower_1 = _anchor_level_value(current_anchor, "LOWER_1")
+    lower_2 = _anchor_level_value(current_anchor, "LOWER_2")
+    ema15 = _coerce_float(
+        row.get("ema15")
+        or row.get("ema_15")
+        or state.get("ema15")
+        or state.get("ema_15")
+        or entry_feature_snapshot.get("ema15")
+        or entry_feature_snapshot.get("ema_15")
+    )
+
+    if side == "LONG":
+        if current_vwap is not None and float(last_close) < float(current_vwap):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="AVWAPE",
+                level=current_vwap,
+                event_type="avwape_reclaim",
+                alert_label="AVWAPE reclaim",
+                reason="A/S upgrade target: reclaim current AVWAPE resistance.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_above",
+            )
+        if upper_1 is not None and float(last_close) < float(upper_1):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="UPPER_1",
+                level=upper_1,
+                event_type="first_dev_break",
+                alert_label="1st-dev break",
+                reason="A/S upgrade target: clear UPPER_1 resistance.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_above",
+            )
+        elif upper_2 is not None and float(last_close) < float(upper_2):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="UPPER_2",
+                level=upper_2,
+                event_type="second_dev_break",
+                alert_label="2nd-dev break",
+                reason="A/S upgrade target: clear UPPER_2 resistance.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_above",
+            )
+        if current_vwap is not None and float(last_close) > float(current_vwap):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="AVWAPE",
+                level=current_vwap,
+                event_type="avwape_retest_watch",
+                alert_label="AVWAPE retest",
+                reason="A/S upgrade target: pullback into AVWAPE support for a daily bounce.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_below",
+            )
+        if ema15 is not None and float(last_close) > float(ema15):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="EMA_15",
+                level=ema15,
+                event_type="ema15_retest_watch",
+                alert_label="15EMA retest",
+                reason="A/S upgrade target: pullback into daily 15EMA support for a bounce.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="INDICATOR",
+                anchor_date=str(row.get("last_trade_date") or state.get("last_trade_date") or today_iso),
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_below",
+            )
+    else:
+        if current_vwap is not None and float(last_close) > float(current_vwap):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="AVWAPE",
+                level=current_vwap,
+                event_type="avwape_breakdown",
+                alert_label="AVWAPE breakdown",
+                reason="A/S upgrade target: lose current AVWAPE support.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_below",
+            )
+        if lower_1 is not None and float(last_close) > float(lower_1):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="LOWER_1",
+                level=lower_1,
+                event_type="first_dev_break",
+                alert_label="1st-dev break",
+                reason="A/S upgrade target: break LOWER_1 support.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_below",
+            )
+        elif lower_2 is not None and float(last_close) > float(lower_2):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="LOWER_2",
+                level=lower_2,
+                event_type="second_dev_break",
+                alert_label="2nd-dev break",
+                reason="A/S upgrade target: break LOWER_2 support.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_below",
+            )
+        if current_vwap is not None and float(last_close) < float(current_vwap):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="AVWAPE",
+                level=current_vwap,
+                event_type="avwape_retest_watch",
+                alert_label="AVWAPE retest",
+                reason="A/S upgrade target: push into AVWAPE resistance for a daily rejection.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="CURRENT",
+                anchor_date=current_anchor_date,
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_above",
+            )
+        if ema15 is not None and float(last_close) < float(ema15):
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label="EMA_15",
+                level=ema15,
+                event_type="ema15_retest_watch",
+                alert_label="15EMA retest",
+                reason="A/S upgrade target: push into daily 15EMA resistance for a rejection.",
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="INDICATOR",
+                anchor_date=str(row.get("last_trade_date") or state.get("last_trade_date") or today_iso),
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action="break_above",
+            )
+
+    previous_day_high = _coerce_float(row.get("previous_day_high") or state.get("previous_day_high"))
+    previous_day_low = _coerce_float(row.get("previous_day_low") or state.get("previous_day_low"))
+    previous_day_date = str(row.get("previous_day_date") or state.get("previous_day_date") or "").strip()
+    if side == "LONG" and previous_day_high is not None and float(last_close) < float(previous_day_high):
+        _append_scan_context_upgrade_target(
+            trigger_levels,
+            seen,
+            side=side,
+            label="PDH",
+            level=previous_day_high,
+            event_type="previous_day_high_break",
+            alert_label="previous-day high break",
+            reason="A/S upgrade target: break previous-day high.",
+            source="a_s_upgrade_target",
+            today_iso=today_iso,
+            armed_price=last_close,
+            anchor_type="PREVIOUS_DAY",
+            anchor_date=previous_day_date,
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+            action="break_above",
+        )
+    elif side == "SHORT" and previous_day_low is not None and float(last_close) > float(previous_day_low):
+        _append_scan_context_upgrade_target(
+            trigger_levels,
+            seen,
+            side=side,
+            label="PDL",
+            level=previous_day_low,
+            event_type="previous_day_low_break",
+            alert_label="previous-day low break",
+            reason="A/S upgrade target: break previous-day low.",
+            source="a_s_upgrade_target",
+            today_iso=today_iso,
+            armed_price=last_close,
+            anchor_type="PREVIOUS_DAY",
+            anchor_date=previous_day_date,
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+            action="break_below",
+        )
+
+    trendline_candidate = row.get("trendline_candidate") or state.get("priority_trendline_candidate")
+    if isinstance(trendline_candidate, dict):
+        trendline_level = _coerce_float(trendline_candidate.get("current_line_price"))
+        trendline_note = row.get("trendline_note") or state.get("priority_trendline_note") or ""
+        _append_scan_context_upgrade_target(
+            trigger_levels,
+            seen,
+            side=side,
+            label="TRENDLINE",
+            level=trendline_level,
+            event_type="trendline_break_watch",
+            alert_label="trendline break",
+            reason=f"A/S upgrade target: break daily trendline. {trendline_note}".strip(),
+            source="a_s_upgrade_target",
+            today_iso=today_iso,
+            armed_price=last_close,
+            anchor_type="TRENDLINE",
+            anchor_date=str(trendline_candidate.get("end_date") or ""),
+            priority_bucket=priority_bucket,
+            setup_family=setup_family,
+        )
+
+    obstacle_source_groups = (
+        ("sma_obstacle_break", "SMA obstacle break", row.get("sma_obstacles") or state.get("priority_sma_obstacles") or []),
+        (
+            "previous_anchor_obstacle_break",
+            "previous-anchor obstacle break",
+            row.get("previous_anchor_obstacles") or state.get("priority_previous_anchor_obstacles") or [],
+        ),
+    )
+    for event_type, alert_label, obstacles in obstacle_source_groups:
+        if not isinstance(obstacles, list):
+            continue
+        for obstacle in obstacles[:2]:
+            if not isinstance(obstacle, dict):
+                continue
+            level_value = _coerce_float(obstacle.get("level"))
+            if level_value is None:
+                continue
+            action = "break_below" if side == "SHORT" else "break_above"
+            _append_scan_context_upgrade_target(
+                trigger_levels,
+                seen,
+                side=side,
+                label=str(obstacle.get("label") or "LEVEL").strip().upper(),
+                level=level_value,
+                event_type=event_type,
+                alert_label=alert_label,
+                reason=(
+                    "A/S upgrade target: clear nearby resistance/blocker "
+                    f"{str(obstacle.get('label') or 'level').strip().upper()}."
+                ),
+                source="a_s_upgrade_target",
+                today_iso=today_iso,
+                armed_price=last_close,
+                anchor_type="OBSTACLE",
+                anchor_date="",
+                priority_bucket=priority_bucket,
+                setup_family=setup_family,
+                action=action,
+            )
 
 
 def _build_d1_watchlist_trigger_levels(
@@ -16672,7 +19002,41 @@ def _build_d1_watchlist_trigger_levels(
             setup_family=setup_family,
         )
 
-    return trigger_levels
+    _append_scan_context_upgrade_targets(
+        trigger_levels,
+        seen,
+        row,
+        state,
+        today_iso=today_iso,
+        current_anchor=current_anchor,
+        current_anchor_date=current_anchor_date,
+        side=side,
+        last_close=last_close,
+        priority_bucket=priority_bucket,
+        setup_family=setup_family,
+        entry_feature_snapshot=entry_feature_snapshot,
+    )
+
+    return _dedupe_d1_trigger_levels(trigger_levels)
+
+
+def _format_d1_upgrade_target_summary(trigger_levels: list[dict], limit: int = D1_UPGRADE_TARGETS_PER_SYMBOL) -> str:
+    parts = []
+    for item in trigger_levels[:limit]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("alert_label") or item.get("label") or "target").strip()
+        action = str(item.get("action") or "").strip().replace("_", " ")
+        level = _coerce_float(item.get("level"))
+        if level is None:
+            parts.append(label)
+        elif action:
+            parts.append(f"{label} {action} {level:.2f}")
+        else:
+            parts.append(f"{label} {level:.2f}")
+    if len(trigger_levels or []) > limit:
+        parts.append(f"+{len(trigger_levels) - limit} more")
+    return "; ".join(parts)
 
 
 def _merge_d1_watchlist_entry(
@@ -16787,6 +19151,7 @@ def _merge_d1_watchlist_entry(
         "post_earnings_earnings_candle_stop_label": row.get("post_earnings_earnings_candle_stop_label") or "",
         "post_earnings_bounce_date": row.get("post_earnings_bounce_date") or "",
         "post_earnings_bounce_age_sessions": row.get("post_earnings_bounce_age_sessions"),
+        "post_earnings_bounce_sessions_after_gap": row.get("post_earnings_bounce_sessions_after_gap"),
         "post_earnings_note": row.get("post_earnings_note") or "",
         "mid_earnings_ema15_trigger": bool(row.get("mid_earnings_ema15_trigger") or existing_entry.get("mid_earnings_ema15_trigger")),
         "mid_earnings_ema21_trigger": bool(row.get("mid_earnings_ema21_trigger") or existing_entry.get("mid_earnings_ema21_trigger")),
@@ -16804,6 +19169,8 @@ def _merge_d1_watchlist_entry(
         "trendline_note": row.get("trendline_note") or existing_entry.get("trendline_note") or "",
         "last_trade_date": row.get("last_trade_date") or today_iso,
         "trigger_levels": trigger_levels,
+        "upgrade_targets": [dict(item) for item in trigger_levels if isinstance(item, dict)],
+        "upgrade_summary": _format_d1_upgrade_target_summary(trigger_levels),
         "trigger_summary": ", ".join(
             f"{item.get('label')} {item.get('action')} {item.get('level')}"
             for item in trigger_levels[:4]
@@ -16893,12 +19260,20 @@ def update_master_avwap_d1_watchlist(
     for row in priority_rows or []:
         if not isinstance(row, dict):
             continue
-        reasons = _d1_watchlist_priority_reasons(row)
-        if not reasons:
-            continue
         row_for_entry = dict(row)
         symbol_state = ai_symbols.get(str(row.get("symbol") or "").strip().upper(), {})
         row_for_entry["_symbol_state"] = symbol_state if isinstance(symbol_state, dict) else {}
+        reasons = _d1_watchlist_priority_reasons(row)
+        if not reasons and not _is_priority_recommendation_blocked(row):
+            upgrade_targets = _build_d1_watchlist_trigger_levels(
+                row_for_entry,
+                row_for_entry["_symbol_state"],
+                today_iso=today_iso,
+            )
+            if upgrade_targets:
+                reasons = ["a_s_upgrade_target"]
+        if not reasons:
+            continue
         _merge_d1_watchlist_entry(
             symbols,
             existing_symbols,
@@ -16931,6 +19306,13 @@ def update_master_avwap_d1_watchlist(
 
     for symbol, entry in existing_symbols.items():
         if symbol in symbols or not isinstance(entry, dict):
+            continue
+        existing_reasons = {
+            str(reason or "").strip()
+            for reason in (entry.get("watch_reasons") or [])
+            if str(reason or "").strip()
+        }
+        if existing_reasons and existing_reasons <= {"a_s_upgrade_target"}:
             continue
         last_seen = entry.get("last_seen") or entry.get("first_seen")
         try:
@@ -16980,6 +19362,152 @@ def update_master_avwap_d1_watchlist(
         "symbols": symbol_map,
     }
     save_json(path, payload, pretty=True)
+    return payload
+
+
+def build_master_avwap_d1_upgrade_alert_payload(
+    priority_rows: list[dict],
+    ai_state: dict,
+    *,
+    reference_time: datetime | None = None,
+) -> dict:
+    now = reference_time or datetime.now()
+    today_iso = now.date().isoformat()
+    ai_symbols = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
+    ai_symbols = ai_symbols if isinstance(ai_symbols, dict) else {}
+    symbol_map: dict[str, dict] = {}
+    alert_rows: list[dict] = []
+
+    for row in priority_rows or []:
+        if not isinstance(row, dict) or _is_priority_recommendation_blocked(row):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_state = ai_symbols.get(symbol, {})
+        symbol_state = symbol_state if isinstance(symbol_state, dict) else {}
+        row_for_targets = dict(row)
+        row_for_targets["_symbol_state"] = symbol_state
+        upgrade_targets = _build_d1_watchlist_trigger_levels(
+            row_for_targets,
+            symbol_state,
+            today_iso=today_iso,
+        )
+        if not upgrade_targets:
+            continue
+        side = normalize_side(row.get("side") or symbol_state.get("side"))
+        entry = {
+            "symbol": symbol,
+            "side": side,
+            "run_date": today_iso,
+            "last_trade_date": row.get("last_trade_date") or symbol_state.get("last_trade_date") or "",
+            "priority_bucket": row.get("priority_bucket") or symbol_state.get("priority_bucket") or "",
+            "priority_score": _coerce_float(row.get("score") or symbol_state.get("priority_score")),
+            "setup_family": row.get("setup_family") or symbol_state.get("setup_family") or "",
+            "favorite_zone": row.get("favorite_zone") or symbol_state.get("favorite_zone") or "",
+            "current_band_zone": row.get("current_band_zone") or symbol_state.get("current_band_zone") or "",
+            "upgrade_summary": _format_d1_upgrade_target_summary(upgrade_targets),
+            "upgrade_targets": [dict(item) for item in upgrade_targets],
+        }
+        symbol_map[symbol] = entry
+        for target in upgrade_targets:
+            if not isinstance(target, dict):
+                continue
+            alert_rows.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "priority_score": entry["priority_score"],
+                    "priority_bucket": entry["priority_bucket"],
+                    "setup_family": entry["setup_family"],
+                    **target,
+                }
+            )
+
+    ranked_symbols = dict(
+        sorted(
+            symbol_map.items(),
+            key=lambda item: (
+                -float(item[1].get("priority_score") or 0.0),
+                item[0],
+            ),
+        )
+    )
+    alert_rows = sorted(
+        alert_rows,
+        key=lambda item: (
+            -float(item.get("priority_score") or 0.0),
+            str(item.get("symbol") or ""),
+            _d1_trigger_level_sort_key(item),
+        ),
+    )
+    return {
+        "schema_version": D1_UPGRADE_ALERT_SCHEMA_VERSION,
+        "generated_at": now.isoformat(timespec="seconds"),
+        "run_date": today_iso,
+        "description": "D1 conditions that would upgrade scanned symbols toward A/S-tier Master AVWAP setups.",
+        "symbols": ranked_symbols,
+        "alerts": alert_rows,
+    }
+
+
+def format_master_avwap_d1_upgrade_alert_report(payload: dict) -> str:
+    symbols = payload.get("symbols", {}) if isinstance(payload, dict) else {}
+    symbols = symbols if isinstance(symbols, dict) else {}
+    lines = [
+        "MASTER AVWAP A/S UPGRADE ALERTS",
+        "=" * 80,
+        "These are watch conditions only: the D1 level/bounce/retest that would upgrade a scan toward A/S tier.",
+    ]
+    if not symbols:
+        lines.append("No A/S upgrade targets generated for the latest scan.")
+        return "\n".join(lines).rstrip() + "\n"
+
+    for symbol, entry in symbols.items():
+        score = _coerce_float(entry.get("priority_score"))
+        score_text = "n/a" if score is None else (f"{score:.1f}" if abs(score - round(score)) > 0.01 else f"{score:.0f}")
+        side = normalize_side(entry.get("side")) or "WATCH"
+        bucket = str(entry.get("priority_bucket") or "unbucketed").strip() or "unbucketed"
+        family = str(entry.get("setup_family") or "general").strip() or "general"
+        zone = str(entry.get("favorite_zone") or entry.get("current_band_zone") or "").strip()
+        header = f"{symbol} {side} score={score_text} bucket={bucket} family={family}"
+        if zone:
+            header += f" zone={zone}"
+        lines.append(header)
+        for target in entry.get("upgrade_targets") or []:
+            if not isinstance(target, dict):
+                continue
+            label = str(target.get("alert_label") or target.get("label") or "target").strip()
+            action = str(target.get("action") or "").strip().replace("_", " ")
+            level = _coerce_float(target.get("level"))
+            reason = str(target.get("reason") or "").strip()
+            source = str(target.get("source") or "").strip()
+            level_text = f" {action} {level:.2f}" if level is not None and action else (f" {level:.2f}" if level is not None else "")
+            suffix_parts = []
+            if reason:
+                suffix_parts.append(f"reason={reason}")
+            if source:
+                suffix_parts.append(f"source={source}")
+            suffix = f" | {'; '.join(suffix_parts)}" if suffix_parts else ""
+            lines.append(f"  - A/S upgrade: {label}{level_text}{suffix}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_master_avwap_d1_upgrade_alert_outputs(
+    *,
+    alerts_path: Path = MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
+    report_path: Path = MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
+    priority_rows: list[dict],
+    ai_state: dict,
+    reference_time: datetime | None = None,
+) -> dict:
+    payload = build_master_avwap_d1_upgrade_alert_payload(
+        priority_rows,
+        ai_state,
+        reference_time=reference_time,
+    )
+    save_json(alerts_path, payload, pretty=True)
+    _write_text_atomic(report_path, format_master_avwap_d1_upgrade_alert_report(payload))
     return payload
 
 
@@ -17098,6 +19626,9 @@ def write_stdev_range_report(
     buffer.write("\n15+ sessions after earnings and above 2nd stdev for >= 2 days (post-earnings anchors)\n")
     buffer.write(f"Longs (above UPPER_2): {long_mid}\n")
     buffer.write(f"Shorts (below LOWER_2): {short_mid}\n")
+    buffer.write("\nCurrent 2nd/3rd stdev retest tracking list\n")
+    buffer.write(f"Longs tracked for later retest: {long_mid}\n")
+    buffer.write(f"Shorts tracked for later retest: {short_mid}\n")
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
@@ -18259,6 +20790,7 @@ def _evaluate_priority_snapshot_for_date(
     priority_summary["post_earnings_gap_date"] = post_earnings_summary.get("gap_date", "")
     priority_summary["post_earnings_bounce_date"] = post_earnings_summary.get("bounce_date", "")
     priority_summary["post_earnings_bounce_age_sessions"] = post_earnings_summary.get("bounce_age_sessions")
+    priority_summary["post_earnings_bounce_sessions_after_gap"] = post_earnings_summary.get("bounce_sessions_after_gap")
     priority_summary["post_earnings_monitor_level"] = _coerce_float(post_earnings_summary.get("monitor_level"))
     priority_summary["post_earnings_note"] = post_earnings_summary.get("note", "")
     priority_summary["mid_earnings_watch"] = bool(mid_earnings_summary.get("watch"))
@@ -18377,6 +20909,7 @@ def _evaluate_priority_snapshot_for_date(
         "post_earnings_gap_atr_multiple": _coerce_float(post_earnings_summary.get("gap_atr_multiple")),
         "post_earnings_bounce_date": post_earnings_summary.get("bounce_date", ""),
         "post_earnings_bounce_age_sessions": post_earnings_summary.get("bounce_age_sessions"),
+        "post_earnings_bounce_sessions_after_gap": post_earnings_summary.get("bounce_sessions_after_gap"),
         "post_earnings_note": post_earnings_summary.get("note", ""),
         "mid_earnings_watch": bool(mid_earnings_summary.get("watch")),
         "mid_earnings_active_second_stdev_hold": bool(mid_earnings_summary.get("active_second_stdev_hold")),

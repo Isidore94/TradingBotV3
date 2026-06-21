@@ -17,6 +17,7 @@ from typing import Any
 from project_paths import (
     LOCAL_SETTINGS_FILE,
     LONGS_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
     SHORTS_FILE,
     SWING_LONGS_FILE,
     SWING_SHORTS_FILE,
@@ -190,6 +191,7 @@ class ConsolidatedTradingGUI:
         self.mode = mode
         self.root.title("Consolidated Trading GUI")
         self.root.geometry("1880x1040" if mode == "full" else "1380x900")
+        self.root.minsize(1280, 760)
         self.root.configure(bg=DARK_GREY)
         configure_theme(self.root)
 
@@ -204,26 +206,13 @@ class ConsolidatedTradingGUI:
         self._configure_output_snapshot_updates()
 
     def _build_layout(self) -> None:
-        main_pane = tk.PanedWindow(
-            self.root,
-            orient=tk.VERTICAL,
-            sashrelief=tk.RAISED,
-            sashwidth=10,
-            showhandle=True,
-            bg=DARK_GREY,
-        )
-        main_pane.pack(fill=tk.BOTH, expand=True)
-
-        notebook = ttk.Notebook(main_pane)
+        notebook = ttk.Notebook(self.root)
         self.main_notebook = notebook
+        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        bounce_tab = ttk.Frame(notebook)
-        self.bounce_tab = bounce_tab
-        notebook.add(bounce_tab, text="BounceBot")
-
-        master_tab = ttk.Frame(notebook)
-        self.master_tab = master_tab
-        notebook.add(master_tab, text="Master AVWAP")
+        trading_tab = ttk.Frame(notebook)
+        self.trading_tab = trading_tab
+        notebook.add(trading_tab, text="Trading")
 
         market_prep_tab = ttk.Frame(notebook)
         self.market_prep_tab = market_prep_tab
@@ -232,6 +221,27 @@ class ConsolidatedTradingGUI:
         ticker_lookup_tab = ttk.Frame(notebook)
         self.ticker_lookup_tab = ticker_lookup_tab
         notebook.add(ticker_lookup_tab, text="Ticker Lookup")
+
+        trading_pane = tk.PanedWindow(
+            trading_tab,
+            orient=tk.VERTICAL,
+            sashrelief=tk.RAISED,
+            sashwidth=10,
+            showhandle=True,
+            bg=DARK_GREY,
+        )
+        trading_pane.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+
+        trading_notebook = ttk.Notebook(trading_pane)
+        self.trading_notebook = trading_notebook
+
+        bounce_tab = ttk.Frame(trading_notebook)
+        self.bounce_tab = bounce_tab
+        trading_notebook.add(bounce_tab, text="BounceBot")
+
+        master_tab = ttk.Frame(trading_notebook)
+        self.master_tab = master_tab
+        trading_notebook.add(master_tab, text="Master AVWAP")
 
         if self.mode == "full":
             self.bounce_panel = FullBounceBotPanel(bounce_tab, switch_mode_callback=lambda: self.switch_mode("simple"))
@@ -246,48 +256,85 @@ class ConsolidatedTradingGUI:
         self.ticker_lookup_panel = TickerLookupTab(ticker_lookup_tab, text_bg=INPUT_GREY, text_fg=TEXT_COLOR)
         self.ticker_lookup_panel.pack(fill=tk.BOTH, expand=True)
 
-        main_pane.add(notebook, stretch="always")
+        trading_pane.add(trading_notebook, stretch="always", minsize=420)
+        trading_notebook.bind("<<NotebookTabChanged>>", self._on_trading_tab_changed)
         notebook.bind("<<NotebookTabChanged>>", self._on_main_tab_changed)
 
-        watchlist_container = ttk.Frame(main_pane)
+        watchlist_container = ttk.LabelFrame(trading_pane, text="Trading Watchlists")
         self.watchlist_container = watchlist_container
+
+        watchlist_toolbar = ttk.Frame(watchlist_container)
+        watchlist_toolbar.pack(fill=tk.X, padx=10, pady=(8, 0))
+        ttk.Label(
+            watchlist_toolbar,
+            text="Shared lists feed BounceBot and Master AVWAP. Master swing lists are AVWAP-only.",
+        ).pack(side=tk.LEFT)
+        ttk.Button(watchlist_toolbar, text="Refresh All", command=self._refresh_watchlist_editors).pack(side=tk.RIGHT)
+
+        watchlist_notebook = ttk.Notebook(watchlist_container)
+        self.watchlist_notebook = watchlist_notebook
+        watchlist_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(8, 10))
+
+        shared_watchlist_tab = ttk.Frame(watchlist_notebook)
+        self.shared_watchlist_tab = shared_watchlist_tab
+        watchlist_notebook.add(shared_watchlist_tab, text="Shared longs / shorts")
+
+        master_watchlist_tab = ttk.Frame(watchlist_notebook)
+        self.master_watchlist_tab = master_watchlist_tab
+        watchlist_notebook.add(master_watchlist_tab, text="Master swing lists")
+
         self.bounce_watchlist_area = WatchlistEditorArea(
-            watchlist_container,
+            shared_watchlist_tab,
             long_title="BounceBot Longs",
             long_path=LONGS_FILE,
             short_title="BounceBot Shorts",
             short_path=SHORTS_FILE,
         )
         self.master_watchlist_area = WatchlistEditorArea(
-            watchlist_container,
+            master_watchlist_tab,
             long_title="Master Swing Longs",
             long_path=SWING_LONGS_FILE,
             short_title="Master Short Swings",
             short_path=SWING_SHORTS_FILE,
         )
+        self.bounce_watchlist_area.pack(fill=tk.BOTH, expand=True)
+        self.master_watchlist_area.pack(fill=tk.BOTH, expand=True)
         self.watchlist_area = self.bounce_watchlist_area
-        self._visible_watchlist_area = None
+        self._visible_watchlist_area = self.bounce_watchlist_area
         self._sync_watchlist_editor_to_selected_tab()
-        main_pane.add(watchlist_container)
+        trading_pane.add(watchlist_container, stretch="never", minsize=230, height=300)
 
     def _sync_watchlist_editor_to_selected_tab(self) -> None:
-        selected_tab = self.main_notebook.select()
-        next_area = (
-            self.master_watchlist_area
-            if selected_tab == str(self.master_tab)
-            else self.bounce_watchlist_area
-        )
+        selected_tab = self.trading_notebook.select()
+        if selected_tab == str(self.master_tab):
+            next_area = self.master_watchlist_area
+            next_watchlist_tab = self.master_watchlist_tab
+        else:
+            next_area = self.bounce_watchlist_area
+            next_watchlist_tab = self.shared_watchlist_tab
+
+        try:
+            if self.watchlist_notebook.select() != str(next_watchlist_tab):
+                self.watchlist_notebook.select(next_watchlist_tab)
+        except tk.TclError:
+            pass
         if self._visible_watchlist_area is next_area:
             return
-        if self._visible_watchlist_area is not None:
-            self._visible_watchlist_area.container.pack_forget()
-        next_area.pack(fill=tk.BOTH, expand=True)
         next_area.longs_panel.refresh_from_disk()
         next_area.shorts_panel.refresh_from_disk()
         self.watchlist_area = next_area
         self._visible_watchlist_area = next_area
 
+    def _refresh_watchlist_editors(self) -> None:
+        for area in (self.bounce_watchlist_area, self.master_watchlist_area):
+            area.longs_panel.refresh_from_disk()
+            area.shorts_panel.refresh_from_disk()
+
     def _on_main_tab_changed(self, _event=None) -> None:
+        if self.main_notebook.select() == str(self.trading_tab):
+            self._sync_watchlist_editor_to_selected_tab()
+
+    def _on_trading_tab_changed(self, _event=None) -> None:
         self._sync_watchlist_editor_to_selected_tab()
 
     def _configure_output_snapshot_updates(self) -> None:

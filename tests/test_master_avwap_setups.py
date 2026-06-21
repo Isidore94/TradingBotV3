@@ -37,9 +37,17 @@ from master_avwap import (  # noqa: E402
     build_master_avwap_focus_setup_type_text,
     build_master_avwap_focus_side_groups,
     build_recent_tracker_setup_family_rows,
+    build_bot_tier_catch_rate_rows,
+    build_bot_tier_outcome_rows,
+    build_bot_tier_performance_rows,
+    build_bot_tier_pick_rows,
+    build_scan_factor_leaderboard_rows,
+    build_scan_factor_observation_rows,
     compute_indicator_frame,
     evaluate_theta_pcs_candidate,
     evaluate_theta_put_candidate,
+    export_bot_tier_tracker_views,
+    export_scan_factor_views,
     extract_theta_rows_from_report,
     extract_theta_reason_risk_rows,
     extract_theta_symbols_from_report,
@@ -1794,6 +1802,32 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertTrue(context["gap_is_down"])
         self.assertGreater(context["gap_atr_multiple"], 1.0)
 
+    def test_release_context_anchors_post_earnings_avwap_to_day_before_gap_up(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=0)
+        gap_idx = 30
+        anchor_idx = gap_idx - 1
+        gap_date = df.iloc[gap_idx]["datetime"].date().isoformat()
+        anchor_date = df.iloc[anchor_idx]["datetime"].date().isoformat()
+
+        context = _build_latest_earnings_release_context(
+            df,
+            {
+                "earnings_date": gap_date,
+                "release_session": "bmo",
+            },
+        )
+        expected_vwap, expected_stdev, expected_bands = master_avwap.calc_anchored_vwap_bands(df, anchor_idx)
+
+        self.assertTrue(context["active"])
+        self.assertEqual(context["gap_idx"], gap_idx)
+        self.assertEqual(context["anchor_idx"], anchor_idx)
+        self.assertEqual(context["gap_date"], gap_date)
+        self.assertEqual(context["anchor_date"], anchor_date)
+        self.assertTrue(context["gap_is_up"])
+        self.assertAlmostEqual(context["anchor_meta"]["vwap"], float(expected_vwap))
+        self.assertAlmostEqual(context["anchor_meta"]["stdev"], float(expected_stdev))
+        self.assertEqual(context["anchor_meta"]["bands"], {key: float(value) for key, value in expected_bands.items()})
+
     def test_release_context_records_inferred_unknown_session(self):
         df = _build_history_with_gap()
         earnings_date = df.iloc[20]["datetime"].date().isoformat()
@@ -1980,6 +2014,33 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(summary["family"], master_avwap.POST_EARNINGS_BOUNCE_SIGNAL)
         self.assertEqual(summary["events"], [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL])
 
+    def test_post_earnings_avwape_bounce_waits_until_second_session_after_gap(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=0)
+        df.loc[:29, "high"] = 130.0
+        context = _build_post_earnings_52w_release_context(df)
+        self.assertEqual(context["sessions_since_gap"], 1)
+
+        with patch("master_avwap.bounce_up_at_level", return_value=True) as bounce_mock:
+            summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        bounce_mock.assert_not_called()
+        self.assertTrue(summary["active"])
+        self.assertFalse(summary["bounce_signal"])
+        self.assertEqual(summary["events"], [])
+
+    def test_post_earnings_avwape_bounce_can_fire_on_second_session_after_gap(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=1)
+        df.loc[:29, "high"] = 130.0
+        context = _build_post_earnings_52w_release_context(df)
+        self.assertEqual(context["sessions_since_gap"], 2)
+
+        with patch("master_avwap.bounce_up_at_level", return_value=True):
+            summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertTrue(summary["bounce_signal"])
+        self.assertEqual(summary["bounce_sessions_after_gap"], 2)
+        self.assertEqual(summary["events"], [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL])
+
     def test_post_earnings_52w_break_rejects_gap_day_break_and_bounce(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=0).iloc[:-1].copy()
         context = _build_post_earnings_52w_release_context(df)
@@ -2049,18 +2110,65 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 },
                 "post_earnings_earnings_candle_stop_level": 54.0,
                 "post_earnings_earnings_candle_stop_label": master_avwap.POST_EARNINGS_CANDLE_STOP_LABEL_SHORT,
+                "ema_15": 52.0,
+                "entry_feature_snapshot": {"ema8": 50.5},
                 "atr20": 2.0,
             },
         )
 
         post_stop = next(item for item in candidates if item["label"] == POST_EARNINGS_STOP_LABEL)
         candle_stop = next(item for item in candidates if item["label"] == master_avwap.POST_EARNINGS_CANDLE_STOP_LABEL_SHORT)
+        ema15_stop = next(item for item in candidates if item["label"] == "EMA_15")
+        ema8_stop = next(item for item in candidates if item["label"] == "EMA_8")
         self.assertEqual(post_stop["source_type"], "post_earnings_anchor")
         self.assertEqual(post_stop["level"], 51.5)
         self.assertEqual(post_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
         self.assertEqual(candle_stop["source_type"], "post_earnings_candle")
         self.assertEqual(candle_stop["level"], 54.0)
         self.assertEqual(candle_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
+        self.assertEqual(ema15_stop["source_type"], "ema")
+        self.assertEqual(ema15_stop["level"], 52.0)
+        self.assertEqual(ema15_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
+        self.assertEqual(ema8_stop["source_type"], "ema")
+        self.assertEqual(ema8_stop["level"], 50.5)
+        self.assertEqual(ema8_stop["close_failure_limit"], POST_EARNINGS_STOP_FAILURE_CLOSES)
+
+    def test_post_earnings_tracker_record_builds_ema_stops_from_indicator_snapshot(self):
+        setup = master_avwap.build_tracker_setup_record(
+            {
+                "symbol": "NVDA",
+                "side": "LONG",
+                "priority_bucket": "favorite_setup",
+                "setup_family": "post_earnings_52w_break",
+                "post_earnings_earnings_candle_stop_level": 94.0,
+                "post_earnings_earnings_candle_stop_label": master_avwap.POST_EARNINGS_CANDLE_STOP_LABEL_LONG,
+            },
+            {
+                "last_close": 100.0,
+                "current_anchor": {
+                    "date": "2026-05-01",
+                    "vwap": 98.0,
+                    "bands": {"LOWER_1": 96.0, "UPPER_1": 104.0, "UPPER_2": 108.0, "UPPER_3": 112.0},
+                },
+                "post_earnings_anchor": {
+                    "vwap": 97.0,
+                    "bands": {"LOWER_1": 95.0, "UPPER_1": 105.0, "UPPER_2": 110.0, "UPPER_3": 115.0},
+                },
+                "atr20": 2.0,
+            },
+            feature_row=None,
+            generated_at="2026-05-05T13:00:00",
+            indicator_row=pd.Series({"ema_8": 98.5, "ema_15": 96.5, "ema_21": 95.5, "atr_20": 2.0}),
+            scan_date="2026-05-05",
+        )
+
+        stop_labels = {
+            scenario["stop_reference_label"]
+            for scenario in setup["scenarios"].values()
+            if scenario.get("stop_reference_label")
+        }
+        self.assertIn("EMA_15", stop_labels)
+        self.assertIn("EMA_8", stop_labels)
 
     def test_post_earnings_tracker_targets_can_use_pre_earnings_anchor_overrides(self):
         scenario = {
@@ -3222,6 +3330,57 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(tsla_triggers["LOWER_1"]["action"], "break_above")
         self.assertEqual(tsla_triggers["LOWER_1"]["event_type"], "mid_earnings_first_dev_retest_watch")
 
+    def test_d1_watchlist_records_a_s_upgrade_targets_for_scan_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "master_avwap_d1_watchlist.json"
+            priority_rows = [
+                {
+                    "symbol": "MSFT",
+                    "side": "LONG",
+                    "priority_bucket": "",
+                    "score": 72,
+                    "setup_family": "general_watch",
+                    "previous_day_high": 105.0,
+                    "trendline_candidate": {"current_line_price": 106.0, "end_date": "2026-04-02"},
+                    "sma_obstacles": [
+                        {"label": "SMA_50", "level": 107.0},
+                        {"label": "SMA_200", "level": 108.0},
+                    ],
+                    "previous_anchor_obstacles": [
+                        {"label": "PREV_UPPER_1", "level": 109.0},
+                        {"label": "PREV_UPPER_2", "level": 110.0},
+                    ],
+                }
+            ]
+            ai_state = {
+                "symbols": {
+                    "MSFT": {
+                        "side": "LONG",
+                        "last_close": 100.0,
+                        "current_anchor": {
+                            "date": "2026-04-01",
+                            "vwap": 98.0,
+                            "bands": {"UPPER_1": 103.0, "UPPER_2": 108.0},
+                        },
+                        "entry_feature_snapshot": {"ema15": 96.0},
+                        "previous_day_high": 105.0,
+                    }
+                }
+            }
+
+            payload = update_master_avwap_d1_watchlist(path, priority_rows, [], [], ai_state)
+
+        entry = payload["symbols"]["MSFT"]
+        self.assertIn("a_s_upgrade_target", entry["watch_reasons"])
+        self.assertTrue(entry["upgrade_targets"])
+        self.assertIn("1st-dev break", entry["upgrade_summary"])
+        labels = {target["label"] for target in entry["upgrade_targets"]}
+        self.assertIn("UPPER_1", labels)
+        self.assertGreater(len(entry["upgrade_targets"]), 4)
+        self.assertEqual(len(entry["trigger_levels"]), len(entry["upgrade_targets"]))
+        self.assertIn("+", entry["upgrade_summary"])
+        self.assertTrue(all(target.get("target_tier") == "A/S" for target in entry["upgrade_targets"]))
+
     def test_d1_watchlist_drops_stale_post_earnings_avwape_bounce(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "master_avwap_d1_watchlist.json"
@@ -3347,6 +3506,378 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertEqual(written.loc[0, "watchlist_label"], "test-watchlist")
             self.assertEqual(written.loc[0, "symbol"], "AAPL")
 
+    def test_scan_factor_observations_compute_side_and_spy_relative_returns(self):
+        history = pd.DataFrame(
+            [
+                {
+                    "run_id": "run-1",
+                    "run_timestamp": "2026-01-02T16:00:00",
+                    "run_date": "2026-01-02",
+                    "watchlist_label": "test",
+                    "symbol": "AAPL",
+                    "side": "LONG",
+                    "last_trade_date": "2026-01-02",
+                    "last_close": 100.0,
+                },
+                {
+                    "run_id": "run-2",
+                    "run_timestamp": "2026-01-05T16:00:00",
+                    "run_date": "2026-01-05",
+                    "watchlist_label": "test",
+                    "symbol": "AAPL",
+                    "side": "LONG",
+                    "last_trade_date": "2026-01-05",
+                    "last_close": 110.0,
+                },
+                {
+                    "run_id": "run-1",
+                    "run_timestamp": "2026-01-02T16:00:00",
+                    "run_date": "2026-01-02",
+                    "watchlist_label": "test",
+                    "symbol": "TSLA",
+                    "side": "SHORT",
+                    "last_trade_date": "2026-01-02",
+                    "last_close": 100.0,
+                },
+                {
+                    "run_id": "run-2",
+                    "run_timestamp": "2026-01-05T16:00:00",
+                    "run_date": "2026-01-05",
+                    "watchlist_label": "test",
+                    "symbol": "TSLA",
+                    "side": "SHORT",
+                    "last_trade_date": "2026-01-05",
+                    "last_close": 90.0,
+                },
+                {
+                    "run_id": "run-1",
+                    "run_timestamp": "2026-01-02T16:00:00",
+                    "run_date": "2026-01-02",
+                    "watchlist_label": "test",
+                    "symbol": "SPY",
+                    "side": "LONG",
+                    "last_trade_date": "2026-01-02",
+                    "last_close": 100.0,
+                },
+                {
+                    "run_id": "run-2",
+                    "run_timestamp": "2026-01-05T16:00:00",
+                    "run_date": "2026-01-05",
+                    "watchlist_label": "test",
+                    "symbol": "SPY",
+                    "side": "LONG",
+                    "last_trade_date": "2026-01-05",
+                    "last_close": 105.0,
+                },
+            ]
+        )
+
+        rows = build_scan_factor_observation_rows(history, horizons=(1,))
+        by_symbol = {row["symbol"]: row for row in rows if row["scan_date"] == "2026-01-02"}
+
+        self.assertAlmostEqual(by_symbol["AAPL"]["raw_return_pct"], 10.0)
+        self.assertAlmostEqual(by_symbol["AAPL"]["side_return_pct"], 10.0)
+        self.assertAlmostEqual(by_symbol["AAPL"]["spy_relative_side_return_pct"], 5.0)
+        self.assertAlmostEqual(by_symbol["TSLA"]["raw_return_pct"], -10.0)
+        self.assertAlmostEqual(by_symbol["TSLA"]["side_return_pct"], 10.0)
+        self.assertAlmostEqual(by_symbol["TSLA"]["spy_relative_side_return_pct"], 15.0)
+
+    def test_scan_factor_leaderboard_ranks_recent_working_attributes(self):
+        rows = []
+        for idx in range(8):
+            symbol = f"WIN{idx}"
+            rows.extend(
+                [
+                    {
+                        "run_id": "run-1",
+                        "run_timestamp": "2026-01-02T16:00:00",
+                        "run_date": "2026-01-02",
+                        "watchlist_label": "test",
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-02",
+                        "last_close": 100.0,
+                        "current_band_zone": "CLEAN",
+                        "priority_score": 130.0,
+                        "events_today": "BOUNCE_VWAP;CROSS_UP_VWAP",
+                    },
+                    {
+                        "run_id": "run-2",
+                        "run_timestamp": "2026-01-05T16:00:00",
+                        "run_date": "2026-01-05",
+                        "watchlist_label": "test",
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-05",
+                        "last_close": 110.0,
+                        "current_band_zone": "CLEAN",
+                        "priority_score": 130.0,
+                    },
+                ]
+            )
+        for idx in range(8):
+            symbol = f"BAD{idx}"
+            rows.extend(
+                [
+                    {
+                        "run_id": "run-1",
+                        "run_timestamp": "2026-01-02T16:00:00",
+                        "run_date": "2026-01-02",
+                        "watchlist_label": "test",
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-02",
+                        "last_close": 100.0,
+                        "current_band_zone": "MESSY",
+                        "priority_score": 70.0,
+                    },
+                    {
+                        "run_id": "run-2",
+                        "run_timestamp": "2026-01-05T16:00:00",
+                        "run_date": "2026-01-05",
+                        "watchlist_label": "test",
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-05",
+                        "last_close": 95.0,
+                        "current_band_zone": "MESSY",
+                        "priority_score": 70.0,
+                    },
+                ]
+            )
+        history = pd.DataFrame(rows)
+        observations = build_scan_factor_observation_rows(history, horizons=(1,))
+        leaderboard = build_scan_factor_leaderboard_rows(
+            history,
+            observations,
+            min_observations=8,
+            reference_date="2026-01-02",
+        )
+
+        clean_row = next(
+            row
+            for row in leaderboard
+            if row["factor_key"] == "current_band_zone" and row["value_label"] == "CLEAN"
+        )
+        messy_row = next(
+            row
+            for row in leaderboard
+            if row["factor_key"] == "current_band_zone" and row["value_label"] == "MESSY"
+        )
+        event_row = next(
+            row
+            for row in leaderboard
+            if row["factor_key"] == "events_today" and row["value_label"] == "BOUNCE_VWAP"
+        )
+        score_bucket_row = next(
+            row
+            for row in leaderboard
+            if row["factor_key"] == "priority_score" and row["value_label"] == "120 to < 140"
+        )
+
+        self.assertEqual(clean_row["observation_count"], 8)
+        self.assertGreater(clean_row["side_return_edge_pct"], 0)
+        self.assertLess(messy_row["side_return_edge_pct"], 0)
+        self.assertEqual(event_row["observation_count"], 8)
+        self.assertEqual(score_bucket_row["observation_count"], 8)
+
+    def test_export_scan_factor_views_writes_observation_and_leaderboard_csvs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_path = temp_path / "d1_features_history.csv"
+            observations_path = temp_path / "scan_factor_observations.csv"
+            leaderboard_path = temp_path / "scan_factor_leaderboard.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "run_id": "run-1",
+                        "run_timestamp": "2026-01-02T16:00:00",
+                        "run_date": "2026-01-02",
+                        "watchlist_label": "test",
+                        "symbol": "AAPL",
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-02",
+                        "last_close": 100.0,
+                        "current_band_zone": "CLEAN",
+                    },
+                    {
+                        "run_id": "run-2",
+                        "run_timestamp": "2026-01-05T16:00:00",
+                        "run_date": "2026-01-05",
+                        "watchlist_label": "test",
+                        "symbol": "AAPL",
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-05",
+                        "last_close": 103.0,
+                        "current_band_zone": "CLEAN",
+                    },
+                ]
+            ).to_csv(history_path, index=False)
+
+            result = export_scan_factor_views(
+                history_path=history_path,
+                observations_path=observations_path,
+                leaderboard_path=leaderboard_path,
+                min_observations=1,
+            )
+
+            self.assertEqual(result["observation_count"], 1)
+            self.assertTrue(observations_path.exists())
+            self.assertTrue(leaderboard_path.exists())
+            observations = pd.read_csv(observations_path)
+            leaderboard = pd.read_csv(leaderboard_path)
+            self.assertIn("side_return_pct", observations.columns)
+            self.assertIn("factor_key", leaderboard.columns)
+            self.assertEqual(leaderboard.loc[0, "factor_key"], "current_band_zone")
+
+    def test_bot_tier_tracker_builds_s_a_outcomes_and_catch_rate(self):
+        rows = []
+
+        def add_symbol(symbol, bucket, zone, start_close, end_close, score):
+            rows.extend(
+                [
+                    {
+                        "run_id": "run-1",
+                        "run_timestamp": "2026-01-02T16:00:00",
+                        "run_date": "2026-01-02",
+                        "watchlist_label": "test",
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-02",
+                        "last_close": start_close,
+                        "priority_bucket": bucket,
+                        "priority_score": score,
+                        "setup_family": "avwap_breakout" if bucket else "general_watch",
+                        "current_band_zone": zone,
+                    },
+                    {
+                        "run_id": "run-2",
+                        "run_timestamp": "2026-01-05T16:00:00",
+                        "run_date": "2026-01-05",
+                        "watchlist_label": "test",
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-05",
+                        "last_close": end_close,
+                        "priority_bucket": bucket,
+                        "priority_score": score,
+                        "setup_family": "avwap_breakout" if bucket else "general_watch",
+                        "current_band_zone": zone,
+                    },
+                ]
+            )
+
+        for idx in range(4):
+            add_symbol(f"S{idx}", "favorite_setup", "CLEAN", 100.0, 112.0, 140.0)
+        for idx in range(2):
+            add_symbol(f"A{idx}", "near_favorite_zone", "CLEAN", 100.0, 108.0, 115.0)
+        for idx in range(4):
+            add_symbol(f"MISS{idx}", "", "CLEAN", 100.0, 112.0, 70.0)
+        for idx in range(6):
+            add_symbol(f"BAD{idx}", "", "MESSY", 100.0, 94.0, 70.0)
+
+        history = pd.DataFrame(rows)
+        observations = build_scan_factor_observation_rows(history, horizons=(1,))
+        leaderboard = build_scan_factor_leaderboard_rows(
+            history,
+            observations,
+            min_observations=4,
+            reference_date="2026-01-02",
+        )
+
+        tier_picks = build_bot_tier_pick_rows(history, leaderboard)
+        tier_outcomes = build_bot_tier_outcome_rows(history, observations, leaderboard)
+        performance = build_bot_tier_performance_rows(
+            tier_outcomes,
+            observations,
+            reference_date="2026-01-02",
+        )
+        catch_rate = build_bot_tier_catch_rate_rows(
+            history,
+            observations,
+            leaderboard,
+            reference_date="2026-01-02",
+        )
+
+        tiers = {row["symbol"]: row["tier"] for row in tier_picks}
+        self.assertEqual(tiers["S0"], "S")
+        self.assertEqual(tiers["A0"], "A")
+        self.assertTrue(all(row["positive_scan_factor_match_count"] > 0 for row in tier_outcomes))
+        summary = next(
+            row
+            for row in performance
+            if row["tier"] == "S/A" and row["side"] == "ALL" and row["horizon_sessions"] == 1
+        )
+        self.assertEqual(summary["observation_count"], 6)
+        self.assertGreater(summary["avg_side_return_pct"], 0)
+        catch_summary = next(
+            row
+            for row in catch_rate
+            if row["side"] == "ALL" and row["horizon_sessions"] == 1
+        )
+        self.assertEqual(catch_summary["factor_winner_count"], 10)
+        self.assertEqual(catch_summary["caught_winner_count"], 6)
+        self.assertEqual(catch_summary["missed_winner_count"], 4)
+
+    def test_export_bot_tier_tracker_views_writes_tier_csvs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_path = temp_path / "d1_features_history.csv"
+            tier_list_path = temp_path / "tier_list.csv"
+            tier_outcomes_path = temp_path / "tier_outcomes.csv"
+            tier_performance_path = temp_path / "tier_performance.csv"
+            tier_catch_rate_path = temp_path / "tier_catch_rate.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "run_id": "run-1",
+                        "run_timestamp": "2026-01-02T16:00:00",
+                        "run_date": "2026-01-02",
+                        "watchlist_label": "test",
+                        "symbol": "AAPL",
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-02",
+                        "last_close": 100.0,
+                        "priority_bucket": "favorite_setup",
+                        "priority_score": 150.0,
+                        "current_band_zone": "CLEAN",
+                    },
+                    {
+                        "run_id": "run-2",
+                        "run_timestamp": "2026-01-05T16:00:00",
+                        "run_date": "2026-01-05",
+                        "watchlist_label": "test",
+                        "symbol": "AAPL",
+                        "side": "LONG",
+                        "last_trade_date": "2026-01-05",
+                        "last_close": 104.0,
+                        "priority_bucket": "favorite_setup",
+                        "priority_score": 150.0,
+                        "current_band_zone": "CLEAN",
+                    },
+                ]
+            ).to_csv(history_path, index=False)
+
+            result = export_bot_tier_tracker_views(
+                history_path=history_path,
+                tier_list_path=tier_list_path,
+                tier_outcomes_path=tier_outcomes_path,
+                tier_performance_path=tier_performance_path,
+                tier_catch_rate_path=tier_catch_rate_path,
+                min_observations=1,
+            )
+
+            self.assertEqual(result["tier_pick_count"], 1)
+            self.assertEqual(result["tier_outcome_count"], 1)
+            self.assertTrue(tier_list_path.exists())
+            self.assertTrue(tier_outcomes_path.exists())
+            self.assertTrue(tier_performance_path.exists())
+            self.assertTrue(tier_catch_rate_path.exists())
+            tier_list = pd.read_csv(tier_list_path)
+            tier_outcomes = pd.read_csv(tier_outcomes_path)
+            self.assertEqual(tier_list.loc[0, "tier"], "S")
+            self.assertIn("side_return_pct", tier_outcomes.columns)
+
     def test_append_user_favorites_logs_against_current_bot_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             feedback_path = Path(temp_dir) / "user_favorites.csv"
@@ -3409,8 +3940,12 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertGreaterEqual(candidate["support_count"], 3)
         self.assertGreaterEqual(candidate["major_sma_support_count"], 1)
+        self.assertGreaterEqual(candidate["avwap_support_count"], 1)
+        self.assertGreaterEqual(candidate["previous_first_dev_support_count"], 1)
         self.assertEqual(candidate["side"], "LONG")
         self.assertTrue(candidate["top_score_drivers"])
+        self.assertIn("major SMA support", candidate["top_score_drivers"])
+        self.assertIn("previous 1st-dev support", candidate["top_score_drivers"])
         self.assertIsInstance(candidate["risk_flags"], list)
         self.assertNotIn("SMA_20", [support["label"] for support in candidate["supports"]])
 
@@ -3545,6 +4080,34 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94]), [])
         self.assertEqual(master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 94]), [])
 
+    def test_theta_option_strikes_require_covered_avwap_family_support(self):
+        row = {
+            "symbol": "CIEN",
+            "last_close": 105.0,
+            "score": 80,
+            "base_score": 80,
+            "supports": [
+                {"label": "SMA_50", "level": 100.0, "source": "sma", "distance_atr": 0.4},
+                {"label": "SMA_100", "level": 98.0, "source": "sma", "distance_atr": 0.7},
+                {"label": "TRENDLINE_SUPPORT", "level": 96.0, "source": "trendline", "distance_atr": 1.0},
+                {"label": "COMPRESSION_LOW", "level": 94.0, "source": "compression", "distance_atr": 1.3},
+            ],
+        }
+
+        self.assertEqual(master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 95, 94]), [])
+        self.assertEqual(master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 95, 94]), [])
+
+        row["supports"].append(
+            {"label": "PREV_UPPER_1", "level": 95.0, "source": "previous_avwape", "distance_atr": 1.1}
+        )
+        sold_put_candidates = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 95, 94])
+        pcs_candidates = master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 95, 94])
+
+        self.assertIn(95.0, [candidate["strike"] for candidate in sold_put_candidates])
+        self.assertIn(95.0, [candidate["short_strike"] for candidate in pcs_candidates])
+        self.assertEqual(sold_put_candidates[0]["covered_avwap_support_count"], 1)
+        self.assertEqual(sold_put_candidates[0]["covered_previous_first_dev_support_count"], 1)
+
     def test_pcs_ranking_uses_two_supports_and_credit_width_target(self):
         row = {
             "symbol": "NVDA",
@@ -3613,18 +4176,51 @@ class MasterAvwapSetupTests(unittest.TestCase):
             )
         )
 
-    def test_option_quote_credit_prefers_mid_then_last(self):
-        mid_credit, mid_source = master_avwap._option_quote_credit_with_source(
+    def test_option_quote_credit_prefers_last_known_then_bid(self):
+        last_credit, last_source = master_avwap._option_quote_credit_with_source(
             {"bid": 0.20, "ask": 0.40, "last": 0.55}
         )
-        last_credit, last_source = master_avwap._option_quote_credit_with_source(
-            {"bid": 0.50, "ask": 0.40, "last": 0.45}
+        close_credit, close_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.20, "ask": 0.40, "close": 0.35}
+        )
+        bid_credit, bid_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.20, "ask": 0.40}
         )
 
-        self.assertAlmostEqual(mid_credit, 0.30)
-        self.assertEqual(mid_source, "mid")
-        self.assertEqual(last_credit, 0.45)
+        self.assertAlmostEqual(last_credit, 0.55)
         self.assertEqual(last_source, "last")
+        self.assertAlmostEqual(close_credit, 0.35)
+        self.assertEqual(close_source, "close")
+        self.assertAlmostEqual(bid_credit, 0.20)
+        self.assertEqual(bid_source, "bid")
+        self.assertAlmostEqual(master_avwap._option_quote_mid({"bid": 0.20, "ask": 0.40}), 0.30)
+
+    def test_sold_put_ranking_uses_last_known_price_over_wide_midpoint(self):
+        row = {
+            "symbol": "CIEN",
+            "last_close": 105.0,
+            "score": 80,
+            "base_score": 80,
+        }
+        quote_row = {
+            "strike": 95.0,
+            "expiration": "20260508",
+            "expiration_date": date(2026, 5, 8),
+            "market_days": 4,
+            "covered_support_count": 3,
+            "covered_major_sma_support_count": 1,
+            "covered_avwap_support_count": 1,
+            "covered_previous_first_dev_support_count": 1,
+            "total_support_count": 3,
+            "support_quality_score": 3.0,
+            "quote": {"bid": 0.01, "ask": 0.99, "last": 0.18},
+        }
+
+        ranked = master_avwap._rank_sold_put_option_recommendations(row, [quote_row])
+
+        self.assertEqual(ranked[0]["credit"], 0.18)
+        self.assertEqual(ranked[0]["credit_source"], "last")
+        self.assertEqual(ranked[0]["status"], "cusp")
 
     def test_theta_option_client_reconnects_when_scan_client_is_unavailable(self):
         class FakeIb:
@@ -4252,7 +4848,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         self.assertEqual(row["option_status"], "below_target")
         self.assertIn("strike", row["best_option"])
-        self.assertAlmostEqual(row["best_option"]["credit"], 0.06)
+        self.assertAlmostEqual(row["best_option"]["credit"], 0.04)
+        self.assertEqual(row["best_option"]["credit_source"], "bid")
 
     def test_theta_ib_unavailable_keeps_pcs_support_only_rows(self):
         sold_put_row = {"symbol": "ABC", "score": 80, "notes": "theta setup"}

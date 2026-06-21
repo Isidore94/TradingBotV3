@@ -38,9 +38,17 @@ def _write_master_avwap_output_file(sorted_events: list, range_buckets: dict) ->
     output_buffer = io.StringIO()
     f = output_buffer
     priority_text = PRIORITY_SETUPS_FILE.read_text(encoding="utf-8").strip()
+    upgrade_alerts_text = (
+        MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE.read_text(encoding="utf-8").strip()
+        if MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE.exists()
+        else ""
+    )
     theta_text = THETA_PUTS_FILE.read_text(encoding="utf-8").strip()
     if priority_text:
         f.write(priority_text)
+        f.write("\n\n")
+    if upgrade_alerts_text:
+        f.write(upgrade_alerts_text)
         f.write("\n\n")
     if theta_text:
         f.write("MASTER AVWAP THETA PLAYS\n")
@@ -1340,6 +1348,15 @@ def run_master(
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
+    d1_upgrade_alert_payload = write_master_avwap_d1_upgrade_alert_outputs(
+        alerts_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
+        report_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
+        priority_rows=priority_rows,
+        ai_state=ai_state,
+    )
+    existing_d1_watchlist_payload = load_json(MASTER_AVWAP_D1_WATCHLIST_FILE, default={})
+    if not isinstance(existing_d1_watchlist_payload, dict):
+        existing_d1_watchlist_payload = {}
     logging.info(
         "Priority scoring complete; theta option strike/price enrichment will run after ranking outputs are written "
         "(%d sold-put row(s), %d PCS row(s)).",
@@ -1366,6 +1383,8 @@ def run_master(
         "setup_tracker_skip_reason": "",
         "theta_enrichment_pending": False,
         "theta_enrichment_mode": "deferred",
+        "d1_upgrade_alert_count": len(d1_upgrade_alert_payload.get("alerts", [])),
+        "d1_watchlist_symbol_count": len(existing_d1_watchlist_payload.get("symbols", {})),
     }
     setup_tracker_allowed = (
         bool(update_setup_tracker)
@@ -1483,6 +1502,9 @@ def run_master(
     run_result["favorite_zone_watchlists_updated"] = bool(favorite_watchlist_result.get("updated"))
     run_result["favorite_zone_watchlists_allowed"] = bool(favorite_watchlist_result.get("allowed"))
     run_result["favorite_zone_watchlists_skip_reason"] = favorite_watchlist_result.get("skip_reason", "")
+    updated_d1_watchlist = favorite_watchlist_result.get("d1_watchlist")
+    if isinstance(updated_d1_watchlist, dict):
+        run_result["d1_watchlist_symbol_count"] = len(updated_d1_watchlist.get("symbols", {}))
     favorite_watchlist_context = {
         "allowed": bool(favorite_watchlist_result.get("allowed")),
         "reference_time": favorite_watchlist_reference,
@@ -1680,6 +1702,35 @@ def run_master(
             "scoring_config_updated_at": scoring_config_metadata.get("updated_at", ""),
         },
     )
+    try:
+        scan_factor_result = export_scan_factor_views()
+        run_result["scan_factor_observation_count"] = int(scan_factor_result.get("observation_count", 0) or 0)
+        run_result["scan_factor_leaderboard_count"] = int(scan_factor_result.get("leaderboard_count", 0) or 0)
+        logging.info(
+            "Scan factor tracker exported %s observation row(s) and %s leaderboard row(s).",
+            run_result["scan_factor_observation_count"],
+            run_result["scan_factor_leaderboard_count"],
+        )
+    except Exception:
+        run_result["scan_factor_observation_count"] = 0
+        run_result["scan_factor_leaderboard_count"] = 0
+        logging.exception("Scan factor tracker export failed.")
+    try:
+        tier_tracker_result = export_bot_tier_tracker_views()
+        run_result["tier_pick_count"] = int(tier_tracker_result.get("tier_pick_count", 0) or 0)
+        run_result["tier_outcome_count"] = int(tier_tracker_result.get("tier_outcome_count", 0) or 0)
+        run_result["tier_catch_rate_count"] = int(tier_tracker_result.get("tier_catch_rate_count", 0) or 0)
+        logging.info(
+            "Bot tier tracker exported %s current pick(s), %s outcome row(s), and %s catch-rate row(s).",
+            run_result["tier_pick_count"],
+            run_result["tier_outcome_count"],
+            run_result["tier_catch_rate_count"],
+        )
+    except Exception:
+        run_result["tier_pick_count"] = 0
+        run_result["tier_outcome_count"] = 0
+        run_result["tier_catch_rate_count"] = 0
+        logging.exception("Bot tier tracker export failed.")
 
     positions_payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),

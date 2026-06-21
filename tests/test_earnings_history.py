@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from scripts import earnings_history
@@ -106,6 +107,75 @@ class EarningsHistoryTests(unittest.TestCase):
         self.assertEqual(events[0]["release_session"], "AMC")
         self.assertEqual(events[0]["source_confidence"], "inferred")
         self.assertEqual(events[0]["inferred_release_session"], "inferred_amc")
+
+    def test_future_nasdaq_date_update_replaces_stale_future_date(self):
+        now = datetime(2026, 5, 1, 8, 0, 0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "earnings_calendar_history.json"
+            earnings_history.merge_events(
+                [
+                    {
+                        "ticker": "XYZ",
+                        "earnings_date": "2026-05-10",
+                        "release_session": "TBD",
+                        "source": "nasdaq",
+                    }
+                ],
+                path=path,
+                now=now,
+            )
+            earnings_history.merge_events(
+                [
+                    {
+                        "ticker": "XYZ",
+                        "earnings_date": "2026-05-15",
+                        "release_session": "AMC",
+                        "source": "nasdaq",
+                        "source_confidence": "confirmed",
+                    }
+                ],
+                path=path,
+                now=now,
+            )
+
+            events = earnings_history.get_events_for_symbols(["XYZ"], start_date="2026-05-01", path=path)["XYZ"]
+
+        self.assertEqual([event["earnings_date"] for event in events], ["2026-05-15"])
+        self.assertEqual(events[0]["release_session"], "AMC")
+
+    def test_yfinance_future_date_does_not_replace_nasdaq_future_date(self):
+        now = datetime(2026, 5, 1, 8, 0, 0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "earnings_calendar_history.json"
+            earnings_history.merge_events(
+                [
+                    {
+                        "ticker": "NVDA",
+                        "earnings_date": "2026-05-20",
+                        "release_session": "AMC",
+                        "source": "nasdaq",
+                        "source_confidence": "confirmed",
+                    }
+                ],
+                path=path,
+                now=now,
+            )
+            earnings_history.merge_events(
+                [
+                    {
+                        "ticker": "NVDA",
+                        "earnings_date": "2026-05-22",
+                        "release_session": "TBD",
+                        "source": "yfinance",
+                    }
+                ],
+                path=path,
+                now=now,
+            )
+
+            events = earnings_history.get_events_for_symbols(["NVDA"], start_date="2026-05-01", path=path)["NVDA"]
+
+        self.assertEqual([event["earnings_date"] for event in events], ["2026-05-22", "2026-05-20"])
 
 
 if __name__ == "__main__":

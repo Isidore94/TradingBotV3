@@ -45,7 +45,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "provider": "nasdaq",
         "include_manual": True,
         "nasdaq_cache_ttl_hours": 6,
+        "nasdaq_today_cache_ttl_minutes": 30,
+        "nasdaq_future_cache_ttl_hours": 2,
         "request_delay_seconds": 0.15,
+        "request_timeout_seconds": 10,
+        "request_retries": 2,
+        "request_retry_backoff_seconds": 0.5,
     },
     "forexfactory": {
         "enabled": False,

@@ -1,5 +1,6 @@
+import json
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -7,7 +8,7 @@ from unittest.mock import patch
 from scripts import earnings_history
 from market_prep.models import MarketPrepConfig
 from market_prep.report_builder import build_earnings_report
-from market_prep.services.earnings_service import NasdaqEarningsProvider, get_upcoming_earnings
+from market_prep.services.earnings_service import NasdaqEarningsProvider, fetch_nasdaq_earnings_for_date, get_upcoming_earnings
 from market_prep.services.yfinance_service import enrich_event_with_metadata
 
 
@@ -149,6 +150,68 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["earnings"][0]["ticker"], "BIG")
         self.assertEqual(stored[0]["release_session"], "AMC")
+
+    def test_fetch_nasdaq_earnings_for_date_uses_fresh_future_cache(self):
+        target_date = (datetime.now().date() + timedelta(days=10)).isoformat()
+        cached_rows = [{"symbol": "FRESH", "time": "time-after-hours"}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "nasdaq_earnings_calendar_cache.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "generated_at": datetime.now().isoformat(timespec="seconds"),
+                        "source": "nasdaq",
+                        "dates": {
+                            target_date: {
+                                "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                                "rows": cached_rows,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch("market_prep.services.earnings_service.get_default_cache_dir", return_value=Path(temp_dir)),
+                patch("market_prep.services.earnings_service.requests.get") as get_mock,
+            ):
+                rows = fetch_nasdaq_earnings_for_date(target_date)
+
+        self.assertEqual(rows, cached_rows)
+        get_mock.assert_not_called()
+
+    def test_fetch_nasdaq_earnings_for_date_retries_then_uses_stale_future_cache(self):
+        target_date = (datetime.now().date() + timedelta(days=10)).isoformat()
+        cached_rows = [{"symbol": "STALE", "time": "time-pre-market"}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "nasdaq_earnings_calendar_cache.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "generated_at": (datetime.now() - timedelta(days=2)).isoformat(timespec="seconds"),
+                        "source": "nasdaq",
+                        "dates": {
+                            target_date: {
+                                "fetched_at": (datetime.now() - timedelta(days=2)).isoformat(timespec="seconds"),
+                                "rows": cached_rows,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch("market_prep.services.earnings_service.get_default_cache_dir", return_value=Path(temp_dir)),
+                patch("market_prep.services.earnings_service.requests.get", side_effect=RuntimeError("nasdaq down")) as get_mock,
+                patch("market_prep.services.earnings_service.time.sleep") as sleep_mock,
+            ):
+                rows = fetch_nasdaq_earnings_for_date(target_date)
+
+        self.assertEqual(rows, cached_rows)
+        self.assertEqual(get_mock.call_count, 3)
+        self.assertEqual(sleep_mock.call_count, 2)
 
     def test_yfinance_enrichment_preserves_nasdaq_market_cap_when_metadata_is_empty(self):
         event = {

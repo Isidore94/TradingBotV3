@@ -9,6 +9,7 @@ from typing import Any
 
 from project_paths import (
     LONGS_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_MARKET_PREP_FILE,
     MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
@@ -35,6 +36,32 @@ MAIN_GUI_OUTPUT_FILE = LONGS_FILE.parent / "consolidated_gui_output.txt"
 MAIN_GUI_OUTPUT_DEBOUNCE_MS = 750
 MAIN_GUI_OUTPUT_REFRESH_MS = 30_000
 MAIN_GUI_BOUNCE_ALERT_LINES = 120
+GUI_OUTPUT_MODES = {"full", "simple", "combined"}
+
+
+def normalize_gui_mode(mode: Any, default: str = "full") -> str:
+    normalized_default = str(default or "full").strip().lower()
+    if normalized_default not in GUI_OUTPUT_MODES:
+        normalized_default = "full"
+    normalized = str(mode or "").strip().lower()
+    return normalized if normalized in GUI_OUTPUT_MODES else normalized_default
+
+
+def coerce_bool_setting(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def performance_delay(use_slow_delay: Any, fast_ms: int, slow_ms: int) -> int:
+    return int(slow_ms if coerce_bool_setting(use_slow_delay) else fast_ms)
 
 
 def _read_text_file(path: Path) -> str:
@@ -196,6 +223,7 @@ def build_consolidated_gui_output(
             _read_text_file(THETA_PUTS_FILE),
             _read_text_file(EVENT_TICKERS_FILE),
             _read_text_file(STDEV_RANGE_FILE),
+            _read_text_file(MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE),
         )
     )
     market_prep_output = _read_widget_text(getattr(avwap_gui, "market_prep_report_text", None))
@@ -238,6 +266,7 @@ def build_consolidated_gui_output(
         f"Event tickers report: {EVENT_TICKERS_FILE}",
         f"Stdev report: {STDEV_RANGE_FILE}",
         f"TradingView copy lists report: {MASTER_AVWAP_TRADINGVIEW_REPORT_FILE}",
+        f"A/S upgrade alerts report: {MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE}",
         f"Market prep report: {MASTER_AVWAP_MARKET_PREP_REPORT_FILE}",
         f"Focus feed: {MASTER_AVWAP_FOCUS_FILE}",
         f"User favorites log: {USER_FAVORITES_FILE}",

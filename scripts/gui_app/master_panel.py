@@ -67,6 +67,7 @@ class SimpleMasterAvwapPanel:
             self._read_text_file(THETA_PUTS_FILE),
             self._read_text_file(EVENT_TICKERS_FILE),
             self._read_text_file(STDEV_RANGE_FILE),
+            self._read_text_file(MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE),
         )
         set_highlighted_text(self.text_area, combined, state_after="disabled")
 

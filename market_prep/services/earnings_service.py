@@ -58,7 +58,12 @@ DEFAULT_EARNINGS_SETTINGS = {
     "provider": "nasdaq",
     "include_manual": True,
     "nasdaq_cache_ttl_hours": 6,
+    "nasdaq_today_cache_ttl_minutes": 30,
+    "nasdaq_future_cache_ttl_hours": 2,
     "request_delay_seconds": 0.15,
+    "request_timeout_seconds": 10,
+    "request_retries": 2,
+    "request_retry_backoff_seconds": 0.5,
     "filter_by_market_cap_and_volume": False,
     "min_market_cap": 1_000_000_000,
     "min_average_volume": 1_000_000,
@@ -296,31 +301,49 @@ def fetch_nasdaq_earnings_for_date(date_str: str, *, config: MarketPrepConfig | 
     if _is_nasdaq_cache_entry_fresh(cached_entry, event_date, settings):
         return cached_rows
 
-    try:
-        response = requests.get(
-            NASDAQ_EARNINGS_API_URL.format(date=normalized_date),
-            headers=NASDAQ_HEADERS,
-            timeout=10,
+    timeout_seconds = max(1.0, _safe_float(settings.get("request_timeout_seconds"), 10.0))
+    retries = max(0, _safe_int(settings.get("request_retries"), 2))
+    backoff_seconds = max(0.0, _safe_float(settings.get("request_retry_backoff_seconds"), 0.5))
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            response = requests.get(
+                NASDAQ_EARNINGS_API_URL.format(date=normalized_date),
+                headers=NASDAQ_HEADERS,
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            rows = _extract_nasdaq_earnings_rows(response.json())
+            fetched_at = datetime.now().isoformat(timespec="seconds")
+            cache_dates[normalized_date] = {
+                "fetched_at": fetched_at,
+                "row_count": len(rows),
+                "rows": rows,
+            }
+            write_json_cache(
+                cache_path,
+                {
+                    "generated_at": fetched_at,
+                    "source": "nasdaq",
+                    "dates": cache_dates,
+                },
+            )
+            return rows
+        except Exception as exc:
+            last_error = exc
+            if attempt < retries and backoff_seconds:
+                time.sleep(backoff_seconds * (2 ** attempt))
+
+    logger = logging.getLogger("market_prep")
+    logger.warning("Failed fetching Nasdaq earnings for %s: %s", normalized_date, last_error)
+    if cached_rows:
+        logger.warning(
+            "Using cached Nasdaq earnings for %s after refresh failure; fetched_at=%s row_count=%s.",
+            normalized_date,
+            _nasdaq_cache_fetched_at(cached_entry),
+            len(cached_rows),
         )
-        response.raise_for_status()
-        rows = response.json().get("data", {}).get("rows", []) or []
-        rows = rows if isinstance(rows, list) else []
-        cache_dates[normalized_date] = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "rows": rows,
-        }
-        write_json_cache(
-            cache_path,
-            {
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "source": "nasdaq",
-                "dates": cache_dates,
-            },
-        )
-        return rows
-    except Exception as exc:
-        logging.getLogger("market_prep").warning("Failed fetching Nasdaq earnings for %s: %s", normalized_date, exc)
-        return cached_rows
+    return cached_rows
 
 
 def load_watchlist_tickers(config: MarketPrepConfig) -> list[str]:
@@ -485,17 +508,38 @@ def _parse_market_cap(value: Any) -> int | None:
 def _is_nasdaq_cache_entry_fresh(entry: Any, event_date: date, settings: dict[str, Any]) -> bool:
     if not isinstance(entry, dict) or not isinstance(entry.get("rows"), list):
         return False
+    today = datetime.now().date()
+    if event_date < today:
+        return True
     try:
         fetched_at = datetime.fromisoformat(str(entry.get("fetched_at") or ""))
     except ValueError:
         return False
-    today = datetime.now().date()
-    if event_date < today:
-        return True
-    ttl = timedelta(hours=max(0.0, _safe_float(settings.get("nasdaq_cache_ttl_hours"), 6.0)))
+    ttl = _nasdaq_cache_ttl_for_date(event_date, settings)
     if ttl.total_seconds() <= 0:
         return False
     return datetime.now() - fetched_at <= ttl
+
+
+def _nasdaq_cache_ttl_for_date(event_date: date, settings: dict[str, Any]) -> timedelta:
+    today = datetime.now().date()
+    if event_date == today:
+        return timedelta(minutes=max(0.0, _safe_float(settings.get("nasdaq_today_cache_ttl_minutes"), 30.0)))
+    future_ttl = _safe_float(
+        settings.get("nasdaq_future_cache_ttl_hours"),
+        _safe_float(settings.get("nasdaq_cache_ttl_hours"), 6.0),
+    )
+    return timedelta(hours=max(0.0, future_ttl))
+
+
+def _extract_nasdaq_earnings_rows(payload: Any) -> list[dict[str, Any]]:
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    rows = data.get("rows", []) if isinstance(data, dict) else []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _nasdaq_cache_fetched_at(entry: Any) -> str:
+    return str(entry.get("fetched_at") or "unknown") if isinstance(entry, dict) else "unknown"
 
 
 def _is_earnings_in_window(row: dict[str, Any], start: date, end: date) -> bool:

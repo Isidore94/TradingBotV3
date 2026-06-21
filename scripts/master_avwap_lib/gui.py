@@ -58,6 +58,10 @@ class MasterAvwapGUI:
         self.setup_tracker_playbook_rows = []
         self.setup_tracker_best_playbook_rows = []
         self.setup_tracker_factor_rows = []
+        self.setup_tracker_scan_factor_rows = []
+        self.setup_tracker_tier_rows = []
+        self.setup_tracker_tier_performance_rows = []
+        self.setup_tracker_tier_catch_rate_rows = []
         self.setup_tracker_view_loaded = False
         self.setup_tracker_view_stale = True
         self.theta_sort_column = "score"
@@ -179,6 +183,8 @@ class MasterAvwapGUI:
             self.setup_tracker_playbook_text,
             self.setup_tracker_setup_type_text,
             self.setup_tracker_factor_text,
+            self.setup_tracker_scan_factor_text,
+            self.setup_tracker_tier_text,
         ]
         widgets.extend(getattr(self, "market_prep_text_widgets", []))
         if getattr(self, "market_prep_report_text", None) is not None:
@@ -202,6 +208,8 @@ class MasterAvwapGUI:
             getattr(self, "setup_tracker_playbook_table", None),
             getattr(self, "setup_tracker_setup_type_table", None),
             getattr(self, "setup_tracker_factor_table", None),
+            getattr(self, "setup_tracker_scan_factor_table", None),
+            getattr(self, "setup_tracker_tier_table", None),
             getattr(self, "theta_table", None),
             getattr(self, "theta_pcs_table", None),
         ):
@@ -595,6 +603,134 @@ class MasterAvwapGUI:
             height=11,
         )
         self.setup_tracker_factor_text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        scan_factor_tab = ttk.Frame(tracker_insights_notebook)
+        tracker_insights_notebook.add(scan_factor_tab, text="Scan Factors")
+        scan_factor_frame = ttk.LabelFrame(scan_factor_tab, text="Scan-Wide Factor Impact")
+        scan_factor_frame.pack(fill="both", expand=True, pady=(0, 8))
+        scan_factor_columns = (
+            "horizon",
+            "side",
+            "factor",
+            "value",
+            "obs",
+            "win",
+            "avg",
+            "edge",
+            "success",
+        )
+        self.setup_tracker_scan_factor_table = ttk.Treeview(
+            scan_factor_frame,
+            columns=scan_factor_columns,
+            show="headings",
+            style="Dark.Treeview",
+            height=12,
+        )
+        scan_factor_col_widths = {
+            "horizon": 62,
+            "side": 58,
+            "factor": 170,
+            "value": 150,
+            "obs": 58,
+            "win": 64,
+            "avg": 72,
+            "edge": 72,
+            "success": 74,
+        }
+        for col in scan_factor_columns:
+            self.setup_tracker_scan_factor_table.heading(col, text=col)
+            self.setup_tracker_scan_factor_table.column(
+                col,
+                width=scan_factor_col_widths.get(col, 90),
+                anchor="w",
+            )
+        scan_factor_scroll = ttk.Scrollbar(
+            scan_factor_frame,
+            orient="vertical",
+            command=self.setup_tracker_scan_factor_table.yview,
+        )
+        self.setup_tracker_scan_factor_table.configure(yscrollcommand=scan_factor_scroll.set)
+        self.setup_tracker_scan_factor_table.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(8, 0),
+            pady=8,
+        )
+        scan_factor_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self.setup_tracker_scan_factor_table.bind("<<TreeviewSelect>>", self._on_scan_factor_selected)
+
+        scan_factor_detail_frame = ttk.LabelFrame(scan_factor_tab, text="Scan Factor Details")
+        scan_factor_detail_frame.pack(fill="both", expand=True)
+        self.setup_tracker_scan_factor_text = tk.Text(
+            scan_factor_detail_frame,
+            wrap="word",
+            font=("Courier New", 10),
+            height=11,
+        )
+        self.setup_tracker_scan_factor_text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        tier_tab = ttk.Frame(tracker_insights_notebook)
+        tracker_insights_notebook.add(tier_tab, text="Bot Tiers")
+        tier_frame = ttk.LabelFrame(tier_tab, text="Current S/A Tier Picks")
+        tier_frame.pack(fill="both", expand=True, pady=(0, 8))
+        tier_columns = (
+            "tier",
+            "symbol",
+            "side",
+            "score",
+            "family",
+            "zone",
+            "factor_matches",
+        )
+        self.setup_tracker_tier_table = ttk.Treeview(
+            tier_frame,
+            columns=tier_columns,
+            show="headings",
+            style="Dark.Treeview",
+            height=12,
+        )
+        tier_col_widths = {
+            "tier": 48,
+            "symbol": 72,
+            "side": 58,
+            "score": 70,
+            "family": 170,
+            "zone": 150,
+            "factor_matches": 105,
+        }
+        for col in tier_columns:
+            self.setup_tracker_tier_table.heading(col, text=col)
+            self.setup_tracker_tier_table.column(
+                col,
+                width=tier_col_widths.get(col, 90),
+                anchor="w",
+            )
+        tier_scroll = ttk.Scrollbar(
+            tier_frame,
+            orient="vertical",
+            command=self.setup_tracker_tier_table.yview,
+        )
+        self.setup_tracker_tier_table.configure(yscrollcommand=tier_scroll.set)
+        self.setup_tracker_tier_table.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(8, 0),
+            pady=8,
+        )
+        tier_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self.setup_tracker_tier_table.bind("<<TreeviewSelect>>", self._on_tier_selected)
+
+        tier_detail_frame = ttk.LabelFrame(tier_tab, text="Tier Performance Details")
+        tier_detail_frame.pack(fill="both", expand=True)
+        self.setup_tracker_tier_text = tk.Text(
+            tier_detail_frame,
+            wrap="word",
+            font=("Courier New", 10),
+            height=11,
+        )
+        self.setup_tracker_tier_text.pack(fill="both", expand=True, padx=8, pady=8)
 
         avwap_tab = ttk.Frame(self.notebook)
         self.avwap_tab = avwap_tab
@@ -1045,12 +1181,18 @@ class MasterAvwapGUI:
         self.setup_tracker_playbook_rows = []
         self.setup_tracker_best_playbook_rows = []
         self.setup_tracker_factor_rows = []
+        self.setup_tracker_scan_factor_rows = []
+        self.setup_tracker_tier_rows = []
+        self.setup_tracker_tier_performance_rows = []
+        self.setup_tracker_tier_catch_rate_rows = []
         for table in (
             getattr(self, "setup_tracker_table", None),
             getattr(self, "setup_tracker_scenario_table", None),
             getattr(self, "setup_tracker_setup_type_table", None),
             getattr(self, "setup_tracker_playbook_table", None),
             getattr(self, "setup_tracker_factor_table", None),
+            getattr(self, "setup_tracker_scan_factor_table", None),
+            getattr(self, "setup_tracker_tier_table", None),
         ):
             if table is None:
                 continue
@@ -1066,6 +1208,8 @@ class MasterAvwapGUI:
             "setup_tracker_setup_type_text",
             "setup_tracker_playbook_text",
             "setup_tracker_factor_text",
+            "setup_tracker_scan_factor_text",
+            "setup_tracker_tier_text",
         ):
             widget = getattr(self, widget_name, None)
             if widget is not None:
@@ -1254,6 +1398,10 @@ class MasterAvwapGUI:
             payload.get("setup_type_stats", []) if isinstance(payload.get("setup_type_stats"), list) else [],
         )
         factor_rows = getattr(self, "setup_tracker_factor_rows", [])
+        scan_factor_rows = getattr(self, "setup_tracker_scan_factor_rows", [])
+        tier_rows = getattr(self, "setup_tracker_tier_rows", [])
+        tier_performance_rows = getattr(self, "setup_tracker_tier_performance_rows", [])
+        tier_catch_rate_rows = getattr(self, "setup_tracker_tier_catch_rate_rows", [])
         playbook_rows = getattr(self, "setup_tracker_playbook_rows", [])
         best_playbook_rows = getattr(self, "setup_tracker_best_playbook_rows", [])
         tracker_setups = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
@@ -1276,6 +1424,10 @@ class MasterAvwapGUI:
         def _fmt_pct_edge(value) -> str:
             numeric = _coerce_float(value)
             return f"{numeric * 100:+.0f} pts" if numeric is not None else "n/a"
+
+        def _fmt_return_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:+.2f}%" if numeric is not None else "n/a"
 
         lines = []
         lines.append("Tracker summary")
@@ -1464,6 +1616,105 @@ class MasterAvwapGUI:
                     f"stop_edge={_fmt_pct_edge(row.get('stop_rate_edge'))}"
                 )
 
+        positive_scan_factor_rows = [
+            row
+            for row in scan_factor_rows
+            if (_coerce_float(row.get("success_score")) or 0.0) > 0
+        ]
+        negative_scan_factor_rows = [
+            row
+            for row in scan_factor_rows
+            if (_coerce_float(row.get("success_score")) or 0.0) < 0
+        ]
+        positive_scan_factor_rows = sorted(
+            positive_scan_factor_rows,
+            key=lambda row: (
+                -(_coerce_float(row.get("success_score")) or 0.0),
+                -int(row.get("observation_count", 0) or 0),
+            ),
+        )
+        negative_scan_factor_rows = sorted(
+            negative_scan_factor_rows,
+            key=lambda row: (
+                (_coerce_float(row.get("success_score")) or 0.0),
+                -int(row.get("observation_count", 0) or 0),
+            ),
+        )
+
+        lines.append("")
+        lines.append("Scan-wide factor edges")
+        lines.append("-" * 80)
+        if not scan_factor_rows:
+            lines.append("No scan-wide factor stats yet. They populate after enough saved D1 feature history exists.")
+        else:
+            for row in positive_scan_factor_rows[:5]:
+                lines.append(
+                    f"{row.get('horizon_sessions')}d {row.get('side')} | "
+                    f"{row.get('factor_label')}={row.get('value_label')}: "
+                    f"obs={int(row.get('observation_count', 0) or 0)} "
+                    f"avg={_fmt_return_pct(row.get('avg_side_return_pct'))} "
+                    f"edge={_fmt_return_pct(row.get('side_return_edge_pct'))} "
+                    f"win={_fmt_pct(row.get('win_rate'))}"
+                )
+            if negative_scan_factor_rows:
+                lines.append("")
+                lines.append("Scan-wide weakest edges")
+                for row in negative_scan_factor_rows[:3]:
+                    lines.append(
+                        f"{row.get('horizon_sessions')}d {row.get('side')} | "
+                        f"{row.get('factor_label')}={row.get('value_label')}: "
+                        f"obs={int(row.get('observation_count', 0) or 0)} "
+                        f"avg={_fmt_return_pct(row.get('avg_side_return_pct'))} "
+                        f"edge={_fmt_return_pct(row.get('side_return_edge_pct'))} "
+                        f"win={_fmt_pct(row.get('win_rate'))}"
+                    )
+
+        lines.append("")
+        lines.append("Bot S/A tier performance")
+        lines.append("-" * 80)
+        if tier_rows:
+            s_count = sum(1 for row in tier_rows if str(row.get("tier") or "").upper() == "S")
+            a_count = sum(1 for row in tier_rows if str(row.get("tier") or "").upper() == "A")
+            lines.append(f"Current tier list: S={s_count} A={a_count}")
+        else:
+            lines.append("Current tier list is empty.")
+        display_tier_rows = [
+            row
+            for row in tier_performance_rows
+            if str(row.get("tier") or "") == "S/A"
+            and str(row.get("side") or "") == "ALL"
+        ]
+        display_tier_rows = sorted(
+            display_tier_rows,
+            key=lambda row: int(row.get("horizon_sessions", 0) or 0),
+        )
+        if display_tier_rows:
+            for row in display_tier_rows[:4]:
+                lines.append(
+                    f"{int(row.get('horizon_sessions', 0) or 0)}d S/A: "
+                    f"obs={int(row.get('observation_count', 0) or 0)} "
+                    f"avg={_fmt_return_pct(row.get('avg_side_return_pct'))} "
+                    f"edge={_fmt_return_pct(row.get('side_return_edge_pct'))} "
+                    f"win={_fmt_pct(row.get('win_rate'))}"
+                )
+        else:
+            lines.append("No completed S/A forward outcomes yet.")
+        catch_rows = [
+            row
+            for row in tier_catch_rate_rows
+            if str(row.get("side") or "") == "ALL"
+        ]
+        catch_rows = sorted(catch_rows, key=lambda row: int(row.get("horizon_sessions", 0) or 0))
+        if catch_rows:
+            lines.append("Catch rate versus positive scan-factor opportunities:")
+            for row in catch_rows[:4]:
+                lines.append(
+                    f"{int(row.get('horizon_sessions', 0) or 0)}d: "
+                    f"caught winners={int(row.get('caught_winner_count', 0) or 0)}/"
+                    f"{int(row.get('factor_winner_count', 0) or 0)} "
+                    f"({_fmt_pct(row.get('caught_winner_rate'))})"
+                )
+
         if selected_setup:
             lines.append("")
             lines.append("Selected setup")
@@ -1590,6 +1841,12 @@ class MasterAvwapGUI:
         lines.append(f"Playbook stats CSV: {SETUP_PLAYBOOKS_FILE}")
         lines.append(f"Attributes CSV: {SETUP_ATTRIBUTES_FILE}")
         lines.append(f"Attribute leaderboard CSV: {SETUP_ATTRIBUTE_LEADERBOARD_FILE}")
+        lines.append(f"Scan factor observations CSV: {SCAN_FACTOR_OBSERVATIONS_FILE}")
+        lines.append(f"Scan factor leaderboard CSV: {SCAN_FACTOR_LEADERBOARD_FILE}")
+        lines.append(f"Tier list CSV: {TIER_LIST_FILE}")
+        lines.append(f"Tier outcomes CSV: {TIER_OUTCOMES_FILE}")
+        lines.append(f"Tier performance CSV: {TIER_PERFORMANCE_FILE}")
+        lines.append(f"Tier catch-rate CSV: {TIER_CATCH_RATE_FILE}")
         lines.append(f"Scoring config JSON: {SCORING_CONFIG_FILE}")
         lines.append(f"Scoring recommendations JSON: {SCORING_RECOMMENDATIONS_FILE}")
         lines.append(f"Scoring tuner report: {SCORING_TUNER_REPORT_FILE}")
@@ -1849,6 +2106,262 @@ class MasterAvwapGUI:
         row = self.setup_tracker_factor_row_map.get(selected[0]) if selected else None
         self._render_factor_details(row)
 
+    def _populate_scan_factor_table(self, rows: list[dict]) -> None:
+        self.setup_tracker_scan_factor_row_map = {}
+        for item in self.setup_tracker_scan_factor_table.get_children():
+            self.setup_tracker_scan_factor_table.delete(item)
+        if not rows:
+            self._render_scan_factor_details(None)
+            return
+
+        def _fmt_return(value) -> str:
+            numeric = _coerce_float(value)
+            return "" if numeric is None else f"{numeric:+.2f}%"
+
+        def _fmt_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return "" if numeric is None else f"{numeric * 100:.0f}%"
+
+        for row in rows:
+            values = (
+                str(int(row.get("horizon_sessions", 0) or 0)),
+                row.get("side", ""),
+                row.get("factor_label", ""),
+                row.get("value_label", ""),
+                int(row.get("observation_count", 0) or 0),
+                _fmt_pct(row.get("win_rate")),
+                _fmt_return(row.get("avg_side_return_pct")),
+                _fmt_return(row.get("side_return_edge_pct")),
+                _fmt_return(row.get("success_score")),
+            )
+            item_id = self.setup_tracker_scan_factor_table.insert(
+                "",
+                "end",
+                values=values,
+                tags=tree_tags_for_values(values),
+            )
+            self.setup_tracker_scan_factor_row_map[item_id] = row
+
+        first_item = self.setup_tracker_scan_factor_table.get_children()
+        if first_item:
+            self.setup_tracker_scan_factor_table.selection_set(first_item[0])
+            self.setup_tracker_scan_factor_table.focus(first_item[0])
+            self._on_scan_factor_selected()
+        else:
+            self._render_scan_factor_details(None)
+
+    def _render_scan_factor_details(self, row: dict | None) -> None:
+        if not row:
+            self._set_text_widget_contents(
+                self.setup_tracker_scan_factor_text,
+                "No scan-wide factor stats yet.",
+            )
+            return
+
+        def _fmt_return(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:+.2f}%" if numeric is not None else "n/a"
+
+        def _fmt_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:.0f}%" if numeric is not None else "n/a"
+
+        def _fmt_pct_edge(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:+.0f} pts" if numeric is not None else "n/a"
+
+        lines = [
+            f"[{row.get('factor_group')}] {row.get('factor_label')} = {row.get('value_label')}",
+            "-" * 80,
+            (
+                f"Context: {row.get('side')} | horizon={int(row.get('horizon_sessions', 0) or 0)} scan session(s) "
+                f"| window={row.get('window_start') or 'n/a'} to {row.get('window_end') or 'n/a'}"
+            ),
+            (
+                f"Observations={int(row.get('observation_count', 0) or 0)} | "
+                f"symbols={int(row.get('symbol_count', 0) or 0)} | "
+                f"baseline obs={int(row.get('baseline_observation_count', 0) or 0)}"
+            ),
+            (
+                f"Avg side return={_fmt_return(row.get('avg_side_return_pct'))} "
+                f"vs baseline {_fmt_return(row.get('baseline_avg_side_return_pct'))} "
+                f"({_fmt_return(row.get('side_return_edge_pct'))})"
+            ),
+            f"Median side return={_fmt_return(row.get('median_side_return_pct'))}",
+            (
+                f"Win rate={_fmt_pct(row.get('win_rate'))} "
+                f"vs baseline {_fmt_pct(row.get('baseline_win_rate'))} "
+                f"({_fmt_pct_edge(row.get('win_rate_edge'))})"
+            ),
+            (
+                f"SPY-relative side return={_fmt_return(row.get('avg_spy_relative_side_return_pct'))} "
+                f"vs baseline {_fmt_return(row.get('baseline_avg_spy_relative_side_return_pct'))} "
+                f"({_fmt_return(row.get('spy_relative_edge_pct'))})"
+            ),
+            (
+                f"Success score={_fmt_return(row.get('success_score'))} | "
+                f"impact={_coerce_float(row.get('impact_score')):.2f}"
+                if _coerce_float(row.get("impact_score")) is not None
+                else f"Success score={_fmt_return(row.get('success_score'))} | impact=n/a"
+            ),
+        ]
+        if row.get("sample_observations"):
+            lines.append("")
+            lines.append("Recent examples")
+            lines.append("-" * 80)
+            for item in str(row.get("sample_observations") or "").split("; "):
+                if item:
+                    lines.append(item)
+        self._set_text_widget_contents(self.setup_tracker_scan_factor_text, "\n".join(lines))
+
+    def _on_scan_factor_selected(self, _event=None) -> None:
+        selected = self.setup_tracker_scan_factor_table.selection()
+        row = self.setup_tracker_scan_factor_row_map.get(selected[0]) if selected else None
+        self._render_scan_factor_details(row)
+
+    def _populate_tier_table(self, rows: list[dict]) -> None:
+        self.setup_tracker_tier_row_map = {}
+        for item in self.setup_tracker_tier_table.get_children():
+            self.setup_tracker_tier_table.delete(item)
+        if not rows:
+            self._render_tier_details(None)
+            return
+
+        for row in rows:
+            priority_score = _coerce_float(row.get("priority_score"))
+            values = (
+                row.get("tier", ""),
+                row.get("symbol", ""),
+                row.get("side", ""),
+                "" if priority_score is None else f"{priority_score:.1f}",
+                row.get("setup_family", ""),
+                row.get("favorite_zone") or row.get("current_band_zone") or "",
+                int(row.get("scan_factor_match_count", 0) or 0),
+            )
+            item_id = self.setup_tracker_tier_table.insert(
+                "",
+                "end",
+                values=values,
+                tags=tree_tags_for_values(values),
+            )
+            self.setup_tracker_tier_row_map[item_id] = row
+
+        first_item = self.setup_tracker_tier_table.get_children()
+        if first_item:
+            self.setup_tracker_tier_table.selection_set(first_item[0])
+            self.setup_tracker_tier_table.focus(first_item[0])
+            self._on_tier_selected()
+        else:
+            self._render_tier_details(None)
+
+    def _render_tier_details(self, row: dict | None) -> None:
+        def _fmt_return(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric:+.2f}%" if numeric is not None else "n/a"
+
+        def _fmt_pct(value) -> str:
+            numeric = _coerce_float(value)
+            return f"{numeric * 100:.0f}%" if numeric is not None else "n/a"
+
+        lines = []
+        if row:
+            score = _coerce_float(row.get("priority_score"))
+            score_text = "n/a" if score is None else f"{score:.1f}"
+            lines.extend(
+                [
+                    f"{row.get('tier')} tier: {row.get('symbol')} {row.get('side')}",
+                    "-" * 80,
+                    (
+                        f"score={score_text} bucket={row.get('priority_bucket') or ''} "
+                        f"family={row.get('setup_family') or ''}"
+                    ),
+                    (
+                        f"zone={row.get('favorite_zone') or row.get('current_band_zone') or 'n/a'} "
+                        f"trend={row.get('trend_20d') or 'n/a'} close={row.get('last_close') or 'n/a'}"
+                    ),
+                    f"Positive scan-factor matches: {int(row.get('scan_factor_match_count', 0) or 0)}",
+                ]
+            )
+            if row.get("scan_factor_matches"):
+                lines.append(str(row.get("scan_factor_matches")))
+            lines.append("")
+        else:
+            lines.extend(["No current S/A tier picks.", ""])
+
+        performance_rows = getattr(self, "setup_tracker_tier_performance_rows", [])
+        catch_rows = getattr(self, "setup_tracker_tier_catch_rate_rows", [])
+        if row:
+            tier_filter = str(row.get("tier") or "")
+            side_filter = str(row.get("side") or "")
+            display_perf = [
+                item
+                for item in performance_rows
+                if str(item.get("tier") or "") in {tier_filter, "S/A"}
+                and str(item.get("side") or "") in {side_filter, "ALL"}
+            ]
+        else:
+            display_perf = [
+                item
+                for item in performance_rows
+                if str(item.get("tier") or "") == "S/A"
+                and str(item.get("side") or "") == "ALL"
+            ]
+        display_perf = sorted(
+            display_perf,
+            key=lambda item: (
+                int(item.get("horizon_sessions", 0) or 0),
+                0 if str(item.get("tier") or "") == (str(row.get("tier") or "") if row else "S/A") else 1,
+                str(item.get("side") or ""),
+            ),
+        )
+        lines.append("Recent tier performance")
+        lines.append("-" * 80)
+        if not display_perf:
+            lines.append("No completed tier outcomes yet.")
+        else:
+            for item in display_perf[:8]:
+                lines.append(
+                    f"{int(item.get('horizon_sessions', 0) or 0)}d {item.get('tier')} {item.get('side')}: "
+                    f"obs={int(item.get('observation_count', 0) or 0)} "
+                    f"avg={_fmt_return(item.get('avg_side_return_pct'))} "
+                    f"edge={_fmt_return(item.get('side_return_edge_pct'))} "
+                    f"win={_fmt_pct(item.get('win_rate'))} "
+                    f"factor-match={_fmt_pct(item.get('positive_scan_factor_match_rate'))}"
+                )
+
+        lines.append("")
+        lines.append("Catch rate vs scan-factor winners")
+        lines.append("-" * 80)
+        display_catch = sorted(
+            [item for item in catch_rows if str(item.get("side") or "") == "ALL"],
+            key=lambda item: int(item.get("horizon_sessions", 0) or 0),
+        )
+        if not display_catch:
+            lines.append("No scan-factor opportunity comparison yet.")
+        else:
+            for item in display_catch[:6]:
+                lines.append(
+                    f"{int(item.get('horizon_sessions', 0) or 0)}d: "
+                    f"opps={int(item.get('factor_opportunity_count', 0) or 0)} "
+                    f"winners={int(item.get('factor_winner_count', 0) or 0)} "
+                    f"caught_winners={int(item.get('caught_winner_count', 0) or 0)} "
+                    f"rate={_fmt_pct(item.get('caught_winner_rate'))}"
+                )
+            first = display_catch[0]
+            if first.get("sample_missed_winners"):
+                lines.append("")
+                lines.append("Sample missed factor winners")
+                lines.append("-" * 80)
+                for item in str(first.get("sample_missed_winners") or "").split("; "):
+                    if item:
+                        lines.append(item)
+        self._set_text_widget_contents(self.setup_tracker_tier_text, "\n".join(lines))
+
+    def _on_tier_selected(self, _event=None) -> None:
+        selected = self.setup_tracker_tier_table.selection()
+        row = self.setup_tracker_tier_row_map.get(selected[0]) if selected else None
+        self._render_tier_details(row)
+
     def _populate_setup_tracker_scenarios(self, setup: dict | None):
         for item in self.setup_tracker_scenario_table.get_children():
             self.setup_tracker_scenario_table.delete(item)
@@ -1910,9 +2423,15 @@ class MasterAvwapGUI:
             self.setup_tracker_playbook_rows
         )
         self.setup_tracker_factor_rows = build_tracker_factor_view_rows(attribute_leaderboard_rows)
+        self.setup_tracker_scan_factor_rows = load_scan_factor_leaderboard_rows()
+        self.setup_tracker_tier_rows = load_bot_tier_list_rows()
+        self.setup_tracker_tier_performance_rows = load_bot_tier_performance_rows()
+        self.setup_tracker_tier_catch_rate_rows = load_bot_tier_catch_rate_rows()
         self._populate_playbook_table(self.setup_tracker_best_playbook_rows)
         self._populate_setup_type_table(self.setup_tracker_setup_type_rows)
         self._populate_factor_table(self.setup_tracker_factor_rows)
+        self._populate_scan_factor_table(self.setup_tracker_scan_factor_rows)
+        self._populate_tier_table(self.setup_tracker_tier_rows)
 
         for item in self.setup_tracker_table.get_children():
             self.setup_tracker_table.delete(item)
@@ -2302,11 +2821,13 @@ class MasterAvwapGUI:
         theta_section = self._read_text_file(THETA_PUTS_FILE)
         event_section = self._read_text_file(EVENT_TICKERS_FILE)
         stdev_section = self._read_text_file(STDEV_RANGE_FILE)
+        d1_upgrade_section = self._read_text_file(MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE)
         combined = build_combined_avwap_output_text(
             priority_section,
             theta_section,
             event_section,
             stdev_section,
+            d1_upgrade_section,
         )
 
         self._set_text_widget_contents(self.avwap_text, combined)

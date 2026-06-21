@@ -19,6 +19,7 @@ DEFAULT_HISTORY_FILE = EARNINGS_CALENDAR_HISTORY_FILE
 CONFIRMED_SESSIONS = {"BMO", "AMC"}
 SOURCE_PRIORITY = {"yfinance": 1, "nasdaq": 2, "manual": 3}
 CONFIDENCE_PRIORITY = {"unknown": 0, "supplemental": 1, "inferred": 2, "confirmed": 3}
+ACTIVE_FUTURE_SUPERSESSION_WINDOW_DAYS = 120
 
 
 def normalize_release_session(value: Any) -> str:
@@ -203,7 +204,9 @@ def merge_events(events: list[dict[str, Any]], path: Path | None = None, now: da
     normalized_events = [event for event in normalized_events if event is not None]
     if not normalized_events:
         return []
-    now_text = (now or datetime.now()).isoformat(timespec="seconds")
+    now_value = now or datetime.now()
+    now_text = now_value.isoformat(timespec="seconds")
+    reference_date = now_value.date()
     history = load_history(path)
     merged_events: list[dict[str, Any]] = []
     symbols = history.setdefault("symbols", {})
@@ -216,6 +219,7 @@ def merge_events(events: list[dict[str, Any]], path: Path | None = None, now: da
             for existing in existing_events
             if isinstance(existing, dict)
         }
+        _drop_superseded_active_events(existing_by_date, event, reference_date)
         existing = existing_by_date.get(event["earnings_date"])
         merged = _merge_event(existing, event, now_text)
         existing_by_date[event["earnings_date"]] = merged
@@ -525,6 +529,68 @@ def _merge_event(existing: dict[str, Any] | None, new: dict[str, Any], now_text:
 
     merged.setdefault("first_seen_at", existing.get("first_seen_at") or now_text)
     return normalize_event(merged) or merged
+
+
+def _drop_superseded_active_events(
+    existing_by_date: dict[str, dict[str, Any]],
+    new: dict[str, Any],
+    reference_date: date,
+) -> None:
+    new_date = parse_date(new.get("earnings_date"))
+    if new_date is None or new_date < reference_date:
+        return
+    for existing_date_text, existing in list(existing_by_date.items()):
+        if existing_date_text == new.get("earnings_date"):
+            continue
+        if _new_event_supersedes_existing_active_date(existing, new, reference_date):
+            existing_by_date.pop(existing_date_text, None)
+
+
+def _new_event_supersedes_existing_active_date(
+    existing: dict[str, Any],
+    new: dict[str, Any],
+    reference_date: date,
+) -> bool:
+    existing_date = parse_date(existing.get("earnings_date"))
+    new_date = parse_date(new.get("earnings_date"))
+    if existing_date is None or new_date is None:
+        return False
+    if existing_date < reference_date or new_date < reference_date:
+        return False
+
+    old_rank = _event_source_priority(existing)
+    new_rank = _event_source_priority(new)
+    if new_rank < old_rank:
+        return False
+    if new_rank == old_rank and _event_sources(existing).isdisjoint(_event_sources(new)):
+        return False
+
+    existing_quarter = str(existing.get("fiscal_quarter") or "").strip()
+    new_quarter = str(new.get("fiscal_quarter") or "").strip()
+    if existing_quarter and new_quarter:
+        return existing_quarter == new_quarter
+
+    return abs((existing_date - new_date).days) <= ACTIVE_FUTURE_SUPERSESSION_WINDOW_DAYS
+
+
+def _event_sources(event: dict[str, Any]) -> set[str]:
+    raw_sources = event.get("sources", [])
+    if isinstance(raw_sources, str):
+        source_values = [raw_sources]
+    else:
+        source_values = raw_sources if isinstance(raw_sources, (list, tuple, set)) else []
+    sources = {
+        str(event.get("source") or "").strip().lower(),
+        *[str(value).strip().lower() for value in source_values if str(value).strip()],
+    }
+    raw_fields = event.get("raw_provider_fields")
+    if isinstance(raw_fields, dict):
+        sources.update(str(key).strip().lower() for key in raw_fields if str(key).strip())
+    return sources - {""}
+
+
+def _event_source_priority(event: dict[str, Any]) -> int:
+    return max((SOURCE_PRIORITY.get(source, 0) for source in _event_sources(event)), default=0)
 
 
 def _new_session_is_better(existing: dict[str, Any], new: dict[str, Any]) -> bool:

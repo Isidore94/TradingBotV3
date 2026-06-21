@@ -189,6 +189,26 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(tag, "d1_flag_short")
         self.assertEqual(len(bot.emitted_master_avwap_d1_flags), 2)
 
+    def test_d1_upgrade_watch_uses_watch_prefix(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+
+        message = bot._format_master_avwap_d1_flag_event(
+            {
+                "symbol": "MSFT",
+                "direction": "long",
+                "label": "1st-dev break",
+                "source": "watchlist_upgrade_target",
+                "target_tier": "A/S",
+                "trigger_id": "first_dev_break:UPPER_1:103.0000",
+                "level_label": "UPPER_1",
+                "level": 103.0,
+                "reason": "A/S upgrade target: clear UPPER_1 resistance.",
+            }
+        )
+
+        self.assertIn("MASTER_AVWAP_D1_UPGRADE_WATCH: MSFT", message)
+        self.assertIn("A/S upgrade: 1st-dev break", message)
+
     def test_d1_preloaded_trigger_emits_on_intraday_cross_once(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
         bot.master_avwap_d1_watchlist = {

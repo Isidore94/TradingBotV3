@@ -21,6 +21,7 @@ class WatchlistEditorPanel:
         self._loading = False
         self._save_after_id = None
         self.add_symbol_var = tk.StringVar()
+        self.status_var = tk.StringVar()
         self._build_layout()
         self.refresh_from_disk()
 
@@ -31,28 +32,32 @@ class WatchlistEditorPanel:
         header = ttk.Frame(self.container)
         header.pack(fill=tk.X, padx=10, pady=(10, 6))
 
-        ttk.Label(header, text=self.title).pack(side=tk.LEFT)
-        actions = ttk.Frame(header)
-        actions.pack(side=tk.RIGHT)
+        ttk.Label(header, text=self.title, font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+        actions = ttk.Frame(self.container)
+        actions.pack(fill=tk.X, padx=10, pady=(0, 6))
         self.add_symbol_entry = ttk.Entry(actions, textvariable=self.add_symbol_var, width=12)
         self.add_symbol_entry.pack(side=tk.LEFT)
         self.add_symbol_entry.bind("<Return>", self._on_add_symbol_return)
         ttk.Button(actions, text="Add", command=self.add_symbol).pack(side=tk.LEFT, padx=(6, 12))
-        ttk.Button(actions, text="Dedupe", command=self.force_save).pack(side=tk.LEFT)
+        ttk.Button(actions, text="Save / Dedupe", command=self.force_save).pack(side=tk.LEFT)
+        ttk.Button(actions, text="Sort A-Z", command=self.sort_symbols).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(actions, text="Paste", command=self.paste_symbols).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(actions, text="Copy", command=self.copy_symbols).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(actions, text="Refresh", command=self.refresh_from_disk).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(actions, text="Open Folder", command=self.open_folder).pack(side=tk.LEFT, padx=(6, 0))
 
-        hint = ttk.Label(self.container, text=f"{self.path.name} auto-saves and removes duplicates.")
-        hint.pack(anchor="w", padx=10, pady=(0, 6))
+        status = ttk.Label(self.container, textvariable=self.status_var, anchor="w", justify=tk.LEFT, wraplength=620)
+        status.pack(fill=tk.X, padx=10, pady=(0, 6))
 
         self.text_area = scrolledtext.ScrolledText(
             self.container,
             wrap=tk.WORD,
-            font=("Courier New", 10),
+            font=("Courier New", 11),
             bg=INPUT_GREY,
             fg=TEXT_COLOR,
             insertbackground=TEXT_COLOR,
+            undo=True,
+            maxundo=100,
         )
         self.text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         self.text_area.bind("<<Modified>>", self._on_modified)
@@ -71,10 +76,17 @@ class WatchlistEditorPanel:
         finally:
             self._loading = False
 
+    def _set_status_from_symbols(self, symbols: list[str], action: str) -> None:
+        count = len(symbols)
+        label = "symbol" if count == 1 else "symbols"
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_var.set(f"{self.path.name} | {count} {label} | {action} {timestamp} | {self.path}")
+
     def _write_symbols(self, symbols: list[str], notify: bool) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("\n".join(symbols), encoding="utf-8")
         self._set_text_from_symbols(symbols)
+        self._set_status_from_symbols(symbols, "saved")
         if notify:
             self.on_symbols_saved(self, symbols)
 
@@ -93,9 +105,11 @@ class WatchlistEditorPanel:
 
     def refresh_from_disk(self) -> None:
         if not self.path.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text("", encoding="utf-8")
         symbols = self._normalize_symbols(self.path.read_text(encoding="utf-8"))
         self._write_symbols(symbols, notify=False)
+        self._set_status_from_symbols(symbols, "loaded")
 
     def force_save(self) -> None:
         if self._save_after_id:
@@ -107,6 +121,11 @@ class WatchlistEditorPanel:
         symbols = self._normalize_symbols(self.text_area.get("1.0", tk.END))
         self.container.clipboard_clear()
         self.container.clipboard_append(", ".join(symbols))
+        self._set_status_from_symbols(symbols, "copied")
+
+    def sort_symbols(self) -> None:
+        symbols = sorted(self._normalize_symbols(self.text_area.get("1.0", tk.END)))
+        self._write_symbols(symbols, notify=True)
 
     def paste_symbols(self) -> None:
         try:
@@ -146,6 +165,9 @@ class WatchlistEditorPanel:
         filtered = [symbol for symbol in current_symbols if symbol not in symbols_to_remove]
         if filtered != current_symbols:
             self._write_symbols(filtered, notify=False)
+
+    def open_folder(self) -> None:
+        _open_folder(self.path.parent)
 
 
 class WatchlistEditorArea:

@@ -60,6 +60,7 @@ from master_avwap_shared import (
     build_master_avwap_second_stdev_cross_map,
     describe_master_avwap_focus,
     describe_master_avwap_second_stdev_cross,
+    load_master_avwap_d1_upgrade_alerts as load_master_avwap_d1_upgrade_alerts_map,
     load_master_avwap_d1_watchlist as load_master_avwap_d1_watchlist_map,
     load_master_avwap_events_for_date,
     load_master_avwap_focus_map,
@@ -87,6 +88,7 @@ from project_paths import (
     INDUSTRY_ETF_MAP_FILE,
     SYMBOL_CLASSIFICATION_CACHE_FILE,
     MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
     MASTER_AVWAP_D1_WATCHLIST_FILE,
     APP_LOG_BACKUP_COUNT,
     get_tracker_storage_details,
@@ -111,6 +113,7 @@ INTRADAY_BOUNCE_PERFORMANCE_CSV = INTRADAY_BOUNCE_CANDIDATES_CSV.with_name("intr
 INTRADAY_BOUNCE_PERFORMANCE_REPORT = REPORTS_DIR / "intraday_bounce_performance.txt"
 MASTER_AVWAP_SIGNALS_FILENAME = AVWAP_SIGNALS_FILE
 MASTER_AVWAP_FOCUS_FILENAME = MASTER_AVWAP_FOCUS_FILE
+MASTER_AVWAP_D1_UPGRADE_ALERTS_FILENAME = MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE
 MASTER_AVWAP_D1_WATCHLIST_FILENAME = MASTER_AVWAP_D1_WATCHLIST_FILE
 STRENGTH_SCAN_LOG_FILENAME = RRS_STRENGTH_LOG_FILE
 GROUP_STRENGTH_SCAN_LOG_FILENAME = RRS_GROUP_STRENGTH_LOG_FILE
@@ -1514,6 +1517,7 @@ class BounceBot(EWrapper, EClient):
         self.emitted_master_avwap_events = set()
         self.master_avwap_focus_map = {}
         self.master_avwap_second_stdev_cross_map = {}
+        self.master_avwap_d1_upgrade_alerts = {}
         self.master_avwap_d1_watchlist = {}
         self.emitted_master_avwap_focus_alerts = set()
         self.emitted_master_avwap_second_stdev_alerts = set()
@@ -2237,8 +2241,15 @@ class BounceBot(EWrapper, EClient):
             watchlist_path=MASTER_AVWAP_D1_WATCHLIST_FILENAME,
         )
 
+    def load_master_avwap_d1_upgrade_alerts(self):
+        self.master_avwap_d1_upgrade_alerts = load_master_avwap_d1_upgrade_alerts_map(
+            alerts_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_FILENAME,
+        )
+
     def get_master_avwap_d1_watch_symbols(self):
-        return sorted(self.master_avwap_d1_watchlist.keys())
+        symbols = set(getattr(self, "master_avwap_d1_watchlist", {}).keys())
+        symbols.update(getattr(self, "master_avwap_d1_upgrade_alerts", {}).keys())
+        return sorted(symbols)
 
     def get_symbol_direction(self, symbol):
         symbol = str(symbol or "").strip().upper()
@@ -2253,6 +2264,13 @@ class BounceBot(EWrapper, EClient):
 
         watch_entry = self.master_avwap_d1_watchlist.get(symbol) or {}
         side = str(watch_entry.get("side") or "").strip().upper()
+        if side == "LONG":
+            return "long"
+        if side == "SHORT":
+            return "short"
+
+        upgrade_entry = getattr(self, "master_avwap_d1_upgrade_alerts", {}).get(symbol) or {}
+        side = str(upgrade_entry.get("side") or "").strip().upper()
         if side == "LONG":
             return "long"
         if side == "SHORT":
@@ -2288,7 +2306,11 @@ class BounceBot(EWrapper, EClient):
 
     def _find_master_avwap_intraday_trigger_events(self, symbol, today_df):
         symbol = str(symbol or "").strip().upper()
-        watch_entry = self.master_avwap_d1_watchlist.get(symbol) or {}
+        watch_entry = (
+            getattr(self, "master_avwap_d1_upgrade_alerts", {}).get(symbol)
+            or getattr(self, "master_avwap_d1_watchlist", {}).get(symbol)
+            or {}
+        )
         if not watch_entry or not bool(watch_entry.get("active_current_scan")):
             return []
 
@@ -2377,6 +2399,8 @@ class BounceBot(EWrapper, EClient):
                     "bar_low": low_value,
                     "bar_time": bar_time.isoformat(timespec="minutes") if bar_time else "",
                     "trigger_source": str(trigger.get("source") or "").strip(),
+                    "target_tier": str(trigger.get("target_tier") or "").strip(),
+                    "upgrade_only": bool(trigger.get("upgrade_only")),
                 }
             )
         return events
@@ -2410,6 +2434,9 @@ class BounceBot(EWrapper, EClient):
         score = event.get("priority_score")
         suffix_parts = []
         level_value = self._master_avwap_trigger_float(event.get("level"))
+        target_tier = str(event.get("target_tier") or "").strip()
+        if target_tier and "upgrade" not in label.lower():
+            label = f"{target_tier} upgrade: {label}"
         if event.get("trigger_id") and level_value is not None:
             level_label = str(event.get("level_label") or "").strip()
             label = f"{label} {level_label}@{level_value:.2f}".strip()
@@ -2426,7 +2453,12 @@ class BounceBot(EWrapper, EClient):
         if source:
             suffix_parts.append(f"source={source}")
         suffix = f" [{'; '.join(suffix_parts)}]" if suffix_parts else ""
-        return f"MASTER_AVWAP_D1_FLAG: {symbol} ({direction or 'watch'}) {label}{suffix}"
+        prefix = (
+            "MASTER_AVWAP_D1_UPGRADE_WATCH"
+            if source == "watchlist_upgrade_target"
+            else "MASTER_AVWAP_D1_FLAG"
+        )
+        return f"{prefix}: {symbol} ({direction or 'watch'}) {label}{suffix}"
 
     def _build_master_avwap_d1_flag_events(self):
         return build_master_avwap_d1_flag_events(
@@ -2434,6 +2466,7 @@ class BounceBot(EWrapper, EClient):
             self.master_avwap_events,
             self.master_avwap_d1_watchlist,
             trade_date=datetime.now().date(),
+            d1_upgrade_alerts=getattr(self, "master_avwap_d1_upgrade_alerts", {}),
         )
 
     def _master_avwap_d1_flag_key(self, event, today_iso=None):
@@ -4164,6 +4197,7 @@ class BounceBot(EWrapper, EClient):
     def run_rrs_scan(self, timeframe_key_override=None, emit_gui=True):
         self.load_master_avwap_focus()
         self.load_master_avwap_d1_watchlist()
+        self.load_master_avwap_d1_upgrade_alerts()
         threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
         if timeframe_key_override in RRS_TIMEFRAMES:
             timeframe_key = timeframe_key_override
@@ -6454,7 +6488,9 @@ class BounceBot(EWrapper, EClient):
                 self.shorts = read_tickers(SHORTS_FILENAME)
                 self.load_master_avwap_focus()
                 self.load_master_avwap_d1_watchlist()
+                self.load_master_avwap_d1_upgrade_alerts()
                 self.update_watchlists_from_master_avwap()
+                self.emit_master_avwap_d1_flags()
                 self.alerted_symbols.clear()
                 self.symbol_metrics = {}
                 self.latest_bars = {}
