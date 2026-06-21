@@ -23323,6 +23323,40 @@ def build_tracker_entry_attributes(
                 directional_ema15_distance_atr >= -POST_EARNINGS_EMA15_RECLAIM_BUFFER_ATR
                 and directional_ema15_distance_atr <= POST_EARNINGS_EMA15_ADD_ZONE_ATR
             )
+    top_daily_sma50_reclaim = bool(
+        row.get("top_pattern_daily_sma50_reclaim")
+        or symbol_entry.get("top_pattern_daily_sma50_reclaim")
+    )
+    top_daily_sma50_bounce = bool(
+        row.get("top_pattern_daily_sma50_bounce")
+        or symbol_entry.get("top_pattern_daily_sma50_bounce")
+    )
+    top_weekly_sma50_entry = bool(
+        row.get("top_pattern_weekly_sma50_entry")
+        or symbol_entry.get("top_pattern_weekly_sma50_entry")
+    )
+    top_weekly_sma50_retest_recent = bool(
+        row.get("top_pattern_weekly_sma50_retest_recent")
+        or symbol_entry.get("top_pattern_weekly_sma50_retest_recent")
+    )
+    top_avwape_retest = bool(row.get("top_pattern_avwape_retest") or symbol_entry.get("top_pattern_avwape_retest"))
+    top_entry_timing_styles = []
+    if top_daily_sma50_bounce:
+        top_entry_timing_styles.append("daily_50sma_bounce")
+    if top_daily_sma50_reclaim:
+        top_entry_timing_styles.append("daily_50sma_reclaim")
+    if top_weekly_sma50_entry:
+        top_entry_timing_styles.append("weekly_50sma_test")
+    if top_weekly_sma50_retest_recent:
+        top_entry_timing_styles.append("recent_weekly_50sma_support")
+    if top_avwape_retest:
+        top_entry_timing_styles.append("avwape_retest")
+    top_recent_sma_bounce_entry = bool(
+        top_daily_sma50_bounce
+        or top_daily_sma50_reclaim
+        or top_weekly_sma50_entry
+        or top_weekly_sma50_retest_recent
+    )
 
     add(
         "setup.side",
@@ -23443,6 +23477,22 @@ def build_tracker_entry_attributes(
         label="TOP entry trigger",
         value_type="text",
         description="The specific trigger that made the weekly TOP pattern actionable.",
+    )
+    add(
+        "setup.top_pattern_entry_timing_styles",
+        top_entry_timing_styles,
+        group="setup",
+        label="TOP entry timing styles",
+        value_type="list",
+        description="Entry timing tags for TOP patterns, including daily/weekly SMA bounce support and AVWAPE retests.",
+    )
+    add(
+        "setup.top_pattern_recent_sma_bounce_entry",
+        top_recent_sma_bounce_entry,
+        group="setup",
+        label="TOP recent SMA bounce entry",
+        value_type="bool",
+        description="Whether the TOP setup was timed from recent daily/weekly SMA bounce or reclaim support.",
     )
     add(
         "setup.preferred_swing_focus",
@@ -23881,7 +23931,7 @@ def build_tracker_entry_attributes(
     )
     add(
         "pattern.top_pattern_weekly_sma50_retest_recent",
-        bool(row.get("top_pattern_weekly_sma50_retest_recent") or symbol_entry.get("top_pattern_weekly_sma50_retest_recent")),
+        top_weekly_sma50_retest_recent,
         group="pattern",
         label="TOP weekly 50SMA retest recent",
         value_type="bool",
@@ -23889,7 +23939,7 @@ def build_tracker_entry_attributes(
     )
     add(
         "pattern.top_pattern_daily_sma50_reclaim",
-        bool(row.get("top_pattern_daily_sma50_reclaim") or symbol_entry.get("top_pattern_daily_sma50_reclaim")),
+        top_daily_sma50_reclaim,
         group="pattern",
         label="TOP daily 50SMA reclaim",
         value_type="bool",
@@ -23897,15 +23947,31 @@ def build_tracker_entry_attributes(
     )
     add(
         "pattern.top_pattern_daily_sma50_bounce",
-        bool(row.get("top_pattern_daily_sma50_bounce") or symbol_entry.get("top_pattern_daily_sma50_bounce")),
+        top_daily_sma50_bounce,
         group="pattern",
         label="TOP daily 50SMA bounce",
         value_type="bool",
         description="Whether the latest daily candle tested and held the 50SMA for a TOP entry.",
     )
     add(
+        "pattern.top_pattern_weekly_sma50_entry",
+        top_weekly_sma50_entry,
+        group="pattern",
+        label="TOP weekly 50SMA entry",
+        value_type="bool",
+        description="Whether the latest daily candle tested and held the weekly 50SMA for a TOP entry.",
+    )
+    add(
+        "pattern.top_pattern_recent_sma_bounce_entry",
+        top_recent_sma_bounce_entry,
+        group="pattern",
+        label="TOP recent SMA bounce entry",
+        value_type="bool",
+        description="Whether the TOP entry timing came from daily or weekly SMA support rather than a pure strength watch.",
+    )
+    add(
         "pattern.top_pattern_avwape_retest",
-        bool(row.get("top_pattern_avwape_retest") or symbol_entry.get("top_pattern_avwape_retest")),
+        top_avwape_retest,
         group="pattern",
         label="TOP AVWAPE retest",
         value_type="bool",

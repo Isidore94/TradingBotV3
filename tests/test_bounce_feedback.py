@@ -704,6 +704,101 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(vwap_row["recommendation"], "focus")
         self.assertIn("DT focus candidates", report_text)
 
+    def test_intraday_bounce_performance_segments_top_pattern_h1_ema15_entries(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            candidates_path = temp_path / "intraday_bounce_candidates.csv"
+            outcomes_path = temp_path / "intraday_bounce_outcomes.csv"
+
+            pd.DataFrame(
+                [
+                    {
+                        "event_id": "TOPS_h1_1",
+                        "event_type": "confirmed",
+                        "logged_at": "2026-06-01T10:00:00",
+                        "trade_date": "2026-06-01",
+                        "symbol": "TOPS",
+                        "direction": "long",
+                        "bounce_types": "h1_ema_15",
+                        "score": 42,
+                        "risk_per_share": 0.50,
+                        "rrs_spy": 1.0,
+                        "market_environment": "bullish",
+                        "master_avwap_setup_family": "top_pattern_tracking",
+                        "master_avwap_h1_focus_type": "top_pattern",
+                    },
+                    {
+                        "event_id": "TOPX_h1_2",
+                        "event_type": "confirmed",
+                        "logged_at": "2026-06-01T11:00:00",
+                        "trade_date": "2026-06-01",
+                        "symbol": "TOPX",
+                        "direction": "long",
+                        "bounce_types": "h1_ema_15",
+                        "score": 43,
+                        "risk_per_share": 0.55,
+                        "rrs_spy": 1.2,
+                        "market_environment": "bullish",
+                        "master_avwap_setup_family": "top_pattern",
+                        "master_avwap_h1_focus_type": "top_pattern",
+                    },
+                ]
+            ).to_csv(candidates_path, index=False)
+            pd.DataFrame(
+                [
+                    {
+                        "event_id": "TOPS_h1_1",
+                        "event_type": "final",
+                        "logged_at": "2026-06-01T13:10:00",
+                        "entry_time": "2026-06-01T10:00:00",
+                        "bars_elapsed": 24,
+                        "close_r": 0.70,
+                        "mfe_r": 1.1,
+                        "mae_r": -0.2,
+                        "target_1r_hit": True,
+                        "target_2r_hit": False,
+                        "stop_hit": False,
+                        "status": "eod_complete",
+                    },
+                    {
+                        "event_id": "TOPX_h1_2",
+                        "event_type": "final",
+                        "logged_at": "2026-06-01T13:10:00",
+                        "entry_time": "2026-06-01T11:00:00",
+                        "bars_elapsed": 18,
+                        "close_r": 0.50,
+                        "mfe_r": 0.9,
+                        "mae_r": -0.1,
+                        "target_1r_hit": False,
+                        "target_2r_hit": False,
+                        "stop_hit": False,
+                        "status": "eod_complete",
+                    },
+                ]
+            ).to_csv(outcomes_path, index=False)
+
+            rows = bounce_bot.build_intraday_bounce_performance_rows(
+                candidates_path=candidates_path,
+                outcomes_path=outcomes_path,
+                min_samples=2,
+            )
+
+        h1_focus_row = next(
+            row for row in rows
+            if row["dimension"] == "master_avwap_h1_focus_type"
+            and row["segment"] == "top_pattern"
+            and row["direction"] == "long"
+        )
+        timing_row = next(
+            row for row in rows
+            if row["dimension"] == "top_pattern_entry_timing"
+            and row["segment"] == "h1_15ema_bounce"
+            and row["direction"] == "long"
+        )
+        self.assertEqual(h1_focus_row["sample_count"], 2)
+        self.assertEqual(timing_row["sample_count"], 2)
+        self.assertEqual(timing_row["recommendation"], "focus")
+
     def test_intraday_bounce_performance_recommendation_categories_with_old_optional_columns_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

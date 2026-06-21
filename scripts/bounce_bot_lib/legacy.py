@@ -393,6 +393,7 @@ BOUNCE_CANDIDATE_EVENT_COLUMNS = [
     "master_avwap_focus_label",
     "master_avwap_priority_bucket",
     "master_avwap_setup_family",
+    "master_avwap_h1_focus_type",
     "candles_waited",
     "levels_json",
     "candle_json",
@@ -902,6 +903,7 @@ def build_intraday_bounce_performance_rows(
         "master_avwap_focus_label",
         "master_avwap_priority_bucket",
         "master_avwap_setup_family",
+        "master_avwap_h1_focus_type",
     ]
     outcome_columns = [
         "event_id",
@@ -989,8 +991,15 @@ def build_intraday_bounce_performance_rows(
                 "master_avwap_setup_family",
                 str(record.get("master_avwap_setup_family") or "none").strip() or "none",
             ),
+            (
+                "master_avwap_h1_focus_type",
+                str(record.get("master_avwap_h1_focus_type") or "none").strip() or "none",
+            ),
         ]
         dimensions.extend(("bounce_type", bounce_type) for bounce_type in bounce_types)
+        h1_focus_type = str(record.get("master_avwap_h1_focus_type") or "").strip().lower()
+        if h1_focus_type == "top_pattern" and "h1_ema_15" in bounce_types:
+            dimensions.append(("top_pattern_entry_timing", "h1_15ema_bounce"))
         for dimension, segment in dimensions:
             observations.append({**common, "dimension": dimension, "segment": segment})
 
@@ -1870,6 +1879,13 @@ class BounceBot(EWrapper, EClient):
         metrics = self.symbol_metrics.get(symbol, {})
         focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
         focus_label = self._describe_master_avwap_focus(focus_entry) if isinstance(focus_entry, dict) else ""
+        level_names = {str(key) for key in (levels or {}).keys()}
+        master_avwap_h1_focus_type = ""
+        if bool(level_names & {"h1_ema_15", "h1_sma_20"}):
+            if "h1_ema_15" in level_names and self._is_top_pattern_h1_entry_focus(symbol, direction):
+                master_avwap_h1_focus_type = "top_pattern"
+            elif self._is_mid_earnings_h1_bounce_focus(symbol, direction):
+                master_avwap_h1_focus_type = "mid_earnings"
         row = {
             "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
             "event_id": event_id,
@@ -1909,6 +1925,7 @@ class BounceBot(EWrapper, EClient):
                 if isinstance(focus_entry, dict)
                 else ""
             ),
+            "master_avwap_h1_focus_type": master_avwap_h1_focus_type,
             "candles_waited": int(candles_waited or 0),
             "levels_json": self._json_for_learning(levels or {}),
             "candle_json": self._json_for_learning({"bounce": bounce_candle, "current": current_candle}),
