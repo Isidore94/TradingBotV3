@@ -563,6 +563,7 @@ def build_daily_markdown(report: dict) -> str:
         ]
     )
     lines.extend(f"- {item}" for item in posture)
+    lines.extend(_ai_summary_markdown(report.get("ai_summary")))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -746,7 +747,23 @@ def build_weekly_markdown(report: dict) -> str:
         ]
     )
     lines.extend(f"- {item}" for item in swing_conditions)
+    lines.extend(_ai_summary_markdown(report.get("ai_summary")))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def attach_ai_summary_to_report(report: dict, ai_summary: dict) -> dict:
+    updated = dict(report or {})
+    updated["ai_summary"] = ai_summary if isinstance(ai_summary, dict) else {}
+    report_type = str(updated.get("report_type") or "").lower()
+    if report_type == "weekly":
+        updated["markdown"] = build_weekly_markdown(updated)
+    elif report_type == "daily":
+        updated["markdown"] = build_daily_markdown(updated)
+    else:
+        markdown = str(updated.get("markdown") or "").rstrip()
+        ai_lines = _ai_summary_markdown(updated.get("ai_summary"))
+        updated["markdown"] = (markdown + "\n\n" + "\n".join(ai_lines).strip()).strip() + "\n"
+    return updated
 
 
 def _daily_top_focus_markdown(
@@ -1400,6 +1417,9 @@ def build_earnings_report(payload: dict, *, title: str = "Earnings Calendar") ->
     yfinance_lines = _yfinance_status_markdown(payload)
     if yfinance_lines:
         lines.extend(yfinance_lines)
+    filter_lines = _earnings_filter_markdown(payload)
+    if filter_lines:
+        lines.extend(filter_lines)
     lines.append("")
 
     if not earnings:
@@ -1461,6 +1481,23 @@ def build_earnings_report(payload: dict, *, title: str = "Earnings Calendar") ->
         lines.extend(["", f"Watchlist symbols checked: {len(tickers)}"])
 
     return "\n".join(lines).rstrip()
+
+
+def _earnings_filter_markdown(payload: dict) -> list[str]:
+    filters = payload.get("filters") if isinstance(payload, dict) else {}
+    if not isinstance(filters, dict) or not filters.get("enabled"):
+        return []
+    min_market_cap = _market_cap_plain_text(filters.get("min_market_cap"))
+    min_volume = _share_volume_text(filters.get("min_average_volume"))
+    removed = int(filters.get("removed_count") or 0)
+    prefilter_removed = int(filters.get("prefilter_removed_count") or 0)
+    removed_unknown = int(filters.get("removed_unknown_count") or 0)
+    parts = [f"min market cap {min_market_cap}", f"min avg volume {min_volume} shares"]
+    if prefilter_removed or removed:
+        parts.append(f"filtered out {prefilter_removed + removed} row(s)")
+    if removed_unknown:
+        parts.append(f"{removed_unknown} unknown cap/volume")
+    return [f"Filter: {'; '.join(parts)}"]
 
 
 def build_watchlist_risk_report(payload: dict, *, title: str = "Watchlist Risk Scan") -> str:
@@ -2173,6 +2210,39 @@ def _headline_line(headline: dict) -> str:
     return detail
 
 
+def _ai_summary_markdown(payload) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    summary = str(payload.get("summary") or "").strip()
+    status = str(payload.get("status_label") or payload.get("status") or "").strip()
+    message = str(payload.get("message") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    generated_at = str(payload.get("generated_at") or "").strip()
+    lines = ["", "## AI Macro Brief", ""]
+    if summary:
+        lines.append(summary)
+    elif message:
+        lines.append(message)
+    else:
+        lines.append("No AI macro brief generated.")
+    details = []
+    if model:
+        details.append(f"model={model}")
+    if status:
+        details.append(f"status={status}")
+    if generated_at:
+        details.append(f"generated_at={generated_at}")
+    if details:
+        lines.extend(["", "- " + " | ".join(details)])
+    articles = payload.get("used_articles") if isinstance(payload.get("used_articles"), list) else []
+    if articles:
+        lines.append("- Articles read: " + ", ".join(str(item.get("title") or "").strip() for item in articles[:5] if isinstance(item, dict) and str(item.get("title") or "").strip()))
+    links = payload.get("used_links") if isinstance(payload.get("used_links"), list) else []
+    if links:
+        lines.append("- Links sent: " + ", ".join(str(item.get("title") or item.get("url") or "").strip() for item in links[:5] if isinstance(item, dict) and str(item.get("title") or item.get("url") or "").strip()))
+    return lines
+
+
 def _youtube_links_markdown(payload: dict, *, limit: int = 10) -> list[str]:
     videos = payload.get("videos") if isinstance(payload, dict) else []
     videos = videos if isinstance(videos, list) else []
@@ -2328,6 +2398,22 @@ def _market_cap_text(row: dict) -> str:
         if abs(amount) >= divisor:
             return f"${amount / divisor:.2f}{suffix}"
     return f"${amount:,.0f}"
+
+
+def _market_cap_plain_text(value) -> str:
+    return _market_cap_text({"market_cap": value})
+
+
+def _share_volume_text(value) -> str:
+    try:
+        numeric = int(float(value))
+    except (TypeError, ValueError):
+        return "unknown"
+    amount = float(max(0, numeric))
+    for suffix, divisor in (("B", 1_000_000_000), ("M", 1_000_000), ("K", 1_000)):
+        if amount >= divisor:
+            return f"{amount / divisor:.1f}{suffix}"
+    return f"{amount:,.0f}"
 
 
 def _earnings_source_text(row: dict) -> str:

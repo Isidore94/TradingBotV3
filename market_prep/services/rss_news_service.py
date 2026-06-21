@@ -150,6 +150,7 @@ def fetch_rss_headlines(
                     "summary": summary,
                     "category": category,
                     "query": query,
+                    "summary": summary,
                     "tags": tags,
                 }
             )

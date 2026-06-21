@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""GUI-first Master AVWAP scheduler for an always-on Windows mini PC."""
+"""Headless-first Master AVWAP scheduler for an always-on Windows mini PC.
+
+The scan itself delegates to :func:`master_avwap.run_master`; this file is the
+mini-PC wrapper that keeps scheduling, watchlist filtering, and the phone-safe
+status package around the shared scanner.
+"""
 
 from __future__ import annotations
 
@@ -63,6 +68,8 @@ from project_paths import (
     MASTER_AVWAP_SCORING_CONFIG_FILE,
     MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE,
     MASTER_AVWAP_SCORING_TUNER_REPORT_FILE,
+    MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
+    MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE,
     MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE,
     MASTER_AVWAP_SETUP_ATTRIBUTES_FILE,
     MASTER_AVWAP_SETUP_DAILY_FILE,
@@ -70,6 +77,10 @@ from project_paths import (
     MASTER_AVWAP_SETUP_STATS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
     MASTER_AVWAP_STDEV_REPORT_FILE,
+    MASTER_AVWAP_TIER_CATCH_RATE_FILE,
+    MASTER_AVWAP_TIER_LIST_FILE,
+    MASTER_AVWAP_TIER_OUTCOMES_FILE,
+    MASTER_AVWAP_TIER_PERFORMANCE_FILE,
     MASTER_AVWAP_TRADINGVIEW_REPORT_FILE,
     PERSISTENT_RUNTIME_DATA_DIR,
     SHORTS_FILE,
@@ -77,6 +88,7 @@ from project_paths import (
     SWING_SHORTS_FILE,
     get_tracker_storage_details,
 )
+from watchlist_utils import WATCHLIST_SYMBOL_RE, count_watchlist_symbols
 
 STATUS_FILE = LONGS_FILE.parent / "master_avwap_mini_pc_status.txt"
 STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc_state.json"
@@ -84,6 +96,9 @@ LOCK_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc.lock"
 SCHEDULER_LOG_FILE = LOG_DIR / "master_avwap_mini_pc.log"
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 STATUS_PREVIEW_RUNS = 8
+STATUS_TOP_TRADE_LIMIT = 10
+STATUS_PRIORITY_PREVIEW_LINES = 120
+STATUS_MAIN_REPORT_PREVIEW_LINES = 180
 SLEEP_POLL_SECONDS = 30
 STALE_LOCK_MAX_AGE = timedelta(hours=12)
 GUI_TICK_MS = 15_000
@@ -92,7 +107,6 @@ JOURNAL_EOD_FINAL_STATUSES = {"success", "failed", "dry_run"}
 WATCHLIST_FILTER_CLIENT_ID = 1005
 SETUP_TRACKER_SYNC_CLIENT_ID = 1006
 WATCHLIST_FILTER_DAYS = 5
-WATCHLIST_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 
 _LOCK_ACQUIRED = False
@@ -295,19 +309,6 @@ def get_next_pending_slot(state: dict[str, Any], schedule: list[str], now: datet
     return None
 
 
-def count_watchlist_symbols(path: Path) -> int:
-    if not path.exists():
-        return 0
-    seen = set()
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            symbol = str(line).strip().upper()
-            if not symbol or symbol.startswith("SYMBOLS FROM TC2000"):
-                continue
-            seen.add(symbol)
-    return len(seen)
-
-
 def read_text(path: Path) -> str:
     if not path.exists():
         return ""
@@ -339,6 +340,170 @@ def extract_priority_tier_preview(report_text: str, max_lines: int = 18) -> str:
     preview_lines = [line.rstrip() for line in lines[start_index:end_index]]
     preview_lines = [line for line in preview_lines if line.strip() and set(line.strip()) != {"="}]
     return "\n".join(preview_lines[:max(1, int(max_lines))]).strip()
+def _shorten_status_text(value: Any, limit: int = 150) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _tail_or_head_lines(text: str, max_lines: int, *, mode: str = "head") -> list[str]:
+    lines = [line.rstrip() for line in str(text or "").splitlines()]
+    if len(lines) <= max_lines:
+        return lines
+    if mode == "tail":
+        return [f"... showing last {max_lines} lines ...", *lines[-max_lines:]]
+    return [*lines[:max_lines], f"... showing first {max_lines} lines ..."]
+
+
+def _parse_priority_ranked_rows(report_text: str, limit: int = STATUS_TOP_TRADE_LIMIT) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    in_ranked_block = False
+    pattern = re.compile(
+        r"^([A-Z0-9.\-]+)\s+(LONG|SHORT)\s+score=([^\s]+)\s+family=(.*?)\s+bucket=([^\s]+)\s*$",
+        re.IGNORECASE,
+    )
+
+    for raw_line in str(report_text or "").splitlines():
+        line = raw_line.strip()
+        if not in_ranked_block:
+            if line.lower() == "ranked by total score":
+                in_ranked_block = True
+            continue
+        if not line:
+            if rows:
+                break
+            continue
+        if set(line) <= {"-"}:
+            continue
+        match = pattern.match(line)
+        if not match:
+            continue
+        rows.append(
+            {
+                "symbol": match.group(1).upper(),
+                "side": match.group(2).upper(),
+                "score": match.group(3),
+                "family": match.group(4).strip(),
+                "bucket": match.group(5).strip(),
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _parse_priority_detail_map(report_text: str) -> dict[str, dict[str, str]]:
+    details: dict[str, dict[str, str]] = {}
+    current_symbol = ""
+    row_pattern = re.compile(
+        r"^\s+([A-Z0-9.\-]+)\s+(LONG|SHORT)\s+score=([^\s]+)\s+family=(.*?)\s+trend=([^\s]+)\s+zone=(.*)$",
+        re.IGNORECASE,
+    )
+    field_pattern = re.compile(r"^\s+(signals|score notes|setup notes):\s*(.*)$", re.IGNORECASE)
+
+    for raw_line in str(report_text or "").splitlines():
+        match = row_pattern.match(raw_line)
+        if match:
+            current_symbol = match.group(1).upper()
+            details.setdefault(
+                current_symbol,
+                {
+                    "trend": match.group(5).strip(),
+                    "zone": match.group(6).strip(),
+                },
+            )
+            continue
+        if not current_symbol:
+            continue
+        field_match = field_pattern.match(raw_line)
+        if not field_match:
+            continue
+        key = field_match.group(1).lower().replace(" ", "_")
+        details.setdefault(current_symbol, {})[key] = field_match.group(2).strip()
+    return details
+
+
+def _status_bucket_label(bucket: str) -> str:
+    normalized = str(bucket or "").strip().lower()
+    labels = {
+        "favorite_setup": "favorite",
+        "near_favorite_zone": "near",
+        "post_earnings_play": "post earnings",
+    }
+    return labels.get(normalized, normalized.replace("_", " ") or "tracked")
+
+
+def _format_ranked_trade_line(index: int, row: dict[str, str], detail_map: dict[str, dict[str, str]]) -> str:
+    symbol = str(row.get("symbol") or "").strip().upper()
+    details = detail_map.get(symbol, {})
+    parts = [
+        f"{index}. {symbol} {row.get('side', '')}",
+        f"score={row.get('score', 'n/a')}",
+        _status_bucket_label(row.get("bucket", "")),
+    ]
+    family = _shorten_status_text(row.get("family"), 42)
+    if family:
+        parts.append(family)
+    zone = _shorten_status_text(details.get("zone"), 50)
+    if zone and zone.lower() != "none":
+        parts.append(f"zone={zone}")
+    notes = details.get("setup_notes") or details.get("score_notes") or details.get("signals")
+    notes = _shorten_status_text(notes, 120)
+    if notes:
+        parts.append(notes)
+    return " | ".join(part for part in parts if part)
+
+
+def build_best_trade_snapshot_lines(
+    *,
+    priority_report: str,
+    favorite_symbols: list[str],
+    near_favorite_symbols: list[str],
+    theta_symbols: list[str],
+) -> list[str]:
+    focus_symbols = favorite_symbols + near_favorite_symbols
+    ranked_rows = _parse_priority_ranked_rows(priority_report)
+    detail_map = _parse_priority_detail_map(priority_report)
+
+    lines = [
+        "Best Trades First",
+        f"TV Paste: {_format_symbol_group(focus_symbols)}",
+        f"Favorite setups: {_format_symbol_group(favorite_symbols)}",
+        f"Near favorite zones: {_format_symbol_group(near_favorite_symbols)}",
+        f"Theta Paste: {_format_symbol_group(theta_symbols)}",
+        "Top ranked setups:",
+    ]
+    if ranked_rows:
+        for index, row in enumerate(ranked_rows, start=1):
+            lines.append(_format_ranked_trade_line(index, row, detail_map))
+    else:
+        lines.append("(No priority-ranked setups have been written yet.)")
+    return lines
+
+
+def _scan_result_followup_note(scan_result: dict[str, Any]) -> str:
+    if not isinstance(scan_result, dict):
+        return ""
+    if scan_result.get("theta_enrichment_pending"):
+        return (
+            "Theta strike/credit enrichment is still running in the background; "
+            "stock rankings and paste lists are ready now."
+        )
+    return ""
+
+
+def _append_filter_summary_message(filter_summary: Any, message: str) -> Any:
+    if not message or not isinstance(filter_summary, dict):
+        return filter_summary
+    updated = dict(filter_summary)
+    existing = str(updated.get("message") or "").strip()
+    if message in existing:
+        return updated
+    updated["message"] = f"{existing} {message}".strip() if existing else message
+    return updated
 
 
 def format_duration(seconds: float | None) -> str:
@@ -777,19 +942,24 @@ def filter_watchlists_by_previous_day_levels() -> dict[str, Any]:
     return summary
 
 
+def run_master_avwap_shared_scan(update_setup_tracker: bool = True) -> dict[str, Any]:
+    scan_result = run_master(
+        use_shared_watchlists=True,
+        update_setup_tracker=update_setup_tracker,
+        require_ib_for_setup_tracker=True,
+        include_theta=True,
+    )
+    return scan_result if isinstance(scan_result, dict) else {}
+
+
 def run_master_with_watchlist_filter(update_setup_tracker: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
     filter_summary = filter_watchlists_by_previous_day_levels()
     try:
-        scan_result = run_master(
-            use_shared_watchlists=True,
-            update_setup_tracker=update_setup_tracker,
-            require_ib_for_setup_tracker=True,
-            include_theta=True,
-        )
+        scan_result = run_master_avwap_shared_scan(update_setup_tracker=update_setup_tracker)
     except Exception as exc:
         setattr(exc, "watchlist_filter_summary", filter_summary)
         raise
-    return filter_summary, scan_result if isinstance(scan_result, dict) else {}
+    return filter_summary, scan_result
 
 
 def get_setup_tracker_refresh_slot_for_schedule(
@@ -972,9 +1142,18 @@ def write_status_file(
 
     lines = [
         "Master AVWAP Mini PC Status",
-        f"Theta Paste: {_format_symbol_group(theta_symbols)}",
-        f"TV Paste: {_format_symbol_group(favorite_focus_symbols)}",
+        "Headless wrapper: uses master_avwap.run_master(shared watchlists)",
+        "Ranking output is written before theta strike/credit enrichment finishes.",
         f"Generated at: {now.strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        *build_best_trade_snapshot_lines(
+            priority_report=priority_report,
+            favorite_symbols=favorite_symbols,
+            near_favorite_symbols=near_favorite_symbols,
+            theta_symbols=theta_symbols,
+        ),
+        "",
+        "Run Status",
         f"Phase: {phase}",
         f"Today's schedule: {', '.join(schedule)}",
         f"Stop time: {stop_at}",
@@ -992,6 +1171,10 @@ def write_status_file(
         f"EOD journal import: {format_eod_journal_import_summary(journal_eod_import)}",
         f"Journal DB: {JOURNAL_DB_FILE}",
         f"TV paste source: {tradingview_groups.get('source_label', 'Unknown')}",
+        "",
+        "Output Package",
+        f"Open first: {MASTER_AVWAP_PRIORITY_SETUPS_FILE}",
+        f"Phone status file: {STATUS_FILE}",
         f"Setup tracker: {MASTER_AVWAP_SETUP_TRACKER_FILE}",
         f"Setup scenarios CSV: {MASTER_AVWAP_SETUP_SCENARIOS_FILE}",
         f"Setup daily CSV: {MASTER_AVWAP_SETUP_DAILY_FILE}",
@@ -999,6 +1182,12 @@ def write_status_file(
         f"Setup type stats CSV: {SETUP_TYPE_STATS_FILE}",
         f"Setup attributes CSV: {MASTER_AVWAP_SETUP_ATTRIBUTES_FILE}",
         f"Factor leaderboard CSV: {MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE}",
+        f"Scan factor observations CSV: {MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE}",
+        f"Scan factor leaderboard CSV: {MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE}",
+        f"Tier list CSV: {MASTER_AVWAP_TIER_LIST_FILE}",
+        f"Tier outcomes CSV: {MASTER_AVWAP_TIER_OUTCOMES_FILE}",
+        f"Tier performance CSV: {MASTER_AVWAP_TIER_PERFORMANCE_FILE}",
+        f"Tier catch-rate CSV: {MASTER_AVWAP_TIER_CATCH_RATE_FILE}",
         f"Scoring config JSON: {MASTER_AVWAP_SCORING_CONFIG_FILE}",
         f"Scoring recommendations JSON: {MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE}",
         f"Scoring tuner report: {MASTER_AVWAP_SCORING_TUNER_REPORT_FILE}",
@@ -1022,13 +1211,7 @@ def write_status_file(
         ]
     )
 
-    lines.extend(
-        [
-            "",
-            "Theta Plays",
-            f"Theta candidates: {_format_symbol_group(theta_symbols)}",
-        ]
-    )
+    lines.extend(["", "Theta Plays", f"Theta candidates: {_format_symbol_group(theta_symbols)}"])
     if theta_report:
         theta_preview = "\n".join(theta_report.splitlines()[:24]).strip()
         lines.extend(["Theta report preview:", theta_preview or "(No theta report details.)"])
@@ -1044,6 +1227,12 @@ def write_status_file(
             f"Favorite focus combined: {_format_symbol_group(favorite_focus_symbols)}",
         ]
     )
+
+    lines.extend(["", "Priority report preview:", "-" * 80])
+    if priority_report:
+        lines.extend(_tail_or_head_lines(priority_report, STATUS_PRIORITY_PREVIEW_LINES, mode="head"))
+    else:
+        lines.append("(No priority setup report has been written yet.)")
 
     lines.extend(["", "Slot coverage:"])
     slots = state.get("slots", {})
@@ -1076,7 +1265,7 @@ def write_status_file(
 
     lines.extend(["", "Latest main AVWAP output:", "-" * 80])
     if main_report:
-        lines.extend(main_report.splitlines())
+        lines.extend(_tail_or_head_lines(main_report, STATUS_MAIN_REPORT_PREVIEW_LINES, mode="head"))
     else:
         lines.append("(No main AVWAP report has been written yet.)")
 
@@ -1258,6 +1447,8 @@ def execute_scan(
                 f"{filter_summary.get('message', '').strip()} "
                 f"Tracker sync: {tracker_sync_message}"
             ).strip()
+    theta_followup_note = _scan_result_followup_note(scan_result) if status == "success" and not dry_run else ""
+    filter_summary = _append_filter_summary_message(filter_summary, theta_followup_note)
     run_record = {
         "run_id": run_id,
         "slot": trigger_slot,
@@ -1303,6 +1494,7 @@ def execute_scan(
         note=(
             f"Slot {trigger_slot} completed in {format_duration(duration_seconds)}."
             + (f" {tracker_sync_message}" if tracker_sync_message else "")
+            + (f" {theta_followup_note}" if theta_followup_note else "")
         ),
     )
     logging.info("Finished mini-PC Master AVWAP run for slot %s in %s.", trigger_slot, format_duration(duration_seconds))
@@ -1382,6 +1574,8 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
                 f"{filter_summary.get('message', '').strip()} "
                 f"Tracker sync: {tracker_sync_message}"
             ).strip()
+    theta_followup_note = _scan_result_followup_note(scan_result) if status == "success" and not dry_run else ""
+    filter_summary = _append_filter_summary_message(filter_summary, theta_followup_note)
     state.setdefault("runs", []).append(
         {
             "run_id": started_at.strftime("%Y%m%d-%H%M%S"),
@@ -1402,6 +1596,7 @@ def run_once(schedule: list[str], stop_at: str, dry_run: bool = False) -> int:
     note = (
         f"Immediate run completed in {format_duration(duration_seconds)}."
         + (f" {tracker_sync_message}" if tracker_sync_message else "")
+        + (f" {theta_followup_note}" if theta_followup_note else "")
         if status != "failed"
         else f"Immediate run failed: {error_text}"
     )
@@ -1781,6 +1976,12 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                             f"{filter_summary.get('message', '').strip()} "
                             f"Tracker sync: {tracker_sync_message}"
                         ).strip()
+            theta_followup_note = (
+                _scan_result_followup_note(scan_result)
+                if run_status == "success" and not self.dry_run
+                else ""
+            )
+            filter_summary = _append_filter_summary_message(filter_summary, theta_followup_note)
 
             def _finish():
                 state = load_state(self.schedule)
@@ -1834,6 +2035,8 @@ class MiniPCMasterAvwapGUI(MasterAvwapGUI):
                     )
                     if tracker_sync_message:
                         done_note = f"{done_note} {tracker_sync_message}"
+                    if theta_followup_note:
+                        done_note = f"{done_note} {theta_followup_note}"
 
                 save_state(state)
                 self.scheduler_state = state

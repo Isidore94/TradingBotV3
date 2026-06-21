@@ -267,14 +267,11 @@ class JournalSystemTests(unittest.TestCase):
             self.assertIn("IBKR skipped: disabled.", summary["messages"])
 
     def test_gui_wires_journal_only_into_tabbed_layout(self):
-        gui_text = (SCRIPTS_DIR / "gui.py").read_text(encoding="utf-8")
+        gui_text = (SCRIPTS_DIR / "gui_app" / "app.py").read_text(encoding="utf-8")
         self.assertIn("from journal_tab import JournalTab", gui_text)
         self.assertIn('notebook.add(journal_tab, text="Journal")', gui_text)
-        combined_start = gui_text.index("    def _build_combined_layout")
-        combined_end = gui_text.index("    def _set_combined_initial_panes", combined_start)
-        combined_block = gui_text[combined_start:combined_end]
-        self.assertNotIn("JournalTab", combined_block)
-        self.assertNotIn('text="Journal"', combined_block)
+        self.assertNotIn("trading_notebook.add(journal_tab", gui_text)
+        self.assertEqual(gui_text.count('text="Journal"'), 1)
 
 
 if __name__ == "__main__":

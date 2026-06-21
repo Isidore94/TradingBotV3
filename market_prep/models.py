@@ -48,6 +48,7 @@ class MarketPrepConfig:
     treasury_calendar: dict[str, Any] = field(default_factory=dict)
     sec_filings: dict[str, Any] = field(default_factory=dict)
     google_news_rss: dict[str, Any] = field(default_factory=dict)
+    llm_summary: dict[str, Any] = field(default_factory=dict)
     ticker_lookup: dict[str, Any] = field(default_factory=dict)
     future_roadmap: dict[str, Any] = field(default_factory=dict)
     market_prep_ai: dict[str, Any] = field(default_factory=dict)
@@ -72,6 +73,7 @@ class MarketPrepConfig:
         treasury_calendar = payload.get("treasury_calendar")
         sec_filings = payload.get("sec_filings")
         google_news_rss = payload.get("google_news_rss")
+        llm_summary = payload.get("llm_summary")
         ticker_lookup = payload.get("ticker_lookup")
         future_roadmap = payload.get("future_roadmap")
         market_prep_ai = payload.get("market_prep_ai")
@@ -91,6 +93,7 @@ class MarketPrepConfig:
             treasury_calendar=dict(treasury_calendar) if isinstance(treasury_calendar, dict) else {},
             sec_filings=dict(sec_filings) if isinstance(sec_filings, dict) else {},
             google_news_rss=dict(google_news_rss) if isinstance(google_news_rss, dict) else {},
+            llm_summary=dict(llm_summary) if isinstance(llm_summary, dict) else {},
             ticker_lookup=dict(ticker_lookup) if isinstance(ticker_lookup, dict) else {},
             future_roadmap=dict(future_roadmap) if isinstance(future_roadmap, dict) else {},
             market_prep_ai=dict(market_prep_ai) if isinstance(market_prep_ai, dict) else {},

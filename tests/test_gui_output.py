@@ -10,7 +10,7 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import gui  # noqa: E402
+import gui_output  # noqa: E402
 
 
 class _FakeVar:
@@ -54,22 +54,22 @@ class _FakeAvwapGui:
 
 class GuiOutputTests(unittest.TestCase):
     def test_normalize_gui_mode_accepts_combined_and_falls_back_to_full(self):
-        self.assertEqual(gui.normalize_gui_mode("combined"), "combined")
-        self.assertEqual(gui.normalize_gui_mode("simple"), "simple")
-        self.assertEqual(gui.normalize_gui_mode("FULL"), "full")
-        self.assertEqual(gui.normalize_gui_mode("unknown"), "full")
-        self.assertEqual(gui.normalize_gui_mode(None), "full")
+        self.assertEqual(gui_output.normalize_gui_mode("combined"), "combined")
+        self.assertEqual(gui_output.normalize_gui_mode("simple"), "simple")
+        self.assertEqual(gui_output.normalize_gui_mode("FULL"), "full")
+        self.assertEqual(gui_output.normalize_gui_mode("unknown"), "full")
+        self.assertEqual(gui_output.normalize_gui_mode(None), "full")
 
     def test_performance_delay_uses_slower_delay_when_enabled(self):
-        self.assertEqual(gui.performance_delay(False, 150, 750), 150)
-        self.assertEqual(gui.performance_delay(True, 150, 750), 750)
+        self.assertEqual(gui_output.performance_delay(False, 150, 750), 150)
+        self.assertEqual(gui_output.performance_delay(True, 150, 750), 750)
 
     def test_bool_setting_parser_handles_saved_string_values(self):
-        self.assertTrue(gui.coerce_bool_setting("true"))
-        self.assertTrue(gui.coerce_bool_setting("on"))
-        self.assertFalse(gui.coerce_bool_setting("false", default=True))
-        self.assertFalse(gui.coerce_bool_setting("off", default=True))
-        self.assertTrue(gui.coerce_bool_setting("not-a-bool", default=True))
+        self.assertTrue(gui_output.coerce_bool_setting("true"))
+        self.assertTrue(gui_output.coerce_bool_setting("on"))
+        self.assertFalse(gui_output.coerce_bool_setting("false", default=True))
+        self.assertFalse(gui_output.coerce_bool_setting("off", default=True))
+        self.assertTrue(gui_output.coerce_bool_setting("not-a-bool", default=True))
 
     def test_build_consolidated_gui_output_includes_widget_copy_lists(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -86,7 +86,7 @@ class GuiOutputTests(unittest.TestCase):
                 near_favorites="TSLA",
                 long_focus="AAPL, MSFT",
                 short_focus="TSLA",
-                setup_types="avwap_breakout\nLONG: AAPL, MSFT",
+                setup_types="AAPL LONG score=99 family=avwap_breakout bucket=favorite_setup",
                 theta="NVDA",
             )
 
@@ -98,12 +98,12 @@ class GuiOutputTests(unittest.TestCase):
             }
 
             with (
-                patch.object(gui, "LONGS_FILE", longs_path),
-                patch.object(gui, "SHORTS_FILE", shorts_path),
-                patch.object(gui, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
-                patch.object(gui, "get_tracker_storage_details", return_value=storage_details),
+                patch.object(gui_output, "LONGS_FILE", longs_path),
+                patch.object(gui_output, "SHORTS_FILE", shorts_path),
+                patch.object(gui_output, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
+                patch.object(gui_output, "get_tracker_storage_details", return_value=storage_details),
             ):
-                output = gui.build_consolidated_gui_output("full", None, avwap_gui)
+                output = gui_output.build_consolidated_gui_output("full", None, avwap_gui)
 
             self.assertIn("AVWAP Copy/Paste Lists", output)
             self.assertIn("Favorite Setups\nAAPL, NVDA", output)
@@ -111,7 +111,10 @@ class GuiOutputTests(unittest.TestCase):
             self.assertIn("Theta Plays\nNVDA", output)
             self.assertIn("Directional Longs\nAAPL, MSFT", output)
             self.assertIn("Directional Shorts\nTSLA", output)
-            self.assertIn("Setup Type Copy Lists\navwap_breakout\nLONG: AAPL, MSFT", output)
+            self.assertIn(
+                "Score-Ranked Setups\nAAPL LONG score=99 family=avwap_breakout bucket=favorite_setup",
+                output,
+            )
 
     def test_build_consolidated_gui_output_falls_back_to_focus_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -173,23 +176,23 @@ class GuiOutputTests(unittest.TestCase):
             }
 
             with (
-                patch.object(gui, "LONGS_FILE", longs_path),
-                patch.object(gui, "SHORTS_FILE", shorts_path),
-                patch.object(gui, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
-                patch.object(gui, "MASTER_AVWAP_FOCUS_FILE", focus_path),
-                patch.object(gui, "MASTER_AVWAP_TRADINGVIEW_REPORT_FILE", tradingview_path),
-                patch.object(gui, "THETA_PUTS_FILE", theta_path),
-                patch.object(gui, "get_tracker_storage_details", return_value=storage_details),
+                patch.object(gui_output, "LONGS_FILE", longs_path),
+                patch.object(gui_output, "SHORTS_FILE", shorts_path),
+                patch.object(gui_output, "MAIN_GUI_OUTPUT_FILE", snapshot_path),
+                patch.object(gui_output, "MASTER_AVWAP_FOCUS_FILE", focus_path),
+                patch.object(gui_output, "MASTER_AVWAP_TRADINGVIEW_REPORT_FILE", tradingview_path),
+                patch.object(gui_output, "THETA_PUTS_FILE", theta_path),
+                patch.object(gui_output, "get_tracker_storage_details", return_value=storage_details),
             ):
-                output = gui.build_consolidated_gui_output("full", None, avwap_gui)
+                output = gui_output.build_consolidated_gui_output("full", None, avwap_gui)
 
             self.assertIn("Favorite Setups\nAAPL", output)
             self.assertIn("Near Favorite Zones\nMSFT, TSLA", output)
             self.assertIn("Theta Plays\nNVDA", output)
             self.assertIn("Directional Longs\nAAPL, MSFT", output)
             self.assertIn("Directional Shorts\nTSLA", output)
-            self.assertIn("Setup Type Copy Lists\navwap_breakout\nLONG: AAPL, MSFT", output)
-            self.assertIn("avwap_breakdown\nSHORT: TSLA", output)
+            self.assertIn("Score-Ranked Setups\nAAPL LONG", output)
+            self.assertIn("TSLA SHORT", output)
 
 
 if __name__ == "__main__":
