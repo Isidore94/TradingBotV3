@@ -331,6 +331,84 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(bot.emit_master_avwap_intraday_trigger_flags("AAPL", today_df), 0)
         bot.gui_callback.assert_called_once()
 
+    def test_d1_upgrade_watch_prime_does_not_block_intraday_trigger(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        watch_event = {
+            "symbol": "MSFT",
+            "side": "LONG",
+            "direction": "long",
+            "event_type": "first_dev_break",
+            "label": "A/S upgrade: 1st-dev break",
+            "reason": "A/S upgrade target: clear UPPER_1 resistance.",
+            "source": "watchlist_upgrade_target",
+            "trigger_id": "first_dev_break:UPPER_1:103.0000",
+            "level_label": "UPPER_1",
+            "level": 103.0,
+            "target_tier": "A/S",
+        }
+        bot._build_master_avwap_d1_flag_events = Mock(return_value=[watch_event])
+        bot.master_avwap_d1_flags_primed_date = None
+        bot.emitted_master_avwap_d1_flags = set()
+        bot.gui_callback = Mock()
+        bot.log_symbol = Mock()
+
+        bot.emit_master_avwap_d1_flags()
+
+        bot.gui_callback.assert_not_called()
+        bot.master_avwap_d1_upgrade_alerts = {
+            "MSFT": {
+                "symbol": "MSFT",
+                "side": "LONG",
+                "direction": "long",
+                "active_current_scan": True,
+                "priority_score": 185,
+                "watchlist_run_date": "2026-05-05",
+                "trigger_levels": [
+                    {
+                        "trigger_id": "first_dev_break:UPPER_1:103.0000",
+                        "label": "UPPER_1",
+                        "level": 103.0,
+                        "action": "break_above",
+                        "event_type": "first_dev_break",
+                        "alert_label": "1st-dev break",
+                        "reason": "A/S upgrade target: clear UPPER_1 resistance.",
+                        "armed_price": 102.0,
+                        "target_tier": "A/S",
+                        "upgrade_only": True,
+                    }
+                ],
+            }
+        }
+        bot.master_avwap_d1_watchlist = {}
+        today_df = pd.DataFrame(
+            [
+                {
+                    "datetime": pd.Timestamp("2026-05-06 09:35:00"),
+                    "open": 102.1,
+                    "high": 102.8,
+                    "low": 101.9,
+                    "close": 102.6,
+                    "volume": 1000,
+                    "time": "20260506  09:35:00",
+                },
+                {
+                    "datetime": pd.Timestamp("2026-05-06 09:40:00"),
+                    "open": 102.7,
+                    "high": 103.4,
+                    "low": 102.5,
+                    "close": 103.2,
+                    "volume": 1200,
+                    "time": "20260506  09:40:00",
+                },
+            ]
+        )
+
+        self.assertEqual(bot.emit_master_avwap_intraday_trigger_flags("MSFT", today_df), 1)
+        message, tag = bot.gui_callback.call_args.args
+        self.assertIn("MASTER_AVWAP_D1_UPGRADE_TRIGGER: MSFT", message)
+        self.assertIn("A/S upgrade: 1st-dev break", message)
+        self.assertEqual(tag, "d1_flag_long")
+
     def test_d1_preloaded_trigger_does_not_replay_earlier_intraday_cross(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
         bot.master_avwap_d1_watchlist = {

@@ -2664,6 +2664,8 @@ class BounceBot(EWrapper, EClient):
         prefix = (
             "MASTER_AVWAP_D1_UPGRADE_WATCH"
             if source == "watchlist_upgrade_target"
+            else "MASTER_AVWAP_D1_UPGRADE_TRIGGER"
+            if source == "watchlist_trigger" and (target_tier or event.get("upgrade_only"))
             else "MASTER_AVWAP_D1_FLAG"
         )
         return f"{prefix}: {symbol} ({direction or 'watch'}) {label}{suffix}"
@@ -2681,11 +2683,13 @@ class BounceBot(EWrapper, EClient):
         symbol = str(event.get("symbol") or "").strip().upper()
         trigger_id = str(event.get("trigger_id") or "").strip()
         if trigger_id:
+            source = str(event.get("source") or "").strip()
+            trigger_state = "intraday_trigger" if source == "watchlist_trigger" else "watch_target"
             return (
                 today_iso or datetime.now().date().isoformat(),
                 symbol,
                 event.get("side"),
-                "intraday_trigger",
+                trigger_state,
                 trigger_id,
             )
         return (
