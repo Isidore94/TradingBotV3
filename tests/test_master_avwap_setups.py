@@ -973,6 +973,18 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertTrue(result["daily_sma50_bounce"])
         self.assertIn("entry=", result["note"])
 
+    def test_top_pattern_entry_remains_favorite_tracker_family(self):
+        row = {
+            "symbol": "TOPS",
+            "side": "LONG",
+            "priority_bucket": "favorite_setup",
+            "setup_family": master_avwap.TOP_PATTERN_FAMILY,
+            "top_pattern_watch": True,
+            "top_pattern_entry": True,
+        }
+
+        self.assertEqual(master_avwap._tracker_priority_bucket(row), "favorite_setup")
+
     def test_daily_relative_strength_prefers_long_strength_and_short_weakness_vs_spy(self):
         dates = pd.bdate_range("2026-06-01", periods=6)
         strong_rows = [

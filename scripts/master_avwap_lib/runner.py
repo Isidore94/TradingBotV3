@@ -737,6 +737,23 @@ def run_master(
                     mid_signal_levels.get(signal_name),
                 )
 
+        top_pattern_summary = analyze_top_pattern_setup(
+            df,
+            side=side,
+            current_anchor_meta=current_anchor_meta,
+            indicator_frame=indicator_frame,
+            atr20=atr20,
+        )
+        if top_pattern_summary.get("favorite_signal") and top_pattern_summary.get("signal"):
+            add_signal(
+                top_pattern_summary.get("signal"),
+                "TOP",
+                current_anchor_meta.get("date") if current_anchor_meta else "",
+                current_vwap,
+                current_anchor_meta.get("stdev") if current_anchor_meta else None,
+                top_pattern_summary.get("entry_level"),
+            )
+
         # dedupe and sort events for consistency
         symbol_events_today = sorted(set(symbol_events_today))
 
@@ -1006,6 +1023,31 @@ def run_master(
             "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
             "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
             "mid_earnings_note": mid_earnings_summary.get("note", ""),
+            "top_pattern_watch": bool(top_pattern_summary.get("watch")),
+            "top_pattern_entry": bool(top_pattern_summary.get("favorite_signal")),
+            "top_pattern_signal": top_pattern_summary.get("signal", ""),
+            "top_pattern_entry_trigger": top_pattern_summary.get("entry_trigger", ""),
+            "top_pattern_entry_triggers": list(top_pattern_summary.get("entry_triggers") or []),
+            "top_pattern_entry_level": _coerce_float(top_pattern_summary.get("entry_level")),
+            "top_pattern_score_bonus": int(top_pattern_summary.get("score_bonus", 0) or 0),
+            "top_pattern_note": top_pattern_summary.get("note", ""),
+            "top_pattern_weekly_return_13w_pct": _coerce_float(top_pattern_summary.get("weekly_return_13w_pct")),
+            "top_pattern_weekly_return_26w_pct": _coerce_float(top_pattern_summary.get("weekly_return_26w_pct")),
+            "top_pattern_weekly_pullback_from_52w_high_pct": _coerce_float(
+                top_pattern_summary.get("weekly_pullback_from_52w_high_pct")
+            ),
+            "top_pattern_weekly_ema15_hold": bool(top_pattern_summary.get("weekly_ema15_hold")),
+            "top_pattern_weekly_ema15_hold_ratio": _coerce_float(
+                top_pattern_summary.get("weekly_ema15_hold_ratio")
+            ),
+            "top_pattern_weekly_above_sma100": bool(top_pattern_summary.get("weekly_above_sma100")),
+            "top_pattern_weekly_sma50_retest_recent": bool(
+                top_pattern_summary.get("weekly_sma50_retest_recent")
+            ),
+            "top_pattern_daily_sma50_reclaim": bool(top_pattern_summary.get("daily_sma50_reclaim")),
+            "top_pattern_daily_sma50_bounce": bool(top_pattern_summary.get("daily_sma50_bounce")),
+            "top_pattern_weekly_sma50_entry": bool(top_pattern_summary.get("weekly_sma50_entry")),
+            "top_pattern_avwape_retest": bool(top_pattern_summary.get("avwape_retest")),
             "entry_feature_snapshot": entry_feature_snapshot,
             **bouncebot_focus_context,
         }
@@ -1076,6 +1118,12 @@ def run_master(
             extension_note=extension_note,
             mid_earnings_active_second_stdev_hold=bool(mid_earnings_summary.get("active_second_stdev_hold")),
             mid_earnings_primary_trigger_level=mid_earnings_summary.get("primary_trigger_level", ""),
+            top_pattern_watch=bool(top_pattern_summary.get("watch")),
+            top_pattern_entry=bool(top_pattern_summary.get("favorite_signal")),
+            top_pattern_signal=top_pattern_summary.get("signal", ""),
+            top_pattern_score_bonus=int(top_pattern_summary.get("score_bonus", 0) or 0),
+            top_pattern_note=top_pattern_summary.get("note", ""),
+            top_pattern_entry_trigger=top_pattern_summary.get("entry_trigger", ""),
         )
         priority_summary["post_earnings_active"] = bool(post_earnings_summary.get("active"))
         priority_summary["latest_release_earnings_date"] = (
@@ -1121,6 +1169,29 @@ def run_master(
         priority_summary["mid_earnings_ema21_confluence"] = bool(mid_earnings_summary.get("ema21_confluence"))
         priority_summary["mid_earnings_first_dev_confluence"] = bool(mid_earnings_summary.get("first_dev_confluence"))
         priority_summary["mid_earnings_note"] = mid_earnings_summary.get("note", "")
+        priority_summary["top_pattern_entry_triggers"] = list(top_pattern_summary.get("entry_triggers") or [])
+        priority_summary["top_pattern_entry_level"] = _coerce_float(top_pattern_summary.get("entry_level"))
+        priority_summary["top_pattern_weekly_return_13w_pct"] = _coerce_float(
+            top_pattern_summary.get("weekly_return_13w_pct")
+        )
+        priority_summary["top_pattern_weekly_return_26w_pct"] = _coerce_float(
+            top_pattern_summary.get("weekly_return_26w_pct")
+        )
+        priority_summary["top_pattern_weekly_pullback_from_52w_high_pct"] = _coerce_float(
+            top_pattern_summary.get("weekly_pullback_from_52w_high_pct")
+        )
+        priority_summary["top_pattern_weekly_ema15_hold"] = bool(top_pattern_summary.get("weekly_ema15_hold"))
+        priority_summary["top_pattern_weekly_ema15_hold_ratio"] = _coerce_float(
+            top_pattern_summary.get("weekly_ema15_hold_ratio")
+        )
+        priority_summary["top_pattern_weekly_above_sma100"] = bool(top_pattern_summary.get("weekly_above_sma100"))
+        priority_summary["top_pattern_weekly_sma50_retest_recent"] = bool(
+            top_pattern_summary.get("weekly_sma50_retest_recent")
+        )
+        priority_summary["top_pattern_daily_sma50_reclaim"] = bool(top_pattern_summary.get("daily_sma50_reclaim"))
+        priority_summary["top_pattern_daily_sma50_bounce"] = bool(top_pattern_summary.get("daily_sma50_bounce"))
+        priority_summary["top_pattern_weekly_sma50_entry"] = bool(top_pattern_summary.get("weekly_sma50_entry"))
+        priority_summary["top_pattern_avwape_retest"] = bool(top_pattern_summary.get("avwape_retest"))
         effective_compression_penalty, effective_compression_note = _effective_compression_penalty(
             compression_summary,
             priority_summary,
@@ -1285,6 +1356,31 @@ def run_master(
             "mid_earnings_ema21_confluence": bool(mid_earnings_summary.get("ema21_confluence")),
             "mid_earnings_first_dev_confluence": bool(mid_earnings_summary.get("first_dev_confluence")),
             "mid_earnings_note": mid_earnings_summary.get("note", ""),
+            "top_pattern_watch": bool(top_pattern_summary.get("watch")),
+            "top_pattern_entry": bool(top_pattern_summary.get("favorite_signal")),
+            "top_pattern_signal": top_pattern_summary.get("signal", ""),
+            "top_pattern_entry_trigger": top_pattern_summary.get("entry_trigger", ""),
+            "top_pattern_entry_triggers": ";".join(top_pattern_summary.get("entry_triggers") or []),
+            "top_pattern_entry_level": _coerce_float(top_pattern_summary.get("entry_level")),
+            "top_pattern_score_bonus": int(top_pattern_summary.get("score_bonus", 0) or 0),
+            "top_pattern_note": top_pattern_summary.get("note", ""),
+            "top_pattern_weekly_return_13w_pct": _coerce_float(top_pattern_summary.get("weekly_return_13w_pct")),
+            "top_pattern_weekly_return_26w_pct": _coerce_float(top_pattern_summary.get("weekly_return_26w_pct")),
+            "top_pattern_weekly_pullback_from_52w_high_pct": _coerce_float(
+                top_pattern_summary.get("weekly_pullback_from_52w_high_pct")
+            ),
+            "top_pattern_weekly_ema15_hold": bool(top_pattern_summary.get("weekly_ema15_hold")),
+            "top_pattern_weekly_ema15_hold_ratio": _coerce_float(
+                top_pattern_summary.get("weekly_ema15_hold_ratio")
+            ),
+            "top_pattern_weekly_above_sma100": bool(top_pattern_summary.get("weekly_above_sma100")),
+            "top_pattern_weekly_sma50_retest_recent": bool(
+                top_pattern_summary.get("weekly_sma50_retest_recent")
+            ),
+            "top_pattern_daily_sma50_reclaim": bool(top_pattern_summary.get("daily_sma50_reclaim")),
+            "top_pattern_daily_sma50_bounce": bool(top_pattern_summary.get("daily_sma50_bounce")),
+            "top_pattern_weekly_sma50_entry": bool(top_pattern_summary.get("weekly_sma50_entry")),
+            "top_pattern_avwape_retest": bool(top_pattern_summary.get("avwape_retest")),
             "bouncebot_relevant_focus_hit_today": bool(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_today")),
             "bouncebot_relevant_focus_hit_count": int(bouncebot_focus_context.get("bouncebot_relevant_focus_hit_count", 0) or 0),
             "bouncebot_relevant_focus_max_score": _coerce_float(bouncebot_focus_context.get("bouncebot_relevant_focus_max_score")),
@@ -1663,6 +1759,25 @@ def run_master(
         "mid_earnings_ema21_confluence",
         "mid_earnings_first_dev_confluence",
         "mid_earnings_note",
+        "top_pattern_watch",
+        "top_pattern_entry",
+        "top_pattern_signal",
+        "top_pattern_entry_trigger",
+        "top_pattern_entry_triggers",
+        "top_pattern_entry_level",
+        "top_pattern_score_bonus",
+        "top_pattern_note",
+        "top_pattern_weekly_return_13w_pct",
+        "top_pattern_weekly_return_26w_pct",
+        "top_pattern_weekly_pullback_from_52w_high_pct",
+        "top_pattern_weekly_ema15_hold",
+        "top_pattern_weekly_ema15_hold_ratio",
+        "top_pattern_weekly_above_sma100",
+        "top_pattern_weekly_sma50_retest_recent",
+        "top_pattern_daily_sma50_reclaim",
+        "top_pattern_daily_sma50_bounce",
+        "top_pattern_weekly_sma50_entry",
+        "top_pattern_avwape_retest",
         "priority_score",
         "priority_bucket",
         "is_favorite_setup",
