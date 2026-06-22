@@ -139,6 +139,30 @@ except ImportError:  # pragma: no cover - used when imported through scripts.*
         record_yfinance_rows as record_shared_yfinance_rows,
     )
 
+try:
+    from bounce_bot_lib.rrs import (
+        load_industry_etf_map as load_rrs_industry_etf_map,
+        load_sector_etf_map as load_rrs_sector_etf_map,
+        load_symbol_classification_cache as load_rrs_symbol_classification_cache,
+        resolve_industry_ref_etf as resolve_rrs_industry_ref_etf,
+        resolve_sector_etf as resolve_rrs_sector_etf,
+    )
+except ImportError:  # pragma: no cover - used when imported through scripts.*
+    try:
+        from scripts.bounce_bot_lib.rrs import (
+            load_industry_etf_map as load_rrs_industry_etf_map,
+            load_sector_etf_map as load_rrs_sector_etf_map,
+            load_symbol_classification_cache as load_rrs_symbol_classification_cache,
+            resolve_industry_ref_etf as resolve_rrs_industry_ref_etf,
+            resolve_sector_etf as resolve_rrs_sector_etf,
+        )
+    except ImportError:  # pragma: no cover - optional shared RRS helpers unavailable
+        load_rrs_industry_etf_map = None
+        load_rrs_sector_etf_map = None
+        load_rrs_symbol_classification_cache = None
+        resolve_rrs_industry_ref_etf = None
+        resolve_rrs_sector_etf = None
+
 # ============================================================================
 # PATHS / CONFIG
 # ============================================================================
@@ -735,6 +759,12 @@ MARKET_PREP_SECTION_DEFINITIONS = [
         "empty_message": "None",
     },
     {
+        "id": "strongest_industries",
+        "title": "Strongest Industries: D1 vs SPY",
+        "copy_label": "Copy Industries",
+        "empty_message": "None",
+    },
+    {
         "id": "post_earnings_potential_plays",
         "title": "Post-Earnings Potential Plays",
         "copy_label": "Copy Post-Earnings",
@@ -778,6 +808,9 @@ DEFAULT_PRIORITY_SCORING_CONFIG = {
     "signal_weights": {
         "current": copy.deepcopy(FAVORITE_CURRENT_SIGNALS),
         "context": copy.deepcopy(FAVORITE_CONTEXT_SIGNALS),
+    },
+    "feature_flags": {
+        "industry_relative_strength_scoring_enabled": False,
     },
     "attribute_adjustments": [
         {
@@ -974,6 +1007,11 @@ def load_priority_scoring_config(force_reload: bool = False) -> dict:
         raw_adjustments = raw.get("attribute_adjustments", [])
         if isinstance(raw_adjustments, list):
             config["attribute_adjustments"] = [item for item in raw_adjustments if isinstance(item, dict)]
+        raw_feature_flags = raw.get("feature_flags", {})
+        if isinstance(raw_feature_flags, dict):
+            config["feature_flags"].update(
+                {str(key): bool(value) for key, value in raw_feature_flags.items()}
+            )
 
     _normalize_priority_scoring_signal_weights(config)
     _PRIORITY_SCORING_CONFIG_CACHE = copy.deepcopy(config)
@@ -1004,6 +1042,11 @@ def save_priority_scoring_config(payload: dict) -> None:
         raw_adjustments = payload.get("attribute_adjustments", [])
         if isinstance(raw_adjustments, list):
             config["attribute_adjustments"] = [dict(item) for item in raw_adjustments if isinstance(item, dict)]
+        raw_feature_flags = payload.get("feature_flags", {})
+        if isinstance(raw_feature_flags, dict):
+            config["feature_flags"].update(
+                {str(key): bool(value) for key, value in raw_feature_flags.items()}
+            )
 
     _normalize_priority_scoring_signal_weights(config)
     config["schema_version"] = PRIORITY_SCORING_CONFIG_SCHEMA_VERSION
@@ -1194,6 +1237,14 @@ def get_priority_attribute_adjustments() -> list[dict]:
     config = load_priority_scoring_config()
     adjustments = config.get("attribute_adjustments", [])
     return [dict(item) for item in adjustments if isinstance(item, dict)]
+
+
+def get_priority_feature_flags() -> dict[str, bool]:
+    config = load_priority_scoring_config()
+    flags = config.get("feature_flags", {})
+    if not isinstance(flags, dict):
+        return {}
+    return {str(key): bool(value) for key, value in flags.items()}
 
 
 def _priority_attribute_rule_signature(rule: dict) -> tuple[str, str, str, str, str]:
@@ -22255,6 +22306,12 @@ DAILY_RELATIVE_STRENGTH_THRESHOLD = 1.0
 
 DAILY_RELATIVE_STRENGTH_LOOKBACK_DAYS = 5
 
+INDUSTRY_RELATIVE_STRENGTH_SCORING_FLAG = "industry_relative_strength_scoring_enabled"
+INDUSTRY_RELATIVE_STRENGTH_BONUS = 10
+INDUSTRY_RELATIVE_STRENGTH_THRESHOLD = 1.0
+INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD = 0.5
+INDUSTRY_RELATIVE_STRENGTH_ROTATION_RELAX_THRESHOLD = 3.0
+
 PRIORITY_ADVERSE_REJECTION_MIN_WICK_RANGE_RATIO = 0.30
 
 PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MAX = 0.35
@@ -22275,6 +22332,8 @@ MARKET_PREP_STRENGTH_DECILE_FRACTION = 0.10
 MARKET_PREP_RETURN_13W_SESSIONS = 65
 MARKET_PREP_RETURN_26W_SESSIONS = 130
 MARKET_PREP_PULLBACK_MAX_ROWS = 15
+MARKET_PREP_INDUSTRY_STRENGTH_MAX_ROWS = 12
+MARKET_PREP_INDUSTRY_LOOKBACK_DAYS = 220
 
 def assess_adverse_entry_candle(
     daily_rows,
@@ -22789,11 +22848,148 @@ def _trailing_return_pct(daily_rows: list[dict], sessions: int) -> float | None:
     return round(((float(last_close) - float(past_close)) / float(past_close)) * 100.0, 3)
 
 
+def _weighted_excess_strength_score(
+    one_day_return: float | None,
+    five_day_return: float | None,
+    benchmark_one_day: float | None,
+    benchmark_five_day: float | None,
+) -> float | None:
+    one_day = _coerce_float(one_day_return)
+    five_day = _coerce_float(five_day_return)
+    benchmark_one = _coerce_float(benchmark_one_day)
+    benchmark_five = _coerce_float(benchmark_five_day)
+    if one_day is None or five_day is None or benchmark_one is None or benchmark_five is None:
+        return None
+    return round((0.35 * (float(one_day) - float(benchmark_one))) + (0.65 * (float(five_day) - float(benchmark_five))), 3)
+
+
+def build_symbol_industry_contexts(
+    symbols,
+    *,
+    symbol_classification_cache: dict | None = None,
+    sector_map: dict | None = None,
+    industry_map_data: dict | None = None,
+) -> dict[str, dict]:
+    """Resolve scanned symbols to their sector and industry ETF references.
+
+    The master scan reads the shared cache that BounceBot already maintains. It
+    intentionally does not fetch missing Yahoo classifications here; missing cache
+    rows simply produce no industry context for that symbol.
+    """
+    if symbol_classification_cache is None and callable(load_rrs_symbol_classification_cache):
+        symbol_classification_cache = load_rrs_symbol_classification_cache()
+    if sector_map is None and callable(load_rrs_sector_etf_map):
+        sector_map = load_rrs_sector_etf_map()
+    if industry_map_data is None and callable(load_rrs_industry_etf_map):
+        industry_map_data = load_rrs_industry_etf_map()
+    symbol_classification_cache = symbol_classification_cache if isinstance(symbol_classification_cache, dict) else {}
+    sector_map = sector_map if isinstance(sector_map, dict) else {}
+    industry_map_data = industry_map_data if isinstance(industry_map_data, dict) else {}
+
+    contexts: dict[str, dict] = {}
+    for symbol in symbols or []:
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            continue
+        classification = symbol_classification_cache.get(sym)
+        if not isinstance(classification, dict):
+            continue
+        sector_key = str(classification.get("sectorKey") or "").strip()
+        industry_key = str(classification.get("industryKey") or "").strip()
+        if not sector_key and not industry_key:
+            continue
+        if callable(resolve_rrs_sector_etf):
+            sector_etf = resolve_rrs_sector_etf(sector_key, sector_map)
+        else:
+            sector_etf = "SPY"
+        if callable(resolve_rrs_industry_ref_etf):
+            industry_etf = resolve_rrs_industry_ref_etf(industry_key, sector_key, industry_map_data, sector_map)
+        else:
+            industry_etf = sector_etf
+        contexts[sym] = {
+            "symbol": sym,
+            "sector_key": sector_key,
+            "industry_key": industry_key,
+            "sector": classification.get("sector", ""),
+            "industry": classification.get("industry", ""),
+            "sector_etf": str(sector_etf or "").strip().upper(),
+            "industry_etf": str(industry_etf or "").strip().upper(),
+        }
+    return contexts
+
+
+def build_industry_strength_rows(
+    industry_daily_frames_by_etf: dict | None,
+    spy_benchmark: dict | None,
+    *,
+    industry_context_by_symbol: dict | None = None,
+) -> list[dict]:
+    rows: list[dict] = []
+    if not isinstance(industry_daily_frames_by_etf, dict) or not industry_daily_frames_by_etf:
+        return rows
+
+    labels_by_etf: dict[str, set[str]] = {}
+    symbols_by_etf: dict[str, set[str]] = {}
+    for symbol, context in (industry_context_by_symbol or {}).items():
+        if not isinstance(context, dict):
+            continue
+        etf = str(context.get("industry_etf") or context.get("sector_etf") or "").strip().upper()
+        if not etf:
+            continue
+        label = str(context.get("industry") or context.get("sector") or "").strip()
+        if label:
+            labels_by_etf.setdefault(etf, set()).add(label)
+        sym = str(symbol or context.get("symbol") or "").strip().upper()
+        if sym:
+            symbols_by_etf.setdefault(etf, set()).add(sym)
+
+    for etf, df in industry_daily_frames_by_etf.items():
+        ref = str(etf or "").strip().upper()
+        if not ref:
+            continue
+        daily_rows = _daily_frame_to_rows(df)
+        if not daily_rows:
+            continue
+        try:
+            last_trade_date = date.fromisoformat(daily_rows[-1]["date"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        rs = assess_daily_relative_strength(daily_rows, last_trade_date, "LONG", spy_benchmark)
+        rs_score = _coerce_float(rs.get("daily_relative_strength_score"))
+        if rs_score is None:
+            continue
+        label_candidates = sorted(labels_by_etf.get(ref, set()))
+        rows.append(
+            {
+                "symbol": ref,
+                "industry_etf": ref,
+                "industry": ", ".join(label_candidates[:3]),
+                "constituent_symbols": sorted(symbols_by_etf.get(ref, set())),
+                "daily_relative_strength_score": rs_score,
+                "symbol_one_day_return_pct": rs.get("symbol_one_day_return_pct"),
+                "symbol_five_day_return_pct": rs.get("symbol_five_day_return_pct"),
+                "spy_one_day_return_pct": rs.get("spy_one_day_return_pct"),
+                "spy_five_day_return_pct": rs.get("spy_five_day_return_pct"),
+                "return_13w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_13W_SESSIONS),
+                "return_26w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_26W_SESSIONS),
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            -float(row.get("daily_relative_strength_score") or 0.0),
+            str(row.get("industry_etf") or row.get("symbol") or ""),
+        )
+    )
+    return rows
+
+
 def build_universe_strength_rows(
     daily_frames_by_symbol: dict | None,
     spy_benchmark: dict | None,
     *,
     sides_by_symbol: dict | None = None,
+    industry_context_by_symbol: dict | None = None,
+    industry_daily_frames_by_etf: dict | None = None,
 ) -> list[dict]:
     """One strength row per *scanned* symbol — the whole universe, not just the
     symbols that produced a flagged setup. Feeds the market-prep strongest/weakest
@@ -22808,6 +23004,13 @@ def build_universe_strength_rows(
     if not isinstance(daily_frames_by_symbol, dict) or not daily_frames_by_symbol:
         return rows
     sides_by_symbol = sides_by_symbol if isinstance(sides_by_symbol, dict) else {}
+    industry_context_by_symbol = industry_context_by_symbol if isinstance(industry_context_by_symbol, dict) else {}
+    industry_daily_frames_by_etf = industry_daily_frames_by_etf if isinstance(industry_daily_frames_by_etf, dict) else {}
+    industry_rows_by_etf: dict[str, list[dict]] = {}
+    for etf, df in industry_daily_frames_by_etf.items():
+        ref = str(etf or "").strip().upper()
+        if ref:
+            industry_rows_by_etf[ref] = _daily_frame_to_rows(df)
     for symbol, df in daily_frames_by_symbol.items():
         sym = str(symbol or "").strip().upper()
         if not sym:
@@ -22821,22 +23024,217 @@ def build_universe_strength_rows(
             continue
         side = normalize_side(sides_by_symbol.get(sym) or "")
         rs = assess_daily_relative_strength(daily_rows, last_trade_date, side, spy_benchmark)
-        rows.append(
-            {
-                "symbol": sym,
-                "side": side,
-                "daily_relative_strength_score": rs.get("daily_relative_strength_score"),
-                "symbol_one_day_return_pct": rs.get("symbol_one_day_return_pct"),
-                "symbol_five_day_return_pct": rs.get("symbol_five_day_return_pct"),
-                "spy_one_day_return_pct": rs.get("spy_one_day_return_pct"),
-                "spy_five_day_return_pct": rs.get("spy_five_day_return_pct"),
-                "return_13w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_13W_SESSIONS),
-                "return_26w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_26W_SESSIONS),
-                "atr20": compute_atr_from_ohlc(daily_rows, last_trade_date),
-                "universe_strength_row": True,
-            }
-        )
+        row = {
+            "symbol": sym,
+            "side": side,
+            "daily_relative_strength_score": rs.get("daily_relative_strength_score"),
+            "daily_relative_strength_bonus": rs.get("daily_relative_strength_bonus"),
+            "daily_relative_strength_note": rs.get("daily_relative_strength_note"),
+            "symbol_one_day_return_pct": rs.get("symbol_one_day_return_pct"),
+            "symbol_five_day_return_pct": rs.get("symbol_five_day_return_pct"),
+            "spy_one_day_return_pct": rs.get("spy_one_day_return_pct"),
+            "spy_five_day_return_pct": rs.get("spy_five_day_return_pct"),
+            "return_13w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_13W_SESSIONS),
+            "return_26w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_26W_SESSIONS),
+            "atr20": compute_atr_from_ohlc(daily_rows, last_trade_date),
+            "universe_strength_row": True,
+        }
+        context = industry_context_by_symbol.get(sym)
+        if isinstance(context, dict):
+            row.update(
+                {
+                    "sector": context.get("sector", ""),
+                    "industry": context.get("industry", ""),
+                    "sector_key": context.get("sector_key", ""),
+                    "industry_key": context.get("industry_key", ""),
+                    "sector_etf": context.get("sector_etf", ""),
+                    "industry_etf": context.get("industry_etf", ""),
+                }
+            )
+            industry_etf = str(context.get("industry_etf") or "").strip().upper()
+            industry_rows = industry_rows_by_etf.get(industry_etf)
+            if industry_rows:
+                industry_one_day = _trailing_return_pct(industry_rows, 1)
+                industry_five_day = _trailing_return_pct(industry_rows, DAILY_RELATIVE_STRENGTH_LOOKBACK_DAYS)
+                industry_13w = _trailing_return_pct(industry_rows, MARKET_PREP_RETURN_13W_SESSIONS)
+                row.update(
+                    {
+                        "industry_one_day_return_pct": industry_one_day,
+                        "industry_five_day_return_pct": industry_five_day,
+                        "industry_13w_return_pct": industry_13w,
+                        "rs_vs_industry": _weighted_excess_strength_score(
+                            row.get("symbol_one_day_return_pct"),
+                            row.get("symbol_five_day_return_pct"),
+                            industry_one_day,
+                            industry_five_day,
+                        ),
+                        "return_13w_vs_industry_pct": (
+                            None
+                            if row.get("return_13w_pct") is None or industry_13w is None
+                            else round(float(row.get("return_13w_pct")) - float(industry_13w), 3)
+                        ),
+                    }
+                )
+        rows.append(row)
     return rows
+
+
+def assess_industry_relative_strength(
+    universe_row: dict | None,
+    side: str,
+    industry_strength_row: dict | None = None,
+    *,
+    scoring_enabled: bool = False,
+) -> dict:
+    row = universe_row if isinstance(universe_row, dict) else {}
+    industry_row = industry_strength_row if isinstance(industry_strength_row, dict) else {}
+    industry_etf = str(row.get("industry_etf") or industry_row.get("industry_etf") or "").strip().upper()
+    rs_vs_industry = _coerce_float(row.get("rs_vs_industry"))
+    industry_rs = _coerce_float(industry_row.get("daily_relative_strength_score"))
+    result = {
+        "industry_etf": industry_etf,
+        "industry_relative_strength_score": rs_vs_industry,
+        "industry_daily_relative_strength_score": industry_rs,
+        "industry_relative_strength_bonus": 0,
+        "industry_relative_strength_note": "",
+    }
+    if not industry_etf or rs_vs_industry is None:
+        return result
+
+    normalized_side = normalize_side(side)
+    if normalized_side == "SHORT":
+        stock_leads = rs_vs_industry <= -INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
+        industry_aligned = industry_rs is None or industry_rs <= -INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD
+        stock_text = "weaker than"
+        industry_text = "industry weak vs SPY"
+    else:
+        stock_leads = rs_vs_industry >= INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
+        industry_aligned = industry_rs is None or industry_rs >= INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD
+        stock_text = "stronger than"
+        industry_text = "industry strong vs SPY"
+
+    note_bits = [
+        f"D1 {stock_text} {industry_etf}: rs_ind={rs_vs_industry:+.2f}",
+    ]
+    if industry_rs is not None:
+        note_bits.append(f"{industry_text} rs={industry_rs:+.2f}")
+
+    if stock_leads and industry_aligned:
+        if scoring_enabled:
+            result["industry_relative_strength_bonus"] = INDUSTRY_RELATIVE_STRENGTH_BONUS
+            note_bits.append(f"+{INDUSTRY_RELATIVE_STRENGTH_BONUS}")
+        else:
+            note_bits.append("score flag off")
+    elif (
+        normalized_side == "LONG"
+        and industry_rs is not None
+        and industry_rs >= INDUSTRY_RELATIVE_STRENGTH_ROTATION_RELAX_THRESHOLD
+        and rs_vs_industry > -INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
+    ):
+        note_bits.append("super-strong industry; mild lag kept as rotation context")
+
+    result["industry_relative_strength_note"] = "; ".join(note_bits)
+    return result
+
+
+def enrich_priority_rows_with_industry_relative_strength(
+    priority_rows: list[dict] | None,
+    universe_strength_rows: list[dict] | None,
+    industry_strength_rows: list[dict] | None,
+    *,
+    scoring_enabled: bool | None = None,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+) -> None:
+    if not priority_rows or not universe_strength_rows:
+        return
+    if scoring_enabled is None:
+        scoring_enabled = bool(get_priority_feature_flags().get(INDUSTRY_RELATIVE_STRENGTH_SCORING_FLAG))
+    universe_by_symbol = {
+        str(row.get("symbol") or "").strip().upper(): row
+        for row in universe_strength_rows or []
+        if isinstance(row, dict) and str(row.get("symbol") or "").strip()
+    }
+    industry_by_etf = {
+        str(row.get("industry_etf") or row.get("symbol") or "").strip().upper(): row
+        for row in industry_strength_rows or []
+        if isinstance(row, dict) and str(row.get("industry_etf") or row.get("symbol") or "").strip()
+    }
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+
+    copy_fields = (
+        "daily_relative_strength_score",
+        "symbol_one_day_return_pct",
+        "symbol_five_day_return_pct",
+        "spy_one_day_return_pct",
+        "spy_five_day_return_pct",
+        "return_13w_pct",
+        "return_26w_pct",
+        "sector",
+        "industry",
+        "sector_key",
+        "industry_key",
+        "sector_etf",
+        "industry_etf",
+        "industry_one_day_return_pct",
+        "industry_five_day_return_pct",
+        "industry_13w_return_pct",
+        "rs_vs_industry",
+        "return_13w_vs_industry_pct",
+    )
+    for priority_row in priority_rows:
+        if not isinstance(priority_row, dict):
+            continue
+        symbol = str(priority_row.get("symbol") or "").strip().upper()
+        universe_row = universe_by_symbol.get(symbol)
+        if not universe_row:
+            continue
+        for field in copy_fields:
+            if field in universe_row:
+                priority_row[field] = universe_row.get(field)
+        industry_etf = str(universe_row.get("industry_etf") or "").strip().upper()
+        bonus_result = assess_industry_relative_strength(
+            universe_row,
+            priority_row.get("side") or universe_row.get("side") or "",
+            industry_by_etf.get(industry_etf),
+            scoring_enabled=bool(scoring_enabled),
+        )
+        setup_family = str(priority_row.get("setup_family") or "").strip().lower()
+        setup_active = (
+            bool(priority_row.get("has_favorite_signal"))
+            or bool(priority_row.get("favorite_signals"))
+            or bool(priority_row.get("favorite_zone"))
+            or bool(priority_row.get("extreme_move_watch"))
+            or bool(priority_row.get("sma_breakout_watch"))
+            or bool(priority_row.get("sma_breakout_confirmed"))
+            or setup_family not in {"", "general"}
+        )
+        if not setup_active and int(bonus_result.get("industry_relative_strength_bonus", 0) or 0):
+            bonus_result["industry_relative_strength_bonus"] = 0
+            note = str(bonus_result.get("industry_relative_strength_note") or "")
+            bonus_result["industry_relative_strength_note"] = (
+                f"{note}; setup inactive" if note else "Industry RS boost skipped; setup inactive"
+            )
+        priority_row.update(bonus_result)
+        bonus = int(bonus_result.get("industry_relative_strength_bonus", 0) or 0)
+        if bonus:
+            priority_row["score"] = float(priority_row.get("score", 0.0) or 0.0) + float(bonus)
+
+        symbol_entry = ai_symbols.get(symbol)
+        if isinstance(symbol_entry, dict):
+            for field in (*copy_fields, *bonus_result.keys()):
+                if field in priority_row:
+                    symbol_entry[field] = priority_row.get(field)
+            symbol_entry["priority_score"] = priority_row.get("score")
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if isinstance(feature_row, dict):
+            for field in (*copy_fields, *bonus_result.keys()):
+                if field in priority_row:
+                    feature_row[field] = priority_row.get(field)
+            feature_row["priority_score"] = priority_row.get("score")
 
 
 def _previous_anchor_sr_output_label(level_label: str) -> str:
@@ -23564,17 +23962,68 @@ def _market_prep_strength_details(rows: list[dict]) -> list[str]:
         symbol = str(row.get("symbol") or "").strip().upper()
         side = normalize_side(row.get("side") or "")
         rs_score = _market_prep_strength_score(row)
+        industry_etf = str(row.get("industry_etf") or "").strip().upper()
+        rs_vs_industry = _coerce_float(row.get("rs_vs_industry"))
         one_day = _coerce_float(row.get("symbol_one_day_return_pct"))
         five_day = _coerce_float(row.get("symbol_five_day_return_pct"))
         score = _coerce_float(row.get("score"))
         family = _priority_setup_family_label(str(row.get("setup_family") or "general"))
         rs_text = "n/a" if rs_score is None else f"{float(rs_score):+.2f}"
+        industry_text = ""
+        if industry_etf or rs_vs_industry is not None:
+            ind_rs_text = "n/a" if rs_vs_industry is None else f"{float(rs_vs_industry):+.2f}"
+            industry_text = f" ind={industry_etf or 'n/a'} ind_rs={ind_rs_text:<7}"
         one_day_text = "n/a" if one_day is None else f"{float(one_day):+.1f}%"
         five_day_text = "n/a" if five_day is None else f"{float(five_day):+.1f}%"
         score_text = "n/a" if score is None else _priority_score_text(row)
         details.append(
             f"{symbol:<6} {side:<5} rs={rs_text:<7} 1d={one_day_text:<7} "
-            f"5d={five_day_text:<7} score={score_text:<5} family={family}"
+            f"5d={five_day_text:<7}{industry_text} score={score_text:<5} family={family}"
+        )
+    return details
+
+
+def _market_prep_industry_strength_rows(
+    industry_strength_rows: list[dict] | None,
+    *,
+    limit: int = MARKET_PREP_INDUSTRY_STRENGTH_MAX_ROWS,
+) -> list[dict]:
+    rows = [
+        row for row in (industry_strength_rows or [])
+        if isinstance(row, dict) and _market_prep_strength_score(row) is not None
+    ]
+    rows.sort(
+        key=lambda row: (
+            -float(_market_prep_strength_score(row) or 0.0),
+            str(row.get("industry_etf") or row.get("symbol") or ""),
+        )
+    )
+    return rows[: max(0, int(limit))]
+
+
+def _market_prep_industry_strength_details(rows: list[dict]) -> list[str]:
+    details = []
+    for row in rows or []:
+        etf = str(row.get("industry_etf") or row.get("symbol") or "").strip().upper()
+        label = str(row.get("industry") or "").strip()
+        rs_score = _market_prep_strength_score(row)
+        one_day = _coerce_float(row.get("symbol_one_day_return_pct"))
+        five_day = _coerce_float(row.get("symbol_five_day_return_pct"))
+        ret_13w = _coerce_float(row.get("return_13w_pct"))
+        constituents = [
+            str(sym or "").strip().upper()
+            for sym in (row.get("constituent_symbols") or [])
+            if str(sym or "").strip()
+        ]
+        rs_text = "n/a" if rs_score is None else f"{float(rs_score):+.2f}"
+        one_day_text = "n/a" if one_day is None else f"{float(one_day):+.1f}%"
+        five_day_text = "n/a" if five_day is None else f"{float(five_day):+.1f}%"
+        ret_13w_text = "n/a" if ret_13w is None else f"{float(ret_13w):+.1f}%"
+        sample_text = ", ".join(constituents[:5])
+        details.append(
+            f"{etf:<6} rs={rs_text:<7} 1d={one_day_text:<7} 5d={five_day_text:<7} "
+            f"13w={ret_13w_text:<8} {label or 'Industry ETF'}"
+            + (f" | symbols={sample_text}" if sample_text else "")
         )
     return details
 
@@ -23867,6 +24316,11 @@ def build_priority_setup_summary(
     daily_relative_strength_score: float | None = None,
     daily_relative_strength_bonus: int = 0,
     daily_relative_strength_note: str = "",
+    industry_relative_strength_score: float | None = None,
+    industry_daily_relative_strength_score: float | None = None,
+    industry_relative_strength_bonus: int = 0,
+    industry_relative_strength_note: str = "",
+    industry_etf: str = "",
 ) -> dict:
     current_weights = get_priority_signal_weights(side, "current")
     context_weights = get_priority_signal_weights(side, "context")
@@ -23939,6 +24393,7 @@ def build_priority_setup_summary(
         score += max(0, int(top_pattern_score_bonus or 0))
 
     score += max(0, int(daily_relative_strength_bonus or 0))
+    score += max(0, int(industry_relative_strength_bonus or 0))
     score += max(0, int(previous_day_range_break_bonus or 0))
     score += max(0, int(vwap_range_confirmation_bonus or 0))
     score += max(0, int(first_dev_break_bonus or 0))
@@ -24059,6 +24514,11 @@ def build_priority_setup_summary(
         "daily_relative_strength_score": _coerce_float(daily_relative_strength_score),
         "daily_relative_strength_bonus": int(daily_relative_strength_bonus or 0),
         "daily_relative_strength_note": daily_relative_strength_note or "",
+        "industry_etf": str(industry_etf or "").strip().upper(),
+        "industry_relative_strength_score": _coerce_float(industry_relative_strength_score),
+        "industry_daily_relative_strength_score": _coerce_float(industry_daily_relative_strength_score),
+        "industry_relative_strength_bonus": int(industry_relative_strength_bonus or 0),
+        "industry_relative_strength_note": industry_relative_strength_note or "",
     }
 
 def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, side):
@@ -25343,6 +25803,46 @@ def build_tracker_entry_attributes(
         description="Scanner note comparing the symbol's one-day and five-day move with SPY.",
     )
     add(
+        "relative_strength.industry_etf",
+        row.get("industry_etf") or symbol_entry.get("industry_etf") or "",
+        group="relative_strength",
+        label="Industry ETF",
+        value_type="text",
+        description="Mapped industry or sector ETF used as the stock's comparison group.",
+    )
+    add(
+        "relative_strength.rs_vs_industry",
+        _coerce_float(row.get("industry_relative_strength_score") or row.get("rs_vs_industry") or symbol_entry.get("industry_relative_strength_score")),
+        group="relative_strength",
+        label="D1 relative strength vs industry",
+        value_type="number",
+        description="One-day and five-day symbol return spread versus its mapped industry or sector ETF.",
+    )
+    add(
+        "relative_strength.industry_daily_relative_strength_score",
+        _coerce_float(row.get("industry_daily_relative_strength_score") or symbol_entry.get("industry_daily_relative_strength_score")),
+        group="relative_strength",
+        label="Industry D1 relative strength score",
+        value_type="number",
+        description="Mapped industry or sector ETF relative strength versus SPY.",
+    )
+    add(
+        "relative_strength.industry_relative_strength_bonus",
+        int(row.get("industry_relative_strength_bonus", symbol_entry.get("industry_relative_strength_bonus", 0)) or 0),
+        group="relative_strength",
+        label="Industry relative strength bonus",
+        value_type="number",
+        description="Priority bonus awarded when the stock leads its group and the group is aligned.",
+    )
+    add(
+        "relative_strength.industry_relative_strength_note",
+        row.get("industry_relative_strength_note") or symbol_entry.get("industry_relative_strength_note") or "",
+        group="relative_strength",
+        label="Industry relative strength note",
+        value_type="text",
+        description="Scanner note comparing the stock with its mapped industry or sector ETF.",
+    )
+    add(
         "filters.ranking_blocked",
         bool(symbol_entry.get("priority_ranking_blocked")),
         group="filters",
@@ -26329,6 +26829,18 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "daily_relative_strength_note": row.get("daily_relative_strength_note") or "",
             "symbol_one_day_return_pct": _coerce_float(row.get("symbol_one_day_return_pct")),
             "symbol_five_day_return_pct": _coerce_float(row.get("symbol_five_day_return_pct")),
+            "sector": row.get("sector") or symbol_state.get("sector") or "",
+            "industry": row.get("industry") or symbol_state.get("industry") or "",
+            "sector_etf": row.get("sector_etf") or symbol_state.get("sector_etf") or "",
+            "industry_etf": row.get("industry_etf") or symbol_state.get("industry_etf") or "",
+            "rs_vs_industry": _coerce_float(row.get("rs_vs_industry")),
+            "industry_one_day_return_pct": _coerce_float(row.get("industry_one_day_return_pct")),
+            "industry_five_day_return_pct": _coerce_float(row.get("industry_five_day_return_pct")),
+            "industry_13w_return_pct": _coerce_float(row.get("industry_13w_return_pct")),
+            "industry_relative_strength_score": _coerce_float(row.get("industry_relative_strength_score")),
+            "industry_daily_relative_strength_score": _coerce_float(row.get("industry_daily_relative_strength_score")),
+            "industry_relative_strength_bonus": int(row.get("industry_relative_strength_bonus", 0) or 0),
+            "industry_relative_strength_note": row.get("industry_relative_strength_note") or "",
             "extension_note": row.get("extension_note") or "",
             "first_dev_note": row.get("first_dev_note") or "",
             "compression_flag": bool(row.get("compression_flag")),
@@ -26412,6 +26924,9 @@ def build_market_prep_payload(
     spy_benchmark: dict | None = None,
     sides_by_symbol: dict | None = None,
     universe_strength_rows: list[dict] | None = None,
+    industry_context_by_symbol: dict | None = None,
+    industry_daily_frames_by_etf: dict | None = None,
+    industry_strength_rows: list[dict] | None = None,
 ) -> dict:
     reference_date = reference_date or datetime.now().date()
     previous_session_date = previous_session_date or _market_prep_previous_session_before(reference_date)
@@ -26429,10 +26944,18 @@ def build_market_prep_payload(
                 daily_frames_by_symbol,
                 spy_benchmark,
                 sides_by_symbol=sides_by_symbol,
+                industry_context_by_symbol=industry_context_by_symbol,
+                industry_daily_frames_by_etf=industry_daily_frames_by_etf,
             )
         else:
             universe_strength_rows = []
     strength_source_rows = universe_strength_rows if universe_strength_rows else priority_rows
+    if not isinstance(industry_strength_rows, list):
+        industry_strength_rows = build_industry_strength_rows(
+            industry_daily_frames_by_etf,
+            spy_benchmark,
+            industry_context_by_symbol=industry_context_by_symbol,
+        )
 
     recent_earnings_entries = collect_market_prep_recent_earnings(
         reference_date=reference_date,
@@ -26483,6 +27006,7 @@ def build_market_prep_payload(
         strongest=False,
     )
     pullback_rows = _market_prep_pullback_rows(universe_strength_rows)
+    strongest_industry_rows = _market_prep_industry_strength_rows(industry_strength_rows)
     strength_percent = int(round(MARKET_PREP_STRENGTH_DECILE_FRACTION * 100))
     strongest_note = (
         f"Top {strength_percent}% by D1 relative strength versus SPY "
@@ -26513,6 +27037,15 @@ def build_market_prep_payload(
             note=(
                 "Strong over ~26w (or ~13w) but pulling back on the last 5 sessions "
                 f"({len(pullback_rows)} of {strength_universe_count} symbols with RS data)."
+            ),
+        ),
+        _build_market_prep_section(
+            "strongest_industries",
+            [row.get("industry_etf") or row.get("symbol", "") for row in strongest_industry_rows],
+            details=_market_prep_industry_strength_details(strongest_industry_rows),
+            note=(
+                "Strongest mapped industry/sector ETFs by the same D1 1d/5d excess-return "
+                f"score versus SPY ({len(strongest_industry_rows)} shown)."
             ),
         ),
         _build_market_prep_section(

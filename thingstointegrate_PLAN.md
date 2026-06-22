@@ -128,7 +128,7 @@ independently shippable + testable.
 | --- | --- | --- |
 | **P1** ✅ | #1 Strongest/weakest 10% for market prep | **DONE 2026-06-21.** Smallest, already half-built, fixes a "not working" complaint. Builds B1. |
 | **P2** ✅ | #2 TOP becomes a *secondary* setup | **DONE 2026-06-21.** Small, removes a known regression (TOP suppressing other patterns). |
-| **P3** | #3 Industry/sector relative strength | Aaron's #1 conceptual priority. Reuses bounce_bot ETF infra. Builds on B1. |
+| **P3** ☑ | #3 Industry/sector relative strength | **DONE 2026-06-22.** Daily scan + market prep + flag-gated D1 boost + BounceBot M5 directional industry RRS. |
 | **P4** | #4 1h/4h trend detection (boost only) | Needs B2 (intraday fetch). Boost first, study in parallel. |
 | **P5** | #5 D1 high-volume horizontal levels | Needs B3 (level store). Study-first; scoring penalty later. |
 | **P6** | #6 Cloud lines, compression breaks, trendline breaks | Needs B3 + B4. Most research-y; pure study-first. |
@@ -188,7 +188,7 @@ Steps:
    studies the real pattern) with `top_secondary=True` context.
 4. ☑ **Tests:** 5 new in `tests/test_master_avwap_setups.py`. Full suite 352 green.
 
-### Phase 3 — Industry & sector relative strength  ☐
+### Phase 3 — Industry & sector relative strength  ☑ DONE (2026-06-22, see T3)
 **Goal (txt #3, #6 of his prose):** find stocks **stronger than their industry**
 (D1 + M5), surface **strongest industries**, and boost swing setups where a
 leader retests (e.g. 15EMA) while its industry turns up.
@@ -220,6 +220,20 @@ Steps:
    `real_relative_strength`).
 8. ☐ **Tests:** ETF map resolution, `rs_vs_industry` math, industry ranking,
    boost is bounded + flag-gated.
+
+> **Shipped.** Seeded the editable industry ETF map in `bounce_bot_lib/legacy.py`
+> (defaults merge into the existing `DATA_DIR/industry_etf_map.json` without
+> overwriting user edits) and exposed cache/map helpers through `rrs.py`. Master
+> AVWAP now reads the shared symbol classification cache, resolves each scanned
+> symbol to industry ETF with sector fallback, fetches unique mapped ETF D1 bars,
+> adds `industry_etf` + `rs_vs_industry` + ETF return fields to universe rows, and
+> writes a new `strongest_industries` market-prep section. Priority rows, AI state,
+> D1 feature CSV/history, tracker attributes, and focus payloads all carry the new
+> industry RS context. The D1 score boost is bounded (`+10`) and gated by
+> `feature_flags.industry_relative_strength_scoring_enabled` (default off). BounceBot
+> M5 candidate scoring now gives a bounded directional industry-RRS bonus instead
+> of a flat "any industry data" bump. Added 7 focused tests; full suite 358 green
+> (`python -m unittest discover tests`).
 
 Note on the "super strong industry" nuance: when an industry is *very* strong,
 a slightly weaker member is OK (rotation candidate) — encode this as: industry
@@ -353,7 +367,13 @@ Steps:
   `_derive_setup_family` (real pattern keeps the family; `top_secondary` flag + bonus
   ride along). 5 new tests; full suite 352 green. **Also catalogued ~20 shadowed
   duplicate `legacy.py` functions in §8b#1** (handoff hazard — edit the last `def`).
-  Next: T3 (industry RS, Aaron's #1 priority).
+  Next at that point was T3 (now shipped 2026-06-22).
+- 2026-06-22 — **T3 / Phase 3 SHIPPED.** Industry ETF defaults + shared cache/map
+  helpers exposed through `rrs.py`; Master AVWAP D1 universe rows now include
+  stock-vs-industry context and market prep includes strongest industries; D1 boost
+  is bounded and flag-gated off by default; BounceBot M5 candidate scoring now gives
+  a bounded directional industry-RRS bonus. 6 new/updated focused tests; full suite
+  358 green.
 
 ---
 
@@ -600,12 +620,17 @@ OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
 > already flag-based). 5 new tests; full suite 352 green. **Discovered ~20 shadowed
 > duplicate functions in `legacy.py` — documented in §8b#1.**
 
-### T3 — Industry/sector relative strength  (Phase 3, B1)  ☐
+### T3 — Industry/sector relative strength  (Phase 3, B1)  ☑ DONE (2026-06-22)
 - Expand §4 "Phase 3." Reuse `bounce_bot_lib/legacy.py` RS/ETF fns via the `rrs.py`
   shim (§8); the JSON ETF maps already exist (`project_paths.py:79-80`). Add
   `industry_etf` + `rs_vs_industry` to the B1 rows (T1), an industry-strength
   ranking section, and a **flag-gated bounded** boost mirroring
   `daily_relative_strength_bonus` (`legacy.py:23714`). DEPENDS ON: T1.
+
+> **Shipped.** See Phase 3 + progress log notes above. Daily scan now computes
+> symbol-vs-industry D1 context, market prep surfaces strongest industries, the
+> D1 score boost is feature-flagged off by default, and BounceBot M5 candidate
+> scoring now prefers directionally aligned industry RRS.
 
 ### T4 — B2 intraday fetch + 1h/4h trend boost & study  (Phase 4)  ☐
 - Expand §4 "Phase 4." Build `fetch_intraday_bars(ib, sym, bar_size, duration)`

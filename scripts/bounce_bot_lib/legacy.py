@@ -265,6 +265,74 @@ DEFAULT_SECTOR_ETF_MAP = {
     "technology": "XLK",
     "utilities": "XLU",
 }
+DEFAULT_INDUSTRY_ETF_MAP = {
+    "aerospace-defense": {"sectorKey": "industrials", "industry": "Aerospace & Defense", "sector": "Industrials", "etf": "ITA"},
+    "airlines": {"sectorKey": "industrials", "industry": "Airlines", "sector": "Industrials", "etf": "JETS"},
+    "asset-management": {"sectorKey": "financial-services", "industry": "Asset Management", "sector": "Financial Services", "etf": "KCE"},
+    "auto-manufacturers": {"sectorKey": "consumer-cyclical", "industry": "Auto Manufacturers", "sector": "Consumer Cyclical", "etf": "CARZ"},
+    "banks-diversified": {"sectorKey": "financial-services", "industry": "Banks - Diversified", "sector": "Financial Services", "etf": "KBE"},
+    "banks-regional": {"sectorKey": "financial-services", "industry": "Banks - Regional", "sector": "Financial Services", "etf": "KRE"},
+    "biotechnology": {"sectorKey": "healthcare", "industry": "Biotechnology", "sector": "Healthcare", "etf": "XBI"},
+    "building-products-equipment": {"sectorKey": "industrials", "industry": "Building Products & Equipment", "sector": "Industrials", "etf": "XHB"},
+    "capital-markets": {"sectorKey": "financial-services", "industry": "Capital Markets", "sector": "Financial Services", "etf": "KCE"},
+    "chemicals": {"sectorKey": "basic-materials", "industry": "Chemicals", "sector": "Basic Materials", "etf": "XLB"},
+    "communication-equipment": {"sectorKey": "technology", "industry": "Communication Equipment", "sector": "Technology", "etf": "IGN"},
+    "computer-hardware": {"sectorKey": "technology", "industry": "Computer Hardware", "sector": "Technology", "etf": "XLK"},
+    "consumer-electronics": {"sectorKey": "technology", "industry": "Consumer Electronics", "sector": "Technology", "etf": "XLK"},
+    "copper": {"sectorKey": "basic-materials", "industry": "Copper", "sector": "Basic Materials", "etf": "COPX"},
+    "credit-services": {"sectorKey": "financial-services", "industry": "Credit Services", "sector": "Financial Services", "etf": "IPAY"},
+    "cybersecurity": {"sectorKey": "technology", "industry": "Cybersecurity", "sector": "Technology", "etf": "HACK"},
+    "diagnostics-research": {"sectorKey": "healthcare", "industry": "Diagnostics & Research", "sector": "Healthcare", "etf": "IHI"},
+    "drug-manufacturers-general": {"sectorKey": "healthcare", "industry": "Drug Manufacturers - General", "sector": "Healthcare", "etf": "PPH"},
+    "drug-manufacturers-specialty-generic": {"sectorKey": "healthcare", "industry": "Drug Manufacturers - Specialty & Generic", "sector": "Healthcare", "etf": "IHE"},
+    "electrical-equipment-parts": {"sectorKey": "industrials", "industry": "Electrical Equipment & Parts", "sector": "Industrials", "etf": "GRID"},
+    "electronic-components": {"sectorKey": "technology", "industry": "Electronic Components", "sector": "Technology", "etf": "SOXX"},
+    "engineering-construction": {"sectorKey": "industrials", "industry": "Engineering & Construction", "sector": "Industrials", "etf": "PAVE"},
+    "entertainment": {"sectorKey": "communication-services", "industry": "Entertainment", "sector": "Communication Services", "etf": "XLC"},
+    "farm-heavy-construction-machinery": {"sectorKey": "industrials", "industry": "Farm & Heavy Construction Machinery", "sector": "Industrials", "etf": "XLI"},
+    "gold": {"sectorKey": "basic-materials", "industry": "Gold", "sector": "Basic Materials", "etf": "GDX"},
+    "health-information-services": {"sectorKey": "healthcare", "industry": "Health Information Services", "sector": "Healthcare", "etf": "ARKG"},
+    "healthcare-plans": {"sectorKey": "healthcare", "industry": "Healthcare Plans", "sector": "Healthcare", "etf": "IHF"},
+    "home-improvement-retail": {"sectorKey": "consumer-cyclical", "industry": "Home Improvement Retail", "sector": "Consumer Cyclical", "etf": "XHB"},
+    "internet-content-information": {"sectorKey": "communication-services", "industry": "Internet Content & Information", "sector": "Communication Services", "etf": "FDN"},
+    "internet-retail": {"sectorKey": "consumer-cyclical", "industry": "Internet Retail", "sector": "Consumer Cyclical", "etf": "IBUY"},
+    "insurance-property-casualty": {"sectorKey": "financial-services", "industry": "Insurance - Property & Casualty", "sector": "Financial Services", "etf": "KIE"},
+    "insurance-diversified": {"sectorKey": "financial-services", "industry": "Insurance - Diversified", "sector": "Financial Services", "etf": "KIE"},
+    "leisure": {"sectorKey": "consumer-cyclical", "industry": "Leisure", "sector": "Consumer Cyclical", "etf": "PEJ"},
+    "lithium": {"sectorKey": "basic-materials", "industry": "Lithium", "sector": "Basic Materials", "etf": "LIT"},
+    "lodging": {"sectorKey": "consumer-cyclical", "industry": "Lodging", "sector": "Consumer Cyclical", "etf": "PEJ"},
+    "medical-devices": {"sectorKey": "healthcare", "industry": "Medical Devices", "sector": "Healthcare", "etf": "IHI"},
+    "medical-instruments-supplies": {"sectorKey": "healthcare", "industry": "Medical Instruments & Supplies", "sector": "Healthcare", "etf": "IHI"},
+    "memory": {"sectorKey": "technology", "industry": "Memory", "sector": "Technology", "etf": "DRAM"},
+    "oil-gas-e-p": {"sectorKey": "energy", "industry": "Oil & Gas E&P", "sector": "Energy", "etf": "XOP"},
+    "oil-gas-equipment-services": {"sectorKey": "energy", "industry": "Oil & Gas Equipment & Services", "sector": "Energy", "etf": "OIH"},
+    "oil-gas-integrated": {"sectorKey": "energy", "industry": "Oil & Gas Integrated", "sector": "Energy", "etf": "XLE"},
+    "packaged-foods": {"sectorKey": "consumer-defensive", "industry": "Packaged Foods", "sector": "Consumer Defensive", "etf": "XLP"},
+    "pharmaceutical-retailers": {"sectorKey": "healthcare", "industry": "Pharmaceutical Retailers", "sector": "Healthcare", "etf": "IHE"},
+    "pollution-treatment-controls": {"sectorKey": "industrials", "industry": "Pollution & Treatment Controls", "sector": "Industrials", "etf": "PHO"},
+    "real-estate-development": {"sectorKey": "real-estate", "industry": "Real Estate - Development", "sector": "Real Estate", "etf": "XLRE"},
+    "real-estate-services": {"sectorKey": "real-estate", "industry": "Real Estate Services", "sector": "Real Estate", "etf": "VNQ"},
+    "recreational-vehicles": {"sectorKey": "consumer-cyclical", "industry": "Recreational Vehicles", "sector": "Consumer Cyclical", "etf": "CARZ"},
+    "reit-diversified": {"sectorKey": "real-estate", "industry": "REIT - Diversified", "sector": "Real Estate", "etf": "VNQ"},
+    "reit-industrial": {"sectorKey": "real-estate", "industry": "REIT - Industrial", "sector": "Real Estate", "etf": "VNQ"},
+    "reit-retail": {"sectorKey": "real-estate", "industry": "REIT - Retail", "sector": "Real Estate", "etf": "VNQ"},
+    "renewable-utilities": {"sectorKey": "utilities", "industry": "Renewable Utilities", "sector": "Utilities", "etf": "ICLN"},
+    "residential-construction": {"sectorKey": "consumer-cyclical", "industry": "Residential Construction", "sector": "Consumer Cyclical", "etf": "XHB"},
+    "restaurants": {"sectorKey": "consumer-cyclical", "industry": "Restaurants", "sector": "Consumer Cyclical", "etf": "EATZ"},
+    "semiconductor-equipment-materials": {"sectorKey": "technology", "industry": "Semiconductor Equipment & Materials", "sector": "Technology", "etf": "SOXX"},
+    "semiconductors": {"sectorKey": "technology", "industry": "Semiconductors", "sector": "Technology", "etf": "SMH"},
+    "software-application": {"sectorKey": "technology", "industry": "Software - Application", "sector": "Technology", "etf": "IGV"},
+    "software-infrastructure": {"sectorKey": "technology", "industry": "Software - Infrastructure", "sector": "Technology", "etf": "IGV"},
+    "solar": {"sectorKey": "technology", "industry": "Solar", "sector": "Technology", "etf": "TAN"},
+    "specialty-industrial-machinery": {"sectorKey": "industrials", "industry": "Specialty Industrial Machinery", "sector": "Industrials", "etf": "XLI"},
+    "specialty-retail": {"sectorKey": "consumer-cyclical", "industry": "Specialty Retail", "sector": "Consumer Cyclical", "etf": "XRT"},
+    "steel": {"sectorKey": "basic-materials", "industry": "Steel", "sector": "Basic Materials", "etf": "SLX"},
+    "telecom-services": {"sectorKey": "communication-services", "industry": "Telecom Services", "sector": "Communication Services", "etf": "IYZ"},
+    "travel-services": {"sectorKey": "consumer-cyclical", "industry": "Travel Services", "sector": "Consumer Cyclical", "etf": "PEJ"},
+    "trucking": {"sectorKey": "industrials", "industry": "Trucking", "sector": "Industrials", "etf": "IYT"},
+    "uranium": {"sectorKey": "energy", "industry": "Uranium", "sector": "Energy", "etf": "URA"},
+    "utilities-regulated-electric": {"sectorKey": "utilities", "industry": "Utilities - Regulated Electric", "sector": "Utilities", "etf": "XLU"},
+}
 
 MARKET_ENVIRONMENTS = {
     "bearish_strong": {"label": "Bearish Strong"},
@@ -277,6 +345,7 @@ MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
 MASTER_AVWAP_FOCUS_MIN_MOVE_RATIO = 0.45
 MASTER_AVWAP_FOCUS_MIN_EXCESS_MOVE_RATIO = 0.25
+BOUNCE_INDUSTRY_RRS_BONUS_CAP = 10
 EMIT_MASTER_AVWAP_FOCUS_RRS_ALERTS = False
 ENVIRONMENT_HIGHLIGHT_LIMIT = 6
 ENVIRONMENT_SCAN_LIMIT = 25
@@ -495,9 +564,26 @@ def load_sector_etf_map():
     return dict(DEFAULT_SECTOR_ETF_MAP)
 
 
+def _default_industry_etf_map_payload():
+    now = utc_now_iso()
+    refs = {}
+    for industry_key, entry in DEFAULT_INDUSTRY_ETF_MAP.items():
+        refs[industry_key] = {
+            "sectorKey": entry.get("sectorKey", ""),
+            "industry": entry.get("industry", ""),
+            "sector": entry.get("sector", ""),
+            "etf": (entry.get("etf") or "").strip().upper() or None,
+            "source": "default",
+            "first_seen_utc": now,
+            "last_seen_utc": now,
+            "seen_count": 0,
+        }
+    return {"version": 1, "updated_utc": now, "yahoo_industryKey_to_ref": refs}
+
+
 def _load_industry_etf_map_file():
     INDUSTRY_ETF_MAP_FILENAME.parent.mkdir(parents=True, exist_ok=True)
-    default_map = {"version": 1, "updated_utc": utc_now_iso(), "yahoo_industryKey_to_ref": {}}
+    default_map = _default_industry_etf_map_payload()
     if not INDUSTRY_ETF_MAP_FILENAME.exists():
         with open(INDUSTRY_ETF_MAP_FILENAME, "w") as fh:
             json.dump(default_map, fh, indent=2, sort_keys=True)
@@ -511,8 +597,37 @@ def _load_industry_etf_map_file():
         data = {}
     data.setdefault("version", 1)
     data.setdefault("updated_utc", utc_now_iso())
-    data.setdefault("yahoo_industryKey_to_ref", {})
+    refs = data.setdefault("yahoo_industryKey_to_ref", {})
+    changed = False
+    for industry_key, default_entry in default_map["yahoo_industryKey_to_ref"].items():
+        existing = refs.get(industry_key)
+        if not isinstance(existing, dict):
+            refs[industry_key] = dict(default_entry)
+            changed = True
+            continue
+        for field in ("sectorKey", "industry", "sector"):
+            if not existing.get(field) and default_entry.get(field):
+                existing[field] = default_entry[field]
+                changed = True
+        if not existing.get("etf") and default_entry.get("etf"):
+            existing["etf"] = default_entry["etf"]
+            existing.setdefault("source", "default")
+            changed = True
+        existing.setdefault("first_seen_utc", default_entry.get("first_seen_utc") or utc_now_iso())
+        existing.setdefault("last_seen_utc", existing.get("first_seen_utc") or utc_now_iso())
+        existing.setdefault("seen_count", 0)
+    if changed:
+        data["updated_utc"] = utc_now_iso()
+        try:
+            with open(INDUSTRY_ETF_MAP_FILENAME, "w") as fh:
+                json.dump(data, fh, indent=2, sort_keys=True)
+        except Exception as exc:
+            logging.warning(f"Failed updating industry ETF map defaults: {exc}")
     return data
+
+
+def load_industry_etf_map():
+    return _load_industry_etf_map_file()
 
 
 def load_and_update_industry_etf_map(industryKey, sectorKey, industry_name, sector_name):
@@ -564,14 +679,45 @@ def resolve_sector_etf(sectorKey, sector_map=None):
     return "SPY"
 
 
-def resolve_industry_ref_etf(industryKey, sectorKey):
+def resolve_industry_ref_etf(industryKey, sectorKey, industry_map_data=None, sector_map=None):
     if industryKey:
-        data = _load_industry_etf_map_file()
-        entry = data.get("yahoo_industryKey_to_ref", {}).get(industryKey, {})
-        etf = (entry.get("etf") or "").strip().upper() if isinstance(entry, dict) else ""
-        if etf:
-            return etf
-    return resolve_sector_etf(sectorKey)
+        data = industry_map_data if isinstance(industry_map_data, dict) else _load_industry_etf_map_file()
+        refs = data.get("yahoo_industryKey_to_ref", {})
+        candidates = [
+            str(industryKey or "").strip(),
+            str(industryKey or "").strip().lower(),
+            slugify_key(industryKey),
+        ]
+        for candidate in candidates:
+            entry = refs.get(candidate, {}) if isinstance(refs, dict) else {}
+            etf = (entry.get("etf") or "").strip().upper() if isinstance(entry, dict) else ""
+            if etf:
+                return etf
+    return resolve_sector_etf(sectorKey, sector_map)
+
+
+def load_symbol_classification_cache():
+    cache = {}
+    if not SYMBOL_CLASSIFICATION_CACHE_FILENAME.exists():
+        return cache
+    try:
+        with open(SYMBOL_CLASSIFICATION_CACHE_FILENAME, "r", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                symbol = (row.get("symbol") or "").strip().upper()
+                if not symbol:
+                    continue
+                cache[symbol] = {
+                    "symbol": symbol,
+                    "sectorKey": slugify_key(row.get("sectorKey") or row.get("sector") or ""),
+                    "industryKey": slugify_key(row.get("industryKey") or row.get("industry") or ""),
+                    "sector": row.get("sector", ""),
+                    "industry": row.get("industry", ""),
+                    "updated_utc": row.get("updated_utc", ""),
+                }
+    except Exception as exc:
+        logging.warning(f"Failed loading symbol classification cache: {exc}")
+    return cache
 
 ##########################################
 # Logging Filter
@@ -1882,8 +2028,14 @@ class BounceBot(EWrapper, EClient):
             pass
         if context.get("rrs_sector") != "":
             score += 4
-        if context.get("rrs_industry") != "":
-            score += 4
+        try:
+            industry_rrs = float(context.get("rrs_industry"))
+            if direction == "long" and industry_rrs > 0:
+                score += min(BOUNCE_INDUSTRY_RRS_BONUS_CAP, max(4, industry_rrs * 2))
+            elif direction == "short" and industry_rrs < 0:
+                score += min(BOUNCE_INDUSTRY_RRS_BONUS_CAP, max(4, abs(industry_rrs) * 2))
+        except (TypeError, ValueError):
+            pass
         return round(float(score), 2)
 
     def _master_avwap_swing_trait_tags(self, focus_entry):

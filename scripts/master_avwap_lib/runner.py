@@ -1418,6 +1418,45 @@ def run_master(
             f"multi_day={symbol_multi_day}"
         )
 
+    spy_benchmark = (market_regime_snapshot.get("benchmarks", {}) or {}).get("SPY", {}) or {}
+    sides_by_symbol = {
+        sym: ("LONG" if sym in longs else "SHORT") for sym in daily_frames_by_symbol
+    }
+    industry_context_by_symbol = build_symbol_industry_contexts(daily_frames_by_symbol.keys())
+    industry_etfs = sorted(
+        {
+            str(context.get("industry_etf") or "").strip().upper()
+            for context in industry_context_by_symbol.values()
+            if isinstance(context, dict)
+            and str(context.get("industry_etf") or "").strip().upper()
+            and str(context.get("industry_etf") or "").strip().upper() != "SPY"
+        }
+    )
+    industry_daily_frames_by_etf = {}
+    for industry_etf in industry_etfs:
+        etf_df = fetch_daily_bars(ib, industry_etf, MARKET_PREP_INDUSTRY_LOOKBACK_DAYS)
+        if etf_df is not None and not etf_df.empty:
+            industry_daily_frames_by_etf[industry_etf] = etf_df.copy()
+    universe_strength_rows = build_universe_strength_rows(
+        daily_frames_by_symbol,
+        spy_benchmark,
+        sides_by_symbol=sides_by_symbol,
+        industry_context_by_symbol=industry_context_by_symbol,
+        industry_daily_frames_by_etf=industry_daily_frames_by_etf,
+    )
+    industry_strength_rows = build_industry_strength_rows(
+        industry_daily_frames_by_etf,
+        spy_benchmark,
+        industry_context_by_symbol=industry_context_by_symbol,
+    )
+    enrich_priority_rows_with_industry_relative_strength(
+        priority_rows,
+        universe_strength_rows,
+        industry_strength_rows,
+        ai_state=ai_state,
+        feature_rows_by_symbol=feature_rows_by_symbol,
+    )
+
     refine_priority_rows_with_directional_filters(
         priority_rows,
         ai_state,
@@ -1479,6 +1518,8 @@ def run_master(
         "ai_state": ai_state,
         "feature_rows_by_symbol": feature_rows_by_symbol,
         "daily_frames_by_symbol": daily_frames_by_symbol,
+        "universe_strength_rows": universe_strength_rows,
+        "industry_strength_rows": industry_strength_rows,
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
         "setup_tracker_updated": False,
         "setup_tracker_allowed": False,
@@ -1675,10 +1716,6 @@ def run_master(
         stdev_range_hits,
         stdev_cross_hits,
     )
-    spy_benchmark = (market_regime_snapshot.get("benchmarks", {}) or {}).get("SPY", {}) or {}
-    sides_by_symbol = {
-        sym: ("LONG" if sym in longs else "SHORT") for sym in daily_frames_by_symbol
-    }
     market_prep_payload = build_market_prep_payload(
         range_buckets=range_buckets,
         market_prep_range_buckets=market_prep_range_buckets,
@@ -1688,6 +1725,10 @@ def run_master(
         daily_frames_by_symbol=daily_frames_by_symbol,
         spy_benchmark=spy_benchmark,
         sides_by_symbol=sides_by_symbol,
+        universe_strength_rows=universe_strength_rows,
+        industry_context_by_symbol=industry_context_by_symbol,
+        industry_daily_frames_by_etf=industry_daily_frames_by_etf,
+        industry_strength_rows=industry_strength_rows,
     )
     write_market_prep_files(market_prep_payload)
     run_result["market_prep_payload"] = market_prep_payload
@@ -1703,6 +1744,19 @@ def run_master(
         "spy_five_day_return_pct",
         "spy_above_sma20",
         "spy_above_sma50",
+        "sector",
+        "industry",
+        "sector_etf",
+        "industry_etf",
+        "industry_one_day_return_pct",
+        "industry_five_day_return_pct",
+        "industry_13w_return_pct",
+        "rs_vs_industry",
+        "return_13w_vs_industry_pct",
+        "industry_relative_strength_score",
+        "industry_daily_relative_strength_score",
+        "industry_relative_strength_bonus",
+        "industry_relative_strength_note",
         "last_close",
         "last_volume",
         "atr20",

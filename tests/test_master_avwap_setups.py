@@ -2118,6 +2118,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
             priority_rows=priority_rows,
             reference_date=date(2026, 4, 24),
             previous_session_date=date(2026, 4, 23),
+            calendar_rows_by_date={},
         )
         sections = {section["id"]: section for section in payload["sections"]}
 
@@ -2175,6 +2176,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
             sides_by_symbol={sym: "LONG" for sym in symbols},
             priority_rows=[],  # nothing flagged -> proves the decile no longer needs flagged rows
             reference_date=date(2026, 4, 24),
+            previous_session_date=date(2026, 4, 23),
+            calendar_rows_by_date={},
         )
         sections = {section["id"]: section for section in payload["sections"]}
 
@@ -2194,6 +2197,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
             daily_frames_by_symbol=frames,
             spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
             reference_date=date(2026, 4, 24),
+            previous_session_date=date(2026, 4, 23),
+            calendar_rows_by_date={},
         )
         sections = {section["id"]: section for section in payload["sections"]}
         self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], ["AAA", "BBB"])
@@ -2207,6 +2212,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
             daily_frames_by_symbol=frames,
             spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
             reference_date=date(2026, 4, 24),
+            previous_session_date=date(2026, 4, 23),
+            calendar_rows_by_date={},
         )
         sections = {section["id"]: section for section in payload["sections"]}
         self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], ["AAA"])
@@ -2216,6 +2223,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
         payload = build_market_prep_payload(
             priority_rows=[],
             reference_date=date(2026, 4, 24),
+            previous_session_date=date(2026, 4, 23),
+            calendar_rows_by_date={},
         )
         sections = {section["id"]: section for section in payload["sections"]}
         self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], [])
@@ -2236,12 +2245,151 @@ class MasterAvwapSetupTests(unittest.TestCase):
             daily_frames_by_symbol=frames,
             spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
             reference_date=date(2026, 4, 24),
+            previous_session_date=date(2026, 4, 23),
+            calendar_rows_by_date={},
         )
         sections = {section["id"]: section for section in payload["sections"]}
         pullback = sections["recently_strong_now_pulling_back"]
         self.assertIn("WINNER", pullback["symbols"])
         self.assertNotIn("STEADY", pullback["symbols"])
         self.assertTrue(pullback["details"][0].startswith("WINNER"))
+
+    def test_symbol_industry_contexts_use_industry_map_then_sector_fallback(self):
+        contexts = master_avwap.build_symbol_industry_contexts(
+            ["NVDA", "JPM"],
+            symbol_classification_cache={
+                "NVDA": {
+                    "sectorKey": "technology",
+                    "industryKey": "semiconductors",
+                    "sector": "Technology",
+                    "industry": "Semiconductors",
+                },
+                "JPM": {
+                    "sectorKey": "financial-services",
+                    "industryKey": "banks-diversified",
+                    "sector": "Financial Services",
+                    "industry": "Banks - Diversified",
+                },
+            },
+            sector_map={"technology": "XLK", "financial-services": "XLF"},
+            industry_map_data={
+                "yahoo_industryKey_to_ref": {
+                    "semiconductors": {"etf": "SMH"},
+                    "banks-diversified": {"etf": ""},
+                }
+            },
+        )
+
+        self.assertEqual(contexts["NVDA"]["industry_etf"], "SMH")
+        self.assertEqual(contexts["NVDA"]["sector_etf"], "XLK")
+        self.assertEqual(contexts["JPM"]["industry_etf"], "XLF")
+
+    def test_universe_strength_rows_compute_stock_vs_industry(self):
+        frames = {
+            "NVDA": self._strength_frame(10.0),
+        }
+        industry_frames = {
+            "SMH": self._strength_frame(3.0),
+        }
+        contexts = {
+            "NVDA": {
+                "sector": "Technology",
+                "industry": "Semiconductors",
+                "sector_etf": "XLK",
+                "industry_etf": "SMH",
+            }
+        }
+
+        rows = master_avwap.build_universe_strength_rows(
+            frames,
+            {"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
+            sides_by_symbol={"NVDA": "LONG"},
+            industry_context_by_symbol=contexts,
+            industry_daily_frames_by_etf=industry_frames,
+        )
+
+        self.assertEqual(rows[0]["industry_etf"], "SMH")
+        self.assertAlmostEqual(rows[0]["rs_vs_industry"], 7.0, places=3)
+        self.assertAlmostEqual(rows[0]["industry_five_day_return_pct"], 3.0, places=3)
+
+    def test_market_prep_includes_strongest_industries(self):
+        industry_frames = {
+            "XBI": self._strength_frame(2.0),
+            "SMH": self._strength_frame(6.0),
+        }
+        payload = build_market_prep_payload(
+            industry_daily_frames_by_etf=industry_frames,
+            industry_context_by_symbol={
+                "NVDA": {"industry": "Semiconductors", "industry_etf": "SMH"},
+                "BIIB": {"industry": "Biotechnology", "industry_etf": "XBI"},
+            },
+            spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
+            reference_date=date(2026, 4, 24),
+            previous_session_date=date(2026, 4, 23),
+            calendar_rows_by_date={},
+        )
+        sections = {section["id"]: section for section in payload["sections"]}
+
+        self.assertEqual(sections["strongest_industries"]["symbols"][:2], ["SMH", "XBI"])
+        self.assertIn("Semiconductors", sections["strongest_industries"]["details"][0])
+        self.assertIn("rs=+6.00", sections["strongest_industries"]["details"][0])
+
+    def test_industry_relative_strength_enrichment_is_feature_flag_gated(self):
+        priority_rows = [
+            {
+                "symbol": "NVDA",
+                "side": "LONG",
+                "score": 100.0,
+                "has_favorite_signal": True,
+                "setup_family": "sma_breakout",
+            }
+        ]
+        universe_rows = [
+            {
+                "symbol": "NVDA",
+                "side": "LONG",
+                "industry_etf": "SMH",
+                "rs_vs_industry": 2.2,
+                "industry_one_day_return_pct": 1.0,
+                "industry_five_day_return_pct": 1.2,
+            }
+        ]
+        industry_rows = [{"industry_etf": "SMH", "daily_relative_strength_score": 1.4}]
+
+        master_avwap.enrich_priority_rows_with_industry_relative_strength(
+            priority_rows,
+            universe_rows,
+            industry_rows,
+            scoring_enabled=False,
+        )
+        self.assertEqual(priority_rows[0]["score"], 100.0)
+        self.assertEqual(priority_rows[0]["industry_relative_strength_bonus"], 0)
+        self.assertIn("score flag off", priority_rows[0]["industry_relative_strength_note"])
+
+        master_avwap.enrich_priority_rows_with_industry_relative_strength(
+            priority_rows,
+            universe_rows,
+            industry_rows,
+            scoring_enabled=True,
+        )
+        self.assertEqual(priority_rows[0]["score"], 110.0)
+        self.assertEqual(priority_rows[0]["industry_relative_strength_bonus"], 10)
+
+    def test_industry_relative_strength_boost_skips_inactive_general_rows(self):
+        priority_rows = [{"symbol": "NVDA", "side": "LONG", "score": 100.0, "setup_family": "general"}]
+        universe_rows = [{"symbol": "NVDA", "side": "LONG", "industry_etf": "SMH", "rs_vs_industry": 2.2}]
+        industry_rows = [{"industry_etf": "SMH", "daily_relative_strength_score": 1.4}]
+
+        master_avwap.enrich_priority_rows_with_industry_relative_strength(
+            priority_rows,
+            universe_rows,
+            industry_rows,
+            scoring_enabled=True,
+        )
+
+        self.assertEqual(priority_rows[0]["score"], 100.0)
+        self.assertEqual(priority_rows[0]["industry_relative_strength_bonus"], 0)
+        self.assertIn("setup inactive", priority_rows[0]["industry_relative_strength_note"])
 
     def test_load_scan_earnings_context_reuses_refreshed_earnings_lookup(self):
         earnings_lookup = {"AAPL": ["2026-04-21"]}
@@ -3448,6 +3596,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
                             "context": {"SHORT": {"PREV_CROSS_DOWN_LOWER_2": 99}},
                         },
                         "attribute_adjustments": [],
+                        "feature_flags": {
+                            "industry_relative_strength_scoring_enabled": True,
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -3460,6 +3611,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(config["signal_weights"]["current"]["SHORT"]["CROSS_DOWN_LOWER_2"], 110)
         self.assertEqual(config["signal_weights"]["current"]["SHORT"]["POST_EARNINGS_52W_BREAK"], 120)
         self.assertEqual(config["signal_weights"]["context"]["SHORT"]["PREV_CROSS_DOWN_LOWER_2"], 28)
+        self.assertTrue(config["feature_flags"]["industry_relative_strength_scoring_enabled"])
     def test_market_regime_penalizes_countertrend_without_fresh_trigger(self):
         priority_rows = [
             {

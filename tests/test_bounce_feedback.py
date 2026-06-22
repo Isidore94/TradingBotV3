@@ -112,6 +112,35 @@ def _flat_h1_bars(*, direction="long"):
 
 
 class BounceFeedbackTests(unittest.TestCase):
+    def test_bounce_candidate_industry_rrs_bonus_is_directional(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        levels = {"vwap": {}}
+
+        base = bot._score_bounce_candidate_snapshot(
+            "long",
+            levels,
+            {"rrs_spy": "", "rrs_sector": "", "rrs_industry": ""},
+        )
+        aligned_long = bot._score_bounce_candidate_snapshot(
+            "long",
+            levels,
+            {"rrs_spy": "", "rrs_sector": "", "rrs_industry": 3.0},
+        )
+        counter_long = bot._score_bounce_candidate_snapshot(
+            "long",
+            levels,
+            {"rrs_spy": "", "rrs_sector": "", "rrs_industry": -3.0},
+        )
+        aligned_short = bot._score_bounce_candidate_snapshot(
+            "short",
+            levels,
+            {"rrs_spy": "", "rrs_sector": "", "rrs_industry": -3.0},
+        )
+
+        self.assertEqual(aligned_long, base + 6.0)
+        self.assertEqual(counter_long, base)
+        self.assertEqual(aligned_short, base + 6.0)
+
     def _build_impulse_retest_bot(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
         bot.atr_cache = {"AAPL": 10.0}
