@@ -14404,11 +14404,24 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     if cache_has_history and cache_data_is_recent and _daily_bar_live_failure_in_cooldown(normalized_symbol):
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
-    refresh_days = (
-        requested_days
-        if not cache_has_history
-        else min(requested_days, max(ATR_LENGTH + 5, DAILY_BAR_CACHE_RECENT_REFRESH_DAYS))
-    )
+    if not cache_has_history:
+        refresh_days = requested_days
+    else:
+        # Fill in only from the last stored bar forward (the delta), plus a small
+        # re-statement buffer for late prints/adjustments. This keeps the fetch
+        # minimal on a daily cadence yet still bridges the gap with no holes if the
+        # bot has been offline for a while, instead of a fixed 20-day window that
+        # could leave the cache with a gap.
+        last_cached_date = _daily_bar_frame_last_date(cached)
+        gap_days = (
+            _weekday_gap(last_cached_date, datetime.now().date())
+            if last_cached_date is not None
+            else DAILY_BAR_CACHE_RECENT_REFRESH_DAYS
+        )
+        refresh_days = min(
+            requested_days,
+            max(DAILY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS),
+        )
     fresh = _fetch_live_daily_bars(ib, normalized_symbol, refresh_days)
     if fresh is not None and not fresh.empty:
         if _daily_bar_cache_data_is_recent(fresh):
