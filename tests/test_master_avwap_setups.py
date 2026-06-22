@@ -5903,6 +5903,44 @@ class MasterAvwapSetupTests(unittest.TestCase):
             master_avwap._INTRADAY_BAR_FRAME_CACHE.clear()
             master_avwap._INTRADAY_BAR_CACHE_TOUCHED_AT.clear()
 
+    def test_warm_durable_bar_stores_force_writes_unique_symbols(self):
+        def daily_frame(n):
+            dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=n)
+            return pd.DataFrame(
+                {"datetime": dates, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0}
+            )
+
+        def hourly_frame(n):
+            sessions = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=n)
+            rows = []
+            for day in sessions:
+                for hour in range(9, 16):
+                    rows.append(
+                        {"datetime": pd.Timestamp(day) + pd.Timedelta(hours=hour),
+                         "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0}
+                    )
+            return pd.DataFrame(rows)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            daily_dir = Path(temp_dir) / "daily"
+            intraday_dir = Path(temp_dir) / "intraday"
+            with (
+                patch.object(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", daily_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_INTRADAY_BARS_DIR", intraday_dir),
+                patch.object(master_avwap, "fetch_daily_bars", side_effect=lambda ib, sym, days: daily_frame(420)),
+                patch.object(master_avwap, "fetch_intraday_bars", side_effect=lambda ib, sym, bar_size=None: hourly_frame(190)),
+            ):
+                summary = master_avwap.warm_durable_bar_stores(["nvda", "AAPL", "nvda", ""], ib=None)
+
+            self.assertEqual(summary["requested"], 2)
+            self.assertEqual(summary["daily"], 2)
+            self.assertEqual(summary["intraday"], 2)
+            self.assertEqual(summary["failed"], [])
+            self.assertTrue((daily_dir / "NVDA.parquet").exists())
+            self.assertTrue((daily_dir / "AAPL.parquet").exists())
+            self.assertTrue((intraday_dir / "NVDA__1h.parquet").exists())
+            self.assertTrue((intraday_dir / "AAPL__1h.parquet").exists())
+
     def test_fetch_daily_bars_skips_when_live_refresh_returns_stale_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_dir = Path(temp_dir) / "daily_bars"

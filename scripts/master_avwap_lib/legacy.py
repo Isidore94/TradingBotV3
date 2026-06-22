@@ -14884,6 +14884,117 @@ def fetch_intraday_bars(
         return cached.copy()
     return fresh if fresh is not None else _empty_intraday_bar_frame()
 
+
+# Daily history depth to warm into the durable store: enough to cover the longest
+# daily SMA (PRIORITY_SMA_LOOKBACK_DAYS=320) plus a buffer for every consumer.
+WARM_DURABLE_DAILY_DAYS = 400
+
+
+def warm_durable_bar_stores(
+    symbols,
+    ib: IBApi | None = None,
+    *,
+    include_daily: bool = True,
+    include_intraday: bool = True,
+    daily_days: int | None = None,
+    intraday_bar_size: str | None = None,
+    progress_every: int = 25,
+) -> dict:
+    """One-shot pre-population of the durable (Drive) daily and H1 stores.
+
+    Fetches each symbol's history once (delta-aware, so it is cheap when a local
+    cache already exists) and force-writes it to the durable Parquet store, so a
+    later run on another Drive-linked machine starts delta-only instead of
+    re-pulling full history. Idempotent and safe to re-run.
+    """
+    seen: list[str] = []
+    for raw in symbols or []:
+        sym = str(raw or "").strip().upper()
+        if sym and sym not in seen:
+            seen.append(sym)
+    summary = {"requested": len(seen), "daily": 0, "intraday": 0, "failed": []}
+    daily_days = int(daily_days or WARM_DURABLE_DAILY_DAYS)
+    token = _intraday_bar_size_token(intraday_bar_size)
+    for idx, sym in enumerate(seen):
+        if include_daily:
+            try:
+                frame = fetch_daily_bars(ib, sym, daily_days)
+                if frame is not None and not getattr(frame, "empty", True):
+                    _persist_durable_daily_bars(sym, _normalize_daily_bar_frame(frame))
+                    summary["daily"] += 1
+            except Exception as exc:
+                if sym not in summary["failed"]:
+                    summary["failed"].append(sym)
+                logging.warning("%s: durable daily warm failed (%s).", sym, exc)
+        if include_intraday:
+            try:
+                hourly = fetch_intraday_bars(ib, sym, bar_size=intraday_bar_size)
+                if hourly is not None and not getattr(hourly, "empty", True):
+                    _persist_durable_intraday_bars(sym, token, _normalize_intraday_bar_frame(hourly))
+                    summary["intraday"] += 1
+            except Exception as exc:
+                if sym not in summary["failed"]:
+                    summary["failed"].append(sym)
+                logging.warning("%s: durable intraday warm failed (%s).", sym, exc)
+        if progress_every and (idx + 1) % int(progress_every) == 0:
+            logging.info(
+                "Durable warm progress: %d/%d symbols (daily=%d, intraday=%d).",
+                idx + 1, len(seen), summary["daily"], summary["intraday"],
+            )
+    logging.info(
+        "Durable warm complete: %d symbol(s) (daily=%d, intraday=%d, failed=%d).",
+        len(seen), summary["daily"], summary["intraday"], len(summary["failed"]),
+    )
+    return summary
+
+
+def warm_durable_stores_for_watchlists(
+    ib: IBApi | None = None,
+    *,
+    use_shared_watchlists: bool = True,
+    include_daily: bool = True,
+    include_intraday: bool = True,
+    daily_days: int | None = None,
+    intraday_bar_size: str | None = None,
+) -> dict:
+    """Load the standard scan watchlist symbols and warm the durable stores.
+
+    Connects an IBKR daily-data client when one is not supplied (falling back to
+    Yahoo if IB is unavailable), warms, and disconnects what it connected.
+    """
+    long_paths, short_paths, label = resolve_master_scan_watchlist_paths(
+        use_shared_watchlists=use_shared_watchlists
+    )
+    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE}
+    longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
+    shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
+    symbols = sorted(set(longs + shorts))
+    if not symbols:
+        logging.warning("Durable warm: no symbols found in %s.", label)
+        return {"requested": 0, "daily": 0, "intraday": 0, "failed": []}
+    logging.info("Durable warm: %d symbol(s) from %s.", len(symbols), label)
+    owns_ib = False
+    if ib is None:
+        ib = connect_daily_data_client(client_id=1009, startup_wait=1.5)
+        owns_ib = ib is not None
+        if ib is None:
+            logging.info("Durable warm: no IBKR connection; using Yahoo fallback.")
+    try:
+        return warm_durable_bar_stores(
+            symbols,
+            ib,
+            include_daily=include_daily,
+            include_intraday=include_intraday,
+            daily_days=daily_days,
+            intraday_bar_size=intraday_bar_size,
+        )
+    finally:
+        if owns_ib and ib is not None:
+            try:
+                ib.disconnect()
+            except Exception:
+                pass
+
 # ============================================================================
 # AVWAP CALCULATION
 # ============================================================================
