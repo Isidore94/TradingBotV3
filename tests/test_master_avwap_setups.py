@@ -5354,10 +5354,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(ranked[0]["covered_major_sma_support_count"], 1)
         self.assertNotIn("SMA_20", ranked[0]["covered_support_summary"])
 
-    def test_theta_option_strikes_allow_avwap_only_support(self):
-        # Loosened: an AVWAP support below the strike is enough on its own (a major
-        # SMA is no longer also required).
-        row = {
+    def test_theta_strike_requires_major_sma_defense(self):
+        # A strike defended only by AVWAP/trendline (no 50/100/200 SMA) is rejected.
+        avwap_only = {
             "symbol": "CIEN",
             "last_close": 105.0,
             "score": 80,
@@ -5368,25 +5367,46 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 {"label": "PREV_AVWAPE", "level": 96.0, "source": "previous_avwape", "distance_atr": 1.0},
             ],
         }
+        self.assertEqual(master_avwap._sold_put_candidate_strikes(avwap_only, [100, 98, 96, 94]), [])
 
-        sold = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94])
+        # Add a major SMA below the strike and it becomes eligible.
+        with_sma = dict(avwap_only)
+        with_sma["supports"] = avwap_only["supports"] + [
+            {"label": "SMA_50", "level": 99.0, "source": "sma", "distance_atr": 0.5}
+        ]
+        sold = master_avwap._sold_put_candidate_strikes(with_sma, [100, 98, 96, 94])
         self.assertTrue(sold)
-        self.assertTrue(all(c["covered_avwap_support_count"] >= 1 for c in sold))
+        self.assertTrue(all(c["covered_major_sma_support_count"] >= 1 for c in sold))
 
-        # A strike covered only by trendline/compression (no SMA, no AVWAP) is
-        # still rejected.
-        row_no_structural = {
+    def test_theta_hv_horizontal_levels_count_as_supports(self):
+        # High-rvol horizontal levels from the stored chart defend the strike like
+        # any other support (stacking), but never substitute for the major SMA.
+        store = {
+            "levels": [
+                {"kind": "hv_horizontal", "price": 99.0, "bucket": "green"},
+                {"kind": "hv_horizontal", "price": 97.0, "bucket": "red"},
+                {"kind": "cloud_flat", "price": 96.0},  # not an hv_horizontal -> ignored
+                {"kind": "hv_horizontal", "price": 130.0, "bucket": "green"},  # above price -> filtered
+            ]
+        }
+        hv_supports = master_avwap._theta_hv_level_supports("CIEN", 105.0, 4.0, store=store)
+        labels = sorted(entry["label"] for entry in hv_supports)
+        self.assertEqual(labels, ["HVOL_GREEN", "HVOL_RED"])
+        self.assertTrue(all(entry["source"] == "hv_horizontal" for entry in hv_supports))
+
+        # HV levels stack with a major SMA to make a strike eligible.
+        row = {
             "symbol": "CIEN",
             "last_close": 105.0,
             "score": 80,
             "base_score": 80,
             "supports": [
-                {"label": "TRENDLINE_SUPPORT", "level": 100.0, "source": "trendline", "distance_atr": 0.4},
-                {"label": "COMPRESSION_LOW", "level": 98.0, "source": "compression", "distance_atr": 0.7},
-                {"label": "TRENDLINE_SUPPORT_2", "level": 96.0, "source": "trendline", "distance_atr": 1.0},
+                {"label": "SMA_50", "level": 99.0, "source": "sma", "distance_atr": 0.5},
+                *hv_supports,
             ],
         }
-        self.assertEqual(master_avwap._sold_put_candidate_strikes(row_no_structural, [100, 98, 96, 94]), [])
+        sold = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94])
+        self.assertTrue(sold)
 
     def test_theta_option_strikes_allow_sma_only_support(self):
         # Loosened: a major SMA support below the strike is enough on its own (an

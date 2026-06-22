@@ -16632,6 +16632,50 @@ def _theta_support_entry(
     }
 
 
+def _theta_hv_level_supports(
+    symbol: str,
+    last_close: float | None,
+    atr20: float | None,
+    *,
+    levels_dir: Path | None = None,
+    store: dict | None = None,
+) -> list[dict]:
+    """High-rvol horizontal levels (from the stored level chart) as theta supports.
+
+    Stored hv_horizontal levels at/below price defend a sold strike just like an
+    SMA/AVWAP support. They add to the stack but never substitute for the required
+    major SMA defense. Reads the persisted Drive level store on demand; an empty
+    store (e.g. first run) simply contributes no extra supports.
+    """
+    close_value = _coerce_float(last_close)
+    atr_value = _coerce_float(atr20)
+    if close_value is None or close_value <= 0 or atr_value is None or atr_value <= 0:
+        return []
+    if not isinstance(store, dict):
+        try:
+            path = level_store_path(Path(levels_dir or MASTER_AVWAP_LEVELS_DIR), symbol)
+            store = load_level_store(path, symbol)
+        except Exception:
+            return []
+    entries: list[dict] = []
+    for level in (store or {}).get("levels", []) or []:
+        if str(level.get("kind") or "") != "hv_horizontal":
+            continue
+        price = _coerce_float(level.get("price"))
+        if price is None:
+            continue
+        bucket = str(level.get("bucket") or "").strip().lower()
+        label = (
+            "HVOL_GREEN" if bucket == "green"
+            else "HVOL_RED" if bucket == "red"
+            else "HVOL_LEVEL"
+        )
+        entry = _theta_support_entry(label, price, close_value, atr_value, "hv_horizontal")
+        if entry:
+            entries.append(entry)
+    return entries
+
+
 def _normalize_theta_support_label(label: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", str(label or "").upper()).strip("_")
 
@@ -17028,6 +17072,7 @@ def evaluate_theta_put_candidate(
 
     source_weights = {
         "avwape": 1.30,
+        "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "trendline": 1.35,
         "sma": 1.10,
@@ -17346,6 +17391,7 @@ def _support_source_weight(source: str) -> float:
     return {
         "trendline": 1.35,
         "avwape": 1.30,
+        "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "sma": 1.10,
         "compression": 0.85,
@@ -17531,7 +17577,7 @@ def _sold_put_candidate_strikes(row: dict, strikes: list[float]) -> list[dict]:
             strike,
             min_support_levels=THETA_MIN_SUPPORT_LEVELS,
             max_surrendered_supports=THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE,
-            require_major_sma_or_avwap_support=True,
+            require_major_sma_support=True,
         )
         if not support_context["eligible"]:
             continue
@@ -17675,7 +17721,7 @@ def _pcs_short_strike_candidates(row: dict, strikes: list[float]) -> list[dict]:
             supports,
             strike,
             min_support_levels=THETA_PCS_MIN_SUPPORT_LEVELS,
-            require_major_sma_or_avwap_support=True,
+            require_major_sma_support=True,
         )
         if not support_context["eligible"]:
             continue
@@ -28208,6 +28254,8 @@ def evaluate_theta_put_candidate(
                     )
                 )
 
+    raw_supports.extend(_theta_hv_level_supports(symbol, close_value, atr_value))
+
     supports = _dedupe_theta_supports([entry for entry in raw_supports if entry])
     min_support_levels = max(1, int(min_support_levels or THETA_MIN_SUPPORT_LEVELS))
     if len(supports) < min_support_levels:
@@ -28233,6 +28281,7 @@ def evaluate_theta_put_candidate(
 
     source_weights = {
         "avwape": 1.30,
+        "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "trendline": 1.35,
         "sma": 1.10,
