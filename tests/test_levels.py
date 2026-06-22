@@ -212,6 +212,17 @@ class LevelModuleTests(unittest.TestCase):
         fresh = levels.accumulate_touch_stats([dict(level)], frame, atr20=4.0)[0]
         self.assertEqual(migrated["touch_count"], fresh["touch_count"])
 
+    def test_level_conviction_grows_with_respect_and_discounts_breaks(self):
+        fresh = {"kind": "hv_horizontal", "bucket": "green", "respect_count": 0, "break_count": 0}
+        respected = {"kind": "hv_horizontal", "bucket": "green", "respect_count": 8, "break_count": 0}
+        flaky = {"kind": "hv_horizontal", "bucket": "green", "respect_count": 4, "break_count": 4}
+        red = {"kind": "hv_horizontal", "bucket": "red", "respect_count": 0, "break_count": 0}
+        self.assertGreater(levels.level_conviction(respected), levels.level_conviction(fresh))
+        self.assertGreater(levels.level_conviction(fresh), levels.level_conviction(red))
+        self.assertLess(levels.level_conviction(flaky), levels.level_conviction(respected))
+        # A green level fully respected should clear the "full penalty" conviction.
+        self.assertGreaterEqual(levels.level_conviction(respected), 1.6)
+
     def test_merge_into_store_preserves_cumulative_stats(self):
         frame = self._touch_break_frame()
         level = {

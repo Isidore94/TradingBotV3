@@ -18,6 +18,12 @@ LEVEL_FORWARD_BARS = 5
 LEVEL_TOUCH_WEIGHT = 0.08
 LEVEL_TOUCH_CAP = 0.40
 LEVEL_BUCKET_WEIGHTS = {"green": 1.0, "red": 0.35}
+# Conviction (used for scoring, not filtering): how much cumulative respect a
+# level has earned. Unlike ``strength`` it is not capped at the touch ceiling, so
+# "respected more and more over time" keeps growing the number.
+LEVEL_RESPECT_FULL_COUNT = 8       # respects at which the respect bonus saturates
+LEVEL_RESPECT_BONUS_CAP = 1.0      # max conviction added on top of the bucket weight
+LEVEL_BREAK_DISCOUNT_FLOOR = 0.5   # a level that breaks as often as it holds is worth half
 CLOUD_SPAN_B_LEN = 52
 CLOUD_DISPLACEMENT = 26
 CLOUD_FLAT_MIN_BARS = 8
@@ -228,6 +234,36 @@ def _level_strength(level: dict) -> float:
         + min(LEVEL_TOUCH_CAP, touch_count * LEVEL_TOUCH_WEIGHT),
         4,
     )
+
+
+def level_conviction(level: dict | None) -> float:
+    """How real this S/R is, from cumulative respect/break history (0..~2.0).
+
+    Combines the structural bucket weight (a high-volume green level matters even
+    when freshly formed) with how many times price has *respected* the level over
+    its tracked life, discounted toward half when the level breaks as often as it
+    holds. This is the multi-year signal ``strength`` cannot express because the
+    touch term there saturates at ``LEVEL_TOUCH_CAP``.
+    """
+    if not isinstance(level, dict):
+        return 0.0
+    kind = str(level.get("kind") or "")
+    if kind == "cloud_flat":
+        base = float(CLOUD_LEVEL_WEIGHT)
+    else:
+        bucket = str(level.get("bucket") or "red").lower()
+        base = float(LEVEL_BUCKET_WEIGHTS.get(bucket, LEVEL_BUCKET_WEIGHTS["red"]))
+    respect = int(level.get("respect_count", 0) or 0)
+    breaks = int(level.get("break_count", 0) or 0)
+    respect_bonus = (
+        min(LEVEL_RESPECT_BONUS_CAP, LEVEL_RESPECT_BONUS_CAP * respect / float(LEVEL_RESPECT_FULL_COUNT))
+        if LEVEL_RESPECT_FULL_COUNT
+        else 0.0
+    )
+    tested = respect + breaks
+    ratio = (respect / tested) if tested > 0 else 1.0  # untested fresh level: trust the structure
+    reliability = LEVEL_BREAK_DISCOUNT_FLOOR + (1.0 - LEVEL_BREAK_DISCOUNT_FLOOR) * ratio
+    return round((base + respect_bonus) * reliability, 4)
 
 
 def _cluster_from_members(members: list[dict], atr20: float | None) -> dict:

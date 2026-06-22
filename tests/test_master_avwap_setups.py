@@ -2540,6 +2540,52 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(feature_rows_by_symbol["TSLA"]["hv_level_nearby_count"], priority_rows[0]["hv_level_nearby_count"])
         self.assertEqual(ai_state["symbols"]["TSLA"]["hv_level_note"], priority_rows[0]["hv_level_note"])
 
+    def test_hv_level_scoring_penalizes_entry_at_respected_level(self):
+        # A respected green level just above a long entry should subtract score
+        # only when scoring is enabled, scaled by cumulative respect history.
+        def store(respect):
+            return {
+                "schema_version": 1,
+                "symbol": "TSLA",
+                "levels": [
+                    {
+                        "kind": "hv_horizontal",
+                        "price": 100.10,
+                        "bucket": "green",
+                        "first_seen": "2024-01-01",
+                        "respect_count": respect,
+                        "break_count": 0,
+                        "strength": 1.0,
+                    }
+                ],
+            }
+
+        off = master_avwap._hv_level_context_for_entry(
+            store(8), side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=False,
+        )
+        self.assertEqual(off["hv_level_score_delta"], 0.0)
+
+        fresh = master_avwap._hv_level_context_for_entry(
+            store(0), side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=True,
+        )
+        respected = master_avwap._hv_level_context_for_entry(
+            store(8), side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=True,
+        )
+        self.assertLess(fresh["hv_level_score_delta"], 0.0)
+        self.assertLess(respected["hv_level_score_delta"], fresh["hv_level_score_delta"])
+
+        # A level broken on the latest bar is a breakout, not a wall: no penalty.
+        broken = store(8)
+        broken["levels"][0]["last_break"] = "2026-06-22"
+        breakout = master_avwap._hv_level_context_for_entry(
+            broken, side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=True,
+        )
+        self.assertEqual(breakout["hv_level_score_delta"], 0.0)
+
     def test_compression_break_context_detects_close_out_of_prior_box(self):
         dates = pd.bdate_range("2026-01-01", periods=8)
         frame = pd.DataFrame(

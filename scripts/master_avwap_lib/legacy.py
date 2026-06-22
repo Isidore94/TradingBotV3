@@ -133,6 +133,7 @@ from .levels import (
     compute_relvol,
     default_level_store,
     extract_hv_levels,
+    level_conviction,
     level_store_path,
     levels_blocking_entry,
     levels_near,
@@ -22732,6 +22733,15 @@ HV_LEVEL_DEEP_BACKFILL_DAYS = 5 * 365
 HV_LEVEL_DEEP_BACKFILL_MIN_BARS = 60
 HV_LEVEL_DEEP_BACKFILL_MAX_PER_RUN = 40
 
+# Score penalty for entering right at a respected blocking level (resistance for a
+# long, support for a short). Scales with the level's cumulative-respect
+# conviction and how point-blank the entry is. Opt-in via feature flag, matching
+# the HTF / industry-RS scoring convention.
+HV_LEVEL_SCORING_FLAG = "hv_level_scoring_enabled"
+HV_LEVEL_BLOCK_PENALTY_MAX = 10.0      # points removed at a point-blank, fully-respected wall
+HV_LEVEL_BLOCK_CONVICTION_FULL = 1.6   # conviction earning the full penalty (green + deep respect)
+HV_LEVEL_BLOCK_PROXIMITY_FLOOR = 0.5   # penalty fraction still applied at the tolerance edge
+
 PHASE6_CLOUD_STUDY_FAMILY = "cloud_flat_proximity"
 PHASE6_COMPRESSION_BREAK_STUDY_FAMILY = "compression_break"
 PHASE6_TRENDLINE_BREAK_STUDY_FAMILY = "trendline_break"
@@ -23781,6 +23791,29 @@ def _hv_level_summary(levels: list[dict], limit: int = 3) -> str:
     return ", ".join(parts)
 
 
+def _hv_level_block_score_delta(blocking: list[dict]) -> tuple[float, dict | None]:
+    """Negative score delta for the strongest respected level in the entry path.
+
+    Picks the blocking level with the highest cumulative-respect conviction and
+    scales the penalty by that conviction and how point-blank the entry is (the
+    closer to the level, the larger the penalty). Returns ``(delta, level)``.
+    """
+    if not blocking:
+        return 0.0, None
+    top = max(blocking, key=lambda level: level_conviction(level))
+    conviction = level_conviction(top)
+    if conviction <= 0:
+        return 0.0, None
+    tol_atr = float(LEVEL_TOL_ATR_FRACTION) or 0.0
+    abs_dist_atr = abs(_coerce_float(top.get("distance_atr")) or 0.0)
+    proximity = 1.0 - (abs_dist_atr / tol_atr) if tol_atr > 0 else 1.0
+    proximity = max(0.0, min(1.0, proximity))
+    proximity_factor = HV_LEVEL_BLOCK_PROXIMITY_FLOOR + (1.0 - HV_LEVEL_BLOCK_PROXIMITY_FLOOR) * proximity
+    conviction_factor = min(1.0, conviction / float(HV_LEVEL_BLOCK_CONVICTION_FULL or 1.0))
+    delta = -round(HV_LEVEL_BLOCK_PENALTY_MAX * conviction_factor * proximity_factor, 1)
+    return delta, top
+
+
 def _hv_level_context_for_entry(
     store: dict,
     *,
@@ -23788,6 +23821,7 @@ def _hv_level_context_for_entry(
     entry_price: float | None,
     atr20: float | None,
     last_trade_date: str = "",
+    scoring_enabled: bool = False,
 ) -> dict:
     nearby = levels_near(
         store,
@@ -23807,13 +23841,27 @@ def _hv_level_context_for_entry(
         kinds={"hv_horizontal"},
     )
     nearest = nearby[0] if nearby else {}
-    break_today = any(str(level.get("last_break") or "") == str(last_trade_date or "") for level in nearby)
+    last_trade_text = str(last_trade_date or "")
+    break_today = bool(last_trade_text) and any(
+        str(level.get("last_break") or "") == last_trade_text for level in nearby
+    )
+    score_delta, penalized = (0.0, None)
+    if scoring_enabled and not break_today:
+        # A level being broken on the latest bar is a different (breakout) setup,
+        # so only penalize entries into an intact respected wall.
+        score_delta, penalized = _hv_level_block_score_delta(blocking)
     note = ""
     if nearby:
         label = "blocking" if blocking else "nearby"
         note = f"HV level {label}: {_hv_level_summary(blocking or nearby)}"
         if break_today:
             note += "; latest bar broke a stored level"
+    if score_delta and penalized is not None:
+        respect = int(penalized.get("respect_count", 0) or 0)
+        note += (
+            f"; entering at respected level @{_coerce_float(penalized.get('price')):.2f} "
+            f"(respected {respect}x, conviction {level_conviction(penalized):.2f}) {score_delta:+.1f}"
+        )
     return {
         "hv_level_nearby_count": int(len(nearby)),
         "hv_level_blocking_count": int(len(blocking)),
@@ -23823,6 +23871,8 @@ def _hv_level_context_for_entry(
         "hv_level_nearest_distance_atr": _coerce_float(nearest.get("distance_atr")),
         "hv_level_nearby_summary": _hv_level_summary(nearby),
         "hv_level_blocking_summary": _hv_level_summary(blocking),
+        "hv_level_score_delta": float(score_delta),
+        "hv_level_score_note": note if score_delta else "",
         "hv_level_note": note,
     }
 
@@ -23866,6 +23916,7 @@ def enrich_priority_rows_with_hv_levels(
     cumulative_stats: bool | None = None,
     deep_backfill_days: int | None = None,
     max_backfills_per_run: int | None = None,
+    scoring_enabled: bool | None = None,
 ) -> list[dict]:
     frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
     stores_by_symbol: dict[str, dict] = stores_out if isinstance(stores_out, dict) else {}
@@ -23877,6 +23928,8 @@ def enrich_priority_rows_with_hv_levels(
         cumulative_stats = bool(flags.get(HV_LEVEL_CUMULATIVE_STATS_FLAG, True))
     if deep_backfill_enabled is None:
         deep_backfill_enabled = bool(flags.get(HV_LEVEL_DEEP_BACKFILL_FLAG, True))
+    if scoring_enabled is None:
+        scoring_enabled = bool(flags.get(HV_LEVEL_SCORING_FLAG))
     backfill_days = int(deep_backfill_days or HV_LEVEL_DEEP_BACKFILL_DAYS)
     backfill_budget = (
         int(max_backfills_per_run) if max_backfills_per_run is not None else HV_LEVEL_DEEP_BACKFILL_MAX_PER_RUN
@@ -23937,6 +23990,8 @@ def enrich_priority_rows_with_hv_levels(
         "hv_level_nearest_distance_atr",
         "hv_level_nearby_summary",
         "hv_level_blocking_summary",
+        "hv_level_score_delta",
+        "hv_level_score_note",
         "hv_level_note",
     )
     study_rows: list[dict] = []
@@ -23960,8 +24015,16 @@ def enrich_priority_rows_with_hv_levels(
             entry_price=entry_price,
             atr20=atr_value,
             last_trade_date=last_trade_date,
+            scoring_enabled=bool(scoring_enabled),
         )
         row.update(context)
+        score_delta = _coerce_float(context.get("hv_level_score_delta")) or 0.0
+        if score_delta:
+            row["score"] = float(row.get("score", 0.0) or 0.0) + float(score_delta)
+            if isinstance(symbol_entry, dict):
+                symbol_entry["priority_score"] = row.get("score")
+            if isinstance(feature_row, dict):
+                feature_row["priority_score"] = row.get("score")
         if isinstance(symbol_entry, dict):
             for field in hv_fields:
                 symbol_entry[field] = context.get(field)
