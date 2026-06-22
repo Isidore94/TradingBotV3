@@ -5354,7 +5354,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(ranked[0]["covered_major_sma_support_count"], 1)
         self.assertNotIn("SMA_20", ranked[0]["covered_support_summary"])
 
-    def test_theta_option_strikes_require_covered_major_sma_support(self):
+    def test_theta_option_strikes_allow_avwap_only_support(self):
+        # Loosened: an AVWAP support below the strike is enough on its own (a major
+        # SMA is no longer also required).
         row = {
             "symbol": "CIEN",
             "last_close": 105.0,
@@ -5367,10 +5369,28 @@ class MasterAvwapSetupTests(unittest.TestCase):
             ],
         }
 
-        self.assertEqual(master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94]), [])
-        self.assertEqual(master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 94]), [])
+        sold = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94])
+        self.assertTrue(sold)
+        self.assertTrue(all(c["covered_avwap_support_count"] >= 1 for c in sold))
 
-    def test_theta_option_strikes_require_covered_avwap_family_support(self):
+        # A strike covered only by trendline/compression (no SMA, no AVWAP) is
+        # still rejected.
+        row_no_structural = {
+            "symbol": "CIEN",
+            "last_close": 105.0,
+            "score": 80,
+            "base_score": 80,
+            "supports": [
+                {"label": "TRENDLINE_SUPPORT", "level": 100.0, "source": "trendline", "distance_atr": 0.4},
+                {"label": "COMPRESSION_LOW", "level": 98.0, "source": "compression", "distance_atr": 0.7},
+                {"label": "TRENDLINE_SUPPORT_2", "level": 96.0, "source": "trendline", "distance_atr": 1.0},
+            ],
+        }
+        self.assertEqual(master_avwap._sold_put_candidate_strikes(row_no_structural, [100, 98, 96, 94]), [])
+
+    def test_theta_option_strikes_allow_sma_only_support(self):
+        # Loosened: a major SMA support below the strike is enough on its own (an
+        # AVWAP support is no longer also required).
         row = {
             "symbol": "CIEN",
             "last_close": 105.0,
@@ -5384,19 +5404,12 @@ class MasterAvwapSetupTests(unittest.TestCase):
             ],
         }
 
-        self.assertEqual(master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 95, 94]), [])
-        self.assertEqual(master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 95, 94]), [])
-
-        row["supports"].append(
-            {"label": "PREV_UPPER_1", "level": 95.0, "source": "previous_avwape", "distance_atr": 1.1}
-        )
         sold_put_candidates = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 95, 94])
         pcs_candidates = master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 95, 94])
 
-        self.assertIn(95.0, [candidate["strike"] for candidate in sold_put_candidates])
-        self.assertIn(95.0, [candidate["short_strike"] for candidate in pcs_candidates])
-        self.assertEqual(sold_put_candidates[0]["covered_avwap_support_count"], 1)
-        self.assertEqual(sold_put_candidates[0]["covered_previous_first_dev_support_count"], 1)
+        self.assertTrue(sold_put_candidates)
+        self.assertTrue(pcs_candidates)
+        self.assertTrue(all(c["covered_major_sma_support_count"] >= 1 for c in sold_put_candidates))
 
     def test_pcs_ranking_uses_two_supports_and_credit_width_target(self):
         row = {
@@ -5466,26 +5479,34 @@ class MasterAvwapSetupTests(unittest.TestCase):
             )
         )
 
-    def test_option_quote_credit_prefers_last_known_then_bid(self):
-        last_credit, last_source = master_avwap._option_quote_credit_with_source(
-            {"bid": 0.20, "ask": 0.40, "last": 0.55}
+    def test_option_quote_credit_prefers_mid_then_bid_on_wide_spread(self):
+        # Reasonable spread -> bid/ask midpoint (realistic limit fill), ignoring a
+        # stale last trade.
+        mid_credit, mid_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.20, "ask": 0.24, "last": 0.55}
         )
-        close_credit, close_source = master_avwap._option_quote_credit_with_source(
-            {"bid": 0.20, "ask": 0.40, "close": 0.35}
+        # Wide spread -> conservative bid, still not the stale last.
+        wide_credit, wide_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.20, "ask": 0.60, "last": 0.55}
         )
-        bid_credit, bid_source = master_avwap._option_quote_credit_with_source(
-            {"bid": 0.20, "ask": 0.40}
-        )
+        # No live two-sided market -> bid, then last/close only as a last resort.
+        bid_credit, bid_source = master_avwap._option_quote_credit_with_source({"bid": 0.20})
+        last_credit, last_source = master_avwap._option_quote_credit_with_source({"last": 0.55})
+        close_credit, close_source = master_avwap._option_quote_credit_with_source({"close": 0.35})
 
+        self.assertAlmostEqual(mid_credit, 0.22)
+        self.assertEqual(mid_source, "mid")
+        self.assertAlmostEqual(wide_credit, 0.20)
+        self.assertEqual(wide_source, "bid_wide_spread")
+        self.assertAlmostEqual(bid_credit, 0.20)
+        self.assertEqual(bid_source, "bid")
         self.assertAlmostEqual(last_credit, 0.55)
         self.assertEqual(last_source, "last")
         self.assertAlmostEqual(close_credit, 0.35)
         self.assertEqual(close_source, "close")
-        self.assertAlmostEqual(bid_credit, 0.20)
-        self.assertEqual(bid_source, "bid")
         self.assertAlmostEqual(master_avwap._option_quote_mid({"bid": 0.20, "ask": 0.40}), 0.30)
 
-    def test_sold_put_ranking_uses_last_known_price_over_wide_midpoint(self):
+    def test_sold_put_ranking_uses_conservative_bid_on_wide_spread(self):
         row = {
             "symbol": "CIEN",
             "last_close": 105.0,
@@ -5503,14 +5524,16 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "covered_previous_first_dev_support_count": 1,
             "total_support_count": 3,
             "support_quality_score": 3.0,
+            # Illiquid wide market: the stale 0.18 last trade overstated the credit;
+            # the realistic fill is the 0.01 bid, which correctly ranks this out.
             "quote": {"bid": 0.01, "ask": 0.99, "last": 0.18},
         }
 
         ranked = master_avwap._rank_sold_put_option_recommendations(row, [quote_row])
 
-        self.assertEqual(ranked[0]["credit"], 0.18)
-        self.assertEqual(ranked[0]["credit_source"], "last")
-        self.assertEqual(ranked[0]["status"], "cusp")
+        self.assertAlmostEqual(ranked[0]["credit"], 0.01)
+        self.assertEqual(ranked[0]["credit_source"], "bid_wide_spread")
+        self.assertEqual(ranked[0]["status"], "below_target")
 
     def test_theta_option_client_reconnects_when_scan_client_is_unavailable(self):
         class FakeIb:
@@ -6268,7 +6291,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(row["option_status"], "below_target")
         self.assertIn("strike", row["best_option"])
         self.assertAlmostEqual(row["best_option"]["credit"], 0.04)
-        self.assertEqual(row["best_option"]["credit_source"], "bid")
+        self.assertEqual(row["best_option"]["credit_source"], "bid_wide_spread")
 
     def test_theta_ib_unavailable_keeps_pcs_support_only_rows(self):
         sold_put_row = {"symbol": "ABC", "score": 80, "notes": "theta setup"}

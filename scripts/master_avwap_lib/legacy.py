@@ -427,6 +427,9 @@ THETA_OPTION_CHAIN_TIMEOUT_SEC = 8.0
 THETA_OPTION_REQUEST_DELAY_SEC = 0.08
 THETA_OPTION_ENRICHMENT_MAX_SECONDS = 240.0
 THETA_OPTION_ENRICHMENT_MAX_QUOTES = 160
+# Above this bid/ask spread (% of mid) the midpoint over-states a realistic fill,
+# so the conservative bid is used as the credit instead of the mid.
+THETA_OPTION_WIDE_SPREAD_PCT = 25.0
 THETA_WEEKLY_EXPIRATION_MAX_GAP_DAYS = 8
 THETA_OPTION_CLIENT_ID = 1005
 THETA_OPTION_CONNECT_STARTUP_WAIT_SEC = 1.5
@@ -17360,6 +17363,7 @@ def _strike_support_context(
     max_surrendered_supports: int | None = None,
     require_major_sma_support: bool = False,
     require_avwap_support: bool = False,
+    require_major_sma_or_avwap_support: bool = False,
 ) -> dict:
     strike_value = float(strike)
     ordered_supports = sorted(
@@ -17395,6 +17399,12 @@ def _strike_support_context(
     if require_major_sma_support and not covered_major_sma_supports:
         eligible = False
     if require_avwap_support and not covered_avwap_supports:
+        eligible = False
+    if (
+        require_major_sma_or_avwap_support
+        and not covered_major_sma_supports
+        and not covered_avwap_supports
+    ):
         eligible = False
     return {
         "eligible": bool(eligible),
@@ -17439,7 +17449,22 @@ def _option_quote_mid(quote: dict | None) -> float | None:
 
 
 def _option_quote_credit_with_source(quote: dict | None) -> tuple[float | None, str]:
-    for key, source in (("last", "last"), ("close", "close"), ("bid", "bid"), ("model_price", "model")):
+    # The credit you can actually collect is the live two-sided market: the
+    # bid/ask midpoint for a realistic limit fill, or the bid when the spread is
+    # so wide the midpoint would over-state it. The last trade and prior close are
+    # frequently stale on thin OTM weeklies (a print from hours ago at a different
+    # underlying price), so they are only a last resort when there is no live
+    # two-sided quote at all.
+    bid = _quote_value(quote, "bid")
+    mid = _option_quote_mid(quote)
+    if mid is not None and mid > 0:
+        spread_pct = _option_quote_spread_pct(quote)
+        if bid is not None and spread_pct is not None and spread_pct > THETA_OPTION_WIDE_SPREAD_PCT:
+            return bid, "bid_wide_spread"
+        return mid, "mid"
+    if bid is not None:
+        return bid, "bid"
+    for key, source in (("last", "last"), ("close", "close"), ("model_price", "model")):
         value = _quote_value(quote, key)
         if value is not None:
             return value, source
@@ -17501,8 +17526,7 @@ def _sold_put_candidate_strikes(row: dict, strikes: list[float]) -> list[dict]:
             strike,
             min_support_levels=THETA_MIN_SUPPORT_LEVELS,
             max_surrendered_supports=THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE,
-            require_major_sma_support=True,
-            require_avwap_support=True,
+            require_major_sma_or_avwap_support=True,
         )
         if not support_context["eligible"]:
             continue
@@ -17644,8 +17668,7 @@ def _pcs_short_strike_candidates(row: dict, strikes: list[float]) -> list[dict]:
             supports,
             strike,
             min_support_levels=THETA_PCS_MIN_SUPPORT_LEVELS,
-            require_major_sma_support=True,
-            require_avwap_support=True,
+            require_major_sma_or_avwap_support=True,
         )
         if not support_context["eligible"]:
             continue
