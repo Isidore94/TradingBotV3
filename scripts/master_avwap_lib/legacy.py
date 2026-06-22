@@ -14697,12 +14697,6 @@ def _derive_setup_family(
         return MID_EARNINGS_EMA21_RETEST_FAMILY, tags
     if MID_EARNINGS_FIRST_DEV_RETEST_SIGNAL in tags:
         return MID_EARNINGS_FIRST_DEV_RETEST_FAMILY, tags
-    if TOP_PATTERN_SIGNAL in tags:
-        return TOP_PATTERN_FAMILY, tags
-    if top_pattern_entry:
-        return TOP_PATTERN_FAMILY, tags
-    if top_pattern_watch:
-        return TOP_PATTERN_TRACKING_FAMILY, tags
     if mid_earnings_active_second_stdev_hold:
         return MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY, tags
     if sma_breakout_confirmed or any(signal in SMA_BREAKOUT_RECLAIM_SIGNALS.values() for signal in tags):
@@ -14715,6 +14709,14 @@ def _derive_setup_family(
         return "extreme_move_retest", tags
     if retest_followthrough:
         return "avwap_retest_followthrough", tags
+    # TOP is a *secondary* signal (Feat 2): it only becomes the primary family when
+    # no specific entry pattern above fired, so it never suppresses the study of the
+    # real pattern (50SMA retest, AVWAPE reclaim, band bounce, ...). When a real
+    # pattern did fire, the TOP score bonus + `top_secondary` flag still apply.
+    if TOP_PATTERN_SIGNAL in tags or top_pattern_entry:
+        return TOP_PATTERN_FAMILY, tags
+    if top_pattern_watch:
+        return TOP_PATTERN_TRACKING_FAMILY, tags
     if tags:
         return "avwap_breakout", tags
     if favorite_zone:
@@ -23154,17 +23156,21 @@ def _priority_is_preferred_custom_setup(row: dict) -> bool:
         MID_EARNINGS_EMA21_RETEST_FAMILY,
     }:
         return True
-    if setup_family == TOP_PATTERN_FAMILY and row.get("top_pattern_entry"):
+    # TOP entries stay "preferred" even when demoted to a secondary tag (Feat 2):
+    # key off the flag, not the family, so a TOP+real-pattern setup keeps its status.
+    if row.get("top_pattern_entry"):
         return True
     return False
 
 def _priority_should_track_top_pattern(row: dict) -> bool:
     if not isinstance(row, dict):
         return False
+    # A watch-only TOP candidate should appear in the TOP tracking list regardless of
+    # whatever primary family it also matched (Feat 2: TOP is now secondary, so it no
+    # longer owns the family). Gate on the flags, not the family.
     return bool(
         row.get("top_pattern_watch")
         and not row.get("top_pattern_entry")
-        and str(row.get("setup_family") or "") == TOP_PATTERN_TRACKING_FAMILY
     )
 
 def _priority_is_top_strength_watchlist(row: dict) -> bool:
@@ -24040,6 +24046,12 @@ def build_priority_setup_summary(
         "sma_breakout_previous_day_high": _coerce_float(sma_breakout_previous_day_high),
         "top_pattern_watch": bool(top_pattern_watch),
         "top_pattern_entry": bool(top_pattern_entry),
+        # TOP fired but a different (real) pattern is the primary family — TOP rides
+        # along as a secondary context tag + score bonus instead of replacing it.
+        "top_secondary": bool(
+            (top_pattern_entry or top_pattern_watch)
+            and setup_family not in {TOP_PATTERN_FAMILY, TOP_PATTERN_TRACKING_FAMILY}
+        ),
         "top_pattern_signal": top_pattern_signal or "",
         "top_pattern_score_bonus": int(top_pattern_score_bonus or 0),
         "top_pattern_note": top_pattern_note or "",

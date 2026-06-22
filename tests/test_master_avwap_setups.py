@@ -1010,6 +1010,79 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertTrue(attributes["pattern.top_pattern_recent_sma_bounce_entry"])
         self.assertTrue(attributes["pattern.top_pattern_weekly_sma50_entry"])
 
+    def test_top_pattern_is_secondary_to_a_real_entry_pattern(self):
+        # TOP entry + a real SMA breakout: family is the SMA breakout (so the tracker
+        # studies that pattern), NOT collapsed into top_pattern (Feat 2).
+        family, _ = master_avwap._derive_setup_family(
+            [],
+            side="LONG",
+            retest_followthrough=False,
+            retest_reference_level="",
+            extreme_move_favorite_ready=False,
+            mid_earnings_active_second_stdev_hold=False,
+            mid_earnings_primary_trigger_level="",
+            sma_breakout_confirmed=True,
+            top_pattern_entry=True,
+            favorite_zone=None,
+        )
+        self.assertEqual(family, master_avwap.SMA_BREAKOUT_FAMILY)
+
+    def test_top_pattern_is_primary_only_when_no_other_pattern_fired(self):
+        family, _ = master_avwap._derive_setup_family(
+            [],
+            side="LONG",
+            retest_followthrough=False,
+            retest_reference_level="",
+            extreme_move_favorite_ready=False,
+            mid_earnings_active_second_stdev_hold=False,
+            mid_earnings_primary_trigger_level="",
+            top_pattern_entry=True,
+            favorite_zone=None,
+        )
+        self.assertEqual(family, master_avwap.TOP_PATTERN_FAMILY)
+
+    def test_top_pattern_watch_demotes_below_sma_breakout_tracking(self):
+        family, _ = master_avwap._derive_setup_family(
+            [],
+            side="LONG",
+            retest_followthrough=False,
+            retest_reference_level="",
+            extreme_move_favorite_ready=False,
+            mid_earnings_active_second_stdev_hold=False,
+            mid_earnings_primary_trigger_level="",
+            sma_breakout_watch=True,
+            top_pattern_watch=True,
+            favorite_zone=None,
+        )
+        self.assertEqual(family, master_avwap.SMA_BREAKOUT_TRACKING_FAMILY)
+
+    def test_top_secondary_flag_and_bonus_apply_when_demoted(self):
+        base = master_avwap.build_priority_setup_summary(
+            "TOPS", "LONG", [], [], "UPTREND", None,
+            sma_breakout_confirmed=True,
+        )
+        boosted = master_avwap.build_priority_setup_summary(
+            "TOPS", "LONG", [], [], "UPTREND", None,
+            sma_breakout_confirmed=True,
+            top_pattern_entry=True,
+            top_pattern_score_bonus=38,
+        )
+        # Real pattern stays the primary family; TOP rides along as secondary + bonus.
+        self.assertEqual(boosted["setup_family"], master_avwap.SMA_BREAKOUT_FAMILY)
+        self.assertTrue(boosted["top_secondary"])
+        self.assertFalse(base["top_secondary"])
+        self.assertEqual(boosted["top_pattern_score_bonus"], 38)
+        self.assertGreater(boosted["score"], base["score"])
+
+    def test_top_only_setup_keeps_top_family_and_not_secondary(self):
+        top_only = master_avwap.build_priority_setup_summary(
+            "TOPS", "LONG", [], [], "UPTREND", None,
+            top_pattern_entry=True,
+            top_pattern_score_bonus=38,
+        )
+        self.assertEqual(top_only["setup_family"], master_avwap.TOP_PATTERN_FAMILY)
+        self.assertFalse(top_only["top_secondary"])
+
     def test_daily_relative_strength_prefers_long_strength_and_short_weakness_vs_spy(self):
         dates = pd.bdate_range("2026-06-01", periods=6)
         strong_rows = [

@@ -127,7 +127,7 @@ independently shippable + testable.
 | Phase | Feature(s) from txt | Why this order |
 | --- | --- | --- |
 | **P1** ✅ | #1 Strongest/weakest 10% for market prep | **DONE 2026-06-21.** Smallest, already half-built, fixes a "not working" complaint. Builds B1. |
-| **P2** | #2 TOP becomes a *secondary* setup | Small, removes a known regression (TOP suppressing other patterns). |
+| **P2** ✅ | #2 TOP becomes a *secondary* setup | **DONE 2026-06-21.** Small, removes a known regression (TOP suppressing other patterns). |
 | **P3** | #3 Industry/sector relative strength | Aaron's #1 conceptual priority. Reuses bounce_bot ETF infra. Builds on B1. |
 | **P4** | #4 1h/4h trend detection (boost only) | Needs B2 (intraday fetch). Boost first, study in parallel. |
 | **P5** | #5 D1 high-volume horizontal levels | Needs B3 (level store). Study-first; scoring penalty later. |
@@ -170,24 +170,23 @@ Steps:
 Acceptance: with a watchlist of e.g. 80 names, market prep lists ~8 strongest /
 ~8 weakest by D1-vs-SPY across **all 80**, not just the flagged ones.
 
-### Phase 2 — TOP pattern as a *secondary* setup  ☐
+### Phase 2 — TOP pattern as a *secondary* setup  ☑ DONE (2026-06-21, see T2)
 **Problem (txt #2):** "TOP pattern shouldnt necessarily be a pattern in itself if
 it overwrites the ability for other patterns to be studied. it should be
 considered a secondary setup."
 
 Steps:
-1. ☐ Find where TOP is assigned as a primary `setup_family` and where it can
-   short-circuit other setup analysis (grep `TOP` in `legacy.py`, `runner.py`,
-   `master_avwap_shared.py`). Recent commits `b68e565`/`67a1766` activated it.
-2. ☐ Demote TOP to an **additive tag + score modifier**: let the primary
-   family be whatever real pattern fired (AVWAPE reclaim, 50SMA retest, etc.),
-   and attach `top_secondary=True` + a bounded boost, instead of replacing the
-   family. Preserve the TOP watchlist report (`write_top_strength_watchlist_report`).
-3. ☐ Make sure a symbol that is both "a TOP leader" and "a 50SMA retest" is
-   tracked as the 50SMA retest (so the tracker can study that family) with TOP as
-   context, not collapsed into a single TOP record.
-4. ☐ **Tests:** a fixture that previously collapsed to TOP now keeps its base
-   family and gains the TOP secondary flag/boost.
+1. ☑ Found it: `_derive_setup_family` (`legacy.py:14656`) checked TOP *above*
+   sma_breakout/band_bounce/extreme_move/retest, collapsing those to `top_pattern`.
+2. ☑ Demoted: moved the TOP block below all specific entry patterns (above the
+   generic `avwap_breakout`/`favorite_zone`/`general` fallbacks). Added
+   `top_secondary` to the priority row. The TOP score bonus was already applied
+   independently of the family (`legacy.py` ~score build), so the boost survives.
+   TOP watchlist preserved (`_priority_should_track_top_pattern` /
+   `_priority_is_top_strength_watchlist` now gate on the flags, not the family).
+3. ☑ A TOP + 50SMA-retest setup now records as the SMA-breakout family (tracker
+   studies the real pattern) with `top_secondary=True` context.
+4. ☑ **Tests:** 5 new in `tests/test_master_avwap_setups.py`. Full suite 352 green.
 
 ### Phase 3 — Industry & sector relative strength  ☐
 **Goal (txt #3, #6 of his prose):** find stocks **stronger than their industry**
@@ -349,7 +348,12 @@ Steps:
 - 2026-06-21 — **T6 / B4 SHIPPED.** `study_setups` isolated namespace +
   `master_avwap_study.txt` report, recorded via `update_setup_tracker_from_scan`'s
   new `study_rows` kwarg (no existing caller changed). 9 new tests incl. isolation.
-  Full suite 347 green. T4/T5/T7 unblocked. Next: T2 (demote TOP) or T3 (industry RS).
+  Full suite 347 green. T4/T5/T7 unblocked. Committed `d324da4`.
+- 2026-06-21 — **T2 / Phase 2 SHIPPED.** Demoted TOP to a secondary tag in
+  `_derive_setup_family` (real pattern keeps the family; `top_secondary` flag + bonus
+  ride along). 5 new tests; full suite 352 green. **Also catalogued ~20 shadowed
+  duplicate `legacy.py` functions in §8b#1** (handoff hazard — edit the last `def`).
+  Next: T3 (industry RS, Aaron's #1 priority).
 
 ---
 
@@ -384,7 +388,26 @@ Steps:
 | Tests | `tests/` — **338 test functions** across 22 files (no `pytest.ini`/`conftest.py`) | "keep green" baseline. |
 
 ### 8b. Gotchas that will bite a cold-start agent
-1. **Edit the live `build_market_prep_payload` (26242), not the shadowed 20816.**
+1. **`legacy.py` has ~20 SHADOWED DUPLICATE top-level functions** (older copies
+   overridden by a later, maintained copy — Python keeps the **last** `def`).
+   **ALWAYS edit the copy with the HIGHEST line number.** Verify before editing:
+   `grep -n '^def NAME' scripts/master_avwap_lib/legacy.py` → edit the last hit.
+   List every duplicate: `grep -oE '^def [A-Za-z_][A-Za-z0-9_]*' \
+   scripts/master_avwap_lib/legacy.py | sed 's/^def //' | sort | uniq -d`.
+   Known duplicated names (as of 2026-06-21; T1 already removed the
+   `build_market_prep_payload`/`format_market_prep_payload_report` pair):
+   `build_priority_setup_summary`, `analyze_sma_breakout_setup`,
+   `_priority_is_preferred_custom_setup`, `_priority_is_high_conviction`,
+   `_priority_best_swing_trade_rows`, `apply_final_priority_buckets`,
+   `apply_priority_rejection_score_caps`, `assess_previous_day_range_break`,
+   `assess_priority_directional_obstacles`, `build_priority_scoring_attribute_context`,
+   `build_tracker_entry_attributes`, `evaluate_theta_put_candidate`,
+   `write_master_avwap_focus_feed`, `write_priority_setup_report`,
+   `_write_priority_score_ranked_rows`, `_register_tracker_attribute`,
+   `_tracker_attribute_is_present`, `_normalize_tracker_attribute_value`,
+   `_normalize_focus_priority_entry`, `_focus_priority_bucket_sort_value`.
+   (Cleanup candidate: delete the dead copies — out of scope per ticket, do it as a
+   standalone PR with the full suite green.)
 2. **Edit bounce_bot RS/ETF code in `bounce_bot_lib/legacy.py`, not `rrs.py`.**
 3. `assess_daily_relative_strength` wants **`daily_rows` (list of dicts)**; the
    universe data is **DataFrames** (`daily_frames_by_symbol`). Convert, or extract
@@ -558,12 +581,24 @@ INVARIANTS: §10c #5, #6. (No scoring change, no new persisted store, no study n
 OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
 ```
 
-### T2 — Demote TOP to a secondary tag/boost  (Phase 2)  ☐
+### T2 — Demote TOP to a secondary tag/boost  (Phase 2)  ☑ DONE (2026-06-21)
 - Expand §4 "Phase 2" into the template. Key anchors (§8): setup-family machinery
   `legacy.py:4948/5001/5024`, `write_top_strength_watchlist_report:23316`, plus
   grep `TOP` across `legacy.py`, `runner.py`, `master_avwap_shared.py`. Net effect:
   primary `setup_family` = the real pattern that fired; attach `top_secondary=True`
   + a bounded boost; tracker records the base family (not "TOP"). DEPENDS ON: none.
+
+> **Shipped.** The single chokepoint was `_derive_setup_family` — TOP was checked
+> *above* sma_breakout/band_bounce/extreme_move/retest. Moved the TOP block **below**
+> all specific entry patterns (still above the generic `avwap_breakout`/`general`
+> fallbacks), so a real pattern wins and TOP-only setups still track as `top_pattern`.
+> Added a `top_secondary` flag to the priority row (TOP fired but family is something
+> else); the TOP score bonus was already applied independently of family, so the boost
+> survives demotion automatically. Relaxed `_priority_is_preferred_custom_setup` and
+> `_priority_should_track_top_pattern` to gate on the `top_pattern_*` flags instead of
+> the family (so TOP context + watchlist survive demotion; the strength watchlist was
+> already flag-based). 5 new tests; full suite 352 green. **Discovered ~20 shadowed
+> duplicate functions in `legacy.py` — documented in §8b#1.**
 
 ### T3 — Industry/sector relative strength  (Phase 3, B1)  ☐
 - Expand §4 "Phase 3." Reuse `bounce_bot_lib/legacy.py` RS/ETF fns via the `rrs.py`
