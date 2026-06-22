@@ -82,6 +82,7 @@ SYMBOL_CLASSIFICATION_CACHE_FILE = DATA_DIR / "symbol_classification.csv"
 EARNINGS_ANCHORS_FILE = DATA_DIR / "earnings_avwap_anchors.csv"
 EARNINGS_ANCHOR_CANDIDATES_FILE = RUNTIME_DATA_DIR / "earnings_anchor_candidates.csv"
 EARNINGS_CALENDAR_HISTORY_FILE = DATA_DIR / "earnings_calendar_history.json"
+MASTER_AVWAP_LEVELS_DIR = DATA_DIR / "levels"
 
 EARNINGS_CACHE_FILE = CACHE_DIR / "earnings_cache.json"
 PREV_EARNINGS_CACHE_FILE = CACHE_DIR / "prev_earnings_cache.json"
@@ -348,6 +349,7 @@ def migrate_legacy_layout() -> None:
         (REPO_DATA_DIR / "industry_etf_map.json", INDUSTRY_ETF_MAP_FILE),
         (REPO_DATA_DIR / "symbol_classification.csv", SYMBOL_CLASSIFICATION_CACHE_FILE),
         (REPO_DATA_DIR / "earnings_avwap_anchors.csv", EARNINGS_ANCHORS_FILE),
+        (REPO_DATA_DIR / "levels", MASTER_AVWAP_LEVELS_DIR),
         (REPO_DATA_DIR / "earnings_cache.json", EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "prev_earnings_cache.json", PREV_EARNINGS_CACHE_FILE),
         (REPO_DATA_DIR / "earnings_dates_cache.json", EARNINGS_DATES_CACHE_FILE),
@@ -433,6 +435,7 @@ def migrate_legacy_layout() -> None:
         (LOCAL_SETTINGS_DIR / "data" / "industry_etf_map.json", INDUSTRY_ETF_MAP_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "symbol_classification.csv", SYMBOL_CLASSIFICATION_CACHE_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "earnings_avwap_anchors.csv", EARNINGS_ANCHORS_FILE),
+        (LOCAL_SETTINGS_DIR / "data" / "levels", MASTER_AVWAP_LEVELS_DIR),
         (LOCAL_SETTINGS_DIR / "data" / "cache" / "earnings_cache.json", EARNINGS_CACHE_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "cache" / "prev_earnings_cache.json", PREV_EARNINGS_CACHE_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "cache" / "earnings_dates_cache.json", EARNINGS_DATES_CACHE_FILE),

@@ -2492,6 +2492,54 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(boosted_rows[0]["score"], 100.0 + master_avwap.HTF_TREND_SCORE_BONUS)
         self.assertEqual(boosted_features["TSLA"]["priority_score"], boosted_rows[0]["score"])
 
+    def test_hv_level_enrichment_writes_study_rows_without_scoring(self):
+        frame = _build_daily_bar_cache_frame(90)
+        last_close = float(frame.iloc[-1]["close"])
+        frame.loc[70, "high"] = last_close + 0.02
+        frame.loc[70, "low"] = last_close - 0.02
+        frame.loc[70, "close"] = last_close
+        frame.loc[70, "volume"] = 5_000_000
+        priority_rows = [
+            {
+                "symbol": "TSLA",
+                "side": "LONG",
+                "score": 100.0,
+                "setup_family": "avwap_bounce",
+            }
+        ]
+        ai_state = {
+            "symbols": {
+                "TSLA": {
+                    "symbol": "TSLA",
+                    "side": "LONG",
+                    "last_trade_date": frame.iloc[-1]["datetime"].date().isoformat(),
+                    "last_close": last_close,
+                    "atr20": 2.0,
+                    "current_anchor": {"date": "2026-01-02", "vwap": last_close, "bands": {"LOWER_1": last_close - 2.0}},
+                }
+            }
+        }
+        feature_rows_by_symbol = {"TSLA": {"last_close": last_close, "atr20": 2.0, "priority_score": 100.0}}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            study_rows = master_avwap.enrich_priority_rows_with_hv_levels(
+                priority_rows,
+                {"TSLA": frame},
+                ai_state=ai_state,
+                feature_rows_by_symbol=feature_rows_by_symbol,
+                levels_dir=Path(temp_dir),
+                persist=False,
+            )
+
+        self.assertEqual(priority_rows[0]["score"], 100.0)
+        self.assertGreaterEqual(priority_rows[0]["hv_level_nearby_count"], 1)
+        self.assertEqual(len(study_rows), 1)
+        self.assertEqual(study_rows[0]["setup_family"], master_avwap.HV_LEVEL_STUDY_FAMILY)
+        self.assertEqual(study_rows[0]["priority_bucket"], master_avwap.HV_LEVEL_STUDY_BUCKET)
+        self.assertIn("HV level", priority_rows[0]["hv_level_note"])
+        self.assertEqual(feature_rows_by_symbol["TSLA"]["hv_level_nearby_count"], priority_rows[0]["hv_level_nearby_count"])
+        self.assertEqual(ai_state["symbols"]["TSLA"]["hv_level_note"], priority_rows[0]["hv_level_note"])
+
     def test_load_scan_earnings_context_reuses_refreshed_earnings_lookup(self):
         earnings_lookup = {"AAPL": ["2026-04-21"]}
         latest_release_map = {

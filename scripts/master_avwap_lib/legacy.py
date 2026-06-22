@@ -103,6 +103,7 @@ from project_paths import (
     MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE,
     MASTER_AVWAP_SCORING_TUNER_REPORT_FILE,
     MASTER_AVWAP_USER_FAVORITES_FILE,
+    MASTER_AVWAP_LEVELS_DIR,
     RRS_ENVIRONMENT_FOCUS_HISTORY_FILE,
     EARNINGS_ANCHORS_FILE,
     EARNINGS_ANCHOR_CANDIDATES_FILE,
@@ -116,6 +117,26 @@ from project_paths import (
     get_tracker_storage_details,
     open_path_in_file_manager,
     save_tracker_storage_dir,
+)
+
+from .levels import (
+    HV_RELVOL_GREEN,
+    HV_RELVOL_RED,
+    HV_VOL_SMA,
+    LEVEL_BREAK_ATR,
+    LEVEL_STORE_SCHEMA_VERSION,
+    LEVEL_TOL_ATR_FRACTION,
+    cluster_levels as cluster_hv_levels,
+    compute_relvol,
+    default_level_store,
+    extract_hv_levels,
+    level_store_path,
+    levels_blocking_entry,
+    levels_near,
+    load_level_store,
+    merge_into_store as merge_levels_into_store,
+    recompute_touch_stats as recompute_level_touch_stats,
+    save_level_store,
 )
 
 try:
@@ -4525,6 +4546,54 @@ def build_tracker_entry_attributes(
         description="Scanner note describing the 1h/4h trend and retest context.",
     )
     add(
+        "levels.hv_level_nearby_count",
+        int(row.get("hv_level_nearby_count", symbol_entry.get("hv_level_nearby_count", feature_row.get("hv_level_nearby_count", 0))) or 0),
+        group="levels",
+        label="Nearby HV levels",
+        value_type="number",
+        description="Count of stored high-volume horizontal levels near the entry.",
+    )
+    add(
+        "levels.hv_level_blocking_count",
+        int(row.get("hv_level_blocking_count", symbol_entry.get("hv_level_blocking_count", feature_row.get("hv_level_blocking_count", 0))) or 0),
+        group="levels",
+        label="Blocking HV levels",
+        value_type="number",
+        description="Count of strong stored HV levels overhead for longs or below for shorts.",
+    )
+    add(
+        "levels.hv_level_break_today",
+        bool(row.get("hv_level_break_today") or symbol_entry.get("hv_level_break_today") or feature_row.get("hv_level_break_today")),
+        group="levels",
+        label="HV level break today",
+        value_type="bool",
+        description="Whether the latest bar broke a stored high-volume horizontal level.",
+    )
+    add(
+        "levels.hv_level_nearest_bucket",
+        row.get("hv_level_nearest_bucket") or symbol_entry.get("hv_level_nearest_bucket") or feature_row.get("hv_level_nearest_bucket") or "",
+        group="levels",
+        label="Nearest HV level bucket",
+        value_type="text",
+        description="Relvol bucket for the nearest stored high-volume horizontal level.",
+    )
+    add(
+        "levels.hv_level_nearest_distance_atr",
+        _coerce_float(row.get("hv_level_nearest_distance_atr") or symbol_entry.get("hv_level_nearest_distance_atr") or feature_row.get("hv_level_nearest_distance_atr")),
+        group="levels",
+        label="Nearest HV level distance ATR",
+        value_type="number",
+        description="ATR-normalized signed distance from entry to nearest stored HV level.",
+    )
+    add(
+        "levels.hv_level_note",
+        row.get("hv_level_note") or symbol_entry.get("hv_level_note") or feature_row.get("hv_level_note") or "",
+        group="levels",
+        label="HV level note",
+        value_type="text",
+        description="Scanner note describing nearby or blocking high-volume levels.",
+    )
+    add(
         "trend.trendline_break_recent",
         bool(row.get("trendline_break_recent") or symbol_entry.get("priority_trendline_break_recent")),
         group="trend",
@@ -5451,6 +5520,17 @@ def build_tracker_setup_record(
         "htf_retest_age_bars": _coerce_int(row.get("htf_retest_age_bars", symbol_entry.get("htf_retest_age_bars"))),
         "htf_trend_score_bonus": int(row.get("htf_trend_score_bonus", symbol_entry.get("htf_trend_score_bonus", 0)) or 0),
         "htf_trend_note": row.get("htf_trend_note") or symbol_entry.get("htf_trend_note") or "",
+        "hv_level_nearby_count": int(row.get("hv_level_nearby_count", symbol_entry.get("hv_level_nearby_count", 0)) or 0),
+        "hv_level_blocking_count": int(row.get("hv_level_blocking_count", symbol_entry.get("hv_level_blocking_count", 0)) or 0),
+        "hv_level_break_today": bool(row.get("hv_level_break_today") or symbol_entry.get("hv_level_break_today")),
+        "hv_level_nearest_price": _coerce_float(row.get("hv_level_nearest_price") or symbol_entry.get("hv_level_nearest_price")),
+        "hv_level_nearest_bucket": row.get("hv_level_nearest_bucket") or symbol_entry.get("hv_level_nearest_bucket") or "",
+        "hv_level_nearest_distance_atr": _coerce_float(
+            row.get("hv_level_nearest_distance_atr") or symbol_entry.get("hv_level_nearest_distance_atr")
+        ),
+        "hv_level_nearby_summary": row.get("hv_level_nearby_summary") or symbol_entry.get("hv_level_nearby_summary") or "",
+        "hv_level_blocking_summary": row.get("hv_level_blocking_summary") or symbol_entry.get("hv_level_blocking_summary") or "",
+        "hv_level_note": row.get("hv_level_note") or symbol_entry.get("hv_level_note") or "",
         "compression_flag": bool(row.get("compression_flag")),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note") or "",
@@ -19128,6 +19208,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("mid earnings", "mid_earnings_note"),
         ("SMA breakout", "sma_breakout_note"),
         ("1h/4h trend", "htf_trend_note"),
+        ("HV level", "hv_level_note"),
     )
     for label, key in setup_note_keys:
         value = str(row.get(key) or "").strip()
@@ -19456,6 +19537,13 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "htf_retest_sma": row.get("htf_retest_sma") or "",
             "htf_trend_score_bonus": int(row.get("htf_trend_score_bonus", 0) or 0),
             "htf_trend_note": row.get("htf_trend_note") or "",
+            "hv_level_nearby_count": int(row.get("hv_level_nearby_count", 0) or 0),
+            "hv_level_blocking_count": int(row.get("hv_level_blocking_count", 0) or 0),
+            "hv_level_break_today": bool(row.get("hv_level_break_today")),
+            "hv_level_nearest_price": _coerce_float(row.get("hv_level_nearest_price")),
+            "hv_level_nearest_bucket": row.get("hv_level_nearest_bucket") or "",
+            "hv_level_nearest_distance_atr": _coerce_float(row.get("hv_level_nearest_distance_atr")),
+            "hv_level_note": row.get("hv_level_note") or "",
             "favorite_signals": list(row.get("favorite_signals") or []),
             "favorite_context_signals": list(row.get("context_signals") or []),
             "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),
@@ -22557,6 +22645,11 @@ HTF_INTRADAY_DURATION = "180 D"
 HTF_TREND_STUDY_FAMILY = "htf_trend_retest"
 HTF_TREND_STUDY_BUCKET = "study_htf_trend"
 
+HV_LEVEL_STUDY_FAMILY = "hv_level_proximity"
+HV_LEVEL_BREAK_STUDY_FAMILY = "hv_level_break"
+HV_LEVEL_STUDY_BUCKET = "study_hv_level"
+HV_LEVEL_MIN_STUDY_STRENGTH = 0.35
+
 PRIORITY_ADVERSE_REJECTION_MIN_WICK_RANGE_RATIO = 0.30
 
 PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MAX = 0.35
@@ -23413,6 +23506,228 @@ def enrich_priority_rows_with_htf_trend_context(
 
         if context.get("htf_retest_confirmed"):
             study_rows.append(_build_htf_trend_study_row(row, context))
+    return study_rows
+
+
+def _hv_level_last_trade_date(df: pd.DataFrame | None) -> str:
+    work = df.copy() if isinstance(df, pd.DataFrame) and not df.empty else pd.DataFrame()
+    if work.empty or "datetime" not in work.columns:
+        return datetime.now().date().isoformat()
+    dates = pd.to_datetime(work["datetime"], errors="coerce").dropna()
+    if dates.empty:
+        return datetime.now().date().isoformat()
+    return dates.iloc[-1].date().isoformat()
+
+
+def _hv_level_atr20_for_frame(df: pd.DataFrame | None) -> float | None:
+    rows = _daily_frame_to_rows(df)
+    if not rows:
+        return None
+    try:
+        last_trade_date = date.fromisoformat(rows[-1]["date"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return _coerce_float(compute_atr_from_ohlc(rows, last_trade_date))
+
+
+def build_hv_level_store_for_symbol(
+    symbol: str,
+    df: pd.DataFrame | None,
+    *,
+    atr20: float | None = None,
+    earnings_dates: list[str] | None = None,
+    levels_dir: Path | None = None,
+    persist: bool = True,
+) -> dict:
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return default_level_store("")
+    atr_value = _coerce_float(atr20) or _hv_level_atr20_for_frame(df)
+    levels_root = Path(levels_dir or MASTER_AVWAP_LEVELS_DIR)
+    path = level_store_path(levels_root, sym)
+    existing_store = load_level_store(path, sym)
+    candidates = extract_hv_levels(
+        df,
+        atr_value,
+        green=HV_RELVOL_GREEN,
+        red=HV_RELVOL_RED,
+        vol_sma=HV_VOL_SMA,
+        earnings_dates=earnings_dates or [],
+    )
+    clusters = cluster_hv_levels(candidates, atr_value, tol_frac=LEVEL_TOL_ATR_FRACTION)
+    store = merge_levels_into_store(
+        existing_store,
+        clusters,
+        symbol=sym,
+        atr20=atr_value,
+        updated=_hv_level_last_trade_date(df),
+    )
+    store["levels"] = recompute_level_touch_stats(
+        store.get("levels", []),
+        df,
+        atr_value,
+        tol_frac=LEVEL_TOL_ATR_FRACTION,
+        break_atr=LEVEL_BREAK_ATR,
+    )
+    if persist:
+        save_level_store(path, store)
+    return store
+
+
+def _hv_level_summary(levels: list[dict], limit: int = 3) -> str:
+    parts = []
+    for level in levels[: max(1, int(limit or 1))]:
+        price = _coerce_float(level.get("price"))
+        bucket = str(level.get("bucket") or "").strip()
+        distance_atr = _coerce_float(level.get("distance_atr"))
+        if price is None:
+            continue
+        distance_text = "" if distance_atr is None else f" {distance_atr:+.2f}ATR"
+        parts.append(f"{bucket}@{price:.2f}{distance_text}".strip())
+    return ", ".join(parts)
+
+
+def _hv_level_context_for_entry(
+    store: dict,
+    *,
+    side: str,
+    entry_price: float | None,
+    atr20: float | None,
+    last_trade_date: str = "",
+) -> dict:
+    nearby = levels_near(
+        store,
+        entry_price,
+        atr20,
+        tol_frac=LEVEL_TOL_ATR_FRACTION,
+        min_strength=HV_LEVEL_MIN_STUDY_STRENGTH,
+    )
+    blocking = levels_blocking_entry(
+        store,
+        side,
+        entry_price,
+        atr20,
+        tol_frac=LEVEL_TOL_ATR_FRACTION,
+        min_strength=1.0,
+    )
+    nearest = nearby[0] if nearby else {}
+    break_today = any(str(level.get("last_break") or "") == str(last_trade_date or "") for level in nearby)
+    note = ""
+    if nearby:
+        label = "blocking" if blocking else "nearby"
+        note = f"HV level {label}: {_hv_level_summary(blocking or nearby)}"
+        if break_today:
+            note += "; latest bar broke a stored level"
+    return {
+        "hv_level_nearby_count": int(len(nearby)),
+        "hv_level_blocking_count": int(len(blocking)),
+        "hv_level_break_today": bool(break_today),
+        "hv_level_nearest_price": _coerce_float(nearest.get("price")),
+        "hv_level_nearest_bucket": nearest.get("bucket", "") if nearest else "",
+        "hv_level_nearest_distance_atr": _coerce_float(nearest.get("distance_atr")),
+        "hv_level_nearby_summary": _hv_level_summary(nearby),
+        "hv_level_blocking_summary": _hv_level_summary(blocking),
+        "hv_level_note": note,
+    }
+
+
+def _build_hv_level_study_row(priority_row: dict, context: dict) -> dict:
+    study_row = dict(priority_row)
+    study_row.update(context)
+    break_today = bool(context.get("hv_level_break_today"))
+    family = HV_LEVEL_BREAK_STUDY_FAMILY if break_today else HV_LEVEL_STUDY_FAMILY
+    tag = "HV_LEVEL_BREAK" if break_today else "HV_LEVEL_PROXIMITY"
+    existing_tags = list(study_row.get("setup_tags") or [])
+    study_row["priority_bucket"] = HV_LEVEL_STUDY_BUCKET
+    study_row["is_favorite_setup"] = False
+    study_row["is_near_favorite_zone"] = False
+    study_row["setup_family"] = family
+    study_row["study_kind"] = family
+    study_row["setup_tags"] = list(dict.fromkeys([*existing_tags, tag]))
+    study_row["favorite_signals"] = []
+    study_row["context_signals"] = list(dict.fromkeys([*(study_row.get("context_signals") or []), tag]))
+    study_row["has_favorite_signal"] = False
+    note = str(context.get("hv_level_note") or "")
+    study_row["score_bonus_note"] = note
+    if not str(study_row.get("retest_note") or "").strip():
+        study_row["retest_note"] = note
+    return study_row
+
+
+def enrich_priority_rows_with_hv_levels(
+    priority_rows: list[dict] | None,
+    daily_frames_by_symbol: dict[str, pd.DataFrame] | None,
+    *,
+    earnings_dates_by_symbol: dict[str, list[str]] | None = None,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+    levels_dir: Path | None = None,
+    persist: bool = True,
+) -> list[dict]:
+    frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
+    stores_by_symbol: dict[str, dict] = {}
+    earnings_dates_by_symbol = earnings_dates_by_symbol if isinstance(earnings_dates_by_symbol, dict) else {}
+    for symbol, df in frames.items():
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            continue
+        try:
+            stores_by_symbol[sym] = build_hv_level_store_for_symbol(
+                sym,
+                df,
+                earnings_dates=earnings_dates_by_symbol.get(sym, []),
+                levels_dir=levels_dir,
+                persist=persist,
+            )
+        except Exception as exc:
+            logging.warning("%s: failed updating HV level store (%s).", sym, exc)
+
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    hv_fields = (
+        "hv_level_nearby_count",
+        "hv_level_blocking_count",
+        "hv_level_break_today",
+        "hv_level_nearest_price",
+        "hv_level_nearest_bucket",
+        "hv_level_nearest_distance_atr",
+        "hv_level_nearby_summary",
+        "hv_level_blocking_summary",
+        "hv_level_note",
+    )
+    study_rows: list[dict] = []
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        store = stores_by_symbol.get(symbol)
+        if not store:
+            continue
+        symbol_entry = ai_symbols.get(symbol) if isinstance(ai_symbols, dict) else {}
+        symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+        feature_row = feature_rows_by_symbol.get(symbol)
+        feature_row = feature_row if isinstance(feature_row, dict) else {}
+        entry_price = _coerce_float(row.get("last_close") or symbol_entry.get("last_close") or feature_row.get("last_close"))
+        atr_value = _coerce_float(row.get("atr20") or symbol_entry.get("atr20") or feature_row.get("atr20"))
+        last_trade_date = str(symbol_entry.get("last_trade_date") or feature_row.get("last_trade_date") or "")
+        context = _hv_level_context_for_entry(
+            store,
+            side=row.get("side") or symbol_entry.get("side") or "",
+            entry_price=entry_price,
+            atr20=atr_value,
+            last_trade_date=last_trade_date,
+        )
+        row.update(context)
+        if isinstance(symbol_entry, dict):
+            for field in hv_fields:
+                symbol_entry[field] = context.get(field)
+        if isinstance(feature_row, dict):
+            for field in hv_fields:
+                feature_row[field] = context.get(field)
+        if context.get("hv_level_nearby_count") or context.get("hv_level_break_today"):
+            study_rows.append(_build_hv_level_study_row(row, context))
     return study_rows
 
 
@@ -27299,6 +27614,13 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "htf_retest_sma": row.get("htf_retest_sma") or "",
             "htf_trend_score_bonus": int(row.get("htf_trend_score_bonus", 0) or 0),
             "htf_trend_note": row.get("htf_trend_note") or "",
+            "hv_level_nearby_count": int(row.get("hv_level_nearby_count", 0) or 0),
+            "hv_level_blocking_count": int(row.get("hv_level_blocking_count", 0) or 0),
+            "hv_level_break_today": bool(row.get("hv_level_break_today")),
+            "hv_level_nearest_price": _coerce_float(row.get("hv_level_nearest_price")),
+            "hv_level_nearest_bucket": row.get("hv_level_nearest_bucket") or "",
+            "hv_level_nearest_distance_atr": _coerce_float(row.get("hv_level_nearest_distance_atr")),
+            "hv_level_note": row.get("hv_level_note") or "",
             "favorite_signals": list(row.get("favorite_signals") or []),
             "favorite_context_signals": list(row.get("context_signals") or []),
             "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),

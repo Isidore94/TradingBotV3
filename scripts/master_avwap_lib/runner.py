@@ -339,6 +339,7 @@ def run_master(
     daily_frames_by_symbol = {}
     priority_rows = []
     htf_trend_study_rows = []
+    hv_level_study_rows = []
     theta_put_rows = []
     theta_pcs_rows = []
     positions = {
@@ -1463,6 +1464,14 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    hv_level_study_rows = enrich_priority_rows_with_hv_levels(
+        priority_rows,
+        daily_frames_by_symbol,
+        earnings_dates_by_symbol=earnings_data,
+        ai_state=ai_state,
+        feature_rows_by_symbol=feature_rows_by_symbol,
+    )
+    study_rows = [*htf_trend_study_rows, *hv_level_study_rows]
 
     refine_priority_rows_with_directional_filters(
         priority_rows,
@@ -1529,6 +1538,8 @@ def run_master(
         "industry_strength_rows": industry_strength_rows,
         "htf_trend_study_rows": htf_trend_study_rows,
         "htf_trend_study_count": len(htf_trend_study_rows),
+        "hv_level_study_rows": hv_level_study_rows,
+        "hv_level_study_count": len(hv_level_study_rows),
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
         "setup_tracker_updated": False,
         "study_setups_tracked": 0,
@@ -1596,16 +1607,16 @@ def run_master(
             daily_frames_by_symbol,
             ib,
             control_rows=control_rows,
-            study_rows=htf_trend_study_rows,
+            study_rows=study_rows,
         )
         run_result["setup_tracker_updated"] = True
         run_result["control_setups_tracked"] = len(control_rows)
-        run_result["study_setups_tracked"] = len(htf_trend_study_rows)
+        run_result["study_setups_tracked"] = len(study_rows)
         logging.info(
             "Setup tracker updated for %s tracked symbol(s); %s control/holdout setup(s); %s study setup(s).",
             len(tracked_rows),
             len(control_rows),
-            len(htf_trend_study_rows),
+            len(study_rows),
         )
         # Re-fit the Expected-R prior anchors to the freshly-updated closed
         # outcomes so the next scan's headline ranking is grounded in this
@@ -1803,6 +1814,15 @@ def run_master(
         "htf_4h_bar_count",
         "htf_trend_score_bonus",
         "htf_trend_note",
+        "hv_level_nearby_count",
+        "hv_level_blocking_count",
+        "hv_level_break_today",
+        "hv_level_nearest_price",
+        "hv_level_nearest_bucket",
+        "hv_level_nearest_distance_atr",
+        "hv_level_nearby_summary",
+        "hv_level_blocking_summary",
+        "hv_level_note",
         "previous_day_range_break",
         "previous_day_range_break_bonus",
         "previous_day_range_note",

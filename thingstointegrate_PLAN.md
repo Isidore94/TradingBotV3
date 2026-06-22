@@ -130,7 +130,7 @@ independently shippable + testable.
 | **P2** ✅ | #2 TOP becomes a *secondary* setup | **DONE 2026-06-21.** Small, removes a known regression (TOP suppressing other patterns). |
 | **P3** ☑ | #3 Industry/sector relative strength | **DONE 2026-06-22.** Daily scan + market prep + flag-gated D1 boost + BounceBot M5 directional industry RRS. |
 | **P4** ☑ | #4 1h/4h trend detection (boost only) | **DONE 2026-06-22.** B2 intraday fetch + 1h/4h SMA retest detection + flag-gated boost + study rows. |
-| **P5** | #5 D1 high-volume horizontal levels | Needs B3 (level store). Study-first; scoring penalty later. |
+| **P5** ☑ | #5 D1 high-volume horizontal levels | **DONE 2026-06-22.** B3 level store + study-first HV level events; scoring penalty still later. |
 | **P6** | #6 Cloud lines, compression breaks, trendline breaks | Needs B3 + B4. Most research-y; pure study-first. |
 
 ---
@@ -270,32 +270,43 @@ Steps:
 6. ☐ **Tests:** synthetic 1h frames → correct trend label + retest detection;
    boost bounded + gated.
 
-### Phase 5 — D1 high-volume horizontal levels  ☐ (study-first)
+### Phase 5 — D1 high-volume horizontal levels  ☑ DONE (2026-06-22, study-first)
 **Goal (txt #5):** from D1 OHLC + volume, derive horizontal S/R from
 high-relative-volume candles (relvol ≥2 & <3 = "red", ≥3 = "green" per Aaron's
 PineScript). Persist per-symbol. Use as S/R: **don't enter right at a big level.**
 Tolerance ≈ `0.05 × ATR20` (tunable).
 
 Steps:
-1. ☐ **Build B3** per-symbol level store (cloud JSON, schema-versioned).
-2. ☐ Port the PineScript: `relvol = volume / SMA(volume,50)`. For each candle
+1. ☑ **Build B3** per-symbol level store (cloud JSON, schema-versioned).
+2. ☑ Port the PineScript: `relvol = volume / SMA(volume,50)`. For each candle
    with relvol in [2,3) record its **high** (and symmetrically its low) as a
    level (red); relvol ≥3 → stronger level (green). Keep first-seen date + relvol
    bucket + running touch/respect count.
-3. ☐ **Tolerance / clustering:** merge levels within `±tol` where
+3. ☑ **Tolerance / clustering:** merge levels within `±tol` where
    `tol = LEVEL_TOL_ATR_FRACTION × ATR20` (start 0.05). Cluster nearby levels so
    the list stays clean; strengthen a level each time price revisits within tol.
-4. ☐ **Flag non-earnings high-vol days** separately (Aaron: anchor AVWAPs on
+4. ☑ **Flag non-earnings high-vol days** separately (Aaron: anchor AVWAPs on
    them, study relevance). Reuse the earnings calendar already in the scan to
    exclude earnings days.
-5. ☐ **Study-first:** record "approaching/at a green level" and "level break"
+5. ☑ **Study-first:** record "approaching/at a green level" and "level break"
    events to the `study_setups` namespace + `master_avwap_study.txt`. Measure:
    how often levels hold, how often breaks lead to sharp moves.
 6. ☐ **Scoring (later, after study validates):** penalize a long entry sitting
    just under a strong green level (poor R:R) / short under support; small,
    bounded, flag-gated.
-7. ☐ **Tests:** relvol bucketing, level extraction from a synthetic frame,
+7. ☑ **Tests:** relvol bucketing, level extraction from a synthetic frame,
    tolerance clustering, touch-count increment, earnings-day exclusion.
+
+> **Shipped.** Added `scripts/master_avwap_lib/levels.py` with inclusive
+> relvol-SMA bucketing, high+low candidate extraction, ATR-scaled clustering,
+> schema-versioned JSON stores under `DATA_DIR/levels`, idempotent touch/respect/
+> break recomputation, adjacent-session earnings-origin marking, and
+> non-earnings green HV anchor flags. Master AVWAP now enriches priority rows,
+> AI state, D1 feature CSV/history, tracker attributes, focus payloads, and the
+> priority report with `hv_level_*` context, then records proximity/break rows
+> into isolated `study_setups` without changing live score. Added focused
+> `tests/test_levels.py` coverage plus scanner integration coverage; full suite
+> 366 green (`python -m unittest discover tests`).
 
 ### Phase 6 — Cloud lines, compression & trendline breaks  ☐ (pure study-first)
 **Goal (txt #6):** Ichimoku **Leading Span B** flat-cloud lines as S/R
@@ -329,7 +340,7 @@ Steps:
 ## 5. Testing & rollout checklist (every phase)
 - ☐ New pure logic lives in a focused module or a clearly-scoped legacy block,
   with unit tests added under `tests/`.
-- ☐ Run the full suite (`pytest`, currently 333+ green) — no regressions.
+- ☐ Run the full suite (`unittest`, currently 366 green) — no regressions.
 - ☐ Anything that can affect ranking is **flag-gated** and **bounded**, off by
   default until studied.
 - ☐ Study namespaces never leak into Expected-R / calibration / live ranking
@@ -391,6 +402,11 @@ Steps:
   resampling, aligned 1h/4h SMA retest detection, `htf_*` output fields, a
   bounded flag-gated `+6` boost (default off), and `study_setups` producer rows.
   2 focused HTF tests + scoring-config coverage; full suite 360 green.
+- 2026-06-22 — **T5 / Phase 5 SHIPPED.** Added B3 `DATA_DIR/levels/<SYM>.json`
+  level stores, HV horizontal extraction/clustering/touch stats in new
+  `levels.py`, earnings-origin/non-earnings HV anchor flags, `hv_level_*` scanner
+  context, and study-only proximity/break rows. No live score penalty added.
+  5 focused level tests + scanner integration coverage; full suite 366 green.
 
 ---
 
@@ -422,7 +438,7 @@ Steps:
 | RS / ETF infra (bounce_bot) | impls in `scripts/bounce_bot_lib/legacy.py`: `real_relative_strength:1531`, `load_sector_etf_map:475`, `_load_industry_etf_map_file:498`, `load_and_update_industry_etf_map:518`, `resolve_sector_etf:550`, `resolve_industry_ref_etf:567` | Imported via the `rrs.py` shim. **Edit in legacy.py, import from rrs.py.** |
 | Shared/cloud data root | `project_paths.py:61` `PERSISTENT_DATA_DIR` (env `TRADINGBOTV3_DATA_DIR` → local `shared_data_dir` → default), `DATA_DIR = PERSISTENT_DATA_DIR/"data"` (`:64`) | New B3/B5 stores go under `DATA_DIR`. This *is* the "Google Drive / cloud folder." |
 | ETF map files | `SECTOR_ETF_MAP_FILE`/`INDUSTRY_ETF_MAP_FILE` `project_paths.py:79-80`; repo→data seed/sync `:347-348`, `:432-433` | Phase 3 reuses; add new stores to the same sync lists so they propagate. |
-| Tests | `tests/` — **360 tests green** as of T4 (`python -m unittest discover tests`) | "keep green" baseline; no `pytest.ini`/`conftest.py`. |
+| Tests | `tests/` — **366 tests green** as of T5 (`python -m unittest discover tests`) | "keep green" baseline; no `pytest.ini`/`conftest.py`. |
 
 ### 8b. Gotchas that will bite a cold-start agent
 1. **`legacy.py` has ~20 SHADOWED DUPLICATE top-level functions** (older copies
@@ -505,7 +521,7 @@ of work and finish it safely without the accumulated chat context.
 ### 10b. Environment & test command (Windows, repo root `c:\Users\aaron\TradingBotV3`)
 **pytest is NOT installed in `.venv`** — the suite is `unittest`-based. Use unittest:
 ```powershell
-# full suite (baseline: 360 passing as of 2026-06-22, through T4):
+# full suite (baseline: 366 passing as of 2026-06-22, through T5):
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 # one file while iterating:
 .\.venv\Scripts\python.exe -m unittest tests.test_master_avwap_setups
@@ -657,12 +673,15 @@ OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
 > **Shipped.** See Phase 4 + progress log notes above. The boost is gated off by
 > default; the study namespace records HTF retest candidates for outcome discovery.
 
-### T5 — B3 level store + D1 high-volume horizontal levels  (Phase 5)  ☐
+### T5 — B3 level store + D1 high-volume horizontal levels  (Phase 5)  ☑ DONE (2026-06-22)
 - **→ Full worked algorithm in §12.1.** New schema-versioned per-symbol JSON under
-  `DATA_DIR` (+ sync lists). Accumulate **high AND low** of every ≥3 rvol candle
+  `DATA_DIR` (+ sync lists). Accumulate **high AND low** of every qualifying ≥2 rvol candle
   (not `valuewhen`), ATR-scaled clustering (`0.05×ATR20`), touch stats recomputed
   each run (idempotent), earnings-day exclusion. **Study-first** (record
   approach/break events; no scoring yet). DEPENDS ON: B4 (T6).
+
+> **Shipped.** See Phase 5 + progress log notes above. The level store and
+> study producers are live; the scoring penalty remains intentionally deferred.
 
 ### T6 — B4 study_setups namespace + master_avwap_study.txt  (cross-cutting)  ☑ DONE (2026-06-21)
 - **Build this early — T4/T5/T7 depend on it.** Clone the `control_setups`
@@ -692,7 +711,7 @@ OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
 
 ### Suggested execution order for parallel agents
 `T6` and `T1` first (independent, unblock the most). Then `T2`, `T3` (needs T1).
-Next `T5` (needs B4, already done). `T7` last (needs T5 + B4).
+Next `T7` (needs T5 + B4, both now done).
 
 ---
 
@@ -709,7 +728,7 @@ Next `T5` (needs B4, already done). `T7` last (needs T5 + B4).
 ### 12.0 Why the TradingView scripts don't port literally
 - **HV levels:** the PineScript uses `ta.valuewhen(cond, high, 0)` → only the
   **most recent** qualifying candle's high, redrawn each bar. We want to
-  **accumulate** levels: iterate *all* bars, and for *each* ≥3 rvol candle record
+  **accumulate** levels: iterate *all* bars, and for *each* qualifying ≥2 rvol candle record
   **both its high and its low** as persistent levels. Different algorithm.
 - **Cloud lines:** Span B is plotted with `offset=+26`. The flat segment that price
   reacts to **today** was computed **26 bars ago**. Comparing today's price to
