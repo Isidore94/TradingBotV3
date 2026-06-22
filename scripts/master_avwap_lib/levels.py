@@ -41,6 +41,10 @@ def _coerce_float(value) -> float | None:
 def _normalize_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+    if df.attrs.get("_levels_normalized"):
+        # Already normalized by a prior call in the same pipeline; skip the
+        # copy/rename/coerce/sort work and reuse the frame as-is.
+        return df
     work = df.copy()
     work.rename(columns={column: str(column).strip().lower() for column in work.columns}, inplace=True)
     if "datetime" not in work.columns:
@@ -57,7 +61,19 @@ def _normalize_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     work = work.dropna(subset=["datetime", "open", "high", "low", "close", "volume"])
     if work.empty:
         return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-    return work.sort_values("datetime").reset_index(drop=True)
+    work = work.sort_values("datetime").reset_index(drop=True)
+    work.attrs["_levels_normalized"] = True
+    return work
+
+
+def normalize_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Public wrapper around the internal normalizer.
+
+    Callers that run several level helpers over the same daily frame can
+    normalize once and pass the result down; the helpers detect the
+    already-normalized frame and skip redundant copy/coerce/sort work.
+    """
+    return _normalize_frame(df)
 
 
 def _date_text(value) -> str:

@@ -1440,12 +1440,20 @@ def run_master(
         etf_df = fetch_daily_bars(ib, industry_etf, MARKET_PREP_INDUSTRY_LOOKBACK_DAYS)
         if etf_df is not None and not etf_df.empty:
             industry_daily_frames_by_etf[industry_etf] = etf_df.copy()
+    # Convert each daily frame to rows + ATR20 once and share across the
+    # universe-strength and HV-level enrichers (avoids re-running the per-symbol
+    # frame->rows + ATR conversion two extra times across the pipeline).
+    daily_rows_cache = build_daily_rows_cache(daily_frames_by_symbol)
+    industry_rows_by_etf = build_daily_rows_cache(industry_daily_frames_by_etf)
+    industry_rows_by_etf = {etf: entry["rows"] for etf, entry in industry_rows_by_etf.items()}
     universe_strength_rows = build_universe_strength_rows(
         daily_frames_by_symbol,
         spy_benchmark,
         sides_by_symbol=sides_by_symbol,
         industry_context_by_symbol=industry_context_by_symbol,
         industry_daily_frames_by_etf=industry_daily_frames_by_etf,
+        daily_rows_cache=daily_rows_cache,
+        industry_rows_by_etf=industry_rows_by_etf,
     )
     industry_strength_rows = build_industry_strength_rows(
         industry_daily_frames_by_etf,
@@ -1473,6 +1481,7 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
         stores_out=hv_level_stores_by_symbol,
+        daily_rows_cache=daily_rows_cache,
     )
 
     refine_priority_rows_with_directional_filters(

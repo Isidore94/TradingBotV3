@@ -137,6 +137,7 @@ from .levels import (
     levels_near,
     load_level_store,
     merge_into_store as merge_levels_into_store,
+    normalize_frame as normalize_levels_frame,
     recompute_touch_stats as recompute_level_touch_stats,
     save_level_store,
 )
@@ -23253,6 +23254,36 @@ def _daily_frame_to_rows(df: "pd.DataFrame | None") -> list[dict]:
     return rows
 
 
+def build_daily_rows_cache(daily_frames_by_symbol: "dict | None") -> dict[str, dict]:
+    """Convert each symbol's daily frame to rows + ATR20 + last_trade_date once.
+
+    The universe-strength, HV-level and phase-6 enrichers each used to re-run
+    ``_daily_frame_to_rows`` and ``compute_atr_from_ohlc`` per symbol. Building
+    this cache a single time lets them share the result, removing two redundant
+    full-frame conversions per symbol on every scan.
+    """
+    cache: dict[str, dict] = {}
+    if not isinstance(daily_frames_by_symbol, dict):
+        return cache
+    for symbol, df in daily_frames_by_symbol.items():
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            continue
+        rows = _daily_frame_to_rows(df)
+        if not rows:
+            continue
+        try:
+            last_trade_date = date.fromisoformat(rows[-1]["date"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        cache[sym] = {
+            "rows": rows,
+            "last_trade_date": last_trade_date,
+            "atr20": _coerce_float(compute_atr_from_ohlc(rows, last_trade_date)),
+        }
+    return cache
+
+
 def _trailing_return_pct(daily_rows: list[dict], sessions: int) -> float | None:
     """Percent change in close over the last ``sessions`` trading sessions."""
     if not daily_rows or sessions <= 0 or len(daily_rows) < sessions + 1:
@@ -23620,12 +23651,15 @@ def build_hv_level_store_for_symbol(
     sym = str(symbol or "").strip().upper()
     if not sym:
         return default_level_store("")
-    atr_value = _coerce_float(atr20) or _hv_level_atr20_for_frame(df)
+    # Normalize the daily frame once and reuse it across extract/span-B/touch-stats
+    # instead of letting each helper re-run the copy/coerce/sort pipeline.
+    work = normalize_levels_frame(df)
+    atr_value = _coerce_float(atr20) or _hv_level_atr20_for_frame(work)
     levels_root = Path(levels_dir or MASTER_AVWAP_LEVELS_DIR)
     path = level_store_path(levels_root, sym)
     existing_store = load_level_store(path, sym)
     candidates = extract_hv_levels(
-        df,
+        work,
         atr_value,
         green=HV_RELVOL_GREEN,
         red=HV_RELVOL_RED,
@@ -23633,17 +23667,17 @@ def build_hv_level_store_for_symbol(
         earnings_dates=earnings_dates or [],
     )
     clusters = cluster_hv_levels(candidates, atr_value, tol_frac=LEVEL_TOL_ATR_FRACTION)
-    cloud_flats = compute_span_b_flats(df, atr_value)
+    cloud_flats = compute_span_b_flats(work, atr_value)
     store = merge_levels_into_store(
         existing_store,
         [*clusters, *cloud_flats],
         symbol=sym,
         atr20=atr_value,
-        updated=_hv_level_last_trade_date(df),
+        updated=_hv_level_last_trade_date(work),
     )
     store["levels"] = recompute_level_touch_stats(
         store.get("levels", []),
-        df,
+        work,
         atr_value,
         tol_frac=LEVEL_TOL_ATR_FRACTION,
         break_atr=LEVEL_BREAK_ATR,
@@ -23745,18 +23779,23 @@ def enrich_priority_rows_with_hv_levels(
     levels_dir: Path | None = None,
     persist: bool = True,
     stores_out: dict[str, dict] | None = None,
+    daily_rows_cache: dict | None = None,
 ) -> list[dict]:
     frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
     stores_by_symbol: dict[str, dict] = stores_out if isinstance(stores_out, dict) else {}
     earnings_dates_by_symbol = earnings_dates_by_symbol if isinstance(earnings_dates_by_symbol, dict) else {}
+    daily_rows_cache = daily_rows_cache if isinstance(daily_rows_cache, dict) else {}
     for symbol, df in frames.items():
         sym = str(symbol or "").strip().upper()
         if not sym:
             continue
+        cached = daily_rows_cache.get(sym) if daily_rows_cache else None
+        cached_atr = cached.get("atr20") if isinstance(cached, dict) else None
         try:
             stores_by_symbol[sym] = build_hv_level_store_for_symbol(
                 sym,
                 df,
+                atr20=cached_atr,
                 earnings_dates=earnings_dates_by_symbol.get(sym, []),
                 levels_dir=levels_dir,
                 persist=persist,
@@ -24239,6 +24278,8 @@ def build_universe_strength_rows(
     sides_by_symbol: dict | None = None,
     industry_context_by_symbol: dict | None = None,
     industry_daily_frames_by_etf: dict | None = None,
+    daily_rows_cache: dict | None = None,
+    industry_rows_by_etf: dict | None = None,
 ) -> list[dict]:
     """One strength row per *scanned* symbol — the whole universe, not just the
     symbols that produced a flagged setup. Feeds the market-prep strongest/weakest
@@ -24255,22 +24296,39 @@ def build_universe_strength_rows(
     sides_by_symbol = sides_by_symbol if isinstance(sides_by_symbol, dict) else {}
     industry_context_by_symbol = industry_context_by_symbol if isinstance(industry_context_by_symbol, dict) else {}
     industry_daily_frames_by_etf = industry_daily_frames_by_etf if isinstance(industry_daily_frames_by_etf, dict) else {}
-    industry_rows_by_etf: dict[str, list[dict]] = {}
-    for etf, df in industry_daily_frames_by_etf.items():
-        ref = str(etf or "").strip().upper()
-        if ref:
-            industry_rows_by_etf[ref] = _daily_frame_to_rows(df)
+    daily_rows_cache = daily_rows_cache if isinstance(daily_rows_cache, dict) else {}
+    if isinstance(industry_rows_by_etf, dict):
+        industry_rows_by_etf = {
+            str(etf or "").strip().upper(): rows
+            for etf, rows in industry_rows_by_etf.items()
+            if str(etf or "").strip()
+        }
+    else:
+        industry_rows_by_etf = {}
+        for etf, df in industry_daily_frames_by_etf.items():
+            ref = str(etf or "").strip().upper()
+            if ref:
+                industry_rows_by_etf[ref] = _daily_frame_to_rows(df)
     for symbol, df in daily_frames_by_symbol.items():
         sym = str(symbol or "").strip().upper()
         if not sym:
             continue
-        daily_rows = _daily_frame_to_rows(df)
+        cached = daily_rows_cache.get(sym) if daily_rows_cache else None
+        if isinstance(cached, dict) and cached.get("rows"):
+            daily_rows = cached["rows"]
+            last_trade_date = cached.get("last_trade_date")
+            cached_atr = cached.get("atr20")
+        else:
+            daily_rows = _daily_frame_to_rows(df)
+            last_trade_date = None
+            cached_atr = None
         if not daily_rows:
             continue
-        try:
-            last_trade_date = date.fromisoformat(daily_rows[-1]["date"])
-        except (ValueError, KeyError, TypeError):
-            continue
+        if last_trade_date is None:
+            try:
+                last_trade_date = date.fromisoformat(daily_rows[-1]["date"])
+            except (ValueError, KeyError, TypeError):
+                continue
         side = normalize_side(sides_by_symbol.get(sym) or "")
         rs = assess_daily_relative_strength(daily_rows, last_trade_date, side, spy_benchmark)
         row = {
@@ -24285,7 +24343,7 @@ def build_universe_strength_rows(
             "spy_five_day_return_pct": rs.get("spy_five_day_return_pct"),
             "return_13w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_13W_SESSIONS),
             "return_26w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_26W_SESSIONS),
-            "atr20": compute_atr_from_ohlc(daily_rows, last_trade_date),
+            "atr20": cached_atr if cached_atr is not None else compute_atr_from_ohlc(daily_rows, last_trade_date),
             "universe_strength_row": True,
         }
         context = industry_context_by_symbol.get(sym)
