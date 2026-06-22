@@ -162,18 +162,24 @@ def extract_hv_levels(
     work = _normalize_frame(df)
     if work.empty:
         return []
-    relvol = compute_relvol(work, vol_sma=vol_sma)
+    relvol = compute_relvol(work, vol_sma=vol_sma).tolist()
     earnings_set = _earnings_origin_dates(work, earnings_dates)
+    date_texts = [_date_text(value) for value in work["datetime"]]
+    highs = work["high"].tolist()
+    lows = work["low"].tolist()
+    atr_at_origin = _coerce_float(atr20)
+    green_threshold = float(green)
+    red_threshold = float(red)
     candidates: list[dict] = []
-    for idx, row in work.iterrows():
-        rv = _coerce_float(relvol.iloc[idx] if idx < len(relvol) else None)
-        if rv is None or rv < float(red):
+    for idx in range(len(work)):
+        rv = _coerce_float(relvol[idx])
+        if rv is None or rv < red_threshold:
             continue
-        bucket = "green" if rv >= float(green) else "red"
-        trade_date = _date_text(row.get("datetime"))
+        bucket = "green" if rv >= green_threshold else "red"
+        trade_date = date_texts[idx]
         earnings_origin = trade_date in earnings_set
-        for origin_side, price_key in (("high", "high"), ("low", "low")):
-            price = _coerce_float(row.get(price_key))
+        for origin_side, price_array in (("high", highs), ("low", lows)):
+            price = _coerce_float(price_array[idx])
             if price is None:
                 continue
             candidates.append(
@@ -187,7 +193,7 @@ def extract_hv_levels(
                     "last_seen": trade_date,
                     "earnings_origin": bool(earnings_origin),
                     "non_earnings_anchor_candidate": bool(bucket == "green" and not earnings_origin),
-                    "atr20_at_origin": _coerce_float(atr20),
+                    "atr20_at_origin": atr_at_origin,
                     "source_bar_index": int(idx),
                 }
             )
@@ -391,6 +397,13 @@ def recompute_touch_stats(
     if work.empty:
         return [dict(level) for level in levels]
     break_tolerance = _level_tolerance(atr20, tol_frac=float(break_atr))
+    bar_count = len(work)
+    forward_step = max(1, int(forward_bars or LEVEL_FORWARD_BARS))
+    date_texts = [_date_text(value) for value in work["datetime"]]
+    date_keys = [_date_key(text) for text in date_texts]
+    highs = work["high"].tolist()
+    lows = work["low"].tolist()
+    closes = work["close"].tolist()
     output = []
     for raw_level in levels:
         level = dict(raw_level)
@@ -399,34 +412,33 @@ def recompute_touch_stats(
             continue
         first_seen = _date_key(level.get("first_seen"))
         tolerance = _level_kind_tolerance(level, atr20, price, default_tol_frac=tol_frac)
+        upper = float(price) + tolerance
+        lower = float(price) - tolerance
+        break_up_level = float(price) + break_tolerance
+        break_down_level = float(price) - break_tolerance
         touch_count = 0
         respect_count = 0
         break_count = 0
         post_break_returns = []
         last_touch = ""
         last_break = ""
-        for idx, row in work.iterrows():
-            trade_date_text = _date_text(row.get("datetime"))
-            trade_date = _date_key(trade_date_text)
+        for idx in range(bar_count):
+            trade_date = date_keys[idx]
             if first_seen is not None and trade_date is not None and trade_date <= first_seen:
                 continue
-            high_value = _coerce_float(row.get("high"))
-            low_value = _coerce_float(row.get("low"))
-            close_value = _coerce_float(row.get("close"))
-            if high_value is None or low_value is None or close_value is None:
-                continue
-            touched = float(low_value) <= float(price) + tolerance and float(high_value) >= float(price) - tolerance
-            broke_up = float(close_value) > float(price) + break_tolerance
-            broke_down = float(close_value) < float(price) - break_tolerance
-            if not touched:
+            high_value = highs[idx]
+            low_value = lows[idx]
+            close_value = closes[idx]
+            if not (float(low_value) <= upper and float(high_value) >= lower):
                 continue
             touch_count += 1
+            trade_date_text = date_texts[idx]
             last_touch = trade_date_text
-            if broke_up or broke_down:
+            if float(close_value) > break_up_level or float(close_value) < break_down_level:
                 break_count += 1
                 last_break = trade_date_text
-                future_idx = min(len(work) - 1, idx + max(1, int(forward_bars or LEVEL_FORWARD_BARS)))
-                future_close = _coerce_float(work.iloc[future_idx].get("close"))
+                future_idx = min(bar_count - 1, idx + forward_step)
+                future_close = _coerce_float(closes[future_idx])
                 if future_close is not None and close_value:
                     post_break_returns.append(round(((future_close - close_value) / close_value) * 100.0, 4))
             else:

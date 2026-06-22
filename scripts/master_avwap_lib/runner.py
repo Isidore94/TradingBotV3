@@ -1465,14 +1465,15 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    hv_level_stores_by_symbol: dict[str, dict] = {}
     hv_level_study_rows = enrich_priority_rows_with_hv_levels(
         priority_rows,
         daily_frames_by_symbol,
         earnings_dates_by_symbol=earnings_data,
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
+        stores_out=hv_level_stores_by_symbol,
     )
-    study_rows = [*htf_trend_study_rows, *hv_level_study_rows]
 
     refine_priority_rows_with_directional_filters(
         priority_rows,
@@ -1486,6 +1487,7 @@ def run_master(
         earnings_dates_by_symbol=earnings_data,
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
+        level_stores_by_symbol=hv_level_stores_by_symbol,
     )
     study_rows = [*htf_trend_study_rows, *hv_level_study_rows, *phase6_study_rows]
     apply_pre_earnings_priority_blocks(priority_rows, ai_state, feature_rows_by_symbol)

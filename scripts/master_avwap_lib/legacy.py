@@ -23744,9 +23744,10 @@ def enrich_priority_rows_with_hv_levels(
     feature_rows_by_symbol: dict | None = None,
     levels_dir: Path | None = None,
     persist: bool = True,
+    stores_out: dict[str, dict] | None = None,
 ) -> list[dict]:
     frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
-    stores_by_symbol: dict[str, dict] = {}
+    stores_by_symbol: dict[str, dict] = stores_out if isinstance(stores_out, dict) else {}
     earnings_dates_by_symbol = earnings_dates_by_symbol if isinstance(earnings_dates_by_symbol, dict) else {}
     for symbol, df in frames.items():
         sym = str(symbol or "").strip().upper()
