@@ -149,6 +149,95 @@ class LevelModuleTests(unittest.TestCase):
         self.assertEqual(once[0]["respect_count"], 1)
         self.assertEqual(once[0]["break_count"], 1)
 
+    def _touch_break_frame(self, periods: int = 60, *, start: str = "2024-01-01") -> pd.DataFrame:
+        dates = pd.bdate_range(start, periods=periods)
+        rows = []
+        for idx, dt_value in enumerate(dates):
+            if idx % 6 == 0:
+                low, high, close = 99.7, 101.5, 101.2  # break up through 100
+            elif idx % 6 == 3:
+                low, high, close = 99.5, 100.3, 100.0  # respect 100
+            else:
+                low, high, close = 103.0, 105.0, 104.0
+            rows.append(
+                {"datetime": dt_value, "open": 104.0, "high": high, "low": low, "close": close, "volume": 1000.0}
+            )
+        return pd.DataFrame(rows)
+
+    def test_accumulate_matches_full_recompute_over_overlapping_windows(self):
+        frame = self._touch_break_frame()
+        level = {
+            "kind": "hv_horizontal",
+            "price": 100.0,
+            "bucket": "green",
+            "first_seen": frame.loc[0, "datetime"].date().isoformat(),
+        }
+        full = levels.recompute_touch_stats([dict(level)], frame, atr20=4.0)[0]
+        acc = [dict(level)]
+        for start, end in ((0, 25), (18, 45), (40, 60)):
+            acc = levels.accumulate_touch_stats(acc, frame.iloc[start:end].reset_index(drop=True), atr20=4.0)
+        accumulated = acc[0]
+        self.assertEqual(accumulated["touch_count"], full["touch_count"])
+        self.assertEqual(accumulated["respect_count"], full["respect_count"])
+        self.assertEqual(accumulated["break_count"], full["break_count"])
+        self.assertTrue(accumulated["stats_through"])
+
+    def test_accumulate_does_not_double_count_on_replay(self):
+        frame = self._touch_break_frame()
+        level = {
+            "kind": "hv_horizontal",
+            "price": 100.0,
+            "bucket": "green",
+            "first_seen": frame.loc[0, "datetime"].date().isoformat(),
+        }
+        once = levels.accumulate_touch_stats([dict(level)], frame, atr20=4.0)
+        twice = levels.accumulate_touch_stats(once, frame, atr20=4.0)
+        self.assertEqual(once[0]["touch_count"], twice[0]["touch_count"])
+        self.assertEqual(once[0]["break_count"], twice[0]["break_count"])
+        # A short trailing window must never shrink the accumulated totals.
+        short = levels.accumulate_touch_stats(twice, frame.iloc[-2:].reset_index(drop=True), atr20=4.0)
+        self.assertGreaterEqual(short[0]["touch_count"], once[0]["touch_count"])
+
+    def test_accumulate_migrates_legacy_level_without_double_counting(self):
+        frame = self._touch_break_frame(periods=30)
+        level = {
+            "kind": "hv_horizontal",
+            "price": 100.0,
+            "bucket": "green",
+            "first_seen": frame.loc[0, "datetime"].date().isoformat(),
+        }
+        legacy_level = levels.recompute_touch_stats([dict(level)], frame, atr20=4.0)[0]
+        self.assertNotIn("stats_through", legacy_level)
+        migrated = levels.accumulate_touch_stats([dict(legacy_level)], frame, atr20=4.0)[0]
+        fresh = levels.accumulate_touch_stats([dict(level)], frame, atr20=4.0)[0]
+        self.assertEqual(migrated["touch_count"], fresh["touch_count"])
+
+    def test_merge_into_store_preserves_cumulative_stats(self):
+        frame = self._touch_break_frame()
+        level = {
+            "kind": "hv_horizontal",
+            "price": 100.0,
+            "bucket": "green",
+            "first_seen": frame.loc[0, "datetime"].date().isoformat(),
+        }
+        accumulated = levels.accumulate_touch_stats([dict(level)], frame, atr20=4.0)[0]
+        store = levels.default_level_store("T")
+        store["levels"] = [dict(accumulated)]
+        reconfirm = {
+            "kind": "hv_horizontal",
+            "price": 100.02,
+            "bucket": "green",
+            "relvol": 3.0,
+            "first_seen": frame.loc[0, "datetime"].date().isoformat(),
+            "touch_count": 0,
+            "respect_count": 0,
+            "break_count": 0,
+        }
+        merged = levels.merge_into_store(store, [reconfirm], symbol="T", atr20=4.0)
+        matched = next(item for item in merged["levels"] if abs(float(item["price"]) - 100.0) < 0.1)
+        self.assertEqual(matched["touch_count"], accumulated["touch_count"])
+        self.assertEqual(matched["stats_through"], accumulated["stats_through"])
+
     def test_levels_blocking_entry_filters_by_side_and_strength(self):
         store = {
             "levels": [

@@ -127,6 +127,7 @@ from .levels import (
     LEVEL_BREAK_ATR,
     LEVEL_STORE_SCHEMA_VERSION,
     LEVEL_TOL_ATR_FRACTION,
+    accumulate_touch_stats as accumulate_level_touch_stats,
     cluster_levels as cluster_hv_levels,
     compute_span_b_flats,
     compute_relvol,
@@ -22721,6 +22722,16 @@ HV_LEVEL_BREAK_STUDY_FAMILY = "hv_level_break"
 HV_LEVEL_STUDY_BUCKET = "study_hv_level"
 HV_LEVEL_MIN_STUDY_STRENGTH = 0.35
 
+# Multi-year S/R history. The deep backfill does a one-time long fetch per symbol
+# so the level chart starts years deep instead of accruing only going forward;
+# cumulative stats keep the touch/respect/break history inside the (Drive-stored)
+# level JSON so it survives short fetch windows and machine/cache wipes.
+HV_LEVEL_DEEP_BACKFILL_FLAG = "hv_level_deep_backfill_enabled"
+HV_LEVEL_CUMULATIVE_STATS_FLAG = "hv_level_cumulative_stats_enabled"
+HV_LEVEL_DEEP_BACKFILL_DAYS = 5 * 365
+HV_LEVEL_DEEP_BACKFILL_MIN_BARS = 60
+HV_LEVEL_DEEP_BACKFILL_MAX_PER_RUN = 40
+
 PHASE6_CLOUD_STUDY_FAMILY = "cloud_flat_proximity"
 PHASE6_COMPRESSION_BREAK_STUDY_FAMILY = "compression_break"
 PHASE6_TRENDLINE_BREAK_STUDY_FAMILY = "trendline_break"
@@ -23628,6 +23639,16 @@ def _hv_level_last_trade_date(df: pd.DataFrame | None) -> str:
     return dates.iloc[-1].date().isoformat()
 
 
+def _hv_level_first_trade_date(df: pd.DataFrame | None) -> str:
+    work = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    if work.empty or "datetime" not in work.columns:
+        return ""
+    dates = pd.to_datetime(work["datetime"], errors="coerce").dropna()
+    if dates.empty:
+        return ""
+    return dates.iloc[0].date().isoformat()
+
+
 def _hv_level_atr20_for_frame(df: pd.DataFrame | None) -> float | None:
     rows = _daily_frame_to_rows(df)
     if not rows:
@@ -23639,6 +23660,37 @@ def _hv_level_atr20_for_frame(df: pd.DataFrame | None) -> float | None:
     return _coerce_float(compute_atr_from_ohlc(rows, last_trade_date))
 
 
+def _fetch_deep_daily_bars_for_levels(
+    ib: "IBApi | None", symbol: str, days: int
+) -> "pd.DataFrame | None":
+    """One-time long-history daily fetch for the level backfill.
+
+    Uses the live fetch directly (not ``fetch_daily_bars``) so the multi-year pull
+    is NOT written into the rolling daily-bar cache; otherwise every later scan
+    would re-extract levels and indicators over years of bars and slow the whole
+    pipeline. The deep frame is consumed once to seed the level store and dropped.
+    """
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return None
+    try:
+        deep = _fetch_live_daily_bars(ib, sym, max(int(days), HV_LEVEL_DEEP_BACKFILL_DAYS))
+    except Exception as exc:
+        logging.warning("%s: deep level backfill fetch failed (%s).", sym, exc)
+        return None
+    if deep is None or getattr(deep, "empty", True):
+        return None
+    return deep
+
+
+def _level_store_needs_deep_backfill(store: dict | None) -> bool:
+    """True until a symbol has had its one-time multi-year backfill recorded."""
+    if not isinstance(store, dict):
+        return True
+    marker = store.get("deep_backfill")
+    return not (isinstance(marker, dict) and bool(marker.get("done")))
+
+
 def build_hv_level_store_for_symbol(
     symbol: str,
     df: pd.DataFrame | None,
@@ -23647,6 +23699,10 @@ def build_hv_level_store_for_symbol(
     earnings_dates: list[str] | None = None,
     levels_dir: Path | None = None,
     persist: bool = True,
+    existing_store: dict | None = None,
+    cumulative_stats: bool = True,
+    mark_deep_backfill: bool = False,
+    backfill_lookback_days: int | None = None,
 ) -> dict:
     sym = str(symbol or "").strip().upper()
     if not sym:
@@ -23657,7 +23713,7 @@ def build_hv_level_store_for_symbol(
     atr_value = _coerce_float(atr20) or _hv_level_atr20_for_frame(work)
     levels_root = Path(levels_dir or MASTER_AVWAP_LEVELS_DIR)
     path = level_store_path(levels_root, sym)
-    existing_store = load_level_store(path, sym)
+    store_in = existing_store if isinstance(existing_store, dict) else load_level_store(path, sym)
     candidates = extract_hv_levels(
         work,
         atr_value,
@@ -23668,20 +23724,45 @@ def build_hv_level_store_for_symbol(
     )
     clusters = cluster_hv_levels(candidates, atr_value, tol_frac=LEVEL_TOL_ATR_FRACTION)
     cloud_flats = compute_span_b_flats(work, atr_value)
+    last_trade_date = _hv_level_last_trade_date(work)
     store = merge_levels_into_store(
-        existing_store,
+        store_in,
         [*clusters, *cloud_flats],
         symbol=sym,
         atr20=atr_value,
-        updated=_hv_level_last_trade_date(work),
+        updated=last_trade_date,
     )
-    store["levels"] = recompute_level_touch_stats(
-        store.get("levels", []),
-        work,
-        atr_value,
-        tol_frac=LEVEL_TOL_ATR_FRACTION,
-        break_atr=LEVEL_BREAK_ATR,
-    )
+    if cumulative_stats:
+        # Add only the unseen bars to the stored running totals; a deep backfill
+        # resets and counts the full multi-year window once.
+        store["levels"] = accumulate_level_touch_stats(
+            store.get("levels", []),
+            work,
+            atr_value,
+            tol_frac=LEVEL_TOL_ATR_FRACTION,
+            break_atr=LEVEL_BREAK_ATR,
+            reset=bool(mark_deep_backfill),
+        )
+    else:
+        store["levels"] = recompute_level_touch_stats(
+            store.get("levels", []),
+            work,
+            atr_value,
+            tol_frac=LEVEL_TOL_ATR_FRACTION,
+            break_atr=LEVEL_BREAK_ATR,
+        )
+    if mark_deep_backfill:
+        first_seen = ""
+        if not work.empty and "datetime" in work.columns:
+            first_seen = _hv_level_first_trade_date(work)
+        store["deep_backfill"] = {
+            "done": True,
+            "completed_on": datetime.now().date().isoformat(),
+            "from_date": first_seen,
+            "through_date": last_trade_date,
+            "lookback_days": int(backfill_lookback_days or HV_LEVEL_DEEP_BACKFILL_DAYS),
+            "bar_count": int(len(work)),
+        }
     if persist:
         save_level_store(path, store)
     return store
@@ -23780,11 +23861,28 @@ def enrich_priority_rows_with_hv_levels(
     persist: bool = True,
     stores_out: dict[str, dict] | None = None,
     daily_rows_cache: dict | None = None,
+    ib: "IBApi | None" = None,
+    deep_backfill_enabled: bool | None = None,
+    cumulative_stats: bool | None = None,
+    deep_backfill_days: int | None = None,
+    max_backfills_per_run: int | None = None,
 ) -> list[dict]:
     frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
     stores_by_symbol: dict[str, dict] = stores_out if isinstance(stores_out, dict) else {}
     earnings_dates_by_symbol = earnings_dates_by_symbol if isinstance(earnings_dates_by_symbol, dict) else {}
     daily_rows_cache = daily_rows_cache if isinstance(daily_rows_cache, dict) else {}
+
+    flags = get_priority_feature_flags()
+    if cumulative_stats is None:
+        cumulative_stats = bool(flags.get(HV_LEVEL_CUMULATIVE_STATS_FLAG, True))
+    if deep_backfill_enabled is None:
+        deep_backfill_enabled = bool(flags.get(HV_LEVEL_DEEP_BACKFILL_FLAG, True))
+    backfill_days = int(deep_backfill_days or HV_LEVEL_DEEP_BACKFILL_DAYS)
+    backfill_budget = (
+        int(max_backfills_per_run) if max_backfills_per_run is not None else HV_LEVEL_DEEP_BACKFILL_MAX_PER_RUN
+    )
+    levels_root = Path(levels_dir or MASTER_AVWAP_LEVELS_DIR)
+
     for symbol, df in frames.items():
         sym = str(symbol or "").strip().upper()
         if not sym:
@@ -23792,13 +23890,36 @@ def enrich_priority_rows_with_hv_levels(
         cached = daily_rows_cache.get(sym) if daily_rows_cache else None
         cached_atr = cached.get("atr20") if isinstance(cached, dict) else None
         try:
+            existing_store = load_level_store(level_store_path(levels_root, sym), sym)
+            build_df = df
+            mark_backfill = False
+            build_atr = cached_atr
+            if (
+                deep_backfill_enabled
+                and ib is not None
+                and backfill_budget > 0
+                and _level_store_needs_deep_backfill(existing_store)
+            ):
+                deep_df = _fetch_deep_daily_bars_for_levels(ib, sym, backfill_days)
+                if deep_df is not None and len(deep_df) >= HV_LEVEL_DEEP_BACKFILL_MIN_BARS:
+                    build_df = deep_df
+                    mark_backfill = True
+                    build_atr = None  # recompute ATR from the deep frame's own tail
+                    backfill_budget -= 1
+                    logging.info(
+                        "%s: seeding multi-year level history from %d daily bars.", sym, len(deep_df)
+                    )
             stores_by_symbol[sym] = build_hv_level_store_for_symbol(
                 sym,
-                df,
-                atr20=cached_atr,
+                build_df,
+                atr20=build_atr,
                 earnings_dates=earnings_dates_by_symbol.get(sym, []),
                 levels_dir=levels_dir,
                 persist=persist,
+                existing_store=existing_store,
+                cumulative_stats=bool(cumulative_stats),
+                mark_deep_backfill=mark_backfill,
+                backfill_lookback_days=backfill_days,
             )
         except Exception as exc:
             logging.warning("%s: failed updating HV level store (%s).", sym, exc)

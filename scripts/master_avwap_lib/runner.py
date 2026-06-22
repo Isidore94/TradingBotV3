@@ -1482,6 +1482,7 @@ def run_master(
         feature_rows_by_symbol=feature_rows_by_symbol,
         stores_out=hv_level_stores_by_symbol,
         daily_rows_cache=daily_rows_cache,
+        ib=ib,
     )
 
     refine_priority_rows_with_directional_filters(
