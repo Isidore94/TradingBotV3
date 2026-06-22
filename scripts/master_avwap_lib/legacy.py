@@ -120,6 +120,7 @@ from project_paths import (
 )
 
 from .levels import (
+    CLOUD_TOL_ATR_FRACTION,
     HV_RELVOL_GREEN,
     HV_RELVOL_RED,
     HV_VOL_SMA,
@@ -127,6 +128,7 @@ from .levels import (
     LEVEL_STORE_SCHEMA_VERSION,
     LEVEL_TOL_ATR_FRACTION,
     cluster_levels as cluster_hv_levels,
+    compute_span_b_flats,
     compute_relvol,
     default_level_store,
     extract_hv_levels,
@@ -4594,6 +4596,46 @@ def build_tracker_entry_attributes(
         description="Scanner note describing nearby or blocking high-volume levels.",
     )
     add(
+        "levels.cloud_level_nearby_count",
+        int(row.get("cloud_level_nearby_count", symbol_entry.get("cloud_level_nearby_count", feature_row.get("cloud_level_nearby_count", 0))) or 0),
+        group="levels",
+        label="Nearby cloud levels",
+        value_type="number",
+        description="Count of active flat Leading Span B cloud levels near the entry.",
+    )
+    add(
+        "levels.cloud_level_nearest_distance_atr",
+        _coerce_float(row.get("cloud_level_nearest_distance_atr") or symbol_entry.get("cloud_level_nearest_distance_atr") or feature_row.get("cloud_level_nearest_distance_atr")),
+        group="levels",
+        label="Nearest cloud level distance ATR",
+        value_type="number",
+        description="ATR-normalized signed distance from entry to the nearest active flat cloud level.",
+    )
+    add(
+        "levels.cloud_level_note",
+        row.get("cloud_level_note") or symbol_entry.get("cloud_level_note") or feature_row.get("cloud_level_note") or "",
+        group="levels",
+        label="Cloud level note",
+        value_type="text",
+        description="Scanner note describing active flat cloud level proximity.",
+    )
+    add(
+        "structure.compression_break_today",
+        bool(row.get("compression_break_today") or symbol_entry.get("compression_break_today") or feature_row.get("compression_break_today")),
+        group="structure",
+        label="Compression break today",
+        value_type="bool",
+        description="Whether the latest daily close broke out of a prior compressed anchor box.",
+    )
+    add(
+        "structure.compression_break_note",
+        row.get("compression_break_note") or symbol_entry.get("compression_break_note") or feature_row.get("compression_break_note") or "",
+        group="structure",
+        label="Compression break note",
+        value_type="text",
+        description="Scanner note describing the compression break study event.",
+    )
+    add(
         "trend.trendline_break_recent",
         bool(row.get("trendline_break_recent") or symbol_entry.get("priority_trendline_break_recent")),
         group="trend",
@@ -5531,9 +5573,25 @@ def build_tracker_setup_record(
         "hv_level_nearby_summary": row.get("hv_level_nearby_summary") or symbol_entry.get("hv_level_nearby_summary") or "",
         "hv_level_blocking_summary": row.get("hv_level_blocking_summary") or symbol_entry.get("hv_level_blocking_summary") or "",
         "hv_level_note": row.get("hv_level_note") or symbol_entry.get("hv_level_note") or "",
+        "cloud_level_nearby_count": int(row.get("cloud_level_nearby_count", symbol_entry.get("cloud_level_nearby_count", 0)) or 0),
+        "cloud_level_nearest_price": _coerce_float(row.get("cloud_level_nearest_price") or symbol_entry.get("cloud_level_nearest_price")),
+        "cloud_level_nearest_distance_atr": _coerce_float(
+            row.get("cloud_level_nearest_distance_atr") or symbol_entry.get("cloud_level_nearest_distance_atr")
+        ),
+        "cloud_level_effective_range": row.get("cloud_level_effective_range") or symbol_entry.get("cloud_level_effective_range") or "",
+        "cloud_level_nearby_summary": row.get("cloud_level_nearby_summary") or symbol_entry.get("cloud_level_nearby_summary") or "",
+        "cloud_level_note": row.get("cloud_level_note") or symbol_entry.get("cloud_level_note") or "",
         "compression_flag": bool(row.get("compression_flag")),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note") or "",
+        "compression_break_today": bool(row.get("compression_break_today") or symbol_entry.get("compression_break_today")),
+        "compression_break_direction": row.get("compression_break_direction") or symbol_entry.get("compression_break_direction") or "",
+        "compression_break_level": _coerce_float(row.get("compression_break_level") or symbol_entry.get("compression_break_level")),
+        "compression_break_distance_atr": _coerce_float(
+            row.get("compression_break_distance_atr") or symbol_entry.get("compression_break_distance_atr")
+        ),
+        "compression_break_prior_bars": int(row.get("compression_break_prior_bars", symbol_entry.get("compression_break_prior_bars", 0)) or 0),
+        "compression_break_note": row.get("compression_break_note") or symbol_entry.get("compression_break_note") or "",
         "current_anchor_entry": current_anchor,
         "previous_anchor_entry": previous_anchor,
         "post_earnings_anchor_entry": symbol_entry.get("post_earnings_anchor") or {},
@@ -19209,6 +19267,8 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("SMA breakout", "sma_breakout_note"),
         ("1h/4h trend", "htf_trend_note"),
         ("HV level", "hv_level_note"),
+        ("cloud level", "cloud_level_note"),
+        ("compression break", "compression_break_note"),
     )
     for label, key in setup_note_keys:
         value = str(row.get(key) or "").strip()
@@ -19544,6 +19604,16 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "hv_level_nearest_bucket": row.get("hv_level_nearest_bucket") or "",
             "hv_level_nearest_distance_atr": _coerce_float(row.get("hv_level_nearest_distance_atr")),
             "hv_level_note": row.get("hv_level_note") or "",
+            "cloud_level_nearby_count": int(row.get("cloud_level_nearby_count", 0) or 0),
+            "cloud_level_nearest_price": _coerce_float(row.get("cloud_level_nearest_price")),
+            "cloud_level_nearest_distance_atr": _coerce_float(row.get("cloud_level_nearest_distance_atr")),
+            "cloud_level_effective_range": row.get("cloud_level_effective_range") or "",
+            "cloud_level_note": row.get("cloud_level_note") or "",
+            "compression_break_today": bool(row.get("compression_break_today")),
+            "compression_break_direction": row.get("compression_break_direction") or "",
+            "compression_break_level": _coerce_float(row.get("compression_break_level")),
+            "compression_break_distance_atr": _coerce_float(row.get("compression_break_distance_atr")),
+            "compression_break_note": row.get("compression_break_note") or "",
             "favorite_signals": list(row.get("favorite_signals") or []),
             "favorite_context_signals": list(row.get("context_signals") or []),
             "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),
@@ -22650,6 +22720,14 @@ HV_LEVEL_BREAK_STUDY_FAMILY = "hv_level_break"
 HV_LEVEL_STUDY_BUCKET = "study_hv_level"
 HV_LEVEL_MIN_STUDY_STRENGTH = 0.35
 
+PHASE6_CLOUD_STUDY_FAMILY = "cloud_flat_proximity"
+PHASE6_COMPRESSION_BREAK_STUDY_FAMILY = "compression_break"
+PHASE6_TRENDLINE_BREAK_STUDY_FAMILY = "trendline_break"
+PHASE6_CLOUD_STUDY_BUCKET = "study_cloud_level"
+PHASE6_STRUCTURE_STUDY_BUCKET = "study_structure_break"
+PHASE6_COMPRESSION_BREAK_BUFFER_ATR = 0.10
+PHASE6_COMPRESSION_MIN_PRIOR_BARS = 5
+
 PRIORITY_ADVERSE_REJECTION_MIN_WICK_RANGE_RATIO = 0.30
 
 PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MAX = 0.35
@@ -23555,9 +23633,10 @@ def build_hv_level_store_for_symbol(
         earnings_dates=earnings_dates or [],
     )
     clusters = cluster_hv_levels(candidates, atr_value, tol_frac=LEVEL_TOL_ATR_FRACTION)
+    cloud_flats = compute_span_b_flats(df, atr_value)
     store = merge_levels_into_store(
         existing_store,
-        clusters,
+        [*clusters, *cloud_flats],
         symbol=sym,
         atr20=atr_value,
         updated=_hv_level_last_trade_date(df),
@@ -23601,6 +23680,7 @@ def _hv_level_context_for_entry(
         atr20,
         tol_frac=LEVEL_TOL_ATR_FRACTION,
         min_strength=HV_LEVEL_MIN_STUDY_STRENGTH,
+        kinds={"hv_horizontal"},
     )
     blocking = levels_blocking_entry(
         store,
@@ -23609,6 +23689,7 @@ def _hv_level_context_for_entry(
         atr20,
         tol_frac=LEVEL_TOL_ATR_FRACTION,
         min_strength=1.0,
+        kinds={"hv_horizontal"},
     )
     nearest = nearby[0] if nearby else {}
     break_today = any(str(level.get("last_break") or "") == str(last_trade_date or "") for level in nearby)
@@ -23728,6 +23809,305 @@ def enrich_priority_rows_with_hv_levels(
                 feature_row[field] = context.get(field)
         if context.get("hv_level_nearby_count") or context.get("hv_level_break_today"):
             study_rows.append(_build_hv_level_study_row(row, context))
+    return study_rows
+
+
+def _phase6_level_summary(levels: list[dict], limit: int = 3) -> str:
+    parts = []
+    for level in levels[: max(1, int(limit or 1))]:
+        price = _coerce_float(level.get("price"))
+        distance_atr = _coerce_float(level.get("distance_atr"))
+        if price is None:
+            continue
+        effective_range = level.get("effective_range")
+        range_text = ""
+        if isinstance(effective_range, list) and len(effective_range) == 2:
+            range_text = f" eff={effective_range[0]}..{effective_range[1]}"
+        distance_text = "" if distance_atr is None else f" {distance_atr:+.2f}ATR"
+        parts.append(f"cloud@{price:.2f}{distance_text}{range_text}".strip())
+    return ", ".join(parts)
+
+
+def _cloud_level_context_for_entry(
+    store: dict,
+    *,
+    entry_price: float | None,
+    atr20: float | None,
+    last_trade_date: str = "",
+) -> dict:
+    nearby = levels_near(
+        store,
+        entry_price,
+        atr20,
+        tol_frac=CLOUD_TOL_ATR_FRACTION,
+        min_strength=0.0,
+        kinds={"cloud_flat"},
+        as_of_date=last_trade_date,
+    )
+    nearest = nearby[0] if nearby else {}
+    note = f"Cloud flat nearby: {_phase6_level_summary(nearby)}" if nearby else ""
+    effective_range = nearest.get("effective_range") if nearest else []
+    return {
+        "cloud_level_nearby_count": int(len(nearby)),
+        "cloud_level_nearest_price": _coerce_float(nearest.get("price")),
+        "cloud_level_nearest_distance_atr": _coerce_float(nearest.get("distance_atr")),
+        "cloud_level_effective_range": (
+            " -> ".join(str(value) for value in effective_range)
+            if isinstance(effective_range, list) and len(effective_range) == 2
+            else ""
+        ),
+        "cloud_level_nearby_summary": _phase6_level_summary(nearby),
+        "cloud_level_note": note,
+    }
+
+
+def assess_compression_break_context(
+    df: pd.DataFrame | None,
+    *,
+    anchor_date_iso: str | None,
+    anchor_stdev: float | None,
+    atr20: float | None,
+    side: str = "",
+    last_trade_date: str | date | None = None,
+) -> dict:
+    result = {
+        "compression_break_today": False,
+        "compression_break_direction": "",
+        "compression_break_level": None,
+        "compression_break_distance_atr": None,
+        "compression_break_prior_bars": 0,
+        "compression_break_note": "",
+    }
+    atr_value = _coerce_float(atr20)
+    stdev_value = _coerce_float(anchor_stdev)
+    if df is None or df.empty or atr_value is None or atr_value <= 0 or stdev_value is None:
+        return result
+    try:
+        anchor_date = date.fromisoformat(str(anchor_date_iso or "")[:10])
+    except ValueError:
+        return result
+
+    work = df.copy()
+    if "datetime" not in work.columns:
+        return result
+    work["datetime"] = pd.to_datetime(work["datetime"], errors="coerce")
+    work = work.dropna(subset=["datetime"]).sort_values("datetime")
+    if work.empty:
+        return result
+    for column in ("high", "low", "close"):
+        if column not in work.columns:
+            return result
+        work[column] = pd.to_numeric(work[column], errors="coerce")
+    work = work.dropna(subset=["high", "low", "close"])
+    if work.empty:
+        return result
+
+    if last_trade_date:
+        try:
+            last_date = date.fromisoformat(str(last_trade_date)[:10])
+        except ValueError:
+            last_date = work["datetime"].iloc[-1].date()
+    else:
+        last_date = work["datetime"].iloc[-1].date()
+
+    prior = work[(work["datetime"].dt.date >= anchor_date) & (work["datetime"].dt.date < last_date)].copy()
+    if len(prior) < PHASE6_COMPRESSION_MIN_PRIOR_BARS:
+        return result
+    prior_summary = summarize_anchor_compression(prior, stdev_value, atr_value)
+    if not prior_summary.get("is_compressed"):
+        return result
+
+    latest_rows = work[work["datetime"].dt.date == last_date]
+    latest = latest_rows.iloc[-1] if not latest_rows.empty else work.iloc[-1]
+    prior_high = _coerce_float(prior["high"].max())
+    prior_low = _coerce_float(prior["low"].min())
+    close_value = _coerce_float(latest.get("close"))
+    if prior_high is None or prior_low is None or close_value is None:
+        return result
+    buffer = float(PHASE6_COMPRESSION_BREAK_BUFFER_ATR) * float(atr_value)
+    normalized_side = normalize_side(side)
+    broke_up = float(close_value) > float(prior_high) + buffer
+    broke_down = float(close_value) < float(prior_low) - buffer
+    if normalized_side == "SHORT":
+        broke_up = False
+    elif normalized_side == "LONG":
+        broke_down = False
+    if not (broke_up or broke_down):
+        return result
+
+    direction = "up" if broke_up else "down"
+    level = float(prior_high if broke_up else prior_low)
+    distance = abs(float(close_value) - level) / float(atr_value)
+    result.update(
+        {
+            "compression_break_today": True,
+            "compression_break_direction": direction,
+            "compression_break_level": round(level, 4),
+            "compression_break_distance_atr": round(distance, 4),
+            "compression_break_prior_bars": int(len(prior)),
+            "compression_break_note": (
+                f"Compression break {direction}: close {close_value:.2f} beyond prior box "
+                f"{prior_low:.2f}-{prior_high:.2f} by {distance:.2f} ATR"
+            ),
+        }
+    )
+    return result
+
+
+def _build_phase6_study_row(priority_row: dict, *, family: str, bucket: str, tag: str, note: str, extra: dict | None = None) -> dict:
+    study_row = dict(priority_row)
+    if isinstance(extra, dict):
+        study_row.update(extra)
+    existing_tags = list(study_row.get("setup_tags") or [])
+    study_row["priority_bucket"] = bucket
+    study_row["is_favorite_setup"] = False
+    study_row["is_near_favorite_zone"] = False
+    study_row["setup_family"] = family
+    study_row["study_kind"] = family
+    study_row["setup_tags"] = list(dict.fromkeys([*existing_tags, tag]))
+    study_row["favorite_signals"] = []
+    study_row["context_signals"] = list(dict.fromkeys([*(study_row.get("context_signals") or []), tag]))
+    study_row["has_favorite_signal"] = False
+    study_row["score_bonus_note"] = note
+    if not str(study_row.get("retest_note") or "").strip():
+        study_row["retest_note"] = note
+    return study_row
+
+
+def enrich_priority_rows_with_phase6_studies(
+    priority_rows: list[dict] | None,
+    daily_frames_by_symbol: dict[str, pd.DataFrame] | None,
+    *,
+    earnings_dates_by_symbol: dict[str, list[str]] | None = None,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+    levels_dir: Path | None = None,
+    persist: bool = True,
+    level_stores_by_symbol: dict[str, dict] | None = None,
+) -> list[dict]:
+    frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
+    stores_by_symbol = level_stores_by_symbol if isinstance(level_stores_by_symbol, dict) else {}
+    earnings_dates_by_symbol = earnings_dates_by_symbol if isinstance(earnings_dates_by_symbol, dict) else {}
+    if not stores_by_symbol:
+        stores_by_symbol = {}
+        for symbol, df in frames.items():
+            sym = str(symbol or "").strip().upper()
+            if not sym:
+                continue
+            try:
+                stores_by_symbol[sym] = build_hv_level_store_for_symbol(
+                    sym,
+                    df,
+                    earnings_dates=earnings_dates_by_symbol.get(sym, []),
+                    levels_dir=levels_dir,
+                    persist=persist,
+                )
+            except Exception as exc:
+                logging.warning("%s: failed updating Phase 6 level store (%s).", sym, exc)
+
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    fields = (
+        "cloud_level_nearby_count",
+        "cloud_level_nearest_price",
+        "cloud_level_nearest_distance_atr",
+        "cloud_level_effective_range",
+        "cloud_level_nearby_summary",
+        "cloud_level_note",
+        "compression_break_today",
+        "compression_break_direction",
+        "compression_break_level",
+        "compression_break_distance_atr",
+        "compression_break_prior_bars",
+        "compression_break_note",
+    )
+    study_rows: list[dict] = []
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        symbol_entry = ai_symbols.get(symbol) if isinstance(ai_symbols, dict) else {}
+        symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+        feature_row = feature_rows_by_symbol.get(symbol)
+        feature_row = feature_row if isinstance(feature_row, dict) else {}
+        entry_price = _coerce_float(row.get("last_close") or symbol_entry.get("last_close") or feature_row.get("last_close"))
+        atr_value = _coerce_float(row.get("atr20") or symbol_entry.get("atr20") or feature_row.get("atr20"))
+        last_trade_date = str(
+            row.get("last_trade_date")
+            or symbol_entry.get("last_trade_date")
+            or feature_row.get("last_trade_date")
+            or ""
+        )
+        cloud_context = _cloud_level_context_for_entry(
+            stores_by_symbol.get(symbol, {}),
+            entry_price=entry_price,
+            atr20=atr_value,
+            last_trade_date=last_trade_date,
+        )
+        compression_context = assess_compression_break_context(
+            frames.get(symbol),
+            anchor_date_iso=(
+                (symbol_entry.get("current_anchor") or {}).get("date")
+                if isinstance(symbol_entry.get("current_anchor"), dict)
+                else ""
+            ),
+            anchor_stdev=(
+                (symbol_entry.get("current_anchor") or {}).get("stdev")
+                if isinstance(symbol_entry.get("current_anchor"), dict)
+                else None
+            ),
+            atr20=atr_value,
+            side=row.get("side") or symbol_entry.get("side") or "",
+            last_trade_date=last_trade_date,
+        )
+        context = {**cloud_context, **compression_context}
+        row.update(context)
+        for target in (symbol_entry, feature_row):
+            if isinstance(target, dict):
+                for field in fields:
+                    target[field] = context.get(field)
+
+        if cloud_context.get("cloud_level_nearby_count"):
+            study_rows.append(
+                _build_phase6_study_row(
+                    row,
+                    family=PHASE6_CLOUD_STUDY_FAMILY,
+                    bucket=PHASE6_CLOUD_STUDY_BUCKET,
+                    tag="CLOUD_FLAT_PROXIMITY",
+                    note=cloud_context.get("cloud_level_note") or "",
+                    extra=cloud_context,
+                )
+            )
+        if compression_context.get("compression_break_today"):
+            study_rows.append(
+                _build_phase6_study_row(
+                    row,
+                    family=PHASE6_COMPRESSION_BREAK_STUDY_FAMILY,
+                    bucket=PHASE6_STRUCTURE_STUDY_BUCKET,
+                    tag="COMPRESSION_BREAK",
+                    note=compression_context.get("compression_break_note") or "",
+                    extra=compression_context,
+                )
+            )
+        if row.get("trendline_break_recent"):
+            note = row.get("trendline_break_note") or symbol_entry.get("priority_trendline_break_note") or ""
+            study_rows.append(
+                _build_phase6_study_row(
+                    row,
+                    family=PHASE6_TRENDLINE_BREAK_STUDY_FAMILY,
+                    bucket=PHASE6_STRUCTURE_STUDY_BUCKET,
+                    tag="TRENDLINE_BREAK",
+                    note=note,
+                    extra={
+                        "trendline_break_recent": True,
+                        "trendline_break_note": note,
+                        "trendline_break_candidate": row.get("trendline_break_candidate")
+                        or symbol_entry.get("priority_trendline_break_candidate"),
+                    },
+                )
+            )
     return study_rows
 
 
@@ -26937,6 +27317,110 @@ def build_tracker_entry_attributes(
         value_type="number",
         description="Percent distance from current LOWER_1 at scan time.",
     )
+    add(
+        "trend.htf_retest_confirmed",
+        bool(row.get("htf_retest_confirmed") or symbol_entry.get("htf_retest_confirmed") or feature_row.get("htf_retest_confirmed")),
+        group="trend",
+        label="1h/4h SMA retest confirmed",
+        value_type="bool",
+        description="Whether the setup had an aligned higher-timeframe SMA retest.",
+    )
+    add(
+        "trend.htf_retest_sma",
+        row.get("htf_retest_sma") or symbol_entry.get("htf_retest_sma") or feature_row.get("htf_retest_sma") or "",
+        group="trend",
+        label="1h/4h retest SMA",
+        value_type="text",
+        description="Higher-timeframe SMA labels involved in the recent retest.",
+    )
+    add(
+        "trend.htf_trend_note",
+        row.get("htf_trend_note") or symbol_entry.get("htf_trend_note") or feature_row.get("htf_trend_note") or "",
+        group="trend",
+        label="1h/4h trend note",
+        value_type="text",
+        description="Scanner note describing the 1h/4h trend and retest context.",
+    )
+    add(
+        "levels.hv_level_nearby_count",
+        int(row.get("hv_level_nearby_count", symbol_entry.get("hv_level_nearby_count", feature_row.get("hv_level_nearby_count", 0))) or 0),
+        group="levels",
+        label="Nearby HV levels",
+        value_type="number",
+        description="Count of stored high-volume horizontal levels near the entry.",
+    )
+    add(
+        "levels.hv_level_blocking_count",
+        int(row.get("hv_level_blocking_count", symbol_entry.get("hv_level_blocking_count", feature_row.get("hv_level_blocking_count", 0))) or 0),
+        group="levels",
+        label="Blocking HV levels",
+        value_type="number",
+        description="Count of strong stored HV levels overhead for longs or below for shorts.",
+    )
+    add(
+        "levels.hv_level_break_today",
+        bool(row.get("hv_level_break_today") or symbol_entry.get("hv_level_break_today") or feature_row.get("hv_level_break_today")),
+        group="levels",
+        label="HV level break today",
+        value_type="bool",
+        description="Whether the latest bar broke a stored high-volume horizontal level.",
+    )
+    add(
+        "levels.hv_level_nearest_distance_atr",
+        _coerce_float(row.get("hv_level_nearest_distance_atr") or symbol_entry.get("hv_level_nearest_distance_atr") or feature_row.get("hv_level_nearest_distance_atr")),
+        group="levels",
+        label="Nearest HV level distance ATR",
+        value_type="number",
+        description="ATR-normalized signed distance from entry to nearest stored HV level.",
+    )
+    add(
+        "levels.hv_level_note",
+        row.get("hv_level_note") or symbol_entry.get("hv_level_note") or feature_row.get("hv_level_note") or "",
+        group="levels",
+        label="HV level note",
+        value_type="text",
+        description="Scanner note describing nearby or blocking high-volume levels.",
+    )
+    add(
+        "levels.cloud_level_nearby_count",
+        int(row.get("cloud_level_nearby_count", symbol_entry.get("cloud_level_nearby_count", feature_row.get("cloud_level_nearby_count", 0))) or 0),
+        group="levels",
+        label="Nearby cloud levels",
+        value_type="number",
+        description="Count of active flat Leading Span B cloud levels near the entry.",
+    )
+    add(
+        "levels.cloud_level_nearest_distance_atr",
+        _coerce_float(row.get("cloud_level_nearest_distance_atr") or symbol_entry.get("cloud_level_nearest_distance_atr") or feature_row.get("cloud_level_nearest_distance_atr")),
+        group="levels",
+        label="Nearest cloud level distance ATR",
+        value_type="number",
+        description="ATR-normalized signed distance from entry to the nearest active flat cloud level.",
+    )
+    add(
+        "levels.cloud_level_note",
+        row.get("cloud_level_note") or symbol_entry.get("cloud_level_note") or feature_row.get("cloud_level_note") or "",
+        group="levels",
+        label="Cloud level note",
+        value_type="text",
+        description="Scanner note describing active flat cloud level proximity.",
+    )
+    add(
+        "structure.compression_break_today",
+        bool(row.get("compression_break_today") or symbol_entry.get("compression_break_today") or feature_row.get("compression_break_today")),
+        group="structure",
+        label="Compression break today",
+        value_type="bool",
+        description="Whether the latest daily close broke out of a prior compressed anchor box.",
+    )
+    add(
+        "structure.compression_break_note",
+        row.get("compression_break_note") or symbol_entry.get("compression_break_note") or feature_row.get("compression_break_note") or "",
+        group="structure",
+        label="Compression break note",
+        value_type="text",
+        description="Scanner note describing the compression break study event.",
+    )
 
     return attributes, registry
 
@@ -27621,6 +28105,16 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "hv_level_nearest_bucket": row.get("hv_level_nearest_bucket") or "",
             "hv_level_nearest_distance_atr": _coerce_float(row.get("hv_level_nearest_distance_atr")),
             "hv_level_note": row.get("hv_level_note") or "",
+            "cloud_level_nearby_count": int(row.get("cloud_level_nearby_count", 0) or 0),
+            "cloud_level_nearest_price": _coerce_float(row.get("cloud_level_nearest_price")),
+            "cloud_level_nearest_distance_atr": _coerce_float(row.get("cloud_level_nearest_distance_atr")),
+            "cloud_level_effective_range": row.get("cloud_level_effective_range") or "",
+            "cloud_level_note": row.get("cloud_level_note") or "",
+            "compression_break_today": bool(row.get("compression_break_today")),
+            "compression_break_direction": row.get("compression_break_direction") or "",
+            "compression_break_level": _coerce_float(row.get("compression_break_level")),
+            "compression_break_distance_atr": _coerce_float(row.get("compression_break_distance_atr")),
+            "compression_break_note": row.get("compression_break_note") or "",
             "favorite_signals": list(row.get("favorite_signals") or []),
             "favorite_context_signals": list(row.get("context_signals") or []),
             "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),

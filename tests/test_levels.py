@@ -85,6 +85,48 @@ class LevelModuleTests(unittest.TestCase):
         self.assertGreater(clustered[0]["price"], 100.0)
         self.assertLess(clustered[0]["price"], 100.2)
 
+    def test_compute_span_b_flats_applies_forward_displacement(self):
+        dates = pd.bdate_range("2026-01-01", periods=90)
+        frame = pd.DataFrame(
+            {
+                "datetime": dates,
+                "open": [100.0] * 90,
+                "high": [110.0] * 62 + [130.0] * 28,
+                "low": [90.0] * 62 + [100.0] * 28,
+                "close": [100.0] * 90,
+                "volume": [1000.0] * 90,
+            }
+        )
+
+        flats = levels.compute_span_b_flats(frame, atr20=10.0)
+
+        first_flat = next(flat for flat in flats if flat["price"] == 100.0)
+        self.assertEqual(first_flat["kind"], "cloud_flat")
+        self.assertEqual(first_flat["computed_range"], [dates[51].date().isoformat(), dates[61].date().isoformat()])
+        self.assertEqual(first_flat["effective_range"], [dates[77].date().isoformat(), dates[87].date().isoformat()])
+
+    def test_levels_near_filters_cloud_lines_by_effective_range(self):
+        store = {
+            "levels": [
+                {
+                    "kind": "cloud_flat",
+                    "price": 100.1,
+                    "bucket": "cloud",
+                    "strength": 1.0,
+                    "effective_range": ["2026-03-01", "2026-03-31"],
+                },
+                {"kind": "hv_horizontal", "price": 100.1, "bucket": "green", "strength": 1.0},
+            ]
+        }
+
+        active = levels.levels_near(store, 100.0, 10.0, kinds={"cloud_flat"}, as_of_date="2026-03-10")
+        inactive = levels.levels_near(store, 100.0, 10.0, kinds={"cloud_flat"}, as_of_date="2026-04-10")
+        hv_only = levels.levels_near(store, 100.0, 10.0, kinds={"hv_horizontal"}, as_of_date="2026-04-10")
+
+        self.assertEqual(len(active), 1)
+        self.assertEqual(inactive, [])
+        self.assertEqual(len(hv_only), 1)
+
     def test_recompute_touch_stats_is_idempotent(self):
         frame = _daily_frame(days=6)
         frame.loc[1, ["high", "low", "close"]] = [100.2, 99.8, 100.1]

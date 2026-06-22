@@ -2540,6 +2540,103 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(feature_rows_by_symbol["TSLA"]["hv_level_nearby_count"], priority_rows[0]["hv_level_nearby_count"])
         self.assertEqual(ai_state["symbols"]["TSLA"]["hv_level_note"], priority_rows[0]["hv_level_note"])
 
+    def test_compression_break_context_detects_close_out_of_prior_box(self):
+        dates = pd.bdate_range("2026-01-01", periods=8)
+        frame = pd.DataFrame(
+            {
+                "datetime": dates,
+                "open": [100.0] * 8,
+                "high": [100.4] * 7 + [102.0],
+                "low": [99.6] * 7 + [101.0],
+                "close": [100.0] * 7 + [101.2],
+                "volume": [1000] * 8,
+            }
+        )
+
+        context = master_avwap.assess_compression_break_context(
+            frame,
+            anchor_date_iso=dates[0].date().isoformat(),
+            anchor_stdev=1.0,
+            atr20=2.0,
+            side="LONG",
+            last_trade_date=dates[-1].date().isoformat(),
+        )
+
+        self.assertTrue(context["compression_break_today"])
+        self.assertEqual(context["compression_break_direction"], "up")
+        self.assertIn("Compression break up", context["compression_break_note"])
+
+    def test_phase6_enrichment_writes_study_rows_without_scoring(self):
+        dates = pd.bdate_range("2026-01-01", periods=8)
+        last_trade_date = dates[-1].date().isoformat()
+        frame = pd.DataFrame(
+            {
+                "datetime": dates,
+                "open": [100.0] * 8,
+                "high": [100.4] * 7 + [102.0],
+                "low": [99.6] * 7 + [101.0],
+                "close": [100.0] * 7 + [101.2],
+                "volume": [1000] * 8,
+            }
+        )
+        priority_rows = [
+            {
+                "symbol": "TSLA",
+                "side": "LONG",
+                "score": 100.0,
+                "setup_family": "avwap_breakout",
+                "trendline_break_recent": True,
+                "trendline_break_note": "H-break 2026-01-02 -> 2026-01-06",
+            }
+        ]
+        ai_state = {
+            "symbols": {
+                "TSLA": {
+                    "symbol": "TSLA",
+                    "side": "LONG",
+                    "last_trade_date": last_trade_date,
+                    "last_close": 101.2,
+                    "atr20": 2.0,
+                    "current_anchor": {"date": dates[0].date().isoformat(), "stdev": 1.0},
+                }
+            }
+        }
+        feature_rows_by_symbol = {"TSLA": {"last_close": 101.2, "atr20": 2.0, "last_trade_date": last_trade_date}}
+        store = {
+            "levels": [
+                {
+                    "kind": "cloud_flat",
+                    "price": 101.2,
+                    "bucket": "cloud",
+                    "strength": 1.0,
+                    "effective_range": [dates[-2].date().isoformat(), dates[-1].date().isoformat()],
+                }
+            ]
+        }
+
+        study_rows = master_avwap.enrich_priority_rows_with_phase6_studies(
+            priority_rows,
+            {"TSLA": frame},
+            ai_state=ai_state,
+            feature_rows_by_symbol=feature_rows_by_symbol,
+            level_stores_by_symbol={"TSLA": store},
+            persist=False,
+        )
+
+        self.assertEqual(priority_rows[0]["score"], 100.0)
+        self.assertEqual(priority_rows[0]["cloud_level_nearby_count"], 1)
+        self.assertTrue(priority_rows[0]["compression_break_today"])
+        self.assertEqual(
+            {row["setup_family"] for row in study_rows},
+            {
+                master_avwap.PHASE6_CLOUD_STUDY_FAMILY,
+                master_avwap.PHASE6_COMPRESSION_BREAK_STUDY_FAMILY,
+                master_avwap.PHASE6_TRENDLINE_BREAK_STUDY_FAMILY,
+            },
+        )
+        self.assertEqual(feature_rows_by_symbol["TSLA"]["cloud_level_note"], priority_rows[0]["cloud_level_note"])
+        self.assertEqual(ai_state["symbols"]["TSLA"]["compression_break_note"], priority_rows[0]["compression_break_note"])
+
     def test_load_scan_earnings_context_reuses_refreshed_earnings_lookup(self):
         earnings_lookup = {"AAPL": ["2026-04-21"]}
         latest_release_map = {

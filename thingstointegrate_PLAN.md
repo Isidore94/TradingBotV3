@@ -131,7 +131,7 @@ independently shippable + testable.
 | **P3** ☑ | #3 Industry/sector relative strength | **DONE 2026-06-22.** Daily scan + market prep + flag-gated D1 boost + BounceBot M5 directional industry RRS. |
 | **P4** ☑ | #4 1h/4h trend detection (boost only) | **DONE 2026-06-22.** B2 intraday fetch + 1h/4h SMA retest detection + flag-gated boost + study rows. |
 | **P5** ☑ | #5 D1 high-volume horizontal levels | **DONE 2026-06-22.** B3 level store + study-first HV level events; scoring penalty still later. |
-| **P6** | #6 Cloud lines, compression breaks, trendline breaks | Needs B3 + B4. Most research-y; pure study-first. |
+| **P6** ☑ | #6 Cloud lines, compression breaks, trendline breaks | **DONE 2026-06-22.** Cloud-flat levels + compression/trendline study rows; no new scoring. |
 
 ---
 
@@ -308,7 +308,7 @@ Steps:
 > `tests/test_levels.py` coverage plus scanner integration coverage; full suite
 > 366 green (`python -m unittest discover tests`).
 
-### Phase 6 — Cloud lines, compression & trendline breaks  ☐ (pure study-first)
+### Phase 6 — Cloud lines, compression & trendline breaks  ☑ DONE (2026-06-22, pure study-first)
 **Goal (txt #6):** Ichimoku **Leading Span B** flat-cloud lines as S/R
 (persisted, fairly exact); define **compression** as a function of AVWAPE ± stdev
 bands (or a prior AVWAPE's bands) and detect **compression breaks**; begin
@@ -316,31 +316,41 @@ testing **trendline breaks**. Aaron: *"start adding real depth and complexity �
 we dont need to directly incorporate these into the scoring yet."*
 
 Steps:
-1. ☐ **Leading Span B lines:** port the PineScript — `leadLine2 =
+1. ☑ **Leading Span B lines:** port the PineScript — `leadLine2 =
    avg(highest(52), lowest(52))`, displaced 26; detect "flat" via
    `SMA(leadLine2,8) == leadLine2` (within tol). Store flat segments as horizontal
    levels in the B3 store (these are "rather exact" → tight tol). Avoid entries
    right at a flat cloud line.
-2. ☐ **Compression metric:** define compression as band width
+2. ☑ **Compression metric:** define compression as band width
    (`(UPPER_k − LOWER_k)/AVWAPE`) contracting over N sessions, relative to the
    anchor's own history (and/or vs the previous anchor's bands). Emit a
    `compression_score` + a `compression_break` event when price expands out of a
    contracted state.
-3. ☐ **Trendline breaks:** fit recent swing-high / swing-low trendlines (pivot
+3. ☑ **Trendline breaks:** fit recent swing-high / swing-low trendlines (pivot
    detection) and emit break events. Keep simple + deterministic first.
-4. ☐ **Study-only:** everything in this phase goes to `study_setups` + the study
+4. ☑ **Study-only:** everything in this phase goes to `study_setups` + the study
    report. No scoring impact until the tracker shows edge. This is the sandbox
    Aaron explicitly asked for.
-5. ☐ **Tests:** flat-cloud detection, compression contraction/break on synthetic
+5. ☑ **Tests:** flat-cloud detection, compression contraction/break on synthetic
    bands, trendline pivot fit + break, all isolated to the study namespace (live
    ranking untouched).
+
+> **Shipped.** Extended `levels.py` with `compute_span_b_flats`, kind-aware
+> cloud tolerances, active-date filtering, and `cloud_flat` levels in the shared
+> B3 store. Master AVWAP now records active cloud-flat proximity, compression
+> breaks out of a prior compressed anchor box, and existing trendline-break
+> detections into `study_setups` via `phase6_study_rows`. Priority rows, AI state,
+> D1 feature CSV/history, tracker attributes, focus payloads, and priority notes
+> carry `cloud_level_*` / `compression_break_*` context. No new live scoring was
+> added in T7. Added flat-cloud displacement/filter tests plus compression/Phase 6
+> scanner integration tests; full suite 370 green (`python -m unittest discover tests`).
 
 ---
 
 ## 5. Testing & rollout checklist (every phase)
 - ☐ New pure logic lives in a focused module or a clearly-scoped legacy block,
   with unit tests added under `tests/`.
-- ☐ Run the full suite (`unittest`, currently 366 green) — no regressions.
+- ☐ Run the full suite (`unittest`, currently 370 green) — no regressions.
 - ☐ Anything that can affect ranking is **flag-gated** and **bounded**, off by
   default until studied.
 - ☐ Study namespaces never leak into Expected-R / calibration / live ranking
@@ -407,6 +417,11 @@ Steps:
   `levels.py`, earnings-origin/non-earnings HV anchor flags, `hv_level_*` scanner
   context, and study-only proximity/break rows. No live score penalty added.
   5 focused level tests + scanner integration coverage; full suite 366 green.
+- 2026-06-22 — **T7 / Phase 6 SHIPPED.** Added displaced Leading Span B flat-cloud
+  level detection into the B3 store, active cloud proximity context, prior-box
+  compression-break study detection, and trendline-break study producers. No new
+  scoring added. 2 new level tests + 2 scanner integration tests; full suite
+  370 green.
 
 ---
 
@@ -438,7 +453,7 @@ Steps:
 | RS / ETF infra (bounce_bot) | impls in `scripts/bounce_bot_lib/legacy.py`: `real_relative_strength:1531`, `load_sector_etf_map:475`, `_load_industry_etf_map_file:498`, `load_and_update_industry_etf_map:518`, `resolve_sector_etf:550`, `resolve_industry_ref_etf:567` | Imported via the `rrs.py` shim. **Edit in legacy.py, import from rrs.py.** |
 | Shared/cloud data root | `project_paths.py:61` `PERSISTENT_DATA_DIR` (env `TRADINGBOTV3_DATA_DIR` → local `shared_data_dir` → default), `DATA_DIR = PERSISTENT_DATA_DIR/"data"` (`:64`) | New B3/B5 stores go under `DATA_DIR`. This *is* the "Google Drive / cloud folder." |
 | ETF map files | `SECTOR_ETF_MAP_FILE`/`INDUSTRY_ETF_MAP_FILE` `project_paths.py:79-80`; repo→data seed/sync `:347-348`, `:432-433` | Phase 3 reuses; add new stores to the same sync lists so they propagate. |
-| Tests | `tests/` — **366 tests green** as of T5 (`python -m unittest discover tests`) | "keep green" baseline; no `pytest.ini`/`conftest.py`. |
+| Tests | `tests/` — **370 tests green** as of T7 (`python -m unittest discover tests`) | "keep green" baseline; no `pytest.ini`/`conftest.py`. |
 
 ### 8b. Gotchas that will bite a cold-start agent
 1. **`legacy.py` has ~20 SHADOWED DUPLICATE top-level functions** (older copies
@@ -521,7 +536,7 @@ of work and finish it safely without the accumulated chat context.
 ### 10b. Environment & test command (Windows, repo root `c:\Users\aaron\TradingBotV3`)
 **pytest is NOT installed in `.venv`** — the suite is `unittest`-based. Use unittest:
 ```powershell
-# full suite (baseline: 366 passing as of 2026-06-22, through T5):
+# full suite (baseline: 370 passing as of 2026-06-22, through T7):
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 # one file while iterating:
 .\.venv\Scripts\python.exe -m unittest tests.test_master_avwap_setups
@@ -702,16 +717,20 @@ OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
 > `tests/test_study_setups.py` incl. an isolation test (study setups don't change
 > control/Expected-R discovery). Full suite 347 green.
 
-### T7 — Cloud lines, compression breaks, trendline breaks  (Phase 6)  ☐
+### T7 — Cloud lines, compression breaks, trendline breaks  (Phase 6)  ☑ DONE (2026-06-22)
 - **→ Cloud-line algorithm (with the +26 displacement fix) in §12.2.** Pure
   study-only. Leading Span B flat segments into the B3 store; compression reuses
   the **existing** `summarize_anchor_compression` (`legacy.py:3546`) + a break
   event; trendline reuses the **existing** `_find_trendline_pivots`
   (`legacy.py:15282`). All events → `study_setups` only. DEPENDS ON: T5 (B3), T6 (B4).
 
+> **Shipped.** See Phase 6 + progress log notes above. This completed the remaining
+> standalone plan ticket; any direct cloud/HV scoring should wait for study results.
+
 ### Suggested execution order for parallel agents
 `T6` and `T1` first (independent, unblock the most). Then `T2`, `T3` (needs T1).
-Next `T7` (needs T5 + B4, both now done).
+All standalone tickets T1–T7 are now shipped. Next work should be study review,
+real-output eyeballing, or new scoring gates based on tracker evidence.
 
 ---
 

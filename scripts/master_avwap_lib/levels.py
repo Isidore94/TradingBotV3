@@ -18,6 +18,12 @@ LEVEL_FORWARD_BARS = 5
 LEVEL_TOUCH_WEIGHT = 0.08
 LEVEL_TOUCH_CAP = 0.40
 LEVEL_BUCKET_WEIGHTS = {"green": 1.0, "red": 0.35}
+CLOUD_SPAN_B_LEN = 52
+CLOUD_DISPLACEMENT = 26
+CLOUD_FLAT_MIN_BARS = 8
+CLOUD_TOL_ATR_FRACTION = 0.02
+CLOUD_TOL_PCT = 0.0005
+CLOUD_LEVEL_WEIGHT = 1.0
 
 
 def _coerce_float(value) -> float | None:
@@ -101,6 +107,39 @@ def _level_tolerance(atr20: float | None, price: float | None = None, *, tol_fra
     return max(0.01, price_value * 0.001)
 
 
+def _level_kind_tolerance(
+    level_or_kind,
+    atr20: float | None,
+    price: float | None = None,
+    *,
+    default_tol_frac: float = LEVEL_TOL_ATR_FRACTION,
+) -> float:
+    kind = str(level_or_kind.get("kind") if isinstance(level_or_kind, dict) else level_or_kind or "").strip()
+    price_value = abs(_coerce_float(price) or 0.0)
+    if kind == "cloud_flat":
+        atr_value = _coerce_float(atr20)
+        atr_tol = float(atr_value) * CLOUD_TOL_ATR_FRACTION if atr_value is not None and atr_value > 0 else 0.0
+        pct_tol = price_value * CLOUD_TOL_PCT if price_value > 0 else 0.0
+        return max(0.01, atr_tol, pct_tol)
+    return _level_tolerance(atr20, price, tol_frac=default_tol_frac)
+
+
+def _level_is_effective_on(level: dict, as_of_date: str | date | None) -> bool:
+    if not as_of_date or str(level.get("kind") or "") != "cloud_flat":
+        return True
+    as_of = _date_key(as_of_date.isoformat() if hasattr(as_of_date, "isoformat") else str(as_of_date))
+    if as_of is None:
+        return True
+    effective_range = level.get("effective_range")
+    if not isinstance(effective_range, list) or len(effective_range) != 2:
+        return True
+    start = _date_key(effective_range[0])
+    end = _date_key(effective_range[1])
+    if start is None or end is None:
+        return True
+    return start <= as_of <= end
+
+
 def compute_relvol(df: pd.DataFrame | None, vol_sma: int = HV_VOL_SMA) -> pd.Series:
     work = _normalize_frame(df)
     if work.empty:
@@ -156,6 +195,10 @@ def extract_hv_levels(
 
 
 def _level_strength(level: dict) -> float:
+    kind = str(level.get("kind") or "").strip()
+    if kind == "cloud_flat":
+        touch_count = int(level.get("touch_count", 0) or 0)
+        return round(CLOUD_LEVEL_WEIGHT + min(LEVEL_TOUCH_CAP, touch_count * LEVEL_TOUCH_WEIGHT), 4)
     bucket = str(level.get("bucket") or "red").lower()
     touch_count = int(level.get("touch_count", 0) or 0)
     return round(
@@ -229,6 +272,110 @@ def cluster_levels(
     return [_cluster_from_members(members, atr20) for members in clusters]
 
 
+def _project_bday(date_text: str, displacement: int) -> str:
+    date_value = _date_key(date_text)
+    if date_value is None:
+        return str(date_text or "")
+    try:
+        return (pd.Timestamp(date_value) + pd.offsets.BDay(max(0, int(displacement or 0)))).date().isoformat()
+    except Exception:
+        return date_value.isoformat()
+
+
+def _displaced_date(date_texts: list[str], idx: int, displacement: int) -> str:
+    target_idx = int(idx) + max(0, int(displacement or 0))
+    if 0 <= target_idx < len(date_texts):
+        return date_texts[target_idx]
+    if 0 <= idx < len(date_texts):
+        return _project_bday(date_texts[idx], displacement)
+    return ""
+
+
+def compute_span_b_flats(
+    df: pd.DataFrame | None,
+    atr20: float | None,
+    *,
+    length: int = CLOUD_SPAN_B_LEN,
+    displacement: int = CLOUD_DISPLACEMENT,
+    min_bars: int = CLOUD_FLAT_MIN_BARS,
+    tol_frac: float = CLOUD_TOL_ATR_FRACTION,
+    tol_pct: float = CLOUD_TOL_PCT,
+) -> list[dict]:
+    work = _normalize_frame(df)
+    length = max(2, int(length or CLOUD_SPAN_B_LEN))
+    min_bars = max(2, int(min_bars or CLOUD_FLAT_MIN_BARS))
+    if work.empty or len(work) < length + min_bars - 1:
+        return []
+
+    highs = pd.to_numeric(work["high"], errors="coerce")
+    lows = pd.to_numeric(work["low"], errors="coerce")
+    closes = pd.to_numeric(work["close"], errors="coerce")
+    mid52 = (highs.rolling(length, min_periods=length).max() + lows.rolling(length, min_periods=length).min()) / 2.0
+    date_texts = [_date_text(value) for value in work["datetime"]]
+
+    flats: list[dict] = []
+    run_indices: list[int] = []
+    run_values: list[float] = []
+
+    def tolerance_for(idx: int, value: float) -> float:
+        atr_tol = _level_tolerance(atr20, value, tol_frac=tol_frac)
+        close_value = _coerce_float(closes.iloc[idx] if idx < len(closes) else None)
+        pct_base = abs(close_value if close_value is not None else value)
+        return max(0.01, atr_tol, pct_base * float(tol_pct or CLOUD_TOL_PCT))
+
+    def flush_run() -> None:
+        if len(run_indices) < min_bars:
+            return
+        value = sum(run_values) / len(run_values)
+        start_idx = run_indices[0]
+        end_idx = run_indices[-1]
+        effective_start = _displaced_date(date_texts, start_idx, displacement)
+        effective_end = _displaced_date(date_texts, end_idx, displacement)
+        flat = {
+            "kind": "cloud_flat",
+            "price": round(float(value), 4),
+            "bucket": "cloud",
+            "computed_range": [date_texts[start_idx], date_texts[end_idx]],
+            "effective_range": [effective_start, effective_end],
+            "first_seen": effective_start,
+            "last_seen": effective_end,
+            "bar_count": int(len(run_indices)),
+            "tol_atr_fraction": float(tol_frac),
+            "tol_pct": float(tol_pct),
+            "atr20_at_update": _coerce_float(atr20),
+            "touch_count": 0,
+            "respect_count": 0,
+            "break_count": 0,
+        }
+        flat["strength"] = _level_strength(flat)
+        flats.append(flat)
+
+    for idx, raw_value in enumerate(mid52.tolist()):
+        value = _coerce_float(raw_value)
+        if value is None:
+            flush_run()
+            run_indices = []
+            run_values = []
+            continue
+        if not run_indices:
+            run_indices = [idx]
+            run_values = [float(value)]
+            continue
+        run_mean = sum(run_values) / len(run_values)
+        tolerance = max(tolerance_for(idx, float(value)), tolerance_for(run_indices[-1], run_mean))
+        if abs(float(value) - run_mean) <= tolerance:
+            run_indices.append(idx)
+            run_values.append(float(value))
+            continue
+        flush_run()
+        run_indices = [idx]
+        run_values = [float(value)]
+    flush_run()
+
+    flats.sort(key=lambda item: (float(item.get("price") or 0.0), item.get("computed_range", [""])[0]))
+    return flats
+
+
 def recompute_touch_stats(
     levels: list[dict] | None,
     df: pd.DataFrame | None,
@@ -251,7 +398,7 @@ def recompute_touch_stats(
         if price is None:
             continue
         first_seen = _date_key(level.get("first_seen"))
-        tolerance = _level_tolerance(atr20, price, tol_frac=tol_frac)
+        tolerance = _level_kind_tolerance(level, atr20, price, default_tol_frac=tol_frac)
         touch_count = 0
         respect_count = 0
         break_count = 0
@@ -296,7 +443,7 @@ def recompute_touch_stats(
                     if post_break_returns
                     else None
                 ),
-                "strength": _level_strength({"bucket": level.get("bucket"), "touch_count": touch_count}),
+                "strength": _level_strength({**level, "touch_count": touch_count}),
                 "atr20_at_update": _coerce_float(atr20),
             }
         )
@@ -329,7 +476,6 @@ def merge_into_store(
         payload["levels"] = [dict(level) for level in store.get("levels", []) if isinstance(level, dict)]
     payload["schema_version"] = LEVEL_STORE_SCHEMA_VERSION
     payload["symbol"] = str(symbol or payload.get("symbol") or "").strip().upper()
-    tolerance = _level_tolerance(atr20)
     merged = [dict(level) for level in payload.get("levels", [])]
     for cluster in clusters or []:
         price = _coerce_float(cluster.get("price"))
@@ -340,6 +486,7 @@ def merge_into_store(
             if str(existing.get("kind") or "") != str(cluster.get("kind") or ""):
                 continue
             existing_price = _coerce_float(existing.get("price"))
+            tolerance = _level_kind_tolerance(cluster, atr20, price)
             if existing_price is not None and abs(float(existing_price) - float(price)) <= tolerance:
                 match = existing
                 break
@@ -364,19 +511,27 @@ def levels_near(
     *,
     tol_frac: float = LEVEL_TOL_ATR_FRACTION,
     min_strength: float = 0.0,
+    kinds: set[str] | tuple[str, ...] | list[str] | None = None,
+    as_of_date: str | date | None = None,
 ) -> list[dict]:
     entry_price = _coerce_float(price)
     if entry_price is None or not isinstance(store, dict):
         return []
-    tolerance = _level_tolerance(atr20, entry_price, tol_frac=tol_frac)
+    kind_filter = {str(kind) for kind in kinds} if kinds else set()
     matches = []
     for level in store.get("levels", []) or []:
+        kind = str(level.get("kind") or "")
+        if kind_filter and kind not in kind_filter:
+            continue
+        if not _level_is_effective_on(level, as_of_date):
+            continue
         level_price = _coerce_float(level.get("price"))
         if level_price is None:
             continue
         strength = _coerce_float(level.get("strength")) or 0.0
         if strength < float(min_strength or 0.0):
             continue
+        tolerance = _level_kind_tolerance(level, atr20, level_price, default_tol_frac=tol_frac)
         distance = float(level_price) - float(entry_price)
         if abs(distance) <= tolerance:
             item = dict(level)
@@ -397,8 +552,18 @@ def levels_blocking_entry(
     *,
     tol_frac: float = LEVEL_TOL_ATR_FRACTION,
     min_strength: float = LEVEL_BUCKET_WEIGHTS["green"],
+    kinds: set[str] | tuple[str, ...] | list[str] | None = None,
+    as_of_date: str | date | None = None,
 ) -> list[dict]:
-    nearby = levels_near(store, entry_price, atr20, tol_frac=tol_frac, min_strength=min_strength)
+    nearby = levels_near(
+        store,
+        entry_price,
+        atr20,
+        tol_frac=tol_frac,
+        min_strength=min_strength,
+        kinds=kinds,
+        as_of_date=as_of_date,
+    )
     normalized_side = str(side or "").strip().upper()
     if normalized_side == "SHORT":
         return [level for level in nearby if float(level.get("distance") or 0.0) <= 0]

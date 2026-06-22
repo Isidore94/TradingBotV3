@@ -340,6 +340,7 @@ def run_master(
     priority_rows = []
     htf_trend_study_rows = []
     hv_level_study_rows = []
+    phase6_study_rows = []
     theta_put_rows = []
     theta_pcs_rows = []
     positions = {
@@ -1479,6 +1480,14 @@ def run_master(
         ib,
         daily_frames_by_symbol=daily_frames_by_symbol,
     )
+    phase6_study_rows = enrich_priority_rows_with_phase6_studies(
+        priority_rows,
+        daily_frames_by_symbol,
+        earnings_dates_by_symbol=earnings_data,
+        ai_state=ai_state,
+        feature_rows_by_symbol=feature_rows_by_symbol,
+    )
+    study_rows = [*htf_trend_study_rows, *hv_level_study_rows, *phase6_study_rows]
     apply_pre_earnings_priority_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_post_earnings_hard_rule_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
@@ -1540,6 +1549,8 @@ def run_master(
         "htf_trend_study_count": len(htf_trend_study_rows),
         "hv_level_study_rows": hv_level_study_rows,
         "hv_level_study_count": len(hv_level_study_rows),
+        "phase6_study_rows": phase6_study_rows,
+        "phase6_study_count": len(phase6_study_rows),
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
         "setup_tracker_updated": False,
         "study_setups_tracked": 0,
@@ -1823,6 +1834,18 @@ def run_master(
         "hv_level_nearby_summary",
         "hv_level_blocking_summary",
         "hv_level_note",
+        "cloud_level_nearby_count",
+        "cloud_level_nearest_price",
+        "cloud_level_nearest_distance_atr",
+        "cloud_level_effective_range",
+        "cloud_level_nearby_summary",
+        "cloud_level_note",
+        "compression_break_today",
+        "compression_break_direction",
+        "compression_break_level",
+        "compression_break_distance_atr",
+        "compression_break_prior_bars",
+        "compression_break_note",
         "previous_day_range_break",
         "previous_day_range_break_bonus",
         "previous_day_range_note",
