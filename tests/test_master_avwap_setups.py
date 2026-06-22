@@ -5796,6 +5796,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
             master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
             with (
                 patch.object(master_avwap, "DAILY_BARS_CACHE_DIR", cache_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", Path(temp_dir) / "durable"),
                 patch.object(master_avwap, "_fetch_live_daily_bars", return_value=fresh_frame) as live_fetch,
             ):
                 master_avwap._write_cached_daily_bar_frame("AL", stale_frame)
@@ -5808,6 +5809,49 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 pd.to_datetime(result.iloc[-1]["datetime"]).date(),
                 pd.to_datetime(fresh_frame.iloc[-1]["datetime"]).date(),
             )
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+
+    def test_durable_store_seeds_cold_cache_and_only_delta_is_fetched(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir) / "daily_bars"
+            durable_dir = Path(temp_dir) / "durable"
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+            with (
+                patch.object(master_avwap, "DAILY_BARS_CACHE_DIR", cache_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", durable_dir),
+            ):
+                # Persist durable history (covers the request window but ends a few
+                # sessions ago), then simulate a fresh machine: no local L1 cache,
+                # only the durable Drive store exists.
+                history = _build_daily_bar_cache_frame(450)
+                history["datetime"] = history["datetime"] - pd.Timedelta(days=10)
+                master_avwap._persist_durable_daily_bars("AL", master_avwap._normalize_daily_bar_frame(history))
+                self.assertTrue((durable_dir / "AL.parquet").exists())
+                master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+                master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+
+                # Cold start: local cache missing -> load seeds from durable store.
+                seeded = master_avwap._load_cached_daily_bar_frame("AL")
+                self.assertFalse(seeded.empty)
+                self.assertTrue((cache_dir / "AL.csv").exists())  # L1 seeded for fast reuse
+
+                # With history present, only the recent delta is requested (a small
+                # window), never the full requested lookback.
+                captured = {}
+
+                def fake_live(ib, symbol, days):
+                    captured["days"] = days
+                    return _build_daily_bar_cache_frame()
+
+                master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+                master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+                with patch.object(master_avwap, "_fetch_live_daily_bars", side_effect=fake_live):
+                    master_avwap.fetch_daily_bars(object(), "AL", 400)
+                self.assertLess(captured["days"], 400)
             master_avwap._DAILY_BAR_FRAME_CACHE.clear()
             master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
             master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()

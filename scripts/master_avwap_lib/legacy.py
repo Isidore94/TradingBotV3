@@ -70,6 +70,7 @@ from project_paths import (
     EARNINGS_CALENDAR_CACHE_FILE,
     YAHOO_SYMBOL_META_CACHE_FILE,
     DAILY_BARS_CACHE_DIR,
+    MASTER_AVWAP_DAILY_BARS_DIR,
     MASTER_AVWAP_HISTORY_FILE,
     MASTER_AVWAP_AI_STATE_FILE,
     D1_FEATURES_FILE,
@@ -1994,6 +1995,18 @@ def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
 
     cache_path = _daily_bar_cache_file(symbol)
     if not cache_path.exists():
+        # Cold start (fresh / ephemeral machine): seed the local L1 cache from the
+        # durable Drive store so only the delta needs fetching, not full history.
+        durable = _load_durable_daily_bar_frame(symbol)
+        if not durable.empty:
+            _DAILY_BAR_FRAME_CACHE[symbol] = durable
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                durable.to_csv(cache_path, index=False)
+                _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
+            except Exception:
+                _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
+            return _set_daily_bar_source(durable.copy(), DAILY_BAR_SOURCE_CACHE)
         return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
 
     try:
@@ -2016,6 +2029,48 @@ def _write_cached_daily_bar_frame(symbol: str, df: pd.DataFrame) -> None:
     normalized.to_csv(cache_path, index=False)
     _DAILY_BAR_FRAME_CACHE[symbol] = normalized
     _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
+
+
+def _durable_daily_bar_file(symbol: str) -> Path:
+    return Path(MASTER_AVWAP_DAILY_BARS_DIR) / f"{_sanitize_symbol_for_filename(symbol)}.parquet"
+
+
+def _load_durable_daily_bar_frame(symbol: str) -> pd.DataFrame:
+    """Read the durable (Drive-backed) Parquet history; empty frame on any miss."""
+    try:
+        path = _durable_daily_bar_file(symbol)
+        if not path.exists():
+            return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
+        df = pd.read_parquet(path)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to L1 only
+        logging.debug("%s: durable daily-bar read skipped (%s).", symbol, exc)
+        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
+    return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
+
+
+def _persist_durable_daily_bars(symbol: str, normalized: pd.DataFrame, previous: pd.DataFrame | None = None) -> None:
+    """Mirror the merged history to the durable Parquet store, but only when it
+    actually changed (bounds Drive sync churn to genuine updates)."""
+    if normalized is None or getattr(normalized, "empty", True):
+        return
+    try:
+        path = _durable_daily_bar_file(symbol)
+        if previous is not None and path.exists() and not _daily_bar_frame_changed(previous, normalized):
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized.to_parquet(path, index=False)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to L1 only
+        logging.debug("%s: durable daily-bar persist skipped (%s).", symbol, exc)
+
+
+def _daily_bar_frame_changed(previous: pd.DataFrame | None, current: pd.DataFrame | None) -> bool:
+    if previous is None or getattr(previous, "empty", True):
+        return True
+    if current is None or getattr(current, "empty", True):
+        return False
+    if len(previous) != len(current):
+        return True
+    return _daily_bar_frame_last_date(previous) != _daily_bar_frame_last_date(current)
 
 
 def _merge_daily_bar_frames(existing: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
@@ -14428,6 +14483,7 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
             _mark_daily_bar_live_fetch_result(normalized_symbol, succeeded=True)
             merged = _merge_daily_bar_frames(cached, fresh)
             _write_cached_daily_bar_frame(normalized_symbol, merged)
+            _persist_durable_daily_bars(normalized_symbol, merged, previous=cached)
             return _set_daily_bar_source(merged.copy(), _get_daily_bar_source(fresh))
         fresh_last_date = _daily_bar_frame_last_date(fresh)
         logging.warning(

@@ -83,6 +83,10 @@ EARNINGS_ANCHORS_FILE = DATA_DIR / "earnings_avwap_anchors.csv"
 EARNINGS_ANCHOR_CANDIDATES_FILE = RUNTIME_DATA_DIR / "earnings_anchor_candidates.csv"
 EARNINGS_CALENDAR_HISTORY_FILE = DATA_DIR / "earnings_calendar_history.json"
 MASTER_AVWAP_LEVELS_DIR = DATA_DIR / "levels"
+# Durable, shared (Drive-backed) daily-bar history. The local machine cache under
+# CACHE_DIR is a fast L1; this is the L2 that survives cache wipes / fresh
+# machines so cold starts only fetch the delta instead of full price history.
+MASTER_AVWAP_DAILY_BARS_DIR = DATA_DIR / "daily_bars"
 
 EARNINGS_CACHE_FILE = CACHE_DIR / "earnings_cache.json"
 PREV_EARNINGS_CACHE_FILE = CACHE_DIR / "prev_earnings_cache.json"
