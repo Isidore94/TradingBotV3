@@ -129,7 +129,7 @@ independently shippable + testable.
 | **P1** ✅ | #1 Strongest/weakest 10% for market prep | **DONE 2026-06-21.** Smallest, already half-built, fixes a "not working" complaint. Builds B1. |
 | **P2** ✅ | #2 TOP becomes a *secondary* setup | **DONE 2026-06-21.** Small, removes a known regression (TOP suppressing other patterns). |
 | **P3** ☑ | #3 Industry/sector relative strength | **DONE 2026-06-22.** Daily scan + market prep + flag-gated D1 boost + BounceBot M5 directional industry RRS. |
-| **P4** | #4 1h/4h trend detection (boost only) | Needs B2 (intraday fetch). Boost first, study in parallel. |
+| **P4** ☑ | #4 1h/4h trend detection (boost only) | **DONE 2026-06-22.** B2 intraday fetch + 1h/4h SMA retest detection + flag-gated boost + study rows. |
 | **P5** | #5 D1 high-volume horizontal levels | Needs B3 (level store). Study-first; scoring penalty later. |
 | **P6** | #6 Cloud lines, compression breaks, trendline breaks | Needs B3 + B4. Most research-y; pure study-first. |
 
@@ -240,24 +240,33 @@ a slightly weaker member is OK (rotation candidate) — encode this as: industry
 RS very high → relax the stock-vs-industry penalty; otherwise require the stock
 to lead. Keep this as a tunable, study it in the tracker before trusting it.
 
-### Phase 4 — 1h / 4h trend detection  ◐ (study-first + small boost)
+### Phase 4 — 1h / 4h trend detection  ☑ DONE (2026-06-22; study-first + small boost)
 **Goal (txt #4):** detect 1h/4h pullback→retest of 20/50/100/200 SMA that forms
 up/down trends; boost stocks in a 1h **and** 4h uptrend. Reuse existing
 uptrend/downtrend detection.
 
 Steps:
-1. ☐ **Build B2** intraday fetch (`1 hour`, duration enough for 200-SMA on 4h —
+1. ☑ **Build B2** intraday fetch (`1 hour`, duration enough for 200-SMA on 4h —
    ~40 trading days of 1h bars; resample 1h→4h). IBKR-first, Yahoo-fallback.
-2. ☐ Locate the existing trend/uptrend detector (grep `uptrend`/`downtrend` in
+2. ☑ Locate the existing trend/uptrend detector (grep `uptrend`/`downtrend` in
    `legacy.py`) and apply it to the 1h and 4h frames.
-3. ☐ Detect the specific setup: price pulled back to one of 20/50/100/200 SMA,
+3. ☑ Detect the specific setup: price pulled back to one of 20/50/100/200 SMA,
    then resumed trend (retest-and-go). Tag `htf_trend_1h`, `htf_trend_4h`,
    `htf_retest_sma`.
-4. ☐ **Boost (small, bounded, flag-gated):** stock in 1h **and** 4h uptrend
+4. ☑ **Boost (small, bounded, flag-gated):** stock in 1h **and** 4h uptrend
    (long) gets a modest boost; opposite for shorts.
-5. ☐ **Study in parallel:** record these as `study_setups` (B4) to measure
+5. ☑ **Study in parallel:** record these as `study_setups` (B4) to measure
    whether the retest-and-go actually precedes follow-through, before increasing
    the boost.
+
+> **Shipped.** Added normalized intraday fetch (`fetch_intraday_bars`) with
+> IBKR-first/Yahoo fallback, deterministic 1h→4h resampling, 1h/4h SMA-stack trend
+> labels, recent SMA retest detection, and a bounded `+6` boost gated by
+> `feature_flags.htf_trend_scoring_enabled` (default off). Priority rows, AI state,
+> D1 feature CSV/history, tracker attributes, focus payloads, and the priority
+> report carry `htf_*` context. Confirmed retest-and-go rows are recorded into the
+> isolated `study_setups` namespace via `study_rows`. Added 2 focused HTF tests +
+> scoring-config coverage; full suite 360 green (`python -m unittest discover tests`).
 6. ☐ **Tests:** synthetic 1h frames → correct trend label + retest detection;
    boost bounded + gated.
 
@@ -372,8 +381,16 @@ Steps:
   helpers exposed through `rrs.py`; Master AVWAP D1 universe rows now include
   stock-vs-industry context and market prep includes strongest industries; D1 boost
   is bounded and flag-gated off by default; BounceBot M5 candidate scoring now gives
-  a bounded directional industry-RRS bonus. 6 new/updated focused tests; full suite
+  a bounded directional industry-RRS bonus. 7 new/updated focused tests; full suite
   358 green.
+- 2026-06-22 — Confirmed GitHub `origin/main` contains T1 (`6fb081b`), T2
+  (`9796b86`), and T3 (`d791b02`). Updated stale §8/§9/§10 references to reflect
+  completed market-prep wiring and `study_setups`. Starting T4 on side branch
+  `codex/master-avwap-mini-pc-journal-market-prep`.
+- 2026-06-22 — **T4 / Phase 4 SHIPPED.** Added B2 intraday fetch, 1h→4h
+  resampling, aligned 1h/4h SMA retest detection, `htf_*` output fields, a
+  bounded flag-gated `+6` boost (default off), and `study_setups` producer rows.
+  2 focused HTF tests + scoring-config coverage; full suite 360 green.
 
 ---
 
@@ -391,9 +408,9 @@ Steps:
 | --- | --- | --- |
 | `run_master()` core | `scripts/master_avwap_lib/runner.py` | builds `daily_frames_by_symbol` (`runner.py:339`, populated `:393`) and `priority_rows` (`:340`) |
 | SPY benchmark dict | `runner.py:~1266` | `market_regime_snapshot["benchmarks"]["SPY"]` → keys `one_day_return_pct`, `five_day_return_pct`. This is the `spy_benchmark` arg every RS call expects. |
-| `build_market_prep_payload` (call site) | `runner.py:1678` | Currently passes `range_buckets`, `market_prep_range_buckets`, `priority_rows`, `latest_release_map`, `reference_date`. **Does NOT pass `daily_frames_by_symbol` or `spy_benchmark`** — that's the wiring Phase 1 adds. |
-| `build_market_prep_payload` (def) | ⚠️ **TWO defs**: `legacy.py:20816` and `legacy.py:26242` | Python keeps the **last** one, so **`26242` is live** (it calls `_market_prep_strength_decile_rows`). `20816` is dead/shadowed. **Edit 26242.** Cleanup task: delete 20816 after confirming nothing imports it before redefinition. |
-| `_market_prep_strength_decile_rows` | `legacy.py:23387` | Today ranks whatever rows it's handed; the bug is it's fed `priority_rows`. Param `fraction` defaults to the decile constant. |
+| `build_market_prep_payload` (call site) | `runner.py` (re-grep) | **Updated by T1/T3.** Now passes `daily_frames_by_symbol`, `spy_benchmark`, `sides_by_symbol`, universe strength rows, and industry context into market prep. |
+| `build_market_prep_payload` (def) | `legacy.py` (re-grep) | **Single live def after T1 cleanup.** Takes universe rows and industry rows/context; ranks full-universe strength, pullbacks, and strongest industries. |
+| `_market_prep_strength_decile_rows` | `legacy.py` (re-grep) | Ranks whichever strength rows it is handed; T1 now feeds full-universe rows when daily frames are available. |
 | `MARKET_PREP_STRENGTH_DECILE_FRACTION` | `legacy.py:22265` | `= 0.10` |
 | `assess_daily_relative_strength` | `legacy.py:22666` (math `:22713`) | `(daily_rows, last_trade_date, side, spy_benchmark, lookback_days)`. Consumes **`daily_rows` = list of `{date, close,...}` dicts**, not a DataFrame. Returns dict incl. `daily_relative_strength_score`, `daily_relative_strength_bonus`, `symbol_one_day_return_pct`, `symbol_five_day_return_pct`. |
 | `daily_relative_strength_bonus` (scoring hook) | `legacy.py:23714` (param), applied `:23787`, persisted `:23900` | The bounded, directional boost pattern to **mirror** for Feat 3/4 boosts. |
@@ -401,11 +418,11 @@ Steps:
 | setup-family machinery | `_normalized_setup_family_text` `legacy.py:4948`, `_canonical_tracker_setup_family` `:5001`, `_tracker_priority_bucket` `:5024`, `MAIN_SWING_SETUP_FAMILIES` used `:5037` | Where Phase 2 decides primary family vs. secondary tag. |
 | `_fetch_live_daily_bars` | `legacy.py:13906` | `(ib, symbol, days)`, IBKR-first/Yahoo-fallback. **Mirror this** for B2 `fetch_intraday_bars`. |
 | `control_setups` namespace (the study-first template) | created `legacy.py:4873`, loaded `:4925`, recorded/pruned `:9899`–`:9941`, `_prune_control_setups` `:10056`, `_collect_control_episode_observations` `:10126` | Copy this exact shape for `study_setups` (B4). |
-| `study_setups` namespace | **does not exist yet** | B4 is greenfield. |
+| `study_setups` namespace | `legacy.py` (re-grep `_default_setup_tracker_payload`, `update_setup_tracker_from_scan`, `build_study_discovery_rows`) | **DONE by T6.** Isolated study namespace + `master_avwap_study.txt`; producers for T4/T5/T7 pass `study_rows`. |
 | RS / ETF infra (bounce_bot) | impls in `scripts/bounce_bot_lib/legacy.py`: `real_relative_strength:1531`, `load_sector_etf_map:475`, `_load_industry_etf_map_file:498`, `load_and_update_industry_etf_map:518`, `resolve_sector_etf:550`, `resolve_industry_ref_etf:567` | Imported via the `rrs.py` shim. **Edit in legacy.py, import from rrs.py.** |
 | Shared/cloud data root | `project_paths.py:61` `PERSISTENT_DATA_DIR` (env `TRADINGBOTV3_DATA_DIR` → local `shared_data_dir` → default), `DATA_DIR = PERSISTENT_DATA_DIR/"data"` (`:64`) | New B3/B5 stores go under `DATA_DIR`. This *is* the "Google Drive / cloud folder." |
 | ETF map files | `SECTOR_ETF_MAP_FILE`/`INDUSTRY_ETF_MAP_FILE` `project_paths.py:79-80`; repo→data seed/sync `:347-348`, `:432-433` | Phase 3 reuses; add new stores to the same sync lists so they propagate. |
-| Tests | `tests/` — **338 test functions** across 22 files (no `pytest.ini`/`conftest.py`) | "keep green" baseline. |
+| Tests | `tests/` — **360 tests green** as of T4 (`python -m unittest discover tests`) | "keep green" baseline; no `pytest.ini`/`conftest.py`. |
 
 ### 8b. Gotchas that will bite a cold-start agent
 1. **`legacy.py` has ~20 SHADOWED DUPLICATE top-level functions** (older copies
@@ -465,7 +482,7 @@ Steps:
   initial risk.
 - **control_setups / study_setups:** *side* tracker namespaces the live ranking can
   **never** see, used to measure a new idea's edge before it's allowed to score.
-  `control_setups` exists; `study_setups` is to be built (B4).
+  Both exist now; `study_setups` is the producer target for T4/T5/T7.
 - **Timeframes:** **M5** = 5-min, **D1** = daily, **1h/4h** = the HTF trend frames
   Aaron cares about (Feat 4). IBKR has no native 4h → resample from 1h.
 - **decile:** top/bottom 10% slice (the strongest/weakest list, Feat 1).
@@ -488,7 +505,7 @@ of work and finish it safely without the accumulated chat context.
 ### 10b. Environment & test command (Windows, repo root `c:\Users\aaron\TradingBotV3`)
 **pytest is NOT installed in `.venv`** — the suite is `unittest`-based. Use unittest:
 ```powershell
-# full suite (baseline: 338 passing as of 2026-06-21, incl. T1's 5 new tests):
+# full suite (baseline: 360 passing as of 2026-06-22, through T4):
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 # one file while iterating:
 .\.venv\Scripts\python.exe -m unittest tests.test_master_avwap_setups
@@ -509,7 +526,7 @@ Byte-compile a changed module fast: `.\.venv\Scripts\python.exe -m py_compile sc
 4. **Persisted stores are schema-versioned** (a `"schema_version"` field) and live
    under `DATA_DIR` via `project_paths.py`; add them to the repo→data sync lists
    (`project_paths.py:347-348` / `432-433`) so both machines get them.
-5. **Don't break the 338.** Full suite green before "done."
+5. **Don't break the suite.** Full suite green before "done."
 6. **Re-grep anchors before editing** (line numbers drift; see §8 header).
 
 ### 10d. Definition of Done (per ticket)
@@ -632,10 +649,13 @@ OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
 > D1 score boost is feature-flagged off by default, and BounceBot M5 candidate
 > scoring now prefers directionally aligned industry RRS.
 
-### T4 — B2 intraday fetch + 1h/4h trend boost & study  (Phase 4)  ☐
+### T4 — B2 intraday fetch + 1h/4h trend boost & study  (Phase 4)  ☑ DONE (2026-06-22)
 - Expand §4 "Phase 4." Build `fetch_intraday_bars(ib, sym, bar_size, duration)`
   mirroring `_fetch_live_daily_bars` (`legacy.py:13906`); resample 1h→4h. Boost is
   small/bounded/flag-gated; record retest-and-go to `study_setups`. DEPENDS ON: B4 (T6).
+
+> **Shipped.** See Phase 4 + progress log notes above. The boost is gated off by
+> default; the study namespace records HTF retest candidates for outcome discovery.
 
 ### T5 — B3 level store + D1 high-volume horizontal levels  (Phase 5)  ☐
 - **→ Full worked algorithm in §12.1.** New schema-versioned per-symbol JSON under
@@ -672,7 +692,7 @@ OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
 
 ### Suggested execution order for parallel agents
 `T6` and `T1` first (independent, unblock the most). Then `T2`, `T3` (needs T1).
-Then `T4`, `T5` (need T6). `T7` last (needs T5 + T6).
+Next `T5` (needs B4, already done). `T7` last (needs T5 + B4).
 
 ---
 

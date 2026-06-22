@@ -811,6 +811,7 @@ DEFAULT_PRIORITY_SCORING_CONFIG = {
     },
     "feature_flags": {
         "industry_relative_strength_scoring_enabled": False,
+        "htf_trend_scoring_enabled": False,
     },
     "attribute_adjustments": [
         {
@@ -4468,6 +4469,62 @@ def build_tracker_entry_attributes(
         description="Directional trend label derived from recent daily closes.",
     )
     add(
+        "trend.htf_trend_1h",
+        row.get("htf_trend_1h") or symbol_entry.get("htf_trend_1h") or feature_row.get("htf_trend_1h") or "",
+        group="trend",
+        label="1h trend",
+        value_type="text",
+        description="Directional 1h trend label from intraday SMA stack and slope.",
+    )
+    add(
+        "trend.htf_trend_4h",
+        row.get("htf_trend_4h") or symbol_entry.get("htf_trend_4h") or feature_row.get("htf_trend_4h") or "",
+        group="trend",
+        label="4h trend",
+        value_type="text",
+        description="Synthetic 4h trend label resampled from 1h bars.",
+    )
+    add(
+        "trend.htf_trend_aligned",
+        bool(row.get("htf_trend_aligned") or symbol_entry.get("htf_trend_aligned") or feature_row.get("htf_trend_aligned")),
+        group="trend",
+        label="1h/4h trend aligned",
+        value_type="bool",
+        description="Whether both 1h and 4h trends align with the setup side.",
+    )
+    add(
+        "trend.htf_retest_confirmed",
+        bool(row.get("htf_retest_confirmed") or symbol_entry.get("htf_retest_confirmed") or feature_row.get("htf_retest_confirmed")),
+        group="trend",
+        label="HTF SMA retest confirmed",
+        value_type="bool",
+        description="Whether a recent 1h or 4h SMA retest-and-go was detected.",
+    )
+    add(
+        "trend.htf_retest_sma",
+        row.get("htf_retest_sma") or symbol_entry.get("htf_retest_sma") or feature_row.get("htf_retest_sma") or "",
+        group="trend",
+        label="HTF retest SMA",
+        value_type="text",
+        description="Timeframe and SMA label touched by the 1h/4h retest study.",
+    )
+    add(
+        "trend.htf_trend_score_bonus",
+        int(row.get("htf_trend_score_bonus", symbol_entry.get("htf_trend_score_bonus", feature_row.get("htf_trend_score_bonus", 0))) or 0),
+        group="trend",
+        label="HTF trend bonus",
+        value_type="number",
+        description="Feature-flagged priority bonus from aligned 1h/4h trend and recent SMA retest.",
+    )
+    add(
+        "trend.htf_trend_note",
+        row.get("htf_trend_note") or symbol_entry.get("htf_trend_note") or feature_row.get("htf_trend_note") or "",
+        group="trend",
+        label="HTF trend note",
+        value_type="text",
+        description="Scanner note describing the 1h/4h trend and retest context.",
+    )
+    add(
         "trend.trendline_break_recent",
         bool(row.get("trendline_break_recent") or symbol_entry.get("priority_trendline_break_recent")),
         group="trend",
@@ -5385,6 +5442,15 @@ def build_tracker_setup_record(
         "rejection_score_cap_note": row.get("rejection_score_cap_note") or "",
         "trendline_break_recent": bool(row.get("trendline_break_recent")),
         "trendline_break_note": row.get("trendline_break_note") or "",
+        "htf_trend_1h": row.get("htf_trend_1h") or symbol_entry.get("htf_trend_1h") or "",
+        "htf_trend_4h": row.get("htf_trend_4h") or symbol_entry.get("htf_trend_4h") or "",
+        "htf_trend_aligned": bool(row.get("htf_trend_aligned") or symbol_entry.get("htf_trend_aligned")),
+        "htf_retest_confirmed": bool(row.get("htf_retest_confirmed") or symbol_entry.get("htf_retest_confirmed")),
+        "htf_retest_sma": row.get("htf_retest_sma") or symbol_entry.get("htf_retest_sma") or "",
+        "htf_retest_timeframes": row.get("htf_retest_timeframes") or symbol_entry.get("htf_retest_timeframes") or "",
+        "htf_retest_age_bars": _coerce_int(row.get("htf_retest_age_bars", symbol_entry.get("htf_retest_age_bars"))),
+        "htf_trend_score_bonus": int(row.get("htf_trend_score_bonus", symbol_entry.get("htf_trend_score_bonus", 0)) or 0),
+        "htf_trend_note": row.get("htf_trend_note") or symbol_entry.get("htf_trend_note") or "",
         "compression_flag": bool(row.get("compression_flag")),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "compression_note": row.get("compression_note") or "",
@@ -14228,6 +14294,166 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
 
     return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
 
+
+def _empty_intraday_bar_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+
+
+def _normalize_intraday_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return _empty_intraday_bar_frame()
+    work = df.copy()
+    work.rename(columns={c: str(c).strip().lower() for c in work.columns}, inplace=True)
+    if "datetime" not in work.columns:
+        for candidate in ("date", "time", "timestamp"):
+            if candidate in work.columns:
+                work.rename(columns={candidate: "datetime"}, inplace=True)
+                break
+    required = {"datetime", "open", "high", "low", "close", "volume"}
+    missing = required - set(work.columns)
+    if missing:
+        return _empty_intraday_bar_frame()
+    work["datetime"] = pd.to_datetime(work["datetime"], errors="coerce")
+    try:
+        work["datetime"] = work["datetime"].dt.tz_localize(None)
+    except (AttributeError, TypeError):
+        try:
+            work["datetime"] = work["datetime"].dt.tz_convert(None)
+        except (AttributeError, TypeError):
+            pass
+    for column in ("open", "high", "low", "close", "volume"):
+        work[column] = pd.to_numeric(work[column], errors="coerce")
+    work = work.dropna(subset=["datetime", "open", "high", "low", "close"])
+    if work.empty:
+        return _empty_intraday_bar_frame()
+    work = work.sort_values("datetime").drop_duplicates(subset=["datetime"], keep="last")
+    return work[["datetime", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+
+
+def fetch_intraday_bars_from_yahoo(
+    symbol: str,
+    *,
+    period_days: int = 180,
+    interval: str = "1h",
+) -> pd.DataFrame:
+    """Fetch intraday OHLCV bars from Yahoo Finance as the non-IBKR fallback."""
+
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return _empty_intraday_bar_frame()
+    period = f"{max(5, int(period_days or 0))}d"
+    try:
+        df = yf.download(
+            normalized_symbol,
+            period=period,
+            interval=interval,
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+            timeout=DAILY_BAR_YAHOO_TIMEOUT_SEC,
+            multi_level_index=False,
+        )
+    except Exception as e:
+        logging.error("%s: failed to download intraday bars from Yahoo: %s", normalized_symbol, e)
+        return _empty_intraday_bar_frame()
+
+    if df is None or df.empty:
+        logging.warning("%s: no intraday data returned from Yahoo.", normalized_symbol)
+        return _empty_intraday_bar_frame()
+
+    df = _flatten_yahoo_daily_bar_columns(df.reset_index())
+    date_col = next(
+        (column for column in df.columns if str(column).strip().lower() in {"datetime", "date"}),
+        df.columns[0],
+    )
+    df.rename(columns={date_col: "datetime"}, inplace=True)
+    return _normalize_intraday_bar_frame(df)
+
+
+def _fetch_live_intraday_bars(
+    ib: IBApi | None,
+    symbol: str,
+    *,
+    bar_size: str | None = None,
+    duration: str | None = None,
+) -> pd.DataFrame:
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return _empty_intraday_bar_frame()
+    if ib is None:
+        try:
+            days = int(str(duration).split()[0])
+        except (TypeError, ValueError, IndexError):
+            days = 180
+        return fetch_intraday_bars_from_yahoo(normalized_symbol, period_days=days)
+
+    reqId = None
+    request_completed = False
+    try:
+        reqId = int(time.time() * 1000) % (2**31 - 1)
+        ib.data[reqId] = []
+        ib.ready[reqId] = False
+
+        ib.reqHistoricalData(
+            reqId,
+            create_contract(normalized_symbol),
+            "",
+            str(duration or HTF_INTRADAY_DURATION),
+            str(bar_size or HTF_INTRADAY_BAR_SIZE),
+            "TRADES",
+            1,
+            1,
+            False,
+            [],
+        )
+
+        deadline = time.monotonic() + DAILY_BAR_IBKR_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            if ib.ready.get(reqId):
+                request_completed = True
+                break
+            time.sleep(DAILY_BAR_IBKR_POLL_INTERVAL_SEC)
+
+        if not request_completed and hasattr(ib, "cancelHistoricalData"):
+            try:
+                ib.cancelHistoricalData(reqId)
+            except Exception:
+                pass
+
+        bars = ib.data.pop(reqId, [])
+        ib.ready.pop(reqId, None)
+        df = pd.DataFrame(bars)
+        if not df.empty:
+            if "datetime" not in df.columns and "time" in df.columns:
+                df["datetime"] = pd.to_datetime(df["time"], errors="coerce")
+            return _normalize_intraday_bar_frame(df)
+        logging.warning("%s: no intraday bars returned from IBKR, falling back to Yahoo.", normalized_symbol)
+    except Exception as e:
+        logging.error("%s: IBKR intraday fetch failed (%s), falling back to Yahoo.", normalized_symbol, e)
+    finally:
+        if reqId is not None:
+            try:
+                ib.data.pop(reqId, None)
+                ib.ready.pop(reqId, None)
+            except Exception:
+                pass
+
+    try:
+        days = int(str(duration).split()[0])
+    except (TypeError, ValueError, IndexError):
+        days = 180
+    return fetch_intraday_bars_from_yahoo(normalized_symbol, period_days=days)
+
+
+def fetch_intraday_bars(
+    ib: IBApi | None,
+    symbol: str,
+    *,
+    bar_size: str | None = None,
+    duration: str | None = None,
+) -> pd.DataFrame:
+    return _fetch_live_intraday_bars(ib, symbol, bar_size=bar_size, duration=duration)
+
 # ============================================================================
 # AVWAP CALCULATION
 # ============================================================================
@@ -18901,6 +19127,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
         ("post earnings", "post_earnings_note"),
         ("mid earnings", "mid_earnings_note"),
         ("SMA breakout", "sma_breakout_note"),
+        ("1h/4h trend", "htf_trend_note"),
     )
     for label, key in setup_note_keys:
         value = str(row.get(key) or "").strip()
@@ -19222,6 +19449,13 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "setup_tags": list(row.get("setup_tags") or []),
             "favorite_zone": row.get("favorite_zone") or "",
             "trend_20d": row.get("trend_20d") or "SIDEWAYS",
+            "htf_trend_1h": row.get("htf_trend_1h") or "",
+            "htf_trend_4h": row.get("htf_trend_4h") or "",
+            "htf_trend_aligned": bool(row.get("htf_trend_aligned")),
+            "htf_retest_confirmed": bool(row.get("htf_retest_confirmed")),
+            "htf_retest_sma": row.get("htf_retest_sma") or "",
+            "htf_trend_score_bonus": int(row.get("htf_trend_score_bonus", 0) or 0),
+            "htf_trend_note": row.get("htf_trend_note") or "",
             "favorite_signals": list(row.get("favorite_signals") or []),
             "favorite_context_signals": list(row.get("context_signals") or []),
             "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),
@@ -22312,6 +22546,17 @@ INDUSTRY_RELATIVE_STRENGTH_THRESHOLD = 1.0
 INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD = 0.5
 INDUSTRY_RELATIVE_STRENGTH_ROTATION_RELAX_THRESHOLD = 3.0
 
+HTF_TREND_SCORING_FLAG = "htf_trend_scoring_enabled"
+HTF_TREND_SCORE_BONUS = 6
+HTF_TREND_SMA_PERIODS = (20, 50, 100, 200)
+HTF_TREND_RETEST_LOOKBACK_BARS = 8
+HTF_TREND_RETEST_TOL_ATR = 0.25
+HTF_TREND_FALLBACK_TOL_PCT = 0.003
+HTF_INTRADAY_BAR_SIZE = "1 hour"
+HTF_INTRADAY_DURATION = "180 D"
+HTF_TREND_STUDY_FAMILY = "htf_trend_retest"
+HTF_TREND_STUDY_BUCKET = "study_htf_trend"
+
 PRIORITY_ADVERSE_REJECTION_MIN_WICK_RANGE_RATIO = 0.30
 
 PRIORITY_ADVERSE_REJECTION_CLOSE_POSITION_MAX = 0.35
@@ -22861,6 +23106,314 @@ def _weighted_excess_strength_score(
     if one_day is None or five_day is None or benchmark_one is None or benchmark_five is None:
         return None
     return round((0.35 * (float(one_day) - float(benchmark_one))) + (0.65 * (float(five_day) - float(benchmark_five))), 3)
+
+
+def resample_intraday_bars_to_4h(hourly_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Build synthetic 4h bars from sequential 1h bars.
+
+    IBKR has no native 4h bar size here; grouping every four completed 1h bars is
+    deterministic for scanner tests and avoids exchange-session gap assumptions.
+    """
+
+    work = _normalize_intraday_bar_frame(hourly_df)
+    if work.empty:
+        return _empty_intraday_bar_frame()
+    work = work.reset_index(drop=True)
+    work["_group"] = [idx // 4 for idx in range(len(work))]
+    grouped = (
+        work.groupby("_group", as_index=False)
+        .agg(
+            {
+                "datetime": "last",
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }
+        )
+        .dropna(subset=["datetime", "open", "high", "low", "close"])
+    )
+    return grouped[["datetime", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+
+
+def _htf_indicator_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    normalized = _normalize_intraday_bar_frame(df)
+    if normalized.empty:
+        return pd.DataFrame()
+    return compute_indicator_frame(normalized)
+
+
+def _htf_trend_label(indicator_frame: pd.DataFrame | None) -> str:
+    if indicator_frame is None or indicator_frame.empty:
+        return "NEUTRAL"
+    work = indicator_frame.dropna(subset=["close_num"]).reset_index(drop=True)
+    if work.empty:
+        return "NEUTRAL"
+    latest = work.iloc[-1]
+    close_value = _coerce_float(latest.get("close_num", latest.get("close")))
+    sma20 = _coerce_float(latest.get("sma_20"))
+    sma20_prev = _coerce_float(latest.get("sma_20_prev"))
+    sma50 = _coerce_float(latest.get("sma_50"))
+    if close_value is None or sma20 is None:
+        return "NEUTRAL"
+    sma20_rising = sma20_prev is None or float(sma20) >= float(sma20_prev)
+    sma20_falling = sma20_prev is None or float(sma20) <= float(sma20_prev)
+    long_stack = float(close_value) >= float(sma20) and sma20_rising
+    short_stack = float(close_value) <= float(sma20) and sma20_falling
+    if sma50 is not None:
+        long_stack = long_stack and float(sma20) >= float(sma50)
+        short_stack = short_stack and float(sma20) <= float(sma50)
+    if long_stack:
+        return "UP"
+    if short_stack:
+        return "DOWN"
+    return "NEUTRAL"
+
+
+def _htf_row_timestamp(row: pd.Series | dict | None) -> str:
+    if row is None:
+        return ""
+    value = row.get("datetime") if isinstance(row, (pd.Series, dict)) else None
+    if value is None:
+        value = row.get("trade_date") if isinstance(row, (pd.Series, dict)) else None
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _htf_recent_sma_retest(
+    indicator_frame: pd.DataFrame | None,
+    *,
+    side: str,
+    timeframe: str,
+    lookback_bars: int = HTF_TREND_RETEST_LOOKBACK_BARS,
+) -> dict | None:
+    if indicator_frame is None or indicator_frame.empty:
+        return None
+    work = indicator_frame.reset_index(drop=True)
+    normalized_side = normalize_side(side)
+    last_idx = len(work) - 1
+    first_idx = max(0, last_idx - max(1, int(lookback_bars or 1)) + 1)
+    for idx in range(last_idx, first_idx - 1, -1):
+        row = work.iloc[idx]
+        close_value = _coerce_float(row.get("close_num", row.get("close")))
+        high_value = _coerce_float(row.get("high_num", row.get("high")))
+        low_value = _coerce_float(row.get("low_num", row.get("low")))
+        atr_value = _coerce_float(row.get("atr_20"))
+        if close_value is None or high_value is None or low_value is None:
+            continue
+        for period in HTF_TREND_SMA_PERIODS:
+            level = _coerce_float(row.get(f"sma_{period}"))
+            if level is None:
+                continue
+            tolerance = max(
+                abs(float(level)) * HTF_TREND_FALLBACK_TOL_PCT,
+                float(atr_value or 0.0) * HTF_TREND_RETEST_TOL_ATR,
+            )
+            if normalized_side == "SHORT":
+                touched = float(high_value) >= float(level) - tolerance
+                reclaimed = float(close_value) <= float(level)
+            else:
+                touched = float(low_value) <= float(level) + tolerance
+                reclaimed = float(close_value) >= float(level)
+            if touched and reclaimed:
+                return {
+                    "timeframe": timeframe,
+                    "sma_label": f"SMA_{period}",
+                    "sma_period": int(period),
+                    "sma_level": round(float(level), 4),
+                    "age_bars": int(last_idx - idx),
+                    "bar_time": _htf_row_timestamp(row),
+                }
+    return None
+
+
+def assess_htf_trend_context(
+    hourly_df: pd.DataFrame | None,
+    side: str,
+    *,
+    scoring_enabled: bool = False,
+) -> dict:
+    hourly = _normalize_intraday_bar_frame(hourly_df)
+    result = {
+        "htf_trend_1h": "NEUTRAL",
+        "htf_trend_4h": "NEUTRAL",
+        "htf_trend_aligned": False,
+        "htf_retest_confirmed": False,
+        "htf_retest_sma": "",
+        "htf_retest_timeframes": "",
+        "htf_retest_age_bars": None,
+        "htf_intraday_bar_count": int(len(hourly)),
+        "htf_4h_bar_count": 0,
+        "htf_trend_score_bonus": 0,
+        "htf_trend_note": "",
+    }
+    if hourly.empty:
+        result["htf_trend_note"] = "No 1h bars available"
+        return result
+
+    four_hour = resample_intraday_bars_to_4h(hourly)
+    result["htf_4h_bar_count"] = int(len(four_hour))
+    hourly_indicators = _htf_indicator_frame(hourly)
+    four_hour_indicators = _htf_indicator_frame(four_hour)
+    one_hour_label = _htf_trend_label(hourly_indicators)
+    four_hour_label = _htf_trend_label(four_hour_indicators)
+    result["htf_trend_1h"] = one_hour_label
+    result["htf_trend_4h"] = four_hour_label
+
+    normalized_side = normalize_side(side)
+    required_label = "DOWN" if normalized_side == "SHORT" else "UP"
+    aligned = one_hour_label == required_label and four_hour_label == required_label
+    result["htf_trend_aligned"] = bool(aligned)
+
+    retests = []
+    if one_hour_label == required_label:
+        retest_1h = _htf_recent_sma_retest(hourly_indicators, side=normalized_side, timeframe="1h")
+        if retest_1h:
+            retests.append(retest_1h)
+    if four_hour_label == required_label:
+        retest_4h = _htf_recent_sma_retest(four_hour_indicators, side=normalized_side, timeframe="4h")
+        if retest_4h:
+            retests.append(retest_4h)
+
+    retest_confirmed = bool(aligned and retests)
+    result["htf_retest_confirmed"] = retest_confirmed
+    if retests:
+        result["htf_retest_sma"] = ";".join(
+            f"{item['timeframe']}:{item['sma_label']}" for item in retests
+        )
+        result["htf_retest_timeframes"] = ";".join(item["timeframe"] for item in retests)
+        result["htf_retest_age_bars"] = min(int(item.get("age_bars", 0) or 0) for item in retests)
+
+    note_bits = [f"1h={one_hour_label}", f"4h={four_hour_label}"]
+    if retests:
+        note_bits.append("recent SMA retest " + result["htf_retest_sma"])
+    if aligned and retest_confirmed:
+        if scoring_enabled:
+            result["htf_trend_score_bonus"] = HTF_TREND_SCORE_BONUS
+            note_bits.append(f"+{HTF_TREND_SCORE_BONUS}")
+        else:
+            note_bits.append("score flag off")
+    elif aligned:
+        note_bits.append("aligned; no recent SMA retest")
+    else:
+        note_bits.append("not aligned")
+    result["htf_trend_note"] = "; ".join(note_bits)
+    return result
+
+
+def _priority_row_has_active_setup(row: dict | None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    setup_family = str(row.get("setup_family") or "").strip().lower()
+    return bool(
+        row.get("has_favorite_signal")
+        or row.get("favorite_signals")
+        or row.get("favorite_zone")
+        or row.get("extreme_move_watch")
+        or row.get("sma_breakout_watch")
+        or row.get("sma_breakout_confirmed")
+        or row.get("top_pattern_watch")
+        or row.get("top_pattern_entry")
+        or setup_family not in {"", "general"}
+    )
+
+
+def _build_htf_trend_study_row(priority_row: dict, context: dict) -> dict:
+    study_row = dict(priority_row)
+    existing_tags = list(study_row.get("setup_tags") or [])
+    study_row.update(context)
+    study_row["priority_bucket"] = HTF_TREND_STUDY_BUCKET
+    study_row["is_favorite_setup"] = False
+    study_row["is_near_favorite_zone"] = False
+    study_row["setup_family"] = HTF_TREND_STUDY_FAMILY
+    study_row["study_kind"] = HTF_TREND_STUDY_FAMILY
+    study_row["setup_tags"] = list(dict.fromkeys([*existing_tags, "HTF_TREND_RETEST"]))
+    study_row["favorite_signals"] = []
+    study_row["context_signals"] = list(dict.fromkeys([*(study_row.get("context_signals") or []), "HTF_TREND_RETEST"]))
+    study_row["has_favorite_signal"] = False
+    htf_note = str(context.get("htf_trend_note") or "")
+    study_row["score_bonus_note"] = htf_note
+    if not str(study_row.get("retest_note") or "").strip():
+        study_row["retest_note"] = htf_note
+    return study_row
+
+
+def enrich_priority_rows_with_htf_trend_context(
+    priority_rows: list[dict] | None,
+    *,
+    ib: IBApi | None = None,
+    intraday_frames_by_symbol: dict[str, pd.DataFrame] | None = None,
+    scoring_enabled: bool | None = None,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+) -> list[dict]:
+    if not priority_rows:
+        return []
+    if scoring_enabled is None:
+        scoring_enabled = bool(get_priority_feature_flags().get(HTF_TREND_SCORING_FLAG))
+    intraday_cache = dict(intraday_frames_by_symbol or {})
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    htf_fields = (
+        "htf_trend_1h",
+        "htf_trend_4h",
+        "htf_trend_aligned",
+        "htf_retest_confirmed",
+        "htf_retest_sma",
+        "htf_retest_timeframes",
+        "htf_retest_age_bars",
+        "htf_intraday_bar_count",
+        "htf_4h_bar_count",
+        "htf_trend_score_bonus",
+        "htf_trend_note",
+    )
+    study_rows: list[dict] = []
+    for row in priority_rows:
+        if not isinstance(row, dict) or not _priority_row_has_active_setup(row):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        if symbol in intraday_cache:
+            hourly_df = intraday_cache.get(symbol)
+        else:
+            try:
+                hourly_df = fetch_intraday_bars(ib, symbol)
+            except Exception as exc:
+                logging.warning("%s: HTF trend intraday fetch failed (%s).", symbol, exc)
+                hourly_df = _empty_intraday_bar_frame()
+            intraday_cache[symbol] = hourly_df
+
+        context = assess_htf_trend_context(
+            hourly_df,
+            row.get("side") or "",
+            scoring_enabled=bool(scoring_enabled),
+        )
+        row.update(context)
+        bonus = int(context.get("htf_trend_score_bonus", 0) or 0)
+        if bonus:
+            row["score"] = float(row.get("score", 0.0) or 0.0) + float(bonus)
+
+        symbol_entry = ai_symbols.get(symbol)
+        if isinstance(symbol_entry, dict):
+            for field in htf_fields:
+                symbol_entry[field] = row.get(field)
+            symbol_entry["priority_score"] = row.get("score")
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if isinstance(feature_row, dict):
+            for field in htf_fields:
+                feature_row[field] = row.get(field)
+            feature_row["priority_score"] = row.get("score")
+
+        if context.get("htf_retest_confirmed"):
+            study_rows.append(_build_htf_trend_study_row(row, context))
+    return study_rows
 
 
 def build_symbol_industry_contexts(
@@ -24519,6 +25072,17 @@ def build_priority_setup_summary(
         "industry_daily_relative_strength_score": _coerce_float(industry_daily_relative_strength_score),
         "industry_relative_strength_bonus": int(industry_relative_strength_bonus or 0),
         "industry_relative_strength_note": industry_relative_strength_note or "",
+        "htf_trend_1h": "",
+        "htf_trend_4h": "",
+        "htf_trend_aligned": False,
+        "htf_retest_confirmed": False,
+        "htf_retest_sma": "",
+        "htf_retest_timeframes": "",
+        "htf_retest_age_bars": None,
+        "htf_intraday_bar_count": 0,
+        "htf_4h_bar_count": 0,
+        "htf_trend_score_bonus": 0,
+        "htf_trend_note": "",
     }
 
 def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, side):
@@ -26728,6 +27292,13 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
             "setup_tags": list(row.get("setup_tags") or []),
             "favorite_zone": row.get("favorite_zone") or "",
             "trend_20d": row.get("trend_20d") or "SIDEWAYS",
+            "htf_trend_1h": row.get("htf_trend_1h") or "",
+            "htf_trend_4h": row.get("htf_trend_4h") or "",
+            "htf_trend_aligned": bool(row.get("htf_trend_aligned")),
+            "htf_retest_confirmed": bool(row.get("htf_retest_confirmed")),
+            "htf_retest_sma": row.get("htf_retest_sma") or "",
+            "htf_trend_score_bonus": int(row.get("htf_trend_score_bonus", 0) or 0),
+            "htf_trend_note": row.get("htf_trend_note") or "",
             "favorite_signals": list(row.get("favorite_signals") or []),
             "favorite_context_signals": list(row.get("context_signals") or []),
             "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),

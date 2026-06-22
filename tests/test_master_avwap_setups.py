@@ -111,6 +111,29 @@ def _build_daily_bar_cache_frame(days: int = 120) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_intraday_htf_retest_frame(hours: int = 360) -> pd.DataFrame:
+    datetimes = pd.date_range("2026-04-01 09:30", periods=hours, freq="h")
+    rows = []
+    for idx, dt_value in enumerate(datetimes):
+        close = 100.0 + idx * 0.08
+        rows.append(
+            {
+                "datetime": dt_value,
+                "open": close - 0.05,
+                "high": close + 0.35,
+                "low": close - 0.35,
+                "close": close,
+                "volume": 250_000 + idx,
+            }
+        )
+    frame = pd.DataFrame(rows)
+    four_hour = master_avwap.resample_intraday_bars_to_4h(frame)
+    four_hour_indicators = master_avwap.compute_indicator_frame(four_hour)
+    four_hour_sma20 = float(four_hour_indicators.iloc[-1]["sma_20"])
+    frame.loc[frame.index[-4:], "low"] = four_hour_sma20 - 0.05
+    return frame
+
+
 def _build_post_earnings_52w_history(
     *,
     side: str = "LONG",
@@ -2391,6 +2414,84 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[0]["industry_relative_strength_bonus"], 0)
         self.assertIn("setup inactive", priority_rows[0]["industry_relative_strength_note"])
 
+    def test_htf_trend_context_detects_aligned_sma_retest(self):
+        intraday = _build_intraday_htf_retest_frame()
+
+        context = master_avwap.assess_htf_trend_context(intraday, "LONG", scoring_enabled=False)
+
+        self.assertEqual(context["htf_trend_1h"], "UP")
+        self.assertEqual(context["htf_trend_4h"], "UP")
+        self.assertTrue(context["htf_trend_aligned"])
+        self.assertTrue(context["htf_retest_confirmed"])
+        self.assertIn("4h:SMA_20", context["htf_retest_sma"])
+        self.assertEqual(context["htf_trend_score_bonus"], 0)
+        self.assertIn("score flag off", context["htf_trend_note"])
+
+        scoring_context = master_avwap.assess_htf_trend_context(
+            intraday,
+            "LONG",
+            scoring_enabled=True,
+        )
+        self.assertEqual(scoring_context["htf_trend_score_bonus"], master_avwap.HTF_TREND_SCORE_BONUS)
+
+    def test_htf_trend_enrichment_is_feature_flag_gated_and_writes_study_rows(self):
+        intraday = _build_intraday_htf_retest_frame()
+        priority_rows = [
+            {
+                "symbol": "TSLA",
+                "side": "LONG",
+                "score": 100.0,
+                "has_favorite_signal": True,
+                "favorite_signals": ["BOUNCE_VWAP"],
+                "context_signals": [],
+                "setup_family": "avwap_bounce",
+                "priority_bucket": "favorite_setup",
+            }
+        ]
+        ai_state = {
+            "symbols": {
+                "TSLA": {
+                    "symbol": "TSLA",
+                    "side": "LONG",
+                    "last_trade_date": "2026-06-01",
+                    "last_close": 150.0,
+                    "current_anchor": {"date": "2026-01-02", "vwap": 145.0, "bands": {"LOWER_1": 140.0}},
+                    "setup_family": "avwap_bounce",
+                }
+            }
+        }
+        feature_rows_by_symbol = {"TSLA": {"priority_score": 100.0}}
+
+        study_rows = master_avwap.enrich_priority_rows_with_htf_trend_context(
+            priority_rows,
+            intraday_frames_by_symbol={"TSLA": intraday},
+            scoring_enabled=False,
+            ai_state=ai_state,
+            feature_rows_by_symbol=feature_rows_by_symbol,
+        )
+
+        self.assertEqual(priority_rows[0]["score"], 100.0)
+        self.assertEqual(priority_rows[0]["htf_trend_score_bonus"], 0)
+        self.assertEqual(len(study_rows), 1)
+        self.assertEqual(study_rows[0]["setup_family"], master_avwap.HTF_TREND_STUDY_FAMILY)
+        self.assertEqual(study_rows[0]["priority_bucket"], master_avwap.HTF_TREND_STUDY_BUCKET)
+        self.assertEqual(feature_rows_by_symbol["TSLA"]["htf_trend_4h"], "UP")
+        self.assertEqual(ai_state["symbols"]["TSLA"]["htf_retest_sma"], priority_rows[0]["htf_retest_sma"])
+
+        boosted_rows = [dict(priority_rows[0], score=100.0, htf_trend_score_bonus=0)]
+        boosted_features = {"TSLA": {"priority_score": 100.0}}
+        master_avwap.enrich_priority_rows_with_htf_trend_context(
+            boosted_rows,
+            intraday_frames_by_symbol={"TSLA": intraday},
+            scoring_enabled=True,
+            ai_state={"symbols": {"TSLA": dict(ai_state["symbols"]["TSLA"])}},
+            feature_rows_by_symbol=boosted_features,
+        )
+
+        self.assertEqual(boosted_rows[0]["htf_trend_score_bonus"], master_avwap.HTF_TREND_SCORE_BONUS)
+        self.assertEqual(boosted_rows[0]["score"], 100.0 + master_avwap.HTF_TREND_SCORE_BONUS)
+        self.assertEqual(boosted_features["TSLA"]["priority_score"], boosted_rows[0]["score"])
+
     def test_load_scan_earnings_context_reuses_refreshed_earnings_lookup(self):
         earnings_lookup = {"AAPL": ["2026-04-21"]}
         latest_release_map = {
@@ -3598,6 +3699,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                         "attribute_adjustments": [],
                         "feature_flags": {
                             "industry_relative_strength_scoring_enabled": True,
+                            "htf_trend_scoring_enabled": True,
                         },
                     }
                 ),
@@ -3612,6 +3714,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(config["signal_weights"]["current"]["SHORT"]["POST_EARNINGS_52W_BREAK"], 120)
         self.assertEqual(config["signal_weights"]["context"]["SHORT"]["PREV_CROSS_DOWN_LOWER_2"], 28)
         self.assertTrue(config["feature_flags"]["industry_relative_strength_scoring_enabled"])
+        self.assertTrue(config["feature_flags"]["htf_trend_scoring_enabled"])
     def test_market_regime_penalizes_countertrend_without_fresh_trigger(self):
         priority_rows = [
             {

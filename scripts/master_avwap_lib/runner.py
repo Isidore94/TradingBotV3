@@ -338,6 +338,7 @@ def run_master(
     feature_rows_by_symbol = {}
     daily_frames_by_symbol = {}
     priority_rows = []
+    htf_trend_study_rows = []
     theta_put_rows = []
     theta_pcs_rows = []
     positions = {
@@ -1456,6 +1457,12 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    htf_trend_study_rows = enrich_priority_rows_with_htf_trend_context(
+        priority_rows,
+        ib=ib,
+        ai_state=ai_state,
+        feature_rows_by_symbol=feature_rows_by_symbol,
+    )
 
     refine_priority_rows_with_directional_filters(
         priority_rows,
@@ -1520,8 +1527,11 @@ def run_master(
         "daily_frames_by_symbol": daily_frames_by_symbol,
         "universe_strength_rows": universe_strength_rows,
         "industry_strength_rows": industry_strength_rows,
+        "htf_trend_study_rows": htf_trend_study_rows,
+        "htf_trend_study_count": len(htf_trend_study_rows),
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
         "setup_tracker_updated": False,
+        "study_setups_tracked": 0,
         "setup_tracker_allowed": False,
         "setup_tracker_skip_reason": "",
         "theta_enrichment_pending": False,
@@ -1586,13 +1596,16 @@ def run_master(
             daily_frames_by_symbol,
             ib,
             control_rows=control_rows,
+            study_rows=htf_trend_study_rows,
         )
         run_result["setup_tracker_updated"] = True
         run_result["control_setups_tracked"] = len(control_rows)
+        run_result["study_setups_tracked"] = len(htf_trend_study_rows)
         logging.info(
-            "Setup tracker updated for %s tracked symbol(s); %s control/holdout setup(s).",
+            "Setup tracker updated for %s tracked symbol(s); %s control/holdout setup(s); %s study setup(s).",
             len(tracked_rows),
             len(control_rows),
+            len(htf_trend_study_rows),
         )
         # Re-fit the Expected-R prior anchors to the freshly-updated closed
         # outcomes so the next scan's headline ranking is grounded in this
@@ -1779,6 +1792,17 @@ def run_master(
         "distance_from_current_lower_1",
         "pct_from_current_lower_1",
         "trend_20d",
+        "htf_trend_1h",
+        "htf_trend_4h",
+        "htf_trend_aligned",
+        "htf_retest_confirmed",
+        "htf_retest_sma",
+        "htf_retest_timeframes",
+        "htf_retest_age_bars",
+        "htf_intraday_bar_count",
+        "htf_4h_bar_count",
+        "htf_trend_score_bonus",
+        "htf_trend_note",
         "previous_day_range_break",
         "previous_day_range_break_bonus",
         "previous_day_range_note",
