@@ -5856,6 +5856,53 @@ class MasterAvwapSetupTests(unittest.TestCase):
             master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
             master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
 
+    def test_intraday_durable_store_seeds_cold_cache_and_fetches_only_delta(self):
+        def hourly(n_days, end_offset_days=0):
+            end = pd.Timestamp.now().normalize() - pd.Timedelta(days=end_offset_days)
+            sessions = pd.bdate_range(end=end, periods=n_days)
+            rows = []
+            for day in sessions:
+                for hour in range(9, 16):
+                    rows.append(
+                        {
+                            "datetime": pd.Timestamp(day) + pd.Timedelta(hours=hour),
+                            "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0,
+                        }
+                    )
+            return pd.DataFrame(rows)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            l1_dir = Path(temp_dir) / "intraday"
+            durable_dir = Path(temp_dir) / "durable"
+            master_avwap._INTRADAY_BAR_FRAME_CACHE.clear()
+            master_avwap._INTRADAY_BAR_CACHE_TOUCHED_AT.clear()
+            with (
+                patch.object(master_avwap, "INTRADAY_BARS_CACHE_DIR", l1_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_INTRADAY_BARS_DIR", durable_dir),
+            ):
+                # A prior machine populated the Drive store; its bars are now stale.
+                history = master_avwap._normalize_intraday_bar_frame(hourly(190, end_offset_days=12))
+                master_avwap._persist_durable_intraday_bars("NVDA", "1h", history)
+                self.assertTrue((durable_dir / "NVDA__1h.parquet").exists())
+
+                # Fresh machine: empty local cache, same Drive.
+                master_avwap._INTRADAY_BAR_FRAME_CACHE.clear()
+                master_avwap._INTRADAY_BAR_CACHE_TOUCHED_AT.clear()
+                captured = {}
+
+                def fake_live(ib, symbol, *, bar_size=None, duration=None):
+                    captured["days"] = master_avwap._duration_to_days(duration, 180)
+                    return hourly(6)
+
+                with patch.object(master_avwap, "_fetch_live_intraday_bars", side_effect=fake_live):
+                    merged = master_avwap.fetch_intraday_bars(object(), "NVDA")
+
+                self.assertLess(captured["days"], 180)  # only the delta, not the full window
+                self.assertGreaterEqual(len(merged), len(history))  # history preserved + extended
+                self.assertTrue((l1_dir / "NVDA__1h.csv").exists())  # L1 seeded for fast reuse
+            master_avwap._INTRADAY_BAR_FRAME_CACHE.clear()
+            master_avwap._INTRADAY_BAR_CACHE_TOUCHED_AT.clear()
+
     def test_fetch_daily_bars_skips_when_live_refresh_returns_stale_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_dir = Path(temp_dir) / "daily_bars"

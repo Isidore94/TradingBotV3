@@ -70,7 +70,9 @@ from project_paths import (
     EARNINGS_CALENDAR_CACHE_FILE,
     YAHOO_SYMBOL_META_CACHE_FILE,
     DAILY_BARS_CACHE_DIR,
+    INTRADAY_BARS_CACHE_DIR,
     MASTER_AVWAP_DAILY_BARS_DIR,
+    MASTER_AVWAP_INTRADAY_BARS_DIR,
     MASTER_AVWAP_HISTORY_FILE,
     MASTER_AVWAP_AI_STATE_FILE,
     D1_FEATURES_FILE,
@@ -1456,6 +1458,12 @@ DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS = 10
 DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
 DAILY_BAR_IBKR_TIMEOUT_SEC = 6.0
 DAILY_BAR_IBKR_POLL_INTERVAL_SEC = 0.2
+# Intraday (H1) cache: same L1/L2 strategy as the daily store. H4 is resampled
+# from cached H1, so only H1 is fetched/stored.
+INTRADAY_BAR_CACHE_MAX_AGE_MINUTES = 30
+INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS = 5
+INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS = 5
+INTRADAY_BAR_DEFAULT_DURATION_DAYS = 180
 DAILY_BAR_YAHOO_TIMEOUT_SEC = 6.0
 DAILY_BAR_LIVE_FAILURE_COOLDOWN_MINUTES = 15
 SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
@@ -1852,6 +1860,8 @@ _SYMBOL_METADATA_CACHE: dict | None = None
 _DAILY_BAR_FRAME_CACHE: dict[str, pd.DataFrame] = {}
 _DAILY_BAR_CACHE_TOUCHED_AT: dict[str, datetime] = {}
 _DAILY_BAR_LIVE_FAILURE_AT: dict[str, datetime] = {}
+_INTRADAY_BAR_FRAME_CACHE: dict[str, pd.DataFrame] = {}
+_INTRADAY_BAR_CACHE_TOUCHED_AT: dict[str, datetime] = {}
 
 
 def _is_timestamp_within_minutes(value, minutes: int) -> bool:
@@ -14655,14 +14665,224 @@ def _fetch_live_intraday_bars(
     return fetch_intraday_bars_from_yahoo(normalized_symbol, period_days=days)
 
 
+def _intraday_bar_size_token(bar_size: str | None) -> str:
+    """Compact filename token for an IBKR bar-size string ("1 hour" -> "1h")."""
+    raw = str(bar_size or HTF_INTRADAY_BAR_SIZE).strip().lower()
+    parts = raw.split()
+    if not parts:
+        return "1h"
+    try:
+        num = str(int(float(parts[0])))
+    except (TypeError, ValueError):
+        num = "1"
+    unit = parts[1] if len(parts) > 1 else "hour"
+    if unit.startswith("hour"):
+        suffix = "h"
+    elif unit.startswith("min"):
+        suffix = "m"
+    elif unit.startswith("day"):
+        suffix = "d"
+    else:
+        suffix = unit[:1] or "h"
+    return f"{num}{suffix}"
+
+
+def _duration_to_days(duration: str | None, default: int) -> int:
+    try:
+        return max(1, int(float(str(duration).split()[0])))
+    except (TypeError, ValueError, IndexError):
+        return int(default)
+
+
+def _intraday_cache_key(symbol: str, token: str) -> str:
+    return f"{str(symbol or '').strip().upper()}__{token}"
+
+
+def _intraday_bar_cache_file(symbol: str, token: str) -> Path:
+    return Path(INTRADAY_BARS_CACHE_DIR) / f"{_sanitize_symbol_for_filename(symbol)}__{token}.csv"
+
+
+def _durable_intraday_bar_file(symbol: str, token: str) -> Path:
+    return Path(MASTER_AVWAP_INTRADAY_BARS_DIR) / f"{_sanitize_symbol_for_filename(symbol)}__{token}.parquet"
+
+
+def _intraday_bar_frame_last_datetime(df: pd.DataFrame | None):
+    if df is None or getattr(df, "empty", True) or "datetime" not in df.columns:
+        return None
+    try:
+        return pd.to_datetime(df["datetime"].iloc[-1])
+    except Exception:
+        return None
+
+
+def _merge_intraday_bar_frames(existing: pd.DataFrame | None, fresh: pd.DataFrame | None) -> pd.DataFrame:
+    if existing is None or getattr(existing, "empty", True):
+        return _normalize_intraday_bar_frame(fresh)
+    if fresh is None or getattr(fresh, "empty", True):
+        return _normalize_intraday_bar_frame(existing)
+    combined = pd.concat([existing, fresh], ignore_index=True)
+    return _normalize_intraday_bar_frame(combined)
+
+
+def _intraday_cache_covers_history(df: pd.DataFrame | None, days: int) -> bool:
+    if df is None or getattr(df, "empty", True):
+        return False
+    required_days = max(int(days), 1) + INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS
+    required_start = datetime.now().date() - timedelta(days=required_days)
+    try:
+        oldest = pd.to_datetime(df["datetime"].iloc[0]).date()
+    except Exception:
+        return False
+    return oldest <= required_start
+
+
+def _intraday_cache_data_is_recent(df: pd.DataFrame | None, *, now: datetime | None = None, max_weekday_gap: int = 2) -> bool:
+    last_dt = _intraday_bar_frame_last_datetime(df)
+    if last_dt is None:
+        return False
+    reference_date = (now or datetime.now()).date()
+    return _weekday_gap(last_dt.date(), reference_date) <= max(0, int(max_weekday_gap))
+
+
+def _intraday_cache_is_recent(key: str) -> bool:
+    touched_at = _INTRADAY_BAR_CACHE_TOUCHED_AT.get(key)
+    if touched_at is None:
+        return False
+    return (datetime.now() - touched_at) <= timedelta(minutes=INTRADAY_BAR_CACHE_MAX_AGE_MINUTES)
+
+
+def _load_durable_intraday_bar_frame(symbol: str, token: str) -> pd.DataFrame:
+    try:
+        path = _durable_intraday_bar_file(symbol, token)
+        if not path.exists():
+            return _empty_intraday_bar_frame()
+        df = pd.read_parquet(path)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to live fetch
+        logging.debug("%s: durable intraday read skipped (%s).", symbol, exc)
+        return _empty_intraday_bar_frame()
+    return _normalize_intraday_bar_frame(df)
+
+
+def _intraday_frame_changed(previous: pd.DataFrame | None, current: pd.DataFrame | None) -> bool:
+    if previous is None or getattr(previous, "empty", True):
+        return True
+    if current is None or getattr(current, "empty", True):
+        return False
+    if len(previous) != len(current):
+        return True
+    return _intraday_bar_frame_last_datetime(previous) != _intraday_bar_frame_last_datetime(current)
+
+
+def _persist_durable_intraday_bars(symbol: str, token: str, normalized: pd.DataFrame, previous: pd.DataFrame | None = None) -> None:
+    if normalized is None or getattr(normalized, "empty", True):
+        return
+    try:
+        path = _durable_intraday_bar_file(symbol, token)
+        if previous is not None and path.exists() and not _intraday_frame_changed(previous, normalized):
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized.to_parquet(path, index=False)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to L1 only
+        logging.debug("%s: durable intraday persist skipped (%s).", symbol, exc)
+
+
+def _write_cached_intraday_bar_frame(symbol: str, token: str, normalized: pd.DataFrame) -> None:
+    key = _intraday_cache_key(symbol, token)
+    path = _intraday_bar_cache_file(symbol, token)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized.to_csv(path, index=False)
+    except Exception as exc:
+        logging.debug("%s: intraday L1 cache write skipped (%s).", symbol, exc)
+    _INTRADAY_BAR_FRAME_CACHE[key] = normalized
+    _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+
+
+def _load_cached_intraday_bar_frame(symbol: str, token: str) -> pd.DataFrame:
+    key = _intraday_cache_key(symbol, token)
+    cached = _INTRADAY_BAR_FRAME_CACHE.get(key)
+    if cached is not None:
+        return cached.copy()
+    path = _intraday_bar_cache_file(symbol, token)
+    if not path.exists():
+        # Cold start: seed from the durable Drive store so only the delta is fetched.
+        durable = _load_durable_intraday_bar_frame(symbol, token)
+        if not durable.empty:
+            _INTRADAY_BAR_FRAME_CACHE[key] = durable
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                durable.to_csv(path, index=False)
+            except Exception:
+                pass
+            _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+            return durable.copy()
+        return _empty_intraday_bar_frame()
+    try:
+        df = pd.read_csv(path, parse_dates=["datetime"])
+    except Exception as exc:
+        logging.debug("%s: failed reading intraday cache (%s).", symbol, exc)
+        return _empty_intraday_bar_frame()
+    normalized = _normalize_intraday_bar_frame(df)
+    _INTRADAY_BAR_FRAME_CACHE[key] = normalized
+    _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+    return normalized.copy()
+
+
 def fetch_intraday_bars(
     ib: IBApi | None,
     symbol: str,
     *,
     bar_size: str | None = None,
     duration: str | None = None,
+    persist: bool = True,
 ) -> pd.DataFrame:
-    return _fetch_live_intraday_bars(ib, symbol, bar_size=bar_size, duration=duration)
+    """Intraday (default H1) bars with the same durable L1/L2 cache as daily bars.
+
+    The accumulated history is stored locally (fast) and mirrored to the
+    Drive-backed Parquet store, so a fresh/ephemeral machine seeds from Drive and
+    fetches only the delta since the last stored bar instead of the full 180-day
+    window every run. H4 is resampled from this H1 history elsewhere.
+    """
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return _empty_intraday_bar_frame()
+    token = _intraday_bar_size_token(bar_size)
+    duration_days = _duration_to_days(duration or HTF_INTRADAY_DURATION, INTRADAY_BAR_DEFAULT_DURATION_DAYS)
+    key = _intraday_cache_key(normalized_symbol, token)
+
+    cached = _load_cached_intraday_bar_frame(normalized_symbol, token)
+    cache_has_history = _intraday_cache_covers_history(cached, duration_days)
+    if cache_has_history and _intraday_cache_data_is_recent(cached) and _intraday_cache_is_recent(key):
+        return cached.copy()
+
+    if not cache_has_history:
+        refresh_days = duration_days
+    else:
+        last_dt = _intraday_bar_frame_last_datetime(cached)
+        gap_days = (
+            _weekday_gap(last_dt.date(), datetime.now().date())
+            if last_dt is not None
+            else INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS
+        )
+        refresh_days = min(
+            duration_days,
+            max(INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS),
+        )
+
+    fresh = _fetch_live_intraday_bars(ib, normalized_symbol, bar_size=bar_size, duration=f"{int(refresh_days)} D")
+    if fresh is not None and not fresh.empty and _intraday_cache_data_is_recent(fresh):
+        merged = _merge_intraday_bar_frames(cached, fresh)
+        if persist:
+            _write_cached_intraday_bar_frame(normalized_symbol, token, merged)
+            _persist_durable_intraday_bars(normalized_symbol, token, merged, previous=cached)
+        else:
+            _INTRADAY_BAR_FRAME_CACHE[key] = merged
+            _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+        return merged.copy()
+
+    if cached is not None and not cached.empty:
+        return cached.copy()
+    return fresh if fresh is not None else _empty_intraday_bar_frame()
 
 # ============================================================================
 # AVWAP CALCULATION
