@@ -111,7 +111,7 @@ bucket, touch count) and flat-cloud (Leading Span B) lines. Levels persist and
 accumulate across runs; tolerance is ATR-scaled. Schema-versioned like the
 existing tracker files.
 
-### B4. Study namespace in the setup tracker (feeds Feat 4, 5, 6)
+### B4. Study namespace in the setup tracker (feeds Feat 4, 5, 6)  ☑ DONE (2026-06-21, see T6)
 A `tracker["study_setups"]` namespace (mirroring `control_setups`) + a
 `master_avwap_study.txt` report, so new setup ideas (1h/4h trend, level
 respect/break, compression break, trendline break) get measured for hit-rate and
@@ -344,8 +344,12 @@ Steps:
   decile across the full scan + "recently strong, now pulling back" list, wired
   through `build_market_prep_payload` and `runner.py`. Deleted the dead duplicate
   `build_market_prep_payload`/`format_market_prep_payload_report`. 5 new tests; full
-  suite 338 green (`unittest`; pytest is NOT installed — §10b corrected). Next: T6
-  (study_setups) then T2.
+  suite 338 green (`unittest`; pytest is NOT installed — §10b corrected). Committed
+  as `6fb081b` (bundled with prior staged Expected-R/tracker work, disclosed).
+- 2026-06-21 — **T6 / B4 SHIPPED.** `study_setups` isolated namespace +
+  `master_avwap_study.txt` report, recorded via `update_setup_tracker_from_scan`'s
+  new `study_rows` kwarg (no existing caller changed). 9 new tests incl. isolation.
+  Full suite 347 green. T4/T5/T7 unblocked. Next: T2 (demote TOP) or T3 (industry RS).
 
 ---
 
@@ -580,11 +584,24 @@ OUT OF SCOPE: industry RS (that's T3), any scoring boost, 1h/4h.
   each run (idempotent), earnings-day exclusion. **Study-first** (record
   approach/break events; no scoring yet). DEPENDS ON: B4 (T6).
 
-### T6 — B4 study_setups namespace + master_avwap_study.txt  (cross-cutting)  ☐
+### T6 — B4 study_setups namespace + master_avwap_study.txt  (cross-cutting)  ☑ DONE (2026-06-21)
 - **Build this early — T4/T5/T7 depend on it.** Clone the `control_setups`
   template (§8: `legacy.py:4873/9899/10056/10126`) into a parallel `study_setups`
   namespace + a `master_avwap_study.txt` report. **Add a test asserting it never
   feeds Expected-R/calibration/live ranking** (§10c #2). DEPENDS ON: none.
+
+> **Shipped.** `study_setups` added to `_default_setup_tracker_payload` + loader +
+> save round-trip; `update_setup_tracker_from_scan` gained a `study_rows=None` kwarg
+> that records into the isolated namespace (`study:` prefix, `is_study=True`,
+> `study_kind`), pruned (`_prune_study_setups`, `STUDY_SETUP_KEEP_DAYS=200`/
+> `MAX_RECORDS=4000`) + recomputed each scan like control. `build_study_discovery_rows`
+> + `write_master_avwap_study_report` → `MASTER_AVWAP_STUDY_FILE`
+> (`master_avwap_study.txt`), reusing the namespace-agnostic
+> `_collect_control_episode_observations` / `_summarize_control_observation_group`.
+> **Producers come later: T4/T5/T7 just build `study_rows` and pass them in** — no
+> existing caller changed (kwarg defaults to None). 9 new tests in
+> `tests/test_study_setups.py` incl. an isolation test (study setups don't change
+> control/Expected-R discovery). Full suite 347 green.
 
 ### T7 — Cloud lines, compression breaks, trendline breaks  (Phase 6)  ☐
 - **→ Cloud-line algorithm (with the +26 displacement fix) in §12.2.** Pure

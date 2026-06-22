@@ -269,6 +269,10 @@ TIER_CATCH_RATE_FILE = MASTER_AVWAP_TIER_CATCH_RATE_FILE
 SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 SETUP_PLAYBOOKS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
+# Study namespace (B4): new setup ideas (1h/4h trend, HV-level break, compression
+# break, ...) are measured here for hit-rate / realized R BEFORE they touch scoring.
+# Lives in its own tracker namespace + report, isolated from Expected-R like control.
+MASTER_AVWAP_STUDY_FILE = SETUP_STATS_FILE.with_name("master_avwap_study.txt")
 D1_FEATURE_HISTORY_FILE = D1_FEATURES_HISTORY_FILE
 SCORING_CONFIG_FILE = MASTER_AVWAP_SCORING_CONFIG_FILE
 SCORING_RECOMMENDATIONS_FILE = MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE
@@ -469,6 +473,11 @@ CONTROL_SETUP_KEEP_DAYS = 60
 CONTROL_SETUP_MAX_RECORDS = 1500
 CONTROL_DISCOVERY_MIN_CLOSED_EPISODES = 5
 CONTROL_DISCOVERY_MIN_AVG_R = 0.35
+# Study namespace bounds (B4). Kept longer than control because level/trend studies
+# accrue slowly; still capped so the namespace stays cheap to recompute every scan.
+STUDY_SETUP_KEEP_DAYS = 200
+STUDY_SETUP_MAX_RECORDS = 4000
+STUDY_DISCOVERY_MIN_CLOSED_EPISODES = 5
 TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
 TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
 TRACKER_RECENT_FAMILY_MIN_TRACKED_SETUPS = 3
@@ -4877,6 +4886,7 @@ def _default_setup_tracker_payload() -> dict:
         "daily_watchlists": {},
         "setups": {},
         "control_setups": {},
+        "study_setups": {},
         "stats": [],
         "setup_type_stats": [],
         "attribute_registry": {},
@@ -4929,6 +4939,7 @@ def load_setup_tracker_payload() -> dict:
     tracker["updated_at"] = payload.get("updated_at")
     tracker["setups"] = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
     tracker["control_setups"] = payload.get("control_setups", {}) if isinstance(payload.get("control_setups"), dict) else {}
+    tracker["study_setups"] = payload.get("study_setups", {}) if isinstance(payload.get("study_setups"), dict) else {}
     tracker["stats"] = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
     tracker["setup_type_stats"] = payload.get("setup_type_stats", []) if isinstance(payload.get("setup_type_stats"), list) else []
     tracker["attribute_registry"] = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
@@ -9832,6 +9843,7 @@ def update_setup_tracker_from_scan(
     scan_date: str | None = None,
     auto_tune: bool = True,
     control_rows: list[dict] | None = None,
+    study_rows: list[dict] | None = None,
 ) -> None:
     tracker = load_setup_tracker_payload()
     symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
@@ -9947,6 +9959,55 @@ def update_setup_tracker_from_scan(
             len(control_setups),
         )
 
+    # Study records (B4): new setup ideas under evaluation. Same isolated-namespace
+    # treatment as control — never visible to Expected-R / calibration / live
+    # ranking / stats; recorded purely so their hit-rate and realized R can be
+    # measured before they are allowed to affect scoring.
+    study_setups = tracker.setdefault("study_setups", {})
+    existing_study_today = [
+        setup_id
+        for setup_id, setup in list(study_setups.items())
+        if isinstance(setup, dict) and str(setup.get("scan_date")) == target_scan_date
+    ]
+    for setup_id in existing_study_today:
+        study_setups.pop(setup_id, None)
+    study_added = 0
+    for row in study_rows or []:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        symbol_entry = symbol_map.get(symbol)
+        if not isinstance(symbol_entry, dict):
+            continue
+        if str(symbol_entry.get("last_trade_date") or "").strip() != target_scan_date:
+            continue
+        if not str(row.get("market_regime_label") or "").strip():
+            row["market_regime_label"] = scan_regime_label
+        df = daily_frames_by_symbol.get(symbol)
+        indicator_row = _indicator_row_for_scan_date(df, target_scan_date)
+        setup = build_tracker_setup_record(
+            row,
+            symbol_entry,
+            feature_rows_by_symbol.get(symbol),
+            now_iso,
+            indicator_row,
+            scan_date=target_scan_date,
+            attribute_registry=tracker.setdefault("attribute_registry", {}),
+        )
+        if not setup:
+            continue
+        setup["is_study"] = True
+        setup["study_kind"] = str(row.get("study_kind") or row.get("setup_family") or "study")
+        setup["setup_id"] = f"study:{setup['setup_id']}"
+        study_setups[setup["setup_id"]] = setup
+        study_added += 1
+    _prune_study_setups(study_setups, reference_scan_date=target_scan_date)
+    if study_added:
+        logging.info(
+            "Setup tracker recorded %s study setup(s) for %s (%s total tracked).",
+            study_added,
+            target_scan_date,
+            len(study_setups),
+        )
+
     recompute_cache = {}
 
     def _recompute_namespace(namespace: dict) -> None:
@@ -9974,12 +10035,17 @@ def update_setup_tracker_from_scan(
 
     _recompute_namespace(tracker.get("setups"))
     _recompute_namespace(tracker.get("control_setups"))
+    _recompute_namespace(tracker.get("study_setups"))
 
     export_setup_tracker_views(tracker)
     try:
         write_control_discovery_report(CONTROL_DISCOVERY_FILE, tracker)
     except Exception as exc:
         logging.warning("Could not write control discovery report (%s).", exc)
+    try:
+        write_master_avwap_study_report(MASTER_AVWAP_STUDY_FILE, tracker)
+    except Exception as exc:
+        logging.warning("Could not write study report (%s).", exc)
     save_setup_tracker_payload(tracker)
     if auto_tune:
         tuner_output = run_priority_scoring_tuner(
@@ -10118,6 +10184,97 @@ def _summarize_control_observation_group(observations: list[dict]) -> dict:
         "avg_closed_r": (sum(closed_rs) / n) if n else None,
         "win_rate": (sum(1.0 for value in closed_rs if value > 0) / n) if n else None,
     }
+
+
+def _prune_study_setups(study_setups: dict, *, reference_scan_date: str | None = None) -> None:
+    """Bound the study namespace by age and hard count (mirrors
+    ``_prune_control_setups`` with study limits)."""
+
+    if not isinstance(study_setups, dict) or not study_setups:
+        return
+    reference = _parse_iso_date_or_none(reference_scan_date) or datetime.now().date()
+    for setup_id, setup in list(study_setups.items()):
+        scan_day = _parse_iso_date_or_none(isinstance(setup, dict) and setup.get("scan_date") or None)
+        if scan_day is None or (reference - scan_day).days > STUDY_SETUP_KEEP_DAYS:
+            study_setups.pop(setup_id, None)
+    if len(study_setups) > STUDY_SETUP_MAX_RECORDS:
+        ordered = sorted(
+            study_setups.items(),
+            key=lambda item: str(item[1].get("scan_date") or "") if isinstance(item[1], dict) else "",
+        )
+        for setup_id, _setup in ordered[: len(study_setups) - STUDY_SETUP_MAX_RECORDS]:
+            study_setups.pop(setup_id, None)
+
+
+def build_study_discovery_rows(tracker: dict | None = None) -> dict:
+    """Rank study-namespace setup ideas by realized edge (episode-deduped, closed R).
+
+    Read-only over ``tracker["study_setups"]`` — never reads or writes
+    ``setups``/``control_setups``, so Expected-R, calibration, and live ranking are
+    unaffected. This is the measurement surface for new ideas (1h/4h trend,
+    HV-level break, compression break, ...) before any of them touch scoring.
+    """
+
+    tracker = tracker if isinstance(tracker, dict) else load_setup_tracker_payload()
+    observations = _collect_control_episode_observations(
+        tracker.get("study_setups", {}), default_reason="study"
+    )
+    family_groups: dict[tuple[str, str], list[dict]] = {}
+    for obs in observations:
+        family_groups.setdefault((obs["side"], obs["setup_family"]), []).append(obs)
+    family_rows = []
+    for (side, family), obs_list in family_groups.items():
+        summary = _summarize_control_observation_group(obs_list)
+        avg_r = summary["avg_closed_r"]
+        summary.update(
+            {
+                "side": side,
+                "setup_family": family,
+                "promising": bool(
+                    summary["closed_episodes"] >= STUDY_DISCOVERY_MIN_CLOSED_EPISODES
+                    and avg_r is not None
+                    and avg_r >= CONTROL_DISCOVERY_MIN_AVG_R
+                ),
+            }
+        )
+        family_rows.append(summary)
+    family_rows.sort(
+        key=lambda row: (
+            -(row["avg_closed_r"] if row["avg_closed_r"] is not None else -9999.0),
+            -int(row["closed_episodes"]),
+        )
+    )
+    return {"families": family_rows}
+
+
+def write_master_avwap_study_report(path: Path, tracker: dict | None = None) -> None:
+    discovery = build_study_discovery_rows(tracker)
+    lines = [
+        "Master AVWAP study namespace (B4)",
+        f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "Study-only setup ideas, measured for edge BEFORE they affect scoring.",
+        "Isolated from Expected-R / calibration / live ranking. Episode-deduped,",
+        "representative-stop, net-of-cost closed R.",
+        "",
+        f"{'side':<6}{'study kind':<34}{'episodes':>10}{'avg R':>9}{'win':>7}  flag",
+        "-" * 74,
+    ]
+    if discovery["families"]:
+        for row in discovery["families"]:
+            avg_r = row["avg_closed_r"]
+            win = row["win_rate"]
+            flag = "  <-- PROMISING" if row.get("promising") else ""
+            lines.append(
+                f"{row['side']:<6}{row['setup_family'][:33]:<34}{row['closed_episodes']:>10}"
+                f"{(f'{avg_r:+.2f}' if avg_r is not None else 'n/a'):>9}"
+                f"{(f'{win*100:.0f}%' if win is not None else 'n/a'):>7}{flag}"
+            )
+    else:
+        lines.append("(No closed study setups yet — populates as study ideas resolve.)")
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def build_control_discovery_rows(tracker: dict | None = None) -> dict:
