@@ -8,6 +8,7 @@ import re
 import math
 import csv
 import copy
+import random
 import ast
 import io
 import hashlib
@@ -267,6 +268,7 @@ TIER_PERFORMANCE_FILE = MASTER_AVWAP_TIER_PERFORMANCE_FILE
 TIER_CATCH_RATE_FILE = MASTER_AVWAP_TIER_CATCH_RATE_FILE
 SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 SETUP_PLAYBOOKS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
+CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 D1_FEATURE_HISTORY_FILE = D1_FEATURES_HISTORY_FILE
 SCORING_CONFIG_FILE = MASTER_AVWAP_SCORING_CONFIG_FILE
 SCORING_RECOMMENDATIONS_FILE = MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE
@@ -443,6 +445,30 @@ TRACKER_PLAYBOOK_R_CLIP = 4.0
 TRACKER_SCORING_R_CLIP = TRACKER_PLAYBOOK_R_CLIP
 TRACKER_MIN_RISK_PER_SHARE = 0.05
 TRACKER_MIN_RISK_PCT_OF_ENTRY = 0.001
+# Swing setups that never reach a target or stop get force-closed at the close of
+# this many trade days so censored outcomes resolve (otherwise slow grinders stay
+# OPEN forever and quietly bias the closed-sample statistics toward fast movers).
+TRACKER_MAX_HOLD_DAYS = 18
+# Round-trip transaction cost model so realized R is net, not gross. Cost per
+# share per side = fixed commission + a slippage fraction of price; liquid names
+# only (MIN_AVG_VOLUME_20D filter) so this stays small but honest.
+TRACKER_COST_COMMISSION_PER_SHARE = 0.005
+TRACKER_SLIPPAGE_FRACTION_PER_SIDE = 0.0003
+# A scenario is "resolved" (closed) when stopped, target-hit, or time-stopped.
+# TIME_STOP counts as closed but NOT as a stop-out (kept out of stop_rate).
+TRACKER_CLOSED_SCENARIO_STATUSES = frozenset({"STOPPED", "TARGET_HIT", "TIME_STOP"})
+# Control / holdout discovery sampling. The tracker normally only records the
+# setups the bot already likes (selection bias) so it can only *confirm*, never
+# *discover*. The control sample records a capped set of real setups the bot saw
+# but did NOT promote, in a separate namespace, so we can measure the gate's edge
+# and surface rejected configurations that are quietly outperforming.
+TRACKER_CONTROL_SAMPLING_ENABLED = True
+CONTROL_SAMPLE_MAX_PER_SCAN = 20
+CONTROL_NEAR_MISS_SCORE_BAND = 25  # points below the favorite gate counts as a near-miss
+CONTROL_SETUP_KEEP_DAYS = 60
+CONTROL_SETUP_MAX_RECORDS = 1500
+CONTROL_DISCOVERY_MIN_CLOSED_EPISODES = 5
+CONTROL_DISCOVERY_MIN_AVG_R = 0.35
 TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
 TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
 TRACKER_RECENT_FAMILY_MIN_TRACKED_SETUPS = 3
@@ -691,6 +717,12 @@ MARKET_PREP_SECTION_DEFINITIONS = [
         "id": "weakest_stocks_bottom_decile",
         "title": "Weakest Stocks: Bottom 10% D1 vs SPY",
         "copy_label": "Copy Weakest",
+        "empty_message": "None",
+    },
+    {
+        "id": "recently_strong_now_pulling_back",
+        "title": "Recently Strong, Now Pulling Back",
+        "copy_label": "Copy Pullbacks",
         "empty_message": "None",
     },
     {
@@ -4844,6 +4876,7 @@ def _default_setup_tracker_payload() -> dict:
         "updated_at": None,
         "daily_watchlists": {},
         "setups": {},
+        "control_setups": {},
         "stats": [],
         "setup_type_stats": [],
         "attribute_registry": {},
@@ -4895,6 +4928,7 @@ def load_setup_tracker_payload() -> dict:
     tracker["schema_version"] = int(payload.get("schema_version", SETUP_TRACKER_SCHEMA_VERSION) or SETUP_TRACKER_SCHEMA_VERSION)
     tracker["updated_at"] = payload.get("updated_at")
     tracker["setups"] = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
+    tracker["control_setups"] = payload.get("control_setups", {}) if isinstance(payload.get("control_setups"), dict) else {}
     tracker["stats"] = payload.get("stats", []) if isinstance(payload.get("stats"), list) else []
     tracker["setup_type_stats"] = payload.get("setup_type_stats", []) if isinstance(payload.get("setup_type_stats"), list) else []
     tracker["attribute_registry"] = payload.get("attribute_registry", {}) if isinstance(payload.get("attribute_registry"), dict) else {}
@@ -5281,6 +5315,9 @@ def build_tracker_setup_record(
         "short_near_favorite_gate_note": row.get("short_near_favorite_gate_note") or "",
         "market_regime_score_delta": int(row.get("market_regime_score_delta", 0) or 0),
         "market_regime_score_note": row.get("market_regime_score_note") or "",
+        "market_regime_label": str(
+            row.get("market_regime_label") or symbol_entry.get("market_regime_label") or ""
+        ).strip().lower(),
         "rejection_score_cap": _coerce_float(row.get("rejection_score_cap")),
         "rejection_score_cap_delta": _coerce_float(row.get("rejection_score_cap_delta")),
         "rejection_score_cap_note": row.get("rejection_score_cap_note") or "",
@@ -5390,6 +5427,15 @@ def _scenario_is_open(status: str) -> bool:
     return str(status).upper() in {"OPEN", "PARTIAL", "ACTIVE"}
 
 
+def _scenario_is_closed(status: object) -> bool:
+    return str(status or "").upper() in TRACKER_CLOSED_SCENARIO_STATUSES
+
+
+def _tracker_cost_per_share_per_side(entry_price: object) -> float:
+    price = abs(_coerce_float(entry_price) or 0.0)
+    return float(TRACKER_COST_COMMISSION_PER_SHARE) + float(TRACKER_SLIPPAGE_FRACTION_PER_SIDE) * price
+
+
 def _bar_hits_target(side: str, bar_row: pd.Series, target_level: float | None) -> bool:
     if target_level is None:
         return False
@@ -5414,7 +5460,11 @@ def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trad
         return {}
     direction = float(scenario.get("direction", 1.0) or 1.0)
     entry_price = float(scenario.get("entry_price"))
-    pnl = (float(exit_price) - entry_price) * qty * direction
+    gross_pnl = (float(exit_price) - entry_price) * qty * direction
+    # Charge round-trip cost (entry + exit legs) for the shares exited here, so
+    # partials each pay their own way and the total equals a full round trip.
+    trade_cost = _tracker_cost_per_share_per_side(entry_price) * qty * 2.0
+    pnl = gross_pnl - trade_cost
     scenario["realized_pnl"] = float(scenario.get("realized_pnl", 0.0) + pnl)
     scenario["remaining_shares"] = int(max(0, int(scenario.get("remaining_shares", 0)) - qty))
     risk_usd = float(scenario.get("initial_risk_usd", 0.0) or 0.0)
@@ -5425,6 +5475,8 @@ def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trad
         "price": float(exit_price),
         "shares": qty,
         "pnl": float(pnl),
+        "gross_pnl": float(gross_pnl),
+        "cost": float(trade_cost),
     }
     scenario.setdefault("events", []).append(event)
     scenario["last_action"] = f"{reason} @ {exit_price:.2f} on {trade_date}"
@@ -5440,6 +5492,7 @@ def _evaluate_tracker_scenario_bar(
     indicator_row: pd.Series | None,
     is_entry_day: bool,
     dynamic_level_overrides: dict[str, float] | None = None,
+    bar_index: int = 0,
 ) -> list[dict]:
     if not scenario.get("tradeable"):
         scenario["status"] = str(scenario.get("inactive_status") or "UNTRADEABLE")
@@ -5499,6 +5552,33 @@ def _evaluate_tracker_scenario_bar(
     )
     scenario["active_stop_level"] = active_stop_level
 
+    # Stop-first conflict resolution: when a single bar could touch both an
+    # intrabar hard stop and a target, assume the stop filled first (worst case).
+    # Daily OHLC can't reveal the intra-bar path, so booking the target would be
+    # an optimistic bias. The close-based protective stop below is end-of-bar, so
+    # resting-limit targets legitimately fill ahead of it.
+    hard_stop_r_multiple = _coerce_float(scenario.get("hard_stop_r_multiple"))
+    hard_stop_level = None
+    if hard_stop_r_multiple is not None and hard_stop_r_multiple > 0 and initial_risk_per_share > 0:
+        hard_stop_level = float(entry_price - (initial_risk_per_share * hard_stop_r_multiple * direction))
+    scenario["hard_stop_level"] = hard_stop_level
+    if int(scenario.get("remaining_shares", 0)) > 0 and _bar_hits_stop_level(side, bar_row, hard_stop_level):
+        event = _apply_scenario_exit_event(
+            scenario,
+            int(scenario.get("remaining_shares", 0)),
+            float(hard_stop_level),
+            trade_date,
+            "HARD_STOP",
+        )
+        if event:
+            events.append(event)
+        scenario["status"] = "STOPPED"
+        scenario["unrealized_pnl"] = 0.0
+        scenario["unrealized_r"] = 0.0
+        scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
+        scenario["total_r"] = float(scenario.get("realized_r", 0.0))
+        return events
+
     if not scenario.get("partial_taken") and partial_target_level is not None and _bar_hits_target(side, bar_row, partial_target_level):
         qty = max(1, int(scenario.get("remaining_shares", 0)) // 2)
         qty = min(qty, int(scenario.get("remaining_shares", 0)))
@@ -5529,28 +5609,6 @@ def _evaluate_tracker_scenario_bar(
         if event:
             events.append(event)
         scenario["status"] = "TARGET_HIT"
-        scenario["unrealized_pnl"] = 0.0
-        scenario["unrealized_r"] = 0.0
-        scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
-        scenario["total_r"] = float(scenario.get("realized_r", 0.0))
-        return events
-
-    hard_stop_r_multiple = _coerce_float(scenario.get("hard_stop_r_multiple"))
-    hard_stop_level = None
-    if hard_stop_r_multiple is not None and hard_stop_r_multiple > 0 and initial_risk_per_share > 0:
-        hard_stop_level = float(entry_price - (initial_risk_per_share * hard_stop_r_multiple * direction))
-    scenario["hard_stop_level"] = hard_stop_level
-    if int(scenario.get("remaining_shares", 0)) > 0 and _bar_hits_stop_level(side, bar_row, hard_stop_level):
-        event = _apply_scenario_exit_event(
-            scenario,
-            int(scenario.get("remaining_shares", 0)),
-            float(hard_stop_level),
-            trade_date,
-            "HARD_STOP",
-        )
-        if event:
-            events.append(event)
-        scenario["status"] = "STOPPED"
         scenario["unrealized_pnl"] = 0.0
         scenario["unrealized_r"] = 0.0
         scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -5588,6 +5646,26 @@ def _evaluate_tracker_scenario_bar(
             scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
             scenario["total_r"] = float(scenario.get("realized_r", 0.0))
             return events
+
+    # Time stop: force-close a still-open scenario at the close once it has been
+    # held the maximum window, so the outcome resolves instead of staying OPEN and
+    # being silently dropped from closed-sample statistics.
+    if int(scenario.get("remaining_shares", 0)) > 0 and int(bar_index) >= TRACKER_MAX_HOLD_DAYS:
+        event = _apply_scenario_exit_event(
+            scenario,
+            int(scenario.get("remaining_shares", 0)),
+            float(close_value),
+            trade_date,
+            "TIME_STOP",
+        )
+        if event:
+            events.append(event)
+        scenario["status"] = "TIME_STOP"
+        scenario["unrealized_pnl"] = 0.0
+        scenario["unrealized_r"] = 0.0
+        scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
+        scenario["total_r"] = float(scenario.get("realized_r", 0.0))
+        return events
 
     remaining = int(scenario.get("remaining_shares", 0))
     unrealized_pnl = (close_value - entry_price) * remaining * direction
@@ -5703,6 +5781,7 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
                     indicator_row,
                     is_entry_day=(trade_date == entry_trade_date),
                     dynamic_level_overrides=dynamic_level_overrides,
+                    bar_index=idx,
                 )
             )
             scenario["days_held"] = max(0, idx)
@@ -5731,7 +5810,7 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
     setup["closed_scenario_count"] = sum(
         1
         for scenario in baseline_scenarios
-        if str(scenario.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+        if _scenario_is_closed(scenario.get("status"))
     )
     if setup["open_scenario_count"] > 0:
         setup["setup_status"] = "OPEN"
@@ -5859,7 +5938,7 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     closed = [
         scenario
         for scenario in tradeable
-        if str(scenario.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+        if _scenario_is_closed(scenario.get("status"))
     ]
     total_rs = [
         float(scenario.get("total_r", 0.0) or 0.0)
@@ -5887,7 +5966,25 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     avg_closed_r = mean(clipped_closed_rs) if clipped_closed_rs else None
     max_abs_r = max((abs(value) for value in total_rs), default=0.0)
     days_held_values = [int(scenario.get("days_held", 0) or 0) for scenario in tradeable]
+
+    # Representative outcome = the single intended/primary protective-stop
+    # scenario, not the mean across every hypothetical stop variant. You trade one
+    # stop, so this is the honest per-setup R; Expected-R consumes it in
+    # preference to the cross-variant average (it falls back to the average when
+    # the primary stop scenario isn't present).
+    primary_stop_label = _protective_band_label(normalize_side(setup.get("side")))
+    representative = next(
+        (scenario for scenario in tradeable if str(scenario.get("stop_reference_label") or "") == primary_stop_label),
+        None,
+    )
+    rep_total_r = _clip_tracker_r_value(representative.get("total_r"), TRACKER_SCORING_R_CLIP) if representative else None
+    rep_is_closed = bool(representative and _scenario_is_closed(representative.get("status")))
+    representative_total_r = rep_total_r if rep_total_r is not None else avg_total_r
+    representative_closed_r = rep_total_r if (rep_total_r is not None and rep_is_closed) else avg_closed_r
     return {
+        "representative_stop_label": str(representative.get("stop_reference_label")) if representative else "",
+        "representative_total_r": representative_total_r,
+        "representative_closed_r": representative_closed_r,
         "tradeable_scenario_count": len(tradeable),
         "open_tradeable_scenario_count": len(open_tradeable),
         "closed_tradeable_scenario_count": len(closed),
@@ -6027,6 +6124,50 @@ def _derive_recent_tracker_family_score_delta(group_row: dict, baseline_row: dic
     return score_delta, raw_score
 
 
+def _tracker_episode_key(setup: dict) -> tuple[str, str, str, str]:
+    """Identity of a setup *episode*, independent of which day it was re-scanned.
+
+    The stored ``setup_id`` includes ``scan_date``, so a setup flagged on N
+    consecutive days produces N records that all track the same overlapping
+    forward move. Grouping by this key lets aggregation count each independent
+    episode once instead of N correlated times."""
+
+    return (
+        str(setup.get("symbol") or "").strip().upper(),
+        normalize_side(setup.get("side") or ""),
+        str(setup.get("anchor_date") or "").strip(),
+        _canonical_tracker_setup_family(setup),
+    )
+
+
+def _dedupe_recent_tracker_family_rows(rows: list[dict]) -> list[dict]:
+    """Collapse correlated daily re-scans of the same episode to one
+    representative row: prefer a record that has closed (resolved outcome), then
+    the earliest entry (the trade you would actually have taken at first signal)."""
+
+    groups: dict[tuple, list[dict]] = {}
+    for row in rows:
+        key = (
+            str(row.get("symbol") or ""),
+            str(row.get("side") or ""),
+            str(row.get("anchor_date") or ""),
+            str(row.get("setup_family") or "general"),
+        )
+        groups.setdefault(key, []).append(row)
+    representatives: list[dict] = []
+    for group in groups.values():
+        representatives.append(
+            sorted(
+                group,
+                key=lambda r: (
+                    0 if int(r.get("closed_setups", 0) or 0) > 0 else 1,
+                    str(r.get("scan_date") or ""),
+                ),
+            )[0]
+        )
+    return representatives
+
+
 def build_recent_tracker_setup_family_rows(
     setups: dict[str, dict],
     *,
@@ -6068,6 +6209,7 @@ def build_recent_tracker_setup_family_rows(
         row = {
             "symbol": str(setup.get("symbol") or "").strip().upper(),
             "scan_date": scan_day.isoformat(),
+            "anchor_date": str(setup.get("anchor_date") or "").strip(),
             "side": side,
             "priority_bucket": priority_bucket,
             "setup_family": setup_family,
@@ -6075,15 +6217,25 @@ def build_recent_tracker_setup_family_rows(
             "closed_setups": 1 if int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0) > 0 else 0,
             "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
             "avg_closed_r": _coerce_float(outcome_summary.get("avg_closed_r")),
+            "representative_total_r": _coerce_float(outcome_summary.get("representative_total_r")),
+            "representative_closed_r": _coerce_float(outcome_summary.get("representative_closed_r")),
             "any_target_hit": bool(outcome_summary.get("any_target_hit")),
             "any_stopped": bool(outcome_summary.get("any_stopped")),
             "recency_weight": float(recency_weight),
         }
         recent_rows.append(row)
-        baseline_groups.setdefault((side, priority_bucket), []).append(row)
 
     if not recent_rows:
         return []
+
+    # Collapse correlated daily re-scans so each independent episode counts once
+    # before any baseline/group statistics are computed.
+    recent_rows = _dedupe_recent_tracker_family_rows(recent_rows)
+    baseline_groups = {}
+    for row in recent_rows:
+        baseline_groups.setdefault(
+            (str(row.get("side") or ""), str(row.get("priority_bucket") or "")), []
+        ).append(row)
 
     baseline_map: dict[tuple[str, str], dict[str, object]] = {}
     for context_key, rows_for_context in baseline_groups.items():
@@ -6130,6 +6282,12 @@ def build_recent_tracker_setup_family_rows(
         avg_closed_r = _weighted_mean(
             [(row.get("avg_closed_r"), row.get("recency_weight")) for row in closed_rows]
         )
+        representative_total_r = _weighted_mean(
+            [(row.get("representative_total_r"), row.get("recency_weight")) for row in rows_for_group]
+        )
+        representative_closed_r = _weighted_mean(
+            [(row.get("representative_closed_r"), row.get("recency_weight")) for row in closed_rows]
+        )
         target_hit_rate = _weighted_mean(
             [
                 (1.0 if row.get("any_target_hit") else 0.0, row.get("recency_weight"))
@@ -6171,6 +6329,8 @@ def build_recent_tracker_setup_family_rows(
             "closed_setups": len(closed_rows),
             "avg_total_r": avg_total_r,
             "avg_closed_r": avg_closed_r,
+            "representative_total_r": representative_total_r,
+            "representative_closed_r": representative_closed_r,
             "target_hit_rate": target_hit_rate,
             "stop_rate": stop_rate,
             "baseline_avg_total_r": _coerce_float(baseline.get("avg_total_r")),
@@ -6603,6 +6763,266 @@ def apply_tracker_setup_type_adjustments(
             logging.info("%s: tracker setup-type adjustment applied (%s).", symbol, score_note)
 
     return ranked_setup_type_rows
+
+
+# ---------------------------------------------------------------------------
+# Expected-R ranking
+#
+# Converts the static "quality points" score into an expected R-multiple and
+# blends it with the live, tracker-measured realized R so that *what is working
+# right now* leads the ranking instead of the hand-set signal weights.  The pure
+# math lives in ``expected_r.py`` and is unit-tested in isolation; this layer
+# only wires it into the priority-row data flow.
+# ---------------------------------------------------------------------------
+
+from .expected_r import (  # noqa: E402  (leaf module, no cycle)
+    DEFAULT_EXPECTED_R_CONFIG,
+    calibrate_prior_anchors,
+    compute_expected_r,
+)
+
+EXPECTED_R_CONFIG_FILE = SCORING_CONFIG_FILE.with_name("master_avwap_expected_r_config.json")
+_EXPECTED_R_CONFIG_CACHE: dict | None = None
+
+
+def _expected_r_static_points_from_record(setup: dict) -> float | None:
+    """Static quality points for a stored tracker setup: its scan-time score with
+    the tracker-derived deltas removed (mirrors ``_expected_r_quality_points``)."""
+
+    score = _coerce_float(setup.get("priority_score"))
+    if score is None:
+        return None
+    score -= int(setup.get("recent_tracker_score_delta", 0) or 0)
+    score -= int(setup.get("setup_type_score_delta", 0) or 0)
+    return float(score)
+
+
+def build_expected_r_calibration_samples(tracker_payload: dict | None = None) -> list[tuple[float, float]]:
+    """(static_quality_points, realized_closed_r) pairs from closed tracker
+    setups, used to fit the points->R prior anchors to the trader's own data."""
+
+    tracker = tracker_payload if isinstance(tracker_payload, dict) else load_setup_tracker_payload()
+    setups = tracker.get("setups", {}) if isinstance(tracker, dict) else {}
+    # One representative closed record per episode (earliest entry), so correlated
+    # daily re-scans of the same setup don't over-weight the calibration fit.
+    by_episode: dict[tuple, tuple[str, float, float]] = {}
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            continue
+        points = _expected_r_static_points_from_record(setup)
+        if points is None:
+            continue
+        outcome = _summarize_tracker_setup_outcome(setup)
+        if int(outcome.get("closed_tradeable_scenario_count", 0) or 0) <= 0:
+            continue
+        realized = _coerce_float(outcome.get("representative_closed_r"))
+        if realized is None:
+            realized = _coerce_float(outcome.get("avg_closed_r"))
+        if realized is None:
+            continue
+        key = _tracker_episode_key(setup)
+        scan_date = str(setup.get("scan_date") or "")
+        existing = by_episode.get(key)
+        if existing is None or scan_date < existing[0]:
+            by_episode[key] = (scan_date, float(points), float(realized))
+    return [(points, realized) for _scan_date, points, realized in by_episode.values()]
+
+
+def load_expected_r_config(force_reload: bool = False) -> dict:
+    """Expected-R config with calibrated prior anchors applied when available."""
+
+    global _EXPECTED_R_CONFIG_CACHE
+    if _EXPECTED_R_CONFIG_CACHE is not None and not force_reload:
+        return _EXPECTED_R_CONFIG_CACHE
+    config = copy.deepcopy(DEFAULT_EXPECTED_R_CONFIG)
+    try:
+        if EXPECTED_R_CONFIG_FILE.exists():
+            payload = json.loads(EXPECTED_R_CONFIG_FILE.read_text(encoding="utf-8"))
+            anchors = payload.get("prior_anchors") if isinstance(payload, dict) else None
+            if isinstance(anchors, list):
+                cleaned = []
+                for pair in anchors:
+                    if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                        point = _coerce_float(pair[0])
+                        r_value = _coerce_float(pair[1])
+                        if point is not None and r_value is not None:
+                            cleaned.append([float(point), float(r_value)])
+                if len(cleaned) >= 2:
+                    config["prior_anchors"] = cleaned
+    except Exception as exc:
+        logging.warning("Could not load Expected-R config (%s); using defaults.", exc)
+    _EXPECTED_R_CONFIG_CACHE = config
+    return config
+
+
+def calibrate_expected_r_prior_anchors(
+    tracker_payload: dict | None = None,
+    *,
+    persist: bool = True,
+) -> dict:
+    """Fit the points->R prior anchors from closed tracker outcomes and persist
+    them so the next scan ranks off a prior grounded in the trader's own data.
+    Never raises into the scan; logs and keeps defaults on any problem."""
+
+    global _EXPECTED_R_CONFIG_CACHE
+    try:
+        samples = build_expected_r_calibration_samples(tracker_payload)
+        result = calibrate_prior_anchors(samples)
+    except Exception as exc:
+        logging.warning("Expected-R calibration failed (%s); keeping existing anchors.", exc)
+        return {"used_default": True, "note": f"calibration error: {exc}", "anchors": [], "num_samples": 0}
+
+    if persist and not result.get("used_default"):
+        payload = {
+            "schema_version": 1,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "num_samples": int(result.get("num_samples", 0) or 0),
+            "prior_anchors": result.get("anchors", []),
+            "bins": result.get("bins", []),
+            "note": result.get("note", ""),
+        }
+        try:
+            EXPECTED_R_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            EXPECTED_R_CONFIG_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            _EXPECTED_R_CONFIG_CACHE = None  # force reload on next use
+            logging.info("Expected-R prior anchors calibrated: %s", result.get("note"))
+        except Exception as exc:
+            logging.warning("Could not persist Expected-R config (%s).", exc)
+    else:
+        logging.info("Expected-R calibration kept defaults: %s", result.get("note"))
+    return result
+
+
+def _expected_r_quality_points(row: dict) -> float:
+    """Static setup-quality points: the final score minus the tracker-derived
+    deltas that already represent realized performance, so the Expected-R blend
+    does not double-count what the tracker is about to re-inject."""
+
+    score = float(_coerce_float(row.get("score")) or 0.0)
+    score -= int(row.get("recent_tracker_score_delta", 0) or 0)
+    score -= int(row.get("setup_type_score_delta", 0) or 0)
+    return score
+
+
+def _expected_r_realized_lookup(recent_family_rows: list[dict] | None) -> dict[tuple, tuple]:
+    """Map (side, bucket, family) -> (realized_r, closed_samples) from the
+    recency-weighted family rows the tracker already computed this scan."""
+
+    lookup: dict[tuple, tuple] = {}
+    for item in recent_family_rows or []:
+        if not isinstance(item, dict):
+            continue
+        side = normalize_side(item.get("side") or "")
+        bucket = str(item.get("priority_bucket") or "").strip()
+        family = str(item.get("setup_family") or "general").strip() or "general"
+        closed = int(item.get("closed_setups", 0) or 0)
+        # Prefer the representative (primary-stop) R over the cross-variant mean,
+        # since that reflects the single stop actually traded; fall back to the
+        # average when the representative isn't available.
+        avg_closed = _coerce_float(item.get("representative_closed_r"))
+        if avg_closed is None:
+            avg_closed = _coerce_float(item.get("avg_closed_r"))
+        avg_total = _coerce_float(item.get("representative_total_r"))
+        if avg_total is None:
+            avg_total = _coerce_float(item.get("avg_total_r"))
+        if closed > 0 and avg_closed is not None:
+            realized, samples = avg_closed, closed
+        elif avg_total is not None:
+            realized, samples = avg_total, int(item.get("tracked_setups", 0) or 0)
+        else:
+            continue
+        lookup[(side, bucket, family)] = (float(realized), int(samples))
+    return lookup
+
+
+def _expected_r_days_since_signal(row: dict) -> int:
+    """Days since the setup's trigger fired, for freshness decay.
+
+    Placeholder returning 0 (treat as fresh) until per-family trigger-date
+    extraction lands; freshness is therefore a no-op today and never penalises a
+    setup incorrectly.  Wired separately in the freshness-decay change."""
+
+    return 0
+
+
+def _format_expected_r_note(result: dict) -> str:
+    expected = float(result.get("expected_r") or 0.0)
+    prior = float(result.get("prior_r") or 0.0)
+    realized = result.get("realized_r")
+    weight = float(result.get("blend_weight") or 0.0)
+    samples = int(result.get("closed_samples") or 0)
+    if realized is None or weight <= 0:
+        return f"ExpR {expected:+.2f}R (prior {prior:+.2f}R, no tracker sample yet)"
+    return (
+        f"ExpR {expected:+.2f}R (prior {prior:+.2f}R blended with realized "
+        f"{float(realized):+.2f}R at w={weight:.2f}, n={samples})"
+    )
+
+
+def apply_expected_r_ranking(
+    priority_rows: list[dict],
+    ai_state: dict,
+    feature_rows_by_symbol: dict[str, dict],
+    *,
+    recent_family_rows: list[dict] | None = None,
+    config: dict | None = None,
+) -> None:
+    """Attach an Expected-R estimate and a freshness-decayed rank score to every
+    priority row.  This is the headline number the priority output is ranked by:
+    it lets a lower static-quality setup that is printing now outrank a cold
+    high-quality one.  Reuses the family rows already produced by
+    ``apply_recent_tracker_setup_family_adjustments`` (no recomputation)."""
+
+    if config is None:
+        config = load_expected_r_config()
+    realized_lookup = _expected_r_realized_lookup(recent_family_rows)
+    symbol_map = ai_state.setdefault("symbols", {}) if isinstance(ai_state, dict) else {}
+
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        quality_points = _expected_r_quality_points(row)
+        context = _tracker_setup_context(row)
+        key = (
+            normalize_side(context.get("side") or ""),
+            str(context.get("priority_bucket") or "").strip(),
+            str(context.get("setup_family") or "general").strip() or "general",
+        )
+        realized_r, closed_samples = realized_lookup.get(key, (None, 0))
+        result = compute_expected_r(
+            quality_points=quality_points,
+            realized_r=realized_r,
+            closed_samples=closed_samples,
+            days_since_signal=_expected_r_days_since_signal(row),
+            config=config,
+        )
+
+        expected_r = round(float(result["expected_r"]), 3)
+        rank_score = round(float(result["rank_score"]), 3)
+        note = _format_expected_r_note(result)
+        realized_out = None if result["realized_r"] is None else round(float(result["realized_r"]), 3)
+
+        row["expected_r"] = expected_r
+        row["expected_r_rank_score"] = rank_score
+        row["expected_r_prior"] = round(float(result["prior_r"]), 3)
+        row["expected_r_realized"] = realized_out
+        row["expected_r_blend_weight"] = round(float(result["blend_weight"]), 3)
+        row["expected_r_samples"] = int(result["closed_samples"])
+        row["expected_r_freshness"] = round(float(result["freshness_factor"]), 3)
+        row["expected_r_note"] = note
+
+        symbol_entry = symbol_map.get(symbol)
+        if isinstance(symbol_entry, dict):
+            symbol_entry["expected_r"] = expected_r
+            symbol_entry["expected_r_rank_score"] = rank_score
+            symbol_entry["expected_r_note"] = note
+
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if isinstance(feature_row, dict):
+            feature_row["expected_r"] = expected_r
+            feature_row["expected_r_rank_score"] = rank_score
+            feature_row["expected_r_note"] = note
 
 
 def _short_near_favorite_gate_reason(row: dict) -> str:
@@ -7079,7 +7499,7 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
     stats_rows = []
     for key, rows in grouped.items():
         tradeable = [row for row in rows if bool(row.get("tradeable", int(row.get("shares", 0) or 0) > 0))]
-        closed = [row for row in tradeable if str(row.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}]
+        closed = [row for row in tradeable if _scenario_is_closed(row.get("status"))]
         open_rows = [row for row in tradeable if _scenario_is_open(row.get("status", ""))]
         closed_rs = [float(row.get("total_r", 0.0) or 0.0) for row in closed]
         total_rs = [float(row.get("total_r", 0.0) or 0.0) for row in tradeable]
@@ -7371,7 +7791,7 @@ def build_tracker_playbook_rows(setups: dict[str, dict]) -> list[dict]:
         closed_rows = [
             row
             for row in rows
-            if str(row.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+            if _scenario_is_closed(row.get("status"))
         ]
         closed_rs = [
             float(row.get("total_r", 0.0) or 0.0)
@@ -7403,7 +7823,7 @@ def build_tracker_playbook_rows(setups: dict[str, dict]) -> list[dict]:
         closed_rows = [
             row
             for row in rows_for_group
-            if str(row.get("status", "")).upper() in {"STOPPED", "TARGET_HIT"}
+            if _scenario_is_closed(row.get("status"))
         ]
         open_rows = [
             row
@@ -7449,7 +7869,7 @@ def build_tracker_playbook_rows(setups: dict[str, dict]) -> list[dict]:
             sample_text = f"{symbol} {scan_date}".strip()
             scenario_status = str(sample_row.get("status") or "").strip()
             sample_r = _coerce_float(sample_row.get("total_r"))
-            if scenario_status in {"STOPPED", "TARGET_HIT"} and sample_r is not None:
+            if _scenario_is_closed(scenario_status) and sample_r is not None:
                 sample_text += f" ({sample_r:+.2f}R)"
             elif scenario_status:
                 sample_text += f" ({scenario_status})"
@@ -9411,11 +9831,17 @@ def update_setup_tracker_from_scan(
     ib: IBApi | None,
     scan_date: str | None = None,
     auto_tune: bool = True,
+    control_rows: list[dict] | None = None,
 ) -> None:
     tracker = load_setup_tracker_payload()
     symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
     now_iso = datetime.now().isoformat(timespec="seconds")
     target_scan_date = _infer_tracker_scan_date(tracked_rows, symbol_map, requested_scan_date=scan_date)
+    scan_regime_label = (
+        str((ai_state.get("market_regime") or {}).get("label") or "").strip().lower()
+        if isinstance(ai_state, dict)
+        else ""
+    )
 
     existing_today_ids = [
         setup_id
@@ -9436,6 +9862,8 @@ def update_setup_tracker_from_scan(
         if symbol_scan_date != target_scan_date:
             skipped_symbols.append(f"{symbol} ({symbol_scan_date or 'missing trade date'})")
             continue
+        if not str(row.get("market_regime_label") or "").strip():
+            row["market_regime_label"] = scan_regime_label
         df = daily_frames_by_symbol.get(symbol)
         indicator_row = _indicator_row_for_scan_date(df, target_scan_date)
         setup = build_tracker_setup_record(
@@ -9471,30 +9899,87 @@ def update_setup_tracker_from_scan(
             ", ".join(skipped_symbols[:12]) + (f" (+{len(skipped_symbols) - 12} more)" if len(skipped_symbols) > 12 else ""),
         )
 
+    # Control / holdout records live in a separate namespace so none of the
+    # favorite-path aggregations (Expected-R, calibration, playbooks, stats) can
+    # ever see them; they exist purely for gate measurement and edge discovery.
+    control_setups = tracker.setdefault("control_setups", {})
+    existing_control_today = [
+        setup_id
+        for setup_id, setup in list(control_setups.items())
+        if isinstance(setup, dict) and str(setup.get("scan_date")) == target_scan_date
+    ]
+    for setup_id in existing_control_today:
+        control_setups.pop(setup_id, None)
+    control_added = 0
+    for row in control_rows or []:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        symbol_entry = symbol_map.get(symbol)
+        if not isinstance(symbol_entry, dict):
+            continue
+        if str(symbol_entry.get("last_trade_date") or "").strip() != target_scan_date:
+            continue
+        if not str(row.get("market_regime_label") or "").strip():
+            row["market_regime_label"] = scan_regime_label
+        df = daily_frames_by_symbol.get(symbol)
+        indicator_row = _indicator_row_for_scan_date(df, target_scan_date)
+        setup = build_tracker_setup_record(
+            row,
+            symbol_entry,
+            feature_rows_by_symbol.get(symbol),
+            now_iso,
+            indicator_row,
+            scan_date=target_scan_date,
+            attribute_registry=tracker.setdefault("attribute_registry", {}),
+        )
+        if not setup:
+            continue
+        setup["is_control"] = True
+        setup["control_reason"] = str(row.get("control_reason") or "random")
+        setup["setup_id"] = f"control:{setup['setup_id']}"
+        control_setups[setup["setup_id"]] = setup
+        control_added += 1
+    _prune_control_setups(control_setups, reference_scan_date=target_scan_date)
+    if control_added:
+        logging.info(
+            "Setup tracker recorded %s control/holdout setup(s) for %s (%s total tracked).",
+            control_added,
+            target_scan_date,
+            len(control_setups),
+        )
+
     recompute_cache = {}
-    for setup_id, setup in list((tracker.get("setups") or {}).items()):
-        if not isinstance(setup, dict):
-            continue
-        symbol = str(setup.get("symbol", "")).strip().upper()
-        if symbol in recompute_cache:
-            df = recompute_cache[symbol]
-        else:
-            df = daily_frames_by_symbol.get(symbol)
+
+    def _recompute_namespace(namespace: dict) -> None:
+        for setup_id, setup in list((namespace or {}).items()):
+            if not isinstance(setup, dict):
+                continue
+            symbol = str(setup.get("symbol", "")).strip().upper()
+            if symbol in recompute_cache:
+                df = recompute_cache[symbol]
+            else:
+                df = daily_frames_by_symbol.get(symbol)
+                if df is None or df.empty:
+                    anchor_date = str(setup.get("anchor_date") or setup.get("entry_trade_date") or target_scan_date)
+                    days_needed = ATR_LENGTH + 220
+                    try:
+                        anchor_date_obj = datetime.fromisoformat(anchor_date).date()
+                        days_needed = max(days_needed, (datetime.now().date() - anchor_date_obj).days + 20)
+                    except ValueError:
+                        pass
+                    df = fetch_daily_bars(ib, symbol, days_needed)
+                recompute_cache[symbol] = df
             if df is None or df.empty:
-                anchor_date = str(setup.get("anchor_date") or setup.get("entry_trade_date") or target_scan_date)
-                days_needed = ATR_LENGTH + 220
-                try:
-                    anchor_date_obj = datetime.fromisoformat(anchor_date).date()
-                    days_needed = max(days_needed, (datetime.now().date() - anchor_date_obj).days + 20)
-                except ValueError:
-                    pass
-                df = fetch_daily_bars(ib, symbol, days_needed)
-            recompute_cache[symbol] = df
-        if df is None or df.empty:
-            continue
-        tracker["setups"][setup_id] = recompute_tracker_setup_record(setup, df)
+                continue
+            namespace[setup_id] = recompute_tracker_setup_record(setup, df)
+
+    _recompute_namespace(tracker.get("setups"))
+    _recompute_namespace(tracker.get("control_setups"))
 
     export_setup_tracker_views(tracker)
+    try:
+        write_control_discovery_report(CONTROL_DISCOVERY_FILE, tracker)
+    except Exception as exc:
+        logging.warning("Could not write control discovery report (%s).", exc)
     save_setup_tracker_payload(tracker)
     if auto_tune:
         tuner_output = run_priority_scoring_tuner(
@@ -9504,6 +9989,232 @@ def update_setup_tracker_from_scan(
         )
         if tuner_output:
             logging.info("Priority scoring tuner: %s", tuner_output.splitlines()[0])
+
+
+# ---------------------------------------------------------------------------
+# Control / holdout discovery
+# ---------------------------------------------------------------------------
+def select_tracker_control_rows(
+    priority_rows: list[dict],
+    tracked_rows: list[dict],
+    *,
+    scan_date: str | None = None,
+    max_rows: int = CONTROL_SAMPLE_MAX_PER_SCAN,
+) -> list[dict]:
+    """Pick a capped sample of real setups the bot saw but did NOT promote.
+
+    Two strata: ``near_miss`` (scored just below the favorite gate — measures
+    whether the gate is well-calibrated) and ``random`` (a deterministic sample
+    of the rest — surfaces edges in configurations the bot ignores). Rows are
+    flagged in place with ``is_control`` and ``control_reason``."""
+
+    if not TRACKER_CONTROL_SAMPLING_ENABLED or max_rows <= 0:
+        return []
+
+    tracked_keys = {
+        (str(row.get("symbol") or "").strip().upper(), normalize_side(row.get("side")))
+        for row in tracked_rows or []
+    }
+    candidates = []
+    for row in priority_rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        if (symbol, normalize_side(row.get("side"))) in tracked_keys:
+            continue
+        if str(row.get("priority_bucket") or "") in {"favorite_setup", "near_favorite_zone"}:
+            continue
+        if row.get("ranking_blocked") or _is_priority_recommendation_blocked(row):
+            continue
+        # Only track genuine setups that simply weren't promoted, not non-setups.
+        if not row.get("has_favorite_signal"):
+            continue
+        candidates.append(row)
+
+    if not candidates:
+        return []
+
+    gate = float(PRIORITY_FAVORITE_SETUP_MIN_SCORE)
+    near_miss = [row for row in candidates if _priority_row_score(row) >= gate - CONTROL_NEAR_MISS_SCORE_BAND]
+    near_miss_ids = {id(row) for row in near_miss}
+    others = [row for row in candidates if id(row) not in near_miss_ids]
+
+    near_miss.sort(key=lambda row: -_priority_row_score(row))
+    rng = random.Random(str(scan_date or ""))
+    rng.shuffle(others)
+
+    selected = []
+    for row in near_miss:
+        if len(selected) >= max_rows:
+            break
+        row["is_control"] = True
+        row["control_reason"] = "near_miss"
+        selected.append(row)
+    for row in others:
+        if len(selected) >= max_rows:
+            break
+        row["is_control"] = True
+        row["control_reason"] = "random"
+        selected.append(row)
+    return selected
+
+
+def _prune_control_setups(control_setups: dict, *, reference_scan_date: str | None = None) -> None:
+    """Bound the control namespace by age and hard count so it stays cheap to
+    recompute every scan."""
+
+    if not isinstance(control_setups, dict) or not control_setups:
+        return
+    reference = _parse_iso_date_or_none(reference_scan_date) or datetime.now().date()
+    for setup_id, setup in list(control_setups.items()):
+        scan_day = _parse_iso_date_or_none(isinstance(setup, dict) and setup.get("scan_date") or None)
+        if scan_day is None or (reference - scan_day).days > CONTROL_SETUP_KEEP_DAYS:
+            control_setups.pop(setup_id, None)
+    if len(control_setups) > CONTROL_SETUP_MAX_RECORDS:
+        ordered = sorted(
+            control_setups.items(),
+            key=lambda item: str(item[1].get("scan_date") or "") if isinstance(item[1], dict) else "",
+        )
+        for setup_id, _setup in ordered[: len(control_setups) - CONTROL_SETUP_MAX_RECORDS]:
+            control_setups.pop(setup_id, None)
+
+
+def _collect_control_episode_observations(setups: dict, *, default_reason: str = "random") -> list[dict]:
+    """Episode-deduped closed observations (one per setup episode) from a setups
+    namespace, each carrying side/family/reason and representative closed R."""
+
+    by_episode: dict[tuple, dict] = {}
+    for setup in (setups or {}).values():
+        if not isinstance(setup, dict):
+            continue
+        outcome = _summarize_tracker_setup_outcome(setup)
+        if int(outcome.get("closed_tradeable_scenario_count", 0) or 0) <= 0:
+            continue
+        realized = _coerce_float(outcome.get("representative_closed_r"))
+        if realized is None:
+            realized = _coerce_float(outcome.get("avg_closed_r"))
+        if realized is None:
+            continue
+        key = _tracker_episode_key(setup)
+        scan_date = str(setup.get("scan_date") or "")
+        existing = by_episode.get(key)
+        if existing is not None and existing["scan_date"] <= scan_date:
+            continue
+        by_episode[key] = {
+            "side": normalize_side(setup.get("side")),
+            "setup_family": _canonical_tracker_setup_family(setup),
+            "reason": str(setup.get("control_reason") or default_reason),
+            "closed_r": float(realized),
+            "scan_date": scan_date,
+        }
+    return list(by_episode.values())
+
+
+def _summarize_control_observation_group(observations: list[dict]) -> dict:
+    closed_rs = [float(obs["closed_r"]) for obs in observations if obs.get("closed_r") is not None]
+    n = len(closed_rs)
+    return {
+        "closed_episodes": n,
+        "avg_closed_r": (sum(closed_rs) / n) if n else None,
+        "win_rate": (sum(1.0 for value in closed_rs if value > 0) / n) if n else None,
+    }
+
+
+def build_control_discovery_rows(tracker: dict | None = None) -> dict:
+    """Compare promoted (favorite) setups against the control sample, and rank
+    control setup families by realized edge to surface configurations the bot is
+    rejecting that are actually working."""
+
+    tracker = tracker if isinstance(tracker, dict) else load_setup_tracker_payload()
+    promoted = _collect_control_episode_observations(tracker.get("setups", {}), default_reason="promoted")
+    for obs in promoted:
+        obs["reason"] = "promoted"
+    control = _collect_control_episode_observations(tracker.get("control_setups", {}))
+
+    cohorts = {
+        "promoted": promoted,
+        "near_miss": [obs for obs in control if obs["reason"] == "near_miss"],
+        "random": [obs for obs in control if obs["reason"] == "random"],
+    }
+    cohort_rows = []
+    for label in ("promoted", "near_miss", "random"):
+        summary = _summarize_control_observation_group(cohorts[label])
+        summary["cohort"] = label
+        cohort_rows.append(summary)
+
+    family_groups: dict[tuple[str, str], list[dict]] = {}
+    for obs in control:
+        family_groups.setdefault((obs["side"], obs["setup_family"]), []).append(obs)
+    family_rows = []
+    for (side, family), observations in family_groups.items():
+        summary = _summarize_control_observation_group(observations)
+        avg_r = summary["avg_closed_r"]
+        summary.update(
+            {
+                "side": side,
+                "setup_family": family,
+                "outperforming": bool(
+                    summary["closed_episodes"] >= CONTROL_DISCOVERY_MIN_CLOSED_EPISODES
+                    and avg_r is not None
+                    and avg_r >= CONTROL_DISCOVERY_MIN_AVG_R
+                ),
+            }
+        )
+        family_rows.append(summary)
+    family_rows.sort(
+        key=lambda row: (
+            -(row["avg_closed_r"] if row["avg_closed_r"] is not None else -9999.0),
+            -int(row["closed_episodes"]),
+        )
+    )
+    return {"cohorts": cohort_rows, "families": family_rows}
+
+
+def write_control_discovery_report(path: Path, tracker: dict | None = None) -> None:
+    discovery = build_control_discovery_rows(tracker)
+    lines = [
+        "Master AVWAP control / holdout discovery",
+        f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "Gate edge: promoted (favorites) vs setups the bot saw but rejected.",
+        "Episode-deduped, representative-stop, net-of-cost closed R.",
+        "",
+        f"{'cohort':<12}{'episodes':>10}{'avg R':>10}{'win rate':>10}",
+        "-" * 42,
+    ]
+    for row in discovery["cohorts"]:
+        avg_r = row["avg_closed_r"]
+        win = row["win_rate"]
+        lines.append(
+            f"{row['cohort']:<12}{row['closed_episodes']:>10}"
+            f"{(f'{avg_r:+.2f}' if avg_r is not None else 'n/a'):>10}"
+            f"{(f'{win*100:.0f}%' if win is not None else 'n/a'):>10}"
+        )
+
+    lines.extend(
+        [
+            "",
+            "Rejected configurations ranked by realized edge "
+            f"(>= {CONTROL_DISCOVERY_MIN_CLOSED_EPISODES} closed, >= {CONTROL_DISCOVERY_MIN_AVG_R:+.2f}R flagged):",
+            f"{'side':<6}{'family':<34}{'episodes':>10}{'avg R':>9}{'win':>7}  flag",
+            "-" * 74,
+        ]
+    )
+    if discovery["families"]:
+        for row in discovery["families"]:
+            avg_r = row["avg_closed_r"]
+            win = row["win_rate"]
+            flag = "  <-- DISCOVER" if row["outperforming"] else ""
+            lines.append(
+                f"{row['side']:<6}{row['setup_family'][:33]:<34}{row['closed_episodes']:>10}"
+                f"{(f'{avg_r:+.2f}' if avg_r is not None else 'n/a'):>9}"
+                f"{(f'{win*100:.0f}%' if win is not None else 'n/a'):>7}{flag}"
+            )
+    else:
+        lines.append("(No closed control setups yet — discovery builds as the holdout sample resolves.)")
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def get_last_daily_row_for_date(daily_rows, last_trade_date):
@@ -17735,6 +18446,31 @@ def _priority_total_score_sort_key(row: dict) -> tuple[float, str]:
     return (-float(row.get("score", 0.0) or 0.0), str(row.get("symbol") or ""))
 
 
+def _priority_expected_r_text(row: dict) -> str:
+    value = _coerce_float(row.get("expected_r"))
+    if value is None:
+        return "n/a"
+    return f"{value:+.2f}R"
+
+
+def _priority_expected_r_sort_key(row: dict) -> tuple[int, float, float, str]:
+    """Rank by Expected-R (freshness-decayed) descending.  Rows that have an
+    Expected-R estimate sort above rows that don't; the static points score is
+    the final tiebreaker so behaviour is stable when ExpR ties or is absent."""
+
+    rank = _coerce_float(row.get("expected_r_rank_score"))
+    if rank is None:
+        rank = _coerce_float(row.get("expected_r"))
+    has_expected_r = 0 if rank is not None else 1
+    score = float(row.get("score", 0.0) or 0.0)
+    return (
+        has_expected_r,
+        -(float(rank) if rank is not None else 0.0),
+        -score,
+        str(row.get("symbol") or ""),
+    )
+
+
 def _priority_unique_rows_by_symbol(rows: list[dict]) -> list[dict]:
     seen = set()
     unique_rows = []
@@ -17990,7 +18726,7 @@ def _write_priority_setup_copy_lists(handle, title: str, rows: list[dict]) -> No
 def _write_priority_score_ranked_rows(handle, title: str, rows: list[dict]) -> None:
     handle.write(f"{title}\n")
     handle.write("-" * len(title) + "\n")
-    ranked_rows = sorted(rows or [], key=_priority_total_score_sort_key)
+    ranked_rows = sorted(rows or [], key=_priority_expected_r_sort_key)
     if not ranked_rows:
         handle.write("None\n\n")
         return
@@ -17999,7 +18735,7 @@ def _write_priority_score_ranked_rows(handle, title: str, rows: list[dict]) -> N
         side = normalize_side(row.get("side", ""))
         family = _priority_setup_family_label(str(row.get("setup_family") or "general"))
         handle.write(
-            f"{symbol} {side} score={_priority_score_text(row)} "
+            f"{symbol} {side} ExpR={_priority_expected_r_text(row)} score={_priority_score_text(row)} "
             f"family={family} bucket={row.get('priority_bucket') or 'tracked'}\n"
         )
     handle.write("\n")
@@ -18211,7 +18947,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     _write_priority_copy_lists(handle, "Near favorite zones", watchlist)
     _write_priority_copy_lists(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
     _write_priority_copy_lists(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
-    _write_priority_score_ranked_rows(handle, "Ranked by total score", all_priority_rows)
+    _write_priority_score_ranked_rows(handle, "Ranked by Expected-R (blended)", all_priority_rows)
     _write_priority_setup_copy_lists(handle, "By setup type", all_priority_rows)
     _write_best_swing_trade_rows(handle, "Best swing trades today", best_swing_rows)
     _write_priority_score_rankings(handle, "Overall score rankings", actionable_priority_rows)
@@ -20083,167 +20819,9 @@ def _build_market_prep_section(
     }
 
 
-def build_market_prep_payload(
-    *,
-    range_buckets: dict | None = None,
-    market_prep_range_buckets: dict | None = None,
-    priority_rows: list[dict] | None = None,
-    latest_release_map: dict | None = None,
-    reference_date: date | None = None,
-    previous_session_date: date | None = None,
-    calendar_rows_by_date: dict | None = None,
-) -> dict:
-    reference_date = reference_date or datetime.now().date()
-    previous_session_date = previous_session_date or _market_prep_previous_session_before(reference_date)
-    range_buckets = range_buckets if isinstance(range_buckets, dict) else {}
-    market_prep_range_buckets = market_prep_range_buckets if isinstance(market_prep_range_buckets, dict) else {}
-    priority_rows = priority_rows if isinstance(priority_rows, list) else []
-
-    recent_earnings_entries = collect_market_prep_recent_earnings(
-        reference_date=reference_date,
-        previous_session_date=previous_session_date,
-        calendar_rows_by_date=calendar_rows_by_date,
-        latest_release_map=latest_release_map,
-    )
-    recent_earnings_symbols = [entry["symbol"] for entry in recent_earnings_entries]
-    recent_earnings_details = [
-        (
-            f"{entry['symbol']:<6} {entry['timing']} "
-            f"earnings={entry['earnings_date']} release={entry['release_session']} source={entry['source']}"
-        )
-        for entry in recent_earnings_entries
-    ]
-
-    post_earnings_rows = sorted(
-        [
-            row for row in priority_rows
-            if isinstance(row, dict) and _is_post_earnings_play_ready(row)
-        ],
-        key=lambda row: (
-            not bool(row.get("post_earnings_break_intraday")),
-            -float(row.get("score", 0.0) or 0.0),
-            str(row.get("symbol") or ""),
-        ),
-    )
-    post_earnings_details = []
-    for row in post_earnings_rows:
-        status = "triggered" if row.get("post_earnings_break_intraday") else "watch"
-        if row.get("post_earnings_break_close"):
-            status = "close_confirmed"
-        note = str(row.get("post_earnings_note") or "").strip()
-        post_earnings_details.append(
-            (
-                f"{row.get('symbol', ''):<6} {row.get('side', ''):<5} {status} "
-                f"score={float(row.get('score', 0.0) or 0.0):.1f}"
-                + (f" | {note}" if note else "")
-            ).strip()
-        )
-
-    sections = [
-        _build_market_prep_section(
-            "long_avwape_to_1stdev",
-            range_buckets.get("long_avwap_to_upper_1", []),
-            note="Current-anchor longs trading between AVWAPE and UPPER_1.",
-        ),
-        _build_market_prep_section(
-            "short_avwape_to_1stdev",
-            range_buckets.get("short_avwap_to_lower_1", []),
-            note="Current-anchor shorts trading between AVWAPE and LOWER_1.",
-        ),
-        _build_market_prep_section(
-            "long_2nd_to_3rd_stdev_2_sessions",
-            market_prep_range_buckets.get("long_upper_2_to_upper_3_2_sessions", []),
-            note="Current-anchor longs with the last two closes between UPPER_2 and UPPER_3.",
-        ),
-        _build_market_prep_section(
-            "earnings_last_night_or_today",
-            recent_earnings_symbols,
-            details=recent_earnings_details,
-            note=(
-                f"Previous market session={previous_session_date.isoformat()} AMC/unknown; "
-                f"today={reference_date.isoformat()} BMO/unknown."
-            ),
-        ),
-        _build_market_prep_section(
-            "post_earnings_potential_plays",
-            [row.get("symbol", "") for row in post_earnings_rows],
-            details=post_earnings_details,
-            note=(
-                f"Qualified post-earnings 52-week close continuation watches and triggers "
-                f"from the past {POST_EARNINGS_MAX_SESSIONS} market days."
-            ),
-        ),
-    ]
-
-    return {
-        "schema_version": MARKET_PREP_SCHEMA_VERSION,
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "run_date": reference_date.isoformat(),
-        "previous_session_date": previous_session_date.isoformat(),
-        "sections": sections,
-    }
-
-
-def format_market_prep_payload_report(payload: dict | None) -> str:
-    if not isinstance(payload, dict):
-        return "No market prep output yet."
-
-    sections = payload.get("sections", [])
-    if not isinstance(sections, list):
-        sections = []
-    section_map = {
-        str(section.get("id") or ""): section
-        for section in sections
-        if isinstance(section, dict)
-    }
-
-    lines = [
-        "Master AVWAP Market Prep",
-        f"Generated at {payload.get('generated_at') or 'n/a'}",
-        f"Run date: {payload.get('run_date') or 'n/a'}",
-        f"Previous market session: {payload.get('previous_session_date') or 'n/a'}",
-        "",
-    ]
-
-    rendered_ids = set()
-
-    def _append_section(section: dict, fallback_title: str, empty_message: str = "None") -> None:
-        title = section.get("title") or fallback_title
-        copy_text = str(section.get("copy_text") or empty_message or "None").strip() or "None"
-        note = str(section.get("note") or "").strip()
-        details = section.get("details", [])
-        details = details if isinstance(details, list) else []
-
-        lines.append(title)
-        lines.append("-" * len(title))
-        lines.append(copy_text)
-        if note:
-            lines.append(f"note: {note}")
-        if details:
-            lines.append("details:")
-            lines.extend(str(item) for item in details if str(item).strip())
-        lines.append("")
-
-    for definition in MARKET_PREP_SECTION_DEFINITIONS:
-        section_id = str(definition["id"])
-        section = section_map.get(section_id, {})
-        rendered_ids.add(section_id)
-        _append_section(
-            section,
-            str(definition["title"]),
-            str(definition.get("empty_message") or "None"),
-        )
-
-    for section in sections:
-        if not isinstance(section, dict):
-            continue
-        section_id = str(section.get("id") or "")
-        if section_id in rendered_ids:
-            continue
-        rendered_ids.add(section_id)
-        _append_section(section, str(section.get("title") or section_id or "Untitled section"))
-
-    return "\n".join(lines).rstrip()
+# NOTE: a stale duplicate of build_market_prep_payload / format_market_prep_payload_report
+# previously lived here and was shadowed by the maintained copies further down in this
+# module (the ones runner.py actually calls). Removed to avoid editing the dead copy.
 
 
 def write_market_prep_files(
@@ -21361,7 +21939,7 @@ def backfill_setup_tracker_from_recent_sessions(
             apply_post_earnings_hard_rule_blocks(priority_rows, ai_state, feature_rows_by_symbol)
             apply_final_priority_buckets(priority_rows, ai_state, [], feature_rows_by_symbol)
             apply_clean_first_zone_score_bonus(priority_rows, ai_state, feature_rows_by_symbol)
-            apply_recent_tracker_setup_family_adjustments(
+            recent_family_rows = apply_recent_tracker_setup_family_adjustments(
                 priority_rows,
                 ai_state,
                 feature_rows_by_symbol,
@@ -21378,6 +21956,12 @@ def backfill_setup_tracker_from_recent_sessions(
             apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
             apply_final_priority_buckets(priority_rows, ai_state, [], feature_rows_by_symbol)
             attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
+            apply_expected_r_ranking(
+                priority_rows,
+                ai_state,
+                feature_rows_by_symbol,
+                recent_family_rows=recent_family_rows,
+            )
             tracked_rows = [
                 row
                 for row in priority_rows
@@ -21385,6 +21969,11 @@ def backfill_setup_tracker_from_recent_sessions(
                 and not row.get("ranking_blocked")
             ]
             tracked_symbols = sorted({str(row.get("symbol", "")).strip().upper() for row in tracked_rows if str(row.get("symbol", "")).strip()})
+            control_rows = select_tracker_control_rows(
+                priority_rows,
+                tracked_rows,
+                scan_date=evaluation_date.isoformat(),
+            )
             update_setup_tracker_from_scan(
                 tracked_rows,
                 ai_state,
@@ -21393,6 +21982,7 @@ def backfill_setup_tracker_from_recent_sessions(
                 ib,
                 scan_date=evaluation_date.isoformat(),
                 auto_tune=False,
+                control_rows=control_rows,
             )
             watchlists_by_date[evaluation_date.isoformat()] = tracked_symbols
             logging.info(
@@ -21407,6 +21997,10 @@ def backfill_setup_tracker_from_recent_sessions(
         )
         if tuner_output:
             logging.info("Priority scoring tuner after backfill: %s", tuner_output.splitlines()[0])
+
+        # Backfill produces a batch of closed outcomes; refit the Expected-R
+        # prior anchors so they reflect the rebuilt history.
+        calibrate_expected_r_prior_anchors(persist=True)
 
         return {
             "dates": [value.isoformat() for value in evaluation_dates],
@@ -21517,6 +22111,11 @@ PRIORITY_ADVERSE_REJECTION_SCORE_PENALTY = 24
 PRIORITY_REJECTION_CAP_ADVERSE_CANDLE = 120
 
 MARKET_PREP_STRENGTH_DECILE_FRACTION = 0.10
+# Trailing-return lookbacks for the universe strength table (Feat 1). ~13 weeks and
+# ~26 weeks of trading sessions; used for the "recently strong, now pulling back" list.
+MARKET_PREP_RETURN_13W_SESSIONS = 65
+MARKET_PREP_RETURN_26W_SESSIONS = 130
+MARKET_PREP_PULLBACK_MAX_ROWS = 15
 
 def assess_adverse_entry_candle(
     daily_rows,
@@ -21993,6 +22592,93 @@ def assess_daily_relative_strength(
         }
     )
     return result
+
+
+def _daily_frame_to_rows(df: "pd.DataFrame | None") -> list[dict]:
+    """Convert a normalized daily-bar DataFrame (columns datetime/open/high/low/
+    close/volume) into the list-of-dict shape the dict-based helpers expect
+    (``assess_daily_relative_strength`` / ``compute_atr_from_ohlc`` key off
+    ``date``/``close``/``high``/``low``)."""
+    if df is None or getattr(df, "empty", True):
+        return []
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["datetime"], errors="coerce").dt.date
+    work = work.dropna(subset=["date"])
+    rows: list[dict] = []
+    for record in work[["date", "open", "high", "low", "close", "volume"]].to_dict("records"):
+        rows.append(
+            {
+                "date": record["date"].isoformat(),
+                "open": _coerce_float(record.get("open")),
+                "high": _coerce_float(record.get("high")),
+                "low": _coerce_float(record.get("low")),
+                "close": _coerce_float(record.get("close")),
+                "volume": _coerce_float(record.get("volume")),
+            }
+        )
+    return rows
+
+
+def _trailing_return_pct(daily_rows: list[dict], sessions: int) -> float | None:
+    """Percent change in close over the last ``sessions`` trading sessions."""
+    if not daily_rows or sessions <= 0 or len(daily_rows) < sessions + 1:
+        return None
+    last_close = _coerce_float(daily_rows[-1].get("close"))
+    past_close = _coerce_float(daily_rows[-(sessions + 1)].get("close"))
+    if last_close is None or past_close in (None, 0):
+        return None
+    return round(((float(last_close) - float(past_close)) / float(past_close)) * 100.0, 3)
+
+
+def build_universe_strength_rows(
+    daily_frames_by_symbol: dict | None,
+    spy_benchmark: dict | None,
+    *,
+    sides_by_symbol: dict | None = None,
+) -> list[dict]:
+    """One strength row per *scanned* symbol — the whole universe, not just the
+    symbols that produced a flagged setup. Feeds the market-prep strongest/weakest
+    decile and the "recently strong, now pulling back" list (Feat 1).
+
+    Reuses the existing ``assess_daily_relative_strength`` (0.35/0.65 excess-vs-SPY
+    math) so universe RS matches per-symbol RS shown elsewhere. The RS *score* is
+    side-independent, so this is computed once per symbol regardless of watchlist
+    side; ``sides_by_symbol`` only labels the row.
+    """
+    rows: list[dict] = []
+    if not isinstance(daily_frames_by_symbol, dict) or not daily_frames_by_symbol:
+        return rows
+    sides_by_symbol = sides_by_symbol if isinstance(sides_by_symbol, dict) else {}
+    for symbol, df in daily_frames_by_symbol.items():
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            continue
+        daily_rows = _daily_frame_to_rows(df)
+        if not daily_rows:
+            continue
+        try:
+            last_trade_date = date.fromisoformat(daily_rows[-1]["date"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        side = normalize_side(sides_by_symbol.get(sym) or "")
+        rs = assess_daily_relative_strength(daily_rows, last_trade_date, side, spy_benchmark)
+        rows.append(
+            {
+                "symbol": sym,
+                "side": side,
+                "daily_relative_strength_score": rs.get("daily_relative_strength_score"),
+                "symbol_one_day_return_pct": rs.get("symbol_one_day_return_pct"),
+                "symbol_five_day_return_pct": rs.get("symbol_five_day_return_pct"),
+                "spy_one_day_return_pct": rs.get("spy_one_day_return_pct"),
+                "spy_five_day_return_pct": rs.get("spy_five_day_return_pct"),
+                "return_13w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_13W_SESSIONS),
+                "return_26w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_26W_SESSIONS),
+                "atr20": compute_atr_from_ohlc(daily_rows, last_trade_date),
+                "universe_strength_row": True,
+            }
+        )
+    return rows
+
 
 def _previous_anchor_sr_output_label(level_label: str) -> str:
     normalized = str(level_label or "").strip().upper()
@@ -22657,6 +23343,57 @@ def _market_prep_strength_decile_rows(
         ),
     )
     return ranked[:decile_count], len(strength_rows)
+
+def _market_prep_pullback_rows(
+    universe_rows: list[dict] | None,
+    *,
+    limit: int = MARKET_PREP_PULLBACK_MAX_ROWS,
+) -> list[dict]:
+    """Symbols that were strong over the longer term (26w, or 13w if 26w is
+    unavailable) but are pulling back recently (5d return negative). Serves Aaron's
+    stated buy preference: "stocks that were super strong 1-2 weeks ago then went on
+    pullbacks." Ranked by longer-term strength, then by how deep the pullback is."""
+    candidates: list[dict] = []
+    for row in universe_rows or []:
+        if not isinstance(row, dict):
+            continue
+        long_term = _coerce_float(row.get("return_26w_pct"))
+        if long_term is None:
+            long_term = _coerce_float(row.get("return_13w_pct"))
+        recent = _coerce_float(row.get("symbol_five_day_return_pct"))
+        if long_term is None or recent is None:
+            continue
+        if long_term > 0 and recent < 0:
+            candidates.append(row)
+    candidates.sort(
+        key=lambda r: (
+            -(_coerce_float(r.get("return_26w_pct")) if _coerce_float(r.get("return_26w_pct")) is not None
+              else (_coerce_float(r.get("return_13w_pct")) or 0.0)),
+            _coerce_float(r.get("symbol_five_day_return_pct")) or 0.0,
+            str(r.get("symbol") or ""),
+        )
+    )
+    return candidates[: max(0, int(limit))]
+
+
+def _market_prep_pullback_details(rows: list[dict]) -> list[str]:
+    details = []
+    for row in rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        ret_26w = _coerce_float(row.get("return_26w_pct"))
+        ret_13w = _coerce_float(row.get("return_13w_pct"))
+        five_day = _coerce_float(row.get("symbol_five_day_return_pct"))
+        one_day = _coerce_float(row.get("symbol_one_day_return_pct"))
+        ret_26w_text = "n/a" if ret_26w is None else f"{ret_26w:+.1f}%"
+        ret_13w_text = "n/a" if ret_13w is None else f"{ret_13w:+.1f}%"
+        five_day_text = "n/a" if five_day is None else f"{five_day:+.1f}%"
+        one_day_text = "n/a" if one_day is None else f"{one_day:+.1f}%"
+        details.append(
+            f"{symbol:<6} 26w={ret_26w_text:<8} 13w={ret_13w_text:<8} "
+            f"5d={five_day_text:<7} 1d={one_day_text}"
+        )
+    return details
+
 
 def _market_prep_strength_details(rows: list[dict]) -> list[str]:
     details = []
@@ -25227,7 +25964,7 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     _write_priority_copy_lists(handle, "TOP pattern tracking", top_pattern_tracking_rows)
     _write_priority_copy_lists(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
     _write_priority_copy_lists(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
-    _write_priority_score_ranked_rows(handle, "Ranked by total score", all_priority_rows)
+    _write_priority_score_ranked_rows(handle, "Ranked by Expected-R (blended)", all_priority_rows)
 
     _write_best_swing_trade_rows(handle, "Best swing trades today", best_swing_rows)
     _write_priority_detail_rows(handle, "TOP strength watchlist (long only)", top_strength_rows)
@@ -25502,12 +26239,31 @@ def build_market_prep_payload(
     reference_date: date | None = None,
     previous_session_date: date | None = None,
     calendar_rows_by_date: dict | None = None,
+    daily_frames_by_symbol: dict | None = None,
+    spy_benchmark: dict | None = None,
+    sides_by_symbol: dict | None = None,
+    universe_strength_rows: list[dict] | None = None,
 ) -> dict:
     reference_date = reference_date or datetime.now().date()
     previous_session_date = previous_session_date or _market_prep_previous_session_before(reference_date)
     range_buckets = range_buckets if isinstance(range_buckets, dict) else {}
     market_prep_range_buckets = market_prep_range_buckets if isinstance(market_prep_range_buckets, dict) else {}
     priority_rows = priority_rows if isinstance(priority_rows, list) else []
+
+    # Feat 1: rank the strongest/weakest decile across the WHOLE scanned universe,
+    # not just the symbols that flagged a setup (priority_rows). Build the universe
+    # rows from the daily frames when available; otherwise fall back to priority_rows
+    # so existing callers/tests keep working.
+    if not isinstance(universe_strength_rows, list):
+        if isinstance(daily_frames_by_symbol, dict) and daily_frames_by_symbol:
+            universe_strength_rows = build_universe_strength_rows(
+                daily_frames_by_symbol,
+                spy_benchmark,
+                sides_by_symbol=sides_by_symbol,
+            )
+        else:
+            universe_strength_rows = []
+    strength_source_rows = universe_strength_rows if universe_strength_rows else priority_rows
 
     recent_earnings_entries = collect_market_prep_recent_earnings(
         reference_date=reference_date,
@@ -25550,13 +26306,14 @@ def build_market_prep_payload(
         )
 
     strongest_rows, strength_universe_count = _market_prep_strength_decile_rows(
-        priority_rows,
+        strength_source_rows,
         strongest=True,
     )
     weakest_rows, _ = _market_prep_strength_decile_rows(
-        priority_rows,
+        strength_source_rows,
         strongest=False,
     )
+    pullback_rows = _market_prep_pullback_rows(universe_strength_rows)
     strength_percent = int(round(MARKET_PREP_STRENGTH_DECILE_FRACTION * 100))
     strongest_note = (
         f"Top {strength_percent}% by D1 relative strength versus SPY "
@@ -25579,6 +26336,15 @@ def build_market_prep_payload(
             [row.get("symbol", "") for row in weakest_rows],
             details=_market_prep_strength_details(weakest_rows),
             note=weakest_note,
+        ),
+        _build_market_prep_section(
+            "recently_strong_now_pulling_back",
+            [row.get("symbol", "") for row in pullback_rows],
+            details=_market_prep_pullback_details(pullback_rows),
+            note=(
+                "Strong over ~26w (or ~13w) but pulling back on the last 5 sessions "
+                f"({len(pullback_rows)} of {strength_universe_count} symbols with RS data)."
+            ),
         ),
         _build_market_prep_section(
             "long_avwape_to_1stdev",

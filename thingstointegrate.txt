@@ -1,0 +1,69 @@
+1. Strongest 10% weakest 10% stocks not working. wouald like that for market prep purposes
+2. TOP pattern shouldnt necessarily be a pattern in itself if it overwrites the ability for other patterns to be studied. it should be considered a secondary setup
+3. In regards to the strongest stocks we should also generate a list of the stronget industries. we need to find ETFs that cover most of the major stock inudstries. for example TAN covers solar, SMH/SOXX covers Semiconductors, DRAM covers memory, HACK covers stocks like CRWD and PANW. generate a full list of these ETFs they need to be somewhat liquid for good price action comparison 
+    After doing this we can find stocks on an M5 and a D1 basis that are much stronger than their industry. combined with a Swing setup these can get massive boosts to scoring. for example if an industry is staarting to get strong on a D1 basis a stock has been strong to that industry, when that stock does a 15ema retest that could be an amazing entry
+    We can also perform this strategy intraday with bounce_bot.p. we can also do this with sectors like XLF, XLK etc. 
+In general a lot of my focus personally is ensuring a stock is at least as strong as its industry (or as weak for shorts). many times stocks can bait you becqause they are being carried by their industry. For example Semi conductors are very strong right now, but some are stronger than others. When an industry is SUPER strong its still fine if a stock is weaker becauise it might get some rotation into it, but primarily I want to find the strognest stocks, or stocks that were super strong 1-2 weeks ago then went on pullbacks. Id like to buy thsoe stocks
+4. it would be very cool if we could use the hourly and 4 hourly chart to find trends. for example somestime stocks on an hourly basis will pullback and retest their 20,50,100,200sma and then form uptrends or down trends. would be nice if the bot could find these and highlight these stocks. or at leasdt stasrt to studyh these setups. 1h and 4h are the timeframes i am interested in. we already have some of the coding to determine if astock is in an uptrend or a downtrend so we can start by givign boosts to stocks that have that uptrend on the 1h and 4h. 
+5. heres a big idea but if we are generating D1 OHLC4 candles and volume we may as well use that data for form horizontal resistance levels. I will leave this to you to figure out the tolerances but in general stocks on high vol days will set highs and lows and those levels will slowly be respected more and more overtime. it would be useful going forward to store the data for each stock (ideally in the google drive/cloud folder structure) and be able to generate thes horuizontal levels. they wont always be down to the penny but within 0.05*20dayATR or smth like that. you can decide how to build those tolerances. 
+in tradingview this is how i currently use pinescript to caculate the levels: //@version=5
+indicator("Highs of High Relative Volume Candle", overlay=true)
+
+// Calculate the 50-day moving average of volume
+avgVolume50 = ta.sma(volume, 50)
+
+// Calculate relative volume
+relVolume = volume / avgVolume50
+
+// Conditions to check relative volume levels
+high_rel_volume_2_3 = relVolume >= 2 and relVolume < 3
+high_rel_volume_above_3 = relVolume >= 3
+
+// Retrieve the high of the last high relative volume candle
+high_level_2_3 = ta.valuewhen(high_rel_volume_2_3, high, 0)
+high_level_above_3 = ta.valuewhen(high_rel_volume_above_3, high, 0)
+
+// Plot the high levels as lines
+if (high_rel_volume_2_3)
+    line.new(bar_index, high_level_2_3, bar_index - 1, high_level_2_3, width=1, color=color.red, extend=extend.left)
+
+if (high_rel_volume_above_3)
+    line.new(bar_index, high_level_above_3, bar_index - 1, high_level_above_3, width=1, color=color.green, extend=extend.left)
+
+6. additionally I like to use cloud lines as S/R levels heres my tradinview script to generate the ones i care about 
+//@version=5
+indicator("Leading Span B Lines", shorttitle="LSB-Lines", overlay=true)
+
+basePeriods = input.int(26, minval=1, title="Base Line Length")
+laggingSpan2Periods = input.int(52, minval=1, title="Leading Span B Length")
+displacement = input.int(26, minval=1, title="Displacement")
+
+// Donchian channel function
+donchian(len) => math.avg(ta.lowest(len), ta.highest(len))
+
+// Calculation of Leading Span B
+leadLine2 = donchian(laggingSpan2Periods)
+
+// Plot Leading Span B
+p2 = plot(leadLine2, offset = displacement, color=color.new(#EF9A9A, 0), title="Leading Span B")
+
+// Function to check if a line is flat
+isFlat(line) => ta.sma(line, 8) == line
+
+// Detecting flat condition for Leading Span B
+flatCloudCondition2 = isFlat(leadLine2)
+
+var line flatLine2 = na
+if flatCloudCondition2
+    if na(flatLine2)
+        flatLine2 := line.new(bar_index[1], leadLine2, bar_index, leadLine2, width=1, color=color.purple, extend=extend.right)
+else
+    if not na(flatLine2)
+        line.set_x2(flatLine2, bar_index[1])
+        flatLine2 := na
+
+I would like the bot to use horizontal levels and cloud lines to affect the scoring of stocks. i dont want to be entering stocks right at big green horizontal lines or big purple cloud lines. because these values stay relevant forever we can store these levels. for cloud lines they are rather exact but horizontal high vol levels can have some tolerances/range to them.
+it might also be useful to track these super high volume days when they are not earnigns days for the purposes of putting avwaps on them to see how reelvant they are. we can also test putting avwaps on relative highs or lows on the D1. we can fine tune this overtime. we dont necessariyl need to include these in the scoring yet but we can put them in setup tracker to see how often they need to bne respected/how often their breaks lead to sharp movves high_rel_volume_2_3
+In that vein of thought it would be useful to consider how we can define compressions as as function of AVWAPE and its stdev bands or previous avwape and its stdev bands. then we can define a comrpession break and look for those setups. We can also start testing trendline breaks as well. 
+Basically  I want to start adding some real depth and complexity to the bot we dont need to directly incoperpate tehse into the scoring yet but we need a place to start looking at these additions and see how valuable they might be. 
+ 

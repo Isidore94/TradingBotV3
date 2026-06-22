@@ -1318,7 +1318,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("LONG: AAPL", text)
         self.assertIn("SHORT: TSLA", text)
         self.assertIn("By setup type", text)
-        self.assertLess(text.index("AAPL LONG score=101"), text.index("TSLA SHORT score=98"))
+        self.assertLess(
+            text.index("AAPL LONG ExpR=n/a score=101"),
+            text.index("TSLA SHORT ExpR=n/a score=98"),
+        )
         self.assertIn("AVWAP breakout\n  LONG: AAPL", text)
         self.assertIn("AVWAP breakdown\n  LONG: None\n  SHORT: TSLA", text)
         self.assertIn("Overall score rankings", text)
@@ -2062,6 +2065,110 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("Strongest Stocks: Top 10% D1 vs SPY", report)
         self.assertIn("Weakest Stocks: Bottom 10% D1 vs SPY", report)
         self.assertIn("Top 10% by D1 relative strength versus SPY (2 of 20", report)
+
+    @staticmethod
+    def _universe_frame(closes, *, start="2024-06-03"):
+        """Build a normalized daily-bar frame from a list of closes."""
+        closes = [float(c) for c in closes]
+        dates = pd.bdate_range(start=start, periods=len(closes))
+        return pd.DataFrame(
+            {
+                "datetime": dates,
+                "open": closes,
+                "high": [c * 1.001 for c in closes],
+                "low": [c * 0.999 for c in closes],
+                "close": closes,
+                "volume": [1_000_000.0] * len(closes),
+            }
+        )
+
+    @classmethod
+    def _strength_frame(cls, strength_pct):
+        """Frame whose 1d and 5d returns both equal ``strength_pct`` (so D1 RS vs a
+        flat SPY benchmark equals ``strength_pct``)."""
+        base = 100.0 / (1.0 + strength_pct / 100.0)
+        return cls._universe_frame([base] * 7 + [100.0])
+
+    def test_market_prep_decile_ranks_full_universe_not_just_flagged(self):
+        symbols = [
+            "AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH", "III", "JJJ",
+            "KKK", "LLL", "MMM", "NNN", "OOO", "PPP", "QQQ", "RRR", "SSS", "TTT",
+        ]
+        frames = {sym: self._strength_frame(10.0 - idx) for idx, sym in enumerate(symbols)}
+
+        payload = build_market_prep_payload(
+            daily_frames_by_symbol=frames,
+            spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
+            sides_by_symbol={sym: "LONG" for sym in symbols},
+            priority_rows=[],  # nothing flagged -> proves the decile no longer needs flagged rows
+            reference_date=date(2026, 4, 24),
+        )
+        sections = {section["id"]: section for section in payload["sections"]}
+
+        self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], ["AAA", "BBB"])
+        self.assertEqual(sections["weakest_stocks_bottom_decile"]["symbols"], ["TTT", "SSS"])
+        self.assertIn("2 of 20 symbols with RS data", sections["strongest_stocks_top_decile"]["note"])
+
+    def test_market_prep_decile_breaks_ties_by_symbol(self):
+        # 20 symbols -> top decile = 2. "BBB" and "AAA" tie as the two strongest and are
+        # inserted B-before-A; the tie must still resolve to alphabetical order.
+        strengths = {"BBB": 10.0, "AAA": 10.0}
+        for n in range(18):
+            strengths[f"S{n:02d}"] = 1.0
+        frames = {sym: self._strength_frame(val) for sym, val in strengths.items()}
+
+        payload = build_market_prep_payload(
+            daily_frames_by_symbol=frames,
+            spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
+            reference_date=date(2026, 4, 24),
+        )
+        sections = {section["id"]: section for section in payload["sections"]}
+        self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], ["AAA", "BBB"])
+
+    def test_market_prep_universe_skips_symbols_without_enough_history(self):
+        frames = {
+            "AAA": self._strength_frame(8.0),
+            "SHORTY": self._universe_frame([100.0, 101.0]),  # only 2 bars -> no RS
+        }
+        payload = build_market_prep_payload(
+            daily_frames_by_symbol=frames,
+            spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
+            reference_date=date(2026, 4, 24),
+        )
+        sections = {section["id"]: section for section in payload["sections"]}
+        self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], ["AAA"])
+        self.assertIn("1 of 1 symbols with RS data", sections["strongest_stocks_top_decile"]["note"])
+
+    def test_market_prep_no_universe_data_falls_back_without_error(self):
+        payload = build_market_prep_payload(
+            priority_rows=[],
+            reference_date=date(2026, 4, 24),
+        )
+        sections = {section["id"]: section for section in payload["sections"]}
+        self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], [])
+        self.assertEqual(sections["recently_strong_now_pulling_back"]["symbols"], [])
+
+    def test_market_prep_pullback_lists_strong_then_pulling_back(self):
+        # WINNER: up strongly over ~26w but down over the last 5 sessions.
+        rising = [50.0 + i * 0.4 for i in range(135)]  # ~+100% over the window
+        rising[-1] = rising[-6] * 0.95  # last 5 sessions negative
+        # STEADY: flat the whole window (no pullback, not "recently strong").
+        flat = [100.0] * 135
+
+        frames = {
+            "WINNER": self._universe_frame(rising),
+            "STEADY": self._universe_frame(flat),
+        }
+        payload = build_market_prep_payload(
+            daily_frames_by_symbol=frames,
+            spy_benchmark={"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
+            reference_date=date(2026, 4, 24),
+        )
+        sections = {section["id"]: section for section in payload["sections"]}
+        pullback = sections["recently_strong_now_pulling_back"]
+        self.assertIn("WINNER", pullback["symbols"])
+        self.assertNotIn("STEADY", pullback["symbols"])
+        self.assertTrue(pullback["details"][0].startswith("WINNER"))
 
     def test_load_scan_earnings_context_reuses_refreshed_earnings_lookup(self):
         earnings_lookup = {"AAPL": ["2026-04-21"]}

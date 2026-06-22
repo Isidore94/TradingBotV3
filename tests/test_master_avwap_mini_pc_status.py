@@ -21,10 +21,10 @@ class MasterAvwapMiniPcStatusTests(unittest.TestCase):
             [
                 "Master AVWAP priority setups",
                 "",
-                "Ranked by total score",
-                "---------------------",
-                "NVDA LONG score=245 family=AVWAPE break bucket=favorite_setup",
-                "TSLA SHORT score=211 family=post earnings gap bucket=near_favorite_zone",
+                "Ranked by Expected-R (blended)",
+                "------------------------------",
+                "NVDA LONG ExpR=+1.10R score=245 family=AVWAPE break bucket=favorite_setup",
+                "TSLA SHORT ExpR=+0.70R score=211 family=post earnings gap bucket=near_favorite_zone",
                 "",
                 "Detailed setup notes",
                 "====================",
@@ -46,23 +46,43 @@ class MasterAvwapMiniPcStatusTests(unittest.TestCase):
         self.assertEqual(lines[0], "Best Trades First")
         self.assertIn("TV Paste: NVDA, TSLA", lines)
         self.assertIn("Theta Paste: AMD", lines)
-        self.assertIn("1. NVDA LONG | score=245 | favorite | AVWAPE break | zone=upper_band | clean zone; tracker edge", lines)
-        self.assertIn("2. TSLA SHORT | score=211 | near | post earnings gap", lines)
+        self.assertIn(
+            "1. NVDA LONG | ExpR=+1.10R | score=245 | favorite | AVWAPE break | zone=upper_band | clean zone; tracker edge",
+            lines,
+        )
+        self.assertIn("2. TSLA SHORT | ExpR=+0.70R | score=211 | near | post earnings gap", lines)
 
     def test_priority_rank_parser_stops_after_ranked_block(self):
+        rows = _parse_priority_ranked_rows(
+            "\n".join(
+                [
+                    "Ranked by Expected-R (blended)",
+                    "------------------------------",
+                    "NVDA LONG ExpR=+1.10R score=245 family=AVWAPE break bucket=favorite_setup",
+                    "",
+                    "TSLA SHORT ExpR=+0.70R score=211 family=ignored bucket=near_favorite_zone",
+                ]
+            )
+        )
+
+        self.assertEqual([row["symbol"] for row in rows], ["NVDA"])
+        self.assertEqual(rows[0]["expected_r"], "+1.10R")
+
+    def test_priority_rank_parser_accepts_legacy_total_score_format(self):
+        # Reports written before the Expected-R upgrade must still parse.
         rows = _parse_priority_ranked_rows(
             "\n".join(
                 [
                     "Ranked by total score",
                     "---------------------",
                     "NVDA LONG score=245 family=AVWAPE break bucket=favorite_setup",
-                    "",
-                    "TSLA SHORT score=211 family=ignored bucket=near_favorite_zone",
                 ]
             )
         )
 
         self.assertEqual([row["symbol"] for row in rows], ["NVDA"])
+        self.assertEqual(rows[0]["expected_r"], "")
+        self.assertEqual(rows[0]["score"], "245")
 
     def test_theta_pending_note_only_when_deferred(self):
         self.assertIn("background", _scan_result_followup_note({"theta_enrichment_pending": True}))

@@ -108,6 +108,7 @@ WATCHLIST_FILTER_CLIENT_ID = 1005
 SETUP_TRACKER_SYNC_CLIENT_ID = 1006
 WATCHLIST_FILTER_DAYS = 5
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
+CONTROL_DISCOVERY_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 
 _LOCK_ACQUIRED = False
 
@@ -361,15 +362,18 @@ def _tail_or_head_lines(text: str, max_lines: int, *, mode: str = "head") -> lis
 def _parse_priority_ranked_rows(report_text: str, limit: int = STATUS_TOP_TRADE_LIMIT) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     in_ranked_block = False
+    # ``ExpR=`` is optional so reports written before the Expected-R upgrade (or
+    # mid-migration) still parse cleanly.
     pattern = re.compile(
-        r"^([A-Z0-9.\-]+)\s+(LONG|SHORT)\s+score=([^\s]+)\s+family=(.*?)\s+bucket=([^\s]+)\s*$",
+        r"^([A-Z0-9.\-]+)\s+(LONG|SHORT)\s+(?:ExpR=(\S+)\s+)?score=(\S+)\s+family=(.*?)\s+bucket=(\S+)\s*$",
         re.IGNORECASE,
     )
 
     for raw_line in str(report_text or "").splitlines():
         line = raw_line.strip()
         if not in_ranked_block:
-            if line.lower() == "ranked by total score":
+            header = line.lower()
+            if header == "ranked by total score" or header.startswith("ranked by expected-r"):
                 in_ranked_block = True
             continue
         if not line:
@@ -385,9 +389,10 @@ def _parse_priority_ranked_rows(report_text: str, limit: int = STATUS_TOP_TRADE_
             {
                 "symbol": match.group(1).upper(),
                 "side": match.group(2).upper(),
-                "score": match.group(3),
-                "family": match.group(4).strip(),
-                "bucket": match.group(5).strip(),
+                "expected_r": (match.group(3) or "").strip(),
+                "score": match.group(4),
+                "family": match.group(5).strip(),
+                "bucket": match.group(6).strip(),
             }
         )
         if len(rows) >= limit:
@@ -439,11 +444,12 @@ def _status_bucket_label(bucket: str) -> str:
 def _format_ranked_trade_line(index: int, row: dict[str, str], detail_map: dict[str, dict[str, str]]) -> str:
     symbol = str(row.get("symbol") or "").strip().upper()
     details = detail_map.get(symbol, {})
-    parts = [
-        f"{index}. {symbol} {row.get('side', '')}",
-        f"score={row.get('score', 'n/a')}",
-        _status_bucket_label(row.get("bucket", "")),
-    ]
+    parts = [f"{index}. {symbol} {row.get('side', '')}"]
+    expected_r = str(row.get("expected_r") or "").strip()
+    if expected_r and expected_r.lower() != "none":
+        parts.append(f"ExpR={expected_r}")
+    parts.append(f"score={row.get('score', 'n/a')}")
+    parts.append(_status_bucket_label(row.get("bucket", "")))
     family = _shorten_status_text(row.get("family"), 42)
     if family:
         parts.append(family)
@@ -1180,6 +1186,7 @@ def write_status_file(
         f"Setup daily CSV: {MASTER_AVWAP_SETUP_DAILY_FILE}",
         f"Setup stats CSV: {MASTER_AVWAP_SETUP_STATS_FILE}",
         f"Setup type stats CSV: {SETUP_TYPE_STATS_FILE}",
+        f"Control discovery report: {CONTROL_DISCOVERY_FILE}",
         f"Setup attributes CSV: {MASTER_AVWAP_SETUP_ATTRIBUTES_FILE}",
         f"Factor leaderboard CSV: {MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE}",
         f"Scan factor observations CSV: {MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE}",

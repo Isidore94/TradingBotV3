@@ -1428,7 +1428,7 @@ def run_master(
     apply_post_earnings_hard_rule_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     apply_clean_first_zone_score_bonus(priority_rows, ai_state, feature_rows_by_symbol)
-    apply_recent_tracker_setup_family_adjustments(
+    recent_family_rows = apply_recent_tracker_setup_family_adjustments(
         priority_rows,
         ai_state,
         feature_rows_by_symbol,
@@ -1444,6 +1444,12 @@ def run_master(
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
+    apply_expected_r_ranking(
+        priority_rows,
+        ai_state,
+        feature_rows_by_symbol,
+        recent_family_rows=recent_family_rows,
+    )
     d1_upgrade_alert_payload = write_master_avwap_d1_upgrade_alert_outputs(
         alerts_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
         report_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
@@ -1527,18 +1533,30 @@ def run_master(
     run_result["setup_tracker_skip_reason"] = setup_tracker_skip_reason
 
     if setup_tracker_allowed:
+        control_rows = select_tracker_control_rows(
+            priority_rows,
+            tracked_rows,
+            scan_date=today_run.isoformat() if hasattr(today_run, "isoformat") else str(today_run or ""),
+        )
         update_setup_tracker_from_scan(
             tracked_rows,
             ai_state,
             feature_rows_by_symbol,
             daily_frames_by_symbol,
             ib,
+            control_rows=control_rows,
         )
         run_result["setup_tracker_updated"] = True
+        run_result["control_setups_tracked"] = len(control_rows)
         logging.info(
-            "Setup tracker updated for %s tracked symbol(s).",
+            "Setup tracker updated for %s tracked symbol(s); %s control/holdout setup(s).",
             len(tracked_rows),
+            len(control_rows),
         )
+        # Re-fit the Expected-R prior anchors to the freshly-updated closed
+        # outcomes so the next scan's headline ranking is grounded in this
+        # trader's own realized R (no-op until enough closed history exists).
+        calibrate_expected_r_prior_anchors(persist=True)
     else:
         if setup_tracker_skip_reason:
             logging.info(setup_tracker_skip_reason)
@@ -1657,12 +1675,19 @@ def run_master(
         stdev_range_hits,
         stdev_cross_hits,
     )
+    spy_benchmark = (market_regime_snapshot.get("benchmarks", {}) or {}).get("SPY", {}) or {}
+    sides_by_symbol = {
+        sym: ("LONG" if sym in longs else "SHORT") for sym in daily_frames_by_symbol
+    }
     market_prep_payload = build_market_prep_payload(
         range_buckets=range_buckets,
         market_prep_range_buckets=market_prep_range_buckets,
         priority_rows=priority_rows,
         latest_release_map=latest_release_map,
         reference_date=today_run,
+        daily_frames_by_symbol=daily_frames_by_symbol,
+        spy_benchmark=spy_benchmark,
+        sides_by_symbol=sides_by_symbol,
     )
     write_market_prep_files(market_prep_payload)
     run_result["market_prep_payload"] = market_prep_payload
