@@ -405,7 +405,9 @@ THETA_AVWAP_FAMILY_SUPPORT_LABELS = (
     | THETA_PREVIOUS_AVWAPE_SUPPORT_LABELS
     | THETA_PREVIOUS_FIRST_DEV_SUPPORT_LABELS
 )
-THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 11
+# Keep theta plays short-dated: at most ~2 weeks out, preferring the nearest
+# weekly. Market days, so 10 ~= 2 calendar weeks, 5 ~= 1 week.
+THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 10
 THETA_PUT_TARGET_TOTAL_CREDIT = 100.0
 THETA_PUT_MAX_CONTRACTS = 4
 THETA_PUT_TARGET_MIN_CREDIT = THETA_PUT_TARGET_TOTAL_CREDIT / 100.0 / THETA_PUT_MAX_CONTRACTS
@@ -413,9 +415,12 @@ THETA_PUT_CUSP_MIN_CREDIT = 0.15
 THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE = 2
 THETA_PUT_MAX_STRIKES_PER_EXPIRATION = 12
 THETA_PUT_MAX_EXPIRATIONS = 3
+# Points subtracted per market day to expiration, so the shorter-dated play wins
+# unless a slightly longer one is clearly better.
+THETA_DTE_PENALTY_PER_MARKET_DAY = 4.0
 THETA_PCS_MIN_SUPPORT_LEVELS = 2
-THETA_PCS_MIN_EXPIRATION_MARKET_DAYS = 6
-THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 15
+THETA_PCS_MIN_EXPIRATION_MARKET_DAYS = 4
+THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 10
 THETA_PCS_TARGET_CREDIT_WIDTH_RATIO = 0.20
 THETA_PCS_CUSP_CREDIT_WIDTH_RATIO = 0.12
 THETA_PCS_MAX_EXPIRATIONS = 3
@@ -17578,6 +17583,7 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
         moneyness_penalty = 0.0
         if close_value > 0:
             moneyness_penalty = max(0.0, ((close_value - strike) / close_value * 100.0) - 8.0) * 0.6
+        dte_penalty = max(0, int(quote_row.get("market_days", 0) or 0)) * THETA_DTE_PENALTY_PER_MARKET_DAY
         rank_score = (
             base_score
             + credit * 90.0
@@ -17587,6 +17593,7 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
             - surrendered * 8.0
             - spread_penalty
             - moneyness_penalty
+            - dte_penalty
             - status_rank * 55.0
         )
         ranked.append(
@@ -17746,6 +17753,7 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
         surrendered = int(spread_row.get("surrendered_support_count", 0) or 0)
         avwap_support_count = int(spread_row.get("covered_avwap_support_count", 0) or 0)
         previous_first_dev_support_count = int(spread_row.get("covered_previous_first_dev_support_count", 0) or 0)
+        dte_penalty = max(0, int(spread_row.get("market_days", 0) or 0)) * THETA_DTE_PENALTY_PER_MARKET_DAY
         rank_score = (
             base_score
             + credit_ratio * 240.0
@@ -17755,6 +17763,7 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
             + previous_first_dev_support_count * 3.0
             - surrendered * 5.0
             - spread_penalty
+            - dte_penalty
             - status_rank * 55.0
         )
         ranked.append(
