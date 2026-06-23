@@ -5390,9 +5390,15 @@ class MasterAvwapSetupTests(unittest.TestCase):
             ]
         }
         hv_supports = master_avwap._theta_hv_level_supports("CIEN", 105.0, 4.0, store=store)
-        labels = sorted(entry["label"] for entry in hv_supports)
-        self.assertEqual(labels, ["HVOL_GREEN", "HVOL_RED"])
-        self.assertTrue(all(entry["source"] == "hv_horizontal" for entry in hv_supports))
+        by_label = {entry["label"]: entry for entry in hv_supports}
+        self.assertEqual(sorted(by_label), ["HVOL_GREEN", "HVOL_RED"])
+        self.assertEqual(by_label["HVOL_GREEN"]["source"], "hv_horizontal_green")
+        self.assertEqual(by_label["HVOL_RED"]["source"], "hv_horizontal_red")
+        # Green rvol lines are weighted far above red ones.
+        self.assertGreater(
+            master_avwap._theta_support_quality(by_label["HVOL_GREEN"]),
+            2.0 * master_avwap._theta_support_quality(by_label["HVOL_RED"]),
+        )
 
         # HV levels stack with a major SMA to make a strike eligible.
         row = {
@@ -5407,6 +5413,48 @@ class MasterAvwapSetupTests(unittest.TestCase):
         }
         sold = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94])
         self.assertTrue(sold)
+
+    def test_relative_avwap_study_detects_retest_and_emits_study_row(self):
+        prices = [100.0] * 40
+        prices[19] = 95.0
+        prices[20] = 90.0  # relative low pivot
+        prices[21] = 95.0
+        dates = pd.bdate_range("2024-01-01", periods=40)
+        rows = []
+        for idx, (day, price) in enumerate(zip(dates, prices)):
+            if idx == 39:
+                rows.append({"datetime": day, "open": 99.5, "high": 100.0, "low": 99.0, "close": 99.5, "volume": 1.0})
+            else:
+                rows.append({"datetime": day, "open": price, "high": price, "low": price, "close": price, "volume": 1.0})
+        frame = pd.DataFrame(rows)
+
+        context = master_avwap.assess_relative_avwap_context(
+            frame, last_close=99.5, atr20=5.0, side="LONG"
+        )
+        self.assertTrue(context["relative_avwap_nearby"])
+        self.assertEqual(context["relative_avwap_kind"], "low")
+        self.assertTrue(context["relative_avwap_retest_today"])
+
+        priority_rows = [
+            {
+                "symbol": "X",
+                "side": "LONG",
+                "last_close": 99.5,
+                "atr20": 5.0,
+                "priority_bucket": "favorite_setup",
+                "setup_tags": ["A"],
+                "has_favorite_signal": True,
+            }
+        ]
+        study_rows = master_avwap.enrich_priority_rows_with_relative_avwap_studies(
+            priority_rows, {"X": frame}
+        )
+        self.assertEqual(len(study_rows), 1)
+        self.assertEqual(study_rows[0]["setup_family"], master_avwap.RELATIVE_AVWAP_STUDY_FAMILY)
+        self.assertEqual(study_rows[0]["priority_bucket"], master_avwap.RELATIVE_AVWAP_STUDY_BUCKET)
+        self.assertIn("RELATIVE_AVWAP_RETEST", study_rows[0]["setup_tags"])
+        # The study annotation flows onto the priority row but does not change score.
+        self.assertTrue(priority_rows[0]["relative_avwap_nearby"])
 
     def test_theta_option_strikes_allow_sma_only_support(self):
         # Loosened: a major SMA support below the strike is enough on its own (an
