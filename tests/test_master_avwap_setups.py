@@ -6079,6 +6079,42 @@ class MasterAvwapSetupTests(unittest.TestCase):
             master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
             master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
 
+    def test_ibkr_historical_failure_circuit_uses_yahoo_for_remaining_fetches(self):
+        class FailingHistoricalClient:
+            def __init__(self):
+                self.data = {}
+                self.ready = {}
+                self.request_errors = {}
+                self.calls = 0
+
+            def reqHistoricalData(self, req_id, *_args):
+                self.calls += 1
+                self.data[req_id] = []
+                self.ready[req_id] = True
+                self.request_errors[req_id] = [
+                    {"code": 162, "message": "Historical Market Data Service error message:API historical data query cancelled"}
+                ]
+
+            def cancelHistoricalData(self, _req_id):
+                pass
+
+        ib = FailingHistoricalClient()
+        yahoo_frame = _build_daily_bar_cache_frame()
+        master_avwap.reset_ibkr_historical_failure_circuit()
+        with patch.object(master_avwap, "fetch_daily_bars_from_yahoo", return_value=yahoo_frame) as yahoo_fetch:
+            for _ in range(master_avwap.IBKR_HISTORICAL_FAILURE_THRESHOLD):
+                result = master_avwap._fetch_live_daily_bars(ib, "AL", 40)
+                self.assertFalse(result.empty)
+
+            calls_after_trip = ib.calls
+            result = master_avwap._fetch_live_daily_bars(ib, "MSFT", 40)
+
+        self.assertFalse(result.empty)
+        self.assertEqual(calls_after_trip, master_avwap.IBKR_HISTORICAL_FAILURE_THRESHOLD)
+        self.assertEqual(ib.calls, calls_after_trip)
+        self.assertEqual(yahoo_fetch.call_count, master_avwap.IBKR_HISTORICAL_FAILURE_THRESHOLD + 1)
+        master_avwap.reset_ibkr_historical_failure_circuit()
+
     def test_yahoo_daily_bar_parser_handles_multiindex_columns(self):
         dates = pd.date_range("2026-01-01", periods=3)
         raw = pd.DataFrame(

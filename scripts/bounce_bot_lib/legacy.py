@@ -74,6 +74,7 @@ from project_paths import (
     SHORTS_FILE,
     REPORTS_DIR,
     BOUNCE_LOG_FILE,
+    SafeRotatingFileHandler,
     TRADING_BOT_LOG_FILE,
     INTRADAY_BOUNCES_FILE,
     INTRADAY_BOUNCE_CANDIDATES_FILE,
@@ -1417,7 +1418,7 @@ def configure_app_logging():
     console_handler.setFormatter(logging.Formatter(APP_LOG_FORMAT))
     handlers = [console_handler]
     try:
-        file_handler = RotatingFileHandler(
+        file_handler = SafeRotatingFileHandler(
             TRADING_BOT_LOG_FILENAME,
             maxBytes=1_000_000,
             backupCount=APP_LOG_BACKUP_COUNT,

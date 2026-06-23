@@ -1,0 +1,181 @@
+QWidget {
+    background: @bg_app@;
+    color: @text_primary@;
+    font-family: "Segoe UI";
+    font-size: 10.5pt;
+}
+
+QMainWindow,
+QStatusBar {
+    background: @bg_app@;
+}
+
+QFrame#NavRail,
+QFrame#Panel,
+QFrame#TopBar,
+QFrame#StatusStrip,
+QFrame#InfoDrawer {
+    background: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: 10px;
+}
+
+QFrame#TopBar {
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    border-top: 0;
+}
+
+QLabel#TitleLabel {
+    font-size: 17pt;
+    font-weight: 650;
+    color: @text_primary@;
+}
+
+QLabel#SectionTitle {
+    font-size: 13pt;
+    font-weight: 650;
+    color: @text_primary@;
+}
+
+QLabel#SectionSubtitle,
+QLabel#MutedLabel,
+QStatusBar QLabel {
+    color: @text_secondary@;
+}
+
+QPushButton,
+QToolButton {
+    background: @bg_elevated@;
+    color: @text_primary@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    padding: @padding_small@ @padding_medium@;
+}
+
+QPushButton:hover,
+QToolButton:hover {
+    background: @bg_hover@;
+    border-color: @accent@;
+}
+
+QPushButton:checked,
+QToolButton:checked {
+    background: @accent_soft@;
+    border-color: @accent@;
+    color: @text_primary@;
+}
+
+QPushButton#PrimaryButton {
+    background: @accent@;
+    border-color: @accent@;
+    color: white;
+    font-weight: 600;
+}
+
+QPushButton#NavButton {
+    text-align: left;
+    padding: 9px 12px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: @text_secondary@;
+    font-weight: 600;
+}
+
+QPushButton#NavButton:hover {
+    background: @bg_hover@;
+    border-color: @border@;
+    color: @text_primary@;
+}
+
+QPushButton#NavButton:checked {
+    background: @accent_soft@;
+    border-color: @accent@;
+    color: @text_primary@;
+}
+
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox,
+QComboBox,
+QPlainTextEdit,
+QTextEdit {
+    background: @input_bg@;
+    color: @text_primary@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    padding: @padding_small@;
+    selection-background-color: @selection@;
+}
+
+QTableView {
+    background: @bg_panel@;
+    alternate-background-color: @bg_elevated@;
+    color: @text_primary@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    gridline-color: @border@;
+    selection-background-color: @selection@;
+    selection-color: @text_primary@;
+}
+
+QHeaderView::section {
+    background: @bg_elevated@;
+    color: @text_secondary@;
+    border: 0;
+    border-right: 1px solid @border@;
+    border-bottom: 1px solid @border@;
+    padding: 7px 8px;
+    font-weight: 650;
+}
+
+QTableView::item {
+    min-height: @row_height@;
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+QTabWidget::pane {
+    border: 1px solid @border@;
+    border-radius: 8px;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: @bg_elevated@;
+    color: @text_secondary@;
+    border: 1px solid @border@;
+    border-bottom: 0;
+    padding: 8px 14px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+
+QTabBar::tab:selected {
+    background: @bg_panel@;
+    color: @text_primary@;
+    border-color: @accent@;
+}
+
+QSplitter::handle {
+    background: @border@;
+}
+
+QScrollBar:vertical,
+QScrollBar:horizontal {
+    background: @bg_app@;
+    border: 0;
+    width: 12px;
+    height: 12px;
+}
+
+QScrollBar::handle {
+    background: @border@;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:hover {
+    background: @text_muted@;
+}

@@ -59,6 +59,8 @@ from master_avwap import (
 )
 from project_paths import (
     APP_LOG_BACKUP_COUNT,
+    LOCAL_LOG_DIR,
+    SafeRotatingFileHandler,
     JOURNAL_DB_FILE,
     LOG_DIR,
     LONGS_FILE,
@@ -94,7 +96,7 @@ from watchlist_utils import WATCHLIST_SYMBOL_RE, count_watchlist_symbols
 STATUS_FILE = LONGS_FILE.parent / "master_avwap_mini_pc_status.txt"
 STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc_state.json"
 LOCK_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_mini_pc.lock"
-SCHEDULER_LOG_FILE = LOG_DIR / "master_avwap_mini_pc.log"
+SCHEDULER_LOG_FILE = LOCAL_LOG_DIR / "master_avwap_mini_pc.log"
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 STATUS_PREVIEW_RUNS = 8
 STATUS_TOP_TRADE_LIMIT = 10
@@ -1289,8 +1291,8 @@ def attach_scheduler_log_handler() -> None:
         if handler_path and str(Path(handler_path).resolve()) == target:
             return
 
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
+    SCHEDULER_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handler = SafeRotatingFileHandler(
         SCHEDULER_LOG_FILE,
         maxBytes=2_000_000,
         backupCount=APP_LOG_BACKUP_COUNT,

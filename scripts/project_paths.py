@@ -1,12 +1,51 @@
 from __future__ import annotations
 
+import logging.handlers
 import os
 import shutil
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+
+
+class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler that tolerates a locked target file on rollover.
+
+    On Windows, files inside a Google Drive / OneDrive sync folder are frequently
+    held open by the sync client, so the ``os.rename`` in ``doRollover`` raises
+    PermissionError (WinError 32). The stock handler then re-raises that on every
+    subsequent record, flooding the console with rollover tracebacks. This keeps
+    writing to the current file and backs off, retrying the rotation later.
+    """
+
+    _ROLLOVER_BACKOFF_SECONDS = 60.0
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._rollover_blocked_until = 0.0
+
+    def shouldRollover(self, record):  # noqa: N802 (logging override naming)
+        if time.monotonic() < self._rollover_blocked_until:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self):  # noqa: N802
+        try:
+            super().doRollover()
+            self._rollover_blocked_until = 0.0
+        except OSError:
+            # Target file is locked (commonly Drive/OneDrive sync). Keep logging
+            # to the current file and retry rotation after a cool-off rather than
+            # raising, which would spam a rollover traceback on every record.
+            self._rollover_blocked_until = time.monotonic() + self._ROLLOVER_BACKOFF_SECONDS
+            if self.stream is None and not self.delay:
+                try:
+                    self.stream = self._open()
+                except OSError:
+                    pass
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -67,6 +106,9 @@ LOG_DIR = PERSISTENT_DATA_DIR / "logs"
 
 LOCAL_MACHINE_CACHE_DIR = LOCAL_SETTINGS_DIR / "machine_cache"
 CACHE_DIR = LOCAL_MACHINE_CACHE_DIR
+# Diagnostic app logs are per-machine and rotate (rename) frequently, which fights
+# Google Drive / OneDrive sync locks — keep them on local disk, not the shared store.
+LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
 PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
@@ -147,7 +189,10 @@ MASTER_AVWAP_MARKET_PREP_REPORT_FILE = REPORTS_DIR / "master_avwap_market_prep.t
 EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE = REPORTS_DIR / "earnings_anchor_candidates.txt"
 
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
-APP_LOG_FILE = LOG_DIR / "trading_bot.log"
+# Rotating diagnostic log lives on local disk (see LOCAL_LOG_DIR) so rotation never
+# collides with cloud-sync file locks; data-style logs (bouncers, RRS CSVs) stay on
+# the shared store.
+APP_LOG_FILE = LOCAL_LOG_DIR / "trading_bot.log"
 APP_LOG_BACKUP_COUNT = 1
 TRADING_BOT_LOG_FILE = APP_LOG_FILE
 MASTER_AVWAP_LOG_FILE = APP_LOG_FILE
@@ -167,6 +212,7 @@ def get_tracker_storage_details() -> dict[str, str]:
         "shared_root_dir": str(SHARED_HOME_DIR),
         "mutable_data_dir": str(DATA_DIR),
         "logs_dir": str(LOG_DIR),
+        "app_log_dir": str(LOCAL_LOG_DIR),
         "output_dir": str(OUTPUT_DIR),
         "runtime_dir": str(PERSISTENT_RUNTIME_DATA_DIR),
         "local_cache_dir": str(LOCAL_MACHINE_CACHE_DIR),
@@ -260,6 +306,7 @@ def _ensure_directories() -> None:
         DATA_DIR,
         OUTPUT_DIR,
         LOG_DIR,
+        LOCAL_LOG_DIR,
         JOURNAL_EXPORT_DIR,
     ):
         path.mkdir(parents=True, exist_ok=True)
@@ -337,7 +384,9 @@ def _consolidate_legacy_logs() -> None:
         _append_legacy_text_file(source_path, destination)
 
     for search_dir in (REPO_LOG_DIR, legacy_log_dir):
-        if search_dir == LOG_DIR:
+        # Skip both the shared logs dir and the now-active local log dir so their
+        # live rotation backups are not folded back into the active log.
+        if search_dir in (LOG_DIR, LOCAL_LOG_DIR):
             continue
         _consolidate_log_variants(APP_LOG_FILE, "trading_bot.log", search_dir, keep_backups=0)
         _consolidate_log_variants(APP_LOG_FILE, "master_avwap.log", search_dir, keep_backups=0)

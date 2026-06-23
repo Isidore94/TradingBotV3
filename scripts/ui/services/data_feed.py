@@ -1,0 +1,340 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Iterable
+
+from project_paths import (
+    MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+)
+from ui.models.setup import SetupRow
+
+
+RANKED_LINE_RE = re.compile(
+    r"^\s*(?P<rank>\d+)\.\s+"
+    r"(?P<symbol>[A-Z][A-Z0-9.\-]*)\s+"
+    r"(?P<side>LONG|SHORT)\s+"
+    r"(?:ExpR=(?P<expected_r>-?\d+(?:\.\d+)?)\s+)?"
+    r"score=(?P<score>-?\d+(?:\.\d+)?)\s+"
+    r"bucket=(?P<bucket>[^\s]+)\s+"
+    r"family=(?P<family>.+?)\s{2,}"
+    r"(?:zone=(?P<zone>.+?)\s{2,})?"
+    r"(?:trend=(?P<trend>[A-Z_]+)\s+)?"
+    r"(?P<tail>.*)$"
+)
+
+
+def rows_from_run_result(run_result: dict[str, Any] | None) -> list[SetupRow]:
+    if not isinstance(run_result, dict):
+        return []
+
+    theta_by_symbol = _theta_by_symbol(run_result)
+    rows: list[SetupRow] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for source_key in (
+        "tracked_rows",
+        "hv_level_study_rows",
+        "relative_avwap_study_rows",
+        "htf_trend_study_rows",
+        "phase6_study_rows",
+    ):
+        for raw in _iter_dicts(run_result.get(source_key)):
+            row = setup_row_from_mapping(raw, theta_by_symbol=theta_by_symbol, source=source_key)
+            identity = (row.symbol, row.side, row.bucket)
+            if row.symbol and identity not in seen:
+                rows.append(row)
+                seen.add(identity)
+
+    rows.sort(key=_sort_key)
+    return rows
+
+
+def load_setup_rows_from_focus(path: Path = MASTER_AVWAP_FOCUS_FILE) -> list[SetupRow]:
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        return []
+
+    rows: list[SetupRow] = []
+    seen: set[tuple[str, str, str]] = set()
+    for key in (
+        "high_conviction",
+        "favorites",
+        "near_favorite_zones",
+        "post_earnings_plays",
+        "sma_breakout_tracking",
+        "stdev_retest_tracking",
+    ):
+        for raw in _iter_dicts(payload.get(key)):
+            row = setup_row_from_mapping(raw, source=f"focus:{key}")
+            identity = (row.symbol, row.side, row.bucket)
+            if row.symbol and identity not in seen:
+                rows.append(row)
+                seen.add(identity)
+
+    rows.sort(key=_sort_key)
+    return rows
+
+
+def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE) -> list[SetupRow]:
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+
+    rows: list[SetupRow] = []
+    seen: set[tuple[str, str, str]] = set()
+    for line in lines:
+        match = RANKED_LINE_RE.match(line)
+        if not match:
+            continue
+        data = match.groupdict()
+        bucket = _unlabel_bucket(data.get("bucket") or "")
+        row = SetupRow(
+            symbol=(data.get("symbol") or "").upper(),
+            side=data.get("side") or "",
+            score=_float_or_none(data.get("score")),
+            bucket=bucket,
+            setup_tags=[data.get("family") or ""],
+            key_level=data.get("zone") or "",
+            expected_r=_float_or_none(data.get("expected_r")),
+            source="priority_report",
+            raw={"report_line": line, **{k: v for k, v in data.items() if v}},
+        )
+        identity = (row.symbol, row.side, row.bucket)
+        if row.symbol and identity not in seen:
+            rows.append(row)
+            seen.add(identity)
+
+    rows.sort(key=_sort_key)
+    return rows
+
+
+def load_latest_setup_rows() -> list[SetupRow]:
+    rows = load_setup_rows_from_focus()
+    if rows:
+        return rows
+    return load_setup_rows_from_priority_report()
+
+
+def setup_row_from_mapping(
+    raw: dict[str, Any],
+    *,
+    theta_by_symbol: dict[str, str] | None = None,
+    source: str = "",
+) -> SetupRow:
+    symbol = str(raw.get("symbol") or "").strip().upper()
+    side = _normalize_side(raw.get("side"))
+    bucket = str(raw.get("priority_bucket") or raw.get("bucket") or "").strip()
+    if not bucket and source.endswith("_study_rows"):
+        bucket = "study"
+
+    score = _float_or_none(raw.get("priority_score", raw.get("score")))
+    tags = _listish(raw.get("setup_tags"))
+    if not tags:
+        tags = _listish(raw.get("favorite_signals"))[:3]
+
+    supports = _int_or_none(raw.get("support_count"))
+    if supports is None:
+        nearby = _int_or_none(raw.get("hv_level_nearby_count")) or 0
+        blocking = _int_or_none(raw.get("hv_level_blocking_count")) or 0
+        supports = nearby + blocking if nearby or blocking else None
+
+    theta_by_symbol = theta_by_symbol or {}
+    theta = theta_by_symbol.get(symbol, "")
+
+    return SetupRow(
+        symbol=symbol,
+        side=side,
+        score=score,
+        bucket=bucket,
+        setup_tags=tags,
+        key_level=_key_level_text(raw),
+        supports=supports,
+        hv_summary=_hv_summary(raw),
+        theta=theta,
+        expected_r=_float_or_none(raw.get("expected_r")),
+        expected_r_rank=_float_or_none(raw.get("expected_r_rank_score")),
+        days_to_earnings=_int_or_none(raw.get("days_to_next_earnings")),
+        last_trade_date=str(raw.get("last_trade_date") or raw.get("scan_date") or ""),
+        source=source,
+        raw=dict(raw),
+    )
+
+
+def copy_symbols(rows: Iterable[SetupRow], kind: str) -> str:
+    normalized = kind.strip().lower()
+    selected: list[SetupRow] = []
+    for row in rows:
+        bucket = row.bucket.strip().lower()
+        if normalized == "longs" and row.side != "LONG":
+            continue
+        if normalized == "shorts" and row.side != "SHORT":
+            continue
+        if normalized == "favorites" and bucket not in {"favorite_setup", "high_conviction"}:
+            continue
+        if normalized == "active" and bucket not in {"favorite_setup", "near_favorite_zone", "high_conviction"}:
+            continue
+        selected.append(row)
+
+    if normalized == "ranked":
+        # Preserve the table's current (rank) order; only de-duplicate.
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for row in selected:
+            if row.symbol and row.symbol not in seen:
+                seen.add(row.symbol)
+                ordered.append(row.symbol)
+        return ", ".join(ordered)
+
+    symbols = sorted({row.symbol for row in selected if row.symbol})
+    return ", ".join(symbols)
+
+
+def _theta_by_symbol(run_result: dict[str, Any]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for source_key, label in (("theta_put_rows", "Put"), ("theta_pcs_rows", "PCS")):
+        for row in _iter_dicts(run_result.get(source_key)):
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol or symbol in lookup:
+                continue
+            lookup[symbol] = _theta_summary(row, label)
+    return lookup
+
+
+def _theta_summary(row: dict[str, Any], label: str) -> str:
+    option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
+    strike = option.get("strike", option.get("short_strike", row.get("sell_strike", "")))
+    credit = option.get("credit", row.get("recommended_credit", ""))
+    dte = option.get("market_days", row.get("market_days", ""))
+    parts = [label]
+    if strike not in (None, ""):
+        parts.append(f"{_format_number(strike)} strike")
+    if credit not in (None, ""):
+        parts.append(f"@ {_format_number(credit)}")
+    if dte not in (None, ""):
+        parts.append(f"{dte}d")
+    return " ".join(parts)
+
+
+def _key_level_text(row: dict[str, Any]) -> str:
+    for key in (
+        "current_band_zone",
+        "favorite_zone",
+        "retest_reference_level",
+        "top_pattern_entry_level",
+        "mid_earnings_primary_trigger_level",
+        "sma_breakout_retest_level",
+        "post_earnings_monitor_level",
+        "hv_level_nearest_price",
+    ):
+        value = row.get(key)
+        if value not in (None, ""):
+            if isinstance(value, (float, int)):
+                return _format_number(value)
+            return str(value)
+    return ""
+
+
+def _hv_summary(row: dict[str, Any]) -> str:
+    nearby = _int_or_none(row.get("hv_level_nearby_count")) or 0
+    blocking = _int_or_none(row.get("hv_level_blocking_count")) or 0
+    if not nearby and not blocking and not row.get("hv_level_break_today"):
+        return ""
+    parts: list[str] = []
+    if nearby:
+        parts.append(f"{nearby} near")
+    if blocking:
+        parts.append(f"{blocking} block")
+    if row.get("hv_level_break_today"):
+        parts.append("break")
+    return ", ".join(parts)
+
+
+def _iter_dicts(value: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                yield item
+
+
+def _listish(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        separators = ";" if ";" in value else ","
+        return [part.strip() for part in value.split(separators) if part.strip()]
+    return []
+
+
+def _read_json(path: Path) -> Any:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _normalize_side(value: Any) -> str:
+    side = str(value or "").strip().upper()
+    if side in {"LONG", "SHORT"}:
+        return side
+    return side
+
+
+def _unlabel_bucket(label: str) -> str:
+    normalized = label.strip().lower()
+    return {
+        "favorite": "favorite_setup",
+        "near-zone": "near_favorite_zone",
+        "post-earnings": "post_earnings_play",
+        "sma-track": "sma_breakout_tracking",
+        "stdev-track": "stdev_retest_tracking",
+        "high-conviction": "high_conviction",
+    }.get(normalized, normalized.replace("-", "_"))
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_number(value: Any) -> str:
+    number = _float_or_none(value)
+    if number is None:
+        return str(value)
+    if abs(number) >= 100:
+        return f"{number:.1f}"
+    return f"{number:.2f}"
+
+
+def _sort_key(row: SetupRow) -> tuple[int, float, str]:
+    bucket_rank = {
+        "high_conviction": 0,
+        "favorite_setup": 1,
+        "near_favorite_zone": 2,
+        "post_earnings_play": 3,
+        "sma_breakout_tracking": 4,
+        "stdev_retest_tracking": 5,
+        "study": 6,
+    }.get(row.bucket.strip().lower(), 7)
+    score = row.expected_r_rank if row.expected_r_rank is not None else row.score
+    return (bucket_rank, -(score if score is not None else -999999.0), row.symbol)

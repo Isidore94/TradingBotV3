@@ -116,6 +116,7 @@ from project_paths import (
     ANCHOR_AVWAP_SIGNALS_FILE,
     MASTER_AVWAP_LOG_FILE,
     APP_LOG_BACKUP_COUNT,
+    SafeRotatingFileHandler,
     get_shared_watchlist_paths,
     get_tracker_storage_details,
     open_path_in_file_manager,
@@ -387,6 +388,24 @@ PRIORITY_TRENDLINE_BREAK_MAX_ATR = 1.5
 PRIORITY_TRENDLINE_BREAK_SCORE_BONUS = 18
 PRIORITY_PRE_EARNINGS_BLOCK_DAYS = 10
 PRIORITY_FAVORITE_SETUP_MIN_SCORE = 100
+# Short setups bleed when promoted while price is still elevated (tracker: shorts
+# above the prior-day low realized -0.65R; short favorites lacking a bearish
+# SMA stack realized -0.49R). Require recent weakness before a SHORT can sit in
+# the favorite ("act first") bucket; failing rows demote to near/watch, not gone.
+SHORT_FAVORITE_REQUIRE_TREND_ALIGNMENT = True
+SHORT_FAVORITE_REQUIRE_PRIOR_DAY_LOW_BREAK = True
+# A favorite whose blended Expected-R is clearly negative should not headline the
+# S ("act first") tier regardless of how high its static score is — it demotes to
+# A. (Expected-R is shrunk toward ~0, so this bites harder once regime
+# conditioning de-compresses it for the weak side.)
+TIER_S_DEMOTE_EXPECTED_R_BELOW = -0.05
+# Condition the tracker's recency-weighted realized R (which feeds Expected-R) on
+# market regime: history from a different coarse regime than the current scan is
+# down-weighted, so e.g. shorts are judged mostly on how shorts did in similar
+# tape. Soft (down-weight, not exclude) so thin same-regime history degrades
+# gracefully; strengthens automatically as labeled history diversifies.
+TRACKER_REGIME_CONDITIONING_ENABLED = True
+TRACKER_REGIME_MISMATCH_WEIGHT = 0.5
 THETA_MIN_EARNINGS_BUFFER_DAYS = 21
 THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS = 63
 THETA_MIN_SUPPORT_LEVELS = 3
@@ -1485,6 +1504,17 @@ DAILY_BAR_SOURCE_ATTR = "daily_bar_source"
 DAILY_BAR_SOURCE_IBKR = "ibkr"
 DAILY_BAR_SOURCE_YAHOO = "yahoo"
 DAILY_BAR_SOURCE_CACHE = "cache"
+IBKR_HISTORICAL_FAILURE_THRESHOLD = 5
+IBKR_HISTORICAL_FAILURE_CODES = {162, 366}
+IBKR_HISTORICAL_FAILURE_TEXT_MARKERS = (
+    "historical market data service",
+    "historical data query cancelled",
+    "pacing violation",
+    "rate limit",
+    "query cancelled",
+)
+_IBKR_HISTORICAL_FAILURE_COUNT = 0
+_IBKR_HISTORICAL_YAHOO_ONLY = False
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 # ============================================================================
@@ -1519,7 +1549,8 @@ def configure_logging():
 
     logger.addHandler(ch)
     try:
-        fh = RotatingFileHandler(
+        MASTER_AVWAP_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fh = SafeRotatingFileHandler(
             MASTER_AVWAP_LOG_FILE,
             maxBytes=2_000_000,
             backupCount=APP_LOG_BACKUP_COUNT,
@@ -1891,10 +1922,54 @@ def _load_earnings_calendar_rows_cache() -> dict:
     return _EARNINGS_CALENDAR_ROWS_CACHE
 
 
-def _save_earnings_calendar_rows_cache() -> None:
+_EARNINGS_CALENDAR_SAVE_DEFERRED = False
+_EARNINGS_CALENDAR_PENDING_WRITES = 0
+_EARNINGS_CALENDAR_FLUSH_EVERY = 50
+
+
+def _write_earnings_calendar_rows_cache() -> None:
+    global _EARNINGS_CALENDAR_PENDING_WRITES
     if _EARNINGS_CALENDAR_ROWS_CACHE is None:
         return
     save_json(EARNINGS_CALENDAR_CACHE_FILE, _EARNINGS_CALENDAR_ROWS_CACHE)
+    _EARNINGS_CALENDAR_PENDING_WRITES = 0
+
+
+def _save_earnings_calendar_rows_cache() -> None:
+    """Persist the earnings calendar cache.
+
+    Standalone callers write immediately. During a bulk multi-day walk (wrapped by
+    ``_begin_deferred_earnings_calendar_save``) writes are batched: the full,
+    growing cache file is otherwise rewritten once per freshly fetched date, which
+    is O(days^2) disk I/O on a cold deep walk. While deferred we flush every
+    ``_EARNINGS_CALENDAR_FLUSH_EVERY`` fetches to bound both the churn and how much
+    progress a mid-walk interruption can lose, with a final flush when the walk ends.
+    """
+    global _EARNINGS_CALENDAR_PENDING_WRITES
+    if _EARNINGS_CALENDAR_ROWS_CACHE is None:
+        return
+    if not _EARNINGS_CALENDAR_SAVE_DEFERRED:
+        _write_earnings_calendar_rows_cache()
+        return
+    _EARNINGS_CALENDAR_PENDING_WRITES += 1
+    if _EARNINGS_CALENDAR_PENDING_WRITES >= _EARNINGS_CALENDAR_FLUSH_EVERY:
+        _write_earnings_calendar_rows_cache()
+
+
+def _begin_deferred_earnings_calendar_save() -> bool:
+    """Start batching calendar-cache writes; returns the prior state for nesting."""
+    global _EARNINGS_CALENDAR_SAVE_DEFERRED
+    previous = _EARNINGS_CALENDAR_SAVE_DEFERRED
+    _EARNINGS_CALENDAR_SAVE_DEFERRED = True
+    return previous
+
+
+def _end_deferred_earnings_calendar_save(previous: bool) -> None:
+    """Restore the prior deferral state and flush any pending writes when ending."""
+    global _EARNINGS_CALENDAR_SAVE_DEFERRED
+    _EARNINGS_CALENDAR_SAVE_DEFERRED = previous
+    if not previous and _EARNINGS_CALENDAR_PENDING_WRITES:
+        _write_earnings_calendar_rows_cache()
 
 
 def _load_symbol_metadata_cache() -> dict:
@@ -1957,6 +2032,52 @@ def _set_daily_bar_source(df: pd.DataFrame | None, source: str | None) -> pd.Dat
 
 def _empty_daily_bar_frame(source: str | None = None) -> pd.DataFrame:
     return _set_daily_bar_source(pd.DataFrame(columns=DAILY_BAR_COLUMNS), source)
+
+
+def reset_ibkr_historical_failure_circuit() -> None:
+    global _IBKR_HISTORICAL_FAILURE_COUNT, _IBKR_HISTORICAL_YAHOO_ONLY
+    _IBKR_HISTORICAL_FAILURE_COUNT = 0
+    _IBKR_HISTORICAL_YAHOO_ONLY = False
+
+
+def _ibkr_historical_yahoo_only() -> bool:
+    return bool(_IBKR_HISTORICAL_YAHOO_ONLY)
+
+
+def _ibkr_historical_errors_are_circuit_worthy(errors: list[dict] | None) -> bool:
+    for item in errors or []:
+        code = int(item.get("code", 0) or 0)
+        message = str(item.get("message") or "").lower()
+        if code in IBKR_HISTORICAL_FAILURE_CODES:
+            return True
+        if any(marker in message for marker in IBKR_HISTORICAL_FAILURE_TEXT_MARKERS):
+            return True
+    return False
+
+
+def _record_ibkr_historical_result(
+    symbol: str,
+    *,
+    succeeded: bool,
+    errors: list[dict] | None = None,
+    timed_out: bool = False,
+) -> None:
+    global _IBKR_HISTORICAL_FAILURE_COUNT, _IBKR_HISTORICAL_YAHOO_ONLY
+    if succeeded:
+        _IBKR_HISTORICAL_FAILURE_COUNT = 0
+        return
+    if not (timed_out or _ibkr_historical_errors_are_circuit_worthy(errors)):
+        return
+    _IBKR_HISTORICAL_FAILURE_COUNT += 1
+    if _IBKR_HISTORICAL_YAHOO_ONLY:
+        return
+    if _IBKR_HISTORICAL_FAILURE_COUNT >= IBKR_HISTORICAL_FAILURE_THRESHOLD:
+        _IBKR_HISTORICAL_YAHOO_ONLY = True
+        logging.warning(
+            "IBKR historical data has failed %d time(s) in this scan; using Yahoo for remaining bar refreshes. Last symbol: %s.",
+            _IBKR_HISTORICAL_FAILURE_COUNT,
+            symbol,
+        )
 
 
 def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
@@ -6511,12 +6632,30 @@ def _dedupe_recent_tracker_family_rows(rows: list[dict]) -> list[dict]:
     return representatives
 
 
+def _coarse_regime_bucket(label: object) -> str:
+    """Collapse a regime label to bull / bear / neutral (or '' when unknown)."""
+    text = str(label or "").strip().lower()
+    if not text:
+        return ""
+    if "bear" in text:
+        return "bear"
+    if "bull" in text:
+        return "bull"
+    return "neutral"
+
+
+def _setup_regime_label(setup: dict) -> str:
+    feature_row = setup.get("feature_row") if isinstance(setup.get("feature_row"), dict) else {}
+    return str(feature_row.get("market_regime_label") or setup.get("market_regime_label") or "")
+
+
 def build_recent_tracker_setup_family_rows(
     setups: dict[str, dict],
     *,
     reference_date: date | None = None,
     lookback_days: int = TRACKER_RECENT_FAMILY_LOOKBACK_DAYS,
     recency_half_life_days: float = TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS,
+    current_regime_label: str | None = None,
 ) -> list[dict]:
     if not isinstance(setups, dict) or not setups:
         return []
@@ -6524,6 +6663,9 @@ def build_recent_tracker_setup_family_rows(
     reference_day = reference_date or datetime.now().date()
     max_age_days = max(1, int(lookback_days))
     half_life = max(1.0, float(recency_half_life_days))
+    current_regime_bucket = (
+        _coarse_regime_bucket(current_regime_label) if TRACKER_REGIME_CONDITIONING_ENABLED else ""
+    )
     recent_rows = []
     baseline_groups: dict[tuple[str, str], list[dict]] = {}
 
@@ -6549,6 +6691,13 @@ def build_recent_tracker_setup_family_rows(
             continue
 
         recency_weight = math.exp(-math.log(2.0) * (float(age_days) / half_life))
+        setup_regime_bucket = _coarse_regime_bucket(_setup_regime_label(setup))
+        if (
+            current_regime_bucket
+            and setup_regime_bucket
+            and setup_regime_bucket != current_regime_bucket
+        ):
+            recency_weight *= TRACKER_REGIME_MISMATCH_WEIGHT
         row = {
             "symbol": str(setup.get("symbol") or "").strip().upper(),
             "scan_date": scan_day.isoformat(),
@@ -6556,6 +6705,7 @@ def build_recent_tracker_setup_family_rows(
             "side": side,
             "priority_bucket": priority_bucket,
             "setup_family": setup_family,
+            "regime_bucket": setup_regime_bucket,
             "setup_status": str(setup.get("setup_status") or ""),
             "closed_setups": 1 if int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0) > 0 else 0,
             "avg_total_r": _coerce_float(outcome_summary.get("avg_total_r")),
@@ -6759,9 +6909,15 @@ def apply_recent_tracker_setup_family_adjustments(
     reference_date: date | None = None,
 ) -> list[dict]:
     tracker = tracker_payload if isinstance(tracker_payload, dict) else load_setup_tracker_payload()
+    current_regime_label = (
+        str((ai_state.get("market_regime") or {}).get("label") or "")
+        if isinstance(ai_state, dict)
+        else ""
+    )
     recent_family_rows = build_recent_tracker_setup_family_rows(
         tracker.get("setups", {}) if isinstance(tracker, dict) else {},
         reference_date=reference_date,
+        current_regime_label=current_regime_label,
     )
     lookup = {
         (
@@ -10920,27 +11076,50 @@ def collect_earnings_dates(
     pending = set(normalized_symbols) if stop_when_complete else set()
     minimum_dates = max(1, int(min_dates_per_symbol))
 
-    for delta in range(lookback_days):
-        day = today - timedelta(days=delta)
-        rows = fetch_fn(day.isoformat())
-        if not isinstance(rows, list):
-            rows = []
-        for row in rows:
-            sym = str(row.get("symbol", "")).strip().upper()
-            if sym not in symbol_dates:
-                continue
-            ds = day.isoformat()
-            if ds not in symbol_dates[sym]:
-                symbol_dates[sym].append(ds)
-            if stop_when_complete and len(symbol_dates[sym]) >= minimum_dates:
-                pending.discard(sym)
+    # The politeness sleep only needs to apply when a date actually hits the
+    # network. The default fetcher serves already-fresh past dates from the
+    # in-memory cache, so a warm deep walk should not pay base_sleep per day
+    # (~33s over a 220-day window) for cache hits — that idle sleeping is the
+    # bulk of "deep earnings history is slow each time".
+    calendar_cache = _load_earnings_calendar_rows_cache() if fetch_fn is fetch_earnings_for_date else None
+    network_fetches = 0
 
-        if stop_when_complete and not pending:
-            logging.info("Collected required earnings history for all requested symbols; stopping early.")
-            break
+    deferred_previous = _begin_deferred_earnings_calendar_save()
+    try:
+        for delta in range(lookback_days):
+            day = today - timedelta(days=delta)
+            date_str = day.isoformat()
+            served_from_cache = calendar_cache is not None and _earnings_calendar_cache_entry_is_fresh(
+                date_str, calendar_cache.get(date_str)
+            )
+            rows = fetch_fn(date_str)
+            if not isinstance(rows, list):
+                rows = []
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                if sym not in symbol_dates:
+                    continue
+                if date_str not in symbol_dates[sym]:
+                    symbol_dates[sym].append(date_str)
+                if stop_when_complete and len(symbol_dates[sym]) >= minimum_dates:
+                    pending.discard(sym)
 
-        if base_sleep:
-            time.sleep(base_sleep)
+            if stop_when_complete and not pending:
+                logging.info("Collected required earnings history for all requested symbols; stopping early.")
+                break
+
+            if not served_from_cache:
+                network_fetches += 1
+                if base_sleep:
+                    time.sleep(base_sleep)
+    finally:
+        _end_deferred_earnings_calendar_save(deferred_previous)
+
+    if calendar_cache is not None and network_fetches == 0 and lookback_days:
+        logging.info(
+            "Earnings calendar walk served entirely from cache (%d day(s), no network fetches).",
+            lookback_days,
+        )
 
     for sym, dates in symbol_dates.items():
         symbol_dates[sym] = _normalize_earnings_dates(dates, today=today)
@@ -14401,6 +14580,9 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
 def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     if ib is None:
         return fetch_daily_bars_from_yahoo(symbol, days)
+    if _ibkr_historical_yahoo_only():
+        logging.info("%s: using Yahoo for daily bars because IBKR historical data is disabled for this scan.", symbol)
+        return fetch_daily_bars_from_yahoo(symbol, days)
 
     # Try IBKR first
     reqId = None
@@ -14441,22 +14623,33 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
             except Exception:
                 pass
 
+        request_errors = list(getattr(ib, "request_errors", {}).get(reqId, []) or [])
         bars = ib.data.pop(reqId, [])
         ib.ready.pop(reqId, None)
+        getattr(ib, "request_errors", {}).pop(reqId, None)
 
         df = pd.DataFrame(bars)
         if not df.empty:
             df["datetime"] = pd.to_datetime(df["time"], format="%Y%m%d", errors="coerce")
             df = df.sort_values("datetime").reset_index(drop=True)
+            _record_ibkr_historical_result(symbol, succeeded=True)
             return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_IBKR)
+        _record_ibkr_historical_result(
+            symbol,
+            succeeded=False,
+            errors=request_errors,
+            timed_out=not request_completed,
+        )
         logging.warning(f"{symbol}: no daily bars returned from IBKR, falling back to Yahoo.")
     except Exception as e:
+        _record_ibkr_historical_result(symbol, succeeded=False, timed_out=True)
         logging.error(f"{symbol}: IBKR daily fetch failed ({e}), falling back to Yahoo.")
     finally:
         if reqId is not None:
             try:
                 ib.data.pop(reqId, None)
                 ib.ready.pop(reqId, None)
+                getattr(ib, "request_errors", {}).pop(reqId, None)
             except Exception:
                 pass
 
@@ -14615,6 +14808,16 @@ def _fetch_live_intraday_bars(
         except (TypeError, ValueError, IndexError):
             days = 180
         return fetch_intraday_bars_from_yahoo(normalized_symbol, period_days=days)
+    if _ibkr_historical_yahoo_only():
+        try:
+            days = int(str(duration).split()[0])
+        except (TypeError, ValueError, IndexError):
+            days = 180
+        logging.info(
+            "%s: using Yahoo for intraday bars because IBKR historical data is disabled for this scan.",
+            normalized_symbol,
+        )
+        return fetch_intraday_bars_from_yahoo(normalized_symbol, period_days=days)
 
     reqId = None
     request_completed = False
@@ -14649,21 +14852,32 @@ def _fetch_live_intraday_bars(
             except Exception:
                 pass
 
+        request_errors = list(getattr(ib, "request_errors", {}).get(reqId, []) or [])
         bars = ib.data.pop(reqId, [])
         ib.ready.pop(reqId, None)
+        getattr(ib, "request_errors", {}).pop(reqId, None)
         df = pd.DataFrame(bars)
         if not df.empty:
             if "datetime" not in df.columns and "time" in df.columns:
                 df["datetime"] = pd.to_datetime(df["time"], errors="coerce")
+            _record_ibkr_historical_result(normalized_symbol, succeeded=True)
             return _normalize_intraday_bar_frame(df)
+        _record_ibkr_historical_result(
+            normalized_symbol,
+            succeeded=False,
+            errors=request_errors,
+            timed_out=not request_completed,
+        )
         logging.warning("%s: no intraday bars returned from IBKR, falling back to Yahoo.", normalized_symbol)
     except Exception as e:
+        _record_ibkr_historical_result(normalized_symbol, succeeded=False, timed_out=True)
         logging.error("%s: IBKR intraday fetch failed (%s), falling back to Yahoo.", normalized_symbol, e)
     finally:
         if reqId is not None:
             try:
                 ib.data.pop(reqId, None)
                 ib.ready.pop(reqId, None)
+                getattr(ib, "request_errors", {}).pop(reqId, None)
             except Exception:
                 pass
 
@@ -18610,6 +18824,65 @@ def assess_priority_directional_obstacles(
     }
 
 
+def _apply_short_directional_flags(
+    row: dict,
+    symbol_entry: dict | None,
+    sma_levels: dict | None,
+) -> None:
+    """Attach daily-bar weakness flags used to gate SHORT favorites.
+
+    Promotion should require a short to actually be weak (price stacked below the
+    20/50 SMA and a close under the prior-day low), not merely sitting in the
+    lower anchored-VWAP bands. Flags are ``None`` when inputs are missing, so the
+    gate fails open rather than demoting on absent data.
+    """
+    symbol_entry = symbol_entry or {}
+    side = normalize_side(row.get("side") or symbol_entry.get("side") or "")
+    last_close = _coerce_float(symbol_entry.get("last_close"))
+    if last_close is None:
+        last_close = _coerce_float(row.get("last_close"))
+
+    levels = sma_levels or {}
+    sma20 = _coerce_float(levels.get("SMA_20"))
+    sma50 = _coerce_float(levels.get("SMA_50"))
+    trend_aligned = None
+    if last_close is not None and sma20 is not None and sma50 is not None:
+        trend_aligned = (
+            last_close < sma20 < sma50 if side == "SHORT" else last_close > sma20 > sma50
+        )
+    row["priority_short_trend_aligned"] = trend_aligned
+
+    previous_day_low = _coerce_float(symbol_entry.get("previous_day_low"))
+    if previous_day_low is None:
+        previous_day_low = _coerce_float(row.get("previous_day_low"))
+    closed_below_prev_low = None
+    if last_close is not None and previous_day_low is not None:
+        closed_below_prev_low = last_close < previous_day_low
+    row["priority_closed_below_prev_day_low"] = closed_below_prev_low
+
+
+def _short_favorite_demotion_reason(row: dict) -> str:
+    """Why a SHORT favorite candidate should hold at near/watch instead of being
+    promoted to the 'act first' bucket, or '' to allow promotion.
+
+    SHORT-only and fails open: if a flag is ``None`` (data unavailable) it does
+    not contribute a demotion reason.
+    """
+    if normalize_side(row.get("side", "")) != "SHORT":
+        return ""
+    reasons: list[str] = []
+    if SHORT_FAVORITE_REQUIRE_TREND_ALIGNMENT and row.get("priority_short_trend_aligned") is False:
+        reasons.append("price not stacked below 20/50 SMA")
+    if (
+        SHORT_FAVORITE_REQUIRE_PRIOR_DAY_LOW_BREAK
+        and row.get("priority_closed_below_prev_day_low") is False
+    ):
+        reasons.append("close above prior-day low (no breakdown yet)")
+    if not reasons:
+        return ""
+    return "short held at watch: " + "; ".join(reasons)
+
+
 def refine_priority_rows_with_directional_filters(
     priority_rows: list[dict],
     ai_state: dict,
@@ -18694,6 +18967,7 @@ def refine_priority_rows_with_directional_filters(
         row["clean_path_score_bonus"] = clean_path_score_bonus
         row["score_bonus_note"] = " | ".join(bonus_notes)
         row["sma_levels"] = sma_levels
+        _apply_short_directional_flags(row, symbol_entry, sma_levels)
         apply_priority_attribute_adjustments(row, symbol_entry)
 
         if row.get("ranking_blocked"):
@@ -19419,6 +19693,10 @@ def apply_final_priority_buckets(
         )
         if favorite_candidate:
             if _priority_is_side_opposite_day(row):
+                return "near_favorite_zone", False, True
+            short_gate_note = _short_favorite_demotion_reason(row)
+            if short_gate_note:
+                row["favorite_short_gate_note"] = short_gate_note
                 return "near_favorite_zone", False, True
             if _priority_row_meets_favorite_score(row):
                 return "favorite_setup", True, False
@@ -25900,6 +26178,13 @@ def _priority_is_best_swing_trade_candidate(row: dict) -> bool:
         return bool(_priority_is_actionable_avwap_breakout(row) and _priority_has_range_break_confirmation(row))
     return False
 
+def _tier_row_expected_r_below(row: dict, threshold: float) -> bool:
+    """True only when a row's blended Expected-R is known and below ``threshold``
+    (fails open: a missing Expected-R never triggers a demotion)."""
+    value = _coerce_float(row.get("expected_r"))
+    return value is not None and value < float(threshold)
+
+
 def _priority_tier_sort_key(row: dict) -> tuple[float, int, int, str]:
     score = _coerce_float(row.get("score"))
     tracker_delta = (
@@ -25940,9 +26225,21 @@ def _priority_partition_tier_rows(
             selected.append(row)
         return selected
 
-    s_rows = take_rows(best_swing_rows + high_conviction_rows)
+    s_candidates = best_swing_rows + high_conviction_rows
+    s_demoted_by_expected_r = [
+        row for row in s_candidates if _tier_row_expected_r_below(row, TIER_S_DEMOTE_EXPECTED_R_BELOW)
+    ]
+    for row in s_demoted_by_expected_r:
+        expected_r = _coerce_float(row.get("expected_r")) or 0.0
+        row["tier_expected_r_demote_note"] = f"held out of S tier (ExpR {expected_r:+.2f})"
+    s_keep = [
+        row for row in s_candidates if not _tier_row_expected_r_below(row, TIER_S_DEMOTE_EXPECTED_R_BELOW)
+    ]
+
+    s_rows = take_rows(s_keep)
     a_rows = take_rows(
-        [
+        s_demoted_by_expected_r
+        + [
             row for row in actionable_rows
             if (
                 row.get("priority_bucket") == "favorite_setup"
@@ -28730,6 +29027,10 @@ def apply_final_priority_buckets(
         )
         if favorite_candidate:
             if _priority_is_side_opposite_day(row):
+                return "near_favorite_zone", False, True
+            short_gate_note = _short_favorite_demotion_reason(row)
+            if short_gate_note:
+                row["favorite_short_gate_note"] = short_gate_note
                 return "near_favorite_zone", False, True
             if _priority_row_meets_favorite_score(row):
                 return "favorite_setup", True, False

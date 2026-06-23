@@ -227,6 +227,7 @@ def run_master(
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
 ):
+    reset_ibkr_historical_failure_circuit()
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
         shorts_path=shorts_path,

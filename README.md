@@ -3,14 +3,20 @@
 ## Prerequisites
 - Python 3.10+.
 - [Interactive Brokers TWS or IB Gateway](https://www.interactivebrokers.com/en/trading/ib-api.php) running locally with API access enabled on `127.0.0.1:7496`.
-- A working GUI environment if you plan to use the Tkinter UI in `bounce_bot.py` or the PyQt5 interface in `TickerMover.py`.
+- A working Windows desktop session for the GUI. The new consumer UI is PySide6/Qt; the Tk UI remains available during migration.
 
-Install Python dependencies:
+Install the normal desktop dependencies:
 
 ```bash
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+Dependency layers:
+- `requirements-core.txt` - headless/mini-PC engines and data services.
+- `requirements-gui.txt` - core plus desktop GUI packages.
+- `requirements-dev.txt` - GUI plus test and packaging tools.
+- `requirements.txt` - compatibility alias for the GUI install.
 
 Run scripts from the repo-local virtual environment:
 
@@ -21,10 +27,19 @@ Run scripts from the repo-local virtual environment:
 If you keep personal launcher files such as `run_python_script.ps1` or `run_master_avwap_mini_pc.cmd`, keep them local to your machine. They are intentionally not tracked in git.
 
 ## Repository Layout
-- `scripts/` - Intraday and daily-running bots ready for use (`master_avwap.py`, `master_avwap_mini_pc.py`, `bounce_bot.py`, `TickerMover.py`, etc.).
-- `data/`, `logs/`, `output/` - Legacy repo folders; current runtime files are stored under the selected home folder.
+- `TradingBotV3_GUI.cmd` - Windows launcher for the new PySide6 Trading Desk UI.
+- `scripts/gui.py` - compatibility launcher. Defaults to the new PySide6 UI; use `--ui tk` for the legacy Tk UI.
+- `scripts/ui/` - new consumer desktop UI.
+- `scripts/master_avwap_lib/`, `scripts/bounce_bot_lib/` - trading engines and legacy compatibility modules.
+- `market_prep/` - market prep services.
+- `docs/` - shipping, cleanup, and future broker architecture notes.
+- `packaging/` - Windows `.exe` / installer notes and future PyInstaller files.
+- `data/`, `logs/`, `output/` - legacy repo folders; current runtime files are stored under the selected home folder.
 - `longs.txt`, `shorts.txt` - Primary shared watchlists consumed by BounceBot and also scanned by Master AVWAP, stored in the selected home folder root.
 - `swinglongs.txt`, `shortswings.txt` - Master AVWAP-only swing watchlists. BounceBot does not read these files.
+
+For repo cleanup and shipping direction, see `docs/SHIP_READINESS.md`.
+For future multi-broker architecture, see `docs/BROKER_ADAPTERS.md`.
 
 ## Required Inputs
 - `longs.txt` - one ticker per line for long-side scanning.
@@ -35,6 +50,29 @@ If you keep personal launcher files such as `run_python_script.ps1` or `run_mast
 These files should live in the selected home folder root. The app creates any missing `data`, `logs`, and `output` directories inside that home folder at runtime.
 
 ## Running The Bots
+- New Qt Trading Desk UI:
+
+  ```powershell
+  .\TradingBotV3_GUI.cmd
+  ```
+
+  Or launch through Python:
+
+  ```powershell
+  .\.venv\Scripts\python.exe .\scripts\gui.py
+  ```
+
+  To force and save dark mode from the launcher:
+
+  ```powershell
+  .\TradingBotV3_GUI.cmd --theme dark
+  ```
+
+  This is the target consumer UI. It currently includes the themed shell,
+  Trading Desk, Master AVWAP setup table, settings, and placeholders for the
+  remaining phased panels. You can also switch between Dark and Light from
+  the Settings page.
+
 - Daily AVWAP/previous-AVWAP engine:
 
   ```powershell
@@ -78,10 +116,10 @@ These files should live in the selected home folder root. The app creates any mi
 - Consolidated BounceBot + Master AVWAP GUI:
 
   ```powershell
-  .\.venv\Scripts\python.exe .\scripts\gui.py
+  .\.venv\Scripts\python.exe .\scripts\gui.py --ui tk
   ```
 
-  Uses the same selected home folder and now writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well. The top-level `Trading` tab contains BounceBot, Master AVWAP, and expanded watchlist editors for shared `longs.txt` / `shorts.txt` plus Master AVWAP-only `swinglongs.txt` / `shortswings.txt`; Market Prep and Ticker Lookup stay in separate tabs.
+  Legacy Tk GUI. Uses the same selected home folder and writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well. The top-level `Trading` tab contains BounceBot, Master AVWAP, and expanded watchlist editors for shared `longs.txt` / `shorts.txt` plus Master AVWAP-only `swinglongs.txt` / `shortswings.txt`; Market Prep and Ticker Lookup stay in separate tabs.
 
 - Intraday 5-minute bounce detector with optional GUI:
 

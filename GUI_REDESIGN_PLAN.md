@@ -1,9 +1,16 @@
 # GUI Redesign Plan — TradingBotV3 (Windows desktop)
 
-> Status: **PLAN — not yet implemented.** This document is the spec for the GUI
-> redesign. Implement it phase by phase (Phase 0 → 6). Each phase is shippable
-> and leaves the app runnable. **Do not change bot/trading logic** — this is a
-> presentation-layer redesign over the existing engines.
+> Status: **FEATURE-COMPLETE (Phases 0–5 + most of 6).** The full PySide6 app in
+> `scripts/ui/` ships the Trading Desk (Master AVWAP setups surface with a
+> chip/score-bar table, BounceBot live panel, Theta Plays, Watchlists),
+> the **Journal** (store-backed trade table, filters, analytics KPIs, and a
+> setup-tags/notes annotation editor), **Research** (Master AVWAP Market Prep +
+> a threaded **Ticker Lookup**), and **Settings** (theme, density, Explain
+> toggle, and a durable-store warming button). Remaining: optional shipping
+> polish only — PyInstaller `.exe` packaging, an Explain-mode legend/InfoDots
+> pass, and retiring the legacy Tk GUI once it's been exercised on the mini PC.
+> **Bot/trading logic is untouched** — this is a presentation-layer redesign
+> over the existing engines.
 
 ---
 
