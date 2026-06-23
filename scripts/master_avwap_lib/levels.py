@@ -18,6 +18,12 @@ LEVEL_FORWARD_BARS = 5
 LEVEL_TOUCH_WEIGHT = 0.08
 LEVEL_TOUCH_CAP = 0.40
 LEVEL_BUCKET_WEIGHTS = {"green": 1.0, "red": 0.35}
+# Conviction (used for scoring, not filtering): how much cumulative respect a
+# level has earned. Unlike ``strength`` it is not capped at the touch ceiling, so
+# "respected more and more over time" keeps growing the number.
+LEVEL_RESPECT_FULL_COUNT = 8       # respects at which the respect bonus saturates
+LEVEL_RESPECT_BONUS_CAP = 1.0      # max conviction added on top of the bucket weight
+LEVEL_BREAK_DISCOUNT_FLOOR = 0.5   # a level that breaks as often as it holds is worth half
 CLOUD_SPAN_B_LEN = 52
 CLOUD_DISPLACEMENT = 26
 CLOUD_FLAT_MIN_BARS = 8
@@ -41,6 +47,10 @@ def _coerce_float(value) -> float | None:
 def _normalize_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+    if df.attrs.get("_levels_normalized"):
+        # Already normalized by a prior call in the same pipeline; skip the
+        # copy/rename/coerce/sort work and reuse the frame as-is.
+        return df
     work = df.copy()
     work.rename(columns={column: str(column).strip().lower() for column in work.columns}, inplace=True)
     if "datetime" not in work.columns:
@@ -57,7 +67,19 @@ def _normalize_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     work = work.dropna(subset=["datetime", "open", "high", "low", "close", "volume"])
     if work.empty:
         return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-    return work.sort_values("datetime").reset_index(drop=True)
+    work = work.sort_values("datetime").reset_index(drop=True)
+    work.attrs["_levels_normalized"] = True
+    return work
+
+
+def normalize_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Public wrapper around the internal normalizer.
+
+    Callers that run several level helpers over the same daily frame can
+    normalize once and pass the result down; the helpers detect the
+    already-normalized frame and skip redundant copy/coerce/sort work.
+    """
+    return _normalize_frame(df)
 
 
 def _date_text(value) -> str:
@@ -162,18 +184,24 @@ def extract_hv_levels(
     work = _normalize_frame(df)
     if work.empty:
         return []
-    relvol = compute_relvol(work, vol_sma=vol_sma)
+    relvol = compute_relvol(work, vol_sma=vol_sma).tolist()
     earnings_set = _earnings_origin_dates(work, earnings_dates)
+    date_texts = [_date_text(value) for value in work["datetime"]]
+    highs = work["high"].tolist()
+    lows = work["low"].tolist()
+    atr_at_origin = _coerce_float(atr20)
+    green_threshold = float(green)
+    red_threshold = float(red)
     candidates: list[dict] = []
-    for idx, row in work.iterrows():
-        rv = _coerce_float(relvol.iloc[idx] if idx < len(relvol) else None)
-        if rv is None or rv < float(red):
+    for idx in range(len(work)):
+        rv = _coerce_float(relvol[idx])
+        if rv is None or rv < red_threshold:
             continue
-        bucket = "green" if rv >= float(green) else "red"
-        trade_date = _date_text(row.get("datetime"))
+        bucket = "green" if rv >= green_threshold else "red"
+        trade_date = date_texts[idx]
         earnings_origin = trade_date in earnings_set
-        for origin_side, price_key in (("high", "high"), ("low", "low")):
-            price = _coerce_float(row.get(price_key))
+        for origin_side, price_array in (("high", highs), ("low", lows)):
+            price = _coerce_float(price_array[idx])
             if price is None:
                 continue
             candidates.append(
@@ -187,7 +215,7 @@ def extract_hv_levels(
                     "last_seen": trade_date,
                     "earnings_origin": bool(earnings_origin),
                     "non_earnings_anchor_candidate": bool(bucket == "green" and not earnings_origin),
-                    "atr20_at_origin": _coerce_float(atr20),
+                    "atr20_at_origin": atr_at_origin,
                     "source_bar_index": int(idx),
                 }
             )
@@ -206,6 +234,36 @@ def _level_strength(level: dict) -> float:
         + min(LEVEL_TOUCH_CAP, touch_count * LEVEL_TOUCH_WEIGHT),
         4,
     )
+
+
+def level_conviction(level: dict | None) -> float:
+    """How real this S/R is, from cumulative respect/break history (0..~2.0).
+
+    Combines the structural bucket weight (a high-volume green level matters even
+    when freshly formed) with how many times price has *respected* the level over
+    its tracked life, discounted toward half when the level breaks as often as it
+    holds. This is the multi-year signal ``strength`` cannot express because the
+    touch term there saturates at ``LEVEL_TOUCH_CAP``.
+    """
+    if not isinstance(level, dict):
+        return 0.0
+    kind = str(level.get("kind") or "")
+    if kind == "cloud_flat":
+        base = float(CLOUD_LEVEL_WEIGHT)
+    else:
+        bucket = str(level.get("bucket") or "red").lower()
+        base = float(LEVEL_BUCKET_WEIGHTS.get(bucket, LEVEL_BUCKET_WEIGHTS["red"]))
+    respect = int(level.get("respect_count", 0) or 0)
+    breaks = int(level.get("break_count", 0) or 0)
+    respect_bonus = (
+        min(LEVEL_RESPECT_BONUS_CAP, LEVEL_RESPECT_BONUS_CAP * respect / float(LEVEL_RESPECT_FULL_COUNT))
+        if LEVEL_RESPECT_FULL_COUNT
+        else 0.0
+    )
+    tested = respect + breaks
+    ratio = (respect / tested) if tested > 0 else 1.0  # untested fresh level: trust the structure
+    reliability = LEVEL_BREAK_DISCOUNT_FLOOR + (1.0 - LEVEL_BREAK_DISCOUNT_FLOOR) * ratio
+    return round((base + respect_bonus) * reliability, 4)
 
 
 def _cluster_from_members(members: list[dict], atr20: float | None) -> dict:
@@ -391,6 +449,13 @@ def recompute_touch_stats(
     if work.empty:
         return [dict(level) for level in levels]
     break_tolerance = _level_tolerance(atr20, tol_frac=float(break_atr))
+    bar_count = len(work)
+    forward_step = max(1, int(forward_bars or LEVEL_FORWARD_BARS))
+    date_texts = [_date_text(value) for value in work["datetime"]]
+    date_keys = [_date_key(text) for text in date_texts]
+    highs = work["high"].tolist()
+    lows = work["low"].tolist()
+    closes = work["close"].tolist()
     output = []
     for raw_level in levels:
         level = dict(raw_level)
@@ -399,34 +464,33 @@ def recompute_touch_stats(
             continue
         first_seen = _date_key(level.get("first_seen"))
         tolerance = _level_kind_tolerance(level, atr20, price, default_tol_frac=tol_frac)
+        upper = float(price) + tolerance
+        lower = float(price) - tolerance
+        break_up_level = float(price) + break_tolerance
+        break_down_level = float(price) - break_tolerance
         touch_count = 0
         respect_count = 0
         break_count = 0
         post_break_returns = []
         last_touch = ""
         last_break = ""
-        for idx, row in work.iterrows():
-            trade_date_text = _date_text(row.get("datetime"))
-            trade_date = _date_key(trade_date_text)
+        for idx in range(bar_count):
+            trade_date = date_keys[idx]
             if first_seen is not None and trade_date is not None and trade_date <= first_seen:
                 continue
-            high_value = _coerce_float(row.get("high"))
-            low_value = _coerce_float(row.get("low"))
-            close_value = _coerce_float(row.get("close"))
-            if high_value is None or low_value is None or close_value is None:
-                continue
-            touched = float(low_value) <= float(price) + tolerance and float(high_value) >= float(price) - tolerance
-            broke_up = float(close_value) > float(price) + break_tolerance
-            broke_down = float(close_value) < float(price) - break_tolerance
-            if not touched:
+            high_value = highs[idx]
+            low_value = lows[idx]
+            close_value = closes[idx]
+            if not (float(low_value) <= upper and float(high_value) >= lower):
                 continue
             touch_count += 1
+            trade_date_text = date_texts[idx]
             last_touch = trade_date_text
-            if broke_up or broke_down:
+            if float(close_value) > break_up_level or float(close_value) < break_down_level:
                 break_count += 1
                 last_break = trade_date_text
-                future_idx = min(len(work) - 1, idx + max(1, int(forward_bars or LEVEL_FORWARD_BARS)))
-                future_close = _coerce_float(work.iloc[future_idx].get("close"))
+                future_idx = min(bar_count - 1, idx + forward_step)
+                future_close = _coerce_float(closes[future_idx])
                 if future_close is not None and close_value:
                     post_break_returns.append(round(((future_close - close_value) / close_value) * 100.0, 4))
             else:
@@ -443,6 +507,152 @@ def recompute_touch_stats(
                     if post_break_returns
                     else None
                 ),
+                "strength": _level_strength({**level, "touch_count": touch_count}),
+                "atr20_at_update": _coerce_float(atr20),
+            }
+        )
+        output.append(level)
+    output.sort(key=lambda item: (float(item.get("price") or 0.0), str(item.get("first_seen") or "")))
+    return output
+
+
+# Stat fields that represent cumulative, multi-year history and must survive a
+# re-confirm merge and short fetch windows.
+CUMULATIVE_STAT_FIELDS = (
+    "touch_count",
+    "respect_count",
+    "break_count",
+    "last_touch",
+    "last_break",
+    "stats_through",
+    "post_break_return_sum",
+    "post_break_return_n",
+    "avg_post_break_return_pct",
+)
+
+
+def accumulate_touch_stats(
+    levels: list[dict] | None,
+    df: pd.DataFrame | None,
+    atr20: float | None,
+    *,
+    tol_frac: float = LEVEL_TOL_ATR_FRACTION,
+    break_atr: float = LEVEL_BREAK_ATR,
+    forward_bars: int = LEVEL_FORWARD_BARS,
+    reset: bool = False,
+) -> list[dict]:
+    """Cumulative touch/respect/break stats that persist across runs.
+
+    Unlike :func:`recompute_touch_stats` (which recomputes from scratch over
+    whatever window it is handed, so a short fetch window or a cache wipe shrinks
+    the numbers), this only counts bars *after* the level's ``stats_through``
+    marker and adds them to the stored running totals. The result is a true
+    multi-year touch history kept entirely inside the level store, independent of
+    how many daily bars happen to be available on any given run.
+
+    ``reset=True`` (used by a one-time deep backfill) ignores the stored totals
+    and counts the full window from scratch, then stamps ``stats_through``. A
+    level that has no ``stats_through`` yet (a fresh level, or one migrating from
+    the old recompute path) is also counted from scratch so its existing
+    window-based count is not double-added.
+    """
+
+    work = _normalize_frame(df)
+    if not levels:
+        return []
+    if work.empty:
+        return [dict(level) for level in levels]
+    break_tolerance = _level_tolerance(atr20, tol_frac=float(break_atr))
+    bar_count = len(work)
+    forward_step = max(1, int(forward_bars or LEVEL_FORWARD_BARS))
+    date_texts = [_date_text(value) for value in work["datetime"]]
+    date_keys = [_date_key(text) for text in date_texts]
+    highs = work["high"].tolist()
+    lows = work["low"].tolist()
+    closes = work["close"].tolist()
+    window_last_date = next((key for key in reversed(date_keys) if key is not None), None)
+    output = []
+    for raw_level in levels:
+        level = dict(raw_level)
+        price = _coerce_float(level.get("price"))
+        if price is None:
+            continue
+        first_seen = _date_key(level.get("first_seen"))
+        stored_through = None if reset else _date_key(level.get("stats_through"))
+        has_baseline = stored_through is not None
+        # Only count bars newer than what has already been counted; for a reset or
+        # a never-counted level, count everything after first_seen.
+        count_after = first_seen
+        if stored_through is not None and (count_after is None or stored_through > count_after):
+            count_after = stored_through
+
+        base_touch = int(level.get("touch_count", 0) or 0) if has_baseline else 0
+        base_respect = int(level.get("respect_count", 0) or 0) if has_baseline else 0
+        base_break = int(level.get("break_count", 0) or 0) if has_baseline else 0
+        base_return_sum = (_coerce_float(level.get("post_break_return_sum")) or 0.0) if has_baseline else 0.0
+        base_return_n = int(level.get("post_break_return_n", 0) or 0) if has_baseline else 0
+        last_touch = str(level.get("last_touch") or "") if has_baseline else ""
+        last_break = str(level.get("last_break") or "") if has_baseline else ""
+
+        tolerance = _level_kind_tolerance(level, atr20, price, default_tol_frac=tol_frac)
+        upper = float(price) + tolerance
+        lower = float(price) - tolerance
+        break_up_level = float(price) + break_tolerance
+        break_down_level = float(price) - break_tolerance
+        new_touch = 0
+        new_respect = 0
+        new_break = 0
+        new_return_sum = 0.0
+        new_return_n = 0
+        for idx in range(bar_count):
+            trade_date = date_keys[idx]
+            if first_seen is not None and trade_date is not None and trade_date <= first_seen:
+                continue
+            if count_after is not None and trade_date is not None and trade_date <= count_after:
+                continue
+            high_value = highs[idx]
+            low_value = lows[idx]
+            close_value = closes[idx]
+            if not (float(low_value) <= upper and float(high_value) >= lower):
+                continue
+            new_touch += 1
+            trade_date_text = date_texts[idx]
+            last_touch = trade_date_text
+            if float(close_value) > break_up_level or float(close_value) < break_down_level:
+                new_break += 1
+                last_break = trade_date_text
+                future_idx = min(bar_count - 1, idx + forward_step)
+                future_close = _coerce_float(closes[future_idx])
+                if future_close is not None and close_value:
+                    new_return_sum += round(((future_close - close_value) / close_value) * 100.0, 4)
+                    new_return_n += 1
+            else:
+                new_respect += 1
+
+        touch_count = base_touch + new_touch
+        respect_count = base_respect + new_respect
+        break_count = base_break + new_break
+        return_sum = base_return_sum + new_return_sum
+        return_n = base_return_n + new_return_n
+        # Advance the marker so already-counted bars are never re-added; never move
+        # it backwards if this window ended earlier than a prior one.
+        new_through = level.get("stats_through") if has_baseline else None
+        if window_last_date is not None:
+            if stored_through is None or window_last_date > stored_through:
+                new_through = window_last_date.isoformat()
+        level.update(
+            {
+                "touch_count": int(touch_count),
+                "respect_count": int(respect_count),
+                "break_count": int(break_count),
+                "last_touch": last_touch,
+                "last_break": last_break,
+                "post_break_return_sum": round(float(return_sum), 4),
+                "post_break_return_n": int(return_n),
+                "avg_post_break_return_pct": (
+                    round(float(return_sum) / return_n, 4) if return_n else None
+                ),
+                "stats_through": new_through,
                 "strength": _level_strength({**level, "touch_count": touch_count}),
                 "atr20_at_update": _coerce_float(atr20),
             }
@@ -495,7 +705,12 @@ def merge_into_store(
             continue
         first_seen_values = [str(match.get("first_seen") or ""), str(cluster.get("first_seen") or "")]
         first_seen_values = [value for value in first_seen_values if value]
+        # A re-confirming cluster carries zeroed stat fields; preserve the level's
+        # accumulated multi-year history so the merge does not wipe it (the stats
+        # pass that follows updates these incrementally).
+        preserved_stats = {field: match[field] for field in CUMULATIVE_STAT_FIELDS if field in match}
         match.update(cluster)
+        match.update(preserved_stats)
         if first_seen_values:
             match["first_seen"] = min(first_seen_values)
     payload["levels"] = sorted(merged, key=lambda item: (float(item.get("price") or 0.0), str(item.get("first_seen") or "")))

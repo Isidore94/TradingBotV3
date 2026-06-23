@@ -83,6 +83,13 @@ EARNINGS_ANCHORS_FILE = DATA_DIR / "earnings_avwap_anchors.csv"
 EARNINGS_ANCHOR_CANDIDATES_FILE = RUNTIME_DATA_DIR / "earnings_anchor_candidates.csv"
 EARNINGS_CALENDAR_HISTORY_FILE = DATA_DIR / "earnings_calendar_history.json"
 MASTER_AVWAP_LEVELS_DIR = DATA_DIR / "levels"
+# Durable, shared (Drive-backed) daily-bar history. The local machine cache under
+# CACHE_DIR is a fast L1; this is the L2 that survives cache wipes / fresh
+# machines so cold starts only fetch the delta instead of full price history.
+MASTER_AVWAP_DAILY_BARS_DIR = DATA_DIR / "daily_bars"
+# Durable, shared (Drive-backed) intraday (H1) bar history. H4 is resampled from
+# H1, so only H1 is stored. Same L1/L2 split as the daily store.
+MASTER_AVWAP_INTRADAY_BARS_DIR = DATA_DIR / "intraday_bars"
 
 EARNINGS_CACHE_FILE = CACHE_DIR / "earnings_cache.json"
 PREV_EARNINGS_CACHE_FILE = CACHE_DIR / "prev_earnings_cache.json"
@@ -90,6 +97,7 @@ EARNINGS_DATES_CACHE_FILE = CACHE_DIR / "earnings_dates_cache.json"
 EARNINGS_CALENDAR_CACHE_FILE = CACHE_DIR / "earnings_calendar_rows.json"
 YAHOO_SYMBOL_META_CACHE_FILE = CACHE_DIR / "yahoo_symbol_metadata.json"
 DAILY_BARS_CACHE_DIR = CACHE_DIR / "daily_bars"
+INTRADAY_BARS_CACHE_DIR = CACHE_DIR / "intraday_bars"
 
 AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "avwap_signals.csv"
 D1_FEATURES_FILE = RUNTIME_DATA_DIR / "d1_features.csv"

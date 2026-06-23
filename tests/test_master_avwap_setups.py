@@ -2540,6 +2540,52 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(feature_rows_by_symbol["TSLA"]["hv_level_nearby_count"], priority_rows[0]["hv_level_nearby_count"])
         self.assertEqual(ai_state["symbols"]["TSLA"]["hv_level_note"], priority_rows[0]["hv_level_note"])
 
+    def test_hv_level_scoring_penalizes_entry_at_respected_level(self):
+        # A respected green level just above a long entry should subtract score
+        # only when scoring is enabled, scaled by cumulative respect history.
+        def store(respect):
+            return {
+                "schema_version": 1,
+                "symbol": "TSLA",
+                "levels": [
+                    {
+                        "kind": "hv_horizontal",
+                        "price": 100.10,
+                        "bucket": "green",
+                        "first_seen": "2024-01-01",
+                        "respect_count": respect,
+                        "break_count": 0,
+                        "strength": 1.0,
+                    }
+                ],
+            }
+
+        off = master_avwap._hv_level_context_for_entry(
+            store(8), side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=False,
+        )
+        self.assertEqual(off["hv_level_score_delta"], 0.0)
+
+        fresh = master_avwap._hv_level_context_for_entry(
+            store(0), side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=True,
+        )
+        respected = master_avwap._hv_level_context_for_entry(
+            store(8), side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=True,
+        )
+        self.assertLess(fresh["hv_level_score_delta"], 0.0)
+        self.assertLess(respected["hv_level_score_delta"], fresh["hv_level_score_delta"])
+
+        # A level broken on the latest bar is a breakout, not a wall: no penalty.
+        broken = store(8)
+        broken["levels"][0]["last_break"] = "2026-06-22"
+        breakout = master_avwap._hv_level_context_for_entry(
+            broken, side="LONG", entry_price=100.0, atr20=4.0,
+            last_trade_date="2026-06-22", scoring_enabled=True,
+        )
+        self.assertEqual(breakout["hv_level_score_delta"], 0.0)
+
     def test_compression_break_context_detects_close_out_of_prior_box(self):
         dates = pd.bdate_range("2026-01-01", periods=8)
         frame = pd.DataFrame(
@@ -5308,8 +5354,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(ranked[0]["covered_major_sma_support_count"], 1)
         self.assertNotIn("SMA_20", ranked[0]["covered_support_summary"])
 
-    def test_theta_option_strikes_require_covered_major_sma_support(self):
-        row = {
+    def test_theta_strike_requires_major_sma_defense(self):
+        # A strike defended only by AVWAP/trendline (no 50/100/200 SMA) is rejected.
+        avwap_only = {
             "symbol": "CIEN",
             "last_close": 105.0,
             "score": 80,
@@ -5320,11 +5367,50 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 {"label": "PREV_AVWAPE", "level": 96.0, "source": "previous_avwape", "distance_atr": 1.0},
             ],
         }
+        self.assertEqual(master_avwap._sold_put_candidate_strikes(avwap_only, [100, 98, 96, 94]), [])
 
-        self.assertEqual(master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94]), [])
-        self.assertEqual(master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 94]), [])
+        # Add a major SMA below the strike and it becomes eligible.
+        with_sma = dict(avwap_only)
+        with_sma["supports"] = avwap_only["supports"] + [
+            {"label": "SMA_50", "level": 99.0, "source": "sma", "distance_atr": 0.5}
+        ]
+        sold = master_avwap._sold_put_candidate_strikes(with_sma, [100, 98, 96, 94])
+        self.assertTrue(sold)
+        self.assertTrue(all(c["covered_major_sma_support_count"] >= 1 for c in sold))
 
-    def test_theta_option_strikes_require_covered_avwap_family_support(self):
+    def test_theta_hv_horizontal_levels_count_as_supports(self):
+        # High-rvol horizontal levels from the stored chart defend the strike like
+        # any other support (stacking), but never substitute for the major SMA.
+        store = {
+            "levels": [
+                {"kind": "hv_horizontal", "price": 99.0, "bucket": "green"},
+                {"kind": "hv_horizontal", "price": 97.0, "bucket": "red"},
+                {"kind": "cloud_flat", "price": 96.0},  # not an hv_horizontal -> ignored
+                {"kind": "hv_horizontal", "price": 130.0, "bucket": "green"},  # above price -> filtered
+            ]
+        }
+        hv_supports = master_avwap._theta_hv_level_supports("CIEN", 105.0, 4.0, store=store)
+        labels = sorted(entry["label"] for entry in hv_supports)
+        self.assertEqual(labels, ["HVOL_GREEN", "HVOL_RED"])
+        self.assertTrue(all(entry["source"] == "hv_horizontal" for entry in hv_supports))
+
+        # HV levels stack with a major SMA to make a strike eligible.
+        row = {
+            "symbol": "CIEN",
+            "last_close": 105.0,
+            "score": 80,
+            "base_score": 80,
+            "supports": [
+                {"label": "SMA_50", "level": 99.0, "source": "sma", "distance_atr": 0.5},
+                *hv_supports,
+            ],
+        }
+        sold = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 94])
+        self.assertTrue(sold)
+
+    def test_theta_option_strikes_allow_sma_only_support(self):
+        # Loosened: a major SMA support below the strike is enough on its own (an
+        # AVWAP support is no longer also required).
         row = {
             "symbol": "CIEN",
             "last_close": 105.0,
@@ -5338,19 +5424,12 @@ class MasterAvwapSetupTests(unittest.TestCase):
             ],
         }
 
-        self.assertEqual(master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 95, 94]), [])
-        self.assertEqual(master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 95, 94]), [])
-
-        row["supports"].append(
-            {"label": "PREV_UPPER_1", "level": 95.0, "source": "previous_avwape", "distance_atr": 1.1}
-        )
         sold_put_candidates = master_avwap._sold_put_candidate_strikes(row, [100, 98, 96, 95, 94])
         pcs_candidates = master_avwap._pcs_short_strike_candidates(row, [100, 98, 96, 95, 94])
 
-        self.assertIn(95.0, [candidate["strike"] for candidate in sold_put_candidates])
-        self.assertIn(95.0, [candidate["short_strike"] for candidate in pcs_candidates])
-        self.assertEqual(sold_put_candidates[0]["covered_avwap_support_count"], 1)
-        self.assertEqual(sold_put_candidates[0]["covered_previous_first_dev_support_count"], 1)
+        self.assertTrue(sold_put_candidates)
+        self.assertTrue(pcs_candidates)
+        self.assertTrue(all(c["covered_major_sma_support_count"] >= 1 for c in sold_put_candidates))
 
     def test_pcs_ranking_uses_two_supports_and_credit_width_target(self):
         row = {
@@ -5420,26 +5499,34 @@ class MasterAvwapSetupTests(unittest.TestCase):
             )
         )
 
-    def test_option_quote_credit_prefers_last_known_then_bid(self):
-        last_credit, last_source = master_avwap._option_quote_credit_with_source(
-            {"bid": 0.20, "ask": 0.40, "last": 0.55}
+    def test_option_quote_credit_prefers_mid_then_bid_on_wide_spread(self):
+        # Reasonable spread -> bid/ask midpoint (realistic limit fill), ignoring a
+        # stale last trade.
+        mid_credit, mid_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.20, "ask": 0.24, "last": 0.55}
         )
-        close_credit, close_source = master_avwap._option_quote_credit_with_source(
-            {"bid": 0.20, "ask": 0.40, "close": 0.35}
+        # Wide spread -> conservative bid, still not the stale last.
+        wide_credit, wide_source = master_avwap._option_quote_credit_with_source(
+            {"bid": 0.20, "ask": 0.60, "last": 0.55}
         )
-        bid_credit, bid_source = master_avwap._option_quote_credit_with_source(
-            {"bid": 0.20, "ask": 0.40}
-        )
+        # No live two-sided market -> bid, then last/close only as a last resort.
+        bid_credit, bid_source = master_avwap._option_quote_credit_with_source({"bid": 0.20})
+        last_credit, last_source = master_avwap._option_quote_credit_with_source({"last": 0.55})
+        close_credit, close_source = master_avwap._option_quote_credit_with_source({"close": 0.35})
 
+        self.assertAlmostEqual(mid_credit, 0.22)
+        self.assertEqual(mid_source, "mid")
+        self.assertAlmostEqual(wide_credit, 0.20)
+        self.assertEqual(wide_source, "bid_wide_spread")
+        self.assertAlmostEqual(bid_credit, 0.20)
+        self.assertEqual(bid_source, "bid")
         self.assertAlmostEqual(last_credit, 0.55)
         self.assertEqual(last_source, "last")
         self.assertAlmostEqual(close_credit, 0.35)
         self.assertEqual(close_source, "close")
-        self.assertAlmostEqual(bid_credit, 0.20)
-        self.assertEqual(bid_source, "bid")
         self.assertAlmostEqual(master_avwap._option_quote_mid({"bid": 0.20, "ask": 0.40}), 0.30)
 
-    def test_sold_put_ranking_uses_last_known_price_over_wide_midpoint(self):
+    def test_sold_put_ranking_uses_conservative_bid_on_wide_spread(self):
         row = {
             "symbol": "CIEN",
             "last_close": 105.0,
@@ -5457,14 +5544,16 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "covered_previous_first_dev_support_count": 1,
             "total_support_count": 3,
             "support_quality_score": 3.0,
+            # Illiquid wide market: the stale 0.18 last trade overstated the credit;
+            # the realistic fill is the 0.01 bid, which correctly ranks this out.
             "quote": {"bid": 0.01, "ask": 0.99, "last": 0.18},
         }
 
         ranked = master_avwap._rank_sold_put_option_recommendations(row, [quote_row])
 
-        self.assertEqual(ranked[0]["credit"], 0.18)
-        self.assertEqual(ranked[0]["credit_source"], "last")
-        self.assertEqual(ranked[0]["status"], "cusp")
+        self.assertAlmostEqual(ranked[0]["credit"], 0.01)
+        self.assertEqual(ranked[0]["credit_source"], "bid_wide_spread")
+        self.assertEqual(ranked[0]["status"], "below_target")
 
     def test_theta_option_client_reconnects_when_scan_client_is_unavailable(self):
         class FakeIb:
@@ -5750,6 +5839,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
             master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
             with (
                 patch.object(master_avwap, "DAILY_BARS_CACHE_DIR", cache_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", Path(temp_dir) / "durable"),
                 patch.object(master_avwap, "_fetch_live_daily_bars", return_value=fresh_frame) as live_fetch,
             ):
                 master_avwap._write_cached_daily_bar_frame("AL", stale_frame)
@@ -5765,6 +5855,134 @@ class MasterAvwapSetupTests(unittest.TestCase):
             master_avwap._DAILY_BAR_FRAME_CACHE.clear()
             master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
             master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+
+    def test_durable_store_seeds_cold_cache_and_only_delta_is_fetched(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir) / "daily_bars"
+            durable_dir = Path(temp_dir) / "durable"
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+            with (
+                patch.object(master_avwap, "DAILY_BARS_CACHE_DIR", cache_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", durable_dir),
+            ):
+                # Persist durable history (covers the request window but ends a few
+                # sessions ago), then simulate a fresh machine: no local L1 cache,
+                # only the durable Drive store exists.
+                history = _build_daily_bar_cache_frame(450)
+                history["datetime"] = history["datetime"] - pd.Timedelta(days=10)
+                master_avwap._persist_durable_daily_bars("AL", master_avwap._normalize_daily_bar_frame(history))
+                self.assertTrue((durable_dir / "AL.parquet").exists())
+                master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+                master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+
+                # Cold start: local cache missing -> load seeds from durable store.
+                seeded = master_avwap._load_cached_daily_bar_frame("AL")
+                self.assertFalse(seeded.empty)
+                self.assertTrue((cache_dir / "AL.csv").exists())  # L1 seeded for fast reuse
+
+                # With history present, only the recent delta is requested (a small
+                # window), never the full requested lookback.
+                captured = {}
+
+                def fake_live(ib, symbol, days):
+                    captured["days"] = days
+                    return _build_daily_bar_cache_frame()
+
+                master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+                master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+                with patch.object(master_avwap, "_fetch_live_daily_bars", side_effect=fake_live):
+                    master_avwap.fetch_daily_bars(object(), "AL", 400)
+                self.assertLess(captured["days"], 400)
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            master_avwap._DAILY_BAR_LIVE_FAILURE_AT.clear()
+
+    def test_intraday_durable_store_seeds_cold_cache_and_fetches_only_delta(self):
+        def hourly(n_days, end_offset_days=0):
+            end = pd.Timestamp.now().normalize() - pd.Timedelta(days=end_offset_days)
+            sessions = pd.bdate_range(end=end, periods=n_days)
+            rows = []
+            for day in sessions:
+                for hour in range(9, 16):
+                    rows.append(
+                        {
+                            "datetime": pd.Timestamp(day) + pd.Timedelta(hours=hour),
+                            "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0,
+                        }
+                    )
+            return pd.DataFrame(rows)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            l1_dir = Path(temp_dir) / "intraday"
+            durable_dir = Path(temp_dir) / "durable"
+            master_avwap._INTRADAY_BAR_FRAME_CACHE.clear()
+            master_avwap._INTRADAY_BAR_CACHE_TOUCHED_AT.clear()
+            with (
+                patch.object(master_avwap, "INTRADAY_BARS_CACHE_DIR", l1_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_INTRADAY_BARS_DIR", durable_dir),
+            ):
+                # A prior machine populated the Drive store; its bars are now stale.
+                history = master_avwap._normalize_intraday_bar_frame(hourly(190, end_offset_days=12))
+                master_avwap._persist_durable_intraday_bars("NVDA", "1h", history)
+                self.assertTrue((durable_dir / "NVDA__1h.parquet").exists())
+
+                # Fresh machine: empty local cache, same Drive.
+                master_avwap._INTRADAY_BAR_FRAME_CACHE.clear()
+                master_avwap._INTRADAY_BAR_CACHE_TOUCHED_AT.clear()
+                captured = {}
+
+                def fake_live(ib, symbol, *, bar_size=None, duration=None):
+                    captured["days"] = master_avwap._duration_to_days(duration, 180)
+                    return hourly(6)
+
+                with patch.object(master_avwap, "_fetch_live_intraday_bars", side_effect=fake_live):
+                    merged = master_avwap.fetch_intraday_bars(object(), "NVDA")
+
+                self.assertLess(captured["days"], 180)  # only the delta, not the full window
+                self.assertGreaterEqual(len(merged), len(history))  # history preserved + extended
+                self.assertTrue((l1_dir / "NVDA__1h.csv").exists())  # L1 seeded for fast reuse
+            master_avwap._INTRADAY_BAR_FRAME_CACHE.clear()
+            master_avwap._INTRADAY_BAR_CACHE_TOUCHED_AT.clear()
+
+    def test_warm_durable_bar_stores_force_writes_unique_symbols(self):
+        def daily_frame(n):
+            dates = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=n)
+            return pd.DataFrame(
+                {"datetime": dates, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0}
+            )
+
+        def hourly_frame(n):
+            sessions = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=n)
+            rows = []
+            for day in sessions:
+                for hour in range(9, 16):
+                    rows.append(
+                        {"datetime": pd.Timestamp(day) + pd.Timedelta(hours=hour),
+                         "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000.0}
+                    )
+            return pd.DataFrame(rows)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            daily_dir = Path(temp_dir) / "daily"
+            intraday_dir = Path(temp_dir) / "intraday"
+            with (
+                patch.object(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", daily_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_INTRADAY_BARS_DIR", intraday_dir),
+                patch.object(master_avwap, "fetch_daily_bars", side_effect=lambda ib, sym, days: daily_frame(420)),
+                patch.object(master_avwap, "fetch_intraday_bars", side_effect=lambda ib, sym, bar_size=None: hourly_frame(190)),
+            ):
+                summary = master_avwap.warm_durable_bar_stores(["nvda", "AAPL", "nvda", ""], ib=None)
+
+            self.assertEqual(summary["requested"], 2)
+            self.assertEqual(summary["daily"], 2)
+            self.assertEqual(summary["intraday"], 2)
+            self.assertEqual(summary["failed"], [])
+            self.assertTrue((daily_dir / "NVDA.parquet").exists())
+            self.assertTrue((daily_dir / "AAPL.parquet").exists())
+            self.assertTrue((intraday_dir / "NVDA__1h.parquet").exists())
+            self.assertTrue((intraday_dir / "AAPL__1h.parquet").exists())
 
     def test_fetch_daily_bars_skips_when_live_refresh_returns_stale_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -6093,7 +6311,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(row["option_status"], "below_target")
         self.assertIn("strike", row["best_option"])
         self.assertAlmostEqual(row["best_option"]["credit"], 0.04)
-        self.assertEqual(row["best_option"]["credit_source"], "bid")
+        self.assertEqual(row["best_option"]["credit_source"], "bid_wide_spread")
 
     def test_theta_ib_unavailable_keeps_pcs_support_only_rows(self):
         sold_put_row = {"symbol": "ABC", "score": 80, "notes": "theta setup"}

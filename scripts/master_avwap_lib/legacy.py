@@ -70,6 +70,9 @@ from project_paths import (
     EARNINGS_CALENDAR_CACHE_FILE,
     YAHOO_SYMBOL_META_CACHE_FILE,
     DAILY_BARS_CACHE_DIR,
+    INTRADAY_BARS_CACHE_DIR,
+    MASTER_AVWAP_DAILY_BARS_DIR,
+    MASTER_AVWAP_INTRADAY_BARS_DIR,
     MASTER_AVWAP_HISTORY_FILE,
     MASTER_AVWAP_AI_STATE_FILE,
     D1_FEATURES_FILE,
@@ -127,16 +130,19 @@ from .levels import (
     LEVEL_BREAK_ATR,
     LEVEL_STORE_SCHEMA_VERSION,
     LEVEL_TOL_ATR_FRACTION,
+    accumulate_touch_stats as accumulate_level_touch_stats,
     cluster_levels as cluster_hv_levels,
     compute_span_b_flats,
     compute_relvol,
     default_level_store,
     extract_hv_levels,
+    level_conviction,
     level_store_path,
     levels_blocking_entry,
     levels_near,
     load_level_store,
     merge_into_store as merge_levels_into_store,
+    normalize_frame as normalize_levels_frame,
     recompute_touch_stats as recompute_level_touch_stats,
     save_level_store,
 )
@@ -399,7 +405,9 @@ THETA_AVWAP_FAMILY_SUPPORT_LABELS = (
     | THETA_PREVIOUS_AVWAPE_SUPPORT_LABELS
     | THETA_PREVIOUS_FIRST_DEV_SUPPORT_LABELS
 )
-THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 11
+# Keep theta plays short-dated: at most ~2 weeks out, preferring the nearest
+# weekly. Market days, so 10 ~= 2 calendar weeks, 5 ~= 1 week.
+THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 10
 THETA_PUT_TARGET_TOTAL_CREDIT = 100.0
 THETA_PUT_MAX_CONTRACTS = 4
 THETA_PUT_TARGET_MIN_CREDIT = THETA_PUT_TARGET_TOTAL_CREDIT / 100.0 / THETA_PUT_MAX_CONTRACTS
@@ -407,9 +415,12 @@ THETA_PUT_CUSP_MIN_CREDIT = 0.15
 THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE = 2
 THETA_PUT_MAX_STRIKES_PER_EXPIRATION = 12
 THETA_PUT_MAX_EXPIRATIONS = 3
+# Points subtracted per market day to expiration, so the shorter-dated play wins
+# unless a slightly longer one is clearly better.
+THETA_DTE_PENALTY_PER_MARKET_DAY = 4.0
 THETA_PCS_MIN_SUPPORT_LEVELS = 2
-THETA_PCS_MIN_EXPIRATION_MARKET_DAYS = 6
-THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 15
+THETA_PCS_MIN_EXPIRATION_MARKET_DAYS = 4
+THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 10
 THETA_PCS_TARGET_CREDIT_WIDTH_RATIO = 0.20
 THETA_PCS_CUSP_CREDIT_WIDTH_RATIO = 0.12
 THETA_PCS_MAX_EXPIRATIONS = 3
@@ -421,6 +432,9 @@ THETA_OPTION_CHAIN_TIMEOUT_SEC = 8.0
 THETA_OPTION_REQUEST_DELAY_SEC = 0.08
 THETA_OPTION_ENRICHMENT_MAX_SECONDS = 240.0
 THETA_OPTION_ENRICHMENT_MAX_QUOTES = 160
+# Above this bid/ask spread (% of mid) the midpoint over-states a realistic fill,
+# so the conservative bid is used as the credit instead of the mid.
+THETA_OPTION_WIDE_SPREAD_PCT = 25.0
 THETA_WEEKLY_EXPIRATION_MAX_GAP_DAYS = 8
 THETA_OPTION_CLIENT_ID = 1005
 THETA_OPTION_CONNECT_STARTUP_WAIT_SEC = 1.5
@@ -1452,6 +1466,12 @@ DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS = 10
 DAILY_BAR_CACHE_RECENT_REFRESH_DAYS = 20
 DAILY_BAR_IBKR_TIMEOUT_SEC = 6.0
 DAILY_BAR_IBKR_POLL_INTERVAL_SEC = 0.2
+# Intraday (H1) cache: same L1/L2 strategy as the daily store. H4 is resampled
+# from cached H1, so only H1 is fetched/stored.
+INTRADAY_BAR_CACHE_MAX_AGE_MINUTES = 30
+INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS = 5
+INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS = 5
+INTRADAY_BAR_DEFAULT_DURATION_DAYS = 180
 DAILY_BAR_YAHOO_TIMEOUT_SEC = 6.0
 DAILY_BAR_LIVE_FAILURE_COOLDOWN_MINUTES = 15
 SYMBOL_METADATA_CACHE_MAX_AGE_DAYS = 1
@@ -1848,6 +1868,8 @@ _SYMBOL_METADATA_CACHE: dict | None = None
 _DAILY_BAR_FRAME_CACHE: dict[str, pd.DataFrame] = {}
 _DAILY_BAR_CACHE_TOUCHED_AT: dict[str, datetime] = {}
 _DAILY_BAR_LIVE_FAILURE_AT: dict[str, datetime] = {}
+_INTRADAY_BAR_FRAME_CACHE: dict[str, pd.DataFrame] = {}
+_INTRADAY_BAR_CACHE_TOUCHED_AT: dict[str, datetime] = {}
 
 
 def _is_timestamp_within_minutes(value, minutes: int) -> bool:
@@ -1991,6 +2013,18 @@ def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
 
     cache_path = _daily_bar_cache_file(symbol)
     if not cache_path.exists():
+        # Cold start (fresh / ephemeral machine): seed the local L1 cache from the
+        # durable Drive store so only the delta needs fetching, not full history.
+        durable = _load_durable_daily_bar_frame(symbol)
+        if not durable.empty:
+            _DAILY_BAR_FRAME_CACHE[symbol] = durable
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                durable.to_csv(cache_path, index=False)
+                _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
+            except Exception:
+                _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
+            return _set_daily_bar_source(durable.copy(), DAILY_BAR_SOURCE_CACHE)
         return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
 
     try:
@@ -2013,6 +2047,48 @@ def _write_cached_daily_bar_frame(symbol: str, df: pd.DataFrame) -> None:
     normalized.to_csv(cache_path, index=False)
     _DAILY_BAR_FRAME_CACHE[symbol] = normalized
     _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
+
+
+def _durable_daily_bar_file(symbol: str) -> Path:
+    return Path(MASTER_AVWAP_DAILY_BARS_DIR) / f"{_sanitize_symbol_for_filename(symbol)}.parquet"
+
+
+def _load_durable_daily_bar_frame(symbol: str) -> pd.DataFrame:
+    """Read the durable (Drive-backed) Parquet history; empty frame on any miss."""
+    try:
+        path = _durable_daily_bar_file(symbol)
+        if not path.exists():
+            return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
+        df = pd.read_parquet(path)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to L1 only
+        logging.debug("%s: durable daily-bar read skipped (%s).", symbol, exc)
+        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
+    return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
+
+
+def _persist_durable_daily_bars(symbol: str, normalized: pd.DataFrame, previous: pd.DataFrame | None = None) -> None:
+    """Mirror the merged history to the durable Parquet store, but only when it
+    actually changed (bounds Drive sync churn to genuine updates)."""
+    if normalized is None or getattr(normalized, "empty", True):
+        return
+    try:
+        path = _durable_daily_bar_file(symbol)
+        if previous is not None and path.exists() and not _daily_bar_frame_changed(previous, normalized):
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized.to_parquet(path, index=False)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to L1 only
+        logging.debug("%s: durable daily-bar persist skipped (%s).", symbol, exc)
+
+
+def _daily_bar_frame_changed(previous: pd.DataFrame | None, current: pd.DataFrame | None) -> bool:
+    if previous is None or getattr(previous, "empty", True):
+        return True
+    if current is None or getattr(current, "empty", True):
+        return False
+    if len(previous) != len(current):
+        return True
+    return _daily_bar_frame_last_date(previous) != _daily_bar_frame_last_date(current)
 
 
 def _merge_daily_bar_frames(existing: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
@@ -14401,17 +14477,31 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     if cache_has_history and cache_data_is_recent and _daily_bar_live_failure_in_cooldown(normalized_symbol):
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
-    refresh_days = (
-        requested_days
-        if not cache_has_history
-        else min(requested_days, max(ATR_LENGTH + 5, DAILY_BAR_CACHE_RECENT_REFRESH_DAYS))
-    )
+    if not cache_has_history:
+        refresh_days = requested_days
+    else:
+        # Fill in only from the last stored bar forward (the delta), plus a small
+        # re-statement buffer for late prints/adjustments. This keeps the fetch
+        # minimal on a daily cadence yet still bridges the gap with no holes if the
+        # bot has been offline for a while, instead of a fixed 20-day window that
+        # could leave the cache with a gap.
+        last_cached_date = _daily_bar_frame_last_date(cached)
+        gap_days = (
+            _weekday_gap(last_cached_date, datetime.now().date())
+            if last_cached_date is not None
+            else DAILY_BAR_CACHE_RECENT_REFRESH_DAYS
+        )
+        refresh_days = min(
+            requested_days,
+            max(DAILY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS),
+        )
     fresh = _fetch_live_daily_bars(ib, normalized_symbol, refresh_days)
     if fresh is not None and not fresh.empty:
         if _daily_bar_cache_data_is_recent(fresh):
             _mark_daily_bar_live_fetch_result(normalized_symbol, succeeded=True)
             merged = _merge_daily_bar_frames(cached, fresh)
             _write_cached_daily_bar_frame(normalized_symbol, merged)
+            _persist_durable_daily_bars(normalized_symbol, merged, previous=cached)
             return _set_daily_bar_source(merged.copy(), _get_daily_bar_source(fresh))
         fresh_last_date = _daily_bar_frame_last_date(fresh)
         logging.warning(
@@ -14583,14 +14673,335 @@ def _fetch_live_intraday_bars(
     return fetch_intraday_bars_from_yahoo(normalized_symbol, period_days=days)
 
 
+def _intraday_bar_size_token(bar_size: str | None) -> str:
+    """Compact filename token for an IBKR bar-size string ("1 hour" -> "1h")."""
+    raw = str(bar_size or HTF_INTRADAY_BAR_SIZE).strip().lower()
+    parts = raw.split()
+    if not parts:
+        return "1h"
+    try:
+        num = str(int(float(parts[0])))
+    except (TypeError, ValueError):
+        num = "1"
+    unit = parts[1] if len(parts) > 1 else "hour"
+    if unit.startswith("hour"):
+        suffix = "h"
+    elif unit.startswith("min"):
+        suffix = "m"
+    elif unit.startswith("day"):
+        suffix = "d"
+    else:
+        suffix = unit[:1] or "h"
+    return f"{num}{suffix}"
+
+
+def _duration_to_days(duration: str | None, default: int) -> int:
+    try:
+        return max(1, int(float(str(duration).split()[0])))
+    except (TypeError, ValueError, IndexError):
+        return int(default)
+
+
+def _intraday_cache_key(symbol: str, token: str) -> str:
+    return f"{str(symbol or '').strip().upper()}__{token}"
+
+
+def _intraday_bar_cache_file(symbol: str, token: str) -> Path:
+    return Path(INTRADAY_BARS_CACHE_DIR) / f"{_sanitize_symbol_for_filename(symbol)}__{token}.csv"
+
+
+def _durable_intraday_bar_file(symbol: str, token: str) -> Path:
+    return Path(MASTER_AVWAP_INTRADAY_BARS_DIR) / f"{_sanitize_symbol_for_filename(symbol)}__{token}.parquet"
+
+
+def _intraday_bar_frame_last_datetime(df: pd.DataFrame | None):
+    if df is None or getattr(df, "empty", True) or "datetime" not in df.columns:
+        return None
+    try:
+        return pd.to_datetime(df["datetime"].iloc[-1])
+    except Exception:
+        return None
+
+
+def _merge_intraday_bar_frames(existing: pd.DataFrame | None, fresh: pd.DataFrame | None) -> pd.DataFrame:
+    if existing is None or getattr(existing, "empty", True):
+        return _normalize_intraday_bar_frame(fresh)
+    if fresh is None or getattr(fresh, "empty", True):
+        return _normalize_intraday_bar_frame(existing)
+    combined = pd.concat([existing, fresh], ignore_index=True)
+    return _normalize_intraday_bar_frame(combined)
+
+
+def _intraday_cache_covers_history(df: pd.DataFrame | None, days: int) -> bool:
+    if df is None or getattr(df, "empty", True):
+        return False
+    required_days = max(int(days), 1) + INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS
+    required_start = datetime.now().date() - timedelta(days=required_days)
+    try:
+        oldest = pd.to_datetime(df["datetime"].iloc[0]).date()
+    except Exception:
+        return False
+    return oldest <= required_start
+
+
+def _intraday_cache_data_is_recent(df: pd.DataFrame | None, *, now: datetime | None = None, max_weekday_gap: int = 2) -> bool:
+    last_dt = _intraday_bar_frame_last_datetime(df)
+    if last_dt is None:
+        return False
+    reference_date = (now or datetime.now()).date()
+    return _weekday_gap(last_dt.date(), reference_date) <= max(0, int(max_weekday_gap))
+
+
+def _intraday_cache_is_recent(key: str) -> bool:
+    touched_at = _INTRADAY_BAR_CACHE_TOUCHED_AT.get(key)
+    if touched_at is None:
+        return False
+    return (datetime.now() - touched_at) <= timedelta(minutes=INTRADAY_BAR_CACHE_MAX_AGE_MINUTES)
+
+
+def _load_durable_intraday_bar_frame(symbol: str, token: str) -> pd.DataFrame:
+    try:
+        path = _durable_intraday_bar_file(symbol, token)
+        if not path.exists():
+            return _empty_intraday_bar_frame()
+        df = pd.read_parquet(path)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to live fetch
+        logging.debug("%s: durable intraday read skipped (%s).", symbol, exc)
+        return _empty_intraday_bar_frame()
+    return _normalize_intraday_bar_frame(df)
+
+
+def _intraday_frame_changed(previous: pd.DataFrame | None, current: pd.DataFrame | None) -> bool:
+    if previous is None or getattr(previous, "empty", True):
+        return True
+    if current is None or getattr(current, "empty", True):
+        return False
+    if len(previous) != len(current):
+        return True
+    return _intraday_bar_frame_last_datetime(previous) != _intraday_bar_frame_last_datetime(current)
+
+
+def _persist_durable_intraday_bars(symbol: str, token: str, normalized: pd.DataFrame, previous: pd.DataFrame | None = None) -> None:
+    if normalized is None or getattr(normalized, "empty", True):
+        return
+    try:
+        path = _durable_intraday_bar_file(symbol, token)
+        if previous is not None and path.exists() and not _intraday_frame_changed(previous, normalized):
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized.to_parquet(path, index=False)
+    except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to L1 only
+        logging.debug("%s: durable intraday persist skipped (%s).", symbol, exc)
+
+
+def _write_cached_intraday_bar_frame(symbol: str, token: str, normalized: pd.DataFrame) -> None:
+    key = _intraday_cache_key(symbol, token)
+    path = _intraday_bar_cache_file(symbol, token)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized.to_csv(path, index=False)
+    except Exception as exc:
+        logging.debug("%s: intraday L1 cache write skipped (%s).", symbol, exc)
+    _INTRADAY_BAR_FRAME_CACHE[key] = normalized
+    _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+
+
+def _load_cached_intraday_bar_frame(symbol: str, token: str) -> pd.DataFrame:
+    key = _intraday_cache_key(symbol, token)
+    cached = _INTRADAY_BAR_FRAME_CACHE.get(key)
+    if cached is not None:
+        return cached.copy()
+    path = _intraday_bar_cache_file(symbol, token)
+    if not path.exists():
+        # Cold start: seed from the durable Drive store so only the delta is fetched.
+        durable = _load_durable_intraday_bar_frame(symbol, token)
+        if not durable.empty:
+            _INTRADAY_BAR_FRAME_CACHE[key] = durable
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                durable.to_csv(path, index=False)
+            except Exception:
+                pass
+            _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+            return durable.copy()
+        return _empty_intraday_bar_frame()
+    try:
+        df = pd.read_csv(path, parse_dates=["datetime"])
+    except Exception as exc:
+        logging.debug("%s: failed reading intraday cache (%s).", symbol, exc)
+        return _empty_intraday_bar_frame()
+    normalized = _normalize_intraday_bar_frame(df)
+    _INTRADAY_BAR_FRAME_CACHE[key] = normalized
+    _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+    return normalized.copy()
+
+
 def fetch_intraday_bars(
     ib: IBApi | None,
     symbol: str,
     *,
     bar_size: str | None = None,
     duration: str | None = None,
+    persist: bool = True,
 ) -> pd.DataFrame:
-    return _fetch_live_intraday_bars(ib, symbol, bar_size=bar_size, duration=duration)
+    """Intraday (default H1) bars with the same durable L1/L2 cache as daily bars.
+
+    The accumulated history is stored locally (fast) and mirrored to the
+    Drive-backed Parquet store, so a fresh/ephemeral machine seeds from Drive and
+    fetches only the delta since the last stored bar instead of the full 180-day
+    window every run. H4 is resampled from this H1 history elsewhere.
+    """
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return _empty_intraday_bar_frame()
+    token = _intraday_bar_size_token(bar_size)
+    duration_days = _duration_to_days(duration or HTF_INTRADAY_DURATION, INTRADAY_BAR_DEFAULT_DURATION_DAYS)
+    key = _intraday_cache_key(normalized_symbol, token)
+
+    cached = _load_cached_intraday_bar_frame(normalized_symbol, token)
+    cache_has_history = _intraday_cache_covers_history(cached, duration_days)
+    if cache_has_history and _intraday_cache_data_is_recent(cached) and _intraday_cache_is_recent(key):
+        return cached.copy()
+
+    if not cache_has_history:
+        refresh_days = duration_days
+    else:
+        last_dt = _intraday_bar_frame_last_datetime(cached)
+        gap_days = (
+            _weekday_gap(last_dt.date(), datetime.now().date())
+            if last_dt is not None
+            else INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS
+        )
+        refresh_days = min(
+            duration_days,
+            max(INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS),
+        )
+
+    fresh = _fetch_live_intraday_bars(ib, normalized_symbol, bar_size=bar_size, duration=f"{int(refresh_days)} D")
+    if fresh is not None and not fresh.empty and _intraday_cache_data_is_recent(fresh):
+        merged = _merge_intraday_bar_frames(cached, fresh)
+        if persist:
+            _write_cached_intraday_bar_frame(normalized_symbol, token, merged)
+            _persist_durable_intraday_bars(normalized_symbol, token, merged, previous=cached)
+        else:
+            _INTRADAY_BAR_FRAME_CACHE[key] = merged
+            _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
+        return merged.copy()
+
+    if cached is not None and not cached.empty:
+        return cached.copy()
+    return fresh if fresh is not None else _empty_intraday_bar_frame()
+
+
+# Daily history depth to warm into the durable store: enough to cover the longest
+# daily SMA (PRIORITY_SMA_LOOKBACK_DAYS=320) plus a buffer for every consumer.
+WARM_DURABLE_DAILY_DAYS = 400
+
+
+def warm_durable_bar_stores(
+    symbols,
+    ib: IBApi | None = None,
+    *,
+    include_daily: bool = True,
+    include_intraday: bool = True,
+    daily_days: int | None = None,
+    intraday_bar_size: str | None = None,
+    progress_every: int = 25,
+) -> dict:
+    """One-shot pre-population of the durable (Drive) daily and H1 stores.
+
+    Fetches each symbol's history once (delta-aware, so it is cheap when a local
+    cache already exists) and force-writes it to the durable Parquet store, so a
+    later run on another Drive-linked machine starts delta-only instead of
+    re-pulling full history. Idempotent and safe to re-run.
+    """
+    seen: list[str] = []
+    for raw in symbols or []:
+        sym = str(raw or "").strip().upper()
+        if sym and sym not in seen:
+            seen.append(sym)
+    summary = {"requested": len(seen), "daily": 0, "intraday": 0, "failed": []}
+    daily_days = int(daily_days or WARM_DURABLE_DAILY_DAYS)
+    token = _intraday_bar_size_token(intraday_bar_size)
+    for idx, sym in enumerate(seen):
+        if include_daily:
+            try:
+                frame = fetch_daily_bars(ib, sym, daily_days)
+                if frame is not None and not getattr(frame, "empty", True):
+                    _persist_durable_daily_bars(sym, _normalize_daily_bar_frame(frame))
+                    summary["daily"] += 1
+            except Exception as exc:
+                if sym not in summary["failed"]:
+                    summary["failed"].append(sym)
+                logging.warning("%s: durable daily warm failed (%s).", sym, exc)
+        if include_intraday:
+            try:
+                hourly = fetch_intraday_bars(ib, sym, bar_size=intraday_bar_size)
+                if hourly is not None and not getattr(hourly, "empty", True):
+                    _persist_durable_intraday_bars(sym, token, _normalize_intraday_bar_frame(hourly))
+                    summary["intraday"] += 1
+            except Exception as exc:
+                if sym not in summary["failed"]:
+                    summary["failed"].append(sym)
+                logging.warning("%s: durable intraday warm failed (%s).", sym, exc)
+        if progress_every and (idx + 1) % int(progress_every) == 0:
+            logging.info(
+                "Durable warm progress: %d/%d symbols (daily=%d, intraday=%d).",
+                idx + 1, len(seen), summary["daily"], summary["intraday"],
+            )
+    logging.info(
+        "Durable warm complete: %d symbol(s) (daily=%d, intraday=%d, failed=%d).",
+        len(seen), summary["daily"], summary["intraday"], len(summary["failed"]),
+    )
+    return summary
+
+
+def warm_durable_stores_for_watchlists(
+    ib: IBApi | None = None,
+    *,
+    use_shared_watchlists: bool = True,
+    include_daily: bool = True,
+    include_intraday: bool = True,
+    daily_days: int | None = None,
+    intraday_bar_size: str | None = None,
+) -> dict:
+    """Load the standard scan watchlist symbols and warm the durable stores.
+
+    Connects an IBKR daily-data client when one is not supplied (falling back to
+    Yahoo if IB is unavailable), warms, and disconnects what it connected.
+    """
+    long_paths, short_paths, label = resolve_master_scan_watchlist_paths(
+        use_shared_watchlists=use_shared_watchlists
+    )
+    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE}
+    longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
+    shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
+    symbols = sorted(set(longs + shorts))
+    if not symbols:
+        logging.warning("Durable warm: no symbols found in %s.", label)
+        return {"requested": 0, "daily": 0, "intraday": 0, "failed": []}
+    logging.info("Durable warm: %d symbol(s) from %s.", len(symbols), label)
+    owns_ib = False
+    if ib is None:
+        ib = connect_daily_data_client(client_id=1009, startup_wait=1.5)
+        owns_ib = ib is not None
+        if ib is None:
+            logging.info("Durable warm: no IBKR connection; using Yahoo fallback.")
+    try:
+        return warm_durable_bar_stores(
+            symbols,
+            ib,
+            include_daily=include_daily,
+            include_intraday=include_intraday,
+            daily_days=daily_days,
+            intraday_bar_size=intraday_bar_size,
+        )
+    finally:
+        if owns_ib and ib is not None:
+            try:
+                ib.disconnect()
+            except Exception:
+                pass
 
 # ============================================================================
 # AVWAP CALCULATION
@@ -16221,6 +16632,50 @@ def _theta_support_entry(
     }
 
 
+def _theta_hv_level_supports(
+    symbol: str,
+    last_close: float | None,
+    atr20: float | None,
+    *,
+    levels_dir: Path | None = None,
+    store: dict | None = None,
+) -> list[dict]:
+    """High-rvol horizontal levels (from the stored level chart) as theta supports.
+
+    Stored hv_horizontal levels at/below price defend a sold strike just like an
+    SMA/AVWAP support. They add to the stack but never substitute for the required
+    major SMA defense. Reads the persisted Drive level store on demand; an empty
+    store (e.g. first run) simply contributes no extra supports.
+    """
+    close_value = _coerce_float(last_close)
+    atr_value = _coerce_float(atr20)
+    if close_value is None or close_value <= 0 or atr_value is None or atr_value <= 0:
+        return []
+    if not isinstance(store, dict):
+        try:
+            path = level_store_path(Path(levels_dir or MASTER_AVWAP_LEVELS_DIR), symbol)
+            store = load_level_store(path, symbol)
+        except Exception:
+            return []
+    entries: list[dict] = []
+    for level in (store or {}).get("levels", []) or []:
+        if str(level.get("kind") or "") != "hv_horizontal":
+            continue
+        price = _coerce_float(level.get("price"))
+        if price is None:
+            continue
+        bucket = str(level.get("bucket") or "").strip().lower()
+        label = (
+            "HVOL_GREEN" if bucket == "green"
+            else "HVOL_RED" if bucket == "red"
+            else "HVOL_LEVEL"
+        )
+        entry = _theta_support_entry(label, price, close_value, atr_value, "hv_horizontal")
+        if entry:
+            entries.append(entry)
+    return entries
+
+
 def _normalize_theta_support_label(label: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", str(label or "").upper()).strip("_")
 
@@ -16617,6 +17072,7 @@ def evaluate_theta_put_candidate(
 
     source_weights = {
         "avwape": 1.30,
+        "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "trendline": 1.35,
         "sma": 1.10,
@@ -16935,6 +17391,7 @@ def _support_source_weight(source: str) -> float:
     return {
         "trendline": 1.35,
         "avwape": 1.30,
+        "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "sma": 1.10,
         "compression": 0.85,
@@ -16957,6 +17414,7 @@ def _strike_support_context(
     max_surrendered_supports: int | None = None,
     require_major_sma_support: bool = False,
     require_avwap_support: bool = False,
+    require_major_sma_or_avwap_support: bool = False,
 ) -> dict:
     strike_value = float(strike)
     ordered_supports = sorted(
@@ -16992,6 +17450,12 @@ def _strike_support_context(
     if require_major_sma_support and not covered_major_sma_supports:
         eligible = False
     if require_avwap_support and not covered_avwap_supports:
+        eligible = False
+    if (
+        require_major_sma_or_avwap_support
+        and not covered_major_sma_supports
+        and not covered_avwap_supports
+    ):
         eligible = False
     return {
         "eligible": bool(eligible),
@@ -17036,7 +17500,22 @@ def _option_quote_mid(quote: dict | None) -> float | None:
 
 
 def _option_quote_credit_with_source(quote: dict | None) -> tuple[float | None, str]:
-    for key, source in (("last", "last"), ("close", "close"), ("bid", "bid"), ("model_price", "model")):
+    # The credit you can actually collect is the live two-sided market: the
+    # bid/ask midpoint for a realistic limit fill, or the bid when the spread is
+    # so wide the midpoint would over-state it. The last trade and prior close are
+    # frequently stale on thin OTM weeklies (a print from hours ago at a different
+    # underlying price), so they are only a last resort when there is no live
+    # two-sided quote at all.
+    bid = _quote_value(quote, "bid")
+    mid = _option_quote_mid(quote)
+    if mid is not None and mid > 0:
+        spread_pct = _option_quote_spread_pct(quote)
+        if bid is not None and spread_pct is not None and spread_pct > THETA_OPTION_WIDE_SPREAD_PCT:
+            return bid, "bid_wide_spread"
+        return mid, "mid"
+    if bid is not None:
+        return bid, "bid"
+    for key, source in (("last", "last"), ("close", "close"), ("model_price", "model")):
         value = _quote_value(quote, key)
         if value is not None:
             return value, source
@@ -17099,7 +17578,6 @@ def _sold_put_candidate_strikes(row: dict, strikes: list[float]) -> list[dict]:
             min_support_levels=THETA_MIN_SUPPORT_LEVELS,
             max_surrendered_supports=THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE,
             require_major_sma_support=True,
-            require_avwap_support=True,
         )
         if not support_context["eligible"]:
             continue
@@ -17151,6 +17629,7 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
         moneyness_penalty = 0.0
         if close_value > 0:
             moneyness_penalty = max(0.0, ((close_value - strike) / close_value * 100.0) - 8.0) * 0.6
+        dte_penalty = max(0, int(quote_row.get("market_days", 0) or 0)) * THETA_DTE_PENALTY_PER_MARKET_DAY
         rank_score = (
             base_score
             + credit * 90.0
@@ -17160,6 +17639,7 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
             - surrendered * 8.0
             - spread_penalty
             - moneyness_penalty
+            - dte_penalty
             - status_rank * 55.0
         )
         ranked.append(
@@ -17242,7 +17722,6 @@ def _pcs_short_strike_candidates(row: dict, strikes: list[float]) -> list[dict]:
             strike,
             min_support_levels=THETA_PCS_MIN_SUPPORT_LEVELS,
             require_major_sma_support=True,
-            require_avwap_support=True,
         )
         if not support_context["eligible"]:
             continue
@@ -17320,6 +17799,7 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
         surrendered = int(spread_row.get("surrendered_support_count", 0) or 0)
         avwap_support_count = int(spread_row.get("covered_avwap_support_count", 0) or 0)
         previous_first_dev_support_count = int(spread_row.get("covered_previous_first_dev_support_count", 0) or 0)
+        dte_penalty = max(0, int(spread_row.get("market_days", 0) or 0)) * THETA_DTE_PENALTY_PER_MARKET_DAY
         rank_score = (
             base_score
             + credit_ratio * 240.0
@@ -17329,6 +17809,7 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
             + previous_first_dev_support_count * 3.0
             - surrendered * 5.0
             - spread_penalty
+            - dte_penalty
             - status_rank * 55.0
         )
         ranked.append(
@@ -22720,6 +23201,25 @@ HV_LEVEL_BREAK_STUDY_FAMILY = "hv_level_break"
 HV_LEVEL_STUDY_BUCKET = "study_hv_level"
 HV_LEVEL_MIN_STUDY_STRENGTH = 0.35
 
+# Multi-year S/R history. The deep backfill does a one-time long fetch per symbol
+# so the level chart starts years deep instead of accruing only going forward;
+# cumulative stats keep the touch/respect/break history inside the (Drive-stored)
+# level JSON so it survives short fetch windows and machine/cache wipes.
+HV_LEVEL_DEEP_BACKFILL_FLAG = "hv_level_deep_backfill_enabled"
+HV_LEVEL_CUMULATIVE_STATS_FLAG = "hv_level_cumulative_stats_enabled"
+HV_LEVEL_DEEP_BACKFILL_DAYS = 5 * 365
+HV_LEVEL_DEEP_BACKFILL_MIN_BARS = 60
+HV_LEVEL_DEEP_BACKFILL_MAX_PER_RUN = 40
+
+# Score penalty for entering right at a respected blocking level (resistance for a
+# long, support for a short). Scales with the level's cumulative-respect
+# conviction and how point-blank the entry is. Opt-in via feature flag, matching
+# the HTF / industry-RS scoring convention.
+HV_LEVEL_SCORING_FLAG = "hv_level_scoring_enabled"
+HV_LEVEL_BLOCK_PENALTY_MAX = 10.0      # points removed at a point-blank, fully-respected wall
+HV_LEVEL_BLOCK_CONVICTION_FULL = 1.6   # conviction earning the full penalty (green + deep respect)
+HV_LEVEL_BLOCK_PROXIMITY_FLOOR = 0.5   # penalty fraction still applied at the tolerance edge
+
 PHASE6_CLOUD_STUDY_FAMILY = "cloud_flat_proximity"
 PHASE6_COMPRESSION_BREAK_STUDY_FAMILY = "compression_break"
 PHASE6_TRENDLINE_BREAK_STUDY_FAMILY = "trendline_break"
@@ -23253,6 +23753,36 @@ def _daily_frame_to_rows(df: "pd.DataFrame | None") -> list[dict]:
     return rows
 
 
+def build_daily_rows_cache(daily_frames_by_symbol: "dict | None") -> dict[str, dict]:
+    """Convert each symbol's daily frame to rows + ATR20 + last_trade_date once.
+
+    The universe-strength, HV-level and phase-6 enrichers each used to re-run
+    ``_daily_frame_to_rows`` and ``compute_atr_from_ohlc`` per symbol. Building
+    this cache a single time lets them share the result, removing two redundant
+    full-frame conversions per symbol on every scan.
+    """
+    cache: dict[str, dict] = {}
+    if not isinstance(daily_frames_by_symbol, dict):
+        return cache
+    for symbol, df in daily_frames_by_symbol.items():
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            continue
+        rows = _daily_frame_to_rows(df)
+        if not rows:
+            continue
+        try:
+            last_trade_date = date.fromisoformat(rows[-1]["date"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        cache[sym] = {
+            "rows": rows,
+            "last_trade_date": last_trade_date,
+            "atr20": _coerce_float(compute_atr_from_ohlc(rows, last_trade_date)),
+        }
+    return cache
+
+
 def _trailing_return_pct(daily_rows: list[dict], sessions: int) -> float | None:
     """Percent change in close over the last ``sessions`` trading sessions."""
     if not daily_rows or sessions <= 0 or len(daily_rows) < sessions + 1:
@@ -23597,6 +24127,16 @@ def _hv_level_last_trade_date(df: pd.DataFrame | None) -> str:
     return dates.iloc[-1].date().isoformat()
 
 
+def _hv_level_first_trade_date(df: pd.DataFrame | None) -> str:
+    work = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    if work.empty or "datetime" not in work.columns:
+        return ""
+    dates = pd.to_datetime(work["datetime"], errors="coerce").dropna()
+    if dates.empty:
+        return ""
+    return dates.iloc[0].date().isoformat()
+
+
 def _hv_level_atr20_for_frame(df: pd.DataFrame | None) -> float | None:
     rows = _daily_frame_to_rows(df)
     if not rows:
@@ -23608,6 +24148,37 @@ def _hv_level_atr20_for_frame(df: pd.DataFrame | None) -> float | None:
     return _coerce_float(compute_atr_from_ohlc(rows, last_trade_date))
 
 
+def _fetch_deep_daily_bars_for_levels(
+    ib: "IBApi | None", symbol: str, days: int
+) -> "pd.DataFrame | None":
+    """One-time long-history daily fetch for the level backfill.
+
+    Uses the live fetch directly (not ``fetch_daily_bars``) so the multi-year pull
+    is NOT written into the rolling daily-bar cache; otherwise every later scan
+    would re-extract levels and indicators over years of bars and slow the whole
+    pipeline. The deep frame is consumed once to seed the level store and dropped.
+    """
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return None
+    try:
+        deep = _fetch_live_daily_bars(ib, sym, max(int(days), HV_LEVEL_DEEP_BACKFILL_DAYS))
+    except Exception as exc:
+        logging.warning("%s: deep level backfill fetch failed (%s).", sym, exc)
+        return None
+    if deep is None or getattr(deep, "empty", True):
+        return None
+    return deep
+
+
+def _level_store_needs_deep_backfill(store: dict | None) -> bool:
+    """True until a symbol has had its one-time multi-year backfill recorded."""
+    if not isinstance(store, dict):
+        return True
+    marker = store.get("deep_backfill")
+    return not (isinstance(marker, dict) and bool(marker.get("done")))
+
+
 def build_hv_level_store_for_symbol(
     symbol: str,
     df: pd.DataFrame | None,
@@ -23616,16 +24187,23 @@ def build_hv_level_store_for_symbol(
     earnings_dates: list[str] | None = None,
     levels_dir: Path | None = None,
     persist: bool = True,
+    existing_store: dict | None = None,
+    cumulative_stats: bool = True,
+    mark_deep_backfill: bool = False,
+    backfill_lookback_days: int | None = None,
 ) -> dict:
     sym = str(symbol or "").strip().upper()
     if not sym:
         return default_level_store("")
-    atr_value = _coerce_float(atr20) or _hv_level_atr20_for_frame(df)
+    # Normalize the daily frame once and reuse it across extract/span-B/touch-stats
+    # instead of letting each helper re-run the copy/coerce/sort pipeline.
+    work = normalize_levels_frame(df)
+    atr_value = _coerce_float(atr20) or _hv_level_atr20_for_frame(work)
     levels_root = Path(levels_dir or MASTER_AVWAP_LEVELS_DIR)
     path = level_store_path(levels_root, sym)
-    existing_store = load_level_store(path, sym)
+    store_in = existing_store if isinstance(existing_store, dict) else load_level_store(path, sym)
     candidates = extract_hv_levels(
-        df,
+        work,
         atr_value,
         green=HV_RELVOL_GREEN,
         red=HV_RELVOL_RED,
@@ -23633,21 +24211,46 @@ def build_hv_level_store_for_symbol(
         earnings_dates=earnings_dates or [],
     )
     clusters = cluster_hv_levels(candidates, atr_value, tol_frac=LEVEL_TOL_ATR_FRACTION)
-    cloud_flats = compute_span_b_flats(df, atr_value)
+    cloud_flats = compute_span_b_flats(work, atr_value)
+    last_trade_date = _hv_level_last_trade_date(work)
     store = merge_levels_into_store(
-        existing_store,
+        store_in,
         [*clusters, *cloud_flats],
         symbol=sym,
         atr20=atr_value,
-        updated=_hv_level_last_trade_date(df),
+        updated=last_trade_date,
     )
-    store["levels"] = recompute_level_touch_stats(
-        store.get("levels", []),
-        df,
-        atr_value,
-        tol_frac=LEVEL_TOL_ATR_FRACTION,
-        break_atr=LEVEL_BREAK_ATR,
-    )
+    if cumulative_stats:
+        # Add only the unseen bars to the stored running totals; a deep backfill
+        # resets and counts the full multi-year window once.
+        store["levels"] = accumulate_level_touch_stats(
+            store.get("levels", []),
+            work,
+            atr_value,
+            tol_frac=LEVEL_TOL_ATR_FRACTION,
+            break_atr=LEVEL_BREAK_ATR,
+            reset=bool(mark_deep_backfill),
+        )
+    else:
+        store["levels"] = recompute_level_touch_stats(
+            store.get("levels", []),
+            work,
+            atr_value,
+            tol_frac=LEVEL_TOL_ATR_FRACTION,
+            break_atr=LEVEL_BREAK_ATR,
+        )
+    if mark_deep_backfill:
+        first_seen = ""
+        if not work.empty and "datetime" in work.columns:
+            first_seen = _hv_level_first_trade_date(work)
+        store["deep_backfill"] = {
+            "done": True,
+            "completed_on": datetime.now().date().isoformat(),
+            "from_date": first_seen,
+            "through_date": last_trade_date,
+            "lookback_days": int(backfill_lookback_days or HV_LEVEL_DEEP_BACKFILL_DAYS),
+            "bar_count": int(len(work)),
+        }
     if persist:
         save_level_store(path, store)
     return store
@@ -23666,6 +24269,29 @@ def _hv_level_summary(levels: list[dict], limit: int = 3) -> str:
     return ", ".join(parts)
 
 
+def _hv_level_block_score_delta(blocking: list[dict]) -> tuple[float, dict | None]:
+    """Negative score delta for the strongest respected level in the entry path.
+
+    Picks the blocking level with the highest cumulative-respect conviction and
+    scales the penalty by that conviction and how point-blank the entry is (the
+    closer to the level, the larger the penalty). Returns ``(delta, level)``.
+    """
+    if not blocking:
+        return 0.0, None
+    top = max(blocking, key=lambda level: level_conviction(level))
+    conviction = level_conviction(top)
+    if conviction <= 0:
+        return 0.0, None
+    tol_atr = float(LEVEL_TOL_ATR_FRACTION) or 0.0
+    abs_dist_atr = abs(_coerce_float(top.get("distance_atr")) or 0.0)
+    proximity = 1.0 - (abs_dist_atr / tol_atr) if tol_atr > 0 else 1.0
+    proximity = max(0.0, min(1.0, proximity))
+    proximity_factor = HV_LEVEL_BLOCK_PROXIMITY_FLOOR + (1.0 - HV_LEVEL_BLOCK_PROXIMITY_FLOOR) * proximity
+    conviction_factor = min(1.0, conviction / float(HV_LEVEL_BLOCK_CONVICTION_FULL or 1.0))
+    delta = -round(HV_LEVEL_BLOCK_PENALTY_MAX * conviction_factor * proximity_factor, 1)
+    return delta, top
+
+
 def _hv_level_context_for_entry(
     store: dict,
     *,
@@ -23673,6 +24299,7 @@ def _hv_level_context_for_entry(
     entry_price: float | None,
     atr20: float | None,
     last_trade_date: str = "",
+    scoring_enabled: bool = False,
 ) -> dict:
     nearby = levels_near(
         store,
@@ -23692,13 +24319,27 @@ def _hv_level_context_for_entry(
         kinds={"hv_horizontal"},
     )
     nearest = nearby[0] if nearby else {}
-    break_today = any(str(level.get("last_break") or "") == str(last_trade_date or "") for level in nearby)
+    last_trade_text = str(last_trade_date or "")
+    break_today = bool(last_trade_text) and any(
+        str(level.get("last_break") or "") == last_trade_text for level in nearby
+    )
+    score_delta, penalized = (0.0, None)
+    if scoring_enabled and not break_today:
+        # A level being broken on the latest bar is a different (breakout) setup,
+        # so only penalize entries into an intact respected wall.
+        score_delta, penalized = _hv_level_block_score_delta(blocking)
     note = ""
     if nearby:
         label = "blocking" if blocking else "nearby"
         note = f"HV level {label}: {_hv_level_summary(blocking or nearby)}"
         if break_today:
             note += "; latest bar broke a stored level"
+    if score_delta and penalized is not None:
+        respect = int(penalized.get("respect_count", 0) or 0)
+        note += (
+            f"; entering at respected level @{_coerce_float(penalized.get('price')):.2f} "
+            f"(respected {respect}x, conviction {level_conviction(penalized):.2f}) {score_delta:+.1f}"
+        )
     return {
         "hv_level_nearby_count": int(len(nearby)),
         "hv_level_blocking_count": int(len(blocking)),
@@ -23708,6 +24349,8 @@ def _hv_level_context_for_entry(
         "hv_level_nearest_distance_atr": _coerce_float(nearest.get("distance_atr")),
         "hv_level_nearby_summary": _hv_level_summary(nearby),
         "hv_level_blocking_summary": _hv_level_summary(blocking),
+        "hv_level_score_delta": float(score_delta),
+        "hv_level_score_note": note if score_delta else "",
         "hv_level_note": note,
     }
 
@@ -23744,21 +24387,70 @@ def enrich_priority_rows_with_hv_levels(
     feature_rows_by_symbol: dict | None = None,
     levels_dir: Path | None = None,
     persist: bool = True,
+    stores_out: dict[str, dict] | None = None,
+    daily_rows_cache: dict | None = None,
+    ib: "IBApi | None" = None,
+    deep_backfill_enabled: bool | None = None,
+    cumulative_stats: bool | None = None,
+    deep_backfill_days: int | None = None,
+    max_backfills_per_run: int | None = None,
+    scoring_enabled: bool | None = None,
 ) -> list[dict]:
     frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
-    stores_by_symbol: dict[str, dict] = {}
+    stores_by_symbol: dict[str, dict] = stores_out if isinstance(stores_out, dict) else {}
     earnings_dates_by_symbol = earnings_dates_by_symbol if isinstance(earnings_dates_by_symbol, dict) else {}
+    daily_rows_cache = daily_rows_cache if isinstance(daily_rows_cache, dict) else {}
+
+    flags = get_priority_feature_flags()
+    if cumulative_stats is None:
+        cumulative_stats = bool(flags.get(HV_LEVEL_CUMULATIVE_STATS_FLAG, True))
+    if deep_backfill_enabled is None:
+        deep_backfill_enabled = bool(flags.get(HV_LEVEL_DEEP_BACKFILL_FLAG, True))
+    if scoring_enabled is None:
+        scoring_enabled = bool(flags.get(HV_LEVEL_SCORING_FLAG))
+    backfill_days = int(deep_backfill_days or HV_LEVEL_DEEP_BACKFILL_DAYS)
+    backfill_budget = (
+        int(max_backfills_per_run) if max_backfills_per_run is not None else HV_LEVEL_DEEP_BACKFILL_MAX_PER_RUN
+    )
+    levels_root = Path(levels_dir or MASTER_AVWAP_LEVELS_DIR)
+
     for symbol, df in frames.items():
         sym = str(symbol or "").strip().upper()
         if not sym:
             continue
+        cached = daily_rows_cache.get(sym) if daily_rows_cache else None
+        cached_atr = cached.get("atr20") if isinstance(cached, dict) else None
         try:
+            existing_store = load_level_store(level_store_path(levels_root, sym), sym)
+            build_df = df
+            mark_backfill = False
+            build_atr = cached_atr
+            if (
+                deep_backfill_enabled
+                and ib is not None
+                and backfill_budget > 0
+                and _level_store_needs_deep_backfill(existing_store)
+            ):
+                deep_df = _fetch_deep_daily_bars_for_levels(ib, sym, backfill_days)
+                if deep_df is not None and len(deep_df) >= HV_LEVEL_DEEP_BACKFILL_MIN_BARS:
+                    build_df = deep_df
+                    mark_backfill = True
+                    build_atr = None  # recompute ATR from the deep frame's own tail
+                    backfill_budget -= 1
+                    logging.info(
+                        "%s: seeding multi-year level history from %d daily bars.", sym, len(deep_df)
+                    )
             stores_by_symbol[sym] = build_hv_level_store_for_symbol(
                 sym,
-                df,
+                build_df,
+                atr20=build_atr,
                 earnings_dates=earnings_dates_by_symbol.get(sym, []),
                 levels_dir=levels_dir,
                 persist=persist,
+                existing_store=existing_store,
+                cumulative_stats=bool(cumulative_stats),
+                mark_deep_backfill=mark_backfill,
+                backfill_lookback_days=backfill_days,
             )
         except Exception as exc:
             logging.warning("%s: failed updating HV level store (%s).", sym, exc)
@@ -23776,6 +24468,8 @@ def enrich_priority_rows_with_hv_levels(
         "hv_level_nearest_distance_atr",
         "hv_level_nearby_summary",
         "hv_level_blocking_summary",
+        "hv_level_score_delta",
+        "hv_level_score_note",
         "hv_level_note",
     )
     study_rows: list[dict] = []
@@ -23799,8 +24493,16 @@ def enrich_priority_rows_with_hv_levels(
             entry_price=entry_price,
             atr20=atr_value,
             last_trade_date=last_trade_date,
+            scoring_enabled=bool(scoring_enabled),
         )
         row.update(context)
+        score_delta = _coerce_float(context.get("hv_level_score_delta")) or 0.0
+        if score_delta:
+            row["score"] = float(row.get("score", 0.0) or 0.0) + float(score_delta)
+            if isinstance(symbol_entry, dict):
+                symbol_entry["priority_score"] = row.get("score")
+            if isinstance(feature_row, dict):
+                feature_row["priority_score"] = row.get("score")
         if isinstance(symbol_entry, dict):
             for field in hv_fields:
                 symbol_entry[field] = context.get(field)
@@ -24238,6 +24940,8 @@ def build_universe_strength_rows(
     sides_by_symbol: dict | None = None,
     industry_context_by_symbol: dict | None = None,
     industry_daily_frames_by_etf: dict | None = None,
+    daily_rows_cache: dict | None = None,
+    industry_rows_by_etf: dict | None = None,
 ) -> list[dict]:
     """One strength row per *scanned* symbol — the whole universe, not just the
     symbols that produced a flagged setup. Feeds the market-prep strongest/weakest
@@ -24254,22 +24958,39 @@ def build_universe_strength_rows(
     sides_by_symbol = sides_by_symbol if isinstance(sides_by_symbol, dict) else {}
     industry_context_by_symbol = industry_context_by_symbol if isinstance(industry_context_by_symbol, dict) else {}
     industry_daily_frames_by_etf = industry_daily_frames_by_etf if isinstance(industry_daily_frames_by_etf, dict) else {}
-    industry_rows_by_etf: dict[str, list[dict]] = {}
-    for etf, df in industry_daily_frames_by_etf.items():
-        ref = str(etf or "").strip().upper()
-        if ref:
-            industry_rows_by_etf[ref] = _daily_frame_to_rows(df)
+    daily_rows_cache = daily_rows_cache if isinstance(daily_rows_cache, dict) else {}
+    if isinstance(industry_rows_by_etf, dict):
+        industry_rows_by_etf = {
+            str(etf or "").strip().upper(): rows
+            for etf, rows in industry_rows_by_etf.items()
+            if str(etf or "").strip()
+        }
+    else:
+        industry_rows_by_etf = {}
+        for etf, df in industry_daily_frames_by_etf.items():
+            ref = str(etf or "").strip().upper()
+            if ref:
+                industry_rows_by_etf[ref] = _daily_frame_to_rows(df)
     for symbol, df in daily_frames_by_symbol.items():
         sym = str(symbol or "").strip().upper()
         if not sym:
             continue
-        daily_rows = _daily_frame_to_rows(df)
+        cached = daily_rows_cache.get(sym) if daily_rows_cache else None
+        if isinstance(cached, dict) and cached.get("rows"):
+            daily_rows = cached["rows"]
+            last_trade_date = cached.get("last_trade_date")
+            cached_atr = cached.get("atr20")
+        else:
+            daily_rows = _daily_frame_to_rows(df)
+            last_trade_date = None
+            cached_atr = None
         if not daily_rows:
             continue
-        try:
-            last_trade_date = date.fromisoformat(daily_rows[-1]["date"])
-        except (ValueError, KeyError, TypeError):
-            continue
+        if last_trade_date is None:
+            try:
+                last_trade_date = date.fromisoformat(daily_rows[-1]["date"])
+            except (ValueError, KeyError, TypeError):
+                continue
         side = normalize_side(sides_by_symbol.get(sym) or "")
         rs = assess_daily_relative_strength(daily_rows, last_trade_date, side, spy_benchmark)
         row = {
@@ -24284,7 +25005,7 @@ def build_universe_strength_rows(
             "spy_five_day_return_pct": rs.get("spy_five_day_return_pct"),
             "return_13w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_13W_SESSIONS),
             "return_26w_pct": _trailing_return_pct(daily_rows, MARKET_PREP_RETURN_26W_SESSIONS),
-            "atr20": compute_atr_from_ohlc(daily_rows, last_trade_date),
+            "atr20": cached_atr if cached_atr is not None else compute_atr_from_ohlc(daily_rows, last_trade_date),
             "universe_strength_row": True,
         }
         context = industry_context_by_symbol.get(sym)
@@ -27533,6 +28254,8 @@ def evaluate_theta_put_candidate(
                     )
                 )
 
+    raw_supports.extend(_theta_hv_level_supports(symbol, close_value, atr_value))
+
     supports = _dedupe_theta_supports([entry for entry in raw_supports if entry])
     min_support_levels = max(1, int(min_support_levels or THETA_MIN_SUPPORT_LEVELS))
     if len(supports) < min_support_levels:
@@ -27558,6 +28281,7 @@ def evaluate_theta_put_candidate(
 
     source_weights = {
         "avwape": 1.30,
+        "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "trendline": 1.35,
         "sma": 1.10,

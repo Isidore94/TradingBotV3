@@ -55,6 +55,7 @@ from master_avwap import (
     load_tickers,
     run_master,
     update_setup_tracker_from_scan,
+    warm_durable_stores_for_watchlists,
 )
 from project_paths import (
     APP_LOG_BACKUP_COUNT,
@@ -2284,12 +2285,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Clear a stale mini-PC lock file before starting.",
     )
+    parser.add_argument(
+        "--warm-durable-stores",
+        action="store_true",
+        help=(
+            "One-shot: pre-populate the durable (Drive) daily + H1 bar stores for "
+            "the watchlist symbols, then exit. Makes the next run on another "
+            "Drive-linked machine start delta-only instead of re-pulling history."
+        ),
+    )
     return parser
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.warm_durable_stores:
+        attach_scheduler_log_handler()
+        logging.info("Warming durable bar stores for watchlist symbols…")
+        summary = warm_durable_stores_for_watchlists()
+        logging.info(
+            "Durable warm finished: %s requested, daily=%s, intraday=%s, failed=%s.",
+            summary.get("requested"),
+            summary.get("daily"),
+            summary.get("intraday"),
+            len(summary.get("failed") or []),
+        )
+        return 0
 
     dynamic_schedule = not args.schedule
     dynamic_stop_at = not args.stop_at
