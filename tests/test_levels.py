@@ -265,5 +265,28 @@ class LevelModuleTests(unittest.TestCase):
         self.assertEqual([item["price"] for item in short_blockers], [99.7])
 
 
+    def test_find_relative_pivots_detects_strict_swings_and_ignores_plateaus(self):
+        prices = [100.0] * 40
+        prices[19] = 95.0
+        prices[20] = 90.0  # strict relative low
+        prices[21] = 95.0
+        dates = pd.bdate_range("2024-01-01", periods=40)
+        rows = [
+            {"datetime": d, "open": p, "high": p, "low": p, "close": p, "volume": 1.0}
+            for d, p in zip(dates, prices)
+        ]
+        frame = pd.DataFrame(rows)
+
+        pivots = levels.find_relative_pivots(frame, lookback=8, atr20=5.0)
+
+        # Only the genuine swing low is a pivot; the flat 100 plateau is not.
+        self.assertEqual([(p["kind"], p["bar_index"]) for p in pivots], [("low", 20)])
+        self.assertEqual(pivots[0]["price"], 90.0)
+
+    def test_find_relative_pivots_requires_minimum_bars(self):
+        frame = _daily_frame(days=10)
+        self.assertEqual(levels.find_relative_pivots(frame, lookback=8), [])
+
+
 if __name__ == "__main__":
     unittest.main()

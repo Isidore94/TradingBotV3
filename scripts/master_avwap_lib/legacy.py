@@ -136,6 +136,7 @@ from .levels import (
     compute_relvol,
     default_level_store,
     extract_hv_levels,
+    find_relative_pivots,
     level_conviction,
     level_store_path,
     levels_blocking_entry,
@@ -24817,6 +24818,212 @@ def enrich_priority_rows_with_phase6_studies(
                     },
                 )
             )
+    return study_rows
+
+
+# ---------------------------------------------------------------------------
+# Relative high/low anchored-VWAP study (research layer)
+#
+# Anchors an AVWAP on each recent relative high / low (swing pivot) and records
+# when price retests or breaks one of those AVWAPs. These are study-only setups:
+# they flow into the setup tracker's study namespace so their hit-rate / realized
+# R can be measured per setup family and regime before they ever touch scoring.
+# ---------------------------------------------------------------------------
+RELATIVE_AVWAP_STUDY_FAMILY = "relative_avwap_retest"
+RELATIVE_AVWAP_BREAK_STUDY_FAMILY = "relative_avwap_break"
+RELATIVE_AVWAP_STUDY_BUCKET = "study_relative_avwap"
+RELATIVE_AVWAP_PIVOT_LOOKBACK = 10
+RELATIVE_AVWAP_PROMINENCE_ATR = 0.6
+RELATIVE_AVWAP_MAX_ANCHOR_BARS = 252
+RELATIVE_AVWAP_MAX_PIVOTS = 8
+RELATIVE_AVWAP_RETEST_TOL_ATR = 0.25
+RELATIVE_AVWAP_BREAK_BUFFER_ATR = 0.15
+RELATIVE_AVWAP_MAX_DISTANCE_ATR = 1.0
+
+
+def _anchored_avwap_at_last_bar(work: pd.DataFrame) -> "tuple[list[float], list[int]]":
+    """Cumulative (typical*volume) and volume, so the AVWAP at the latest bar from
+    any anchor index ``a`` is (cum_vp[-1]-cum_vp[a-1]) / (cum_vol[-1]-cum_vol[a-1])
+    in O(1) per anchor instead of re-summing each window."""
+    typical = (work["open"] + work["high"] + work["low"] + work["close"]) / 4.0
+    volume = pd.to_numeric(work["volume"], errors="coerce").fillna(0.0)
+    cum_vp = (typical * volume).cumsum().tolist()
+    cum_vol = volume.cumsum().tolist()
+    return cum_vp, cum_vol
+
+
+def assess_relative_avwap_context(
+    df: pd.DataFrame | None,
+    *,
+    last_close: float | None,
+    atr20: float | None,
+    side: str = "",
+    last_trade_date: str | date | None = None,
+) -> dict:
+    result = {
+        "relative_avwap_nearby": False,
+        "relative_avwap_kind": "",
+        "relative_avwap_price": None,
+        "relative_avwap_anchor_date": "",
+        "relative_avwap_distance_atr": None,
+        "relative_avwap_retest_today": False,
+        "relative_avwap_break_today": False,
+        "relative_avwap_break_direction": "",
+        "relative_avwap_note": "",
+    }
+    work = normalize_levels_frame(df)
+    close_value = _coerce_float(last_close)
+    atr_value = _coerce_float(atr20)
+    if work.empty or close_value is None or close_value <= 0 or atr_value is None or atr_value <= 0:
+        return result
+
+    pivots = find_relative_pivots(
+        work,
+        lookback=RELATIVE_AVWAP_PIVOT_LOOKBACK,
+        prominence_atr=RELATIVE_AVWAP_PROMINENCE_ATR,
+        atr20=atr_value,
+        max_lookback_bars=RELATIVE_AVWAP_MAX_ANCHOR_BARS,
+    )
+    if not pivots:
+        return result
+    pivots = pivots[-RELATIVE_AVWAP_MAX_PIVOTS:]
+
+    cum_vp, cum_vol = _anchored_avwap_at_last_bar(work)
+    bar_count = len(work)
+    highs = work["high"].tolist()
+    lows = work["low"].tolist()
+    closes = work["close"].tolist()
+    last_high = float(highs[-1])
+    last_low = float(lows[-1])
+    last_close_bar = float(closes[-1])
+    prev_close = float(closes[-2]) if bar_count >= 2 else last_close_bar
+    retest_tol = atr_value * RELATIVE_AVWAP_RETEST_TOL_ATR
+    break_buffer = atr_value * RELATIVE_AVWAP_BREAK_BUFFER_ATR
+    max_distance = atr_value * RELATIVE_AVWAP_MAX_DISTANCE_ATR
+
+    best = None
+    for pivot in pivots:
+        anchor = int(pivot["bar_index"])
+        if anchor < 0 or anchor >= bar_count:
+            continue
+        total_vol = cum_vol[-1] - (cum_vol[anchor - 1] if anchor > 0 else 0.0)
+        if total_vol <= 0:
+            continue
+        avwap = (cum_vp[-1] - (cum_vp[anchor - 1] if anchor > 0 else 0.0)) / total_vol
+        distance = close_value - avwap
+        if abs(distance) > max_distance:
+            continue
+        retest_today = last_low <= avwap + retest_tol and last_high >= avwap - retest_tol
+        broke_up = prev_close <= avwap and last_close_bar > avwap + break_buffer
+        broke_down = prev_close >= avwap and last_close_bar < avwap - break_buffer
+        break_today = bool(broke_up or broke_down)
+        if not (retest_today or break_today):
+            continue
+        candidate = {
+            "kind": str(pivot["kind"]),
+            "price": round(float(avwap), 4),
+            "anchor_date": str(pivot.get("date") or ""),
+            "distance": float(distance),
+            "distance_atr": round(distance / atr_value, 4),
+            "retest_today": bool(retest_today),
+            "break_today": break_today,
+            "break_direction": "up" if broke_up else "down" if broke_down else "",
+        }
+        if best is None or abs(candidate["distance"]) < abs(best["distance"]):
+            best = candidate
+    if best is None:
+        return result
+
+    note = (
+        f"Relative {best['kind']} AVWAP @{best['price']:.2f} "
+        f"(anchor {best['anchor_date']}, {best['distance_atr']:+.2f}ATR)"
+    )
+    if best["break_today"]:
+        note += f"; broke {best['break_direction']} today"
+    elif best["retest_today"]:
+        note += "; retest today"
+    result.update(
+        {
+            "relative_avwap_nearby": True,
+            "relative_avwap_kind": best["kind"],
+            "relative_avwap_price": best["price"],
+            "relative_avwap_anchor_date": best["anchor_date"],
+            "relative_avwap_distance_atr": best["distance_atr"],
+            "relative_avwap_retest_today": best["retest_today"],
+            "relative_avwap_break_today": best["break_today"],
+            "relative_avwap_break_direction": best["break_direction"],
+            "relative_avwap_note": note,
+        }
+    )
+    return result
+
+
+def enrich_priority_rows_with_relative_avwap_studies(
+    priority_rows: list[dict] | None,
+    daily_frames_by_symbol: dict[str, pd.DataFrame] | None,
+    *,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+) -> list[dict]:
+    frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    fields = (
+        "relative_avwap_nearby",
+        "relative_avwap_kind",
+        "relative_avwap_price",
+        "relative_avwap_anchor_date",
+        "relative_avwap_distance_atr",
+        "relative_avwap_retest_today",
+        "relative_avwap_break_today",
+        "relative_avwap_break_direction",
+        "relative_avwap_note",
+    )
+    study_rows: list[dict] = []
+    for row in priority_rows or []:
+        if not isinstance(row, dict) or not _priority_row_has_active_setup(row):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_entry = ai_symbols.get(symbol) if isinstance(ai_symbols, dict) else {}
+        symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+        feature_row = feature_rows_by_symbol.get(symbol)
+        feature_row = feature_row if isinstance(feature_row, dict) else {}
+        entry_price = _coerce_float(row.get("last_close") or symbol_entry.get("last_close") or feature_row.get("last_close"))
+        atr_value = _coerce_float(row.get("atr20") or symbol_entry.get("atr20") or feature_row.get("atr20"))
+        last_trade_date = str(
+            row.get("last_trade_date") or symbol_entry.get("last_trade_date") or feature_row.get("last_trade_date") or ""
+        )
+        context = assess_relative_avwap_context(
+            frames.get(symbol),
+            last_close=entry_price,
+            atr20=atr_value,
+            side=row.get("side") or symbol_entry.get("side") or "",
+            last_trade_date=last_trade_date,
+        )
+        row.update(context)
+        for target in (symbol_entry, feature_row):
+            if isinstance(target, dict):
+                for field in fields:
+                    target[field] = context.get(field)
+        if not context.get("relative_avwap_nearby"):
+            continue
+        break_today = bool(context.get("relative_avwap_break_today"))
+        family = RELATIVE_AVWAP_BREAK_STUDY_FAMILY if break_today else RELATIVE_AVWAP_STUDY_FAMILY
+        tag = "RELATIVE_AVWAP_BREAK" if break_today else "RELATIVE_AVWAP_RETEST"
+        study_rows.append(
+            _build_phase6_study_row(
+                row,
+                family=family,
+                bucket=RELATIVE_AVWAP_STUDY_BUCKET,
+                tag=tag,
+                note=context.get("relative_avwap_note") or "",
+                extra=context,
+            )
+        )
     return study_rows
 
 

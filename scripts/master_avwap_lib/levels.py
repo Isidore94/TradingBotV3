@@ -162,6 +162,58 @@ def _level_is_effective_on(level: dict, as_of_date: str | date | None) -> bool:
     return start <= as_of <= end
 
 
+RELATIVE_PIVOT_LOOKBACK = 10
+RELATIVE_PIVOT_PROMINENCE_ATR = 0.5
+
+
+def find_relative_pivots(
+    df: pd.DataFrame | None,
+    *,
+    lookback: int = RELATIVE_PIVOT_LOOKBACK,
+    prominence_atr: float = RELATIVE_PIVOT_PROMINENCE_ATR,
+    atr20: float | None = None,
+    max_lookback_bars: int | None = None,
+) -> list[dict]:
+    """Confirmed swing highs/lows (relative highs/lows) on a daily frame.
+
+    A bar is a pivot high when its high is the maximum over +/- ``lookback`` bars
+    and the surrounding swing has an amplitude of at least ``prominence_atr`` * ATR
+    (and the mirror for pivot lows). The most recent ``lookback`` bars cannot be
+    confirmed yet, so they are excluded. ``max_lookback_bars`` restricts the search
+    to the most recent N bars (older swings matter less and cost more).
+    """
+    work = _normalize_frame(df)
+    bar_count = len(work)
+    k = max(1, int(lookback or RELATIVE_PIVOT_LOOKBACK))
+    if bar_count < 2 * k + 1:
+        return []
+    highs = work["high"].tolist()
+    lows = work["low"].tolist()
+    date_texts = [_date_text(value) for value in work["datetime"]]
+    atr_value = _coerce_float(atr20)
+    prominence = (float(atr_value) * float(prominence_atr)) if (atr_value and atr_value > 0) else 0.0
+    start_idx = k
+    if max_lookback_bars and int(max_lookback_bars) > 0:
+        start_idx = max(k, bar_count - int(max_lookback_bars))
+    pivots: list[dict] = []
+    for idx in range(start_idx, bar_count - k):
+        window_high = highs[idx - k: idx + k + 1]
+        window_low = lows[idx - k: idx + k + 1]
+        amplitude = max(window_high) - min(window_low)
+        if prominence > 0 and amplitude < prominence:
+            continue
+        left_high = max(highs[idx - k: idx])
+        right_high = max(highs[idx + 1: idx + k + 1])
+        # Strict local extreme on BOTH sides, so a flat plateau is not flagged.
+        if highs[idx] > left_high and highs[idx] > right_high:
+            pivots.append({"kind": "high", "bar_index": int(idx), "date": date_texts[idx], "price": round(float(highs[idx]), 4)})
+        left_low = min(lows[idx - k: idx])
+        right_low = min(lows[idx + 1: idx + k + 1])
+        if lows[idx] < left_low and lows[idx] < right_low:
+            pivots.append({"kind": "low", "bar_index": int(idx), "date": date_texts[idx], "price": round(float(lows[idx]), 4)})
+    return pivots
+
+
 def compute_relvol(df: pd.DataFrame | None, vol_sma: int = HV_VOL_SMA) -> pd.Series:
     work = _normalize_frame(df)
     if work.empty:
