@@ -16665,12 +16665,13 @@ def _theta_hv_level_supports(
         if price is None:
             continue
         bucket = str(level.get("bucket") or "").strip().lower()
-        label = (
-            "HVOL_GREEN" if bucket == "green"
-            else "HVOL_RED" if bucket == "red"
-            else "HVOL_LEVEL"
-        )
-        entry = _theta_support_entry(label, price, close_value, atr_value, "hv_horizontal")
+        if bucket == "green":
+            label, source = "HVOL_GREEN", "hv_horizontal_green"
+        elif bucket == "red":
+            label, source = "HVOL_RED", "hv_horizontal_red"
+        else:
+            label, source = "HVOL_LEVEL", "hv_horizontal"
+        entry = _theta_support_entry(label, price, close_value, atr_value, source)
         if entry:
             entries.append(entry)
     return entries
@@ -17071,12 +17072,14 @@ def evaluate_theta_put_candidate(
     secondary_strike_bands = formatted_strike_bands[1:]
 
     source_weights = {
+        "hv_horizontal_green": 1.50,
         "avwape": 1.30,
         "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "trendline": 1.35,
         "sma": 1.10,
         "compression": 0.85,
+        "hv_horizontal_red": 0.70,
     }
     proximity_tiers = (
         (0.20, 1.50),
@@ -17389,12 +17392,16 @@ def _select_option_expirations(
 def _support_source_weight(source: str) -> float:
     source_key = str(source or "").strip().lower()
     return {
+        # A green high-rvol horizontal line (relvol >= 3) is premium S/R and is
+        # weighted far above a red one (relvol 2-3), which barely counts.
+        "hv_horizontal_green": 1.50,
         "trendline": 1.35,
         "avwape": 1.30,
         "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "sma": 1.10,
         "compression": 0.85,
+        "hv_horizontal_red": 0.70,
     }.get(source_key, 0.75)
 
 
@@ -28280,12 +28287,14 @@ def evaluate_theta_put_candidate(
     secondary_strike_bands = formatted_strike_bands[1:]
 
     source_weights = {
+        "hv_horizontal_green": 1.50,
         "avwape": 1.30,
         "hv_horizontal": 1.20,
         "previous_avwape": 1.15,
         "trendline": 1.35,
         "sma": 1.10,
         "compression": 0.85,
+        "hv_horizontal_red": 0.70,
     }
     proximity_tiers = (
         (0.20, 1.50),

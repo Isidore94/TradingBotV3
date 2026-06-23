@@ -5390,9 +5390,15 @@ class MasterAvwapSetupTests(unittest.TestCase):
             ]
         }
         hv_supports = master_avwap._theta_hv_level_supports("CIEN", 105.0, 4.0, store=store)
-        labels = sorted(entry["label"] for entry in hv_supports)
-        self.assertEqual(labels, ["HVOL_GREEN", "HVOL_RED"])
-        self.assertTrue(all(entry["source"] == "hv_horizontal" for entry in hv_supports))
+        by_label = {entry["label"]: entry for entry in hv_supports}
+        self.assertEqual(sorted(by_label), ["HVOL_GREEN", "HVOL_RED"])
+        self.assertEqual(by_label["HVOL_GREEN"]["source"], "hv_horizontal_green")
+        self.assertEqual(by_label["HVOL_RED"]["source"], "hv_horizontal_red")
+        # Green rvol lines are weighted far above red ones.
+        self.assertGreater(
+            master_avwap._theta_support_quality(by_label["HVOL_GREEN"]),
+            2.0 * master_avwap._theta_support_quality(by_label["HVOL_RED"]),
+        )
 
         # HV levels stack with a major SMA to make a strike eligible.
         row = {
