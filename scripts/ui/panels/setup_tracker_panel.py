@@ -15,9 +15,12 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextBrowser,
     QVBoxLayout,
+    QWidget,
 )
 
 from project_paths import (
+    HUMAN_FOCUS_OUTCOMES_FILE,
+    HUMAN_FOCUS_PERFORMANCE_FILE,
     MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
     MASTER_AVWAP_SETUP_STATS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
@@ -27,6 +30,10 @@ from project_paths import (
 )
 from ui import theme
 from ui.models.tracker_table_model import TrackerSortProxyModel, TrackerTableModel
+from ui.services.human_focus_tracker_feed import (
+    build_human_focus_comparison_rows,
+    load_human_focus_performance_rows,
+)
 from ui.widgets.data_table import DataTable
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
@@ -121,6 +128,20 @@ CATCH_RATE_COLUMNS = (
     ("sample_missed_winners", "Missed Samples"),
 )
 
+HUMAN_PICK_COLUMNS = (
+    ("cohort", "Cohort"),
+    ("side", "Side"),
+    ("horizon_sessions", "Horizon"),
+    ("sample_count", "Human N"),
+    ("win_rate", "Human Win"),
+    ("avg_side_return_pct", "Human Avg %"),
+    ("profit_factor", "Human PF"),
+    ("bot_sa_sample_count", "Bot S/A N"),
+    ("bot_sa_win_rate", "Bot S/A Win"),
+    ("bot_sa_avg_side_return_pct", "Bot S/A Avg %"),
+    ("avg_side_return_delta_pct", "Delta %"),
+)
+
 PERCENT_KEYS = {
     "win_rate",
     "win_rate_closed",
@@ -129,6 +150,7 @@ PERCENT_KEYS = {
     "positive_scan_factor_match_rate",
     "caught_winner_rate",
     "caught_opportunity_rate",
+    "bot_sa_win_rate",
 }
 SIGNED_KEYS = {
     "avg_closed_r",
@@ -141,6 +163,7 @@ SIGNED_KEYS = {
     "win_rate_edge",
     "success_score",
     "score_delta",
+    "avg_side_return_delta_pct",
 }
 TOOLTIP_KEYS = {
     "sample_setups",
@@ -163,6 +186,7 @@ class SetupTrackerPanel(QFrame):
         self.scan_factor_rows: list[dict[str, Any]] = []
         self.tier_performance_rows: list[dict[str, Any]] = []
         self.catch_rate_rows: list[dict[str, Any]] = []
+        self.human_pick_rows: list[dict[str, Any]] = []
 
         self.min_closed_input = QSpinBox()
         self.min_closed_input.setRange(1, 100)
@@ -191,13 +215,33 @@ class SetupTrackerPanel(QFrame):
         self.scan_factor_table, self.scan_factor_model = self._make_table(SCAN_FACTOR_COLUMNS)
         self.tier_performance_table, self.tier_performance_model = self._make_table(TIER_PERFORMANCE_COLUMNS)
         self.catch_rate_table, self.catch_rate_model = self._make_table(CATCH_RATE_COLUMNS)
+        self.human_pick_table, self.human_pick_model = self._make_table(HUMAN_PICK_COLUMNS)
 
         self.tabs.addTab(self.current_table, "Current Picks")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "Compares snapshotted Focus Picks against bot S/A tier picks using the same side-return horizons.",
+                self.human_pick_table,
+            ),
+            "Human Picks",
+        )
         self.tabs.addTab(self.setup_type_table, "Setup Types")
         self.tabs.addTab(self.playbook_table, "Playbooks")
         self.tabs.addTab(self.scan_factor_table, "Scan Factors")
-        self.tabs.addTab(self.tier_performance_table, "Tier Performance")
-        self.tabs.addTab(self.catch_rate_table, "Catch Rate")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "Realized outcome by S/A/B tier: win rate and side-return edge at each forward horizon.",
+                self.tier_performance_table,
+            ),
+            "Tier Performance",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "Catch rate shows how often positive scan-factor opportunities became tier picks, and which winners were missed.",
+                self.catch_rate_table,
+            ),
+            "Catch Rate",
+        )
 
         self._build_layout()
         self.refresh()
@@ -246,18 +290,36 @@ class SetupTrackerPanel(QFrame):
         table.setShowGrid(False)
         return table, model
 
+    def _make_explained_tab(self, description: str, table: DataTable) -> QWidget:
+        tab = QWidget()
+        label = QLabel(description)
+        label.setObjectName("MutedLabel")
+        label.setWordWrap(True)
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        layout.addWidget(label)
+        layout.addWidget(table, 1)
+        return tab
+
     def refresh(self) -> None:
         min_closed = int(self.min_closed_input.value())
         all_setup_type_rows = _load_csv_rows(SETUP_TYPE_STATS_FILE)
         all_playbook_rows = _load_csv_rows(SETUP_PLAYBOOKS_FILE)
+        tier_performance_export_rows = _load_csv_rows(MASTER_AVWAP_TIER_PERFORMANCE_FILE)
         self.current_pick_rows = _rank_current_picks(_load_csv_rows(MASTER_AVWAP_TIER_LIST_FILE))
         self.setup_type_rows = _rank_setup_types(all_setup_type_rows, min_closed=min_closed)
         self.playbook_rows = _rank_playbooks(all_playbook_rows, min_closed=min_closed)
         self.scan_factor_rows = _rank_scan_factors(_load_csv_rows(MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE))
-        self.tier_performance_rows = _rank_tier_performance(_load_csv_rows(MASTER_AVWAP_TIER_PERFORMANCE_FILE))
+        self.tier_performance_rows = _rank_tier_performance(tier_performance_export_rows)
         self.catch_rate_rows = _rank_catch_rates(_load_csv_rows(MASTER_AVWAP_TIER_CATCH_RATE_FILE))
+        self.human_pick_rows = build_human_focus_comparison_rows(
+            load_human_focus_performance_rows(),
+            tier_performance_export_rows,
+        )
 
         self.current_model.set_rows(self.current_pick_rows[:300])
+        self.human_pick_model.set_rows(self.human_pick_rows)
         self.setup_type_model.set_rows(self.setup_type_rows[:300])
         self.playbook_model.set_rows(self.playbook_rows[:300])
         self.scan_factor_model.set_rows(self.scan_factor_rows[:300])
@@ -265,6 +327,7 @@ class SetupTrackerPanel(QFrame):
         self.catch_rate_model.set_rows(self.catch_rate_rows)
         for table in (
             self.current_table,
+            self.human_pick_table,
             self.setup_type_table,
             self.playbook_table,
             self.scan_factor_table,
@@ -461,6 +524,8 @@ def _export_files() -> list[Path]:
         MASTER_AVWAP_TIER_LIST_FILE,
         MASTER_AVWAP_TIER_PERFORMANCE_FILE,
         MASTER_AVWAP_TIER_CATCH_RATE_FILE,
+        HUMAN_FOCUS_PERFORMANCE_FILE,
+        HUMAN_FOCUS_OUTCOMES_FILE,
     ]
 
 

@@ -356,7 +356,12 @@ storage/services.
    `run_master` runs the engine hook; the Focus Picks tab has a `Snapshot Today`
    button and first-boot snapshot status; Research → Market Prep shows a compact
    "Today's Human Picks" section from the dated CSV.
-7. **Setup Tracker Human Picks tab + comparison (GUI)**; Tier/Catch-rate clarity.
+7. **[DONE]** **Setup Tracker Human Picks tab + comparison (GUI)**; Tier/Catch-rate clarity.
+   Added a Setup Tracker → Human Picks tab that reads
+   `human_focus_performance.csv`, compares human WR / avg side return / profit
+   factor against weighted bot S/A tier-performance baselines at the same
+   horizons, and headlines 5/10-session rows first. Tier Performance and Catch
+   Rate tabs now carry inline descriptions explaining what each table measures.
 8. **Folded asks:** Journal Questrade UI; launcher commit/doc; SMA-track surfacing.
 9. **Keep this doc current:** remove completed bullets as they merge; leave
    remaining work visible for the next agent.
