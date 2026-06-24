@@ -1,0 +1,1 @@
+1. Never run out of usage limits before finishing a task. if a task will go over usage limits, save your work and stop before and update the github with changes so CODEX can take over
