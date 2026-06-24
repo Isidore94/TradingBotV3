@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 from typing import Any
 
-from project_paths import MASTER_AVWAP_MARKET_PREP_FILE, MASTER_AVWAP_MARKET_PREP_REPORT_FILE
+from market_session import get_market_session_window
+from project_paths import (
+    HUMAN_FOCUS_DAILY_PICKS_FILE,
+    MASTER_AVWAP_MARKET_PREP_FILE,
+    MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
+)
 
 
 MARKET_PREP_SECTION_DEFINITIONS = [
@@ -108,3 +114,53 @@ def section_symbol_count(section: dict[str, Any], text: str) -> int:
     if not clean or clean == "None":
         return 0
     return len([part for part in clean.replace(",", " ").split() if part.strip()])
+
+
+def load_human_focus_daily_picks(
+    *,
+    trade_date: Any = None,
+    path: Path = HUMAN_FOCUS_DAILY_PICKS_FILE,
+) -> list[dict[str, str]]:
+    target_date = str(trade_date or get_market_session_window().market_date.isoformat()).strip()[:10]
+    if not Path(path).exists():
+        return []
+    try:
+        with Path(path).open("r", newline="", encoding="utf-8") as handle:
+            rows = [dict(row) for row in csv.DictReader(handle)]
+    except OSError:
+        return []
+    return [
+        row
+        for row in rows
+        if str(row.get("trade_date") or "").strip() == target_date
+    ]
+
+
+def human_focus_pick_text(rows: list[dict[str, Any]]) -> str:
+    grouped = {"LONG": [], "SHORT": []}
+    for row in rows or []:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = str(row.get("side") or "").strip().upper()
+        if not symbol:
+            continue
+        side = "SHORT" if side.startswith("SHORT") else "LONG"
+        if symbol not in grouped[side]:
+            grouped[side].append(symbol)
+    if not grouped["LONG"] and not grouped["SHORT"]:
+        return "No human focus picks snapshotted for this market date."
+    lines = []
+    if grouped["LONG"]:
+        lines.append(f"LONG: {', '.join(grouped['LONG'])}")
+    if grouped["SHORT"]:
+        lines.append(f"SHORT: {', '.join(grouped['SHORT'])}")
+    return "\n".join(lines)
+
+
+def human_focus_pick_count(rows: list[dict[str, Any]]) -> int:
+    return len(
+        {
+            (str(row.get("symbol") or "").strip().upper(), str(row.get("side") or "").strip().upper())
+            for row in rows or []
+            if str(row.get("symbol") or "").strip()
+        }
+    )

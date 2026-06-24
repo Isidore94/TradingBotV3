@@ -230,6 +230,13 @@ class FocusPickStore:
     def membership(self) -> dict[str, dict]:
         return dict(self._membership)
 
+    def uses_default_paths(self) -> bool:
+        return (
+            self._focus_paths["long"] == Path(FOCUS_LONGS_FILE)
+            and self._focus_paths["short"] == Path(FOCUS_SHORTS_FILE)
+            and self._membership_path == Path(FOCUS_PICK_MEMBERSHIP_FILE)
+        )
+
 
 def load_focus_map(
     *,

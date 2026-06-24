@@ -347,7 +347,15 @@ storage/services.
      bucket-upgrade events; BounceBot's D1 Focus feed consumes only those events
      and emits `MASTER_AVWAP_D1_BUCKET_UPGRADE`, while the Qt panel rejects the old
      generic D1/stdev/watch-target messages.
-6. **Daily snapshot + forward-return tracking (engine) + Market Prep view (GUI).**
+6. **[DONE]** **Daily snapshot + forward-return tracking (engine) + Market Prep view (GUI).**
+   `scripts/human_focus_tracking.py` snapshots Focus Longs/Shorts once per
+   market-local day (plus manual merge), writes `human_focus_daily_picks.csv`,
+   computes 1/3/5/10-session side-adjusted returns into
+   `human_focus_outcomes.csv`, aggregates `human_focus_performance.csv`, and marks
+   matching setup rows with `human_focus_pick=True` before setup-tracker export.
+   `run_master` runs the engine hook; the Focus Picks tab has a `Snapshot Today`
+   button and first-boot snapshot status; Research → Market Prep shows a compact
+   "Today's Human Picks" section from the dated CSV.
 7. **Setup Tracker Human Picks tab + comparison (GUI)**; Tier/Catch-rate clarity.
 8. **Folded asks:** Journal Questrade UI; launcher commit/doc; SMA-track surfacing.
 9. **Keep this doc current:** remove completed bullets as they merge; leave

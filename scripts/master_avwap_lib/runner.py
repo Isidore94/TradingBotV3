@@ -1551,6 +1551,30 @@ def run_master(
         ai_state=ai_state,
         bucket_upgrades=bucket_upgrades,
     )
+    try:
+        from human_focus_tracking import (
+            load_human_focus_map_for_date,
+            mark_human_focus_rows,
+            update_human_focus_tracking,
+        )
+
+        human_focus_market_date = get_market_session_window().market_date
+        human_focus_tracking_result = update_human_focus_tracking(
+            market_date=human_focus_market_date,
+            daily_frames_by_symbol=daily_frames_by_symbol,
+        )
+        human_focus_marked_count = mark_human_focus_rows(
+            priority_rows,
+            feature_rows_by_symbol,
+            focus_map=load_human_focus_map_for_date(human_focus_market_date),
+        )
+    except Exception:
+        logging.exception("Human focus snapshot/performance tracking failed.")
+        human_focus_tracking_result = {
+            "snapshot": {"snapshotted": False, "reason": "error"},
+            "outcomes": {"outcome_rows": 0, "updated_outcomes": 0, "performance_rows": 0},
+        }
+        human_focus_marked_count = 0
     existing_d1_watchlist_payload = load_json(MASTER_AVWAP_D1_WATCHLIST_FILE, default={})
     if not isinstance(existing_d1_watchlist_payload, dict):
         existing_d1_watchlist_payload = {}
@@ -1586,6 +1610,8 @@ def run_master(
         "relative_avwap_study_rows": relative_avwap_study_rows,
         "relative_avwap_study_count": len(relative_avwap_study_rows),
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
+        "human_focus_tracking": human_focus_tracking_result,
+        "human_focus_marked_setup_count": human_focus_marked_count,
         "setup_tracker_updated": False,
         "study_setups_tracked": 0,
         "setup_tracker_allowed": False,

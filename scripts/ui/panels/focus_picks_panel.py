@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from human_focus_tracking import snapshot_human_focus_picks
 from ui.services.focus_service import FocusService
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.section_header import SectionHeader
@@ -34,30 +35,56 @@ class FocusPicksPanel(QFrame):
         self.short_editor = FocusSideEditor("Focus Shorts", "short", focus_service, tone="short")
         self.long_editor.statusChanged.connect(self.statusChanged)
         self.short_editor.statusChanged.connect(self.statusChanged)
+        self.snapshot_status_label = QLabel("")
+        self.snapshot_status_label.setObjectName("MutedLabel")
 
         splitter = QSplitter()
         splitter.addWidget(self.long_editor)
         splitter.addWidget(self.short_editor)
         splitter.setSizes([500, 500])
 
+        header = SectionHeader(
+            "Focus Picks",
+            "Handpicked daily longs/shorts the bot watches closely. Adds sync into the shared "
+            "longs/shorts watchlists; removing only un-injects what Focus Picks added.",
+        )
+        snapshot_button = QPushButton("Snapshot Today")
+        snapshot_button.clicked.connect(lambda: self.snapshot_today(force=True))
+        header.add_action(snapshot_button)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
-        layout.addWidget(
-            SectionHeader(
-                "Focus Picks",
-                "Handpicked daily longs/shorts the bot watches closely. Adds sync into the shared "
-                "longs/shorts watchlists; removing only un-injects what Focus Picks added.",
-            )
-        )
+        layout.addWidget(header)
+        layout.addWidget(self.snapshot_status_label)
         layout.addWidget(splitter, 1)
 
         # One signal rebuilds both sides (covers edits from anywhere, incl. Step 3).
         self.service.focusChanged.connect(self._refresh_all)
+        self.snapshot_today(force=False, emit_status=False)
 
     def _refresh_all(self) -> None:
         self.long_editor.refresh()
         self.short_editor.refresh()
+
+    def snapshot_today(self, *, force: bool, emit_status: bool = True) -> None:
+        if not getattr(self.service.store, "uses_default_paths", lambda: False)():
+            self.snapshot_status_label.setText("Snapshot: custom focus store")
+            return
+        result = snapshot_human_focus_picks(
+            focus_map=self.service.all_focus(),
+            force=force,
+        )
+        trade_date = result.get("trade_date", "today")
+        added = int(result.get("added") or 0)
+        total = int(result.get("total_for_date") or 0)
+        if result.get("snapshotted"):
+            message = f"Snapshot {trade_date}: {total} pick(s), {added} new."
+        else:
+            message = f"Snapshot {trade_date}: already captured ({total} pick(s))."
+        self.snapshot_status_label.setText(message)
+        if emit_status:
+            self.statusChanged.emit(message)
 
 
 class FocusSideEditor(QFrame):

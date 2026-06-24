@@ -41,3 +41,29 @@ def test_market_prep_section_helpers_count_symbols_from_payload_and_text():
     assert text == "AAPL, MSFT"
     assert section_symbol_count(section, text) == 2
     assert section_symbol_count({}, "NVDA, TSLA AMD") == 3
+
+
+def test_human_focus_pick_helpers_format_today_rows(tmp_path):
+    from ui.services.market_prep_feed import (
+        human_focus_pick_count,
+        human_focus_pick_text,
+        load_human_focus_daily_picks,
+    )
+
+    path = tmp_path / "human_focus_daily_picks.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "trade_date,symbol,side,source,snapshotted_at,active_at_snapshot",
+                "2026-06-01,NVDA,LONG,focus_pick,2026-06-01T09:35:00,1",
+                "2026-06-01,TSLA,SHORT,focus_pick,2026-06-01T09:35:00,1",
+                "2026-06-02,AAPL,LONG,focus_pick,2026-06-02T09:35:00,1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rows = load_human_focus_daily_picks(trade_date="2026-06-01", path=path)
+
+    assert human_focus_pick_count(rows) == 2
+    assert human_focus_pick_text(rows) == "LONG: NVDA\nSHORT: TSLA"

@@ -14,9 +14,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from project_paths import MASTER_AVWAP_MARKET_PREP_FILE, MASTER_AVWAP_MARKET_PREP_REPORT_FILE, open_path_in_file_manager
+from project_paths import (
+    HUMAN_FOCUS_DAILY_PICKS_FILE,
+    MASTER_AVWAP_MARKET_PREP_FILE,
+    MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
+    open_path_in_file_manager,
+)
 from ui.services.market_prep_feed import (
     MARKET_PREP_SECTION_DEFINITIONS,
+    human_focus_pick_count,
+    human_focus_pick_text,
+    load_human_focus_daily_picks,
     load_market_prep_payload,
     load_market_prep_report,
     market_prep_sections,
@@ -37,6 +45,11 @@ class MasterMarketPrepPanel(QFrame):
         self.report_text = QTextEdit()
         self.report_text.setReadOnly(True)
         self.report_text.setPlaceholderText("Run Master AVWAP to populate market prep output.")
+        self.human_picks_label = QLabel("Today's Human Picks (0)")
+        self.human_picks_label.setObjectName("SectionTitle")
+        self.human_picks_text = QTextEdit()
+        self.human_picks_text.setReadOnly(True)
+        self.human_picks_text.setMaximumHeight(84)
         self.status_label = QLabel("")
         self.status_label.setObjectName("MutedLabel")
         self._build_layout()
@@ -82,6 +95,7 @@ class MasterMarketPrepPanel(QFrame):
         layout.setSpacing(8)
         layout.addWidget(header)
         layout.addWidget(self.status_label)
+        layout.addWidget(self._build_human_picks_panel())
         layout.addLayout(body, 1)
 
     def _build_section_card(self, definition: dict[str, str]) -> QFrame:
@@ -107,9 +121,26 @@ class MasterMarketPrepPanel(QFrame):
         layout.addWidget(text)
         return frame
 
+    def _build_human_picks_panel(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("StatusStrip")
+        copy_button = QPushButton("Copy")
+        copy_button.clicked.connect(self.copy_human_picks)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.addWidget(self.human_picks_label)
+        top.addStretch(1)
+        top.addWidget(copy_button)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+        layout.addLayout(top)
+        layout.addWidget(self.human_picks_text)
+        return frame
+
     def _configure_watcher(self) -> None:
         self.watcher = QFileSystemWatcher(self)
-        for path in (MASTER_AVWAP_MARKET_PREP_FILE, MASTER_AVWAP_MARKET_PREP_REPORT_FILE):
+        for path in (MASTER_AVWAP_MARKET_PREP_FILE, MASTER_AVWAP_MARKET_PREP_REPORT_FILE, HUMAN_FOCUS_DAILY_PICKS_FILE):
             if path.exists():
                 self.watcher.addPath(str(path))
         self.watcher.fileChanged.connect(lambda _path: self.refresh())
@@ -131,6 +162,7 @@ class MasterMarketPrepPanel(QFrame):
                 widget.setPlainText(text)
         self.report_text.setPlainText(load_market_prep_report())
         generated = payload.get("generated_at") if isinstance(payload, dict) else ""
+        self._refresh_human_picks(payload)
         self.status_label.setText(
             f"Generated: {generated or 'n/a'} | Focus symbols across sections: {total_symbols}"
         )
@@ -165,8 +197,24 @@ class MasterMarketPrepPanel(QFrame):
             self.status_label.setText("Copied all market prep sections.")
         self.statusChanged.emit(self.status_label.text())
 
+    def copy_human_picks(self) -> None:
+        text = self.human_picks_text.toPlainText().strip()
+        if not text or text.startswith("No human focus picks"):
+            self.status_label.setText("No human focus picks to copy.")
+        else:
+            QApplication.clipboard().setText(text)
+            self.status_label.setText("Copied today's human picks.")
+        self.statusChanged.emit(self.status_label.text())
+
+    def _refresh_human_picks(self, payload: dict) -> None:
+        trade_date = payload.get("run_date") if isinstance(payload, dict) else ""
+        rows = load_human_focus_daily_picks(trade_date=trade_date)
+        count = human_focus_pick_count(rows)
+        self.human_picks_label.setText(f"Today's Human Picks ({count})")
+        self.human_picks_text.setPlainText(human_focus_pick_text(rows))
+
     def _refresh_watcher_paths(self) -> None:
         watched = set(self.watcher.files())
-        for path in (MASTER_AVWAP_MARKET_PREP_FILE, MASTER_AVWAP_MARKET_PREP_REPORT_FILE):
+        for path in (MASTER_AVWAP_MARKET_PREP_FILE, MASTER_AVWAP_MARKET_PREP_REPORT_FILE, HUMAN_FOCUS_DAILY_PICKS_FILE):
             if path.exists() and str(path) not in watched:
                 self.watcher.addPath(str(path))

@@ -5704,6 +5704,8 @@ def build_tracker_setup_record(
         "previous_anchor_date": str(previous_anchor.get("date") or ""),
         "priority_bucket": str(row.get("priority_bucket") or ""),
         "priority_score": float(row.get("score", 0) or 0),
+        "human_focus_pick": bool(row.get("human_focus_pick")),
+        "human_focus_side": str(row.get("human_focus_side") or "").strip().upper(),
         "favorite_zone": row.get("favorite_zone") or "",
         "setup_family": str(row.get("setup_family") or symbol_entry.get("setup_family") or ""),
         "tracker_setup_family": tracker_setup_family,
