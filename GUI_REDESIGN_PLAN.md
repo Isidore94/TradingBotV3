@@ -334,8 +334,17 @@ storage/services.
      the `include_disabled_bounce_types` path used by
      `_emit_master_avwap_focus_bounce_alert`), scoped by side. Tag the callback
      payload `feedback.is_focus_pick` / `focus_side`. (Riskier; needs IB to verify.)
-5. **D1 Focus Alerts.** `master_avwap_bucket_state.json` + transition gate in
-   `run_master`; constrain the existing D1 upgrade payload; retarget the D1 panel.
+5. **D1 Focus Alerts.**
+   - **[DONE] 5a (engine):** `scripts/master_avwap_bucket_state.py` (pure, tested) —
+     `is_bucket_upgrade` transition rule, `load/save_bucket_state`,
+     `compute_bucket_upgrades`, `record_scan_bucket_upgrades`. Wired into
+     `runner.run_master` after final buckets: diffs vs
+     `master_avwap_bucket_state.json`, persists new state, exposes
+     `run_result["bucket_upgrades"]` (only genuine upgrades into Favorite/High
+     Conviction). Tests: `tests/test_bucket_state.py`.
+   - **5b (display, pending):** retarget the D1 Focus Alerts panel to show only those
+     upgrade events (consume `bucket_upgrades` / write them where the bounce-side
+     `emit_master_avwap_d1_flags` display reads) and drop the generic D1/stdev noise.
 6. **Daily snapshot + forward-return tracking (engine) + Market Prep view (GUI).**
 7. **Setup Tracker Human Picks tab + comparison (GUI)**; Tier/Catch-rate clarity.
 8. **Folded asks:** Journal Questrade UI; launcher commit/doc; SMA-track surfacing.

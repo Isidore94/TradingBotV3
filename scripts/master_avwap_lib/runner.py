@@ -1533,6 +1533,11 @@ def run_master(
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
+    # D1 Focus Alerts: diff this scan's final buckets vs the persisted state and keep
+    # only genuine upgrades into Favorite / High Conviction (see GUI_REDESIGN_PLAN.md).
+    from master_avwap_bucket_state import record_scan_bucket_upgrades
+
+    bucket_upgrades = record_scan_bucket_upgrades(priority_rows, today_run)
     apply_expected_r_ranking(
         priority_rows,
         ai_state,
@@ -1563,6 +1568,7 @@ def run_master(
     run_result: dict[str, object] = {
         "watchlist_label": watchlist_label,
         "tracked_rows": tracked_rows,
+        "bucket_upgrades": bucket_upgrades,
         "theta_put_rows": theta_put_rows,
         "theta_pcs_rows": theta_pcs_rows,
         "ai_state": ai_state,
