@@ -104,6 +104,48 @@ def test_human_focus_outcomes_are_side_adjusted_and_aggregated(tmp_path):
     assert all_h10["avg_side_return"] == "0.200000"
 
 
+def test_matured_outcomes_are_preserved_without_recompute(tmp_path):
+    from human_focus_tracking import snapshot_human_focus_picks, update_human_focus_outcomes
+
+    picks_path = tmp_path / "human_focus_daily_picks.csv"
+    outcomes_path = tmp_path / "human_focus_outcomes.csv"
+    performance_path = tmp_path / "human_focus_performance.csv"
+    snapshot_human_focus_picks(
+        market_date="2026-06-01",
+        focus_map={"long": {"AAPL"}, "short": set()},
+        daily_picks_path=picks_path,
+        snapshot_state_path=tmp_path / "state.json",
+    )
+    dates = pd.date_range("2026-06-01", periods=11, freq="B")
+    frames = {"AAPL": pd.DataFrame({"datetime": dates, "close": list(range(100, 111))})}
+
+    first = update_human_focus_outcomes(
+        reference_date="2026-06-16",
+        daily_frames_by_symbol=frames,
+        daily_picks_path=picks_path,
+        outcomes_path=outcomes_path,
+        performance_path=performance_path,
+        daily_bars_dir=tmp_path / "daily_bars",
+    )
+    assert first["updated_outcomes"] == 1
+    matured_row = _read_csv(outcomes_path)[0]
+    assert matured_row["fully_matured"] == "1"
+
+    # A matured pick must be kept as-is even when no bars are available on a later run.
+    second = update_human_focus_outcomes(
+        reference_date="2026-06-17",
+        daily_frames_by_symbol={},
+        daily_picks_path=picks_path,
+        outcomes_path=outcomes_path,
+        performance_path=performance_path,
+        daily_bars_dir=tmp_path / "missing_bars",
+    )
+    assert second["updated_outcomes"] == 0
+    preserved = _read_csv(outcomes_path)
+    assert len(preserved) == 1
+    assert preserved[0]["h10_return"] == matured_row["h10_return"]
+
+
 def test_mark_human_focus_rows_sets_priority_and_feature_flags():
     from human_focus_tracking import mark_human_focus_rows
 

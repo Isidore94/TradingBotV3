@@ -346,12 +346,16 @@ def _compute_pick_outcome(
     trade_date = _parse_date(pick.get("trade_date"))
     symbol = str(pick.get("symbol") or "").strip().upper()
     side = _side_label(pick.get("side"))
-    if trade_date is None or not symbol or frame is None or frame.empty:
+    if trade_date is None or not symbol or frame is None or getattr(frame, "empty", True):
         return None
-    work = _normalize_daily_frame(frame)
-    if work.empty:
-        return None
-    work["trade_day"] = work["datetime"].dt.date
+    # Accept an already-normalized frame (with a cached ``trade_day`` column) to avoid
+    # re-normalizing the same symbol once per pick; fall back to normalizing raw frames.
+    work = frame
+    if "trade_day" not in work.columns:
+        work = _normalize_daily_frame(work)
+        if work.empty:
+            return None
+        work = work.assign(trade_day=work["datetime"].dt.date)
     candidates = work[work["trade_day"] >= trade_date].reset_index(drop=True)
     if candidates.empty:
         return None
@@ -396,23 +400,40 @@ def update_human_focus_outcomes(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     reference = _market_date(reference_date)
+    daily_bars_dir = Path(daily_bars_dir)
     picks = _read_csv_rows(Path(daily_picks_path))
     existing = {_pick_key(row): dict(row) for row in _read_csv_rows(Path(outcomes_path))}
     updated_at = _now_text(now)
     updated_count = 0
+    stale_before = reference - timedelta(days=recent_calendar_days)
+    # One normalized frame per symbol per scan: the same focus name is snapshotted
+    # across many trade dates, so resolving/normalizing once avoids redundant parquet
+    # reads and DataFrame work for every pick row sharing that symbol.
+    normalized_frames: dict[str, pd.DataFrame] = {}
+
+    def _resolve_frame(symbol: str) -> pd.DataFrame:
+        cached = normalized_frames.get(symbol)
+        if cached is None:
+            frame = _frame_for_symbol(symbol, daily_frames_by_symbol, daily_bars_dir)
+            if not frame.empty:
+                frame = frame.assign(trade_day=frame["datetime"].dt.date)
+            normalized_frames[symbol] = frame
+            cached = frame
+        return cached
+
     for pick in picks:
         pick_date = _parse_date(pick.get("trade_date"))
         key = _pick_key(pick)
         if pick_date is None or not key[1]:
             continue
         existing_row = existing.get(key, {})
-        fully_matured = str(existing_row.get("fully_matured") or "") in {"1", "true", "True"}
-        if fully_matured and pick_date < reference - timedelta(days=recent_calendar_days):
+        # A fully matured pick (all 10 forward sessions recorded) never changes, so keep
+        # its existing row instead of re-reading bars and recomputing it every scan.
+        if str(existing_row.get("fully_matured") or "") in {"1", "true", "True"}:
             continue
-        if pick_date < reference - timedelta(days=recent_calendar_days):
+        if pick_date < stale_before:
             continue
-        frame = _frame_for_symbol(key[1], daily_frames_by_symbol, Path(daily_bars_dir))
-        outcome = _compute_pick_outcome(pick, frame, updated_at=updated_at)
+        outcome = _compute_pick_outcome(pick, _resolve_frame(key[1]), updated_at=updated_at)
         if outcome is None:
             continue
         existing[key] = outcome
