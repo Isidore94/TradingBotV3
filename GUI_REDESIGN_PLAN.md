@@ -299,10 +299,15 @@ them. Decide with the owner; default to (a) clarify.
 Order chosen so each step ships independently and later steps depend on earlier
 storage/services.
 
-1. **Storage + `FocusPickStore` (engine + shared).** Path constants in
-   `project_paths.py` for `focus_longs.txt`/`focus_shorts.txt` (shared home) and the
-   runtime JSON/CSV (§ Storage). `FocusPickStore` service: read/write/add/remove/
-   clear/paste/dedupe/autosave + shared-watchlist injection membership. Unit tests.
+1. **[DONE]** **Storage + `FocusPickStore` (engine + shared).** Path constants in
+   `project_paths.py` (focus txt + the six runtime files in § Storage).
+   `scripts/focus_picks.py::FocusPickStore` — plain Python (no Qt) so engine + GUI
+   share it: read/add/`add_many`(paste)/remove/clear/dedupe, observer listeners,
+   `load_focus_map()` read helper, and shared-watchlist injection with
+   `focus_pick_membership.json` (removal only un-injects what Focus Picks added;
+   never deletes an independently maintained broad-list symbol). Tests:
+   `tests/test_focus_picks.py` (10, green). *Note: autosave/Qt `focusChanged` signal
+   arrives with the GUI wrapper in Step 2.*
 2. **Focus Picks tab (GUI).** `FocusPicksPanel` + `symbol_chip` widget; wire into
    `MasterAvwapWorkspace` after Setups; inject the shared `FocusPickStore`.
 3. **Master AVWAP Add-to-Focus + table marker (GUI).** Row action + delegate star;

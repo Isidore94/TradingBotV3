@@ -118,6 +118,18 @@ SHORTS_FILE = PERSISTENT_DATA_DIR / "shorts.txt"
 SWING_LONGS_FILE = PERSISTENT_DATA_DIR / "swinglongs.txt"
 SWING_SHORTS_FILE = PERSISTENT_DATA_DIR / "shortswings.txt"
 
+# Trader-curated daily Focus Picks (shared home, synced across machines) and the
+# runtime files for human-pick membership tracking + the human-vs-bot cohort.
+# See GUI_REDESIGN_PLAN.md (Focus Picks + Human Setup Tracker).
+FOCUS_LONGS_FILE = PERSISTENT_DATA_DIR / "focus_longs.txt"
+FOCUS_SHORTS_FILE = PERSISTENT_DATA_DIR / "focus_shorts.txt"
+FOCUS_PICK_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "focus_pick_membership.json"
+HUMAN_FOCUS_SNAPSHOT_STATE_FILE = RUNTIME_DATA_DIR / "human_focus_snapshot_state.json"
+HUMAN_FOCUS_DAILY_PICKS_FILE = RUNTIME_DATA_DIR / "human_focus_daily_picks.csv"
+HUMAN_FOCUS_OUTCOMES_FILE = RUNTIME_DATA_DIR / "human_focus_outcomes.csv"
+HUMAN_FOCUS_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "human_focus_performance.csv"
+MASTER_AVWAP_BUCKET_STATE_FILE = RUNTIME_DATA_DIR / "master_avwap_bucket_state.json"
+
 SECTOR_ETF_MAP_FILE = DATA_DIR / "sector_etf_map.json"
 INDUSTRY_ETF_MAP_FILE = DATA_DIR / "industry_etf_map.json"
 SYMBOL_CLASSIFICATION_CACHE_FILE = DATA_DIR / "symbol_classification.csv"
