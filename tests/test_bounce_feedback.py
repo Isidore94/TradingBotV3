@@ -299,6 +299,92 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertIn("MASTER_AVWAP_D1_UPGRADE_WATCH: MSFT", message)
         self.assertIn("A/S upgrade: 1st-dev break", message)
 
+    def test_d1_bucket_upgrade_uses_bucket_prefix(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+
+        message = bot._format_master_avwap_d1_flag_event(
+            {
+                "symbol": "NVDA",
+                "direction": "long",
+                "label": "Favorite setup upgrade",
+                "reason": "Near favorite zone -> Favorite setup",
+                "source": "bucket_upgrade",
+                "priority_score": 245,
+            }
+        )
+
+        self.assertIn("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA", message)
+        self.assertIn("Favorite setup upgrade", message)
+
+    def test_d1_flag_builder_only_uses_bucket_upgrade_alerts(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        bot.master_avwap_focus_map = {
+            "AAPL": {
+                "symbol": "AAPL",
+                "side": "LONG",
+                "priority_score": 220,
+                "mid_earnings_ema15_trigger": True,
+            }
+        }
+        bot.master_avwap_events = {
+            "MSFT": [
+                {
+                    "symbol": "MSFT",
+                    "signal_type": "CROSS_UP_VWAP",
+                    "side": "LONG",
+                    "level": "VWAP",
+                }
+            ]
+        }
+        bot.master_avwap_d1_watchlist = {
+            "TSLA": {
+                "symbol": "TSLA",
+                "side": "SHORT",
+                "active_current_scan": True,
+                "upgrade_targets": [
+                    {
+                        "label": "LOWER_1",
+                        "level": 90.0,
+                        "action": "break_below",
+                    }
+                ],
+            }
+        }
+        bot.master_avwap_d1_upgrade_alerts = {
+            "OLD": {
+                "symbol": "OLD",
+                "side": "LONG",
+                "upgrade_targets": [
+                    {
+                        "label": "UPPER_1",
+                        "level": 103.0,
+                        "action": "break_above",
+                    }
+                ],
+            },
+            "NVDA": {
+                "symbol": "NVDA",
+                "side": "LONG",
+                "bucket_upgrade_events": [
+                    {
+                        "symbol": "NVDA",
+                        "side": "LONG",
+                        "event_type": "bucket_upgrade",
+                        "label": "High conviction upgrade",
+                        "reason": "Favorite setup -> High conviction",
+                        "source": "bucket_upgrade",
+                        "previous_bucket": "favorite_setup",
+                        "priority_bucket": "high_conviction",
+                    }
+                ],
+            },
+        }
+
+        events = bot._build_master_avwap_d1_flag_events()
+
+        self.assertEqual([event["symbol"] for event in events], ["NVDA"])
+        self.assertEqual(events[0]["source"], "bucket_upgrade")
+
     def test_d1_preloaded_trigger_emits_on_intraday_cross_once(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
         bot.master_avwap_d1_watchlist = {

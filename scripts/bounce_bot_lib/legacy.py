@@ -2913,7 +2913,9 @@ class BounceBot(EWrapper, EClient):
             suffix_parts.append(f"source={source}")
         suffix = f" [{'; '.join(suffix_parts)}]" if suffix_parts else ""
         prefix = (
-            "MASTER_AVWAP_D1_UPGRADE_WATCH"
+            "MASTER_AVWAP_D1_BUCKET_UPGRADE"
+            if source == "bucket_upgrade"
+            else "MASTER_AVWAP_D1_UPGRADE_WATCH"
             if source == "watchlist_upgrade_target"
             else "MASTER_AVWAP_D1_UPGRADE_TRIGGER"
             if source == "watchlist_trigger" and (target_tier or event.get("upgrade_only"))
@@ -2922,12 +2924,17 @@ class BounceBot(EWrapper, EClient):
         return f"{prefix}: {symbol} ({direction or 'watch'}) {label}{suffix}"
 
     def _build_master_avwap_d1_flag_events(self):
+        bucket_upgrade_alerts = {
+            symbol: entry
+            for symbol, entry in getattr(self, "master_avwap_d1_upgrade_alerts", {}).items()
+            if isinstance(entry, dict) and entry.get("bucket_upgrade_events")
+        }
         return build_master_avwap_d1_flag_events(
-            self.master_avwap_focus_map,
-            self.master_avwap_events,
-            self.master_avwap_d1_watchlist,
+            {},
+            {},
+            {},
             trade_date=datetime.now().date(),
-            d1_upgrade_alerts=getattr(self, "master_avwap_d1_upgrade_alerts", {}),
+            d1_upgrade_alerts=bucket_upgrade_alerts,
         )
 
     def _master_avwap_d1_flag_key(self, event, today_iso=None):

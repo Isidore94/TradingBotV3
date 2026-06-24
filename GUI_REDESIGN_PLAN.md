@@ -342,9 +342,11 @@ storage/services.
      `master_avwap_bucket_state.json`, persists new state, exposes
      `run_result["bucket_upgrades"]` (only genuine upgrades into Favorite/High
      Conviction). Tests: `tests/test_bucket_state.py`.
-   - **5b (display, pending):** retarget the D1 Focus Alerts panel to show only those
-     upgrade events (consume `bucket_upgrades` / write them where the bounce-side
-     `emit_master_avwap_d1_flags` display reads) and drop the generic D1/stdev noise.
+   - **[DONE] 5b (display):** `run_master` now writes only the computed
+     `bucket_upgrades` into `master_avwap_d1_upgrade_alerts.json` as explicit
+     bucket-upgrade events; BounceBot's D1 Focus feed consumes only those events
+     and emits `MASTER_AVWAP_D1_BUCKET_UPGRADE`, while the Qt panel rejects the old
+     generic D1/stdev/watch-target messages.
 6. **Daily snapshot + forward-return tracking (engine) + Market Prep view (GUI).**
 7. **Setup Tracker Human Picks tab + comparison (GUI)**; Tier/Catch-rate clarity.
 8. **Folded asks:** Journal Questrade UI; launcher commit/doc; SMA-track surfacing.

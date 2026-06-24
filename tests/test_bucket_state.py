@@ -1,4 +1,6 @@
+import json
 import sys
+from datetime import date
 from pathlib import Path
 
 
@@ -65,3 +67,65 @@ def test_record_scan_round_trip_fires_once(tmp_path):
     rows[1]["priority_bucket"] = "favorite_setup"
     third = record_scan_bucket_upgrades(rows, "2026-06-25", path=path)
     assert [u["symbol"] for u in third] == ["AAPL"]
+
+
+def test_bucket_upgrades_feed_d1_focus_alert_payload(tmp_path):
+    from master_avwap_lib.legacy import (
+        build_master_avwap_d1_upgrade_alert_payload,
+        format_master_avwap_d1_upgrade_alert_report,
+    )
+    from master_avwap_shared import (
+        build_master_avwap_d1_flag_events,
+        load_master_avwap_d1_upgrade_alerts,
+    )
+
+    payload = build_master_avwap_d1_upgrade_alert_payload(
+        [
+            {
+                "symbol": "AAPL",
+                "side": "LONG",
+                "priority_bucket": "favorite_setup",
+                "score": 242,
+                "setup_family": "earnings_gap",
+            },
+            {
+                "symbol": "TSLA",
+                "side": "SHORT",
+                "priority_bucket": "near_favorite_zone",
+                "score": 190,
+            },
+        ],
+        {"symbols": {}},
+        bucket_upgrades=[
+            {
+                "symbol": "AAPL",
+                "side": "LONG",
+                "previous_bucket": "near_favorite_zone",
+                "bucket": "favorite_setup",
+            }
+        ],
+    )
+
+    assert payload["alert_mode"] == "bucket_upgrades"
+    assert list(payload["symbols"]) == ["AAPL"]
+    assert payload["symbols"]["AAPL"]["bucket_upgrade_events"][0]["previous_bucket"] == "near_favorite_zone"
+
+    report = format_master_avwap_d1_upgrade_alert_report(payload)
+    assert "MASTER AVWAP D1 FOCUS ALERTS" in report
+    assert "Near favorite zone -> Favorite setup" in report
+
+    path = tmp_path / "master_avwap_d1_upgrade_alerts.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    loaded = load_master_avwap_d1_upgrade_alerts(path)
+    flags = build_master_avwap_d1_flag_events(
+        {},
+        {},
+        {},
+        date(2026, 6, 23),
+        d1_upgrade_alerts=loaded,
+    )
+
+    assert len(flags) == 1
+    assert flags[0]["symbol"] == "AAPL"
+    assert flags[0]["source"] == "bucket_upgrade"
+    assert flags[0]["previous_bucket"] == "near_favorite_zone"

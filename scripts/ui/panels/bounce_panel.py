@@ -333,45 +333,5 @@ def _is_feed_noise_alert(alert: BounceAlert) -> bool:
 
 
 def _is_actionable_d1_alert(alert: BounceAlert) -> bool:
-    text = f"{alert.raw_text} {alert.trigger} {alert.tag}".upper()
-    actionable_tokens = (
-        "UPGRADE",
-        "FAVORITE",
-        "HIGH_CONVICTION",
-        "NEAR_FAVORITE",
-        "RETEST FOLLOW",
-        "15EMA",
-        "EMA15",
-        "1ST-DEV D1 BOUNCE",
-        "FIRST_DEV_RETEST",
-        "AVWAPE D1 BOUNCE",
-        "AVWAP_BOUNCE",
-        "TRENDLINE",
-        "PREVIOUS-DAY",
-        "5D BREAKOUT",
-        "THETA_RECOMMENDED",
-        "PUT PREMIUM VIABLE",
-    )
-    if any(token in text for token in actionable_tokens):
-        return True
-
-    noisy_tokens = (
-        "2ND-DEV",
-        "SECOND_DEV",
-        "UPPER_2",
-        "LOWER_2",
-        "UPPER_3",
-        "LOWER_3",
-        "CROSS_UP_UPPER_2",
-        "CROSS_DOWN_LOWER_2",
-        "PREV_CROSS_UP_UPPER_2",
-        "PREV_CROSS_DOWN_LOWER_2",
-        "BOUNCE_UPPER_2",
-        "BOUNCE_LOWER_2",
-        "PREV_BOUNCE_UPPER_2",
-        "PREV_BOUNCE_LOWER_2",
-    )
-    if any(token in text for token in noisy_tokens):
-        return False
-
-    return False
+    prefix = str(alert.raw_text or "").split(":", 1)[0].strip().upper()
+    return prefix == "MASTER_AVWAP_D1_BUCKET_UPGRADE"

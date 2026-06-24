@@ -21380,6 +21380,130 @@ def _format_d1_upgrade_target_summary(trigger_levels: list[dict], limit: int = D
     return "; ".join(parts)
 
 
+def _priority_bucket_label(bucket: str) -> str:
+    bucket_text = str(bucket or "").strip().lower()
+    labels = {
+        "favorite_setup": "Favorite setup",
+        "high_conviction": "High conviction",
+        "near_favorite_zone": "Near favorite zone",
+        "stdev_retest_tracking": "Stdev track",
+        "sma_breakout_tracking": "SMA track",
+    }
+    return labels.get(bucket_text, bucket_text.replace("_", " ").strip().title() or "Unbucketed")
+
+
+def _build_bucket_upgrade_reason(previous_bucket: str, current_bucket: str) -> str:
+    previous = str(previous_bucket or "").strip().lower() or "missing"
+    current = str(current_bucket or "").strip().lower() or "unbucketed"
+    return f"{_priority_bucket_label(previous)} -> {_priority_bucket_label(current)}"
+
+
+def _build_master_avwap_bucket_upgrade_alert_payload(
+    priority_rows: list[dict],
+    ai_state: dict,
+    bucket_upgrades: list[dict],
+    *,
+    reference_time: datetime | None = None,
+) -> dict:
+    now = reference_time or datetime.now()
+    today_iso = now.date().isoformat()
+    ai_symbols = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
+    ai_symbols = ai_symbols if isinstance(ai_symbols, dict) else {}
+    rows_by_key: dict[tuple[str, str], dict] = {}
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side_raw = str(row.get("side") or "").strip().upper()
+        if symbol and side_raw in {"LONG", "SHORT"}:
+            rows_by_key[(symbol, side_raw)] = row
+
+    symbol_map: dict[str, dict] = {}
+    alert_rows: list[dict] = []
+    for upgrade in bucket_upgrades or []:
+        if not isinstance(upgrade, dict):
+            continue
+        symbol = str(upgrade.get("symbol") or "").strip().upper()
+        side_raw = str(upgrade.get("side") or "").strip().upper()
+        if not symbol or side_raw not in {"LONG", "SHORT"}:
+            continue
+        row = rows_by_key.get((symbol, side_raw), {})
+        symbol_state = ai_symbols.get(symbol, {})
+        symbol_state = symbol_state if isinstance(symbol_state, dict) else {}
+        current_bucket = str(
+            upgrade.get("bucket")
+            or row.get("priority_bucket")
+            or symbol_state.get("priority_bucket")
+            or ""
+        ).strip().lower()
+        previous_bucket = str(upgrade.get("previous_bucket") or "").strip().lower()
+        side = normalize_side(side_raw)
+        priority_score = _coerce_float(row.get("score") or row.get("priority_score") or symbol_state.get("priority_score"))
+        label = f"{_priority_bucket_label(current_bucket)} upgrade"
+        reason = _build_bucket_upgrade_reason(previous_bucket, current_bucket)
+        event = {
+            "symbol": symbol,
+            "side": side,
+            "event_type": "bucket_upgrade",
+            "label": label,
+            "reason": reason,
+            "source": "bucket_upgrade",
+            "bucket_upgrade": True,
+            "previous_bucket": previous_bucket,
+            "priority_bucket": current_bucket,
+            "bucket": current_bucket,
+            "priority_score": priority_score,
+            "setup_family": row.get("setup_family") or symbol_state.get("setup_family") or "",
+            "favorite_zone": row.get("favorite_zone") or symbol_state.get("favorite_zone") or "",
+            "current_band_zone": row.get("current_band_zone") or symbol_state.get("current_band_zone") or "",
+            "last_trade_date": row.get("last_trade_date") or symbol_state.get("last_trade_date") or today_iso,
+            "trade_date": row.get("last_trade_date") or symbol_state.get("last_trade_date") or today_iso,
+        }
+        entry = {
+            "symbol": symbol,
+            "side": side,
+            "run_date": today_iso,
+            "last_trade_date": event["last_trade_date"],
+            "priority_bucket": current_bucket,
+            "previous_bucket": previous_bucket,
+            "priority_score": priority_score,
+            "setup_family": event["setup_family"],
+            "favorite_zone": event["favorite_zone"],
+            "current_band_zone": event["current_band_zone"],
+            "upgrade_summary": reason,
+            "bucket_upgrade_events": [dict(event)],
+            "upgrade_targets": [],
+        }
+        symbol_map[symbol] = entry
+        alert_rows.append(dict(event))
+
+    ranked_symbols = dict(
+        sorted(
+            symbol_map.items(),
+            key=lambda item: (
+                -float(item[1].get("priority_score") or 0.0),
+                item[0],
+            ),
+        )
+    )
+    alert_rows = sorted(
+        alert_rows,
+        key=lambda item: (
+            -float(item.get("priority_score") or 0.0),
+            str(item.get("symbol") or ""),
+        ),
+    )
+    return {
+        "schema_version": D1_UPGRADE_ALERT_SCHEMA_VERSION,
+        "alert_mode": "bucket_upgrades",
+        "generated_at": now.isoformat(timespec="seconds"),
+        "run_date": today_iso,
+        "description": "Master AVWAP bucket upgrades into Favorite or High Conviction.",
+        "symbols": ranked_symbols,
+        "alerts": alert_rows,
+    }
+
+
 def _merge_d1_watchlist_entry(
     symbols: dict[str, dict],
     existing_symbols: dict,
@@ -21710,8 +21834,17 @@ def build_master_avwap_d1_upgrade_alert_payload(
     priority_rows: list[dict],
     ai_state: dict,
     *,
+    bucket_upgrades: list[dict] | None = None,
     reference_time: datetime | None = None,
 ) -> dict:
+    if bucket_upgrades is not None:
+        return _build_master_avwap_bucket_upgrade_alert_payload(
+            priority_rows,
+            ai_state,
+            bucket_upgrades,
+            reference_time=reference_time,
+        )
+
     now = reference_time or datetime.now()
     today_iso = now.date().isoformat()
     ai_symbols = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
@@ -21795,6 +21928,36 @@ def build_master_avwap_d1_upgrade_alert_payload(
 def format_master_avwap_d1_upgrade_alert_report(payload: dict) -> str:
     symbols = payload.get("symbols", {}) if isinstance(payload, dict) else {}
     symbols = symbols if isinstance(symbols, dict) else {}
+    alert_mode = str(payload.get("alert_mode") or "").strip().lower() if isinstance(payload, dict) else ""
+    has_bucket_upgrades = any(
+        isinstance(entry, dict) and entry.get("bucket_upgrade_events")
+        for entry in symbols.values()
+    )
+    if alert_mode == "bucket_upgrades" or has_bucket_upgrades:
+        lines = [
+            "MASTER AVWAP D1 FOCUS ALERTS",
+            "=" * 80,
+            "Only genuine bucket upgrades into Favorite or High Conviction are shown here.",
+        ]
+        if not symbols:
+            lines.append("No D1 focus bucket upgrades generated for the latest scan.")
+            return "\n".join(lines).rstrip() + "\n"
+        for symbol, entry in symbols.items():
+            if not isinstance(entry, dict):
+                continue
+            score = _coerce_float(entry.get("priority_score"))
+            score_text = "n/a" if score is None else (f"{score:.1f}" if abs(score - round(score)) > 0.01 else f"{score:.0f}")
+            side = normalize_side(entry.get("side")) or "WATCH"
+            previous_bucket = str(entry.get("previous_bucket") or "").strip().lower() or "missing"
+            bucket = str(entry.get("priority_bucket") or "").strip().lower() or "unbucketed"
+            family = str(entry.get("setup_family") or "general").strip() or "general"
+            lines.append(
+                f"{symbol} {side} score={score_text} "
+                f"upgrade={_priority_bucket_label(previous_bucket)} -> {_priority_bucket_label(bucket)} "
+                f"family={family}"
+            )
+        return "\n".join(lines).rstrip() + "\n"
+
     lines = [
         "MASTER AVWAP A/S UPGRADE ALERTS",
         "=" * 80,
@@ -21840,11 +22003,13 @@ def write_master_avwap_d1_upgrade_alert_outputs(
     report_path: Path = MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
     priority_rows: list[dict],
     ai_state: dict,
+    bucket_upgrades: list[dict] | None = None,
     reference_time: datetime | None = None,
 ) -> dict:
     payload = build_master_avwap_d1_upgrade_alert_payload(
         priority_rows,
         ai_state,
+        bucket_upgrades=bucket_upgrades,
         reference_time=reference_time,
     )
     save_json(alerts_path, payload, pretty=True)

@@ -62,7 +62,11 @@ def _message_text(message: Any) -> str:
 def _extract_symbol(text: str) -> str:
     if ":" in text:
         candidate = text.split(":", 1)[0].strip().split()[-1].upper()
-        if candidate and candidate not in {"MASTER_AVWAP_D1_FLAG", "MASTER_AVWAP_FOCUS_BOUNCE"}:
+        if (
+            candidate
+            and not candidate.startswith("MASTER_AVWAP_D1")
+            and candidate not in {"MASTER_AVWAP_FOCUS_BOUNCE"}
+        ):
             return candidate
     match = SYMBOL_RE.search(text)
     return match.group(1).upper() if match else ""

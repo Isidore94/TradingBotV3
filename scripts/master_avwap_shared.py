@@ -170,6 +170,58 @@ def _normalize_d1_trigger_levels(values: Any, side: Any = "") -> list[dict[str, 
     return trigger_levels
 
 
+def _normalize_bucket_upgrade_events(values: Any, side: Any = "") -> list[dict[str, Any]]:
+    if isinstance(values, dict):
+        raw_values = values.values()
+    elif isinstance(values, (list, tuple)):
+        raw_values = values
+    else:
+        raw_values = []
+
+    normalized_side = _normalize_side(side)
+    events: list[dict[str, Any]] = []
+    seen = set()
+    for raw_entry in raw_values:
+        if not isinstance(raw_entry, dict):
+            continue
+        symbol = str(raw_entry.get("symbol") or "").strip().upper()
+        event_side = _normalize_side(raw_entry.get("side") or normalized_side)
+        if not event_side:
+            continue
+        current_bucket = str(raw_entry.get("priority_bucket") or raw_entry.get("bucket") or "").strip().lower()
+        previous_bucket = str(raw_entry.get("previous_bucket") or "").strip().lower()
+        event_type = str(raw_entry.get("event_type") or "bucket_upgrade").strip().lower()
+        key = (symbol, event_side, event_type, previous_bucket, current_bucket)
+        if key in seen:
+            continue
+        seen.add(key)
+        label = str(raw_entry.get("label") or "").strip()
+        if not label:
+            bucket_label = current_bucket.replace("_", " ").strip().title() or "Bucket"
+            label = f"{bucket_label} upgrade"
+        reason = str(raw_entry.get("reason") or "").strip()
+        if not reason:
+            reason = f"{previous_bucket or 'missing'} -> {current_bucket or 'unbucketed'}"
+        events.append(
+            {
+                "symbol": symbol,
+                "side": event_side,
+                "event_type": event_type,
+                "label": label,
+                "reason": reason,
+                "source": str(raw_entry.get("source") or "bucket_upgrade").strip() or "bucket_upgrade",
+                "previous_bucket": previous_bucket,
+                "priority_bucket": current_bucket,
+                "bucket": current_bucket,
+                "priority_score": _coerce_float(raw_entry.get("priority_score")),
+                "setup_family": str(raw_entry.get("setup_family") or "").strip(),
+                "trade_date": str(raw_entry.get("trade_date") or raw_entry.get("last_trade_date") or "").strip(),
+                "bucket_upgrade": True,
+            }
+        )
+    return events
+
+
 def _empty_focus_groups(
     source: str = "none",
     source_label: str = "No focus output yet",
@@ -535,8 +587,21 @@ def load_master_avwap_d1_upgrade_alerts(
             entry.get("upgrade_targets"),
             entry.get("side"),
         )
-        if not upgrade_targets:
+        bucket_upgrade_events = _normalize_bucket_upgrade_events(
+            entry.get("bucket_upgrade_events") or entry.get("upgrade_events"),
+            entry.get("side"),
+        )
+        for event in bucket_upgrade_events:
+            event["symbol"] = event.get("symbol") or symbol
+            if not event.get("trade_date"):
+                event["trade_date"] = str(entry.get("last_trade_date") or run_date).strip()
+            if event.get("priority_score") is None:
+                event["priority_score"] = _coerce_float(entry.get("priority_score"))
+            if not event.get("setup_family"):
+                event["setup_family"] = str(entry.get("setup_family") or "").strip()
+        if not upgrade_targets and not bucket_upgrade_events:
             continue
+        reason_summary = "D1 bucket upgrade" if bucket_upgrade_events else "A/S upgrade target"
         alerts[symbol] = {
             "symbol": symbol,
             "side": _normalize_side(entry.get("side")),
@@ -550,10 +615,11 @@ def load_master_avwap_d1_upgrade_alerts(
             "setup_family": str(entry.get("setup_family") or "").strip(),
             "favorite_zone": str(entry.get("favorite_zone") or "").strip(),
             "current_band_zone": str(entry.get("current_band_zone") or "").strip(),
-            "watch_reasons": ["a_s_upgrade_target"],
-            "reason_summary": "A/S upgrade target",
+            "watch_reasons": ["bucket_upgrade"] if bucket_upgrade_events else ["a_s_upgrade_target"],
+            "reason_summary": reason_summary,
             "upgrade_targets": upgrade_targets,
             "trigger_levels": [dict(item) for item in upgrade_targets],
+            "bucket_upgrade_events": bucket_upgrade_events,
             "upgrade_summary": str(entry.get("upgrade_summary") or "").strip(),
             "watchlist_generated_at": generated_at,
             "watchlist_run_date": run_date,
@@ -643,6 +709,52 @@ def _add_d1_flag_event(
     if extra:
         event_payload.update(extra)
     events.append(event_payload)
+
+
+def _add_bucket_upgrade_d1_flags(
+    events: list[dict[str, Any]],
+    seen: set[tuple[Any, ...]],
+    symbol: str,
+    entry: dict[str, Any],
+) -> None:
+    fallback_side = entry.get("side")
+    fallback_score = _coerce_float(entry.get("priority_score"))
+    fallback_trade_date = entry.get("last_trade_date") or entry.get("last_seen")
+    for upgrade_event in entry.get("bucket_upgrade_events") or []:
+        if not isinstance(upgrade_event, dict):
+            continue
+        previous_bucket = str(upgrade_event.get("previous_bucket") or entry.get("previous_bucket") or "").strip().lower()
+        current_bucket = str(
+            upgrade_event.get("priority_bucket")
+            or upgrade_event.get("bucket")
+            or entry.get("priority_bucket")
+            or ""
+        ).strip().lower()
+        reason = str(upgrade_event.get("reason") or "").strip()
+        if not reason:
+            reason = f"{previous_bucket or 'missing'} -> {current_bucket or 'unbucketed'}"
+        _add_d1_flag_event(
+            events,
+            seen,
+            symbol=symbol,
+            side=upgrade_event.get("side") or fallback_side,
+            event_type=str(upgrade_event.get("event_type") or "bucket_upgrade").strip(),
+            label=str(upgrade_event.get("label") or "D1 bucket upgrade").strip(),
+            reason=reason,
+            sort_rank=5,
+            source="bucket_upgrade",
+            priority_score=(
+                _coerce_float(upgrade_event.get("priority_score"))
+                if upgrade_event.get("priority_score") is not None
+                else fallback_score
+            ),
+            trade_date=upgrade_event.get("trade_date") or fallback_trade_date,
+            extra={
+                "bucket_upgrade": True,
+                "previous_bucket": previous_bucket,
+                "priority_bucket": current_bucket,
+            },
+        )
 
 
 def _add_focus_like_d1_flags(
@@ -870,7 +982,10 @@ def build_master_avwap_d1_flag_events(
         _add_focus_like_d1_flags(d1_events, seen, symbol, entry, source="focus")
 
     for symbol, entry in (d1_upgrade_alerts or {}).items():
-        _add_focus_like_d1_flags(d1_events, seen, symbol, entry, source="upgrade_alerts")
+        if isinstance(entry, dict) and entry.get("bucket_upgrade_events"):
+            _add_bucket_upgrade_d1_flags(d1_events, seen, symbol, entry)
+        else:
+            _add_focus_like_d1_flags(d1_events, seen, symbol, entry, source="upgrade_alerts")
 
     for symbol, entry in (d1_watchlist or {}).items():
         _add_focus_like_d1_flags(d1_events, seen, symbol, entry, source="watchlist")

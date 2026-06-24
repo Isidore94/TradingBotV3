@@ -656,7 +656,7 @@ def append_alert_message(
         text_area.insert(tk.END, f"{timestamp} - ", prefix_tag)
         prefix_inserted = True
 
-    if display_msg.startswith("MASTER_AVWAP_D1_FLAG:"):
+    if display_msg.startswith("MASTER_AVWAP_D1"):
         insert_prefix(tag)
         text_area.insert(tk.END, f"{display_msg}\n", tag)
     elif display_msg.startswith("MASTER_AVWAP_FAVORITE_BOUNCE:"):

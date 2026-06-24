@@ -1549,6 +1549,7 @@ def run_master(
         report_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
         priority_rows=priority_rows,
         ai_state=ai_state,
+        bucket_upgrades=bucket_upgrades,
     )
     existing_d1_watchlist_payload = load_json(MASTER_AVWAP_D1_WATCHLIST_FILE, default={})
     if not isinstance(existing_d1_watchlist_payload, dict):
