@@ -47,7 +47,7 @@ class TradingDeskPanel(QWidget):
             self.watchlists_panel,
             self.focus_picks_panel,
         )
-        self.bounce_panel = BouncePanel()
+        self.bounce_panel = BouncePanel(self.focus_service)
         self._mode_widget: QWidget | None = None
 
         self.master_panel.statusChanged.connect(self.statusChanged)

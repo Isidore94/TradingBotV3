@@ -50,12 +50,23 @@ class RrsSnapshotWidget(QWidget):
         layout.addWidget(self.board, 1)
         self.board.setHtml(_empty_html())
 
+    _focus_service = None
+
+    def set_focus_service(self, service) -> None:
+        self._focus_service = service
+
+    def _focus_map(self) -> dict[str, set]:
+        if self._focus_service is None:
+            return {"long": set(), "short": set()}
+        focus = self._focus_service.all_focus()
+        return {"long": set(focus.get("long", [])), "short": set(focus.get("short", []))}
+
     def update_snapshot(self, payload: Any) -> None:
         self._payload = payload if isinstance(payload, dict) else {}
         env = self._payload.get("market_environment_label") or self._payload.get("market_environment") or "Environment"
         self.env_label.setText(str(env))
         self.meta_label.setText(self._meta_text())
-        self.board.setHtml(_board_html(self._payload))
+        self.board.setHtml(_board_html(self._payload, self._focus_map()))
 
     def _copy_side(self, side: str) -> None:
         symbols: list[str] = []
@@ -79,10 +90,11 @@ class RrsSnapshotWidget(QWidget):
         return f"Timeframe {timeframe} - Threshold {threshold_text} - Updated {_stamp(self._payload.get('timestamp'))}"
 
 
-def _board_html(payload: dict[str, Any]) -> str:
+def _board_html(payload: dict[str, Any], focus: dict[str, set] | None = None) -> str:
     if not payload:
         return _empty_html()
 
+    focus = focus or {"long": set(), "short": set()}
     body_c = theme.color("text_primary")
     head_c = theme.color("text_secondary")
     border_c = theme.color("border")
@@ -93,7 +105,7 @@ def _board_html(payload: dict[str, Any]) -> str:
     ]
     parts.append("<table width='100%' cellspacing='0' cellpadding='0'><tr>")
     for scope in _SCOPES:
-        parts.append(f"<td valign='top' width='33%' style='padding-right:8px'>{_scope_html(payload, scope)}</td>")
+        parts.append(f"<td valign='top' width='33%' style='padding-right:8px'>{_scope_html(payload, scope, focus)}</td>")
     parts.append("</tr></table>")
     parts.append(f"<div style='height:8px; border-bottom:1px solid {border_c}'></div>")
     parts.append(_group_strength_html(payload))
@@ -103,7 +115,8 @@ def _board_html(payload: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _scope_html(payload: dict[str, Any], scope: str) -> str:
+def _scope_html(payload: dict[str, Any], scope: str, focus: dict[str, set] | None = None) -> str:
+    focus = focus or {"long": set(), "short": set()}
     rows = rrs_rows(payload, scope)
     strong = sorted((row for row in rows if row.side == "RS"), key=lambda row: -row.rrs)[:8]
     weak = sorted((row for row in rows if row.side == "RW"), key=lambda row: row.rrs)[:8]
@@ -124,9 +137,9 @@ def _scope_html(payload: dict[str, Any], scope: str) -> str:
         rs = strong[index] if index < len(strong) else None
         rw = weak[index] if index < len(weak) else None
         parts.append("<tr>")
-        parts.append(_symbol_cell(rs.symbol if rs else "", long_c))
+        parts.append(_symbol_cell(rs.symbol if rs else "", long_c, focus_aligned=bool(rs and rs.symbol in focus["long"])))
         parts.append(_number_cell(rs.rrs if rs else None, long_c))
-        parts.append(_symbol_cell(rw.symbol if rw else "", short_c, left_pad=True))
+        parts.append(_symbol_cell(rw.symbol if rw else "", short_c, left_pad=True, focus_aligned=bool(rw and rw.symbol in focus["short"])))
         parts.append(_number_cell(rw.rrs if rw else None, short_c))
         parts.append("</tr>")
     parts.append("</table>")
@@ -200,9 +213,10 @@ def _empty_html() -> str:
     )
 
 
-def _symbol_cell(value: str, color: str, *, left_pad: bool = False) -> str:
+def _symbol_cell(value: str, color: str, *, left_pad: bool = False, focus_aligned: bool = False) -> str:
     padding = "padding-left:10px;" if left_pad else ""
-    return f"<td style='color:{color}; {padding} font-weight:600'>{_esc(value)}</td>"
+    marker = f"<span style='color:{theme.color('favorite')}'>&#9733;</span> " if (focus_aligned and value) else ""
+    return f"<td style='color:{color}; {padding} font-weight:600'>{marker}{_esc(value)}</td>"
 
 
 def _number_cell(value: float | None, color: str) -> str:

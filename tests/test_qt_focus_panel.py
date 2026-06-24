@@ -102,3 +102,29 @@ def test_master_panel_add_to_focus_routes_by_side(tmp_path):
     # delegate marker lookup reflects focus membership
     assert panel.delegate._is_focus(_row("NVDA", "LONG")) is True
     assert panel.delegate._is_focus(_row("XYZ", "LONG")) is False
+
+
+def test_alert_feed_item_focus_highlight():
+    from ui.models.bounce import BounceAlert
+    from ui.widgets.alert_feed_item import AlertFeedItem
+
+    alert = BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim")
+    focus_item = AlertFeedItem(alert, is_focus=True)
+    plain_item = AlertFeedItem(alert, is_focus=False)
+    assert "border-left" in focus_item.styleSheet()  # gold stripe for focus names
+    assert plain_item.styleSheet() == ""
+
+
+def test_rrs_board_marks_focus_aligned_only():
+    from ui.widgets import rrs_snapshot
+
+    payload = {"threshold": 1.0, "results": [("RS", "NVDA", 3.0, 1.0), ("RW", "TSLA", -3.0, 1.0)]}
+    star = "&#9733;"
+
+    # focus long shown as RS + focus short shown as RW -> both flagged
+    aligned = rrs_snapshot._scope_html(payload, "SPY", {"long": {"NVDA"}, "short": {"TSLA"}})
+    assert aligned.count(star) == 2
+    # no focus -> no markers
+    assert star not in rrs_snapshot._scope_html(payload, "SPY", {"long": set(), "short": set()})
+    # misaligned (focus long that shows as RW) -> NOT flagged
+    assert star not in rrs_snapshot._scope_html(payload, "SPY", {"long": {"TSLA"}, "short": set()})

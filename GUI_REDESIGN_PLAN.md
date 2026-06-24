@@ -322,8 +322,18 @@ storage/services.
    row's side (LONG→Focus Longs, SHORT→Focus Shorts). `SetupTableDelegate` draws a
    gold ★ in the Symbol cell for focus names (`set_focus_lookup`), and repaints on
    `focusChanged`. Tests in `tests/test_qt_focus_panel.py`.
-4. **BounceBot reorder + focus alerting.** Panel reorder (GUI) + engine always-on
-   focus emit (`bounce_bot_lib`) + alert highlight + RRS focus flags.
+4. **BounceBot reorder + focus alerting.**
+   - **[DONE] 4a (GUI):** Recent Bounce Alerts is now leftmost (Recent Bounce Alerts
+     | D1 Focus Alerts | RRS). Focus bounce alerts get a gold ★ FOCUS badge + left
+     stripe (`AlertFeedItem(is_focus=...)`, cross-referenced client-side against the
+     `FocusService`). RRS board stars focus-**aligned** names (focus long shown as
+     RS / focus short shown as RW) via `RrsSnapshotWidget.set_focus_service`.
+     `FocusService` injected into `BouncePanel`. Tests in `test_qt_focus_panel.py`.
+   - **4b (engine, pending):** in `bounce_bot_lib`, emit a focus symbol's
+     **direction-matching** bounce regardless of the per-type enable toggles (reuse
+     the `include_disabled_bounce_types` path used by
+     `_emit_master_avwap_focus_bounce_alert`), scoped by side. Tag the callback
+     payload `feedback.is_focus_pick` / `focus_side`. (Riskier; needs IB to verify.)
 5. **D1 Focus Alerts.** `master_avwap_bucket_state.json` + transition gate in
    `run_master`; constrain the existing D1 upgrade payload; retarget the D1 panel.
 6. **Daily snapshot + forward-return tracking (engine) + Market Prep view (GUI).**

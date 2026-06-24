@@ -49,9 +49,10 @@ BOUNCE_TOGGLE_ORDER = [
 class BouncePanel(QFrame):
     statusChanged = Signal(str)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, focus_service=None, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+        self.focus_service = focus_service
         self.service = BounceService(self)
         self.config = load_bounce_config()
         self._alert_count = 0
@@ -108,6 +109,8 @@ class BouncePanel(QFrame):
         self.d1_layout.addStretch(1)
 
         self.rrs_snapshot = RrsSnapshotWidget()
+        if self.focus_service is not None:
+            self.rrs_snapshot.set_focus_service(self.focus_service)
 
         self._build_layout()
         self._wire_service()
@@ -164,10 +167,10 @@ class BouncePanel(QFrame):
         d1_scroll.setWidget(self.d1_container)
 
         split = QSplitter()
-        split.addWidget(_framed_panel("Relative Strength Board (RRS)", self.rrs_snapshot))
-        split.addWidget(_framed_panel("D1 Focus Alerts", d1_scroll))
         split.addWidget(_framed_panel("Recent Bounce Alerts", feed_scroll))
-        split.setSizes([820, 420, 260])
+        split.addWidget(_framed_panel("D1 Focus Alerts", d1_scroll))
+        split.addWidget(_framed_panel("Relative Strength Board (RRS)", self.rrs_snapshot))
+        split.setSizes([560, 300, 440])
 
         self.filter_panel = self._build_filter_panel()
         self.filter_panel.setVisible(False)
@@ -261,7 +264,8 @@ class BouncePanel(QFrame):
         if alert.is_d1 and not _is_actionable_d1_alert(alert):
             return
         target_layout = self.d1_layout if alert.is_d1 else self.feed_layout
-        target_layout.insertWidget(0, AlertFeedItem(alert))
+        is_focus = bool(self.focus_service and alert.symbol and self.focus_service.is_focus(alert.symbol))
+        target_layout.insertWidget(0, AlertFeedItem(alert, is_focus=is_focus))
         if alert.is_d1:
             self._d1_count += 1
             _trim_feed(target_layout, self._max_feed_items)
