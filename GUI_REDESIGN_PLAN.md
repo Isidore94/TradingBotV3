@@ -329,11 +329,14 @@ storage/services.
      `FocusService`). RRS board stars focus-**aligned** names (focus long shown as
      RS / focus short shown as RW) via `RrsSnapshotWidget.set_focus_service`.
      `FocusService` injected into `BouncePanel`. Tests in `test_qt_focus_panel.py`.
-   - **4b (engine, pending):** in `bounce_bot_lib`, emit a focus symbol's
+   - **[DONE] 4b (engine):** in `bounce_bot_lib`, emit a focus symbol's
      **direction-matching** bounce regardless of the per-type enable toggles (reuse
      the `include_disabled_bounce_types` path used by
-     `_emit_master_avwap_focus_bounce_alert`), scoped by side. Tag the callback
-     payload `feedback.is_focus_pick` / `focus_side`. (Riskier; needs IB to verify.)
+     `_emit_master_avwap_focus_bounce_alert`), scoped by side. Human focus picks
+     are reloaded from `focus_longs.txt` / `focus_shorts.txt` each cycle, scanned
+     in the prioritized monitored set, and matching-side bounce evaluation bypasses
+     the visible per-type filters while opposite-side bounces stay normal. Callback
+     payloads are tagged `feedback.is_focus_pick` / `focus_side`.
 5. **D1 Focus Alerts.**
    - **[DONE] 5a (engine):** `scripts/master_avwap_bucket_state.py` (pure, tested) —
      `is_bucket_upgrade` transition rule, `load/save_bucket_state`,
@@ -371,8 +374,7 @@ storage/services.
    `analyze_sma_breakout_setup` tests confirm EMA15 retest tracking and
    confirmation transitions.
 9. **[DONE] Keep this doc current:** completed bullets were marked as they merged;
-   remaining deferred work stays visible (notably Step 4b engine focus-bounce
-   alerting).
+   no numbered implementation steps remain open in this plan.
 
 ---
 

@@ -66,6 +66,7 @@ from master_avwap_shared import (
     load_master_avwap_focus_map,
     normalize_master_avwap_event_row,
 )
+from focus_picks import load_focus_map
 from project_paths import (
     DATA_DIR,
     LOG_DIR,
@@ -428,7 +429,7 @@ PREV_DAY_LEVEL_MIN_PRIOR_BARS = 4
 PREV_DAY_LEVEL_RESPECT_RATIO = 0.85
 PREV_DAY_LEVEL_MAX_WRONG_SIDE_CLOSES = 1
 PREV_DAY_LEVEL_RECENT_RESPECT_BARS = 6
-BOUNCE_LEARNING_SCHEMA_VERSION = 3
+BOUNCE_LEARNING_SCHEMA_VERSION = 4
 BOUNCE_OUTCOME_MILESTONE_BARS = (1, 3, 6, 12)
 BOUNCE_EOD_FINALIZE_GRACE_MINUTES = 10
 BOUNCE_PERFORMANCE_MIN_SAMPLES = 5
@@ -461,6 +462,8 @@ BOUNCE_CANDIDATE_EVENT_COLUMNS = [
     "sector_etf",
     "industry_etf",
     "market_environment",
+    "human_focus_pick",
+    "human_focus_side",
     "master_avwap_focus_label",
     "master_avwap_priority_bucket",
     "master_avwap_setup_family",
@@ -1787,6 +1790,7 @@ class BounceBot(EWrapper, EClient):
         self._master_avwap_events_cache_key = None
         self.emitted_master_avwap_events = set()
         self.master_avwap_focus_map = {}
+        self.human_focus_map = {"long": set(), "short": set()}
         self.master_avwap_second_stdev_cross_map = {}
         self.master_avwap_d1_upgrade_alerts = {}
         self.master_avwap_d1_watchlist = {}
@@ -2129,6 +2133,8 @@ class BounceBot(EWrapper, EClient):
         focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
         focus_label = self._describe_master_avwap_focus(focus_entry) if isinstance(focus_entry, dict) else ""
         swing_traits = self._master_avwap_swing_trait_tags(focus_entry)
+        human_focus_side = self._human_focus_side_for_symbol(symbol, direction=direction)
+        human_focus_pick = bool(human_focus_side in {"LONG", "SHORT"})
         level_names = {str(key) for key in (levels or {}).keys()}
         master_avwap_h1_focus_type = ""
         if bool(level_names & {"h1_ema_15", "h1_sma_20"}):
@@ -2164,6 +2170,8 @@ class BounceBot(EWrapper, EClient):
             "sector_etf": context.get("sector_etf", ""),
             "industry_etf": context.get("industry_etf", ""),
             "market_environment": context.get("market_environment", ""),
+            "human_focus_pick": bool(human_focus_pick),
+            "human_focus_side": human_focus_side if human_focus_pick else "",
             "master_avwap_focus_label": focus_label,
             "master_avwap_priority_bucket": (
                 str(focus_entry.get("priority_bucket") or "").strip()
@@ -2204,6 +2212,8 @@ class BounceBot(EWrapper, EClient):
             "candle_json": row.get("candle_json", ""),
             "metrics_json": row.get("metrics_json", ""),
             "context_json": row.get("context_json", ""),
+            "is_focus_pick": bool(row.get("human_focus_pick")),
+            "focus_side": str(row.get("human_focus_side") or "").strip().upper(),
         }
         return {
             "kind": "bounce_alert",
@@ -2695,6 +2705,73 @@ class BounceBot(EWrapper, EClient):
             focus_path=MASTER_AVWAP_FOCUS_FILENAME,
         )
 
+    def load_human_focus_picks(self):
+        try:
+            focus = load_focus_map()
+        except Exception as exc:
+            logging.debug(f"Failed loading human focus picks: {exc}")
+            focus = {}
+        self.human_focus_map = {
+            "long": {
+                str(item or "").strip().upper()
+                for item in (focus.get("long") or set())
+                if str(item or "").strip()
+            },
+            "short": {
+                str(item or "").strip().upper()
+                for item in (focus.get("short") or set())
+                if str(item or "").strip()
+            },
+        }
+
+    def _human_focus_sets(self):
+        focus = getattr(self, "human_focus_map", {}) or {}
+        return {
+            "long": {
+                str(item or "").strip().upper()
+                for item in (focus.get("long") or set())
+                if str(item or "").strip()
+            },
+            "short": {
+                str(item or "").strip().upper()
+                for item in (focus.get("short") or set())
+                if str(item or "").strip()
+            },
+        }
+
+    def _human_focus_symbols(self):
+        focus = self._human_focus_sets()
+        return set(focus["long"]) | set(focus["short"])
+
+    def _human_focus_side_for_symbol(self, symbol, direction=None):
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return ""
+        focus = self._human_focus_sets()
+        direction = str(direction or "").strip().lower()
+        in_long = symbol in focus["long"]
+        in_short = symbol in focus["short"]
+        if direction == "long":
+            return "LONG" if in_long else ""
+        if direction == "short":
+            return "SHORT" if in_short else ""
+        if in_long and not in_short:
+            return "LONG"
+        if in_short and not in_long:
+            return "SHORT"
+        if in_long and in_short:
+            return "BOTH"
+        return ""
+
+    def _is_human_focus_bounce(self, symbol, direction):
+        side = self._human_focus_side_for_symbol(symbol, direction=direction)
+        return (direction == "long" and side == "LONG") or (direction == "short" and side == "SHORT")
+
+    def _bounce_eval_filter_options_for_symbol(self, symbol, direction, allowed_bounce_types):
+        if self._is_human_focus_bounce(symbol, direction):
+            return None, True
+        return allowed_bounce_types, False
+
     def load_master_avwap_d1_watchlist(self):
         self.master_avwap_d1_watchlist = load_master_avwap_d1_watchlist_map(
             watchlist_path=MASTER_AVWAP_D1_WATCHLIST_FILENAME,
@@ -2714,6 +2791,11 @@ class BounceBot(EWrapper, EClient):
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return ""
+        human_focus_side = self._human_focus_side_for_symbol(symbol)
+        if human_focus_side == "LONG":
+            return "long"
+        if human_focus_side == "SHORT":
+            return "short"
         long_symbols = {str(item or "").strip().upper() for item in self.longs}
         short_symbols = {str(item or "").strip().upper() for item in self.shorts}
         if symbol in long_symbols:
@@ -2749,7 +2831,7 @@ class BounceBot(EWrapper, EClient):
             for item in (self.longs + self.shorts)
             if str(item or "").strip()
         }
-        return base_symbols | set(self.get_master_avwap_d1_watch_symbols())
+        return base_symbols | set(self.get_master_avwap_d1_watch_symbols()) | self._human_focus_symbols()
 
     def _master_avwap_trigger_float(self, value):
         try:
@@ -4965,6 +5047,7 @@ class BounceBot(EWrapper, EClient):
         symbols = set()
         for entries in self.latest_scan_extremes.values():
             symbols.update(item[0] for item in entries)
+        symbols.update(self._human_focus_symbols())
         for symbol, entry in self.master_avwap_focus_map.items():
             if not isinstance(entry, dict):
                 continue
@@ -6578,8 +6661,20 @@ class BounceBot(EWrapper, EClient):
             self.log_symbol(symbol, msg)
 
 
-        # Continue with evaluating bounce candidates
-        candidate_info = self.evaluate_bounce_candidate(symbol, df, allowed_bounce_types=allowed_bounce_types)
+        # Continue with evaluating bounce candidates. Human focus picks get
+        # side-matching always-on alerts, so their candidate detection bypasses
+        # the visible per-type toggles while normal symbols keep those filters.
+        effective_allowed_types, include_disabled_for_focus = self._bounce_eval_filter_options_for_symbol(
+            symbol,
+            direction,
+            allowed_bounce_types,
+        )
+        candidate_info = self.evaluate_bounce_candidate(
+            symbol,
+            df,
+            allowed_bounce_types=effective_allowed_types,
+            include_disabled_bounce_types=include_disabled_for_focus,
+        )
         learning_candidate_info = self.evaluate_bounce_candidate(
             symbol,
             df,
@@ -7013,6 +7108,7 @@ class BounceBot(EWrapper, EClient):
                 self.longs = read_tickers(LONGS_FILENAME)
                 self.shorts = read_tickers(SHORTS_FILENAME)
                 self.load_master_avwap_focus()
+                self.load_human_focus_picks()
                 self.load_master_avwap_d1_watchlist()
                 self.load_master_avwap_d1_upgrade_alerts()
                 self.update_watchlists_from_master_avwap()

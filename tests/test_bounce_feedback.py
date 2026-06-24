@@ -717,6 +717,60 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertIn("family:top_pattern", tags)
         self.assertNotIn("post_earnings_active", tags)
 
+    def test_human_focus_bounce_policy_bypasses_disabled_types_for_matching_side(self):
+        bot = object.__new__(bounce_bot.BounceBot)
+        bot.human_focus_map = {"long": {"AAPL"}, "short": {"TSLA"}}
+        enabled_types = {"ema_8", "vwap"}
+
+        allowed_types, include_disabled = bot._bounce_eval_filter_options_for_symbol(
+            "AAPL",
+            "long",
+            enabled_types,
+        )
+        self.assertIsNone(allowed_types)
+        self.assertTrue(include_disabled)
+
+        allowed_types, include_disabled = bot._bounce_eval_filter_options_for_symbol(
+            "AAPL",
+            "short",
+            enabled_types,
+        )
+        self.assertEqual(allowed_types, enabled_types)
+        self.assertFalse(include_disabled)
+
+    def test_human_focus_symbols_are_scanned_and_set_direction(self):
+        bot = object.__new__(bounce_bot.BounceBot)
+        bot.longs = []
+        bot.shorts = []
+        bot.master_avwap_d1_watchlist = {}
+        bot.master_avwap_d1_upgrade_alerts = {}
+        bot.master_avwap_focus_map = {}
+        bot.latest_scan_extremes = {}
+        bot.human_focus_map = {"long": {"AAPL"}, "short": {"TSLA"}}
+
+        self.assertEqual(bot.get_symbol_direction("AAPL"), "long")
+        self.assertEqual(bot.get_symbol_direction("TSLA"), "short")
+        self.assertIn("AAPL", bot.get_scan_symbol_set())
+        self.assertIn("TSLA", bot.get_scan_symbol_set())
+        self.assertIn("AAPL", bot.get_monitored_extreme_symbols())
+        self.assertIn("TSLA", bot.get_monitored_extreme_symbols())
+
+    def test_human_focus_bounce_feedback_payload_is_tagged(self):
+        bot = object.__new__(bounce_bot.BounceBot)
+        payload = bot._build_bounce_feedback_alert_payload(
+            "AAPL: Bounce confirmed (long) from ['ema_15']",
+            {
+                "symbol": "AAPL",
+                "direction": "long",
+                "bounce_types": "ema_15",
+                "human_focus_pick": True,
+                "human_focus_side": "LONG",
+            },
+        )
+
+        self.assertTrue(payload["feedback"]["is_focus_pick"])
+        self.assertEqual(payload["feedback"]["focus_side"], "LONG")
+
     def test_pending_bounce_does_not_finalize_before_eod_even_if_stop_or_target_seen(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             outcomes_path = Path(temp_dir) / "intraday_bounce_outcomes.csv"
