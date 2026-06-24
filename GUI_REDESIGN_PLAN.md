@@ -308,8 +308,14 @@ storage/services.
    never deletes an independently maintained broad-list symbol). Tests:
    `tests/test_focus_picks.py` (10, green). *Note: autosave/Qt `focusChanged` signal
    arrives with the GUI wrapper in Step 2.*
-2. **Focus Picks tab (GUI).** `FocusPicksPanel` + `symbol_chip` widget; wire into
-   `MasterAvwapWorkspace` after Setups; inject the shared `FocusPickStore`.
+2. **[DONE]** **Focus Picks tab (GUI).** `ui/services/focus_service.py::FocusService`
+   (Qt adapter over the store; `focusChanged` signal + autosave-on-edit),
+   `ui/widgets/flow_layout.py` (wrapping chip layout), `ui/widgets/symbol_chip.py`
+   (ticker chip w/ × remove, side-toned), `ui/panels/focus_picks_panel.py`
+   (Focus Longs | Focus Shorts editors: add/paste/copy/clear-all, chip flow).
+   Wired into `MasterAvwapWorkspace` as the tab right after Setups; `FocusService`
+   created in `TradingDeskPanel` and injected. Tests: `tests/test_qt_focus_panel.py`
+   (3). *Per-symbol live RRS/bounce state column arrives with Step 4.*
 3. **Master AVWAP Add-to-Focus + table marker (GUI).** Row action + delegate star;
    `is_focus_pick` plumbing.
 4. **BounceBot reorder + focus alerting.** Panel reorder (GUI) + engine always-on
