@@ -22,6 +22,20 @@ class SetupTableDelegate(QStyledItemDelegate):
     All colors come from the active theme tokens so light/dark both look right.
     """
 
+    _focus_lookup = None
+
+    def set_focus_lookup(self, lookup) -> None:
+        """`lookup(symbol) -> bool` flags Focus Picks with a star in the Symbol cell."""
+        self._focus_lookup = lookup
+
+    def _is_focus(self, row) -> bool:
+        if self._focus_lookup is None or not isinstance(row, SetupRow) or not row.symbol:
+            return False
+        try:
+            return bool(self._focus_lookup(row.symbol))
+        except Exception:
+            return False
+
     def sizeHint(self, option, index):  # noqa: N802 (Qt override)
         size = super().sizeHint(option, index)
         return QSize(size.width(), max(size.height(), _ROW_HEIGHT))
@@ -65,6 +79,14 @@ class SetupTableDelegate(QStyledItemDelegate):
             self._score(painter, option, rect, row.score, selected)
         else:
             self._text(painter, option, rect, index, key, is_study, selected)
+
+        if key == "symbol" and self._is_focus(row):
+            painter.setPen(QColor(theme.color("favorite")))
+            painter.drawText(
+                QRect(rect.right() - 16, rect.top(), 14, rect.height()),
+                int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter),
+                "★",  # star marks a Focus Pick
+            )
 
         painter.restore()
 

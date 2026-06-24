@@ -316,8 +316,12 @@ storage/services.
    Wired into `MasterAvwapWorkspace` as the tab right after Setups; `FocusService`
    created in `TradingDeskPanel` and injected. Tests: `tests/test_qt_focus_panel.py`
    (3). *Per-symbol live RRS/bounce state column arrives with Step 4.*
-3. **Master AVWAP Add-to-Focus + table marker (GUI).** Row action + delegate star;
-   `is_focus_pick` plumbing.
+3. **[DONE]** **Master AVWAP Add-to-Focus + table marker (GUI).** `DataTable` gained
+   per-row context-menu actions (`add_row_action`); `MasterAvwapPanel` (now takes
+   the injected `FocusService`) adds **"Add to Focus Picks"** which routes by the
+   row's side (LONG→Focus Longs, SHORT→Focus Shorts). `SetupTableDelegate` draws a
+   gold ★ in the Symbol cell for focus names (`set_focus_lookup`), and repaints on
+   `focusChanged`. Tests in `tests/test_qt_focus_panel.py`.
 4. **BounceBot reorder + focus alerting.** Panel reorder (GUI) + engine always-on
    focus emit (`bounce_bot_lib`) + alert highlight + RRS focus flags.
 5. **D1 Focus Alerts.** `master_avwap_bucket_state.json` + transition gate in

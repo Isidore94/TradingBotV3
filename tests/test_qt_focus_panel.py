@@ -67,3 +67,38 @@ def test_focus_panel_sides_are_independent(tmp_path):
     assert panel.service.focus_symbols("short") == ["TSLA"]
     assert panel.long_editor.chip_flow.count() == 1
     assert panel.short_editor.chip_flow.count() == 1
+
+
+def _row(symbol, side, **kwargs):
+    from ui.models.setup import SetupRow
+
+    return SetupRow(symbol=symbol, side=side, **kwargs)
+
+
+def test_master_panel_add_to_focus_routes_by_side(tmp_path):
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+    service = _service(tmp_path)
+    panel = MasterAvwapPanel(service)
+    panel.set_rows(
+        [
+            _row("NVDA", "LONG", score=90.0, bucket="favorite_setup"),
+            _row("TSLA", "SHORT", score=80.0, bucket="favorite_setup"),
+        ]
+    )
+
+    def proxy_index(symbol):
+        for proxy_row in range(panel.proxy.rowCount()):
+            index = panel.proxy.index(proxy_row, 0)
+            if index.data() == symbol:
+                return index
+        raise AssertionError(f"{symbol} not in table")
+
+    panel._add_row_to_focus(proxy_index("NVDA"))
+    panel._add_row_to_focus(proxy_index("TSLA"))
+
+    assert service.focus_symbols("long") == ["NVDA"]  # LONG row -> Focus Longs
+    assert service.focus_symbols("short") == ["TSLA"]  # SHORT row -> Focus Shorts
+    # delegate marker lookup reflects focus membership
+    assert panel.delegate._is_focus(_row("NVDA", "LONG")) is True
+    assert panel.delegate._is_focus(_row("XYZ", "LONG")) is False

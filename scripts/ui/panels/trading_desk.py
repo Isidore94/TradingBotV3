@@ -37,7 +37,7 @@ class TradingDeskPanel(QWidget):
         super().__init__(parent)
         self.workspace_mode = workspace_mode
         self.focus_service = FocusService()
-        self.master_panel = MasterAvwapPanel()
+        self.master_panel = MasterAvwapPanel(self.focus_service)
         self.theta_panel = ThetaPanel()
         self.watchlists_panel = WatchlistsPanel()
         self.focus_picks_panel = FocusPicksPanel(self.focus_service)

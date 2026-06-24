@@ -24,6 +24,13 @@ class DataTable(QTableView):
         copy_action.triggered.connect(self.copy_selection)
         self.addAction(copy_action)
 
+        # Extra per-row context-menu actions; each callback receives the clicked
+        # (proxy) QModelIndex. Used e.g. for "Add to Focus".
+        self._row_actions: list[tuple[str, object]] = []
+
+    def add_row_action(self, label: str, callback) -> None:
+        self._row_actions.append((label, callback))
+
     def fit_columns(self) -> None:
         self.resizeColumnsToContents()
         header = self.horizontalHeader()
@@ -48,6 +55,14 @@ class DataTable(QTableView):
 
     def _show_context_menu(self, point) -> None:
         menu = QMenu(self)
+        index = self.indexAt(point)
+        if self._row_actions and index.isValid():
+            for label, callback in self._row_actions:
+                action = menu.addAction(label)
+                action.triggered.connect(
+                    lambda _checked=False, cb=callback, idx=index: cb(idx)
+                )
+            menu.addSeparator()
         copy_action = menu.addAction("Copy Selection")
         copy_action.triggered.connect(self.copy_selection)
         menu.exec(self.viewport().mapToGlobal(point))

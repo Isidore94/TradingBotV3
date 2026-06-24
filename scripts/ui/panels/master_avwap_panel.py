@@ -37,8 +37,9 @@ class MasterAvwapPanel(QWidget):
     rowsChanged = Signal(int, int, int)
     statusChanged = Signal(str)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, focus_service=None, parent=None) -> None:
         super().__init__(parent)
+        self.focus_service = focus_service
         self.scan_service = ScanService(self)
         self.scan_service.started.connect(self._on_scan_started)
         self.scan_service.finished.connect(self._on_scan_finished)
@@ -56,9 +57,14 @@ class MasterAvwapPanel(QWidget):
 
         self.table = DataTable()
         self.table.setModel(self.proxy)
-        self.table.setItemDelegate(SetupTableDelegate(self.table))
+        self.delegate = SetupTableDelegate(self.table)
+        self.table.setItemDelegate(self.delegate)
         self.table.setShowGrid(False)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        if self.focus_service is not None:
+            self.delegate.set_focus_lookup(self.focus_service.is_focus)
+            self.table.add_row_action("Add to Focus Picks", self._add_row_to_focus)
+            self.focus_service.focusChanged.connect(lambda: self.table.viewport().update())
 
         self.empty_state = EmptyState(
             "Run a scan to see setups",
@@ -449,3 +455,20 @@ class MasterAvwapPanel(QWidget):
         row = self.model.row_at(source_index.row())
         if row is not None:
             self.setupSelected.emit(row)
+
+    def _add_row_to_focus(self, proxy_index) -> None:
+        if self.focus_service is None or not proxy_index.isValid():
+            return
+        row = self.model.row_at(self.proxy.mapToSource(proxy_index).row())
+        if row is None or row.side not in {"LONG", "SHORT"}:
+            message = "Add to Focus needs a LONG or SHORT row."
+        else:
+            side = "long" if row.side == "LONG" else "short"
+            added = self.focus_service.add(row.symbol, side)
+            message = (
+                f"Added {row.symbol} to Focus {side}s."
+                if added
+                else f"{row.symbol} already in Focus {side}s."
+            )
+        self.status_label.setText(message)
+        self.statusChanged.emit(message)
