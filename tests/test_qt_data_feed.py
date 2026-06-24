@@ -91,3 +91,27 @@ def test_priority_report_parser_reads_existing_ranked_lines(tmp_path):
     assert rows[0].side == "LONG"
     assert rows[0].bucket_label == "Favorite"
     assert rows[0].key_level == "VWAP to UPPER_1"
+
+
+def test_sma_track_bucket_is_first_class_setup_bucket(tmp_path):
+    from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
+    from ui.services.data_feed import load_setup_rows_from_priority_report
+
+    assert SetupRow(symbol="SMAT", bucket="sma_breakout_tracking").bucket_label == "SMA Track"
+    assert "SMA Track" in DEFAULT_SETUP_BUCKET_FILTER_LABELS
+    assert "Stdev Track" in DEFAULT_SETUP_BUCKET_FILTER_LABELS
+
+    report = tmp_path / "priority.txt"
+    report.write_text(
+        "Overall score rankings\n"
+        "----------------------\n"
+        "  1. SMAT   LONG  score=72.0  bucket=sma-track     family=sma breakout retest  zone=EMA_15\n",
+        encoding="utf-8",
+    )
+
+    rows = load_setup_rows_from_priority_report(report)
+
+    assert len(rows) == 1
+    assert rows[0].symbol == "SMAT"
+    assert rows[0].bucket == "sma_breakout_tracking"
+    assert rows[0].bucket_label == "SMA Track"

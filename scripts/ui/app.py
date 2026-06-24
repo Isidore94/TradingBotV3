@@ -195,7 +195,7 @@ class MainWindow(QMainWindow):
         self.setup_status.setText(f"Setups: {total} | Favorites: {favorites} | Near: {near}")
 
     def closeEvent(self, event) -> None:
-        for panel in (self.trading_panel, self.research_panel, self.settings_panel):
+        for panel in (self.trading_panel, self.journal_panel, self.research_panel, self.settings_panel):
             try:
                 panel.shutdown()
             except Exception:

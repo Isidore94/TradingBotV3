@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from project_paths import MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_PRIORITY_SETUPS_FILE
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
-from ui.models.setup import SetupRow
+from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
 from ui.services.data_feed import copy_symbols, load_latest_setup_rows
 from ui.services.scan_service import ScanService
@@ -404,11 +404,13 @@ class MasterAvwapPanel(QWidget):
 
     def _refresh_bucket_filter(self, rows: list[SetupRow]) -> None:
         current = self.bucket_input.currentText()
-        labels = sorted({row.bucket_label for row in rows if row.bucket_label})
+        labels = list(DEFAULT_SETUP_BUCKET_FILTER_LABELS)
+        extras = sorted({row.bucket_label for row in rows if row.bucket_label and row.bucket_label not in labels})
         self.bucket_input.blockSignals(True)
         self.bucket_input.clear()
         self.bucket_input.addItem("ALL")
         self.bucket_input.addItems(labels)
+        self.bucket_input.addItems(extras)
         index = self.bucket_input.findText(current)
         self.bucket_input.setCurrentIndex(index if index >= 0 else 0)
         self.bucket_input.blockSignals(False)

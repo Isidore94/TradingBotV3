@@ -51,3 +51,38 @@ def test_journal_trade_handles_missing_costs_and_tags():
     assert trade.net_pnl is None
     assert not trade.is_closed
     assert trade.tags == "AVWAP"  # falls back to auto-tag summary
+
+
+def test_journal_import_helpers_plan_recent_questrade_window():
+    from datetime import date
+
+    from ui.services.journal_import_helpers import recent_import_dates, summarize_import_results
+
+    assert recent_import_dates(3, today=date(2026, 6, 23)) == [
+        date(2026, 6, 21),
+        date(2026, 6, 22),
+        date(2026, 6, 23),
+    ]
+
+    summary = summarize_import_results(
+        [
+            {
+                "status": "OK",
+                "target_date": "2026-06-22",
+                "total_imported": 2,
+                "trade_count": 1,
+                "messages": ["Questrade 2", "IBKR skipped: disabled."],
+            },
+            {
+                "status": "OK",
+                "target_date": "2026-06-23",
+                "total_imported": 3,
+                "trade_count": 2,
+                "messages": ["Questrade 3", "IBKR skipped: disabled."],
+            },
+        ]
+    )
+
+    assert "5 execution(s)" in summary
+    assert "2 day(s)" in summary
+    assert "Grouped trades now: 2" in summary

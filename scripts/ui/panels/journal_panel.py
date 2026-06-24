@@ -10,15 +10,20 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from journal_importers import QUESTRADE_REFRESH_TOKEN_SETTING, QuestradeImporter
+from project_paths import get_local_setting, save_local_setting
 from ui.models.journal import JournalTrade
 from ui.models.journal_table_model import ROW_ROLE, JournalFilterProxyModel, JournalTableModel
 from ui.services import journal_feed
+from ui.services.journal_import_helpers import DEFAULT_QUESTRADE_PULL_DAYS
+from ui.services.journal_import_service import JournalImportService
 from ui.widgets.data_table import DataTable
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.kpi_tile import KpiTile
@@ -32,6 +37,10 @@ class JournalPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self._trades: list[JournalTrade] = []
+        self.import_service = JournalImportService(self)
+        self.import_service.started.connect(self._on_import_started)
+        self.import_service.finished.connect(self._on_import_finished)
+        self.import_service.failed.connect(self._on_import_failed)
 
         self.model = JournalTableModel()
         self.proxy = JournalFilterProxyModel(self)
@@ -64,6 +73,12 @@ class JournalPanel(QFrame):
         self.direction_input = QComboBox()
         self.direction_input.addItems(["ALL", "LONG", "SHORT"])
         self.direction_input.currentTextChanged.connect(self._apply_filters)
+
+        self.broker_sync_toggle = QPushButton("Broker sync >")
+        self.broker_sync_toggle.setCheckable(True)
+        self.broker_sync_toggle.toggled.connect(self._toggle_broker_sync)
+        self.broker_sync_body = self._build_broker_sync_body()
+        self.broker_sync_body.setVisible(False)
 
         self.trades_tile = KpiTile("Trades", "0")
         self.winrate_tile = KpiTile("Win Rate", "-")
@@ -121,10 +136,70 @@ class JournalPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         layout.addWidget(header)
+        layout.addWidget(self.broker_sync_toggle)
+        layout.addWidget(self.broker_sync_body)
         layout.addLayout(kpi_row)
         layout.addLayout(filter_row)
         layout.addLayout(body, 1)
         layout.addWidget(self.status_label)
+
+    def _build_broker_sync_body(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("InfoDrawer")
+
+        self.questrade_refresh_input = QLineEdit()
+        self.questrade_refresh_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.questrade_refresh_input.setPlaceholderText("Paste Questrade refresh token")
+        self.questrade_refresh_input.setText(str(get_local_setting(QUESTRADE_REFRESH_TOKEN_SETTING, "") or ""))
+
+        self.questrade_save_button = QPushButton("Save")
+        self.questrade_save_button.clicked.connect(self._save_questrade_refresh_token)
+        self.questrade_clear_button = QPushButton("Clear")
+        self.questrade_clear_button.clicked.connect(self._clear_questrade_refresh_token)
+
+        self.questrade_days_input = QSpinBox()
+        self.questrade_days_input.setRange(1, 31)
+        self.questrade_days_input.setValue(DEFAULT_QUESTRADE_PULL_DAYS)
+        self.questrade_days_input.setPrefix("Days ")
+
+        self.questrade_pull_button = QPushButton("Pull New Trades")
+        self.questrade_pull_button.setObjectName("PrimaryButton")
+        self.questrade_pull_button.clicked.connect(self._pull_new_questrade_trades)
+
+        self.questrade_status_label = QLabel("")
+        self.questrade_status_label.setObjectName("MutedLabel")
+        self.questrade_status_label.setWordWrap(True)
+
+        note = QLabel("Questrade rotates refresh tokens; paste the current token here when it changes.")
+        note.setObjectName("MutedLabel")
+        note.setWordWrap(True)
+
+        token_row = QHBoxLayout()
+        token_row.setContentsMargins(0, 0, 0, 0)
+        token_row.setSpacing(8)
+        token_row.addWidget(QLabel("Questrade refresh token"))
+        token_row.addWidget(self.questrade_refresh_input, 1)
+        token_row.addWidget(self.questrade_save_button)
+        token_row.addWidget(self.questrade_clear_button)
+
+        pull_row = QHBoxLayout()
+        pull_row.setContentsMargins(0, 0, 0, 0)
+        pull_row.setSpacing(8)
+        pull_row.addWidget(self.questrade_days_input)
+        pull_row.addWidget(self.questrade_pull_button)
+        pull_row.addStretch(1)
+
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+        layout.addWidget(SectionHeader("Broker Sync", "Questrade import settings and on-demand trade pull."))
+        layout.addLayout(token_row)
+        layout.addWidget(note)
+        layout.addLayout(pull_row)
+        layout.addWidget(self.questrade_status_label)
+
+        self._refresh_questrade_status()
+        return frame
 
     def _populate_filter_options(self) -> None:
         for combo, column in ((self.broker_input, "broker"), (self.account_input, "account_label")):
@@ -172,6 +247,69 @@ class JournalPanel(QFrame):
             QMessageBox.warning(self, "Journal Export Failed", str(exc))
             return
         self._set_status(f"Exported trades to {path}")
+
+    def shutdown(self) -> None:
+        self.import_service.shutdown()
+
+    def _toggle_broker_sync(self, visible: bool) -> None:
+        self.broker_sync_body.setVisible(visible)
+        self.broker_sync_toggle.setText("Broker sync v" if visible else "Broker sync >")
+        if visible:
+            self._refresh_questrade_status()
+
+    def _save_questrade_refresh_token(self) -> None:
+        save_local_setting(QUESTRADE_REFRESH_TOKEN_SETTING, self.questrade_refresh_input.text().strip())
+        self._refresh_questrade_status()
+        self._set_status("Saved Questrade refresh token.")
+
+    def _clear_questrade_refresh_token(self) -> None:
+        self.questrade_refresh_input.clear()
+        save_local_setting(QUESTRADE_REFRESH_TOKEN_SETTING, "")
+        self._refresh_questrade_status()
+        self._set_status("Cleared Questrade refresh token.")
+
+    def _pull_new_questrade_trades(self) -> None:
+        if self.import_service.running:
+            self._set_status("Questrade import is already running.")
+            return
+        self._save_questrade_refresh_token()
+        days = self.questrade_days_input.value()
+        if not self.import_service.pull_recent_questrade(days):
+            self._set_status("Questrade import is already running.")
+
+    def _refresh_questrade_status(self) -> None:
+        try:
+            lines = QuestradeImporter().status_lines()
+        except Exception as exc:  # pragma: no cover - defensive
+            lines = [f"Questrade status unavailable: {exc}"]
+        self.questrade_status_label.setText("\n".join(lines))
+
+    def _set_import_controls_enabled(self, enabled: bool) -> None:
+        self.questrade_refresh_input.setEnabled(enabled)
+        self.questrade_save_button.setEnabled(enabled)
+        self.questrade_clear_button.setEnabled(enabled)
+        self.questrade_days_input.setEnabled(enabled)
+        self.questrade_pull_button.setEnabled(enabled)
+
+    def _on_import_started(self, days: int) -> None:
+        self._set_import_controls_enabled(False)
+        self.questrade_pull_button.setText("Pulling...")
+        self._set_status(f"Pulling Questrade trades for the last {days} day(s)...")
+
+    def _on_import_finished(self, _summaries: list, message: str) -> None:
+        self._set_import_controls_enabled(True)
+        self.questrade_pull_button.setText("Pull New Trades")
+        self._refresh_questrade_status()
+        self._populate_filter_options()
+        self._reload()
+        self._set_status(message)
+
+    def _on_import_failed(self, message: str) -> None:
+        self._set_import_controls_enabled(True)
+        self.questrade_pull_button.setText("Pull New Trades")
+        self._refresh_questrade_status()
+        QMessageBox.warning(self, "Questrade Import Failed", message)
+        self._set_status("Questrade import failed.")
 
     def _apply_filters(self) -> None:
         self.proxy.set_filters(

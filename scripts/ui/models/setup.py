@@ -4,6 +4,31 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+SETUP_BUCKET_LABELS = {
+    "favorite_setup": "Favorite",
+    "near_favorite_zone": "Near",
+    "high_conviction": "High Conviction",
+    "post_earnings_play": "Post Earnings",
+    "sma_breakout_tracking": "SMA Track",
+    "stdev_retest_tracking": "Stdev Track",
+    "study_hv_level": "Study",
+    "study_htf_trend": "Study",
+    "study_relative_avwap": "Study",
+    "study_phase6": "Study",
+    "study": "Study",
+}
+
+DEFAULT_SETUP_BUCKET_FILTER_LABELS = (
+    "High Conviction",
+    "Favorite",
+    "Near",
+    "Post Earnings",
+    "SMA Track",
+    "Stdev Track",
+    "Study",
+)
+
+
 @dataclass
 class SetupRow:
     symbol: str
@@ -25,19 +50,10 @@ class SetupRow:
     @property
     def bucket_label(self) -> str:
         normalized = self.bucket.strip().lower()
-        return {
-            "favorite_setup": "Favorite",
-            "near_favorite_zone": "Near",
-            "high_conviction": "High Conviction",
-            "post_earnings_play": "Post Earnings",
-            "sma_breakout_tracking": "SMA Track",
-            "stdev_retest_tracking": "Stdev Track",
-            "study_hv_level": "Study",
-            "study_htf_trend": "Study",
-            "study_relative_avwap": "Study",
-            "study_phase6": "Study",
-            "study": "Study",
-        }.get(normalized, normalized.replace("_", " ").title() if normalized else "Unbucketed")
+        return SETUP_BUCKET_LABELS.get(
+            normalized,
+            normalized.replace("_", " ").title() if normalized else "Unbucketed",
+        )
 
     @property
     def tags_text(self) -> str:

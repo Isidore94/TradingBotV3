@@ -28,6 +28,7 @@ If you keep personal launcher files such as `run_python_script.ps1` or `run_mast
 
 ## Repository Layout
 - `TradingBotV3_GUI.cmd` - Windows launcher for the new PySide6 Trading Desk UI.
+- `launch_gui.py` - repo-root Python shim for the same Qt launcher.
 - `scripts/gui.py` - compatibility launcher. Defaults to the new PySide6 UI; use `--ui tk` for the legacy Tk UI.
 - `scripts/ui/` - new consumer desktop UI.
 - `scripts/master_avwap_lib/`, `scripts/bounce_bot_lib/` - trading engines and legacy compatibility modules.
@@ -59,6 +60,12 @@ These files should live in the selected home folder root. The app creates any mi
   Or launch through Python:
 
   ```powershell
+  .\.venv\Scripts\python.exe .\launch_gui.py
+  ```
+
+  The older direct entrypoint also works:
+
+  ```powershell
   .\.venv\Scripts\python.exe .\scripts\gui.py
   ```
 
@@ -68,10 +75,10 @@ These files should live in the selected home folder root. The app creates any mi
   .\TradingBotV3_GUI.cmd --theme dark
   ```
 
-  This is the target consumer UI. It currently includes the themed shell,
-  Trading Desk, Master AVWAP setup table, settings, and placeholders for the
-  remaining phased panels. You can also switch between Dark and Light from
-  the Settings page.
+  This is the target consumer UI. It includes the themed shell, Trading Desk,
+  Master AVWAP setup table, Focus Picks, BounceBot, Research, Journal, and
+  Settings panels. You can also switch between Dark and Light from the Settings
+  page.
 
 - Daily AVWAP/previous-AVWAP engine:
 

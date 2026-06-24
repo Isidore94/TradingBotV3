@@ -275,7 +275,7 @@ them. Decide with the owner; default to (a) clarify.
 
 ## 9. Folded-in smaller asks
 
-- **Journal — Questrade (UI only).** Add to `ui/panels/journal_panel.py`: a
+- **[DONE] Journal — Questrade (UI only).** Add to `ui/panels/journal_panel.py`: a
   collapsible "Broker sync" area with a **Questrade refresh-token** field (note:
   Questrade rotates the refresh token, so the user re-pastes it ~weekly) saved via
   `save_local_setting(QUESTRADE_REFRESH_TOKEN_SETTING, ...)`, and a **Pull new
@@ -283,9 +283,9 @@ them. Decide with the owner; default to (a) clarify.
   recent window on a worker thread (reuse the `ScanService`/`WarmingService`
   threading pattern), then refreshes the trade table. Backend already exists
   (`QuestradeImporter`).
-- **Launcher.** Commit `TradingBotV3_GUI.cmd` and document it in the README;
+- **[DONE] Launcher.** Commit `TradingBotV3_GUI.cmd` and document it in the README;
   optionally add a thin root `launch_gui.py` that calls `scripts/gui.py --ui qt`.
-- **SMA track.** Surface the existing `sma_breakout_retest_tracking` family as a
+- **[DONE] SMA track.** Surface the existing `sma_breakout_retest_tracking` family as a
   first-class "SMA track" bucket parallel to `stdev_retest_tracking`: ensure it has
   a label (`legacy.py:~19954` label map → `"sma-track"`), appears in the setups
   table bucket filter / drawer, and is tracked like the stdev-track bucket. Confirm
@@ -362,9 +362,17 @@ storage/services.
    factor against weighted bot S/A tier-performance baselines at the same
    horizons, and headlines 5/10-session rows first. Tier Performance and Catch
    Rate tabs now carry inline descriptions explaining what each table measures.
-8. **Folded asks:** Journal Questrade UI; launcher commit/doc; SMA-track surfacing.
-9. **Keep this doc current:** remove completed bullets as they merge; leave
-   remaining work visible for the next agent.
+8. **[DONE] Folded asks:** Journal Questrade UI; launcher commit/doc; SMA-track surfacing.
+   Qt Journal now has a collapsible Broker Sync area with a saved Questrade
+   refresh-token field and a worker-threaded seven-day Questrade pull that refreshes
+   the trade table. `TradingBotV3_GUI.cmd` is tracked, README documents it, and a
+   root `launch_gui.py` shim is available. `SMA Track` is explicit in the setup
+   bucket vocabulary/filter alongside `Stdev Track`; the existing
+   `analyze_sma_breakout_setup` tests confirm EMA15 retest tracking and
+   confirmation transitions.
+9. **[DONE] Keep this doc current:** completed bullets were marked as they merged;
+   remaining deferred work stays visible (notably Step 4b engine focus-bounce
+   alerting).
 
 ---
 
