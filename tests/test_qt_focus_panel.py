@@ -69,6 +69,57 @@ def test_focus_panel_sides_are_independent(tmp_path):
     assert panel.short_editor.chip_flow.count() == 1
 
 
+def test_focus_panel_marks_live_bounce_alert(tmp_path):
+    from PySide6.QtWidgets import QLabel
+
+    from ui.models.bounce import BounceAlert
+    from ui.panels.focus_picks_panel import FocusPicksPanel
+
+    panel = FocusPicksPanel(_service(tmp_path))
+    panel.long_editor.add_input.setText("NVDA")
+    panel.long_editor.add_from_input()
+
+    panel.record_bounce_alert(
+        BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim", timeframe="5m")
+    )
+
+    chip = panel.long_editor.chip_flow.itemAt(0).widget()
+    labels = [label.text() for label in chip.findChildren(QLabel)]
+    assert "BOUNCE" in labels
+    assert any("09:30:00 bounce - LONG 5m VWAP reclaim" == text for text in labels)
+
+
+def test_master_workspace_no_longer_tabs_focus_picks(tmp_path):
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+    from ui.panels.theta_panel import ThetaPanel
+    from ui.panels.trading_desk import MasterAvwapWorkspace
+    from ui.panels.watchlists_panel import WatchlistsPanel
+
+    service = _service(tmp_path)
+    workspace = MasterAvwapWorkspace(
+        MasterAvwapPanel(service),
+        ThetaPanel(),
+        WatchlistsPanel(),
+    )
+
+    assert [workspace.tabs.tabText(index) for index in range(workspace.tabs.count())] == [
+        "Setups",
+        "Theta Plays",
+        "Watchlists",
+    ]
+
+
+def test_focus_picks_is_top_level_app_page():
+    from ui.app import MainWindow
+    from ui.state import UiState
+
+    window = MainWindow(UiState(workspace_mode="workspace"))
+    labels = [button.text() for button in window.nav_buttons]
+
+    assert labels == ["Trading Desk", "Focus Picks", "Journal", "Research", "Settings"]
+    assert window.pages.widget(1) is window.trading_panel.focus_picks_panel
+
+
 def _row(symbol, side, **kwargs):
     from ui.models.setup import SetupRow
 

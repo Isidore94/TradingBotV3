@@ -45,7 +45,6 @@ class TradingDeskPanel(QWidget):
             self.master_panel,
             self.theta_panel,
             self.watchlists_panel,
-            self.focus_picks_panel,
         )
         self.bounce_panel = BouncePanel(self.focus_service)
         self._mode_widget: QWidget | None = None
@@ -57,6 +56,8 @@ class TradingDeskPanel(QWidget):
         self.focus_picks_panel.statusChanged.connect(self.statusChanged)
         self.bounce_panel.statusChanged.connect(self.statusChanged)
         self.bounce_panel.service.connectionChanged.connect(self.connectionChanged)
+        self.bounce_panel.service.alertReceived.connect(self.focus_picks_panel.record_bounce_alert)
+        self.bounce_panel.service.rrsSnapshotChanged.connect(self.focus_picks_panel.record_rrs_snapshot)
 
         self.center_container = QWidget()
         self.center_layout = QVBoxLayout(self.center_container)
@@ -117,7 +118,6 @@ class MasterAvwapWorkspace(QFrame):
         master_panel: MasterAvwapPanel,
         theta_panel: ThetaPanel,
         watchlists_panel: WatchlistsPanel,
-        focus_picks_panel: FocusPicksPanel,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -125,10 +125,8 @@ class MasterAvwapWorkspace(QFrame):
         self.master_panel = master_panel
         self.theta_panel = theta_panel
         self.watchlists_panel = watchlists_panel
-        self.focus_picks_panel = focus_picks_panel
         self.tabs = QTabWidget()
         self.tabs.addTab(self.master_panel, "Setups")
-        self.tabs.addTab(self.focus_picks_panel, "Focus Picks")
         self.tabs.addTab(self.theta_panel, "Theta Plays")
         self.tabs.addTab(self.watchlists_panel, "Watchlists")
         self.master_panel.scan_service.finished.connect(lambda *_args: self.theta_panel.refresh())
@@ -139,9 +137,6 @@ class MasterAvwapWorkspace(QFrame):
 
     def show_setups(self) -> None:
         self.tabs.setCurrentWidget(self.master_panel)
-
-    def show_focus(self) -> None:
-        self.tabs.setCurrentWidget(self.focus_picks_panel)
 
     def show_theta(self) -> None:
         self.theta_panel.refresh()

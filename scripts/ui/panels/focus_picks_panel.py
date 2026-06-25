@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from typing import Any
+
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -10,15 +12,18 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from human_focus_tracking import snapshot_human_focus_picks
+from ui import theme
+from ui.models.bounce import BounceAlert
+from ui.models.rrs import rrs_rows
 from ui.services.focus_service import FocusService
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.section_header import SectionHeader
-from ui.widgets.symbol_chip import SymbolChip
 
 
 class FocusPicksPanel(QFrame):
@@ -30,9 +35,11 @@ class FocusPicksPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self.service = focus_service
+        self._bounce_state: dict[str, dict[str, str]] = {}
+        self._rrs_state: dict[str, dict[str, str]] = {}
 
-        self.long_editor = FocusSideEditor("Focus Longs", "long", focus_service, tone="long")
-        self.short_editor = FocusSideEditor("Focus Shorts", "short", focus_service, tone="short")
+        self.long_editor = FocusSideEditor("Focus Longs", "long", focus_service, self._live_state_for, tone="long")
+        self.short_editor = FocusSideEditor("Focus Shorts", "short", focus_service, self._live_state_for, tone="short")
         self.long_editor.statusChanged.connect(self.statusChanged)
         self.short_editor.statusChanged.connect(self.statusChanged)
         self.snapshot_status_label = QLabel("")
@@ -67,6 +74,32 @@ class FocusPicksPanel(QFrame):
         self.long_editor.refresh()
         self.short_editor.refresh()
 
+    def record_bounce_alert(self, alert: BounceAlert) -> None:
+        """Surface BounceBot alerts directly on matching Focus Picks chips."""
+        if alert.is_d1 or not alert.symbol or not self.service.is_focus(alert.symbol):
+            return
+        symbol = alert.symbol.upper()
+        detail = " ".join(part for part in (alert.side, alert.timeframe, alert.trigger) if part).strip()
+        self._bounce_state[symbol] = {
+            "tone": "long" if alert.side == "LONG" else "short" if alert.side == "SHORT" else "favorite",
+            "text": f"{alert.time_text} bounce" + (f" - {detail}" if detail else ""),
+        }
+        self._refresh_symbol(symbol)
+
+    def record_rrs_snapshot(self, payload: Any) -> None:
+        """Mark focus longs that are RS and focus shorts that are RW."""
+        focus = self.service.all_focus()
+        aligned: dict[str, dict[str, str]] = {}
+        for scope in ("SPY", "Sector", "Industry"):
+            for row in rrs_rows(payload, scope):
+                symbol = row.symbol.upper()
+                if row.side == "RS" and symbol in focus.get("long", []):
+                    aligned[symbol] = {"tone": "long", "text": f"RS {row.rrs:+.2f} vs {scope}"}
+                elif row.side == "RW" and symbol in focus.get("short", []):
+                    aligned[symbol] = {"tone": "short", "text": f"RW {row.rrs:+.2f} vs {scope}"}
+        self._rrs_state = aligned
+        self._refresh_all()
+
     def snapshot_today(self, *, force: bool, emit_status: bool = True) -> None:
         if not getattr(self.service.store, "uses_default_paths", lambda: False)():
             self.snapshot_status_label.setText("Snapshot: custom focus store")
@@ -86,15 +119,40 @@ class FocusPicksPanel(QFrame):
         if emit_status:
             self.statusChanged.emit(message)
 
+    def _live_state_for(self, symbol: str) -> dict[str, dict[str, str]]:
+        symbol = str(symbol or "").upper()
+        return {
+            "bounce": self._bounce_state.get(symbol, {}),
+            "rrs": self._rrs_state.get(symbol, {}),
+        }
+
+    def _refresh_symbol(self, symbol: str) -> None:
+        side = self.service.focus_side(symbol)
+        if side == "LONG":
+            self.long_editor.refresh()
+        elif side == "SHORT":
+            self.short_editor.refresh()
+        else:
+            self._refresh_all()
+
 
 class FocusSideEditor(QFrame):
     statusChanged = Signal(str)
 
-    def __init__(self, title: str, side: str, focus_service: FocusService, *, tone: str) -> None:
+    def __init__(
+        self,
+        title: str,
+        side: str,
+        focus_service: FocusService,
+        live_state_for,
+        *,
+        tone: str,
+    ) -> None:
         super().__init__()
         self.setObjectName("Panel")
         self.side = side
         self.service = focus_service
+        self.live_state_for = live_state_for
         self.tone = tone
 
         self.title_label = QLabel(title)
@@ -165,7 +223,7 @@ class FocusSideEditor(QFrame):
                 widget.deleteLater()
         symbols = self.service.focus_symbols(self.side)
         for symbol in symbols:
-            chip = SymbolChip(symbol, tone=self.tone)
+            chip = FocusStatusChip(symbol, tone=self.tone, state=self.live_state_for(symbol))
             chip.removed.connect(self._remove)
             self.chip_flow.addWidget(chip)
         self.count_label.setText(str(len(symbols)))
@@ -196,3 +254,73 @@ class FocusSideEditor(QFrame):
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
         self.statusChanged.emit(f"Focus {self.side}s: {message}")
+
+
+class FocusStatusChip(QFrame):
+    """Ticker chip with optional live BounceBot/RRS status."""
+
+    removed = Signal(str)
+
+    def __init__(self, symbol: str, *, tone: str, state: dict[str, dict[str, str]], parent=None) -> None:
+        super().__init__(parent)
+        self.symbol = symbol
+        self.setObjectName("FocusStatusChip")
+
+        bounce = state.get("bounce") or {}
+        rrs = state.get("rrs") or {}
+        has_bounce = bool(bounce.get("text"))
+        has_rrs = bool(rrs.get("text"))
+        accent_tone = str(bounce.get("tone") or rrs.get("tone") or tone)
+        accent = theme.color("favorite" if has_bounce else accent_tone)
+        side_color = theme.color(tone)
+        bg_alpha = 0.20 if has_bounce else 0.14 if has_rrs else 0.10
+        border_alpha = 0.78 if has_bounce else 0.55
+        self.setStyleSheet(
+            f"""
+            QFrame#FocusStatusChip {{
+                background: {theme.with_alpha(accent, bg_alpha)};
+                border: 1px solid {theme.with_alpha(accent, border_alpha)};
+                border-radius: 8px;
+            }}
+            QFrame#FocusStatusChip QLabel {{ background: transparent; }}
+            QFrame#FocusStatusChip QToolButton {{
+                color: {side_color}; border: none; background: transparent; font-weight: 700; padding: 0 2px;
+            }}
+            QFrame#FocusStatusChip QToolButton:hover {{ color: {theme.color('text_primary')}; }}
+            """
+        )
+
+        title = QLabel(symbol)
+        title.setStyleSheet(f"color: {side_color}; font-weight: 700;")
+        remove_button = QToolButton()
+        remove_button.setText("x")
+        remove_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove_button.setToolTip(f"Remove {symbol}")
+        remove_button.clicked.connect(lambda: self.removed.emit(self.symbol))
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(4)
+        top.addWidget(title)
+        if has_bounce:
+            flag = QLabel("BOUNCE")
+            flag.setStyleSheet(f"color: {theme.color('favorite')}; font-weight: 700;")
+            top.addWidget(flag)
+        elif has_rrs:
+            flag = QLabel("RRS")
+            flag.setStyleSheet(f"color: {accent}; font-weight: 700;")
+            top.addWidget(flag)
+        top.addWidget(remove_button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(9, 4, 5, 4)
+        layout.setSpacing(2)
+        layout.addLayout(top)
+        for item in (bounce, rrs):
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            status = QLabel(text)
+            status.setObjectName("MutedLabel")
+            status.setWordWrap(True)
+            layout.addWidget(status)

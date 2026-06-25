@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)
+        self.pages.addWidget(self.trading_panel.focus_picks_panel)
         self.pages.addWidget(self.journal_panel)
         self.pages.addWidget(self.research_panel)
         self.pages.addWidget(self.settings_panel)
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
 
         nav_items = (
             ("Trading Desk", "mdi.chart-timeline-variant"),
+            ("Focus Picks", "mdi.star-outline"),
             ("Journal", "mdi.notebook-outline"),
             ("Research", "mdi.flask-outline"),
             ("Settings", "mdi.cog-outline"),
@@ -156,7 +158,7 @@ class MainWindow(QMainWindow):
         self.addAction(focus_action)
 
     def _select_page(self, index: int) -> None:
-        titles = ("Trading Desk", "Journal", "Research", "Settings")
+        titles = ("Trading Desk", "Focus Picks", "Journal", "Research", "Settings")
         self.pages.setCurrentIndex(index)
         self.title_label.setText(titles[index])
         for button_index, button in enumerate(self.nav_buttons):
