@@ -84,6 +84,28 @@ def _load_local_settings() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _default_google_drive_shared_dir() -> Path | None:
+    """Return the app's shared Google Drive folder when Drive is mounted."""
+
+    roots: list[Path] = []
+    env_value = os.environ.get("GOOGLE_DRIVE")
+    if env_value:
+        roots.append(Path(env_value).expanduser())
+
+    home = Path.home()
+    roots.extend(
+        [
+            home / "My Drive",
+            home / "Google Drive",
+        ]
+    )
+
+    for root in roots:
+        if root.exists():
+            return root / "Trading" / "TradingBot"
+    return None
+
+
 def _resolve_persistent_data_dir() -> tuple[Path, str]:
     env_value = os.environ.get("TRADINGBOTV3_DATA_DIR")
     if env_value:
@@ -93,6 +115,10 @@ def _resolve_persistent_data_dir() -> tuple[Path, str]:
     config_value = settings.get("shared_data_dir")
     if isinstance(config_value, str) and config_value.strip():
         return Path(config_value).expanduser(), "local_config"
+
+    google_drive_dir = _default_google_drive_shared_dir()
+    if google_drive_dir is not None:
+        return google_drive_dir, "google_drive_default"
 
     return LOCAL_SETTINGS_DIR, "default_local"
 
@@ -217,6 +243,7 @@ def get_tracker_storage_details() -> dict[str, str]:
     source_labels = {
         "environment": "Environment variable",
         "local_config": "Saved local setting",
+        "google_drive_default": "Google Drive default",
         "default_local": "Default local storage",
     }
     return {
