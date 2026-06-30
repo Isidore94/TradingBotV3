@@ -45,6 +45,10 @@ QStatusBar QLabel {
     color: @text_secondary@;
 }
 
+QLabel#CautionLabel {
+    color: @caution@;
+}
+
 QPushButton,
 QToolButton {
     background: @bg_elevated@;

@@ -322,6 +322,10 @@ TIER_OUTCOMES_FILE = MASTER_AVWAP_TIER_OUTCOMES_FILE
 TIER_PERFORMANCE_FILE = MASTER_AVWAP_TIER_PERFORMANCE_FILE
 TIER_CATCH_RATE_FILE = MASTER_AVWAP_TIER_CATCH_RATE_FILE
 SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
+# Recent-window ("what's worked in the last N days") per-family stats, including
+# study families like the 2nd-dev breakout, surfaced in the Setup Tracker panel.
+SETUP_TYPE_RECENT_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_recent_stats.csv")
+RECENT_SETUP_TYPE_LOOKBACK_DAYS = 30
 SETUP_PLAYBOOKS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 # Study namespace (B4): new setup ideas (1h/4h trend, HV-level break, compression
@@ -486,6 +490,9 @@ PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS = 10
 PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS = 8
 PRIORITY_RETEST_CLEAR_PATH_SCORE_BONUS = 14
 SETUP_TRACKER_SCHEMA_VERSION = 2
+# An on-disk tracker larger than this is treated as "has real content"; a save
+# that would overwrite it with an empty payload is refused (corruption guard).
+SETUP_TRACKER_MIN_NONEMPTY_BYTES = 1024
 PRIORITY_SCORING_CONFIG_SCHEMA_VERSION = 1
 D1_FEATURE_HISTORY_SCHEMA_VERSION = 1
 SETUP_CANDIDATE_SCHEMA_VERSION = 1
@@ -534,6 +541,18 @@ TRACKER_MIN_RISK_PCT_OF_ENTRY = 0.001
 # this many trade days so censored outcomes resolve (otherwise slow grinders stay
 # OPEN forever and quietly bias the closed-sample statistics toward fast movers).
 TRACKER_MAX_HOLD_DAYS = 18
+# Forward tracking (scenarios + per-bar daily_marks) only needs to run through the
+# time-stop at TRACKER_MAX_HOLD_DAYS plus a small buffer. Recording a daily mark
+# for every bar from entry to the present (the prior behaviour) bloats each setup
+# record without adding signal once the scenarios have all closed.
+TRACKER_FORWARD_MARK_BUFFER_DAYS = 2
+# Main (favorite-path) setups retention. Unlike control/study these were never
+# pruned, so the namespace accumulated every setup since inception and the tracker
+# JSON ballooned. The longest aggregation lookback over setups is
+# SCAN_FACTOR_LOOKBACK_DAYS (60); keep 2x that so Expected-R/calibration retain a
+# safe margin while the file stays bounded.
+SETUP_KEEP_DAYS = 120
+SETUP_MAX_RECORDS = 30000
 # Round-trip transaction cost model so realized R is net, not gross. Cost per
 # share per side = fixed commission + a slippage fraction of price; liquid names
 # only (MIN_AVG_VOLUME_20D filter) so this stays small but honest.
@@ -3523,201 +3542,6 @@ def compute_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
-def analyze_sma_breakout_setup(
-    df: pd.DataFrame,
-    side: str,
-    indicator_frame: pd.DataFrame | None = None,
-    atr20: float | None = None,
-) -> dict:
-    result = {
-        "watch": False,
-        "confirmed": False,
-        "tracking": False,
-        "favorite_signal": False,
-        "signal": "",
-        "setup_family": "",
-        "breakout_sma_label": "",
-        "breakout_sma_period": 0,
-        "breakout_sma_level": None,
-        "breakout_date": "",
-        "breakout_age_sessions": 0,
-        "retest_level": "",
-        "retest_level_value": None,
-        "retest_date": "",
-        "retest_age_sessions": 0,
-        "retest_distance_atr": None,
-        "confirmation_date": "",
-        "score_bonus": 0,
-        "note": "",
-    }
-    if normalize_side(side) != "LONG" or df is None or df.empty:
-        return result
-
-    work = indicator_frame.copy() if isinstance(indicator_frame, pd.DataFrame) and not indicator_frame.empty else compute_indicator_frame(df)
-    if work.empty:
-        return result
-    work = work.reset_index(drop=True)
-    if len(work) < SMA_BREAKOUT_MIN_HISTORY_BARS:
-        return result
-    last_idx = len(work) - 1
-    if last_idx < SMA_BREAKOUT_MAX_SESSIONS_AFTER_BREAK:
-        return result
-
-    latest = work.iloc[last_idx]
-    latest_close = _coerce_float(latest.get("close_num", latest.get("close")))
-    if latest_close is None:
-        return result
-
-    atr_value = _coerce_float(atr20) or _coerce_float(latest.get("atr_20"))
-    if atr_value is None or atr_value <= 0:
-        return result
-
-    min_break_idx = max(1, last_idx - SMA_BREAKOUT_MAX_SESSIONS_AFTER_BREAK)
-    max_break_idx = last_idx - SMA_BREAKOUT_MIN_SESSIONS_AFTER_BREAK
-    if max_break_idx < min_break_idx:
-        return result
-
-    period_rank = {50: 1, 100: 2, 200: 3}
-    touch_preference = {"EMA_15": 0, "EMA_21": 1}
-    candidates = []
-
-    def _row_date(row: pd.Series) -> str:
-        value = row.get("trade_date")
-        if value:
-            return str(value)
-        try:
-            return pd.to_datetime(row.get("datetime")).date().isoformat()
-        except Exception:
-            return ""
-
-    for period in SMA_BREAKOUT_PERIODS:
-        sma_col = f"sma_{period}"
-        if sma_col not in work.columns:
-            continue
-        sma_label = f"SMA_{period}"
-        signal_name = SMA_BREAKOUT_RECLAIM_SIGNALS.get(period, "")
-
-        for breakout_idx in range(min_break_idx, max_break_idx + 1):
-            breakout_row = work.iloc[breakout_idx]
-            prev_row = work.iloc[breakout_idx - 1]
-            prev_close = _coerce_float(prev_row.get("close_num", prev_row.get("close")))
-            prev_sma = _coerce_float(prev_row.get(sma_col))
-            breakout_close = _coerce_float(breakout_row.get("close_num", breakout_row.get("close")))
-            breakout_sma = _coerce_float(breakout_row.get(sma_col))
-            if None in (prev_close, prev_sma, breakout_close, breakout_sma):
-                continue
-            if not (float(prev_close) <= float(prev_sma) and float(breakout_close) > float(breakout_sma)):
-                continue
-            prior_window_start = breakout_idx - SMA_BREAKOUT_PRIOR_BELOW_SESSIONS
-            if prior_window_start < 0:
-                continue
-            prior_window = work.iloc[prior_window_start:breakout_idx]
-            prior_valid = True
-            for _, prior_row in prior_window.iterrows():
-                prior_close = _coerce_float(prior_row.get("close_num", prior_row.get("close")))
-                prior_sma = _coerce_float(prior_row.get(sma_col))
-                if prior_close is None or prior_sma is None or float(prior_close) > float(prior_sma):
-                    prior_valid = False
-                    break
-            if not prior_valid:
-                continue
-
-            for retest_idx in range(breakout_idx + 1, last_idx + 1):
-                retest_row = work.iloc[retest_idx]
-                retest_low = _coerce_float(retest_row.get("low_num", retest_row.get("low")))
-                retest_close = _coerce_float(retest_row.get("close_num", retest_row.get("close")))
-                if None in (retest_low, retest_close):
-                    continue
-
-                bar_atr = atr_value
-                if bar_atr is None or bar_atr <= 0:
-                    continue
-                touch_tolerance = float(bar_atr) * SMA_BREAKOUT_RETEST_TOL_ATR
-                level_specs = [
-                    ("EMA_15", _coerce_float(retest_row.get("ema_15"))),
-                    ("EMA_21", _coerce_float(retest_row.get("ema_21"))),
-                    (sma_label, _coerce_float(retest_row.get(sma_col))),
-                ]
-                touches = []
-                for label, level in level_specs:
-                    if level is None:
-                        continue
-                    distance = abs(float(retest_low) - float(level))
-                    if distance > touch_tolerance:
-                        continue
-                    if float(retest_close) < float(level):
-                        continue
-                    touches.append(
-                        {
-                            "label": label,
-                            "level": float(level),
-                            "distance": float(distance),
-                            "distance_atr": float(distance / float(bar_atr)),
-                        }
-                    )
-                if not touches:
-                    continue
-
-                touches.sort(
-                    key=lambda item: (
-                        item["distance"],
-                        touch_preference.get(item["label"], 2),
-                    )
-                )
-                touch = touches[0]
-                latest_sma = _coerce_float(latest.get(sma_col))
-                confirmed = latest_sma is not None and float(latest_close) > float(latest_sma)
-                breakout_age = last_idx - breakout_idx
-                retest_age = last_idx - retest_idx
-                note = (
-                    f"Broke up through {sma_label} {breakout_age} session(s) ago; "
-                    f"retested {touch['label']} on {_row_date(retest_row)} "
-                    f"within {touch['distance_atr']:.3f} ATR"
-                )
-                if confirmed:
-                    note = f"{note}; latest close reclaimed {sma_label}"
-                else:
-                    note = f"{note}; awaiting close back above {sma_label}"
-
-                candidates.append(
-                    {
-                        "watch": True,
-                        "confirmed": bool(confirmed),
-                        "tracking": not bool(confirmed),
-                        "favorite_signal": bool(confirmed),
-                        "signal": signal_name if confirmed else "",
-                        "setup_family": SMA_BREAKOUT_FAMILY if confirmed else SMA_BREAKOUT_TRACKING_FAMILY,
-                        "breakout_sma_label": sma_label,
-                        "breakout_sma_period": int(period),
-                        "breakout_sma_level": float(latest_sma if latest_sma is not None else breakout_sma),
-                        "breakout_date": _row_date(breakout_row),
-                        "breakout_age_sessions": int(breakout_age),
-                        "retest_level": touch["label"],
-                        "retest_level_value": float(touch["level"]),
-                        "retest_date": _row_date(retest_row),
-                        "retest_age_sessions": int(retest_age),
-                        "retest_distance_atr": float(touch["distance_atr"]),
-                        "confirmation_date": _row_date(latest) if confirmed else "",
-                        "score_bonus": int(SMA_BREAKOUT_TRACKING_SCORE_BONUS.get(period, 0)),
-                        "note": note,
-                    }
-                )
-                break
-
-    if not candidates:
-        return result
-
-    candidates.sort(
-        key=lambda item: (
-            bool(item.get("confirmed")),
-            period_rank.get(int(item.get("breakout_sma_period", 0) or 0), 0),
-            -int(item.get("retest_age_sessions", 0) or 0),
-            -int(item.get("breakout_age_sessions", 0) or 0),
-        ),
-        reverse=True,
-    )
-    result.update(candidates[0])
-    return result
 
 
 def calc_anchored_vwap_band_history(df: pd.DataFrame, anchor_date_iso: str) -> dict[str, dict]:
@@ -4068,1102 +3892,14 @@ def build_tracker_feature_snapshot(
     return snapshot
 
 
-def _normalize_tracker_attribute_value(value):
-    if value is None:
-        return None
-    if isinstance(value, (str, bool, int, float)):
-        return value
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, (list, tuple, set)):
-        normalized_items = []
-        for item in value:
-            normalized = _normalize_tracker_attribute_value(item)
-            if normalized is not None:
-                normalized_items.append(normalized)
-        return normalized_items
-    if isinstance(value, dict):
-        normalized_map = {}
-        for key, item in value.items():
-            normalized = _normalize_tracker_attribute_value(item)
-            if normalized is not None:
-                normalized_map[str(key)] = normalized
-        return normalized_map
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception:
-            pass
-    return str(value)
 
 
-def _tracker_attribute_is_present(value, value_type: str | None = None) -> bool:
-    if value is None:
-        return False
-    if value_type in {"bool", "number"}:
-        return True
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (list, tuple, set, dict)):
-        return bool(value)
-    return True
 
 
-def _register_tracker_attribute(
-    registry: dict,
-    key: str,
-    *,
-    group: str,
-    label: str,
-    value_type: str,
-    description: str,
-    source_stage: str = "entry",
-) -> None:
-    if not isinstance(registry, dict) or not key:
-        return
-    registry[key] = {
-        "group": group,
-        "label": label,
-        "value_type": value_type,
-        "description": description,
-        "source_stage": source_stage,
-    }
 
 
-def build_tracker_entry_attributes(
-    row: dict,
-    symbol_entry: dict,
-    entry_snapshot: dict,
-    feature_row: dict | None = None,
-) -> tuple[dict[str, object], dict[str, dict]]:
-    feature_row = feature_row or {}
-    attributes: dict[str, object] = {}
-    registry: dict[str, dict] = {}
-
-    def add(
-        key: str,
-        value,
-        *,
-        group: str,
-        label: str,
-        value_type: str,
-        description: str,
-    ) -> None:
-        normalized = _normalize_tracker_attribute_value(value)
-        if not _tracker_attribute_is_present(normalized, value_type=value_type):
-            return
-        attributes[key] = normalized
-        _register_tracker_attribute(
-            registry,
-            key,
-            group=group,
-            label=label,
-            value_type=value_type,
-            description=description,
-        )
-
-    favorite_signals = list(row.get("favorite_signals") or [])
-    context_signals = list(row.get("context_signals") or [])
-    events_today = list(symbol_entry.get("events_today") or [])
-
-    add(
-        "setup.side",
-        normalize_side(row.get("side") or symbol_entry.get("side") or ""),
-        group="setup",
-        label="Side",
-        value_type="text",
-        description="Trade direction for the setup.",
-    )
-    add(
-        "setup.symbol",
-        str(row.get("symbol") or symbol_entry.get("symbol") or "").strip().upper(),
-        group="setup",
-        label="Symbol",
-        value_type="text",
-        description="Ticker symbol for the setup.",
-    )
-    add(
-        "setup.priority_bucket",
-        row.get("priority_bucket") or "",
-        group="setup",
-        label="Priority bucket",
-        value_type="text",
-        description="Priority bucket assigned to the setup at scan time.",
-    )
-    add(
-        "setup.priority_score",
-        _coerce_float(row.get("score")),
-        group="setup",
-        label="Priority score",
-        value_type="number",
-        description="Final priority score after ranking filters and bonuses.",
-    )
-    add(
-        "setup.favorite_zone",
-        row.get("favorite_zone") or "",
-        group="setup",
-        label="Favorite zone",
-        value_type="text",
-        description="Named AVWAP zone the setup was trading in at scan time.",
-    )
-    add(
-        "setup.setup_family",
-        row.get("setup_family") or symbol_entry.get("setup_family") or "",
-        group="setup",
-        label="Setup family",
-        value_type="text",
-        description="High-level setup family assigned by the generalized setup scanner.",
-    )
-    add(
-        "setup.setup_tags",
-        list(row.get("setup_tags") or symbol_entry.get("setup_tags") or []),
-        group="setup",
-        label="Setup tags",
-        value_type="list",
-        description="Normalized priority setup tags active for this setup family.",
-    )
-    add(
-        "setup.sma_breakout_sma_label",
-        row.get("sma_breakout_sma_label") or symbol_entry.get("sma_breakout_sma_label") or "",
-        group="setup",
-        label="SMA breakout level",
-        value_type="text",
-        description="The 50/100/200 SMA level used by the SMA breakout setup.",
-    )
-    add(
-        "setup.sma_breakout_retest_level",
-        row.get("sma_breakout_retest_level") or symbol_entry.get("sma_breakout_retest_level") or "",
-        group="setup",
-        label="SMA breakout retest level",
-        value_type="text",
-        description="The EMA/SMA level touched during the SMA breakout retest.",
-    )
-    add(
-        "setup.sma_breakout_confirmed",
-        bool(row.get("sma_breakout_confirmed") or symbol_entry.get("sma_breakout_confirmed")),
-        group="setup",
-        label="SMA breakout confirmed",
-        value_type="bool",
-        description="Whether the latest close reclaimed the breakout SMA after the retest.",
-    )
-    add(
-        "signals.favorite_signals",
-        favorite_signals,
-        group="signals",
-        label="Favorite signals",
-        value_type="list",
-        description="Priority signals active for the setup on the entry day.",
-    )
-    add(
-        "signals.favorite_signal_count",
-        len(favorite_signals),
-        group="signals",
-        label="Favorite signal count",
-        value_type="number",
-        description="Number of favorite signals active on the entry day.",
-    )
-    add(
-        "signals.context_signals",
-        context_signals,
-        group="signals",
-        label="Context signals",
-        value_type="list",
-        description="Supporting context signals that contributed to the setup rank.",
-    )
-    add(
-        "signals.context_signal_count",
-        len(context_signals),
-        group="signals",
-        label="Context signal count",
-        value_type="number",
-        description="Number of context signals active on the entry day.",
-    )
-    add(
-        "signals.events_today",
-        events_today,
-        group="signals",
-        label="Events today",
-        value_type="list",
-        description="All primary entry-day events recorded for the setup.",
-    )
-    add(
-        "signals.has_bounce_event_today",
-        bool(symbol_entry.get("has_bounce_event_today")),
-        group="signals",
-        label="Has bounce event today",
-        value_type="bool",
-        description="Whether the scanner saw a bounce event on the entry day.",
-    )
-    add(
-        "bouncebot.bullish_weak_long_seen_today",
-        bool(symbol_entry.get("bouncebot_bullish_weak_long_seen_today")),
-        group="bouncebot",
-        label="BounceBot bullish weak long hit",
-        value_type="bool",
-        description="Whether the symbol appeared in BounceBot's bullish-weak long context list at some point that day.",
-    )
-    add(
-        "bouncebot.bullish_weak_long_hit_count",
-        int(symbol_entry.get("bouncebot_bullish_weak_long_hit_count", 0) or 0),
-        group="bouncebot",
-        label="BounceBot bullish weak long hit count",
-        value_type="number",
-        description="How many BounceBot scans that day included the symbol in the bullish-weak long list.",
-    )
-    add(
-        "bouncebot.bullish_weak_long_max_score",
-        _coerce_float(symbol_entry.get("bouncebot_bullish_weak_long_max_score")),
-        group="bouncebot",
-        label="BounceBot bullish weak long max score",
-        value_type="number",
-        description="Highest BounceBot environment-focus score seen that day for bullish-weak long list membership.",
-    )
-    add(
-        "bouncebot.bullish_weak_long_timeframes",
-        list(symbol_entry.get("bouncebot_bullish_weak_long_timeframes") or []),
-        group="bouncebot",
-        label="BounceBot bullish weak long timeframes",
-        value_type="list",
-        description="RRS timeframes where the symbol showed up in the bullish-weak long list that day.",
-    )
-    add(
-        "bouncebot.bearish_weak_short_seen_today",
-        bool(symbol_entry.get("bouncebot_bearish_weak_short_seen_today")),
-        group="bouncebot",
-        label="BounceBot bearish weak short hit",
-        value_type="bool",
-        description="Whether the symbol appeared in BounceBot's bearish-weak short context list at some point that day.",
-    )
-    add(
-        "bouncebot.bearish_weak_short_hit_count",
-        int(symbol_entry.get("bouncebot_bearish_weak_short_hit_count", 0) or 0),
-        group="bouncebot",
-        label="BounceBot bearish weak short hit count",
-        value_type="number",
-        description="How many BounceBot scans that day included the symbol in the bearish-weak short list.",
-    )
-    add(
-        "bouncebot.bearish_weak_short_max_score",
-        _coerce_float(symbol_entry.get("bouncebot_bearish_weak_short_max_score")),
-        group="bouncebot",
-        label="BounceBot bearish weak short max score",
-        value_type="number",
-        description="Highest BounceBot environment-focus score seen that day for bearish-weak short list membership.",
-    )
-    add(
-        "bouncebot.bearish_weak_short_timeframes",
-        list(symbol_entry.get("bouncebot_bearish_weak_short_timeframes") or []),
-        group="bouncebot",
-        label="BounceBot bearish weak short timeframes",
-        value_type="list",
-        description="RRS timeframes where the symbol showed up in the bearish-weak short list that day.",
-    )
-    add(
-        "bouncebot.relevant_focus_hit_today",
-        bool(symbol_entry.get("bouncebot_relevant_focus_hit_today")),
-        group="bouncebot",
-        label="BounceBot relevant focus hit",
-        value_type="bool",
-        description="Whether the symbol appeared in the BounceBot focus list relevant to this setup direction that day.",
-    )
-    add(
-        "bouncebot.relevant_focus_hit_count",
-        int(symbol_entry.get("bouncebot_relevant_focus_hit_count", 0) or 0),
-        group="bouncebot",
-        label="BounceBot relevant focus hit count",
-        value_type="number",
-        description="How many BounceBot scans that day included the symbol in the directionally relevant focus list.",
-    )
-    add(
-        "bouncebot.relevant_focus_max_score",
-        _coerce_float(symbol_entry.get("bouncebot_relevant_focus_max_score")),
-        group="bouncebot",
-        label="BounceBot relevant focus max score",
-        value_type="number",
-        description="Highest BounceBot focus score seen that day in the directionally relevant list.",
-    )
-    add(
-        "bouncebot.relevant_focus_timeframes",
-        list(symbol_entry.get("bouncebot_relevant_focus_timeframes") or []),
-        group="bouncebot",
-        label="BounceBot relevant focus timeframes",
-        value_type="list",
-        description="RRS timeframes where the symbol appeared in the directionally relevant BounceBot focus list.",
-    )
-    add(
-        "pattern.breakout_5d",
-        bool(row.get("breakout_5d")),
-        group="pattern",
-        label="Five-day breakout",
-        value_type="bool",
-        description="Whether the setup closed through the prior five-day range on the entry day.",
-    )
-    add(
-        "pattern.retest_followthrough",
-        bool(row.get("retest_followthrough")),
-        group="pattern",
-        label="Retest followthrough",
-        value_type="bool",
-        description="Whether the setup showed directional retest followthrough.",
-    )
-    add(
-        "pattern.retest_reference_level",
-        row.get("retest_reference_level") or "",
-        group="pattern",
-        label="Retest reference level",
-        value_type="text",
-        description="Level used by the retest followthrough classifier.",
-    )
-    add(
-        "pattern.retest_note",
-        row.get("retest_note") or "",
-        group="pattern",
-        label="Retest note",
-        value_type="text",
-        description="Freeform note describing the retest structure detected by the scanner.",
-    )
-    add(
-        "pattern.extreme_move_watch",
-        bool(row.get("extreme_move_watch")),
-        group="pattern",
-        label="Extreme move watch",
-        value_type="bool",
-        description="Whether the symbol recently displaced through multiple AVWAP bands and is being tracked for a retest.",
-    )
-    add(
-        "pattern.extreme_move_favorite_ready",
-        bool(row.get("extreme_move_favorite_ready")),
-        group="pattern",
-        label="Extreme move favorite ready",
-        value_type="bool",
-        description="Whether the extreme-move setup had both wide bands and a clean retest signal.",
-    )
-    add(
-        "pattern.extreme_move_retest_level",
-        row.get("extreme_move_retest_level") or "",
-        group="pattern",
-        label="Extreme move retest level",
-        value_type="text",
-        description="Band or EMA level used by the extreme-move retest classifier.",
-    )
-    add(
-        "pattern.extreme_move_band_crosses",
-        int(row.get("extreme_move_band_crosses", 0) or 0),
-        group="pattern",
-        label="Extreme move band crosses",
-        value_type="number",
-        description="How many anchored AVWAP band boundaries the displacement candle traveled through.",
-    )
-    add(
-        "pattern.extreme_move_band_width_atr",
-        _coerce_float(row.get("extreme_move_band_width_atr")),
-        group="pattern",
-        label="Extreme move band width ATR",
-        value_type="number",
-        description="Anchored AVWAP standard deviation width measured in ATR for the displacement setup.",
-    )
-    add(
-        "pattern.extreme_move_note",
-        row.get("extreme_move_note") or "",
-        group="pattern",
-        label="Extreme move note",
-        value_type="text",
-        description="Scanner note describing the recent extreme displacement and retest setup.",
-    )
-    add(
-        "pattern.post_earnings_active",
-        bool(row.get("post_earnings_active") or symbol_entry.get("post_earnings_active")),
-        group="pattern",
-        label="Post-earnings watch active",
-        value_type="bool",
-        description="Whether the symbol is inside the 10-session post-earnings setup window.",
-    )
-    add(
-        "pattern.post_earnings_break_intraday",
-        bool(row.get("post_earnings_break_intraday") or symbol_entry.get("post_earnings_break_intraday")),
-        group="pattern",
-        label="Post-earnings intraday break",
-        value_type="bool",
-        description="Whether price has a fresh break of the earnings candle's 52-week high/low.",
-    )
-    add(
-        "pattern.post_earnings_break_close",
-        bool(row.get("post_earnings_break_close") or symbol_entry.get("post_earnings_break_close")),
-        group="pattern",
-        label="Post-earnings close confirm",
-        value_type="bool",
-        description="Whether price closed through the earnings candle's 52-week high/low.",
-    )
-    add(
-        "pattern.post_earnings_sessions_since_gap",
-        int(row.get("post_earnings_sessions_since_gap", symbol_entry.get("post_earnings_sessions_since_gap", 0)) or 0),
-        group="pattern",
-        label="Post-earnings sessions since gap",
-        value_type="number",
-        description="Trading sessions elapsed since the qualifying earnings gap.",
-    )
-    add(
-        "pattern.post_earnings_gap_atr_multiple",
-        _coerce_float(row.get("post_earnings_gap_atr_multiple") or symbol_entry.get("latest_release_gap_atr_multiple")),
-        group="pattern",
-        label="Post-earnings gap ATR multiple",
-        value_type="number",
-        description="Gap size measured against ATR(20) for the qualifying earnings reaction.",
-    )
-    add(
-        "pattern.mid_earnings_watch",
-        bool(row.get("mid_earnings_watch") or symbol_entry.get("mid_earnings_watch")),
-        group="pattern",
-        label="Mid-earnings watch active",
-        value_type="bool",
-        description="Whether the symbol is tracking the mid-earnings 2nd-to-3rd deviation continuation structure.",
-    )
-    add(
-        "pattern.mid_earnings_active_second_stdev_hold",
-        bool(
-            row.get("mid_earnings_active_second_stdev_hold")
-            or symbol_entry.get("mid_earnings_active_second_stdev_hold")
-        ),
-        group="pattern",
-        label="Mid-earnings active 2nd-dev hold",
-        value_type="bool",
-        description="Whether the symbol is still holding beyond the 2nd deviation after the post-earnings continuation run.",
-    )
-    add(
-        "pattern.mid_earnings_sessions_since_gap",
-        int(row.get("mid_earnings_sessions_since_gap", symbol_entry.get("mid_earnings_sessions_since_gap", 0)) or 0),
-        group="pattern",
-        label="Mid-earnings sessions since gap",
-        value_type="number",
-        description="Trading sessions elapsed since the qualifying earnings gap for the mid-earnings continuation setup.",
-    )
-    add(
-        "pattern.mid_earnings_zone_streak_days",
-        int(row.get("mid_earnings_zone_streak_days", symbol_entry.get("mid_earnings_zone_streak_days", 0)) or 0),
-        group="pattern",
-        label="Mid-earnings zone streak days",
-        value_type="number",
-        description="How many consecutive closes held in the 2nd-to-3rd deviation continuation zone.",
-    )
-    add(
-        "pattern.mid_earnings_primary_trigger_level",
-        row.get("mid_earnings_primary_trigger_level") or symbol_entry.get("mid_earnings_primary_trigger_level") or "",
-        group="pattern",
-        label="Mid-earnings primary trigger",
-        value_type="text",
-        description="Primary trigger level used to classify the mid-earnings retest entry.",
-    )
-    add(
-        "pattern.mid_earnings_retest_date",
-        row.get("mid_earnings_retest_date") or symbol_entry.get("mid_earnings_retest_date") or "",
-        group="pattern",
-        label="Mid-earnings retest date",
-        value_type="text",
-        description="Date of the EMA or first-deviation retest that confirmed the mid-earnings setup.",
-    )
-    add(
-        "pattern.mid_earnings_sessions_after_zone",
-        int(row.get("mid_earnings_sessions_after_zone", symbol_entry.get("mid_earnings_sessions_after_zone", 0)) or 0),
-        group="pattern",
-        label="Mid-earnings sessions after zone",
-        value_type="number",
-        description="How many sessions after the 2nd-dev streak the confirming retest occurred.",
-    )
-    add(
-        "pattern.mid_earnings_trigger_levels",
-        list(row.get("mid_earnings_trigger_levels") or symbol_entry.get("mid_earnings_trigger_levels") or []),
-        group="pattern",
-        label="Mid-earnings trigger levels",
-        value_type="list",
-        description="All mid-earnings trigger levels that bounced on the entry day.",
-    )
-    add(
-        "pattern.mid_earnings_ema15_trigger",
-        bool(row.get("mid_earnings_ema15_trigger") or symbol_entry.get("mid_earnings_ema15_trigger")),
-        group="pattern",
-        label="Mid-earnings EMA15 trigger",
-        value_type="bool",
-        description="Whether the mid-earnings setup triggered directly off EMA15.",
-    )
-    add(
-        "pattern.mid_earnings_ema21_trigger",
-        bool(row.get("mid_earnings_ema21_trigger") or symbol_entry.get("mid_earnings_ema21_trigger")),
-        group="pattern",
-        label="Mid-earnings EMA21 trigger",
-        value_type="bool",
-        description="Whether the mid-earnings setup triggered directly off EMA21.",
-    )
-    add(
-        "pattern.mid_earnings_first_dev_trigger",
-        bool(row.get("mid_earnings_first_dev_trigger") or symbol_entry.get("mid_earnings_first_dev_trigger")),
-        group="pattern",
-        label="Mid-earnings 1st-dev trigger",
-        value_type="bool",
-        description="Whether the mid-earnings setup triggered directly off the first deviation band.",
-    )
-    add(
-        "pattern.mid_earnings_ema8_confluence",
-        bool(row.get("mid_earnings_ema8_confluence") or symbol_entry.get("mid_earnings_ema8_confluence")),
-        group="pattern",
-        label="Mid-earnings EMA8 confluence",
-        value_type="bool",
-        description="Whether the mid-earnings retest also interacted with EMA8.",
-    )
-    add(
-        "pattern.mid_earnings_ema21_confluence",
-        bool(row.get("mid_earnings_ema21_confluence") or symbol_entry.get("mid_earnings_ema21_confluence")),
-        group="pattern",
-        label="Mid-earnings EMA21 confluence",
-        value_type="bool",
-        description="Whether the mid-earnings retest also interacted with EMA21.",
-    )
-    add(
-        "pattern.mid_earnings_first_dev_confluence",
-        bool(row.get("mid_earnings_first_dev_confluence") or symbol_entry.get("mid_earnings_first_dev_confluence")),
-        group="pattern",
-        label="Mid-earnings 1st-dev confluence",
-        value_type="bool",
-        description="Whether the mid-earnings retest also lined up with the first deviation band.",
-    )
-    add(
-        "pattern.recent_band_extension_days",
-        int(symbol_entry.get("recent_band_extension_days", 0) or 0),
-        group="pattern",
-        label="Recent band extension days",
-        value_type="number",
-        description="Consecutive sessions already extended through the first favorable band before entry.",
-    )
-    add(
-        "pattern.recent_second_band_test_days",
-        int(row.get("recent_second_band_test_days", 0) or 0),
-        group="pattern",
-        label="Recent second-band test days",
-        value_type="number",
-        description="How many recent sessions tested the second favorable band.",
-    )
-    add(
-        "pattern.second_band_penalty",
-        int(row.get("second_band_penalty", 0) or 0),
-        group="pattern",
-        label="Second-band penalty",
-        value_type="number",
-        description="Ranking penalty applied for repeated second-band tests.",
-    )
-    add(
-        "pattern.extension_note",
-        row.get("extension_note") or "",
-        group="pattern",
-        label="Extension note",
-        value_type="text",
-        description="Scanner note about recent extension behavior.",
-    )
-    add(
-        "pattern.first_dev_break_bonus",
-        int(row.get("first_dev_break_bonus", 0) or 0),
-        group="pattern",
-        label="First-dev break bonus",
-        value_type="number",
-        description="Bonus applied when the first-dev break was fresh instead of recycled.",
-    )
-    add(
-        "pattern.first_dev_chop_penalty",
-        int(row.get("first_dev_chop_penalty", 0) or 0),
-        group="pattern",
-        label="First-dev chop penalty",
-        value_type="number",
-        description="Penalty applied when price chopped or repeatedly failed around the first deviation band.",
-    )
-    add(
-        "pattern.first_dev_note",
-        row.get("first_dev_note") or "",
-        group="pattern",
-        label="First-dev note",
-        value_type="text",
-        description="Scanner note describing the first-dev break quality.",
-    )
-    add(
-        "trend.trend_20d",
-        symbol_entry.get("trend_20d") or feature_row.get("trend_20d") or "",
-        group="trend",
-        label="20-day trend",
-        value_type="text",
-        description="Directional trend label derived from recent daily closes.",
-    )
-    add(
-        "trend.htf_trend_1h",
-        row.get("htf_trend_1h") or symbol_entry.get("htf_trend_1h") or feature_row.get("htf_trend_1h") or "",
-        group="trend",
-        label="1h trend",
-        value_type="text",
-        description="Directional 1h trend label from intraday SMA stack and slope.",
-    )
-    add(
-        "trend.htf_trend_4h",
-        row.get("htf_trend_4h") or symbol_entry.get("htf_trend_4h") or feature_row.get("htf_trend_4h") or "",
-        group="trend",
-        label="4h trend",
-        value_type="text",
-        description="Synthetic 4h trend label resampled from 1h bars.",
-    )
-    add(
-        "trend.htf_trend_aligned",
-        bool(row.get("htf_trend_aligned") or symbol_entry.get("htf_trend_aligned") or feature_row.get("htf_trend_aligned")),
-        group="trend",
-        label="1h/4h trend aligned",
-        value_type="bool",
-        description="Whether both 1h and 4h trends align with the setup side.",
-    )
-    add(
-        "trend.htf_retest_confirmed",
-        bool(row.get("htf_retest_confirmed") or symbol_entry.get("htf_retest_confirmed") or feature_row.get("htf_retest_confirmed")),
-        group="trend",
-        label="HTF SMA retest confirmed",
-        value_type="bool",
-        description="Whether a recent 1h or 4h SMA retest-and-go was detected.",
-    )
-    add(
-        "trend.htf_retest_sma",
-        row.get("htf_retest_sma") or symbol_entry.get("htf_retest_sma") or feature_row.get("htf_retest_sma") or "",
-        group="trend",
-        label="HTF retest SMA",
-        value_type="text",
-        description="Timeframe and SMA label touched by the 1h/4h retest study.",
-    )
-    add(
-        "trend.htf_trend_score_bonus",
-        int(row.get("htf_trend_score_bonus", symbol_entry.get("htf_trend_score_bonus", feature_row.get("htf_trend_score_bonus", 0))) or 0),
-        group="trend",
-        label="HTF trend bonus",
-        value_type="number",
-        description="Feature-flagged priority bonus from aligned 1h/4h trend and recent SMA retest.",
-    )
-    add(
-        "trend.htf_trend_note",
-        row.get("htf_trend_note") or symbol_entry.get("htf_trend_note") or feature_row.get("htf_trend_note") or "",
-        group="trend",
-        label="HTF trend note",
-        value_type="text",
-        description="Scanner note describing the 1h/4h trend and retest context.",
-    )
-    add(
-        "levels.hv_level_nearby_count",
-        int(row.get("hv_level_nearby_count", symbol_entry.get("hv_level_nearby_count", feature_row.get("hv_level_nearby_count", 0))) or 0),
-        group="levels",
-        label="Nearby HV levels",
-        value_type="number",
-        description="Count of stored high-volume horizontal levels near the entry.",
-    )
-    add(
-        "levels.hv_level_blocking_count",
-        int(row.get("hv_level_blocking_count", symbol_entry.get("hv_level_blocking_count", feature_row.get("hv_level_blocking_count", 0))) or 0),
-        group="levels",
-        label="Blocking HV levels",
-        value_type="number",
-        description="Count of strong stored HV levels overhead for longs or below for shorts.",
-    )
-    add(
-        "levels.hv_level_break_today",
-        bool(row.get("hv_level_break_today") or symbol_entry.get("hv_level_break_today") or feature_row.get("hv_level_break_today")),
-        group="levels",
-        label="HV level break today",
-        value_type="bool",
-        description="Whether the latest bar broke a stored high-volume horizontal level.",
-    )
-    add(
-        "levels.hv_level_nearest_bucket",
-        row.get("hv_level_nearest_bucket") or symbol_entry.get("hv_level_nearest_bucket") or feature_row.get("hv_level_nearest_bucket") or "",
-        group="levels",
-        label="Nearest HV level bucket",
-        value_type="text",
-        description="Relvol bucket for the nearest stored high-volume horizontal level.",
-    )
-    add(
-        "levels.hv_level_nearest_distance_atr",
-        _coerce_float(row.get("hv_level_nearest_distance_atr") or symbol_entry.get("hv_level_nearest_distance_atr") or feature_row.get("hv_level_nearest_distance_atr")),
-        group="levels",
-        label="Nearest HV level distance ATR",
-        value_type="number",
-        description="ATR-normalized signed distance from entry to nearest stored HV level.",
-    )
-    add(
-        "levels.hv_level_note",
-        row.get("hv_level_note") or symbol_entry.get("hv_level_note") or feature_row.get("hv_level_note") or "",
-        group="levels",
-        label="HV level note",
-        value_type="text",
-        description="Scanner note describing nearby or blocking high-volume levels.",
-    )
-    add(
-        "levels.cloud_level_nearby_count",
-        int(row.get("cloud_level_nearby_count", symbol_entry.get("cloud_level_nearby_count", feature_row.get("cloud_level_nearby_count", 0))) or 0),
-        group="levels",
-        label="Nearby cloud levels",
-        value_type="number",
-        description="Count of active flat Leading Span B cloud levels near the entry.",
-    )
-    add(
-        "levels.cloud_level_nearest_distance_atr",
-        _coerce_float(row.get("cloud_level_nearest_distance_atr") or symbol_entry.get("cloud_level_nearest_distance_atr") or feature_row.get("cloud_level_nearest_distance_atr")),
-        group="levels",
-        label="Nearest cloud level distance ATR",
-        value_type="number",
-        description="ATR-normalized signed distance from entry to the nearest active flat cloud level.",
-    )
-    add(
-        "levels.cloud_level_note",
-        row.get("cloud_level_note") or symbol_entry.get("cloud_level_note") or feature_row.get("cloud_level_note") or "",
-        group="levels",
-        label="Cloud level note",
-        value_type="text",
-        description="Scanner note describing active flat cloud level proximity.",
-    )
-    add(
-        "structure.compression_break_today",
-        bool(row.get("compression_break_today") or symbol_entry.get("compression_break_today") or feature_row.get("compression_break_today")),
-        group="structure",
-        label="Compression break today",
-        value_type="bool",
-        description="Whether the latest daily close broke out of a prior compressed anchor box.",
-    )
-    add(
-        "structure.compression_break_note",
-        row.get("compression_break_note") or symbol_entry.get("compression_break_note") or feature_row.get("compression_break_note") or "",
-        group="structure",
-        label="Compression break note",
-        value_type="text",
-        description="Scanner note describing the compression break study event.",
-    )
-    add(
-        "trend.trendline_break_recent",
-        bool(row.get("trendline_break_recent") or symbol_entry.get("priority_trendline_break_recent")),
-        group="trend",
-        label="Recent trendline break",
-        value_type="bool",
-        description="Whether a recent trendline break candidate was detected for the setup.",
-    )
-    add(
-        "trend.trendline_break_note",
-        row.get("trendline_break_note") or symbol_entry.get("priority_trendline_break_note") or "",
-        group="trend",
-        label="Trendline break note",
-        value_type="text",
-        description="Scanner description of the recent trendline break candidate.",
-    )
-    add(
-        "trend.trendline_alert_nearby",
-        bool(symbol_entry.get("priority_trendline_within_alert_range")),
-        group="trend",
-        label="Trendline alert nearby",
-        value_type="bool",
-        description="Whether a directional trendline candidate was nearby at scan time.",
-    )
-    add(
-        "trend.trendline_note",
-        symbol_entry.get("priority_trendline_note") or "",
-        group="trend",
-        label="Trendline note",
-        value_type="text",
-        description="Scanner description of the nearby trendline candidate.",
-    )
-    add(
-        "structure.compression_flag",
-        bool(row.get("compression_flag")),
-        group="structure",
-        label="Compression flag",
-        value_type="bool",
-        description="Whether the setup met the anchor compression criteria.",
-    )
-    add(
-        "structure.compression_penalty",
-        int(row.get("compression_penalty", 0) or 0),
-        group="structure",
-        label="Compression penalty",
-        value_type="number",
-        description="Ranking penalty applied for compression.",
-    )
-    add(
-        "structure.compression_note",
-        row.get("compression_note") or "",
-        group="structure",
-        label="Compression note",
-        value_type="text",
-        description="Scanner note describing the compression structure.",
-    )
-    add(
-        "structure.ema21_consolidation",
-        bool(entry_snapshot.get("ema21_consolidation")),
-        group="structure",
-        label="EMA21 consolidation",
-        value_type="bool",
-        description="Whether the setup was consolidating tightly around the 21 EMA.",
-    )
-    add(
-        "structure.ema21_consolidation_span_atr",
-        _coerce_float(entry_snapshot.get("ema21_consolidation_span_atr")),
-        group="structure",
-        label="EMA21 consolidation span ATR",
-        value_type="number",
-        description="Width of the recent consolidation range measured in ATR.",
-    )
-    add(
-        "structure.directional_ema21_distance_atr",
-        _coerce_float(entry_snapshot.get("directional_ema21_distance_atr")),
-        group="structure",
-        label="Directional EMA21 distance ATR",
-        value_type="number",
-        description="ATR-normalized distance from EMA21, flipped so positive values align with the setup direction.",
-    )
-    add(
-        "structure.directional_ema21_bucket",
-        entry_snapshot.get("directional_ema21_bucket") or "",
-        group="structure",
-        label="Directional EMA21 bucket",
-        value_type="text",
-        description="Directional EMA21 posture bucket: tight, clean extension, overextended, or against the setup.",
-    )
-    add(
-        "structure.directional_sma_support",
-        entry_snapshot.get("directional_sma_support"),
-        group="structure",
-        label="Directional SMA support",
-        value_type="bool",
-        description="Whether price is on the favorable side of both the 20-day and 50-day moving averages.",
-    )
-    add(
-        "structure.directional_sma_stack_aligned",
-        entry_snapshot.get("directional_sma_stack_aligned"),
-        group="structure",
-        label="Directional SMA stack aligned",
-        value_type="bool",
-        description="Whether price and the 20-day/50-day moving averages are stacked in the setup direction.",
-    )
-    add(
-        "structure.previous_avwape_near_0_5atr",
-        bool(entry_snapshot.get("previous_avwape_near_0_5atr")),
-        group="structure",
-        label="Previous AVWAPE within 0.5 ATR",
-        value_type="bool",
-        description="Whether the prior anchor AVWAPE was within 0.5 ATR of price.",
-    )
-    add(
-        "structure.previous_day_range_break",
-        bool(row.get("previous_day_range_break") or symbol_entry.get("previous_day_range_break")),
-        group="structure",
-        label="Previous day range break",
-        value_type="bool",
-        description="Whether price closed through the prior session trigger level for the setup direction.",
-    )
-    add(
-        "filters.ranking_blocked",
-        bool(symbol_entry.get("priority_ranking_blocked")),
-        group="filters",
-        label="Ranking blocked",
-        value_type="bool",
-        description="Whether ranking filters blocked the setup from the top list.",
-    )
-    add(
-        "filters.ranking_note",
-        row.get("ranking_note") or symbol_entry.get("priority_ranking_note") or "",
-        group="filters",
-        label="Ranking note",
-        value_type="text",
-        description="Explanation for any ranking penalty or exclusion applied to the setup.",
-    )
-    add(
-        "filters.score_bonus_note",
-        row.get("score_bonus_note") or symbol_entry.get("priority_score_bonus_note") or "",
-        group="filters",
-        label="Score bonus note",
-        value_type="text",
-        description="Explanation for score bonuses applied during final ranking refinement.",
-    )
-    add(
-        "filters.clean_path_score_bonus",
-        int(symbol_entry.get("priority_clean_path_score_bonus", 0) or 0),
-        group="filters",
-        label="Clean-path score bonus",
-        value_type="number",
-        description="Bonus added when the previous anchor path looked clear.",
-    )
-    add(
-        "filters.clean_first_zone_score_bonus",
-        int(row.get("clean_first_zone_score_bonus", symbol_entry.get("priority_clean_first_zone_score_bonus", 0)) or 0),
-        group="filters",
-        label="Clean first-zone score bonus",
-        value_type="number",
-        description="Bonus added when price is cleanly holding the AVWAPE-to-first-deviation zone.",
-    )
-    add(
-        "filters.market_regime_score_delta",
-        int(row.get("market_regime_score_delta", symbol_entry.get("priority_market_regime_score_delta", 0)) or 0),
-        group="filters",
-        label="Market regime score delta",
-        value_type="number",
-        description="Score adjustment applied when a setup fights the current broad-market regime without confirmation.",
-    )
-    add(
-        "filters.rejection_score_cap",
-        _coerce_float(row.get("rejection_score_cap") or symbol_entry.get("priority_rejection_score_cap")),
-        group="filters",
-        label="Rejection score cap",
-        value_type="number",
-        description="Maximum score allowed when noisy setup-quality rejection conditions are present.",
-    )
-    add(
-        "filters.trendline_score_bonus",
-        int(symbol_entry.get("priority_trendline_score_bonus", 0) or 0),
-        group="filters",
-        label="Trendline score bonus",
-        value_type="number",
-        description="Bonus added for a recent trendline break candidate.",
-    )
-    add(
-        "filters.previous_day_range_break_bonus",
-        int(
-            row.get("previous_day_range_break_bonus", 0)
-            or symbol_entry.get("previous_day_range_break_bonus", 0)
-            or 0
-        ),
-        group="filters",
-        label="Previous day range bonus",
-        value_type="number",
-        description="Bonus added when price cleared the prior day high for longs or low for shorts.",
-    )
-    add(
-        "filters.previous_day_range_note",
-        row.get("previous_day_range_note") or symbol_entry.get("previous_day_range_note") or "",
-        group="filters",
-        label="Previous day range note",
-        value_type="text",
-        description="Scanner note describing the prior-day range break bonus.",
-    )
-    add(
-        "levels.current_active_level",
-        symbol_entry.get("current_active_level") or feature_row.get("current_active_level") or "",
-        group="levels",
-        label="Current active level",
-        value_type="text",
-        description="Band level containing price at scan time for the current anchor.",
-    )
-    add(
-        "levels.current_band_zone",
-        symbol_entry.get("current_band_zone") or feature_row.get("current_band_zone") or "",
-        group="levels",
-        label="Current band zone",
-        value_type="text",
-        description="Scanner band-zone label for the current anchor.",
-    )
-    add(
-        "levels.current_nearby_bands",
-        symbol_entry.get("current_nearby_bands") or [],
-        group="levels",
-        label="Current nearby bands",
-        value_type="list",
-        description="Nearby current-anchor AVWAP levels around the entry price.",
-    )
-    add(
-        "levels.previous_day_high",
-        _coerce_float(symbol_entry.get("previous_day_high") or feature_row.get("previous_day_high")),
-        group="levels",
-        label="Previous day high",
-        value_type="number",
-        description="High of the session immediately before the scan date.",
-    )
-    add(
-        "levels.previous_day_low",
-        _coerce_float(symbol_entry.get("previous_day_low") or feature_row.get("previous_day_low")),
-        group="levels",
-        label="Previous day low",
-        value_type="number",
-        description="Low of the session immediately before the scan date.",
-    )
-    add(
-        "levels.previous_active_level",
-        symbol_entry.get("previous_active_level") or feature_row.get("previous_active_level") or "",
-        group="levels",
-        label="Previous active level",
-        value_type="text",
-        description="Band level containing price for the previous anchor at scan time.",
-    )
-    add(
-        "levels.previous_band_zone",
-        symbol_entry.get("previous_band_zone") or feature_row.get("previous_band_zone") or "",
-        group="levels",
-        label="Previous band zone",
-        value_type="text",
-        description="Scanner band-zone label for the previous anchor.",
-    )
-    add(
-        "levels.previous_nearby_bands",
-        symbol_entry.get("previous_nearby_bands") or [],
-        group="levels",
-        label="Previous nearby bands",
-        value_type="list",
-        description="Nearby previous-anchor AVWAP levels around the entry price.",
-    )
-    add(
-        "distance.distance_from_current_vwap",
-        _coerce_float(symbol_entry.get("distance_from_current_vwap")),
-        group="distance",
-        label="Distance from current AVWAPE",
-        value_type="number",
-        description="Absolute price distance from current AVWAPE at scan time.",
-    )
-    add(
-        "distance.pct_from_current_vwap",
-        _coerce_float(symbol_entry.get("pct_from_current_vwap")),
-        group="distance",
-        label="Pct from current AVWAPE",
-        value_type="number",
-        description="Percent distance from current AVWAPE at scan time.",
-    )
-    add(
-        "distance.distance_from_current_upper_1",
-        _coerce_float(symbol_entry.get("distance_from_current_upper_1")),
-        group="distance",
-        label="Distance from current UPPER_1",
-        value_type="number",
-        description="Absolute price distance from current UPPER_1 at scan time.",
-    )
-    add(
-        "distance.pct_from_current_upper_1",
-        _coerce_float(symbol_entry.get("pct_from_current_upper_1")),
-        group="distance",
-        label="Pct from current UPPER_1",
-        value_type="number",
-        description="Percent distance from current UPPER_1 at scan time.",
-    )
-    add(
-        "distance.distance_from_current_lower_1",
-        _coerce_float(symbol_entry.get("distance_from_current_lower_1")),
-        group="distance",
-        label="Distance from current LOWER_1",
-        value_type="number",
-        description="Absolute price distance from current LOWER_1 at scan time.",
-    )
-    add(
-        "distance.pct_from_current_lower_1",
-        _coerce_float(symbol_entry.get("pct_from_current_lower_1")),
-        group="distance",
-        label="Pct from current LOWER_1",
-        value_type="number",
-        description="Percent distance from current LOWER_1 at scan time.",
-    )
-
-    return attributes, registry
 
 
-def build_priority_scoring_attribute_context(row: dict, symbol_entry: dict) -> dict[str, object]:
-    entry_snapshot = symbol_entry.get("entry_feature_snapshot", {})
-    if not isinstance(entry_snapshot, dict):
-        entry_snapshot = {}
-    attributes, _ = build_tracker_entry_attributes(
-        row,
-        symbol_entry,
-        entry_snapshot,
-        feature_row=symbol_entry.get("feature_row") if isinstance(symbol_entry.get("feature_row"), dict) else None,
-    )
-    return attributes
 
 
 def _coerce_rule_scalar(value):
@@ -5346,8 +4082,36 @@ def _normalize_setup_tracker_daily_watchlists(
     return normalized
 
 
+def _setup_tracker_backup_path() -> Path:
+    return SETUP_TRACKER_FILE.with_name(SETUP_TRACKER_FILE.name + ".bak")
+
+
+def _tracker_payload_record_count(payload) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    return sum(
+        len(payload.get(namespace) or {})
+        for namespace in ("setups", "control_setups", "study_setups")
+    )
+
+
 def load_setup_tracker_payload() -> dict:
-    payload = load_json(SETUP_TRACKER_FILE, default={})
+    payload = load_json(SETUP_TRACKER_FILE, default=None)
+    # The tracker lives on a cloud-synced drive and is large; a partial/mid-sync
+    # read surfaces as a JSON error (-> None) or an empty dict. Falling straight
+    # through to the empty default would let the next save wipe the entire
+    # Expected-R history, so recover from the rolling .bak first.
+    if _tracker_payload_record_count(payload) == 0:
+        backup_path = _setup_tracker_backup_path()
+        backup_payload = load_json(backup_path, default=None)
+        if _tracker_payload_record_count(backup_payload) > 0:
+            logging.warning(
+                "Setup tracker at %s was missing/empty/corrupt; recovered %d record(s) from backup %s.",
+                SETUP_TRACKER_FILE,
+                _tracker_payload_record_count(backup_payload),
+                backup_path,
+            )
+            payload = backup_payload
     if not isinstance(payload, dict):
         return _default_setup_tracker_payload()
 
@@ -5368,7 +4132,7 @@ def load_setup_tracker_payload() -> dict:
     return tracker
 
 
-def save_setup_tracker_payload(payload: dict) -> None:
+def save_setup_tracker_payload(payload: dict, *, allow_empty: bool = False) -> None:
     payload["schema_version"] = SETUP_TRACKER_SCHEMA_VERSION
     payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
     payload["daily_watchlists"] = _normalize_setup_tracker_daily_watchlists(
@@ -5376,6 +4140,32 @@ def save_setup_tracker_payload(payload: dict) -> None:
         payload.get("setups"),
         default_updated_at=payload["updated_at"],
     )
+
+    # Corruption guard: never overwrite a non-trivial existing tracker with an
+    # empty payload (the signature of a failed/partial read upstream). Callers
+    # that intend a real reset must pass allow_empty=True.
+    if not allow_empty and _tracker_payload_record_count(payload) == 0:
+        try:
+            existing_size = SETUP_TRACKER_FILE.stat().st_size if SETUP_TRACKER_FILE.exists() else 0
+        except OSError:
+            existing_size = 0
+        if existing_size > SETUP_TRACKER_MIN_NONEMPTY_BYTES:
+            logging.error(
+                "Refusing to overwrite setup tracker %s (%d bytes) with an empty payload; "
+                "the prior read likely failed or was partial. Pass allow_empty=True to force a reset.",
+                SETUP_TRACKER_FILE,
+                existing_size,
+            )
+            return
+
+    # Rotate the last known-good file to a single rolling backup (cheap local
+    # rename) before writing the new one, so a crash/lock mid-write is recoverable.
+    if SETUP_TRACKER_FILE.exists():
+        try:
+            os.replace(SETUP_TRACKER_FILE, _setup_tracker_backup_path())
+        except OSError as exc:
+            logging.warning("Could not rotate setup tracker backup before save: %s", exc)
+
     save_json(SETUP_TRACKER_FILE, payload)
 
 
@@ -6197,6 +4987,14 @@ def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
 
     trade_df = df[df["datetime"].dt.date.astype(str) >= entry_trade_date].copy().reset_index(drop=True)
     indicator_trade = indicator_frame[indicator_frame["trade_date"] >= entry_trade_date].copy().reset_index(drop=True)
+    # Forward tracking only needs bars through the TRACKER_MAX_HOLD_DAYS time-stop
+    # (idx == TRACKER_MAX_HOLD_DAYS) plus a small buffer; capping here keeps a
+    # closed setup's record from growing one daily mark per scan forever.
+    max_forward_bars = TRACKER_MAX_HOLD_DAYS + TRACKER_FORWARD_MARK_BUFFER_DAYS + 1
+    if len(trade_df) > max_forward_bars:
+        trade_df = trade_df.iloc[:max_forward_bars].reset_index(drop=True)
+    if len(indicator_trade) > max_forward_bars:
+        indicator_trade = indicator_trade.iloc[:max_forward_bars].reset_index(drop=True)
     daily_marks = []
 
     try:
@@ -10253,6 +9051,40 @@ def build_tracker_factor_view_rows(attribute_leaderboard_rows: list[dict]) -> li
     return rows
 
 
+def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
+    """"What's worked in the last N days" per-family rows across the scored
+    (``setups``) and measured-only (``study_setups``) namespaces.
+
+    Reuses ``build_recent_tracker_setup_family_rows`` (episode-deduped,
+    recency-weighted) at ``RECENT_SETUP_TYPE_LOOKBACK_DAYS`` and tags each row
+    with its source namespace so study families (e.g. the 2nd-dev breakout) show
+    up alongside the live setups. Regime conditioning is intentionally off here so
+    this is a plain recent-window view.
+    """
+    if not isinstance(payload, dict):
+        return []
+    rows: list[dict] = []
+    for namespace, source_label in (("setups", "live"), ("study_setups", "study")):
+        namespace_setups = payload.get(namespace)
+        if not isinstance(namespace_setups, dict) or not namespace_setups:
+            continue
+        family_rows = build_recent_tracker_setup_family_rows(
+            namespace_setups,
+            lookback_days=RECENT_SETUP_TYPE_LOOKBACK_DAYS,
+            current_regime_label=None,
+        )
+        for row in family_rows:
+            row["namespace"] = source_label
+        rows.extend(family_rows)
+    rows.sort(
+        key=lambda row: (
+            -(row.get("closed_setups") or 0),
+            -(_coerce_float(row.get("avg_closed_r")) or -10**9),
+        )
+    )
+    return rows
+
+
 def export_setup_tracker_views(payload: dict) -> None:
     setups = payload.get("setups", {}) if isinstance(payload, dict) else {}
     attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload, dict) else {}
@@ -10262,6 +9094,7 @@ def export_setup_tracker_views(payload: dict) -> None:
     attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
     stats_rows = build_tracker_stats_rows(scenario_rows)
     setup_type_rows = build_tracker_setup_type_rows(setups)
+    recent_setup_type_rows = build_recent_setup_type_stat_rows(payload)
     playbook_rows = build_tracker_playbook_rows(setups)
     payload["stats"] = stats_rows
     payload["setup_type_stats"] = setup_type_rows
@@ -10271,6 +9104,7 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(daily_rows).to_csv(SETUP_DAILY_FILE, index=False)
     pd.DataFrame(stats_rows).to_csv(SETUP_STATS_FILE, index=False)
     pd.DataFrame(setup_type_rows).to_csv(SETUP_TYPE_STATS_FILE, index=False)
+    pd.DataFrame(recent_setup_type_rows).to_csv(SETUP_TYPE_RECENT_STATS_FILE, index=False)
     pd.DataFrame(playbook_rows).to_csv(SETUP_PLAYBOOKS_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
@@ -10400,6 +9234,8 @@ def update_setup_tracker_from_scan(
             target_scan_date,
             ", ".join(skipped_symbols[:12]) + (f" (+{len(skipped_symbols) - 12} more)" if len(skipped_symbols) > 12 else ""),
         )
+
+    _prune_main_setups(tracker, reference_scan_date=target_scan_date)
 
     # Control / holdout records live in a separate namespace so none of the
     # favorite-path aggregations (Expected-R, calibration, playbooks, stats) can
@@ -10613,6 +9449,56 @@ def select_tracker_control_rows(
         row["control_reason"] = "random"
         selected.append(row)
     return selected
+
+
+def _prune_main_setups(tracker: dict, *, reference_scan_date: str | None = None) -> None:
+    """Bound the main (favorite-path) ``setups`` namespace by age and hard count.
+
+    Historically only the control/study namespaces were pruned, so ``setups``
+    accumulated every record since inception and the tracker JSON grew without
+    bound. Keep a rolling SETUP_KEEP_DAYS window (comfortably beyond the longest
+    aggregation lookback) plus a hard cap, and drop the matching
+    ``daily_watchlists`` entries so they do not linger as empty shells.
+    """
+
+    if not isinstance(tracker, dict):
+        return
+    setups = tracker.get("setups")
+    if not isinstance(setups, dict) or not setups:
+        return
+    reference = _parse_iso_date_or_none(reference_scan_date) or datetime.now().date()
+    removed_dates: set[str] = set()
+    for setup_id, setup in list(setups.items()):
+        scan_value = isinstance(setup, dict) and setup.get("scan_date") or None
+        scan_day = _parse_iso_date_or_none(scan_value)
+        if scan_day is None or (reference - scan_day).days > SETUP_KEEP_DAYS:
+            setups.pop(setup_id, None)
+            if scan_value:
+                removed_dates.add(str(scan_value))
+    if len(setups) > SETUP_MAX_RECORDS:
+        ordered = sorted(
+            setups.items(),
+            key=lambda item: str(item[1].get("scan_date") or "") if isinstance(item[1], dict) else "",
+        )
+        for setup_id, setup in ordered[: len(setups) - SETUP_MAX_RECORDS]:
+            setups.pop(setup_id, None)
+            scan_value = isinstance(setup, dict) and setup.get("scan_date") or None
+            if scan_value:
+                removed_dates.add(str(scan_value))
+
+    # Drop daily_watchlists entries whose setups are now all gone (the on-save
+    # normaliser keeps the union of watchlist + setup dates, so stale dates would
+    # otherwise persist forever as empty shells).
+    daily_watchlists = tracker.get("daily_watchlists")
+    if isinstance(daily_watchlists, dict) and removed_dates:
+        surviving_dates = {
+            str(setup.get("scan_date") or "")
+            for setup in setups.values()
+            if isinstance(setup, dict)
+        }
+        for scan_date in removed_dates:
+            if scan_date not in surviving_dates:
+                daily_watchlists.pop(scan_date, None)
 
 
 def _prune_control_setups(control_setups: dict, *, reference_scan_date: str | None = None) -> None:
@@ -10885,37 +9771,6 @@ def get_previous_daily_row_for_date(daily_rows, last_trade_date):
     return previous_row
 
 
-def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, side):
-    previous_row = get_previous_daily_row_for_date(daily_rows, last_trade_date)
-    previous_day_high = _coerce_float(previous_row.get("high")) if previous_row else None
-    previous_day_low = _coerce_float(previous_row.get("low")) if previous_row else None
-    result = {
-        "previous_day_date": str(previous_row.get("date") or "") if previous_row else "",
-        "previous_day_high": previous_day_high,
-        "previous_day_low": previous_day_low,
-        "previous_day_range_break": False,
-        "previous_day_range_break_bonus": 0,
-        "previous_day_range_note": "",
-    }
-    if last_close is None:
-        return result
-
-    side = normalize_side(side)
-    if side == "LONG" and previous_day_high is not None and float(last_close) > float(previous_day_high):
-        result["previous_day_range_break"] = True
-        result["previous_day_range_break_bonus"] = PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS
-        result["previous_day_range_note"] = (
-            f"Above previous day high {float(previous_day_high):.2f} "
-            f"(+{PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS})"
-        )
-    elif side == "SHORT" and previous_day_low is not None and float(last_close) < float(previous_day_low):
-        result["previous_day_range_break"] = True
-        result["previous_day_range_break_bonus"] = PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS
-        result["previous_day_range_note"] = (
-            f"Below previous day low {float(previous_day_low):.2f} "
-            f"(+{PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS})"
-        )
-    return result
 
 
 def sessions_since_date(df: pd.DataFrame, event_date: date) -> int | None:
@@ -13380,31 +12235,8 @@ def append_master_avwap_user_favorites(
     }
 
 
-def _normalize_focus_priority_entry(entry: dict, default_bucket: str = "") -> dict | None:
-    if not isinstance(entry, dict):
-        return None
-
-    symbol = str(entry.get("symbol") or "").strip().upper()
-    if not symbol:
-        return None
-
-    return {
-        "symbol": symbol,
-        "side": normalize_side(entry.get("side", "LONG")),
-        "setup_family": str(entry.get("setup_family") or "").strip() or "general",
-        "priority_bucket": str(entry.get("priority_bucket") or default_bucket or "").strip().lower(),
-        "priority_score": _coerce_float(entry.get("priority_score")) or 0.0,
-    }
 
 
-def _focus_priority_bucket_sort_value(bucket: str) -> int:
-    lookup = {
-        "favorite_setup": 0,
-        "near_favorite_zone": 1,
-        "post_earnings_play": 2,
-        "sma_breakout_tracking": 3,
-    }
-    return lookup.get(str(bucket or "").strip().lower(), len(lookup))
 
 
 def build_master_avwap_focus_entries(payload: dict) -> list[dict]:
@@ -15827,193 +14659,6 @@ def _effective_compression_penalty(
     return int(effective_penalty), note
 
 
-def build_priority_setup_summary(
-    symbol: str,
-    side: str,
-    events_today: list[str],
-    all_events: list[str],
-    trend_label: str,
-    favorite_zone: str | None,
-    recent_band_extension_days: int = 0,
-    recent_second_band_test_days: int = 0,
-    second_band_penalty: int = 0,
-    breakout_5d: bool = False,
-    retest_followthrough: bool = False,
-    retest_reference_level: str = "",
-    retest_note: str = "",
-    extension_note: str = "",
-    first_dev_break_bonus: int = 0,
-    first_dev_chop_penalty: int = 0,
-    first_dev_note: str = "",
-    extreme_move_watch: bool = False,
-    extreme_move_favorite_ready: bool = False,
-    extreme_move_retest_level: str = "",
-    extreme_move_band_crosses: int = 0,
-    extreme_move_band_width_atr: float | None = None,
-    extreme_move_displacement_date: str = "",
-    extreme_move_note: str = "",
-    previous_day_range_break: bool = False,
-    previous_day_range_break_bonus: int = 0,
-    previous_day_range_note: str = "",
-    mid_earnings_active_second_stdev_hold: bool = False,
-    mid_earnings_primary_trigger_level: str = "",
-    post_earnings_sessions_since_gap: int | None = None,
-    sma_breakout_watch: bool = False,
-    sma_breakout_confirmed: bool = False,
-    sma_breakout_signal: str = "",
-    sma_breakout_score_bonus: int = 0,
-    sma_breakout_note: str = "",
-    sma_breakout_sma_label: str = "",
-    sma_breakout_sma_period: int = 0,
-    sma_breakout_sma_level: float | None = None,
-    sma_breakout_retest_level: str = "",
-    sma_breakout_retest_level_value: float | None = None,
-    sma_breakout_breakout_date: str = "",
-    sma_breakout_retest_date: str = "",
-    sma_breakout_confirmation_date: str = "",
-) -> dict:
-    current_weights = get_priority_signal_weights(side, "current")
-    context_weights = get_priority_signal_weights(side, "context")
-
-    current_setup_signals = sorted(
-        evt
-        for evt in events_today
-        if evt in current_weights
-        and (
-            _is_priority_breakout_signal(evt, side)
-            or _is_priority_bounce_signal(evt, side)
-            or evt == "EXTREME_MOVE_RETEST"
-            or _is_custom_priority_setup_signal(evt)
-        )
-    )
-    context_signals = sorted(evt for evt in events_today if evt in context_weights)
-    setup_active = (
-        bool(current_setup_signals)
-        or bool(first_dev_break_bonus)
-        or bool(extreme_move_favorite_ready)
-        or bool(sma_breakout_confirmed)
-    )
-    bounce_support_bonus, bounce_support_signals = _compute_bounce_support_bonus(
-        events_today,
-        setup_active=(
-            setup_active
-            or bool(retest_followthrough)
-            or bool(breakout_5d)
-            or bool(previous_day_range_break)
-        ),
-        side=side,
-    )
-
-    score = sum(current_weights.get(evt, 0) for evt in current_setup_signals)
-    score += sum(context_weights.get(evt, 0) for evt in context_signals)
-    score += bounce_support_bonus
-    trend_is_aligned = (
-        (side == "LONG" and trend_label == "UP")
-        or (side == "SHORT" and trend_label == "DOWN")
-    )
-
-    if favorite_zone:
-        score += PRIORITY_FAVORITE_ZONE_SCORE_BONUS
-
-    if retest_followthrough:
-        score += PRIORITY_RETEST_FOLLOWTHROUGH_SCORE_BONUS
-        score += PRIORITY_RETEST_LEVEL_SCORE_BONUS.get(retest_reference_level or "", 0)
-        if favorite_zone:
-            score += PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS
-        if trend_is_aligned:
-            score += PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS
-
-    if breakout_5d:
-        score += 14
-
-    if extreme_move_watch:
-        score += PRIORITY_EXTREME_MOVE_WATCH_SCORE_BONUS
-
-    if sma_breakout_watch and not sma_breakout_confirmed:
-        score += max(0, int(sma_breakout_score_bonus or 0))
-
-    score += max(0, int(previous_day_range_break_bonus or 0))
-    score += max(0, int(first_dev_break_bonus or 0))
-
-    if recent_band_extension_days <= 2:
-        score += 8
-    else:
-        score -= min(18, (recent_band_extension_days - 2) * 6)
-
-    score -= max(0, int(second_band_penalty or 0))
-    score -= max(0, int(first_dev_chop_penalty or 0))
-
-    if trend_is_aligned:
-        score += 8
-
-    if current_setup_signals and any(evt.startswith("MD_") for evt in all_events):
-        score += 5
-
-    setup_family, setup_tags = _derive_setup_family(
-        current_setup_signals,
-        side=side,
-        retest_followthrough=bool(retest_followthrough),
-        retest_reference_level=retest_reference_level,
-        extreme_move_favorite_ready=bool(extreme_move_favorite_ready),
-        mid_earnings_active_second_stdev_hold=bool(mid_earnings_active_second_stdev_hold),
-        mid_earnings_primary_trigger_level=mid_earnings_primary_trigger_level,
-        sma_breakout_watch=bool(sma_breakout_watch),
-        sma_breakout_confirmed=bool(sma_breakout_confirmed),
-        favorite_zone=favorite_zone,
-        post_earnings_sessions_since_gap=_coerce_int(post_earnings_sessions_since_gap),
-    )
-
-    return {
-        "symbol": symbol,
-        "side": side,
-        "score": score,
-        "favorite_signals": current_setup_signals,
-        "context_signals": context_signals,
-        "bounce_support_signals": bounce_support_signals,
-        "bounce_support_bonus": int(bounce_support_bonus or 0),
-        "favorite_zone": favorite_zone,
-        "trend_20d": trend_label,
-        "has_favorite_signal": bool(setup_active),
-        "setup_family": setup_family,
-        "setup_tags": setup_tags,
-        "recent_band_extension_days": recent_band_extension_days,
-        "recent_second_band_test_days": int(recent_second_band_test_days or 0),
-        "second_band_penalty": int(second_band_penalty or 0),
-        "breakout_5d": breakout_5d,
-        "retest_followthrough": retest_followthrough,
-        "retest_reference_level": retest_reference_level,
-        "retest_note": retest_note,
-        "extension_note": extension_note,
-        "first_dev_break_bonus": int(first_dev_break_bonus or 0),
-        "first_dev_chop_penalty": int(first_dev_chop_penalty or 0),
-        "first_dev_note": first_dev_note or "",
-        "extreme_move_watch": bool(extreme_move_watch),
-        "extreme_move_favorite_ready": bool(extreme_move_favorite_ready),
-        "extreme_move_retest_level": extreme_move_retest_level or "",
-        "extreme_move_band_crosses": int(extreme_move_band_crosses or 0),
-        "extreme_move_band_width_atr": (
-            None if extreme_move_band_width_atr is None else float(extreme_move_band_width_atr)
-        ),
-        "extreme_move_displacement_date": extreme_move_displacement_date or "",
-        "extreme_move_note": extreme_move_note or "",
-        "previous_day_range_break": bool(previous_day_range_break),
-        "previous_day_range_break_bonus": int(previous_day_range_break_bonus or 0),
-        "previous_day_range_note": previous_day_range_note or "",
-        "mid_earnings_primary_trigger_level": mid_earnings_primary_trigger_level or "",
-        "sma_breakout_watch": bool(sma_breakout_watch),
-        "sma_breakout_confirmed": bool(sma_breakout_confirmed),
-        "sma_breakout_signal": sma_breakout_signal or "",
-        "sma_breakout_score_bonus": int(sma_breakout_score_bonus or 0),
-        "sma_breakout_note": sma_breakout_note or "",
-        "sma_breakout_sma_label": sma_breakout_sma_label or "",
-        "sma_breakout_sma_period": int(sma_breakout_sma_period or 0),
-        "sma_breakout_sma_level": _coerce_float(sma_breakout_sma_level),
-        "sma_breakout_retest_level": sma_breakout_retest_level or "",
-        "sma_breakout_retest_level_value": _coerce_float(sma_breakout_retest_level_value),
-        "sma_breakout_breakout_date": sma_breakout_breakout_date or "",
-        "sma_breakout_retest_date": sma_breakout_retest_date or "",
-        "sma_breakout_confirmation_date": sma_breakout_confirmation_date or "",
-    }
 
 
 def _priority_pre_earnings_block_reason(next_earnings_date: str, days_to_next: int) -> str:
@@ -17159,294 +15804,6 @@ def _next_earnings_window_summary(
     }
 
 
-def evaluate_theta_put_candidate(
-    symbol: str,
-    side: str,
-    df: pd.DataFrame,
-    last_trade_date: date,
-    last_close: float | None,
-    atr20: float | None,
-    current_anchor_meta: dict | None,
-    previous_anchor_meta: dict | None,
-    indicator_row: pd.Series | dict | None,
-    compression_summary: dict | None,
-    recent_earnings_dates: list[str],
-    upcoming_earnings_dates: list[str],
-    *,
-    min_support_levels: int = THETA_MIN_SUPPORT_LEVELS,
-    play_type: str = "sold_put",
-) -> dict | None:
-    if normalize_side(side) != "LONG":
-        return None
-    close_value = _coerce_float(last_close)
-    atr_value = _coerce_float(atr20)
-    if close_value is None or close_value <= 0 or atr_value is None or atr_value <= 0:
-        return None
-
-    earnings_summary = _theta_earnings_window_summary(
-        last_trade_date,
-        recent_earnings_dates,
-        upcoming_earnings_dates,
-    )
-    if not earnings_summary["eligible"]:
-        return None
-
-    raw_supports = []
-    for label in THETA_SMA_SUPPORT_LABELS:
-        raw_supports.append(
-            _theta_support_entry(
-                label,
-                _indicator_level_value(indicator_row, label),
-                close_value,
-                atr_value,
-                "sma",
-            )
-        )
-
-    if current_anchor_meta:
-        current_bands = current_anchor_meta.get("bands", {}) if isinstance(current_anchor_meta.get("bands"), dict) else {}
-        raw_supports.extend(
-            [
-                _theta_support_entry("CURRENT_AVWAPE", current_anchor_meta.get("vwap"), close_value, atr_value, "avwape"),
-                _theta_support_entry("CURRENT_LOWER_1", current_bands.get("LOWER_1"), close_value, atr_value, "avwape"),
-                _theta_support_entry("CURRENT_UPPER_1", current_bands.get("UPPER_1"), close_value, atr_value, "avwape"),
-            ]
-        )
-
-    if previous_anchor_meta:
-        previous_bands = previous_anchor_meta.get("bands", {}) if isinstance(previous_anchor_meta.get("bands"), dict) else {}
-        raw_supports.extend(
-            [
-                _theta_support_entry("PREV_AVWAPE", previous_anchor_meta.get("vwap"), close_value, atr_value, "previous_avwape"),
-                _theta_support_entry("PREV_LOWER_1", previous_bands.get("LOWER_1"), close_value, atr_value, "previous_avwape"),
-                _theta_support_entry("PREV_UPPER_1", previous_bands.get("UPPER_1"), close_value, atr_value, "previous_avwape"),
-            ]
-        )
-
-    support_trendline = find_directional_trendline_candidate(
-        df,
-        side="SHORT",
-        last_close=close_value,
-        atr20=atr_value,
-    )
-    trendline_candidate = support_trendline.get("trendline_candidate")
-    if trendline_candidate:
-        raw_supports.append(
-            _theta_support_entry(
-                "TRENDLINE_SUPPORT",
-                trendline_candidate.get("current_line_price"),
-                close_value,
-                atr_value,
-                "trendline",
-            )
-        )
-
-    if bool((compression_summary or {}).get("is_compressed")) and df is not None and not df.empty:
-        recent = df.tail(THETA_COMPRESSION_SUPPORT_LOOKBACK_BARS)
-        if not recent.empty:
-            compression_low = pd.to_numeric(recent["low"], errors="coerce").dropna()
-            if not compression_low.empty:
-                raw_supports.append(
-                    _theta_support_entry(
-                        "COMPRESSION_LOW",
-                        float(compression_low.min()),
-                        close_value,
-                        atr_value,
-                        "compression",
-                    )
-                )
-
-    supports = _dedupe_theta_supports([entry for entry in raw_supports if entry])
-    min_support_levels = max(1, int(min_support_levels or THETA_MIN_SUPPORT_LEVELS))
-    if len(supports) < min_support_levels:
-        return None
-    major_sma_supports = _theta_major_sma_supports(supports)
-    if not major_sma_supports:
-        return None
-    avwap_supports = _theta_avwap_supports(supports)
-    if not avwap_supports:
-        return None
-    current_avwape_supports = [
-        entry
-        for entry in supports
-        if _normalize_theta_support_label(entry.get("label")) in THETA_CURRENT_AVWAPE_SUPPORT_LABELS
-    ]
-    previous_avwape_supports = [
-        entry
-        for entry in supports
-        if _normalize_theta_support_label(entry.get("label")) in THETA_PREVIOUS_AVWAPE_SUPPORT_LABELS
-    ]
-    previous_first_dev_supports = _theta_previous_first_dev_supports(supports)
-    sources = {
-        str(entry.get("source") or "").strip().lower()
-        for entry in supports
-        if str(entry.get("source") or "").strip()
-    }
-    ranked_strike_bands = _build_theta_strike_bands(supports, atr_value)
-    formatted_strike_bands = [_format_theta_strike_band(band) for band in ranked_strike_bands]
-    formatted_strike_bands = [band for band in formatted_strike_bands if band]
-    primary_strike_band = formatted_strike_bands[0] if formatted_strike_bands else ""
-    secondary_strike_bands = formatted_strike_bands[1:]
-
-    source_weights = {
-        "hv_horizontal_green": 1.50,
-        "avwape": 1.30,
-        "hv_horizontal": 1.20,
-        "previous_avwape": 1.15,
-        "trendline": 1.35,
-        "sma": 1.10,
-        "compression": 0.85,
-        "hv_horizontal_red": 0.70,
-    }
-    proximity_tiers = (
-        (0.20, 1.50),
-        (0.50, 1.20),
-        (1.00, 0.90),
-        (1.75, 0.60),
-        (THETA_SUPPORT_MAX_ATR, 0.35),
-    )
-    source_seen_counts: dict[str, int] = {}
-    proximity_score = 0.0
-    quality_score = 0.0
-    diminishing_penalty = 0.0
-    for entry in supports:
-        source = str(entry.get("source") or "").strip().lower()
-        distance_atr = float(entry.get("distance_atr", THETA_SUPPORT_MAX_ATR) or THETA_SUPPORT_MAX_ATR)
-        proximity_mult = proximity_tiers[-1][1]
-        for tier_limit, tier_mult in proximity_tiers:
-            if distance_atr <= tier_limit:
-                proximity_mult = tier_mult
-                break
-        proximity_score += 14.0 * proximity_mult
-
-        source_weight = source_weights.get(source, 0.75)
-        source_seen_counts[source] = source_seen_counts.get(source, 0) + 1
-        ordinal = source_seen_counts[source]
-        diminishing_mult = 1.0 if ordinal == 1 else max(0.35, 0.72 ** (ordinal - 1))
-        quality_score += 12.0 * source_weight * diminishing_mult
-        if ordinal > 1:
-            diminishing_penalty += 1.75 * (ordinal - 1)
-
-    confluence_score = 0.0
-    confluence_clusters = 0
-    if len(supports) >= 2:
-        levels = sorted(float(entry.get("level", 0.0) or 0.0) for entry in supports)
-        confluence_band = max(0.35 * atr_value, close_value * 0.0035)
-        for idx in range(len(levels)):
-            low = levels[idx]
-            high = low + confluence_band
-            members = [
-                entry
-                for entry in supports
-                if low <= float(entry.get("level", 0.0) or 0.0) <= high
-            ]
-            member_sources = {
-                str(entry.get("source") or "").strip().lower()
-                for entry in members
-                if entry.get("source")
-            }
-            if len(member_sources) >= 2 and len(members) >= 2:
-                confluence_clusters += 1
-                confluence_score = max(confluence_score, 7.0 + (len(member_sources) - 2) * 2.0 + (len(members) - 2) * 1.5)
-
-    nearest_support = max(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
-    nearest_support_distance_atr = float(nearest_support.get("distance_atr", 0.0) or 0.0)
-    far_support_penalty = 0.0
-    if nearest_support_distance_atr > 0.85:
-        far_support_penalty = min(26.0, (nearest_support_distance_atr - 0.85) * 18.0)
-
-    score = proximity_score + quality_score + confluence_score - diminishing_penalty - far_support_penalty
-    if earnings_summary.get("days_to_next_earnings") is None or int(earnings_summary.get("days_to_next_earnings") or 0) >= 35:
-        score += 5
-
-    deepest_support = min(supports, key=lambda entry: float(entry.get("level", 0.0) or 0.0))
-    strike_zone = f"at/below {nearest_support['label']} {nearest_support['level']:.2f}"
-    if deepest_support["label"] != nearest_support["label"]:
-        strike_zone += f"; deeper stack to {deepest_support['label']} {deepest_support['level']:.2f}"
-
-    driver_parts = [f"{len(supports)} support stack"]
-    driver_parts.append("major SMA support")
-    avwap_driver_parts = []
-    if current_avwape_supports:
-        avwap_driver_parts.append("current AVWAPE")
-    if previous_avwape_supports:
-        avwap_driver_parts.append("previous AVWAPE")
-    if previous_first_dev_supports:
-        avwap_driver_parts.append("previous 1st-dev")
-    if avwap_driver_parts:
-        driver_parts.append(" + ".join(avwap_driver_parts) + " support")
-    else:
-        driver_parts.append("AVWAP-family support")
-    if "avwape" in sources and "trendline" in sources:
-        driver_parts.append("AVWAPE+Trendline confluence")
-    elif "trendline" in sources:
-        driver_parts.append("Trendline support confluence")
-    if "compression" in sources:
-        driver_parts.append("compression floor")
-    if earnings_summary.get("days_to_next_earnings") is None or int(earnings_summary.get("days_to_next_earnings") or 0) >= 35:
-        driver_parts.append("earnings buffer clear")
-
-    risk_flags = []
-    if nearest_support.get("distance_atr") is not None and float(nearest_support.get("distance_atr") or 0.0) >= 2.0:
-        risk_flags.append("support distance high")
-    days_to_next = earnings_summary.get("days_to_next_earnings")
-    if days_to_next is not None and int(days_to_next) <= 35:
-        risk_flags.append("earnings soon")
-    if not previous_avwape_supports and not previous_first_dev_supports:
-        risk_flags.append("thin historical AVWAP stack")
-    if not risk_flags:
-        risk_flags.append("none")
-
-    notes = [
-        f"{len(supports)} supports",
-        earnings_summary["note"],
-        "IBKR option premium check pending",
-    ]
-    if bool((compression_summary or {}).get("is_compressed")):
-        notes.append((compression_summary or {}).get("compression_note", "compression zone"))
-    if trendline_candidate:
-        notes.append("support trendline nearby")
-
-    return {
-        "symbol": str(symbol or "").strip().upper(),
-        "side": "LONG",
-        "play_type": str(play_type or "sold_put"),
-        "score": int(score),
-        "last_trade_date": last_trade_date.isoformat() if hasattr(last_trade_date, "isoformat") else str(last_trade_date),
-        "last_close": float(close_value),
-        "atr20": float(atr_value),
-        "support_count": int(len(supports)),
-        "min_support_levels": int(min_support_levels),
-        "major_sma_support_count": int(len(major_sma_supports)),
-        "major_sma_support_summary": _format_theta_support_stack(major_sma_supports, limit=3),
-        "avwap_support_count": int(len(avwap_supports)),
-        "avwap_support_summary": _format_theta_support_stack(avwap_supports, limit=5),
-        "previous_first_dev_support_count": int(len(previous_first_dev_supports)),
-        "previous_first_dev_support_summary": _format_theta_support_stack(previous_first_dev_supports, limit=3),
-        "supports": supports,
-        "score_breakdown": {
-            "proximity_score": round(proximity_score, 2),
-            "quality_score": round(quality_score, 2),
-            "confluence_bonus": round(confluence_score, 2),
-            "diminishing_returns_penalty": round(diminishing_penalty, 2),
-            "far_support_penalty": round(far_support_penalty, 2),
-            "confluence_clusters": int(confluence_clusters),
-            "nearest_support_distance_atr": round(nearest_support_distance_atr, 3),
-        },
-        "support_summary": _format_theta_support_stack(supports),
-        "primary_strike_band": primary_strike_band,
-        "secondary_strike_bands": secondary_strike_bands,
-        "ranked_strike_bands": ranked_strike_bands,
-        "strike_zone": strike_zone,
-        "premium_target": _format_theta_premium_target(close_value),
-        "last_earnings_date": earnings_summary.get("last_earnings_date", ""),
-        "days_since_last_earnings": earnings_summary.get("days_since_last_earnings"),
-        "next_earnings_date": earnings_summary.get("next_earnings_date", ""),
-        "days_to_next_earnings": earnings_summary.get("days_to_next_earnings"),
-        "top_score_drivers": ", ".join(driver_parts),
-        "risk_flags": risk_flags,
-        "notes": "; ".join(part for part in notes if part),
-    }
 
 
 def evaluate_theta_pcs_candidate(
@@ -18532,119 +16889,6 @@ def build_combined_avwap_output_text(
     )
 
 
-def assess_priority_directional_obstacles(
-    side: str,
-    last_close: float,
-    atr20: float,
-    daily_rows,
-    last_trade_date,
-    sma_levels: dict[str, float],
-    current_anchor_meta: dict | None,
-    previous_anchor_meta: dict | None,
-) -> dict:
-    sma_obstacles = []
-    sma_blockers = []
-    sma_penalty = 0
-
-    for label, level in sorted(sma_levels.items(), key=lambda item: int(item[0].split("_")[-1])):
-        atr_distance = _directional_atr_distance(last_close, level, atr20, side)
-        if atr_distance is None or atr_distance > PRIORITY_SMA_WARN_ATR:
-            continue
-        obstacle = {
-            "label": label,
-            "level": float(level),
-            "atr_distance": float(atr_distance),
-        }
-        sma_obstacles.append(obstacle)
-        if atr_distance <= PRIORITY_SMA_DQ_ATR:
-            sma_blockers.append(obstacle)
-        else:
-            sma_penalty += 10 if atr_distance <= 2.5 else 6
-
-    prev_anchor_obstacles = []
-    prev_avwap_obstacles = []
-    prev_band_obstacles = []
-    prev_anchor_penalty = 0
-    if previous_anchor_meta:
-        prev_levels = [("PREV_AVWAPE", previous_anchor_meta.get("vwap"))]
-        prev_bands = previous_anchor_meta.get("bands", {}) or {}
-        prev_levels.extend(
-            [
-                ("PREV_UPPER_1", prev_bands.get("UPPER_1")),
-                ("PREV_LOWER_1", prev_bands.get("LOWER_1")),
-            ]
-        )
-
-        for label, level in prev_levels:
-            atr_distance = _directional_atr_distance(last_close, level, atr20, side)
-            if atr_distance is None or atr_distance > PRIORITY_PREV_AVWAP_WARN_ATR:
-                continue
-            obstacle = {
-                "label": label,
-                "level": float(level),
-                "atr_distance": float(atr_distance),
-            }
-            prev_anchor_obstacles.append(obstacle)
-            if label == "PREV_AVWAPE":
-                prev_avwap_obstacles.append(obstacle)
-            else:
-                prev_band_obstacles.append(obstacle)
-            if atr_distance <= 1.0:
-                prev_anchor_penalty += 10
-            elif atr_distance <= 2.0:
-                prev_anchor_penalty += 6
-            else:
-                prev_anchor_penalty += 3
-
-    directional_rejection = assess_directional_rejection_candle(
-        daily_rows=daily_rows,
-        last_trade_date=last_trade_date,
-        side=side,
-        atr20=atr20,
-        sma_levels=sma_levels,
-        current_anchor_meta=current_anchor_meta,
-        previous_anchor_meta=previous_anchor_meta,
-    )
-
-    ranking_blocked = bool(sma_blockers)
-    notes = []
-    if ranking_blocked:
-        notes.append(f"SMA DQ: {_format_obstacle_labels(sma_blockers)}")
-    elif sma_obstacles:
-        notes.append(f"SMAs ahead: {_format_obstacle_labels(sma_obstacles)}")
-    if prev_avwap_obstacles:
-        notes.append(f"Prev AVWAPE ahead: {_format_obstacle_labels(prev_avwap_obstacles)}")
-    if prev_band_obstacles:
-        notes.append(f"Prev stdev bands ahead: {_format_obstacle_labels(prev_band_obstacles)}")
-    if directional_rejection.get("directional_rejection_note"):
-        notes.append(
-            f"{directional_rejection['directional_rejection_note']} "
-            f"(-{int(directional_rejection.get('directional_rejection_penalty', 0) or 0)})"
-        )
-
-    return {
-        "ranking_blocked": ranking_blocked,
-        "ranking_block_reason": _format_obstacle_labels(sma_blockers) if ranking_blocked else "",
-        "sma_obstacles": sma_obstacles,
-        "sma_blockers": sma_blockers,
-        "previous_anchor_obstacles": prev_anchor_obstacles,
-        "previous_anchor_path_clear": bool(previous_anchor_meta) and not prev_anchor_obstacles,
-        "score_penalty": (
-            sma_penalty
-            + prev_anchor_penalty
-            + int(directional_rejection.get("directional_rejection_penalty", 0) or 0)
-        ),
-        "score_penalty_sma": sma_penalty,
-        "score_penalty_previous_anchor": prev_anchor_penalty,
-        "score_penalty_directional_rejection": int(
-            directional_rejection.get("directional_rejection_penalty", 0) or 0
-        ),
-        "directional_rejection_note": directional_rejection.get("directional_rejection_note", ""),
-        "directional_rejection_levels": list(directional_rejection.get("directional_rejection_levels") or []),
-        "directional_rejection_range_ratio": directional_rejection.get("directional_rejection_range_ratio"),
-        "directional_rejection_atr_ratio": directional_rejection.get("directional_rejection_atr_ratio"),
-        "ranking_note": " | ".join(notes),
-    }
 
 
 def assess_priority_directional_obstacles(
@@ -19405,33 +17649,6 @@ def _priority_side_opposite_day_note(row: dict) -> str:
     return f"long setup closed down on day{change_text}"
 
 
-def apply_priority_rejection_score_caps(
-    priority_rows: list[dict],
-    ai_state: dict,
-    feature_rows_by_symbol: dict[str, dict],
-) -> None:
-    for row in priority_rows:
-        symbol = str(row.get("symbol") or "").strip().upper()
-        previous_delta = float(row.get("rejection_score_cap_delta", 0.0) or 0.0)
-        base_score = float(row.get("score", 0.0) or 0.0) - previous_delta
-        score_cap, note = _priority_rejection_score_cap(row)
-        capped_score = min(base_score, float(score_cap)) if score_cap is not None else base_score
-        cap_delta = capped_score - base_score
-        row["rejection_score_cap"] = score_cap
-        row["rejection_score_cap_delta"] = float(cap_delta)
-        row["rejection_score_cap_note"] = note
-        row["score"] = capped_score
-        _update_priority_score_outputs(
-            symbol,
-            row,
-            ai_state,
-            feature_rows_by_symbol,
-            {
-                "rejection_score_cap": score_cap,
-                "rejection_score_cap_delta": float(cap_delta),
-                "rejection_score_cap_note": note,
-            },
-        )
 
 
 def _priority_signal_levels(row: dict) -> set[str]:
@@ -19517,20 +17734,6 @@ def _is_post_earnings_play_ready(row: dict) -> bool:
     )
 
 
-def _priority_is_preferred_custom_setup(row: dict) -> bool:
-    setup_family = str(row.get("setup_family") or "")
-    if setup_family in {
-        MID_EARNINGS_EMA15_RETEST_FAMILY,
-        MID_EARNINGS_EMA21_RETEST_FAMILY,
-        MID_EARNINGS_FIRST_DEV_RETEST_FAMILY,
-        SMA_BREAKOUT_FAMILY,
-    }:
-        return True
-    if setup_family == "post_earnings_avwap_bounce":
-        return _is_post_earnings_play_ready(row)
-    if setup_family == "post_earnings_52w_break":
-        return _is_post_earnings_play_ready(row) and bool(row.get("post_earnings_break_close"))
-    return False
 
 
 def _priority_requires_strength_confirmation(row: dict) -> bool:
@@ -19655,99 +17858,6 @@ def _priority_sma_breakout_tracking_rows(rows: list[dict]) -> list[dict]:
     return sorted(tracking_rows, key=sort_key)
 
 
-def apply_final_priority_buckets(
-    priority_rows: list[dict],
-    ai_state: dict,
-    csv_rows: list[dict],
-    feature_rows_by_symbol: dict[str, dict],
-) -> None:
-    def _enrich_priority_bucket_context(row: dict, symbol_entry: dict) -> None:
-        row.setdefault("current_active_level", symbol_entry.get("current_active_level") or "")
-        row.setdefault("current_band_zone", symbol_entry.get("current_band_zone") or "")
-        if "compression_flag" not in row:
-            row["compression_flag"] = bool(symbol_entry.get("compression_flag"))
-
-    def _classify_priority_bucket(row: dict | None) -> tuple[str, bool, bool]:
-        if not row or row.get("ranking_blocked") or _is_priority_recommendation_blocked(row):
-            return "", False, False
-        if _priority_should_track_extended_stdev(row) or _priority_should_track_sma_breakout(row):
-            return "", False, False
-        row.pop("favorite_score_gate_note", None)
-        setup_ready = bool(
-            row.get("has_favorite_signal")
-            or (row.get("retest_followthrough") and row.get("previous_anchor_path_clear"))
-            or _is_clean_first_zone_setup(row)
-        )
-        primary_favorite_ready = bool(setup_ready and _is_main_swing_or_favorite_zone_setup(row))
-        if setup_ready and not primary_favorite_ready:
-            setup_family = _canonical_tracker_setup_family(row)
-            row["favorite_score_gate_note"] = (
-                f"demoted from favorite: {setup_family} is tracker-only"
-            )
-        favorite_candidate = (
-            (
-                primary_favorite_ready
-                or _priority_is_actionable_avwap_breakout(row)
-                or _priority_is_first_zone_retest(row)
-                or _priority_is_preferred_custom_setup(row)
-            )
-            and _priority_has_strength_confirmation(row)
-        )
-        if favorite_candidate:
-            if _priority_is_side_opposite_day(row):
-                return "near_favorite_zone", False, True
-            short_gate_note = _short_favorite_demotion_reason(row)
-            if short_gate_note:
-                row["favorite_short_gate_note"] = short_gate_note
-                return "near_favorite_zone", False, True
-            if _priority_row_meets_favorite_score(row):
-                return "favorite_setup", True, False
-            row["favorite_score_gate_note"] = (
-                f"demoted from favorite: score {_priority_row_score(row):.0f} "
-                f"< {PRIORITY_FAVORITE_SETUP_MIN_SCORE}"
-            )
-        if (
-            row.get("favorite_zone")
-            or _priority_is_clean_retest_watch(row)
-            or setup_ready
-            or row.get("favorite_signals")
-            or row.get("extreme_move_watch")
-            or _is_post_earnings_play_ready(row)
-            or row.get("mid_earnings_watch")
-        ):
-            return "near_favorite_zone", False, True
-        return "", False, False
-
-    priority_map = {row["symbol"]: row for row in priority_rows}
-    symbol_map = ai_state.setdefault("symbols", {})
-
-    for symbol, symbol_entry in symbol_map.items():
-        row = priority_map.get(symbol)
-        if row:
-            _enrich_priority_bucket_context(row, symbol_entry)
-        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_priority_bucket(row)
-
-        symbol_entry["priority_bucket"] = priority_bucket
-        symbol_entry["is_favorite_setup"] = is_favorite_setup
-        symbol_entry["is_near_favorite_zone"] = is_near_favorite_zone
-        if row:
-            row["priority_bucket"] = priority_bucket
-            row["is_favorite_setup"] = is_favorite_setup
-            row["is_near_favorite_zone"] = is_near_favorite_zone
-
-        feature_row = feature_rows_by_symbol.get(symbol)
-        if row and feature_row is not None:
-            feature_row["priority_score"] = row.get("score", feature_row.get("priority_score"))
-            feature_row["priority_bucket"] = priority_bucket
-            feature_row["is_favorite_setup"] = is_favorite_setup
-            feature_row["is_near_favorite_zone"] = is_near_favorite_zone
-
-    for record in csv_rows:
-        row = priority_map.get(record.get("symbol"))
-        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_priority_bucket(row)
-        record["priority_bucket"] = priority_bucket
-        record["is_favorite_setup"] = is_favorite_setup
-        record["is_near_favorite_zone"] = is_near_favorite_zone
 
 def _priority_setup_family_label(setup_family: str) -> str:
     raw = str(setup_family or "general").strip() or "general"
@@ -19864,30 +17974,6 @@ def _priority_has_specific_trigger(row: dict) -> bool:
     )
 
 
-def _priority_is_high_conviction(row: dict) -> bool:
-    if row.get("priority_bucket") not in {"favorite_setup", "near_favorite_zone"}:
-        return False
-    if _priority_is_side_opposite_day(row):
-        return False
-    score = _coerce_float(row.get("score"))
-    if score is None or score < PRIORITY_HIGH_CONVICTION_MIN_SCORE:
-        return False
-    if not _priority_is_actionable_band_zone(row):
-        return False
-    if not _priority_has_specific_trigger(row):
-        return False
-    if (
-        str(row.get("setup_family") or "").strip() == "favorite_zone_watch"
-        and not row.get("favorite_signals")
-        and not row.get("retest_followthrough")
-        and not row.get("breakout_5d")
-    ):
-        return False
-    if str(row.get("setup_family") or "").startswith("post_earnings_") and not row.get("favorite_zone"):
-        return False
-    if row.get("short_near_favorite_gate_note"):
-        return False
-    return True
 
 
 def _priority_high_conviction_rows(rows: list[dict]) -> list[dict]:
@@ -19947,16 +18033,6 @@ def _write_priority_data_freshness(handle, rows: list[dict]) -> None:
     handle.write("\n")
 
 
-def _priority_bucket_label(bucket: str) -> str:
-    normalized = str(bucket or "").strip().lower()
-    return {
-        "favorite_setup": "favorite",
-        "near_favorite_zone": "near-zone",
-        "post_earnings_play": "post-earnings",
-        "stdev_retest_tracking": "stdev-track",
-        "sma_breakout_tracking": "sma-track",
-        "high_conviction": "high-conviction",
-    }.get(normalized, normalized or "unbucketed")
 
 
 def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None:
@@ -19995,8 +18071,6 @@ def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None
     handle.write("\n")
 
 
-def _write_priority_score_ranked_rows(handle, title: str, rows: list[dict]) -> None:
-    _write_priority_score_rankings(handle, title, rows)
 
 
 def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
@@ -20100,38 +18174,6 @@ def _best_swing_trade_sort_key(row: dict) -> tuple[float, int, int, str]:
     )
 
 
-def _priority_best_swing_trade_rows(
-    rows: list[dict],
-    *,
-    per_side: int = BEST_SWING_TRADES_PER_SIDE,
-    total_limit: int = BEST_SWING_TRADES_TOTAL_LIMIT,
-) -> list[dict]:
-    candidates = []
-    for row in _priority_unique_rows_by_symbol(rows):
-        if row.get("priority_bucket") not in {"favorite_setup", "near_favorite_zone"}:
-            continue
-        if row.get("ranking_blocked"):
-            continue
-        if _priority_is_side_opposite_day(row):
-            continue
-        if row.get("short_near_favorite_gate_note"):
-            continue
-        if bool(row.get("compression_flag")) and int(row.get("compression_penalty", 0) or 0) >= PRIORITY_COMPRESSION_SCORE_PENALTY_SEVERE:
-            continue
-        if not _priority_has_specific_trigger(row):
-            continue
-        candidates.append(row)
-
-    best_rows = []
-    for side in ("LONG", "SHORT"):
-        side_rows = [
-            row for row in candidates
-            if normalize_side(row.get("side") or "") == side
-        ]
-        best_rows.extend(sorted(side_rows, key=_best_swing_trade_sort_key)[:max(1, int(per_side))])
-
-    best_rows = _priority_unique_rows_by_symbol(sorted(best_rows, key=_best_swing_trade_sort_key))
-    return best_rows[:max(1, int(total_limit))]
 
 
 def _best_swing_trade_evidence(row: dict) -> str:
@@ -20229,293 +18271,8 @@ def _write_priority_detail_rows(handle, title: str, rows: list[dict]) -> None:
     handle.write("\n")
 
 
-def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
-    favorites = sorted(
-        [
-            row for row in priority_rows
-            if row.get("priority_bucket") == "favorite_setup"
-        ],
-        key=lambda row: (-row["score"], row["symbol"]),
-    )
-    watchlist = sorted(
-        [
-            row for row in priority_rows
-            if row.get("priority_bucket") == "near_favorite_zone"
-        ],
-        key=lambda row: (-row["score"], row["symbol"]),
-    )
-    post_earnings_rows = sorted(
-        [
-            row for row in priority_rows
-            if _is_post_earnings_play_ready(row)
-        ],
-        key=lambda row: (-row["score"], row["symbol"]),
-    )
-    mid_earnings_hold_rows = sorted(
-        [
-            row for row in priority_rows
-            if row.get("setup_family") == MID_EARNINGS_ABOVE_SECOND_STDEV_FAMILY
-            and not _is_priority_recommendation_blocked(row)
-        ],
-        key=lambda row: (-row["score"], row["symbol"]),
-    )
-    sma_breakout_tracking_rows = _priority_sma_breakout_tracking_rows(priority_rows)
-    stdev_tracking_rows = _priority_stdev_tracking_rows(priority_rows)
-    actionable_priority_rows = _priority_unique_rows_by_symbol(
-        favorites + watchlist + post_earnings_rows
-    )
-    report_rows = _priority_unique_rows_by_symbol(
-        actionable_priority_rows + mid_earnings_hold_rows + sma_breakout_tracking_rows + stdev_tracking_rows
-    )
-    high_conviction_rows = _priority_high_conviction_rows(actionable_priority_rows)
-    best_swing_rows = _priority_best_swing_trade_rows(actionable_priority_rows)
-    all_priority_rows = _priority_unique_rows_by_symbol(
-        sorted(report_rows, key=_priority_total_score_sort_key)
-    )
-
-    buffer = io.StringIO()
-    handle = buffer
-    handle.write("Master AVWAP priority setups\n")
-    handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-    handle.write(
-        "Focus: generalized high-quality setups across AVWAP breaks, post-earnings gap structures, "
-        "and mid-earnings continuation retests\n\n"
-    )
-    handle.write(
-        f"Pre-earnings filter: non-theta setups inside {PRIORITY_PRE_EARNINGS_BLOCK_DAYS} calendar days of earnings are omitted. "
-        "Theta sold-put/PCS candidates keep their own earnings rules.\n\n"
-    )
-    _write_priority_data_freshness(handle, report_rows)
-    handle.write("Copy/paste lists\n")
-    handle.write("================\n")
-    _write_priority_copy_lists(handle, "High conviction shortlist", high_conviction_rows)
-    _write_priority_copy_lists(handle, "Best swing trades today", best_swing_rows)
-    _write_priority_copy_lists(handle, "Favorite setups", favorites)
-    _write_priority_copy_lists(handle, "Near favorite zones", watchlist)
-    _write_priority_copy_lists(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
-    _write_priority_copy_lists(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
-    _write_priority_score_ranked_rows(handle, "Ranked by Expected-R (blended)", all_priority_rows)
-    _write_priority_setup_copy_lists(handle, "By setup type", all_priority_rows)
-    _write_best_swing_trade_rows(handle, "Best swing trades today", best_swing_rows)
-    _write_priority_score_rankings(handle, "Overall score rankings", actionable_priority_rows)
-
-    handle.write("Detailed setup notes\n")
-    handle.write("====================\n")
-    _write_priority_detail_rows(handle, "High conviction shortlist", high_conviction_rows)
-    _write_priority_detail_rows(handle, "Best current favorite setups", favorites)
-    _write_priority_detail_rows(handle, "Near favorite zones", watchlist)
-    _write_priority_detail_rows(handle, "Post earnings plays", post_earnings_rows)
-    _write_priority_detail_rows(handle, "Mid earnings above 2nd stdev", mid_earnings_hold_rows)
-    _write_priority_detail_rows(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
-    _write_priority_detail_rows(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
-    _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 
-def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_state: dict) -> None:
-    ranked_rows = sorted(priority_rows, key=lambda row: (-row["score"], row["symbol"]))
-    favorite_rows = [
-        row for row in ranked_rows
-        if row.get("priority_bucket") == "favorite_setup"
-    ]
-    near_rows = [
-        row for row in ranked_rows
-        if row.get("priority_bucket") == "near_favorite_zone"
-    ]
-    high_conviction_rows = _priority_high_conviction_rows(favorite_rows + near_rows)
-    post_earnings_rows = [
-        row for row in ranked_rows
-        if _is_post_earnings_play_ready(row)
-    ]
-    sma_breakout_tracking_rows = _priority_sma_breakout_tracking_rows(ranked_rows)
-    stdev_tracking_rows = _priority_stdev_tracking_rows(ranked_rows)
-
-    def _build_entry(row: dict, bucket: str, rank: int) -> dict:
-        symbol = row["symbol"]
-        symbol_state = ai_state.get("symbols", {}).get(symbol, {})
-        return {
-            "symbol": symbol,
-            "side": row["side"],
-            "priority_bucket": bucket,
-            "priority_rank": rank,
-            "priority_score": row["score"],
-            "setup_family": row.get("setup_family") or "",
-            "recent_tracker_score_delta": int(row.get("recent_tracker_score_delta", 0) or 0),
-            "recent_tracker_score_note": row.get("recent_tracker_score_note") or "",
-            "setup_type_score_delta": int(row.get("setup_type_score_delta", 0) or 0),
-            "setup_type_score_note": row.get("setup_type_score_note") or "",
-            "short_near_favorite_gate_delta": int(row.get("short_near_favorite_gate_delta", 0) or 0),
-            "short_near_favorite_gate_note": row.get("short_near_favorite_gate_note") or "",
-            "clean_first_zone_score_bonus": int(row.get("clean_first_zone_score_bonus", 0) or 0),
-            "clean_first_zone_score_note": row.get("clean_first_zone_score_note") or "",
-            "tracker_guardrail_score_delta": _coerce_float(row.get("tracker_guardrail_score_delta")) or 0.0,
-            "tracker_guardrail_score_note": row.get("tracker_guardrail_score_note") or "",
-            "watch_only": bool(row.get("watch_only")),
-            "short_confirmation_reasons": list(row.get("short_confirmation_reasons") or []),
-            "market_regime_score_delta": int(row.get("market_regime_score_delta", 0) or 0),
-            "market_regime_score_note": row.get("market_regime_score_note") or "",
-            "rejection_score_cap": _coerce_float(row.get("rejection_score_cap")),
-            "rejection_score_cap_delta": _coerce_float(row.get("rejection_score_cap_delta")),
-            "rejection_score_cap_note": row.get("rejection_score_cap_note") or "",
-            "setup_tags": list(row.get("setup_tags") or []),
-            "favorite_zone": row.get("favorite_zone") or "",
-            "trend_20d": row.get("trend_20d") or "SIDEWAYS",
-            "htf_trend_1h": row.get("htf_trend_1h") or "",
-            "htf_trend_4h": row.get("htf_trend_4h") or "",
-            "htf_trend_aligned": bool(row.get("htf_trend_aligned")),
-            "htf_retest_confirmed": bool(row.get("htf_retest_confirmed")),
-            "htf_retest_sma": row.get("htf_retest_sma") or "",
-            "htf_trend_score_bonus": int(row.get("htf_trend_score_bonus", 0) or 0),
-            "htf_trend_note": row.get("htf_trend_note") or "",
-            "hv_level_nearby_count": int(row.get("hv_level_nearby_count", 0) or 0),
-            "hv_level_blocking_count": int(row.get("hv_level_blocking_count", 0) or 0),
-            "hv_level_break_today": bool(row.get("hv_level_break_today")),
-            "hv_level_nearest_price": _coerce_float(row.get("hv_level_nearest_price")),
-            "hv_level_nearest_bucket": row.get("hv_level_nearest_bucket") or "",
-            "hv_level_nearest_distance_atr": _coerce_float(row.get("hv_level_nearest_distance_atr")),
-            "hv_level_note": row.get("hv_level_note") or "",
-            "cloud_level_nearby_count": int(row.get("cloud_level_nearby_count", 0) or 0),
-            "cloud_level_nearest_price": _coerce_float(row.get("cloud_level_nearest_price")),
-            "cloud_level_nearest_distance_atr": _coerce_float(row.get("cloud_level_nearest_distance_atr")),
-            "cloud_level_effective_range": row.get("cloud_level_effective_range") or "",
-            "cloud_level_note": row.get("cloud_level_note") or "",
-            "compression_break_today": bool(row.get("compression_break_today")),
-            "compression_break_direction": row.get("compression_break_direction") or "",
-            "compression_break_level": _coerce_float(row.get("compression_break_level")),
-            "compression_break_distance_atr": _coerce_float(row.get("compression_break_distance_atr")),
-            "compression_break_note": row.get("compression_break_note") or "",
-            "favorite_signals": list(row.get("favorite_signals") or []),
-            "favorite_context_signals": list(row.get("context_signals") or []),
-            "recent_band_extension_days": int(row.get("recent_band_extension_days", 0) or 0),
-            "recent_second_band_test_days": int(row.get("recent_second_band_test_days", 0) or 0),
-            "second_band_penalty": int(row.get("second_band_penalty", 0) or 0),
-            "breakout_5d": bool(row.get("breakout_5d")),
-            "retest_followthrough": bool(row.get("retest_followthrough")),
-            "retest_reference_level": row.get("retest_reference_level") or "",
-            "retest_note": row.get("retest_note") or "",
-            "previous_day_date": symbol_state.get("previous_day_date") or "",
-            "previous_day_high": _coerce_float(symbol_state.get("previous_day_high")),
-            "previous_day_low": _coerce_float(symbol_state.get("previous_day_low")),
-            "previous_day_range_break": bool(row.get("previous_day_range_break")),
-            "previous_day_range_break_bonus": int(row.get("previous_day_range_break_bonus", 0) or 0),
-            "previous_day_range_note": row.get("previous_day_range_note") or "",
-            "extreme_move_watch": bool(row.get("extreme_move_watch")),
-            "extreme_move_favorite_ready": bool(row.get("extreme_move_favorite_ready")),
-            "extreme_move_retest_level": row.get("extreme_move_retest_level") or "",
-            "extreme_move_band_crosses": int(row.get("extreme_move_band_crosses", 0) or 0),
-            "extreme_move_band_width_atr": _coerce_float(row.get("extreme_move_band_width_atr")),
-            "extreme_move_displacement_date": row.get("extreme_move_displacement_date") or "",
-            "extreme_move_note": row.get("extreme_move_note") or "",
-            "post_earnings_active": bool(row.get("post_earnings_active")),
-            "post_earnings_break_intraday": bool(row.get("post_earnings_break_intraday")),
-            "post_earnings_break_close": bool(row.get("post_earnings_break_close")),
-            "post_earnings_sessions_since_gap": int(row.get("post_earnings_sessions_since_gap", 0) or 0),
-            "post_earnings_qualified_52w_gap": bool(row.get("post_earnings_qualified_52w_gap")),
-            "post_earnings_qualified_pre_earnings_avwap_gap": bool(
-                row.get("post_earnings_qualified_pre_earnings_avwap_gap")
-            ),
-            "post_earnings_break_sessions_after_gap": row.get("post_earnings_break_sessions_after_gap"),
-            "post_earnings_earnings_candle_stop_level": _coerce_float(
-                row.get("post_earnings_earnings_candle_stop_level")
-            ),
-            "post_earnings_earnings_candle_stop_label": row.get("post_earnings_earnings_candle_stop_label") or "",
-            "post_earnings_gap_atr_multiple": _coerce_float(row.get("post_earnings_gap_atr_multiple")),
-            "post_earnings_anchor_date": row.get("post_earnings_anchor_date") or "",
-            "post_earnings_gap_date": row.get("post_earnings_gap_date") or "",
-            "post_earnings_bounce_date": row.get("post_earnings_bounce_date") or "",
-            "post_earnings_bounce_age_sessions": row.get("post_earnings_bounce_age_sessions"),
-            "post_earnings_bounce_sessions_after_gap": row.get("post_earnings_bounce_sessions_after_gap"),
-            "post_earnings_monitor_level": _coerce_float(row.get("post_earnings_monitor_level")),
-            "post_earnings_note": row.get("post_earnings_note") or "",
-            "mid_earnings_watch": bool(row.get("mid_earnings_watch")),
-            "mid_earnings_active_second_stdev_hold": bool(row.get("mid_earnings_active_second_stdev_hold")),
-            "mid_earnings_sessions_since_gap": int(row.get("mid_earnings_sessions_since_gap", 0) or 0),
-            "mid_earnings_zone_streak_days": int(row.get("mid_earnings_zone_streak_days", 0) or 0),
-            "mid_earnings_zone_start_date": row.get("mid_earnings_zone_start_date") or "",
-            "mid_earnings_zone_end_date": row.get("mid_earnings_zone_end_date") or "",
-            "mid_earnings_primary_trigger_level": row.get("mid_earnings_primary_trigger_level") or "",
-            "mid_earnings_retest_date": row.get("mid_earnings_retest_date") or "",
-            "mid_earnings_sessions_after_zone": int(row.get("mid_earnings_sessions_after_zone", 0) or 0),
-            "mid_earnings_trigger_levels": list(row.get("mid_earnings_trigger_levels") or []),
-            "mid_earnings_ema15_trigger": bool(row.get("mid_earnings_ema15_trigger")),
-            "mid_earnings_ema21_trigger": bool(row.get("mid_earnings_ema21_trigger")),
-            "mid_earnings_first_dev_trigger": bool(row.get("mid_earnings_first_dev_trigger")),
-            "mid_earnings_ema8_confluence": bool(row.get("mid_earnings_ema8_confluence")),
-            "mid_earnings_ema21_confluence": bool(row.get("mid_earnings_ema21_confluence")),
-            "mid_earnings_first_dev_confluence": bool(row.get("mid_earnings_first_dev_confluence")),
-            "mid_earnings_note": row.get("mid_earnings_note") or "",
-            "sma_breakout_watch": bool(row.get("sma_breakout_watch")),
-            "sma_breakout_confirmed": bool(row.get("sma_breakout_confirmed")),
-            "sma_breakout_signal": row.get("sma_breakout_signal") or "",
-            "sma_breakout_sma_label": row.get("sma_breakout_sma_label") or "",
-            "sma_breakout_sma_period": int(row.get("sma_breakout_sma_period", 0) or 0),
-            "sma_breakout_sma_level": _coerce_float(row.get("sma_breakout_sma_level")),
-            "sma_breakout_retest_level": row.get("sma_breakout_retest_level") or "",
-            "sma_breakout_retest_level_value": _coerce_float(row.get("sma_breakout_retest_level_value")),
-            "sma_breakout_breakout_date": row.get("sma_breakout_breakout_date") or "",
-            "sma_breakout_retest_date": row.get("sma_breakout_retest_date") or "",
-            "sma_breakout_confirmation_date": row.get("sma_breakout_confirmation_date") or "",
-            "sma_breakout_note": row.get("sma_breakout_note") or "",
-            "extension_note": row.get("extension_note") or "",
-            "first_dev_note": row.get("first_dev_note") or "",
-            "compression_flag": bool(row.get("compression_flag")),
-            "compression_penalty": int(row.get("compression_penalty", 0) or 0),
-            "compression_note": row.get("compression_note") or "",
-            "trendline_note": row.get("trendline_note") or "",
-            "trendline_break_note": row.get("trendline_break_note") or "",
-            "trendline_break_recent": bool(row.get("trendline_break_recent")),
-            "trendline_score_bonus": int(row.get("trendline_score_bonus", 0) or 0),
-            "has_bounce_event_today": bool(symbol_state.get("has_bounce_event_today")),
-            "daily_bar_source": symbol_state.get("daily_bar_source") or "",
-            "market_regime_label": symbol_state.get("market_regime_label") or "",
-            "next_earnings_date": row.get("next_earnings_date") or symbol_state.get("next_earnings_date") or "",
-            "days_to_next_earnings": row.get("days_to_next_earnings", symbol_state.get("days_to_next_earnings")),
-            "pre_earnings_setup_blocked": bool(row.get("pre_earnings_setup_blocked")),
-            "pre_earnings_setup_block_reason": row.get("pre_earnings_setup_block_reason") or "",
-            "candidate_rejection_reasons": list(row.get("candidate_rejection_reasons") or []),
-            "setup_candidate": row.get("setup_candidate") or symbol_state.get("setup_candidate") or {},
-            "last_trade_date": symbol_state.get("last_trade_date"),
-        }
-
-    favorites = [_build_entry(row, "favorite_setup", idx + 1) for idx, row in enumerate(favorite_rows)]
-    near_favorites = [_build_entry(row, "near_favorite_zone", idx + 1) for idx, row in enumerate(near_rows)]
-    post_earnings_entries = [_build_entry(row, "post_earnings_play", idx + 1) for idx, row in enumerate(post_earnings_rows)]
-    sma_breakout_tracking_entries = [
-        _build_entry(row, "sma_breakout_tracking", idx + 1)
-        for idx, row in enumerate(sma_breakout_tracking_rows)
-    ]
-    stdev_tracking_entries = [
-        _build_entry(row, "stdev_retest_tracking", idx + 1)
-        for idx, row in enumerate(stdev_tracking_rows)
-    ]
-    high_conviction_entries = [
-        _build_entry(row, "high_conviction", idx + 1)
-        for idx, row in enumerate(high_conviction_rows)
-    ]
-    symbol_map = {}
-    for entry in (
-        favorites
-        + near_favorites
-        + post_earnings_entries
-        + high_conviction_entries
-        + sma_breakout_tracking_entries
-        + stdev_tracking_entries
-    ):
-        symbol_map.setdefault(entry["symbol"], entry)
-
-    payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "run_date": datetime.now().date().isoformat(),
-        "scoring_config": ai_state.get("scoring_config", {}),
-        "market_regime": ai_state.get("market_regime", {}),
-        "favorites": favorites,
-        "near_favorite_zones": near_favorites,
-        "post_earnings_plays": post_earnings_entries,
-        "high_conviction": high_conviction_entries,
-        "sma_breakout_tracking": sma_breakout_tracking_entries,
-        "stdev_retest_tracking": stdev_tracking_entries,
-        "symbols": symbol_map,
-    }
-    save_json(path, payload)
 
 
 def _d1_watchlist_priority_reasons(row: dict) -> list[str]:
@@ -25466,6 +23223,99 @@ def enrich_priority_rows_with_relative_avwap_studies(
                 bucket=RELATIVE_AVWAP_STUDY_BUCKET,
                 tag=tag,
                 note=context.get("relative_avwap_note") or "",
+                extra=context,
+            )
+        )
+    return study_rows
+
+
+# 2nd-stdev breakout study (B4): a fresh momentum cross up through UPPER_2 (LONG)
+# or down through LOWER_2 (SHORT). Pros take these but the bot historically only
+# treated the 2nd band as over-extension risk. Tracked in the isolated study
+# namespace (no scoring impact) so realized R accumulates and the "last 30 days"
+# stats can show whether they work before any promotion to a scored family.
+SECOND_DEV_BREAKOUT_STUDY_FAMILY = "2nddev_breakout"
+SECOND_DEV_BREAKOUT_STUDY_BUCKET = "study_2nddev_breakout"
+
+
+def enrich_priority_rows_with_second_dev_breakouts(
+    priority_rows: list[dict] | None,
+    daily_frames_by_symbol: dict[str, pd.DataFrame] | None = None,
+    *,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+) -> list[dict]:
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    study_rows: list[dict] = []
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_entry = ai_symbols.get(symbol) if isinstance(ai_symbols, dict) else {}
+        symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+        feature_row = feature_rows_by_symbol.get(symbol)
+        feature_row = feature_row if isinstance(feature_row, dict) else {}
+
+        side = normalize_side(row.get("side") or symbol_entry.get("side") or "")
+        if side not in ("LONG", "SHORT"):
+            continue
+        current_anchor = symbol_entry.get("current_anchor")
+        bands = current_anchor.get("bands") if isinstance(current_anchor, dict) else None
+        if not isinstance(bands, dict):
+            continue
+        band_label = "UPPER_2" if side == "LONG" else "LOWER_2"
+        band_level = _coerce_float(bands.get(band_label))
+        if band_level is None:
+            continue
+        daily_rows = symbol_entry.get("daily_ohlc")
+        if not isinstance(daily_rows, list) or not daily_rows:
+            continue
+        last_trade_date = _parse_iso_date_or_none(
+            str(row.get("last_trade_date") or symbol_entry.get("last_trade_date") or "")
+        )
+        if last_trade_date is None:
+            continue
+        atr_value = _coerce_float(
+            row.get("atr20") or symbol_entry.get("atr20") or feature_row.get("atr20")
+        )
+
+        quality = assess_first_dev_break_quality(
+            daily_rows,
+            last_trade_date,
+            band_level,
+            side,
+            atr20=atr_value,
+        )
+        # fresh_break_today = first clean close beyond the 2nd band with no recent
+        # touches of it — the pro-style fresh breakout, not chop-at-the-band.
+        if not quality.get("fresh_break_today"):
+            continue
+
+        note = (
+            f"Fresh 2nd-dev breakout: close beyond {band_label} ({band_level:.2f}) "
+            f"with a clean {PRIORITY_FIRST_DEV_LOOKBACK_DAYS}-session lookback"
+        )
+        context = {
+            "second_dev_breakout_today": True,
+            "second_dev_breakout_level": band_level,
+            "second_dev_breakout_level_label": band_label,
+            "second_dev_breakout_note": note,
+        }
+        for target in (symbol_entry, feature_row):
+            if isinstance(target, dict):
+                target.update(context)
+        study_rows.append(
+            _build_phase6_study_row(
+                row,
+                family=SECOND_DEV_BREAKOUT_STUDY_FAMILY,
+                bucket=SECOND_DEV_BREAKOUT_STUDY_BUCKET,
+                tag="2NDDEV_BREAKOUT",
+                note=note,
                 extra=context,
             )
         )

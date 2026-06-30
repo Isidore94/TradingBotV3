@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -12,17 +13,26 @@ from project_paths import (
 from ui.models.setup import SetupRow
 
 
+# The "Ranked by Expected-R (blended)" section of the priority report is the
+# machine-readable feed (flush-left, raw internal bucket names, e.g.
+#   AVB LONG ExpR=+0.12R score=112 family=mid earnings 1st-dev retest bucket=near_favorite_zone
+# The optional trailing "R" on ExpR is stripped; family may contain spaces so it
+# is captured lazily up to the " bucket=" delimiter.
 RANKED_LINE_RE = re.compile(
-    r"^\s*(?P<rank>\d+)\.\s+"
-    r"(?P<symbol>[A-Z][A-Z0-9.\-]*)\s+"
+    r"^(?P<symbol>[A-Z][A-Z0-9.\-]*)\s+"
     r"(?P<side>LONG|SHORT)\s+"
-    r"(?:ExpR=(?P<expected_r>-?\d+(?:\.\d+)?)\s+)?"
+    r"(?:ExpR=(?P<expected_r>[+-]?\d+(?:\.\d+)?)R?\s+)?"
     r"score=(?P<score>-?\d+(?:\.\d+)?)\s+"
-    r"bucket=(?P<bucket>[^\s]+)\s+"
-    r"family=(?P<family>.+?)\s{2,}"
-    r"(?:zone=(?P<zone>.+?)\s{2,})?"
-    r"(?:trend=(?P<trend>[A-Z_]+)\s+)?"
-    r"(?P<tail>.*)$"
+    r"family=(?P<family>.+?)\s+"
+    r"bucket=(?P<bucket>\S+)\s*$"
+)
+
+# The "Overall score rankings" section carries the band zone (used as key level)
+# but uses padded display labels with spaces, so values are delimited by the
+# following ``token=`` rather than whitespace.
+ZONE_LINE_RE = re.compile(
+    r"^\s*\d+\.\s+(?P<symbol>[A-Z][A-Z0-9.\-]*)\s+(?:LONG|SHORT)\s+"
+    r".*?\bzone=(?P<zone>.+?)\s+trend="
 )
 
 
@@ -52,8 +62,7 @@ def rows_from_run_result(run_result: dict[str, Any] | None) -> list[SetupRow]:
     return rows
 
 
-def load_setup_rows_from_focus(path: Path = MASTER_AVWAP_FOCUS_FILE) -> list[SetupRow]:
-    payload = _read_json(path)
+def _rows_from_focus_payload(payload: Any) -> list[SetupRow]:
     if not isinstance(payload, dict):
         return []
 
@@ -78,6 +87,10 @@ def load_setup_rows_from_focus(path: Path = MASTER_AVWAP_FOCUS_FILE) -> list[Set
     return rows
 
 
+def load_setup_rows_from_focus(path: Path = MASTER_AVWAP_FOCUS_FILE) -> list[SetupRow]:
+    return _rows_from_focus_payload(_read_json(path))
+
+
 def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE) -> list[SetupRow]:
     if not path.exists():
         return []
@@ -86,6 +99,13 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
     except OSError:
         return []
 
+    zone_by_symbol: dict[str, str] = {}
+    for line in lines:
+        zone_match = ZONE_LINE_RE.match(line)
+        if zone_match:
+            symbol = zone_match.group("symbol").upper()
+            zone_by_symbol.setdefault(symbol, zone_match.group("zone").strip())
+
     rows: list[SetupRow] = []
     seen: set[tuple[str, str, str]] = set()
     for line in lines:
@@ -93,14 +113,15 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
         if not match:
             continue
         data = match.groupdict()
-        bucket = _unlabel_bucket(data.get("bucket") or "")
+        symbol = (data.get("symbol") or "").upper()
+        family = (data.get("family") or "").strip()
         row = SetupRow(
-            symbol=(data.get("symbol") or "").upper(),
+            symbol=symbol,
             side=data.get("side") or "",
             score=_float_or_none(data.get("score")),
-            bucket=bucket,
-            setup_tags=[data.get("family") or ""],
-            key_level=data.get("zone") or "",
+            bucket=(data.get("bucket") or "").strip(),
+            setup_tags=[family] if family else [],
+            key_level=zone_by_symbol.get(symbol, ""),
             expected_r=_float_or_none(data.get("expected_r")),
             source="priority_report",
             raw={"report_line": line, **{k: v for k, v in data.items() if v}},
@@ -114,11 +135,109 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
     return rows
 
 
+_PRIORITY_GENERATED_RE = re.compile(r"Generated at\s+(\d{4}-\d{2}-\d{2})")
+
+# Mirror the scanner's daily-bar recency tolerance (a 2-weekday gap is still
+# "recent"). Anything beyond that is flagged as stale in the UI.
+_STALE_WEEKDAY_GAP = 2
+
+
+def _payload_data_date(payload: Any) -> str | None:
+    """Best-effort scan date (YYYY-MM-DD) embedded in the focus feed payload."""
+    if not isinstance(payload, dict):
+        return None
+    for key in ("run_date", "generated_at"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value[:10]
+    return None
+
+
+def read_priority_report_date(path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE) -> str | None:
+    """Parse the 'Generated at YYYY-MM-DD ...' header from the priority report."""
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for _ in range(10):
+                line = handle.readline()
+                if not line:
+                    break
+                match = _PRIORITY_GENERATED_RE.search(line)
+                if match:
+                    return match.group(1)
+    except OSError:
+        return None
+    return None
+
+
+def _weekday_gap(start: date, end: date) -> int:
+    if start >= end:
+        return 0
+    cursor = start
+    count = 0
+    while cursor < end:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            count += 1
+    return count
+
+
+def _is_stale(data_date: str | None, *, today: date | None = None) -> bool:
+    if not data_date:
+        return False
+    try:
+        parsed = date.fromisoformat(data_date[:10])
+    except ValueError:
+        return False
+    return _weekday_gap(parsed, today or date.today()) > _STALE_WEEKDAY_GAP
+
+
+def load_latest_setup_rows_with_meta() -> dict[str, Any]:
+    """Return the freshest available setup rows plus the date/source behind them.
+
+    The focus feed is the richer source but it is only rewritten in the
+    final-hour/after-close window, so a pre-market scan leaves it stale while a
+    fresh priority report exists. Prefer the focus feed only when it is at least
+    as new as the priority report; otherwise fall back to the fresh report so
+    the panel never silently shows days-old setups.
+    """
+    focus_payload = _read_json(MASTER_AVWAP_FOCUS_FILE)
+    focus_rows = _rows_from_focus_payload(focus_payload)
+    focus_date = _payload_data_date(focus_payload)
+    priority_date = read_priority_report_date()
+
+    focus_is_current = bool(focus_rows) and (
+        priority_date is None or focus_date is None or focus_date >= priority_date
+    )
+    if focus_is_current:
+        return {
+            "rows": focus_rows,
+            "data_date": focus_date,
+            "source": "focus",
+            "is_stale": _is_stale(focus_date),
+        }
+
+    priority_rows = load_setup_rows_from_priority_report()
+    if priority_rows:
+        return {
+            "rows": priority_rows,
+            "data_date": priority_date,
+            "source": "priority_report",
+            "is_stale": _is_stale(priority_date),
+        }
+
+    # No fresher report available; show whatever the focus feed still holds.
+    return {
+        "rows": focus_rows,
+        "data_date": focus_date,
+        "source": "focus" if focus_rows else "none",
+        "is_stale": _is_stale(focus_date),
+    }
+
+
 def load_latest_setup_rows() -> list[SetupRow]:
-    rows = load_setup_rows_from_focus()
-    if rows:
-        return rows
-    return load_setup_rows_from_priority_report()
+    return load_latest_setup_rows_with_meta()["rows"]
 
 
 def setup_row_from_mapping(
@@ -285,18 +404,6 @@ def _normalize_side(value: Any) -> str:
     if side in {"LONG", "SHORT"}:
         return side
     return side
-
-
-def _unlabel_bucket(label: str) -> str:
-    normalized = label.strip().lower()
-    return {
-        "favorite": "favorite_setup",
-        "near-zone": "near_favorite_zone",
-        "post-earnings": "post_earnings_play",
-        "sma-track": "sma_breakout_tracking",
-        "stdev-track": "stdev_retest_tracking",
-        "high-conviction": "high_conviction",
-    }.get(normalized, normalized.replace("-", "_"))
 
 
 def _float_or_none(value: Any) -> float | None:

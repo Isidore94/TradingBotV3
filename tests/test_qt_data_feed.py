@@ -73,14 +73,21 @@ def test_copy_symbols_ranked_preserves_order_while_lists_alphabetize():
     assert copy_symbols(rows, "active") == "AAPL, NVDA, TSLA"
 
 
-def test_priority_report_parser_reads_existing_ranked_lines(tmp_path):
+def test_priority_report_parser_reads_ranked_expected_r_section(tmp_path):
     from ui.services.data_feed import load_setup_rows_from_priority_report
 
+    # The parser reads the machine-readable "Ranked by Expected-R (blended)"
+    # section (raw internal bucket names) and enriches key level from the band
+    # zone in "Overall score rankings".
     report = tmp_path / "priority.txt"
     report.write_text(
         "Overall score rankings\n"
         "----------------------\n"
-        "  1. NVDA   LONG  score=88.5  bucket=favorite     family=earnings gap             zone=VWAP to UPPER_1   trend=UP       clean\n",
+        "  1. NVDA   LONG  score=88   bucket=Favorite setup family=earnings gap            zone=VWAP to UPPER_1   trend=UP       clean\n"
+        "\n"
+        "Ranked by Expected-R (blended)\n"
+        "------------------------------\n"
+        "NVDA LONG ExpR=+1.20R score=88 family=earnings gap bucket=favorite_setup\n",
         encoding="utf-8",
     )
 
@@ -89,7 +96,9 @@ def test_priority_report_parser_reads_existing_ranked_lines(tmp_path):
     assert len(rows) == 1
     assert rows[0].symbol == "NVDA"
     assert rows[0].side == "LONG"
+    assert rows[0].bucket == "favorite_setup"
     assert rows[0].bucket_label == "Favorite"
+    assert rows[0].expected_r == 1.2
     assert rows[0].key_level == "VWAP to UPPER_1"
 
 
@@ -103,9 +112,9 @@ def test_sma_track_bucket_is_first_class_setup_bucket(tmp_path):
 
     report = tmp_path / "priority.txt"
     report.write_text(
-        "Overall score rankings\n"
-        "----------------------\n"
-        "  1. SMAT   LONG  score=72.0  bucket=sma-track     family=sma breakout retest  zone=EMA_15\n",
+        "Ranked by Expected-R (blended)\n"
+        "------------------------------\n"
+        "SMAT LONG ExpR=+0.50R score=72 family=sma breakout retest bucket=sma_breakout_tracking\n",
         encoding="utf-8",
     )
 

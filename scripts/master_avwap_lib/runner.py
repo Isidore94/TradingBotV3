@@ -343,6 +343,7 @@ def run_master(
     hv_level_study_rows = []
     phase6_study_rows = []
     relative_avwap_study_rows = []
+    second_dev_breakout_study_rows = []
     theta_put_rows = []
     theta_pcs_rows = []
     positions = {
@@ -1507,11 +1508,18 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    second_dev_breakout_study_rows = enrich_priority_rows_with_second_dev_breakouts(
+        priority_rows,
+        daily_frames_by_symbol,
+        ai_state=ai_state,
+        feature_rows_by_symbol=feature_rows_by_symbol,
+    )
     study_rows = [
         *htf_trend_study_rows,
         *hv_level_study_rows,
         *phase6_study_rows,
         *relative_avwap_study_rows,
+        *second_dev_breakout_study_rows,
     ]
     apply_pre_earnings_priority_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_post_earnings_hard_rule_blocks(priority_rows, ai_state, feature_rows_by_symbol)
@@ -1609,6 +1617,8 @@ def run_master(
         "phase6_study_count": len(phase6_study_rows),
         "relative_avwap_study_rows": relative_avwap_study_rows,
         "relative_avwap_study_count": len(relative_avwap_study_rows),
+        "second_dev_breakout_study_rows": second_dev_breakout_study_rows,
+        "second_dev_breakout_study_count": len(second_dev_breakout_study_rows),
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
         "human_focus_tracking": human_focus_tracking_result,
         "human_focus_marked_setup_count": human_focus_marked_count,

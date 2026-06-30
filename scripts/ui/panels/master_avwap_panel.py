@@ -23,7 +23,7 @@ from project_paths import MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_PRIORITY_SETUPS_
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
 from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
-from ui.services.data_feed import copy_symbols, load_latest_setup_rows
+from ui.services.data_feed import copy_symbols, load_latest_setup_rows_with_meta
 from ui.services.scan_service import ScanService
 from ui.widgets.data_table import DataTable
 from ui.widgets.setup_delegate import SetupTableDelegate
@@ -79,6 +79,8 @@ class MasterAvwapPanel(QWidget):
 
         self.status_label = QLabel("Idle")
         self.status_label.setObjectName("MutedLabel")
+        self.data_as_of_label = QLabel("")
+        self.data_as_of_label.setObjectName("MutedLabel")
         self.last_run_label = QLabel("Last run: never")
         self.last_run_label.setObjectName("MutedLabel")
         self.scheduler_status_label = QLabel("")
@@ -184,6 +186,7 @@ class MasterAvwapPanel(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.addWidget(self.status_label)
         status_row.addStretch(1)
+        status_row.addWidget(self.data_as_of_label)
         status_row.addWidget(self.last_run_label)
 
         layout = QVBoxLayout(self)
@@ -347,12 +350,35 @@ class MasterAvwapPanel(QWidget):
         self._refresh_scheduler_status(note=note)
 
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
-        rows = load_latest_setup_rows()
+        meta = load_latest_setup_rows_with_meta()
+        rows = meta["rows"]
         if rows or emit_empty:
             self.set_rows(rows)
             self.status_label.setText("Loaded latest report rows." if rows else "No report rows found.")
             self.statusChanged.emit(self.status_label.text())
+        self._apply_data_as_of(meta)
         self._refresh_watcher_paths()
+
+    def _apply_data_as_of(self, meta: dict) -> None:
+        data_date = meta.get("data_date")
+        source = meta.get("source") or ""
+        is_stale = bool(meta.get("is_stale"))
+        if not data_date:
+            self.data_as_of_label.setText("")
+        else:
+            source_note = " · priority report" if source == "priority_report" else ""
+            if is_stale:
+                text = f"⚠ Setups as of {data_date} — stale; run an after-close scan to refresh{source_note}"
+            else:
+                text = f"Setups as of {data_date}{source_note}"
+            self.data_as_of_label.setText(text)
+        object_name = "CautionLabel" if is_stale else "MutedLabel"
+        if self.data_as_of_label.objectName() != object_name:
+            self.data_as_of_label.setObjectName(object_name)
+            # Re-apply the stylesheet so the objectName-scoped rule takes effect.
+            style = self.data_as_of_label.style()
+            style.unpolish(self.data_as_of_label)
+            style.polish(self.data_as_of_label)
 
     def set_rows(self, rows: list[SetupRow]) -> None:
         self.model.set_rows(rows)
@@ -439,6 +465,7 @@ class MasterAvwapPanel(QWidget):
         message = f"Scan complete at {stamp}; loaded {len(rows)} setup row(s)."
         self.status_label.setText(message)
         self.statusChanged.emit(message)
+        self._apply_data_as_of(load_latest_setup_rows_with_meta())
         self._refresh_watcher_paths()
         self._finish_scheduler_run(success=True)
 

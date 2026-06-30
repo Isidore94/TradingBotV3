@@ -40,6 +40,7 @@ from ui.widgets.section_header import SectionHeader
 
 
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
+RECENT_SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_recent_stats.csv")
 SETUP_PLAYBOOKS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 
 
@@ -69,6 +70,21 @@ SETUP_TYPE_COLUMNS = (
     ("target_hit_rate", "Target Hit"),
     ("stop_rate", "Stop"),
     ("score_delta", "Score Delta"),
+    ("sample_setups", "Recent Samples"),
+)
+
+RECENT_TYPE_COLUMNS = (
+    ("namespace", "Source"),
+    ("side", "Side"),
+    ("priority_bucket", "Bucket"),
+    ("setup_family", "Setup Family"),
+    ("closed_setups", "Closed 30d"),
+    ("tracked_setups", "Tracked 30d"),
+    ("avg_closed_r", "Closed R"),
+    ("avg_closed_r_edge", "R Edge"),
+    ("target_hit_rate", "Target Hit"),
+    ("stop_rate", "Stop"),
+    ("representative_closed_r", "Repr R"),
     ("sample_setups", "Recent Samples"),
 )
 
@@ -155,6 +171,8 @@ PERCENT_KEYS = {
 SIGNED_KEYS = {
     "avg_closed_r",
     "avg_closed_r_edge",
+    "representative_closed_r",
+    "representative_total_r",
     "robust_closed_r",
     "robust_closed_r_edge",
     "avg_total_r",
@@ -182,6 +200,7 @@ class SetupTrackerPanel(QFrame):
         self.setObjectName("Panel")
         self.current_pick_rows: list[dict[str, Any]] = []
         self.setup_type_rows: list[dict[str, Any]] = []
+        self.recent_type_rows: list[dict[str, Any]] = []
         self.playbook_rows: list[dict[str, Any]] = []
         self.scan_factor_rows: list[dict[str, Any]] = []
         self.tier_performance_rows: list[dict[str, Any]] = []
@@ -211,6 +230,7 @@ class SetupTrackerPanel(QFrame):
         self.tabs = QTabWidget()
         self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
         self.setup_type_table, self.setup_type_model = self._make_table(SETUP_TYPE_COLUMNS)
+        self.recent_type_table, self.recent_type_model = self._make_table(RECENT_TYPE_COLUMNS)
         self.playbook_table, self.playbook_model = self._make_table(PLAYBOOK_COLUMNS)
         self.scan_factor_table, self.scan_factor_model = self._make_table(SCAN_FACTOR_COLUMNS)
         self.tier_performance_table, self.tier_performance_model = self._make_table(TIER_PERFORMANCE_COLUMNS)
@@ -226,6 +246,14 @@ class SetupTrackerPanel(QFrame):
             "Human Picks",
         )
         self.tabs.addTab(self.setup_type_table, "Setup Types")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "What's worked in the last 30 days: per-family closed count, realized R, target/stop rates "
+                "across live setups and measured-only study families (incl. 2nd-dev breakouts).",
+                self.recent_type_table,
+            ),
+            "Last 30 Days",
+        )
         self.tabs.addTab(self.playbook_table, "Playbooks")
         self.tabs.addTab(self.scan_factor_table, "Scan Factors")
         self.tabs.addTab(
@@ -309,6 +337,7 @@ class SetupTrackerPanel(QFrame):
         tier_performance_export_rows = _load_csv_rows(MASTER_AVWAP_TIER_PERFORMANCE_FILE)
         self.current_pick_rows = _rank_current_picks(_load_csv_rows(MASTER_AVWAP_TIER_LIST_FILE))
         self.setup_type_rows = _rank_setup_types(all_setup_type_rows, min_closed=min_closed)
+        self.recent_type_rows = _rank_recent_types(_load_csv_rows(RECENT_SETUP_TYPE_STATS_FILE))
         self.playbook_rows = _rank_playbooks(all_playbook_rows, min_closed=min_closed)
         self.scan_factor_rows = _rank_scan_factors(_load_csv_rows(MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE))
         self.tier_performance_rows = _rank_tier_performance(tier_performance_export_rows)
@@ -321,6 +350,7 @@ class SetupTrackerPanel(QFrame):
         self.current_model.set_rows(self.current_pick_rows[:300])
         self.human_pick_model.set_rows(self.human_pick_rows)
         self.setup_type_model.set_rows(self.setup_type_rows[:300])
+        self.recent_type_model.set_rows(self.recent_type_rows[:300])
         self.playbook_model.set_rows(self.playbook_rows[:300])
         self.scan_factor_model.set_rows(self.scan_factor_rows[:300])
         self.tier_performance_model.set_rows(self.tier_performance_rows)
@@ -329,6 +359,7 @@ class SetupTrackerPanel(QFrame):
             self.current_table,
             self.human_pick_table,
             self.setup_type_table,
+            self.recent_type_table,
             self.playbook_table,
             self.scan_factor_table,
             self.tier_performance_table,
@@ -376,6 +407,19 @@ def _rank_setup_types(rows: list[dict[str, Any]], *, min_closed: int) -> list[di
             -_float(row.get("ranking_score"), 0.0),
             -_float(row.get("avg_closed_r_edge"), 0.0),
             -_int(row.get("closed_setups")),
+        ),
+    )
+
+
+def _rank_recent_types(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Surface families with the most recent closed evidence first, best realized R
+    # next; open-only families (no closed yet) fall to the bottom but stay visible.
+    return sorted(
+        rows,
+        key=lambda row: (
+            -_int(row.get("closed_setups")),
+            -_float(row.get("avg_closed_r"), -1e9),
+            -_int(row.get("tracked_setups")),
         ),
     )
 
@@ -519,6 +563,7 @@ def _best_factor_label(rows: list[dict[str, Any]]) -> str:
 def _export_files() -> list[Path]:
     return [
         SETUP_TYPE_STATS_FILE,
+        RECENT_SETUP_TYPE_STATS_FILE,
         SETUP_PLAYBOOKS_FILE,
         MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
         MASTER_AVWAP_TIER_LIST_FILE,
