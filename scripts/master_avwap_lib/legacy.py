@@ -21785,7 +21785,9 @@ def compute_weekly_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
     for period in (20, 50, 100):
         weekly[f"sma_{period}"] = weekly["close_num"].rolling(period).mean()
         weekly[f"sma_{period}_prev"] = weekly[f"sma_{period}"].shift(1)
+    weekly["ema_8"] = weekly["close_num"].ewm(span=8, adjust=False).mean()
     weekly["ema_15"] = weekly["close_num"].ewm(span=15, adjust=False).mean()
+    weekly["ema_21"] = weekly["close_num"].ewm(span=21, adjust=False).mean()
     weekly["high_52w"] = weekly["high_num"].rolling(52, min_periods=1).max()
     weekly["trade_date"] = pd.to_datetime(weekly["datetime"]).dt.date.astype(str)
     return weekly
@@ -23632,6 +23634,167 @@ def enrich_priority_rows_with_first_dev_breakouts(
                 family=FIRST_DEV_BREAKOUT_STUDY_FAMILY,
                 bucket=FIRST_DEV_BREAKOUT_STUDY_BUCKET,
                 tag="1STDEV_BREAKOUT",
+                note=note,
+                extra=context,
+            )
+        )
+    return study_rows
+
+
+WEEKLY_EMA8_HOLD_STUDY_FAMILY = "weekly_ema8_hold_retest"
+WEEKLY_EMA8_HOLD_STUDY_BUCKET = "study_weekly_ema8_hold"
+# Basket membership: this many most-recent weekly candles must all CLOSE at or
+# above the weekly 8EMA ("staying above the weekly 8EMA ~10 weeks in a row").
+WEEKLY_EMA8_HOLD_MIN_WEEKS = 10
+# EMA8 needs warmup weeks before the streak means anything.
+WEEKLY_EMA8_HOLD_MIN_HISTORY_WEEKS = 24
+# Daily bounce-target touch tolerance, in ATR(20).
+WEEKLY_EMA8_RETEST_TOL_ATR = 0.15
+# Preference order for the primary bounce target when several are tagged in the
+# same session (a deep pullback low can sweep more than one).
+WEEKLY_EMA8_BOUNCE_LEVEL_ORDER = ("EMA_15", "EMA_21", "UPPER_1")
+
+
+def _weekly_ema8_hold_streak(weekly: pd.DataFrame | None) -> int:
+    """Consecutive most-recent weekly candles closing at/above the weekly EMA8."""
+    if weekly is None or weekly.empty or "ema_8" not in weekly.columns:
+        return 0
+    work = weekly.dropna(subset=["close_num", "ema_8"]).reset_index(drop=True)
+    streak = 0
+    for idx in range(len(work) - 1, -1, -1):
+        row = work.iloc[idx]
+        close_value = _coerce_float(row.get("close_num"))
+        ema8_value = _coerce_float(row.get("ema_8"))
+        if close_value is None or ema8_value is None or close_value < ema8_value:
+            break
+        streak += 1
+    return streak
+
+
+def enrich_priority_rows_with_weekly_ema8_hold(
+    priority_rows: list[dict] | None,
+    daily_frames_by_symbol: dict[str, pd.DataFrame] | None = None,
+    *,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+) -> list[dict]:
+    """Isolated study: the weekly-8EMA persistence basket.
+
+    Basket = long-side names whose last ``WEEKLY_EMA8_HOLD_MIN_WEEKS`` weekly
+    candles all closed at/above the weekly 8EMA (persistent institutional-grade
+    momentum, same spirit as the 2nd/3rd-stdev basket). Membership is flagged on
+    the symbol entry every scan; a study row (tracked in the isolated study
+    namespace, no scoring impact) is recorded only on sessions where the daily
+    bar tags one of the bounce targets — daily EMA15 / EMA21 / current-anchor
+    first deviation — and closes back above it, so realized R accrues on the
+    actual bounce entries the basket is meant to produce.
+    """
+    frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    study_rows: list[dict] = []
+    seen_symbols: set[str] = set()
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol or symbol in seen_symbols:
+            continue
+        symbol_entry = ai_symbols.get(symbol)
+        symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+        feature_row = feature_rows_by_symbol.get(symbol)
+        feature_row = feature_row if isinstance(feature_row, dict) else {}
+        side = normalize_side(row.get("side") or symbol_entry.get("side") or "")
+        if side != "LONG":
+            continue
+        seen_symbols.add(symbol)
+
+        df = frames.get(symbol)
+        weekly = compute_weekly_indicator_frame(df) if isinstance(df, pd.DataFrame) else pd.DataFrame()
+        if weekly.empty or len(weekly) < WEEKLY_EMA8_HOLD_MIN_HISTORY_WEEKS:
+            continue
+        streak = _weekly_ema8_hold_streak(weekly)
+        in_basket = streak >= WEEKLY_EMA8_HOLD_MIN_WEEKS
+        basket_fields = {
+            "weekly_ema8_hold": bool(in_basket),
+            "weekly_ema8_hold_weeks": int(streak),
+        }
+        for target in (symbol_entry, feature_row):
+            if isinstance(target, dict):
+                target.update(basket_fields)
+        row.update(basket_fields)
+        if not in_basket:
+            continue
+
+        # Today's daily bar, for the bounce-target test.
+        daily_rows = symbol_entry.get("daily_ohlc")
+        if not isinstance(daily_rows, list) or not daily_rows:
+            continue
+        last_trade_date = str(row.get("last_trade_date") or symbol_entry.get("last_trade_date") or "").strip()
+        today_rows = [
+            r for r in daily_rows if isinstance(r, dict) and str(r.get("date") or "") == last_trade_date
+        ]
+        if not today_rows:
+            continue
+        today = today_rows[-1]
+        low_value = _coerce_float(today.get("low"))
+        close_value = _coerce_float(today.get("close"))
+        if low_value is None or close_value is None:
+            continue
+        atr20 = _coerce_float(
+            row.get("atr20") or symbol_entry.get("atr20") or feature_row.get("atr20")
+        )
+        touch_tol = float(atr20) * WEEKLY_EMA8_RETEST_TOL_ATR if atr20 and atr20 > 0 else 0.0
+
+        current_anchor = symbol_entry.get("current_anchor")
+        bands = current_anchor.get("bands") if isinstance(current_anchor, dict) else None
+        bands = bands if isinstance(bands, dict) else {}
+        level_values = {
+            "EMA_15": _first_coerced_float(
+                row.get("ema_15"), row.get("ema15"), symbol_entry.get("ema_15"), symbol_entry.get("ema15")
+            ),
+            "EMA_21": _first_coerced_float(
+                row.get("ema_21"), row.get("ema21"), symbol_entry.get("ema_21"), symbol_entry.get("ema21")
+            ),
+            "UPPER_1": _coerce_float(bands.get("UPPER_1")),
+        }
+        tagged_labels = []
+        for label in WEEKLY_EMA8_BOUNCE_LEVEL_ORDER:
+            level = level_values.get(label)
+            if level is None:
+                continue
+            touched = float(low_value) <= float(level) + touch_tol
+            reclaimed = float(close_value) >= float(level)
+            if touched and reclaimed:
+                tagged_labels.append(label)
+        if not tagged_labels:
+            continue
+
+        primary_label = tagged_labels[0]
+        primary_level = level_values[primary_label]
+        note = (
+            f"Weekly 8EMA basket ({streak}w hold): tagged {primary_label} "
+            f"({primary_level:.2f}) and closed back above it"
+        )
+        context = {
+            **basket_fields,
+            "weekly_ema8_bounce_today": True,
+            "weekly_ema8_bounce_level_label": primary_label,
+            "weekly_ema8_bounce_level": primary_level,
+            "weekly_ema8_bounce_levels": ";".join(tagged_labels),
+            "weekly_ema8_note": note,
+        }
+        for target in (symbol_entry, feature_row):
+            if isinstance(target, dict):
+                target.update(context)
+        study_rows.append(
+            _build_phase6_study_row(
+                row,
+                family=WEEKLY_EMA8_HOLD_STUDY_FAMILY,
+                bucket=WEEKLY_EMA8_HOLD_STUDY_BUCKET,
+                tag="WEEKLY_EMA8_HOLD",
                 note=note,
                 extra=context,
             )
