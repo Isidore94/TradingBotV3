@@ -21610,6 +21610,14 @@ HTF_INTRADAY_DURATION = "180 D"
 HTF_TREND_STUDY_FAMILY = "htf_trend_retest"
 HTF_TREND_STUDY_BUCKET = "study_htf_trend"
 
+# H1/H4 15EMA rejection study: a bar that pierces the 15EMA intrabar and closes
+# back on the trend side, while both HTF trends align with the setup side. Kept
+# as its own study family (separate from the SMA-retest study above) so its
+# realized R is measured independently before any promotion to scoring.
+HTF_EMA15_REJECTION_STUDY_FAMILY = "htf_ema15_rejection"
+HTF_EMA15_REJECTION_STUDY_BUCKET = "study_htf_ema15"
+HTF_EMA15_REJECTION_LOOKBACK_BARS = 8
+
 HV_LEVEL_STUDY_FAMILY = "hv_level_proximity"
 HV_LEVEL_BREAK_STUDY_FAMILY = "hv_level_break"
 HV_LEVEL_STUDY_BUCKET = "study_hv_level"
@@ -22228,15 +22236,28 @@ def _weighted_excess_strength_score(
 def resample_intraday_bars_to_4h(hourly_df: pd.DataFrame | None) -> pd.DataFrame:
     """Build synthetic 4h bars from sequential 1h bars.
 
-    IBKR has no native 4h bar size here; grouping every four completed 1h bars is
-    deterministic for scanner tests and avoids exchange-session gap assumptions.
+    IBKR has no native 4h bar size here. The 4-bar grouping restarts at each
+    session (calendar-date) boundary so the bars line up with the session-anchored
+    4h candles charting platforms draw -- a 6.5h RTH session no longer bleeds its
+    last bars into the next day's first group, which would make 4h EMAs drift away
+    from what the user sees on a chart.
     """
 
     work = _normalize_intraday_bar_frame(hourly_df)
     if work.empty:
         return _empty_intraday_bar_frame()
     work = work.reset_index(drop=True)
-    work["_group"] = [idx // 4 for idx in range(len(work))]
+    session_dates = [value.date() for value in work["datetime"]]
+    bar_in_session = 0
+    previous_session = None
+    group_keys = []
+    for session_date in session_dates:
+        if session_date != previous_session:
+            bar_in_session = 0
+            previous_session = session_date
+        group_keys.append((session_date, bar_in_session // 4))
+        bar_in_session += 1
+    work["_group"] = group_keys
     grouped = (
         work.groupby("_group", as_index=False)
         .agg(
@@ -22348,6 +22369,45 @@ def _htf_recent_sma_retest(
     return None
 
 
+def _htf_recent_ema15_rejection(
+    indicator_frame: pd.DataFrame | None,
+    *,
+    side: str,
+    timeframe: str,
+    lookback_bars: int = HTF_EMA15_REJECTION_LOOKBACK_BARS,
+) -> dict | None:
+    """Most recent bar (within lookback) that pierced the 15EMA intrabar and
+    closed back on the trend side -- the classic H1/H4 15EMA rejection entry."""
+    if indicator_frame is None or indicator_frame.empty or "ema_15" not in indicator_frame.columns:
+        return None
+    work = indicator_frame.reset_index(drop=True)
+    normalized_side = normalize_side(side)
+    last_idx = len(work) - 1
+    first_idx = max(0, last_idx - max(1, int(lookback_bars or 1)) + 1)
+    for idx in range(last_idx, first_idx - 1, -1):
+        row = work.iloc[idx]
+        close_value = _coerce_float(row.get("close_num", row.get("close")))
+        high_value = _coerce_float(row.get("high_num", row.get("high")))
+        low_value = _coerce_float(row.get("low_num", row.get("low")))
+        level = _coerce_float(row.get("ema_15"))
+        if close_value is None or high_value is None or low_value is None or level is None:
+            continue
+        if normalized_side == "SHORT":
+            pierced = float(high_value) >= float(level)
+            rejected = float(close_value) <= float(level)
+        else:
+            pierced = float(low_value) <= float(level)
+            rejected = float(close_value) >= float(level)
+        if pierced and rejected:
+            return {
+                "timeframe": timeframe,
+                "level": round(float(level), 4),
+                "age_bars": int(last_idx - idx),
+                "bar_time": _htf_row_timestamp(row),
+            }
+    return None
+
+
 def assess_htf_trend_context(
     hourly_df: pd.DataFrame | None,
     side: str,
@@ -22367,6 +22427,11 @@ def assess_htf_trend_context(
         "htf_4h_bar_count": 0,
         "htf_trend_score_bonus": 0,
         "htf_trend_note": "",
+        "htf_ema15_rejection_confirmed": False,
+        "htf_ema15_rejection_timeframes": "",
+        "htf_ema15_rejection_age_bars": None,
+        "htf_ema15_rejection_level": None,
+        "htf_ema15_rejection_note": "",
     }
     if hourly.empty:
         result["htf_trend_note"] = "No 1h bars available"
@@ -22404,6 +22469,27 @@ def assess_htf_trend_context(
         )
         result["htf_retest_timeframes"] = ";".join(item["timeframe"] for item in retests)
         result["htf_retest_age_bars"] = min(int(item.get("age_bars", 0) or 0) for item in retests)
+
+    ema15_rejections = []
+    if one_hour_label == required_label:
+        rejection_1h = _htf_recent_ema15_rejection(hourly_indicators, side=normalized_side, timeframe="1h")
+        if rejection_1h:
+            ema15_rejections.append(rejection_1h)
+    if four_hour_label == required_label:
+        rejection_4h = _htf_recent_ema15_rejection(four_hour_indicators, side=normalized_side, timeframe="4h")
+        if rejection_4h:
+            ema15_rejections.append(rejection_4h)
+    result["htf_ema15_rejection_confirmed"] = bool(aligned and ema15_rejections)
+    if ema15_rejections:
+        freshest = min(ema15_rejections, key=lambda item: int(item.get("age_bars", 0) or 0))
+        result["htf_ema15_rejection_timeframes"] = ";".join(item["timeframe"] for item in ema15_rejections)
+        result["htf_ema15_rejection_age_bars"] = int(freshest.get("age_bars", 0) or 0)
+        result["htf_ema15_rejection_level"] = freshest.get("level")
+        result["htf_ema15_rejection_note"] = (
+            f"15EMA rejection on {result['htf_ema15_rejection_timeframes']} "
+            f"(freshest {freshest['timeframe']} @ {freshest['level']}, {freshest['age_bars']} bar(s) ago); "
+            f"1h={one_hour_label} 4h={four_hour_label}"
+        )
 
     note_bits = [f"1h={one_hour_label}", f"4h={four_hour_label}"]
     if retests:
@@ -22489,6 +22575,11 @@ def enrich_priority_rows_with_htf_trend_context(
         "htf_4h_bar_count",
         "htf_trend_score_bonus",
         "htf_trend_note",
+        "htf_ema15_rejection_confirmed",
+        "htf_ema15_rejection_timeframes",
+        "htf_ema15_rejection_age_bars",
+        "htf_ema15_rejection_level",
+        "htf_ema15_rejection_note",
     )
     study_rows: list[dict] = []
     for row in priority_rows:
@@ -22530,6 +22621,17 @@ def enrich_priority_rows_with_htf_trend_context(
 
         if context.get("htf_retest_confirmed"):
             study_rows.append(_build_htf_trend_study_row(row, context))
+        if context.get("htf_ema15_rejection_confirmed"):
+            study_rows.append(
+                _build_phase6_study_row(
+                    row,
+                    family=HTF_EMA15_REJECTION_STUDY_FAMILY,
+                    bucket=HTF_EMA15_REJECTION_STUDY_BUCKET,
+                    tag="HTF_EMA15_REJECTION",
+                    note=str(context.get("htf_ema15_rejection_note") or ""),
+                    extra=context,
+                )
+            )
     return study_rows
 
 

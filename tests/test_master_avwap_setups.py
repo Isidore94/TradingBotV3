@@ -2472,9 +2472,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         self.assertEqual(priority_rows[0]["score"], 100.0)
         self.assertEqual(priority_rows[0]["htf_trend_score_bonus"], 0)
-        self.assertEqual(len(study_rows), 1)
-        self.assertEqual(study_rows[0]["setup_family"], master_avwap.HTF_TREND_STUDY_FAMILY)
-        self.assertEqual(study_rows[0]["priority_bucket"], master_avwap.HTF_TREND_STUDY_BUCKET)
+        trend_rows = [row for row in study_rows if row["setup_family"] == master_avwap.HTF_TREND_STUDY_FAMILY]
+        self.assertEqual(len(trend_rows), 1)
+        self.assertEqual(trend_rows[0]["priority_bucket"], master_avwap.HTF_TREND_STUDY_BUCKET)
         self.assertEqual(feature_rows_by_symbol["TSLA"]["htf_trend_4h"], "UP")
         self.assertEqual(ai_state["symbols"]["TSLA"]["htf_retest_sma"], priority_rows[0]["htf_retest_sma"])
 
