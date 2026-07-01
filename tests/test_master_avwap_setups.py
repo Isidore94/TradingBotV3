@@ -2985,7 +2985,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
         self.assertIn(master_avwap.POST_EARNINGS_CLOSE_CONFIRM_SIGNAL, summary["events"])
 
-    def test_post_earnings_52w_break_requires_green_gap_candle_for_longs(self):
+    def test_post_earnings_52w_break_allows_wrong_way_gap_candle_with_fresh_break(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=0)
         gap_idx = 30
         df.loc[df.index[gap_idx], "close"] = df.loc[df.index[gap_idx], "open"] - 0.25
@@ -2993,10 +2993,32 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
 
-        self.assertFalse(summary["qualified_gap"])
-        self.assertFalse(summary["qualified_52w_gap"])
+        self.assertTrue(summary["qualified_gap"])
+        self.assertTrue(summary["qualified_52w_gap"])
+        self.assertFalse(summary["gap_candle_directional"])
+        self.assertTrue(summary["break_signal"])
+        self.assertTrue(summary["break_fresh"])
+        self.assertEqual(summary["break_sessions_after_gap"], 1)
+        self.assertIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
+
+    def test_post_earnings_52w_break_keeps_wrong_way_gap_candle_as_watch(self):
+        df = _build_post_earnings_52w_history(extra_sessions_after_break=0)
+        gap_idx = 30
+        df.loc[df.index[gap_idx], "close"] = df.loc[df.index[gap_idx], "open"] - 0.25
+        df.loc[df.index[gap_idx + 1], ["open", "high", "low", "close"]] = [119.0, 119.5, 118.2, 119.0]
+        context = _build_post_earnings_52w_release_context(df)
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertTrue(summary["active"])
+        self.assertTrue(summary["qualified_gap"])
+        self.assertTrue(summary["qualified_52w_gap"])
+        self.assertFalse(summary["gap_candle_directional"])
+        self.assertEqual(summary["monitor_level"], 120.0)
         self.assertFalse(summary["break_signal"])
+        self.assertFalse(summary["break_fresh"])
         self.assertEqual(summary["events"], [])
+        self.assertIn("waiting for post-gap break", summary["note"])
 
     def test_post_earnings_52w_break_can_start_on_day_after_earnings(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=1)
