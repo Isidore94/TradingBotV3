@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 )
 
 from universe_builder import (
+    DEFAULT_OPTIONS_FILTER,
+    OPTIONS_FILTER_CHOICES,
     UNIVERSE_ALL_FILE,
     UNIVERSE_LONGS_FILE,
     UNIVERSE_SHORTS_FILE,
@@ -55,6 +57,16 @@ class UniversePanel(QFrame):
         self.list_selector = QComboBox()
         self.list_selector.addItems(list(UNIVERSE_FILES))
         self.list_selector.currentTextChanged.connect(lambda _text: self.refresh_from_disk())
+
+        # "optionable" mirrors TC2000's 'Optionable Stocks Is True'; "weeklies"
+        # narrows to weekly-options names; "none" screens every listed stock.
+        self.options_filter_selector = QComboBox()
+        self.options_filter_selector.addItems(list(OPTIONS_FILTER_CHOICES))
+        self.options_filter_selector.setCurrentText(DEFAULT_OPTIONS_FILTER)
+        self.options_filter_selector.setToolTip(
+            "optionable = any listed options (TC2000 'Optionable Stocks Is True')\n"
+            "weeklies = weekly options only\nnone = every listed stock"
+        )
 
         self.build_button = QPushButton("Build Universe Now")
         self.build_button.clicked.connect(self.start_build)
@@ -92,6 +104,8 @@ class UniversePanel(QFrame):
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
         action_row.addWidget(self.list_selector)
+        action_row.addWidget(QLabel("Options:"))
+        action_row.addWidget(self.options_filter_selector)
         action_row.addWidget(self.build_button)
         action_row.addWidget(refresh_button)
         action_row.addWidget(copy_button)
@@ -130,8 +144,8 @@ class UniversePanel(QFrame):
         layout.addWidget(
             SectionHeader(
                 "Universe",
-                "Self-built scan universe (weekly options + price/volume/cap/trend screen via "
-                "yfinance -- no IBKR pacing). Validate it against your TC2000 list on the right.",
+                "Self-built scan universe (optionable/weeklies filter + price/volume/cap/trend "
+                "screen via yfinance -- no IBKR pacing). Validate it against your TC2000 list on the right.",
             )
         )
         layout.addWidget(splitter, 1)
@@ -173,17 +187,22 @@ class UniversePanel(QFrame):
         if self._build_thread is not None and self._build_thread.is_alive():
             return
         self.build_button.setEnabled(False)
-        self.build_status.setText("Building universe... (listing directory -> weeklys -> prices -> caps)")
-        self._build_thread = threading.Thread(target=self._build_worker, daemon=True)
+        options_filter = self.options_filter_selector.currentText()
+        self.build_status.setText(
+            f"Building universe ({options_filter})... (listing directory -> options -> prices -> caps)"
+        )
+        self._build_thread = threading.Thread(
+            target=self._build_worker, args=(options_filter,), daemon=True
+        )
         self._build_thread.start()
 
-    def _build_worker(self) -> None:
+    def _build_worker(self, options_filter: str) -> None:
         try:
-            result = build_universe()
+            result = build_universe(options_filter=options_filter)
+            applied = "applied" if result["options_filter_applied"] else "SKIPPED (source unreachable)"
             message = (
                 f"Universe built: {len(result['all'])} total / {len(result['longs'])} longs / "
-                f"{len(result['shorts'])} shorts | weekly-options filter "
-                f"{'applied' if result['weeklys_applied'] else 'SKIPPED (CBOE unreachable)'}"
+                f"{len(result['shorts'])} shorts | {result['options_filter']} options filter {applied}"
             )
         except Exception as exc:  # surfaced in the status label, never crashes the UI
             traceback.print_exc()

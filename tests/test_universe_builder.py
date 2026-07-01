@@ -47,6 +47,21 @@ class WeeklysParseTests(unittest.TestCase):
         self.assertNotIn("STANDARD WEEKLYS", symbols)
 
 
+class OptionableParseTests(unittest.TestCase):
+    def test_parse_cboe_symbol_directory(self):
+        text = (
+            "Company Name, Stock Symbol, DPM Name, Post/Station, Global Trading Hours DPM\n"
+            '"Apple Inc","AAPL","Citadel Securities LLC","9/1","-"\n'
+            '"Berkshire Hathaway CL B","BRK.B","Belvedere Trading LLC","1/1","-"\n'
+            '"Bad Row","N/A$","X","1/1","-"\n'
+        )
+        symbols = ub.parse_cboe_symbol_directory(text)
+        self.assertIn("AAPL", symbols)
+        self.assertIn("BRK-B", symbols)  # dot converted to Yahoo dash form
+        self.assertNotIn("STOCK SYMBOL", symbols)  # header skipped
+        self.assertFalse(any("$" in s for s in symbols))
+
+
 def _history(symbol: str, *, price: float, volume: float, rising: bool, periods: int = 220) -> pd.DataFrame:
     dates = pd.bdate_range("2025-08-01", periods=periods)
     step = 0.2 if rising else -0.2
@@ -84,8 +99,11 @@ class ScreenTests(unittest.TestCase):
 
         good = screened[screened["symbol"] == "GOOD"].iloc[0]
         self.assertTrue(good["above_sma_100"] and good["above_sma_200"])
+        self.assertFalse(good["below_sma_50"])
         down = screened[screened["symbol"] == "DOWN"].iloc[0]
         self.assertFalse(down["above_sma_100"] or down["above_sma_200"])
+        # The short screen needs all three (50/100/200) below-flags true.
+        self.assertTrue(down["below_sma_50"] and down["below_sma_100"] and down["below_sma_200"])
 
     def test_compare_symbol_lists_normalizes_and_diffs(self):
         result = ub.compare_symbol_lists(

@@ -52,10 +52,18 @@ from project_paths import CACHE_DIR, DATA_DIR, PERSISTENT_DATA_DIR  # noqa: E402
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
 OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
 CBOE_WEEKLYS_URL = "https://www.cboe.com/available_weeklys/get_csv_download/"
+# Full CBOE equity/index options directory (~5,300 rows): effectively every
+# optionable US stock, since CBOE trades essentially all multi-listed equity
+# options. This is the "Optionable Stocks Is True" filter from TC2000.
+CBOE_SYMBOL_DIRECTORY_URL = "https://www.cboe.com/us/options/symboldir/?download=csv"
+
+OPTIONS_FILTER_CHOICES = ("optionable", "weeklies", "none")
+DEFAULT_OPTIONS_FILTER = "optionable"
 
 UNIVERSE_CACHE_DIR = CACHE_DIR / "universe"
 SYMBOL_DIRECTORY_CACHE = UNIVERSE_CACHE_DIR / "symbol_directory.json"
 WEEKLYS_CACHE = UNIVERSE_CACHE_DIR / "cboe_weeklys.json"
+OPTIONABLE_CACHE = UNIVERSE_CACHE_DIR / "cboe_optionable.json"
 MARKET_CAP_CACHE = UNIVERSE_CACHE_DIR / "market_caps.json"
 PRICE_HISTORY_CACHE = UNIVERSE_CACHE_DIR / "price_history.parquet"
 
@@ -66,15 +74,27 @@ UNIVERSE_METADATA_FILE = DATA_DIR / "universe_metadata.csv"
 
 SYMBOL_DIRECTORY_MAX_AGE_DAYS = 7
 WEEKLYS_MAX_AGE_DAYS = 7
+OPTIONABLE_MAX_AGE_DAYS = 7
 MARKET_CAP_MAX_AGE_DAYS = 7
 PRICE_HISTORY_MAX_AGE_HOURS = 20
 
 DEFAULT_MIN_PRICE = 5.0
 DEFAULT_MIN_AVG_VOLUME = 1_000_000
 DEFAULT_MIN_MARKET_CAP_M = 1000.0
-DEFAULT_MAX_SYMBOLS = 2000
+# Safety valve on how many names get priced/capped per run, ranked most-liquid
+# first. The optionable pool intersects to ~4k names, so the default sits above
+# that; tighten it only if yfinance starts throttling.
+DEFAULT_MAX_SYMBOLS = 5000
 YF_CHUNK_SIZE = 200
 HISTORY_PERIOD = "1y"
+# Politeness pacing so Yahoo never sees a burst worth throttling: a short pause
+# between 200-ticker batch downloads, one retry after a longer cool-off if a
+# chunk still fails, and a small delay between the per-symbol market-cap calls.
+YF_CHUNK_PAUSE_SECONDS = 1.0
+YF_CHUNK_RETRY_PAUSE_SECONDS = 20.0
+CAP_FETCH_PAUSE_SECONDS = 0.12
+# Flush the cap cache periodically so an interrupted first run keeps progress.
+CAP_CACHE_FLUSH_EVERY = 100
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +200,49 @@ def fetch_weekly_option_symbols(*, refresh: bool = False) -> list[str]:
     return symbols
 
 
+def parse_cboe_symbol_directory(text: str) -> list[str]:
+    """'Stock Symbol' column from the CBOE equity/index options directory CSV."""
+    symbols: set[str] = set()
+    reader = csv.reader(io.StringIO(text or ""))
+    header: list[str] | None = None
+    symbol_idx = 1
+    for cells in reader:
+        if not cells:
+            continue
+        if header is None:
+            header = [cell.strip().lower() for cell in cells]
+            for idx, name in enumerate(header):
+                if "stock symbol" in name:
+                    symbol_idx = idx
+                    break
+            continue
+        if symbol_idx >= len(cells):
+            continue
+        candidate = cells[symbol_idx].strip().upper()
+        if candidate and all(ch.isalnum() or ch in ".-" for ch in candidate):
+            symbols.add(candidate.replace(".", "-"))
+    return sorted(symbols)
+
+
+def fetch_optionable_symbols(*, refresh: bool = False) -> list[str]:
+    """Every optionable stock per the CBOE symbol directory ("Optionable Stocks
+    Is True"); empty list means 'unavailable' (callers skip the filter)."""
+    if not refresh:
+        cached = _load_json_cache(OPTIONABLE_CACHE, OPTIONABLE_MAX_AGE_DAYS)
+        if cached and cached.get("symbols"):
+            return list(cached["symbols"])
+    try:
+        response = requests.get(CBOE_SYMBOL_DIRECTORY_URL, timeout=30)
+        response.raise_for_status()
+        symbols = parse_cboe_symbol_directory(response.text)
+    except Exception as exc:
+        logging.warning("CBOE symbol directory unavailable (%s); optionable filter skipped.", exc)
+        return []
+    if symbols:
+        _save_json_cache(OPTIONABLE_CACHE, {"symbols": symbols})
+    return symbols
+
+
 # ---------------------------------------------------------------------------
 # Price history + metrics (yfinance, chunked + cached)
 # ---------------------------------------------------------------------------
@@ -201,23 +264,37 @@ def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.Data
 
     import yfinance as yf
 
+    def _download_chunk(chunk: list[str]):
+        return yf.download(
+            tickers=" ".join(chunk),
+            period=HISTORY_PERIOD,
+            interval="1d",
+            group_by="ticker",
+            auto_adjust=False,
+            threads=True,
+            progress=False,
+        )
+
     parts: list[pd.DataFrame] = []
     for start in range(0, len(tickers), YF_CHUNK_SIZE):
         chunk = tickers[start : start + YF_CHUNK_SIZE]
         logging.info("Universe price fetch %s-%s of %s...", start + 1, start + len(chunk), len(tickers))
+        if start:
+            time.sleep(YF_CHUNK_PAUSE_SECONDS)
         try:
-            raw = yf.download(
-                tickers=" ".join(chunk),
-                period=HISTORY_PERIOD,
-                interval="1d",
-                group_by="ticker",
-                auto_adjust=False,
-                threads=True,
-                progress=False,
-            )
+            raw = _download_chunk(chunk)
         except Exception as exc:
-            logging.warning("Chunk download failed (%s); continuing.", exc)
-            continue
+            logging.warning(
+                "Chunk download failed (%s); retrying once after %ss cool-off.",
+                exc,
+                YF_CHUNK_RETRY_PAUSE_SECONDS,
+            )
+            time.sleep(YF_CHUNK_RETRY_PAUSE_SECONDS)
+            try:
+                raw = _download_chunk(chunk)
+            except Exception as retry_exc:
+                logging.warning("Chunk retry failed (%s); continuing without it.", retry_exc)
+                continue
         if raw is None or raw.empty:
             continue
         for symbol in chunk:
@@ -247,10 +324,14 @@ def compute_universe_metrics(history: pd.DataFrame) -> pd.DataFrame:
     """Per-symbol screen metrics from long-form history: last price, 20d average
     volume, dollar volume, and position vs the 100/200-day SMAs."""
     rows = []
+    columns = [
+        "symbol", "last_price", "avg_volume_20d", "dollar_volume_20d",
+        "sma_50", "sma_100", "sma_200",
+        "above_sma_50", "above_sma_100", "above_sma_200",
+        "below_sma_50", "below_sma_100", "below_sma_200",
+    ]
     if history is None or history.empty:
-        return pd.DataFrame(
-            columns=["symbol", "last_price", "avg_volume_20d", "dollar_volume_20d", "sma_100", "sma_200", "above_sma_100", "above_sma_200"]
-        )
+        return pd.DataFrame(columns=columns)
     for symbol, group in history.groupby("symbol"):
         work = group.sort_values("datetime")
         closes = pd.to_numeric(work["close"], errors="coerce").dropna()
@@ -259,21 +340,21 @@ def compute_universe_metrics(history: pd.DataFrame) -> pd.DataFrame:
             continue
         last_price = float(closes.iloc[-1])
         avg_volume = float(volumes.tail(20).mean())
-        sma_100 = float(closes.tail(100).mean()) if len(closes) >= 100 else None
-        sma_200 = float(closes.tail(200).mean()) if len(closes) >= 200 else None
-        rows.append(
-            {
-                "symbol": symbol,
-                "last_price": last_price,
-                "avg_volume_20d": avg_volume,
-                "dollar_volume_20d": last_price * avg_volume,
-                "sma_100": sma_100,
-                "sma_200": sma_200,
-                "above_sma_100": bool(sma_100 is not None and last_price >= sma_100),
-                "above_sma_200": bool(sma_200 is not None and last_price >= sma_200),
-            }
-        )
-    return pd.DataFrame(rows)
+        row = {
+            "symbol": symbol,
+            "last_price": last_price,
+            "avg_volume_20d": avg_volume,
+            "dollar_volume_20d": last_price * avg_volume,
+        }
+        # Both above_* and below_* require the SMA to exist, so a young listing
+        # with no 200-day average can never sneak into either trend list.
+        for period in (50, 100, 200):
+            sma = float(closes.tail(period).mean()) if len(closes) >= period else None
+            row[f"sma_{period}"] = sma
+            row[f"above_sma_{period}"] = bool(sma is not None and last_price >= sma)
+            row[f"below_sma_{period}"] = bool(sma is not None and last_price < sma)
+        rows.append(row)
+    return pd.DataFrame(rows, columns=columns if not rows else None)
 
 
 def fetch_market_caps(symbols: list[str], *, refresh: bool = False) -> dict[str, float]:
@@ -287,12 +368,18 @@ def fetch_market_caps(symbols: list[str], *, refresh: bool = False) -> dict[str,
         import yfinance as yf
 
         logging.info("Fetching market caps for %s symbol(s)...", len(missing))
-        for symbol in missing:
+        for count, symbol in enumerate(missing, start=1):
             try:
                 cap = yf.Ticker(symbol).fast_info.get("marketCap")
                 caps[symbol] = float(cap) / 1e6 if cap else 0.0
             except Exception:
                 caps[symbol] = 0.0
+            # Sequential + paced (~8/sec ceiling) so this never looks like a
+            # burst; flush progress so an interrupted first run resumes cheaply.
+            time.sleep(CAP_FETCH_PAUSE_SECONDS)
+            if count % CAP_CACHE_FLUSH_EVERY == 0:
+                _save_json_cache(MARKET_CAP_CACHE, {"caps": caps})
+                logging.info("Market caps %s/%s (cache flushed).", count, len(missing))
         _save_json_cache(MARKET_CAP_CACHE, {"caps": caps})
     return {s: caps.get(s, 0.0) for s in symbols}
 
@@ -356,17 +443,26 @@ def build_universe(
     min_price: float = DEFAULT_MIN_PRICE,
     min_avg_volume: float = DEFAULT_MIN_AVG_VOLUME,
     min_market_cap_m: float = DEFAULT_MIN_MARKET_CAP_M,
-    use_weeklies: bool = True,
+    options_filter: str = DEFAULT_OPTIONS_FILTER,
     refresh: bool = False,
     write_outputs: bool = True,
 ) -> dict:
+    """Longs mirror the TC2000 long screen (quality + above SMA100 and SMA200);
+    shorts mirror the TC2000 short screen (quality + below SMA50, SMA100 AND
+    SMA200). ``options_filter``: "optionable" (any listed options, the TC2000
+    'Optionable Stocks Is True' box), "weeklies" (weekly options only) or "none"."""
     listed = fetch_all_listed_symbols(refresh=refresh)
     logging.info("Listing directory: %s symbols.", len(listed))
 
-    weeklys = fetch_weekly_option_symbols(refresh=refresh) if use_weeklies else []
-    if weeklys:
-        listed = [s for s in listed if s in set(weeklys)]
-        logging.info("Weekly-options filter: %s symbols remain.", len(listed))
+    options_filter = str(options_filter or "none").strip().lower()
+    option_symbols: list[str] = []
+    if options_filter == "weeklies":
+        option_symbols = fetch_weekly_option_symbols(refresh=refresh)
+    elif options_filter == "optionable":
+        option_symbols = fetch_optionable_symbols(refresh=refresh)
+    if option_symbols:
+        listed = [s for s in listed if s in set(option_symbols)]
+        logging.info("%s options filter: %s symbols remain.", options_filter, len(listed))
 
     history = fetch_price_history(listed, refresh=refresh)
     metrics = compute_universe_metrics(history)
@@ -393,7 +489,11 @@ def build_universe(
 
     all_symbols = sorted(screened["symbol"])
     longs = sorted(screened[screened["above_sma_100"] & screened["above_sma_200"]]["symbol"])
-    shorts = sorted(screened[~screened["above_sma_100"] & ~screened["above_sma_200"]]["symbol"])
+    shorts = sorted(
+        screened[
+            screened["below_sma_50"] & screened["below_sma_100"] & screened["below_sma_200"]
+        ]["symbol"]
+    )
 
     if write_outputs:
         _write_watchlist(UNIVERSE_ALL_FILE, all_symbols)
@@ -413,7 +513,8 @@ def build_universe(
         "longs": longs,
         "shorts": shorts,
         "metrics": screened,
-        "weeklys_applied": bool(weeklys),
+        "options_filter": options_filter,
+        "options_filter_applied": bool(option_symbols),
     }
 
 
@@ -423,7 +524,12 @@ def main() -> int:
     parser.add_argument("--min-price", type=float, default=DEFAULT_MIN_PRICE)
     parser.add_argument("--min-avg-volume", type=float, default=DEFAULT_MIN_AVG_VOLUME)
     parser.add_argument("--min-market-cap-m", type=float, default=DEFAULT_MIN_MARKET_CAP_M)
-    parser.add_argument("--no-weeklies", action="store_true", help="skip the CBOE weekly-options filter")
+    parser.add_argument(
+        "--options-filter",
+        choices=OPTIONS_FILTER_CHOICES,
+        default=DEFAULT_OPTIONS_FILTER,
+        help="optionable = any listed options (TC2000 'Optionable Stocks'); weeklies = weekly options only",
+    )
     parser.add_argument("--refresh", action="store_true", help="ignore local caches")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -432,13 +538,14 @@ def main() -> int:
         min_price=args.min_price,
         min_avg_volume=args.min_avg_volume,
         min_market_cap_m=args.min_market_cap_m,
-        use_weeklies=not args.no_weeklies,
+        options_filter=args.options_filter,
         refresh=args.refresh,
     )
+    applied = "applied" if result["options_filter_applied"] else "SKIPPED (source unreachable)"
     print(
         f"Universe: {len(result['all'])} symbols "
         f"({len(result['longs'])} longs / {len(result['shorts'])} shorts); "
-        f"weekly-options filter {'applied' if result['weeklys_applied'] else 'skipped'}."
+        f"{result['options_filter']} options filter {applied}."
     )
     return 0
 
