@@ -546,6 +546,13 @@ TRACKER_MAX_HOLD_DAYS = 18
 # for every bar from entry to the present (the prior behaviour) bloats each setup
 # record without adding signal once the scenarios have all closed.
 TRACKER_FORWARD_MARK_BUFFER_DAYS = 2
+# A CLOSED setup whose forward-tracking window ended this many calendar days ago is
+# "sealed": its scenarios are terminal and the underlying daily bars are past the
+# restatement buffer (DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS trading days), so a
+# re-run reproduces the identical record. Sealed records are kept as-is instead of
+# being replayed every scan -- this also avoids refetching daily bars for symbols
+# long gone from the watchlist. Kept comfortably above the restatement buffer.
+TRACKER_SEALED_SETUP_MIN_AGE_DAYS = 21
 # Main (favorite-path) setups retention. Unlike control/study these were never
 # pruned, so the namespace accumulated every setup since inception and the tracker
 # JSON ballooned. The longest aggregation lookback over setups is
@@ -4934,18 +4941,39 @@ def _evaluate_tracker_scenario_bar(
     return events
 
 
-def recompute_tracker_setup_record(setup: dict, df: pd.DataFrame) -> dict:
+def recompute_tracker_setup_record(
+    setup: dict,
+    df: pd.DataFrame,
+    *,
+    indicator_frame: pd.DataFrame | None = None,
+    band_history_cache: dict | None = None,
+) -> dict:
     if df is None or df.empty:
         return setup
 
-    indicator_frame = compute_indicator_frame(df)
-    current_history = calc_anchored_vwap_band_history(df, str(setup.get("anchor_date") or ""))
-    previous_history = calc_anchored_vwap_band_history(df, str(setup.get("previous_anchor_date") or "")) if setup.get("previous_anchor_date") else {}
-    post_earnings_history = (
-        calc_anchored_vwap_band_history(df, str(setup.get("post_earnings_anchor_date") or ""))
-        if setup.get("post_earnings_anchor_date")
-        else {}
-    )
+    # ``compute_indicator_frame`` and ``calc_anchored_vwap_band_history`` are pure
+    # in ``df`` (and the anchor date), so a caller replaying many setups for the
+    # same symbol can pass a shared indicator frame + per-anchor band-history cache
+    # to skip recomputing them once per record. Results are identical to computing
+    # inline; only the redundant work is avoided.
+    if indicator_frame is None:
+        indicator_frame = compute_indicator_frame(df)
+
+    def _band_history(anchor_date_iso) -> dict:
+        anchor_iso = str(anchor_date_iso or "")
+        if not anchor_iso:
+            return {}
+        if band_history_cache is None:
+            return calc_anchored_vwap_band_history(df, anchor_iso)
+        cached = band_history_cache.get(anchor_iso)
+        if cached is None:
+            cached = calc_anchored_vwap_band_history(df, anchor_iso)
+            band_history_cache[anchor_iso] = cached
+        return cached
+
+    current_history = _band_history(setup.get("anchor_date"))
+    previous_history = _band_history(setup.get("previous_anchor_date")) if setup.get("previous_anchor_date") else {}
+    post_earnings_history = _band_history(setup.get("post_earnings_anchor_date")) if setup.get("post_earnings_anchor_date") else {}
     entry_trade_date = str(setup.get("entry_trade_date") or setup.get("scan_date") or "")
     if not entry_trade_date:
         return setup
@@ -9158,6 +9186,86 @@ def _indicator_row_for_scan_date(df: pd.DataFrame | None, scan_date: str) -> pd.
     return eligible_indicator_rows.iloc[-1]
 
 
+def _tracker_setup_last_mark_date(setup: dict) -> str:
+    """The most recent forward-tracked bar date on a setup record."""
+    if not isinstance(setup, dict):
+        return ""
+    latest = setup.get("latest_snapshot")
+    if isinstance(latest, dict):
+        mark = str(latest.get("trade_date") or "").strip()
+        if mark:
+            return mark
+    marks = setup.get("daily_marks")
+    if isinstance(marks, list) and marks and isinstance(marks[-1], dict):
+        return str(marks[-1].get("trade_date") or "").strip()
+    return ""
+
+
+def _tracker_setup_recompute_is_sealed(setup: dict, scan_date: str) -> bool:
+    """True when replaying ``setup`` cannot change its record, so recompute (and the
+    daily-bar refetch it needs) can be skipped. See TRACKER_SEALED_SETUP_MIN_AGE_DAYS."""
+    if not isinstance(setup, dict):
+        return False
+    if str(setup.get("setup_status") or "").upper() != "CLOSED":
+        return False
+    last_mark = _tracker_setup_last_mark_date(setup)
+    if not last_mark:
+        return False
+    try:
+        last_dt = datetime.fromisoformat(last_mark).date()
+        scan_dt = datetime.fromisoformat(str(scan_date)).date()
+    except ValueError:
+        return False
+    return (scan_dt - last_dt).days > TRACKER_SEALED_SETUP_MIN_AGE_DAYS
+
+
+def _tracker_setup_needs_live_bars(setup: dict) -> bool:
+    """Only genuinely OPEN setups need fresh bars to advance; CLOSED / UNTRADEABLE
+    records replay deterministically from cached history."""
+    return str(setup.get("setup_status") or "").upper() not in ("CLOSED", "UNTRADEABLE")
+
+
+def _compact_tracker_setup_record(setup: dict) -> bool:
+    """Strip replay-only detail from a sealed record: the per-bar ``daily_marks`` list
+    and each scenario's per-bar ``events`` log. These are ~90% of a closed setup's
+    bytes yet are consumed only by the debug daily CSV / the recompute replay -- every
+    ranking/stats aggregation reads scalar scenario outcomes (kept intact), and
+    ``latest_snapshot`` + ``entry_feature_snapshot`` (kept) preserve the sealed-age
+    check and entry features. A future recompute would rebuild the dropped detail from
+    bars if ever needed. Idempotent; returns True if anything was stripped."""
+    if not isinstance(setup, dict):
+        return False
+    changed = False
+    if setup.get("daily_marks"):
+        setup["daily_marks"] = []
+        changed = True
+    scenarios = setup.get("scenarios")
+    if isinstance(scenarios, dict):
+        for scenario in scenarios.values():
+            if isinstance(scenario, dict) and scenario.get("events"):
+                scenario["events"] = []
+                changed = True
+    return changed
+
+
+def _compact_sealed_tracker_setups(tracker: dict, scan_date: str) -> int:
+    """Compact every sealed record across all namespaces. Sealed records are recompute
+    no-ops (see _tracker_setup_recompute_is_sealed), so their per-bar detail is never
+    rebuilt -- dropping it just shrinks the on-disk tracker. Returns the count changed."""
+    if not isinstance(tracker, dict):
+        return 0
+    compacted = 0
+    for namespace in ("setups", "control_setups", "study_setups"):
+        for setup in (tracker.get(namespace) or {}).values():
+            if not isinstance(setup, dict):
+                continue
+            if not _tracker_setup_recompute_is_sealed(setup, scan_date):
+                continue
+            if _compact_tracker_setup_record(setup):
+                compacted += 1
+    return compacted
+
+
 def update_setup_tracker_from_scan(
     tracked_rows: list[dict],
     ai_state: dict,
@@ -9168,8 +9276,9 @@ def update_setup_tracker_from_scan(
     auto_tune: bool = True,
     control_rows: list[dict] | None = None,
     study_rows: list[dict] | None = None,
+    tracker_payload: dict | None = None,
 ) -> None:
-    tracker = load_setup_tracker_payload()
+    tracker = tracker_payload if isinstance(tracker_payload, dict) else load_setup_tracker_payload()
     symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
     now_iso = datetime.now().isoformat(timespec="seconds")
     target_scan_date = _infer_tracker_scan_date(tracked_rows, symbol_map, requested_scan_date=scan_date)
@@ -9335,12 +9444,38 @@ def update_setup_tracker_from_scan(
         )
 
     recompute_cache = {}
+    # The daily frame is cached per symbol below; also cache the per-symbol pure
+    # derivations (indicator frame + anchored-VWAP band history) so replaying many
+    # setups for the same symbol builds each only once instead of once per record.
+    # Symbols routinely carry a dozen-plus tracked setups, so this removes the bulk
+    # of the recompute cost with no change to the resulting records.
+    indicator_frame_cache: dict[str, pd.DataFrame] = {}
+    band_history_caches: dict[str, dict] = {}
+
+    # A symbol needs a live daily-bar refetch during recompute only if it still has
+    # an OPEN setup to advance. Symbols whose every tracked setup is closed/untradeable
+    # replay from cached bars, so we skip the live IBKR/Yahoo round-trip for them
+    # (they are typically long gone from the scan watchlist).
+    symbols_needing_live_bars: set[str] = set()
+    for _namespace in (tracker.get("setups"), tracker.get("control_setups"), tracker.get("study_setups")):
+        for _setup in (_namespace or {}).values():
+            if isinstance(_setup, dict) and _tracker_setup_needs_live_bars(_setup):
+                symbols_needing_live_bars.add(str(_setup.get("symbol", "")).strip().upper())
+
+    recompute_skipped_sealed = 0
+    recompute_cache_only_fetches = 0
 
     def _recompute_namespace(namespace: dict) -> None:
+        nonlocal recompute_skipped_sealed, recompute_cache_only_fetches
         for setup_id, setup in list((namespace or {}).items()):
             if not isinstance(setup, dict):
                 continue
             symbol = str(setup.get("symbol", "")).strip().upper()
+            # A sealed (closed + aged past the restatement buffer) setup replays to
+            # the identical record, so keep the stored one and skip fetch + recompute.
+            if _tracker_setup_recompute_is_sealed(setup, target_scan_date):
+                recompute_skipped_sealed += 1
+                continue
             if symbol in recompute_cache:
                 df = recompute_cache[symbol]
             else:
@@ -9353,15 +9488,49 @@ def update_setup_tracker_from_scan(
                         days_needed = max(days_needed, (datetime.now().date() - anchor_date_obj).days + 20)
                     except ValueError:
                         pass
-                    df = fetch_daily_bars(ib, symbol, days_needed)
+                    if symbol in symbols_needing_live_bars:
+                        df = fetch_daily_bars(ib, symbol, days_needed)
+                    else:
+                        # All setups for this symbol are closed/untradeable: cached bars
+                        # already cover their (past) windows, so avoid the live refetch.
+                        cached = _load_cached_daily_bar_frame(symbol)
+                        if _daily_bar_cache_covers_history(cached, days_needed):
+                            df = _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
+                            recompute_cache_only_fetches += 1
+                        else:
+                            df = fetch_daily_bars(ib, symbol, days_needed)
                 recompute_cache[symbol] = df
             if df is None or df.empty:
                 continue
-            namespace[setup_id] = recompute_tracker_setup_record(setup, df)
+            indicator_frame = indicator_frame_cache.get(symbol)
+            if indicator_frame is None:
+                indicator_frame = compute_indicator_frame(df)
+                indicator_frame_cache[symbol] = indicator_frame
+            band_history_cache = band_history_caches.setdefault(symbol, {})
+            namespace[setup_id] = recompute_tracker_setup_record(
+                setup,
+                df,
+                indicator_frame=indicator_frame,
+                band_history_cache=band_history_cache,
+            )
 
     _recompute_namespace(tracker.get("setups"))
     _recompute_namespace(tracker.get("control_setups"))
     _recompute_namespace(tracker.get("study_setups"))
+    logging.info(
+        "Setup tracker recompute: skipped %d sealed record(s); served %d off-watchlist "
+        "symbol(s) from cache without a live refetch.",
+        recompute_skipped_sealed,
+        recompute_cache_only_fetches,
+    )
+    # Compact sealed records (drop per-bar replay detail) before exporting/saving so the
+    # on-disk tracker -- and the daily CSV flattened from it -- stay bounded over time.
+    compacted_records = _compact_sealed_tracker_setups(tracker, target_scan_date)
+    if compacted_records:
+        logging.info(
+            "Setup tracker compaction: stripped per-bar replay detail from %d sealed record(s).",
+            compacted_records,
+        )
 
     export_setup_tracker_views(tracker)
     try:
@@ -23315,6 +23484,119 @@ def enrich_priority_rows_with_second_dev_breakouts(
                 family=SECOND_DEV_BREAKOUT_STUDY_FAMILY,
                 bucket=SECOND_DEV_BREAKOUT_STUDY_BUCKET,
                 tag="2NDDEV_BREAKOUT",
+                note=note,
+                extra=context,
+            )
+        )
+    return study_rows
+
+
+FIRST_DEV_BREAKOUT_STUDY_FAMILY = "1stdev_breakout"
+FIRST_DEV_BREAKOUT_STUDY_BUCKET = "study_1stdev_breakout"
+
+
+def enrich_priority_rows_with_first_dev_breakouts(
+    priority_rows: list[dict] | None,
+    daily_frames_by_symbol: dict[str, pd.DataFrame] | None = None,
+    *,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+) -> list[dict]:
+    """Isolated study: fresh cross through the 1st stdev band (UPPER_1 / LOWER_1)
+    that leaves price inside the 1st-to-2nd-dev zone.
+
+    Mirrors :func:`enrich_priority_rows_with_second_dev_breakouts` but anchored on
+    the 1st band, so realized R accumulates in the study namespace (no scoring
+    impact) and the recent-window stats can show whether these breakouts work
+    before any promotion to a scored family. A fresh close that already ran past
+    the 2nd band is left to the 2nd-dev study so the two families stay mutually
+    exclusive.
+    """
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    study_rows: list[dict] = []
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_entry = ai_symbols.get(symbol) if isinstance(ai_symbols, dict) else {}
+        symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+        feature_row = feature_rows_by_symbol.get(symbol)
+        feature_row = feature_row if isinstance(feature_row, dict) else {}
+
+        side = normalize_side(row.get("side") or symbol_entry.get("side") or "")
+        if side not in ("LONG", "SHORT"):
+            continue
+        current_anchor = symbol_entry.get("current_anchor")
+        bands = current_anchor.get("bands") if isinstance(current_anchor, dict) else None
+        if not isinstance(bands, dict):
+            continue
+        band_label = "UPPER_1" if side == "LONG" else "LOWER_1"
+        band_level = _coerce_float(bands.get(band_label))
+        if band_level is None:
+            continue
+        second_band_label = "UPPER_2" if side == "LONG" else "LOWER_2"
+        second_band_level = _coerce_float(bands.get(second_band_label))
+        daily_rows = symbol_entry.get("daily_ohlc")
+        if not isinstance(daily_rows, list) or not daily_rows:
+            continue
+        last_trade_date = _parse_iso_date_or_none(
+            str(row.get("last_trade_date") or symbol_entry.get("last_trade_date") or "")
+        )
+        if last_trade_date is None:
+            continue
+        atr_value = _coerce_float(
+            row.get("atr20") or symbol_entry.get("atr20") or feature_row.get("atr20")
+        )
+
+        quality = assess_first_dev_break_quality(
+            daily_rows,
+            last_trade_date,
+            band_level,
+            side,
+            atr20=atr_value,
+        )
+        # fresh_break_today = first clean close beyond the 1st band with no recent
+        # touches of it — the pro-style fresh breakout, not chop-at-the-band.
+        if not quality.get("fresh_break_today"):
+            continue
+
+        # Keep this study to the 1st->2nd-dev zone. If today's close already ran
+        # past the 2nd band, that break belongs to the 2nd-dev breakout study.
+        target_iso = last_trade_date.isoformat()
+        current_rows = [
+            r for r in daily_rows if isinstance(r, dict) and str(r.get("date") or "") <= target_iso
+        ]
+        current_close = _coerce_float(current_rows[-1].get("close")) if current_rows else None
+        if second_band_level is not None and current_close is not None:
+            if side == "LONG" and current_close >= second_band_level:
+                continue
+            if side == "SHORT" and current_close <= second_band_level:
+                continue
+
+        note = (
+            f"Fresh 1st-dev breakout: close beyond {band_label} ({band_level:.2f}) "
+            f"with a clean {PRIORITY_FIRST_DEV_LOOKBACK_DAYS}-session lookback"
+        )
+        context = {
+            "first_dev_breakout_today": True,
+            "first_dev_breakout_level": band_level,
+            "first_dev_breakout_level_label": band_label,
+            "first_dev_breakout_note": note,
+        }
+        for target in (symbol_entry, feature_row):
+            if isinstance(target, dict):
+                target.update(context)
+        study_rows.append(
+            _build_phase6_study_row(
+                row,
+                family=FIRST_DEV_BREAKOUT_STUDY_FAMILY,
+                bucket=FIRST_DEV_BREAKOUT_STUDY_BUCKET,
+                tag="1STDEV_BREAKOUT",
                 note=note,
                 extra=context,
             )

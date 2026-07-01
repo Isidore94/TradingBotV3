@@ -249,7 +249,7 @@ class SetupTrackerPanel(QFrame):
         self.tabs.addTab(
             self._make_explained_tab(
                 "What's worked in the last 30 days: per-family closed count, realized R, target/stop rates "
-                "across live setups and measured-only study families (incl. 2nd-dev breakouts).",
+                "across live setups and measured-only study families (incl. 1st- and 2nd-dev breakouts).",
                 self.recent_type_table,
             ),
             "Last 30 Days",

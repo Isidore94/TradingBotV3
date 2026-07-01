@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from copy import deepcopy
 
 from . import legacy as _legacy
@@ -13,6 +15,13 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+
+
+def _log_phase_duration(label: str, since: float) -> float:
+    """Log wall-clock seconds elapsed for a run_master phase; returns a fresh mark."""
+    now = time.perf_counter()
+    logging.info("[run_master timing] %-26s %6.1fs", label, now - since)
+    return now
 
 
 def run_master_with_shared_watchlists():
@@ -227,6 +236,8 @@ def run_master(
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
 ):
+    _run_t0 = time.perf_counter()
+    _phase_t = _run_t0
     reset_ibkr_historical_failure_circuit()
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
@@ -343,6 +354,7 @@ def run_master(
     hv_level_study_rows = []
     phase6_study_rows = []
     relative_avwap_study_rows = []
+    first_dev_breakout_study_rows = []
     second_dev_breakout_study_rows = []
     theta_put_rows = []
     theta_pcs_rows = []
@@ -1470,6 +1482,7 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    _phase_t = _log_phase_duration("prep+fetch+priority", _phase_t)
     htf_trend_study_rows = enrich_priority_rows_with_htf_trend_context(
         priority_rows,
         ib=ib,
@@ -1508,6 +1521,12 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    first_dev_breakout_study_rows = enrich_priority_rows_with_first_dev_breakouts(
+        priority_rows,
+        daily_frames_by_symbol,
+        ai_state=ai_state,
+        feature_rows_by_symbol=feature_rows_by_symbol,
+    )
     second_dev_breakout_study_rows = enrich_priority_rows_with_second_dev_breakouts(
         priority_rows,
         daily_frames_by_symbol,
@@ -1519,22 +1538,32 @@ def run_master(
         *hv_level_study_rows,
         *phase6_study_rows,
         *relative_avwap_study_rows,
+        *first_dev_breakout_study_rows,
         *second_dev_breakout_study_rows,
     ]
     apply_pre_earnings_priority_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_post_earnings_hard_rule_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     apply_clean_first_zone_score_bonus(priority_rows, ai_state, feature_rows_by_symbol)
+    _phase_t = _log_phase_duration("studies+enrichment", _phase_t)
+    # The tracker payload lives on a cloud-synced drive and is large (hundreds of MB);
+    # load it once and thread it through every consumer this scan instead of letting
+    # each re-parse the file. update_setup_tracker_from_scan mutates + saves this same
+    # object below, so calibrate_expected_r_prior_anchors then reads the post-update
+    # state in memory with no extra reload.
+    tracker_payload = load_setup_tracker_payload()
     recent_family_rows = apply_recent_tracker_setup_family_adjustments(
         priority_rows,
         ai_state,
         feature_rows_by_symbol,
+        tracker_payload=tracker_payload,
         reference_date=today_run,
     )
     apply_tracker_setup_type_adjustments(
         priority_rows,
         ai_state,
         feature_rows_by_symbol,
+        tracker_payload=tracker_payload,
     )
     apply_tracker_scoring_guardrails(priority_rows, ai_state, feature_rows_by_symbol)
     apply_market_regime_score_adjustments(priority_rows, ai_state, feature_rows_by_symbol)
@@ -1617,6 +1646,8 @@ def run_master(
         "phase6_study_count": len(phase6_study_rows),
         "relative_avwap_study_rows": relative_avwap_study_rows,
         "relative_avwap_study_count": len(relative_avwap_study_rows),
+        "first_dev_breakout_study_rows": first_dev_breakout_study_rows,
+        "first_dev_breakout_study_count": len(first_dev_breakout_study_rows),
         "second_dev_breakout_study_rows": second_dev_breakout_study_rows,
         "second_dev_breakout_study_count": len(second_dev_breakout_study_rows),
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
@@ -1675,6 +1706,7 @@ def run_master(
     run_result["setup_tracker_allowed"] = bool(setup_tracker_allowed)
     run_result["setup_tracker_skip_reason"] = setup_tracker_skip_reason
 
+    _phase_t = _log_phase_duration("tracker scoring+ranking", _phase_t)
     if setup_tracker_allowed:
         control_rows = select_tracker_control_rows(
             priority_rows,
@@ -1689,6 +1721,7 @@ def run_master(
             ib,
             control_rows=control_rows,
             study_rows=study_rows,
+            tracker_payload=tracker_payload,
         )
         run_result["setup_tracker_updated"] = True
         run_result["control_setups_tracked"] = len(control_rows)
@@ -1702,7 +1735,8 @@ def run_master(
         # Re-fit the Expected-R prior anchors to the freshly-updated closed
         # outcomes so the next scan's headline ranking is grounded in this
         # trader's own realized R (no-op until enough closed history exists).
-        calibrate_expected_r_prior_anchors(persist=True)
+        # tracker_payload is the just-updated in-memory tracker, so no reload.
+        calibrate_expected_r_prior_anchors(tracker_payload=tracker_payload, persist=True)
     else:
         if setup_tracker_skip_reason:
             logging.info(setup_tracker_skip_reason)
@@ -1718,6 +1752,7 @@ def run_master(
                 "Setup tracker refresh skipped for this run; final scheduled slot will refresh stored setups."
             )
 
+    _phase_t = _log_phase_duration("tracker update+calibrate", _phase_t)
     disconnect_daily_data_client(ib)
 
     if csv_rows:
@@ -2099,6 +2134,8 @@ def run_master(
     if not theta_enrichment_pending:
         run_result["theta_enrichment_mode"] = "not_needed"
 
+    _phase_t = _log_phase_duration("output writes", _phase_t)
+    _log_phase_duration("TOTAL (theta enrichment deferred)", _run_t0)
     logging.info(
         f"Master AVWAP run complete. "
         f"Events: {OUTPUT_FILE}, AI state: {AI_STATE_FILE}, history: {HISTORY_FILE}"
