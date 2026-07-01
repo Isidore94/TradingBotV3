@@ -71,6 +71,19 @@ UNIVERSE_ALL_FILE = PERSISTENT_DATA_DIR / "universe_all.txt"
 UNIVERSE_LONGS_FILE = PERSISTENT_DATA_DIR / "universe_longs.txt"
 UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
 UNIVERSE_METADATA_FILE = DATA_DIR / "universe_metadata.csv"
+# Manual include lists: names the free sources miss (e.g. NYSE tickers absent
+# from the NASDAQ Trader directory, or optionable names CBOE's file omits).
+# Merged-in symbols persist here so every rebuild re-applies them.
+UNIVERSE_LIST_FILES = {
+    "all": UNIVERSE_ALL_FILE,
+    "longs": UNIVERSE_LONGS_FILE,
+    "shorts": UNIVERSE_SHORTS_FILE,
+}
+UNIVERSE_INCLUDE_FILES = {
+    "all": PERSISTENT_DATA_DIR / "universe_include_all.txt",
+    "longs": PERSISTENT_DATA_DIR / "universe_include_longs.txt",
+    "shorts": PERSISTENT_DATA_DIR / "universe_include_shorts.txt",
+}
 
 SYMBOL_DIRECTORY_MAX_AGE_DAYS = 7
 WEEKLYS_MAX_AGE_DAYS = 7
@@ -420,6 +433,16 @@ def compare_symbol_lists(ours: list[str], theirs: list[str]) -> dict:
 
     ours_set = {_norm(s) for s in ours if _norm(s)}
     theirs_set = {_norm(s) for s in theirs if _norm(s)}
+    # TC2000 writes class shares with no separator at all (BRKB); Yahoo uses a
+    # dash (BRK-B). Remap an unmatched external symbol onto our dashed form when
+    # that variant exists on our side, so the same company never lands on both
+    # sides of the diff.
+    for symbol in list(theirs_set - ours_set):
+        if len(symbol) >= 3:
+            dashed = symbol[:-1] + "-" + symbol[-1]
+            if dashed in ours_set:
+                theirs_set.discard(symbol)
+                theirs_set.add(dashed)
     matched = sorted(ours_set & theirs_set)
     return {
         "matched": matched,
@@ -435,6 +458,48 @@ def compare_symbol_lists(ours: list[str], theirs: list[str]) -> dict:
 def _write_watchlist(path: Path, symbols: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(symbols) + ("\n" if symbols else ""), encoding="utf-8")
+
+
+def _read_watchlist(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return sorted({token.strip().upper() for token in raw.replace(",", "\n").split() if token.strip()})
+
+
+def load_manual_includes(list_name: str) -> list[str]:
+    path = UNIVERSE_INCLUDE_FILES.get(str(list_name or "").strip().lower())
+    return _read_watchlist(path) if path else []
+
+
+def merge_external_into_universe(list_name: str, external_symbols: list[str]) -> dict:
+    """Amalgamate an external watchlist (e.g. pasted from TC2000) into ours.
+
+    The union is written to the universe file immediately, and the names we were
+    missing are appended to the matching include file so every future rebuild
+    re-applies them — this is how gaps in the free sources get patched for good.
+    """
+    key = str(list_name or "").strip().lower()
+    list_path = UNIVERSE_LIST_FILES.get(key)
+    include_path = UNIVERSE_INCLUDE_FILES.get(key)
+    if list_path is None or include_path is None:
+        raise ValueError(f"Unknown universe list '{list_name}' (expected one of {sorted(UNIVERSE_LIST_FILES)}).")
+    ours = _read_watchlist(list_path)
+    diff = compare_symbol_lists(ours, external_symbols)
+    added = list(diff["only_theirs"])
+    if added:
+        _write_watchlist(include_path, sorted(set(load_manual_includes(key)) | set(added)))
+        _write_watchlist(list_path, sorted(set(ours) | set(added)))
+    return {
+        "list_name": key,
+        "added": added,
+        "added_count": len(added),
+        "total": len(set(ours) | set(added)),
+        "include_file": str(include_path),
+    }
 
 
 def build_universe(
@@ -487,12 +552,21 @@ def build_universe(
         min_market_cap_m=min_market_cap_m,
     )
 
-    all_symbols = sorted(screened["symbol"])
     longs = sorted(screened[screened["above_sma_100"] & screened["above_sma_200"]]["symbol"])
     shorts = sorted(
         screened[
             screened["below_sma_50"] & screened["below_sma_100"] & screened["below_sma_200"]
         ]["symbol"]
+    )
+    # Re-apply manual includes so amalgamated names (source-gap patches merged in
+    # via the Universe tab) survive every rebuild.
+    include_longs = load_manual_includes("longs")
+    include_shorts = load_manual_includes("shorts")
+    include_all = load_manual_includes("all")
+    longs = sorted(set(longs) | set(include_longs))
+    shorts = sorted(set(shorts) | set(include_shorts))
+    all_symbols = sorted(
+        set(screened["symbol"]) | set(include_all) | set(include_longs) | set(include_shorts)
     )
 
     if write_outputs:

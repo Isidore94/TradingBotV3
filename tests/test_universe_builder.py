@@ -1,8 +1,10 @@
 """Tests for the self-sufficient universe builder (pure parsing/screening only)."""
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -120,6 +122,36 @@ class ScreenTests(unittest.TestCase):
         result = ub.compare_symbol_lists(ours=["AAPL"], theirs=[])
         self.assertEqual(result["overlap_pct"], 0.0)
         self.assertEqual(result["matched"], [])
+
+    def test_compare_maps_separatorless_class_shares(self):
+        # TC2000 writes BRKB for what Yahoo calls BRK-B: same company, one match.
+        result = ub.compare_symbol_lists(ours=["BRK-B", "AAPL"], theirs=["BRKB", "AAPL"])
+        self.assertEqual(result["matched"], ["AAPL", "BRK-B"])
+        self.assertEqual(result["only_ours"], [])
+        self.assertEqual(result["only_theirs"], [])
+        self.assertEqual(result["overlap_pct"], 100.0)
+
+    def test_merge_external_is_durable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            longs_file = root / "universe_longs.txt"
+            include_file = root / "universe_include_longs.txt"
+            longs_file.write_text("AAPL\nNVDA\n", encoding="utf-8")
+            with (
+                patch.dict(ub.UNIVERSE_LIST_FILES, {"longs": longs_file}),
+                patch.dict(ub.UNIVERSE_INCLUDE_FILES, {"longs": include_file}),
+            ):
+                result = ub.merge_external_into_universe("longs", ["NVDA", "SEM", "BRKB"])
+                self.assertEqual(result["added"], ["BRKB", "SEM"])
+                self.assertEqual(result["total"], 4)
+                # Union written to the list file, additions remembered in the include file.
+                self.assertEqual(
+                    longs_file.read_text(encoding="utf-8").split(), ["AAPL", "BRKB", "NVDA", "SEM"]
+                )
+                self.assertEqual(include_file.read_text(encoding="utf-8").split(), ["BRKB", "SEM"])
+                # Second merge with the same list is a no-op.
+                again = ub.merge_external_into_universe("longs", ["SEM"])
+                self.assertEqual(again["added_count"], 0)
 
     def test_small_cap_dropped_but_unknown_cap_kept(self):
         metrics = ub.compute_universe_metrics(

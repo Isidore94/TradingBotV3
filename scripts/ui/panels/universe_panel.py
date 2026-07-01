@@ -27,6 +27,7 @@ from universe_builder import (
     UNIVERSE_SHORTS_FILE,
     build_universe,
     compare_symbol_lists,
+    merge_external_into_universe,
 )
 from watchlist_utils import extract_watchlist_symbols
 from ui.widgets.section_header import SectionHeader
@@ -34,7 +35,12 @@ from ui.widgets.section_header import SectionHeader
 UNIVERSE_FILES = {
     "All (quality screen)": UNIVERSE_ALL_FILE,
     "Longs (above SMA100+200)": UNIVERSE_LONGS_FILE,
-    "Shorts (below SMA100+200)": UNIVERSE_SHORTS_FILE,
+    "Shorts (below SMA50+100+200)": UNIVERSE_SHORTS_FILE,
+}
+UNIVERSE_LIST_KEYS = {
+    "All (quality screen)": "all",
+    "Longs (above SMA100+200)": "longs",
+    "Shorts (below SMA50+100+200)": "shorts",
 }
 
 
@@ -92,15 +98,27 @@ class UniversePanel(QFrame):
         )
         compare_button = QPushButton("Compare With Pasted List")
         compare_button.clicked.connect(self.run_compare)
+        merge_button = QPushButton("Merge Pasted Into Selected List")
+        merge_button.setToolTip(
+            "Amalgamate: union the pasted list into the selected universe list now, AND "
+            "remember the added names in an include file so every rebuild re-applies them."
+        )
+        merge_button.clicked.connect(self.run_merge)
         self.compare_output = QPlainTextEdit()
         self.compare_output.setReadOnly(True)
         self.compare_output.setPlaceholderText("Comparison results appear here.")
 
         self._buildFinished.connect(self._on_build_finished)
-        self._build_layout(refresh_button, copy_button, compare_button)
+        self._build_layout(refresh_button, copy_button, compare_button, merge_button)
         self.refresh_from_disk()
 
-    def _build_layout(self, refresh_button: QPushButton, copy_button: QPushButton, compare_button: QPushButton) -> None:
+    def _build_layout(
+        self,
+        refresh_button: QPushButton,
+        copy_button: QPushButton,
+        compare_button: QPushButton,
+        merge_button: QPushButton,
+    ) -> None:
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
         action_row.addWidget(self.list_selector)
@@ -130,7 +148,11 @@ class UniversePanel(QFrame):
         compare_title.setObjectName("SectionTitle")
         right_layout.addWidget(compare_title)
         right_layout.addWidget(self.compare_input, 1)
-        right_layout.addWidget(compare_button)
+        compare_actions = QHBoxLayout()
+        compare_actions.setSpacing(6)
+        compare_actions.addWidget(compare_button)
+        compare_actions.addWidget(merge_button)
+        right_layout.addLayout(compare_actions)
         right_layout.addWidget(self.compare_output, 2)
 
         splitter = QSplitter()
@@ -242,6 +264,29 @@ class UniversePanel(QFrame):
         self.compare_output.setPlainText("\n".join(lines))
         self.statusChanged.emit(
             f"Universe compare: {result['overlap_pct']}% of the pasted list matched."
+        )
+
+    def run_merge(self) -> None:
+        theirs = extract_watchlist_symbols(self.compare_input.toPlainText())
+        if not theirs:
+            self.compare_output.setPlainText("Paste the list you want amalgamated first.")
+            return
+        list_key = UNIVERSE_LIST_KEYS[self.list_selector.currentText()]
+        result = merge_external_into_universe(list_key, theirs)
+        self.refresh_from_disk()
+        if result["added_count"]:
+            lines = [
+                f"Merged {result['added_count']} new symbol(s) into {result['list_name']} "
+                f"(now {result['total']} total):",
+                ", ".join(result["added"]),
+                "",
+                f"They are remembered in {result['include_file']} and will be re-applied on every rebuild.",
+            ]
+        else:
+            lines = ["Nothing to merge -- every pasted symbol is already in the selected list."]
+        self.compare_output.setPlainText("\n".join(lines))
+        self.statusChanged.emit(
+            f"Universe merge: +{result['added_count']} into {result['list_name']}."
         )
 
     def shutdown(self) -> None:
