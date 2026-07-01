@@ -64,6 +64,8 @@ from project_paths import (
     LONGS_FILE,
     SHORTS_FILE,
     SWING_LONGS_FILE,
+    UNIVERSE_LONGS_FILE,
+    UNIVERSE_SHORTS_FILE,
     SWING_SHORTS_FILE,
     EARNINGS_CACHE_FILE,
     PREV_EARNINGS_CACHE_FILE,
@@ -1754,10 +1756,12 @@ def resolve_master_scan_watchlist_paths(
     base_longs_path, base_shorts_path, _ = resolve_scan_watchlist_paths(
         use_shared_watchlists=use_shared_watchlists,
     )
+    # The self-built universe is always scanned; longs.txt / shorts.txt stay the
+    # trader's intraday M5 RS/RW dumps and layer on top of it.
     return (
-        [base_longs_path, SWING_LONGS_FILE],
-        [base_shorts_path, SWING_SHORTS_FILE],
-        "home folder watchlists + Master AVWAP swing watchlists",
+        [base_longs_path, SWING_LONGS_FILE, UNIVERSE_LONGS_FILE],
+        [base_shorts_path, SWING_SHORTS_FILE, UNIVERSE_SHORTS_FILE],
+        "home folder watchlists + Master AVWAP swing watchlists + universe",
     )
 
 
@@ -14226,7 +14230,7 @@ def warm_durable_stores_for_watchlists(
     long_paths, short_paths, label = resolve_master_scan_watchlist_paths(
         use_shared_watchlists=use_shared_watchlists
     )
-    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE}
+    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE}
     longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
     shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
     symbols = sorted(set(longs + shorts))
@@ -21322,7 +21326,7 @@ def backfill_setup_tracker_from_recent_sessions(
         shorts_path=shorts_path,
         use_shared_watchlists=use_shared_watchlists,
     )
-    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE}
+    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE}
     longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
     shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
     longs, shorts, d1_watchlist_added = append_master_avwap_d1_watchlist_symbols(longs, shorts)

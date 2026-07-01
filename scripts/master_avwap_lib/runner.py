@@ -249,7 +249,7 @@ def run_master(
         f"{_format_watchlist_path_group(long_paths)} | {_format_watchlist_path_group(short_paths)}"
     )
 
-    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE}
+    optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE}
     longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
     shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
     longs, shorts, d1_watchlist_added = append_master_avwap_d1_watchlist_symbols(longs, shorts)

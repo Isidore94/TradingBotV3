@@ -144,6 +144,13 @@ SHORTS_FILE = PERSISTENT_DATA_DIR / "shorts.txt"
 SWING_LONGS_FILE = PERSISTENT_DATA_DIR / "swinglongs.txt"
 SWING_SHORTS_FILE = PERSISTENT_DATA_DIR / "shortswings.txt"
 
+# Self-built scan universe (universe_builder.py). The master scan always folds
+# these in alongside longs.txt / shorts.txt, which stay reserved for the
+# trader's intraday M5 RS/RW dumps.
+UNIVERSE_ALL_FILE = PERSISTENT_DATA_DIR / "universe_all.txt"
+UNIVERSE_LONGS_FILE = PERSISTENT_DATA_DIR / "universe_longs.txt"
+UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
+
 # Trader-curated daily Focus Picks (shared home, synced across machines) and the
 # runtime files for human-pick membership tracking + the human-vs-bot cohort.
 # See GUI_REDESIGN_PLAN.md (Focus Picks + Human Setup Tracker).

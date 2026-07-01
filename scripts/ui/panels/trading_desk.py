@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from ui.models.setup import SetupRow
 from ui.panels.bounce_panel import BouncePanel
 from ui.panels.focus_picks_panel import FocusPicksPanel
+from ui.panels.industry_panel import IndustryPanel
 from ui.panels.master_avwap_panel import MasterAvwapPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
@@ -40,11 +41,13 @@ class TradingDeskPanel(QWidget):
         self.master_panel = MasterAvwapPanel(self.focus_service)
         self.theta_panel = ThetaPanel()
         self.watchlists_panel = WatchlistsPanel()
+        self.industry_panel = IndustryPanel()
         self.focus_picks_panel = FocusPicksPanel(self.focus_service)
         self.master_workspace = MasterAvwapWorkspace(
             self.master_panel,
             self.theta_panel,
             self.watchlists_panel,
+            self.industry_panel,
         )
         self.bounce_panel = BouncePanel(self.focus_service)
         self._mode_widget: QWidget | None = None
@@ -53,6 +56,7 @@ class TradingDeskPanel(QWidget):
         self.master_panel.rowsChanged.connect(self.rowsChanged)
         self.theta_panel.statusChanged.connect(self.statusChanged)
         self.watchlists_panel.statusChanged.connect(self.statusChanged)
+        self.industry_panel.statusChanged.connect(self.statusChanged)
         self.focus_picks_panel.statusChanged.connect(self.statusChanged)
         self.bounce_panel.statusChanged.connect(self.statusChanged)
         self.bounce_panel.service.connectionChanged.connect(self.connectionChanged)
@@ -118,6 +122,7 @@ class MasterAvwapWorkspace(QFrame):
         master_panel: MasterAvwapPanel,
         theta_panel: ThetaPanel,
         watchlists_panel: WatchlistsPanel,
+        industry_panel: IndustryPanel | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -125,10 +130,13 @@ class MasterAvwapWorkspace(QFrame):
         self.master_panel = master_panel
         self.theta_panel = theta_panel
         self.watchlists_panel = watchlists_panel
+        self.industry_panel = industry_panel
         self.tabs = QTabWidget()
         self.tabs.addTab(self.master_panel, "Setups")
         self.tabs.addTab(self.theta_panel, "Theta Plays")
         self.tabs.addTab(self.watchlists_panel, "Watchlists")
+        if self.industry_panel is not None:
+            self.tabs.addTab(self.industry_panel, "Industry Board")
         self.master_panel.scan_service.finished.connect(lambda *_args: self.theta_panel.refresh())
 
         layout = QVBoxLayout(self)
@@ -144,6 +152,11 @@ class MasterAvwapWorkspace(QFrame):
 
     def show_watchlists(self) -> None:
         self.tabs.setCurrentWidget(self.watchlists_panel)
+
+    def show_industry_board(self) -> None:
+        if self.industry_panel is not None:
+            self.industry_panel.reload_from_disk()
+            self.tabs.setCurrentWidget(self.industry_panel)
 
 
 class TradingControlRail(QFrame):
@@ -214,7 +227,9 @@ class TradingControlRail(QFrame):
         theta_view.clicked.connect(self.master_workspace.show_theta)
         watchlist_view = QPushButton("Watchlists")
         watchlist_view.clicked.connect(self.master_workspace.show_watchlists)
-        for button in (setup_view, theta_view, watchlist_view):
+        industry_view = QPushButton("Industry Board")
+        industry_view.clicked.connect(self.master_workspace.show_industry_board)
+        for button in (setup_view, theta_view, watchlist_view, industry_view):
             layout.addWidget(button)
         layout.addSpacing(10)
 

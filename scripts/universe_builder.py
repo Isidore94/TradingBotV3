@@ -47,7 +47,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from project_paths import CACHE_DIR, DATA_DIR, PERSISTENT_DATA_DIR  # noqa: E402
+from project_paths import (  # noqa: E402
+    CACHE_DIR,
+    DATA_DIR,
+    PERSISTENT_DATA_DIR,
+    UNIVERSE_ALL_FILE,
+    UNIVERSE_LONGS_FILE,
+    UNIVERSE_SHORTS_FILE,
+)
 
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
 OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
@@ -67,9 +74,6 @@ OPTIONABLE_CACHE = UNIVERSE_CACHE_DIR / "cboe_optionable.json"
 MARKET_CAP_CACHE = UNIVERSE_CACHE_DIR / "market_caps.json"
 PRICE_HISTORY_CACHE = UNIVERSE_CACHE_DIR / "price_history.parquet"
 
-UNIVERSE_ALL_FILE = PERSISTENT_DATA_DIR / "universe_all.txt"
-UNIVERSE_LONGS_FILE = PERSISTENT_DATA_DIR / "universe_longs.txt"
-UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
 UNIVERSE_METADATA_FILE = DATA_DIR / "universe_metadata.csv"
 # Manual include lists: names the free sources miss (e.g. NYSE tickers absent
 # from the NASDAQ Trader directory, or optionable names CBOE's file omits).

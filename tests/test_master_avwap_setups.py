@@ -6428,19 +6428,27 @@ class MasterAvwapSetupTests(unittest.TestCase):
             shorts_path.write_text("TSLA\n", encoding="utf-8")
             swing_longs_path.write_text("NVDA\nAAPL\n", encoding="utf-8")
             swing_shorts_path.write_text("AMD\n", encoding="utf-8")
+            universe_longs_path = root / "universe_longs.txt"
+            universe_shorts_path = root / "universe_shorts.txt"
+            universe_longs_path.write_text("ASML\n", encoding="utf-8")
+            # Missing shorts universe file exercises the optional-path skip.
 
             with (
                 patch.object(master_avwap, "LONGS_FILE", longs_path),
                 patch.object(master_avwap, "SHORTS_FILE", shorts_path),
                 patch.object(master_avwap, "SWING_LONGS_FILE", swing_longs_path),
                 patch.object(master_avwap, "SWING_SHORTS_FILE", swing_shorts_path),
+                patch.object(master_avwap, "UNIVERSE_LONGS_FILE", universe_longs_path),
+                patch.object(master_avwap, "UNIVERSE_SHORTS_FILE", universe_shorts_path),
             ):
                 long_paths, short_paths, label = master_avwap.resolve_master_scan_watchlist_paths()
-                longs = master_avwap.load_tickers_from_paths(long_paths, optional_paths={swing_longs_path})
-                shorts = master_avwap.load_tickers_from_paths(short_paths, optional_paths={swing_shorts_path})
+                optional = {swing_longs_path, swing_shorts_path, universe_longs_path, universe_shorts_path}
+                longs = master_avwap.load_tickers_from_paths(long_paths, optional_paths=optional)
+                shorts = master_avwap.load_tickers_from_paths(short_paths, optional_paths=optional)
 
             self.assertIn("swing watchlists", label)
-            self.assertEqual(longs, ["AAPL", "MSFT", "NVDA"])
+            self.assertIn("universe", label)
+            self.assertEqual(longs, ["AAPL", "MSFT", "NVDA", "ASML"])
             self.assertEqual(shorts, ["TSLA", "AMD"])
 
     def test_eod_write_gate_allows_final_hour_and_after_close(self):
