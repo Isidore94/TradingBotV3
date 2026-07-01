@@ -354,6 +354,26 @@ class QuestradeImporter:
                 executions.append(self.normalize_execution(raw, account))
         return executions, accounts
 
+    def import_executions_for_range(
+        self, start_date: date, end_date: date
+    ) -> tuple[list[NormalizedExecution], list[dict[str, Any]]]:
+        """Backfill executions across a date range (chunked to Questrade's 31-day
+        request limit) so the journal holds the complete trade list, not just the
+        days an import happened to run."""
+        accounts = self.get_accounts()
+        executions: list[NormalizedExecution] = []
+        tz = zoneinfo.ZoneInfo(PACIFIC_TZ_NAME)
+        for account in accounts:
+            account_number = str(account.get("number") or account.get("accountNumber") or "").strip()
+            if not account_number:
+                continue
+            for chunk_start, chunk_end in chunk_date_ranges(start_date, end_date, max_days=31):
+                start = datetime.combine(chunk_start, datetime.min.time(), tzinfo=tz)
+                end = datetime.combine(chunk_end, datetime.max.time().replace(microsecond=0), tzinfo=tz)
+                for raw in self.get_executions(account_number, start, end):
+                    executions.append(self.normalize_execution(raw, account))
+        return executions, accounts
+
 
 class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
     def __init__(self) -> None:
@@ -499,6 +519,117 @@ def import_ibkr_executions(
     if last_error is not None:
         raise last_error
     return []
+
+
+# ---------------------------------------------------------------------------
+# IBKR Flex Query (complete history)
+# ---------------------------------------------------------------------------
+# The socket-API reqExecutions above only returns the *current session's* fills,
+# so the journal is complete only for days an import actually ran. A Flex Query
+# (IBKR web portal: Performance & Reports -> Flex Queries, type "Trades") returns
+# the full execution history, so a one-time backfill -- or a weekly safety net --
+# can repair any gaps. Configure the token + query id once in local settings.
+IBKR_FLEX_TOKEN_SETTING = "journal_ibkr_flex_token"
+IBKR_FLEX_QUERY_ID_SETTING = "journal_ibkr_flex_query_id"
+IBKR_FLEX_SEND_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
+IBKR_FLEX_GET_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
+IBKR_FLEX_POLL_SECONDS = 5.0
+IBKR_FLEX_POLL_ATTEMPTS = 12
+
+
+def parse_ibkr_flex_statement(xml_text: str) -> list[NormalizedExecution]:
+    """Normalize <Trade>/<TradeConfirm> rows from a Flex statement XML."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml_text)
+    if root.tag == "FlexStatementResponse":
+        error = root.findtext("ErrorMessage") or "Flex service returned an error response."
+        raise RuntimeError(f"IBKR Flex error: {error}")
+    executions: list[NormalizedExecution] = []
+    for node in list(root.iter("Trade")) + list(root.iter("TradeConfirm")):
+        attrs = dict(node.attrib)
+        symbol = str(attrs.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        raw_datetime = str(attrs.get("dateTime") or attrs.get("tradeDate") or "").replace(";", " ").strip()
+        timestamp = parse_broker_datetime(raw_datetime)
+        account_number = str(attrs.get("accountId") or "").strip()
+        exec_id = str(attrs.get("ibExecID") or attrs.get("execId") or attrs.get("tradeID") or "").strip()
+        quantity = _coerce_float(attrs.get("quantity"))
+        side = normalize_side(attrs.get("buySell") or ("BUY" if quantity >= 0 else "SELL"))
+        executions.append(
+            NormalizedExecution(
+                execution_uid=_execution_uid("IBKR", account_number, exec_id, symbol, timestamp.isoformat()),
+                broker="IBKR",
+                account_number=account_number,
+                account_label=account_number or "IBKR",
+                account_type="",
+                symbol=symbol,
+                security_type=str(attrs.get("assetCategory") or "STK").strip().upper(),
+                currency=str(attrs.get("currency") or "USD").strip().upper(),
+                side=side,
+                quantity=abs(quantity),
+                price=_coerce_float(attrs.get("tradePrice") or attrs.get("price")),
+                timestamp=timestamp.isoformat(),
+                trade_date=timestamp.date().isoformat(),
+                commission=abs(_coerce_float(attrs.get("ibCommission") or attrs.get("commission"))),
+                fees=abs(_coerce_float(attrs.get("otherCommission"))) + abs(_coerce_float(attrs.get("fees"))),
+                gross_amount=None,
+                net_amount=_coerce_float(attrs.get("netCash")) if attrs.get("netCash") is not None else None,
+                order_id=str(attrs.get("ibOrderID") or attrs.get("orderID") or "").strip(),
+                exchange_exec_id=exec_id,
+                raw_json=json.dumps(attrs, sort_keys=True, default=str),
+            )
+        )
+    return executions
+
+
+def import_ibkr_flex_executions(
+    *,
+    token: str | None = None,
+    query_id: str | None = None,
+    session: requests.Session | None = None,
+) -> list[NormalizedExecution]:
+    """Two-step Flex fetch: SendRequest -> poll GetStatement -> parse trades."""
+    resolved_token = str(token or get_local_setting(IBKR_FLEX_TOKEN_SETTING, "") or "").strip()
+    resolved_query = str(query_id or get_local_setting(IBKR_FLEX_QUERY_ID_SETTING, "") or "").strip()
+    if not resolved_token or not resolved_query:
+        raise RuntimeError(
+            "IBKR Flex is not configured. Set the "
+            f"{IBKR_FLEX_TOKEN_SETTING} / {IBKR_FLEX_QUERY_ID_SETTING} local settings "
+            "(IBKR portal: Performance & Reports -> Flex Queries)."
+        )
+    http = session or requests.Session()
+    import xml.etree.ElementTree as ET
+
+    response = http.get(
+        IBKR_FLEX_SEND_URL,
+        params={"t": resolved_token, "q": resolved_query, "v": "3"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    envelope = ET.fromstring(response.text)
+    if (envelope.findtext("Status") or "").strip().lower() != "success":
+        raise RuntimeError(f"IBKR Flex request failed: {envelope.findtext('ErrorMessage') or response.text[:200]}")
+    reference_code = (envelope.findtext("ReferenceCode") or "").strip()
+    statement_url = (envelope.findtext("Url") or IBKR_FLEX_GET_URL).strip()
+
+    last_text = ""
+    for _attempt in range(IBKR_FLEX_POLL_ATTEMPTS):
+        statement = http.get(
+            statement_url,
+            params={"t": resolved_token, "q": reference_code, "v": "3"},
+            timeout=60,
+        )
+        statement.raise_for_status()
+        last_text = statement.text
+        # The service answers with FlexStatementResponse + "generation in progress"
+        # until the report is ready; anything else is the statement itself.
+        if "<FlexStatementResponse" in last_text and "progress" in last_text.lower():
+            time.sleep(IBKR_FLEX_POLL_SECONDS)
+            continue
+        return parse_ibkr_flex_statement(last_text)
+    raise RuntimeError("IBKR Flex statement was still generating after polling; try again shortly.")
 
 
 def manual_execution_from_fields(fields: dict[str, Any]) -> NormalizedExecution:
