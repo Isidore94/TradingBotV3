@@ -116,7 +116,7 @@ def test_focus_picks_is_top_level_app_page():
     window = MainWindow(UiState(workspace_mode="workspace"))
     labels = [button.text() for button in window.nav_buttons]
 
-    assert labels == ["Trading Desk", "Focus Picks", "Journal", "Research", "Settings"]
+    assert labels == ["Trading Desk", "Focus Picks", "Journal", "Universe", "Research", "Settings"]
     assert window.pages.widget(1) is window.trading_panel.focus_picks_panel
 
 

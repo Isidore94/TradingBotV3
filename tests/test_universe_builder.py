@@ -87,6 +87,22 @@ class ScreenTests(unittest.TestCase):
         down = screened[screened["symbol"] == "DOWN"].iloc[0]
         self.assertFalse(down["above_sma_100"] or down["above_sma_200"])
 
+    def test_compare_symbol_lists_normalizes_and_diffs(self):
+        result = ub.compare_symbol_lists(
+            ours=["AAPL", "BRK-B", "NVDA", "EXTRA"],
+            theirs=["aapl", "BRK.B", "NVDA", "MISSING"],
+        )
+        self.assertEqual(result["matched"], ["AAPL", "BRK-B", "NVDA"])
+        self.assertEqual(result["only_ours"], ["EXTRA"])
+        self.assertEqual(result["only_theirs"], ["MISSING"])
+        self.assertEqual(result["theirs_count"], 4)
+        self.assertEqual(result["overlap_pct"], 75.0)
+
+    def test_compare_symbol_lists_empty_external(self):
+        result = ub.compare_symbol_lists(ours=["AAPL"], theirs=[])
+        self.assertEqual(result["overlap_pct"], 0.0)
+        self.assertEqual(result["matched"], [])
+
     def test_small_cap_dropped_but_unknown_cap_kept(self):
         metrics = ub.compute_universe_metrics(
             pd.concat(

@@ -26,6 +26,7 @@ from ui.panels.journal_panel import JournalPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
 from ui.panels.trading_desk import TradingDeskPanel
+from ui.panels.universe_panel import UniversePanel
 from ui.state import UiState
 from ui.theme import apply_theme
 
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
 
         self.trading_panel = TradingDeskPanel(workspace_mode=self.state.workspace_mode)
         self.journal_panel = JournalPanel()
+        self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel()
         self.settings_panel = SettingsPanel(self.state)
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.trading_panel)
         self.pages.addWidget(self.trading_panel.focus_picks_panel)
         self.pages.addWidget(self.journal_panel)
+        self.pages.addWidget(self.universe_panel)
         self.pages.addWidget(self.research_panel)
         self.pages.addWidget(self.settings_panel)
 
@@ -90,6 +93,7 @@ class MainWindow(QMainWindow):
             ("Trading Desk", "mdi.chart-timeline-variant"),
             ("Focus Picks", "mdi.star-outline"),
             ("Journal", "mdi.notebook-outline"),
+            ("Universe", "mdi.earth"),
             ("Research", "mdi.flask-outline"),
             ("Settings", "mdi.cog-outline"),
         )
@@ -158,7 +162,7 @@ class MainWindow(QMainWindow):
         self.addAction(focus_action)
 
     def _select_page(self, index: int) -> None:
-        titles = ("Trading Desk", "Focus Picks", "Journal", "Research", "Settings")
+        titles = ("Trading Desk", "Focus Picks", "Journal", "Universe", "Research", "Settings")
         self.pages.setCurrentIndex(index)
         self.title_label.setText(titles[index])
         for button_index, button in enumerate(self.nav_buttons):
@@ -197,7 +201,7 @@ class MainWindow(QMainWindow):
         self.setup_status.setText(f"Setups: {total} | Favorites: {favorites} | Near: {near}")
 
     def closeEvent(self, event) -> None:
-        for panel in (self.trading_panel, self.journal_panel, self.research_panel, self.settings_panel):
+        for panel in (self.trading_panel, self.journal_panel, self.universe_panel, self.research_panel, self.settings_panel):
             try:
                 panel.shutdown()
             except Exception:

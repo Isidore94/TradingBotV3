@@ -321,6 +321,30 @@ def apply_universe_screen(
     return work.reset_index(drop=True)
 
 
+def compare_symbol_lists(ours: list[str], theirs: list[str]) -> dict:
+    """Diff our universe against an external list (e.g. pasted from TC2000).
+
+    Symbols are normalized to Yahoo form (BRK.B -> BRK-B) so the same name in
+    both conventions counts as a match. ``overlap_pct`` is measured against the
+    external list: "how much of YOUR list did we reproduce"."""
+
+    def _norm(value: str) -> str:
+        return str(value or "").strip().upper().replace(".", "-")
+
+    ours_set = {_norm(s) for s in ours if _norm(s)}
+    theirs_set = {_norm(s) for s in theirs if _norm(s)}
+    matched = sorted(ours_set & theirs_set)
+    return {
+        "matched": matched,
+        "only_ours": sorted(ours_set - theirs_set),
+        "only_theirs": sorted(theirs_set - ours_set),
+        "ours_count": len(ours_set),
+        "theirs_count": len(theirs_set),
+        "matched_count": len(matched),
+        "overlap_pct": round(100.0 * len(matched) / len(theirs_set), 1) if theirs_set else 0.0,
+    }
+
+
 def _write_watchlist(path: Path, symbols: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(symbols) + ("\n" if symbols else ""), encoding="utf-8")
