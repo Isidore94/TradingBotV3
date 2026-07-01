@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -202,6 +203,9 @@ class TickerLookupServiceTests(unittest.TestCase):
         self.assertTrue(any("earnings date" in item for item in risk["missing_checks"]))
 
     def test_lookup_ticker_context_composes_earnings_news_sec_and_peers(self):
+        # Keep mocked headlines inside the 14-day headline lookback regardless of
+        # when the test runs; hardcoded dates rotted out of the window before.
+        recent_published = (date.today() - timedelta(days=2)).isoformat()
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             config = MarketPrepConfig.from_mapping(
@@ -270,13 +274,13 @@ class TickerLookupServiceTests(unittest.TestCase):
                                 "title": "TSM announces investor day",
                                 "query": "TSM investor day",
                                 "source": "Google News",
-                                "published": "2026-06-10",
+                                "published": recent_published,
                             },
                             {
                                 "title": "NVDA earnings preview",
                                 "query": "NVDA earnings",
                                 "source": "Google News",
-                                "published": "2026-06-10",
+                                "published": recent_published,
                             },
                         ],
                     },

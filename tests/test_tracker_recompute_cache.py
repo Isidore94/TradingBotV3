@@ -109,6 +109,25 @@ class RecomputeCacheEquivalenceTests(unittest.TestCase):
         self.assertIn(setup_a["anchor_date"], shared_cache)
         self.assertIn(setup_b["anchor_date"], shared_cache)
 
+    def test_replay_cache_matches_inline_record(self):
+        df = _daily_frame()
+        setup_a = _setup(df, anchor_offset=5, entry_offset=10)
+        setup_b = _setup(df, anchor_offset=20, entry_offset=25)
+
+        inline_a = m.recompute_tracker_setup_record(copy.deepcopy(setup_a), df)
+        inline_b = m.recompute_tracker_setup_record(copy.deepcopy(setup_b), df)
+
+        # One shared per-symbol replay cache (bar dates + compression summaries)
+        # across records with different anchors must not change any record.
+        shared_replay: dict = {}
+        cached_a = m.recompute_tracker_setup_record(copy.deepcopy(setup_a), df, replay_cache=shared_replay)
+        cached_b = m.recompute_tracker_setup_record(copy.deepcopy(setup_b), df, replay_cache=shared_replay)
+
+        self.assertEqual(inline_a, cached_a)
+        self.assertEqual(inline_b, cached_b)
+        self.assertTrue(shared_replay.get("bar_date_strs"))
+        self.assertTrue(shared_replay.get("compression_summaries"))
+
     def test_missing_anchor_is_handled_without_cache(self):
         df = _daily_frame()
         setup = _setup(df)

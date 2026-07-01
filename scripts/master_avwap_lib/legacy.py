@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import time
 import json
+import bisect
 import re
 import math
 import csv
@@ -4773,9 +4774,12 @@ def _evaluate_tracker_scenario_bar(
     if close_value is None or high_value is None or low_value is None:
         return events
 
+    # Excursion only counts while the position exists: entry is modeled at the
+    # entry-day close, so that day's earlier range never belonged to the trade,
+    # and bars after the scenario closed are not excursion either.
     favorable_move = (high_value - entry_price) if normalize_side(side) == "LONG" else (entry_price - low_value)
     adverse_move = (entry_price - low_value) if normalize_side(side) == "LONG" else (high_value - entry_price)
-    if initial_risk_per_share > 0:
+    if initial_risk_per_share > 0 and not is_entry_day and _scenario_is_open(scenario.get("status", "OPEN")):
         scenario["max_favorable_r"] = max(float(scenario.get("max_favorable_r", 0.0) or 0.0), favorable_move / initial_risk_per_share)
         scenario["max_adverse_r"] = max(float(scenario.get("max_adverse_r", 0.0) or 0.0), adverse_move / initial_risk_per_share)
 
@@ -4947,6 +4951,7 @@ def recompute_tracker_setup_record(
     *,
     indicator_frame: pd.DataFrame | None = None,
     band_history_cache: dict | None = None,
+    replay_cache: dict | None = None,
 ) -> dict:
     if df is None or df.empty:
         return setup
@@ -4977,6 +4982,19 @@ def recompute_tracker_setup_record(
     entry_trade_date = str(setup.get("entry_trade_date") or setup.get("scan_date") or "")
     if not entry_trade_date:
         return setup
+
+    # Per-symbol replay context, shared across the many records replayed for one
+    # symbol (same pattern as the indicator frame / band history above): the ISO
+    # date of each bar is pure in ``df``, and each per-bar compression summary is
+    # pure in (anchor date, bar date) for a given ``df``. Bars are chronological,
+    # so window slices resolve via bisect instead of re-deriving ``.dt.date`` masks
+    # over the whole frame for every bar of every record.
+    replay_cache = replay_cache if isinstance(replay_cache, dict) else {}
+    bar_date_strs = replay_cache.get("bar_date_strs")
+    if bar_date_strs is None or len(bar_date_strs) != len(df):
+        bar_date_strs = [value.date().isoformat() for value in df["datetime"]]
+        replay_cache["bar_date_strs"] = bar_date_strs
+    compression_cache = replay_cache.setdefault("compression_summaries", {})
 
     working_scenarios = {}
     for scenario_id, original in _build_tracker_scenarios_from_setup(setup).items():
@@ -5013,7 +5031,8 @@ def recompute_tracker_setup_record(
         )
         working_scenarios[scenario_id] = scenario
 
-    trade_df = df[df["datetime"].dt.date.astype(str) >= entry_trade_date].copy().reset_index(drop=True)
+    entry_start_pos = bisect.bisect_left(bar_date_strs, entry_trade_date)
+    trade_df = df.iloc[entry_start_pos:].copy().reset_index(drop=True)
     indicator_trade = indicator_frame[indicator_frame["trade_date"] >= entry_trade_date].copy().reset_index(drop=True)
     # Forward tracking only needs bars through the TRACKER_MAX_HOLD_DAYS time-stop
     # (idx == TRACKER_MAX_HOLD_DAYS) plus a small buffer; capping here keeps a
@@ -5029,6 +5048,11 @@ def recompute_tracker_setup_record(
         anchor_start_date = datetime.fromisoformat(str(setup.get("anchor_date") or entry_trade_date)).date()
     except ValueError:
         anchor_start_date = datetime.fromisoformat(entry_trade_date).date()
+    anchor_start_iso = anchor_start_date.isoformat()
+    anchor_start_pos = bisect.bisect_left(bar_date_strs, anchor_start_iso)
+    # The raw anchor string joins the cache key so a record whose anchor fell back
+    # to the entry date can never collide with one genuinely anchored there.
+    compression_key_prefix = (str(setup.get("anchor_date") or ""), anchor_start_iso)
 
     for idx in range(len(trade_df)):
         bar_row = trade_df.iloc[idx]
@@ -5037,15 +5061,20 @@ def recompute_tracker_setup_record(
         current_levels = current_history.get(trade_date)
         previous_levels = previous_history.get(trade_date)
         post_earnings_levels = post_earnings_history.get(trade_date)
-        slice_df = df[
-            (df["datetime"].dt.date >= anchor_start_date)
-            & (df["datetime"].dt.date <= bar_row["datetime"].date())
-        ]
-        compression_summary = summarize_anchor_compression(
-            slice_df,
-            _coerce_float((current_levels or {}).get("stdev")),
-            _coerce_float(indicator_row.get("atr_20")) if isinstance(indicator_row, pd.Series) else None,
-        )
+        compression_key = compression_key_prefix + (trade_date,)
+        compression_summary = compression_cache.get(compression_key)
+        if compression_summary is None:
+            slice_end_pos = bisect.bisect_right(bar_date_strs, trade_date)
+            slice_df = df.iloc[anchor_start_pos:slice_end_pos]
+            compression_summary = summarize_anchor_compression(
+                slice_df,
+                _coerce_float((current_levels or {}).get("stdev")),
+                _coerce_float(indicator_row.get("atr_20")) if isinstance(indicator_row, pd.Series) else None,
+            )
+            compression_cache[compression_key] = compression_summary
+        # Hand each record its own copy so a later consumer mutating the summary
+        # cannot contaminate the shared cache.
+        compression_summary = dict(compression_summary)
         feature_snapshot = build_tracker_feature_snapshot(
             normalize_side(setup.get("side")),
             bar_row,
@@ -5063,6 +5092,7 @@ def recompute_tracker_setup_record(
             for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
                 dynamic_level_overrides[label] = _anchor_level_value(post_earnings_levels, label)
         for scenario in working_scenarios.values():
+            was_open = _scenario_is_open(scenario.get("status", "OPEN")) and bool(scenario.get("tradeable"))
             scenario_events.extend(
                 _evaluate_tracker_scenario_bar(
                     scenario,
@@ -5076,7 +5106,10 @@ def recompute_tracker_setup_record(
                     bar_index=idx,
                 )
             )
-            scenario["days_held"] = max(0, idx)
+            # Freeze days_held at the bar that closed the scenario; replay bars
+            # past the close are marks-only and are not time in the trade.
+            if was_open:
+                scenario["days_held"] = max(0, idx)
 
         daily_marks.append(
             {
@@ -9451,6 +9484,7 @@ def update_setup_tracker_from_scan(
     # of the recompute cost with no change to the resulting records.
     indicator_frame_cache: dict[str, pd.DataFrame] = {}
     band_history_caches: dict[str, dict] = {}
+    replay_context_caches: dict[str, dict] = {}
 
     # A symbol needs a live daily-bar refetch during recompute only if it still has
     # an OPEN setup to advance. Symbols whose every tracked setup is closed/untradeable
@@ -9512,6 +9546,7 @@ def update_setup_tracker_from_scan(
                 df,
                 indicator_frame=indicator_frame,
                 band_history_cache=band_history_cache,
+                replay_cache=replay_context_caches.setdefault(symbol, {}),
             )
 
     _recompute_namespace(tracker.get("setups"))
