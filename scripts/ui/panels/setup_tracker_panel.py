@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSpinBox,
+    QSplitter,
     QTabWidget,
     QTextBrowser,
     QVBoxLayout,
@@ -28,8 +30,11 @@ from project_paths import (
     MASTER_AVWAP_TIER_LIST_FILE,
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
 )
+from setup_docs import build_trade_plan, resolve_setup_doc
 from ui import theme
-from ui.models.tracker_table_model import TrackerSortProxyModel, TrackerTableModel
+from ui.models.tracker_table_model import ROW_ROLE, TrackerSortProxyModel, TrackerTableModel
+from ui.panels.setup_docs_panel import render_doc_html
+from ui.services.ai_state_levels import load_symbol_levels
 from ui.services.human_focus_tracker_feed import (
     build_human_focus_comparison_rows,
     load_human_focus_performance_rows,
@@ -194,10 +199,14 @@ TOOLTIP_KEYS = {
 
 class SetupTrackerPanel(QFrame):
     statusChanged = Signal(str)
+    _levelsLoaded = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+        self._symbol_levels: dict[str, dict] = {}
+        self._levels_loading = False
+        self._selected_detail_row: dict[str, Any] | None = None
         self.current_pick_rows: list[dict[str, Any]] = []
         self.setup_type_rows: list[dict[str, Any]] = []
         self.recent_type_rows: list[dict[str, Any]] = []
@@ -271,6 +280,18 @@ class SetupTrackerPanel(QFrame):
             "Catch Rate",
         )
 
+        # Right-hand setup detail: appears when a row is clicked; for symbol
+        # picks it shows the family mechanics plus THIS symbol's stop/target
+        # prices from the current anchor bands.
+        self.detail_view = QTextBrowser()
+        self.detail_view.setOpenExternalLinks(False)
+        self.detail_view.setVisible(False)
+        self.detail_view.setMinimumWidth(340)
+        self._levelsLoaded.connect(self._on_levels_loaded)
+        self.current_table.clicked.connect(self._on_pick_clicked)
+        for table in (self.setup_type_table, self.recent_type_table, self.playbook_table):
+            table.clicked.connect(self._on_family_row_clicked)
+
         self._build_layout()
         self.refresh()
 
@@ -290,13 +311,19 @@ class SetupTrackerPanel(QFrame):
             kpi_row.addWidget(tile)
         kpi_row.addStretch(1)
 
+        self.detail_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.detail_splitter.addWidget(self.tabs)
+        self.detail_splitter.addWidget(self.detail_view)
+        self.detail_splitter.setStretchFactor(0, 3)
+        self.detail_splitter.setStretchFactor(1, 2)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addLayout(kpi_row)
         layout.addWidget(self.summary_view, 1)
-        layout.addWidget(self.tabs, 2)
+        layout.addWidget(self.detail_splitter, 2)
         layout.addWidget(self.status_label)
 
     def _make_table(
@@ -378,6 +405,156 @@ class SetupTrackerPanel(QFrame):
         status = f"Setup tracker refreshed from exports. Last export: {_latest_mtime_text(_export_files())}"
         self.status_label.setText(status)
         self.statusChanged.emit(status)
+
+    # ------------------------------------------------------------------
+    # Click-to-detail: family mechanics + this symbol's stop/target prices
+    # ------------------------------------------------------------------
+    def _on_pick_clicked(self, index) -> None:
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, dict):
+            return
+        self._selected_detail_row = row
+        self._render_detail()
+        if not self._symbol_levels and not self._levels_loading:
+            self._levels_loading = True
+            threading.Thread(target=self._load_levels_worker, daemon=True).start()
+
+    def _on_family_row_clicked(self, index) -> None:
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, dict):
+            return
+        self._selected_detail_row = {"setup_family": row.get("setup_family"), "side": row.get("side")}
+        self._render_detail()
+
+    def _load_levels_worker(self) -> None:
+        try:
+            self._symbol_levels = load_symbol_levels()
+        finally:
+            self._levels_loading = False
+            self._levelsLoaded.emit()
+
+    def _on_levels_loaded(self) -> None:
+        if self._selected_detail_row is not None:
+            self._render_detail()
+
+    def _best_playbook_row(self, side: str, family: str) -> dict[str, Any] | None:
+        side = str(side or "").strip().upper()
+        family = str(family or "").strip().lower()
+        for row in self.playbook_rows:
+            if (
+                str(row.get("side") or "").strip().upper() == side
+                and str(row.get("setup_family") or "").strip().lower() == family
+            ):
+                return row
+        return None
+
+    def _render_detail(self) -> None:
+        row = self._selected_detail_row
+        if row is None:
+            return
+        symbol = str(row.get("symbol") or "").strip().upper()
+        family = str(row.get("setup_family") or "")
+        side = str(row.get("side") or "LONG").strip().upper()
+        doc_key, doc = resolve_setup_doc(family)
+
+        parts = [f"<body style='color:{theme.color('text_primary')}; font-size:9pt'>"]
+        if symbol:
+            side_color = theme.color("long" if side == "LONG" else "short")
+            tier = str(row.get("tier") or "").strip().upper()
+            tier_text = f"<b style='color:{theme.color('favorite')}'>{_esc(tier)}</b> " if tier else ""
+            parts.append(
+                f"<h2 style='margin:0'>{tier_text}{_esc(symbol)} "
+                f"<span style='color:{side_color}'>{_esc(side)}</span></h2>"
+            )
+            parts.append(_render_plan_html(self, row, symbol, side, family))
+        doc_html = render_doc_html(doc_key, doc, heading_level=3)
+        doc_html = doc_html.replace(
+            f"<body style='color:{theme.color('text_primary')}; font-size:9pt'>", ""
+        ).replace("</body>", "")
+        parts.append(doc_html)
+        parts.append("</body>")
+        self.detail_view.setHtml("".join(parts))
+        self.detail_view.setVisible(True)
+
+
+def _render_plan_html(panel: SetupTrackerPanel, row: dict[str, Any], symbol: str, side: str, family: str) -> str:
+    muted = theme.color("text_secondary")
+    favorite = theme.color("favorite")
+    short_c = theme.color("short")
+    long_c = theme.color("long")
+
+    levels = panel._symbol_levels.get(symbol) if panel._symbol_levels else None
+    if levels is None:
+        if panel._levels_loading:
+            return f"<div style='color:{muted}'>Loading level data from the last scan...</div>"
+        return (
+            f"<div style='color:{muted}'>No level data for {_esc(symbol)} in the last scan's state file — "
+            f"family guidance below still applies.</div>"
+        )
+
+    plan = build_trade_plan(
+        side=side,
+        setup_family=family,
+        favorite_signals=_split_signals(row.get("favorite_signals") or row.get("scan_factor_matches") or ""),
+        bands=levels.get("bands") or {},
+        vwap=levels.get("vwap"),
+        atr20=levels.get("atr20"),
+        last_close=_float(row.get("last_close")) or levels.get("last_close"),
+    )
+
+    def _price(value) -> str:
+        return f"{value:,.2f}" if isinstance(value, (int, float)) else "n/a"
+
+    def _r(value) -> str:
+        return f"{value:+.1f}R" if isinstance(value, (int, float)) else "n/a"
+
+    parts = [f"<h3 style='margin:8px 0 2px 0; color:{favorite}'>The plan (from the last scan's anchor levels)</h3>"]
+    entry_ref = plan.get("entry_reference")
+    parts.append(f"<div><b>Reference price:</b> {_price(entry_ref)} <span style='color:{muted}'>(last scan close; anchor {_esc(levels.get('anchor_date'))})</span></div>")
+    parts.append(
+        f"<div><b style='color:{short_c}'>Stop:</b> {_esc(plan['stop_label'])} @ {_price(plan.get('stop_price'))} "
+        f"<span style='color:{muted}'>— fires after {plan['stop_close_failures']} daily close(s) beyond it; "
+        f"{_esc(plan['stop_reason'])}</span></div>"
+    )
+    risk = plan.get("risk_per_share")
+    if isinstance(risk, (int, float)):
+        pct = plan.get("risk_pct_of_price")
+        pct_text = f" ({pct:.1f}% of price)" if isinstance(pct, (int, float)) else ""
+        parts.append(f"<div><b>Risk/share:</b> {_price(risk)}{pct_text}</div>")
+    else:
+        parts.append(
+            f"<div style='color:{short_c}'>Price is already beyond the stop level — the plan is stale; "
+            f"wait for the next valid trigger.</div>"
+        )
+    parts.append(
+        f"<div><b style='color:{long_c}'>TP1 (take 50%):</b> {_esc(plan['partial_label'])} @ "
+        f"{_price(plan.get('partial_price'))} <span style='color:{muted}'>({_r(plan.get('partial_r'))})</span></div>"
+    )
+    parts.append(
+        f"<div><b style='color:{long_c}'>TP2 (runner):</b> {_esc(plan['final_label'])} @ "
+        f"{_price(plan.get('final_price'))} <span style='color:{muted}'>({_r(plan.get('final_r'))}); trail stop to "
+        f"{_esc(plan['trail_label'])} after TP1</span></div>"
+    )
+    parts.append(f"<div style='color:{muted}'>Time stop: {plan['time_stop_sessions']} sessions.</div>")
+
+    best = panel._best_playbook_row(side, family)
+    if best:
+        parts.append(
+            f"<div style='color:{muted}; margin-top:4px'><b>Measured best variant for this family:</b> "
+            f"stop {_esc(best.get('stop_reference_label'))}, {_esc(best.get('profit_take_summary'))} "
+            f"(robust {_signed(_float(best.get('robust_closed_r'), 0.0))}R over {_int(best.get('closed_setups'))} closed).</div>"
+        )
+    return "".join(parts)
+
+
+def _split_signals(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    for separator in (";", ","):
+        if separator in text:
+            return [part.strip() for part in text.split(separator) if part.strip()]
+    return [text]
 
 
 def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
