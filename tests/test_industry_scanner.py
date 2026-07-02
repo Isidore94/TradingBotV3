@@ -90,6 +90,52 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(members["Photonics*"], ["AAOI", "LITE"])
         self.assertNotIn("", members)
 
+    def test_collect_industry_members_with_index_definitions(self):
+        classifications = {
+            "NVDA": {"symbol": "NVDA", "sector": "Technology", "industry": "Semiconductors"},
+            "AMD": {"symbol": "AMD", "sector": "Technology", "industry": "Semiconductors"},
+            "LRCX": {"symbol": "LRCX", "sector": "Technology", "industry": "Semiconductor Equipment & Materials"},
+            "ODD": {"symbol": "ODD", "sector": "Consumer", "industry": "Personal Services"},
+        }
+        definitions = {
+            "Semiconductors": {"industries": ["semiconductors"], "tickers": []},  # case-insensitive
+            "Chip Equipment": {"industries": ["Semiconductor Equipment & Materials"], "tickers": []},
+            "AI Hardware": {"industries": [], "tickers": ["NVDA", "VRT"]},  # overlap + pinned ticker
+        }
+        members = scanner.collect_industry_members(
+            classifications, {"Photonics": ["AAOI"]}, index_definitions=definitions
+        )
+        self.assertEqual(members["Semiconductors"], ["AMD", "NVDA"])
+        self.assertEqual(members["Chip Equipment"], ["LRCX"])
+        # NVDA appears in two indexes; pinned tickers join even if unclassified.
+        self.assertEqual(members["AI Hardware"], ["NVDA", "VRT"])
+        # Unclaimed cache industries fall through as their own rows.
+        self.assertEqual(members["Personal Services"], ["ODD"])
+        self.assertNotIn("Semiconductor Equipment & Materials", members)
+        self.assertEqual(members["Photonics*"], ["AAOI"])
+
+    def test_index_definitions_file_seed_and_parse(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "defs.json"
+            definitions = scanner.load_industry_index_definitions(path)
+            self.assertIn("Semiconductors", definitions)  # seeded on first run
+            self.assertIn("Uranium & Nuclear", definitions)
+            payload = {
+                "Space": ["rklb", " asts ", ""],  # plain list = tickers shorthand
+                "Banks": {"industries": ["Banks - Regional", ""], "tickers": ["jpm"]},
+                "": {"tickers": ["IGNORED"]},
+                "Empty": {},
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            definitions = scanner.load_industry_index_definitions(path)
+            self.assertEqual(
+                definitions,
+                {
+                    "Space": {"industries": [], "tickers": ["ASTS", "RKLB"]},
+                    "Banks": {"industries": ["Banks - Regional"], "tickers": ["JPM"]},
+                },
+            )
+
     def test_custom_groups_file_seed_and_parse(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "groups.json"

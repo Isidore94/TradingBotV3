@@ -6,12 +6,20 @@ Two boards, both ranked so the hottest groups float to the top:
 - **Sector board**: the SPDR sector ETFs (XLK, XLF, ...) measured against SPY —
   today's % change plus a blended relative-strength score over ~1w/1m/3m, with an
   RS rank exactly like the per-stock RRS ranking.
-- **Industry board**: composite "industry indexes" built from every classified
-  symbol in the shared `symbol_classification.csv` cache (the one BounceBot
-  maintains) plus user-defined micro-industry groups in
-  `data/custom_industry_groups.json` (e.g. Photonics = AAOI/LITE/CIEN/AXTI, which
-  trade as their own group long before any official industry list notices).
-  Each industry row reports median member % change, blended RS vs SPY, volume
+- **Industry board**: composite "industry indexes" in the TC2000 style. TC2000
+  builds its index board from the Morningstar hierarchy (11 sectors -> ~55
+  industry groups -> 145 industries); the shared `symbol_classification.csv`
+  cache (the one BounceBot maintains) already carries the 145-industry level, so
+  the board aggregates those into curated industry-group indexes defined in
+  `data/industry_index_definitions.json` (seeded from
+  ``DEFAULT_INDUSTRY_INDEX_DEFINITIONS``, user-editable). Definitions may also
+  pin explicit tickers, which lets theme indexes (AI Hardware, Uranium &
+  Nuclear, Crypto, Space, ...) cut across the official taxonomy — a symbol can
+  and should appear in several indexes. Cache industries not claimed by any
+  definition still show up as their own raw rows, and user-defined
+  micro-industry groups in `data/custom_industry_groups.json` (e.g. Photonics =
+  AAOI/LITE/CIEN/AXTI) are appended with a trailing ``*``.
+  Each index row reports median member % change, blended RS vs SPY, volume
   buzz (today vs 20-day average volume), member count and the top movers.
 
 Data comes from yfinance in one batched download, so this runs without an IBKR
@@ -75,12 +83,243 @@ INDUSTRY_MIN_MEMBERS = 2
 FETCH_PERIOD = "9mo"
 
 CUSTOM_INDUSTRY_GROUPS_FILE = DATA_DIR / "custom_industry_groups.json"
+INDUSTRY_INDEX_DEFINITIONS_FILE = DATA_DIR / "industry_index_definitions.json"
 INDUSTRY_BOARD_TEXT_FILE = OUTPUT_DIR / "industry_indexes.txt"
 INDUSTRY_BOARD_CSV_FILE = OUTPUT_DIR / "industry_indexes.csv"
 SECTOR_BOARD_CSV_FILE = OUTPUT_DIR / "sector_indexes.csv"
 
 DEFAULT_CUSTOM_INDUSTRY_GROUPS = {
     "Photonics": ["AAOI", "LITE", "CIEN", "AXTI", "COHR", "FN"],
+}
+
+# TC2000-style industry-group indexes. Each entry aggregates Morningstar
+# industries (the `industry` column of the classification cache, matched
+# case-insensitively) and/or pins explicit tickers. Tickers let theme indexes
+# cut across the official taxonomy, so overlap between indexes is expected —
+# NVDA belongs in Semiconductors *and* AI Hardware & Data Center.
+DEFAULT_INDUSTRY_INDEX_DEFINITIONS: dict[str, dict] = {
+    # --- Technology ---
+    "Semiconductors": {"industries": ["Semiconductors"]},
+    "Semiconductor Equipment": {"industries": ["Semiconductor Equipment & Materials"]},
+    "Software - Application": {"industries": ["Software - Application"]},
+    "Software - Infrastructure": {"industries": ["Software - Infrastructure"]},
+    "Networking & Comm Equipment": {"industries": ["Communication Equipment"]},
+    "Computer Hardware & Electronics": {
+        "industries": [
+            "Computer Hardware",
+            "Consumer Electronics",
+            "Electronics & Computer Distribution",
+            "Electronic Components",
+            "Scientific & Technical Instruments",
+        ]
+    },
+    "IT Services & Consulting": {"industries": ["Information Technology Services"]},
+    "Solar": {"industries": ["Solar"]},
+    # --- Tech / market themes (ticker-pinned, overlap by design) ---
+    "AI Hardware & Data Center": {
+        "tickers": [
+            "NVDA", "AMD", "AVGO", "MRVL", "MU", "SMCI", "DELL", "HPE",
+            "ANET", "VRT", "CRDO", "ALAB", "TSM", "COHR", "MOD",
+        ]
+    },
+    "Cybersecurity": {
+        "tickers": [
+            "CRWD", "PANW", "ZS", "FTNT", "NET", "OKTA", "S", "CYBR",
+            "TENB", "QLYS", "RPD", "GEN",
+        ]
+    },
+    "Quantum Computing": {"tickers": ["IONQ", "RGTI", "QBTS", "QUBT", "ARQQ"]},
+    "Crypto & Bitcoin Miners": {
+        "tickers": [
+            "COIN", "MSTR", "MARA", "RIOT", "CLSK", "HUT", "WULF", "CIFR",
+            "IREN", "CORZ", "BTBT", "HOOD", "GLXY",
+        ]
+    },
+    "Payments & Fintech": {
+        "industries": ["Credit Services"],
+        "tickers": ["PYPL", "XYZ", "AFRM", "TOST", "SOFI", "FI", "FIS", "GPN", "MQ", "UPST"],
+    },
+    # --- Healthcare ---
+    "Biotechnology": {"industries": ["Biotechnology"]},
+    "Pharmaceuticals": {
+        "industries": ["Drug Manufacturers - General", "Drug Manufacturers - Specialty & Generic"]
+    },
+    "Medical Devices & Supplies": {
+        "industries": ["Medical Devices", "Medical Instruments & Supplies"]
+    },
+    "Diagnostics & Life Science Tools": {"industries": ["Diagnostics & Research"]},
+    "Healthcare Providers & Services": {
+        "industries": [
+            "Healthcare Plans",
+            "Medical Care Facilities",
+            "Medical Distribution",
+            "Health Information Services",
+        ]
+    },
+    "GLP-1 & Obesity": {"tickers": ["LLY", "NVO", "AMGN", "VKTX", "GPCR", "ALT"]},
+    # --- Financials ---
+    "Banks - Major": {"industries": ["Banks - Diversified"]},
+    "Banks - Regional": {"industries": ["Banks - Regional"]},
+    "Capital Markets & Exchanges": {
+        "industries": ["Capital Markets", "Financial Data & Stock Exchanges"]
+    },
+    "Asset Management": {"industries": ["Asset Management"]},
+    "Insurance": {
+        "industries": [
+            "Insurance - Diversified",
+            "Insurance - Life",
+            "Insurance - Property & Casualty",
+            "Insurance - Reinsurance",
+            "Insurance - Specialty",
+            "Insurance Brokers",
+        ]
+    },
+    # --- Energy ---
+    "Oil & Gas E&P": {"industries": ["Oil & Gas E&P"]},
+    "Oil Services & Drilling": {
+        "industries": ["Oil & Gas Equipment & Services", "Oil & Gas Drilling"]
+    },
+    "Integrated Oil & Refiners": {
+        "industries": ["Oil & Gas Integrated", "Oil & Gas Refining & Marketing"]
+    },
+    "Oil & Gas Midstream": {"industries": ["Oil & Gas Midstream"]},
+    "Uranium & Nuclear": {
+        "industries": ["Uranium"],
+        "tickers": ["CCJ", "UEC", "DNN", "NXE", "UUUU", "LEU", "SMR", "OKLO", "NNE", "BWXT", "CEG"],
+    },
+    "Coal": {"industries": ["Thermal Coal", "Coking Coal"]},
+    # --- Basic Materials ---
+    "Gold & Silver Miners": {
+        "industries": ["Gold", "Silver", "Other Precious Metals & Mining"]
+    },
+    "Copper & Base Metals": {
+        "industries": ["Copper", "Aluminum", "Other Industrial Metals & Mining"]
+    },
+    "Steel": {"industries": ["Steel"]},
+    "Chemicals": {"industries": ["Chemicals", "Specialty Chemicals"]},
+    "Agriculture & Farm Products": {
+        "industries": ["Agricultural Inputs", "Farm Products"],
+        "tickers": ["DE", "AGCO", "CNH"],
+    },
+    # --- Industrials ---
+    "Aerospace & Defense": {"industries": ["Aerospace & Defense"]},
+    "Space": {"tickers": ["RKLB", "ASTS", "LUNR", "RDW", "PL", "BKSY"]},
+    "Airlines": {"industries": ["Airlines", "Airports & Air Services"]},
+    "Rails & Trucking": {
+        "industries": ["Railroads", "Trucking", "Integrated Freight & Logistics"]
+    },
+    "Marine Shipping": {"industries": ["Marine Shipping"]},
+    "Machinery": {
+        "industries": [
+            "Specialty Industrial Machinery",
+            "Farm & Heavy Construction Machinery",
+            "Metal Fabrication",
+            "Tools & Accessories",
+        ]
+    },
+    "Electrical Equipment & Grid": {
+        "industries": ["Electrical Equipment & Parts"],
+        "tickers": ["ETN", "VRT", "PWR", "HUBB", "GEV", "NVT", "AZZ"],
+    },
+    "Engineering & Construction": {"industries": ["Engineering & Construction"]},
+    "Building Products & Materials": {
+        "industries": ["Building Products & Equipment", "Building Materials"]
+    },
+    "Waste & Environmental": {
+        "industries": ["Waste Management", "Pollution & Treatment Controls"]
+    },
+    "Business Services": {
+        "industries": [
+            "Specialty Business Services",
+            "Consulting Services",
+            "Staffing & Employment Services",
+            "Security & Protection Services",
+        ]
+    },
+    "Distribution & Rentals": {
+        "industries": ["Industrial Distribution", "Rental & Leasing Services"]
+    },
+    # --- Consumer Cyclical ---
+    "Homebuilders & Home Improvement": {
+        "industries": [
+            "Residential Construction",
+            "Home Improvement Retail",
+            "Furnishings, Fixtures & Appliances",
+        ]
+    },
+    "Autos & EV": {"industries": ["Auto Manufacturers"]},
+    "Auto Parts & Dealers": {
+        "industries": ["Auto Parts", "Auto & Truck Dealerships", "Recreational Vehicles"]
+    },
+    "Retail - Apparel & Specialty": {
+        "industries": [
+            "Apparel Retail",
+            "Apparel Manufacturing",
+            "Footwear & Accessories",
+            "Luxury Goods",
+            "Department Stores",
+            "Specialty Retail",
+        ]
+    },
+    "Internet Retail": {"industries": ["Internet Retail"]},
+    "Restaurants": {"industries": ["Restaurants"]},
+    "Travel & Leisure": {
+        "industries": ["Travel Services", "Lodging", "Resorts & Casinos", "Gambling", "Leisure"]
+    },
+    "Packaging & Containers": {"industries": ["Packaging & Containers"]},
+    # --- Consumer Defensive ---
+    "Food & Beverage": {
+        "industries": [
+            "Packaged Foods",
+            "Beverages - Brewers",
+            "Beverages - Non - Alcoholic",
+            "Confectioners",
+            "Food Distribution",
+        ]
+    },
+    "Staples Retail & Discount": {"industries": ["Discount Stores", "Grocery Stores"]},
+    "Household & Personal Products": {
+        "industries": ["Household & Personal Products", "Tobacco"]
+    },
+    # --- Communication Services ---
+    "Internet Content & Social": {"industries": ["Internet Content & Information"]},
+    "Media & Entertainment": {
+        "industries": [
+            "Entertainment",
+            "Broadcasting",
+            "Publishing",
+            "Advertising Agencies",
+            "Electronic Gaming & Multimedia",
+        ]
+    },
+    "Telecom": {"industries": ["Telecom Services"]},
+    # --- Real Estate ---
+    "REITs - Equity": {
+        "industries": [
+            "REIT - Diversified",
+            "REIT - Healthcare Facilities",
+            "REIT - Hotel & Motel",
+            "REIT - Industrial",
+            "REIT - Office",
+            "REIT - Residential",
+            "REIT - Retail",
+            "REIT - Specialty",
+        ]
+    },
+    "REITs - Mortgage": {"industries": ["REIT - Mortgage", "Mortgage Finance"]},
+    "Real Estate Services": {"industries": ["Real Estate Services"]},
+    # --- Utilities ---
+    "Utilities - Regulated": {
+        "industries": [
+            "Utilities - Regulated Electric",
+            "Utilities - Regulated Gas",
+            "Utilities - Regulated Water",
+            "Utilities - Diversified",
+        ]
+    },
+    "Utilities - IPP & Renewables": {
+        "industries": ["Utilities - Independent Power Producers", "Utilities - Renewable"]
+    },
 }
 
 
@@ -139,26 +378,103 @@ def load_custom_industry_groups(path: Path | None = None) -> dict[str, list[str]
     return groups
 
 
+def load_industry_index_definitions(path: Path | None = None) -> dict[str, dict]:
+    """TC2000-style index definitions; seeds the default file on first run.
+
+    Each definition is ``{"industries": [...], "tickers": [...]}`` (either key
+    optional). A plain list value is shorthand for ``{"tickers": [...]}``.
+    """
+    defs_path = Path(path) if path else INDUSTRY_INDEX_DEFINITIONS_FILE
+    if not defs_path.exists():
+        try:
+            defs_path.parent.mkdir(parents=True, exist_ok=True)
+            defs_path.write_text(
+                json.dumps(DEFAULT_INDUSTRY_INDEX_DEFINITIONS, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logging.warning("Could not seed industry index definitions file: %s", exc)
+            return {name: dict(spec) for name, spec in DEFAULT_INDUSTRY_INDEX_DEFINITIONS.items()}
+    try:
+        payload = json.loads(defs_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logging.warning("Could not parse %s: %s", defs_path, exc)
+        return {}
+    definitions: dict[str, dict] = {}
+    if isinstance(payload, dict):
+        for name, spec in payload.items():
+            label = str(name or "").strip()
+            if not label:
+                continue
+            if isinstance(spec, list):
+                spec = {"tickers": spec}
+            if not isinstance(spec, dict):
+                continue
+            industries = [
+                str(item or "").strip()
+                for item in (spec.get("industries") or [])
+                if str(item or "").strip()
+            ]
+            tickers = sorted(
+                {
+                    str(item or "").strip().upper()
+                    for item in (spec.get("tickers") or [])
+                    if str(item or "").strip()
+                }
+            )
+            if industries or tickers:
+                definitions[label] = {"industries": industries, "tickers": tickers}
+    return definitions
+
+
+def _norm_industry(name: str) -> str:
+    return " ".join(str(name or "").split()).lower()
+
+
 def collect_industry_members(
     classifications: dict[str, dict],
     custom_groups: dict[str, list[str]] | None = None,
     *,
+    index_definitions: dict[str, dict] | None = None,
     restrict_to: set[str] | None = None,
 ) -> dict[str, list[str]]:
-    """Industry label -> member symbols, from the cache plus custom groups.
+    """Index label -> member symbols.
 
-    Custom groups are first-class industries (marked with a trailing ``*`` so the
-    board shows which rows are user-defined) and are never restricted: if you
-    bothered to define Photonics, you want the whole group measured.
+    Cache industries feed the curated index definitions (matched by industry
+    name, case-insensitively); a symbol may land in several indexes because
+    definitions overlap on purpose. Industries not claimed by any definition
+    fall through as their own raw rows so nothing goes invisible. Custom groups
+    are first-class indexes (marked with a trailing ``*`` so the board shows
+    which rows are user-defined); like definition tickers, they are never
+    restricted: if you bothered to define Photonics, you want the whole group
+    measured.
     """
-    members: dict[str, set[str]] = {}
+    by_industry: dict[str, set[str]] = {}
+    display_name: dict[str, str] = {}
     for symbol, row in (classifications or {}).items():
         industry = str(row.get("industry") or "").strip()
         if not industry:
             continue
         if restrict_to is not None and symbol not in restrict_to:
             continue
-        members.setdefault(industry, set()).add(symbol)
+        key = _norm_industry(industry)
+        by_industry.setdefault(key, set()).add(symbol)
+        display_name.setdefault(key, industry)
+
+    members: dict[str, set[str]] = {}
+    claimed: set[str] = set()
+    for name, spec in (index_definitions or {}).items():
+        group: set[str] = set()
+        for industry in spec.get("industries") or []:
+            key = _norm_industry(industry)
+            claimed.add(key)
+            group.update(by_industry.get(key, set()))
+        group.update(spec.get("tickers") or [])
+        if group:
+            members.setdefault(name, set()).update(group)
+    for key, group in by_industry.items():
+        if key not in claimed:
+            members.setdefault(display_name[key], set()).update(group)
     for name, symbols in (custom_groups or {}).items():
         members.setdefault(f"{name}*", set()).update(symbols)
     return {label: sorted(group) for label, group in members.items() if group}
@@ -420,11 +736,13 @@ def run_industry_scan(
     """Build both boards and (optionally) write the text/CSV outputs."""
     classifications = load_symbol_classifications()
     custom_groups = load_custom_industry_groups()
+    index_definitions = load_industry_index_definitions()
     watchlist_symbols = gather_watchlist_symbols()
 
     universe: set[str] = set(watchlist_symbols)
     universe.update(classifications.keys())
     universe.update(s for members in custom_groups.values() for s in members)
+    universe.update(s for spec in index_definitions.values() for s in spec.get("tickers") or [])
     universe.update(extra_symbols or [])
 
     fetch_symbols = set(SECTOR_ETFS) | {BENCHMARK_SYMBOL}
@@ -435,7 +753,9 @@ def run_industry_scan(
     sector_rows = build_sector_board(frames)
     industry_rows = []
     if not sectors_only:
-        industry_members = collect_industry_members(classifications, custom_groups)
+        industry_members = collect_industry_members(
+            classifications, custom_groups, index_definitions=index_definitions
+        )
         industry_rows = build_industry_board(frames, industry_members)
 
     if write_outputs:
