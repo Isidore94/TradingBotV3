@@ -202,6 +202,33 @@ def test_prune_latest_bars_keeps_only_background_on_off_cycles():
     assert stub.latest_bars == {}
 
 
+def test_migrate_csv_header_widens_old_files(tmp_path):
+    from bounce_bot_lib.legacy import _migrate_csv_header
+
+    path = tmp_path / "bounces.csv"
+    path.write_text(
+        "time_local,trade_date,symbol,direction,bounce_types\n"
+        "10:00:00,2026-07-01,AAPL,long,vwap\n",
+        encoding="utf-8",
+    )
+    fieldnames = ["time_local", "trade_date", "symbol", "direction", "bounce_types", "tier", "composite_r"]
+    _migrate_csv_header(path, fieldnames)
+    with open(path, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert list(rows[0].keys()) == fieldnames
+    assert rows[0]["symbol"] == "AAPL"
+    assert rows[0]["tier"] == ""
+    # idempotent on the new layout
+    _migrate_csv_header(path, fieldnames)
+    with open(path, newline="", encoding="utf-8") as handle:
+        assert len(list(csv.DictReader(handle))) == 1
+    # unknown layouts are left untouched
+    other = tmp_path / "other.csv"
+    other.write_text("a,b\n1,2\n", encoding="utf-8")
+    _migrate_csv_header(other, fieldnames)
+    assert other.read_text(encoding="utf-8") == "a,b\n1,2\n"
+
+
 def test_format_bounce_alert_message_includes_tier_plan_and_reasons():
     from bounce_bot_lib.legacy import _format_bounce_alert_message
 

@@ -1038,6 +1038,31 @@ def _bounce_rrs_alignment(row: dict) -> str:
     return "unknown"
 
 
+def _migrate_csv_header(path, fieldnames):
+    """One-time widen of an append-only CSV when new columns are added.
+
+    Existing rows get blank values for the new columns; no-op when the header
+    already matches or the file does not exist.
+    """
+    try:
+        if not Path(path).exists():
+            return
+        with open(path, "r", newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames == list(fieldnames):
+                return
+            if not reader.fieldnames or not set(reader.fieldnames) <= set(fieldnames):
+                return  # unknown layout; never destroy data
+            rows = list(reader)
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(fieldnames))
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
+    except Exception as exc:
+        logging.warning("CSV header migration skipped for %s: %s", path, exc)
+
+
 def _format_bounce_alert_message(symbol, direction, levels_list, event_row, quality) -> str:
     """Alert text: tier + confirmation + trade plan + the measured reasons."""
     row = event_row if isinstance(event_row, dict) else {}
@@ -6905,7 +6930,8 @@ class BounceBot(EWrapper, EClient):
                 levels=levels,
                 bounce_candle=bounce_candle,
                 current_candle=current_candle,
-                threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0)
+                threshold=THRESHOLD_MULTIPLIER * self.atr_cache.get(symbol, 0),
+                quality=quality,
             )
             self.alerted_symbols.add(symbol)
 
@@ -7452,11 +7478,17 @@ class BounceBot(EWrapper, EClient):
             del self.data_ready_events[reqId]
         return results
 
-    def log_bounce_to_file(self, symbol, direction, levels, bounce_candle, current_candle, threshold):
+    def log_bounce_to_file(self, symbol, direction, levels, bounce_candle, current_candle, threshold, quality=None):
         try:
             timestamp = datetime.now().strftime("%H:%M:%S")
             bounce_types_list = list(levels.keys())
             bounce_types_str = ", ".join(bounce_types_list)
+            quality = quality if isinstance(quality, dict) else {}
+            tier = str(quality.get("tier") or "").strip().upper()
+            composite = quality.get("composite_r")
+            tier_str = f"{tier}-TIER" if tier else ""
+            if tier and isinstance(composite, (int, float)):
+                tier_str = f"{tier_str} ({composite:+.2f}R)"
 
             candle_time = str(current_candle.get("time", "")).strip() if current_candle is not None else ""
             trade_dt = None
@@ -7473,15 +7505,14 @@ class BounceBot(EWrapper, EClient):
 
             BOUNCE_LOG_FILENAME.parent.mkdir(parents=True, exist_ok=True)
             with open(BOUNCE_LOG_FILENAME, "a") as f:
-                f.write(f"{timestamp} | {symbol} | {bounce_types_str} | {direction}\n")
+                f.write(f"{timestamp} | {symbol} | {bounce_types_str} | {direction} | {tier_str}\n")
 
             DATA_DIR.mkdir(parents=True, exist_ok=True)
+            fieldnames = ["time_local", "trade_date", "symbol", "direction", "bounce_types", "tier", "composite_r"]
+            _migrate_csv_header(INTRADAY_BOUNCES_CSV, fieldnames)
             file_exists = INTRADAY_BOUNCES_CSV.exists()
             with INTRADAY_BOUNCES_CSV.open("a", newline="") as csvfile:
-                writer = csv.DictWriter(
-                    csvfile,
-                    fieldnames=["time_local", "trade_date", "symbol", "direction", "bounce_types"],
-                )
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 if not file_exists:
                     writer.writeheader()
                 writer.writerow(
@@ -7491,6 +7522,8 @@ class BounceBot(EWrapper, EClient):
                         "symbol": symbol,
                         "direction": direction,
                         "bounce_types": ", ".join(bounce_types_list),
+                        "tier": tier,
+                        "composite_r": composite if isinstance(composite, (int, float)) else "",
                     }
                 )
 

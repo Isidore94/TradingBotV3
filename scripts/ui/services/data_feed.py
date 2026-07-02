@@ -124,7 +124,10 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
             key_level=zone_by_symbol.get(symbol, ""),
             expected_r=_float_or_none(data.get("expected_r")),
             source="priority_report",
-            raw={"report_line": line, **{k: v for k, v in data.items() if v}},
+            # The report renders the family as a display label ("mid earnings
+            # EMA15 retest"); keep it under setup_family so the detail pane can
+            # resolve the real family docs instead of falling back to general.
+            raw={"report_line": line, "setup_family": family, **{k: v for k, v in data.items() if v}},
         )
         identity = (row.symbol, row.side, row.bucket)
         if row.symbol and identity not in seen:

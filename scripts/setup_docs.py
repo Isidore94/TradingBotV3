@@ -449,16 +449,35 @@ SETUP_DOC_ALIASES = {
     "mid_earnings_first_dev_retest": "mid_earnings_1stdev_retest",
     "top_pattern_tracking": "top_pattern",
     "sma_breakout_tracking": "sma_breakout",
+    # A completed/active hold beyond the 2nd stdev IS the power-hold regime.
+    "mid_earnings_above_2nd_stdev": "playbook_second_dev_power_hold",
+    # Bounce off the previous anchor's AVWAP behaves like a band bounce.
+    "previous_avwape_bounce": "avwap_band_bounce",
 }
 
 
 def resolve_setup_doc(setup_family: str) -> tuple[str, dict]:
-    """Return (canonical_key, doc) for a family name; falls back to 'general'."""
-    key = str(setup_family or "").strip().lower().replace(" ", "_")
+    """Return (canonical_key, doc) for a family name; falls back to 'general'.
+
+    Accepts both machine keys ("mid_earnings_1stdev_retest") and the report's
+    display labels ("mid earnings 1st-dev retest") — normalization lowercases,
+    underscores spaces, and strips hyphens so label round-trips resolve.
+    """
+    key = str(setup_family or "").strip().lower().replace(" ", "_").replace("-", "")
     key = SETUP_DOC_ALIASES.get(key, key)
     if key in SETUP_DOCS:
         return key, SETUP_DOCS[key]
     return "general", SETUP_DOCS["general"]
+
+
+def resolve_setup_family_from_candidates(candidates) -> str:
+    """First candidate (family key, display label, or tag) that resolves to a
+    real documented family; 'general' only when nothing does."""
+    for candidate in candidates or []:
+        key, _doc = resolve_setup_doc(candidate)
+        if key != "general":
+            return key
+    return "general"
 
 
 def all_setup_docs_by_group() -> list[tuple[str, list[tuple[str, dict]]]]:

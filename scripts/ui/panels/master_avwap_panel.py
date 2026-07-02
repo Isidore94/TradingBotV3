@@ -498,12 +498,20 @@ class MasterAvwapPanel(QWidget):
             self._show_setup_detail(row)
 
     def _show_setup_detail(self, row: SetupRow) -> None:
+        from setup_docs import resolve_setup_family_from_candidates
+
         raw = row.raw if isinstance(row.raw, dict) else {}
         signals = raw.get("favorite_signals") or row.setup_tags or []
+        # Priority-report rows carry the family as a display label (and often
+        # only inside the tags); resolve against the docs registry instead of
+        # falling back to the bucket, which is not a setup family.
+        family = resolve_setup_family_from_candidates(
+            [raw.get("setup_family"), *row.setup_tags]
+        )
         self.detail_view.show_setup(
             symbol=row.symbol,
             side=row.side or str(raw.get("side") or "LONG"),
-            setup_family=str(raw.get("setup_family") or "") or row.bucket,
+            setup_family=family,
             favorite_signals=signals,
             last_close=raw.get("last_close") or raw.get("previous_close"),
         )

@@ -33,6 +33,27 @@ def test_resolve_families_aliases_and_fallback():
     assert key == "general"
 
 
+def test_resolve_accepts_report_display_labels():
+    # The priority report renders families as human labels; they must round-trip.
+    key, _ = setup_docs.resolve_setup_doc("mid earnings EMA15 retest")
+    assert key == "mid_earnings_ema15_retest"
+    key, _ = setup_docs.resolve_setup_doc("mid earnings 1st-dev retest")
+    assert key == "mid_earnings_1stdev_retest"
+    key, _ = setup_docs.resolve_setup_doc("AVWAP retest followthrough")
+    assert key == "avwap_retest_followthrough"
+    key, _ = setup_docs.resolve_setup_doc("mid earnings above 2nd stdev")
+    assert key == "playbook_second_dev_power_hold"
+
+
+def test_resolve_family_from_candidates_prefers_first_real_match():
+    family = setup_docs.resolve_setup_family_from_candidates(
+        [None, "near_favorite_zone", "mid earnings ema15 retest", "avwap_breakout"]
+    )
+    assert family == "mid_earnings_ema15_retest"
+    assert setup_docs.resolve_setup_family_from_candidates(["nonsense", ""]) == "general"
+    assert setup_docs.resolve_setup_family_from_candidates([]) == "general"
+
+
 def test_docs_grouped_for_display():
     groups = setup_docs.all_setup_docs_by_group()
     names = [name for name, _entries in groups]
