@@ -233,46 +233,61 @@ EVENT_LEVEL_SORT_ORDER = [
     "LOWER_3",
 ]
 
+# Rebalanced 2026-07-01 against the tracker's 60-day scan-factor leaderboard
+# (window 2026-05-01..2026-06-30, 5/10-session excess return vs baseline):
+# - Second/third-band chase crossings measured negative at every horizon
+#   (CROSS_UP_UPPER_2 -2.8% at h5 on n=556) -> demoted hard.
+# - VWAP-adjacent entries measured best at the swing horizon (BOUNCE_VWAP
+#   +3.4%, CROSS_UP_VWAP +2.4% at h5) -> promoted; BOUNCE_UPPER_1 keeps the
+#   top non-earnings weight (+2.0% at h10, positive at every horizon).
+# - The earnings families held the four highest weights but none earned it
+#   (52W_BREAK ~0.0%, FIRST_DEV_RETEST -4.5% at h10) -> halved, keeping them
+#   visible without letting them outrank measured winners.
 FAVORITE_CURRENT_SIGNALS = {
     "LONG": {
-        "CROSS_UP_VWAP": 88,
-        "CROSS_UP_UPPER_1": 112,
-        "CROSS_UP_UPPER_2": 84,
-        "CROSS_UP_UPPER_3": 88,
-        "BOUNCE_VWAP": 96,
+        "CROSS_UP_VWAP": 110,
+        "CROSS_UP_UPPER_1": 106,
+        "CROSS_UP_UPPER_2": 40,
+        "CROSS_UP_UPPER_3": 40,
+        "BOUNCE_VWAP": 114,
         "BOUNCE_UPPER_1": 116,
         "SMA_BREAKOUT_50_RECLAIM": 82,
         "SMA_BREAKOUT_100_RECLAIM": 92,
         "SMA_BREAKOUT_200_RECLAIM": 108,
         "EXTREME_MOVE_RETEST": 112,
-        "POST_EARNINGS_52W_BREAK": 150,
-        "POST_EARNINGS_AVWAPE_BOUNCE": 128,
-        "MID_EARNINGS_EMA15_RETEST": 138,
-        "MID_EARNINGS_EMA21_RETEST": 130,
-        "MID_EARNINGS_FIRST_DEV_RETEST": 134,
+        "POST_EARNINGS_52W_BREAK": 75,
+        "POST_EARNINGS_AVWAPE_BOUNCE": 64,
+        "MID_EARNINGS_EMA15_RETEST": 69,
+        "MID_EARNINGS_EMA21_RETEST": 65,
+        "MID_EARNINGS_FIRST_DEV_RETEST": 67,
     },
     "SHORT": {
         "CROSS_DOWN_VWAP": 88,
-        "CROSS_DOWN_LOWER_1": 112,
-        "CROSS_DOWN_LOWER_2": 84,
-        "CROSS_DOWN_LOWER_3": 88,
-        "BOUNCE_VWAP": 96,
+        "CROSS_DOWN_LOWER_1": 106,
+        "CROSS_DOWN_LOWER_2": 40,
+        "CROSS_DOWN_LOWER_3": 40,
+        "BOUNCE_VWAP": 114,
         "BOUNCE_LOWER_1": 116,
         "EXTREME_MOVE_RETEST": 112,
-        "POST_EARNINGS_52W_BREAK": 150,
-        "POST_EARNINGS_AVWAPE_BOUNCE": 128,
-        "MID_EARNINGS_EMA15_RETEST": 138,
-        "MID_EARNINGS_EMA21_RETEST": 130,
-        "MID_EARNINGS_FIRST_DEV_RETEST": 134,
+        "POST_EARNINGS_52W_BREAK": 75,
+        "POST_EARNINGS_AVWAPE_BOUNCE": 64,
+        "MID_EARNINGS_EMA15_RETEST": 69,
+        "MID_EARNINGS_EMA21_RETEST": 65,
+        "MID_EARNINGS_FIRST_DEV_RETEST": 67,
     },
 }
 
+# Context crossings zeroed 2026-07-01: yesterday's band crossing without
+# today's hold measured NEGATIVE on the largest context samples in the
+# leaderboard (PREV_CROSS_UP_UPPER_1 -1.4% on n=502, PREV_CROSS_UP_UPPER_2
+# -1.6% on n=708 at h5) -- rewarding them scored "late" entries up.
+# PREV_BOUNCE_VWAP stays (+1.2% on n=325).
 FAVORITE_CONTEXT_SIGNALS = {
     "LONG": {
         "PREV_CROSS_UP_VWAP": 18,
-        "PREV_CROSS_UP_UPPER_1": 24,
-        "PREV_CROSS_UP_UPPER_2": 14,
-        "PREV_CROSS_UP_UPPER_3": 15,
+        "PREV_CROSS_UP_UPPER_1": 0,
+        "PREV_CROSS_UP_UPPER_2": 0,
+        "PREV_CROSS_UP_UPPER_3": 0,
         "PREV_BOUNCE_VWAP": 10,
         "POST_EARNINGS_CLOSE_CONFIRM": 20,
         "MID_EARNINGS_EMA8_CONFLUENCE": 8,
@@ -281,9 +296,9 @@ FAVORITE_CONTEXT_SIGNALS = {
     },
     "SHORT": {
         "PREV_CROSS_DOWN_VWAP": 18,
-        "PREV_CROSS_DOWN_LOWER_1": 24,
-        "PREV_CROSS_DOWN_LOWER_2": 14,
-        "PREV_CROSS_DOWN_LOWER_3": 15,
+        "PREV_CROSS_DOWN_LOWER_1": 0,
+        "PREV_CROSS_DOWN_LOWER_2": 0,
+        "PREV_CROSS_DOWN_LOWER_3": 0,
         "PREV_BOUNCE_VWAP": 10,
         "POST_EARNINGS_CLOSE_CONFIRM": 20,
         "MID_EARNINGS_EMA8_CONFLUENCE": 8,
@@ -684,7 +699,6 @@ PRIORITY_MARKET_REGIME_COUNTER_TREND_SOFT_PENALTY = 16
 PRIORITY_REJECTION_CAP_SMA_OBSTACLE = 180
 PRIORITY_REJECTION_CAP_FIRST_DEV_CHOP = 180
 PRIORITY_REJECTION_CAP_COMPRESSION = 150
-PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND = 160
 PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY = 120
 PRIORITY_SHORT_NEAR_FAVORITE_GATE_PENALTY = 36
 PRIORITY_CURRENT_SIGNAL_WEIGHT_DEFAULT_CAP = 110
@@ -2026,9 +2040,23 @@ def _symbol_metadata_is_fresh(entry: dict | None) -> bool:
     return (datetime.now().date() - updated_on).days < max(1, SYMBOL_METADATA_CACHE_MAX_AGE_DAYS)
 
 
+_WINDOWS_RESERVED_FILENAME_STEMS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
 def _sanitize_symbol_for_filename(symbol: str) -> str:
     text = str(symbol or "").strip().upper()
-    return re.sub(r"[^A-Z0-9._-]+", "_", text) or "UNKNOWN"
+    cleaned = re.sub(r"[^A-Z0-9._-]+", "_", text) or "UNKNOWN"
+    root, sep, suffix = cleaned.partition(".")
+    if root in _WINDOWS_RESERVED_FILENAME_STEMS:
+        cleaned = f"{root}_{sep}{suffix}" if sep else f"{root}_"
+    return cleaned
 
 
 def _daily_bar_cache_file(symbol: str) -> Path:
@@ -2151,6 +2179,69 @@ def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     return _set_daily_bar_source(normalized, source)
 
 
+# A local cache read must never be allowed to block the scan indefinitely. On
+# Windows, accidentally using a reserved device-name path such as CON.csv can
+# behave like a 0-byte file and make pd.read_csv block instead of raising.
+DAILY_BAR_CACHE_READ_TIMEOUT_SEC = 5.0
+
+
+def _read_csv_with_timeout(path: Path, timeout_sec: float, **read_csv_kwargs) -> pd.DataFrame:
+    """pd.read_csv on a background thread with a hard wall-clock bound.
+
+    A stuck read leaves its thread running (daemon; Python cannot safely kill a
+    thread mid-syscall), but the caller gets control back within ``timeout_sec``
+    either way, so one damaged file can cost a few seconds instead of hanging the
+    entire scan. Raises the read's own exception on failure, or TimeoutError if
+    the deadline passes with no result.
+    """
+    result: dict = {}
+
+    def _worker() -> None:
+        try:
+            result["frame"] = pd.read_csv(path, **read_csv_kwargs)
+        except Exception as exc:  # re-raised on the calling thread below
+            result["error"] = exc
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join(timeout=max(0.5, float(timeout_sec or 0.5)))
+    if thread.is_alive():
+        raise TimeoutError(f"read_csv({path}) did not complete within {timeout_sec}s")
+    if "error" in result:
+        raise result["error"]
+    return result["frame"]
+
+
+def _seed_daily_bar_cache_from_durable(symbol: str, cache_path: Path) -> pd.DataFrame:
+    # Cold start (fresh / ephemeral machine, or a quarantined corrupt cache file):
+    # seed the local L1 cache from the durable Drive store so only the delta needs
+    # fetching, not full history.
+    durable = _load_durable_daily_bar_frame(symbol)
+    if not durable.empty:
+        _DAILY_BAR_FRAME_CACHE[symbol] = durable
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            durable.to_csv(cache_path, index=False)
+            _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
+        except Exception:
+            _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
+        return _set_daily_bar_source(durable.copy(), DAILY_BAR_SOURCE_CACHE)
+    return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
+
+
+def _quarantine_corrupt_daily_bar_cache(symbol: str, cache_path: Path, reason: str) -> None:
+    logging.warning(
+        "%s: cached daily bars file looks corrupt (%s); removing %s and reseeding.",
+        symbol,
+        reason,
+        cache_path,
+    )
+    try:
+        cache_path.unlink(missing_ok=True)
+    except Exception as exc:
+        logging.warning("%s: could not remove corrupt cache file %s (%s).", symbol, cache_path, exc)
+
+
 def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
     symbol = str(symbol or "").strip().upper()
     cached = _DAILY_BAR_FRAME_CACHE.get(symbol)
@@ -2166,22 +2257,24 @@ def _load_cached_daily_bar_frame(symbol: str) -> pd.DataFrame:
 
     cache_path = _daily_bar_cache_file(symbol)
     if not cache_path.exists():
-        # Cold start (fresh / ephemeral machine): seed the local L1 cache from the
-        # durable Drive store so only the delta needs fetching, not full history.
-        durable = _load_durable_daily_bar_frame(symbol)
-        if not durable.empty:
-            _DAILY_BAR_FRAME_CACHE[symbol] = durable
-            try:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                durable.to_csv(cache_path, index=False)
-                _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = _daily_bar_cache_file_mtime(symbol) or datetime.now()
-            except Exception:
-                _DAILY_BAR_CACHE_TOUCHED_AT[symbol] = datetime.now()
-            return _set_daily_bar_source(durable.copy(), DAILY_BAR_SOURCE_CACHE)
-        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
+        return _seed_daily_bar_cache_from_durable(symbol, cache_path)
+
+    # A zero-byte (or otherwise unstat-able) cache file is the known corruption
+    # signature; skip straight to reseeding instead of ever calling read_csv on it.
+    try:
+        cache_size = cache_path.stat().st_size
+    except OSError as exc:
+        _quarantine_corrupt_daily_bar_cache(symbol, cache_path, f"stat failed: {exc}")
+        return _seed_daily_bar_cache_from_durable(symbol, cache_path)
+    if cache_size == 0:
+        _quarantine_corrupt_daily_bar_cache(symbol, cache_path, "0 bytes")
+        return _seed_daily_bar_cache_from_durable(symbol, cache_path)
 
     try:
-        df = pd.read_csv(cache_path, parse_dates=["datetime"])
+        df = _read_csv_with_timeout(cache_path, DAILY_BAR_CACHE_READ_TIMEOUT_SEC, parse_dates=["datetime"])
+    except TimeoutError as exc:
+        _quarantine_corrupt_daily_bar_cache(symbol, cache_path, str(exc))
+        return _seed_daily_bar_cache_from_durable(symbol, cache_path)
     except Exception as exc:
         logging.warning(f"{symbol}: failed reading cached daily bars ({exc})")
         return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_CACHE)
@@ -2885,11 +2978,24 @@ def count_recent_band_test_days(
 
 
 def compute_recent_second_band_penalty(recent_second_band_test_days: int) -> int:
-    if recent_second_band_test_days <= 0:
+    """Penalty humped by test-day count, not monotonic (2026-07-01 rebalance).
+
+    The tracker's 60-day factor leaderboard shows one isolated second-band tag
+    is the rejection-risk case (-0.9% 5-session edge, n=1389) while pressing
+    the band on 5+ of the lookback days measures POSITIVE (+1.1%, n=464) --
+    the name is riding the band, the same regime as the second-stdev power
+    hold. Penalize the lone tag, fade the penalty as tests accumulate.
+    """
+    tests = int(recent_second_band_test_days)
+    if tests <= 0:
         return 0
-    penalty = PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY
-    penalty += max(0, int(recent_second_band_test_days) - 1) * PRIORITY_SECOND_BAND_REPEAT_TEST_SCORE_PENALTY
-    return min(PRIORITY_SECOND_BAND_MAX_SCORE_PENALTY, penalty)
+    if tests <= 2:
+        penalty = PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY
+        penalty += (tests - 1) * PRIORITY_SECOND_BAND_REPEAT_TEST_SCORE_PENALTY
+        return min(PRIORITY_SECOND_BAND_MAX_SCORE_PENALTY, penalty)
+    if tests <= 4:
+        return PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY // 2
+    return 0
 
 
 def assess_first_dev_break_quality(
@@ -3659,6 +3765,23 @@ def _protective_band_label(side: str) -> str:
     return "LOWER_1" if normalize_side(side) == "LONG" else "UPPER_1"
 
 
+def _representative_stop_label_for_setup(setup: dict) -> str:
+    """Representative stop label for a tracked setup's honest per-setup R.
+
+    Playbook-backfill finding (2026-07-01): bounce entries die with stops tied
+    to the entry bar, and the coherent level-based stop is one band level
+    beyond the *bounced* level. For a first-band bounce (BOUNCE_UPPER_1 long /
+    BOUNCE_LOWER_1 short) that is the anchored VWAP, not the far protective
+    band two levels away; VWAP bounces already resolve to the protective band.
+    """
+    side = normalize_side(setup.get("side"))
+    signals = {str(s or "").strip().upper() for s in (setup.get("favorite_signals") or [])}
+    first_band_bounce = "BOUNCE_UPPER_1" if side == "LONG" else "BOUNCE_LOWER_1"
+    if first_band_bounce in signals:
+        return "AVWAPE"
+    return _protective_band_label(side)
+
+
 def _post_earnings_candle_stop_label(side: str) -> str:
     return (
         POST_EARNINGS_CANDLE_STOP_LABEL_LONG
@@ -4361,7 +4484,11 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
             close_failure_limit=POST_EARNINGS_STOP_FAILURE_CLOSES,
         )
 
-    if priority_bucket in {"favorite_setup", "near_favorite_zone"}:
+    # First-band bounce setups need the AVWAPE scenario present in every bucket
+    # so the representative (bounced-level) stop can actually be measured.
+    row_signals = {str(s or "").strip().upper() for s in (row.get("favorite_signals") or [])}
+    first_band_bounce_signal = "BOUNCE_UPPER_1" if side == "LONG" else "BOUNCE_LOWER_1"
+    if priority_bucket in {"favorite_setup", "near_favorite_zone"} or first_band_bounce_signal in row_signals:
         _add("AVWAPE", _anchor_level_value(current_anchor, "AVWAPE"), "current_anchor")
     _add(primary_stop_label, primary_stop_level, "current_anchor")
 
@@ -5301,7 +5428,7 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     # stop, so this is the honest per-setup R; Expected-R consumes it in
     # preference to the cross-variant average (it falls back to the average when
     # the primary stop scenario isn't present).
-    primary_stop_label = _protective_band_label(normalize_side(setup.get("side")))
+    primary_stop_label = _representative_stop_label_for_setup(setup)
     representative = next(
         (scenario for scenario in tradeable if str(scenario.get("stop_reference_label") or "") == primary_stop_label),
         None,
@@ -17823,12 +17950,11 @@ def _priority_rejection_score_cap(row: dict) -> tuple[float | None, str]:
     if bool(row.get("compression_flag")) and int(row.get("compression_penalty", 0) or 0) >= PRIORITY_COMPRESSION_SCORE_PENALTY_SEVERE:
         caps.append(PRIORITY_REJECTION_CAP_COMPRESSION)
         notes.append("severe compression")
-    if (
-        int(row.get("second_band_penalty", 0) or 0) >= 18
-        and not _is_mid_earnings_retest_family(row)
-    ):
-        caps.append(PRIORITY_REJECTION_CAP_REPEATED_SECOND_BAND)
-        notes.append("repeated 2nd-dev tests")
+    # The "repeated 2nd-dev tests" cap was removed in the 2026-07-01 rebalance:
+    # the tracker leaderboard shows 5+ recent second-band test days measuring
+    # POSITIVE (+1.1% 5-session edge, n=464) -- capping band-riders punished the
+    # strongest regime. The lone-tag rejection risk is handled by
+    # compute_recent_second_band_penalty's hump instead.
     if _priority_is_side_opposite_day(row):
         caps.append(PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY)
         notes.append(_priority_side_opposite_day_note(row))
@@ -23905,6 +24031,175 @@ def enrich_priority_rows_with_weekly_ema8_hold(
                 extra=context,
             )
         )
+    return study_rows
+
+
+# Playbook-study families promoted from the setup_playbook_study backfill
+# (2026-07-01, 186k closed episodes over two regime windows Nov'25-Jun'26).
+# These were the regime-robust discoveries: positive edge vs the unconditional
+# baseline in BOTH the correction window and the bull window. Tracked in the
+# isolated study namespace (no scoring impact) so the live tracker accrues
+# forward evidence before any weight is granted.
+PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY = "playbook_volume_thrust"
+PLAYBOOK_SECOND_DEV_POWER_HOLD_STUDY_FAMILY = "playbook_second_dev_power_hold"
+PLAYBOOK_QUIET_PULLBACK_STUDY_FAMILY = "playbook_quiet_pullback_resume"
+PLAYBOOK_STUDY_BUCKET = "study_playbook"
+PLAYBOOK_VOLUME_THRUST_MIN_MOVE = 0.015
+PLAYBOOK_VOLUME_THRUST_MIN_VOL_MULT = 2.0
+PLAYBOOK_VOLUME_THRUST_VOL_AVG_SESSIONS = 20
+PLAYBOOK_POWER_HOLD_MIN_STREAK_DAYS = 10
+PLAYBOOK_QUIET_PULLBACK_DOWN_SESSIONS = 3
+
+
+def _playbook_frame_tail_values(df: pd.DataFrame | None, needed: int):
+    """Chronological (closes, volumes) list tails, or None when unusable."""
+    if not isinstance(df, pd.DataFrame) or df.empty or "close" not in df.columns or "volume" not in df.columns:
+        return None
+    work = df.dropna(subset=["close"]).reset_index(drop=True)
+    if len(work) < needed:
+        return None
+    closes = [_coerce_float(v) for v in pd.to_numeric(work["close"], errors="coerce").tolist()]
+    volumes = [_coerce_float(v) for v in pd.to_numeric(work["volume"], errors="coerce").tolist()]
+    if any(v is None for v in closes[-needed:]) or any(v is None for v in volumes[-needed:]):
+        return None
+    return closes, volumes
+
+
+def _playbook_avg(values: list) -> float | None:
+    clean = [float(v) for v in values if v is not None]
+    return (sum(clean) / len(clean)) if clean else None
+
+
+def _playbook_detect_volume_thrust(df: pd.DataFrame | None, side: str, anchor_vwap) -> str | None:
+    tail = _playbook_frame_tail_values(df, PLAYBOOK_VOLUME_THRUST_VOL_AVG_SESSIONS + 2)
+    if tail is None:
+        return None
+    closes, volumes = tail
+    avg_volume = _playbook_avg(volumes[-1 - PLAYBOOK_VOLUME_THRUST_VOL_AVG_SESSIONS : -1])
+    if not avg_volume or avg_volume <= 0 or volumes[-1] < PLAYBOOK_VOLUME_THRUST_MIN_VOL_MULT * avg_volume:
+        return None
+    move = (closes[-1] / closes[-2]) - 1.0 if closes[-2] else 0.0
+    vwap = _coerce_float(anchor_vwap)
+    if normalize_side(side) == "LONG":
+        if move < PLAYBOOK_VOLUME_THRUST_MIN_MOVE or (vwap is not None and closes[-1] <= vwap):
+            return None
+    else:
+        if move > -PLAYBOOK_VOLUME_THRUST_MIN_MOVE or (vwap is not None and closes[-1] >= vwap):
+            return None
+    return (
+        f"Volume thrust: {move * 100:+.1f}% on {volumes[-1] / avg_volume:.1f}x avg volume"
+        f"{' (trend side of anchor VWAP)' if vwap is not None else ''}"
+    )
+
+
+def _playbook_detect_quiet_pullback_resume(df: pd.DataFrame | None, side: str) -> str | None:
+    tail = _playbook_frame_tail_values(df, 55)
+    if tail is None:
+        return None
+    closes, volumes = tail
+    sma50 = _playbook_avg(closes[-50:])
+    avg_volume = _playbook_avg(volumes[-1 - PLAYBOOK_VOLUME_THRUST_VOL_AVG_SESSIONS : -1])
+    if sma50 is None or not avg_volume or avg_volume <= 0:
+        return None
+    is_long = normalize_side(side) == "LONG"
+    if (closes[-1] <= sma50) if is_long else (closes[-1] >= sma50):
+        return None
+    for j in range(-1 - PLAYBOOK_QUIET_PULLBACK_DOWN_SESSIONS, -1):
+        against = closes[j] <= closes[j - 1] if is_long else closes[j] >= closes[j - 1]
+        if not against or volumes[j] >= avg_volume:
+            return None
+    resumed = (closes[-1] > closes[-2]) if is_long else (closes[-1] < closes[-2])
+    if not resumed or volumes[-1] <= volumes[-2]:
+        return None
+    return (
+        f"Quiet pullback resume: {PLAYBOOK_QUIET_PULLBACK_DOWN_SESSIONS} low-volume counter-trend "
+        f"sessions, resumed {'up' if is_long else 'down'} on rising volume, trend side of SMA50"
+    )
+
+
+def enrich_priority_rows_with_playbook_studies(
+    priority_rows: list[dict] | None,
+    daily_frames_by_symbol: dict[str, pd.DataFrame] | None = None,
+    *,
+    ai_state: dict | None = None,
+    feature_rows_by_symbol: dict | None = None,
+) -> list[dict]:
+    """Isolated studies for the playbook-backfill discoveries.
+
+    - volume_thrust (both sides): >=1.5% move on >=2x 20d volume, trend side of
+      the anchor VWAP. Backfill edge vs baseline: +0.37/+0.49R (long) and
+      +0.13/+0.33R (short) across the two regime windows.
+    - second_dev_power_hold (LONG only): the live scan's second-stdev hold
+      streak >= 10 sessions. Long edge +0.32/+0.21R; the short mirror measured
+      negative in BOTH windows (snap-back risk), so it is deliberately not
+      recorded.
+    - quiet_pullback_resume (both sides): 3 low-volume counter-trend sessions
+      then a resumption bar, on the trend side of SMA50. Edge +0.24/+0.32R long,
+      +0.22/+0.34R short.
+    """
+    frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
+    ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
+    if not isinstance(ai_symbols, dict):
+        ai_symbols = {}
+    feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    study_rows: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_entry = ai_symbols.get(symbol)
+        symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+        side = normalize_side(row.get("side") or symbol_entry.get("side") or "")
+        df = frames.get(symbol)
+        current_anchor = symbol_entry.get("current_anchor")
+        anchor_vwap = current_anchor.get("vwap") if isinstance(current_anchor, dict) else None
+
+        detections: list[tuple[str, str, str | None]] = [
+            (
+                PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY,
+                "PLAYBOOK_VOLUME_THRUST",
+                _playbook_detect_volume_thrust(df, side, anchor_vwap),
+            ),
+            (
+                PLAYBOOK_QUIET_PULLBACK_STUDY_FAMILY,
+                "PLAYBOOK_QUIET_PULLBACK",
+                _playbook_detect_quiet_pullback_resume(df, side),
+            ),
+        ]
+        if side == "LONG":
+            streak_days = int(
+                row.get("mid_earnings_zone_streak_days", symbol_entry.get("mid_earnings_zone_streak_days", 0)) or 0
+            )
+            active_hold = bool(
+                row.get("mid_earnings_active_second_stdev_hold")
+                or symbol_entry.get("mid_earnings_active_second_stdev_hold")
+            )
+            if active_hold and streak_days >= PLAYBOOK_POWER_HOLD_MIN_STREAK_DAYS:
+                detections.append(
+                    (
+                        PLAYBOOK_SECOND_DEV_POWER_HOLD_STUDY_FAMILY,
+                        "PLAYBOOK_SECOND_DEV_POWER_HOLD",
+                        f"Second-stdev power hold: {streak_days} session(s) riding above UPPER_2",
+                    )
+                )
+
+        for family, tag, note in detections:
+            if not note or (symbol, side, family) in seen:
+                continue
+            seen.add((symbol, side, family))
+            study_rows.append(
+                _build_phase6_study_row(
+                    row,
+                    family=family,
+                    bucket=PLAYBOOK_STUDY_BUCKET,
+                    tag=tag,
+                    note=note,
+                    extra={"playbook_study_note": note},
+                )
+            )
     return study_rows
 
 

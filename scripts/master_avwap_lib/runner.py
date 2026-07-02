@@ -38,6 +38,35 @@ def _mark_latest_theta_enrichment_run(run_id: str) -> None:
         _latest_theta_enrichment_run_id = str(run_id or "")
 
 
+# The playbook study (hypothesis-family backfill + AI digest) refreshes weekly,
+# piggybacking on the after-close tracker window so the digest the AI reads is
+# never more than a week stale. A full run is ~2-3 minutes over the durable
+# daily-bar store and needs no IBKR session.
+PLAYBOOK_STUDY_REFRESH_DAYS = 7
+PLAYBOOK_STUDY_BACKFILL_SESSIONS = 60
+
+
+def refresh_playbook_study_if_stale(max_age_days: int = PLAYBOOK_STUDY_REFRESH_DAYS) -> bool:
+    from datetime import datetime as _dt
+
+    from setup_playbook_study import PLAYBOOK_AI_DIGEST_JSON, run_playbook_study
+
+    try:
+        age_days = (_dt.now() - _dt.fromtimestamp(PLAYBOOK_AI_DIGEST_JSON.stat().st_mtime)).days
+        if age_days < max_age_days:
+            return False
+    except OSError:
+        pass  # no digest yet -> build the first one
+    logging.info("Refreshing setup playbook study (digest missing or stale)...")
+    result = run_playbook_study(days=PLAYBOOK_STUDY_BACKFILL_SESSIONS, write_outputs=True)
+    logging.info(
+        "Playbook study refreshed: %s episodes, %s actionable combo(s) in the AI digest.",
+        len(result["episodes"]),
+        len(result["digest"]["actionable"]),
+    )
+    return True
+
+
 def _theta_enrichment_run_is_latest(run_id: str) -> bool:
     with _theta_enrichment_state_lock:
         return str(run_id or "") == _latest_theta_enrichment_run_id
@@ -1539,6 +1568,12 @@ def run_master(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    playbook_study_rows = enrich_priority_rows_with_playbook_studies(
+        priority_rows,
+        daily_frames_by_symbol,
+        ai_state=ai_state,
+        feature_rows_by_symbol=feature_rows_by_symbol,
+    )
     study_rows = [
         *htf_trend_study_rows,
         *hv_level_study_rows,
@@ -1547,6 +1582,7 @@ def run_master(
         *first_dev_breakout_study_rows,
         *second_dev_breakout_study_rows,
         *weekly_ema8_hold_study_rows,
+        *playbook_study_rows,
     ]
     apply_pre_earnings_priority_blocks(priority_rows, ai_state, feature_rows_by_symbol)
     apply_post_earnings_hard_rule_blocks(priority_rows, ai_state, feature_rows_by_symbol)
@@ -1746,6 +1782,20 @@ def run_master(
         # trader's own realized R (no-op until enough closed history exists).
         # tracker_payload is the just-updated in-memory tracker, so no reload.
         calibrate_expected_r_prior_anchors(tracker_payload=tracker_payload, persist=True)
+        try:
+            refresh_playbook_study_if_stale()
+        except Exception as exc:  # never let the study block the scan pipeline
+            logging.warning("Playbook study refresh failed (non-fatal): %s", exc)
+        try:
+            # BounceBot's alert-time learning state rides the same after-close
+            # window so day-trade tiers/mutes stay current even on days the
+            # bounce bot itself is not restarted.
+            from bounce_bot_lib.learning import refresh_bounce_learning_if_stale
+
+            if refresh_bounce_learning_if_stale():
+                logging.info("Bounce learning state refreshed after close.")
+        except Exception as exc:
+            logging.warning("Bounce learning refresh failed (non-fatal): %s", exc)
     else:
         if setup_tracker_skip_reason:
             logging.info(setup_tracker_skip_reason)

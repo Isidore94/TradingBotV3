@@ -4015,7 +4015,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[0]["priority_bucket"], "near_favorite_zone")
         self.assertTrue(priority_rows[0]["watch_only"])
 
-    def test_rejection_cap_skips_valid_mid_earnings_retest_second_band_history(self):
+    def test_rejection_cap_no_longer_penalizes_second_band_history(self):
+        # 2026-07-01 rebalance: repeated second-band tests measured POSITIVE in
+        # the tracker leaderboard, so the "repeated 2nd-dev tests" cap is gone
+        # for every family (the lone-tag risk lives in the hump penalty now).
         priority_rows = [
             {
                 "symbol": "AAOI",
@@ -4046,8 +4049,132 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         self.assertIsNone(priority_rows[0]["rejection_score_cap"])
         self.assertEqual(priority_rows[0]["score"], 449.0)
-        self.assertEqual(priority_rows[1]["rejection_score_cap"], 160.0)
-        self.assertEqual(priority_rows[1]["score"], 160.0)
+        self.assertIsNone(priority_rows[1]["rejection_score_cap"])
+        self.assertEqual(priority_rows[1]["score"], 310.0)
+
+    def test_second_band_penalty_hump_fades_for_band_riders(self):
+        self.assertEqual(master_avwap.compute_recent_second_band_penalty(0), 0)
+        self.assertEqual(master_avwap.compute_recent_second_band_penalty(1), 10)
+        self.assertEqual(master_avwap.compute_recent_second_band_penalty(2), 14)
+        self.assertEqual(master_avwap.compute_recent_second_band_penalty(3), 5)
+        self.assertEqual(master_avwap.compute_recent_second_band_penalty(4), 5)
+        self.assertEqual(master_avwap.compute_recent_second_band_penalty(5), 0)
+        self.assertEqual(master_avwap.compute_recent_second_band_penalty(8), 0)
+
+    def test_representative_stop_label_prefers_bounced_level_for_first_band_bounce(self):
+        self.assertEqual(
+            master_avwap._representative_stop_label_for_setup(
+                {"side": "LONG", "favorite_signals": ["BOUNCE_UPPER_1"]}
+            ),
+            "AVWAPE",
+        )
+        self.assertEqual(
+            master_avwap._representative_stop_label_for_setup(
+                {"side": "SHORT", "favorite_signals": ["BOUNCE_LOWER_1"]}
+            ),
+            "AVWAPE",
+        )
+        self.assertEqual(
+            master_avwap._representative_stop_label_for_setup(
+                {"side": "LONG", "favorite_signals": ["BOUNCE_VWAP"]}
+            ),
+            "LOWER_1",
+        )
+        self.assertEqual(master_avwap._representative_stop_label_for_setup({"side": "SHORT"}), "UPPER_1")
+
+    def test_stop_candidates_include_avwape_for_first_band_bounce_any_bucket(self):
+        symbol_entry = {
+            "current_anchor": {"vwap": 100.0, "bands": {"LOWER_1": 95.0, "UPPER_1": 105.0}},
+        }
+        bounce_row = {
+            "symbol": "TEST",
+            "side": "LONG",
+            "priority_bucket": "stalk",
+            "favorite_signals": ["BOUNCE_UPPER_1"],
+        }
+        labels = [c["label"] for c in master_avwap._find_tracker_stop_candidates(bounce_row, symbol_entry)]
+        self.assertIn("AVWAPE", labels)
+        plain_row = {"symbol": "TEST", "side": "LONG", "priority_bucket": "stalk", "favorite_signals": []}
+        labels = [c["label"] for c in master_avwap._find_tracker_stop_candidates(plain_row, symbol_entry)]
+        self.assertNotIn("AVWAPE", labels)
+
+    def _playbook_study_frame(self) -> pd.DataFrame:
+        rows = []
+        price = 100.0
+        for i, dt in enumerate(pd.bdate_range("2026-04-01", periods=60)):
+            if 56 <= i <= 58:
+                price *= 0.995  # quiet low-volume pullback
+                volume = 500_000
+            elif i == 59:
+                price *= 1.03  # thrust day on heavy volume
+                volume = 3_000_000
+            else:
+                price *= 1.005
+                volume = 1_000_000
+            rows.append(
+                {
+                    "datetime": dt,
+                    "open": price * 0.99,
+                    "high": price * 1.01,
+                    "low": price * 0.985,
+                    "close": price,
+                    "volume": volume,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def test_playbook_studies_detect_thrust_hold_and_quiet_pullback(self):
+        frame = self._playbook_study_frame()
+        priority_rows = [
+            {
+                "symbol": "TST",
+                "side": "LONG",
+                "priority_bucket": "favorite_setup",
+                "mid_earnings_active_second_stdev_hold": True,
+                "mid_earnings_zone_streak_days": 12,
+            }
+        ]
+        ai_state = {"symbols": {"TST": {"side": "LONG", "current_anchor": {"vwap": 100.0}}}}
+        study_rows = master_avwap.enrich_priority_rows_with_playbook_studies(
+            priority_rows,
+            {"TST": frame},
+            ai_state=ai_state,
+            feature_rows_by_symbol={},
+        )
+        families = {row["setup_family"] for row in study_rows}
+        self.assertEqual(
+            families,
+            {
+                master_avwap.PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY,
+                master_avwap.PLAYBOOK_QUIET_PULLBACK_STUDY_FAMILY,
+                master_avwap.PLAYBOOK_SECOND_DEV_POWER_HOLD_STUDY_FAMILY,
+            },
+        )
+        for row in study_rows:
+            self.assertEqual(row["priority_bucket"], master_avwap.PLAYBOOK_STUDY_BUCKET)
+            self.assertFalse(row["is_favorite_setup"])
+            self.assertEqual(row["favorite_signals"], [])
+
+    def test_playbook_power_hold_study_is_long_only(self):
+        frame = self._playbook_study_frame()
+        priority_rows = [
+            {
+                "symbol": "TST",
+                "side": "SHORT",
+                "priority_bucket": "favorite_setup",
+                "mid_earnings_active_second_stdev_hold": True,
+                "mid_earnings_zone_streak_days": 12,
+            }
+        ]
+        ai_state = {"symbols": {"TST": {"side": "SHORT", "current_anchor": {"vwap": 100.0}}}}
+        study_rows = master_avwap.enrich_priority_rows_with_playbook_studies(
+            priority_rows,
+            {"TST": frame},
+            ai_state=ai_state,
+            feature_rows_by_symbol={},
+        )
+        families = {row["setup_family"] for row in study_rows}
+        self.assertNotIn(master_avwap.PLAYBOOK_SECOND_DEV_POWER_HOLD_STUDY_FAMILY, families)
 
     def test_rejection_cap_allows_trade_ready_mid_earnings_first_dev_retest(self):
         priority_rows = [
@@ -5832,6 +5959,28 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(row["best_option"]["short_strike"], 185.0)
         self.assertEqual(row["best_option"]["long_strike"], 180.0)
         self.assertGreaterEqual(row["best_option"]["credit_width_ratio"], 0.20)
+
+    def test_daily_bar_cache_paths_avoid_windows_reserved_device_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir) / "daily_bars"
+            durable_dir = Path(temp_dir) / "durable"
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
+            with (
+                patch.object(master_avwap, "DAILY_BARS_CACHE_DIR", cache_dir),
+                patch.object(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", durable_dir),
+            ):
+                self.assertEqual(master_avwap._sanitize_symbol_for_filename("CON"), "CON_")
+                self.assertEqual(master_avwap._sanitize_symbol_for_filename("CON.A"), "CON_.A")
+                self.assertEqual(master_avwap._sanitize_symbol_for_filename("COM1"), "COM1_")
+                self.assertEqual(master_avwap._sanitize_symbol_for_filename("BRK.B"), "BRK.B")
+                self.assertEqual(master_avwap._daily_bar_cache_file("CON").name, "CON_.csv")
+                self.assertEqual(master_avwap._durable_daily_bar_file("CON").name, "CON_.parquet")
+
+                master_avwap._write_cached_daily_bar_frame("CON", _build_daily_bar_cache_frame())
+                self.assertTrue((cache_dir / "CON_.csv").exists())
+            master_avwap._DAILY_BAR_FRAME_CACHE.clear()
+            master_avwap._DAILY_BAR_CACHE_TOUCHED_AT.clear()
 
     def test_fetch_daily_bars_uses_recent_cache_before_live_refresh(self):
         with tempfile.TemporaryDirectory() as temp_dir:

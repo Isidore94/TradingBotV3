@@ -280,9 +280,23 @@ def snapshot_human_focus_picks(
     }
 
 
+_WINDOWS_RESERVED_FILENAME_STEMS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
 def _sanitize_symbol_for_filename(symbol: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in {".", "-"} else "_" for ch in str(symbol or "").strip().upper())
-    return cleaned or "UNKNOWN"
+    cleaned = cleaned or "UNKNOWN"
+    root, sep, suffix = cleaned.partition(".")
+    if root in _WINDOWS_RESERVED_FILENAME_STEMS:
+        cleaned = f"{root}_{sep}{suffix}" if sep else f"{root}_"
+    return cleaned
 
 
 def _load_durable_daily_frame(symbol: str, daily_bars_dir: Path = MASTER_AVWAP_DAILY_BARS_DIR) -> pd.DataFrame:

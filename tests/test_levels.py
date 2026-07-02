@@ -287,6 +287,14 @@ class LevelModuleTests(unittest.TestCase):
         frame = _daily_frame(days=10)
         self.assertEqual(levels.find_relative_pivots(frame, lookback=8), [])
 
+    def test_level_store_path_avoids_windows_reserved_device_names(self):
+        levels_dir = Path("levels")
+        self.assertEqual(levels.level_store_path(levels_dir, "CON").name, "CON_.json")
+        self.assertEqual(levels.level_store_path(levels_dir, "NUL").name, "NUL_.json")
+        self.assertEqual(levels.level_store_path(levels_dir, "COM1").name, "COM1_.json")
+        self.assertEqual(levels.level_store_path(levels_dir, "BRK.B").name, "BRKB.json")
+        self.assertEqual(levels.level_store_path(levels_dir, "AAPL").name, "AAPL.json")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,15 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
+def test_human_focus_durable_bar_filename_avoids_windows_reserved_device_names():
+    from human_focus_tracking import _sanitize_symbol_for_filename
+
+    assert _sanitize_symbol_for_filename("CON") == "CON_"
+    assert _sanitize_symbol_for_filename("CON.A") == "CON_.A"
+    assert _sanitize_symbol_for_filename("LPT1") == "LPT1_"
+    assert _sanitize_symbol_for_filename("BRK.B") == "BRK.B"
+
+
 def test_snapshot_human_focus_picks_is_idempotent_and_force_merges(tmp_path):
     from human_focus_tracking import snapshot_human_focus_picks
 

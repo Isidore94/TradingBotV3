@@ -837,8 +837,23 @@ def levels_blocking_entry(
     return [level for level in nearby if float(level.get("distance") or 0.0) >= 0]
 
 
+# Windows reserved device names (CON, NUL, ...): a path like levels/CON.json
+# resolves to the console device, so reads block forever instead of failing.
+# CON is a real NYSE ticker, so this is hit by any universe-wide scan.
+_WINDOWS_RESERVED_FILENAME_STEMS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
 def level_store_path(levels_dir: Path, symbol: str) -> Path:
     safe_symbol = "".join(ch for ch in str(symbol or "").strip().upper() if ch.isalnum() or ch in {"_", "-"})
+    if safe_symbol in _WINDOWS_RESERVED_FILENAME_STEMS:
+        safe_symbol = f"{safe_symbol}_"
     return Path(levels_dir) / f"{safe_symbol}.json"
 
 
