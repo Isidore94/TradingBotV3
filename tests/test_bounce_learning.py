@@ -158,6 +158,50 @@ def test_compact_candidates_csv_noops_below_threshold(tmp_path):
     assert result["compacted"] is False
 
 
+def test_priority_watchlist_emphasis_cycle_logic():
+    from types import SimpleNamespace
+
+    from bounce_bot_lib.legacy import BounceBot
+
+    stub = SimpleNamespace(
+        longs=["aapl", " nvda "],
+        shorts=["tsla"],
+        _human_focus_symbols=lambda: {"HOOD"},
+        _scan_cycle_index=0,
+        latest_bars={},
+    )
+    priority = BounceBot.get_priority_scan_symbols(stub)
+    assert priority == {"AAPL", "NVDA", "TSLA", "HOOD"}
+
+    # Cycle 0 refreshes background; the next two defer it; cycle 3 refreshes.
+    refresh_pattern = []
+    for cycle in range(4):
+        stub._scan_cycle_index = cycle
+        refresh_pattern.append(BounceBot._is_background_refresh_cycle(stub))
+    assert refresh_pattern == [True, False, False, True]
+
+
+def test_prune_latest_bars_keeps_only_background_on_off_cycles():
+    from types import SimpleNamespace
+
+    from bounce_bot_lib.legacy import BounceBot
+
+    bars = {
+        "AAPL|5 D|5 mins": ["p"],  # priority -> refetch
+        "SPY|5 D|5 mins": ["b"],  # benchmark -> refetch
+        "XLK|5 D|5 mins": ["e"],  # sector ETF -> refetch
+        "ZETA|5 D|5 mins": ["bg"],  # background -> keep
+        "ZETA": ["bg"],  # plain-symbol alias key -> keep
+    }
+    stub = SimpleNamespace(latest_bars=dict(bars))
+    BounceBot._prune_latest_bars_for_cycle(stub, False, {"ZETA"})
+    assert set(stub.latest_bars) == {"ZETA|5 D|5 mins", "ZETA"}
+
+    stub = SimpleNamespace(latest_bars=dict(bars))
+    BounceBot._prune_latest_bars_for_cycle(stub, True, {"ZETA"})
+    assert stub.latest_bars == {}
+
+
 def test_format_bounce_alert_message_includes_tier_plan_and_reasons():
     from bounce_bot_lib.legacy import _format_bounce_alert_message
 

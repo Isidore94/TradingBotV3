@@ -241,6 +241,15 @@ BOUNCE_TYPE_LABELS = {
 }
 BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 
+# Priority watchlist emphasis (2026-07-02): longs.txt / shorts.txt (the
+# trader's live intraday RS/RW dumps) and human focus picks get the full
+# treatment every candle; everything else (master AVWAP D1 watch/upgrade
+# symbols) is "background" and only refreshes every N cycles, with its cached
+# 5-min bars surviving the off-cycles. Cuts IB historical-bar requests roughly
+# in proportion to the background share of the scan set.
+PRIORITY_WATCHLIST_EMPHASIS = True
+BACKGROUND_SYMBOL_REFRESH_EVERY_CYCLES = 3
+
 # Connection & Request settings
 MAX_CONCURRENT_REQUESTS = 1
 REQUEST_DELAY = 0.1  # seconds between IB historical data requests
@@ -1824,6 +1833,7 @@ class BounceBot(EWrapper, EClient):
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
         self.scanning_enabled = bool(start_scanning_enabled)
         self.scanning_lock = threading.Lock()
+        self._scan_cycle_index = 0
 
         self.master_avwap_events = {}
         self.master_avwap_last_scan_date = None
@@ -2928,6 +2938,36 @@ class BounceBot(EWrapper, EClient):
             if str(item or "").strip()
         }
         return base_symbols | set(self.get_master_avwap_d1_watch_symbols()) | self._human_focus_symbols()
+
+    def get_priority_scan_symbols(self):
+        """Hand-curated names that deserve every-candle treatment: the trader's
+        longs.txt / shorts.txt intraday dumps plus human focus picks."""
+        base_symbols = {
+            str(item or "").strip().upper()
+            for item in (self.longs + self.shorts)
+            if str(item or "").strip()
+        }
+        return base_symbols | self._human_focus_symbols()
+
+    def _is_background_refresh_cycle(self):
+        if not PRIORITY_WATCHLIST_EMPHASIS:
+            return True
+        every = max(1, int(BACKGROUND_SYMBOL_REFRESH_EVERY_CYCLES))
+        return int(getattr(self, "_scan_cycle_index", 0)) % every == 0
+
+    def _prune_latest_bars_for_cycle(self, refresh_background, background_symbols):
+        """Cycle-start bar-cache policy: priority symbols, SPY and the sector/
+        industry ETFs always refetch; background symbols keep their cached bars
+        through off-cycles so the RRS scan costs them nothing."""
+        if refresh_background or not self.latest_bars:
+            self.latest_bars = {}
+            return
+        keep = {str(s or "").strip().upper() for s in background_symbols}
+        self.latest_bars = {
+            key: bars
+            for key, bars in self.latest_bars.items()
+            if str(key).split("|", 1)[0].strip().upper() in keep
+        }
 
     def _master_avwap_trigger_float(self, value):
         try:
@@ -7229,7 +7269,12 @@ class BounceBot(EWrapper, EClient):
                 self.emit_master_avwap_d1_flags()
                 self.alerted_symbols.clear()
                 self.symbol_metrics = {}
-                self.latest_bars = {}
+                self._scan_cycle_index = int(getattr(self, "_scan_cycle_index", -1)) + 1
+                all_symbols = self.get_scan_symbol_set()
+                priority_symbols = self.get_priority_scan_symbols() & all_symbols
+                background_symbols = all_symbols - priority_symbols
+                refresh_background = self._is_background_refresh_cycle()
+                self._prune_latest_bars_for_cycle(refresh_background, background_symbols)
                 self.build_atr_cache()
 
                 # Log strongest/weakest names for key intraday timeframes each cycle.
@@ -7240,9 +7285,23 @@ class BounceBot(EWrapper, EClient):
 
                 d1_watch_symbols = set(self.get_master_avwap_d1_watch_symbols())
                 monitored_symbols = self.get_monitored_extreme_symbols() | d1_watch_symbols
-                logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
-                all_symbols = self.get_scan_symbol_set()
                 pending_outcome_symbols = self._pending_bounce_symbols()
+                if PRIORITY_WATCHLIST_EMPHASIS and not refresh_background:
+                    # Off-cycle: only priority names and open-outcome symbols get
+                    # fresh bounce-detection requests; background names wait for
+                    # their refresh cycle (their cached bars fed the RRS scan).
+                    deferred = len(background_symbols - pending_outcome_symbols)
+                    logging.info(
+                        "Priority emphasis: scanning %s priority symbol(s); deferring %s background "
+                        "symbol(s) until refresh cycle (every %s candles).",
+                        len(priority_symbols),
+                        deferred,
+                        BACKGROUND_SYMBOL_REFRESH_EVERY_CYCLES,
+                    )
+                    scannable_symbols = priority_symbols | (background_symbols & pending_outcome_symbols)
+                else:
+                    scannable_symbols = set(all_symbols)
+                logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
                 processed_symbols = set()
                 outcome_update_symbols = set()
                 enabled_bounce_types = {
@@ -7254,14 +7313,14 @@ class BounceBot(EWrapper, EClient):
                 for sym in sorted(monitored_symbols):
                     if not self.is_scanning_enabled():
                         break
-                    if sym not in all_symbols or self.atr_cache.get(sym) is None:
+                    if sym not in scannable_symbols or self.atr_cache.get(sym) is None:
                         continue
                     self.request_and_detect_bounce(sym, allowed_bounce_types=enabled_bounce_types)
                     processed_symbols.add(sym)
                     outcome_update_symbols.add(sym)
 
                 # 2) Then scan all remaining symbols for non-EMA-8/15 bounce types.
-                for sym in sorted(all_symbols - processed_symbols):
+                for sym in sorted(scannable_symbols - processed_symbols):
                     if not self.is_scanning_enabled():
                         break
                     if self.atr_cache.get(sym) is None:
