@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QFrame, QTabWidget, QVBoxLayout
 
+from ui.panels.daytrade_tracker_panel import DaytradeTrackerPanel
 from ui.panels.master_market_prep_panel import MasterMarketPrepPanel
+from ui.panels.setup_docs_panel import SetupDocsPanel
 from ui.panels.setup_tracker_panel import SetupTrackerPanel
 from ui.panels.ticker_lookup_panel import TickerLookupPanel
 from ui.widgets.section_header import SectionHeader
@@ -15,9 +17,13 @@ class ResearchPanel(QFrame):
         tabs = QTabWidget()
         self.market_prep_panel = MasterMarketPrepPanel()
         self.setup_tracker_panel = SetupTrackerPanel()
+        self.setup_docs_panel = SetupDocsPanel()
+        self.daytrade_tracker_panel = DaytradeTrackerPanel()
         self.ticker_lookup_panel = TickerLookupPanel()
         tabs.addTab(self.market_prep_panel, "Master AVWAP Market Prep")
         tabs.addTab(self.setup_tracker_panel, "Setup Tracker")
+        tabs.addTab(self.setup_docs_panel, "Setup Playbook")
+        tabs.addTab(self.daytrade_tracker_panel, "Day Trade Tracker")
         tabs.addTab(self.ticker_lookup_panel, "Ticker Lookup")
 
         layout = QVBoxLayout(self)

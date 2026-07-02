@@ -149,6 +149,14 @@ EMA_FRESH_TOUCH_LOOKBACK_BARS = 3
 EMA_FRESH_TOUCH_BUFFER_ATR = 0.03
 CONSECUTIVE_CANDLES = 6  # Number of candles price must respect level before bounce
 CHECK_CONSECUTIVE_CANDLES = True  # Parameter to enable/disable this check
+# Defaults rebalanced 2026-07-02 from the outcome tracker's full history
+# (learning rows keep measuring disabled types, so these stay evidence-based):
+# - dynamic_vwap bands turned ON: dynamic_vwap_lower_band shorts were the best
+#   measured segment (+1.42R avg, n=18, MAE -0.64); upper-band longs +0.78R (n=30).
+# - 10_candle turned ON: positive both sides (+0.34R long n=66, +0.47R short n=34).
+# - eod_vwap_upper/lower band and vwap_lower_band stay OFF: measured -0.82R/-0.25R/
+#   -0.06R. ema_21 stays OFF (-0.60R shorts). Direction/time-specific mutes are
+#   handled by bounce_bot_lib.learning at alert time, not by these type toggles.
 CHECK_BOUNCE_VVWAP = True
 CHECK_BOUNCE_DYNAMIC_VVWAP = True
 CHECK_BOUNCE_EOD_VWAP = True
@@ -157,13 +165,13 @@ CHECK_BOUNCE_IMPULSE_RETEST_VWAP_EOD = True
 CHECK_BOUNCE_8_EMA = True
 CHECK_BOUNCE_15_EMA = True
 CHECK_BOUNCE_21_EMA = False
-CHECK_BOUNCE_10_CANDLE = False
+CHECK_BOUNCE_10_CANDLE = True
 CHECK_BOUNCE_PREV_DAY_HIGH = True
 CHECK_BOUNCE_PREV_DAY_LOW = True
 CHECK_BOUNCE_VWAP_UPPER_BAND = False
 CHECK_BOUNCE_VWAP_LOWER_BAND = False
-CHECK_BOUNCE_DYNAMIC_VWAP_UPPER_BAND = False
-CHECK_BOUNCE_DYNAMIC_VWAP_LOWER_BAND = False
+CHECK_BOUNCE_DYNAMIC_VWAP_UPPER_BAND = True
+CHECK_BOUNCE_DYNAMIC_VWAP_LOWER_BAND = True
 CHECK_BOUNCE_EOD_VWAP_UPPER_BAND = False
 CHECK_BOUNCE_EOD_VWAP_LOWER_BAND = False
 LOGGING_MODE = True
@@ -1021,6 +1029,38 @@ def _bounce_rrs_alignment(row: dict) -> str:
     return "unknown"
 
 
+def _format_bounce_alert_message(symbol, direction, levels_list, event_row, quality) -> str:
+    """Alert text: tier + confirmation + trade plan + the measured reasons."""
+    row = event_row if isinstance(event_row, dict) else {}
+    quality = quality if isinstance(quality, dict) else {}
+    tier = str(quality.get("tier") or "B")
+    parts = [f"[{tier}-TIER] {symbol}: Bounce confirmed ({direction}) from {levels_list}"]
+
+    def _num(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    entry = _num(row.get("entry_price"))
+    stop = _num(row.get("stop_price"))
+    risk = _num(row.get("risk_per_share"))
+    target_1r = _num(row.get("target_1r"))
+    if entry is not None and stop is not None:
+        plan = f"entry {entry:.2f}, stop {stop:.2f}"
+        if risk:
+            plan += f" (risk {risk:.2f})"
+        parts.append(plan)
+    if target_1r is not None:
+        # Exit discipline from the tracker: most bounces touch +1R (60-80%) but
+        # round-trip; harvesting the partial is the measured edge.
+        parts.append(f"take 50% at +1R {target_1r:.2f}, trail the rest")
+    reasons = quality.get("reasons") or []
+    if reasons:
+        parts.append("why: " + "; ".join(reasons[:3]))
+    return " | ".join(parts)
+
+
 def _latest_bounce_outcome_rows(outcomes_df: pd.DataFrame) -> pd.DataFrame:
     if outcomes_df.empty or "event_id" not in outcomes_df.columns:
         return pd.DataFrame()
@@ -1805,6 +1845,27 @@ class BounceBot(EWrapper, EClient):
         self.symbol_classification_cache = {}
         self._load_symbol_classification_cache()
 
+        # Learning-loop maintenance runs off-thread so startup stays instant:
+        # refresh the alert-time learning state if stale (daily) and compact
+        # the candidates CSV when the JSON-blob columns have bloated it.
+        threading.Thread(target=self._run_bounce_learning_maintenance, daemon=True).start()
+
+    def _run_bounce_learning_maintenance(self):
+        try:
+            from bounce_bot_lib.learning import (
+                compact_bounce_candidates_csv,
+                refresh_bounce_learning_if_stale,
+            )
+
+            compact_bounce_candidates_csv(
+                INTRADAY_BOUNCE_CANDIDATES_CSV,
+                max_age_days=365,
+                min_bytes_to_bother=150_000_000,
+            )
+            if refresh_bounce_learning_if_stale():
+                logging.info("Bounce learning state refreshed at startup.")
+        except Exception as exc:  # maintenance must never break the bot
+            logging.warning("Bounce learning maintenance failed: %s", exc)
 
     def _load_pending_bounce_outcomes(self):
         if not INTRADAY_BOUNCE_OUTCOME_STATE_JSON.exists():
@@ -1945,6 +2006,18 @@ class BounceBot(EWrapper, EClient):
         sector_etf = resolve_sector_etf(sector_key, self.sector_etf_map) if sector_key else ""
         industry_etf = resolve_industry_ref_etf(industry_key, sector_key) if industry_key else ""
         spy_rrs = self._extract_rrs_entry(payload, "results", symbol)
+        if not spy_rrs:
+            # ``results`` only carries threshold-crossers; fall back to the
+            # full-universe map so learning rows always capture the RRS value.
+            rrs_all = payload.get("rrs_all") or {}
+            cached = rrs_all.get(str(symbol or "").strip().upper())
+            if cached:
+                rrs_value, power_index = cached
+                spy_rrs = {
+                    "signal": "",
+                    "rrs": self._to_float_or_blank(rrs_value),
+                    "power_index": self._to_float_or_blank(power_index),
+                }
         sector_rrs = self._extract_rrs_entry(payload, "results_sector", symbol)
         industry_rrs = self._extract_rrs_entry(payload, "results_industry", symbol)
         symbol_context = {}
@@ -1968,6 +2041,29 @@ class BounceBot(EWrapper, EClient):
             "watchlist_bias": self.get_symbol_direction(symbol),
             "symbol_context": symbol_context,
         }
+
+    def _evaluate_bounce_alert_quality(self, direction, levels, event_row):
+        """Tier + mute verdict for a confirmed bounce, from the learning state."""
+        try:
+            from bounce_bot_lib.learning import (
+                evaluate_bounce_quality,
+                load_bounce_learning_state,
+                time_bucket_for,
+            )
+
+            row = event_row if isinstance(event_row, dict) else {}
+            return evaluate_bounce_quality(
+                load_bounce_learning_state(),
+                direction=direction,
+                bounce_types=_bounce_type_keys_from_levels(levels or {}),
+                time_bucket=time_bucket_for(get_market_local_now()),
+                market_environment=str(row.get("market_environment") or ""),
+                priority_bucket=str(row.get("master_avwap_priority_bucket") or ""),
+                focus_label=str(row.get("master_avwap_focus_label") or ""),
+            )
+        except Exception as exc:  # learning must never block an alert
+            logging.warning("Bounce learning evaluation failed (alerting anyway): %s", exc)
+            return {"tier": "B", "muted": False, "mute_reasons": [], "reasons": []}
 
     def _make_bounce_event_id(self, symbol, direction, bounce_candle, levels):
         candle_time = ""
@@ -4934,6 +5030,13 @@ class BounceBot(EWrapper, EClient):
             "spy_move_ratio": spy_move_ratio,
             "environment_scan": environment_scan,
             "excluded_earnings_reaction_symbols": earnings_reaction_symbols,
+            # Every scanned symbol's SPY RRS, not just threshold-crossers.
+            # ``results`` only holds alert candidates, which left the learning
+            # rows' rrs fields blank for ~85% of bounces ("unknown" alignment).
+            "rrs_all": {
+                str(symbol).strip().upper(): (rrs_value, power_index)
+                for symbol, rrs_value, power_index in all_scores
+            },
         }
         if emit_gui:
             self._emit_master_avwap_focus_rrs_alerts(symbol_context, threshold, timeframe_key)
@@ -6711,7 +6814,6 @@ class BounceBot(EWrapper, EClient):
             reason=None,
             learning_only=False,
         ):
-            bounce_msg = f"{symbol}: Bounce confirmed ({direction}) from {levels_list}"
             event_row = self._log_bounce_candidate_event(
                 "confirmed",
                 symbol,
@@ -6736,8 +6838,20 @@ class BounceBot(EWrapper, EClient):
                 current_candle.to_dict() if isinstance(current_candle, pd.Series) else current_candle,
                 candidate_id,
             )
-            if learning_only:
-                self.log_symbol(symbol, f"LEARNING_ONLY: {bounce_msg}")
+
+            # Learning-loop verdict: tier from measured segment performance, and
+            # an evidence-based mute for proven-negative segments. Muted bounces
+            # keep recording (outcome already registered above) so a segment can
+            # earn its way back; human focus picks are never muted.
+            quality = self._evaluate_bounce_alert_quality(direction, levels, event_row)
+            human_pick = bool(event_row.get("human_focus_pick"))
+            muted_by_learning = bool(quality.get("muted") and not human_pick)
+            bounce_msg = _format_bounce_alert_message(
+                symbol, direction, levels_list, event_row, quality
+            )
+            if learning_only or muted_by_learning:
+                mute_note = "; ".join(quality.get("mute_reasons") or []) or "learning-only candidate"
+                self.log_symbol(symbol, f"LEARNING_ONLY [{quality.get('tier', '?')}]: {bounce_msg} | {mute_note}")
                 return
 
             bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
