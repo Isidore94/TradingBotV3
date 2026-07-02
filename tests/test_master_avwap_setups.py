@@ -4155,6 +4155,46 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertFalse(row["is_favorite_setup"])
             self.assertEqual(row["favorite_signals"], [])
 
+    def test_focus_feed_persists_study_setups(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "focus.json"
+            priority_rows = [
+                {
+                    "symbol": "AAPL",
+                    "side": "LONG",
+                    "score": 200.0,
+                    "priority_bucket": "favorite_setup",
+                    "setup_family": "avwape_to_1stdev",
+                }
+            ]
+            study_rows = [
+                {
+                    "symbol": "NVDA",
+                    "side": "LONG",
+                    "score": 120.0,
+                    "priority_bucket": master_avwap.PLAYBOOK_STUDY_BUCKET,
+                    "setup_family": master_avwap.PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY,
+                },
+                {  # duplicate symbol/side/family collapses to one entry
+                    "symbol": "NVDA",
+                    "side": "LONG",
+                    "score": 120.0,
+                    "priority_bucket": master_avwap.PLAYBOOK_STUDY_BUCKET,
+                    "setup_family": master_avwap.PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY,
+                },
+            ]
+            master_avwap.write_master_avwap_focus_feed(path, priority_rows, {}, study_rows=study_rows)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            entries = payload.get("study_setups")
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["symbol"], "NVDA")
+            self.assertEqual(entries[0]["priority_bucket"], master_avwap.PLAYBOOK_STUDY_BUCKET)
+            self.assertEqual(entries[0]["setup_family"], master_avwap.PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY)
+            # empty/omitted study rows stay backward compatible
+            master_avwap.write_master_avwap_focus_feed(path, priority_rows, {})
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload.get("study_setups"), [])
+
     def test_playbook_power_hold_study_is_long_only(self):
         frame = self._playbook_study_frame()
         priority_rows = [

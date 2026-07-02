@@ -19546,6 +19546,9 @@ def _build_master_avwap_bucket_upgrade_alert_payload(
             "priority_bucket": current_bucket,
             "bucket": current_bucket,
             "priority_score": priority_score,
+            # Expected-R rides along so downstream consumers (BounceBot's D1
+            # focus alerts) can gate on outcome-calibrated evidence.
+            "expected_r": _coerce_float(row.get("expected_r") or symbol_state.get("expected_r")),
             "setup_family": row.get("setup_family") or symbol_state.get("setup_family") or "",
             "favorite_zone": row.get("favorite_zone") or symbol_state.get("favorite_zone") or "",
             "current_band_zone": row.get("current_band_zone") or symbol_state.get("current_band_zone") or "",
@@ -19560,6 +19563,7 @@ def _build_master_avwap_bucket_upgrade_alert_payload(
             "priority_bucket": current_bucket,
             "previous_bucket": previous_bucket,
             "priority_score": priority_score,
+            "expected_r": event["expected_r"],
             "setup_family": event["setup_family"],
             "favorite_zone": event["favorite_zone"],
             "current_band_zone": event["current_band_zone"],
@@ -20118,6 +20122,7 @@ def write_favorite_zone_watchlist_outputs(
     theta_put_rows: list[dict],
     theta_pcs_rows: list[dict],
     ai_state: dict,
+    study_rows: list[dict] | None = None,
     now: datetime | None = None,
     window_start: str | None = None,
     window_end: str | None = None,
@@ -20144,7 +20149,7 @@ def write_favorite_zone_watchlist_outputs(
             "d1_watchlist": None,
         }
 
-    write_master_avwap_focus_feed(focus_path, priority_rows, ai_state)
+    write_master_avwap_focus_feed(focus_path, priority_rows, ai_state, study_rows=study_rows)
     d1_payload = update_master_avwap_d1_watchlist(
         d1_watchlist_path,
         priority_rows,
@@ -28181,7 +28186,12 @@ def _normalize_focus_priority_entry(entry: dict, default_bucket: str = "") -> di
         "priority_score": _coerce_float(entry.get("priority_score")) or 0.0,
     }
 
-def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_state: dict) -> None:
+def write_master_avwap_focus_feed(
+    path: Path,
+    priority_rows: list[dict],
+    ai_state: dict,
+    study_rows: list[dict] | None = None,
+) -> None:
     ranked_rows = sorted(priority_rows, key=lambda row: (-row["score"], row["symbol"]))
     favorite_rows = [
         row for row in ranked_rows
@@ -28407,6 +28417,26 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         _build_entry(row, "stdev_retest_tracking", idx + 1)
         for idx, row in enumerate(stdev_tracking_rows)
     ]
+    # Study-family rows (weekly 8EMA hold, dev breakouts, playbook discoveries)
+    # persist alongside the priority buckets so the desk shows them after a
+    # reload, not only in the run that produced them. One entry per
+    # symbol/side/family; each keeps its study bucket for filtering.
+    study_entries = []
+    seen_study_keys: set[tuple[str, str, str]] = set()
+    for row in study_rows or []:
+        if not isinstance(row, dict):
+            continue
+        study_key = (
+            str(row.get("symbol") or "").strip().upper(),
+            normalize_side(row.get("side")),
+            str(row.get("setup_family") or ""),
+        )
+        if not study_key[0] or study_key in seen_study_keys:
+            continue
+        seen_study_keys.add(study_key)
+        bucket = str(row.get("priority_bucket") or "study").strip() or "study"
+        study_entries.append(_build_entry(row, bucket, len(study_entries) + 1))
+
     symbol_map = {}
     for entry in (
         favorites
@@ -28433,6 +28463,7 @@ def write_master_avwap_focus_feed(path: Path, priority_rows: list[dict], ai_stat
         "top_pattern_tracking": top_pattern_tracking_entries,
         "sma_breakout_tracking": sma_breakout_tracking_entries,
         "stdev_retest_tracking": stdev_tracking_entries,
+        "study_setups": study_entries,
         "symbols": symbol_map,
     }
     save_json(path, payload)

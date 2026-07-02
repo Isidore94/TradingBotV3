@@ -250,6 +250,14 @@ BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 PRIORITY_WATCHLIST_EMPHASIS = True
 BACKGROUND_SYMBOL_REFRESH_EVERY_CYCLES = 3
 
+# D1 focus alert gate (2026-07-02): only surface D1 flags whose upgrade lands
+# in an actionable bucket (the near -> favorite/high-conviction move, i.e. the
+# A/S-caliber transition) AND that clear the evidence bar - non-negative
+# Expected-R when the master scan provides it, and no learning-state mute for
+# the context. Suppressed flags are still logged so the decision is auditable.
+D1_FLAG_ACTIONABLE_BUCKETS = {"favorite_setup", "high_conviction"}
+D1_FLAG_MIN_EXPECTED_R = 0.0
+
 # Connection & Request settings
 MAX_CONCURRENT_REQUESTS = 1
 REQUEST_DELAY = 0.1  # seconds between IB historical data requests
@@ -3214,6 +3222,48 @@ class BounceBot(EWrapper, EClient):
         )
         return len(active_events)
 
+    def _should_emit_d1_flag(self, event):
+        """Data-backed gate for D1 focus alerts. Returns (emit, reason)."""
+        symbol = str(event.get("symbol") or "").strip().upper()
+        if self._human_focus_side_for_symbol(symbol):
+            return True, "human focus pick"
+
+        bucket = str(event.get("priority_bucket") or event.get("bucket") or "").strip().lower()
+        if bucket and bucket not in D1_FLAG_ACTIONABLE_BUCKETS:
+            return False, f"upgrade lands in '{bucket}', not an actionable bucket"
+
+        expected_r = None
+        try:
+            raw_expected = event.get("expected_r")
+            expected_r = float(raw_expected) if raw_expected not in (None, "") else None
+        except (TypeError, ValueError):
+            expected_r = None
+        if expected_r is not None and expected_r < D1_FLAG_MIN_EXPECTED_R:
+            return False, f"expected R {expected_r:+.2f} below {D1_FLAG_MIN_EXPECTED_R:+.2f}"
+
+        try:
+            from bounce_bot_lib.learning import (
+                evaluate_bounce_quality,
+                load_bounce_learning_state,
+                time_bucket_for,
+            )
+
+            focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
+            focus_label = self._describe_master_avwap_focus(focus_entry) if isinstance(focus_entry, dict) else ""
+            quality = evaluate_bounce_quality(
+                load_bounce_learning_state(),
+                direction=str(event.get("side") or event.get("direction") or "").lower(),
+                time_bucket=time_bucket_for(get_market_local_now()),
+                market_environment=self.get_market_environment(),
+                priority_bucket=bucket,
+                focus_label=focus_label,
+            )
+            if quality.get("muted"):
+                return False, "; ".join(quality.get("mute_reasons") or ["learning-state mute"])
+        except Exception as exc:  # gate must fail open, never block on errors
+            logging.debug("D1 flag learning check skipped: %s", exc)
+        return True, ""
+
     def emit_master_avwap_d1_flags(self):
         events = self._build_master_avwap_d1_flag_events()
         today_iso = datetime.now().date().isoformat()
@@ -3232,6 +3282,10 @@ class BounceBot(EWrapper, EClient):
             if not direction:
                 direction = self.get_symbol_direction(symbol) or "watch"
             message = self._format_master_avwap_d1_flag_event({**event, "direction": direction})
+            emit, suppress_reason = self._should_emit_d1_flag(event)
+            if not emit:
+                self.log_symbol(symbol, f"D1_FLAG_SUPPRESSED: {message} | {suppress_reason}")
+                continue
             gui_tag = "d1_flag_long" if direction == "long" else "d1_flag_short" if direction == "short" else "d1_flag_watch"
             self.gui_callback(message, gui_tag)
             self.log_symbol(symbol, message)

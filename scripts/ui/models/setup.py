@@ -15,6 +15,10 @@ SETUP_BUCKET_LABELS = {
     "study_htf_trend": "Study",
     "study_relative_avwap": "Study",
     "study_phase6": "Study",
+    "study_weekly_ema8_hold": "Study",
+    # Playbook-backfill discoveries get their own label so the regime-robust
+    # families (volume thrust, power hold, quiet pullback) stand out.
+    "study_playbook": "Playbook",
     "study": "Study",
 }
 
@@ -25,6 +29,7 @@ DEFAULT_SETUP_BUCKET_FILTER_LABELS = (
     "Post Earnings",
     "SMA Track",
     "Stdev Track",
+    "Playbook",
     "Study",
 )
 

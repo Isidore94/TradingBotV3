@@ -202,6 +202,46 @@ def test_prune_latest_bars_keeps_only_background_on_off_cycles():
     assert stub.latest_bars == {}
 
 
+def test_d1_flag_gate_requires_actionable_bucket_and_evidence():
+    from types import SimpleNamespace
+
+    from bounce_bot_lib.legacy import BounceBot
+
+    stub = SimpleNamespace(
+        _human_focus_side_for_symbol=lambda symbol: "",
+        master_avwap_focus_map={},
+        _describe_master_avwap_focus=lambda entry: "",
+        get_market_environment=lambda: "bullish_strong",
+    )
+
+    emit, reason = BounceBot._should_emit_d1_flag(
+        stub, {"symbol": "AAA", "priority_bucket": "near_favorite_zone", "side": "LONG"}
+    )
+    assert emit is False and "not an actionable bucket" in reason
+
+    emit, reason = BounceBot._should_emit_d1_flag(
+        stub, {"symbol": "AAA", "priority_bucket": "favorite_setup", "side": "LONG", "expected_r": -0.4}
+    )
+    assert emit is False and "expected R" in reason
+
+    emit, _reason = BounceBot._should_emit_d1_flag(
+        stub, {"symbol": "AAA", "priority_bucket": "favorite_setup", "side": "LONG", "expected_r": 0.25}
+    )
+    assert emit is True
+
+    # human focus picks always alert, regardless of bucket
+    focus_stub = SimpleNamespace(
+        _human_focus_side_for_symbol=lambda symbol: "LONG",
+        master_avwap_focus_map={},
+        _describe_master_avwap_focus=lambda entry: "",
+        get_market_environment=lambda: "bullish_strong",
+    )
+    emit, reason = BounceBot._should_emit_d1_flag(
+        focus_stub, {"symbol": "AAA", "priority_bucket": "near_favorite_zone", "side": "LONG"}
+    )
+    assert emit is True and reason == "human focus pick"
+
+
 def test_migrate_csv_header_widens_old_files(tmp_path):
     from bounce_bot_lib.legacy import _migrate_csv_header
 

@@ -50,6 +50,10 @@ def rows_from_run_result(run_result: dict[str, Any] | None) -> list[SetupRow]:
         "relative_avwap_study_rows",
         "htf_trend_study_rows",
         "phase6_study_rows",
+        "first_dev_breakout_study_rows",
+        "second_dev_breakout_study_rows",
+        "weekly_ema8_hold_study_rows",
+        "playbook_study_rows",
     ):
         for raw in _iter_dicts(run_result.get(source_key)):
             row = setup_row_from_mapping(raw, theta_by_symbol=theta_by_symbol, source=source_key)
@@ -75,6 +79,7 @@ def _rows_from_focus_payload(payload: Any) -> list[SetupRow]:
         "post_earnings_plays",
         "sma_breakout_tracking",
         "stdev_retest_tracking",
+        "study_setups",
     ):
         for raw in _iter_dicts(payload.get(key)):
             row = setup_row_from_mapping(raw, source=f"focus:{key}")
@@ -444,7 +449,8 @@ def _sort_key(row: SetupRow) -> tuple[int, float, str]:
         "post_earnings_play": 3,
         "sma_breakout_tracking": 4,
         "stdev_retest_tracking": 5,
-        "study": 6,
-    }.get(row.bucket.strip().lower(), 7)
+        "study_playbook": 6,
+        "study": 7,
+    }.get(row.bucket.strip().lower(), 8)
     score = row.expected_r_rank if row.expected_r_rank is not None else row.score
     return (bucket_rank, -(score if score is not None else -999999.0), row.symbol)

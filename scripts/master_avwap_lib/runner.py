@@ -1695,6 +1695,8 @@ def run_master(
         "second_dev_breakout_study_count": len(second_dev_breakout_study_rows),
         "weekly_ema8_hold_study_rows": weekly_ema8_hold_study_rows,
         "weekly_ema8_hold_study_count": len(weekly_ema8_hold_study_rows),
+        "playbook_study_rows": playbook_study_rows,
+        "playbook_study_count": len(playbook_study_rows),
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
         "human_focus_tracking": human_focus_tracking_result,
         "human_focus_marked_setup_count": human_focus_marked_count,
@@ -1851,6 +1853,7 @@ def run_master(
         theta_put_rows=theta_put_rows,
         theta_pcs_rows=theta_pcs_rows,
         ai_state=ai_state,
+        study_rows=study_rows,
         now=favorite_watchlist_reference,
     )
     run_result["favorite_zone_watchlists_updated"] = bool(favorite_watchlist_result.get("updated"))
