@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, QItemSelection, QTimer, Signal
+from PySide6.QtCore import QFileSystemWatcher, QItemSelection, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -30,6 +31,7 @@ from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
+from ui.widgets.setup_detail_view import SetupDetailView
 
 
 class MasterAvwapPanel(QWidget):
@@ -76,6 +78,15 @@ class MasterAvwapPanel(QWidget):
         self.stack = QStackedWidget()
         self.stack.addWidget(self.empty_state)
         self.stack.addWidget(self.table)
+
+        # Clicking a setup opens this pane to the right of the table with the
+        # family mechanics and the symbol's concrete stop/TP levels.
+        self.detail_view = SetupDetailView(self)
+        self.detail_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.detail_splitter.addWidget(self.stack)
+        self.detail_splitter.addWidget(self.detail_view)
+        self.detail_splitter.setStretchFactor(0, 3)
+        self.detail_splitter.setStretchFactor(1, 2)
 
         self.status_label = QLabel("Idle")
         self.status_label.setObjectName("MutedLabel")
@@ -196,7 +207,7 @@ class MasterAvwapPanel(QWidget):
         layout.addLayout(kpi_row)
         layout.addLayout(filter_row)
         layout.addLayout(copy_row)
-        layout.addWidget(self.stack, 1)
+        layout.addWidget(self.detail_splitter, 1)
         layout.addWidget(self.scheduler_status_label)
         layout.addLayout(status_row)
 
@@ -484,6 +495,18 @@ class MasterAvwapPanel(QWidget):
         row = self.model.row_at(source_index.row())
         if row is not None:
             self.setupSelected.emit(row)
+            self._show_setup_detail(row)
+
+    def _show_setup_detail(self, row: SetupRow) -> None:
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        signals = raw.get("favorite_signals") or row.setup_tags or []
+        self.detail_view.show_setup(
+            symbol=row.symbol,
+            side=row.side or str(raw.get("side") or "LONG"),
+            setup_family=str(raw.get("setup_family") or "") or row.bucket,
+            favorite_signals=signals,
+            last_close=raw.get("last_close") or raw.get("previous_close"),
+        )
 
     def _add_row_to_focus(self, proxy_index) -> None:
         if self.focus_service is None or not proxy_index.isValid():
