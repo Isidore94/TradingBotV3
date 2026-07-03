@@ -44,14 +44,17 @@ def rows_from_run_result(run_result: dict[str, Any] | None) -> list[SetupRow]:
     rows: list[SetupRow] = []
     seen: set[tuple[str, str, str]] = set()
 
-    # Desk-worthy sources only: tracked rows plus the trade-worthy study
-    # families (playbook discoveries, weekly-8EMA basket). Measurement-only
-    # studies (dev-breakout controls, HV/HTF/relative) live in the tracker.
+    # Desk-worthy sources: tracked rows plus study families that are real
+    # entry patterns with docs and a trade plan (playbook discoveries, weekly
+    # 8EMA basket, dev breakouts). Context-overlay studies (HV/HTF/relative/
+    # phase6) live in the tracker only.
     seen_symbol_side: set[tuple[str, str]] = set()
     for source_key in (
         "tracked_rows",
         "weekly_ema8_hold_study_rows",
         "playbook_study_rows",
+        "first_dev_breakout_study_rows",
+        "second_dev_breakout_study_rows",
     ):
         is_study_source = source_key.endswith("_study_rows")
         for raw in _iter_dicts(run_result.get(source_key)):

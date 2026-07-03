@@ -23403,13 +23403,14 @@ def sync_study_row_ranking_fields(study_rows: list[dict] | None, priority_rows: 
                 study_row[field] = live[field]
 
 
-# Only trade-worthy study families belong on the desk: the playbook
-# discoveries (regime-robust, score-promoted) and the weekly-8EMA basket.
-# Measurement-only controls (dev-breakout studies, HV/HTF/relative studies)
-# stay in the tracker but would just be noise in the setups table.
-# (Literals: PLAYBOOK_STUDY_BUCKET / WEEKLY_EMA8_HOLD_STUDY_BUCKET are defined
-# later in the module.)
-DESK_STUDY_BUCKETS = frozenset({"study_playbook", "study_weekly_ema8_hold"})
+# Study families that belong on the desk: real entry patterns with docs and a
+# trade plan (playbook discoveries, weekly-8EMA basket, dev breakouts). Their
+# rows display as their actual setup, not a generic "Study" chip. Context
+# overlays (HV/HTF/relative/phase6 studies) stay tracker-only.
+# (Literals: the *_STUDY_BUCKET constants are defined later in the module.)
+DESK_STUDY_BUCKETS = frozenset(
+    {"study_playbook", "study_weekly_ema8_hold", "study_1stdev_breakout", "study_2nddev_breakout"}
+)
 
 
 def _build_phase6_study_row(priority_row: dict, *, family: str, bucket: str, tag: str, note: str, extra: dict | None = None) -> dict:

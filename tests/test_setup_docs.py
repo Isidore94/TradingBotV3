@@ -43,6 +43,10 @@ def test_resolve_accepts_report_display_labels():
     assert key == "avwap_retest_followthrough"
     key, _ = setup_docs.resolve_setup_doc("mid earnings above 2nd stdev")
     assert key == "playbook_second_dev_power_hold"
+    key, _ = setup_docs.resolve_setup_doc("1stdev_breakout")
+    assert key == "first_dev_breakout"
+    key, _ = setup_docs.resolve_setup_doc("2nddev_breakout")
+    assert key == "second_dev_breakout"
 
 
 def test_resolve_family_from_candidates_prefers_first_real_match():

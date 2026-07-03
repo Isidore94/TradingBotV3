@@ -16,10 +16,20 @@ SETUP_BUCKET_LABELS = {
     "study_relative_avwap": "Study",
     "study_phase6": "Study",
     "study_weekly_ema8_hold": "Study",
-    # Playbook-backfill discoveries get their own label so the regime-robust
-    # families (volume thrust, power hold, quiet pullback) stand out.
-    "study_playbook": "Playbook",
+    "study_playbook": "Study",
     "study": "Study",
+}
+
+# Study rows show their ACTUAL setup, not a generic "Study" chip: the chip text
+# comes from the row's setup family so the trader sees what the pick is, and
+# clicking it opens that family's docs/stats/stop-TP plan.
+STUDY_FAMILY_LABELS = {
+    "playbook_volume_thrust": "Volume Thrust",
+    "playbook_second_dev_power_hold": "Power Hold",
+    "playbook_quiet_pullback_resume": "Quiet Pullback",
+    "weekly_ema8_hold_retest": "Weekly 8EMA Hold",
+    "1stdev_breakout": "1st-Dev Break",
+    "2nddev_breakout": "2nd-Dev Break",
 }
 
 DEFAULT_SETUP_BUCKET_FILTER_LABELS = (
@@ -29,7 +39,10 @@ DEFAULT_SETUP_BUCKET_FILTER_LABELS = (
     "Post Earnings",
     "SMA Track",
     "Stdev Track",
-    "Playbook",
+    "Volume Thrust",
+    "Power Hold",
+    "Quiet Pullback",
+    "Weekly 8EMA Hold",
     "Study",
 )
 
@@ -55,6 +68,11 @@ class SetupRow:
     @property
     def bucket_label(self) -> str:
         normalized = self.bucket.strip().lower()
+        if normalized.startswith("study"):
+            family = str((self.raw or {}).get("setup_family") or "").strip().lower()
+            family_label = STUDY_FAMILY_LABELS.get(family)
+            if family_label:
+                return family_label
         return SETUP_BUCKET_LABELS.get(
             normalized,
             normalized.replace("_", " ").title() if normalized else "Unbucketed",

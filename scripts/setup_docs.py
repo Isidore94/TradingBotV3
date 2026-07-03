@@ -453,6 +453,9 @@ SETUP_DOC_ALIASES = {
     "mid_earnings_above_2nd_stdev": "playbook_second_dev_power_hold",
     # Bounce off the previous anchor's AVWAP behaves like a band bounce.
     "previous_avwape_bounce": "avwap_band_bounce",
+    # Live study-family keys for the dev-breakout studies.
+    "1stdev_breakout": "first_dev_breakout",
+    "2nddev_breakout": "second_dev_breakout",
 }
 
 

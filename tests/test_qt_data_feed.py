@@ -36,15 +36,21 @@ def test_setup_rows_from_run_result_include_theta_and_tradeworthy_study_rows():
                     },
                 }
             ],
-            # Measurement-only control studies must NOT reach the desk.
+            # Context-overlay studies must NOT reach the desk.
             "hv_level_study_rows": [
                 {"symbol": "MSFT", "side": "SHORT", "score": 52, "setup_tags": ["HV_LEVEL_BLOCK"]}
             ],
+            # Entry-pattern studies show, labelled as their ACTUAL setup.
             "second_dev_breakout_study_rows": [
-                {"symbol": "IBM", "side": "LONG", "score": 300, "priority_bucket": "study"}
+                {
+                    "symbol": "IBM",
+                    "side": "LONG",
+                    "score": 90,
+                    "priority_bucket": "study_2nddev_breakout",
+                    "setup_family": "2nddev_breakout",
+                }
             ],
-            # Trade-worthy studies show, but a clone of a symbol/side already on
-            # the board is skipped instead of duplicating it.
+            # A clone of a symbol/side already on the board is skipped.
             "playbook_study_rows": [
                 {
                     "symbol": "NVDA",
@@ -68,9 +74,9 @@ def test_setup_rows_from_run_result_include_theta_and_tradeworthy_study_rows():
     assert by_symbol["AAPL"].bucket_label == "Favorite"
     assert by_symbol["AAPL"].theta == "Put 190.0 strike @ 1.25 18d"
     assert by_symbol["AAPL"].supports_text == "4"
-    assert by_symbol["NVDA"].bucket_label == "Playbook"
+    assert by_symbol["NVDA"].bucket_label == "Volume Thrust"
+    assert by_symbol["IBM"].bucket_label == "2nd-Dev Break"
     assert "MSFT" not in by_symbol
-    assert "IBM" not in by_symbol
     assert sum(1 for row in rows if row.symbol == "AAPL") == 1
 
 
