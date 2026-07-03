@@ -4,8 +4,10 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -27,10 +29,11 @@ THEME_LABELS = {
 class SettingsPanel(QFrame):
     stateChanged = Signal()
 
-    def __init__(self, state: UiState, parent=None) -> None:
+    def __init__(self, state: UiState, bounce_service=None, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self.state = state
+        self.bounce_service = bounce_service
 
         self.theme_input = QComboBox()
         self.theme_input.addItems(THEME_LABELS)
@@ -88,11 +91,93 @@ class SettingsPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        layout.addWidget(SectionHeader("Settings", "Per-machine presentation and storage settings."))
+        layout.addWidget(SectionHeader("Settings", "Per-machine presentation, storage, and BounceBot configuration."))
         layout.addLayout(form)
         layout.addLayout(data_actions)
         layout.addWidget(self.warm_status)
+        if self.bounce_service is not None:
+            layout.addWidget(self._build_bounce_section())
         layout.addStretch(1)
+
+    def _build_bounce_section(self) -> QFrame:
+        """Operational BounceBot controls, moved off the Trading Desk so the
+        desk stays alert-first: connection management, RRS tuning, and the
+        per-type bounce toggles."""
+        from ui.panels.bounce_panel import BOUNCE_TOGGLE_ORDER
+        from ui.services.bounce_service import load_bounce_config
+
+        service = self.bounce_service
+        config = load_bounce_config()
+        section = QFrame()
+        section.setObjectName("Panel")
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(12, 12, 12, 12)
+        section_layout.setSpacing(10)
+        section_layout.addWidget(
+            SectionHeader("BounceBot", "Connection, RRS tuning, and bounce-type toggles.")
+        )
+
+        connect_row = QHBoxLayout()
+        connect_row.setSpacing(8)
+        connect_button = QPushButton("Connect")
+        connect_button.clicked.connect(service.start)
+        disconnect_button = QPushButton("Disconnect")
+        disconnect_button.clicked.connect(service.stop)
+        reconnect_button = QPushButton("Reconnect")
+        reconnect_button.clicked.connect(service.restart)
+        for button in (connect_button, disconnect_button, reconnect_button):
+            connect_row.addWidget(button)
+        connect_row.addStretch(1)
+        section_layout.addLayout(connect_row)
+
+        tuning_form = QFormLayout()
+        tuning_form.setSpacing(8)
+        self.rrs_threshold_input = QDoubleSpinBox()
+        self.rrs_threshold_input.setRange(0.0, 5.0)
+        self.rrs_threshold_input.setDecimals(1)
+        self.rrs_threshold_input.setSingleStep(0.1)
+        self.rrs_threshold_input.setValue(service.rrs_threshold)
+        self.rrs_threshold_input.valueChanged.connect(service.set_rrs_threshold)
+        tuning_form.addRow("RRS sensitivity", self.rrs_threshold_input)
+
+        self.timeframe_input = QComboBox()
+        for key, item in config["rrs_timeframes"].items():
+            self.timeframe_input.addItem(str(item.get("label", key)), key)
+        self.timeframe_input.setCurrentIndex(
+            max(0, self.timeframe_input.findData(service.rrs_timeframe_key))
+        )
+        self.timeframe_input.currentIndexChanged.connect(
+            lambda _index: service.set_rrs_timeframe(str(self.timeframe_input.currentData() or ""))
+        )
+        tuning_form.addRow("RRS timeframe", self.timeframe_input)
+        section_layout.addLayout(tuning_form)
+
+        toggles_label = QLabel(
+            "Bounce types (defaults are evidence-based from the outcome tracker; "
+            "disabled types keep recording as learning-only)."
+        )
+        toggles_label.setObjectName("MutedLabel")
+        toggles_label.setWordWrap(True)
+        section_layout.addWidget(toggles_label)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(4)
+        labels = config["bounce_type_labels"]
+        defaults = service.bounce_type_settings
+        self.bounce_toggle_boxes: dict[str, QCheckBox] = {}
+        for index, key in enumerate(BOUNCE_TOGGLE_ORDER):
+            if key not in defaults:
+                continue
+            checkbox = QCheckBox(str(labels.get(key, key)))
+            checkbox.setChecked(bool(defaults.get(key)))
+            checkbox.toggled.connect(
+                lambda checked, bounce_key=key: service.set_bounce_type_enabled(bounce_key, checked)
+            )
+            self.bounce_toggle_boxes[key] = checkbox
+            grid.addWidget(checkbox, index // 4, index % 4)
+        section_layout.addLayout(grid)
+        return section
 
     def _save(self) -> None:
         self.state.theme_name = THEME_LABELS.get(self.theme_input.currentText(), "dark")

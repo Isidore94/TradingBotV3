@@ -54,7 +54,7 @@ def test_bounce_alert_marks_d1_flags():
 def test_bucket_upgrade_alert_is_the_only_actionable_d1_focus_message():
     from ui.models.bounce import BounceAlert
     try:
-        from ui.panels.bounce_panel import _is_actionable_d1_alert
+        from ui.panels.alert_center_panel import _is_actionable_d1_alert
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return

@@ -113,6 +113,11 @@ class BounceService(QObject):
         self.market_environment = env_key
         self._with_bot(lambda bot: bot.set_market_environment(env_key))
 
+    def clear_market_environment_override(self) -> None:
+        """Return regime control to the bot's SPY-based auto tracking."""
+        self._with_bot(lambda bot: bot.clear_market_environment_override())
+        self.statusChanged.emit("Market regime back on auto (SPY vs yesterday's close).")
+
     def set_bounce_type_enabled(self, bounce_type: str, enabled: bool) -> None:
         if bounce_type not in self.bounce_type_settings:
             return

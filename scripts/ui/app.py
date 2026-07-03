@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
         self.journal_panel = JournalPanel()
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel()
-        self.settings_panel = SettingsPanel(self.state)
+        self.settings_panel = SettingsPanel(self.state, bounce_service=self.trading_panel.bounce_panel.service)
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
 
         self.pages = QStackedWidget()
