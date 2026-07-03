@@ -702,6 +702,18 @@ PRIORITY_REJECTION_CAP_COMPRESSION = 150
 PRIORITY_REJECTION_CAP_SIDE_OPPOSITE_DAY = 120
 PRIORITY_SHORT_NEAR_FAVORITE_GATE_PENALTY = 36
 PRIORITY_CURRENT_SIGNAL_WEIGHT_DEFAULT_CAP = 110
+# Correlated current signals must not stack (2026-07-02): the mid-earnings
+# retest trio fires together almost by construction (price at EMA15 is at/near
+# EMA21 and often the first deviation), which let one family triple-dip its
+# weights and flood the top of the board. Each group contributes only its
+# highest-weight fired member.
+CORRELATED_CURRENT_SIGNAL_GROUPS = (
+    frozenset({"MID_EARNINGS_EMA15_RETEST", "MID_EARNINGS_EMA21_RETEST", "MID_EARNINGS_FIRST_DEV_RETEST"}),
+)
+# Expected-R coherence guard: below this ExpR the static score gets capped so
+# stacked signals can never outrank outcome-backed setups.
+PRIORITY_EXPECTED_R_SCORE_CAP_BELOW = -0.05
+PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP = 120
 PRIORITY_CONTEXT_SIGNAL_WEIGHT_CAP = 28
 PRIORITY_CURRENT_SIGNAL_WEIGHT_CAPS = {
     "POST_EARNINGS_52W_BREAK": 120,
@@ -1040,6 +1052,20 @@ DEFAULT_PRIORITY_SCORING_CONFIG = {
 
 def default_priority_scoring_config() -> dict:
     return copy.deepcopy(DEFAULT_PRIORITY_SCORING_CONFIG)
+
+
+def _sum_current_signal_weights(current_setup_signals, current_weights) -> int:
+    """Sum current-signal weights with correlated groups contributing only
+    their highest-weight fired member (see CORRELATED_CURRENT_SIGNAL_GROUPS)."""
+    remaining = list(current_setup_signals or [])
+    total = 0
+    for group in CORRELATED_CURRENT_SIGNAL_GROUPS:
+        fired = [evt for evt in remaining if evt in group]
+        if len(fired) > 1:
+            total += max(current_weights.get(evt, 0) for evt in fired)
+            remaining = [evt for evt in remaining if evt not in group]
+    total += sum(current_weights.get(evt, 0) for evt in remaining)
+    return total
 
 
 def _priority_signal_weight_cap(bucket: str, signal_name: str) -> int:
@@ -6502,6 +6528,27 @@ def apply_expected_r_ranking(
         row["expected_r_samples"] = int(result["closed_samples"])
         row["expected_r_freshness"] = round(float(result["freshness_factor"]), 3)
         row["expected_r_note"] = note
+
+        # Coherence cap (2026-07-02): a negative Expected-R must never carry a
+        # chart-topping static score. The 12:18 scan's #1 short (TPG, score 545)
+        # had ExpR -0.08 - the outcome-calibrated estimate already knew the
+        # family bleeds. Cap the score so raw signal stacking can't outrank
+        # clean setups the tracker actually likes.
+        score_value = _coerce_float(row.get("score"))
+        if (
+            expected_r <= PRIORITY_EXPECTED_R_SCORE_CAP_BELOW
+            and score_value is not None
+            and score_value > PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP
+        ):
+            row["score"] = float(PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP)
+            cap_note = (
+                f"score capped at {PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP} "
+                f"(ExpR {expected_r:+.2f} <= {PRIORITY_EXPECTED_R_SCORE_CAP_BELOW:+.2f})"
+            )
+            row["expected_r_score_cap_note"] = cap_note
+            reasons = row.setdefault("candidate_rejection_reasons", [])
+            if isinstance(reasons, list) and cap_note not in reasons:
+                reasons.append(cap_note)
 
         symbol_entry = symbol_map.get(symbol)
         if isinstance(symbol_entry, dict):
@@ -18217,6 +18264,13 @@ def _priority_score_text(row: dict) -> str:
     return f"{score:.1f}" if abs(score - round(score)) > 0.01 else f"{score:.0f}"
 
 
+def _priority_expected_r_text(row: dict) -> str:
+    expected_r = _coerce_float(row.get("expected_r"))
+    if expected_r is None:
+        return "n/a"
+    return f"{expected_r:+.2f}R"
+
+
 def _priority_rows_by_setup_family(rows: list[dict]) -> list[tuple[str, list[dict]]]:
     groups: dict[str, list[dict]] = {}
     order: list[str] = []
@@ -18377,9 +18431,16 @@ def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None
         handle.write("None\n\n")
         return
 
-    def sort_key(row: dict) -> tuple[float, str]:
+    def sort_key(row: dict) -> tuple[float, float, str]:
+        # Expected-R leads (2026-07-02): the outcome-calibrated estimate ranks;
+        # the static score only breaks ties / orders rows without an estimate.
+        expected_r = _coerce_float(row.get("expected_r"))
         score = _coerce_float(row.get("score"))
-        return (-(score if score is not None else -10**9), str(row.get("symbol") or ""))
+        return (
+            -(expected_r if expected_r is not None else -10**9),
+            -(score if score is not None else -10**9),
+            str(row.get("symbol") or ""),
+        )
 
     for rank, row in enumerate(sorted(unique_rows, key=sort_key), start=1):
         symbol = str(row.get("symbol") or "").strip().upper()
@@ -18398,7 +18459,7 @@ def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None
         warning_count = len(row.get("candidate_rejection_reasons") or [])
         warning_text = "clean" if warning_count <= 0 else f"{warning_count} warning(s)"
         handle.write(
-            f"{rank:>3}. {symbol:<6} {side:<5} score={score:<5} "
+            f"{rank:>3}. {symbol:<6} {side:<5} ExpR={_priority_expected_r_text(row):<7} score={score:<5} "
             f"bucket={bucket:<13} family={family:<28} zone={zone:<18} "
             f"trend={trend:<8} {warning_text}\n"
         )
@@ -18552,7 +18613,8 @@ def _write_best_swing_trade_rows(handle, title: str, rows: list[dict]) -> None:
         warnings = row.get("candidate_rejection_reasons") or []
         warning_text = "clean" if not warnings else "; ".join(str(item) for item in warnings[:2])
         handle.write(
-            f"{rank:>2}. {symbol:<6} {side:<5} score={_priority_score_text(row):<5} "
+            f"{rank:>2}. {symbol:<6} {side:<5} ExpR={_priority_expected_r_text(row):<7} "
+            f"score={_priority_score_text(row):<5} "
             f"{bucket:<10} {family:<26} zone={zone:<18} trend={trend:<8}\n"
         )
         handle.write(f"    evidence: {_best_swing_trade_evidence(row)}\n")
@@ -24054,6 +24116,17 @@ PLAYBOOK_VOLUME_THRUST_MIN_VOL_MULT = 2.0
 PLAYBOOK_VOLUME_THRUST_VOL_AVG_SESSIONS = 20
 PLAYBOOK_POWER_HOLD_MIN_STREAK_DAYS = 10
 PLAYBOOK_QUIET_PULLBACK_DOWN_SESSIONS = 3
+# Modest scored promotion (2026-07-02): these three families were positive vs
+# baseline in BOTH backfill regime windows (volume thrust +0.37/+0.49R long and
+# +0.13/+0.33R short; power hold +0.32/+0.21R long-only; quiet pullback
+# +0.24/+0.32R long, +0.22/+0.34R short), so a row carrying the confirmation
+# gets a small score bonus - enough to compete for tier slots, small enough
+# that the setup still has to stand on its own.
+PLAYBOOK_SCORE_BONUSES = {
+    PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY: 18,
+    PLAYBOOK_SECOND_DEV_POWER_HOLD_STUDY_FAMILY: 15,
+    PLAYBOOK_QUIET_PULLBACK_STUDY_FAMILY: 12,
+}
 
 
 def _playbook_frame_tail_values(df: pd.DataFrame | None, needed: int):
@@ -24195,6 +24268,16 @@ def enrich_priority_rows_with_playbook_studies(
             if not note or (symbol, side, family) in seen:
                 continue
             seen.add((symbol, side, family))
+            # Scored promotion: the confirmation boosts the live row's score
+            # (data-cited in PLAYBOOK_SCORE_BONUSES) BEFORE the study copy is
+            # taken, so both the board and the study record see it.
+            bonus = int(PLAYBOOK_SCORE_BONUSES.get(family, 0))
+            if bonus and _coerce_float(row.get("score")) is not None:
+                row["score"] = float(row["score"]) + bonus
+                row["playbook_score_bonus"] = int(row.get("playbook_score_bonus", 0) or 0) + bonus
+                bonus_note = f"{family.replace('playbook_', '').replace('_', ' ')} +{bonus}"
+                existing_note = str(row.get("score_bonus_note") or "").strip()
+                row["score_bonus_note"] = f"{existing_note}; {bonus_note}" if existing_note else bonus_note
             study_rows.append(
                 _build_phase6_study_row(
                     row,
@@ -25128,27 +25211,30 @@ def _priority_partition_tier_rows(
             selected.append(row)
         return selected
 
-    s_candidates = best_swing_rows + high_conviction_rows
-    s_demoted_by_expected_r = [
-        row for row in s_candidates if _tier_row_expected_r_below(row, TIER_S_DEMOTE_EXPECTED_R_BELOW)
-    ]
-    for row in s_demoted_by_expected_r:
-        expected_r = _coerce_float(row.get("expected_r")) or 0.0
-        row["tier_expected_r_demote_note"] = f"held out of S tier (ExpR {expected_r:+.2f})"
-    s_keep = [
-        row for row in s_candidates if not _tier_row_expected_r_below(row, TIER_S_DEMOTE_EXPECTED_R_BELOW)
-    ]
+    def _tier_worthy(row: dict) -> bool:
+        # S/A membership requires the row to earn it: positive score AND
+        # Expected-R above the demote line (2026-07-02). Anything else belongs
+        # in the B stalk list, not "act first" - no quota filling.
+        if (_coerce_float(row.get("score")) or 0.0) <= 0:
+            return False
+        return not _tier_row_expected_r_below(row, TIER_S_DEMOTE_EXPECTED_R_BELOW)
 
-    s_rows = take_rows(s_keep)
+    s_candidates = best_swing_rows + high_conviction_rows
+    for row in s_candidates:
+        if _tier_row_expected_r_below(row, TIER_S_DEMOTE_EXPECTED_R_BELOW):
+            expected_r = _coerce_float(row.get("expected_r")) or 0.0
+            row["tier_expected_r_demote_note"] = f"held out of S/A tiers (ExpR {expected_r:+.2f})"
+
+    s_rows = take_rows([row for row in s_candidates if _tier_worthy(row)])
     a_rows = take_rows(
-        s_demoted_by_expected_r
-        + [
+        [
             row for row in actionable_rows
             if (
                 row.get("priority_bucket") == "favorite_setup"
                 or row.get("preferred_swing_focus")
                 or _is_post_earnings_play_ready(row)
             )
+            and _tier_worthy(row)
         ]
     )
     b_rows = take_rows(report_rows)
@@ -25743,7 +25829,7 @@ def build_priority_setup_summary(
         side=side,
     )
 
-    score = sum(current_weights.get(evt, 0) for evt in current_setup_signals)
+    score = _sum_current_signal_weights(current_setup_signals, current_weights)
     score += sum(context_weights.get(evt, 0) for evt in context_signals)
     score += bounce_support_bonus
     score += previous_avwape_bounce_bonus
@@ -28066,9 +28152,16 @@ def _priority_best_swing_trade_rows(
 
     best_rows = []
     for side in ("LONG", "SHORT"):
+        # No per-side quota filling (2026-07-02): a side only contributes names
+        # that clear the bar on their own - positive score and Expected-R above
+        # the S-tier demote line. An empty short column is the correct output
+        # when the data says shorts are bleeding; a -42 score in "act first"
+        # is not.
         side_rows = [
             row for row in candidates
             if normalize_side(row.get("side") or "") == side
+            and (_coerce_float(row.get("score")) or 0.0) > 0
+            and not _tier_row_expected_r_below(row, TIER_S_DEMOTE_EXPECTED_R_BELOW)
         ]
         best_rows.extend(sorted(side_rows, key=_best_swing_trade_sort_key)[:max(1, int(per_side))])
 
@@ -28223,6 +28316,9 @@ def write_master_avwap_focus_feed(
             "priority_bucket": bucket,
             "priority_rank": rank,
             "priority_score": row["score"],
+            "expected_r": _coerce_float(row.get("expected_r")),
+            "expected_r_rank_score": _coerce_float(row.get("expected_r_rank_score")),
+            "expected_r_note": row.get("expected_r_note") or "",
             "setup_family": row.get("setup_family") or "",
             "recent_tracker_score_delta": int(row.get("recent_tracker_score_delta", 0) or 0),
             "recent_tracker_score_note": row.get("recent_tracker_score_note") or "",

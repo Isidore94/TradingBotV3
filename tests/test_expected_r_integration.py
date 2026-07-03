@@ -79,6 +79,32 @@ class ApplyExpectedRRankingTests(unittest.TestCase):
         master_avwap.apply_expected_r_ranking([a, b], {"symbols": {}}, {}, recent_family_rows=[])
         self.assertAlmostEqual(a["expected_r_prior"], b["expected_r_prior"])
 
+    def test_negative_expected_r_caps_the_static_score(self):
+        # The TPG case: a stacked-signal score in the 500s with a known-negative
+        # Expected-R must be capped so it can't top the board.
+        row = _row("TPG", "SHORT", "near_favorite_zone", "mid_earnings_ema15_retest", 545)
+        family_rows = [_family_row_for(row, closed=12, avg_closed_r=-0.6, avg_total_r=-0.5)]
+
+        master_avwap.apply_expected_r_ranking(
+            [row], {"symbols": {}}, {}, recent_family_rows=family_rows
+        )
+
+        self.assertLessEqual(row["expected_r"], master_avwap.PRIORITY_EXPECTED_R_SCORE_CAP_BELOW)
+        self.assertEqual(row["score"], float(master_avwap.PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP))
+        self.assertIn("score capped", row["expected_r_score_cap_note"])
+        self.assertTrue(
+            any("score capped" in reason for reason in row["candidate_rejection_reasons"])
+        )
+
+    def test_positive_expected_r_leaves_score_alone(self):
+        row = _row("GEN", "LONG", "near_favorite_zone", "avwap_breakout", 316)
+        family_rows = [_family_row_for(row, closed=12, avg_closed_r=1.1, avg_total_r=1.0)]
+        master_avwap.apply_expected_r_ranking(
+            [row], {"symbols": {}}, {}, recent_family_rows=family_rows
+        )
+        self.assertEqual(row["score"], 316)
+        self.assertNotIn("expected_r_score_cap_note", row)
+
     def test_hot_b_setup_outranks_cold_a_setup(self):
         # The headline behaviour: a lower static-quality setup that is working
         # now should rank above a higher static-quality setup that is cold.

@@ -4052,6 +4052,67 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIsNone(priority_rows[1]["rejection_score_cap"])
         self.assertEqual(priority_rows[1]["score"], 310.0)
 
+    def test_correlated_mid_earnings_retest_signals_contribute_max_not_sum(self):
+        weights = {
+            "MID_EARNINGS_EMA15_RETEST": 69,
+            "MID_EARNINGS_EMA21_RETEST": 65,
+            "MID_EARNINGS_FIRST_DEV_RETEST": 67,
+            "BOUNCE_VWAP": 114,
+        }
+        # All three fire together: only the max (69) counts, uncorrelated
+        # signals still add normally.
+        self.assertEqual(
+            master_avwap._sum_current_signal_weights(
+                ["MID_EARNINGS_EMA15_RETEST", "MID_EARNINGS_EMA21_RETEST", "MID_EARNINGS_FIRST_DEV_RETEST", "BOUNCE_VWAP"],
+                weights,
+            ),
+            69 + 114,
+        )
+        # A single member of the group is unaffected.
+        self.assertEqual(
+            master_avwap._sum_current_signal_weights(["MID_EARNINGS_EMA21_RETEST"], weights), 65
+        )
+        self.assertEqual(master_avwap._sum_current_signal_weights([], weights), 0)
+
+    def test_best_swing_rows_exclude_negative_scores_and_negative_expected_r(self):
+        base = {
+            "priority_bucket": "near_favorite_zone",
+            "setup_family": "avwap_retest_followthrough",
+            "favorite_signals": ["CROSS_UP_VWAP"],
+            "context_signals": [],
+            "retest_followthrough": True,
+            "previous_day_range_break": True,
+            "current_band_zone": "VWAP to UPPER_1",
+        }
+        rows = [
+            {**base, "symbol": "GOODL", "side": "LONG", "score": 220, "expected_r": 0.4},
+            {**base, "symbol": "NEGSC", "side": "SHORT", "score": -42, "current_band_zone": "VWAP to LOWER_1"},
+            {**base, "symbol": "NEGER", "side": "SHORT", "score": 180, "expected_r": -0.3, "current_band_zone": "VWAP to LOWER_1"},
+        ]
+        selected = master_avwap._priority_best_swing_trade_rows(rows)
+        symbols = {row["symbol"] for row in selected}
+        self.assertIn("GOODL", symbols)
+        self.assertNotIn("NEGSC", symbols)  # negative score never fills a quota
+        self.assertNotIn("NEGER", symbols)  # negative Expected-R never fills a quota
+
+    def test_tier_partition_requires_positive_score_and_expected_r(self):
+        good = {"symbol": "GOOD", "side": "LONG", "score": 200, "expected_r": 0.3, "priority_bucket": "favorite_setup"}
+        neg_score = {"symbol": "NEGS", "side": "SHORT", "score": -42, "priority_bucket": "near_favorite_zone"}
+        neg_expr = {"symbol": "NEGR", "side": "SHORT", "score": 300, "expected_r": -0.2, "priority_bucket": "favorite_setup"}
+        tiers = master_avwap._priority_partition_tier_rows(
+            actionable_rows=[good, neg_score, neg_expr],
+            report_rows=[good, neg_score, neg_expr],
+            high_conviction_rows=[],
+            best_swing_rows=[good, neg_score, neg_expr],
+        )
+        s_symbols = {row["symbol"] for row in tiers[0]["rows"]}
+        a_symbols = {row["symbol"] for row in tiers[1]["rows"]}
+        b_symbols = {row["symbol"] for row in tiers[2]["rows"]}
+        self.assertEqual(s_symbols, {"GOOD"})
+        self.assertEqual(a_symbols, set())  # nothing unworthy gets promoted to A either
+        self.assertIn("NEGS", b_symbols)
+        self.assertIn("NEGR", b_symbols)
+
     def test_second_band_penalty_hump_fades_for_band_riders(self):
         self.assertEqual(master_avwap.compute_recent_second_band_penalty(0), 0)
         self.assertEqual(master_avwap.compute_recent_second_band_penalty(1), 10)
@@ -4129,6 +4190,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
             {
                 "symbol": "TST",
                 "side": "LONG",
+                "score": 100.0,
                 "priority_bucket": "favorite_setup",
                 "mid_earnings_active_second_stdev_hold": True,
                 "mid_earnings_zone_streak_days": 12,
@@ -4154,6 +4216,11 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertEqual(row["priority_bucket"], master_avwap.PLAYBOOK_STUDY_BUCKET)
             self.assertFalse(row["is_favorite_setup"])
             self.assertEqual(row["favorite_signals"], [])
+        # Scored promotion: all three confirmations boost the live row.
+        expected_bonus = sum(master_avwap.PLAYBOOK_SCORE_BONUSES.values())
+        self.assertEqual(priority_rows[0]["score"], 100.0 + expected_bonus)
+        self.assertEqual(priority_rows[0]["playbook_score_bonus"], expected_bonus)
+        self.assertIn("volume thrust", priority_rows[0]["score_bonus_note"])
 
     def test_focus_feed_persists_study_setups(self):
         with tempfile.TemporaryDirectory() as temp_dir:

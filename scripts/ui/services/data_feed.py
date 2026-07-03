@@ -441,7 +441,7 @@ def _format_number(value: Any) -> str:
     return f"{number:.2f}"
 
 
-def _sort_key(row: SetupRow) -> tuple[int, float, str]:
+def _sort_key(row: SetupRow) -> tuple[int, float, float, str]:
     bucket_rank = {
         "high_conviction": 0,
         "favorite_setup": 1,
@@ -452,5 +452,13 @@ def _sort_key(row: SetupRow) -> tuple[int, float, str]:
         "study_playbook": 6,
         "study": 7,
     }.get(row.bucket.strip().lower(), 8)
-    score = row.expected_r_rank if row.expected_r_rank is not None else row.score
-    return (bucket_rank, -(score if score is not None else -999999.0), row.symbol)
+    # Expected-R is the ranking spine (2026-07-02): the outcome-calibrated
+    # estimate orders rows; raw score only breaks ties or orders rows that have
+    # no estimate yet - it can no longer put stacked-signal junk on top.
+    primary = row.expected_r_rank if row.expected_r_rank is not None else row.expected_r
+    return (
+        bucket_rank,
+        -(primary if primary is not None else -999999.0),
+        -(row.score if row.score is not None else -999999.0),
+        row.symbol,
+    )
