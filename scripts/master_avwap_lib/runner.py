@@ -1624,6 +1624,9 @@ def run_master(
         feature_rows_by_symbol,
         recent_family_rows=recent_family_rows,
     )
+    # Study rows are pre-ranking shallow copies; refresh their score/ExpR so
+    # capped originals don't leave stale stacked scores on the study clones.
+    sync_study_row_ranking_fields(study_rows, priority_rows)
     d1_upgrade_alert_payload = write_master_avwap_d1_upgrade_alert_outputs(
         alerts_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
         report_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,

@@ -23371,6 +23371,47 @@ def assess_compression_break_context(
     return result
 
 
+def sync_study_row_ranking_fields(study_rows: list[dict] | None, priority_rows: list[dict] | None) -> None:
+    """Refresh ranking fields on study-row copies from their live originals.
+
+    Study rows are shallow copies taken during enrichment, BEFORE
+    ``apply_expected_r_ranking`` runs - so they miss the Expected-R fields and
+    keep pre-cap scores (a capped 545 stays 545 on the study clone and floats
+    to the top of score-sorted views). Call this after the ranking pass.
+    """
+    live_by_key: dict[tuple[str, str], dict] = {}
+    for row in priority_rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = (str(row.get("symbol") or "").strip().upper(), normalize_side(row.get("side")))
+        live_by_key.setdefault(key, row)
+    for study_row in study_rows or []:
+        if not isinstance(study_row, dict):
+            continue
+        key = (str(study_row.get("symbol") or "").strip().upper(), normalize_side(study_row.get("side")))
+        live = live_by_key.get(key)
+        if live is None:
+            continue
+        for field in (
+            "score",
+            "expected_r",
+            "expected_r_rank_score",
+            "expected_r_note",
+            "expected_r_score_cap_note",
+        ):
+            if field in live:
+                study_row[field] = live[field]
+
+
+# Only trade-worthy study families belong on the desk: the playbook
+# discoveries (regime-robust, score-promoted) and the weekly-8EMA basket.
+# Measurement-only controls (dev-breakout studies, HV/HTF/relative studies)
+# stay in the tracker but would just be noise in the setups table.
+# (Literals: PLAYBOOK_STUDY_BUCKET / WEEKLY_EMA8_HOLD_STUDY_BUCKET are defined
+# later in the module.)
+DESK_STUDY_BUCKETS = frozenset({"study_playbook", "study_weekly_ema8_hold"})
+
+
 def _build_phase6_study_row(priority_row: dict, *, family: str, bucket: str, tag: str, note: str, extra: dict | None = None) -> dict:
     study_row = dict(priority_row)
     if isinstance(extra, dict):
@@ -28522,6 +28563,9 @@ def write_master_avwap_focus_feed(
     for row in study_rows or []:
         if not isinstance(row, dict):
             continue
+        bucket = str(row.get("priority_bucket") or "study").strip() or "study"
+        if bucket not in DESK_STUDY_BUCKETS:
+            continue  # measurement-only studies stay off the desk feed
         study_key = (
             str(row.get("symbol") or "").strip().upper(),
             normalize_side(row.get("side")),
@@ -28530,7 +28574,6 @@ def write_master_avwap_focus_feed(
         if not study_key[0] or study_key in seen_study_keys:
             continue
         seen_study_keys.add(study_key)
-        bucket = str(row.get("priority_bucket") or "study").strip() or "study"
         study_entries.append(_build_entry(row, bucket, len(study_entries) + 1))
 
     symbol_map = {}

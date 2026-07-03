@@ -8,7 +8,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 
-def test_setup_rows_from_run_result_include_theta_and_study_rows():
+def test_setup_rows_from_run_result_include_theta_and_tradeworthy_study_rows():
     from ui.services.data_feed import rows_from_run_result
 
     rows = rows_from_run_result(
@@ -36,14 +36,30 @@ def test_setup_rows_from_run_result_include_theta_and_study_rows():
                     },
                 }
             ],
+            # Measurement-only control studies must NOT reach the desk.
             "hv_level_study_rows": [
+                {"symbol": "MSFT", "side": "SHORT", "score": 52, "setup_tags": ["HV_LEVEL_BLOCK"]}
+            ],
+            "second_dev_breakout_study_rows": [
+                {"symbol": "IBM", "side": "LONG", "score": 300, "priority_bucket": "study"}
+            ],
+            # Trade-worthy studies show, but a clone of a symbol/side already on
+            # the board is skipped instead of duplicating it.
+            "playbook_study_rows": [
                 {
-                    "symbol": "MSFT",
-                    "side": "SHORT",
-                    "score": 52,
-                    "setup_tags": ["HV_LEVEL_BLOCK"],
-                    "hv_level_nearby_count": 1,
-                }
+                    "symbol": "NVDA",
+                    "side": "LONG",
+                    "score": 120,
+                    "priority_bucket": "study_playbook",
+                    "setup_family": "playbook_volume_thrust",
+                },
+                {
+                    "symbol": "AAPL",
+                    "side": "LONG",
+                    "score": 91.25,
+                    "priority_bucket": "study_playbook",
+                    "setup_family": "playbook_volume_thrust",
+                },
             ],
         }
     )
@@ -52,7 +68,10 @@ def test_setup_rows_from_run_result_include_theta_and_study_rows():
     assert by_symbol["AAPL"].bucket_label == "Favorite"
     assert by_symbol["AAPL"].theta == "Put 190.0 strike @ 1.25 18d"
     assert by_symbol["AAPL"].supports_text == "4"
-    assert by_symbol["MSFT"].bucket_label == "Study"
+    assert by_symbol["NVDA"].bucket_label == "Playbook"
+    assert "MSFT" not in by_symbol
+    assert "IBM" not in by_symbol
+    assert sum(1 for row in rows if row.symbol == "AAPL") == 1
 
 
 def test_copy_symbols_ranked_preserves_order_while_lists_alphabetize():

@@ -4222,6 +4222,24 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[0]["playbook_score_bonus"], expected_bonus)
         self.assertIn("volume thrust", priority_rows[0]["score_bonus_note"])
 
+    def test_sync_study_rows_pick_up_capped_scores_and_expected_r(self):
+        live = {
+            "symbol": "TPG",
+            "side": "SHORT",
+            "score": 120.0,  # post-cap
+            "expected_r": -0.08,
+            "expected_r_rank_score": -0.11,
+            "expected_r_note": "blend",
+            "expected_r_score_cap_note": "score capped at 120 (ExpR -0.08 <= -0.05)",
+        }
+        stale_clone = {"symbol": "TPG", "side": "SHORT", "score": 545.0}
+        unrelated = {"symbol": "XYZ", "side": "LONG", "score": 50.0}
+        master_avwap.sync_study_row_ranking_fields([stale_clone, unrelated], [live])
+        self.assertEqual(stale_clone["score"], 120.0)
+        self.assertEqual(stale_clone["expected_r"], -0.08)
+        self.assertIn("score capped", stale_clone["expected_r_score_cap_note"])
+        self.assertEqual(unrelated["score"], 50.0)  # no live match -> untouched
+
     def test_focus_feed_persists_study_setups(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "focus.json"

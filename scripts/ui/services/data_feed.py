@@ -44,23 +44,28 @@ def rows_from_run_result(run_result: dict[str, Any] | None) -> list[SetupRow]:
     rows: list[SetupRow] = []
     seen: set[tuple[str, str, str]] = set()
 
+    # Desk-worthy sources only: tracked rows plus the trade-worthy study
+    # families (playbook discoveries, weekly-8EMA basket). Measurement-only
+    # studies (dev-breakout controls, HV/HTF/relative) live in the tracker.
+    seen_symbol_side: set[tuple[str, str]] = set()
     for source_key in (
         "tracked_rows",
-        "hv_level_study_rows",
-        "relative_avwap_study_rows",
-        "htf_trend_study_rows",
-        "phase6_study_rows",
-        "first_dev_breakout_study_rows",
-        "second_dev_breakout_study_rows",
         "weekly_ema8_hold_study_rows",
         "playbook_study_rows",
     ):
+        is_study_source = source_key.endswith("_study_rows")
         for raw in _iter_dicts(run_result.get(source_key)):
             row = setup_row_from_mapping(raw, theta_by_symbol=theta_by_symbol, source=source_key)
             identity = (row.symbol, row.side, row.bucket)
-            if row.symbol and identity not in seen:
-                rows.append(row)
-                seen.add(identity)
+            if not row.symbol or identity in seen:
+                continue
+            # A study clone adds nothing when the symbol/side is already on the
+            # board with its real bucket - skip it instead of duplicating.
+            if is_study_source and (row.symbol, row.side) in seen_symbol_side:
+                continue
+            rows.append(row)
+            seen.add(identity)
+            seen_symbol_side.add((row.symbol, row.side))
 
     rows.sort(key=_sort_key)
     return rows
@@ -72,6 +77,7 @@ def _rows_from_focus_payload(payload: Any) -> list[SetupRow]:
 
     rows: list[SetupRow] = []
     seen: set[tuple[str, str, str]] = set()
+    seen_symbol_side: set[tuple[str, str]] = set()
     for key in (
         "high_conviction",
         "favorites",
@@ -81,12 +87,17 @@ def _rows_from_focus_payload(payload: Any) -> list[SetupRow]:
         "stdev_retest_tracking",
         "study_setups",
     ):
+        is_study_source = key == "study_setups"
         for raw in _iter_dicts(payload.get(key)):
             row = setup_row_from_mapping(raw, source=f"focus:{key}")
             identity = (row.symbol, row.side, row.bucket)
-            if row.symbol and identity not in seen:
-                rows.append(row)
-                seen.add(identity)
+            if not row.symbol or identity in seen:
+                continue
+            if is_study_source and (row.symbol, row.side) in seen_symbol_side:
+                continue
+            rows.append(row)
+            seen.add(identity)
+            seen_symbol_side.add((row.symbol, row.side))
 
     rows.sort(key=_sort_key)
     return rows
