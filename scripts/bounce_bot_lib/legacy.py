@@ -238,6 +238,8 @@ BOUNCE_TYPE_LABELS = {
     "eod_vwap_lower_band": "EOD VWAP 1SD Lower",
     "prev_day_high": "Previous Day High",
     "prev_day_low": "Previous Day Low",
+    "regime_pause_rw": "Regime Pause RW",
+    "regime_pause_rs": "Regime Pause RS",
 }
 BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 
@@ -367,6 +369,24 @@ MARKET_ENVIRONMENTS = {
     "bullish_strong": {"label": "Bullish Strong"},
     "bullish_weak": {"label": "Bullish Weak"},
 }
+# Auto intraday market regime (2026-07-03): SPY green/red vs yesterday's close
+# decides bullish/bearish; the magnitude decides strong/weak. The bot tracks
+# this itself every cycle; a manual GUI selection overrides it for the session.
+MARKET_REGIME_AUTO_ENABLED = True
+MARKET_REGIME_STRONG_ABS_PCT = 0.5
+
+# Regime-pause banger detection (2026-07-03). In a bearish tape, when SPY
+# prints a green 5m candle or stops making new session lows for a few candles,
+# whatever is STILL falling or refusing to bounce is the real weakness - the
+# AAOI pattern: much weaker than SPY all day, then keeps dropping through the
+# SPY pause. Inverted for bullish tape. Candidates come from the trader's
+# longs.txt / shorts.txt only.
+REGIME_PAUSE_NO_NEW_EXTREME_CANDLES = 3
+REGIME_PAUSE_SWEEP_MAX_CANDLES = 3
+REGIME_BANGER_DAY_EXCESS_PCT = 0.75
+REGIME_BANGER_WINDOW_EXCESS_PCT = 0.20
+REGIME_PAUSE_RW_TYPE = "regime_pause_rw"
+REGIME_PAUSE_RS_TYPE = "regime_pause_rs"
 MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
 MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
@@ -1860,6 +1880,8 @@ class BounceBot(EWrapper, EClient):
         self.latest_group_extremes = {}
         self.market_environment = "bullish_strong"
         self.market_environment_lock = threading.Lock()
+        self.market_environment_user_override = False
+        self._regime_pause_state = None
         self.latest_rrs_payload = None
         self.earnings_reaction_filter_cache = {}
 
@@ -3563,17 +3585,229 @@ class BounceBot(EWrapper, EClient):
                 self.rrs_timeframe_key,
             )
 
-    def set_market_environment(self, env_key):
+    def set_market_environment(self, env_key, *, source="user"):
         if env_key not in MARKET_ENVIRONMENTS:
             return
         with self.market_environment_lock:
+            changed = env_key != self.market_environment
             self.market_environment = env_key
+        if source == "user" and changed:
+            # A real manual selection pins the regime for the session; the
+            # GUI's startup sync (same value) does not count as an override.
+            self.market_environment_user_override = True
         status_msg = f"Market environment set to {MARKET_ENVIRONMENTS[env_key]['label']}"
+        if source == "auto":
+            status_msg = f"Auto market regime: {MARKET_ENVIRONMENTS[env_key]['label']}"
         self._refresh_rrs_gui(status_msg=status_msg)
+
+    def clear_market_environment_override(self):
+        self.market_environment_user_override = False
 
     def get_market_environment(self):
         with self.market_environment_lock:
             return self.market_environment
+
+    def _spy_session_bars(self):
+        """(today_bars, prev_close) from the cached SPY 5m series."""
+        spy_bars = self.get_cached_5m_bars("SPY")
+        if not spy_bars:
+            return [], None
+        today = spy_bars[-1].dt.date()
+        today_bars = [bar for bar in spy_bars if bar.dt.date() == today]
+        prior_bars = [bar for bar in spy_bars if bar.dt.date() < today]
+        prev_close = prior_bars[-1].close if prior_bars else None
+        return today_bars, prev_close
+
+    def update_auto_market_environment(self):
+        """Track the intraday regime from SPY vs yesterday's close.
+
+        Green day -> bullish, red day -> bearish; |day %| decides strong/weak.
+        Never fights a manual GUI selection (user override wins until cleared).
+        """
+        if not MARKET_REGIME_AUTO_ENABLED or self.market_environment_user_override:
+            return None
+        today_bars, prev_close = self._spy_session_bars()
+        if not today_bars or not prev_close:
+            return None
+        day_pct = (today_bars[-1].close - prev_close) / prev_close * 100.0
+        direction = "bullish" if day_pct >= 0 else "bearish"
+        strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
+        env_key = f"{direction}_{strength}"
+        if env_key != self.get_market_environment():
+            logging.info("Auto market regime: SPY %+.2f%% on the day -> %s", day_pct, env_key)
+            self.set_market_environment(env_key, source="auto")
+        return env_key
+
+    # ------------------------------------------------------------------
+    # Regime-pause bangers: when SPY pauses against the tape, whatever
+    # refuses to participate is the trade (see constants block).
+    # ------------------------------------------------------------------
+    def _detect_spy_pause_start(self, spy_today, side):
+        """Return the pause-start bar datetime, or None while the tape trends.
+
+        Bearish tape (hunting shorts): a pause is a green SPY 5m candle, or no
+        new session low across the last N candles. Bullish tape inverts.
+        """
+        lookback = int(REGIME_PAUSE_NO_NEW_EXTREME_CANDLES)
+        if len(spy_today) < lookback + 2:
+            return None
+        last = spy_today[-1]
+        recent = spy_today[-lookback:]
+        earlier = spy_today[:-lookback]
+        if side == "short":
+            if last.close > last.open:
+                return last.dt
+            if min(bar.low for bar in recent) > min(bar.low for bar in earlier):
+                return recent[0].dt
+        else:
+            if last.close < last.open:
+                return last.dt
+            if max(bar.high for bar in recent) < max(bar.high for bar in earlier):
+                return recent[0].dt
+        return None
+
+    @staticmethod
+    def _window_change_pct(bars, start_dt):
+        window = [bar for bar in bars if bar.dt >= start_dt]
+        if not window or not window[0].open:
+            return None, window
+        return (window[-1].close - window[0].open) / window[0].open * 100.0, window
+
+    def check_regime_pause_setups(self):
+        """SPY paused against the tape: flag the non-participants hard."""
+        env = self.get_market_environment()
+        side = "short" if env.startswith("bearish") else "long"
+        spy_today, _prev_close = self._spy_session_bars()
+        if not spy_today:
+            return []
+        today = spy_today[-1].dt.date()
+        pause_start = self._detect_spy_pause_start(spy_today, side)
+        if pause_start is None:
+            self._regime_pause_state = None
+            return []
+        state = self._regime_pause_state
+        if not state or state.get("date") != today or state.get("side") != side:
+            state = {"date": today, "side": side, "start_dt": pause_start, "alerted": set()}
+            self._regime_pause_state = state
+        pause_candles = sum(1 for bar in spy_today if bar.dt >= state["start_dt"])
+        if pause_candles > int(REGIME_PAUSE_SWEEP_MAX_CANDLES):
+            return []
+        return self._sweep_regime_pause_bangers(state, spy_today, side)
+
+    def _sweep_regime_pause_bangers(self, state, spy_today, side):
+        watchlist = self.shorts if side == "short" else self.longs
+        symbols = sorted(
+            {str(item or "").strip().upper() for item in watchlist if str(item or "").strip()}
+        )
+        if not symbols:
+            return []
+        sign = -1.0 if side == "short" else 1.0
+        spy_open = spy_today[0].open
+        spy_day = (spy_today[-1].close - spy_open) / spy_open * 100.0 if spy_open else None
+        spy_window, _ = self._window_change_pct(spy_today, state["start_dt"])
+        if spy_day is None or spy_window is None:
+            return []
+        # The pause must actually run against the tape direction.
+        if (side == "short" and spy_window < 0) or (side == "long" and spy_window > 0):
+            return []
+
+        flagged = []
+        for symbol in symbols:
+            if symbol in state["alerted"]:
+                continue
+            bars = self.get_cached_5m_bars(symbol)
+            if not bars:
+                continue
+            sym_today = [bar for bar in bars if bar.dt.date() == state["date"]]
+            if len(sym_today) < 2 or not sym_today[0].open:
+                continue
+            sym_day = (sym_today[-1].close - sym_today[0].open) / sym_today[0].open * 100.0
+            sym_window, window_bars = self._window_change_pct(sym_today, state["start_dt"])
+            if sym_window is None:
+                continue
+            # Day-anchored: the symbol must have been notably weaker (shorts) /
+            # stronger (longs) than SPY since the open - the "obvious earlier
+            # in the day" filter.
+            day_excess = sign * (sym_day - spy_day)
+            if day_excess < REGIME_BANGER_DAY_EXCESS_PCT:
+                continue
+            # Pause-window: still moving with the trade direction, or refusing
+            # to follow SPY's pause (compression counts).
+            window_excess = sign * (sym_window - spy_window)
+            still_trending = sign * sym_window > 0
+            pre_window = [bar for bar in sym_today if bar.dt < state["start_dt"]]
+            if not pre_window:
+                made_new_extreme = False
+            elif side == "short":
+                made_new_extreme = min(bar.low for bar in window_bars) < min(bar.low for bar in pre_window)
+            else:
+                made_new_extreme = max(bar.high for bar in window_bars) > max(bar.high for bar in pre_window)
+            if not (still_trending or made_new_extreme or window_excess >= REGIME_BANGER_WINDOW_EXCESS_PCT):
+                continue
+            state["alerted"].add(symbol)
+            flagged.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "sym_day": sym_day,
+                    "spy_day": spy_day,
+                    "sym_window": sym_window,
+                    "spy_window": spy_window,
+                    "day_excess": day_excess,
+                    "last_bar": sym_today[-1],
+                }
+            )
+        for hit in flagged:
+            self._emit_regime_pause_banger(hit)
+        return flagged
+
+    def _emit_regime_pause_banger(self, hit):
+        symbol = hit["symbol"]
+        side = hit["side"]
+        bounce_type = REGIME_PAUSE_RW_TYPE if side == "short" else REGIME_PAUSE_RS_TYPE
+        last_bar = hit["last_bar"]
+        bar_dict = {
+            "time": last_bar.dt.strftime("%Y%m%d  %H:%M:%S"),
+            "open": last_bar.open,
+            "high": last_bar.high,
+            "low": last_bar.low,
+            "close": last_bar.close,
+        }
+        levels = {bounce_type: last_bar.close}
+        event_row = self._log_bounce_candidate_event(
+            "confirmed",
+            symbol,
+            side,
+            levels,
+            bar_dict,
+            bar_dict,
+            reason=(
+                f"SPY pause banger: day {hit['sym_day']:+.2f}% vs SPY {hit['spy_day']:+.2f}%; "
+                f"pause window {hit['sym_window']:+.2f}% vs SPY {hit['spy_window']:+.2f}%"
+            ),
+        )
+        self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
+        quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        label = "RW BANGER" if side == "short" else "RS BANGER"
+        message = (
+            f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): SPY paused "
+            f"({hit['spy_window']:+.2f}% window) but {symbol} isn't participating - "
+            f"day {hit['sym_day']:+.2f}% vs SPY {hit['spy_day']:+.2f}% "
+            f"(excess {hit['day_excess']:+.2f}%), window {hit['sym_window']:+.2f}%."
+        )
+        payload = self._build_bounce_feedback_alert_payload(message, event_row)
+        if self.gui_callback:
+            self.gui_callback(payload, "red" if side == "short" else "green")
+        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_bounce_to_file(
+            symbol=symbol,
+            direction=side,
+            levels=levels,
+            bounce_candle=bar_dict,
+            current_candle=bar_dict,
+            threshold=0.0,
+            quality=quality,
+        )
 
     def _earnings_reaction_source_paths(self):
         paths = []
@@ -7357,11 +7591,25 @@ class BounceBot(EWrapper, EClient):
                 self._prune_latest_bars_for_cycle(refresh_background, background_symbols)
                 self.build_atr_cache()
 
+                # Auto-track the intraday regime (SPY vs yesterday's close)
+                # before anything downstream reads the environment.
+                try:
+                    self.update_auto_market_environment()
+                except Exception:
+                    logging.exception("Auto market regime update failed.")
+
                 # Log strongest/weakest names for key intraday timeframes each cycle.
                 for timeframe_key in ("5m", "15m", "1h"):
                     self.run_rrs_scan(timeframe_key_override=timeframe_key, emit_gui=False)
                 # Keep the GUI view synced with user-selected RRS timeframe.
                 self.run_rrs_scan()
+
+                # Regime-pause bangers: SPY paused against the tape -> flag the
+                # longs/shorts.txt names that refuse to participate.
+                try:
+                    self.check_regime_pause_setups()
+                except Exception:
+                    logging.exception("Regime pause sweep failed.")
 
                 d1_watch_symbols = set(self.get_master_avwap_d1_watch_symbols())
                 monitored_symbols = self.get_monitored_extreme_symbols() | d1_watch_symbols

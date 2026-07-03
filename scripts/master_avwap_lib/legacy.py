@@ -19585,6 +19585,16 @@ def _build_master_avwap_bucket_upgrade_alert_payload(
         row = rows_by_key.get((symbol, side_raw), {})
         symbol_state = ai_symbols.get(symbol, {})
         symbol_state = symbol_state if isinstance(symbol_state, dict) else {}
+        # Evidence gate (2026-07-03): bucket assignment runs BEFORE the
+        # Expected-R coherence cap, so a capped row can still show up here as
+        # "upgraded to Favorite". Fresh upgrades measure +0.65%/+2.27%/+3.53%
+        # over 1/3/5 sessions in the tier outcomes - but only when the row is
+        # one the ranking actually believes in. Skip capped/negative-ExpR rows.
+        upgrade_expected_r = _coerce_float(row.get("expected_r") or symbol_state.get("expected_r"))
+        if row.get("expected_r_score_cap_note") or (
+            upgrade_expected_r is not None and upgrade_expected_r < 0
+        ):
+            continue
         current_bucket = str(
             upgrade.get("bucket")
             or row.get("priority_bucket")
@@ -20096,7 +20106,8 @@ def format_master_avwap_d1_upgrade_alert_report(payload: dict) -> str:
         lines = [
             "MASTER AVWAP D1 FOCUS ALERTS",
             "=" * 80,
-            "Only genuine bucket upgrades into Favorite or High Conviction are shown here.",
+            "Genuine bucket upgrades into Favorite / High Conviction with positive Expected-R only.",
+            "(Fresh upgrades measured +0.65% / +2.27% / +3.53% over 1/3/5 sessions vs +0.35% / +1.37% / +2.41% for continuing S/A names.)",
         ]
         if not symbols:
             lines.append("No D1 focus bucket upgrades generated for the latest scan.")
@@ -20106,12 +20117,14 @@ def format_master_avwap_d1_upgrade_alert_report(payload: dict) -> str:
                 continue
             score = _coerce_float(entry.get("priority_score"))
             score_text = "n/a" if score is None else (f"{score:.1f}" if abs(score - round(score)) > 0.01 else f"{score:.0f}")
+            expected_r = _coerce_float(entry.get("expected_r"))
+            expected_r_text = "n/a" if expected_r is None else f"{expected_r:+.2f}R"
             side = normalize_side(entry.get("side")) or "WATCH"
             previous_bucket = str(entry.get("previous_bucket") or "").strip().lower() or "missing"
             bucket = str(entry.get("priority_bucket") or "").strip().lower() or "unbucketed"
             family = str(entry.get("setup_family") or "general").strip() or "general"
             lines.append(
-                f"{symbol} {side} score={score_text} "
+                f"{symbol} {side} ExpR={expected_r_text} score={score_text} "
                 f"upgrade={_priority_bucket_label(previous_bucket)} -> {_priority_bucket_label(bucket)} "
                 f"family={family}"
             )

@@ -202,6 +202,140 @@ def test_prune_latest_bars_keeps_only_background_on_off_cycles():
     assert stub.latest_bars == {}
 
 
+def _make_bar(dt, open_, high, low, close):
+    from bounce_bot_lib.legacy import IbBar
+
+    return IbBar(dt=dt, open=open_, high=high, low=low, close=close)
+
+
+def _regime_stub(spy_bars, sym_bars_map, *, env, longs=(), shorts=()):
+    import threading
+
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        pass
+
+    for name in (
+        "_spy_session_bars",
+        "update_auto_market_environment",
+        "_detect_spy_pause_start",
+        "check_regime_pause_setups",
+        "_sweep_regime_pause_bangers",
+        "get_market_environment",
+        "set_market_environment",
+        "clear_market_environment_override",
+    ):
+        setattr(Stub, name, getattr(BounceBot, name))
+    Stub._window_change_pct = BounceBot.__dict__["_window_change_pct"]
+
+    stub = Stub()
+    stub.market_environment = env
+    stub.market_environment_lock = threading.Lock()
+    stub.market_environment_user_override = False
+    stub._regime_pause_state = None
+    stub.longs = list(longs)
+    stub.shorts = list(shorts)
+    stub.emitted = []
+    stub.get_cached_5m_bars = lambda symbol, _spy=spy_bars, _m=sym_bars_map: (
+        _spy if symbol == "SPY" else _m.get(symbol, [])
+    )
+    stub._emit_regime_pause_banger = lambda hit: stub.emitted.append(hit)
+    stub._refresh_rrs_gui = lambda **kwargs: None
+    return stub
+
+
+def _downtrend_session(base, *, candles, step, start=None, green_last=False):
+    from datetime import datetime, timedelta
+
+    start = start or datetime(2026, 7, 2, 9, 30)
+    bars = []
+    price = base
+    for index in range(candles):
+        open_ = price
+        close = price + step  # step negative = falling
+        if green_last and index == candles - 1:
+            close = open_ + abs(step)  # one green candle
+        high = max(open_, close) + 0.05
+        low = min(open_, close) - 0.05
+        bars.append(_make_bar(start + timedelta(minutes=5 * index), open_, high, low, close))
+        price = close
+    return bars
+
+
+def test_auto_market_regime_tracks_spy_and_respects_override():
+    from datetime import datetime, timedelta
+
+    # Yesterday's close 100; today SPY trades down ~0.9% -> bearish_strong.
+    prev = [_make_bar(datetime(2026, 7, 1, 15, 55), 100.0, 100.1, 99.9, 100.0)]
+    today = _downtrend_session(100.0, candles=10, step=-0.09, start=datetime(2026, 7, 2, 9, 30))
+    stub = _regime_stub(prev + today, {}, env="bullish_strong")
+
+    env = stub.update_auto_market_environment()
+    assert env == "bearish_strong"
+    assert stub.get_market_environment() == "bearish_strong"
+    assert stub.market_environment_user_override is False  # auto never pins
+
+    # A manual selection pins the regime; auto then stands down.
+    stub.set_market_environment("bullish_weak", source="user")
+    assert stub.market_environment_user_override is True
+    assert stub.update_auto_market_environment() is None
+    assert stub.get_market_environment() == "bullish_weak"
+    stub.clear_market_environment_override()
+    assert stub.update_auto_market_environment() == "bearish_strong"
+
+
+def test_regime_pause_flags_nonparticipating_weak_name():
+    from datetime import datetime
+
+    start = datetime(2026, 7, 2, 9, 30)
+    # SPY: down all day, final candle green (the pause).
+    spy = _downtrend_session(100.0, candles=12, step=-0.08, start=start, green_last=True)
+    # AAOI-style: down 10x harder all day and STILL makes a new low on the pause.
+    weak = _downtrend_session(140.0, candles=12, step=-1.6, start=start)
+    # A name that bounces WITH SPY on the pause candle: not a banger.
+    bouncer = _downtrend_session(50.0, candles=12, step=-0.3, start=start, green_last=True)
+
+    stub = _regime_stub(spy, {"AAOI": weak, "BNCR": bouncer}, env="bearish_strong", shorts=["AAOI", "BNCR"])
+    flagged = stub.check_regime_pause_setups()
+
+    symbols = [hit["symbol"] for hit in flagged]
+    assert symbols == ["AAOI"]
+    hit = flagged[0]
+    assert hit["side"] == "short"
+    assert hit["day_excess"] > 5  # dramatically weaker than SPY on the day
+    assert stub.emitted and stub.emitted[0]["symbol"] == "AAOI"
+
+    # Same pause: no duplicate alert for AAOI.
+    assert stub.check_regime_pause_setups() == []
+
+    # SPY resumes making new lows -> pause state resets.
+    resumed = spy + [_make_bar(datetime(2026, 7, 2, 10, 35), spy[-1].close, spy[-1].close, spy[-1].close - 1.5, spy[-1].close - 1.4)]
+    stub.get_cached_5m_bars = lambda symbol: resumed if symbol == "SPY" else weak
+    assert stub.check_regime_pause_setups() == []
+    assert stub._regime_pause_state is None
+
+
+def test_regime_pause_inverts_for_bullish_tape():
+    from datetime import datetime
+
+    start = datetime(2026, 7, 2, 9, 30)
+    # Bullish tape: SPY up all day, final candle red (the pause).
+    spy = [
+        _make_bar(b.dt, 200 - (b.open - 100), 200 - (b.low - 100), 200 - (b.high - 100), 200 - (b.close - 100))
+        for b in _downtrend_session(100.0, candles=12, step=-0.08, start=start, green_last=True)
+    ]
+    # Strong name: up far more than SPY and still making highs through the pause.
+    strong = [
+        _make_bar(b.dt, 280 - (b.open - 140), 280 - (b.low - 140), 280 - (b.high - 140), 280 - (b.close - 140))
+        for b in _downtrend_session(140.0, candles=12, step=-1.6, start=start)
+    ]
+    stub = _regime_stub(spy, {"MSTR": strong}, env="bullish_strong", longs=["MSTR"])
+    flagged = stub.check_regime_pause_setups()
+    assert [hit["symbol"] for hit in flagged] == ["MSTR"]
+    assert flagged[0]["side"] == "long"
+
+
 def test_d1_flag_gate_requires_actionable_bucket_and_evidence():
     from types import SimpleNamespace
 
