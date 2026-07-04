@@ -61,6 +61,16 @@ class ScanService(QObject):
     def run_local_watchlist_scan(self) -> bool:
         return self._start(lambda: _run_master_scan_subprocess(use_shared_watchlists=False), "Running local-watchlist Master AVWAP scan...")
 
+    def run_autopilot_scan(self, *, update_setup_tracker: bool, label: str) -> bool:
+        """Shared-watchlist scan with an explicit tracker-write decision (Auto Pilot slots)."""
+        return self._start(
+            lambda: _run_master_scan_subprocess(
+                use_shared_watchlists=True,
+                update_setup_tracker=update_setup_tracker,
+            ),
+            label,
+        )
+
     def _start(self, target: Callable[[], Any], label: str) -> bool:
         if self.running:
             return False
@@ -105,13 +115,25 @@ class ScanService(QObject):
         self._worker = None
 
 
-def _run_master_scan_subprocess(*, use_shared_watchlists: bool) -> dict[str, Any]:
+def _run_master_scan_subprocess(
+    *,
+    use_shared_watchlists: bool,
+    update_setup_tracker: bool | None = None,
+) -> dict[str, Any]:
     """Run scanner work outside the Qt process so native faults do not close the GUI."""
+    if update_setup_tracker is None:
+        run_call = f"run_master_with_shared_watchlists() if {use_shared_watchlists!r} else run_master()"
+    else:
+        run_call = (
+            "run_master(use_shared_watchlists=True, "
+            f"update_setup_tracker={bool(update_setup_tracker)!r}, "
+            "require_ib_for_setup_tracker=True, include_theta=True)"
+        )
     code = (
         "import faulthandler; "
         "faulthandler.enable(); "
         "from master_avwap_lib.runner import run_master, run_master_with_shared_watchlists; "
-        f"run_master_with_shared_watchlists() if {use_shared_watchlists!r} else run_master(); "
+        f"{run_call}; "
         "print('SCAN_SUBPROCESS_OK')"
     )
     env = os.environ.copy()

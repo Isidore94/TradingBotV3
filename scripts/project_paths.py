@@ -233,6 +233,14 @@ MASTER_AVWAP_MARKET_PREP_FILE = RUNTIME_DATA_DIR / "master_avwap_market_prep.jso
 MASTER_AVWAP_MARKET_PREP_REPORT_FILE = REPORTS_DIR / "master_avwap_market_prep.txt"
 EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE = REPORTS_DIR / "earnings_anchor_candidates.txt"
 
+# Auto Pilot (unattended mini-PC mode). The report is the away-from-desk digest
+# and lives at the top of the shared Drive folder so it's one tap in the Drive
+# mobile app; scheduler state + activity log are per-machine so two machines
+# never fight over them through cloud sync.
+AUTOPILOT_REPORT_FILE = SHARED_HOME_DIR / "autopilot_today.txt"
+AUTOPILOT_STATE_FILE = LOCAL_MACHINE_CACHE_DIR / "autopilot_state.json"
+AUTOPILOT_LOG_FILE = LOCAL_LOG_DIR / "autopilot.log"
+
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
 # Rotating diagnostic log lives on local disk (see LOCAL_LOG_DIR) so rotation never
 # collides with cloud-sync file locks; data-style logs (bouncers, RRS CSVs) stay on

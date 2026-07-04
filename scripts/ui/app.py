@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from project_paths import get_shared_watchlist_details, get_tracker_storage_details
+from ui.panels.autopilot_panel import AutopilotPanel
 from ui.panels.journal_panel import JournalPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
         self.journal_panel = JournalPanel()
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel()
+        self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
         self.settings_panel = SettingsPanel(self.state, bounce_service=self.trading_panel.bounce_panel.service)
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
 
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.journal_panel)
         self.pages.addWidget(self.universe_panel)
         self.pages.addWidget(self.research_panel)
+        self.pages.addWidget(self.autopilot_panel)
         self.pages.addWidget(self.settings_panel)
 
         self.title_label = QLabel("Trading Desk")
@@ -95,6 +98,7 @@ class MainWindow(QMainWindow):
             ("Journal", "mdi.notebook-outline"),
             ("Universe", "mdi.earth"),
             ("Research", "mdi.flask-outline"),
+            ("Auto Pilot", "mdi.robot-outline"),
             ("Settings", "mdi.cog-outline"),
         )
         for index, (label, icon_name) in enumerate(nav_items):
@@ -162,7 +166,7 @@ class MainWindow(QMainWindow):
         self.addAction(focus_action)
 
     def _select_page(self, index: int) -> None:
-        titles = ("Trading Desk", "Focus Picks", "Journal", "Universe", "Research", "Settings")
+        titles = ("Trading Desk", "Focus Picks", "Journal", "Universe", "Research", "Auto Pilot", "Settings")
         self.pages.setCurrentIndex(index)
         self.title_label.setText(titles[index])
         for button_index, button in enumerate(self.nav_buttons):
@@ -201,7 +205,7 @@ class MainWindow(QMainWindow):
         self.setup_status.setText(f"Setups: {total} | Favorites: {favorites} | Near: {near}")
 
     def closeEvent(self, event) -> None:
-        for panel in (self.trading_panel, self.journal_panel, self.universe_panel, self.research_panel, self.settings_panel):
+        for panel in (self.trading_panel, self.journal_panel, self.universe_panel, self.research_panel, self.autopilot_panel, self.settings_panel):
             try:
                 panel.shutdown()
             except Exception:

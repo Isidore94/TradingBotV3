@@ -212,6 +212,10 @@ class BounceService(QObject):
                 pass
         self.scanningChanged.emit(self.scanning_enabled)
 
+    def current_bot(self):
+        """The live BounceBot instance, or None (used by Auto Pilot)."""
+        return self._current_bot()
+
     def _current_bot(self):
         with self._lock:
             return self._bot
