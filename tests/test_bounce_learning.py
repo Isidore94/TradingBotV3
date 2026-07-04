@@ -336,6 +336,359 @@ def test_regime_pause_inverts_for_bullish_tape():
     assert flagged[0]["side"] == "long"
 
 
+def _daytrade_sweep_stub(spy_bars, sym_bars_map, *, longs=(), shorts=()):
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        pass
+
+    for name in (
+        "_spy_session_bars",
+        "_watchlist_day_sweep_symbols",
+        "_symbol_session_bars",
+        "check_orb_break_setups",
+        "_evaluate_orb_break",
+        "check_ema8_grind_setups",
+        "_evaluate_ema8_grind",
+    ):
+        setattr(Stub, name, getattr(BounceBot, name))
+
+    stub = Stub()
+    stub._orb_break_state = None
+    stub._ema8_grind_state = None
+    stub.longs = list(longs)
+    stub.shorts = list(shorts)
+    stub.orb_emitted = []
+    stub.ema8_emitted = []
+    stub.get_cached_5m_bars = lambda symbol, _spy=spy_bars, _m=sym_bars_map: (
+        _spy if symbol == "SPY" else _m.get(symbol, [])
+    )
+    stub._emit_orb_break_alert = lambda hit: stub.orb_emitted.append(hit)
+    stub._emit_ema8_grind_alert = lambda hit: stub.ema8_emitted.append(hit)
+    return stub
+
+
+def _session_bars(start, ohlc_rows):
+    from datetime import timedelta
+
+    return [
+        _make_bar(start + timedelta(minutes=5 * index), o, h, l, c)
+        for index, (o, h, l, c) in enumerate(ohlc_rows)
+    ]
+
+
+def _flat_session(start, candles, price=100.0, half_range=0.5):
+    return _session_bars(
+        start, [(price, price + half_range, price - half_range, price)] * candles
+    )
+
+
+def test_orb_break_fires_only_after_30_minutes():
+    from datetime import datetime
+
+    start = datetime(2026, 7, 2, 9, 30)
+    spy = _flat_session(start, 8)
+
+    # BRKR: OR high 101; a 9:45 wick through survives; first CLOSE through at 10:00.
+    brkr = _session_bars(
+        start,
+        [
+            (100.0, 101.0, 99.0, 100.5),  # 9:30 opening range
+            (100.5, 100.9, 100.2, 100.6),
+            (100.6, 100.8, 100.1, 100.4),
+            (100.4, 101.3, 100.3, 100.8),  # 9:45 wick above the OR high, closes inside
+            (100.8, 100.9, 100.4, 100.7),
+            (100.7, 101.0, 100.5, 100.9),
+            (100.9, 101.6, 100.8, 101.4),  # 10:00 first close above 101 -> alert
+        ],
+    )
+    # ERLY: closes through the OR high at 9:40 -> the delayed break is dead all day.
+    erly = _session_bars(
+        start,
+        [
+            (50.0, 50.5, 49.5, 50.2),
+            (50.2, 50.6, 50.0, 50.4),
+            (50.4, 51.0, 50.3, 50.9),  # 9:40 early close through 50.5
+            (50.9, 50.9, 50.2, 50.3),
+            (50.3, 50.4, 50.0, 50.1),
+            (50.1, 50.3, 49.9, 50.0),
+            (50.0, 51.2, 49.9, 51.1),  # 10:00 breaks again - stays dead
+        ],
+    )
+    stub = _daytrade_sweep_stub(spy, {"BRKR": brkr, "ERLY": erly}, longs=["BRKR", "ERLY"])
+    hits = stub.check_orb_break_setups()
+    assert [hit["symbol"] for hit in hits] == ["BRKR"]
+    hit = hits[0]
+    assert hit["side"] == "long"
+    assert hit["level"] == 101.0
+    assert hit["minutes_after_open"] == 30
+    assert stub.orb_emitted and stub.orb_emitted[0]["symbol"] == "BRKR"
+    assert "ERLY|long" in stub._orb_break_state["dead"]
+
+    # Same session state: no duplicate alert on the next sweep.
+    assert stub.check_orb_break_setups() == []
+
+
+def test_orb_breakdown_shorts_and_stale_breaks_stay_quiet():
+    from datetime import datetime
+
+    start = datetime(2026, 7, 2, 9, 30)
+    spy = _flat_session(start, 13)
+
+    # SHRT: OR low 49.5 holds on closes (one wick through) until 10:05 -> breakdown.
+    shrt = _session_bars(
+        start,
+        [
+            (50.0, 50.5, 49.5, 49.8),  # opening range
+            (49.8, 50.0, 49.6, 49.7),
+            (49.7, 49.9, 49.4, 49.6),  # wick below holds on the close
+            (49.6, 49.8, 49.55, 49.7),
+            (49.7, 49.9, 49.6, 49.8),
+            (49.8, 49.9, 49.5, 49.6),
+            (49.6, 49.7, 49.5, 49.55),
+            (49.55, 49.6, 49.1, 49.2),  # 10:05 first close below 49.5
+        ],
+    )
+    # STAL: legit 10:00 breakout, but first seen six candles later (restart) ->
+    # stale news, marked dead instead of alerted.
+    stal_rows = [
+        (100.0, 101.0, 99.0, 100.5),
+        (100.5, 100.9, 100.2, 100.6),
+        (100.6, 100.8, 100.1, 100.4),
+        (100.4, 100.9, 100.3, 100.8),
+        (100.8, 100.9, 100.4, 100.7),
+        (100.7, 101.0, 100.5, 100.9),
+        (100.9, 101.6, 100.8, 101.4),  # 10:00 close through
+    ] + [(101.4, 101.7, 101.2, 101.5)] * 6
+    stal = _session_bars(start, stal_rows)
+
+    stub = _daytrade_sweep_stub(spy, {"SHRT": shrt, "STAL": stal}, longs=["STAL"], shorts=["SHRT"])
+    hits = stub.check_orb_break_setups()
+    assert [hit["symbol"] for hit in hits] == ["SHRT"]
+    assert hits[0]["side"] == "short"
+    assert hits[0]["level"] == 49.5
+    assert hits[0]["minutes_after_open"] == 35
+    assert "STAL|long" in stub._orb_break_state["dead"]
+
+
+def _ema8_grind_session_rows():
+    rows = [
+        (100.0, 102.1, 99.9, 102.0),  # 9:30 rip
+        (102.0, 102.9, 101.9, 102.8),
+        (102.8, 103.1, 102.6, 103.0),  # HOD 103.1
+        (103.0, 103.0, 102.1, 102.2),  # pullback
+        (102.2, 102.3, 101.8, 101.9),
+    ]
+    for close in (101.9, 101.95, 101.9, 101.95, 101.9, 101.95):  # the grind
+        rows.append((rows[-1][3], close + 0.15, close - 0.15, close))
+    rows.append((101.95, 103.5, 101.9, 103.4))  # push into a new HOD
+    return rows
+
+
+def test_ema8_grind_squeeze_fires_on_new_hod_push():
+    from datetime import datetime
+
+    prev_day = _flat_session(datetime(2026, 7, 1, 12, 0), 20)
+    start = datetime(2026, 7, 2, 9, 30)
+    spy = _flat_session(start, 12)
+
+    grind = prev_day + _session_bars(start, _ema8_grind_session_rows())
+    # A one-way rip: every bar a new HOD, no pullback -> not this setup.
+    rip_rows = [(100.0 + i, 101.2 + i, 99.9 + i, 101.0 + i) for i in range(12)]
+    rip = prev_day + _session_bars(start, rip_rows)
+
+    stub = _daytrade_sweep_stub(spy, {"GRND": grind, "RIPP": rip}, longs=["GRND", "RIPP"])
+    hits = stub.check_ema8_grind_setups()
+    assert [hit["symbol"] for hit in hits] == ["GRND"]
+    hit = hits[0]
+    assert hit["side"] == "long"
+    assert hit["new_extreme"] == 103.5
+    assert hit["day_pct"] > 3
+    assert hit["squeeze_gap_atr"] <= 0.35
+    assert stub.ema8_emitted and stub.ema8_emitted[0]["symbol"] == "GRND"
+
+    # No duplicate on the next sweep.
+    assert stub.check_ema8_grind_setups() == []
+
+
+def test_ema8_grind_rejects_broken_grind_and_inverts_for_shorts():
+    from datetime import datetime
+
+    prev_day = _flat_session(datetime(2026, 7, 1, 12, 0), 20)
+    start = datetime(2026, 7, 2, 9, 30)
+    spy = _flat_session(start, 12)
+
+    rows = _ema8_grind_session_rows()
+    broken = list(rows)
+    o, h, _l, _c = broken[8]
+    broken[8] = (o, h, 100.8, 101.0)  # one 5m close below the 8-EMA kills the grind
+    broken_bars = prev_day + _session_bars(start, broken)
+
+    # Mirror of the good long session (price' = 200 - price): grind below the
+    # 8-EMA into a new LOD. The flat-100 prior day is its own mirror.
+    mirrored = [(200 - o, 200 - l, 200 - h, 200 - c) for (o, h, l, c) in rows]
+    short_bars = prev_day + _session_bars(start, mirrored)
+
+    stub = _daytrade_sweep_stub(
+        spy, {"BRKN": broken_bars, "SHGR": short_bars}, longs=["BRKN"], shorts=["SHGR"]
+    )
+    hits = stub.check_ema8_grind_setups()
+    assert [hit["symbol"] for hit in hits] == ["SHGR"]
+    assert hits[0]["side"] == "short"
+    assert hits[0]["new_extreme"] == 96.5  # 200 - 103.5
+
+
+def _structure_df(rows):
+    import pandas as pd
+
+    return pd.DataFrame(
+        [{"open": o, "high": h, "low": l, "close": c} for (o, h, l, c) in rows]
+    )
+
+
+def test_session_structure_gate_wants_trend_plus_simple_retest():
+    from bounce_bot_lib.legacy import _session_structure_report
+
+    # Advance off the open, ONE pullback retesting lower, still up on the day.
+    clean = _structure_df(
+        [
+            (100.0, 101.0, 99.9, 100.9),
+            (100.9, 102.0, 100.8, 101.9),
+            (101.9, 103.0, 101.8, 102.9),
+            (102.9, 103.2, 102.7, 103.0),
+            (103.0, 103.0, 102.0, 102.2),  # the pullback
+            (102.2, 102.3, 101.6, 101.8),
+            (101.8, 102.4, 101.7, 102.3),  # bounce candle
+        ]
+    )
+    ok, reason = _session_structure_report(clean, "long", 0.5)
+    assert ok, reason
+    assert "pullbacks 1" in reason
+
+    # Mirrored tape: same structure reads clean for a short.
+    mirrored = _structure_df(
+        [(200 - o, 200 - l, 200 - h, 200 - c) for (o, h, l, c) in clean[["open", "high", "low", "close"]].itertuples(index=False)]
+    )
+    ok_short, reason_short = _session_structure_report(mirrored, "short", 0.5)
+    assert ok_short, reason_short
+
+
+def test_session_structure_gate_rejects_compression_chop_and_giveback():
+    from bounce_bot_lib.legacy import _session_structure_report
+
+    # Compressed: no directional leg off the open.
+    compressed = _structure_df(
+        [
+            (100.0, 100.4, 99.7, 100.1),
+            (100.1, 100.5, 99.8, 100.0),
+            (100.0, 100.3, 99.7, 100.2),
+            (100.2, 100.6, 99.8, 100.4),
+            (100.4, 100.5, 99.9, 100.3),
+        ]
+    )
+    ok, reason = _session_structure_report(compressed, "long", 0.5)
+    assert not ok and "compressed" in reason
+
+    # Choppy: real advance but three deep pullbacks.
+    choppy = _structure_df(
+        [
+            (100.0, 102.0, 99.9, 101.9),
+            (101.9, 104.0, 101.8, 103.9),
+            (103.9, 104.0, 102.2, 102.4),  # pullback 1
+            (102.4, 104.2, 102.3, 104.0),
+            (104.0, 104.2, 102.5, 102.7),  # pullback 2
+            (102.7, 104.5, 102.6, 104.3),
+            (104.3, 104.5, 102.8, 103.0),  # pullback 3
+        ]
+    )
+    ok, reason = _session_structure_report(choppy, "long", 0.5)
+    assert not ok and "choppy" in reason
+
+    # Advance fully given back: not "moving higher" any more.
+    giveback = _structure_df(
+        [
+            (100.0, 101.5, 99.9, 101.4),
+            (101.4, 103.0, 101.3, 102.9),
+            (102.9, 103.2, 101.0, 101.2),
+            (101.2, 101.3, 99.5, 99.7),
+        ]
+    )
+    ok, reason = _session_structure_report(giveback, "long", 0.5)
+    assert not ok and "given back" in reason
+
+    # Too few bars to judge: pass through, per-level checks still apply.
+    young = _structure_df([(100.0, 100.2, 99.9, 100.1)] * 3)
+    ok, _reason = _session_structure_report(young, "long", 0.5)
+    assert ok
+
+
+def _vwap_bar(dt, close, *, spread=0.1, volume=1000.0):
+    from bounce_bot_lib.legacy import IbBar
+
+    return IbBar(dt=dt, open=close - 0.05, high=close + spread, low=close - spread, close=close, volume=volume)
+
+
+def test_vwap_regime_classification():
+    from datetime import datetime, timedelta
+
+    from bounce_bot_lib.legacy import _classify_spy_vwap_regime
+
+    start = datetime(2026, 7, 2, 9, 30)
+
+    # Steady trend day: closes ride above VWAP+1stdev for most of the session.
+    strong = [_vwap_bar(start + timedelta(minutes=5 * i), 100.0 + i) for i in range(12)]
+    assert _classify_spy_vwap_regime(strong, prev_close=99.5) == "bullish_strong"
+
+    # Green but band-less chop: above VWAP, up on the day, never band-extended.
+    weak_closes = [99.9] * 6 + [100.3] * 6
+    weak = [_vwap_bar(start + timedelta(minutes=5 * i), c) for i, c in enumerate(weak_closes)]
+    assert _classify_spy_vwap_regime(weak, prev_close=100.0) == "bullish_weak"
+
+    # Mirrored: closes pinned under VWAP-1stdev -> bearish_strong.
+    down = [_vwap_bar(start + timedelta(minutes=5 * i), 100.0 - i) for i in range(12)]
+    assert _classify_spy_vwap_regime(down, prev_close=100.5) == "bearish_strong"
+
+    # Too young / no volume -> None (caller falls back to the day% rule).
+    assert _classify_spy_vwap_regime(strong[:6], prev_close=99.5) is None
+    no_volume = [_vwap_bar(start + timedelta(minutes=5 * i), 100.0 + i, volume=0.0) for i in range(12)]
+    assert _classify_spy_vwap_regime(no_volume, prev_close=99.5) is None
+
+
+def test_pacing_backoff_registers_and_escalates():
+    import threading
+
+    from bounce_bot_lib.legacy import (
+        IB_PACING_BACKOFF_INITIAL_SECONDS,
+        IB_PACING_BACKOFF_MAX_SECONDS,
+        BounceBot,
+    )
+
+    class Stub:
+        pass
+
+    for name in ("_register_pacing_violation", "pacing_delay_remaining"):
+        setattr(Stub, name, getattr(BounceBot, name))
+
+    stub = Stub()
+    stub.pacing_lock = threading.Lock()
+    stub.pacing_backoff_seconds = 0.0
+    stub.pacing_backoff_until = 0.0
+    stub.last_pacing_violation_at = 0.0
+    stub.gui_callback = None
+
+    assert stub.pacing_delay_remaining() == 0.0
+    stub._register_pacing_violation(162)
+    assert stub.pacing_backoff_seconds == IB_PACING_BACKOFF_INITIAL_SECONDS
+    assert stub.pacing_delay_remaining() > 0
+
+    # A repeat violation inside the reset window doubles the cooldown, capped.
+    stub._register_pacing_violation(100)
+    assert stub.pacing_backoff_seconds == IB_PACING_BACKOFF_INITIAL_SECONDS * 2
+    for _ in range(10):
+        stub._register_pacing_violation(100)
+    assert stub.pacing_backoff_seconds == IB_PACING_BACKOFF_MAX_SECONDS
+
+
 def test_d1_flag_gate_requires_actionable_bucket_and_evidence():
     from types import SimpleNamespace
 

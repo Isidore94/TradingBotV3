@@ -240,6 +240,10 @@ BOUNCE_TYPE_LABELS = {
     "prev_day_low": "Previous Day Low",
     "regime_pause_rw": "Regime Pause RW",
     "regime_pause_rs": "Regime Pause RS",
+    "orb_breakout": "5m ORB Breakout (30m+)",
+    "orb_breakdown": "5m ORB Breakdown (30m+)",
+    "ema8_grind_hod": "8-EMA Grind New HOD",
+    "ema8_grind_lod": "8-EMA Grind New LOD",
 }
 BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 
@@ -263,6 +267,14 @@ D1_FLAG_MIN_EXPECTED_R = 0.0
 # Connection & Request settings
 MAX_CONCURRENT_REQUESTS = 1
 REQUEST_DELAY = 0.1  # seconds between IB historical data requests
+
+# IB pacing protection (2026-07-04): the open is heavy on M5 history pulls, so
+# pacing complaints (error 100, or any message mentioning "pacing") put an
+# escalating cooldown on historical requests instead of hammering the API.
+# Repeat violations inside the reset window double the cooldown up to the max.
+IB_PACING_BACKOFF_INITIAL_SECONDS = 30.0
+IB_PACING_BACKOFF_MAX_SECONDS = 300.0
+IB_PACING_VIOLATION_RESET_SECONDS = 600.0
 
 # RRS (Real Relative Strength) settings
 RRS_DEFAULT_THRESHOLD = 2.0
@@ -374,6 +386,12 @@ MARKET_ENVIRONMENTS = {
 # this itself every cycle; a manual GUI selection overrides it for the session.
 MARKET_REGIME_AUTO_ENABLED = True
 MARKET_REGIME_STRONG_ABS_PCT = 0.5
+# VWAP-based regime read (2026-07-04): SPY holding above VWAP+1stdev for most
+# of the session is bullish_strong; above VWAP and green on the day but under
+# the band is bullish_weak. Inverted for bearish. Needs at least an hour of
+# 5m bars (and volume data) - before that the day%-vs-prev-close rule applies.
+MARKET_REGIME_VWAP_MIN_BARS = 12
+MARKET_REGIME_VWAP_BAND_FRACTION = 0.60
 
 # Regime-pause banger detection (2026-07-03). In a bearish tape, when SPY
 # prints a green 5m candle or stops making new session lows for a few candles,
@@ -387,6 +405,32 @@ REGIME_BANGER_DAY_EXCESS_PCT = 0.75
 REGIME_BANGER_WINDOW_EXCESS_PCT = 0.20
 REGIME_PAUSE_RW_TYPE = "regime_pause_rw"
 REGIME_PAUSE_RS_TYPE = "regime_pause_rs"
+
+# Delayed 5m opening-range breaks (2026-07-04). The trader's ORB variant: the
+# 5-minute opening range (the 9:30 candle) has to survive the first 30 minutes
+# untouched on a closing basis; the FIRST 5m close through it at 30+ minutes
+# after the open is the alert. An early close through the range kills the
+# setup for the day (wicks through are fine - failed pokes keep it alive).
+# longs.txt names break the OR high, shorts.txt names break the OR low.
+ORB_DELAY_MINUTES = 30
+# A break older than this many bars when first seen (e.g. after a restart) is
+# stale news, not a live trigger - mark it dead instead of alerting.
+ORB_FRESH_BREAK_MAX_BARS = 2
+ORB_BREAKOUT_TYPE = "orb_breakout"
+ORB_BREAKDOWN_TYPE = "orb_breakdown"
+
+# 8-EMA grind squeeze (2026-07-04). Longs: a strong name pulls back after the
+# initial push, then rides the 5m 8-EMA without a single close below it; the
+# candle-to-EMA gap compresses (the "squeeze") and the alert fires on the bar
+# that pushes into a new HOD. Inverted for shorts (grind below, new LOD).
+EMA8_GRIND_LENGTH = 8
+EMA8_GRIND_MIN_BARS = 6  # >=30 min of closes holding the 8-EMA before the push
+EMA8_GRIND_PULLBACK_MIN_BARS = 3  # prior HOD/LOD must be at least this stale
+EMA8_GRIND_MIN_DAY_PCT = 0.75  # "strong" gate: day move with the trade direction
+EMA8_GRIND_SQUEEZE_BARS = 4  # bars right before the push that must hug the EMA
+EMA8_GRIND_SQUEEZE_MAX_ATR = 0.35  # max |close - ema8| in intraday ATRs
+EMA8_GRIND_HOD_TYPE = "ema8_grind_hod"
+EMA8_GRIND_LOD_TYPE = "ema8_grind_lod"
 MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
 MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
@@ -474,6 +518,21 @@ PREV_DAY_LEVEL_MIN_PRIOR_BARS = 4
 PREV_DAY_LEVEL_RESPECT_RATIO = 0.85
 PREV_DAY_LEVEL_MAX_WRONG_SIDE_CLOSES = 1
 PREV_DAY_LEVEL_RECENT_RESPECT_BARS = 6
+
+# Session structure gate (2026-07-04): most bounce setups should be a stock
+# MOVING with the trade direction that makes a simple retest of a measured
+# level - not a choppy tape pulling back over and over, and not a name pinned
+# in compression. Longs: a real advance off the open must exist, the day's
+# move must still be intact (close above the session open), and at most N
+# significant pullbacks (zigzag swings against the move) may have printed -
+# the live retest counts as one. Inverted for shorts.
+BOUNCE_SESSION_STRUCTURE_GATE = True
+BOUNCE_STRUCTURE_MIN_BARS = 4  # too few bars -> not enough structure to judge
+BOUNCE_MIN_ADVANCE_ATR = 2.0  # day leg with the trade direction, intraday ATRs
+BOUNCE_MAX_SIGNIFICANT_PULLBACKS = 2
+BOUNCE_PULLBACK_MIN_ATR = 1.2  # swing depth for a pullback to count...
+BOUNCE_PULLBACK_MIN_ADVANCE_FRAC = 0.30  # ...and as a fraction of the advance
+
 BOUNCE_LEARNING_SCHEMA_VERSION = 4
 BOUNCE_OUTCOME_MILESTONE_BARS = (1, 3, 6, 12)
 BOUNCE_EOD_FINALIZE_GRACE_MINUTES = 10
@@ -1553,6 +1612,7 @@ class IbBar:
     high: float
     low: float
     close: float
+    volume: float = 0.0
 
 
 def _parse_ib_bar_datetime(value):
@@ -1571,6 +1631,10 @@ def _bars_to_ib(bars):
         dt = _parse_ib_bar_datetime(bar.get("time"))
         if dt is None:
             continue
+        try:
+            volume = float(bar.get("volume", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            volume = 0.0
         ib_bars.append(
             IbBar(
                 dt=dt,
@@ -1578,6 +1642,7 @@ def _bars_to_ib(bars):
                 high=float(bar.get("high", 0.0)),
                 low=float(bar.get("low", 0.0)),
                 close=float(bar.get("close", 0.0)),
+                volume=volume,
             )
         )
     return ib_bars
@@ -1797,6 +1862,135 @@ def real_relative_strength(symbol_bars, spy_bars, length=RRS_LENGTH):
     return rrs, power_index
 
 
+def _classify_spy_vwap_regime(today_bars, prev_close):
+    """VWAP-position regime read from SPY's session 5m bars, or None.
+
+    bullish_strong: closes held above VWAP+1stdev for most of the day.
+    bullish_weak:   above VWAP and green on the day, but under the band.
+    Inverted for bearish. Returns None (caller falls back to the day% rule)
+    when the session is too young or volume data is missing.
+    """
+    if not prev_close or len(today_bars) < MARKET_REGIME_VWAP_MIN_BARS:
+        return None
+    if sum(bar.volume for bar in today_bars) <= 0:
+        return None
+
+    above_upper = 0
+    below_lower = 0
+    cum_vol = 0.0
+    cum_pv = 0.0
+    cum_pv2 = 0.0
+    vwap = None
+    for bar in today_bars:
+        typical = (bar.high + bar.low + bar.close) / 3.0
+        volume = max(0.0, float(bar.volume))
+        cum_vol += volume
+        cum_pv += typical * volume
+        cum_pv2 += typical * typical * volume
+        if cum_vol <= 0:
+            return None
+        vwap = cum_pv / cum_vol
+        variance = max(0.0, (cum_pv2 / cum_vol) - vwap * vwap)
+        stdev = math.sqrt(variance)
+        if bar.close > vwap + stdev:
+            above_upper += 1
+        elif bar.close < vwap - stdev:
+            below_lower += 1
+
+    fraction = float(MARKET_REGIME_VWAP_BAND_FRACTION)
+    total = len(today_bars)
+    last_close = today_bars[-1].close
+    if above_upper / total >= fraction:
+        return "bullish_strong"
+    if below_lower / total >= fraction:
+        return "bearish_strong"
+    if last_close > vwap and last_close > prev_close:
+        return "bullish_weak"
+    if last_close < vwap and last_close < prev_close:
+        return "bearish_weak"
+    return None
+
+
+def _session_structure_report(today_df, direction, ref_atr):
+    """(ok, reason) for the trend-then-simple-retest session gate.
+
+    The tape we want under a bounce (longs): the stock is moving higher, then
+    makes a simple retest of a level. So: a real advance off the open, still
+    intact, with at most BOUNCE_MAX_SIGNIFICANT_PULLBACKS zigzag swings
+    against the move (the live retest included). Shorts run on the mirrored
+    tape. Too little data to judge passes through - the per-level checks
+    still gate those.
+    """
+    if today_df is None or len(today_df) < BOUNCE_STRUCTURE_MIN_BARS:
+        return True, "not enough bars to judge structure"
+    if not ref_atr or ref_atr <= 0:
+        return True, "no intraday ATR reference"
+
+    if direction == "long":
+        eff_high = today_df["high"].astype(float).tolist()
+        eff_low = today_df["low"].astype(float).tolist()
+        eff_closes = today_df["close"].astype(float).tolist()
+        eff_open = float(today_df["open"].iloc[0])
+    else:
+        eff_high = (-today_df["low"].astype(float)).tolist()
+        eff_low = (-today_df["high"].astype(float)).tolist()
+        eff_closes = (-today_df["close"].astype(float)).tolist()
+        eff_open = -float(today_df["open"].iloc[0])
+
+    advance = max(eff_high) - eff_open
+    if advance < BOUNCE_MIN_ADVANCE_ATR * ref_atr:
+        return False, (
+            f"no directional leg / compressed: advance {advance:.2f} < "
+            f"{BOUNCE_MIN_ADVANCE_ATR} x intraday ATR ({ref_atr:.2f})"
+        )
+    if eff_closes[-1] <= eff_open:
+        return False, "day's move has been given back"
+
+    depth_min = max(
+        BOUNCE_PULLBACK_MIN_ATR * ref_atr,
+        BOUNCE_PULLBACK_MIN_ADVANCE_FRAC * advance,
+    )
+    # Zigzag on CLOSES against wick pivots: one wide candle is not a pullback;
+    # a swing only counts once price *closes* depth_min away from the pivot.
+    pullbacks = 0
+    trend_with = True
+    pivot_high = eff_high[0]
+    pivot_low = eff_low[0]
+    for high, low, close in zip(eff_high, eff_low, eff_closes):
+        if trend_with:
+            if high > pivot_high:
+                pivot_high = high
+            if pivot_high - close >= depth_min:
+                trend_with = False
+                pivot_low = low
+                pullbacks += 1
+        else:
+            if low < pivot_low:
+                pivot_low = low
+            if close - pivot_low >= depth_min:
+                trend_with = True
+                pivot_high = high
+    if pullbacks > BOUNCE_MAX_SIGNIFICANT_PULLBACKS:
+        return False, (
+            f"choppy tape: {pullbacks} pullbacks of >= {depth_min:.2f} "
+            f"(max {BOUNCE_MAX_SIGNIFICANT_PULLBACKS})"
+        )
+    return True, f"advance {advance:.2f}, pullbacks {pullbacks}"
+
+
+def _ema_series(bars, length):
+    """Close-based EMA per bar (ewm span semantics), aligned 1:1 with bars."""
+    if not bars:
+        return []
+    alpha = 2.0 / (length + 1.0)
+    ema = bars[0].close
+    values = [ema]
+    for bar in bars[1:]:
+        ema = alpha * bar.close + (1.0 - alpha) * ema
+        values.append(ema)
+    return values
+
+
 ##########################################
 # Request Queue Class
 ##########################################
@@ -1851,6 +2045,12 @@ class BounceBot(EWrapper, EClient):
         self.reqid_to_symbol = {}
         self.invalid_security_symbols = set()
 
+        # IB pacing backoff state (see IB_PACING_* constants).
+        self.pacing_lock = threading.Lock()
+        self.pacing_backoff_seconds = 0.0
+        self.pacing_backoff_until = 0.0
+        self.last_pacing_violation_at = 0.0
+
         self.longs = read_tickers(LONGS_FILENAME)
         self.shorts = read_tickers(SHORTS_FILENAME)
         self.atr_cache = {}
@@ -1882,6 +2082,8 @@ class BounceBot(EWrapper, EClient):
         self.market_environment_lock = threading.Lock()
         self.market_environment_user_override = False
         self._regime_pause_state = None
+        self._orb_break_state = None
+        self._ema8_grind_state = None
         self.latest_rrs_payload = None
         self.earnings_reaction_filter_cache = {}
 
@@ -2784,6 +2986,38 @@ class BounceBot(EWrapper, EClient):
             logging.error("Failed to reconnect to IB within timeout.")
             return False
 
+    def _register_pacing_violation(self, error_code):
+        now = time.time()
+        with self.pacing_lock:
+            previous = self.pacing_backoff_seconds
+            if previous and (now - self.last_pacing_violation_at) <= IB_PACING_VIOLATION_RESET_SECONDS:
+                backoff = min(previous * 2.0, IB_PACING_BACKOFF_MAX_SECONDS)
+            else:
+                backoff = float(IB_PACING_BACKOFF_INITIAL_SECONDS)
+            self.pacing_backoff_seconds = backoff
+            self.pacing_backoff_until = now + backoff
+            self.last_pacing_violation_at = now
+        logging.warning(
+            f"IB pacing violation (code {error_code}): backing off historical requests for {backoff:.0f}s."
+        )
+        if self.gui_callback:
+            self.gui_callback(f"IB pacing limit hit - slowing historical requests for {backoff:.0f}s.", "blue")
+
+    def pacing_delay_remaining(self):
+        with self.pacing_lock:
+            return max(0.0, self.pacing_backoff_until - time.time())
+
+    def _respect_pacing_backoff(self):
+        """Block the requesting thread until the pacing cooldown has passed."""
+        remaining = self.pacing_delay_remaining()
+        if remaining <= 0:
+            return
+        logging.info(f"IB pacing backoff active: waiting {remaining:.0f}s before the next historical request.")
+        deadline = time.time() + IB_PACING_BACKOFF_MAX_SECONDS
+        while remaining > 0 and time.time() < deadline:
+            time.sleep(min(remaining, 1.0))
+            remaining = self.pacing_delay_remaining()
+
     def set_bounce_type_enabled(self, bounce_type, enabled):
         if bounce_type in self.bounce_type_toggles:
             self.bounce_type_toggles[bounce_type] = bool(enabled)
@@ -3619,10 +3853,13 @@ class BounceBot(EWrapper, EClient):
         return today_bars, prev_close
 
     def update_auto_market_environment(self):
-        """Track the intraday regime from SPY vs yesterday's close.
+        """Track the intraday regime from SPY's VWAP position + day color.
 
-        Green day -> bullish, red day -> bearish; |day %| decides strong/weak.
-        Never fights a manual GUI selection (user override wins until cleared).
+        Preferred read: SPY vs its session VWAP/1stdev band (see
+        _classify_spy_vwap_regime). Early in the session (or without volume
+        data) it falls back to green/red vs yesterday's close with |day %|
+        deciding strong/weak. Never fights a manual GUI selection (user
+        override wins until cleared).
         """
         if not MARKET_REGIME_AUTO_ENABLED or self.market_environment_user_override:
             return None
@@ -3630,9 +3867,11 @@ class BounceBot(EWrapper, EClient):
         if not today_bars or not prev_close:
             return None
         day_pct = (today_bars[-1].close - prev_close) / prev_close * 100.0
-        direction = "bullish" if day_pct >= 0 else "bearish"
-        strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
-        env_key = f"{direction}_{strength}"
+        env_key = _classify_spy_vwap_regime(today_bars, prev_close)
+        if env_key is None:
+            direction = "bullish" if day_pct >= 0 else "bearish"
+            strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
+            env_key = f"{direction}_{strength}"
         if env_key != self.get_market_environment():
             logging.info("Auto market regime: SPY %+.2f%% on the day -> %s", day_pct, env_key)
             self.set_market_environment(env_key, source="auto")
@@ -3794,6 +4033,268 @@ class BounceBot(EWrapper, EClient):
             f"({hit['spy_window']:+.2f}% window) but {symbol} isn't participating - "
             f"day {hit['sym_day']:+.2f}% vs SPY {hit['spy_day']:+.2f}% "
             f"(excess {hit['day_excess']:+.2f}%), window {hit['sym_window']:+.2f}%."
+        )
+        payload = self._build_bounce_feedback_alert_payload(message, event_row)
+        if self.gui_callback:
+            self.gui_callback(payload, "red" if side == "short" else "green")
+        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_bounce_to_file(
+            symbol=symbol,
+            direction=side,
+            levels=levels,
+            bounce_candle=bar_dict,
+            current_candle=bar_dict,
+            threshold=0.0,
+            quality=quality,
+        )
+
+    # ------------------------------------------------------------------
+    # Trader-favorite day-trade sweeps (2026-07-04): delayed 5m opening-
+    # range breaks and 8-EMA grind squeezes into a new session extreme.
+    # Candidates come from longs.txt / shorts.txt only.
+    # ------------------------------------------------------------------
+    def _watchlist_day_sweep_symbols(self, side):
+        watchlist = self.shorts if side == "short" else self.longs
+        return sorted(
+            {str(item or "").strip().upper() for item in watchlist if str(item or "").strip()}
+        )
+
+    def _symbol_session_bars(self, symbol, today):
+        bars = self.get_cached_5m_bars(symbol)
+        return [bar for bar in bars or [] if bar.dt.date() == today]
+
+    def check_orb_break_setups(self):
+        """First 5m close through the opening range at 30+ minutes after open."""
+        spy_today, _prev_close = self._spy_session_bars()
+        if not spy_today:
+            return []
+        today = spy_today[-1].dt.date()
+        state = self._orb_break_state
+        if not state or state.get("date") != today:
+            state = {"date": today, "alerted": set(), "dead": set()}
+            self._orb_break_state = state
+        hits = []
+        for side in ("long", "short"):
+            for symbol in self._watchlist_day_sweep_symbols(side):
+                key = f"{symbol}|{side}"
+                if key in state["alerted"] or key in state["dead"]:
+                    continue
+                hit = self._evaluate_orb_break(symbol, side, today, state)
+                if hit:
+                    state["alerted"].add(key)
+                    hits.append(hit)
+        for hit in hits:
+            self._emit_orb_break_alert(hit)
+        return hits
+
+    def _evaluate_orb_break(self, symbol, side, today, state):
+        sym_today = self._symbol_session_bars(symbol, today)
+        if len(sym_today) < 2:
+            return None
+        opening = sym_today[0]
+        # RTH bars: the session's first 5m candle is the opening range. Guard
+        # against partial data where the cached series misses the open.
+        if (opening.dt.hour, opening.dt.minute) != (9, 30):
+            return None
+        earliest_break_dt = opening.dt + timedelta(minutes=ORB_DELAY_MINUTES)
+        key = f"{symbol}|{side}"
+        sign = 1.0 if side == "long" else -1.0
+        level = opening.high if side == "long" else opening.low
+        for index, bar in enumerate(sym_today[1:], start=1):
+            if sign * (bar.close - level) <= 0:
+                continue
+            if bar.dt < earliest_break_dt:
+                # Early close through the range: the delayed break is gone.
+                state["dead"].add(key)
+                return None
+            if index < len(sym_today) - ORB_FRESH_BREAK_MAX_BARS:
+                # First seen long after the fact (restart/stale cache): the
+                # trigger already played out - don't alert hours late.
+                state["dead"].add(key)
+                return None
+            return {
+                "symbol": symbol,
+                "side": side,
+                "level": level,
+                "or_high": opening.high,
+                "or_low": opening.low,
+                "break_bar": bar,
+                "minutes_after_open": int((bar.dt - opening.dt).total_seconds() // 60),
+            }
+        return None
+
+    def _emit_orb_break_alert(self, hit):
+        symbol = hit["symbol"]
+        side = hit["side"]
+        bounce_type = ORB_BREAKOUT_TYPE if side == "long" else ORB_BREAKDOWN_TYPE
+        break_bar = hit["break_bar"]
+        bar_dict = {
+            "time": break_bar.dt.strftime("%Y%m%d  %H:%M:%S"),
+            "open": break_bar.open,
+            "high": break_bar.high,
+            "low": break_bar.low,
+            "close": break_bar.close,
+        }
+        levels = {bounce_type: hit["level"]}
+        edge = "high" if side == "long" else "low"
+        event_row = self._log_bounce_candidate_event(
+            "confirmed",
+            symbol,
+            side,
+            levels,
+            bar_dict,
+            bar_dict,
+            reason=(
+                f"Delayed 5m ORB: first close through the opening-range {edge} "
+                f"{hit['level']:.2f} at {break_bar.dt:%H:%M} "
+                f"({hit['minutes_after_open']} min after open)"
+            ),
+        )
+        self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
+        quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        label = "ORB BREAKOUT" if side == "long" else "ORB BREAKDOWN"
+        message = (
+            f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): first 5m close "
+            f"{'above' if side == 'long' else 'below'} the opening-range {edge} {hit['level']:.2f} "
+            f"at {break_bar.dt:%H:%M} ({hit['minutes_after_open']} min after open); "
+            f"OR {hit['or_low']:.2f}-{hit['or_high']:.2f}."
+        )
+        payload = self._build_bounce_feedback_alert_payload(message, event_row)
+        if self.gui_callback:
+            self.gui_callback(payload, "red" if side == "short" else "green")
+        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_bounce_to_file(
+            symbol=symbol,
+            direction=side,
+            levels=levels,
+            bounce_candle=bar_dict,
+            current_candle=bar_dict,
+            threshold=0.0,
+            quality=quality,
+        )
+
+    def check_ema8_grind_setups(self):
+        """Strong name rides the 5m 8-EMA, squeezes, then pushes to a new extreme."""
+        spy_today, _prev_close = self._spy_session_bars()
+        if not spy_today:
+            return []
+        today = spy_today[-1].dt.date()
+        state = self._ema8_grind_state
+        if not state or state.get("date") != today:
+            state = {"date": today, "alerted": set()}
+            self._ema8_grind_state = state
+        hits = []
+        for side in ("long", "short"):
+            for symbol in self._watchlist_day_sweep_symbols(side):
+                key = f"{symbol}|{side}"
+                if key in state["alerted"]:
+                    continue
+                hit = self._evaluate_ema8_grind(symbol, side, today)
+                if hit:
+                    state["alerted"].add(key)
+                    hits.append(hit)
+        for hit in hits:
+            self._emit_ema8_grind_alert(hit)
+        return hits
+
+    def _evaluate_ema8_grind(self, symbol, side, today):
+        bars = self.get_cached_5m_bars(symbol)
+        if not bars:
+            return None
+        sym_today = [bar for bar in bars if bar.dt.date() == today]
+        if len(sym_today) < EMA8_GRIND_MIN_BARS + EMA8_GRIND_PULLBACK_MIN_BARS + 1:
+            return None
+        sign = 1.0 if side == "long" else -1.0
+        push = sym_today[-1]
+        prior = sym_today[:-1]
+        # 1) The push bar prints a new session extreme (HOD longs / LOD shorts).
+        if side == "long":
+            prior_extreme = max(bar.high for bar in prior)
+            if push.high <= prior_extreme:
+                return None
+            extreme_index = max(range(len(prior)), key=lambda i: prior[i].high)
+        else:
+            prior_extreme = min(bar.low for bar in prior)
+            if push.low >= prior_extreme:
+                return None
+            extreme_index = min(range(len(prior)), key=lambda i: prior[i].low)
+        # 2) The old extreme must be stale: a straight one-way rip has no
+        #    pullback-and-grind and is not this setup.
+        if len(prior) - 1 - extreme_index < EMA8_GRIND_PULLBACK_MIN_BARS:
+            return None
+        # 3) Strength gate: the day's move runs with the trade direction.
+        session_open = sym_today[0].open
+        if not session_open:
+            return None
+        day_pct = (push.close - session_open) / session_open * 100.0
+        if sign * day_pct < EMA8_GRIND_MIN_DAY_PCT:
+            return None
+        # 4) The grind: not a single 5m close across the 8-EMA before the push.
+        ema_values = _ema_series(bars, EMA8_GRIND_LENGTH)
+        ema_today = ema_values[len(bars) - len(sym_today):]
+        grind_bars = sym_today[-(EMA8_GRIND_MIN_BARS + 1):-1]
+        grind_emas = ema_today[-(EMA8_GRIND_MIN_BARS + 1):-1]
+        if len(grind_bars) < EMA8_GRIND_MIN_BARS:
+            return None
+        if any(sign * (bar.close - ema) < 0 for bar, ema in zip(grind_bars, grind_emas)):
+            return None
+        # 5) The squeeze: closes hugging the 8-EMA right before the push.
+        atr = _wilder_atr_last(bars[:-1], IMPULSE_INTRADAY_ATR_PERIOD)
+        if not atr:
+            return None
+        squeeze_gap = max(
+            abs(bar.close - ema)
+            for bar, ema in zip(
+                grind_bars[-EMA8_GRIND_SQUEEZE_BARS:], grind_emas[-EMA8_GRIND_SQUEEZE_BARS:]
+            )
+        ) / atr
+        if squeeze_gap > EMA8_GRIND_SQUEEZE_MAX_ATR:
+            return None
+        return {
+            "symbol": symbol,
+            "side": side,
+            "push_bar": push,
+            "ema8": ema_today[-1],
+            "day_pct": day_pct,
+            "squeeze_gap_atr": squeeze_gap,
+            "grind_bars": len(grind_bars),
+            "new_extreme": push.high if side == "long" else push.low,
+        }
+
+    def _emit_ema8_grind_alert(self, hit):
+        symbol = hit["symbol"]
+        side = hit["side"]
+        bounce_type = EMA8_GRIND_HOD_TYPE if side == "long" else EMA8_GRIND_LOD_TYPE
+        push_bar = hit["push_bar"]
+        bar_dict = {
+            "time": push_bar.dt.strftime("%Y%m%d  %H:%M:%S"),
+            "open": push_bar.open,
+            "high": push_bar.high,
+            "low": push_bar.low,
+            "close": push_bar.close,
+        }
+        levels = {bounce_type: hit["ema8"]}
+        extreme_label = "HOD" if side == "long" else "LOD"
+        event_row = self._log_bounce_candidate_event(
+            "confirmed",
+            symbol,
+            side,
+            levels,
+            bar_dict,
+            bar_dict,
+            reason=(
+                f"8-EMA grind: {hit['grind_bars']} bars holding the 5m 8-EMA "
+                f"(squeeze {hit['squeeze_gap_atr']:.2f} ATR), day {hit['day_pct']:+.2f}%, "
+                f"pushing into a new {extreme_label} {hit['new_extreme']:.2f}"
+            ),
+        )
+        self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
+        quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        message = (
+            f"[{quality.get('tier', 'B')}-TIER] 8-EMA GRIND {symbol} ({side}): held the 5m 8-EMA "
+            f"{hit['grind_bars']} bars, squeezed to {hit['squeeze_gap_atr']:.2f} ATR, now pushing "
+            f"into a new {extreme_label} {hit['new_extreme']:.2f} (day {hit['day_pct']:+.2f}%, "
+            f"8-EMA {hit['ema8']:.2f})."
         )
         payload = self._build_bounce_feedback_alert_payload(message, event_row)
         if self.gui_callback:
@@ -5183,6 +5684,7 @@ class BounceBot(EWrapper, EClient):
         if not self.ensure_connected():
             logging.warning("Not connected to IB; skipping historical request.")
             return None
+        self._respect_pacing_backoff()
         reqId = self.getReqId()
         with self.data_lock:
             self.data[reqId] = []
@@ -5541,6 +6043,14 @@ class BounceBot(EWrapper, EClient):
                     self.invalid_security_symbols.add(symbol)
                 if reqId in self.data_ready_events:
                     self.data_ready_events[reqId].set()
+        if errorCode in (162, 366):
+            # Failed/cancelled historical query: release the waiting request
+            # instead of letting it burn its full timeout.
+            with self.data_lock:
+                if reqId in self.data_ready_events:
+                    self.data_ready_events[reqId].set()
+        if errorCode == 100 or "pacing" in str(errorString or "").lower():
+            self._register_pacing_violation(errorCode)
         if errorCode == 326:
             self.connection_status = False
             self.client_id_conflict = True
@@ -6073,6 +6583,19 @@ class BounceBot(EWrapper, EClient):
         except Exception as exc:
             logging.debug(f"{symbol}: Failed building intraday RS/RW profile for impulse filter: {exc}")
             intraday_rrs_profile = []
+
+        # General structure gate for ALL bounce types: we want a stock moving
+        # with the trade direction making a simple retest of a level - not a
+        # choppy multi-pullback tape, not a compressed one.
+        if BOUNCE_SESSION_STRUCTURE_GATE:
+            structure_ok, structure_reason = _session_structure_report(
+                today_df, direction, intraday_impulse_atr
+            )
+            if not structure_ok:
+                logging.debug(
+                    f"{symbol}: Session structure gate rejected bounce scan ({structure_reason})"
+                )
+                return None
 
         # Log the metrics being used for evaluation
         if LOGGING_MODE:
@@ -7610,6 +8133,17 @@ class BounceBot(EWrapper, EClient):
                     self.check_regime_pause_setups()
                 except Exception:
                     logging.exception("Regime pause sweep failed.")
+
+                # Trader-favorite day-trade sweeps on longs/shorts.txt: delayed
+                # 5m opening-range breaks and 8-EMA grind squeezes into HOD/LOD.
+                try:
+                    self.check_orb_break_setups()
+                except Exception:
+                    logging.exception("ORB break sweep failed.")
+                try:
+                    self.check_ema8_grind_setups()
+                except Exception:
+                    logging.exception("8-EMA grind sweep failed.")
 
                 d1_watch_symbols = set(self.get_master_avwap_d1_watch_symbols())
                 monitored_symbols = self.get_monitored_extreme_symbols() | d1_watch_symbols
