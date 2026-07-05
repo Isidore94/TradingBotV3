@@ -45,6 +45,8 @@ class AutopilotPanel(QFrame):
         self.scan_now_button.clicked.connect(self.service.run_swing_scan_now)
         self.rebuild_button = QPushButton("Rebuild Watchlists Now")
         self.rebuild_button.clicked.connect(self.service.rebuild_watchlists_now)
+        self.universe_button = QPushButton("Rebuild Universe Now")
+        self.universe_button.clicked.connect(self.service.rebuild_universe_now)
         self.report_button = QPushButton("Write Report Now")
         self.report_button.clicked.connect(self.service.write_report_now)
 
@@ -53,6 +55,8 @@ class AutopilotPanel(QFrame):
         self.next_slot_value = QLabel("-")
         self.slots_value = QLabel("-")
         self.watchlist_value = QLabel("-")
+        self.universe_value = QLabel("-")
+        self.wrapup_value = QLabel("-")
         self.report_value = QLabel("-")
         self.report_value.setWordWrap(True)
 
@@ -66,6 +70,8 @@ class AutopilotPanel(QFrame):
                 ("Next swing slot", self.next_slot_value),
                 ("Slots done", self.slots_value),
                 ("Watchlists", self.watchlist_value),
+                ("Universe", self.universe_value),
+                ("After-close wrap-up", self.wrapup_value),
                 ("Away report", self.report_value),
             )
         ):
@@ -79,6 +85,7 @@ class AutopilotPanel(QFrame):
         buttons.addWidget(self.reconnect_button)
         buttons.addWidget(self.scan_now_button)
         buttons.addWidget(self.rebuild_button)
+        buttons.addWidget(self.universe_button)
         buttons.addWidget(self.report_button)
         buttons.addStretch(1)
 
@@ -152,6 +159,16 @@ class AutopilotPanel(QFrame):
             f"{snapshot.get('longs_count', 0)} longs / {snapshot.get('shorts_count', 0)} shorts "
             f"(auto-build: {built})"
         )
+        universe_text = str(snapshot.get("universe_line", "-")).replace("Universe: ", "")
+        self.universe_value.setText(universe_text)
+        self.universe_value.setStyleSheet(
+            "color: #E06C75;" if "stale" in universe_text or "MISSING" in universe_text else ""
+        )
+        if snapshot.get("wrapup_running"):
+            self.wrapup_value.setText("running...")
+        else:
+            done_at = snapshot.get("wrapup_done_at") or ""
+            self.wrapup_value.setText(f"done at {done_at}" if done_at else "pending (after the last slot)")
         self.report_value.setText(str(snapshot.get("report_path", "")))
 
     def shutdown(self) -> None:

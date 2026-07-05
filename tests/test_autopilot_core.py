@@ -146,3 +146,93 @@ def test_fetch_open_scan_moves_with_injected_downloader():
     assert round(moves["GAPR"]["gap_pct"], 2) == 3.0  # 103 open vs 100 prev close
     assert round(moves["GAPR"]["early_move_pct"], 2) == round((105.0 - 103.0) / 103.0 * 100, 2)
     assert round(moves["SPY"]["gap_pct"], 2) == 0.2
+    # The session date rides along for the holiday/stale-feed guard.
+    assert moves["SPY"]["session_date"] == today.date()
+
+
+def test_last_completed_session_close_walks_back_correctly():
+    # Mid-session Thursday: the last finished session is Wednesday's.
+    assert core.last_completed_session_close(
+        datetime(2026, 7, 2, 8, 0), PACIFIC
+    ) == datetime(2026, 7, 1, 13, 0)
+    # After Thursday's close, Thursday's own close counts.
+    assert core.last_completed_session_close(
+        datetime(2026, 7, 2, 14, 0), PACIFIC
+    ) == datetime(2026, 7, 2, 13, 0)
+    # Saturday: walk back to Friday's close.
+    assert core.last_completed_session_close(
+        datetime(2026, 7, 4, 10, 0), PACIFIC
+    ) == datetime(2026, 7, 3, 13, 0)
+
+
+def test_universe_staleness_rule():
+    built_wed_afternoon = datetime(2026, 7, 1, 16, 0)
+    # Fresh all through Thursday's session...
+    assert not core.universe_is_stale(datetime(2026, 7, 2, 8, 0), built_wed_afternoon, PACIFIC)
+    # ...stale the moment Thursday's close passes (wrap-up rebuild time).
+    assert core.universe_is_stale(datetime(2026, 7, 2, 14, 0), built_wed_afternoon, PACIFIC)
+    # Missing files are always stale.
+    assert core.universe_is_stale(datetime(2026, 7, 2, 8, 0), None, PACIFIC)
+
+
+def test_after_close_wrapup_due_needs_all_slots_done():
+    slots = core.get_autopilot_swing_slots(REF, local_timezone_name=PACIFIC)
+    after_close = datetime(2026, 7, 2, 13, 20)
+    assert core.after_close_wrapup_due(after_close, slots, False, False, PACIFIC)
+    assert not core.after_close_wrapup_due(after_close, slots[:-1], False, False, PACIFIC)
+    assert not core.after_close_wrapup_due(after_close, slots, True, False, PACIFIC)  # already done
+    assert not core.after_close_wrapup_due(after_close, slots, False, True, PACIFIC)  # scan running
+    assert not core.after_close_wrapup_due(datetime(2026, 7, 4, 13, 20), slots, False, False, PACIFIC)  # weekend
+
+
+def test_merge_autopilot_watchlist_keeps_manual_names_only():
+    result = core.merge_autopilot_watchlist(
+        ["NVDA", "AAPL"],
+        # File currently holds: yesterday's auto picks + the trader's dump.
+        ["OLDPICK", "MYPICK", "AAPL"],
+        ["OLDPICK", "AAPL"],  # what Auto Pilot wrote last time
+    )
+    assert result["symbols"] == ["NVDA", "AAPL", "MYPICK"]
+    assert result["manual_kept"] == ["MYPICK"]
+
+    # No prior state: everything currently in the file is treated as manual.
+    first_run = core.merge_autopilot_watchlist(["NVDA"], ["MYPICK"], [])
+    assert first_run["symbols"] == ["NVDA", "MYPICK"]
+
+
+def test_score_autopilot_picks_joins_candidates_and_outcomes():
+    picks = [
+        {"date": "2026-07-02", "symbol": "AAPL", "side": "long"},
+        {"date": "2026-07-02", "symbol": "XYZ", "side": "short"},
+    ]
+    candidates = [
+        {"event_id": "e1", "event_type": "confirmed", "trade_date": "2026-07-02", "symbol": "AAPL", "direction": "long"},
+        {"event_id": "e2", "event_type": "confirmed", "trade_date": "2026-07-02", "symbol": "OTHER", "direction": "long"},
+        {"event_id": "e3", "event_type": "candidate", "trade_date": "2026-07-02", "symbol": "XYZ", "direction": "short"},
+    ]
+    outcomes = [{"event_id": "e1", "close_r": "0.5", "mfe_r": "2.0"}]
+    scorecard = core.score_autopilot_picks(picks, candidates, outcomes)
+    assert scorecard["picks"] == 2 and scorecard["longs"] == 1 and scorecard["shorts"] == 1
+    assert scorecard["alerted"] == 1 and scorecard["alerted_symbols"] == ["AAPL"]
+    assert scorecard["avg_close_r"] == 0.5
+    assert scorecard["avg_mfe_r"] == 2.0
+    line = core.format_scorecard_line(scorecard)
+    assert "1 longs + 1 shorts" in line and "1 alerted" in line and "+0.50R" in line
+
+
+def test_away_report_has_tv_paste_and_status_lines():
+    text = core.render_away_report(
+        {
+            "generated_at": "2026-07-02 13:30:00",
+            "enabled": True,
+            "ib_status": "connected",
+            "regime": "bullish_strong",
+            "longs": ["AAPL", "NVDA"],
+            "shorts": [],
+            "universe_line": "Universe: fresh (built 2026-07-02 13:10)",
+            "scorecard_line": "Auto picks today: 2 longs + 1 shorts -> 1 alerted.",
+        }
+    )
+    assert "TV paste: AAPL,NVDA" in text
+    assert "Universe: fresh" in text
+    assert "Auto picks today:" in text

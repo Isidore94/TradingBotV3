@@ -56,6 +56,10 @@ AUTOPILOT_HOD_PROXIMITY_PCT = 1.0
 AUTOPILOT_HOD_TOP_ROWS = 30
 AUTOPILOT_HOD_CHECK_COOLDOWN_MINUTES = 30
 
+# Universe freshness: Auto Pilot is used sporadically, so freshness is checked
+# on every activation/tick instead of trusting a nightly job to have run.
+AUTOPILOT_UNIVERSE_RETRY_MINUTES = 60
+
 
 # ---------------------------------------------------------------------------
 # Scheduling
@@ -123,6 +127,187 @@ def minutes_since_open(
 
 
 # ---------------------------------------------------------------------------
+# Universe freshness (sporadic activation must self-heal a stale universe)
+# ---------------------------------------------------------------------------
+def last_completed_session_close(
+    now: datetime,
+    local_timezone_name: str | None = None,
+) -> datetime | None:
+    """Local-naive close of the most recent finished session.
+
+    Walks back weekday by weekday; holidays are not modeled, so the worst case
+    on a holiday-adjacent day is one harmless extra universe rebuild.
+    """
+    for days_back in range(0, 10):
+        probe_date = now.date() - timedelta(days=days_back)
+        if probe_date.weekday() >= 5:
+            continue
+        session = get_market_session_window(reference=probe_date, local_timezone_name=local_timezone_name)
+        close_naive = session.close_local.replace(tzinfo=None)
+        if days_back == 0 and now < close_naive:
+            continue
+        return close_naive
+    return None
+
+
+def universe_built_at(paths: Iterable[Path] | None = None) -> datetime | None:
+    """Universe build stamp: newest mtime across the universe files."""
+    stamps = []
+    for path in paths or (UNIVERSE_ALL_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE):
+        try:
+            stamps.append(datetime.fromtimestamp(Path(path).stat().st_mtime))
+        except OSError:
+            continue
+    return max(stamps) if stamps else None
+
+
+_UNSET = object()
+
+
+def universe_is_stale(
+    now: datetime,
+    built_at: datetime | None | object = _UNSET,
+    local_timezone_name: str | None = None,
+) -> bool:
+    """Stale = built before the most recent completed session's close.
+
+    A build from yesterday afternoon stays fresh all of today's session; the
+    moment today's close passes, it goes stale (the after-close wrap-up
+    rebuilds it with today's data).
+    """
+    if built_at is _UNSET:
+        built_at = universe_built_at()
+    if built_at is None:
+        return True
+    reference_close = last_completed_session_close(now, local_timezone_name)
+    if reference_close is None:
+        return False
+    return built_at < reference_close
+
+
+def after_close_wrapup_due(
+    now: datetime,
+    slots_done: Iterable[str],
+    wrapup_done: bool,
+    scan_running: bool,
+    local_timezone_name: str | None = None,
+) -> bool:
+    """The wrap-up runs once, after every swing slot (incl. failures) is done."""
+    if wrapup_done or scan_running or now.weekday() >= 5:
+        return False
+    slots = get_autopilot_swing_slots(now, local_timezone_name)
+    if not slots:
+        return False
+    done = {str(slot) for slot in slots_done or []}
+    return all(slot in done for slot in slots)
+
+
+def merge_autopilot_watchlist(
+    auto_picks: Iterable[str],
+    current_symbols: Iterable[str],
+    last_autopilot: Iterable[str],
+) -> dict[str, list[str]]:
+    """Fresh auto picks + the user's hand-added names.
+
+    Anything in the file that Auto Pilot did NOT write last time is treated as
+    the trader's and survives; yesterday's auto picks get replaced. (File
+    mtimes can't make this distinction - the bot itself rewrites the files
+    intraday - hence the explicit last-written state.)
+    """
+    last = {str(item or "").strip().upper() for item in last_autopilot or []}
+    merged: list[str] = []
+    seen: set[str] = set()
+    for symbol in auto_picks or []:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            merged.append(symbol)
+    manual_kept: list[str] = []
+    for symbol in current_symbols or []:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen and symbol not in last:
+            seen.add(symbol)
+            merged.append(symbol)
+            manual_kept.append(symbol)
+    return {"symbols": merged, "manual_kept": manual_kept}
+
+
+def score_autopilot_picks(
+    picks: Iterable[Mapping[str, Any]],
+    candidate_rows: Iterable[Mapping[str, Any]],
+    outcome_rows: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Did the self-built watchlist produce anything? Join picks vs the
+    day-trade candidate/outcome logs (confirmed events on the same date,
+    symbol and direction; outcomes joined by event_id, last row wins)."""
+    picks = [dict(pick) for pick in picks or []]
+    pick_keys = {
+        (
+            str(pick.get("date") or "").strip(),
+            str(pick.get("symbol") or "").strip().upper(),
+            str(pick.get("side") or "").strip().lower(),
+        )
+        for pick in picks
+    }
+
+    latest_outcome: dict[str, Mapping[str, Any]] = {}
+    for row in outcome_rows or []:
+        event_id = str(row.get("event_id") or "").strip()
+        if event_id:
+            latest_outcome[event_id] = row
+
+    alerted_symbols: set[str] = set()
+    close_values: list[float] = []
+    mfe_values: list[float] = []
+    for row in candidate_rows or []:
+        if str(row.get("event_type") or "").strip().lower() != "confirmed":
+            continue
+        key = (
+            str(row.get("trade_date") or "").strip(),
+            str(row.get("symbol") or "").strip().upper(),
+            str(row.get("direction") or "").strip().lower(),
+        )
+        if key not in pick_keys:
+            continue
+        alerted_symbols.add(key[1])
+        outcome = latest_outcome.get(str(row.get("event_id") or "").strip())
+        if not outcome:
+            continue
+        for field, bucket in (("close_r", close_values), ("mfe_r", mfe_values)):
+            try:
+                bucket.append(float(outcome.get(field)))
+            except (TypeError, ValueError):
+                continue
+
+    sides = [str(pick.get("side") or "").strip().lower() for pick in picks]
+    return {
+        "picks": len(picks),
+        "longs": sides.count("long"),
+        "shorts": sides.count("short"),
+        "alerted": len(alerted_symbols),
+        "alerted_symbols": sorted(alerted_symbols),
+        "avg_close_r": (sum(close_values) / len(close_values)) if close_values else None,
+        "avg_mfe_r": (sum(mfe_values) / len(mfe_values)) if mfe_values else None,
+    }
+
+
+def format_scorecard_line(scorecard: Mapping[str, Any]) -> str:
+    if not scorecard or not scorecard.get("picks"):
+        return "Auto picks today: none logged."
+    close_r = scorecard.get("avg_close_r")
+    mfe_r = scorecard.get("avg_mfe_r")
+    r_text = ""
+    if close_r is not None or mfe_r is not None:
+        close_part = f"avg close {close_r:+.2f}R" if close_r is not None else "avg close n/a"
+        mfe_part = f"MFE {mfe_r:.2f}R" if mfe_r is not None else "MFE n/a"
+        r_text = f", {close_part} / {mfe_part}"
+    return (
+        f"Auto picks today: {scorecard.get('longs', 0)} longs + {scorecard.get('shorts', 0)} shorts "
+        f"-> {scorecard.get('alerted', 0)} alerted{r_text}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Open scan: gaps + early RS/RW vs SPY -> longs.txt / shorts.txt
 # ---------------------------------------------------------------------------
 def summarize_open_move(prev_close: float | None, today_bars: list[Mapping[str, Any]]) -> dict[str, Any] | None:
@@ -140,7 +325,16 @@ def summarize_open_move(prev_close: float | None, today_bars: list[Mapping[str, 
     if prev_close:
         gap_pct = (today_open - float(prev_close)) / float(prev_close) * 100.0
     early_move_pct = (last_price - today_open) / today_open * 100.0
-    return {"gap_pct": gap_pct, "early_move_pct": early_move_pct, "last_price": last_price}
+    session_date = None
+    last_dt = today_bars[-1].get("dt")
+    if last_dt is not None and hasattr(last_dt, "date"):
+        session_date = last_dt.date()
+    return {
+        "gap_pct": gap_pct,
+        "early_move_pct": early_move_pct,
+        "last_price": last_price,
+        "session_date": session_date,
+    }
 
 
 def build_watchlists_from_moves(
@@ -444,16 +638,30 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         bucket_text = f" | {bucket}" if bucket else ""
         picks_lines.append(f"{symbol} ({side}){bucket_text}{expected_text}")
 
+    def _tv_line(items: Iterable[str]) -> str:
+        items = [str(item).strip().upper() for item in items if str(item).strip()]
+        return ",".join(items) if items else "(none)"
+
+    header_bits = [
+        f"Mode: {'ON' if payload.get('enabled') else 'OFF'} | IB: {payload.get('ib_status', 'unknown')} | Regime: {payload.get('regime', 'unknown')}",
+    ]
+    if payload.get("universe_line"):
+        header_bits.append(str(payload["universe_line"]))
+    if payload.get("scorecard_line"):
+        header_bits.append(str(payload["scorecard_line"]))
+
     sections = [
         "TRADINGBOT AUTO PILOT - TODAY",
         f"Updated: {payload.get('generated_at', '')}",
-        f"Mode: {'ON' if payload.get('enabled') else 'OFF'} | IB: {payload.get('ib_status', 'unknown')} | Regime: {payload.get('regime', 'unknown')}",
+        *header_bits,
         "",
         "== DAY TRADE LONGS (longs.txt) ==",
         _tickers(payload.get("longs", [])),
+        f"TV paste: {_tv_line(payload.get('longs', []))}",
         "",
         "== DAY TRADE SHORTS (shorts.txt) ==",
         _tickers(payload.get("shorts", [])),
+        f"TV paste: {_tv_line(payload.get('shorts', []))}",
         "",
         "== TOP SWING PICKS ==",
         _lines(picks_lines),

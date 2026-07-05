@@ -240,6 +240,11 @@ EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE = REPORTS_DIR / "earnings_anchor_candidat
 AUTOPILOT_REPORT_FILE = SHARED_HOME_DIR / "autopilot_today.txt"
 AUTOPILOT_STATE_FILE = LOCAL_MACHINE_CACHE_DIR / "autopilot_state.json"
 AUTOPILOT_LOG_FILE = LOCAL_LOG_DIR / "autopilot.log"
+# Auto-pick evidence trail: every self-built watchlist symbol (with its gap/RS
+# numbers) plus the per-day scorecard joining picks against day-trade outcomes,
+# so the gap/RS thresholds get tuned from data.
+AUTOPILOT_PICKS_FILE = RUNTIME_DATA_DIR / "autopilot_picks.csv"
+AUTOPILOT_SCORECARD_FILE = RUNTIME_DATA_DIR / "autopilot_pick_scorecard.csv"
 
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
 # Rotating diagnostic log lives on local disk (see LOCAL_LOG_DIR) so rotation never

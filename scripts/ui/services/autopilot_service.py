@@ -12,8 +12,12 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from project_paths import (
     AUTOPILOT_LOG_FILE,
+    AUTOPILOT_PICKS_FILE,
     AUTOPILOT_REPORT_FILE,
+    AUTOPILOT_SCORECARD_FILE,
     AUTOPILOT_STATE_FILE,
+    INTRADAY_BOUNCE_CANDIDATES_FILE,
+    INTRADAY_BOUNCE_OUTCOMES_FILE,
     LONGS_FILE,
     SHORTS_FILE,
 )
@@ -56,6 +60,10 @@ class AutopilotService(QObject):
         self._building_watchlists = False
         self._hod_check_running = False
         self._reconnect_running = False
+        self._universe_rebuild_running = False
+        self._universe_last_attempt: datetime | None = None
+        self._wrapup_running = False
+        self._scorecard_line = ""
         self._last_report_write: datetime | None = None
         self._last_ib_status: str | None = None
         self._weekend_logged_date: str | None = None
@@ -90,6 +98,8 @@ class AutopilotService(QObject):
         if enabled:
             self._log("AUTO PILOT ON - scheduling swing scans, self-building watchlists, writing the away report.")
             self._ensure_bot_running()
+            # Sporadic use: never trust that yesterday's after-close routine ran.
+            self._ensure_universe_fresh("activation")
             self._tick()
         else:
             self._log("AUTO PILOT OFF - automation paused (BounceBot keeps running; stop it from the desk if needed).")
@@ -151,7 +161,21 @@ class AutopilotService(QObject):
             "shorts_count": len(shorts),
             "scan_running": self._scan_service.running,
             "report_path": str(AUTOPILOT_REPORT_FILE),
+            "universe_line": self._universe_line(now),
+            "universe_rebuilding": self._universe_rebuild_running,
+            "wrapup_done_at": self._state.get("wrapup_done_at") or "",
+            "wrapup_running": self._wrapup_running,
         }
+
+    def _universe_line(self, now: datetime | None = None) -> str:
+        now = now or datetime.now()
+        built_at = core.universe_built_at()
+        if self._universe_rebuild_running:
+            return "Universe: rebuilding now..."
+        if built_at is None:
+            return "Universe: MISSING - run the Universe builder."
+        state = "stale" if core.universe_is_stale(now, built_at) else "fresh"
+        return f"Universe: {state} (built {built_at:%Y-%m-%d %H:%M})"
 
     def shutdown(self) -> None:
         self._timer.stop()
@@ -175,9 +199,11 @@ class AutopilotService(QObject):
                     self._log("Weekend - Auto Pilot idle until the next session.")
                 return
             self._ensure_bot_running()
+            self._ensure_universe_fresh("tick")
             self._maybe_build_watchlists(now)
             self._maybe_run_swing_slot(now)
             self._maybe_add_near_extreme_names(now)
+            self._maybe_run_wrapup(now)
             self._maybe_heartbeat_report(now)
             self.statusChanged.emit(self.status_snapshot())
         except Exception:
@@ -193,7 +219,12 @@ class AutopilotService(QObject):
                 "watchlist_built_at": None,
                 "hod_last_check": None,
                 "hod_added": [],
+                "wrapup_done_at": None,
+                # What Auto Pilot itself wrote survives the day roll - it is
+                # how tomorrow's build tells its own picks from the trader's.
+                "autopilot_written": self._state.get("autopilot_written") or {"longs": [], "shorts": []},
             }
+            self._scorecard_line = ""
             self._save_state()
         if self._alerts_date != today:
             self._alerts_date = today
@@ -210,6 +241,56 @@ class AutopilotService(QObject):
             service.set_scanning_enabled(True)
 
     # ------------------------------------------------------------------
+    # Universe freshness (sporadic activation self-heals a stale universe)
+    # ------------------------------------------------------------------
+    def _ensure_universe_fresh(self, reason: str, *, force: bool = False) -> None:
+        if self._universe_rebuild_running:
+            return
+        if not force and not self._enabled:
+            return
+        now = datetime.now()
+        if not force:
+            if not core.universe_is_stale(now):
+                return
+            if (
+                self._universe_last_attempt is not None
+                and (now - self._universe_last_attempt).total_seconds()
+                < core.AUTOPILOT_UNIVERSE_RETRY_MINUTES * 60
+            ):
+                return
+        self._universe_rebuild_running = True
+        self._universe_last_attempt = now
+        built_at = core.universe_built_at()
+        built_text = built_at.strftime("%Y-%m-%d %H:%M") if built_at else "never"
+        self._log(f"Universe is stale (built {built_text}) - rebuilding ({reason}, yfinance only)...")
+
+        def worker() -> None:
+            started = datetime.now()
+            try:
+                from universe_builder import DEFAULT_OPTIONS_FILTER, build_universe
+
+                result = build_universe(options_filter=DEFAULT_OPTIONS_FILTER)
+                elapsed = (datetime.now() - started).total_seconds()
+                self._log(
+                    f"Universe rebuilt in {elapsed:.0f}s: {len(result.get('all', []))} total / "
+                    f"{len(result.get('longs', []))} longs / {len(result.get('shorts', []))} shorts."
+                )
+                self._write_report()
+            except Exception as exc:
+                self._log(f"Universe rebuild failed: {exc} (will retry in ~{core.AUTOPILOT_UNIVERSE_RETRY_MINUTES}m)")
+                logging.exception("Auto Pilot universe rebuild failed")
+            finally:
+                self._universe_rebuild_running = False
+
+        threading.Thread(target=worker, name="autopilot-universe", daemon=True).start()
+
+    def rebuild_universe_now(self) -> None:
+        if self._universe_rebuild_running:
+            self._log("Universe rebuild already running.")
+            return
+        self._ensure_universe_fresh("manual", force=True)
+
+    # ------------------------------------------------------------------
     # Watchlist self-build (open scan)
     # ------------------------------------------------------------------
     def _maybe_build_watchlists(self, now: datetime) -> None:
@@ -219,6 +300,9 @@ class AutopilotService(QObject):
         if since_open < core.AUTOPILOT_WATCHLIST_BUILD_AFTER_OPEN_MINUTES:
             return
         if since_open > core.AUTOPILOT_WATCHLIST_BUILD_DEADLINE_MINUTES:
+            return
+        # The build only makes sense off a fresh pool - wait for the rebuild.
+        if self._universe_rebuild_running or core.universe_is_stale(now):
             return
         self._start_watchlist_build(manual=False)
 
@@ -241,22 +325,54 @@ class AutopilotService(QObject):
                     self._log("Open scan returned no data - keeping the existing watchlists.")
                     return
                 spy_move = moves.get("SPY")
+                # Holiday / stale-feed guard: if SPY's freshest bars are not
+                # from today, there is no session to scan - don't build lists
+                # out of the previous session's tape.
+                spy_session = (spy_move or {}).get("session_date")
+                if spy_session is None or spy_session != datetime.now().date():
+                    self._state["watchlist_built_at"] = "skipped (no fresh session - holiday?)"
+                    self._save_state()
+                    self._log("No fresh SPY session in the open-scan data (market holiday?) - watchlists unchanged.")
+                    return
                 built = core.build_watchlists_from_moves(moves, spy_move)
                 longs = built["longs"]
                 shorts = built["shorts"]
                 if not longs and not shorts:
                     self._log(f"Open scan found no gap/RS movers across {built['scanned']} names - watchlists unchanged.")
                     return
-                core.write_bouncebot_watchlists(longs, shorts)
+
+                # Keep the trader's hand-added names: replace only what Auto
+                # Pilot itself wrote last time.
+                written = self._state.get("autopilot_written") or {}
+                current_longs, current_shorts = self._read_watchlists()
+                merged_longs = core.merge_autopilot_watchlist(longs, current_longs, written.get("longs", []))
+                merged_shorts = core.merge_autopilot_watchlist(shorts, current_shorts, written.get("shorts", []))
+                core.write_bouncebot_watchlists(merged_longs["symbols"], merged_shorts["symbols"])
+                self._state["autopilot_written"] = {"longs": list(longs), "shorts": list(shorts)}
                 self._state["watchlist_built_at"] = datetime.now().strftime("%H:%M:%S")
                 self._save_state()
+
+                self._append_pick_rows(
+                    [
+                        {"side": "long", "symbol": symbol, "source": "open_scan", "why": built["long_reasons"].get(symbol, "")}
+                        for symbol in longs
+                    ]
+                    + [
+                        {"side": "short", "symbol": symbol, "source": "open_scan", "why": built["short_reasons"].get(symbol, "")}
+                        for symbol in shorts
+                    ],
+                    moves,
+                )
+
                 spy_text = ""
                 if spy_move and spy_move.get("early_move_pct") is not None:
                     spy_text = f" (SPY early move {float(spy_move['early_move_pct']):+.2f}%)"
+                kept = merged_longs["manual_kept"] + merged_shorts["manual_kept"]
+                kept_text = f"; kept your names: {', '.join(kept)}" if kept else ""
                 self._log(
                     f"Watchlists built from {built['scanned']} names{spy_text}: "
                     f"{len(longs)} longs [{', '.join(longs[:10])}{'...' if len(longs) > 10 else ''}], "
-                    f"{len(shorts)} shorts [{', '.join(shorts[:10])}{'...' if len(shorts) > 10 else ''}]."
+                    f"{len(shorts)} shorts [{', '.join(shorts[:10])}{'...' if len(shorts) > 10 else ''}]{kept_text}."
                 )
                 self._write_report()
             except Exception as exc:
@@ -266,6 +382,43 @@ class AutopilotService(QObject):
                 self._building_watchlists = False
 
         threading.Thread(target=worker, name="autopilot-watchlists", daemon=True).start()
+
+    def _append_pick_rows(self, picks: list[dict], moves: dict | None = None) -> None:
+        """Evidence trail: every auto pick with its gap/RS numbers."""
+        if not picks:
+            return
+        try:
+            import csv
+
+            AUTOPILOT_PICKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fieldnames = ["date", "logged_at", "symbol", "side", "source", "gap_pct", "excess_pct", "why"]
+            write_header = not AUTOPILOT_PICKS_FILE.exists() or AUTOPILOT_PICKS_FILE.stat().st_size == 0
+            spy_early = 0.0
+            if moves and moves.get("SPY", {}).get("early_move_pct") is not None:
+                spy_early = float(moves["SPY"]["early_move_pct"])
+            with AUTOPILOT_PICKS_FILE.open("a", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                if write_header:
+                    writer.writeheader()
+                now = datetime.now()
+                for pick in picks:
+                    move = (moves or {}).get(pick.get("symbol", ""), {})
+                    gap = move.get("gap_pct")
+                    early = move.get("early_move_pct")
+                    writer.writerow(
+                        {
+                            "date": now.date().isoformat(),
+                            "logged_at": now.strftime("%H:%M:%S"),
+                            "symbol": pick.get("symbol", ""),
+                            "side": pick.get("side", ""),
+                            "source": pick.get("source", ""),
+                            "gap_pct": f"{float(gap):.2f}" if gap is not None else "",
+                            "excess_pct": f"{float(early) - spy_early:.2f}" if early is not None else "",
+                            "why": pick.get("why", ""),
+                        }
+                    )
+        except Exception:
+            logging.exception("Auto Pilot pick logging failed")
 
     # ------------------------------------------------------------------
     # Swing scan schedule
@@ -312,6 +465,7 @@ class AutopilotService(QObject):
         self._log(f"Swing scan for slot {slot} finished at {stamp} ({len(rows)} setup rows).")
         self._active_scan_slot = None
         self._write_report()
+        self._maybe_run_wrapup(datetime.now())
 
     @Slot(str)
     def _on_scan_failed(self, message: str) -> None:
@@ -321,6 +475,7 @@ class AutopilotService(QObject):
         self._log(f"Swing scan for slot {slot} FAILED: {first_line}")
         self._active_scan_slot = None
         self._write_report()
+        self._maybe_run_wrapup(datetime.now())
 
     def _mark_slots_done(self) -> None:
         marks = getattr(self, "_pending_slot_marks", [])
@@ -384,7 +539,14 @@ class AutopilotService(QObject):
                 if added:
                     already = sorted(set(self._state.get("hod_added", [])) | set(added))
                     self._state["hod_added"] = already
+                    written = self._state.get("autopilot_written") or {"longs": [], "shorts": []}
+                    side_key = "longs" if side == "long" else "shorts"
+                    written[side_key] = sorted(set(written.get(side_key, [])) | set(added))
+                    self._state["autopilot_written"] = written
                     self._save_state()
+                    self._append_pick_rows(
+                        [{"side": side, "symbol": symbol, "source": "hod_add", "why": f"near {extreme}"} for symbol in added]
+                    )
                     self._log(f"Added near-{extreme} names to {target.name}: {', '.join(added)}.")
                     self._write_report()
                 else:
@@ -433,6 +595,112 @@ class AutopilotService(QObject):
             return []
 
     # ------------------------------------------------------------------
+    # After-close wrap-up: universe rebuild + learning refresh + scorecard
+    # ------------------------------------------------------------------
+    def _maybe_run_wrapup(self, now: datetime) -> None:
+        if self._wrapup_running or not self._enabled:
+            return
+        if not core.after_close_wrapup_due(
+            now,
+            self._state.get("slots_done", []),
+            bool(self._state.get("wrapup_done_at")),
+            self._scan_service.running,
+        ):
+            return
+        self._start_wrapup()
+
+    def _start_wrapup(self) -> None:
+        self._wrapup_running = True
+        self._log("After-close wrap-up: rebuilding universe, refreshing day-trade learning, scoring today's picks...")
+
+        def worker() -> None:
+            try:
+                # 1) Fresh universe with today's closes -> tomorrow's open scan
+                #    is instantly ready (post-close means it is stale by rule).
+                self._ensure_universe_fresh("after-close")
+
+                # 2) Day-trade learning loop: performance rows + report + the
+                #    alert-time learning state the tiers/mutes read.
+                try:
+                    from bounce_bot_lib.learning import refresh_bounce_learning_state
+
+                    state = refresh_bounce_learning_state()
+                    segments = (state or {}).get("segments") or {}
+                    segment_count = sum(len(v) for v in segments.values())
+                    self._log(f"Day-trade learning refreshed ({segment_count} measured segments).")
+                except Exception as exc:
+                    self._log(f"Learning refresh failed: {exc}")
+                    logging.exception("Auto Pilot learning refresh failed")
+
+                # 3) Scorecard: did the self-built lists produce anything?
+                try:
+                    line = self._score_todays_picks()
+                    if line:
+                        self._scorecard_line = line
+                        self._log(line)
+                except Exception as exc:
+                    self._log(f"Pick scorecard failed: {exc}")
+                    logging.exception("Auto Pilot pick scorecard failed")
+
+                self._state["wrapup_done_at"] = datetime.now().strftime("%H:%M:%S")
+                self._save_state()
+                self._write_report()
+                self._log("After-close wrap-up complete.")
+            finally:
+                self._wrapup_running = False
+
+        threading.Thread(target=worker, name="autopilot-wrapup", daemon=True).start()
+
+    def _score_todays_picks(self) -> str:
+        import csv
+
+        today = datetime.now().date().isoformat()
+        picks: list[dict] = []
+        try:
+            with AUTOPILOT_PICKS_FILE.open("r", encoding="utf-8", newline="") as handle:
+                picks = [row for row in csv.DictReader(handle) if row.get("date") == today]
+        except OSError:
+            pass
+        if not picks:
+            return "Auto picks today: none logged."
+
+        def _rows(path: Path) -> list[dict]:
+            try:
+                with Path(path).open("r", encoding="utf-8", newline="") as handle:
+                    return list(csv.DictReader(handle))
+            except OSError:
+                return []
+
+        candidates = [row for row in _rows(INTRADAY_BOUNCE_CANDIDATES_FILE) if row.get("trade_date") == today]
+        candidate_ids = {str(row.get("event_id") or "") for row in candidates}
+        outcomes = [row for row in _rows(INTRADAY_BOUNCE_OUTCOMES_FILE) if str(row.get("event_id") or "") in candidate_ids]
+        scorecard = core.score_autopilot_picks(picks, candidates, outcomes)
+        line = core.format_scorecard_line(scorecard)
+        try:
+            AUTOPILOT_SCORECARD_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fieldnames = ["date", "picks", "longs", "shorts", "alerted", "alerted_symbols", "avg_close_r", "avg_mfe_r"]
+            write_header = not AUTOPILOT_SCORECARD_FILE.exists() or AUTOPILOT_SCORECARD_FILE.stat().st_size == 0
+            with AUTOPILOT_SCORECARD_FILE.open("a", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                if write_header:
+                    writer.writeheader()
+                writer.writerow(
+                    {
+                        "date": today,
+                        "picks": scorecard["picks"],
+                        "longs": scorecard["longs"],
+                        "shorts": scorecard["shorts"],
+                        "alerted": scorecard["alerted"],
+                        "alerted_symbols": ";".join(scorecard["alerted_symbols"]),
+                        "avg_close_r": f"{scorecard['avg_close_r']:.3f}" if scorecard["avg_close_r"] is not None else "",
+                        "avg_mfe_r": f"{scorecard['avg_mfe_r']:.3f}" if scorecard["avg_mfe_r"] is not None else "",
+                    }
+                )
+        except Exception:
+            logging.exception("Auto Pilot scorecard write failed")
+        return line
+
+    # ------------------------------------------------------------------
     # Away report
     # ------------------------------------------------------------------
     def _maybe_heartbeat_report(self, now: datetime) -> None:
@@ -469,6 +737,8 @@ class AutopilotService(QObject):
                 "slots_done": snapshot["slots_done"],
                 "next_slot": snapshot["next_slot"],
                 "log_lines": list(self._log_lines)[-_MAX_REPORT_LOG_LINES:][::-1],
+                "universe_line": snapshot.get("universe_line", ""),
+                "scorecard_line": self._scorecard_line,
             }
             core.write_away_report(payload)
             self._last_report_write = datetime.now()
@@ -571,16 +841,21 @@ class AutopilotService(QObject):
         except Exception:
             payload = {}
         if not isinstance(payload, dict) or payload.get("date") != today:
+            previous = payload if isinstance(payload, dict) else {}
             return {
                 "date": today,
-                "enabled": bool(payload.get("enabled")) if isinstance(payload, dict) else False,
+                "enabled": bool(previous.get("enabled")),
                 "slots_done": [],
                 "watchlist_built_at": None,
                 "hod_last_check": None,
                 "hod_added": [],
+                "wrapup_done_at": None,
+                "autopilot_written": previous.get("autopilot_written") or {"longs": [], "shorts": []},
             }
         payload.setdefault("slots_done", [])
         payload.setdefault("hod_added", [])
+        payload.setdefault("wrapup_done_at", None)
+        payload.setdefault("autopilot_written", {"longs": [], "shorts": []})
         return payload
 
     def _save_state(self) -> None:

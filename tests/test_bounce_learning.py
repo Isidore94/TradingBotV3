@@ -22,6 +22,8 @@ def _perf_row(dimension, direction, segment, n, avg_r, **extra):
         "avg_close_r": avg_r,
         "stop_rate": extra.get("stop_rate", 0.5),
         "target_1r_rate": extra.get("target_1r_rate", 0.6),
+        "avg_mfe_r": extra.get("avg_mfe_r"),
+        "median_close_r": extra.get("median_close_r"),
     }
 
 
@@ -652,6 +654,47 @@ def test_vwap_regime_classification():
     assert _classify_spy_vwap_regime(strong[:6], prev_close=99.5) is None
     no_volume = [_vwap_bar(start + timedelta(minutes=5 * i), 100.0 + i, volume=0.0) for i in range(12)]
     assert _classify_spy_vwap_regime(no_volume, prev_close=99.5) is None
+
+
+def test_learning_state_keeps_mfe_and_exit_note_renders():
+    rows = [
+        _perf_row("bounce_type", "long", "ema_8", 23, 0.5, avg_mfe_r=2.1, median_close_r=0.3),
+        _perf_row("bounce_type", "long", "vwap", 40, 0.2, avg_mfe_r=0.8),
+        _perf_row("bounce_type", "short", "ema_8", 15, 0.4),  # no MFE recorded
+    ]
+    state = learning.build_learning_state(rows)
+    segment = state["segments"]["bounce_type"]["long|ema_8"]
+    assert segment["avg_mfe_r"] == 2.1
+    assert segment["median_close_r"] == 0.3
+
+    # Big MFE vs small close -> the harvest advice appears.
+    note = learning.measured_exit_note(state, direction="long", bounce_types=["ema_8"])
+    assert "avg MFE 2.1R" in note and "n=23" in note and "harvest" in note
+
+    # Modest MFE: stats only, no advice.
+    vwap_note = learning.measured_exit_note(state, direction="long", bounce_types=["vwap"])
+    assert "avg MFE 0.8R" in vwap_note and "harvest" not in vwap_note
+
+    # Best-sampled matching segment wins when several types triggered.
+    both = learning.measured_exit_note(state, direction="long", bounce_types=["ema_8", "vwap"])
+    assert "vwap" in both  # n=40 beats n=23
+
+    # No evidence -> empty note, alert stays clean.
+    assert learning.measured_exit_note(state, direction="short", bounce_types=["ema_8"]) == ""
+    assert learning.measured_exit_note(None, direction="long", bounce_types=["ema_8"]) == ""
+
+
+def test_measured_exit_suffix_never_raises():
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        pass
+
+    Stub._measured_exit_suffix = BounceBot._measured_exit_suffix
+    stub = Stub()
+    # Whatever the learning state on disk looks like, the suffix is a string.
+    assert isinstance(stub._measured_exit_suffix("long", {"ema_8": 101.5}), str)
+    assert isinstance(stub._measured_exit_suffix("short", None), str)
 
 
 def test_pacing_backoff_registers_and_escalates():

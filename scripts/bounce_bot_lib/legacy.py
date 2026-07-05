@@ -1150,7 +1150,7 @@ def _migrate_csv_header(path, fieldnames):
         logging.warning("CSV header migration skipped for %s: %s", path, exc)
 
 
-def _format_bounce_alert_message(symbol, direction, levels_list, event_row, quality) -> str:
+def _format_bounce_alert_message(symbol, direction, levels_list, event_row, quality, exit_note="") -> str:
     """Alert text: tier + confirmation + trade plan + the measured reasons."""
     row = event_row if isinstance(event_row, dict) else {}
     quality = quality if isinstance(quality, dict) else {}
@@ -1176,6 +1176,8 @@ def _format_bounce_alert_message(symbol, direction, levels_list, event_row, qual
         # Exit discipline from the tracker: most bounces touch +1R (60-80%) but
         # round-trip; harvesting the partial is the measured edge.
         parts.append(f"take 50% at +1R {target_1r:.2f}, trail the rest")
+    if exit_note:
+        parts.append(str(exit_note))
     reasons = quality.get("reasons") or []
     if reasons:
         parts.append("why: " + "; ".join(reasons[:3]))
@@ -2331,6 +2333,24 @@ class BounceBot(EWrapper, EClient):
         except Exception as exc:  # learning must never block an alert
             logging.warning("Bounce learning evaluation failed (alerting anyway): %s", exc)
             return {"tier": "B", "muted": False, "mute_reasons": [], "reasons": []}
+
+    def _measured_exit_suffix(self, direction, levels):
+        """Tracker-measured exit stats for this bounce type ("" when unproven).
+
+        Exits are the measured leak (MFE 2-3R vs 0.3-0.7R closed), so alerts
+        carry the evidence. Never blocks an alert.
+        """
+        try:
+            from bounce_bot_lib.learning import load_bounce_learning_state, measured_exit_note
+
+            return measured_exit_note(
+                load_bounce_learning_state(),
+                direction=direction,
+                bounce_types=_bounce_type_keys_from_levels(levels or {}),
+            )
+        except Exception as exc:
+            logging.debug("Measured exit note unavailable: %s", exc)
+            return ""
 
     def _make_bounce_event_id(self, symbol, direction, bounce_candle, levels):
         candle_time = ""
@@ -4034,6 +4054,9 @@ class BounceBot(EWrapper, EClient):
             f"day {hit['sym_day']:+.2f}% vs SPY {hit['spy_day']:+.2f}% "
             f"(excess {hit['day_excess']:+.2f}%), window {hit['sym_window']:+.2f}%."
         )
+        exit_note = self._measured_exit_suffix(side, levels)
+        if exit_note:
+            message += f" | {exit_note}"
         payload = self._build_bounce_feedback_alert_payload(message, event_row)
         if self.gui_callback:
             self.gui_callback(payload, "red" if side == "short" else "green")
@@ -4159,6 +4182,9 @@ class BounceBot(EWrapper, EClient):
             f"at {break_bar.dt:%H:%M} ({hit['minutes_after_open']} min after open); "
             f"OR {hit['or_low']:.2f}-{hit['or_high']:.2f}."
         )
+        exit_note = self._measured_exit_suffix(side, levels)
+        if exit_note:
+            message += f" | {exit_note}"
         payload = self._build_bounce_feedback_alert_payload(message, event_row)
         if self.gui_callback:
             self.gui_callback(payload, "red" if side == "short" else "green")
@@ -4296,6 +4322,9 @@ class BounceBot(EWrapper, EClient):
             f"into a new {extreme_label} {hit['new_extreme']:.2f} (day {hit['day_pct']:+.2f}%, "
             f"8-EMA {hit['ema8']:.2f})."
         )
+        exit_note = self._measured_exit_suffix(side, levels)
+        if exit_note:
+            message += f" | {exit_note}"
         payload = self._build_bounce_feedback_alert_payload(message, event_row)
         if self.gui_callback:
             self.gui_callback(payload, "red" if side == "short" else "green")
@@ -7723,7 +7752,8 @@ class BounceBot(EWrapper, EClient):
             human_pick = bool(event_row.get("human_focus_pick"))
             muted_by_learning = bool(quality.get("muted") and not human_pick)
             bounce_msg = _format_bounce_alert_message(
-                symbol, direction, levels_list, event_row, quality
+                symbol, direction, levels_list, event_row, quality,
+                exit_note=self._measured_exit_suffix(direction, levels),
             )
             if learning_only or muted_by_learning:
                 mute_note = "; ".join(quality.get("mute_reasons") or []) or "learning-only candidate"

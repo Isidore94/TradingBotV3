@@ -77,6 +77,8 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
             "sample_count": sample_count,
             "stop_rate": _float_or_none(row.get("stop_rate")),
             "target_1r_rate": _float_or_none(row.get("target_1r_rate")),
+            "avg_mfe_r": _float_or_none(row.get("avg_mfe_r")),
+            "median_close_r": _float_or_none(row.get("median_close_r")),
             "score_delta": delta,
             "muted": muted,
         }
@@ -190,6 +192,43 @@ def evaluate_bounce_quality(
 # State IO + refresh
 # ---------------------------------------------------------------------------
 _state_cache: dict = {"mtime": None, "state": None}
+
+
+def measured_exit_note(
+    state: dict | None,
+    *,
+    direction: str,
+    bounce_types: list[str] | tuple = (),
+) -> str:
+    """The tracker's own exit evidence for this bounce type, or "".
+
+    Exits are the measured leak (MFE 2-3R vs 0.3-0.7R closed), so alerts show
+    the numbers for the best-sampled matching bounce-type segment. Segments
+    only exist in the state once they clear MIN_SAMPLES, so presence already
+    implies enough evidence.
+    """
+    segments = (state or {}).get("segments") or {}
+    bounce_segments = segments.get("bounce_type") or {}
+    direction = str(direction or "").strip().lower()
+
+    best = None
+    best_type = ""
+    for bounce_type in bounce_types or ():
+        entry = bounce_segments.get(_seg_key(direction, str(bounce_type)))
+        if not isinstance(entry, dict) or entry.get("avg_mfe_r") is None:
+            continue
+        if best is None or int(entry.get("sample_count") or 0) > int(best.get("sample_count") or 0):
+            best = entry
+            best_type = str(bounce_type)
+    if best is None:
+        return ""
+    mfe = float(best["avg_mfe_r"])
+    close_r = _float_or_none(best.get("avg_close_r"))
+    close_text = f" vs {close_r:+.1f}R close" if close_r is not None else ""
+    note = f"measured {best_type}: avg MFE {mfe:.1f}R{close_text} (n={int(best.get('sample_count') or 0)})"
+    if mfe >= 1.2 and (close_r is None or mfe >= close_r + 0.5):
+        note += " -> harvest the partial, trail the rest"
+    return note
 
 
 def load_bounce_learning_state(path: Path | None = None) -> dict | None:
