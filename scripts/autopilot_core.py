@@ -24,6 +24,7 @@ rendering are pure; the yfinance fetchers accept an injectable downloader.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -185,6 +186,50 @@ def universe_is_stale(
     return built_at < reference_close
 
 
+# One rebuild at a time, no matter who asks (GUI-launch self-heal, Auto Pilot
+# tick, manual button) - they all funnel through this lock.
+_UNIVERSE_REBUILD_LOCK = threading.Lock()
+
+
+def rebuild_universe_if_stale(
+    now: datetime | None = None,
+    *,
+    force: bool = False,
+    log: Callable[[str], None] | None = None,
+    builder: Callable[..., dict] | None = None,
+    built_at: datetime | None | object = _UNSET,
+) -> str:
+    """Blocking rebuild (call from a worker thread). Returns one of
+    "fresh" | "rebuilt" | "busy" | "failed"."""
+    now = now or datetime.now()
+    if not force and not universe_is_stale(now, built_at):
+        return "fresh"
+    if not _UNIVERSE_REBUILD_LOCK.acquire(blocking=False):
+        return "busy"
+    started = datetime.now()
+    try:
+        if builder is None:
+            from universe_builder import DEFAULT_OPTIONS_FILTER, build_universe
+
+            result = build_universe(options_filter=DEFAULT_OPTIONS_FILTER)
+        else:
+            result = builder()
+        if log:
+            elapsed = (datetime.now() - started).total_seconds()
+            log(
+                f"Universe rebuilt in {elapsed:.0f}s: {len(result.get('all', []))} total / "
+                f"{len(result.get('longs', []))} longs / {len(result.get('shorts', []))} shorts."
+            )
+        return "rebuilt"
+    except Exception as exc:
+        logging.exception("Universe rebuild failed")
+        if log:
+            log(f"Universe rebuild failed: {exc}")
+        return "failed"
+    finally:
+        _UNIVERSE_REBUILD_LOCK.release()
+
+
 def after_close_wrapup_due(
     now: datetime,
     slots_done: Iterable[str],
@@ -291,9 +336,9 @@ def score_autopilot_picks(
     }
 
 
-def format_scorecard_line(scorecard: Mapping[str, Any]) -> str:
+def format_scorecard_line(scorecard: Mapping[str, Any], label: str = "Auto picks today") -> str:
     if not scorecard or not scorecard.get("picks"):
-        return "Auto picks today: none logged."
+        return f"{label}: none logged."
     close_r = scorecard.get("avg_close_r")
     mfe_r = scorecard.get("avg_mfe_r")
     r_text = ""
@@ -302,9 +347,53 @@ def format_scorecard_line(scorecard: Mapping[str, Any]) -> str:
         mfe_part = f"MFE {mfe_r:.2f}R" if mfe_r is not None else "MFE n/a"
         r_text = f", {close_part} / {mfe_part}"
     return (
-        f"Auto picks today: {scorecard.get('longs', 0)} longs + {scorecard.get('shorts', 0)} shorts "
+        f"{label}: {scorecard.get('longs', 0)} longs + {scorecard.get('shorts', 0)} shorts "
         f"-> {scorecard.get('alerted', 0)} alerted{r_text}."
     )
+
+
+# Pick provenance: the scorecard compares how the bot's own picks, its
+# not-acted-on suggestions, and the trader's hand-picked names each performed.
+PICK_SOURCE_GROUPS = {
+    "open_scan": "auto",
+    "hod_add": "auto",
+    "suggestion": "suggested",
+    "manual": "manual",
+}
+PICK_GROUP_LABELS = {
+    "auto": "Bot picks",
+    "suggested": "Bot suggestions (not acted on)",
+    "manual": "Your picks",
+}
+
+
+def group_picks_by_source(picks: Iterable[Mapping[str, Any]]) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for pick in picks or []:
+        source = str(pick.get("source") or "").strip().lower()
+        group = PICK_SOURCE_GROUPS.get(source, "auto")
+        groups.setdefault(group, []).append(dict(pick))
+    return groups
+
+
+def format_suggestion_message(built: Mapping[str, Any], limit: int = 8) -> str:
+    """One alert line with the open scan's suggested adds (manual-mode days)."""
+
+    def _side(side_key: str, reasons_key: str) -> str:
+        symbols = list(built.get(side_key) or [])[:limit]
+        reasons = built.get(reasons_key) or {}
+        return ", ".join(
+            f"{symbol} ({reasons[symbol]})" if reasons.get(symbol) else symbol for symbol in symbols
+        )
+
+    parts = []
+    if built.get("longs"):
+        parts.append(f"longs: {_side('longs', 'long_reasons')}")
+    if built.get("shorts"):
+        parts.append(f"shorts: {_side('shorts', 'short_reasons')}")
+    if not parts:
+        return ""
+    return "AUTO PILOT SUGGESTS - " + " | ".join(parts)
 
 
 # ---------------------------------------------------------------------------

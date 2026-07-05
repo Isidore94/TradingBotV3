@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from PySide6.QtCore import QSize, Qt
+import threading
+from datetime import datetime
+
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -78,6 +81,12 @@ class MainWindow(QMainWindow):
         self.trading_panel.rowsChanged.connect(self._set_setup_counts)
         self.trading_panel.connectionChanged.connect(self._set_ib_status)
 
+        # Self-heal a stale universe on every launch (not just Auto Pilot ON):
+        # the swing scans fold universe_longs/shorts into every run, so a
+        # stale pool quietly degrades manual scans too. yfinance-only, in a
+        # background thread - IB and the UI are untouched.
+        QTimer.singleShot(2500, self._self_heal_universe)
+
     def _build_shell(self) -> None:
         nav = QFrame()
         nav.setObjectName("NavRail")
@@ -147,11 +156,13 @@ class MainWindow(QMainWindow):
         self.scan_status = QLabel("Scan: idle")
         self.setup_status = QLabel("Setups: 0")
         self.watchlist_status = QLabel(_watchlist_status_text())
+        self.universe_status = QLabel(_universe_status_text())
         self.data_status = QLabel(_data_status_text())
         status.addWidget(self.ib_status)
         status.addWidget(self.scan_status, 1)
         status.addPermanentWidget(self.setup_status)
         status.addPermanentWidget(self.watchlist_status)
+        status.addPermanentWidget(self.universe_status)
         status.addPermanentWidget(self.data_status)
 
     def _bind_shortcuts(self) -> None:
@@ -204,6 +215,36 @@ class MainWindow(QMainWindow):
     def _set_setup_counts(self, total: int, favorites: int, near: int) -> None:
         self.setup_status.setText(f"Setups: {total} | Favorites: {favorites} | Near: {near}")
 
+    def _self_heal_universe(self) -> None:
+        import autopilot_core as core
+
+        if not core.universe_is_stale(datetime.now()):
+            self.universe_status.setText(_universe_status_text())
+            return
+        self.universe_status.setText("Universe: stale - rebuilding...")
+        self.universe_status.setStyleSheet("color: #E5C07B;")
+        threading.Thread(
+            target=core.rebuild_universe_if_stale,
+            kwargs={"force": False},
+            name="universe-self-heal",
+            daemon=True,
+        ).start()
+        self._universe_poll_ticks = 0
+        self._universe_poll = QTimer(self)
+        self._universe_poll.setInterval(10_000)
+        self._universe_poll.timeout.connect(self._poll_universe_heal)
+        self._universe_poll.start()
+
+    def _poll_universe_heal(self) -> None:
+        import autopilot_core as core
+
+        self._universe_poll_ticks += 1
+        done = not core.universe_is_stale(datetime.now())
+        if done or self._universe_poll_ticks > 120:  # give up after ~20 min
+            self.universe_status.setText(_universe_status_text())
+            self.universe_status.setStyleSheet("" if done else "color: #E06C75;")
+            self._universe_poll.stop()
+
     def closeEvent(self, event) -> None:
         for panel in (self.trading_panel, self.journal_panel, self.universe_panel, self.research_panel, self.autopilot_panel, self.settings_panel):
             try:
@@ -240,6 +281,16 @@ def _watchlist_status_text() -> str:
 def _data_status_text() -> str:
     details = get_tracker_storage_details()
     return f"Data: {details.get('source_label', details.get('source', 'unknown'))}"
+
+
+def _universe_status_text() -> str:
+    import autopilot_core as core
+
+    built_at = core.universe_built_at()
+    if built_at is None:
+        return "Universe: missing"
+    state = "stale" if core.universe_is_stale(datetime.now(), built_at) else "fresh"
+    return f"Universe: {state} ({built_at:%b %d %H:%M})"
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -2053,6 +2053,10 @@ class BounceBot(EWrapper, EClient):
         self.pacing_backoff_until = 0.0
         self.last_pacing_violation_at = 0.0
 
+        # After-close learning refresh: once per session, so tiers/mutes work
+        # from today's outcomes even when the bot never restarts.
+        self._learning_refresh_date = None
+
         self.longs = read_tickers(LONGS_FILENAME)
         self.shorts = read_tickers(SHORTS_FILENAME)
         self.atr_cache = {}
@@ -3005,6 +3009,42 @@ class BounceBot(EWrapper, EClient):
                     return False
             logging.error("Failed to reconnect to IB within timeout.")
             return False
+
+    def _maybe_refresh_learning_after_close(self):
+        """Rebuild the day-trade learning chain once per day after the close.
+
+        Runs in a worker thread (no IB needed) so the scan loop never waits;
+        keeps alert tiers/mutes current without a bot restart or Auto Pilot.
+        """
+        if time.time() - getattr(self, "_learning_refresh_last_check", 0.0) < 60:
+            return
+        self._learning_refresh_last_check = time.time()
+        now = get_market_local_now()
+        if now.weekday() >= 5:
+            return
+        today = now.date()
+        if self._learning_refresh_date == today:
+            return
+        session = get_market_session_window(now)
+        if now < session.close_local + timedelta(minutes=BOUNCE_EOD_FINALIZE_GRACE_MINUTES):
+            return
+        self._learning_refresh_date = today
+
+        def worker():
+            try:
+                from bounce_bot_lib.learning import refresh_bounce_learning_state
+
+                state = refresh_bounce_learning_state()
+                segments = sum(len(value) for value in (state or {}).get("segments", {}).values())
+                logging.info("After-close learning refresh complete (%s measured segments).", segments)
+                if self.gui_callback:
+                    self.gui_callback(
+                        f"Learning refreshed after the close ({segments} measured segments).", "blue"
+                    )
+            except Exception:
+                logging.exception("After-close learning refresh failed")
+
+        threading.Thread(target=worker, name="learning-refresh", daemon=True).start()
 
     def _register_pacing_violation(self, error_code):
         now = time.time()
@@ -8104,6 +8144,13 @@ class BounceBot(EWrapper, EClient):
 
         while True:
             try:
+                # Bookkeeping that needs no IB and no scanning: keep the
+                # learning state fresh even on paused/disconnected evenings.
+                try:
+                    self._maybe_refresh_learning_after_close()
+                except Exception:
+                    logging.exception("After-close learning refresh scheduling failed.")
+
                 if not self.is_scanning_enabled():
                     time.sleep(0.5)
                     continue

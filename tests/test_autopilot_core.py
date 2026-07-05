@@ -220,6 +220,70 @@ def test_score_autopilot_picks_joins_candidates_and_outcomes():
     assert "1 longs + 1 shorts" in line and "1 alerted" in line and "+0.50R" in line
 
 
+def test_rebuild_universe_if_stale_outcomes():
+    now = datetime(2026, 7, 2, 8, 0)
+    fresh_built = datetime(2026, 7, 1, 16, 0)
+    calls = []
+
+    def fake_builder():
+        calls.append(1)
+        return {"all": ["A", "B"], "longs": ["A"], "shorts": ["B"]}
+
+    # Fresh -> no rebuild, builder untouched.
+    assert core.rebuild_universe_if_stale(now, builder=fake_builder, built_at=fresh_built) == "fresh"
+    assert not calls
+
+    # Stale -> rebuilds via the injected builder.
+    assert core.rebuild_universe_if_stale(now, builder=fake_builder, built_at=None) == "rebuilt"
+    assert calls == [1]
+
+    # Someone else is rebuilding -> busy, no double work.
+    assert core._UNIVERSE_REBUILD_LOCK.acquire(blocking=False)
+    try:
+        assert core.rebuild_universe_if_stale(now, builder=fake_builder, built_at=None) == "busy"
+    finally:
+        core._UNIVERSE_REBUILD_LOCK.release()
+    assert calls == [1]
+
+    # A crashing builder reports failure instead of raising.
+    def broken_builder():
+        raise RuntimeError("boom")
+
+    assert core.rebuild_universe_if_stale(now, builder=broken_builder, built_at=None) == "failed"
+
+
+def test_pick_grouping_and_suggestion_message():
+    groups = core.group_picks_by_source(
+        [
+            {"symbol": "A", "source": "open_scan"},
+            {"symbol": "B", "source": "hod_add"},
+            {"symbol": "C", "source": "manual"},
+            {"symbol": "D", "source": "suggestion"},
+        ]
+    )
+    assert [pick["symbol"] for pick in groups["auto"]] == ["A", "B"]
+    assert [pick["symbol"] for pick in groups["manual"]] == ["C"]
+    assert [pick["symbol"] for pick in groups["suggested"]] == ["D"]
+
+    message = core.format_suggestion_message(
+        {
+            "longs": ["GAPU", "RSST"],
+            "shorts": ["GAPD"],
+            "long_reasons": {"GAPU": "gap +4.0%"},
+            "short_reasons": {},
+        }
+    )
+    assert message.startswith("AUTO PILOT SUGGESTS")
+    assert "GAPU (gap +4.0%)" in message and "RSST" in message and "shorts: GAPD" in message
+    assert core.format_suggestion_message({"longs": [], "shorts": []}) == ""
+
+    labeled = core.format_scorecard_line(
+        {"picks": 3, "longs": 2, "shorts": 1, "alerted": 1, "avg_close_r": 0.9, "avg_mfe_r": None},
+        label="Your picks",
+    )
+    assert labeled.startswith("Your picks:") and "+0.90R" in labeled
+
+
 def test_away_report_has_tv_paste_and_status_lines():
     text = core.render_away_report(
         {
