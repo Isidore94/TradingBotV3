@@ -141,6 +141,11 @@ PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
 
 LONGS_FILE = PERSISTENT_DATA_DIR / "longs.txt"
 SHORTS_FILE = PERSISTENT_DATA_DIR / "shorts.txt"
+# The bot's own morning picks (gap + RS/RW open scan). Written every session
+# regardless of Auto Pilot mode; BounceBot scans them like longs/shorts.txt so
+# the bot's picks build their own outcome history separate from the trader's.
+AUTO_LONGS_FILE = PERSISTENT_DATA_DIR / "autolongs.txt"
+AUTO_SHORTS_FILE = PERSISTENT_DATA_DIR / "autoshorts.txt"
 SWING_LONGS_FILE = PERSISTENT_DATA_DIR / "swinglongs.txt"
 SWING_SHORTS_FILE = PERSISTENT_DATA_DIR / "shortswings.txt"
 

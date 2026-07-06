@@ -157,6 +157,7 @@ class AutopilotPanel(QFrame):
         built = snapshot.get("watchlist_built_at") or "not built today"
         self.watchlist_value.setText(
             f"{snapshot.get('longs_count', 0)} longs / {snapshot.get('shorts_count', 0)} shorts "
+            f"+ bot picks {snapshot.get('auto_longs_count', 0)}/{snapshot.get('auto_shorts_count', 0)} "
             f"(auto-build: {built})"
         )
         universe_text = str(snapshot.get("universe_line", "-")).replace("Universe: ", "")

@@ -293,10 +293,14 @@ def test_away_report_has_tv_paste_and_status_lines():
             "regime": "bullish_strong",
             "longs": ["AAPL", "NVDA"],
             "shorts": [],
+            "auto_longs": ["ABVX", "ATAI"],
+            "auto_shorts": ["ACMR"],
             "universe_line": "Universe: fresh (built 2026-07-02 13:10)",
             "scorecard_line": "Auto picks today: 2 longs + 1 shorts -> 1 alerted.",
         }
     )
     assert "TV paste: AAPL,NVDA" in text
+    assert "BOT PICKS - LONGS" in text and "ABVX, ATAI" in text
+    assert "BOT PICKS - SHORTS" in text and "ACMR" in text
     assert "Universe: fresh" in text
     assert "Auto picks today:" in text

@@ -168,12 +168,15 @@ def test_priority_watchlist_emphasis_cycle_logic():
     stub = SimpleNamespace(
         longs=["aapl", " nvda "],
         shorts=["tsla"],
+        auto_longs=["gapr"],
+        auto_shorts=[],
         _human_focus_symbols=lambda: {"HOOD"},
         _scan_cycle_index=0,
         latest_bars={},
     )
+    stub._auto_watch_symbols = lambda side=None: BounceBot._auto_watch_symbols(stub, side)
     priority = BounceBot.get_priority_scan_symbols(stub)
-    assert priority == {"AAPL", "NVDA", "TSLA", "HOOD"}
+    assert priority == {"AAPL", "NVDA", "TSLA", "HOOD", "GAPR"}
 
     # Cycle 0 refreshes background; the next two defer it; cycle 3 refreshes.
     refresh_pattern = []
@@ -695,6 +698,43 @@ def test_measured_exit_suffix_never_raises():
     # Whatever the learning state on disk looks like, the suffix is a string.
     assert isinstance(stub._measured_exit_suffix("long", {"ema_8": 101.5}), str)
     assert isinstance(stub._measured_exit_suffix("short", None), str)
+
+
+def test_auto_watchlists_get_same_treatment_as_trader_lists():
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        pass
+
+    for name in (
+        "get_symbol_direction",
+        "get_scan_symbol_set",
+        "get_priority_scan_symbols",
+        "_auto_watch_symbols",
+    ):
+        setattr(Stub, name, getattr(BounceBot, name))
+
+    stub = Stub()
+    stub.longs = ["AAPL"]
+    stub.shorts = ["XYZ"]
+    stub.auto_longs = ["NVDA", "XYZ"]  # XYZ conflicts with the trader's short
+    stub.auto_shorts = ["AMD"]
+    stub._human_focus_side_for_symbol = lambda symbol, direction=None: ""
+    stub._human_focus_symbols = lambda: set()
+    stub.master_avwap_d1_watchlist = {}
+    stub.master_avwap_d1_upgrade_alerts = {}
+    stub.master_avwap_focus_map = {}
+    stub.get_master_avwap_d1_watch_symbols = lambda: []
+
+    # Bot picks get directions like watchlist names...
+    assert stub.get_symbol_direction("NVDA") == "long"
+    assert stub.get_symbol_direction("AMD") == "short"
+    # ...but the trader's call always wins a conflict.
+    assert stub.get_symbol_direction("XYZ") == "short"
+
+    # And they are scanned with full (priority) treatment.
+    assert {"NVDA", "AMD", "AAPL", "XYZ"} <= stub.get_scan_symbol_set()
+    assert {"NVDA", "AMD"} <= stub.get_priority_scan_symbols()
 
 
 def test_pacing_backoff_registers_and_escalates():

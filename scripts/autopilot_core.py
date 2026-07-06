@@ -31,6 +31,8 @@ from typing import Any, Callable, Iterable, Mapping
 
 from market_session import get_market_session_window
 from project_paths import (
+    AUTO_LONGS_FILE,
+    AUTO_SHORTS_FILE,
     AUTOPILOT_REPORT_FILE,
     LONGS_FILE,
     SHORTS_FILE,
@@ -699,6 +701,13 @@ def write_bouncebot_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> N
     write_watchlist_file(Path(SHORTS_FILE), shorts)
 
 
+def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> None:
+    """The bot's own morning picks - written every day in both modes so the
+    picks accumulate a clean, separately-attributable outcome history."""
+    write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
+    write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
+
+
 # ---------------------------------------------------------------------------
 # Away report (shared Google Drive digest)
 # ---------------------------------------------------------------------------
@@ -751,6 +760,14 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "== DAY TRADE SHORTS (shorts.txt) ==",
         _tickers(payload.get("shorts", [])),
         f"TV paste: {_tv_line(payload.get('shorts', []))}",
+        "",
+        "== BOT PICKS - LONGS (autolongs.txt) ==",
+        _tickers(payload.get("auto_longs", [])),
+        f"TV paste: {_tv_line(payload.get('auto_longs', []))}",
+        "",
+        "== BOT PICKS - SHORTS (autoshorts.txt) ==",
+        _tickers(payload.get("auto_shorts", [])),
+        f"TV paste: {_tv_line(payload.get('auto_shorts', []))}",
         "",
         "== TOP SWING PICKS ==",
         _lines(picks_lines),

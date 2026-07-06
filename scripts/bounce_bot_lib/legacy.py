@@ -73,6 +73,8 @@ from project_paths import (
     ROOT_DIR,
     LONGS_FILE,
     SHORTS_FILE,
+    AUTO_LONGS_FILE,
+    AUTO_SHORTS_FILE,
     REPORTS_DIR,
     BOUNCE_LOG_FILE,
     SafeRotatingFileHandler,
@@ -104,6 +106,12 @@ from project_paths import (
 ##########################################
 LONGS_FILENAME = LONGS_FILE
 SHORTS_FILENAME = SHORTS_FILE
+# Auto Pilot's own morning picks (see autopilot_core). Scanned with the same
+# treatment as the trader's lists so the bot's picks earn their own tracked
+# outcome history; the trader's files always win direction conflicts.
+AUTO_LONGS_FILENAME = AUTO_LONGS_FILE
+AUTO_SHORTS_FILENAME = AUTO_SHORTS_FILE
+AUTO_WATCHLIST_PRIORITY = True  # every-candle treatment (pacing governor protects IB)
 BOUNCE_LOG_FILENAME = BOUNCE_LOG_FILE
 TRADING_BOT_LOG_FILENAME = TRADING_BOT_LOG_FILE
 INTRADAY_BOUNCES_CSV = INTRADAY_BOUNCES_FILE
@@ -2059,6 +2067,8 @@ class BounceBot(EWrapper, EClient):
 
         self.longs = read_tickers(LONGS_FILENAME)
         self.shorts = read_tickers(SHORTS_FILENAME)
+        self.auto_longs = read_tickers(AUTO_LONGS_FILENAME)
+        self.auto_shorts = read_tickers(AUTO_SHORTS_FILENAME)
         self.atr_cache = {}
         self.symbol_metrics = {}  # Store precomputed VWAP and level metrics
 
@@ -3258,6 +3268,13 @@ class BounceBot(EWrapper, EClient):
         if symbol in short_symbols:
             return "short"
 
+        # The bot's own morning picks (autolongs/autoshorts.txt). After the
+        # trader's lists so a manual call always wins a direction conflict.
+        if symbol in self._auto_watch_symbols("long"):
+            return "long"
+        if symbol in self._auto_watch_symbols("short"):
+            return "short"
+
         watch_entry = self.master_avwap_d1_watchlist.get(symbol) or {}
         side = str(watch_entry.get("side") or "").strip().upper()
         if side == "LONG":
@@ -3280,23 +3297,41 @@ class BounceBot(EWrapper, EClient):
             return "short"
         return ""
 
+    def _auto_watch_symbols(self, side=None):
+        if side == "long":
+            source = getattr(self, "auto_longs", [])
+        elif side == "short":
+            source = getattr(self, "auto_shorts", [])
+        else:
+            source = list(getattr(self, "auto_longs", [])) + list(getattr(self, "auto_shorts", []))
+        return {str(item or "").strip().upper() for item in source if str(item or "").strip()}
+
     def get_scan_symbol_set(self):
         base_symbols = {
             str(item or "").strip().upper()
             for item in (self.longs + self.shorts)
             if str(item or "").strip()
         }
-        return base_symbols | set(self.get_master_avwap_d1_watch_symbols()) | self._human_focus_symbols()
+        return (
+            base_symbols
+            | self._auto_watch_symbols()
+            | set(self.get_master_avwap_d1_watch_symbols())
+            | self._human_focus_symbols()
+        )
 
     def get_priority_scan_symbols(self):
-        """Hand-curated names that deserve every-candle treatment: the trader's
-        longs.txt / shorts.txt intraday dumps plus human focus picks."""
+        """Every-candle names: the trader's longs.txt / shorts.txt intraday
+        dumps, human focus picks, and (so the bot's picks earn a clean tracked
+        history) the auto watchlists."""
         base_symbols = {
             str(item or "").strip().upper()
             for item in (self.longs + self.shorts)
             if str(item or "").strip()
         }
-        return base_symbols | self._human_focus_symbols()
+        priority = base_symbols | self._human_focus_symbols()
+        if AUTO_WATCHLIST_PRIORITY:
+            priority |= self._auto_watch_symbols()
+        return priority
 
     def _is_background_refresh_cycle(self):
         if not PRIORITY_WATCHLIST_EMPHASIS:
@@ -8175,6 +8210,8 @@ class BounceBot(EWrapper, EClient):
 
                 self.longs = read_tickers(LONGS_FILENAME)
                 self.shorts = read_tickers(SHORTS_FILENAME)
+                self.auto_longs = read_tickers(AUTO_LONGS_FILENAME)
+                self.auto_shorts = read_tickers(AUTO_SHORTS_FILENAME)
                 self.load_master_avwap_focus()
                 self.load_human_focus_picks()
                 self.load_master_avwap_d1_watchlist()

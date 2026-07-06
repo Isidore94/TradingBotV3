@@ -11,6 +11,8 @@ from typing import Any
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from project_paths import (
+    AUTO_LONGS_FILE,
+    AUTO_SHORTS_FILE,
     AUTOPILOT_LOG_FILE,
     AUTOPILOT_PICKS_FILE,
     AUTOPILOT_REPORT_FILE,
@@ -160,6 +162,8 @@ class AutopilotService(QObject):
             "watchlist_built_at": self._state.get("watchlist_built_at") or "",
             "longs_count": len(longs),
             "shorts_count": len(shorts),
+            "auto_longs_count": len(self._read_auto_watchlist(AUTO_LONGS_FILE)),
+            "auto_shorts_count": len(self._read_auto_watchlist(AUTO_SHORTS_FILE)),
             "scan_running": self._scan_service.running,
             "report_path": str(AUTOPILOT_REPORT_FILE),
             "universe_line": self._universe_line(now),
@@ -201,6 +205,7 @@ class AutopilotService(QObject):
             # Always-on duties while the GUI is open, Auto Pilot ON or OFF:
             # near-HOD pause alerts and the daily pick scorecard measure the
             # trader's normal days too (alerts only - no file writes when OFF).
+            self._maybe_clear_stale_auto_lists(now)
             self._maybe_add_near_extreme_names(now)
             self._maybe_score_picks_daily(now)
             if not self._enabled:
@@ -239,6 +244,23 @@ class AutopilotService(QObject):
         if self._alerts_date != today:
             self._alerts_date = today
             self._alerts_today.clear()
+
+    def _maybe_clear_stale_auto_lists(self, now: datetime) -> None:
+        """Empty autolongs/autoshorts once per new session so BounceBot never
+        chases yesterday's bot picks. mtime-guarded: if any machine already
+        wrote them today (shared Drive), they are today's picks - keep them."""
+        today = now.date()
+        if getattr(self, "_auto_lists_cleared_date", None) == today:
+            return
+        self._auto_lists_cleared_date = today
+        try:
+            written_at = core.universe_built_at((Path(AUTO_LONGS_FILE), Path(AUTO_SHORTS_FILE)))
+            if written_at is not None and written_at.date() == today:
+                return
+            core.write_auto_watchlists([], [])
+            self._log("New session - cleared autolongs.txt / autoshorts.txt for today's open scan.")
+        except Exception:
+            logging.exception("Auto watchlist day-roll clear failed")
 
     def _ensure_bot_running(self) -> None:
         service = self._bounce_service
@@ -352,6 +374,9 @@ class AutopilotService(QObject):
                 merged_longs = core.merge_autopilot_watchlist(longs, current_longs, written.get("longs", []))
                 merged_shorts = core.merge_autopilot_watchlist(shorts, current_shorts, written.get("shorts", []))
                 core.write_bouncebot_watchlists(merged_longs["symbols"], merged_shorts["symbols"])
+                # The raw bot picks also land in autolongs/autoshorts.txt so
+                # they build a separately-attributable outcome history.
+                core.write_auto_watchlists(longs, shorts)
                 self._state["autopilot_written"] = {"longs": list(longs), "shorts": list(shorts)}
                 self._state["watchlist_built_at"] = datetime.now().strftime("%H:%M:%S")
                 self._save_state()
@@ -425,11 +450,18 @@ class AutopilotService(QObject):
                 message = core.format_suggestion_message(built)
                 self._state["suggested_at"] = datetime.now().strftime("%H:%M:%S")
                 self._save_state()
+                # The bot's picks get their own tracked watchlists even in
+                # suggestion mode: BounceBot scans autolongs/autoshorts.txt
+                # like the trader's lists, so this data accrues every day.
+                core.write_auto_watchlists(built["longs"], built["shorts"])
                 if not message:
                     self._log(f"Open scan found no gap/RS movers across {built['scanned']} names.")
                     return
                 self._emit_info_alert(message, "blue")
-                self._log(message)
+                self._log(
+                    f"{message} | written to autolongs.txt ({len(built['longs'])}) / "
+                    f"autoshorts.txt ({len(built['shorts'])}) - BounceBot tracks them separately."
+                )
                 self._append_pick_rows(
                     [
                         {"side": "long", "symbol": symbol, "source": "suggestion", "why": built["long_reasons"].get(symbol, "")}
@@ -629,10 +661,15 @@ class AutopilotService(QObject):
                     "green" if side == "long" else "red",
                 )
                 if not self._enabled:
+                    auto_target = Path(AUTO_LONGS_FILE) if side == "long" else Path(AUTO_SHORTS_FILE)
+                    auto_added = core.append_watchlist_symbols(auto_target, matches)
                     self._append_pick_rows(
-                        [{"side": side, "symbol": symbol, "source": "suggestion", "why": f"near {extreme}"} for symbol in matches]
+                        [{"side": side, "symbol": symbol, "source": "suggestion", "why": f"near {extreme}"} for symbol in auto_added or matches]
                     )
-                    self._log(f"Near-{extreme} watch (Auto Pilot OFF, no file writes): {', '.join(matches)}.")
+                    self._log(
+                        f"Near-{extreme} watch (Auto Pilot OFF): added to {auto_target.name}: "
+                        f"{', '.join(auto_added) if auto_added else '(already tracked)'}."
+                    )
                     return
                 target = Path(LONGS_FILE) if side == "long" else Path(SHORTS_FILE)
                 added = core.append_watchlist_symbols(target, matches)
@@ -892,6 +929,8 @@ class AutopilotService(QObject):
                 "log_lines": list(self._log_lines)[-_MAX_REPORT_LOG_LINES:][::-1],
                 "universe_line": snapshot.get("universe_line", ""),
                 "scorecard_line": self._scorecard_line,
+                "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
+                "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
             }
             core.write_away_report(payload)
             self._last_report_write = datetime.now()
@@ -934,6 +973,13 @@ class AutopilotService(QObject):
             return str(bot.get_market_environment())
         except Exception:
             return "unknown"
+
+    @staticmethod
+    def _read_auto_watchlist(path) -> list[str]:
+        try:
+            return list(read_watchlist_symbols(Path(path)))
+        except Exception:
+            return []
 
     def _read_watchlists(self) -> tuple[list[str], list[str]]:
         try:
