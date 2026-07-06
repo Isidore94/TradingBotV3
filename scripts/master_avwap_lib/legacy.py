@@ -5811,6 +5811,31 @@ def build_recent_tracker_setup_family_rows(
                 for row in closed_rows
             ]
         )
+        # Win rate + profit factor for the proven-quality score: judged on the
+        # same representative (primary-stop) closed R the ExpR blend uses.
+        win_flags: list[tuple[float, float]] = []
+        gross_win = 0.0
+        gross_loss = 0.0
+        for closed_row in closed_rows:
+            rep_r = _coerce_float(closed_row.get("representative_closed_r"))
+            if rep_r is None:
+                rep_r = _coerce_float(closed_row.get("avg_closed_r"))
+            if rep_r is None:
+                continue
+            weight = float(_coerce_float(closed_row.get("recency_weight")) or 1.0)
+            win_flags.append((1.0 if rep_r > 0 else 0.0, weight))
+            if rep_r > 0:
+                gross_win += rep_r * weight
+            else:
+                gross_loss += -rep_r * weight
+        win_rate_closed = _weighted_mean(win_flags) if win_flags else None
+        if gross_loss > 0:
+            profit_factor = gross_win / gross_loss
+        elif gross_win > 0:
+            profit_factor = 99.0  # all winners so far; PQS caps this anyway
+        else:
+            profit_factor = None
+
         sample_rows = sorted(
             rows_for_group,
             key=lambda row: (
@@ -5842,6 +5867,8 @@ def build_recent_tracker_setup_family_rows(
             "avg_closed_r": avg_closed_r,
             "representative_total_r": representative_total_r,
             "representative_closed_r": representative_closed_r,
+            "win_rate_closed": win_rate_closed,
+            "profit_factor": profit_factor,
             "target_hit_rate": target_hit_rate,
             "stop_rate": stop_rate,
             "baseline_avg_total_r": _coerce_float(baseline.get("avg_total_r")),
@@ -6296,6 +6323,7 @@ from .expected_r import (  # noqa: E402  (leaf module, no cycle)
     DEFAULT_EXPECTED_R_CONFIG,
     calibrate_prior_anchors,
     compute_expected_r,
+    compute_proven_quality_score,
 )
 
 EXPECTED_R_CONFIG_FILE = SCORING_CONFIG_FILE.with_name("master_avwap_expected_r_config.json")
@@ -6413,19 +6441,22 @@ def calibrate_expected_r_prior_anchors(
 def _expected_r_quality_points(row: dict) -> float:
     """Static setup-quality points: the final score minus the tracker-derived
     deltas that already represent realized performance, so the Expected-R blend
-    does not double-count what the tracker is about to re-inject."""
+    does not double-count what the tracker is about to re-inject. Reads
+    ``static_score`` when present so a re-run after the proven-quality score
+    overwrote ``score`` still derives the same prior."""
 
-    score = float(_coerce_float(row.get("score")) or 0.0)
+    score = float(_coerce_float(row.get("static_score", row.get("score"))) or 0.0)
     score -= int(row.get("recent_tracker_score_delta", 0) or 0)
     score -= int(row.get("setup_type_score_delta", 0) or 0)
     return score
 
 
-def _expected_r_realized_lookup(recent_family_rows: list[dict] | None) -> dict[tuple, tuple]:
-    """Map (side, bucket, family) -> (realized_r, closed_samples) from the
-    recency-weighted family rows the tracker already computed this scan."""
+def _expected_r_realized_lookup(recent_family_rows: list[dict] | None) -> dict[tuple, dict]:
+    """Map (side, bucket, family) -> realized stats (avg R, samples, win rate,
+    profit factor) from the recency-weighted family rows the tracker already
+    computed this scan."""
 
-    lookup: dict[tuple, tuple] = {}
+    lookup: dict[tuple, dict] = {}
     for item in recent_family_rows or []:
         if not isinstance(item, dict):
             continue
@@ -6448,7 +6479,13 @@ def _expected_r_realized_lookup(recent_family_rows: list[dict] | None) -> dict[t
             realized, samples = avg_total, int(item.get("tracked_setups", 0) or 0)
         else:
             continue
-        lookup[(side, bucket, family)] = (float(realized), int(samples))
+        lookup[(side, bucket, family)] = {
+            "realized_r": float(realized),
+            "samples": int(samples),
+            "win_rate": _coerce_float(item.get("win_rate_closed")),
+            "profit_factor": _coerce_float(item.get("profit_factor")),
+            "closed_setups": closed,
+        }
     return lookup
 
 
@@ -6506,7 +6543,9 @@ def apply_expected_r_ranking(
             str(context.get("priority_bucket") or "").strip(),
             str(context.get("setup_family") or "general").strip() or "general",
         )
-        realized_r, closed_samples = realized_lookup.get(key, (None, 0))
+        realized_stats = realized_lookup.get(key) or {}
+        realized_r = realized_stats.get("realized_r")
+        closed_samples = int(realized_stats.get("samples", 0) or 0)
         result = compute_expected_r(
             quality_points=quality_points,
             realized_r=realized_r,
@@ -6529,26 +6568,41 @@ def apply_expected_r_ranking(
         row["expected_r_freshness"] = round(float(result["freshness_factor"]), 3)
         row["expected_r_note"] = note
 
-        # Coherence cap (2026-07-02): a negative Expected-R must never carry a
-        # chart-topping static score. The 12:18 scan's #1 short (TPG, score 545)
-        # had ExpR -0.08 - the outcome-calibrated estimate already knew the
-        # family bleeds. Cap the score so raw signal stacking can't outrank
-        # clean setups the tracker actually likes.
-        score_value = _coerce_float(row.get("score"))
-        if (
-            expected_r <= PRIORITY_EXPECTED_R_SCORE_CAP_BELOW
-            and score_value is not None
-            and score_value > PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP
-        ):
-            row["score"] = float(PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP)
-            cap_note = (
-                f"score capped at {PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP} "
-                f"(ExpR {expected_r:+.2f} <= {PRIORITY_EXPECTED_R_SCORE_CAP_BELOW:+.2f})"
+        # Proven-quality score (2026-07-05, replaces the negative-ExpR cap):
+        # the headline points ARE the evidence. Sample-size-adjusted win rate
+        # + profit factor + freshness lead; the raw signal stack survives only
+        # as a small tiebreaker, so the highest points always belong to the
+        # most proven, highest-quality setup - untracked chart-porn can no
+        # longer top the board on stacked signals alone.
+        static_score = _coerce_float(row.get("static_score", row.get("score")))
+        win_rate = realized_stats.get("win_rate")
+        profit_factor = realized_stats.get("profit_factor")
+        evidence_samples = int(realized_stats.get("closed_setups", 0) or 0)
+        pqs = compute_proven_quality_score(
+            static_points=static_score or 0.0,
+            win_rate=win_rate,
+            profit_factor=profit_factor,
+            closed_samples=evidence_samples,
+            freshness=float(result["freshness_factor"]),
+        )
+        row["static_score"] = static_score
+        row["score"] = float(pqs["score"])
+        row["proven_quality_score"] = float(pqs["score"])
+        row["tracker_win_rate"] = None if win_rate is None else round(float(win_rate), 3)
+        row["tracker_profit_factor"] = None if profit_factor is None else round(float(profit_factor), 2)
+        row["tracker_confident_win_rate"] = pqs["confident_win_rate"]
+        if pqs["proven"]:
+            wr_text = f"{float(win_rate) * 100:.0f}%" if win_rate is not None else "n/a"
+            pf_text = f"{min(float(profit_factor), 9.9):.1f}" if profit_factor is not None else "n/a"
+            row["proven_quality_note"] = (
+                f"score {pqs['score']:.0f} = evidence {pqs['evidence']:.0f} "
+                f"(WR {wr_text}, PF {pf_text}, n={evidence_samples}) + structure {pqs['structure']:.0f}"
             )
-            row["expected_r_score_cap_note"] = cap_note
-            reasons = row.setdefault("candidate_rejection_reasons", [])
-            if isinstance(reasons, list) and cap_note not in reasons:
-                reasons.append(cap_note)
+        else:
+            row["proven_quality_note"] = (
+                f"score {pqs['score']:.0f} = unproven floor {pqs['evidence']:.0f} "
+                f"+ structure {pqs['structure']:.0f} (no closed tracker history)"
+            )
 
         symbol_entry = symbol_map.get(symbol)
         if isinstance(symbol_entry, dict):
@@ -18294,22 +18348,30 @@ def _priority_expected_r_text(row: dict) -> str:
     return f"{value:+.2f}R"
 
 
-def _priority_expected_r_sort_key(row: dict) -> tuple[int, float, float, str]:
-    """Rank by Expected-R (freshness-decayed) descending.  Rows that have an
-    Expected-R estimate sort above rows that don't; the static points score is
-    the final tiebreaker so behaviour is stable when ExpR ties or is absent."""
+def _priority_expected_r_sort_key(row: dict) -> tuple[float, float, str]:
+    """Rank by the proven-quality score (evidence-led points: Wilson-adjusted
+    win rate + profit factor + freshness, structure as tiebreak) descending.
+    Expected-R breaks score ties so behaviour stays stable."""
 
-    rank = _coerce_float(row.get("expected_r_rank_score"))
-    if rank is None:
-        rank = _coerce_float(row.get("expected_r"))
-    has_expected_r = 0 if rank is not None else 1
     score = float(row.get("score", 0.0) or 0.0)
+    expected = _coerce_float(row.get("expected_r_rank_score"))
+    if expected is None:
+        expected = _coerce_float(row.get("expected_r")) or 0.0
     return (
-        has_expected_r,
-        -(float(rank) if rank is not None else 0.0),
         -score,
+        -float(expected),
         str(row.get("symbol") or ""),
     )
+
+
+def _priority_tracker_stats_text(row: dict) -> str:
+    """WR/PF/n headline: the proven-quality evidence behind the points."""
+    win_rate = _coerce_float(row.get("tracker_win_rate"))
+    profit_factor = _coerce_float(row.get("tracker_profit_factor"))
+    samples = int(_coerce_float(row.get("expected_r_samples")) or 0)
+    wr_text = f"{win_rate * 100:.0f}%" if win_rate is not None else "n/a"
+    pf_text = f"{min(profit_factor, 9.9):.1f}" if profit_factor is not None else "n/a"
+    return f"WR={wr_text:<4} PF={pf_text:<4} n={samples:<3}"
 
 
 def _priority_unique_rows_by_symbol(rows: list[dict]) -> list[dict]:
@@ -18459,7 +18521,7 @@ def _write_priority_score_rankings(handle, title: str, rows: list[dict]) -> None
         warning_count = len(row.get("candidate_rejection_reasons") or [])
         warning_text = "clean" if warning_count <= 0 else f"{warning_count} warning(s)"
         handle.write(
-            f"{rank:>3}. {symbol:<6} {side:<5} ExpR={_priority_expected_r_text(row):<7} score={score:<5} "
+            f"{rank:>3}. {symbol:<6} {side:<5} score={score:<5} {_priority_tracker_stats_text(row)} "
             f"bucket={bucket:<13} family={family:<28} zone={zone:<18} "
             f"trend={trend:<8} {warning_text}\n"
         )
@@ -18551,7 +18613,7 @@ def _write_priority_score_ranked_rows(handle, title: str, rows: list[dict]) -> N
         side = normalize_side(row.get("side", ""))
         family = _priority_setup_family_label(str(row.get("setup_family") or "general"))
         handle.write(
-            f"{symbol} {side} ExpR={_priority_expected_r_text(row)} score={_priority_score_text(row)} "
+            f"{symbol} {side} score={_priority_score_text(row)} {_priority_tracker_stats_text(row)} "
             f"family={family} bucket={row.get('priority_bucket') or 'tracked'}\n"
         )
     handle.write("\n")
@@ -18613,8 +18675,8 @@ def _write_best_swing_trade_rows(handle, title: str, rows: list[dict]) -> None:
         warnings = row.get("candidate_rejection_reasons") or []
         warning_text = "clean" if not warnings else "; ".join(str(item) for item in warnings[:2])
         handle.write(
-            f"{rank:>2}. {symbol:<6} {side:<5} ExpR={_priority_expected_r_text(row):<7} "
-            f"score={_priority_score_text(row):<5} "
+            f"{rank:>2}. {symbol:<6} {side:<5} score={_priority_score_text(row):<5} "
+            f"{_priority_tracker_stats_text(row)} "
             f"{bucket:<10} {family:<26} zone={zone:<18} trend={trend:<8}\n"
         )
         handle.write(f"    evidence: {_best_swing_trade_evidence(row)}\n")

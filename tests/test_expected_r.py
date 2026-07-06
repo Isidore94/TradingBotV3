@@ -13,11 +13,57 @@ from master_avwap_lib.expected_r import (  # noqa: E402
     blend_expected_r,
     calibrate_prior_anchors,
     compute_expected_r,
+    compute_proven_quality_score,
     freshness_factor,
     quality_points_to_prior_r,
     resolved_config,
     shrinkage_weight,
+    wilson_lower_bound,
 )
+
+
+class ProvenQualityScoreTests(unittest.TestCase):
+    def test_wilson_bound_penalizes_small_samples(self):
+        # 2-for-2 must not look like a confident 100% win rate.
+        tiny = wilson_lower_bound(1.0, 2)
+        seasoned = wilson_lower_bound(0.60, 40)
+        self.assertLess(tiny, 0.60)
+        self.assertGreater(seasoned, wilson_lower_bound(0.60, 8))
+        self.assertIsNone(wilson_lower_bound(None, 10))
+        self.assertIsNone(wilson_lower_bound(0.5, 0))
+
+    def test_proven_good_beats_unknown_beats_proven_loser(self):
+        good = compute_proven_quality_score(
+            static_points=120, win_rate=0.60, profit_factor=2.0, closed_samples=25
+        )
+        unknown = compute_proven_quality_score(static_points=260)
+        loser = compute_proven_quality_score(
+            static_points=545, win_rate=0.33, profit_factor=0.6, closed_samples=12
+        )
+        self.assertGreater(good["score"], unknown["score"])
+        self.assertGreater(unknown["score"], loser["score"])
+        self.assertTrue(good["proven"])
+        self.assertFalse(unknown["proven"])
+
+    def test_structure_is_only_a_tiebreaker(self):
+        # A 500-point signal stack adds at most the structure cap.
+        modest = compute_proven_quality_score(
+            static_points=100, win_rate=0.55, profit_factor=1.5, closed_samples=20
+        )
+        stacked = compute_proven_quality_score(
+            static_points=500, win_rate=0.55, profit_factor=1.5, closed_samples=20
+        )
+        self.assertLessEqual(stacked["score"] - modest["score"], 40.0)
+
+    def test_freshness_decays_evidence_not_structure(self):
+        fresh = compute_proven_quality_score(
+            static_points=100, win_rate=0.6, profit_factor=2.0, closed_samples=25, freshness=1.0
+        )
+        stale = compute_proven_quality_score(
+            static_points=100, win_rate=0.6, profit_factor=2.0, closed_samples=25, freshness=0.5
+        )
+        self.assertLess(stale["score"], fresh["score"])
+        self.assertEqual(stale["structure"], fresh["structure"])
 
 
 class QualityPointsToPriorRTests(unittest.TestCase):

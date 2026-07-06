@@ -30,7 +30,16 @@ def _row(symbol, side, bucket, family, score, *, recent_delta=0, setup_type_delt
     }
 
 
-def _family_row_for(row, *, closed, avg_closed_r, avg_total_r, tracked=None):
+def _family_row_for(
+    row,
+    *,
+    closed,
+    avg_closed_r,
+    avg_total_r,
+    tracked=None,
+    win_rate=None,
+    profit_factor=None,
+):
     # Build the recent-family aggregate using the SAME canonical context the
     # real pipeline derives, so the lookup key matches what the ranking uses.
     ctx = master_avwap._tracker_setup_context(row)
@@ -42,6 +51,8 @@ def _family_row_for(row, *, closed, avg_closed_r, avg_total_r, tracked=None):
         "avg_closed_r": avg_closed_r,
         "avg_total_r": avg_total_r,
         "tracked_setups": tracked if tracked is not None else closed,
+        "win_rate_closed": win_rate,
+        "profit_factor": profit_factor,
     }
 
 
@@ -79,31 +90,27 @@ class ApplyExpectedRRankingTests(unittest.TestCase):
         master_avwap.apply_expected_r_ranking([a, b], {"symbols": {}}, {}, recent_family_rows=[])
         self.assertAlmostEqual(a["expected_r_prior"], b["expected_r_prior"])
 
-    def test_negative_expected_r_caps_the_static_score(self):
-        # The TPG case: a stacked-signal score in the 500s with a known-negative
-        # Expected-R must be capped so it can't top the board.
-        row = _row("TPG", "SHORT", "near_favorite_zone", "mid_earnings_ema15_retest", 545)
-        family_rows = [_family_row_for(row, closed=12, avg_closed_r=-0.6, avg_total_r=-0.5)]
+    def test_stacked_signals_cannot_outrank_proven_quality(self):
+        # The TPG case, evolved: a stacked-signal 545-point setup from a losing
+        # family must score BELOW a modest but proven winner and below unknowns.
+        loser = _row("TPG", "SHORT", "near_favorite_zone", "mid_earnings_ema15_retest", 545)
+        winner = _row("GEN", "LONG", "near_favorite_zone", "avwap_breakout", 140)
+        unknown = _row("NEWB", "LONG", "watch", "brand_new_family", 260)
+        family_rows = [
+            _family_row_for(loser, closed=12, avg_closed_r=-0.6, avg_total_r=-0.5, win_rate=0.33, profit_factor=0.6),
+            _family_row_for(winner, closed=20, avg_closed_r=1.1, avg_total_r=1.0, win_rate=0.60, profit_factor=2.0),
+        ]
 
-        master_avwap.apply_expected_r_ranking(
-            [row], {"symbols": {}}, {}, recent_family_rows=family_rows
-        )
+        rows = [loser, winner, unknown]
+        master_avwap.apply_expected_r_ranking(rows, {"symbols": {}}, {}, recent_family_rows=family_rows)
 
-        self.assertLessEqual(row["expected_r"], master_avwap.PRIORITY_EXPECTED_R_SCORE_CAP_BELOW)
-        self.assertEqual(row["score"], float(master_avwap.PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP))
-        self.assertIn("score capped", row["expected_r_score_cap_note"])
-        self.assertTrue(
-            any("score capped" in reason for reason in row["candidate_rejection_reasons"])
-        )
-
-    def test_positive_expected_r_leaves_score_alone(self):
-        row = _row("GEN", "LONG", "near_favorite_zone", "avwap_breakout", 316)
-        family_rows = [_family_row_for(row, closed=12, avg_closed_r=1.1, avg_total_r=1.0)]
-        master_avwap.apply_expected_r_ranking(
-            [row], {"symbols": {}}, {}, recent_family_rows=family_rows
-        )
-        self.assertEqual(row["score"], 316)
-        self.assertNotIn("expected_r_score_cap_note", row)
+        self.assertGreater(winner["score"], unknown["score"])
+        self.assertGreater(unknown["score"], loser["score"])
+        # Audit trail survives: the raw stack is preserved, points are evidence.
+        self.assertEqual(loser["static_score"], 545)
+        self.assertEqual(loser["tracker_win_rate"], 0.33)
+        self.assertIn("evidence", loser["proven_quality_note"])
+        self.assertIn("no closed tracker history", unknown["proven_quality_note"])
 
     def test_hot_b_setup_outranks_cold_a_setup(self):
         # The headline behaviour: a lower static-quality setup that is working
@@ -111,8 +118,8 @@ class ApplyExpectedRRankingTests(unittest.TestCase):
         hot = _row("AMD", "LONG", "near_favorite_zone", "mid_earnings_first_dev_retest", 110)
         cold = _row("NVDA", "LONG", "favorite_setup", "post_earnings_52w_break", 150)
         family_rows = [
-            _family_row_for(hot, closed=10, avg_closed_r=1.9, avg_total_r=1.7, tracked=12),
-            _family_row_for(cold, closed=10, avg_closed_r=-0.3, avg_total_r=-0.2, tracked=12),
+            _family_row_for(hot, closed=10, avg_closed_r=1.9, avg_total_r=1.7, tracked=12, win_rate=0.7, profit_factor=2.6),
+            _family_row_for(cold, closed=10, avg_closed_r=-0.3, avg_total_r=-0.2, tracked=12, win_rate=0.4, profit_factor=0.8),
         ]
         ai_state = {"symbols": {"AMD": {}, "NVDA": {}}}
         rows = [hot, cold]
@@ -124,6 +131,7 @@ class ApplyExpectedRRankingTests(unittest.TestCase):
 
         self.assertEqual(ranked[0]["symbol"], "AMD")
         self.assertGreater(hot["expected_r"], cold["expected_r"])
+        self.assertGreater(hot["score"], cold["score"])
 
 
 class ExpectedRCalibrationIntegrationTests(unittest.TestCase):

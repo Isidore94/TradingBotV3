@@ -1415,8 +1415,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("SHORT: TSLA", text)
         self.assertIn("By setup type", text)
         self.assertLess(
-            text.index("AAPL LONG ExpR=n/a score=101"),
-            text.index("TSLA SHORT ExpR=n/a score=98"),
+            text.index("AAPL LONG score=101 WR=n/a"),
+            text.index("TSLA SHORT score=98 WR=n/a"),
         )
         self.assertIn("AVWAP breakout\n  LONG: AAPL", text)
         self.assertIn("AVWAP breakdown\n  LONG: None\n  SHORT: TSLA", text)

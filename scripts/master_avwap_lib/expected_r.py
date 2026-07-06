@@ -24,6 +24,7 @@ a freshness decay so stale signals cannot outrank fresh ones on points alone.
 from __future__ import annotations
 
 import copy
+import math
 from statistics import median
 
 # ``shrinkage_k`` controls how many closed samples it takes before realized
@@ -57,6 +58,89 @@ DEFAULT_EXPECTED_R_CONFIG: dict = {
     # structural setup quality in the estimate even with a large sample.
     "max_blend_weight": 0.92,
 }
+
+
+# ---------------------------------------------------------------------------
+# Proven-quality score (2026-07-05): the headline points ARE the evidence.
+#
+# "Highest points = the most proven, highest-quality setup." Win rate is
+# sample-size-adjusted (Wilson lower bound - what WR we can actually be
+# confident in after n trades, so 2-for-2 can't fake 100%), profit factor
+# rewards asymmetry, freshness decays cold segments, and the old static
+# signal-stack points survive only as a small tiebreaker. Segments with no
+# closed history get a neutral floor (below any decently proven setup);
+# proven losers (PF < 1 with a real sample) are scaled DOWN by their PF so
+# they sink below the unknowns.
+# ---------------------------------------------------------------------------
+DEFAULT_PQS_CONFIG: dict = {
+    "wr_weight": 100.0,  # points for a 100%-confident win rate
+    "pf_weight": 60.0,  # points at/above the profit-factor cap
+    "pf_cap": 3.0,
+    "structure_divisor": 5.0,  # static signal points -> tiebreak points
+    "structure_cap": 40.0,
+    "unproven_evidence": 40.0,  # no closed history -> neutral evidence floor
+    "losing_pf_scale_min_samples": 5,
+    "wilson_z": 1.28,  # ~90% one-sided confidence
+}
+
+
+def wilson_lower_bound(win_rate, samples, z: float = 1.28):
+    """Lower confidence bound of a win rate given its sample size (or None)."""
+    if win_rate is None or samples is None:
+        return None
+    n = float(samples)
+    if n <= 0:
+        return None
+    p = min(max(float(win_rate), 0.0), 1.0)
+    z2 = float(z) * float(z)
+    denom = 1.0 + z2 / n
+    center = p + z2 / (2.0 * n)
+    margin = float(z) * math.sqrt((p * (1.0 - p) + z2 / (4.0 * n)) / n)
+    return max(0.0, (center - margin) / denom)
+
+
+def compute_proven_quality_score(
+    *,
+    static_points,
+    win_rate=None,
+    profit_factor=None,
+    closed_samples=0,
+    freshness: float = 1.0,
+    config: dict | None = None,
+) -> dict:
+    """Evidence-led points: WR (Wilson-adjusted) + PF + freshness, with the
+    static signal stack demoted to a capped tiebreaker."""
+    cfg = dict(DEFAULT_PQS_CONFIG)
+    if config:
+        cfg.update(config)
+
+    structure = min(
+        max(float(static_points or 0.0), 0.0) / float(cfg["structure_divisor"]),
+        float(cfg["structure_cap"]),
+    )
+    samples = int(closed_samples or 0)
+    confident_wr = wilson_lower_bound(win_rate, samples, cfg["wilson_z"])
+    if confident_wr is None:
+        evidence = float(cfg["unproven_evidence"])
+        proven = False
+    else:
+        proven = True
+        evidence = confident_wr * float(cfg["wr_weight"])
+        if profit_factor is not None:
+            pf = max(float(profit_factor), 0.0)
+            evidence += min(pf, float(cfg["pf_cap"])) / float(cfg["pf_cap"]) * float(cfg["pf_weight"])
+            if pf < 1.0 and samples >= int(cfg["losing_pf_scale_min_samples"]):
+                evidence *= pf  # measured loser: sink below the unknowns
+
+    evidence *= min(max(float(freshness or 1.0), 0.0), 1.0)
+    score = evidence + structure
+    return {
+        "score": round(score, 1),
+        "evidence": round(evidence, 1),
+        "structure": round(structure, 1),
+        "confident_win_rate": None if confident_wr is None else round(confident_wr, 3),
+        "proven": proven,
+    }
 
 
 def _coerce_float(value, default=None):
