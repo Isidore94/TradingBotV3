@@ -82,22 +82,22 @@ class TradingDeskPanel(QWidget):
             self.center_layout.addWidget(tabs)
             return
 
-        # Workspace mode: the Alert Center owns the right column at full
+        # Workspace mode: the Alert Center owns the left column at full
         # height (the sit-back-and-wait surface); the setups workspace and the
-        # slim BounceBot status strip share the left.
-        left = QSplitter(Qt.Orientation.Vertical)
-        left.addWidget(self.master_workspace)
-        left.addWidget(self.bounce_panel)
-        left.setStretchFactor(0, 6)
-        left.setStretchFactor(1, 1)
-        left.setSizes([820, 140])
+        # slim BounceBot status strip share the right.
+        right = QSplitter(Qt.Orientation.Vertical)
+        right.addWidget(self.master_workspace)
+        right.addWidget(self.bounce_panel)
+        right.setStretchFactor(0, 6)
+        right.setStretchFactor(1, 1)
+        right.setSizes([820, 140])
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left)
         splitter.addWidget(self.alert_center)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([1900, 950])
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([950, 1900])
         self._mode_widget = splitter
         self.center_layout.addWidget(splitter)
 

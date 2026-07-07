@@ -154,6 +154,8 @@ from .levels import (
 
 try:
     from earnings_history import (
+        begin_deferred_history_save as begin_deferred_shared_history_save,
+        end_deferred_history_save as end_deferred_shared_history_save,
         get_future_dates_by_symbol as get_shared_future_earnings_dates,
         get_latest_events_by_symbol as get_shared_latest_earnings_events,
         get_past_dates_by_symbol as get_shared_past_earnings_dates,
@@ -164,6 +166,8 @@ try:
     )
 except ImportError:  # pragma: no cover - used when imported through scripts.*
     from scripts.earnings_history import (
+        begin_deferred_history_save as begin_deferred_shared_history_save,
+        end_deferred_history_save as end_deferred_shared_history_save,
         get_future_dates_by_symbol as get_shared_future_earnings_dates,
         get_latest_events_by_symbol as get_shared_latest_earnings_events,
         get_past_dates_by_symbol as get_shared_past_earnings_dates,
@@ -2625,30 +2629,34 @@ def _collect_cached_calendar_earnings_dates(
         return symbol_dates
 
     max_age = max(1, int(lookback_days))
-    for date_text, cached_entry in cache.items():
-        earnings_date = _parse_iso_date_or_none(date_text)
-        if earnings_date is None or earnings_date > today:
-            continue
-        if (today - earnings_date).days >= max_age:
-            continue
-
-        if isinstance(cached_entry, dict):
-            rows = cached_entry.get("rows", [])
-        else:
-            rows = cached_entry
-        if not isinstance(rows, list):
-            continue
-
-        date_iso = earnings_date.isoformat()
-        _record_shared_nasdaq_rows_safely(rows, date_iso)
-        for row in rows:
-            if not isinstance(row, dict):
+    begin_deferred_shared_history_save()
+    try:
+        for date_text, cached_entry in cache.items():
+            earnings_date = _parse_iso_date_or_none(date_text)
+            if earnings_date is None or earnings_date > today:
                 continue
-            symbol = str(row.get("symbol", "")).strip().upper()
-            if symbol not in symbol_dates:
+            if (today - earnings_date).days >= max_age:
                 continue
-            if date_iso not in symbol_dates[symbol]:
-                symbol_dates[symbol].append(date_iso)
+
+            if isinstance(cached_entry, dict):
+                rows = cached_entry.get("rows", [])
+            else:
+                rows = cached_entry
+            if not isinstance(rows, list):
+                continue
+
+            date_iso = earnings_date.isoformat()
+            _record_shared_nasdaq_rows_safely(rows, date_iso)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                symbol = str(row.get("symbol", "")).strip().upper()
+                if symbol not in symbol_dates:
+                    continue
+                if date_iso not in symbol_dates[symbol]:
+                    symbol_dates[symbol].append(date_iso)
+    finally:
+        end_deferred_shared_history_save()
 
     for symbol, dates in symbol_dates.items():
         symbol_dates[symbol] = _normalize_earnings_dates(dates, today=today)
@@ -10378,6 +10386,7 @@ def collect_earnings_dates(
     network_fetches = 0
 
     deferred_previous = _begin_deferred_earnings_calendar_save()
+    begin_deferred_shared_history_save()
     try:
         for delta in range(lookback_days):
             day = today - timedelta(days=delta)
@@ -10406,6 +10415,7 @@ def collect_earnings_dates(
                 if base_sleep:
                     time.sleep(base_sleep)
     finally:
+        end_deferred_shared_history_save()
         _end_deferred_earnings_calendar_save(deferred_previous)
 
     if calendar_cache is not None and network_fetches == 0 and lookback_days:
@@ -10434,20 +10444,28 @@ def collect_upcoming_earnings_dates(
         return {}
 
     today = datetime.now().date()
-    for delta in range(max(0, int(lookahead_days)) + 1):
-        day = today + timedelta(days=delta)
-        rows = fetch_fn(day.isoformat())
-        if not isinstance(rows, list):
-            rows = []
-        for row in rows:
-            sym = str(row.get("symbol", "")).strip().upper()
-            if sym not in symbol_dates:
-                continue
-            ds = day.isoformat()
-            if ds not in symbol_dates[sym]:
-                symbol_dates[sym].append(ds)
-        if base_sleep:
-            time.sleep(base_sleep)
+    # Batch cache/history writes across the whole lookahead walk (the shared
+    # history read below happens after the flush, so it sees the merged rows).
+    deferred_previous = _begin_deferred_earnings_calendar_save()
+    begin_deferred_shared_history_save()
+    try:
+        for delta in range(max(0, int(lookahead_days)) + 1):
+            day = today + timedelta(days=delta)
+            rows = fetch_fn(day.isoformat())
+            if not isinstance(rows, list):
+                rows = []
+            for row in rows:
+                sym = str(row.get("symbol", "")).strip().upper()
+                if sym not in symbol_dates:
+                    continue
+                ds = day.isoformat()
+                if ds not in symbol_dates[sym]:
+                    symbol_dates[sym].append(ds)
+            if base_sleep:
+                time.sleep(base_sleep)
+    finally:
+        end_deferred_shared_history_save()
+        _end_deferred_earnings_calendar_save(deferred_previous)
 
     for sym, dates in symbol_dates.items():
         symbol_dates[sym] = sorted(set(dates))
@@ -10744,13 +10762,17 @@ def load_or_refresh_earnings(symbols):
             logging.info(
                 f"Supplementing stale/incomplete earnings history with yfinance for {len(yf_refresh_symbols)} symbol(s)."
             )
-            for sym in yf_refresh_symbols:
-                entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
-                yf_dates = yf_earnings_dates(sym)
-                if yf_dates:
-                    entry["dates"] = _merge_earnings_dates(entry.get("dates", []), yf_dates)
-                    _record_shared_yfinance_dates_safely(sym, yf_dates)
-                entry["last_yf_refresh_on"] = today_iso
+            begin_deferred_shared_history_save()
+            try:
+                for sym in yf_refresh_symbols:
+                    entry = symbol_cache.setdefault(sym, _normalize_earnings_cache_entry({}))
+                    yf_dates = yf_earnings_dates(sym)
+                    if yf_dates:
+                        entry["dates"] = _merge_earnings_dates(entry.get("dates", []), yf_dates)
+                        _record_shared_yfinance_dates_safely(sym, yf_dates)
+                    entry["last_yf_refresh_on"] = today_iso
+            finally:
+                end_deferred_shared_history_save()
 
     try:
         refreshed_shared_dates = get_shared_past_earnings_dates(
@@ -21905,14 +21927,19 @@ HV_LEVEL_DEEP_BACKFILL_DAYS = 5 * 365
 HV_LEVEL_DEEP_BACKFILL_MIN_BARS = 60
 HV_LEVEL_DEEP_BACKFILL_MAX_PER_RUN = 40
 
-# Score penalty for entering right at a respected blocking level (resistance for a
+# Score penalty for entering into a respected blocking level (resistance for a
 # long, support for a short). Scales with the level's cumulative-respect
 # conviction and how point-blank the entry is. Opt-in via feature flag, matching
 # the HTF / industry-RS scoring convention.
 HV_LEVEL_SCORING_FLAG = "hv_level_scoring_enabled"
 HV_LEVEL_BLOCK_PENALTY_MAX = 10.0      # points removed at a point-blank, fully-respected wall
 HV_LEVEL_BLOCK_CONVICTION_FULL = 1.6   # conviction earning the full penalty (green + deep respect)
-HV_LEVEL_BLOCK_PROXIMITY_FLOOR = 0.5   # penalty fraction still applied at the tolerance edge
+HV_LEVEL_BLOCK_PROXIMITY_FLOOR = 0.25  # penalty fraction still applied at the window edge
+# The touch-stat tolerance (LEVEL_TOL_ATR_FRACTION = 0.05 ATR) defines "at the
+# level" and is far too tight for avoid-the-wall purposes: a long half an ATR
+# under major resistance never registered. Blocking uses its own entry-path
+# window; nearby/study proximity keeps the tight touch semantics.
+HV_LEVEL_BLOCK_TOL_ATR_FRACTION = 0.50
 
 PHASE6_CLOUD_STUDY_FAMILY = "cloud_flat_proximity"
 PHASE6_COMPRESSION_BREAK_STUDY_FAMILY = "compression_break"
@@ -23072,7 +23099,7 @@ def _hv_level_block_score_delta(blocking: list[dict]) -> tuple[float, dict | Non
     conviction = level_conviction(top)
     if conviction <= 0:
         return 0.0, None
-    tol_atr = float(LEVEL_TOL_ATR_FRACTION) or 0.0
+    tol_atr = float(HV_LEVEL_BLOCK_TOL_ATR_FRACTION) or 0.0
     abs_dist_atr = abs(_coerce_float(top.get("distance_atr")) or 0.0)
     proximity = 1.0 - (abs_dist_atr / tol_atr) if tol_atr > 0 else 1.0
     proximity = max(0.0, min(1.0, proximity))
@@ -23099,19 +23126,22 @@ def _hv_level_context_for_entry(
         min_strength=HV_LEVEL_MIN_STUDY_STRENGTH,
         kinds={"hv_horizontal"},
     )
+    # Blocking = a strong respected wall inside the entry PATH (resistance
+    # overhead for longs, support below for shorts) within the wider
+    # avoid-the-wall window - not just point-blank touches.
     blocking = levels_blocking_entry(
         store,
         side,
         entry_price,
         atr20,
-        tol_frac=LEVEL_TOL_ATR_FRACTION,
+        tol_frac=HV_LEVEL_BLOCK_TOL_ATR_FRACTION,
         min_strength=1.0,
         kinds={"hv_horizontal"},
     )
-    nearest = nearby[0] if nearby else {}
+    nearest = nearby[0] if nearby else (blocking[0] if blocking else {})
     last_trade_text = str(last_trade_date or "")
     break_today = bool(last_trade_text) and any(
-        str(level.get("last_break") or "") == last_trade_text for level in nearby
+        str(level.get("last_break") or "") == last_trade_text for level in (*nearby, *blocking)
     )
     score_delta, penalized = (0.0, None)
     if scoring_enabled and not break_today:
@@ -23119,7 +23149,7 @@ def _hv_level_context_for_entry(
         # so only penalize entries into an intact respected wall.
         score_delta, penalized = _hv_level_block_score_delta(blocking)
     note = ""
-    if nearby:
+    if nearby or blocking:
         label = "blocking" if blocking else "nearby"
         note = f"HV level {label}: {_hv_level_summary(blocking or nearby)}"
         if break_today:

@@ -264,6 +264,88 @@ class LevelModuleTests(unittest.TestCase):
         self.assertEqual([item["price"] for item in long_blockers], [100.4])
         self.assertEqual([item["price"] for item in short_blockers], [99.7])
 
+    def test_hv_level_block_penalty_covers_entry_path_not_just_touches(self):
+        from master_avwap_lib.legacy import _hv_level_context_for_entry
+
+        wall = {
+            "kind": "hv_horizontal",
+            "price": 103.0,
+            "bucket": "green",
+            "strength": 1.0,
+            "respect_count": 8,
+            "break_count": 0,
+        }
+        store = {"levels": [wall]}
+
+        # Long entering 0.3 ATR under a respected wall: blocked and penalized,
+        # even though it is far outside the tight 0.05-ATR touch tolerance.
+        ctx = _hv_level_context_for_entry(
+            store, side="LONG", entry_price=100.0, atr20=10.0, scoring_enabled=True
+        )
+        self.assertEqual(ctx["hv_level_blocking_count"], 1)
+        self.assertLess(ctx["hv_level_score_delta"], 0.0)
+        self.assertIn("blocking", ctx["hv_level_note"])
+
+        # Closer to the wall = a larger penalty.
+        point_blank = _hv_level_context_for_entry(
+            store, side="LONG", entry_price=102.8, atr20=10.0, scoring_enabled=True
+        )
+        self.assertLess(point_blank["hv_level_score_delta"], ctx["hv_level_score_delta"])
+
+        # The same wall BELOW a long entry is support, not a blocker.
+        above = _hv_level_context_for_entry(
+            store, side="LONG", entry_price=106.0, atr20=10.0, scoring_enabled=True
+        )
+        self.assertEqual(above["hv_level_blocking_count"], 0)
+        self.assertEqual(above["hv_level_score_delta"], 0.0)
+
+        # Outside the entry-path window: no block.
+        far = _hv_level_context_for_entry(
+            store, side="LONG", entry_price=103.0 - 10.0 * 0.7, atr20=10.0, scoring_enabled=True
+        )
+        self.assertEqual(far["hv_level_blocking_count"], 0)
+
+        # Shorts invert: the wall below the entry blocks the short.
+        short_ctx = _hv_level_context_for_entry(
+            store, side="SHORT", entry_price=106.0, atr20=10.0, scoring_enabled=True
+        )
+        self.assertEqual(short_ctx["hv_level_blocking_count"], 1)
+        self.assertLess(short_ctx["hv_level_score_delta"], 0.0)
+
+    def test_hv_level_block_penalty_respects_flag_and_break_today(self):
+        from master_avwap_lib.legacy import _hv_level_context_for_entry
+
+        wall = {
+            "kind": "hv_horizontal",
+            "price": 103.0,
+            "bucket": "green",
+            "strength": 1.0,
+            "respect_count": 8,
+            "break_count": 0,
+            "last_break": "2026-07-06",
+        }
+        store = {"levels": [wall]}
+
+        # Flag off: context fields populate but the score is untouched.
+        ctx = _hv_level_context_for_entry(
+            store, side="LONG", entry_price=100.0, atr20=10.0, scoring_enabled=False
+        )
+        self.assertEqual(ctx["hv_level_blocking_count"], 1)
+        self.assertEqual(ctx["hv_level_score_delta"], 0.0)
+
+        # A wall broken on the latest bar is a breakout, not a fade: no penalty
+        # even when the level sits outside the tight nearby tolerance.
+        broke = _hv_level_context_for_entry(
+            store,
+            side="LONG",
+            entry_price=100.0,
+            atr20=10.0,
+            last_trade_date="2026-07-06",
+            scoring_enabled=True,
+        )
+        self.assertTrue(broke["hv_level_break_today"])
+        self.assertEqual(broke["hv_level_score_delta"], 0.0)
+
 
     def test_find_relative_pivots_detects_strict_swings_and_ignores_plateaus(self):
         prices = [100.0] * 40

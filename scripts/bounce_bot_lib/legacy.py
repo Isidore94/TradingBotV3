@@ -26,6 +26,7 @@ import pandas as pd
 import yfinance as yf
 from market_session import (
     get_market_local_now,
+    get_market_session_close_naive,
     get_market_session_open_naive,
     get_market_session_window,
 )
@@ -252,6 +253,9 @@ BOUNCE_TYPE_LABELS = {
     "orb_breakdown": "5m ORB Breakdown (30m+)",
     "ema8_grind_hod": "8-EMA Grind New HOD",
     "ema8_grind_lod": "8-EMA Grind New LOD",
+    "h1_ema10_bounce": "H1 10-EMA Bounce",
+    "h1_blue_after_red": "H1 Blue After Red",
+    "h1_green_to_yellow": "H1 Green->Yellow Fade",
 }
 BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 
@@ -439,6 +443,21 @@ EMA8_GRIND_SQUEEZE_BARS = 4  # bars right before the push that must hug the EMA
 EMA8_GRIND_SQUEEZE_MAX_ATR = 0.35  # max |close - ema8| in intraday ATRs
 EMA8_GRIND_HOD_TYPE = "ema8_grind_hod"
 EMA8_GRIND_LOD_TYPE = "ema8_grind_lod"
+
+# H1 candle-color sweeps (2026-07-06): the trader's hourly regime colors.
+# EMA15 vs SMA20 defines the hourly trend; the close's position classifies
+# the candle (green/orange/yellow up-structure, red/blue down-structure).
+# Signals under test, swept on longs.txt / shorts.txt closed H1 candles:
+#   - light blue: green regime + open above the H1 10-EMA with the low
+#     tagging (within 0.02 ATR) or piercing it and the close recovering.
+#   - blue-after-red: red H1 followed by a blue reclaim candle (long).
+#   - green-to-yellow: green H1 followed by a yellow breakdown candle (short).
+H1_COLOR_MIN_BARS = 22  # SMA20 must exist on both the signal and prior candle
+H1_COLOR_ATR_LENGTH = 14
+H1_EMA10_BOUNCE_TOUCH_ATR = 0.02  # trader spec: |low - EMA10| <= 0.02 * ATR
+H1_EMA10_BOUNCE_TYPE = "h1_ema10_bounce"
+H1_BLUE_AFTER_RED_TYPE = "h1_blue_after_red"
+H1_GREEN_TO_YELLOW_TYPE = "h1_green_to_yellow"
 MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
 MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
@@ -1675,7 +1694,7 @@ def _align_bars_with_map(symbol_bars, spy_by_dt):
     return [sym_by_dt[dt] for dt in common], [spy_by_dt[dt] for dt in common]
 
 
-def _aggregate_bars_timeframe(bars, timeframe_minutes):
+def _aggregate_bars_timeframe(bars, timeframe_minutes, *, drop_partial_tail=True):
     if timeframe_minutes <= 5:
         return list(bars)
     expected = max(1, timeframe_minutes // 5)
@@ -1719,7 +1738,7 @@ def _aggregate_bars_timeframe(bars, timeframe_minutes):
     result = []
     last_bucket = order[-1]
     for bucket in order:
-        if bucket == last_bucket and counts.get(bucket, 0) < expected:
+        if drop_partial_tail and bucket == last_bucket and counts.get(bucket, 0) < expected:
             continue
         result.append(buckets[bucket])
     return result
@@ -1853,6 +1872,144 @@ def _wilder_atr_last(bars, length):
     for tr in true_ranges[length:]:
         atr = ((atr * (length - 1)) + tr) / float(length)
     return atr if atr > 0 else None
+
+
+def classify_h1_candle_color(close, ema15, sma20):
+    """Trader's hourly regime color for one closed H1 candle.
+
+    Uptrend structure (EMA15 > SMA20): green above the EMA15, orange between
+    the averages, yellow below both. Downtrend structure: red below the EMA15,
+    blue when the close reclaims both averages; a close between them has no
+    color (no signal either way).
+    """
+    if close is None or ema15 is None or sma20 is None:
+        return None
+    if ema15 > sma20:
+        if close > ema15:
+            return "green"
+        if close > sma20:
+            return "orange"
+        return "yellow"
+    if close > ema15 and close > sma20:
+        return "blue"
+    if close < ema15:
+        return "red"
+    return None
+
+
+def h1_candle_colors(h1_bars):
+    """Color per H1 bar, aligned 1:1; None until the SMA20 has 20 bars."""
+    bars = list(h1_bars or [])
+    ema15 = _ema_series(bars, 15)
+    closes = [bar.close for bar in bars]
+    colors = []
+    for idx, bar in enumerate(bars):
+        if idx < 19:
+            colors.append(None)
+            continue
+        sma20 = sum(closes[idx - 19 : idx + 1]) / 20.0
+        colors.append(classify_h1_candle_color(bar.close, ema15[idx], sma20))
+    return colors
+
+
+def _closed_h1_bars(bars_5m):
+    """Aggregate 5m bars to H1 and drop the still-forming final bucket.
+
+    An hourly bucket is closed once the cached 5m bars reach its end - either
+    bucket start + 60 minutes or the session close. Uses a time-based rule
+    instead of the aggregator's bar-count tail rule so the short final RTH
+    candle (a 30-minute hour) still counts once the bell rings.
+    """
+    bars = list(bars_5m or [])
+    if not bars:
+        return []
+    h1 = _aggregate_bars_timeframe(bars, 60, drop_partial_tail=False)
+    if not h1:
+        return []
+    bucket_end = h1[-1].dt + timedelta(minutes=60)
+    try:
+        session_close = get_market_session_close_naive(reference=h1[-1].dt)
+        if session_close > h1[-1].dt:
+            bucket_end = min(bucket_end, session_close)
+    except Exception:
+        pass
+    latest_data_end = bars[-1].dt + timedelta(minutes=5)
+    if latest_data_end < bucket_end:
+        h1 = h1[:-1]
+    return h1
+
+
+def detect_h1_color_signals(h1_bars, side):
+    """Signal hits on the LAST closed H1 candle for the color strategies.
+
+    Longs (strong names): green-regime 10-EMA touch-and-recover candles and
+    blue reclaim candles right after a red one. Shorts (weak names): a green
+    candle followed by a yellow breakdown through both averages.
+    """
+    bars = list(h1_bars or [])
+    if len(bars) < H1_COLOR_MIN_BARS:
+        return []
+    normalized_side = str(side or "").strip().lower()
+    if normalized_side not in {"long", "short"}:
+        return []
+    colors = h1_candle_colors(bars)
+    color, prev_color = colors[-1], colors[-2]
+    if not color or not prev_color:
+        return []
+    bar = bars[-1]
+    closes = [item.close for item in bars]
+    ema10 = _ema_series(bars, 10)[-1]
+    ema15 = _ema_series(bars, 15)[-1]
+    sma20 = sum(closes[-20:]) / 20.0
+    hits = []
+    if normalized_side == "long":
+        atr = _wilder_atr_last(bars, H1_COLOR_ATR_LENGTH)
+        if color == "green" and atr and bar.open > ema10 and bar.close > ema10:
+            tagged = bar.low >= ema10 and abs(bar.low - ema10) <= H1_EMA10_BOUNCE_TOUCH_ATR * atr
+            pierced = bar.low < ema10
+            if tagged or pierced:
+                hits.append(
+                    {
+                        "type": H1_EMA10_BOUNCE_TYPE,
+                        "level": ema10,
+                        "signal_bar": bar,
+                        "color": color,
+                        "prev_color": prev_color,
+                        "detail": (
+                            f"green H1 {'pierced' if pierced else 'tagged'} the 10-EMA "
+                            f"{ema10:.2f} and closed back above it"
+                        ),
+                    }
+                )
+        if prev_color == "red" and color == "blue":
+            hits.append(
+                {
+                    "type": H1_BLUE_AFTER_RED_TYPE,
+                    "level": ema15,
+                    "signal_bar": bar,
+                    "color": color,
+                    "prev_color": prev_color,
+                    "detail": (
+                        f"blue reclaim candle after a red H1: close {bar.close:.2f} back above "
+                        f"the 15-EMA {ema15:.2f} and 20-SMA {sma20:.2f}"
+                    ),
+                }
+            )
+    elif prev_color == "green" and color == "yellow":
+        hits.append(
+            {
+                "type": H1_GREEN_TO_YELLOW_TYPE,
+                "level": sma20,
+                "signal_bar": bar,
+                "color": color,
+                "prev_color": prev_color,
+                "detail": (
+                    f"green H1 failed straight to yellow: close {bar.close:.2f} broke below "
+                    f"the 15-EMA {ema15:.2f} and 20-SMA {sma20:.2f}"
+                ),
+            }
+        )
+    return hits
 
 
 def real_relative_strength(symbol_bars, spy_bars, length=RRS_LENGTH):
@@ -2098,8 +2255,10 @@ class BounceBot(EWrapper, EClient):
         self.market_environment_lock = threading.Lock()
         self.market_environment_user_override = False
         self._regime_pause_state = None
+        self._regime_pause_alert_log = None
         self._orb_break_state = None
         self._ema8_grind_state = None
+        self._h1_color_state = None
         self.latest_rrs_payload = None
         self.earnings_reaction_filter_cache = {}
 
@@ -4007,6 +4166,19 @@ class BounceBot(EWrapper, EClient):
             return None, window
         return (window[-1].close - window[0].open) / window[0].open * 100.0, window
 
+    def _regime_pause_day_alerted(self, today, side):
+        """Day-scoped alerted set: one banger per symbol per side per day.
+
+        SPY pauses many times on a choppy day; the per-pause state resets each
+        time the tape resumes, so without this the same non-participating
+        names re-alert on every pause.
+        """
+        log = getattr(self, "_regime_pause_alert_log", None)
+        if not log or log.get("date") != today:
+            log = {"date": today, "sides": {}}
+            self._regime_pause_alert_log = log
+        return log["sides"].setdefault(side, set())
+
     def check_regime_pause_setups(self):
         """SPY paused against the tape: flag the non-participants hard."""
         env = self.get_market_environment()
@@ -4021,7 +4193,12 @@ class BounceBot(EWrapper, EClient):
             return []
         state = self._regime_pause_state
         if not state or state.get("date") != today or state.get("side") != side:
-            state = {"date": today, "side": side, "start_dt": pause_start, "alerted": set()}
+            state = {
+                "date": today,
+                "side": side,
+                "start_dt": pause_start,
+                "alerted": self._regime_pause_day_alerted(today, side),
+            }
             self._regime_pause_state = state
         pause_candles = sum(1 for bar in spy_today if bar.dt >= state["start_dt"])
         if pause_candles > int(REGIME_PAUSE_SWEEP_MAX_CANDLES):
@@ -4396,6 +4573,97 @@ class BounceBot(EWrapper, EClient):
             f"{hit['grind_bars']} bars, squeezed to {hit['squeeze_gap_atr']:.2f} ATR, now pushing "
             f"into a new {extreme_label} {hit['new_extreme']:.2f} (day {hit['day_pct']:+.2f}%, "
             f"8-EMA {hit['ema8']:.2f})."
+        )
+        exit_note = self._measured_exit_suffix(side, levels)
+        if exit_note:
+            message += f" | {exit_note}"
+        payload = self._build_bounce_feedback_alert_payload(message, event_row)
+        if self.gui_callback:
+            self.gui_callback(payload, "red" if side == "short" else "green")
+        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_bounce_to_file(
+            symbol=symbol,
+            direction=side,
+            levels=levels,
+            bounce_candle=bar_dict,
+            current_candle=bar_dict,
+            threshold=0.0,
+            quality=quality,
+        )
+
+    # ------------------------------------------------------------------
+    # H1 candle-color sweeps (2026-07-06): the trader's hourly regime
+    # colors under test. Longs from longs.txt: green-regime 10-EMA bounce
+    # candles and blue-after-red reclaims. Shorts from shorts.txt: a green
+    # H1 that fails straight to yellow. Signals fire once per closed H1
+    # candle and feed the bounce outcome tracker for edge measurement.
+    # ------------------------------------------------------------------
+    def check_h1_color_setups(self):
+        """Sweep watchlists for H1 color signals on the last closed hourly candle."""
+        spy_today, _prev_close = self._spy_session_bars()
+        if not spy_today:
+            return []
+        today = spy_today[-1].dt.date()
+        state = self._h1_color_state
+        if not state or state.get("date") != today:
+            state = {"date": today, "alerted": set()}
+            self._h1_color_state = state
+        hits = []
+        for side in ("long", "short"):
+            for symbol in self._watchlist_day_sweep_symbols(side):
+                for hit in self._evaluate_h1_color_signals(symbol, side, today):
+                    key = f"{symbol}|{hit['type']}|{hit['signal_bar'].dt:%H:%M}"
+                    if key in state["alerted"]:
+                        continue
+                    state["alerted"].add(key)
+                    hits.append(hit)
+        for hit in hits:
+            self._emit_h1_color_alert(hit)
+        return hits
+
+    def _evaluate_h1_color_signals(self, symbol, side, today):
+        bars = self.get_cached_5m_bars(symbol)
+        if not bars:
+            return []
+        h1 = _closed_h1_bars(bars)
+        if not h1 or h1[-1].dt.date() != today:
+            # Only the freshly closed candle is a live signal; anything older
+            # (restart, stale cache) already played out.
+            return []
+        hits = detect_h1_color_signals(h1, side)
+        for hit in hits:
+            hit["symbol"] = symbol
+            hit["side"] = side
+        return hits
+
+    def _emit_h1_color_alert(self, hit):
+        symbol = hit["symbol"]
+        side = hit["side"]
+        bounce_type = hit["type"]
+        signal_bar = hit["signal_bar"]
+        bar_dict = {
+            "time": signal_bar.dt.strftime("%Y%m%d  %H:%M:%S"),
+            "open": signal_bar.open,
+            "high": signal_bar.high,
+            "low": signal_bar.low,
+            "close": signal_bar.close,
+        }
+        levels = {bounce_type: hit["level"]}
+        event_row = self._log_bounce_candidate_event(
+            "confirmed",
+            symbol,
+            side,
+            levels,
+            bar_dict,
+            bar_dict,
+            reason=f"H1 color signal: {hit['detail']} (H1 candle {signal_bar.dt:%H:%M})",
+        )
+        self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
+        quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        label = BOUNCE_TYPE_LABELS.get(bounce_type, bounce_type).upper()
+        message = (
+            f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): {hit['detail']} "
+            f"on the {signal_bar.dt:%H:%M} H1 candle."
         )
         exit_note = self._measured_exit_suffix(side, levels)
         if exit_note:
@@ -8258,6 +8526,14 @@ class BounceBot(EWrapper, EClient):
                     self.check_ema8_grind_setups()
                 except Exception:
                     logging.exception("8-EMA grind sweep failed.")
+
+                # H1 candle-color signals under test: green-regime 10-EMA
+                # bounces + blue-after-red reclaims (longs), green->yellow
+                # breakdowns (shorts) on closed hourly candles.
+                try:
+                    self.check_h1_color_setups()
+                except Exception:
+                    logging.exception("H1 color sweep failed.")
 
                 d1_watch_symbols = set(self.get_master_avwap_d1_watch_symbols())
                 monitored_symbols = self.get_monitored_extreme_symbols() | d1_watch_symbols

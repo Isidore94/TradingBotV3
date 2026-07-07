@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import traceback
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -115,6 +117,9 @@ class ScanService(QObject):
         self._worker = None
 
 
+_SCAN_OK_MARKER = "SCAN_SUBPROCESS_OK"
+
+
 def _run_master_scan_subprocess(
     *,
     use_shared_watchlists: bool,
@@ -134,29 +139,91 @@ def _run_master_scan_subprocess(
         "faulthandler.enable(); "
         "from master_avwap_lib.runner import run_master, run_master_with_shared_watchlists; "
         f"{run_call}; "
-        "print('SCAN_SUBPROCESS_OK')"
+        f"print('{_SCAN_OK_MARKER}', flush=True)"
     )
     env = os.environ.copy()
     pythonpath = str(SCRIPTS_DIR)
     if env.get("PYTHONPATH"):
         pythonpath = pythonpath + os.pathsep + env["PYTHONPATH"]
     env["PYTHONPATH"] = pythonpath
-    completed = subprocess.run(
+    stdout_text = _wait_for_scan_marker(
         [sys.executable, "-c", code],
         cwd=str(ROOT_DIR),
         env=env,
-        text=True,
-        capture_output=True,
     )
-    if completed.returncode != 0:
-        stderr = (completed.stderr or "").strip()
-        stdout = (completed.stdout or "").strip()
-        details = "\n\n".join(part for part in (stderr, stdout) if part)
-        raise RuntimeError(
-            f"Master AVWAP scan process exited with code {completed.returncode}."
-            + (f"\n\n{details}" if details else "")
-        )
     return {
         "watchlist_label": "home folder watchlists + swing watchlists" if use_shared_watchlists else "local project watchlists",
-        "subprocess_stdout": (completed.stdout or "").strip(),
+        "subprocess_stdout": stdout_text,
     }
+
+
+def _wait_for_scan_marker(
+    command: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    marker: str = _SCAN_OK_MARKER,
+    tail_lines: int = 200,
+) -> str:
+    """Start the scan process and return once it prints the completion marker.
+
+    run_master prints the marker only after every report file is written; the
+    process then stays alive for minutes while the deferred theta option
+    enrichment thread finishes. Waiting for process exit would hold the GUI's
+    "scan running" state (and the next scheduler slot) hostage to that tail, so
+    the marker is the success signal and the process is left to exit on its
+    own. Pipes are drained by daemon threads for the process's whole life so
+    the child never blocks on a full pipe. Raises RuntimeError when the
+    process exits without printing the marker.
+    """
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout_tail: deque[str] = deque(maxlen=tail_lines)
+    stderr_tail: deque[str] = deque(maxlen=tail_lines)
+    marker_seen = threading.Event()
+
+    def _drain(stream, sink: deque[str], watch_marker: bool) -> None:
+        try:
+            for line in stream:
+                sink.append(line)
+                if watch_marker and marker in line:
+                    marker_seen.set()
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    drains = [
+        threading.Thread(target=_drain, args=(proc.stdout, stdout_tail, True), name="scan-stdout-drain", daemon=True),
+        threading.Thread(target=_drain, args=(proc.stderr, stderr_tail, False), name="scan-stderr-drain", daemon=True),
+    ]
+    for thread in drains:
+        thread.start()
+
+    while not marker_seen.is_set() and proc.poll() is None:
+        marker_seen.wait(0.25)
+    if not marker_seen.is_set():
+        # The process exited; let the drains catch the final buffered lines
+        # (the marker may arrive with the interpreter's exit flush).
+        for thread in drains:
+            thread.join(timeout=5)
+    if marker_seen.is_set():
+        return "".join(stdout_tail).strip()
+
+    returncode = proc.wait()
+    stderr_text = "".join(stderr_tail).strip()
+    stdout_text = "".join(stdout_tail).strip()
+    details = "\n\n".join(part for part in (stderr_text, stdout_text) if part)
+    raise RuntimeError(
+        f"Master AVWAP scan process exited with code {returncode}."
+        + (f"\n\n{details}" if details else "")
+    )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
@@ -199,6 +200,80 @@ def save_history(history: dict[str, Any], path: Path | None = None) -> Path:
     return target
 
 
+# Deferred-save support: the shared history is tens of MB on a Drive-synced
+# folder, and several callers record rows inside per-date/per-symbol loops.
+# Without batching, every merge_events call pays a full parse + re-serialize +
+# re-upload of the file. While a deferral is active, merges edit one in-memory
+# copy per path and the file is rewritten once when the outermost scope ends.
+# Reads via load_history stay disk-backed, so end the deferral before reading
+# merged results back. Single-threaded by design (matches the calendar-cache
+# deferral in master_avwap_lib).
+_DEFERRED_SAVE_DEPTH = 0
+_DEFERRED_HISTORIES: dict[str, dict[str, Any]] = {}
+_DEFERRED_DIRTY_KEYS: set[str] = set()
+
+
+def _history_key(path: Path | None) -> str:
+    return str(Path(path or DEFAULT_HISTORY_FILE))
+
+
+def begin_deferred_history_save() -> None:
+    """Start batching history writes; reentrant, pair every call with end via try/finally."""
+    global _DEFERRED_SAVE_DEPTH
+    _DEFERRED_SAVE_DEPTH += 1
+
+
+def end_deferred_history_save() -> None:
+    """Leave one deferral scope; the outermost end flushes every dirty history once."""
+    global _DEFERRED_SAVE_DEPTH
+    if _DEFERRED_SAVE_DEPTH <= 0:
+        return
+    _DEFERRED_SAVE_DEPTH -= 1
+    if _DEFERRED_SAVE_DEPTH:
+        return
+    for key in sorted(_DEFERRED_DIRTY_KEYS):
+        history = _DEFERRED_HISTORIES.get(key)
+        if history is None:
+            continue
+        try:
+            save_history(history, Path(key))
+        except Exception as exc:
+            logging.warning("Deferred earnings-history save failed for %s: %s", key, exc)
+    _DEFERRED_HISTORIES.clear()
+    _DEFERRED_DIRTY_KEYS.clear()
+
+
+def _load_history_for_update(path: Path | None) -> dict[str, Any]:
+    if not _DEFERRED_SAVE_DEPTH:
+        return load_history(path)
+    key = _history_key(path)
+    history = _DEFERRED_HISTORIES.get(key)
+    if history is None:
+        history = load_history(path)
+        _DEFERRED_HISTORIES[key] = history
+    return history
+
+
+def _save_history_after_update(history: dict[str, Any], path: Path | None) -> None:
+    if not _DEFERRED_SAVE_DEPTH:
+        save_history(history, path)
+        return
+    _DEFERRED_DIRTY_KEYS.add(_history_key(path))
+
+
+def _event_signature(event: dict[str, Any] | None) -> str | None:
+    """Stable content signature ignoring the last_seen_at bookkeeping stamp.
+
+    Must be taken BEFORE _merge_event runs: the merge mutates the existing
+    event's raw_provider_fields dict in place, so an after-the-fact comparison
+    would never see raw-field changes.
+    """
+    if not isinstance(event, dict):
+        return None
+    trimmed = {key: value for key, value in event.items() if key != "last_seen_at"}
+    return json.dumps(trimmed, sort_keys=True, default=str)
+
+
 def merge_events(events: list[dict[str, Any]], path: Path | None = None, now: datetime | None = None) -> list[dict[str, Any]]:
     normalized_events = [normalize_event(event) for event in events or []]
     normalized_events = [event for event in normalized_events if event is not None]
@@ -207,9 +282,10 @@ def merge_events(events: list[dict[str, Any]], path: Path | None = None, now: da
     now_value = now or datetime.now()
     now_text = now_value.isoformat(timespec="seconds")
     reference_date = now_value.date()
-    history = load_history(path)
+    history = _load_history_for_update(path)
     merged_events: list[dict[str, Any]] = []
     symbols = history.setdefault("symbols", {})
+    changed = False
     for event in normalized_events:
         ticker = event["ticker"]
         symbol_entry = symbols.setdefault(ticker, {"ticker": ticker, "events": [], "updated_at": ""})
@@ -219,9 +295,20 @@ def merge_events(events: list[dict[str, Any]], path: Path | None = None, now: da
             for existing in existing_events
             if isinstance(existing, dict)
         }
+        count_before_drop = len(existing_by_date)
         _drop_superseded_active_events(existing_by_date, event, reference_date)
+        event_changed = len(existing_by_date) != count_before_drop
         existing = existing_by_date.get(event["earnings_date"])
+        existing_signature = _event_signature(existing)
         merged = _merge_event(existing, event, now_text)
+        if _event_signature(merged) != existing_signature:
+            event_changed = True
+        merged_events.append(dict(merged))
+        if not event_changed:
+            # Re-merge of already-known data: leave the stored entry untouched
+            # so the file is not rewritten just to bump last_seen_at stamps.
+            continue
+        changed = True
         existing_by_date[event["earnings_date"]] = merged
         symbol_entry["events"] = sorted(
             existing_by_date.values(),
@@ -229,9 +316,9 @@ def merge_events(events: list[dict[str, Any]], path: Path | None = None, now: da
             reverse=True,
         )
         symbol_entry["updated_at"] = now_text
-        merged_events.append(dict(merged))
-    history["generated_at"] = now_text
-    save_history(history, path)
+    if changed:
+        history["generated_at"] = now_text
+        _save_history_after_update(history, path)
     return merged_events
 
 

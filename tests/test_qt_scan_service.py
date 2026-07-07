@@ -1,7 +1,6 @@
-import subprocess
+import io
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -15,29 +14,45 @@ def test_master_scan_subprocess_uses_child_python(monkeypatch):
 
     captured = {}
 
-    def fake_run(args, **kwargs):
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return SimpleNamespace(returncode=0, stdout="SCAN_SUBPROCESS_OK\n", stderr="")
+    class FakeProc:
+        def __init__(self, args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            self.stdout = io.StringIO("SCAN_SUBPROCESS_OK\n")
+            self.stderr = io.StringIO("")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        def poll(self):
+            return None  # still alive: theta enrichment finishing in the background
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(scan_service.subprocess, "Popen", FakeProc)
 
     result = scan_service._run_master_scan_subprocess(use_shared_watchlists=True)
 
     assert captured["args"][:2] == [sys.executable, "-c"]
     assert captured["kwargs"]["cwd"] == str(ROOT_DIR)
     assert str(SCRIPTS_DIR) in captured["kwargs"]["env"]["PYTHONPATH"]
+    # The marker alone completes the scan; process exit is not required.
     assert result["subprocess_stdout"] == "SCAN_SUBPROCESS_OK"
 
 
 def test_master_scan_subprocess_reports_child_failure(monkeypatch):
     from ui.services import scan_service
 
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=3221225477, stdout="", stderr="Fatal Python error"),
-    )
+    class FakeProc:
+        def __init__(self, _args, **_kwargs):
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("Fatal Python error")
+
+        def poll(self):
+            return 3221225477
+
+        def wait(self):
+            return 3221225477
+
+    monkeypatch.setattr(scan_service.subprocess, "Popen", FakeProc)
 
     try:
         scan_service._run_master_scan_subprocess(use_shared_watchlists=False)

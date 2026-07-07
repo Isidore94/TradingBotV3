@@ -2529,6 +2529,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 feature_rows_by_symbol=feature_rows_by_symbol,
                 levels_dir=Path(temp_dir),
                 persist=False,
+                # Explicit: this test pins the no-scoring path. The default
+                # comes from the user's LIVE scoring-config feature flags, so
+                # leaving it implicit couples the test to that file's state.
+                scoring_enabled=False,
             )
 
         self.assertEqual(priority_rows[0]["score"], 100.0)

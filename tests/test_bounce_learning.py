@@ -227,6 +227,7 @@ def _regime_stub(spy_bars, sym_bars_map, *, env, longs=(), shorts=()):
         "_detect_spy_pause_start",
         "check_regime_pause_setups",
         "_sweep_regime_pause_bangers",
+        "_regime_pause_day_alerted",
         "get_market_environment",
         "set_market_environment",
         "clear_market_environment_override",
@@ -320,6 +321,21 @@ def test_regime_pause_flags_nonparticipating_weak_name():
     assert stub.check_regime_pause_setups() == []
     assert stub._regime_pause_state is None
 
+    # SPY pauses AGAIN later the same day; AAOI still looks like a banger but
+    # already alerted today -> no re-spam.
+    spy_close = resumed[-1].close
+    paused_again = resumed + [
+        _make_bar(datetime(2026, 7, 2, 10, 40), spy_close, spy_close + 0.3, spy_close - 0.05, spy_close + 0.25)
+    ]
+    weak_again = weak + _downtrend_session(
+        weak[-1].close, candles=3, step=-1.6, start=datetime(2026, 7, 2, 10, 30)
+    )
+    stub.get_cached_5m_bars = lambda symbol: (
+        paused_again if symbol == "SPY" else (weak_again if symbol == "AAOI" else [])
+    )
+    assert stub.check_regime_pause_setups() == []
+    assert stub._regime_pause_state is not None  # new pause tracked, alert suppressed
+
 
 def test_regime_pause_inverts_for_bullish_tape():
     from datetime import datetime
@@ -339,6 +355,152 @@ def test_regime_pause_inverts_for_bullish_tape():
     flagged = stub.check_regime_pause_setups()
     assert [hit["symbol"] for hit in flagged] == ["MSTR"]
     assert flagged[0]["side"] == "long"
+
+
+def _h1_trend_bars(start_close, step, count, start=None):
+    """Hourly bars with a steady per-bar close drift (for H1 color signals)."""
+    from datetime import timedelta
+
+    start = start or datetime(2026, 7, 2, 9, 30)
+    bars = []
+    close = start_close
+    for index in range(count):
+        open_ = close
+        close = open_ + step
+        high = max(open_, close) + 0.1
+        low = min(open_, close) - 0.1
+        bars.append(_make_bar(start + timedelta(hours=index), open_, high, low, close))
+    return bars
+
+
+def test_classify_h1_candle_color_covers_all_regimes():
+    from bounce_bot_lib.legacy import classify_h1_candle_color
+
+    # Uptrend structure: EMA15 above SMA20.
+    assert classify_h1_candle_color(101.0, 100.0, 99.0) == "green"
+    assert classify_h1_candle_color(99.5, 100.0, 99.0) == "orange"
+    assert classify_h1_candle_color(98.5, 100.0, 99.0) == "yellow"
+    # Downtrend structure: EMA15 below SMA20.
+    assert classify_h1_candle_color(98.0, 99.0, 100.0) == "red"
+    assert classify_h1_candle_color(101.0, 99.0, 100.0) == "blue"
+    # Recovery still below the SMA20 has no color.
+    assert classify_h1_candle_color(99.5, 99.0, 100.0) is None
+    assert classify_h1_candle_color(None, 99.0, 100.0) is None
+
+
+def test_h1_blue_after_red_flags_reclaim_long():
+    from datetime import timedelta
+
+    from bounce_bot_lib.legacy import H1_BLUE_AFTER_RED_TYPE, detect_h1_color_signals
+
+    bars = _h1_trend_bars(100.0, -0.5, 30)  # red downtrend
+    last = bars[-1]
+    reclaim = _make_bar(last.dt + timedelta(hours=1), last.close, 91.2, last.close - 0.2, 91.0)
+    hits = detect_h1_color_signals(bars + [reclaim], "long")
+
+    assert [hit["type"] for hit in hits] == [H1_BLUE_AFTER_RED_TYPE]
+    assert hits[0]["prev_color"] == "red"
+    assert hits[0]["color"] == "blue"
+
+    # The same tape is not a short signal.
+    assert detect_h1_color_signals(bars + [reclaim], "short") == []
+
+
+def test_h1_green_to_yellow_flags_breakdown_short():
+    from datetime import timedelta
+
+    from bounce_bot_lib.legacy import H1_GREEN_TO_YELLOW_TYPE, detect_h1_color_signals
+
+    bars = _h1_trend_bars(100.0, 0.5, 30)  # green uptrend, close ~115
+    last = bars[-1]
+    dump = _make_bar(last.dt + timedelta(hours=1), last.close, last.close + 0.2, 108.8, 109.0)
+    hits = detect_h1_color_signals(bars + [dump], "short")
+
+    assert [hit["type"] for hit in hits] == [H1_GREEN_TO_YELLOW_TYPE]
+    assert hits[0]["prev_color"] == "green"
+    assert hits[0]["color"] == "yellow"
+
+    # An orange pullback (holding the 20-SMA) is NOT the short signal.
+    mild = _make_bar(last.dt + timedelta(hours=1), last.close, last.close + 0.2, 110.9, 111.1)
+    assert detect_h1_color_signals(bars + [mild], "short") == []
+
+
+def test_h1_ema10_bounce_detects_pierce_and_recover():
+    from datetime import timedelta
+
+    from bounce_bot_lib.legacy import H1_EMA10_BOUNCE_TYPE, detect_h1_color_signals
+
+    bars = _h1_trend_bars(100.0, 0.5, 30)  # green uptrend; H1 10-EMA ~112.8
+    last = bars[-1]
+    # Green candle opens above the 10-EMA, pierces it intracandle, closes back above.
+    bounce = _make_bar(last.dt + timedelta(hours=1), 115.4, 115.7, 112.9, 115.6)
+    hits = detect_h1_color_signals(bars + [bounce], "long")
+    assert [hit["type"] for hit in hits] == [H1_EMA10_BOUNCE_TYPE]
+
+    # Same green candle without the 10-EMA tag: no bounce signal.
+    no_touch = _make_bar(last.dt + timedelta(hours=1), 115.4, 115.9, 115.0, 115.6)
+    assert detect_h1_color_signals(bars + [no_touch], "long") == []
+
+
+def test_closed_h1_bars_drops_forming_bucket():
+    from datetime import timedelta
+
+    from bounce_bot_lib.legacy import _closed_h1_bars
+    from market_session import get_market_session_open_naive
+
+    session_open = get_market_session_open_naive(reference=datetime(2026, 7, 2, 12, 0))
+
+    def _bars_5m(count):
+        return [
+            _make_bar(session_open + timedelta(minutes=5 * index), 100.0, 100.2, 99.8, 100.1)
+            for index in range(count)
+        ]
+
+    # 12 bars = first hour complete; 3 extra bars form a partial second hour.
+    assert len(_closed_h1_bars(_bars_5m(12))) == 1
+    assert len(_closed_h1_bars(_bars_5m(15))) == 1
+    assert len(_closed_h1_bars(_bars_5m(24))) == 2
+    # A full 6.5h session: the short final bucket closes at the bell and counts.
+    assert len(_closed_h1_bars(_bars_5m(78))) == 7
+
+
+def test_h1_color_sweep_dedupes_per_candle():
+    from datetime import timedelta
+
+    from bounce_bot_lib.legacy import BounceBot, H1_EMA10_BOUNCE_TYPE
+
+    class Stub:
+        pass
+
+    for name in ("check_h1_color_setups", "_watchlist_day_sweep_symbols"):
+        setattr(Stub, name, getattr(BounceBot, name))
+
+    today_bar = _make_bar(datetime(2026, 7, 2, 10, 30), 100.0, 100.5, 99.5, 100.2)
+    signal_bar = _make_bar(datetime(2026, 7, 2, 10, 30), 115.4, 115.7, 112.9, 115.6)
+
+    stub = Stub()
+    stub._spy_session_bars = lambda: ([today_bar], 100.0)
+    stub._h1_color_state = None
+    stub.longs = ["MSTR"]
+    stub.shorts = []
+    stub.emitted = []
+    stub._evaluate_h1_color_signals = lambda symbol, side, today: [
+        {"type": H1_EMA10_BOUNCE_TYPE, "signal_bar": signal_bar, "symbol": symbol, "side": side}
+    ]
+    stub._emit_h1_color_alert = lambda hit: stub.emitted.append(hit)
+
+    assert len(stub.check_h1_color_setups()) == 1
+    # Same candle again: deduped.
+    assert stub.check_h1_color_setups() == []
+    assert len(stub.emitted) == 1
+
+    # The next hourly candle is a fresh signal.
+    next_bar = _make_bar(signal_bar.dt + timedelta(hours=1), 116.0, 116.4, 114.0, 116.2)
+    stub._evaluate_h1_color_signals = lambda symbol, side, today: [
+        {"type": H1_EMA10_BOUNCE_TYPE, "signal_bar": next_bar, "symbol": symbol, "side": side}
+    ]
+    assert len(stub.check_h1_color_setups()) == 1
+    assert len(stub.emitted) == 2
 
 
 def _daytrade_sweep_stub(spy_bars, sym_bars_map, *, longs=(), shorts=()):
