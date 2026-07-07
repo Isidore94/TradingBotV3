@@ -1608,6 +1608,18 @@ def run_master(
         feature_rows_by_symbol,
         tracker_payload=tracker_payload,
     )
+    # BounceBot's intraday SPY-pause defiance observations (today only) ride
+    # in as capped swing-row evidence before the guardrails/caps run.
+    regime_pause_boosted = apply_regime_pause_evidence_adjustments(
+        priority_rows,
+        ai_state,
+        feature_rows_by_symbol,
+        reference_date=today_run,
+    )
+    if regime_pause_boosted:
+        logging.info(
+            "Regime-pause defiance evidence boosted %d swing row(s).", regime_pause_boosted
+        )
     apply_tracker_scoring_guardrails(priority_rows, ai_state, feature_rows_by_symbol)
     apply_market_regime_score_adjustments(priority_rows, ai_state, feature_rows_by_symbol)
     apply_priority_rejection_score_caps(priority_rows, ai_state, feature_rows_by_symbol)

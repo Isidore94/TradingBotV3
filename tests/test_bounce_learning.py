@@ -228,6 +228,8 @@ def _regime_stub(spy_bars, sym_bars_map, *, env, longs=(), shorts=()):
         "check_regime_pause_setups",
         "_sweep_regime_pause_bangers",
         "_regime_pause_day_alerted",
+        "_regime_pause_observation_store",
+        "_record_regime_pause_observation",
         "get_market_environment",
         "set_market_environment",
         "clear_market_environment_override",
@@ -240,13 +242,19 @@ def _regime_stub(spy_bars, sym_bars_map, *, env, longs=(), shorts=()):
     stub.market_environment_lock = threading.Lock()
     stub.market_environment_user_override = False
     stub._regime_pause_state = None
+    stub._regime_pause_observations = None
     stub.longs = list(longs)
     stub.shorts = list(shorts)
     stub.emitted = []
+    stub.summaries = []
     stub.get_cached_5m_bars = lambda symbol, _spy=spy_bars, _m=sym_bars_map: (
         _spy if symbol == "SPY" else _m.get(symbol, [])
     )
-    stub._emit_regime_pause_banger = lambda hit: stub.emitted.append(hit)
+    stub._record_regime_pause_banger = lambda hit: stub.emitted.append(hit)
+    stub._emit_regime_pause_summary = lambda side, spy_window, hits, state: stub.summaries.append(
+        (side, [hit["symbol"] for hit in hits])
+    )
+    stub._save_regime_pause_observations = lambda: None
     stub._refresh_rrs_gui = lambda **kwargs: None
     return stub
 
@@ -311,6 +319,11 @@ def test_regime_pause_flags_nonparticipating_weak_name():
     assert hit["side"] == "short"
     assert hit["day_excess"] > 5  # dramatically weaker than SPY on the day
     assert stub.emitted and stub.emitted[0]["symbol"] == "AAOI"
+    # The feed surface is ONE summary line per sweep batch, not per symbol.
+    assert stub.summaries == [("short", ["AAOI"])]
+    # Pause defiance is recorded as swing-scan evidence.
+    observations = stub._regime_pause_observations["sides"]["short"]
+    assert observations["AAOI"]["pause_count"] == 1
 
     # Same pause: no duplicate alert for AAOI.
     assert stub.check_regime_pause_setups() == []
@@ -322,7 +335,8 @@ def test_regime_pause_flags_nonparticipating_weak_name():
     assert stub._regime_pause_state is None
 
     # SPY pauses AGAIN later the same day; AAOI still looks like a banger but
-    # already alerted today -> no re-spam.
+    # already alerted today -> no re-spam, yet the defiance count still grows
+    # so the swing scan sees "held through 2 pauses".
     spy_close = resumed[-1].close
     paused_again = resumed + [
         _make_bar(datetime(2026, 7, 2, 10, 40), spy_close, spy_close + 0.3, spy_close - 0.05, spy_close + 0.25)
@@ -335,6 +349,8 @@ def test_regime_pause_flags_nonparticipating_weak_name():
     )
     assert stub.check_regime_pause_setups() == []
     assert stub._regime_pause_state is not None  # new pause tracked, alert suppressed
+    assert stub.summaries == [("short", ["AAOI"])]  # still just the first summary
+    assert stub._regime_pause_observations["sides"]["short"]["AAOI"]["pause_count"] == 2
 
 
 def test_regime_pause_inverts_for_bullish_tape():

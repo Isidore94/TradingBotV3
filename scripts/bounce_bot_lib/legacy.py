@@ -95,6 +95,7 @@ from project_paths import (
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
     MASTER_AVWAP_D1_WATCHLIST_FILE,
+    REGIME_PAUSE_OBSERVATIONS_FILE,
     APP_LOG_BACKUP_COUNT,
     get_tracker_storage_details,
     get_local_setting,
@@ -2256,6 +2257,7 @@ class BounceBot(EWrapper, EClient):
         self.market_environment_user_override = False
         self._regime_pause_state = None
         self._regime_pause_alert_log = None
+        self._regime_pause_observations = None
         self._orb_break_state = None
         self._ema8_grind_state = None
         self._h1_color_state = None
@@ -4132,8 +4134,15 @@ class BounceBot(EWrapper, EClient):
         return env_key
 
     # ------------------------------------------------------------------
-    # Regime-pause bangers: when SPY pauses against the tape, whatever
-    # refuses to participate is the trade (see constants block).
+    # Regime-pause sweeps: when SPY pauses against the tape, whatever
+    # refuses to participate is flagged (see constants block). Reworked
+    # 2026-07-07: the per-symbol tiered bangers were screening information
+    # dressed as entries (ten identical-ExpR alerts in one second, no
+    # entry trigger), so the feed now gets ONE untiered summary line per
+    # sweep batch while per-symbol pause-defiance counts persist to
+    # REGIME_PAUSE_OBSERVATIONS_FILE as evidence for the hourly master
+    # scan's swing rows. Tracker outcome logging is unchanged so the
+    # signal keeps earning (or losing) measured WR/PF.
     # ------------------------------------------------------------------
     def _detect_spy_pause_start(self, spy_today, side):
         """Return the pause-start bar datetime, or None while the tape trends.
@@ -4198,6 +4207,10 @@ class BounceBot(EWrapper, EClient):
                 "side": side,
                 "start_dt": pause_start,
                 "alerted": self._regime_pause_day_alerted(today, side),
+                # Per-pause-window set: a symbol's defiance counts once per
+                # pause toward the observations file, however many sweep
+                # cycles the pause lasts.
+                "observed": set(),
             }
             self._regime_pause_state = state
         pause_candles = sum(1 for bar in spy_today if bar.dt >= state["start_dt"])
@@ -4222,9 +4235,11 @@ class BounceBot(EWrapper, EClient):
         if (side == "short" and spy_window < 0) or (side == "long" and spy_window > 0):
             return []
 
+        observed = state.setdefault("observed", set())
         flagged = []
+        observations_dirty = False
         for symbol in symbols:
-            if symbol in state["alerted"]:
+            if symbol in observed:
                 continue
             bars = self.get_cached_5m_bars(symbol)
             if not bars:
@@ -4255,24 +4270,43 @@ class BounceBot(EWrapper, EClient):
                 made_new_extreme = max(bar.high for bar in window_bars) > max(bar.high for bar in pre_window)
             if not (still_trending or made_new_extreme or window_excess >= REGIME_BANGER_WINDOW_EXCESS_PCT):
                 continue
-            state["alerted"].add(symbol)
-            flagged.append(
-                {
-                    "symbol": symbol,
-                    "side": side,
-                    "sym_day": sym_day,
-                    "spy_day": spy_day,
-                    "sym_window": sym_window,
-                    "spy_window": spy_window,
-                    "day_excess": day_excess,
-                    "last_bar": sym_today[-1],
-                }
+            observed.add(symbol)
+            self._record_regime_pause_observation(
+                symbol,
+                side,
+                state["date"],
+                day_excess=day_excess,
+                sym_day=sym_day,
             )
-        for hit in flagged:
-            self._emit_regime_pause_banger(hit)
+            observations_dirty = True
+            if symbol in state["alerted"]:
+                continue
+            state["alerted"].add(symbol)
+            hit = {
+                "symbol": symbol,
+                "side": side,
+                "sym_day": sym_day,
+                "spy_day": spy_day,
+                "sym_window": sym_window,
+                "spy_window": spy_window,
+                "day_excess": day_excess,
+                "last_bar": sym_today[-1],
+            }
+            self._record_regime_pause_banger(hit)
+            flagged.append(hit)
+        if observations_dirty:
+            self._save_regime_pause_observations()
+        if flagged:
+            self._emit_regime_pause_summary(side, spy_window, flagged, state)
         return flagged
 
-    def _emit_regime_pause_banger(self, hit):
+    def _record_regime_pause_banger(self, hit):
+        """Tracker-side bookkeeping for a pause-defiance hit (no feed alert).
+
+        Candidate event, outcome registration, and the bounce log keep
+        flowing so the tracker can measure whether pause defiance carries
+        real edge; the GUI surface is the batch summary line only.
+        """
         symbol = hit["symbol"]
         side = hit["side"]
         bounce_type = REGIME_PAUSE_RW_TYPE if side == "short" else REGIME_PAUSE_RS_TYPE
@@ -4299,20 +4333,12 @@ class BounceBot(EWrapper, EClient):
         )
         self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
-        label = "RW BANGER" if side == "short" else "RS BANGER"
         message = (
-            f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): SPY paused "
-            f"({hit['spy_window']:+.2f}% window) but {symbol} isn't participating - "
-            f"day {hit['sym_day']:+.2f}% vs SPY {hit['spy_day']:+.2f}% "
-            f"(excess {hit['day_excess']:+.2f}%), window {hit['sym_window']:+.2f}%."
+            f"REGIME PAUSE {symbol} ({side}): SPY paused ({hit['spy_window']:+.2f}% window) "
+            f"but {symbol} isn't participating - day {hit['sym_day']:+.2f}% vs SPY {hit['spy_day']:+.2f}% "
+            f"(excess {hit['day_excess']:+.2f}%), window {hit['sym_window']:+.2f}%. Swing evidence recorded."
         )
-        exit_note = self._measured_exit_suffix(side, levels)
-        if exit_note:
-            message += f" | {exit_note}"
-        payload = self._build_bounce_feedback_alert_payload(message, event_row)
-        if self.gui_callback:
-            self.gui_callback(payload, "red" if side == "short" else "green")
-        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_symbol(symbol, f"SWEEP: {message}")
         self.log_bounce_to_file(
             symbol=symbol,
             direction=side,
@@ -4322,6 +4348,90 @@ class BounceBot(EWrapper, EClient):
             threshold=0.0,
             quality=quality,
         )
+
+    def _emit_regime_pause_summary(self, side, spy_window, hits, state):
+        """One untiered feed line per sweep batch (symbols day-deduped).
+
+        Untiered on purpose: no [X-TIER] stamp and no BANGER token, so the
+        line passes the feed's tier gate quietly and never fires the sound.
+        """
+        symbols = ", ".join(hit["symbol"] for hit in hits)
+        pressing = "pressing lows" if side == "short" else "holding highs"
+        total_today = len(state.get("alerted") or ())
+        message = (
+            f"REGIME PAUSE WATCH ({side}): SPY paused ({spy_window:+.2f}% window) - "
+            f"{len(hits)} swing {side}{'s' if len(hits) != 1 else ''} still {pressing}: {symbols}"
+            f" ({total_today} today). Recorded as swing-scan evidence, not an entry signal."
+        )
+        if self.gui_callback:
+            self.gui_callback(message, "red" if side == "short" else "green")
+
+    def _regime_pause_observation_store(self, today):
+        store = getattr(self, "_regime_pause_observations", None)
+        today_iso = today.isoformat()
+        if not isinstance(store, dict) or store.get("date") != today_iso:
+            store = {"date": today_iso, "sides": {"long": {}, "short": {}}}
+            # Survive restarts: fold in counts already written for this day.
+            try:
+                path = Path(REGIME_PAUSE_OBSERVATIONS_FILE)
+                if path.exists():
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(existing, dict) and existing.get("date") == today_iso:
+                        sides = existing.get("sides")
+                        if isinstance(sides, dict):
+                            for side_key in ("long", "short"):
+                                side_map = sides.get(side_key)
+                                if isinstance(side_map, dict):
+                                    store["sides"][side_key] = {
+                                        str(sym).strip().upper(): dict(entry)
+                                        for sym, entry in side_map.items()
+                                        if isinstance(entry, dict)
+                                    }
+            except Exception as exc:
+                logging.debug("Regime-pause observations reload skipped: %s", exc)
+            self._regime_pause_observations = store
+        return store
+
+    def _record_regime_pause_observation(self, symbol, side, today, *, day_excess, sym_day):
+        store = self._regime_pause_observation_store(today)
+        entries = store["sides"].setdefault(side, {})
+        now_text = datetime.now().strftime("%H:%M")
+        entry = entries.get(symbol)
+        if not isinstance(entry, dict):
+            entry = {"pause_count": 0, "first_seen": now_text, "max_day_excess_pct": None}
+            entries[symbol] = entry
+        entry["pause_count"] = int(entry.get("pause_count", 0) or 0) + 1
+        entry["last_seen"] = now_text
+        entry["last_day_pct"] = round(float(sym_day), 2)
+        previous = entry.get("max_day_excess_pct")
+        entry["max_day_excess_pct"] = round(
+            max(float(day_excess), float(previous)) if previous is not None else float(day_excess),
+            2,
+        )
+
+    def _save_regime_pause_observations(self):
+        """Persist today's pause-defiance counts for the hourly master scan.
+
+        Best-effort by design: the observations file is swing-scan evidence,
+        never a blocker for the intraday sweep itself.
+        """
+        store = getattr(self, "_regime_pause_observations", None)
+        if not isinstance(store, dict):
+            return
+        payload = {
+            "schema_version": 1,
+            "date": store.get("date", ""),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "sides": store.get("sides", {}),
+        }
+        try:
+            path = Path(REGIME_PAUSE_OBSERVATIONS_FILE)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_name(f".{path.name}.tmp")
+            temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            os.replace(temp_path, path)
+        except Exception as exc:
+            logging.warning("Regime-pause observations save failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Trader-favorite day-trade sweeps (2026-07-04): delayed 5m opening-

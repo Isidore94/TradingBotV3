@@ -52,7 +52,7 @@ def test_min_tier_filter_policy():
     assert not alert_passes_min_tier(untiered, "S")
 
 
-def test_loud_alerts_are_sa_or_bangers():
+def test_loud_alerts_are_sa_bangers_or_ready_d1():
     try:
         from ui.panels.alert_center_panel import alert_is_loud
     except ModuleNotFoundError as exc:
@@ -64,3 +64,9 @@ def test_loud_alerts_are_sa_or_bangers():
     assert alert_is_loud(_alert("[A-TIER] AAA: Bounce confirmed"))
     assert alert_is_loud(_alert("[D-TIER] RS BANGER MSTR (long)"))
     assert not alert_is_loud(_alert("[B-TIER] AAA: Bounce confirmed"))
+    # D1 focus: a level-cross trigger or bucket upgrade is the "ready" moment.
+    assert alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) 1st-dev break UPPER_1@314.57", "d1_flag_long"))
+    assert alert_is_loud(_alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade", "d1_flag_long"))
+    assert not alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_WATCH: AAPL (long) AVWAPE retest", "d1_flag_long"))
+    # The pause-watch summary line stays quiet by design.
+    assert not alert_is_loud(_alert("REGIME PAUSE WATCH (short): SPY paused (+0.15% window) - 3 swing shorts still pressing lows: A, B, C", "red"))

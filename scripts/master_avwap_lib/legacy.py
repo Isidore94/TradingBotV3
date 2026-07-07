@@ -93,6 +93,7 @@ from project_paths import (
     MASTER_AVWAP_D1_WATCHLIST_FILE,
     MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
     MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
+    REGIME_PAUSE_OBSERVATIONS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
     MASTER_AVWAP_SETUP_SCENARIOS_FILE,
     MASTER_AVWAP_SETUP_DAILY_FILE,
@@ -6019,6 +6020,108 @@ def apply_recent_tracker_setup_family_adjustments(
     return recent_family_rows
 
 
+# Intraday SPY-pause defiance evidence (2026-07-07). BounceBot's regime-pause
+# sweep records which swing names kept pressing while SPY paused against the
+# tape; those observations were previously per-symbol A-TIER feed alerts with
+# no entry logic. Now they flow here instead: a small, capped score boost on
+# the matching swing row so "held its LOD through 2 SPY pauses today" reads as
+# swing evidence in the priority report rather than as a fake intraday entry.
+REGIME_PAUSE_EVIDENCE_POINTS_PER_PAUSE = 2
+REGIME_PAUSE_EVIDENCE_MAX_POINTS = 6
+
+
+def load_regime_pause_observations(reference_date: date | None = None) -> dict[str, dict[str, dict]]:
+    """Return today's pause-defiance map: {"long"|"short": {SYMBOL: entry}}.
+
+    Stale files (any date other than reference_date) are ignored - yesterday's
+    intraday behavior is not evidence for today's swing rows.
+    """
+    empty: dict[str, dict[str, dict]] = {"long": {}, "short": {}}
+    try:
+        payload = json.loads(Path(REGIME_PAUSE_OBSERVATIONS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(payload, dict):
+        return empty
+    expected_date = (reference_date or date.today()).isoformat()
+    if str(payload.get("date") or "") != expected_date:
+        return empty
+    sides = payload.get("sides")
+    if not isinstance(sides, dict):
+        return empty
+    result = {"long": {}, "short": {}}
+    for side_key in ("long", "short"):
+        side_map = sides.get(side_key)
+        if not isinstance(side_map, dict):
+            continue
+        for symbol, entry in side_map.items():
+            symbol_text = str(symbol or "").strip().upper()
+            if symbol_text and isinstance(entry, dict):
+                result[side_key][symbol_text] = entry
+    return result
+
+
+def apply_regime_pause_evidence_adjustments(
+    priority_rows: list[dict],
+    ai_state: dict,
+    feature_rows_by_symbol: dict[str, dict],
+    *,
+    reference_date: date | None = None,
+    observations: dict[str, dict[str, dict]] | None = None,
+) -> int:
+    """Fold BounceBot's pause-defiance observations into swing-row scores.
+
+    Idempotent like the other tracker adjustments: the previous delta is
+    subtracted before the fresh one is applied. Returns the number of rows
+    boosted.
+    """
+    observed = observations if observations is not None else load_regime_pause_observations(reference_date)
+    symbol_map = ai_state.setdefault("symbols", {}) if isinstance(ai_state, dict) else {}
+    boosted = 0
+
+    for row in priority_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = normalize_side(row.get("side", ""))
+        side_key = "short" if side == "SHORT" else "long"
+        previous_delta = int(row.get("regime_pause_score_delta", 0) or 0)
+        base_score = float(row.get("score", 0.0) or 0.0) - float(previous_delta)
+
+        entry = observed.get(side_key, {}).get(symbol) if isinstance(observed, dict) else None
+        pause_count = int(entry.get("pause_count", 0) or 0) if isinstance(entry, dict) else 0
+        score_delta = min(
+            pause_count * REGIME_PAUSE_EVIDENCE_POINTS_PER_PAUSE,
+            REGIME_PAUSE_EVIDENCE_MAX_POINTS,
+        )
+        if score_delta:
+            extreme = "LOD" if side == "SHORT" else "HOD"
+            pauses_text = "pause" if pause_count == 1 else "pauses"
+            score_note = f"held {extreme} through {pause_count} SPY {pauses_text} today {score_delta:+d}"
+            boosted += 1
+        else:
+            score_note = ""
+
+        row["regime_pause_score_delta"] = score_delta
+        row["regime_pause_score_note"] = score_note
+        row["score"] = base_score + float(score_delta)
+
+        symbol_entry = symbol_map.get(symbol)
+        if isinstance(symbol_entry, dict):
+            symbol_entry["priority_regime_pause_score_delta"] = score_delta
+            symbol_entry["priority_regime_pause_score_note"] = score_note
+            symbol_entry["priority_score"] = row["score"]
+
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if isinstance(feature_row, dict):
+            feature_row["regime_pause_score_delta"] = score_delta
+            feature_row["regime_pause_score_note"] = score_note
+            feature_row["priority_score"] = row["score"]
+
+        if score_delta:
+            logging.info("%s: regime-pause defiance evidence applied (%s).", symbol, score_note)
+
+    return boosted
+
+
 def _tracker_setup_type_metric_pair(group_row: dict, baseline_row: dict) -> tuple[float | None, float | None, str]:
     group_closed = int(group_row.get("closed_setups", 0) or 0)
     baseline_closed = int(baseline_row.get("closed_setups", 0) or 0)
@@ -8074,6 +8177,7 @@ SCAN_FACTOR_NUMERIC_FIELDS = {
     "recent_tracker_score_delta": ("tracker", "Recent tracker score delta", (-10, -2, 0, 2, 10)),
     "setup_type_score_delta": ("tracker", "Setup-type score delta", (-10, -2, 0, 2, 10)),
     "tracker_guardrail_score_delta": ("tracker", "Tracker guardrail score delta", (-10, -2, 0, 2, 10)),
+    "regime_pause_score_delta": ("tracker", "Regime-pause defiance delta", (0, 2, 4, 6)),
 }
 
 
@@ -18672,6 +18776,8 @@ def _best_swing_trade_evidence(row: dict) -> str:
         evidence.append(f"setup type {int(row.get('setup_type_score_delta', 0) or 0):+d}")
     if int(row.get("recent_tracker_score_delta", 0) or 0):
         evidence.append(f"recent tracker {int(row.get('recent_tracker_score_delta', 0) or 0):+d}")
+    if row.get("regime_pause_score_note"):
+        evidence.append(str(row.get("regime_pause_score_note")))
     if row.get("market_regime_score_note"):
         evidence.append(str(row.get("market_regime_score_note")))
     if not evidence:
@@ -18703,6 +18809,19 @@ def _write_best_swing_trade_rows(handle, title: str, rows: list[dict]) -> None:
         )
         handle.write(f"    evidence: {_best_swing_trade_evidence(row)}\n")
         handle.write(f"    risk: {warning_text}\n")
+        # The armed trigger levels already feed the D1 watchlist; printing
+        # them here makes "ready when price crosses X" explicit on the row
+        # instead of only living in the runtime JSON.
+        try:
+            armed_levels = _build_d1_watchlist_trigger_levels(
+                row,
+                row.get("_symbol_state") if isinstance(row.get("_symbol_state"), dict) else {},
+                today_iso=datetime.now().date().isoformat(),
+            )
+        except Exception:
+            armed_levels = []
+        if armed_levels:
+            handle.write(f"    ready when: {_format_d1_upgrade_target_summary(armed_levels)}\n")
     handle.write("\n")
 
 

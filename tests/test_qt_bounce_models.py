@@ -51,10 +51,10 @@ def test_bounce_alert_marks_d1_flags():
     assert alert.context == "score=88"
 
 
-def test_bucket_upgrade_alert_is_the_only_actionable_d1_focus_message():
+def test_ready_d1_alerts_are_bucket_upgrades_and_level_cross_triggers():
     from ui.models.bounce import BounceAlert
     try:
-        from ui.panels.alert_center_panel import _is_actionable_d1_alert
+        from ui.panels.alert_center_panel import is_ready_d1_alert
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return
@@ -65,6 +65,16 @@ def test_bucket_upgrade_alert_is_the_only_actionable_d1_focus_message():
         "d1_flag_long",
         timestamp=datetime(2026, 1, 2, 10, 1, 0),
     )
+    trigger_alert = BounceAlert.from_callback(
+        "MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) A/S upgrade: 1st-dev break UPPER_1@314.57 [price=314.80]",
+        "d1_flag_long",
+        timestamp=datetime(2026, 1, 2, 10, 1, 30),
+    )
+    watch_alert = BounceAlert.from_callback(
+        "MASTER_AVWAP_D1_UPGRADE_WATCH: AAPL (long) AVWAPE retest AVWAPE@309.38",
+        "d1_flag_long",
+        timestamp=datetime(2026, 1, 2, 10, 1, 45),
+    )
     generic_alert = BounceAlert.from_callback(
         "MASTER_AVWAP_D1_FLAG: MSFT (short) 15EMA break [score=88]",
         "d1_flag_short",
@@ -73,5 +83,7 @@ def test_bucket_upgrade_alert_is_the_only_actionable_d1_focus_message():
 
     assert bucket_alert.symbol == "NVDA"
     assert bucket_alert.side == "LONG"
-    assert _is_actionable_d1_alert(bucket_alert)
-    assert not _is_actionable_d1_alert(generic_alert)
+    assert is_ready_d1_alert(bucket_alert)
+    assert is_ready_d1_alert(trigger_alert)
+    assert not is_ready_d1_alert(watch_alert)
+    assert not is_ready_d1_alert(generic_alert)

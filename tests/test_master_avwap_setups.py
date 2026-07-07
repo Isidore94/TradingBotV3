@@ -31,6 +31,7 @@ from master_avwap import (  # noqa: E402
     apply_tracker_setup_type_adjustments,
     apply_tracker_scoring_guardrails,
     apply_recent_tracker_setup_family_adjustments,
+    apply_regime_pause_evidence_adjustments,
     assess_daily_relative_strength,
     attach_setup_candidate_payloads,
     build_market_prep_payload,
@@ -54,6 +55,7 @@ from master_avwap import (  # noqa: E402
     extract_theta_reason_risk_rows,
     extract_theta_symbols_from_report,
     format_market_prep_payload_report,
+    load_regime_pause_observations,
     load_scan_earnings_context,
     rank_tracker_setup_type_rows,
     update_master_avwap_d1_watchlist,
@@ -1548,6 +1550,32 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertNotIn("bucket=sma-track", ranking_block)
         self.assertEqual(payload["sma_breakout_tracking"][0]["symbol"], "SMAT")
         self.assertEqual(payload["symbols"]["SMAT"]["priority_bucket"], "sma_breakout_tracking")
+
+    def test_priority_report_prints_armed_trigger_levels_on_detail_rows(self):
+        row = {
+            "symbol": "ARMD",
+            "side": "LONG",
+            "score": 150,
+            "priority_bucket": "favorite_setup",
+            "setup_family": "avwap_breakout",
+            "favorite_signals": [],
+            "context_signals": [],
+            "trend_20d": "UP",
+            "last_close": 100.0,
+            "ema15": 96.33,
+            "mid_earnings_active_second_stdev_hold": True,
+            "current_anchor": {"date": "2026-04-30", "bands": {"UPPER_1": 104.57}},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "priority_report.txt"
+            write_priority_setup_report(report_path, [row])
+            report_text = report_path.read_text(encoding="utf-8")
+
+        # The armed D1 trigger levels ride on the detail row so "ready when
+        # price crosses X" is explicit in the report, not just runtime JSON.
+        self.assertIn("ready when:", report_text)
+        self.assertIn("96.33", report_text)
+        self.assertIn("104.57", report_text)
 
     def test_priority_report_and_focus_feed_include_top_pattern_tracking(self):
         row = {
@@ -3583,6 +3611,65 @@ class MasterAvwapSetupTests(unittest.TestCase):
         )
 
         self.assertEqual(priority_rows[0]["score"], boosted_score)
+
+    def test_regime_pause_evidence_boosts_matching_side_once_and_caps(self):
+        priority_rows = [
+            {"symbol": "CCL", "side": "SHORT", "score": 100.0},
+            {"symbol": "CCL", "side": "LONG", "score": 100.0},  # wrong side: untouched
+            {"symbol": "KBH", "side": "LONG", "score": 100.0},
+            {"symbol": "VOD", "side": "SHORT", "score": 100.0},  # capped at max points
+        ]
+        ai_state = {"symbols": {"CCL": {}, "KBH": {}, "VOD": {}}}
+        feature_rows_by_symbol = {
+            "CCL": {"priority_score": 100.0},
+            "KBH": {"priority_score": 100.0},
+            "VOD": {"priority_score": 100.0},
+        }
+        observations = {
+            "short": {
+                "CCL": {"pause_count": 2, "max_day_excess_pct": 3.1},
+                "VOD": {"pause_count": 9, "max_day_excess_pct": 1.2},
+            },
+            "long": {},
+        }
+
+        boosted = apply_regime_pause_evidence_adjustments(
+            priority_rows,
+            ai_state,
+            feature_rows_by_symbol,
+            observations=observations,
+        )
+
+        self.assertEqual(boosted, 2)
+        self.assertEqual(priority_rows[0]["score"], 104.0)
+        self.assertIn("held LOD through 2 SPY pauses", priority_rows[0]["regime_pause_score_note"])
+        self.assertEqual(priority_rows[1]["score"], 100.0)  # long CCL row untouched
+        self.assertEqual(priority_rows[2]["score"], 100.0)
+        self.assertEqual(priority_rows[3]["score"], 106.0)  # 9 pauses capped at +6
+        # Re-applying does not stack (idempotent like the other adjustments).
+        apply_regime_pause_evidence_adjustments(
+            priority_rows,
+            ai_state,
+            feature_rows_by_symbol,
+            observations=observations,
+        )
+        self.assertEqual(priority_rows[0]["score"], 104.0)
+
+    def test_load_regime_pause_observations_ignores_stale_dates(self):
+        reference_date = date(2026, 7, 7)
+        payload = {
+            "schema_version": 1,
+            "date": "2026-07-07",
+            "sides": {"short": {"ccl": {"pause_count": 2}}, "long": {}},
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            observations_path = Path(tmp_dir) / "regime_pause_observations.json"
+            observations_path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch.object(master_avwap, "REGIME_PAUSE_OBSERVATIONS_FILE", observations_path):
+                fresh = load_regime_pause_observations(reference_date)
+                stale = load_regime_pause_observations(date(2026, 7, 8))
+        self.assertEqual(fresh["short"]["CCL"]["pause_count"], 2)  # symbol upper-cased
+        self.assertEqual(stale, {"long": {}, "short": {}})
 
     def test_tracker_family_stats_alias_legacy_favorite_zone_to_avwape_to_first_dev(self):
         reference_date = date(2026, 5, 12)
