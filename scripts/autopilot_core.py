@@ -32,9 +32,11 @@ from typing import Any, Callable, Iterable, Mapping
 from market_session import get_market_session_window
 from project_paths import (
     AUTO_LONGS_FILE,
+    AUTO_POPULATE_MEMBERSHIP_FILE,
     AUTO_SHORTS_FILE,
     AUTOPILOT_REPORT_FILE,
     LONGS_FILE,
+    MASTER_AVWAP_DAILY_BARS_DIR,
     SHORTS_FILE,
     UNIVERSE_ALL_FILE,
     UNIVERSE_LONGS_FILE,
@@ -663,6 +665,331 @@ def near_extreme_candidates(
         if 0 <= distance <= proximity_pct:
             matches.append(str(symbol).strip().upper())
     return sorted(matches)
+
+
+# ---------------------------------------------------------------------------
+# Universe auto-populate (2026-07-08): keep longs.txt/shorts.txt stocked from
+# the universe all session. Longs = above the previous day's high with a real
+# move relative to ADR; shorts = below the previous day's low, inverted. Time
+# spent at HOD/LOD sweetens the rank. Regime decides how many of each side.
+# The engine only ever rotates/removes names IT added (membership file) - the
+# trader's own entries are untouchable. BounceBot's existing triple-VWAP
+# removal (check_removal_conditions) handles intraday cuts; cut names land in
+# a day-scoped blacklist here so a refresh doesn't re-add them.
+# ---------------------------------------------------------------------------
+AUTO_POPULATE_REFRESH_MINUTES = 30
+AUTO_POPULATE_ADR_SESSIONS = 14
+# "A good move relative to ADR": at least half an average daily range from
+# yesterday's close, on top of the PDH/PDL break itself.
+AUTO_POPULATE_MIN_ADR_MOVE = 0.5
+# A 5m bar counts as "at the extreme" when its high (low) is within this % of
+# the day's final high (low); the fraction of such bars sweetens the score.
+AUTO_POPULATE_EXTREME_PROXIMITY_PCT = 0.3
+AUTO_POPULATE_CAPS = {
+    "bullish": (150, 50),
+    "bearish": (50, 150),
+    "neutral": (100, 100),
+}
+
+_AUTO_POPULATE_LOCK = threading.Lock()
+_DAILY_CONTEXT_CACHE: dict[str, Any] = {"date": None, "contexts": {}}
+
+
+def auto_populate_caps(env_key) -> tuple[int, int]:
+    """(long_cap, short_cap) for a market regime key."""
+    env = str(env_key or "").strip().lower()
+    if env.startswith("bullish"):
+        return AUTO_POPULATE_CAPS["bullish"]
+    if env.startswith("bearish"):
+        return AUTO_POPULATE_CAPS["bearish"]
+    return AUTO_POPULATE_CAPS["neutral"]
+
+
+def load_daily_context(
+    symbols: Iterable[str],
+    *,
+    daily_bars_dir: Path = MASTER_AVWAP_DAILY_BARS_DIR,
+    adr_sessions: int = AUTO_POPULATE_ADR_SESSIONS,
+    reference_date=None,
+) -> dict[str, dict[str, float]]:
+    """{symbol: {prev_high, prev_low, prev_close, adr}} from the durable daily store.
+
+    Only completed sessions strictly before ``reference_date`` (today) count,
+    so an intraday call never treats today's partial bar as "yesterday".
+    Cached per day - the values are static intraday.
+    """
+    from human_focus_tracking import _load_durable_daily_frame
+
+    today = reference_date or datetime.now().date()
+    with _AUTO_POPULATE_LOCK:
+        if _DAILY_CONTEXT_CACHE["date"] == today:
+            cached = _DAILY_CONTEXT_CACHE["contexts"]
+            missing = [s for s in symbols if str(s or "").strip().upper() not in cached]
+            if not missing:
+                return dict(cached)
+
+    contexts: dict[str, dict[str, float]] = {}
+    for symbol in symbols:
+        sym = str(symbol or "").strip().upper()
+        if not sym or sym in contexts:
+            continue
+        try:
+            frame = _load_durable_daily_frame(sym, daily_bars_dir)
+            if frame is None or frame.empty:
+                continue
+            frame = frame.copy()
+            frame.columns = [str(col).strip().lower() for col in frame.columns]
+            if "datetime" not in frame.columns:
+                continue
+            import pandas as pd
+
+            frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+            frame = frame.dropna(subset=["datetime"])
+            frame = frame[frame["datetime"].dt.date < today].tail(adr_sessions)
+            if frame.empty or not {"high", "low", "close"} <= set(frame.columns):
+                continue
+            ranges = (frame["high"] - frame["low"]).astype(float)
+            adr = float(ranges.mean())
+            last_row = frame.iloc[-1]
+            if adr <= 0:
+                continue
+            contexts[sym] = {
+                "prev_high": float(last_row["high"]),
+                "prev_low": float(last_row["low"]),
+                "prev_close": float(last_row["close"]),
+                "adr": adr,
+            }
+        except Exception:
+            continue
+    with _AUTO_POPULATE_LOCK:
+        _DAILY_CONTEXT_CACHE["date"] = today
+        _DAILY_CONTEXT_CACHE["contexts"].update(contexts)
+        return dict(_DAILY_CONTEXT_CACHE["contexts"])
+
+
+def fetch_intraday_profiles(
+    symbols: Iterable[str],
+    *,
+    downloader: Callable[..., Any] | None = None,
+    chunk_size: int = AUTOPILOT_OPEN_SCAN_CHUNK_SIZE,
+    proximity_pct: float = AUTO_POPULATE_EXTREME_PROXIMITY_PCT,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, dict[str, float]]:
+    """{symbol: {last, day_high, day_low, time_at_high_frac, time_at_low_frac}}."""
+    downloader = downloader or _default_downloader
+    pool = [str(s or "").strip().upper() for s in symbols]
+    pool = [s for s in pool if s]
+    profiles: dict[str, dict[str, float]] = {}
+    chunk_size = max(1, int(chunk_size))
+    for start in range(0, len(pool), chunk_size):
+        chunk = pool[start : start + chunk_size]
+        try:
+            data = downloader(chunk, period="1d", interval="5m")
+        except Exception as exc:
+            if log:
+                log(f"Intraday profile chunk failed ({chunk[0]}..{chunk[-1]}): {exc}")
+            continue
+        for symbol in chunk:
+            try:
+                frame = data[symbol] if len(chunk) > 1 else data
+            except Exception:
+                frame = None
+            rows = _frame_rows(frame)
+            if len(rows) < 2:
+                continue
+            day_high = max(row["high"] for row in rows)
+            day_low = min(row["low"] for row in rows)
+            at_high = at_low = 0
+            for row in rows:
+                if day_high > 0 and (day_high - row["high"]) / day_high * 100.0 <= proximity_pct:
+                    at_high += 1
+                if row["low"] > 0 and (row["low"] - day_low) / row["low"] * 100.0 <= proximity_pct:
+                    at_low += 1
+            profiles[symbol] = {
+                "last": rows[-1]["close"],
+                "day_high": day_high,
+                "day_low": day_low,
+                "time_at_high_frac": at_high / len(rows),
+                "time_at_low_frac": at_low / len(rows),
+            }
+    return profiles
+
+
+def build_adr_breakout_candidates(
+    profiles: Mapping[str, Mapping[str, float]],
+    daily_context: Mapping[str, Mapping[str, float]],
+    *,
+    min_adr_move: float = AUTO_POPULATE_MIN_ADR_MOVE,
+) -> dict[str, list[dict[str, Any]]]:
+    """Rank PDH-break longs / PDL-break shorts by ADR-relative move + HOD/LOD time."""
+    longs: list[dict[str, Any]] = []
+    shorts: list[dict[str, Any]] = []
+    for symbol, profile in profiles.items():
+        sym = str(symbol or "").strip().upper()
+        if not sym or sym == "SPY":
+            continue
+        ctx = daily_context.get(sym)
+        if not ctx:
+            continue
+        try:
+            last = float(profile["last"])
+            prev_high = float(ctx["prev_high"])
+            prev_low = float(ctx["prev_low"])
+            prev_close = float(ctx["prev_close"])
+            adr = float(ctx["adr"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if adr <= 0 or last <= 0:
+            continue
+        adr_move = (last - prev_close) / adr
+        at_high = float(profile.get("time_at_high_frac") or 0.0)
+        at_low = float(profile.get("time_at_low_frac") or 0.0)
+        if last > prev_high and adr_move >= min_adr_move:
+            longs.append(
+                {
+                    "symbol": sym,
+                    "score": adr_move + at_high,
+                    "adr_move": adr_move,
+                    "time_at_extreme": at_high,
+                    "reason": f"PDH break, {adr_move:+.1f} ADR, {at_high:.0%} of day at HOD",
+                }
+            )
+        elif last < prev_low and adr_move <= -min_adr_move:
+            shorts.append(
+                {
+                    "symbol": sym,
+                    "score": -adr_move + at_low,
+                    "adr_move": adr_move,
+                    "time_at_extreme": at_low,
+                    "reason": f"PDL break, {adr_move:+.1f} ADR, {at_low:.0%} of day at LOD",
+                }
+            )
+    longs.sort(key=lambda row: (-row["score"], row["symbol"]))
+    shorts.sort(key=lambda row: (-row["score"], row["symbol"]))
+    return {"longs": longs, "shorts": shorts}
+
+
+def _load_auto_populate_membership(path: Path, today_iso: str) -> dict[str, Any]:
+    import json
+
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("date") != today_iso:
+        payload = {"date": today_iso, "long": {}, "short": {}, "cut": {"long": [], "short": []}}
+    payload.setdefault("long", {})
+    payload.setdefault("short", {})
+    payload.setdefault("cut", {"long": [], "short": []})
+    return payload
+
+
+def _save_auto_populate_membership(path: Path, payload: Mapping[str, Any]) -> None:
+    import json
+
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def record_auto_watchlist_cut(
+    symbol: str,
+    side: str,
+    *,
+    membership_path: Path = AUTO_POPULATE_MEMBERSHIP_FILE,
+    now: datetime | None = None,
+) -> None:
+    """Day-scoped blacklist: a VWAP-cut name must not be re-added today."""
+    sym = str(symbol or "").strip().upper()
+    side = "short" if str(side or "").lower().startswith("short") else "long"
+    if not sym:
+        return
+    today_iso = (now or datetime.now()).date().isoformat()
+    with _AUTO_POPULATE_LOCK:
+        payload = _load_auto_populate_membership(membership_path, today_iso)
+        cut = payload["cut"].setdefault(side, [])
+        if sym not in cut:
+            cut.append(sym)
+        # Ownership stays: if the name lingers in the file, the next rotation
+        # sweeps it out (the blacklist only prevents re-adding today).
+        _save_auto_populate_membership(membership_path, payload)
+
+
+def apply_auto_populated_watchlists(
+    candidates: Mapping[str, list[dict[str, Any]]],
+    env_key: str,
+    *,
+    longs_path: Path = LONGS_FILE,
+    shorts_path: Path = SHORTS_FILE,
+    membership_path: Path = AUTO_POPULATE_MEMBERSHIP_FILE,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Rotate the auto-owned slice of longs.txt/shorts.txt to the new top-N.
+
+    Trader-added names (anything not in the membership file) are never touched.
+    Day-cut names are skipped. A symbol can only hold one side at a time.
+    """
+    today_iso = (now or datetime.now()).date().isoformat()
+    long_cap, short_cap = auto_populate_caps(env_key)
+    with _AUTO_POPULATE_LOCK:
+        membership = _load_auto_populate_membership(membership_path, today_iso)
+        summary: dict[str, Any] = {"env": env_key, "caps": (long_cap, short_cap)}
+        taken: set[str] = set()
+        for side, cap, path in (("long", long_cap, longs_path), ("short", short_cap, shorts_path)):
+            rows = candidates.get(f"{side}s") or []
+            cut = {str(s).strip().upper() for s in membership["cut"].get(side, [])}
+            existing = [str(s).strip().upper() for s in read_watchlist_symbols(Path(path))]
+            owned = {str(s).strip().upper() for s in membership.get(side, {})}
+            trader_names = [s for s in existing if s not in owned]
+            trader_set = set(trader_names)
+            picked: dict[str, str] = {}
+            for row in rows:
+                sym = str(row.get("symbol") or "").strip().upper()
+                if not sym or sym in cut or sym in taken or sym in trader_set or sym in picked:
+                    continue
+                picked[sym] = str(row.get("reason") or "")
+                if len(picked) >= cap:
+                    break
+            taken.update(trader_set)
+            taken.update(picked)
+            write_watchlist_file(Path(path), [*trader_names, *picked])
+            summary[side] = {
+                "added": sorted(set(picked) - owned),
+                "rotated_out": sorted(owned - set(picked)),
+                "kept": len(set(picked) & owned),
+                "total_auto": len(picked),
+                "trader_names": len(trader_names),
+            }
+            membership[side] = picked
+        _save_auto_populate_membership(membership_path, membership)
+    return summary
+
+
+def refresh_auto_populated_watchlists(
+    env_key: str,
+    *,
+    downloader: Callable[..., Any] | None = None,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
+    """One full auto-populate pass: universe -> criteria -> regime-capped lists."""
+    pool = load_universe_pool()
+    if not pool:
+        if log:
+            log("Auto-populate skipped: universe pool is empty.")
+        return None
+    daily_context = load_daily_context(pool)
+    profiles = fetch_intraday_profiles(pool, downloader=downloader, log=log)
+    if not profiles:
+        if log:
+            log("Auto-populate skipped: no intraday profiles fetched.")
+        return None
+    candidates = build_adr_breakout_candidates(profiles, daily_context)
+    summary = apply_auto_populated_watchlists(candidates, env_key)
+    summary["scanned"] = len(profiles)
+    summary["candidates"] = {"longs": len(candidates["longs"]), "shorts": len(candidates["shorts"])}
+    return summary
 
 
 # ---------------------------------------------------------------------------

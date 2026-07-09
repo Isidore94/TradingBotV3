@@ -27,6 +27,8 @@ class BounceService(QObject):
     connectionChanged = Signal(str)
     activeBouncesChanged = Signal(int)
     scanningChanged = Signal(bool)
+    autoRegimeChanged = Signal(object)  # reading dict from get_auto_regime_reading(), or {}
+    entryAssistChanged = Signal(object)  # state dict from entry_assist_state(), or {}
     started = Signal()
     stopped = Signal()
     failed = Signal(str)
@@ -49,6 +51,13 @@ class BounceService(QObject):
         self._health_timer.setInterval(3000)
         self._health_timer.timeout.connect(self.refresh_health)
         self.started.connect(self._start_health_timer)
+
+        # Always-on auto-regime readout: what auto tracking thinks right now
+        # (even under a manual override), refreshed from cached SPY bars.
+        self._regime_timer = QTimer(self)
+        self._regime_timer.setInterval(30_000)
+        self._regime_timer.timeout.connect(self.refresh_auto_regime)
+        self.started.connect(self._start_regime_timer)
 
     @property
     def running(self) -> bool:
@@ -78,6 +87,8 @@ class BounceService(QObject):
             except Exception:
                 pass
         self._health_timer.stop()
+        self._regime_timer.stop()
+        self.autoRegimeChanged.emit({})
         self.connectionChanged.emit("IB: disconnected")
         self.activeBouncesChanged.emit(0)
         self.statusChanged.emit("stopped")
@@ -128,6 +139,37 @@ class BounceService(QObject):
     def _start_health_timer(self) -> None:
         self._health_timer.start()
         self.refresh_health()
+
+    @Slot()
+    def _start_regime_timer(self) -> None:
+        self._regime_timer.start()
+        self.refresh_auto_regime()
+
+    @Slot()
+    def refresh_auto_regime(self) -> None:
+        """Emit the bot's read-only auto-regime reading + entry-assist state."""
+        bot = self._current_bot()
+        reading = None
+        assist = None
+        if bot is not None:
+            try:
+                reading = bot.get_auto_regime_reading()
+            except Exception:
+                reading = None
+            try:
+                assist = bot.entry_assist_state()
+            except Exception:
+                assist = None
+        self.autoRegimeChanged.emit(reading or {})
+        self.entryAssistChanged.emit(assist or {})
+
+    def entry_assist(self) -> dict | None:
+        """The strip button: regime-tailored window toggle / movers output."""
+        result = self._with_bot(lambda bot: bot.entry_assist_action())
+        if isinstance(result, dict) and result.get("note"):
+            self.statusChanged.emit(f"Entry assist: {result['note']}")
+        self.refresh_auto_regime()
+        return result
 
     @Slot()
     def refresh_health(self) -> None:

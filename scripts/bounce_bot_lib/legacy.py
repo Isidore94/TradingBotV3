@@ -393,6 +393,10 @@ MARKET_ENVIRONMENTS = {
     "bearish_weak": {"label": "Bearish Weak"},
     "bullish_strong": {"label": "Bullish Strong"},
     "bullish_weak": {"label": "Bullish Weak"},
+    # 2026-07-08: mature session, SPY not band-held and VWAP position
+    # disagreeing with the day color - no trend to lean on. Direction-favored
+    # logic treats it as neither bullish nor bearish (startswith checks fail).
+    "neutral_chop": {"label": "Neutral / Chop"},
 }
 # Auto intraday market regime (2026-07-03): SPY green/red vs yesterday's close
 # decides bullish/bearish; the magnitude decides strong/weak. The bot tracks
@@ -418,6 +422,32 @@ REGIME_BANGER_DAY_EXCESS_PCT = 0.75
 REGIME_BANGER_WINDOW_EXCESS_PCT = 0.20
 REGIME_PAUSE_RW_TYPE = "regime_pause_rw"
 REGIME_PAUSE_RS_TYPE = "regime_pause_rs"
+
+# Entry assist (2026-07-08): regime-tailored entry timing on one button.
+# Strong regimes run a pullback/bounce WINDOW (manual click or auto SPY-pause
+# detection marks the start; the end ranks which names held the trade
+# direction best through the counter-move). Weak regimes emit instant
+# strongest/weakest trailing-30m lists; neutral/chop emits both sides.
+ENTRY_WINDOW_TOP_N = 8
+ENTRY_WINDOW_MIN_BARS = 2
+ENTRY_MOVERS_MINUTES = 30
+ENTRY_AUTO_MOVERS_INTERVAL_MIN = 30
+
+
+def entry_assist_mode_for_env(env_key) -> dict:
+    """Which entry-assist behavior a regime gets: window vs instant movers."""
+    env = str(env_key or "").strip().lower()
+    if env == "bullish_strong":
+        return {"mode": "window", "sides": ("long",)}
+    if env == "bearish_strong":
+        return {"mode": "window", "sides": ("short",)}
+    if env == "bullish_weak":
+        return {"mode": "movers", "sides": ("long",)}
+    if env == "bearish_weak":
+        return {"mode": "movers", "sides": ("short",)}
+    # neutral_chop (and anything unknown): no trend to pause against - emit
+    # both the strongest and weakest lists ("does everything").
+    return {"mode": "movers", "sides": ("long", "short")}
 
 # Delayed 5m opening-range breaks (2026-07-04). The trader's ORB variant: the
 # 5-minute opening range (the 9:30 candle) has to survive the first 30 minutes
@@ -2030,13 +2060,13 @@ def real_relative_strength(symbol_bars, spy_bars, length=RRS_LENGTH):
     return rrs, power_index
 
 
-def _classify_spy_vwap_regime(today_bars, prev_close):
-    """VWAP-position regime read from SPY's session 5m bars, or None.
+def _spy_vwap_regime_stats(today_bars, prev_close):
+    """The VWAP-position regime read plus the measurements behind it, or None.
 
-    bullish_strong: closes held above VWAP+1stdev for most of the day.
-    bullish_weak:   above VWAP and green on the day, but under the band.
-    Inverted for bearish. Returns None (caller falls back to the day% rule)
-    when the session is too young or volume data is missing.
+    Returns {vwap, stdev, above_band_frac, below_band_frac, last_close,
+    classification} where classification is one of the four regime keys or
+    None (mixed tape - the caller falls back to the day% rule). Returns None
+    outright when the session is too young or volume data is missing.
     """
     if not prev_close or len(today_bars) < MARKET_REGIME_VWAP_MIN_BARS:
         return None
@@ -2049,6 +2079,7 @@ def _classify_spy_vwap_regime(today_bars, prev_close):
     cum_pv = 0.0
     cum_pv2 = 0.0
     vwap = None
+    stdev = 0.0
     for bar in today_bars:
         typical = (bar.high + bar.low + bar.close) / 3.0
         volume = max(0.0, float(bar.volume))
@@ -2068,15 +2099,35 @@ def _classify_spy_vwap_regime(today_bars, prev_close):
     fraction = float(MARKET_REGIME_VWAP_BAND_FRACTION)
     total = len(today_bars)
     last_close = today_bars[-1].close
+    classification = None
     if above_upper / total >= fraction:
-        return "bullish_strong"
-    if below_lower / total >= fraction:
-        return "bearish_strong"
-    if last_close > vwap and last_close > prev_close:
-        return "bullish_weak"
-    if last_close < vwap and last_close < prev_close:
-        return "bearish_weak"
-    return None
+        classification = "bullish_strong"
+    elif below_lower / total >= fraction:
+        classification = "bearish_strong"
+    elif last_close > vwap and last_close > prev_close:
+        classification = "bullish_weak"
+    elif last_close < vwap and last_close < prev_close:
+        classification = "bearish_weak"
+    return {
+        "vwap": vwap,
+        "stdev": stdev,
+        "above_band_frac": above_upper / total,
+        "below_band_frac": below_lower / total,
+        "last_close": last_close,
+        "classification": classification,
+    }
+
+
+def _classify_spy_vwap_regime(today_bars, prev_close):
+    """VWAP-position regime read from SPY's session 5m bars, or None.
+
+    bullish_strong: closes held above VWAP+1stdev for most of the day.
+    bullish_weak:   above VWAP and green on the day, but under the band.
+    Inverted for bearish. Returns None (caller falls back to the day% rule)
+    when the session is too young or volume data is missing.
+    """
+    stats = _spy_vwap_regime_stats(today_bars, prev_close)
+    return stats["classification"] if stats else None
 
 
 def _session_structure_report(today_df, direction, ref_atr):
@@ -4097,9 +4148,16 @@ class BounceBot(EWrapper, EClient):
         with self.market_environment_lock:
             return self.market_environment
 
-    def _spy_session_bars(self):
-        """(today_bars, prev_close) from the cached SPY 5m series."""
-        spy_bars = self.get_cached_5m_bars("SPY")
+    def _spy_session_bars(self, cached_only=False):
+        """(today_bars, prev_close) from the cached SPY 5m series.
+
+        cached_only=True never triggers an IB fetch (safe from the GUI thread);
+        it reads whatever series the scan/paused loop last cached.
+        """
+        if cached_only:
+            spy_bars = self.latest_bars.get("SPY|5 D|5 mins") or []
+        else:
+            spy_bars = self.get_cached_5m_bars("SPY")
         if not spy_bars:
             return [], None
         today = spy_bars[-1].dt.date()
@@ -4123,15 +4181,94 @@ class BounceBot(EWrapper, EClient):
         if not today_bars or not prev_close:
             return None
         day_pct = (today_bars[-1].close - prev_close) / prev_close * 100.0
-        env_key = _classify_spy_vwap_regime(today_bars, prev_close)
-        if env_key is None:
+        stats = _spy_vwap_regime_stats(today_bars, prev_close)
+        if stats is None:
+            # Session too young / no volume: the day% rule decides.
             direction = "bullish" if day_pct >= 0 else "bearish"
             strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
             env_key = f"{direction}_{strength}"
+        elif stats["classification"] is not None:
+            env_key = stats["classification"]
+        else:
+            # Mature session, no band hold, and VWAP position disagrees with
+            # the day color: that's chop, not a trend to lean on.
+            env_key = "neutral_chop"
         if env_key != self.get_market_environment():
             logging.info("Auto market regime: SPY %+.2f%% on the day -> %s", day_pct, env_key)
             self.set_market_environment(env_key, source="auto")
         return env_key
+
+    def get_auto_regime_reading(self):
+        """Read-only snapshot of what auto regime tracking thinks RIGHT NOW.
+
+        Never mutates state and ignores any manual override, so the desk can
+        always show the auto read - and how close the other regimes are -
+        even while the trader is forcing a regime. Uses only cached SPY bars
+        (no IB round-trip), so it is safe to call from the GUI thread; bar
+        freshness comes from the scan loop (or the paused-mode refresh).
+        Returns None until a SPY session series is available.
+        """
+        today_bars, prev_close = self._spy_session_bars(cached_only=True)
+        if not today_bars or not prev_close:
+            return None
+        last_close = today_bars[-1].close
+        day_pct = (last_close - prev_close) / prev_close * 100.0
+        stats = _spy_vwap_regime_stats(today_bars, prev_close)
+        source = "vwap"
+        if stats is None:
+            direction = "bullish" if day_pct >= 0 else "bearish"
+            strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
+            env_key = f"{direction}_{strength}"
+            source = "day_pct"
+        elif stats["classification"] is not None:
+            env_key = stats["classification"]
+        else:
+            env_key = "neutral_chop"  # mature mixed tape (see update_auto_market_environment)
+        active_env = self.get_market_environment()
+        reading = {
+            "env_key": env_key,
+            "label": MARKET_ENVIRONMENTS.get(env_key, {}).get("label", env_key),
+            "source": source,
+            "day_pct": day_pct,
+            "last_close": last_close,
+            "prev_close": prev_close,
+            "bar_time": today_bars[-1].dt.strftime("%H:%M"),
+            "override_active": bool(self.market_environment_user_override),
+            "active_env_key": active_env,
+            "active_label": MARKET_ENVIRONMENTS.get(active_env, {}).get("label", active_env),
+            "strong_abs_pct": float(MARKET_REGIME_STRONG_ABS_PCT),
+            "band_fraction_needed": float(MARKET_REGIME_VWAP_BAND_FRACTION),
+        }
+        if stats:
+            reading.update(
+                {
+                    "vwap": stats["vwap"],
+                    "stdev": stats["stdev"],
+                    "above_band_frac": stats["above_band_frac"],
+                    "below_band_frac": stats["below_band_frac"],
+                }
+            )
+        return reading
+
+    def _maybe_refresh_auto_regime_while_paused(self):
+        """Keep the auto-regime read alive while scanning is paused.
+
+        The scan loop normally refreshes SPY bars + regime every cycle, but a
+        paused loop skips all of it; this refetches the SPY 5m series about
+        once a minute so the desk's regime readout (and auto tracking, when
+        no override is set) never goes stale.
+        """
+        if not MARKET_REGIME_AUTO_ENABLED:
+            return
+        now = time.time()
+        if now - float(getattr(self, "_paused_regime_refresh_ts", 0.0)) < 60.0:
+            return
+        self._paused_regime_refresh_ts = now
+        if not self.connection_status:
+            return
+        self.latest_bars.pop("SPY|5 D|5 mins", None)
+        self.get_cached_5m_bars("SPY")  # refetch fresh series for the reading
+        self.update_auto_market_environment()  # applies only when not overridden
 
     # ------------------------------------------------------------------
     # Regime-pause sweeps: when SPY pauses against the tape, whatever
@@ -4365,6 +4502,212 @@ class BounceBot(EWrapper, EClient):
         )
         if self.gui_callback:
             self.gui_callback(message, "red" if side == "short" else "green")
+
+    # ------------------------------------------------------------------
+    # Entry assist (2026-07-08): regime-tailored entry timing.
+    # Strong regimes: a pullback (bullish) / bounce (bearish) WINDOW - the
+    # button or auto SPY-pause detection marks the start; the end ranks
+    # which names held the trade direction best through the counter-move.
+    # Weak regimes: instant strongest/weakest trailing-30m lists.
+    # Neutral/chop: both lists at once; auto emits them on a 30m cadence.
+    # ------------------------------------------------------------------
+    def _entry_candidates(self, side):
+        pools = (
+            (getattr(self, "longs", None), getattr(self, "auto_longs", None))
+            if side == "long"
+            else (getattr(self, "shorts", None), getattr(self, "auto_shorts", None))
+        )
+        symbols = set()
+        for pool in pools:
+            symbols.update(
+                str(item or "").strip().upper() for item in (pool or []) if str(item or "").strip()
+            )
+        symbols.discard("SPY")
+        return sorted(symbols)
+
+    def start_entry_window(self, sides, source="manual", start_dt=None):
+        spy_today, _prev = self._spy_session_bars()
+        if not spy_today:
+            return {"ok": False, "note": "No SPY session bars yet - cannot open an entry window."}
+        # Auto passes the detected pause-start bar so the whole counter-move
+        # is measured; manual clicks anchor at the current bar.
+        start_dt = start_dt or spy_today[-1].dt
+        self._entry_window = {
+            "sides": tuple(sides),
+            "source": source,
+            "date": start_dt.date(),
+            "start_dt": start_dt,
+        }
+        sides_text = "/".join(sides)
+        tracking = "RS holders" if "long" in sides else "RW leaders"
+        if self.gui_callback:
+            self.gui_callback(
+                f"ENTRY WINDOW OPEN ({sides_text}): tracking {tracking} while SPY counter-moves [{source}].",
+                "blue",
+            )
+        return {"ok": True, "note": f"Entry window opened @ {start_dt.strftime('%H:%M')} ({sides_text})."}
+
+    def end_entry_window(self, source="manual"):
+        window = getattr(self, "_entry_window", None)
+        if not window:
+            return {"ok": False, "note": "No entry window active."}
+        self._entry_window = None
+        spy_today, _prev = self._spy_session_bars()
+        spy_bars_today = [bar for bar in spy_today if bar.dt.date() == window["date"]]
+        spy_window, spy_window_bars = self._window_change_pct(spy_bars_today, window["start_dt"])
+        if spy_window is None or len(spy_window_bars) < ENTRY_WINDOW_MIN_BARS:
+            note = "Entry window too short to rank - no output."
+            if source == "manual" and self.gui_callback:
+                self.gui_callback(f"ENTRY WINDOW: {note}", "blue")
+            return {"ok": False, "note": note}
+        results = {}
+        for side in window["sides"]:
+            ranked = self._rank_entry_window_side(side, window["start_dt"], window["date"], spy_window)
+            results[side] = ranked
+            self._emit_entry_window_summary(side, window, spy_window, ranked, source)
+        return {"ok": True, "note": f"Entry window closed - ranked output emitted [{source}].", "results": results}
+
+    def _rank_entry_window_side(self, side, start_dt, today, spy_window):
+        sign = 1.0 if side == "long" else -1.0
+        rows = []
+        for symbol in self._entry_candidates(side):
+            bars = self.get_cached_5m_bars(symbol)
+            sym_today = [bar for bar in bars or [] if bar.dt.date() == today]
+            sym_window, _window_bars = self._window_change_pct(sym_today, start_dt)
+            if sym_window is None:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "window_pct": sym_window,
+                    "excess": sign * (sym_window - spy_window),
+                }
+            )
+        rows.sort(key=lambda row: -row["excess"])
+        return rows[:ENTRY_WINDOW_TOP_N]
+
+    def _emit_entry_window_summary(self, side, window, spy_window, ranked, source):
+        if not self.gui_callback:
+            return
+        start_text = window["start_dt"].strftime("%H:%M")
+        if not ranked:
+            self.gui_callback(
+                f"ENTRY WINDOW ({side}): no candidates with fresh bars for the {start_text} window.",
+                "blue",
+            )
+            return
+        names = ", ".join(
+            f"{row['symbol']} {row['window_pct']:+.2f}% (x{row['excess']:+.2f})" for row in ranked
+        )
+        held = "held strongest" if side == "long" else "stayed weakest"
+        self.gui_callback(
+            f"ENTRY WINDOW ({side}): SPY {spy_window:+.2f}% since {start_text} - "
+            f"{held} through it: {names} [{source}]",
+            "green" if side == "long" else "red",
+        )
+
+    @staticmethod
+    def _trailing_return_pct(bars, minutes):
+        if not bars:
+            return None
+        cutoff = bars[-1].dt - timedelta(minutes=int(minutes))
+        window = [bar for bar in bars if bar.dt > cutoff]
+        if len(window) < 2 or not window[0].open:
+            return None
+        return (window[-1].close - window[0].open) / window[0].open * 100.0
+
+    def _rank_trailing_movers(self, side, minutes, spy_bars):
+        sign = 1.0 if side == "long" else -1.0
+        spy_change = self._trailing_return_pct(spy_bars or [], minutes) or 0.0
+        rows = []
+        for symbol in self._entry_candidates(side):
+            change = self._trailing_return_pct(self.get_cached_5m_bars(symbol) or [], minutes)
+            if change is None:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "change_pct": change,
+                    "excess": sign * (change - spy_change),
+                }
+            )
+        rows.sort(key=lambda row: -row["excess"])
+        return rows[:ENTRY_WINDOW_TOP_N]
+
+    def emit_trailing_movers(self, sides, minutes=ENTRY_MOVERS_MINUTES, source="manual"):
+        spy_bars = self.get_cached_5m_bars("SPY")
+        results = {}
+        for side in sides:
+            ranked = self._rank_trailing_movers(side, minutes, spy_bars)
+            results[side] = ranked
+            if not self.gui_callback:
+                continue
+            label = "STRONGEST" if side == "long" else "WEAKEST"
+            if ranked:
+                names = ", ".join(f"{row['symbol']} {row['change_pct']:+.2f}%" for row in ranked)
+            else:
+                names = "none with fresh bars"
+            self.gui_callback(f"{label} {int(minutes)}M ({side}): {names} [{source}]",
+                              "green" if side == "long" else "red")
+        emitted = sum(len(rows) for rows in results.values())
+        return {
+            "ok": emitted > 0,
+            "note": f"Emitted {int(minutes)}m movers ({'/'.join(sides)}): {emitted} name(s) [{source}].",
+            "results": results,
+        }
+
+    def entry_assist_action(self):
+        """The strip button: window toggle in strong regimes, instant lists otherwise."""
+        mode = entry_assist_mode_for_env(self.get_market_environment())
+        if mode["mode"] == "window":
+            if getattr(self, "_entry_window", None):
+                return self.end_entry_window(source="manual")
+            return self.start_entry_window(mode["sides"], source="manual")
+        return self.emit_trailing_movers(mode["sides"], source="manual")
+
+    def entry_assist_state(self):
+        """Read-only state for the GUI button label (safe from the GUI thread)."""
+        env = self.get_market_environment()
+        window = getattr(self, "_entry_window", None)
+        return {
+            "env_key": env,
+            "mode": entry_assist_mode_for_env(env)["mode"],
+            "window_active": bool(window),
+            "window_started": window["start_dt"].strftime("%H:%M") if window else "",
+            "window_sides": list(window["sides"]) if window else [],
+            "window_source": window.get("source", "") if window else "",
+        }
+
+    def entry_assist_auto_tick(self):
+        """Auto mode: run the whole entry-assist cycle without clicks.
+
+        Strong regimes: open a window when SPY pauses against the tape and
+        close it (emitting the ranked list) when the tape resumes. Weak and
+        chop regimes: emit the trailing-30m list(s) every 30 minutes.
+        """
+        env = self.get_market_environment()
+        mode = entry_assist_mode_for_env(env)
+        window = getattr(self, "_entry_window", None)
+        if mode["mode"] == "window":
+            spy_today, _prev = self._spy_session_bars()
+            if not spy_today:
+                return
+            trend_side = "short" if env.startswith("bearish") else "long"
+            pause_start = self._detect_spy_pause_start(spy_today, trend_side)
+            if window is None and pause_start is not None:
+                self.start_entry_window(mode["sides"], source="auto", start_dt=pause_start)
+            elif window is not None and window.get("source") == "auto" and pause_start is None:
+                # Tape resumed: the pullback/bounce is over - rank and emit.
+                self.end_entry_window(source="auto")
+            return
+        # A regime flip mid-window (e.g. strong -> weak) strands a window;
+        # drop it quietly so the button and auto stay in sync.
+        if window is not None and window.get("source") == "auto":
+            self._entry_window = None
+        now = time.time()
+        if now - float(getattr(self, "_entry_movers_last_ts", 0.0)) >= ENTRY_AUTO_MOVERS_INTERVAL_MIN * 60.0:
+            self._entry_movers_last_ts = now
+            self.emit_trailing_movers(mode["sides"], source="auto")
 
     def _regime_pause_observation_store(self, today):
         store = getattr(self, "_regime_pause_observations", None)
@@ -8530,8 +8873,63 @@ class BounceBot(EWrapper, EClient):
                 if self.gui_callback:
                     self.gui_callback(removal_msg, "blue")
 
+    def _maybe_refresh_auto_populated_watchlists(self):
+        """Every ~30 min while scanning: refresh the auto-owned watchlist slice.
+
+        The heavy work (yfinance bulk + parquet reads) runs on a one-shot
+        daemon thread so the scan cycle never stalls behind it.
+        """
+        from autopilot_core import AUTO_POPULATE_REFRESH_MINUTES, minutes_since_open
+
+        now = time.time()
+        if now - float(getattr(self, "_auto_populate_last_ts", 0.0)) < AUTO_POPULATE_REFRESH_MINUTES * 60.0:
+            return
+        try:
+            since_open = minutes_since_open(datetime.now())
+        except Exception:
+            since_open = None
+        # Wait for a readable tape (30m in) and stop after the close.
+        if since_open is None or since_open < 30 or since_open > 390:
+            return
+        if getattr(self, "_auto_populate_running", False):
+            return
+        self._auto_populate_last_ts = now
+        self._auto_populate_running = True
+        env = self.get_market_environment()
+
+        def worker():
+            try:
+                from autopilot_core import refresh_auto_populated_watchlists
+
+                summary = refresh_auto_populated_watchlists(env, log=logging.info)
+                if summary and self.gui_callback:
+                    long_info = summary.get("long", {})
+                    short_info = summary.get("short", {})
+                    self.gui_callback(
+                        f"AUTO WATCHLIST ({env}): longs {long_info.get('total_auto', 0)} auto "
+                        f"(+{len(long_info.get('added', []))}/-{len(long_info.get('rotated_out', []))}), "
+                        f"shorts {short_info.get('total_auto', 0)} auto "
+                        f"(+{len(short_info.get('added', []))}/-{len(short_info.get('rotated_out', []))}) "
+                        f"from {summary.get('scanned', 0)} universe names.",
+                        "blue",
+                    )
+            except Exception:
+                logging.exception("Auto-populate worker failed.")
+            finally:
+                self._auto_populate_running = False
+
+        threading.Thread(target=worker, name="auto-watchlist-populate", daemon=True).start()
+
     def remove_from_watchlist(self, symbol, direction):
         filename = LONGS_FILENAME if direction == "long" else SHORTS_FILENAME
+        try:
+            from autopilot_core import record_auto_watchlist_cut
+
+            # Day-scoped blacklist so the auto-populator can't re-add a name
+            # the triple-VWAP rule just cut.
+            record_auto_watchlist_cut(symbol, direction)
+        except Exception:
+            pass
         try:
             with open(filename, 'r') as f:
                 symbols = f.read().splitlines()
@@ -8565,6 +8963,12 @@ class BounceBot(EWrapper, EClient):
                     logging.exception("After-close learning refresh scheduling failed.")
 
                 if not self.is_scanning_enabled():
+                    # The regime read stays live even while paused (user ask
+                    # 2026-07-08: always consider regime changes).
+                    try:
+                        self._maybe_refresh_auto_regime_while_paused()
+                    except Exception:
+                        logging.exception("Paused-mode auto regime refresh failed.")
                     time.sleep(0.5)
                     continue
 
@@ -8625,6 +9029,20 @@ class BounceBot(EWrapper, EClient):
                     self.check_regime_pause_setups()
                 except Exception:
                     logging.exception("Regime pause sweep failed.")
+
+                # Entry assist in auto mode: open/close pullback windows in
+                # strong regimes, 30m movers cadence in weak/chop regimes.
+                try:
+                    self.entry_assist_auto_tick()
+                except Exception:
+                    logging.exception("Entry assist auto tick failed.")
+
+                # Universe auto-populate: keep longs/shorts.txt stocked with
+                # PDH/PDL breakers moving > 0.5 ADR (regime-capped top-N).
+                try:
+                    self._maybe_refresh_auto_populated_watchlists()
+                except Exception:
+                    logging.exception("Auto-populate watchlist refresh failed.")
 
                 # Trader-favorite day-trade sweeps on longs/shorts.txt: delayed
                 # 5m opening-range breaks and 8-EMA grind squeezes into HOD/LOD.

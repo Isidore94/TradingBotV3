@@ -71,7 +71,11 @@ class SetupTableDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(theme.color("favorite")))
             painter.drawRoundedRect(QRect(rect.left() + 2, rect.top() + 6, 3, rect.height() - 12), 1.5, 1.5)
 
-        if key == "side" and is_setup and row.side in {"LONG", "SHORT"}:
+        if key == "favorite" and is_setup:
+            self._favorite_star(painter, option, rect, self._is_focus(row))
+        elif key == "dislike" and is_setup:
+            self._dislike_mark(painter, option, rect)
+        elif key == "side" and is_setup and row.side in {"LONG", "SHORT"}:
             self._chip(painter, option, rect, row.side, "long" if row.side == "LONG" else "short")
         elif key == "bucket" and is_setup and row.bucket:
             self._chip(painter, option, rect, row.bucket_label, _bucket_token(bucket), study=is_study)
@@ -80,15 +84,23 @@ class SetupTableDelegate(QStyledItemDelegate):
         else:
             self._text(painter, option, rect, index, key, is_study, selected)
 
-        if key == "symbol" and self._is_focus(row):
-            painter.setPen(QColor(theme.color("favorite")))
-            painter.drawText(
-                QRect(rect.right() - 16, rect.top(), 14, rect.height()),
-                int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter),
-                "★",  # star marks a Focus Pick
-            )
-
         painter.restore()
+
+    def _favorite_star(self, painter, option, rect, focused: bool) -> None:
+        """Clickable favorite column: filled gold ★ for focus picks, hollow ☆ otherwise."""
+        font = QFont(option.font)
+        font.setPointSizeF(font.pointSizeF() + 2.0)
+        painter.setFont(font)
+        painter.setPen(QColor(theme.color("favorite")) if focused else _alpha("text_secondary", 150))
+        painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "★" if focused else "☆")
+
+    def _dislike_mark(self, painter, option, rect) -> None:
+        """Clickable dislike column: ✕ prompts for a why and logs it for AI review."""
+        font = QFont(option.font)
+        font.setPointSizeF(font.pointSizeF() + 1.0)
+        painter.setFont(font)
+        painter.setPen(_alpha("short", 140))
+        painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "✕")
 
     def _text(self, painter, option, rect, index, key, is_study, selected) -> None:
         text = index.data(Qt.ItemDataRole.DisplayRole)

@@ -68,6 +68,108 @@ def test_snapshot_human_focus_picks_is_idempotent_and_force_merges(tmp_path):
     assert state["last_snapshot_market_date"] == "2026-06-01"
 
 
+def test_snapshot_tags_swing_and_m5_sources_and_cohorts_grade_separately(tmp_path):
+    from human_focus_tracking import (
+        build_human_focus_performance_rows,
+        snapshot_human_focus_picks,
+        update_human_focus_outcomes,
+    )
+
+    picks_path = tmp_path / "human_focus_daily_picks.csv"
+    snapshot_human_focus_picks(
+        market_date="2026-06-01",
+        focus_maps_by_category={
+            "swing": {"long": {"NVDA"}, "short": set()},
+            "m5": {"long": {"AAPL"}, "short": set()},
+        },
+        snapshot_state_path=tmp_path / "state.json",
+        daily_picks_path=picks_path,
+    )
+    rows = _read_csv(picks_path)
+    assert {(row["symbol"], row["source"]) for row in rows} == {
+        ("NVDA", "focus_swing"),
+        ("AAPL", "focus_m5"),
+    }
+
+    dates = pd.date_range("2026-06-01", periods=11, freq="B")
+    frames = {
+        "NVDA": pd.DataFrame({"datetime": dates, "close": list(range(100, 111))}),  # winner
+        "AAPL": pd.DataFrame({"datetime": dates, "close": list(range(110, 99, -1))}),  # loser
+    }
+    update_human_focus_outcomes(
+        reference_date="2026-06-16",
+        daily_frames_by_symbol=frames,
+        daily_picks_path=picks_path,
+        outcomes_path=tmp_path / "outcomes.csv",
+        performance_path=tmp_path / "performance.csv",
+        daily_bars_dir=tmp_path / "daily_bars",
+    )
+    performance = _read_csv(tmp_path / "performance.csv")
+    cohorts = {row["cohort"] for row in performance}
+    assert cohorts == {"human_focus_swing", "human_focus_m5"}
+    swing_h10 = next(
+        row for row in performance if row["cohort"] == "human_focus_swing" and row["horizon_sessions"] == "10" and row["side"] == "ALL"
+    )
+    m5_h10 = next(
+        row for row in performance if row["cohort"] == "human_focus_m5" and row["horizon_sessions"] == "10" and row["side"] == "ALL"
+    )
+    # The losing m5 day-trade pick does not dilute the swing cohort.
+    assert swing_h10["win_rate"] == "1.0000"
+    assert m5_h10["win_rate"] == "0.0000"
+    # Legacy untagged rows still aggregate under the old cohort name.
+    legacy_rows = build_human_focus_performance_rows(
+        [{"side": "LONG", "source": "focus_pick", "h5_return": "0.05"}]
+    )
+    assert {row["cohort"] for row in legacy_rows} == {"human_focus_pick"}
+
+
+def test_snapshot_like_origins_split_cohorts_by_alert_source(tmp_path):
+    from human_focus_tracking import snapshot_human_focus_picks, update_human_focus_outcomes
+
+    picks_path = tmp_path / "human_focus_daily_picks.csv"
+    snapshot_human_focus_picks(
+        market_date="2026-06-01",
+        focus_maps_by_category={
+            "swing": {"long": {"NVDA", "AAPL", "MSFT"}, "short": set()},
+            "m5": {"long": set(), "short": set()},
+        },
+        like_origins={
+            ("NVDA", "LONG", "swing"): "h1",
+            ("AAPL", "LONG", "swing"): "d1",
+            # MSFT has no recorded origin -> stays plain focus_swing.
+        },
+        snapshot_state_path=tmp_path / "state.json",
+        daily_picks_path=picks_path,
+    )
+    rows = {row["symbol"]: row["source"] for row in _read_csv(picks_path)}
+    assert rows == {"NVDA": "focus_swing_h1", "AAPL": "focus_swing_d1", "MSFT": "focus_swing"}
+
+    dates = pd.date_range("2026-06-01", periods=11, freq="B")
+    up = pd.DataFrame({"datetime": dates, "close": list(range(100, 111))})
+    down = pd.DataFrame({"datetime": dates, "close": list(range(110, 99, -1))})
+    update_human_focus_outcomes(
+        reference_date="2026-06-16",
+        daily_frames_by_symbol={"NVDA": up, "AAPL": down, "MSFT": up},
+        daily_picks_path=picks_path,
+        outcomes_path=tmp_path / "outcomes.csv",
+        performance_path=tmp_path / "performance.csv",
+        daily_bars_dir=tmp_path / "daily_bars",
+    )
+    performance = _read_csv(tmp_path / "performance.csv")
+    by_cohort = {row["cohort"] for row in performance}
+    assert by_cohort == {"human_focus_swing", "human_focus_swing_d1", "human_focus_swing_h1"}
+
+    def h10(cohort):
+        return next(
+            row for row in performance if row["cohort"] == cohort and row["horizon_sessions"] == "10" and row["side"] == "ALL"
+        )
+
+    # The base swing cohort aggregates all three; origins grade separately.
+    assert h10("human_focus_swing")["sample_count"] == "3"
+    assert h10("human_focus_swing_h1")["win_rate"] == "1.0000"
+    assert h10("human_focus_swing_d1")["win_rate"] == "0.0000"
+
+
 def test_human_focus_outcomes_are_side_adjusted_and_aggregated(tmp_path):
     from human_focus_tracking import snapshot_human_focus_picks, update_human_focus_outcomes
 

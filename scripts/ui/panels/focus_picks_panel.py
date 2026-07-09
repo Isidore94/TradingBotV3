@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from human_focus_tracking import snapshot_human_focus_picks
+from pick_feedback import latest_like_origins
 from ui import theme
 from ui.models.bounce import BounceAlert
 from ui.models.rrs import rrs_rows
@@ -27,7 +28,14 @@ from ui.widgets.section_header import SectionHeader
 
 
 class FocusPicksPanel(QFrame):
-    """Two side-by-side editable focus lists (Longs / Shorts) of handpicked names."""
+    """Focus picks in two categories, each with editable Longs/Shorts lists.
+
+    SWING (top, the headline bucket): anything that remotely looks good for a
+    multi-day hold. Synced into the swing watchlists so every master scan
+    covers it, and graded 1/3/5/10 sessions forward so the bot learns what
+    the trader likes. M5 (below): day-trade names synced into the intraday
+    longs/shorts watchlists that BounceBot sweeps.
+    """
 
     statusChanged = Signal(str)
 
@@ -38,22 +46,31 @@ class FocusPicksPanel(QFrame):
         self._bounce_state: dict[str, dict[str, str]] = {}
         self._rrs_state: dict[str, dict[str, str]] = {}
 
-        self.long_editor = FocusSideEditor("Focus Longs", "long", focus_service, self._live_state_for, tone="long")
-        self.short_editor = FocusSideEditor("Focus Shorts", "short", focus_service, self._live_state_for, tone="short")
-        self.long_editor.statusChanged.connect(self.statusChanged)
-        self.short_editor.statusChanged.connect(self.statusChanged)
+        self.editors: list[FocusSideEditor] = []
+        swing_section = self._build_category_section(
+            "Swing Focus",
+            "swing",
+            "Multi-day picks the bot learns from - synced into the swing watchlists, graded 1/3/5/10 sessions.",
+            accent=theme.color("favorite"),
+        )
+        m5_section = self._build_category_section(
+            "M5 / Day-Trade Focus",
+            "m5",
+            "Intraday picks for the DT patterns - synced into longs/shorts.txt for BounceBot M5 sweeps.",
+        )
+
         self.snapshot_status_label = QLabel("")
         self.snapshot_status_label.setObjectName("MutedLabel")
 
-        splitter = QSplitter()
-        splitter.addWidget(self.long_editor)
-        splitter.addWidget(self.short_editor)
-        splitter.setSizes([500, 500])
+        category_splitter = QSplitter(Qt.Orientation.Vertical)
+        category_splitter.addWidget(swing_section)
+        category_splitter.addWidget(m5_section)
+        category_splitter.setSizes([550, 450])
 
         header = SectionHeader(
             "Focus Picks",
-            "Handpicked daily longs/shorts the bot watches closely. Adds sync into the shared "
-            "longs/shorts watchlists; removing only un-injects what Focus Picks added.",
+            "Handpicked names in two buckets: Swing (multi-day, tracker-graded) and M5 (day-trade). "
+            "Adds sync into the matching shared watchlists; removing only un-injects what Focus Picks added.",
         )
         snapshot_button = QPushButton("Snapshot Today")
         snapshot_button.clicked.connect(lambda: self.snapshot_today(force=True))
@@ -64,15 +81,59 @@ class FocusPicksPanel(QFrame):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addWidget(self.snapshot_status_label)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(category_splitter, 1)
 
-        # One signal rebuilds both sides (covers edits from anywhere, incl. Step 3).
-        self.service.focusChanged.connect(self._refresh_all)
+        # One signal rebuilds all editors (covers edits from anywhere, incl. the
+        # like buttons on the Alert Center / setups table), and force-merges the
+        # day's snapshot so a mid-day like still lands in today's cohort.
+        self.service.focusChanged.connect(self._on_focus_changed)
         self.snapshot_today(force=False, emit_status=False)
 
+    def _build_category_section(self, title: str, category: str, hint: str, accent: str | None = None) -> QWidget:
+        long_editor = FocusSideEditor(
+            f"{title} - Longs", "long", category, self.service, self._live_state_for, tone="long"
+        )
+        short_editor = FocusSideEditor(
+            f"{title} - Shorts", "short", category, self.service, self._live_state_for, tone="short"
+        )
+        setattr(self, f"{category}_long_editor", long_editor)
+        setattr(self, f"{category}_short_editor", short_editor)
+        for editor in (long_editor, short_editor):
+            editor.statusChanged.connect(self.statusChanged)
+            self.editors.append(editor)
+
+        splitter = QSplitter()
+        splitter.addWidget(long_editor)
+        splitter.addWidget(short_editor)
+        splitter.setSizes([500, 500])
+
+        title_label = QLabel(title)
+        title_label.setObjectName("SectionTitle")
+        if accent:
+            title_label.setStyleSheet(f"color: {accent}; font-weight: 700;")
+        hint_label = QLabel(hint)
+        hint_label.setObjectName("MutedLabel")
+        hint_label.setWordWrap(True)
+
+        section = QFrame()
+        section.setObjectName("Panel")
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(8, 8, 8, 8)
+        section_layout.setSpacing(4)
+        section_layout.addWidget(title_label)
+        section_layout.addWidget(hint_label)
+        section_layout.addWidget(splitter, 1)
+        return section
+
+    def _on_focus_changed(self) -> None:
+        self._refresh_all()
+        # Merge new names into today's cohort immediately (no-op on removals;
+        # snapshots only ever add rows for the date).
+        self.snapshot_today(force=True, emit_status=False)
+
     def _refresh_all(self) -> None:
-        self.long_editor.refresh()
-        self.short_editor.refresh()
+        for editor in self.editors:
+            editor.refresh()
 
     def record_bounce_alert(self, alert: BounceAlert) -> None:
         """Surface BounceBot alerts directly on matching Focus Picks chips."""
@@ -84,7 +145,7 @@ class FocusPicksPanel(QFrame):
             "tone": "long" if alert.side == "LONG" else "short" if alert.side == "SHORT" else "favorite",
             "text": f"{alert.time_text} bounce" + (f" - {detail}" if detail else ""),
         }
-        self._refresh_symbol(symbol)
+        self._refresh_all()
 
     def record_rrs_snapshot(self, payload: Any) -> None:
         """Mark focus longs that are RS and focus shorts that are RW."""
@@ -105,7 +166,8 @@ class FocusPicksPanel(QFrame):
             self.snapshot_status_label.setText("Snapshot: custom focus store")
             return
         result = snapshot_human_focus_picks(
-            focus_map=self.service.all_focus(),
+            focus_maps_by_category=self.service.all_focus_by_category(),
+            like_origins=latest_like_origins(),
             force=force,
         )
         trade_date = result.get("trade_date", "today")
@@ -126,15 +188,6 @@ class FocusPicksPanel(QFrame):
             "rrs": self._rrs_state.get(symbol, {}),
         }
 
-    def _refresh_symbol(self, symbol: str) -> None:
-        side = self.service.focus_side(symbol)
-        if side == "LONG":
-            self.long_editor.refresh()
-        elif side == "SHORT":
-            self.short_editor.refresh()
-        else:
-            self._refresh_all()
-
 
 class FocusSideEditor(QFrame):
     statusChanged = Signal(str)
@@ -143,6 +196,7 @@ class FocusSideEditor(QFrame):
         self,
         title: str,
         side: str,
+        category: str,
         focus_service: FocusService,
         live_state_for,
         *,
@@ -151,6 +205,7 @@ class FocusSideEditor(QFrame):
         super().__init__()
         self.setObjectName("Panel")
         self.side = side
+        self.category = category
         self.service = focus_service
         self.live_state_for = live_state_for
         self.tone = tone
@@ -221,7 +276,7 @@ class FocusSideEditor(QFrame):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        symbols = self.service.focus_symbols(self.side)
+        symbols = self.service.focus_symbols(self.side, self.category)
         for symbol in symbols:
             chip = FocusStatusChip(symbol, tone=self.tone, state=self.live_state_for(symbol))
             chip.removed.connect(self._remove)
@@ -229,31 +284,33 @@ class FocusSideEditor(QFrame):
         self.count_label.setText(str(len(symbols)))
 
     def add_from_input(self) -> None:
-        added = self.service.add_many(self.add_input.text(), self.side)
+        added = self.service.add_many(self.add_input.text(), self.side, self.category, origin="manual")
         self.add_input.clear()
         if added:
             self._set_status(f"Added {', '.join(added)}.")
 
     def paste(self) -> None:
-        added = self.service.add_many(QApplication.clipboard().text(), self.side)
+        added = self.service.add_many(
+            QApplication.clipboard().text(), self.side, self.category, origin="manual"
+        )
         self._set_status(f"Pasted {len(added)} symbol(s)." if added else "Nothing new to paste.")
 
     def copy(self) -> None:
-        symbols = self.service.focus_symbols(self.side)
+        symbols = self.service.focus_symbols(self.side, self.category)
         QApplication.clipboard().setText(", ".join(symbols))
         self._set_status(f"Copied {len(symbols)} symbol(s).")
 
     def clear_all(self) -> None:
-        removed = self.service.clear(self.side)
+        removed = self.service.clear(self.side, self.category)
         self._set_status(f"Cleared {removed} symbol(s).")
 
     def _remove(self, symbol: str) -> None:
-        if self.service.remove(symbol, self.side):
+        if self.service.remove(symbol, self.side, self.category):
             self._set_status(f"Removed {symbol}.")
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
-        self.statusChanged.emit(f"Focus {self.side}s: {message}")
+        self.statusChanged.emit(f"{self.category.upper()} focus {self.side}s: {message}")
 
 
 class FocusStatusChip(QFrame):

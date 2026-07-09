@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 
-from focus_picks import load_focus_map
+from focus_picks import load_focus_map, load_focus_maps_by_category
 from market_session import get_market_session_window
 from project_paths import (
     HUMAN_FOCUS_DAILY_PICKS_FILE,
@@ -28,6 +28,14 @@ from project_paths import (
 
 
 HORIZONS = (1, 3, 5, 10)
+# Cohort per pick category: swing picks are the "learn what I like" cohort and
+# get the full multi-day read; m5 picks are day-trade names tracked separately
+# so they never dilute the swing stats. Legacy rows keep "focus_pick". When the
+# pick-feedback log knows the like's origin (h1/d1/m5 alert, setups table,
+# manual), the source gains a suffix - e.g. focus_swing_h1 - so each origin
+# also grades as its own sub-cohort.
+FOCUS_SOURCE_BY_CATEGORY = {"swing": "focus_swing", "m5": "focus_m5"}
+CATEGORY_BY_SOURCE_PREFIX = (("focus_swing", "swing"), ("focus_m5", "m5"))
 HUMAN_FOCUS_DAILY_PICK_COLUMNS = [
     "trade_date",
     "symbol",
@@ -214,15 +222,23 @@ def snapshot_human_focus_picks(
     *,
     market_date: Any = None,
     focus_map: dict[str, set[str] | list[str]] | None = None,
+    focus_maps_by_category: dict[str, dict[str, set[str] | list[str]]] | None = None,
+    like_origins: dict[tuple[str, str, str], str] | None = None,
     force: bool = False,
     now: datetime | None = None,
     snapshot_state_path: Path = HUMAN_FOCUS_SNAPSHOT_STATE_FILE,
     daily_picks_path: Path = HUMAN_FOCUS_DAILY_PICKS_FILE,
 ) -> dict[str, Any]:
-    """Snapshot focus_longs/focus_shorts into the dated human-pick cohort.
+    """Snapshot the focus lists into the dated human-pick cohort.
 
-    With force=False this runs once per market date. With force=True it merges
-    current focus names for the same date without duplicating existing rows.
+    By default (and with `focus_maps_by_category`) each pick is tagged with its
+    category: swing picks -> source "focus_swing", m5 picks -> "focus_m5", so
+    the two cohorts grade separately. `like_origins` ({(SYMBOL, SIDE, category):
+    origin} from the pick-feedback log) refines that to e.g. "focus_swing_h1"
+    so each like origin grades as its own sub-cohort; it is auto-loaded on the
+    fully-default call. A plain `focus_map` (legacy callers) keeps the old
+    untagged "focus_pick" source. With force=False this runs once per market
+    date; force=True merges current names without duplicating rows.
     """
     trade_date = _market_date(market_date)
     trade_date_text = trade_date.isoformat()
@@ -239,27 +255,44 @@ def snapshot_human_focus_picks(
             "total_for_date": len(load_human_focus_daily_picks(trade_date=trade_date, path=daily_picks_path)),
         }
 
-    focus = focus_map if focus_map is not None else load_focus_map()
-    longs = sorted({str(symbol or "").strip().upper() for symbol in (focus.get("long") or []) if str(symbol or "").strip()})
-    shorts = sorted({str(symbol or "").strip().upper() for symbol in (focus.get("short") or []) if str(symbol or "").strip()})
+    if focus_map is not None:
+        categorized_maps = {"": focus_map}  # legacy: untagged focus_pick source
+        origins: dict[tuple[str, str, str], str] = {}
+    else:
+        by_category = focus_maps_by_category if focus_maps_by_category is not None else load_focus_maps_by_category()
+        categorized_maps = dict(by_category)
+        if like_origins is not None:
+            origins = like_origins
+        elif focus_maps_by_category is None:
+            # Fully-default call (the scan runner): read origins from the log.
+            from pick_feedback import latest_like_origins
+
+            origins = latest_like_origins()
+        else:
+            origins = {}
     existing_rows = _read_csv_rows(Path(daily_picks_path))
     rows_by_key = {_pick_key(row): dict(row) for row in existing_rows if _pick_key(row)[0] and _pick_key(row)[1]}
     timestamp = _now_text(now)
     added = 0
-    for side, symbols in (("LONG", longs), ("SHORT", shorts)):
-        for symbol in symbols:
-            key = (trade_date_text, symbol, side)
-            if key in rows_by_key:
-                continue
-            rows_by_key[key] = {
-                "trade_date": trade_date_text,
-                "symbol": symbol,
-                "side": side,
-                "source": "focus_pick",
-                "snapshotted_at": timestamp,
-                "active_at_snapshot": "1",
-            }
-            added += 1
+    for category, focus in categorized_maps.items():
+        base_source = FOCUS_SOURCE_BY_CATEGORY.get(category, "focus_pick")
+        longs = sorted({str(symbol or "").strip().upper() for symbol in (focus.get("long") or []) if str(symbol or "").strip()})
+        shorts = sorted({str(symbol or "").strip().upper() for symbol in (focus.get("short") or []) if str(symbol or "").strip()})
+        for side, symbols in (("LONG", longs), ("SHORT", shorts)):
+            for symbol in symbols:
+                key = (trade_date_text, symbol, side)
+                if key in rows_by_key:
+                    continue
+                origin = origins.get((symbol, side, category), "") if category else ""
+                rows_by_key[key] = {
+                    "trade_date": trade_date_text,
+                    "symbol": symbol,
+                    "side": side,
+                    "source": f"{base_source}_{origin}" if origin else base_source,
+                    "snapshotted_at": timestamp,
+                    "active_at_snapshot": "1",
+                }
+                added += 1
 
     rows = sorted(rows_by_key.values(), key=lambda row: (_pick_key(row)[0], _pick_key(row)[2], _pick_key(row)[1]))
     _write_csv_rows(Path(daily_picks_path), HUMAN_FOCUS_DAILY_PICK_COLUMNS, rows)
@@ -480,41 +513,75 @@ def _profit_factor(values: list[float]) -> str:
     return f"{gains / losses:.4f}"
 
 
+def _outcome_source(row: dict[str, Any]) -> str:
+    return str(row.get("source") or "focus_pick").strip() or "focus_pick"
+
+
+def _outcome_base_cohort(row: dict[str, Any]) -> str:
+    source = _outcome_source(row)
+    for prefix, _category in CATEGORY_BY_SOURCE_PREFIX:
+        if source == prefix or source.startswith(prefix + "_"):
+            return f"human_focus_{prefix[len('focus_'):]}"
+    return "human_focus_pick"
+
+
 def build_human_focus_performance_rows(
     outcome_rows: list[dict[str, Any]],
     *,
     updated_at: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Aggregate stats per cohort: the swing/m5/legacy base cohorts first, then
+    one sub-cohort per like origin present (e.g. human_focus_swing_h1)."""
     timestamp = updated_at or _now_text()
-    rows: list[dict[str, Any]] = []
-    for side_filter in ("ALL", "LONG", "SHORT"):
-        filtered = [
-            row
-            for row in outcome_rows
-            if side_filter == "ALL" or _side_label(row.get("side")) == side_filter
-        ]
-        for horizon in HORIZONS:
-            values = [
-                value
-                for value in (_coerce_return(row.get(f"h{horizon}_return")) for row in filtered)
-                if value is not None
-            ]
-            if not values:
-                continue
-            sample_count = len(values)
-            wins = len([value for value in values if value > 0])
-            rows.append(
-                {
-                    "cohort": "human_focus_pick",
-                    "side": side_filter,
-                    "horizon_sessions": str(horizon),
-                    "sample_count": str(sample_count),
-                    "win_rate": f"{wins / sample_count:.4f}",
-                    "avg_side_return": f"{sum(values) / sample_count:.6f}",
-                    "profit_factor": _profit_factor(values),
-                    "updated_at": timestamp,
-                }
+    groups: list[tuple[str, list[dict[str, Any]]]] = []
+    for base in ("human_focus_swing", "human_focus_m5", "human_focus_pick"):
+        base_rows = [row for row in outcome_rows if _outcome_base_cohort(row) == base]
+        if not base_rows:
+            continue
+        groups.append((base, base_rows))
+        base_source = "focus_" + base[len("human_focus_"):]
+        suffixed = sorted(
+            {
+                source
+                for source in (_outcome_source(row) for row in base_rows)
+                if source.startswith(base_source + "_")
+            }
+        )
+        for source in suffixed:
+            groups.append(
+                (f"human_focus_{source[len('focus_'):]}", [row for row in base_rows if _outcome_source(row) == source])
             )
+
+    rows: list[dict[str, Any]] = []
+    for cohort, cohort_rows in groups:
+        for side_filter in ("ALL", "LONG", "SHORT"):
+            filtered = [
+                row
+                for row in cohort_rows
+                if side_filter == "ALL" or _side_label(row.get("side")) == side_filter
+            ]
+            for horizon in HORIZONS:
+                values = [
+                    value
+                    for value in (_coerce_return(row.get(f"h{horizon}_return")) for row in filtered)
+                    if value is not None
+                ]
+                if not values:
+                    continue
+                sample_count = len(values)
+                wins = len([value for value in values if value > 0])
+                rows.append(
+                    {
+                        "cohort": cohort,
+                        "side": side_filter,
+                        "horizon_sessions": str(horizon),
+                        "sample_count": str(sample_count),
+                        "win_rate": f"{wins / sample_count:.4f}",
+                        "avg_side_return": f"{sum(values) / sample_count:.6f}",
+                        "profit_factor": _profit_factor(values),
+                        "updated_at": timestamp,
+                    }
+                )
     return rows
 
 

@@ -128,3 +128,57 @@ def test_load_focus_map(tmp_path):
     )
     assert focus["long"] == {"NVDA", "AAPL"}
     assert focus["short"] == {"TSLA"}
+
+
+def test_swing_category_uses_own_files_and_swing_watchlists(tmp_path):
+    store = _make_store(tmp_path)
+    store.add("NVDA", "long", "swing")
+    store.add("TSLA", "short", "swing")
+    store.add("AAPL", "long")  # default m5 keeps original behavior
+
+    # Separate focus files per category, separate shared-watchlist targets.
+    assert _symbols(tmp_path / "focus_swing_longs.txt") == ["NVDA"]
+    assert _symbols(tmp_path / "focus_swing_shorts.txt") == ["TSLA"]
+    assert _symbols(tmp_path / "focus_longs.txt") == ["AAPL"]
+    assert _symbols(tmp_path / "swinglongs.txt") == ["NVDA"]
+    assert _symbols(tmp_path / "shortswings.txt") == ["TSLA"]
+    assert _symbols(tmp_path / "longs.txt") == ["AAPL"]
+
+    membership = store.membership()
+    assert membership["NVDA|long|swing"]["shared_file"] == "swinglongs.txt"
+    assert membership["AAPL|long"]["shared_file"] == "longs.txt"  # legacy key format
+
+    assert store.focus_category("NVDA") == "swing"
+    assert store.focus_category("AAPL") == "m5"
+    assert store.focus_symbols("long") == ["NVDA", "AAPL"]  # swing-first union
+
+
+def test_swing_remove_only_uninjects_swing_watchlist(tmp_path):
+    store = _make_store(tmp_path)
+    store.add("NVDA", "long", "swing")
+    store.add("NVDA", "long", "m5")
+    assert store.focus_category("NVDA") == "both"
+
+    store.remove("NVDA", "long", "swing")
+    assert store.focus_category("NVDA") == "m5"
+    assert _symbols(tmp_path / "swinglongs.txt") == []  # swing injection undone
+    assert _symbols(tmp_path / "longs.txt") == ["NVDA"]  # m5 injection intact
+
+
+def test_load_focus_maps_by_category_and_union(tmp_path):
+    from focus_picks import load_focus_map, load_focus_maps_by_category
+
+    (tmp_path / "focus_longs.txt").write_text("AAPL\n", encoding="utf-8")
+    (tmp_path / "focus_swing_longs.txt").write_text("NVDA\n", encoding="utf-8")
+    by_category = load_focus_maps_by_category(
+        focus_longs_path=tmp_path / "focus_longs.txt",
+        focus_shorts_path=tmp_path / "focus_shorts.txt",
+    )
+    assert by_category["swing"]["long"] == {"NVDA"}
+    assert by_category["m5"]["long"] == {"AAPL"}
+    # Explicit-path load_focus_map stays a two-file read (legacy engine callers).
+    focus = load_focus_map(
+        focus_longs_path=tmp_path / "focus_longs.txt",
+        focus_shorts_path=tmp_path / "focus_shorts.txt",
+    )
+    assert focus["long"] == {"AAPL"}

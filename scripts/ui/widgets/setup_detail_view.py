@@ -73,7 +73,10 @@ class SetupDetailView(QTextBrowser):
             self._symbol_levels = load_symbol_levels()
         finally:
             self._levels_loading = False
-            self._levelsLoaded.emit()
+            try:
+                self._levelsLoaded.emit()
+            except RuntimeError:
+                pass  # the view was deleted while levels loaded in the background
 
     def _on_levels_loaded(self) -> None:
         if self._current is not None:

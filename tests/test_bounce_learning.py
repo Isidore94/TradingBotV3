@@ -837,6 +837,189 @@ def test_vwap_regime_classification():
     assert _classify_spy_vwap_regime(no_volume, prev_close=99.5) is None
 
 
+def test_auto_regime_reading_is_read_only_and_reports_possibilities():
+    from datetime import datetime, timedelta
+
+    from bounce_bot_lib.legacy import BounceBot, IbBar
+
+    start = datetime(2026, 7, 8, 9, 30)
+    prev_day = datetime(2026, 7, 7, 15, 55)
+    bars = [IbBar(dt=prev_day, open=99.4, high=99.6, low=99.3, close=99.5, volume=1000.0)]
+    bars += [
+        _vwap_bar(start + timedelta(minutes=5 * i), 100.0 + i)  # trend day above the band
+        for i in range(12)
+    ]
+
+    bot = BounceBot.__new__(BounceBot)
+    bot.latest_bars = {"SPY|5 D|5 mins": bars}
+    bot.market_environment_user_override = True  # override must NOT hide the auto read
+    bot.market_environment = "bearish_weak"
+    import threading
+
+    bot.market_environment_lock = threading.Lock()
+
+    reading = bot.get_auto_regime_reading()
+    assert reading["env_key"] == "bullish_strong"
+    assert reading["source"] == "vwap"
+    assert reading["override_active"] is True
+    assert reading["active_env_key"] == "bearish_weak"
+    assert reading["above_band_frac"] > reading["band_fraction_needed"]
+    assert reading["day_pct"] > 0
+    # Read-only: the applied environment is untouched.
+    assert bot.market_environment == "bearish_weak"
+
+    # No cached bars -> no reading (never triggers an IB fetch).
+    bot.latest_bars = {}
+    assert bot.get_auto_regime_reading() is None
+
+
+def _entry_stub_bot(env, spy_closes, symbol_closes, *, start=None, longs=(), shorts=()):
+    """Minimal BounceBot stub with cached 5m bars for entry-assist tests."""
+    import threading
+    from datetime import datetime, timedelta
+
+    from bounce_bot_lib.legacy import BounceBot
+
+    start = start or datetime(2026, 7, 8, 9, 30)
+
+    def bars_for(closes):
+        return [_vwap_bar(start + timedelta(minutes=5 * i), c) for i, c in enumerate(closes)]
+
+    bot = BounceBot.__new__(BounceBot)
+    bot.latest_bars = {"SPY|5 D|5 mins": bars_for(spy_closes)}
+    for symbol, closes in symbol_closes.items():
+        bot.latest_bars[f"{symbol}|5 D|5 mins"] = bars_for(closes)
+    bot.longs = list(longs)
+    bot.shorts = list(shorts)
+    bot.market_environment = env
+    bot.market_environment_lock = threading.Lock()
+    bot.market_environment_user_override = False
+    bot.alerts = []
+    bot.gui_callback = lambda message, tag: bot.alerts.append((str(message), str(tag)))
+    return bot
+
+
+def _extend_bars(bot, key, closes):
+    from datetime import timedelta
+
+    bars = bot.latest_bars[f"{key}|5 D|5 mins"]
+    last_dt = bars[-1].dt
+    bars.extend(
+        _vwap_bar(last_dt + timedelta(minutes=5 * (i + 1)), c) for i, c in enumerate(closes)
+    )
+
+
+def test_entry_assist_mode_mapping():
+    from bounce_bot_lib.legacy import entry_assist_mode_for_env
+
+    assert entry_assist_mode_for_env("bullish_strong") == {"mode": "window", "sides": ("long",)}
+    assert entry_assist_mode_for_env("bearish_strong") == {"mode": "window", "sides": ("short",)}
+    assert entry_assist_mode_for_env("bullish_weak") == {"mode": "movers", "sides": ("long",)}
+    assert entry_assist_mode_for_env("bearish_weak") == {"mode": "movers", "sides": ("short",)}
+    assert entry_assist_mode_for_env("neutral_chop") == {"mode": "movers", "sides": ("long", "short")}
+
+
+def test_entry_window_ranks_holders_through_spy_pullback():
+    # Uptrend, then SPY pulls back; AAA holds flat (RS), BBB follows SPY down.
+    bot = _entry_stub_bot(
+        "bullish_strong",
+        spy_closes=[100.0, 100.5, 101.0, 101.5, 102.0],
+        symbol_closes={
+            "AAA": [50.0, 50.2, 50.4, 50.6, 50.8],
+            "BBB": [80.0, 80.4, 80.8, 81.2, 81.6],
+        },
+        longs=("AAA", "BBB"),
+    )
+
+    opened = bot.entry_assist_action()  # click 1: pullback started
+    assert opened["ok"] and bot.entry_assist_state()["window_active"]
+    assert any("ENTRY WINDOW OPEN" in message for message, _tag in bot.alerts)
+
+    # During the pullback SPY drops 1%; AAA holds, BBB drops with it.
+    _extend_bars(bot, "SPY", [101.5, 101.0])
+    _extend_bars(bot, "AAA", [50.8, 50.8])
+    _extend_bars(bot, "BBB", [80.8, 80.0])
+
+    closed = bot.entry_assist_action()  # click 2: pullback over
+    assert closed["ok"] and not bot.entry_assist_state()["window_active"]
+    ranked = closed["results"]["long"]
+    assert [row["symbol"] for row in ranked][0] == "AAA"
+    summary = next(message for message, _tag in bot.alerts if message.startswith("ENTRY WINDOW (long)"))
+    assert "AAA" in summary and "held strongest" in summary
+
+
+def test_entry_assist_weak_and_chop_emit_trailing_movers():
+    bot = _entry_stub_bot(
+        "bullish_weak",
+        spy_closes=[100.0] * 8,
+        symbol_closes={
+            "AAA": [50.0] * 4 + [50.0, 50.5, 51.0, 51.5],  # strongest 30m
+            "BBB": [80.0] * 8,
+        },
+        longs=("AAA", "BBB"),
+        shorts=("CCC",),
+    )
+    bot.latest_bars["CCC|5 D|5 mins"] = list(bot.latest_bars["BBB|5 D|5 mins"])
+
+    result = bot.entry_assist_action()
+    assert result["ok"]
+    assert result["results"]["long"][0]["symbol"] == "AAA"
+    assert any(message.startswith("STRONGEST 30M (long)") for message, _tag in bot.alerts)
+
+    # Neutral/chop emits BOTH lists in one click.
+    bot.market_environment = "neutral_chop"
+    bot.alerts.clear()
+    both = bot.entry_assist_action()
+    assert set(both["results"]) == {"long", "short"}
+    assert any(message.startswith("STRONGEST 30M (long)") for message, _tag in bot.alerts)
+    assert any(message.startswith("WEAKEST 30M (short)") for message, _tag in bot.alerts)
+
+
+def test_entry_assist_auto_tick_opens_and_closes_pullback_window():
+    # Trending SPY that stops making new highs for 3 candles -> pause -> auto
+    # window. (_vwap_bar candles are always green, so the no-new-high branch
+    # of _detect_spy_pause_start is the trigger here.)
+    bot = _entry_stub_bot(
+        "bullish_strong",
+        spy_closes=[100.0, 102.0, 101.0, 101.2, 101.1],  # highs stall under 102.1
+        symbol_closes={"AAA": [50.0, 50.1, 50.2, 50.3, 50.3]},
+        longs=("AAA",),
+    )
+    bot.entry_assist_auto_tick()
+    state = bot.entry_assist_state()
+    assert state["window_active"] and state["window_source"] == "auto"
+
+    # Tape resumes with new session highs -> auto close + emit.
+    _extend_bars(bot, "SPY", [102.5, 103.0])
+    _extend_bars(bot, "AAA", [50.5, 50.7])
+    bot.entry_assist_auto_tick()
+    assert not bot.entry_assist_state()["window_active"]
+    assert any(message.startswith("ENTRY WINDOW (long)") for message, _tag in bot.alerts)
+
+
+def test_auto_regime_reading_classifies_mixed_mature_tape_as_chop():
+    from datetime import datetime, timedelta
+
+    from bounce_bot_lib.legacy import _spy_vwap_regime_stats
+
+    start = datetime(2026, 7, 8, 9, 30)
+    # Green on the day (prev 99.0) but chopping around VWAP and finishing under
+    # it - mature session, no band hold, VWAP position disagrees with day color.
+    closes = [100.0, 101.0, 100.0, 101.0, 100.0, 101.0, 100.0, 101.0, 100.0, 101.0, 100.0, 99.9]
+    bars = [_vwap_bar(start + timedelta(minutes=5 * i), c) for i, c in enumerate(closes)]
+    stats = _spy_vwap_regime_stats(bars, prev_close=99.0)
+    assert stats is not None and stats["classification"] is None  # the mixed shape
+
+    bot = _entry_stub_bot("bullish_weak", spy_closes=closes, symbol_closes={})
+    from datetime import datetime as _dt
+
+    prev_day = _vwap_bar(_dt(2026, 7, 7, 15, 55), 99.0)
+    bot.latest_bars["SPY|5 D|5 mins"] = [prev_day] + bot.latest_bars["SPY|5 D|5 mins"]
+    reading = bot.get_auto_regime_reading()
+    assert reading["env_key"] == "neutral_chop"
+    assert reading["label"] == "Neutral / Chop"
+
+
 def test_learning_state_keeps_mfe_and_exit_note_renders():
     rows = [
         _perf_row("bounce_type", "long", "ema_8", 23, 0.5, avg_mfe_r=2.1, median_close_r=0.3),

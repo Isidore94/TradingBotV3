@@ -13,6 +13,44 @@ from project_paths import (
 
 HEADLINE_HORIZON_ORDER = {5: 0, 10: 1, 1: 2, 3: 3}
 
+# Swing picks are the headline "learn what I like" cohort; m5 day-trade picks
+# and pre-category legacy rows list after it. Origin sub-cohorts (which alert
+# timeframe / screen the like came from) nest under their base cohort.
+COHORT_LABELS = {
+    "human_focus_swing": "Swing Focus",
+    "human_focus_m5": "M5 Focus",
+    "human_focus_pick": "Human Focus (legacy)",
+}
+_ORIGIN_LABELS = {
+    "h1": "H1 alerts",
+    "d1": "D1 alerts",
+    "m5": "M5 alerts",
+    "setups": "Setups table",
+    "manual": "Manual adds",
+}
+
+
+def cohort_label(key: str) -> str:
+    if key in COHORT_LABELS:
+        return COHORT_LABELS[key]
+    for base, base_label in (("human_focus_swing_", "Swing"), ("human_focus_m5_", "M5")):
+        if key.startswith(base):
+            origin = key[len(base):]
+            return f"{base_label} · {_ORIGIN_LABELS.get(origin, origin.upper())}"
+    return "Human Focus"
+
+
+def cohort_rank(key: str) -> int:
+    if key == "human_focus_swing":
+        return 0
+    if key.startswith("human_focus_swing_"):
+        return 1
+    if key == "human_focus_m5":
+        return 2
+    if key.startswith("human_focus_m5_"):
+        return 3
+    return 4
+
 
 def load_csv_rows(path: Path) -> list[dict[str, Any]]:
     if not Path(path).exists():
@@ -41,13 +79,15 @@ def build_human_focus_comparison_rows(
         sample_count = _int(row.get("sample_count"))
         if horizon <= 0 or sample_count <= 0:
             continue
+        cohort_key = str(row.get("cohort") or "human_focus_pick").strip() or "human_focus_pick"
         human_avg_pct = _float(row.get("avg_side_return"), 0.0) * 100.0
         bot = baselines.get((side, horizon), {})
         bot_avg_pct = bot.get("avg_side_return_pct")
         delta = "" if bot_avg_pct is None else human_avg_pct - float(bot_avg_pct)
         comparison_rows.append(
             {
-                "cohort": "Human Focus",
+                "cohort": cohort_label(cohort_key),
+                "cohort_key": cohort_key,
                 "side": side,
                 "horizon_sessions": str(horizon),
                 "sample_count": str(sample_count),
@@ -63,6 +103,8 @@ def build_human_focus_comparison_rows(
     return sorted(
         comparison_rows,
         key=lambda item: (
+            cohort_rank(str(item.get("cohort_key") or "")),
+            str(item.get("cohort_key") or ""),
             HEADLINE_HORIZON_ORDER.get(_int(item.get("horizon_sessions")), 99),
             _side_rank(item.get("side")),
         ),

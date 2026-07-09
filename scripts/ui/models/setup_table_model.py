@@ -15,6 +15,8 @@ ROW_ROLE = Qt.ItemDataRole.UserRole + 2
 
 class SetupTableModel(QAbstractTableModel):
     COLUMNS = (
+        ("favorite", "★"),
+        ("dislike", "✕"),
         ("symbol", "Symbol"),
         ("side", "Side"),
         ("score", "Score"),
@@ -51,6 +53,8 @@ class SetupTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return self._display_value(row, key)
         if role == Qt.ItemDataRole.TextAlignmentRole:
+            if key in {"favorite", "dislike"}:
+                return int(Qt.AlignmentFlag.AlignCenter)
             if key in {"score", "supports", "expected_r", "days_to_earnings"}:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -200,6 +204,16 @@ def _bucket_color(bucket: str) -> str:
 
 
 def _tooltip(row: SetupRow, key: str) -> str:
+    if key == "favorite":
+        return (
+            "Click to favorite this pick into Swing Focus - swing watchlists, tracker grading, "
+            "gold alerts. Click a lit ★ to unfavorite. (Right-click for M5 focus instead.)"
+        )
+    if key == "dislike":
+        return (
+            "Click to dislike this pick: you'll be asked why, and the reason is logged to "
+            "pick_feedback.jsonl for AI review (also unfavorites it if starred)."
+        )
     if key == "supports" and row.raw.get("hv_level_note"):
         return str(row.raw.get("hv_level_note"))
     if key == "expected_r" and row.raw.get("expected_r_note"):

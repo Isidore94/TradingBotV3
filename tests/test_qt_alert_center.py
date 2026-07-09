@@ -70,3 +70,21 @@ def test_loud_alerts_are_sa_bangers_or_ready_d1():
     assert not alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_WATCH: AAPL (long) AVWAPE retest", "d1_flag_long"))
     # The pause-watch summary line stays quiet by design.
     assert not alert_is_loud(_alert("REGIME PAUSE WATCH (short): SPY paused (+0.15% window) - 3 swing shorts still pressing lows: A, B, C", "red"))
+
+
+def test_liked_focus_picks_skip_tier_gate_and_always_sound():
+    try:
+        from ui.panels.alert_center_panel import alert_passes_feed_gate, alert_should_sound
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    quiet_b = _alert("[B-TIER] AAA: Bounce confirmed (long)")
+    # Not liked: obeys the tier gate and stays quiet.
+    assert not alert_passes_feed_gate(quiet_b, "A", is_focus=False)
+    assert not alert_should_sound(quiet_b, is_focus=False)
+    # Liked (focus) picks surface through every gate, even S-only, and sound.
+    assert alert_passes_feed_gate(quiet_b, "A", is_focus=True)
+    assert alert_passes_feed_gate(quiet_b, "S", is_focus=True)
+    assert alert_should_sound(quiet_b, is_focus=True)

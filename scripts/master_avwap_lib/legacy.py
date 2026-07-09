@@ -508,7 +508,12 @@ PRIORITY_RETEST_LEVEL_SCORE_BONUS = {
     "UPPER_1": 16,
     "LOWER_1": 16,
 }
-PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS = 12
+# Raised 12 -> 16 (2026-07-08, trader): longs closing above the previous day's
+# high / shorts below its low are a stronger sign of a good swing.
+PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS = 16
+# Trader filter (2026-07-08): a good swing long sits above its daily 15EMA AND
+# 20SMA (shorts below both). Alignment earns points on every priority row.
+PRIORITY_TREND_MA_ALIGNMENT_SCORE_BONUS = 10
 PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS = 10
 PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS = 8
 PRIORITY_RETEST_CLEAR_PATH_SCORE_BONUS = 14
@@ -927,7 +932,9 @@ DEFAULT_PRIORITY_SCORING_CONFIG = {
         "context": copy.deepcopy(FAVORITE_CONTEXT_SIGNALS),
     },
     "feature_flags": {
-        "industry_relative_strength_scoring_enabled": False,
+        # ON since 2026-07-08 (trader): best picks should be RS to their
+        # industry for longs / RW for shorts.
+        "industry_relative_strength_scoring_enabled": True,
         "htf_trend_scoring_enabled": False,
     },
     "attribute_adjustments": [
@@ -15556,6 +15563,9 @@ def build_setup_candidate_payload(row: dict, symbol_entry: dict) -> dict:
         "bounce_support_bonus": int(row.get("bounce_support_bonus", 0) or 0),
         "first_dev_break_bonus": int(row.get("first_dev_break_bonus", 0) or 0),
         "previous_day_range_break_bonus": int(row.get("previous_day_range_break_bonus", 0) or 0),
+        "trend_ma_alignment_bonus": int(row.get("trend_ma_alignment_bonus", 0) or 0),
+        "daily_relative_strength_bonus": int(row.get("daily_relative_strength_bonus", 0) or 0),
+        "industry_relative_strength_bonus": int(row.get("industry_relative_strength_bonus", 0) or 0),
         "compression_penalty": int(row.get("compression_penalty", 0) or 0),
         "second_band_penalty": int(row.get("second_band_penalty", 0) or 0),
         "adaptive_score_delta": int(row.get("adaptive_score_delta", 0) or 0),
@@ -21341,6 +21351,12 @@ def _evaluate_priority_snapshot_for_date(
         side,
         trade_date=last_trade_date.isoformat(),
     )
+    trend_ma_summary = assess_trend_ma_alignment(
+        side,
+        last_close,
+        entry_feature_snapshot.get("ema15"),
+        entry_feature_snapshot.get("sma20"),
+    )
 
     symbol_entry = {
         "side": side,
@@ -21373,6 +21389,9 @@ def _evaluate_priority_snapshot_for_date(
         "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
         "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+        "trend_ma_alignment": bool(trend_ma_summary["trend_ma_alignment"]),
+        "trend_ma_alignment_bonus": int(trend_ma_summary["trend_ma_alignment_bonus"] or 0),
+        "trend_ma_alignment_note": trend_ma_summary["trend_ma_alignment_note"],
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
         "recent_band_extension_days": recent_band_extension_days,
@@ -21483,6 +21502,9 @@ def _evaluate_priority_snapshot_for_date(
         previous_day_range_break=bool(previous_day_range_summary["previous_day_range_break"]),
         previous_day_range_break_bonus=int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         previous_day_range_note=previous_day_range_summary["previous_day_range_note"],
+        trend_ma_alignment=bool(trend_ma_summary["trend_ma_alignment"]),
+        trend_ma_alignment_bonus=int(trend_ma_summary["trend_ma_alignment_bonus"] or 0),
+        trend_ma_alignment_note=trend_ma_summary["trend_ma_alignment_note"],
         extension_note=extension_note,
         mid_earnings_active_second_stdev_hold=bool(mid_earnings_summary.get("active_second_stdev_hold")),
         mid_earnings_primary_trigger_level=mid_earnings_summary.get("primary_trigger_level", ""),
@@ -21602,6 +21624,9 @@ def _evaluate_priority_snapshot_for_date(
         "previous_day_range_break": bool(previous_day_range_summary["previous_day_range_break"]),
         "previous_day_range_break_bonus": int(previous_day_range_summary["previous_day_range_break_bonus"] or 0),
         "previous_day_range_note": previous_day_range_summary["previous_day_range_note"],
+        "trend_ma_alignment": bool(trend_ma_summary["trend_ma_alignment"]),
+        "trend_ma_alignment_bonus": int(trend_ma_summary["trend_ma_alignment_bonus"] or 0),
+        "trend_ma_alignment_note": trend_ma_summary["trend_ma_alignment_note"],
         "has_bounce_event_today": has_bounce_event_today,
         "favorite_zone": favorite_zone,
         "recent_band_extension_days": recent_band_extension_days,
@@ -22011,6 +22036,9 @@ INDUSTRY_RELATIVE_STRENGTH_BONUS = 10
 INDUSTRY_RELATIVE_STRENGTH_THRESHOLD = 1.0
 INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD = 0.5
 INDUSTRY_RELATIVE_STRENGTH_ROTATION_RELAX_THRESHOLD = 3.0
+# Extra points when the stock leads (lags) its industry on BOTH the daily (1d)
+# and weekly (5d) excess - consistent RS/RW, not a one-day pop (2026-07-08).
+INDUSTRY_RS_CONSISTENT_BONUS = 6
 
 HTF_TREND_SCORING_FLAG = "htf_trend_scoring_enabled"
 HTF_TREND_SCORE_BONUS = 6
@@ -24770,16 +24798,31 @@ def build_universe_strength_rows(
                 industry_one_day = _trailing_return_pct(industry_rows, 1)
                 industry_five_day = _trailing_return_pct(industry_rows, DAILY_RELATIVE_STRENGTH_LOOKBACK_DAYS)
                 industry_13w = _trailing_return_pct(industry_rows, MARKET_PREP_RETURN_13W_SESSIONS)
+                symbol_one_day = row.get("symbol_one_day_return_pct")
+                symbol_five_day = row.get("symbol_five_day_return_pct")
                 row.update(
                     {
                         "industry_one_day_return_pct": industry_one_day,
                         "industry_five_day_return_pct": industry_five_day,
                         "industry_13w_return_pct": industry_13w,
                         "rs_vs_industry": _weighted_excess_strength_score(
-                            row.get("symbol_one_day_return_pct"),
-                            row.get("symbol_five_day_return_pct"),
+                            symbol_one_day,
+                            symbol_five_day,
                             industry_one_day,
                             industry_five_day,
+                        ),
+                        # Explicit daily (1d) and weekly (5d) excess vs the
+                        # industry ETF, so alignment on BOTH horizons can be
+                        # tracked and rewarded (2026-07-08).
+                        "rs_vs_industry_1d": (
+                            None
+                            if symbol_one_day is None or industry_one_day is None
+                            else round(float(symbol_one_day) - float(industry_one_day), 3)
+                        ),
+                        "rs_vs_industry_5d": (
+                            None
+                            if symbol_five_day is None or industry_five_day is None
+                            else round(float(symbol_five_day) - float(industry_five_day), 3)
                         ),
                         "return_13w_vs_industry_pct": (
                             None
@@ -24803,11 +24846,16 @@ def assess_industry_relative_strength(
     industry_row = industry_strength_row if isinstance(industry_strength_row, dict) else {}
     industry_etf = str(row.get("industry_etf") or industry_row.get("industry_etf") or "").strip().upper()
     rs_vs_industry = _coerce_float(row.get("rs_vs_industry"))
+    rs_vs_industry_1d = _coerce_float(row.get("rs_vs_industry_1d"))
+    rs_vs_industry_5d = _coerce_float(row.get("rs_vs_industry_5d"))
     industry_rs = _coerce_float(industry_row.get("daily_relative_strength_score"))
     result = {
         "industry_etf": industry_etf,
         "industry_relative_strength_score": rs_vs_industry,
         "industry_daily_relative_strength_score": industry_rs,
+        "rs_vs_industry_1d": rs_vs_industry_1d,
+        "rs_vs_industry_5d": rs_vs_industry_5d,
+        "industry_rs_consistent": False,
         "industry_relative_strength_bonus": 0,
         "industry_relative_strength_note": "",
     }
@@ -24818,24 +24866,47 @@ def assess_industry_relative_strength(
     if normalized_side == "SHORT":
         stock_leads = rs_vs_industry <= -INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
         industry_aligned = industry_rs is None or industry_rs <= -INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD
+        horizons_consistent = (
+            rs_vs_industry_1d is not None
+            and rs_vs_industry_5d is not None
+            and rs_vs_industry_1d < 0
+            and rs_vs_industry_5d < 0
+        )
         stock_text = "weaker than"
         industry_text = "industry weak vs SPY"
     else:
         stock_leads = rs_vs_industry >= INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
         industry_aligned = industry_rs is None or industry_rs >= INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD
+        horizons_consistent = (
+            rs_vs_industry_1d is not None
+            and rs_vs_industry_5d is not None
+            and rs_vs_industry_1d > 0
+            and rs_vs_industry_5d > 0
+        )
         stock_text = "stronger than"
         industry_text = "industry strong vs SPY"
 
     note_bits = [
         f"D1 {stock_text} {industry_etf}: rs_ind={rs_vs_industry:+.2f}",
     ]
+    if rs_vs_industry_1d is not None and rs_vs_industry_5d is not None:
+        note_bits.append(f"1d={rs_vs_industry_1d:+.2f}% 5d={rs_vs_industry_5d:+.2f}%")
     if industry_rs is not None:
         note_bits.append(f"{industry_text} rs={industry_rs:+.2f}")
 
     if stock_leads and industry_aligned:
         if scoring_enabled:
-            result["industry_relative_strength_bonus"] = INDUSTRY_RELATIVE_STRENGTH_BONUS
-            note_bits.append(f"+{INDUSTRY_RELATIVE_STRENGTH_BONUS}")
+            bonus = INDUSTRY_RELATIVE_STRENGTH_BONUS
+            if horizons_consistent:
+                # Leads (lags) the industry on both the daily and weekly read.
+                bonus += INDUSTRY_RS_CONSISTENT_BONUS
+                result["industry_rs_consistent"] = True
+                note_bits.append(
+                    f"daily+weekly aligned (+{INDUSTRY_RELATIVE_STRENGTH_BONUS}+{INDUSTRY_RS_CONSISTENT_BONUS})"
+                )
+            else:
+                note_bits.append(f"+{INDUSTRY_RELATIVE_STRENGTH_BONUS}")
+            result["industry_relative_strength_bonus"] = bonus
         else:
             note_bits.append("score flag off")
     elif (
@@ -24896,6 +24967,8 @@ def enrich_priority_rows_with_industry_relative_strength(
         "industry_five_day_return_pct",
         "industry_13w_return_pct",
         "rs_vs_industry",
+        "rs_vs_industry_1d",
+        "rs_vs_industry_5d",
         "return_13w_vs_industry_pct",
     )
     for priority_row in priority_rows:
@@ -26018,6 +26091,9 @@ def build_priority_setup_summary(
     previous_day_range_note: str = "",
     previous_day_range_intraday_break: bool = False,
     previous_day_range_intraday_note: str = "",
+    trend_ma_alignment: bool = False,
+    trend_ma_alignment_bonus: int = 0,
+    trend_ma_alignment_note: str = "",
     vwap_range_confirmation: bool = False,
     vwap_range_confirmation_bonus: int = 0,
     vwap_range_confirmation_note: str = "",
@@ -26130,6 +26206,7 @@ def build_priority_setup_summary(
     score += max(0, int(daily_relative_strength_bonus or 0))
     score += max(0, int(industry_relative_strength_bonus or 0))
     score += max(0, int(previous_day_range_break_bonus or 0))
+    score += max(0, int(trend_ma_alignment_bonus or 0))
     score += max(0, int(vwap_range_confirmation_bonus or 0))
     score += max(0, int(first_dev_break_bonus or 0))
 
@@ -26211,6 +26288,9 @@ def build_priority_setup_summary(
         "previous_day_range_note": previous_day_range_note or "",
         "previous_day_range_intraday_break": bool(previous_day_range_intraday_break),
         "previous_day_range_intraday_note": previous_day_range_intraday_note or "",
+        "trend_ma_alignment": bool(trend_ma_alignment),
+        "trend_ma_alignment_bonus": int(trend_ma_alignment_bonus or 0),
+        "trend_ma_alignment_note": trend_ma_alignment_note or "",
         "vwap_range_confirmation": bool(vwap_range_confirmation),
         "vwap_range_confirmation_bonus": int(vwap_range_confirmation_bonus or 0),
         "vwap_range_confirmation_note": vwap_range_confirmation_note or "",
@@ -26312,6 +26392,48 @@ def assess_previous_day_range_break(daily_rows, last_trade_date, last_close, sid
             f"(+{PRIORITY_PREVIOUS_DAY_RANGE_BREAK_SCORE_BONUS})"
         )
     return result
+
+
+def assess_trend_ma_alignment(side, last_close, ema15, sma20) -> dict:
+    """Longs above the daily 15EMA AND 20SMA (shorts below both) earn a bonus.
+
+    The trader's "sign of a good trade" filter (2026-07-08): swing longs
+    should trade above both moving averages, shorts below both. Partial
+    alignment earns nothing - the pair is the signal.
+    """
+    result = {
+        "trend_ma_alignment": False,
+        "trend_ma_alignment_bonus": 0,
+        "trend_ma_alignment_note": "",
+    }
+    close_value = _coerce_float(last_close)
+    ema_value = _coerce_float(ema15)
+    sma_value = _coerce_float(sma20)
+    if close_value is None or ema_value is None or sma_value is None:
+        return result
+    normalized_side = normalize_side(side)
+    relation = "below" if normalized_side == "SHORT" else "above"
+    if normalized_side == "SHORT":
+        aligned = close_value < ema_value and close_value < sma_value
+    else:
+        aligned = close_value > ema_value and close_value > sma_value
+    if aligned:
+        result.update(
+            {
+                "trend_ma_alignment": True,
+                "trend_ma_alignment_bonus": PRIORITY_TREND_MA_ALIGNMENT_SCORE_BONUS,
+                "trend_ma_alignment_note": (
+                    f"Close {relation} EMA15 {ema_value:.2f} and SMA20 {sma_value:.2f} "
+                    f"(+{PRIORITY_TREND_MA_ALIGNMENT_SCORE_BONUS})"
+                ),
+            }
+        )
+    else:
+        result["trend_ma_alignment_note"] = (
+            f"Close not {relation} both EMA15 {ema_value:.2f} and SMA20 {sma_value:.2f}"
+        )
+    return result
+
 
 def _normalize_tracker_attribute_value(value):
     if value is None:
@@ -27493,6 +27615,22 @@ def build_tracker_entry_attributes(
         description="Scanner note describing any intraday prior-day high/low break.",
     )
     add(
+        "structure.trend_ma_alignment",
+        bool(row.get("trend_ma_alignment") or symbol_entry.get("trend_ma_alignment")),
+        group="structure",
+        label="EMA15 + SMA20 alignment",
+        value_type="bool",
+        description="Whether the close sits beyond both the daily 15EMA and 20SMA in the setup direction (above for longs, below for shorts).",
+    )
+    add(
+        "structure.trend_ma_alignment_note",
+        row.get("trend_ma_alignment_note") or symbol_entry.get("trend_ma_alignment_note") or "",
+        group="structure",
+        label="EMA15/SMA20 alignment note",
+        value_type="text",
+        description="Scanner note describing the close versus the daily 15EMA and 20SMA.",
+    )
+    add(
         "structure.adverse_entry_candle",
         bool(row.get("adverse_entry_candle") or symbol_entry.get("priority_adverse_entry_candle")),
         group="structure",
@@ -27563,6 +27701,30 @@ def build_tracker_entry_attributes(
         label="D1 relative strength vs industry",
         value_type="number",
         description="One-day and five-day symbol return spread versus its mapped industry or sector ETF.",
+    )
+    add(
+        "relative_strength.rs_vs_industry_1d",
+        _coerce_float(row.get("rs_vs_industry_1d", symbol_entry.get("rs_vs_industry_1d"))),
+        group="relative_strength",
+        label="Daily excess vs industry",
+        value_type="number",
+        description="One-day symbol return minus its industry ETF's one-day return (percentage points).",
+    )
+    add(
+        "relative_strength.rs_vs_industry_5d",
+        _coerce_float(row.get("rs_vs_industry_5d", symbol_entry.get("rs_vs_industry_5d"))),
+        group="relative_strength",
+        label="Weekly excess vs industry",
+        value_type="number",
+        description="Five-day symbol return minus its industry ETF's five-day return (percentage points).",
+    )
+    add(
+        "relative_strength.industry_rs_consistent",
+        bool(row.get("industry_rs_consistent") or symbol_entry.get("industry_rs_consistent")),
+        group="relative_strength",
+        label="Industry RS consistent (daily + weekly)",
+        value_type="bool",
+        description="Whether the stock leads (lags) its industry on both the one-day and five-day excess for the setup direction.",
     )
     add(
         "relative_strength.industry_daily_relative_strength_score",
@@ -28641,6 +28803,12 @@ def write_master_avwap_focus_feed(
             "previous_day_range_break": bool(row.get("previous_day_range_break")),
             "previous_day_range_break_bonus": int(row.get("previous_day_range_break_bonus", 0) or 0),
             "previous_day_range_note": row.get("previous_day_range_note") or "",
+            "trend_ma_alignment": bool(row.get("trend_ma_alignment")),
+            "trend_ma_alignment_bonus": int(row.get("trend_ma_alignment_bonus", 0) or 0),
+            "trend_ma_alignment_note": row.get("trend_ma_alignment_note") or "",
+            "rs_vs_industry_1d": _coerce_float(row.get("rs_vs_industry_1d")),
+            "rs_vs_industry_5d": _coerce_float(row.get("rs_vs_industry_5d")),
+            "industry_rs_consistent": bool(row.get("industry_rs_consistent")),
             "vwap_range_confirmation": bool(row.get("vwap_range_confirmation")),
             "vwap_range_confirmation_bonus": int(row.get("vwap_range_confirmation_bonus", 0) or 0),
             "vwap_range_confirmation_note": row.get("vwap_range_confirmation_note") or "",

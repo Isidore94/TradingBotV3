@@ -162,6 +162,15 @@ UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
 FOCUS_LONGS_FILE = PERSISTENT_DATA_DIR / "focus_longs.txt"
 FOCUS_SHORTS_FILE = PERSISTENT_DATA_DIR / "focus_shorts.txt"
 FOCUS_PICK_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "focus_pick_membership.json"
+# Which longs.txt/shorts.txt entries the universe auto-populator owns (so
+# rotation/cuts never delete a name the trader typed), plus the day's
+# VWAP-cut blacklist so a cut name is not re-added the same session.
+AUTO_POPULATE_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "auto_watchlist_membership.json"
+# Append-only JSONL log of the trader's pick verdicts: star likes (with origin
+# alert timeframe/surface), X dislikes (with the typed reason), unfavorites.
+# Lives in the shared home so it syncs across machines and can be handed to an
+# AI for review ("why did I like/hate these picks -> tune the scans").
+PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
 HUMAN_FOCUS_SNAPSHOT_STATE_FILE = RUNTIME_DATA_DIR / "human_focus_snapshot_state.json"
 HUMAN_FOCUS_DAILY_PICKS_FILE = RUNTIME_DATA_DIR / "human_focus_daily_picks.csv"
 HUMAN_FOCUS_OUTCOMES_FILE = RUNTIME_DATA_DIR / "human_focus_outcomes.csv"

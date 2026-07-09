@@ -32,11 +32,13 @@ def test_focus_panel_add_renders_chips(tmp_path):
     from ui.panels.focus_picks_panel import FocusPicksPanel
 
     panel = FocusPicksPanel(_service(tmp_path))
-    editor = panel.long_editor
+    editor = panel.swing_long_editor
     editor.add_input.setText("nvda, aapl")
     editor.add_from_input()
 
     assert panel.service.focus_symbols("long") == ["NVDA", "AAPL"]
+    assert panel.service.focus_symbols("long", "swing") == ["NVDA", "AAPL"]
+    assert panel.service.focus_symbols("long", "m5") == []
     assert editor.chip_flow.count() == 2  # focusChanged rebuilt the chips
     assert editor.add_input.text() == ""  # input cleared
 
@@ -45,28 +47,47 @@ def test_focus_panel_chip_remove_updates_store(tmp_path):
     from ui.panels.focus_picks_panel import FocusPicksPanel
 
     panel = FocusPicksPanel(_service(tmp_path))
-    panel.long_editor.add_input.setText("NVDA AAPL")
-    panel.long_editor.add_from_input()
+    panel.swing_long_editor.add_input.setText("NVDA AAPL")
+    panel.swing_long_editor.add_from_input()
 
-    panel.long_editor._remove("NVDA")  # simulates a chip's × button
+    panel.swing_long_editor._remove("NVDA")  # simulates a chip's × button
 
     assert panel.service.focus_symbols("long") == ["AAPL"]
-    assert panel.long_editor.chip_flow.count() == 1
+    assert panel.swing_long_editor.chip_flow.count() == 1
 
 
 def test_focus_panel_sides_are_independent(tmp_path):
     from ui.panels.focus_picks_panel import FocusPicksPanel
 
     panel = FocusPicksPanel(_service(tmp_path))
-    panel.long_editor.add_input.setText("NVDA")
-    panel.long_editor.add_from_input()
-    panel.short_editor.add_input.setText("TSLA")
-    panel.short_editor.add_from_input()
+    panel.swing_long_editor.add_input.setText("NVDA")
+    panel.swing_long_editor.add_from_input()
+    panel.swing_short_editor.add_input.setText("TSLA")
+    panel.swing_short_editor.add_from_input()
 
     assert panel.service.focus_symbols("long") == ["NVDA"]
     assert panel.service.focus_symbols("short") == ["TSLA"]
-    assert panel.long_editor.chip_flow.count() == 1
-    assert panel.short_editor.chip_flow.count() == 1
+    assert panel.swing_long_editor.chip_flow.count() == 1
+    assert panel.swing_short_editor.chip_flow.count() == 1
+
+
+def test_focus_panel_categories_are_independent(tmp_path):
+    from ui.panels.focus_picks_panel import FocusPicksPanel
+    from watchlist_utils import read_watchlist_symbols
+
+    panel = FocusPicksPanel(_service(tmp_path))
+    panel.swing_long_editor.add_input.setText("NVDA")
+    panel.swing_long_editor.add_from_input()
+    panel.m5_long_editor.add_input.setText("AAPL")
+    panel.m5_long_editor.add_from_input()
+
+    assert panel.service.focus_symbols("long", "swing") == ["NVDA"]
+    assert panel.service.focus_symbols("long", "m5") == ["AAPL"]
+    assert panel.service.focus_category("NVDA") == "swing"
+    assert panel.service.focus_category("AAPL") == "m5"
+    # Swing picks sync into the swing watchlist; m5 picks into longs.txt.
+    assert read_watchlist_symbols(tmp_path / "swinglongs.txt") == ["NVDA"]
+    assert read_watchlist_symbols(tmp_path / "longs.txt") == ["AAPL"]
 
 
 def test_focus_panel_marks_live_bounce_alert(tmp_path):
@@ -76,14 +97,14 @@ def test_focus_panel_marks_live_bounce_alert(tmp_path):
     from ui.panels.focus_picks_panel import FocusPicksPanel
 
     panel = FocusPicksPanel(_service(tmp_path))
-    panel.long_editor.add_input.setText("NVDA")
-    panel.long_editor.add_from_input()
+    panel.swing_long_editor.add_input.setText("NVDA")
+    panel.swing_long_editor.add_from_input()
 
     panel.record_bounce_alert(
         BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim", timeframe="5m")
     )
 
-    chip = panel.long_editor.chip_flow.itemAt(0).widget()
+    chip = panel.swing_long_editor.chip_flow.itemAt(0).widget()
     labels = [label.text() for label in chip.findChildren(QLabel)]
     assert "BOUNCE" in labels
     assert any("09:30:00 bounce - LONG 5m VWAP reclaim" == text for text in labels)
@@ -138,21 +159,40 @@ def test_master_panel_add_to_focus_routes_by_side(tmp_path):
         ]
     )
 
-    def proxy_index(symbol):
+    def proxy_index(symbol, column=2):  # columns 0/1 are the ★/✕ verdict columns
         for proxy_row in range(panel.proxy.rowCount()):
-            index = panel.proxy.index(proxy_row, 0)
-            if index.data() == symbol:
+            index = panel.proxy.index(proxy_row, column)
+            if panel.proxy.index(proxy_row, 2).data() == symbol:
                 return index
         raise AssertionError(f"{symbol} not in table")
 
     panel._add_row_to_focus(proxy_index("NVDA"))
-    panel._add_row_to_focus(proxy_index("TSLA"))
+    panel._add_row_to_focus(proxy_index("TSLA"), "m5")
 
     assert service.focus_symbols("long") == ["NVDA"]  # LONG row -> Focus Longs
     assert service.focus_symbols("short") == ["TSLA"]  # SHORT row -> Focus Shorts
+    assert service.focus_category("NVDA") == "swing"  # ★ default
+    assert service.focus_category("TSLA") == "m5"  # explicit menu choice
     # delegate marker lookup reflects focus membership
     assert panel.delegate._is_focus(_row("NVDA", "LONG")) is True
     assert panel.delegate._is_focus(_row("XYZ", "LONG")) is False
+
+    # The ★ column click toggles: lit star -> unfavorite; hollow star -> swing add.
+    panel._on_table_clicked(proxy_index("NVDA", column=0))
+    assert service.is_focus("NVDA") is False
+    panel._on_table_clicked(proxy_index("NVDA", column=0))
+    assert service.focus_category("NVDA") == "swing"
+
+    # The ✕ column logs a dislike (with the setups origin) and unfavorites.
+    feedback = []
+    service.record_feedback = lambda symbol, side, verdict, **kw: feedback.append((symbol, verdict, kw))
+    panel._record_dislike(panel.model.rows()[0], "chased, no level")
+    assert service.is_focus("NVDA") is False
+    symbol, verdict, kwargs = next(entry for entry in feedback if entry[1] == "dislike")
+    assert (symbol, verdict) == ("NVDA", "dislike")
+    assert kwargs["origin"] == "setups"
+    assert kwargs["reason"] == "chased, no level"
+    assert "bucket=" in kwargs["context"]
 
 
 def test_alert_feed_item_focus_highlight():
@@ -160,10 +200,143 @@ def test_alert_feed_item_focus_highlight():
     from ui.widgets.alert_feed_item import AlertFeedItem
 
     alert = BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim")
-    focus_item = AlertFeedItem(alert, is_focus=True)
-    plain_item = AlertFeedItem(alert, is_focus=False)
-    assert "border-left" in focus_item.styleSheet()  # gold stripe for focus names
+    focus_item = AlertFeedItem(alert, focus_category="swing")
+    plain_item = AlertFeedItem(alert)
+    assert "border-left" in focus_item.styleSheet()  # gold frame for focus names
     assert plain_item.styleSheet() == ""
+
+
+def test_alert_feed_item_star_reflects_favorite_state():
+    from PySide6.QtWidgets import QToolButton
+
+    from ui.models.bounce import BounceAlert
+    from ui.widgets.alert_feed_item import AlertFeedItem
+
+    alert = BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim")
+
+    def buttons_by_text(item):
+        return {button.text(): button for button in item.findChildren(QToolButton)}
+
+    hollow_item = AlertFeedItem(alert, show_favorite_button=True, favorite_hint="Swing Focus")
+    hollow = buttons_by_text(hollow_item)
+    assert set(hollow) == {"☆", "✕"}  # star to favorite, ✕ to dislike-with-reason
+    assert "Swing Focus" in hollow["☆"].toolTip()
+    assert "pick_feedback" in hollow["✕"].toolTip()
+    lit_item = AlertFeedItem(alert, focus_category="swing", show_favorite_button=True)
+    lit = buttons_by_text(lit_item)
+    assert set(lit) == {"★", "✕"}
+    assert "Unfavorite" in lit["★"].toolTip()
+    # No symbol -> nothing to click.
+    no_symbol = AlertFeedItem(
+        BounceAlert(time_text="09:30:00", symbol="", side="WATCH", trigger="regime note"),
+        show_favorite_button=True,
+    )
+    assert no_symbol.findChildren(QToolButton) == []
+
+
+def test_alert_center_routes_detail_out_when_embedded_pane_disabled(tmp_path):
+    from ui.models.bounce import BounceAlert
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    panel = AlertCenterPanel(_service(tmp_path))
+    routed = []
+    panel.setupRequested.connect(routed.append)
+    alert = BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim")
+
+    panel._show_alert_detail(alert)  # default: embedded pane renders the plan
+    assert routed == []
+    assert panel.detail_view.isVisibleTo(panel)
+
+    panel.set_embedded_detail_enabled(False)  # workspace mode: one detail pane
+    assert not panel.detail_view.isVisibleTo(panel)
+    panel._show_alert_detail(alert)
+    assert routed and routed[0]["symbol"] == "NVDA" and routed[0]["side"] == "LONG"
+    assert not panel.detail_view.isVisibleTo(panel)
+
+
+def test_entry_assist_button_states_follow_regime():
+    from ui.panels.bounce_panel import entry_assist_button_state
+
+    label, _tip, enabled = entry_assist_button_state({})
+    assert label == "Entry Assist" and not enabled
+
+    label, tip, enabled = entry_assist_button_state({"env_key": "bullish_strong", "window_active": False})
+    assert label == "⏱ Pullback started" and enabled
+    assert "hold up" in tip
+
+    label, _tip, _enabled = entry_assist_button_state(
+        {"env_key": "bullish_strong", "window_active": True, "window_started": "10:05"}
+    )
+    assert label == "Pullback over → strongest (since 10:05)"
+
+    label, _tip, _enabled = entry_assist_button_state(
+        {"env_key": "bearish_strong", "window_active": True, "window_started": "11:00"}
+    )
+    assert label == "Bounce over → weakest (since 11:00)"
+
+    assert entry_assist_button_state({"env_key": "bullish_weak"})[0] == "Strongest 30m"
+    assert entry_assist_button_state({"env_key": "bearish_weak"})[0] == "Weakest 30m"
+    label, tip, _enabled = entry_assist_button_state({"env_key": "neutral_chop"})
+    assert label == "Movers 30m" and "BOTH" in tip
+
+
+def test_auto_regime_readout_formatting():
+    from ui.panels.bounce_panel import format_auto_regime_reading
+
+    chip, tip = format_auto_regime_reading({})
+    assert chip == "Auto regime: n/a"
+    assert "SPY" in tip
+
+    reading = {
+        "env_key": "bullish_weak",
+        "label": "Bullish Weak",
+        "source": "vwap",
+        "day_pct": 0.42,
+        "last_close": 626.14,
+        "prev_close": 623.51,
+        "bar_time": "10:35",
+        "override_active": False,
+        "active_env_key": "bullish_weak",
+        "active_label": "Bullish Weak",
+        "strong_abs_pct": 0.5,
+        "band_fraction_needed": 0.6,
+        "vwap": 625.30,
+        "stdev": 0.87,
+        "above_band_frac": 0.41,
+        "below_band_frac": 0.03,
+    }
+    chip, tip = format_auto_regime_reading(reading)
+    assert chip == "Auto: Bullish Weak"
+    assert "Bullish Strong: 41%" in tip and "needs >= 60%" in tip
+    assert "Bearish Strong: 3%" in tip
+    assert "Bullish Weak: SPY above VWAP and green on the day - YES" in tip
+
+    # Manual override: the chip shows both the forced and the auto regime.
+    reading["override_active"] = True
+    reading["active_label"] = "Bearish Strong"
+    chip, tip = format_auto_regime_reading(reading)
+    assert chip == "Manual: Bearish Strong (auto sees Bullish Weak)"
+    assert "auto keeps measuring" in tip
+
+    # Young session: day%-rule fallback text instead of VWAP possibilities.
+    young = {k: v for k, v in reading.items() if k not in {"vwap", "stdev", "above_band_frac", "below_band_frac"}}
+    young.update({"override_active": False, "source": "day_pct"})
+    chip, tip = format_auto_regime_reading(young)
+    assert "day% rule applies" in tip
+
+
+def test_favorite_category_routing_for_alerts():
+    from ui.models.bounce import BounceAlert
+    from ui.panels.alert_center_panel import favorite_category_for_alert
+
+    m5 = BounceAlert(time_text="09:30:00", symbol="AAOI", side="LONG", timeframe="5m")
+    h1 = BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", timeframe="H1")
+    d1 = BounceAlert(time_text="09:30:00", symbol="AAPL", side="LONG", is_d1=True)
+    untimed = BounceAlert(time_text="09:30:00", symbol="TSLA", side="SHORT")
+    assert favorite_category_for_alert(m5) == "m5"
+    assert favorite_category_for_alert(h1) == "swing"
+    assert favorite_category_for_alert(d1) == "swing"
+    assert favorite_category_for_alert(untimed) == "m5"
 
 
 def test_rrs_board_marks_focus_aligned_only():

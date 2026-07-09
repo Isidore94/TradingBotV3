@@ -42,6 +42,10 @@ class TradingDeskPanel(QWidget):
         self.bounce_panel = BouncePanel(self.focus_service)
         self.alert_center = AlertCenterPanel(self.focus_service)
         self.alert_center.attach_service(self.bounce_panel.service)
+        # In workspace mode the Alert Center's embedded plan pane is off; a
+        # clicked alert opens in the setups workspace's detail pane instead,
+        # so the setup is described in exactly one place.
+        self.alert_center.setupRequested.connect(self._show_setup_in_workspace)
         self._mode_widget: QWidget | None = None
 
         self.master_panel.statusChanged.connect(self.statusChanged)
@@ -74,6 +78,7 @@ class TradingDeskPanel(QWidget):
         self._detach_mode_panels()
         _clear_layout(self.center_layout)
         if self.workspace_mode == "tabs":
+            self.alert_center.set_embedded_detail_enabled(True)
             tabs = QTabWidget()
             tabs.addTab(self.master_workspace, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
@@ -83,14 +88,17 @@ class TradingDeskPanel(QWidget):
             return
 
         # Workspace mode: the Alert Center owns the left column at full
-        # height (the sit-back-and-wait surface); the setups workspace and the
-        # slim BounceBot status strip share the right.
-        right = QSplitter(Qt.Orientation.Vertical)
-        right.addWidget(self.master_workspace)
-        right.addWidget(self.bounce_panel)
-        right.setStretchFactor(0, 6)
-        right.setStretchFactor(1, 1)
-        right.setSizes([820, 140])
+        # height (the sit-back-and-wait surface); the right is the setups
+        # workspace over the one-line BounceBot strip (fixed height - no
+        # splitter, so it can't sprawl). Alert clicks show their plan in the
+        # workspace's detail pane, not in a second embedded pane.
+        self.alert_center.set_embedded_detail_enabled(False)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(self.master_workspace, 1)
+        right_layout.addWidget(self.bounce_panel)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.alert_center)
@@ -100,6 +108,10 @@ class TradingDeskPanel(QWidget):
         splitter.setSizes([950, 1900])
         self._mode_widget = splitter
         self.center_layout.addWidget(splitter)
+
+    def _show_setup_in_workspace(self, payload: dict) -> None:
+        self.master_workspace.show_setups()
+        self.master_panel.detail_view.show_setup(**payload)
 
     def shutdown(self) -> None:
         """Release live resources (IB connection, worker threads) on app close."""

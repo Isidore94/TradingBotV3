@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -32,6 +33,20 @@ from ui.widgets.empty_state import EmptyState
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
 from ui.widgets.setup_detail_view import SetupDetailView
+
+
+def _row_context(row: SetupRow) -> str:
+    """One-line setup-row summary stored with a verdict for later AI review."""
+    parts = [f"bucket={row.bucket_label or row.bucket}"]
+    if row.score is not None:
+        parts.append(f"score={row.score:.1f}")
+    if row.tags_text:
+        parts.append(f"tags={row.tags_text}")
+    if row.key_level:
+        parts.append(f"level={row.key_level}")
+    if row.expected_r is not None:
+        parts.append(f"expected_r={row.expected_r:.2f}")
+    return "; ".join(parts)
 
 
 class MasterAvwapPanel(QWidget):
@@ -65,7 +80,16 @@ class MasterAvwapPanel(QWidget):
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
         if self.focus_service is not None:
             self.delegate.set_focus_lookup(self.focus_service.is_focus)
-            self.table.add_row_action("Add to Focus Picks", self._add_row_to_focus)
+            # The ★ column: click to favorite into Swing Focus / click again to remove.
+            self.table.clicked.connect(self._on_table_clicked)
+            self.table.add_row_action(
+                "Add to Swing Focus Picks",
+                lambda proxy_index: self._add_row_to_focus(proxy_index, "swing"),
+            )
+            self.table.add_row_action(
+                "Add to M5 Focus Picks",
+                lambda proxy_index: self._add_row_to_focus(proxy_index, "m5"),
+            )
             self.focus_service.focusChanged.connect(lambda: self.table.viewport().update())
 
         self.empty_state = EmptyState(
@@ -402,6 +426,9 @@ class MasterAvwapPanel(QWidget):
             # the headline ranking is what the trader sees first; column headers
             # remain click-sortable.
             self.table.fit_columns()
+            # ★ / ✕ verdict columns stay icon-width.
+            self.table.horizontalHeader().resizeSection(0, 36)
+            self.table.horizontalHeader().resizeSection(1, 36)
         self._update_kpis(rows)
         self.rowsChanged.emit(
             len(rows),
@@ -516,19 +543,69 @@ class MasterAvwapPanel(QWidget):
             last_close=raw.get("last_close") or raw.get("previous_close"),
         )
 
-    def _add_row_to_focus(self, proxy_index) -> None:
+    def _on_table_clicked(self, proxy_index) -> None:
+        """★ column clicks toggle Swing Focus; ✕ column clicks log a dislike."""
+        if self.focus_service is None or not proxy_index.isValid():
+            return
+        source_index = self.proxy.mapToSource(proxy_index)
+        key = self.model.COLUMNS[source_index.column()][0]
+        if key not in {"favorite", "dislike"}:
+            return
+        row = self.model.row_at(source_index.row())
+        if row is None or not row.symbol:
+            return
+        if key == "dislike":
+            self._dislike_row(row)
+        elif self.focus_service.is_focus(row.symbol):
+            self.focus_service.remove_everywhere(row.symbol, origin="setups", context=_row_context(row))
+            message = f"Unfavorited {row.symbol}: removed from focus picks."
+            self.status_label.setText(message)
+            self.statusChanged.emit(message)
+        else:
+            self._add_row_to_focus(proxy_index, "swing")
+
+    def _dislike_row(self, row: SetupRow) -> None:
+        reason, accepted = QInputDialog.getMultiLineText(
+            self,
+            f"Dislike {row.symbol}",
+            "Why is this a bad pick? Saved to pick_feedback.jsonl so an AI can\n"
+            "review your dislikes and suggest scan/scoring changes.",
+        )
+        if not accepted:
+            return
+        self._record_dislike(row, reason)
+
+    def _record_dislike(self, row: SetupRow, reason: str) -> None:
+        self.focus_service.record_feedback(
+            row.symbol,
+            row.side,
+            "dislike",
+            category=self.focus_service.focus_category(row.symbol) or "swing",
+            origin="setups",
+            reason=reason,
+            context=_row_context(row),
+        )
+        message = f"✕ {row.symbol}: dislike logged for AI review."
+        if self.focus_service.is_focus(row.symbol):
+            self.focus_service.remove_everywhere(row.symbol)
+            message = f"✕ {row.symbol}: dislike logged and removed from focus picks."
+        self.status_label.setText(message)
+        self.statusChanged.emit(message)
+
+    def _add_row_to_focus(self, proxy_index, category: str = "swing") -> None:
         if self.focus_service is None or not proxy_index.isValid():
             return
         row = self.model.row_at(self.proxy.mapToSource(proxy_index).row())
+        bucket = "Swing" if category == "swing" else "M5"
         if row is None or row.side not in {"LONG", "SHORT"}:
             message = "Add to Focus needs a LONG or SHORT row."
         else:
             side = "long" if row.side == "LONG" else "short"
-            added = self.focus_service.add(row.symbol, side)
+            added = self.focus_service.add(row.symbol, side, category, origin="setups", context=_row_context(row))
             message = (
-                f"Added {row.symbol} to Focus {side}s."
+                f"Liked {row.symbol}: added to {bucket} Focus {side}s - its alerts now flag gold in the Alert Center."
                 if added
-                else f"{row.symbol} already in Focus {side}s."
+                else f"{row.symbol} already in {bucket} Focus {side}s."
             )
         self.status_label.setText(message)
         self.statusChanged.emit(message)

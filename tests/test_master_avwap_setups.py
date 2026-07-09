@@ -2442,6 +2442,130 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[0]["industry_relative_strength_bonus"], 0)
         self.assertIn("setup inactive", priority_rows[0]["industry_relative_strength_note"])
 
+    def test_universe_strength_rows_split_daily_and_weekly_industry_excess(self):
+        frames = {"NVDA": self._strength_frame(10.0)}
+        industry_frames = {"SMH": self._strength_frame(3.0)}
+        contexts = {"NVDA": {"industry": "Semiconductors", "industry_etf": "SMH"}}
+
+        rows = master_avwap.build_universe_strength_rows(
+            frames,
+            {"one_day_return_pct": 0.0, "five_day_return_pct": 0.0},
+            sides_by_symbol={"NVDA": "LONG"},
+            industry_context_by_symbol=contexts,
+            industry_daily_frames_by_etf=industry_frames,
+        )
+
+        row = rows[0]
+        self.assertIsNotNone(row["rs_vs_industry_1d"])
+        self.assertIsNotNone(row["rs_vs_industry_5d"])
+        self.assertGreater(row["rs_vs_industry_1d"], 0.0)  # 10% trend vs 3% trend
+        self.assertGreater(row["rs_vs_industry_5d"], 0.0)
+        # The blended score is the 0.35/0.65 mix of the split horizons.
+        self.assertAlmostEqual(
+            row["rs_vs_industry"],
+            0.35 * row["rs_vs_industry_1d"] + 0.65 * row["rs_vs_industry_5d"],
+            places=2,
+        )
+
+    def test_industry_rs_consistency_bonus_requires_daily_and_weekly_alignment(self):
+        universe_row = {
+            "symbol": "NVDA",
+            "side": "LONG",
+            "industry_etf": "SMH",
+            "rs_vs_industry": 2.2,
+            "rs_vs_industry_1d": 0.8,
+            "rs_vs_industry_5d": 3.1,
+        }
+        industry_row = {"industry_etf": "SMH", "daily_relative_strength_score": 1.4}
+
+        aligned = master_avwap.assess_industry_relative_strength(
+            universe_row, "LONG", industry_row, scoring_enabled=True
+        )
+        self.assertTrue(aligned["industry_rs_consistent"])
+        self.assertEqual(
+            aligned["industry_relative_strength_bonus"],
+            master_avwap.INDUSTRY_RELATIVE_STRENGTH_BONUS + master_avwap.INDUSTRY_RS_CONSISTENT_BONUS,
+        )
+        self.assertIn("daily+weekly aligned", aligned["industry_relative_strength_note"])
+
+        # Weekly leads but the daily excess flipped: base bonus only.
+        mixed = master_avwap.assess_industry_relative_strength(
+            dict(universe_row, rs_vs_industry_1d=-0.2),
+            "LONG",
+            industry_row,
+            scoring_enabled=True,
+        )
+        self.assertFalse(mixed["industry_rs_consistent"])
+        self.assertEqual(
+            mixed["industry_relative_strength_bonus"],
+            master_avwap.INDUSTRY_RELATIVE_STRENGTH_BONUS,
+        )
+
+        # Shorts invert: RW on both horizons earns the consistency bonus.
+        short_row = {
+            "symbol": "FLS",
+            "side": "SHORT",
+            "industry_etf": "XLI",
+            "rs_vs_industry": -2.4,
+            "rs_vs_industry_1d": -0.6,
+            "rs_vs_industry_5d": -3.2,
+        }
+        short_aligned = master_avwap.assess_industry_relative_strength(
+            short_row,
+            "SHORT",
+            {"industry_etf": "XLI", "daily_relative_strength_score": -1.1},
+            scoring_enabled=True,
+        )
+        self.assertTrue(short_aligned["industry_rs_consistent"])
+        self.assertEqual(
+            short_aligned["industry_relative_strength_bonus"],
+            master_avwap.INDUSTRY_RELATIVE_STRENGTH_BONUS + master_avwap.INDUSTRY_RS_CONSISTENT_BONUS,
+        )
+
+    def test_trend_ma_alignment_scores_close_beyond_ema15_and_sma20(self):
+        bonus = master_avwap.PRIORITY_TREND_MA_ALIGNMENT_SCORE_BONUS
+
+        aligned_long = master_avwap.assess_trend_ma_alignment("LONG", 105.0, 101.0, 100.0)
+        self.assertTrue(aligned_long["trend_ma_alignment"])
+        self.assertEqual(aligned_long["trend_ma_alignment_bonus"], bonus)
+        self.assertIn("above EMA15", aligned_long["trend_ma_alignment_note"])
+
+        aligned_short = master_avwap.assess_trend_ma_alignment("SHORT", 95.0, 96.0, 97.0)
+        self.assertTrue(aligned_short["trend_ma_alignment"])
+        self.assertEqual(aligned_short["trend_ma_alignment_bonus"], bonus)
+        self.assertIn("below EMA15", aligned_short["trend_ma_alignment_note"])
+
+        # Above one MA but not the other: the pair is the signal, no points.
+        partial = master_avwap.assess_trend_ma_alignment("LONG", 100.5, 101.0, 100.0)
+        self.assertFalse(partial["trend_ma_alignment"])
+        self.assertEqual(partial["trend_ma_alignment_bonus"], 0)
+
+        missing = master_avwap.assess_trend_ma_alignment("LONG", 105.0, None, 100.0)
+        self.assertEqual(missing["trend_ma_alignment_bonus"], 0)
+
+    def test_priority_summary_adds_trend_ma_alignment_bonus(self):
+        common = dict(
+            symbol="NVDA",
+            side="LONG",
+            events_today=[],
+            all_events=[],
+            trend_label="UP",
+            favorite_zone=None,
+        )
+        without = master_avwap.build_priority_setup_summary(**common)
+        with_alignment = master_avwap.build_priority_setup_summary(
+            **common,
+            trend_ma_alignment=True,
+            trend_ma_alignment_bonus=master_avwap.PRIORITY_TREND_MA_ALIGNMENT_SCORE_BONUS,
+            trend_ma_alignment_note="Close above EMA15 100.00 and SMA20 99.00 (+10)",
+        )
+        self.assertEqual(
+            with_alignment["score"] - without["score"],
+            master_avwap.PRIORITY_TREND_MA_ALIGNMENT_SCORE_BONUS,
+        )
+        self.assertTrue(with_alignment["trend_ma_alignment"])
+        self.assertIn("EMA15", with_alignment["trend_ma_alignment_note"])
+
     def test_htf_trend_context_detects_aligned_sma_retest(self):
         intraday = _build_intraday_htf_retest_frame()
 
