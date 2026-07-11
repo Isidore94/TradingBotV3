@@ -21,6 +21,14 @@ def _log_phase_duration(label: str, since: float) -> float:
     """Log wall-clock seconds elapsed for a run_master phase; returns a fresh mark."""
     now = time.perf_counter()
     logging.info("[run_master timing] %-26s %6.1fs", label, now - since)
+    try:
+        from diagnostics import get_active_recorder
+
+        recorder = get_active_recorder()
+        if recorder is not None:
+            recorder.record_phase(label, now - since)
+    except Exception:
+        pass  # diagnostics must never break a scan
     return now
 
 
@@ -258,7 +266,7 @@ def _schedule_deferred_theta_enrichment(
 # CACHE HELPERS
 # ============================================================================
 
-def run_master(
+def _run_master_impl(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
     use_shared_watchlists: bool = False,
@@ -2255,6 +2263,51 @@ def main():
     from .gui import main as _main
 
     return _main()
+
+
+def run_master(
+    longs_path: Path | None = None,
+    shorts_path: Path | None = None,
+    use_shared_watchlists: bool = False,
+    update_setup_tracker: bool | None = None,
+    require_ib_for_setup_tracker: bool = False,
+):
+    """Manifest-wrapped Master scan (plan.md Phase 1): every run writes one
+    structured run manifest - success or failure - with phase timings."""
+    from diagnostics import ManifestRecorder, clear_active_recorder, set_active_recorder
+
+    recorder = ManifestRecorder(job_type="master_scan")
+    recorder.set_counter("use_shared_watchlists", bool(use_shared_watchlists))
+    recorder.set_counter("update_setup_tracker", update_setup_tracker)
+    set_active_recorder(recorder)
+    try:
+        result = _run_master_impl(
+            longs_path=longs_path,
+            shorts_path=shorts_path,
+            use_shared_watchlists=use_shared_watchlists,
+            update_setup_tracker=update_setup_tracker,
+            require_ib_for_setup_tracker=require_ib_for_setup_tracker,
+        )
+        if isinstance(result, dict):
+            recorder.set_counter(
+                "symbols_processed", len(result.get("daily_frames_by_symbol") or {})
+            )
+            recorder.set_counter("tracked_rows", len(result.get("tracked_rows") or []))
+            recorder.outputs["watchlist_label"] = str(result.get("watchlist_label") or "")
+            recorder.set_counter(
+                "setup_tracker_updated", bool(result.get("setup_tracker_updated"))
+            )
+        recorder.finalize(status="ok")
+        return result
+    except BaseException as exc:
+        recorder.finalize(status="failed", error=repr(exc))
+        raise
+    finally:
+        clear_active_recorder()
+        try:
+            recorder.save()
+        except Exception:
+            logging.exception("Failed to save run manifest (scan result unaffected).")
 
 
 run_anchor_watchlist_scan = _legacy.run_anchor_watchlist_scan
