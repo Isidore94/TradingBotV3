@@ -72,6 +72,15 @@ class AutopilotService(QObject):
         self._alerts_today: deque[str] = deque(maxlen=60)
         self._alerts_date = datetime.now().date().isoformat()
         self._state = self._load_state()
+        try:
+            from job_ledger import JobLedger, default_ledger_path
+
+            self._job_ledger = JobLedger(default_ledger_path())
+            for stale in self._job_ledger.mark_stale_running():
+                logging.warning("Job did not survive restart: %s", stale.key)
+        except Exception:
+            logging.exception("Job ledger unavailable; scheduling falls back to state file only.")
+            self._job_ledger = None
         self._enabled = bool(self._state.get("enabled"))
         self._profile = str(self._state.get("profile") or AUTO_PROFILE_DESK)
         if self._profile not in (AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY):
@@ -649,6 +658,7 @@ class AutopilotService(QObject):
         )
         if started:
             self._log(f"Swing scan started for slot {slot_label} ({tracker_text}).")
+            self._ledger_event("start", slot_label)
         else:
             self._active_scan_slot = None
             self._pending_slot_marks = []
@@ -658,6 +668,7 @@ class AutopilotService(QObject):
         slot = self._active_scan_slot or "?"
         self._mark_slots_done()
         self._log(f"Swing scan for slot {slot} finished at {stamp} ({len(rows)} setup rows).")
+        self._ledger_event("complete", slot)
         self._active_scan_slot = None
         self._write_report()
         self._maybe_run_wrapup(datetime.now())
@@ -669,6 +680,7 @@ class AutopilotService(QObject):
         detail = str(message or "").strip()
         first_line = detail.splitlines()[0] if detail else "unknown error"
         self._log(f"Swing scan for slot {slot} FAILED: {first_line}")
+        self._ledger_event("fail", slot, error=first_line)
         # The feed keeps one line for the phone report, but the subprocess
         # stderr/traceback lives in the remaining lines - keep it findable.
         if detail and detail != first_line:
@@ -676,6 +688,26 @@ class AutopilotService(QObject):
         self._active_scan_slot = None
         self._write_report()
         self._maybe_run_wrapup(datetime.now())
+
+    def _ledger_event(self, kind: str, slot_label: str, *, error: str = "") -> None:
+        """Durable job trail beside the legacy slots_done state (Phase 2.3)."""
+        ledger = getattr(self, "_job_ledger", None)
+        if ledger is None:
+            return
+        try:
+            from job_ledger import job_key
+
+            key = job_key(datetime.now().date().isoformat(), "swing_scan", str(slot_label))
+            if kind == "start":
+                ledger.schedule(datetime.now().date().isoformat(), "swing_scan", str(slot_label))
+                ledger.start(key)
+            elif kind == "complete":
+                ledger.complete(key)
+            elif kind == "fail":
+                error_class = "ib_disconnected" if "IB" in error else "unexpected"
+                ledger.fail(key, error_class=error_class, error=error)
+        except Exception:
+            logging.exception("Job ledger event failed (scheduling unaffected).")
 
     def _mark_slots_done(self) -> None:
         marks = getattr(self, "_pending_slot_marks", [])
