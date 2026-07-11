@@ -97,11 +97,22 @@ class ScanService(QObject):
         return True
 
     def shutdown(self) -> None:
-        """Stop the worker thread on app close (best effort; waits briefly)."""
+        """Stop the worker thread on app close (best effort; waits briefly),
+        then reap every scan child this process spawned - a closed desk must
+        not leave a multi-GB scanner running invisibly (plan.md P0 #5)."""
         thread = self._thread
         if thread is not None and thread.isRunning():
             thread.quit()
             thread.wait(3000)
+        summary = terminate_owned_scan_processes()
+        if summary["finished"] or summary["terminated"]:
+            import logging
+
+            logging.info(
+                "Scan children reaped at shutdown: %s finished, %s terminated.",
+                summary["finished"],
+                summary["terminated"],
+            )
 
     @Slot(dict, list, str)
     def _handle_finished(self, run_result: dict, rows: list[SetupRow], stamp: str) -> None:
@@ -118,6 +129,49 @@ class ScanService(QObject):
 
 
 _SCAN_OK_MARKER = "SCAN_SUBPROCESS_OK"
+
+# Every scan subprocess this GUI spawns is registered here so shutdown can
+# reap it (plan.md P0 #5 / Phase 2.6): the marker-based early return means a
+# child (theta tail included) can outlive its scan - it must never outlive
+# the application unnoticed.
+_owned_processes_lock = threading.Lock()
+_owned_processes: list[subprocess.Popen] = []
+
+
+def _register_owned_process(proc: subprocess.Popen) -> None:
+    with _owned_processes_lock:
+        _owned_processes[:] = [p for p in _owned_processes if p.poll() is None]
+        _owned_processes.append(proc)
+
+
+def owned_scan_process_count() -> int:
+    """Live scan children owned by this GUI (health/status surface)."""
+    with _owned_processes_lock:
+        _owned_processes[:] = [p for p in _owned_processes if p.poll() is None]
+        return len(_owned_processes)
+
+
+def terminate_owned_scan_processes(grace_seconds: float = 3.0) -> dict[str, int]:
+    """Bounded-graceful reap of every owned child: wait briefly for a natural
+    exit, then terminate. Only processes this GUI spawned are touched."""
+    with _owned_processes_lock:
+        procs = [p for p in _owned_processes if p.poll() is None]
+        _owned_processes.clear()
+    summary = {"finished": 0, "terminated": 0}
+    for proc in procs:
+        try:
+            proc.wait(timeout=max(0.0, grace_seconds))
+            summary["finished"] += 1
+            continue
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+            summary["terminated"] += 1
+        except Exception:
+            pass
+    return summary
 
 
 def _run_master_scan_subprocess(
@@ -184,6 +238,7 @@ def _wait_for_scan_marker(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    _register_owned_process(proc)
     stdout_tail: deque[str] = deque(maxlen=tail_lines)
     stderr_tail: deque[str] = deque(maxlen=tail_lines)
     marker_seen = threading.Event()

@@ -200,7 +200,12 @@ class AutopilotService(QObject):
         now = datetime.now()
         slots = core.get_autopilot_swing_slots(now)
         done = set(self._state.get("slots_done", []))
-        next_slot = next((slot for slot in slots if slot not in done), None)
+        if now.weekday() >= 5:
+            # Weekend: never advertise a weekday slot as the "next update" -
+            # a Saturday report claiming 07:30 reads as broken automation.
+            next_slot = "next session"
+        else:
+            next_slot = next((slot for slot in slots if slot not in done), None)
         longs, shorts = self._read_watchlists()
         return {
             "enabled": self._enabled,

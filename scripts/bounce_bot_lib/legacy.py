@@ -4357,6 +4357,20 @@ class BounceBot(EWrapper, EClient):
             return []
         today = spy_today[-1].dt.date()
         pause_start = self._detect_spy_pause_start(spy_today, side)
+        # Challenger in shadow (plan.md sec 16): the pure market-state engine
+        # sees the same bars and logs agreement/divergence with this legacy
+        # detector. It must never influence the live decision below.
+        try:
+            from market_state_bridge import record_spy_shadow
+
+            record_spy_shadow(
+                spy_today,
+                _prev_close,
+                legacy_pause_start=pause_start,
+                side=side,
+            )
+        except Exception:
+            logging.debug("SPY shadow-state hook failed.", exc_info=True)
         if pause_start is None:
             self._regime_pause_state = None
             return []

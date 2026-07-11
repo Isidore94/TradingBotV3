@@ -1345,10 +1345,16 @@ def test_pacing_backoff_registers_and_escalates():
     assert stub.pacing_backoff_seconds == IB_PACING_BACKOFF_MAX_SECONDS
 
 
-def test_d1_flag_gate_requires_actionable_bucket_and_evidence():
+def test_d1_flag_gate_requires_actionable_bucket_and_evidence(monkeypatch):
     from types import SimpleNamespace
 
+    import bounce_bot_lib.learning as learning
     from bounce_bot_lib.legacy import BounceBot
+
+    # Hermetic: the gate consults the LIVE learning state and wall clock; on
+    # a machine whose state mutes the current time bucket (e.g. opening_drive
+    # proven negative) the unpatched test fails at some hours of the day.
+    monkeypatch.setattr(learning, "load_bounce_learning_state", lambda: {})
 
     stub = SimpleNamespace(
         _human_focus_side_for_symbol=lambda symbol: "",
