@@ -20,7 +20,7 @@ Responsibilities:
   shared entries Focus Picks injected, so a later removal never deletes a
   symbol the user maintains independently in the broad list.
 
-See GUI_REDESIGN_PLAN.md (Focus Picks + Human Setup Tracker), Step 1.
+See plan.md, Milestone 8 (Human focus lists).
 """
 
 from __future__ import annotations

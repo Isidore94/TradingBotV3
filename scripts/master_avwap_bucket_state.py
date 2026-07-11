@@ -5,8 +5,8 @@ buckets (Favorite / High Conviction) — not generic D1/stdev noise, and not
 favorite->favorite re-flags. We persist each setup's last bucket by symbol+side
 and compare it to the current scan.
 
-Plain Python (no Qt) so the headless `run_master` maintains it. See
-GUI_REDESIGN_PLAN.md (Focus Picks + Human Setup Tracker), Step 5.
+Plain Python (no Qt) so the headless `run_master` maintains it. See plan.md,
+Milestone 8 (Alert ladder and human focus lists).
 """
 
 from __future__ import annotations

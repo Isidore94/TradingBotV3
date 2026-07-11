@@ -1,100 +1,114 @@
-# Sol branch — plan.md implementation status
+# Sol3 implementation checkpoint
 
-Branch: `Sol` (from `main` @ 69bdee8, 2026-07-10 night). Every commit ships
-green: **769 passed, 0 warnings** (was 715 passed / 2 failed / 7 warnings).
-`python scripts/smoke_check.py` runs 7 deterministic checks with no network.
+This is a concise handoff record. [`plan.md`](plan.md) is the authoritative roadmap, promotion policy, and live-validation plan.
 
-plan.md is a multi-month roadmap; this pass implemented its own prescribed
-starting order (sec 21 "first ten moves" and the Packet A–D foundations),
-prioritizing pure, fully-tested engines plus the correctness/reliability fixes
-it marked P0. GUI integration of the new engines is deliberately staged so you
-can test the foundations first.
+## Checkpoint
 
-## Implemented (by commit)
+- Branch: `Sol3`
+- Commit: `20cefb3`
+- Date: 2026-07-11
+- Last reported green baseline: **802 tests passing**
+- Smoke command: `python scripts/smoke_check.py`
 
-1. **Phase 0 baseline** — include_theta test contract fixed (suite green),
-   `datetimde` dormant defect + regression tests, duplicate
-   `_priority_expected_r_text` removed + AST guard against duplicate top-level
-   definitions, deprecated Qt proxy invalidation replaced with
-   `beginFilterChange()/endFilterChange()`.
-2. **Packet A (runtime lifecycle)** — BounceBot `_stop_event` + `stop()` that
-   joins owned threads; cancellable `wait_for_candle_close`; all strategy-loop
-   sleeps cancellable; `BounceService.stop()` really stops the bot and ALL
-   timers (board timer was leaked) and wins the stop-during-startup race.
-3. **Packet B (sec 16/24)** — `scripts/market_state.py`: pure SPY
-   market-state/pullback-episode machine, side-symmetric (`side_sign`),
-   hysteresis, complete-bars-only transitions, append-only episode records,
-   sec-24 thresholds in versioned config; exact bearish-mirror tests.
-4. **Packet C (sec 16.8)** — `scripts/relative_strength.py`: exact-timestamp
-   aligned multi-window features, beta+volatility-normalized residuals,
-   transparent component/percentile composite with named penalties, tiers
-   (DEFIANT/HOLDING/WATCHING/FADING/INVALID); mirror-equivalence tests.
-5. **Packet D (sec 14.3/16.6)** — `scripts/candidate_registry.py`: per-source
-   provenance + leases, user entries automation-proof, lifecycle stages with
-   one-event-per-transition, sec-16.6 priority live pool, atomic versioned
-   persistence (stale writers rejected).
-6. **Phase 1 (sec 6.1)** — `scripts/diagnostics/`: structured run manifests;
-   `run_master` is manifest-wrapped (every run, success or failure, writes
-   phase timings + counters; bounded local history).
-7. **23.8** — `publish_away_report`: atomic tmp+replace, sha256 readback
-   verification, dated bounded archive, failure never clears the prior valid
-   report; report header carries an explicit freshness warning; the service
-   separates last_attempt from last_verified_success.
-8. **Correctness batch** — 22.9 stable digest baseline sampling (was
-   per-process `hash()`), 22.3 strict `Side` parsing with manifest-counted
-   legacy coercions, 23.5 universe freshness = oldest-of-all-files (missing
-   file ⇒ no generation), 23.7 lazy legacy-Tk import, Phase 10.8/10.9
-   `pyproject.toml` (pytest markers, narrow ruff gates) + `constraints.txt`.
-9. **Auto Mode semantics + smoke** — OFF/DESK/AWAY with persisted profile and
-   report labeling; strict OFF runs no suggestion scans/near-extreme checks
-   and touches no lists unless `autopilot_shadow_research` (default ON,
-   preserving the current scorecard pipeline) allows it;
-   `scripts/smoke_check.py` + test.
+## Implemented and green
 
-## Sol2 branch (2026-07-11, on top of Sol)
+### Phase 0
 
-10. **Scan-child ownership (P0 #5)** — closing the desk reaps every scan
-    subprocess it spawned (bounded wait, then terminate); found live when a
-    closed app left a 7.6GB scanner running. `owned_scan_process_count()`
-    ready for the Health surface.
-11. **SPY engine in shadow (sec 16 kickoff)** — `market_state_bridge` runs the
-    pure engine on the bot's cached SPY bars inside
-    `check_regime_pause_setups` and logs agreement/divergence vs the legacy
-    one-red-candle pause detector to
-    `machine diagnostics\spy_state_shadow.jsonl`. Legacy stays the champion;
-    the log accumulates promotion evidence.
-12. Weekend freshness label; two environment-dependent tests made hermetic.
+- Green baseline and dormant-defect fixes.
+- Duplicate-definition guard and modern Qt proxy API.
+- Entrypoint/lazy-import hygiene.
+- Deterministic smoke command.
+- Owned runtime/thread/process shutdown behavior.
+- `pyproject.toml`, pytest markers, narrow lint gates, and pinned constraints.
 
-First production run manifest (2026-07-11): 1,270 symbols / 28.5 min; output
-writes 291s; `side_coercions_invalid: 7` — the strict-side counter caught 7
-corrupt side values on day one.
+### Phase 1 core
 
-13. **Phase 2.3-2.5 job ledger** — append-only JSONL job trail
-    (QUEUED/RUNNING/COMPLETED/FAILED/SKIPPED/STALE, attempts, per-error-class
-    retry budgets, restart replay + stale marking); every swing slot records
-    through it beside the legacy slots_done state.
-14. **Global Auto Mode header (sec 15.2)** — status-bar control on every
-    page: OFF -> AUTO-DESK -> AUTO-AWAY, color-coded, wired to the service.
-15. **Registry shadow adoption (Packet D.2)** — write_auto_watchlists mirrors
-    bot picks into the CandidateRegistry (open_scan source, 24h leases);
-    text files remain the authoritative export.
+- Structured run manifest on Master success or failure.
+- Phase timings, counters, and bounded local history.
 
-## Not yet implemented (next in plan order)
+Remaining:
 
-- **Engine integration (sec 21 moves 7–8)**: wire `market_state` +
-  `relative_strength` into regime-pause, Entry Assist, environment scan, and
-  RS Window (adapters exist; the four surfaces still use their own logic);
-  single-pass RRS timeframes in BounceBot.
-- **TradingRuntime composition root + global Auto header UI** (sec 15): the
-  service-level semantics landed; panel-ownership inversion and the top-bar
-  control are UI work best done with you watching.
-- **CandidateRegistry adoption** (Packet D step 2+): converting the live
-  writers (open scan/auto-populate/near-extreme/VWAP removals) to sources.
-- **Phase 2**: one scheduler engine + job ledger + writer leases.
-- **Phase 3**: storage classification, local journal DB, secrets to OS store.
-- **Phase 4**: provider repository, staged Master scan, batching.
-- **22.1/22.2/22.4–22.7**: moving-level look-ahead, same-day history keys,
-  backfill leakage, tracker identity, score/bucket ordering, factor horizons —
-  each needs golden fixtures before touching detector behavior.
-- **Phases 5–9**: point-in-time research, ranking pipeline, new setup shadow
-  program, journal linking, opportunity inbox, market-prep Qt port, CI.
+- in-app Health page;
+- benchmark and golden-result fixtures.
+
+### Phase 2 implementation
+
+- Durable job ledger with typed states.
+- Bounded retries by error class.
+- Restart replay and stale-run marking.
+- Scan-child ownership and reaping.
+- Verified atomic Away report publishing and archive.
+- Truthful freshness and last-attempt/last-success state.
+- Runtime heartbeat.
+- Cross-machine writer protection/lease.
+- Global `OFF` / `AUTO-DESK` / `AUTO-AWAY` control.
+
+Phase 2 is implementation-complete. The two-machine collision, expiry/takeover, heartbeat-under-stall, publish-failure, and shutdown drills in `plan.md` remain required before it is marked live-validated.
+
+### Foundation engines
+
+- Packet A: runtime lifecycle.
+- Packet B: pure, side-symmetric SPY market-state engine.
+- Packet C: aligned, beta/volatility-normalized relative-strength engine.
+- Packet D: candidate registry with provenance, leases, typed transitions, and versioned persistence.
+
+### Correctness/platform fixes already landed
+
+- Strict and counted side parsing.
+- Stable digest sampling.
+- Universe freshness based on all required files.
+- Lazy legacy-Tk import.
+- Verified report publishing.
+- Truthful Auto profile semantics.
+
+## Live shadow challengers
+
+### SPY pullback engine
+
+- Live bridge runs on cached SPY bars.
+- Legacy pause detector remains champion.
+- Transition/agreement evidence writes to `spy_state_shadow.jsonl`.
+
+### Greatness Monitor
+
+- Persistent D1 confirmation plans and lifecycle.
+- Touch/wick/close/accept/retest/fail/re-arm semantics.
+- Restart-safe candidate state.
+- Existing D1 alerts remain champion.
+- Transition evidence writes to `greatness_shadow.jsonl`.
+
+Neither shadow engine is authorized to affect live ranking or loud alerts. Promotion gates and evidence floors are in `plan.md`, Section 7.
+
+## Operational artifacts
+
+- `heartbeat.json` — normally updated every 30 seconds.
+- `spy_state_shadow.jsonl` — SPY champion/challenger transitions.
+- `greatness_shadow.jsonl` — D1 confirmation lifecycle transitions.
+- run manifests — scan timings, counters, and completion state.
+- job ledger — unattended job lifecycle and retry history.
+
+## Immediate next work
+
+1. Preserve and audit the first full live-session artifacts.
+2. Add shadow coverage/version/config metadata and a daily audit summarizer.
+3. Run the Phase 2 controlled operational drills.
+4. Build the Health page.
+5. Build benchmark and golden-result fixtures.
+6. Perform Phase 3 storage/secrets migration only in a supervised session.
+7. Keep the SPY and Greatness engines in shadow until the evidence gates pass.
+
+## Larger remaining work
+
+- Provider repository and staged scanner.
+- Point-in-time research correctness repairs.
+- Full CandidateRegistry adoption.
+- Canonical SPY/RS integration.
+- Dedicated Greatness fast lane and complete readiness gates.
+- Canonical opportunity/ranking pipeline.
+- Command Center, mini-chart radar, and alert ladder.
+- Auto/Away snapshot parity.
+- Journal/outcome learning loop.
+- Controlled new-setup research program.
+- Market Prep Qt consolidation, CI, and release engineering.
+
+Do not use this file as a substitute for the detailed dependencies, live tests, and exit criteria in `plan.md`.

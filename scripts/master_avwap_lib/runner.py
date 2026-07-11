@@ -1653,7 +1653,7 @@ def _run_master_impl(
     apply_final_priority_buckets(priority_rows, ai_state, csv_rows, feature_rows_by_symbol)
     attach_setup_candidate_payloads(priority_rows, ai_state, feature_rows_by_symbol)
     # D1 Focus Alerts: diff this scan's final buckets vs the persisted state and keep
-    # only genuine upgrades into Favorite / High Conviction (see GUI_REDESIGN_PLAN.md).
+    # only genuine upgrades into Favorite / High Conviction (see plan.md, Milestone 8).
     from master_avwap_bucket_state import record_scan_bucket_upgrades
 
     bucket_upgrades = record_scan_bucket_upgrades(priority_rows, today_run)

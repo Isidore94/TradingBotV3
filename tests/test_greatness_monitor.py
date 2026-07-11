@@ -1,4 +1,4 @@
-"""Greatness Monitor lifecycle tests (HIGH_CONVICTION_FEATURES_PLAN sec 18)."""
+"""Greatness Monitor lifecycle tests (plan.md sections 7.3, 9, and 10)."""
 
 import sys
 from datetime import datetime, timedelta

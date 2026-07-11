@@ -204,7 +204,7 @@ UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
 
 # Trader-curated daily Focus Picks (shared home, synced across machines) and the
 # runtime files for human-pick membership tracking + the human-vs-bot cohort.
-# See GUI_REDESIGN_PLAN.md (Focus Picks + Human Setup Tracker).
+# See plan.md, Milestone 8 (Human focus lists).
 FOCUS_LONGS_FILE = PERSISTENT_DATA_DIR / "focus_longs.txt"
 FOCUS_SHORTS_FILE = PERSISTENT_DATA_DIR / "focus_shorts.txt"
 FOCUS_PICK_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "focus_pick_membership.json"

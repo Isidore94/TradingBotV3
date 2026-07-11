@@ -1,4 +1,4 @@
-"""Greatness Monitor shadow runner (HIGH_CONVICTION plan sec 16.2, shadow-first).
+"""Greatness Monitor shadow runner (plan.md sections 7.3 and 9, shadow-first).
 
 Runs the confirmation engine beside the existing one-wick D1 trigger alerts:
 each time the bot evaluates a D1 watchlist symbol, the same intraday bars

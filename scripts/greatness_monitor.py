@@ -1,4 +1,4 @@
-"""Greatness Monitor core (HIGH_CONVICTION_FEATURES_PLAN.md sec 1, 15, 16.2).
+"""Greatness Monitor core (plan.md sections 7, 8, and 9).
 
 Pure confirmation engine for promising D1 candidates: the slow Master/D1 scan
 defines an ordered ConfirmationPlan (what greatness would look like); this
