@@ -16,6 +16,7 @@ expose_legacy_names(
         "build_tracker_stats_rows",
         "build_tracker_playbook_rows",
         "build_tracker_playbook_recommendation_rows",
+        "build_tracker_short_horizon_rows",
         "build_tracker_setup_type_rows",
         "build_tracker_factor_view_rows",
         "build_scan_factor_observation_rows",

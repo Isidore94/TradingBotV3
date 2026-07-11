@@ -14,6 +14,7 @@ from ui.panels.bounce_panel import BouncePanel
 from ui.panels.focus_picks_panel import FocusPicksPanel
 from ui.panels.industry_panel import IndustryPanel
 from ui.panels.master_avwap_panel import MasterAvwapPanel
+from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
@@ -33,13 +34,15 @@ class TradingDeskPanel(QWidget):
         self.watchlists_panel = WatchlistsPanel()
         self.industry_panel = IndustryPanel()
         self.focus_picks_panel = FocusPicksPanel(self.focus_service)
+        self.bounce_panel = BouncePanel(self.focus_service)
+        self.rs_window_panel = RsWindowPanel(self.bounce_panel.service)
         self.master_workspace = MasterAvwapWorkspace(
             self.master_panel,
             self.theta_panel,
             self.watchlists_panel,
             self.industry_panel,
+            rs_window_panel=self.rs_window_panel,
         )
-        self.bounce_panel = BouncePanel(self.focus_service)
         self.alert_center = AlertCenterPanel(self.focus_service)
         self.alert_center.attach_service(self.bounce_panel.service)
         # In workspace mode the Alert Center's embedded plan pane is off; a
@@ -53,6 +56,7 @@ class TradingDeskPanel(QWidget):
         self.theta_panel.statusChanged.connect(self.statusChanged)
         self.watchlists_panel.statusChanged.connect(self.statusChanged)
         self.industry_panel.statusChanged.connect(self.statusChanged)
+        self.rs_window_panel.statusChanged.connect(self.statusChanged)
         self.focus_picks_panel.statusChanged.connect(self.statusChanged)
         self.bounce_panel.statusChanged.connect(self.statusChanged)
         self.alert_center.statusChanged.connect(self.statusChanged)
@@ -139,6 +143,7 @@ class MasterAvwapWorkspace(QFrame):
         theta_panel: ThetaPanel,
         watchlists_panel: WatchlistsPanel,
         industry_panel: IndustryPanel | None = None,
+        rs_window_panel: RsWindowPanel | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -147,12 +152,15 @@ class MasterAvwapWorkspace(QFrame):
         self.theta_panel = theta_panel
         self.watchlists_panel = watchlists_panel
         self.industry_panel = industry_panel
+        self.rs_window_panel = rs_window_panel
         self.tabs = QTabWidget()
         self.tabs.addTab(self.master_panel, "Setups")
         self.tabs.addTab(self.theta_panel, "Theta Plays")
         self.tabs.addTab(self.watchlists_panel, "Watchlists")
         if self.industry_panel is not None:
             self.tabs.addTab(self.industry_panel, "Industry Board")
+        if self.rs_window_panel is not None:
+            self.tabs.addTab(self.rs_window_panel, "RS Window")
         self.master_panel.scan_service.finished.connect(lambda *_args: self.theta_panel.refresh())
 
         layout = QVBoxLayout(self)

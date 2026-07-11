@@ -956,7 +956,6 @@ def run_master_avwap_shared_scan(update_setup_tracker: bool = True) -> dict[str,
         use_shared_watchlists=True,
         update_setup_tracker=update_setup_tracker,
         require_ib_for_setup_tracker=True,
-        include_theta=True,
     )
     return scan_result if isinstance(scan_result, dict) else {}
 

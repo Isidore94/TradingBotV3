@@ -117,6 +117,79 @@ def test_evaluate_quality_favorite_context_boosts_tier():
     assert boosted["composite_r"] > base["composite_r"]
 
 
+def test_proven_segments_marked_and_flagged_live():
+    rows = [
+        _perf_row("master_avwap_swing_trait", "long", "trendline_break_recent", 31, 1.93, median_close_r=1.72),
+        _perf_row("bounce_combo", "short", "eod_vwap+impulse_retest_vwap_eod", 17, 0.53, median_close_r=1.64),
+        _perf_row("master_avwap_setup_family", "long", "avwap_band_bounce", 53, 0.51, median_close_r=0.42),
+        _perf_row("bounce_type", "long", "thin_winner", 11, 2.00, median_close_r=1.0),  # n below the proven bar
+        _perf_row("bounce_type", "long", "skewed_winner", 40, 0.80, median_close_r=-0.10),  # outlier-carried avg
+        _perf_row("time_bucket", "long", "late_morning", 200, 0.90, median_close_r=0.5),  # dim not proven-eligible
+    ]
+    state = learning.build_learning_state(rows)
+    segments = state["segments"]
+    assert segments["master_avwap_swing_trait"]["long|trendline_break_recent"]["proven"]
+    assert segments["bounce_combo"]["short|eod_vwap+impulse_retest_vwap_eod"]["proven"]
+    assert not segments["bounce_type"]["long|thin_winner"]["proven"]
+    assert not segments["bounce_type"]["long|skewed_winner"]["proven"]
+    assert not segments["time_bucket"]["long|late_morning"]["proven"]
+
+    # A live bounce matching a proven swing trait gets flagged + S floor (avg >= S bar).
+    verdict = learning.evaluate_bounce_quality(
+        state,
+        direction="long",
+        bounce_types=["10_candle"],
+        swing_traits=["trendline_break_recent"],
+    )
+    assert verdict["proven"] and verdict["tier"] == "S"
+    assert any("trendline_break_recent" in reason for reason in verdict["proven_reasons"])
+
+    # A proven combo below the S bar floors at A.
+    combo_verdict = learning.evaluate_bounce_quality(
+        state,
+        direction="short",
+        bounce_combo="eod_vwap+impulse_retest_vwap_eod",
+    )
+    assert combo_verdict["proven"] and combo_verdict["tier"] == "A"
+
+    # No proven match -> unchanged behavior.
+    plain = learning.evaluate_bounce_quality(state, direction="long", bounce_types=["vwap"])
+    assert not plain["proven"] and plain["proven_reasons"] == []
+
+
+def test_mute_overrides_proven():
+    rows = [
+        _perf_row("master_avwap_swing_trait", "long", "trendline_break_recent", 31, 1.93, median_close_r=1.72),
+        _perf_row("time_bucket", "long", "midday", 30, -0.40),
+    ]
+    state = learning.build_learning_state(rows)
+    verdict = learning.evaluate_bounce_quality(
+        state,
+        direction="long",
+        swing_traits=["trendline_break_recent"],
+        time_bucket="midday",
+    )
+    assert verdict["muted"] and not verdict["proven"] and verdict["tier"] == "D"
+
+
+def test_format_bounce_alert_message_carries_proven_stamp():
+    from bounce_bot_lib.legacy import _format_bounce_alert_message
+
+    quality = {
+        "tier": "S",
+        "proven": True,
+        "proven_reasons": ["trendline_break_recent: +1.93R (n=31)"],
+        "reasons": ["dynamic_vwap_upper_band long +0.88R (n=59)"],
+    }
+    message = _format_bounce_alert_message("NVDA", "long", "dynamic_vwap_upper_band", {}, quality)
+    assert message.startswith("[S-TIER] PROVEN NVDA:")
+    assert "proven: trendline_break_recent: +1.93R (n=31)" in message
+
+    unproven = _format_bounce_alert_message("NVDA", "long", "vwap", {}, {"tier": "B"})
+    assert unproven.startswith("[B-TIER] NVDA:")
+    assert "PROVEN" not in unproven
+
+
 def test_time_bucket_for_matches_session_windows():
     assert learning.time_bucket_for(datetime(2026, 7, 2, 9, 45)) == "opening_drive"
     assert learning.time_bucket_for(datetime(2026, 7, 2, 11, 0)) == "late_morning"
@@ -973,6 +1046,145 @@ def test_entry_assist_weak_and_chop_emit_trailing_movers():
     assert set(both["results"]) == {"long", "short"}
     assert any(message.startswith("STRONGEST 30M (long)") for message, _tag in bot.alerts)
     assert any(message.startswith("WEAKEST 30M (short)") for message, _tag in bot.alerts)
+
+
+def test_entry_assist_command_windows_toggle_and_switch_sides():
+    bot = _entry_stub_bot(
+        "neutral_chop",  # commands are regime-independent
+        spy_closes=[100.0, 100.5, 101.0, 101.5, 102.0],
+        symbol_closes={
+            "AAA": [50.0, 50.2, 50.4, 50.6, 50.8],
+            "CCC": [30.0, 29.8, 29.6, 29.4, 29.2],
+        },
+        longs=("AAA",),
+        shorts=("CCC",),
+    )
+
+    opened = bot.entry_assist_command("pullback_window")
+    assert opened["ok"]
+    state = bot.entry_assist_state()
+    assert state["window_active"] and state["window_sides"] == ["long"]
+
+    # Clicking the OTHER window button closes the long window (emitting its
+    # list) and opens a short one.
+    switched = bot.entry_assist_command("bounce_window")
+    assert switched["ok"]
+    state = bot.entry_assist_state()
+    assert state["window_active"] and state["window_sides"] == ["short"]
+
+    # Same button again ends the window.
+    _extend_bars(bot, "SPY", [102.5, 103.0])
+    _extend_bars(bot, "AAA", [50.8, 50.8])
+    _extend_bars(bot, "CCC", [29.0, 28.8])
+    closed = bot.entry_assist_command("bounce_window")
+    assert closed["ok"] and not bot.entry_assist_state()["window_active"]
+    assert any(message.startswith("ENTRY WINDOW (short)") for message, _tag in bot.alerts)
+
+
+def test_entry_assist_command_movers_and_unknown():
+    bot = _entry_stub_bot(
+        "bullish_strong",  # movers commands work even in a window regime
+        spy_closes=[100.0] * 8,
+        symbol_closes={
+            "AAA": [50.0] * 4 + [50.0, 50.5, 51.0, 51.5],
+            "CCC": [80.0] * 4 + [80.0, 79.5, 79.0, 78.5],
+        },
+        longs=("AAA",),
+        shorts=("CCC",),
+    )
+    strongest = bot.entry_assist_command("strongest_30m")
+    assert strongest["ok"] and set(strongest["results"]) == {"long"}
+    weakest = bot.entry_assist_command("weakest_30m")
+    assert weakest["ok"] and set(weakest["results"]) == {"short"}
+    both = bot.entry_assist_command("movers_30m")
+    assert both["ok"] and set(both["results"]) == {"long", "short"}
+    assert any(message.startswith("STRONGEST 30M (long)") for message, _tag in bot.alerts)
+    assert any(message.startswith("WEAKEST 30M (short)") for message, _tag in bot.alerts)
+
+    unknown = bot.entry_assist_command("nope")
+    assert not unknown["ok"] and "Unknown entry-assist command" in unknown["note"]
+
+
+def test_entry_assist_board_snapshot_covers_every_option():
+    # Trending SPY that stalls (no new highs for 3 candles) -> pause detected.
+    bot = _entry_stub_bot(
+        "bullish_strong",
+        spy_closes=[100.0, 102.0, 101.0, 101.2, 101.1],
+        symbol_closes={
+            "AAA": [50.0, 50.5, 50.6, 50.7, 50.8],  # holds through the stall
+            "CCC": [30.0, 29.8, 29.6, 29.4, 29.2],
+        },
+        longs=("AAA",),
+        shorts=("CCC",),
+    )
+    board = bot.entry_assist_board_snapshot()
+    assert board["env_key"] == "bullish_strong" and board["env_label"]
+    assert board["pause"]["detected"] and board["pause"]["trend_side"] == "long"
+    # No window open: the board previews what a pause window would say.
+    assert not board["window"]["active"]
+    preview = board["pause_preview"]
+    assert preview["side"] == "long"
+    assert any(row["symbol"] == "AAA" for row in preview["rows"])
+    # Both-side trailing movers are always on the board, regardless of regime.
+    assert {"long", "short"} <= set(board["movers"])
+    assert any(row["symbol"] == "CCC" for row in board["movers"]["short"])
+
+    # Open a window: the board now carries its LIVE ranking (pre-close).
+    opened = bot.entry_assist_command("pullback_window")
+    assert opened["ok"]
+    board = bot.entry_assist_board_snapshot()
+    assert board["window"]["active"] and board["window"]["sides"] == ["long"]
+    assert "long" in board["window"]["rankings"]
+
+    # No cached SPY bars -> empty board, never an IB fetch.
+    bot.latest_bars = {}
+    assert bot.entry_assist_board_snapshot() == {}
+
+
+def test_rank_window_movers_uses_explicit_from_to_window():
+    from datetime import datetime
+
+    bot = _entry_stub_bot(
+        "neutral_chop",
+        # SPY: flat first 4 bars, then -1% over bars 4..7, then recovers.
+        spy_closes=[100.0, 100.0, 100.0, 100.0, 99.5, 99.0, 99.0, 100.0],
+        symbol_closes={
+            "AAA": [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],  # holds through the dip = RS
+            "BBB": [80.0, 80.0, 80.0, 80.0, 79.0, 78.4, 78.4, 80.0],  # follows SPY down
+            "CCC": [30.0, 30.0, 30.0, 30.0, 29.4, 29.0, 29.0, 30.0],  # weak = RW for shorts
+        },
+        longs=("AAA", "BBB"),
+        shorts=("CCC",),
+    )
+    start = datetime(2026, 7, 8, 9, 50)  # bar index 4
+    end = datetime(2026, 7, 8, 10, 0)  # bar index 6 (excludes the recovery bar)
+    result = bot.rank_window_movers(start, end)
+    assert result["ok"]
+    assert result["spy_pct"] < 0
+    by_symbol = {row["symbol"]: row for row in result["rows"]}
+    assert by_symbol["AAA"]["excess"] > by_symbol["BBB"]["excess"]  # AAA held = most RS
+    assert by_symbol["CCC"]["side"] == "SHORT" and by_symbol["CCC"]["excess"] > 0  # weak short = RW
+    # The recovery bar after `end` must NOT be measured: BBB bounces back to
+    # 80.0 on bar 7, so including it would flip its window move positive.
+    assert by_symbol["BBB"]["window_pct"] < 0
+
+    # A window with no SPY coverage reports cleanly instead of ranking garbage.
+    empty = bot.rank_window_movers(datetime(2026, 7, 9, 9, 30), datetime(2026, 7, 9, 10, 0))
+    assert not empty["ok"] and empty["rows"] == []
+
+
+def test_spy_m5_chart_bars_cached_only():
+    bot = _entry_stub_bot(
+        "neutral_chop",
+        spy_closes=[100.0, 101.0, 102.0],
+        symbol_closes={},
+    )
+    bars = bot.spy_m5_chart_bars()
+    assert len(bars) == 3
+    assert set(bars[0]) == {"dt", "open", "high", "low", "close", "volume"}
+    assert bars[-1]["close"] == 102.0
+    bot.latest_bars = {}
+    assert bot.spy_m5_chart_bars() == []
 
 
 def test_entry_assist_auto_tick_opens_and_closes_pullback_window():

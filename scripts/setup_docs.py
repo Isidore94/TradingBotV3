@@ -440,6 +440,44 @@ SETUP_DOCS: dict[str, dict] = {
         "targets": "50% at band 2 when bands are in range; otherwise ride to the 18-session time stop.",
         "evidence": "+0.24/+0.32R (long) and +0.22/+0.34R (short) edges across both windows. Forward study live.",
     },
+    "playbook_golden_pullback_vol": {
+        "label": "Golden Pullback + Volume (forensics study)",
+        "group": "Playbook research",
+        "what": (
+            "A trending name pulls back into its rising 50SMA, tags it, holds it — with a 2x volume spike in the "
+            "last 3 sessions. The strongest move-initiation combo in the 2026-07-09 move forensics "
+            "(lift 1.87x long / 2.29x short at big-move starts). Shorts are the mirror: rejection at a declining SMA50."
+        ),
+        "detection": [
+            "SMA50 rising vs 10 sessions ago (declining for shorts).",
+            "Closes on the trend side of the SMA50 for the prior 15 sessions.",
+            "Today's low tags/pierces the SMA50 (within ~0.15 ATR) and the close recovers to the trend side.",
+            "Volume >= 2.0x the 20-session average at least once in the last 3 sessions.",
+        ],
+        "entry": "Next session open after the tag-and-hold bar.",
+        "stop": "Under the SMA50 level with the 2-close discipline (the tag low is the tighter alternative).",
+        "targets": "50% at band 2 when bands are in range; otherwise ride to the 18-session time stop.",
+        "evidence": "Forensics lift 1.87x/2.29x (association only) — forward study live, no scoring weight yet.",
+    },
+    "playbook_post_earnings_volume_break": {
+        "label": "Post-Earnings Volume Break (forensics study)",
+        "group": "Playbook research",
+        "what": (
+            "Within 5 sessions of earnings, volume churning at 2x average, and a directional bar beyond the 8EMA. "
+            "The move forensics found the SHORT version (fresh earnings + volume before big down-moves) at 1.91x "
+            "lift, n=324 — a post-earnings distribution family the scan never had. Both sides recorded to confirm "
+            "the asymmetry forward."
+        ),
+        "detection": [
+            "Most recent earnings date is <= 5 sessions ago.",
+            "Volume >= 2.0x the 20-session average at least once in the last 3 sessions.",
+            "Today's bar is directional (close beyond open) and closes beyond the daily 8EMA in the trade direction.",
+        ],
+        "entry": "Next session open after the directional bar.",
+        "stop": "Beyond the signal bar's extreme (0.1 ATR buffer) as measured; the earnings-candle level is the wider alternative.",
+        "targets": "50% at band 2 when bands are in range; otherwise ride to the 18-session time stop.",
+        "evidence": "Forensics lift 1.91x short (n=324) / weaker long — forward study live, no scoring weight yet.",
+    },
 }
 
 # Legacy/alias family names that should resolve to a documented entry.

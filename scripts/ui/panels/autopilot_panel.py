@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from project_paths import get_local_setting, save_local_setting
 from ui.services.autopilot_service import AutopilotService
 
 
@@ -38,6 +40,16 @@ class AutopilotPanel(QFrame):
         self.toggle_button.setCheckable(True)
         self.toggle_button.setMinimumHeight(44)
         self.toggle_button.clicked.connect(self._on_toggle)
+
+        self.auto_arm_input = QCheckBox("Auto-arm every weekday at 07:00 (hands-off default)")
+        self.auto_arm_input.setChecked(bool(get_local_setting("qt_autopilot_auto_arm", True)))
+        self.auto_arm_input.setToolTip(
+            "Auto Pilot switches itself ON once per weekday at/after 07:00 local (immediately if the "
+            "app launches later). Flipping the big button OFF sticks for the rest of that day."
+        )
+        self.auto_arm_input.toggled.connect(
+            lambda checked: save_local_setting("qt_autopilot_auto_arm", bool(checked))
+        )
 
         self.reconnect_button = QPushButton("Reconnect IB Now")
         self.reconnect_button.clicked.connect(self.service.force_reconnect)
@@ -102,6 +114,7 @@ class AutopilotPanel(QFrame):
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addWidget(self.toggle_button)
+        layout.addWidget(self.auto_arm_input)
         layout.addLayout(status_grid)
         layout.addLayout(buttons)
         layout.addWidget(log_title)

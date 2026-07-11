@@ -105,7 +105,11 @@ class AutopilotService(QObject):
             self._ensure_universe_fresh("activation")
             self._tick()
         else:
-            self._log("AUTO PILOT OFF - automation paused (BounceBot keeps running; stop it from the desk if needed).")
+            # A manual OFF blocks the daily auto-arm for the rest of the day -
+            # the trader's hand always wins over the 07:00 self-arm.
+            self._state["auto_armed_date"] = datetime.now().date().isoformat()
+            self._save_state()
+            self._log("AUTO PILOT OFF - automation paused for today (BounceBot keeps running; stop it from the desk if needed).")
         self.enabledChanged.emit(enabled)
         self._write_report()
 
@@ -202,6 +206,11 @@ class AutopilotService(QObject):
                     self._log("Weekend - Auto Pilot idle until the next session.")
                 return
 
+            # Hands-off default: Auto Pilot arms itself once per weekday at
+            # 07:00 (or immediately when the GUI launches later than that).
+            # One arm per day, so switching it OFF by hand sticks all day.
+            self._maybe_auto_arm(now)
+
             # Always-on duties while the GUI is open, Auto Pilot ON or OFF:
             # near-HOD pause alerts and the daily pick scorecard measure the
             # trader's normal days too (alerts only - no file writes when OFF).
@@ -244,6 +253,28 @@ class AutopilotService(QObject):
         if self._alerts_date != today:
             self._alerts_date = today
             self._alerts_today.clear()
+
+    def _maybe_auto_arm(self, now: datetime) -> None:
+        from project_paths import get_local_setting
+
+        try:
+            auto_arm_enabled = bool(get_local_setting("qt_autopilot_auto_arm", True))
+        except Exception:
+            auto_arm_enabled = True
+        if not core.autopilot_auto_arm_due(
+            now,
+            enabled=self._enabled,
+            armed_date=self._state.get("auto_armed_date"),
+            auto_arm_enabled=auto_arm_enabled,
+        ):
+            return
+        self._state["auto_armed_date"] = now.date().isoformat()
+        self._save_state()
+        self._log(
+            f"{core.AUTOPILOT_AUTO_ARM_HOUR:02d}:00 auto-arm: Auto Pilot ON for the day "
+            "(flip it OFF to stay manual today; disable auto-arm on the Auto Pilot page)."
+        )
+        self.set_enabled(True)
 
     def _maybe_clear_stale_auto_lists(self, now: datetime) -> None:
         """Empty autolongs/autoshorts once per new session so BounceBot never
@@ -581,8 +612,13 @@ class AutopilotService(QObject):
     def _on_scan_failed(self, message: str) -> None:
         slot = self._active_scan_slot or "?"
         self._mark_slots_done()  # do not retry-loop a broken slot all hour
-        first_line = str(message or "").strip().splitlines()[0] if str(message or "").strip() else "unknown error"
+        detail = str(message or "").strip()
+        first_line = detail.splitlines()[0] if detail else "unknown error"
         self._log(f"Swing scan for slot {slot} FAILED: {first_line}")
+        # The feed keeps one line for the phone report, but the subprocess
+        # stderr/traceback lives in the remaining lines - keep it findable.
+        if detail and detail != first_line:
+            logging.error("Auto Pilot swing scan for slot %s failed:\n%s", slot, detail)
         self._active_scan_slot = None
         self._write_report()
         self._maybe_run_wrapup(datetime.now())

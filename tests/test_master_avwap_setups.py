@@ -4437,6 +4437,80 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[0]["playbook_score_bonus"], expected_bonus)
         self.assertIn("volume thrust", priority_rows[0]["score_bonus_note"])
 
+    def _golden_pullback_vol_frame(self) -> pd.DataFrame:
+        # Gentle riser so the rolling SMA50 sits just under price; last bar
+        # tags the SMA on a 3x volume spike and closes back above it.
+        closes = [100.0 * (1.0 + 0.0005) ** i for i in range(80)]
+        rows = []
+        for i, dt in enumerate(pd.bdate_range("2026-03-02", periods=80)):
+            close = closes[i]
+            rows.append(
+                {
+                    "datetime": dt,
+                    "open": close - 0.05,
+                    "high": close + 0.3,
+                    "low": close - 0.3,
+                    "close": close,
+                    "volume": 3_000_000.0 if i == 79 else 1_000_000.0,
+                }
+            )
+        frame = pd.DataFrame(rows)
+        sma_now = float(frame["close"].iloc[-50:].mean())
+        frame.loc[79, "low"] = sma_now - 0.02  # tag/pierce the rising SMA50
+        return frame
+
+    def test_playbook_golden_pullback_vol_detection_and_gates(self):
+        frame = self._golden_pullback_vol_frame()
+        note = master_avwap._playbook_detect_golden_pullback_vol(frame, "LONG")
+        self.assertIsNotNone(note)
+        self.assertIn("Golden pullback + volume", note)
+        # No volume spike -> no detection (the volume IS the forensics combo).
+        quiet = frame.copy()
+        quiet.loc[79, "volume"] = 1_000_000.0
+        self.assertIsNone(master_avwap._playbook_detect_golden_pullback_vol(quiet, "LONG"))
+        # Wrong side on a rising SMA50 -> no detection.
+        self.assertIsNone(master_avwap._playbook_detect_golden_pullback_vol(frame, "SHORT"))
+
+    def test_playbook_post_earnings_volume_break_detection_and_gates(self):
+        rows = []
+        closes = [100.0 + 0.4 * i for i in range(30)]
+        for i, dt in enumerate(pd.bdate_range("2026-06-01", periods=30)):
+            close = closes[i]
+            rows.append(
+                {
+                    "datetime": dt,
+                    "open": close - 0.2,
+                    "high": close + 0.3,
+                    "low": close - 0.3,
+                    "close": close,
+                    "volume": 3_000_000.0 if i == 29 else 1_000_000.0,
+                }
+            )
+        frame = pd.DataFrame(rows)
+        fresh = [frame["datetime"].iloc[26].date().isoformat()]
+        note = master_avwap._playbook_detect_post_earnings_volume_break(frame, "LONG", fresh)
+        self.assertIsNotNone(note)
+        self.assertIn("Post-earnings volume break", note)
+        # Bearish requirement fails on a bullish bar.
+        self.assertIsNone(master_avwap._playbook_detect_post_earnings_volume_break(frame, "SHORT", fresh))
+        # Stale earnings -> no detection.
+        stale = [frame["datetime"].iloc[5].date().isoformat()]
+        self.assertIsNone(master_avwap._playbook_detect_post_earnings_volume_break(frame, "LONG", stale))
+        # No earnings info -> no detection.
+        self.assertIsNone(master_avwap._playbook_detect_post_earnings_volume_break(frame, "LONG", []))
+
+    def test_forensics_study_families_carry_no_score_bonus(self):
+        # Forensics lift is association, not tradability: the new study
+        # families must not touch scoring until the backfill confirms them.
+        self.assertNotIn(
+            master_avwap.PLAYBOOK_GOLDEN_PULLBACK_VOL_STUDY_FAMILY,
+            master_avwap.PLAYBOOK_SCORE_BONUSES,
+        )
+        self.assertNotIn(
+            master_avwap.PLAYBOOK_POST_EARNINGS_VOLUME_BREAK_STUDY_FAMILY,
+            master_avwap.PLAYBOOK_SCORE_BONUSES,
+        )
+
     def test_sync_study_rows_pick_up_capped_scores_and_expected_r(self):
         live = {
             "symbol": "TPG",
@@ -7492,6 +7566,241 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("B Tier - stalk list\n  LONG: CCC", cream_copy)
         self.assertLess(report.index("Detailed setup notes"), report.index("Appendix: setup-type copy lists"))
         self.assertLess(report.index("Appendix: setup-type copy lists"), report.index("By setup type"))
+
+
+class RecentSetupTypeHighlightTests(unittest.TestCase):
+    def test_new_and_rising_statuses_pin_fresh_and_upgrade_candidates(self):
+        recent = lambda days: (date.today() - timedelta(days=days)).isoformat()  # noqa: E731
+
+        payload = {
+            "setups": {
+                # Veteran family (first seen long ago), NOT favorite bucket,
+                # outperforming recently -> RISING only.
+                "old_anchor": _build_tracker_setup(
+                    "OLD1", "2026-04-01", 0.5,
+                    setup_family="avwap_retest_followthrough", priority_bucket="near_favorite_zone",
+                ),
+                **{
+                    f"riser_{i}": _build_tracker_setup(
+                        f"RIS{i}", recent(3 + i), 1.2,
+                        setup_family="avwap_retest_followthrough", priority_bucket="near_favorite_zone",
+                    )
+                    for i in range(4)
+                },
+                # Brand-new family (first seen days ago), favorite bucket ->
+                # NEW only (already high conviction, not an upgrade candidate).
+                **{
+                    f"fresh_{i}": _build_tracker_setup(
+                        f"FRS{i}", recent(2 + i), 0.9,
+                        setup_family="avwap_breakout", priority_bucket="favorite_setup",
+                    )
+                    for i in range(4)
+                },
+            },
+        }
+        rows = master_avwap.build_recent_setup_type_stat_rows(payload)
+        by_family = {row["setup_family"]: row for row in rows}
+
+        riser = by_family["avwap_retest_followthrough"]
+        self.assertFalse(riser["is_new_family"])  # first tracked in April
+        self.assertTrue(riser["is_rising_non_favorite"])
+        self.assertEqual(riser["status"], "RISING")
+
+        fresh = by_family["avwap_breakout"]
+        self.assertTrue(fresh["is_new_family"])
+        self.assertFalse(fresh["is_rising_non_favorite"])  # already favorite bucket
+        self.assertEqual(fresh["status"], "NEW")
+        self.assertEqual(fresh["family_first_seen"], recent(5))
+
+        # Highlighted rows pin above everything else.
+        self.assertTrue(all(row["status"] for row in rows[:2]))
+
+
+def _build_short_horizon_setup(
+    symbol: str,
+    scan_date: str,
+    closes: list[float],
+    *,
+    side: str = "LONG",
+    entry_price: float = 100.0,
+    risk_per_share: float = 1.0,
+    anchor_date: str = "2026-06-01",
+    setup_family: str = "avwap_breakout",
+) -> dict:
+    """Tracker-shaped record with an entry-day mark plus one mark per close."""
+    marks = [
+        {
+            "trade_date": scan_date,
+            "is_entry_day": True,
+            "close": entry_price,
+            "high": entry_price,
+            "low": entry_price,
+        }
+    ]
+    for offset, close in enumerate(closes, start=1):
+        marks.append(
+            {
+                "trade_date": f"{scan_date}+{offset}",
+                "is_entry_day": False,
+                "close": close,
+                "high": close + 1.0,
+                "low": close - 1.0,
+            }
+        )
+    return {
+        "setup_id": f"{scan_date}:{symbol}:{setup_family}",
+        "symbol": symbol,
+        "side": side,
+        "scan_date": scan_date,
+        "anchor_date": anchor_date,
+        "entry_price": entry_price,
+        "priority_bucket": "favorite_setup",
+        "setup_family": setup_family,
+        "setup_status": "CLOSED",
+        "daily_marks": marks,
+        "scenarios": {
+            "baseline": {
+                "experimental": False,
+                "tradeable": True,
+                "status": "TARGET_HIT",
+                "total_r": 1.0,
+                "initial_risk_per_share": risk_per_share,
+                "stop_reference_label": "AVWAPE",
+                "events": [{"trade_date": scan_date, "reason": "TARGET", "price": 105.0, "shares": 100}],
+            }
+        },
+    }
+
+
+class TrackerShortHorizonTests(unittest.TestCase):
+    def test_summary_marks_first_two_sessions_net_of_costs(self):
+        setup = _build_short_horizon_setup("AAPL", "2026-07-01", [101.0, 103.0, 110.0])
+        summary = master_avwap._build_tracker_short_horizon_summary(setup)
+        self.assertIsNotNone(summary)
+        self.assertTrue(summary["complete"])
+        round_trip = master_avwap._tracker_cost_per_share_per_side(100.0) * 2.0
+        self.assertAlmostEqual(summary["r_close_1d"], 1.0 - round_trip, places=6)
+        self.assertAlmostEqual(summary["r_close_2d"], 3.0 - round_trip, places=6)
+        # extremes are gross and only cover the first 2 sessions (day-3 high ignored)
+        self.assertAlmostEqual(summary["mfe_r_2d"], 4.0, places=6)
+        self.assertAlmostEqual(summary["mae_r_2d"], 0.0, places=6)
+
+    def test_summary_short_side_and_partial_window(self):
+        setup = _build_short_horizon_setup("TSLA", "2026-07-01", [98.0], side="SHORT")
+        summary = master_avwap._build_tracker_short_horizon_summary(setup)
+        self.assertFalse(summary["complete"])
+        self.assertGreater(summary["r_close_1d"], 0)
+        self.assertIsNone(summary["r_close_2d"])
+
+    def test_summary_requires_risk_and_post_entry_marks(self):
+        setup = _build_short_horizon_setup("MSFT", "2026-07-01", [101.0])
+        setup["scenarios"]["baseline"]["initial_risk_per_share"] = 0.0
+        self.assertIsNone(master_avwap._build_tracker_short_horizon_summary(setup))
+        entry_only = _build_short_horizon_setup("MSFT", "2026-07-01", [])
+        self.assertIsNone(master_avwap._build_tracker_short_horizon_summary(entry_only))
+
+    def test_compaction_captures_summary_before_stripping_marks(self):
+        setup = _build_short_horizon_setup("NVDA", "2026-07-01", [102.0, 104.0])
+        changed = master_avwap._compact_tracker_setup_record(setup)
+        self.assertTrue(changed)
+        self.assertEqual(setup["daily_marks"], [])
+        self.assertEqual(setup["scenarios"]["baseline"]["events"], [])
+        self.assertTrue(setup["short_horizon"]["complete"])
+        self.assertGreater(setup["short_horizon"]["r_close_2d"], 0)
+
+    def test_short_horizon_rows_rank_and_dedupe_episodes(self):
+        setups = {}
+        # winner family: 6 independent episodes with strong 2-session follow-through
+        for idx in range(6):
+            setup = _build_short_horizon_setup(
+                f"WIN{idx}", "2026-07-01", [102.0, 104.0], anchor_date=f"2026-06-{idx + 1:02d}"
+            )
+            setup["short_horizon"] = master_avwap._build_tracker_short_horizon_summary(setup)
+            setups[f"win_{idx}"] = setup
+        # laggard family: 6 episodes that go nowhere in 2 sessions
+        for idx in range(6):
+            setup = _build_short_horizon_setup(
+                f"LAG{idx}",
+                "2026-07-01",
+                [100.0, 99.5],
+                anchor_date=f"2026-06-{idx + 1:02d}",
+                setup_family="avwap_retest_followthrough",
+            )
+            setup["short_horizon"] = master_avwap._build_tracker_short_horizon_summary(setup)
+            setups[f"lag_{idx}"] = setup
+        # duplicate re-scan of an existing winner episode (same symbol/anchor/family)
+        duplicate = _build_short_horizon_setup(
+            "WIN0", "2026-07-02", [90.0, 90.0], anchor_date="2026-06-01"
+        )
+        duplicate["short_horizon"] = master_avwap._build_tracker_short_horizon_summary(duplicate)
+        setups["win_0_rescan"] = duplicate
+
+        rows = master_avwap.build_tracker_short_horizon_rows(
+            setups, reference_date=date(2026, 7, 3)
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["setup_family"], "avwap_breakout")
+        # de-dup kept the first signal, so the losing re-scan never dilutes the row
+        self.assertEqual(rows[0]["samples_2d"], 6)
+        self.assertGreater(rows[0]["avg_r_2d"], rows[1]["avg_r_2d"])
+        self.assertEqual(rows[0]["recent_samples_2d"], 6)
+        self.assertGreater(rows[0]["short_term_score"], rows[1]["short_term_score"])
+        self.assertAlmostEqual(rows[0]["win_rate_2d"], 1.0, places=6)
+
+
+def _build_flat_bounce_frame(bars: int = 30, price: float = 100.0) -> pd.DataFrame:
+    """Flat tape (ATR20 = 1.6 -> eps = 0.192) whose last two bars tests mutate."""
+    dates = pd.bdate_range(end=pd.Timestamp(datetime.now().date()), periods=bars)
+    rows = []
+    for dt_value in dates:
+        rows.append(
+            {
+                "datetime": dt_value,
+                "open": price,
+                "high": price + 0.8,
+                "low": price - 0.8,
+                "close": price,
+                "volume": 1_000_000,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+class BounceZoneWidthCapTests(unittest.TestCase):
+    """A bounce label must die once the close leaves the bounced level's zone."""
+
+    LEVEL = 100.0
+    ZONE = 4.0  # stands in for the anchor stdev (bands are one stdev apart)
+
+    def test_same_day_bounce_within_zone_still_fires(self):
+        df = _build_flat_bounce_frame()
+        df.loc[df.index[-1], ["open", "high", "low", "close"]] = [100.5, 102.2, 99.9, 101.5]
+        self.assertTrue(master_avwap.bounce_up_at_level(df, self.LEVEL, zone_width=self.ZONE))
+
+    def test_same_day_bounce_with_runaway_close_is_not_this_setup(self):
+        df = _build_flat_bounce_frame()
+        # Low tags the level but the close finishes beyond the next band up.
+        df.loc[df.index[-1], ["open", "high", "low", "close"]] = [100.5, 105.6, 99.9, 105.0]
+        self.assertTrue(master_avwap.bounce_up_at_level(df, self.LEVEL))  # legacy behavior
+        self.assertFalse(master_avwap.bounce_up_at_level(df, self.LEVEL, zone_width=self.ZONE))
+
+    def test_two_day_bounce_with_runaway_confirm_close_is_not_this_setup(self):
+        df = _build_flat_bounce_frame()
+        df.loc[df.index[-2], ["open", "high", "low", "close"]] = [100.4, 101.0, 99.9, 100.5]
+        df.loc[df.index[-1], ["open", "high", "low", "close"]] = [104.8, 106.2, 104.6, 106.0]
+        self.assertTrue(master_avwap.bounce_up_at_level(df, self.LEVEL))  # legacy behavior
+        self.assertFalse(master_avwap.bounce_up_at_level(df, self.LEVEL, zone_width=self.ZONE))
+
+    def test_short_side_rejection_with_runaway_close_is_not_this_setup(self):
+        df = _build_flat_bounce_frame()
+        df.loc[df.index[-1], ["open", "high", "low", "close"]] = [99.5, 100.1, 94.2, 94.5]
+        self.assertTrue(master_avwap.bounce_down_at_level(df, self.LEVEL))  # legacy behavior
+        self.assertFalse(master_avwap.bounce_down_at_level(df, self.LEVEL, zone_width=self.ZONE))
+
+    def test_short_side_rejection_within_zone_still_fires(self):
+        df = _build_flat_bounce_frame()
+        df.loc[df.index[-1], ["open", "high", "low", "close"]] = [99.5, 100.1, 98.0, 98.4]
+        self.assertTrue(master_avwap.bounce_down_at_level(df, self.LEVEL, zone_width=self.ZONE))
 
 
 if __name__ == "__main__":

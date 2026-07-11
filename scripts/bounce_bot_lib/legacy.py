@@ -1209,11 +1209,16 @@ def _migrate_csv_header(path, fieldnames):
 
 
 def _format_bounce_alert_message(symbol, direction, levels_list, event_row, quality, exit_note="") -> str:
-    """Alert text: tier + confirmation + trade plan + the measured reasons."""
+    """Alert text: tier + confirmation + trade plan + the measured reasons.
+
+    PROVEN bounces (a segment with strong measured avg AND median R matched
+    this alert) carry the token + the evidence so the trader sees WHY it is a
+    take-this-one alert; the Alert Center gives the token banger treatment."""
     row = event_row if isinstance(event_row, dict) else {}
     quality = quality if isinstance(quality, dict) else {}
     tier = str(quality.get("tier") or "B")
-    parts = [f"[{tier}-TIER] {symbol}: Bounce confirmed ({direction}) from {levels_list}"]
+    proven_token = "PROVEN " if quality.get("proven") else ""
+    parts = [f"[{tier}-TIER] {proven_token}{symbol}: Bounce confirmed ({direction}) from {levels_list}"]
 
     def _num(value):
         try:
@@ -1236,6 +1241,9 @@ def _format_bounce_alert_message(symbol, direction, levels_list, event_row, qual
         parts.append(f"take 50% at +1R {target_1r:.2f}, trail the rest")
     if exit_note:
         parts.append(str(exit_note))
+    proven_reasons = quality.get("proven_reasons") or []
+    if proven_reasons:
+        parts.append("proven: " + "; ".join(proven_reasons))
     reasons = quality.get("reasons") or []
     if reasons:
         parts.append("why: " + "; ".join(reasons[:3]))
@@ -2547,14 +2555,20 @@ class BounceBot(EWrapper, EClient):
             )
 
             row = event_row if isinstance(event_row, dict) else {}
+            bounce_type_keys = _bounce_type_keys_from_levels(levels or {})
             return evaluate_bounce_quality(
                 load_bounce_learning_state(),
                 direction=direction,
-                bounce_types=_bounce_type_keys_from_levels(levels or {}),
+                bounce_types=bounce_type_keys,
                 time_bucket=time_bucket_for(get_market_local_now()),
                 market_environment=str(row.get("market_environment") or ""),
                 priority_bucket=str(row.get("master_avwap_priority_bucket") or ""),
                 focus_label=str(row.get("master_avwap_focus_label") or ""),
+                # The best measured segments live in dimensions the composite
+                # ignores; matching any PROVEN one flags the alert live.
+                bounce_combo="+".join(bounce_type_keys),
+                setup_family=str(row.get("master_avwap_setup_family") or ""),
+                swing_traits=_split_delimited_text(row.get("master_avwap_swing_traits")),
             )
         except Exception as exc:  # learning must never block an alert
             logging.warning("Bounce learning evaluation failed (alerting anyway): %s", exc)
@@ -4567,11 +4581,14 @@ class BounceBot(EWrapper, EClient):
             self._emit_entry_window_summary(side, window, spy_window, ranked, source)
         return {"ok": True, "note": f"Entry window closed - ranked output emitted [{source}].", "results": results}
 
-    def _rank_entry_window_side(self, side, start_dt, today, spy_window):
+    def _rank_entry_window_side(self, side, start_dt, today, spy_window, cached_only=False):
         sign = 1.0 if side == "long" else -1.0
         rows = []
         for symbol in self._entry_candidates(side):
-            bars = self.get_cached_5m_bars(symbol)
+            if cached_only:
+                bars = self.latest_bars.get(f"{symbol}|5 D|5 mins")
+            else:
+                bars = self.get_cached_5m_bars(symbol)
             sym_today = [bar for bar in bars or [] if bar.dt.date() == today]
             sym_window, _window_bars = self._window_change_pct(sym_today, start_dt)
             if sym_window is None:
@@ -4616,12 +4633,16 @@ class BounceBot(EWrapper, EClient):
             return None
         return (window[-1].close - window[0].open) / window[0].open * 100.0
 
-    def _rank_trailing_movers(self, side, minutes, spy_bars):
+    def _rank_trailing_movers(self, side, minutes, spy_bars, cached_only=False):
         sign = 1.0 if side == "long" else -1.0
         spy_change = self._trailing_return_pct(spy_bars or [], minutes) or 0.0
         rows = []
         for symbol in self._entry_candidates(side):
-            change = self._trailing_return_pct(self.get_cached_5m_bars(symbol) or [], minutes)
+            if cached_only:
+                symbol_bars = self.latest_bars.get(f"{symbol}|5 D|5 mins")
+            else:
+                symbol_bars = self.get_cached_5m_bars(symbol)
+            change = self._trailing_return_pct(symbol_bars or [], minutes)
             if change is None:
                 continue
             rows.append(
@@ -4677,6 +4698,158 @@ class BounceBot(EWrapper, EClient):
             "window_sides": list(window["sides"]) if window else [],
             "window_source": window.get("source", "") if window else "",
         }
+
+    def spy_m5_chart_bars(self, max_sessions=2):
+        """Cached SPY 5m bars as plain dicts for the GUI chart.
+
+        Reads ``latest_bars`` only (never triggers an IB fetch), so it is safe
+        from the GUI thread; the scan / paused loop keeps the series fresh."""
+        bars = self.latest_bars.get("SPY|5 D|5 mins") or []
+        if not bars:
+            return []
+        dates = sorted({bar.dt.date() for bar in bars})
+        keep = set(dates[-max(1, int(max_sessions)):])
+        return [
+            {
+                "dt": bar.dt,
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+                "volume": float(getattr(bar, "volume", 0) or 0),
+            }
+            for bar in bars
+            if bar.dt.date() in keep
+        ]
+
+    def rank_window_movers(self, start_dt, end_dt, sides=("long", "short")):
+        """RS/RW ranking over an arbitrary from->to window (GUI chart selection).
+
+        Same excess-vs-SPY math as the entry windows, but with an explicit end
+        instead of "now", so the trader can measure any stretch of the session.
+        Cached bars only - safe from the GUI thread."""
+
+        def window_pct(bars):
+            window = [bar for bar in bars if start_dt <= bar.dt <= end_dt]
+            if not window or not window[0].open:
+                return None
+            return (window[-1].close - window[0].open) / window[0].open * 100.0
+
+        spy_pct = window_pct(self.latest_bars.get("SPY|5 D|5 mins") or [])
+        if spy_pct is None:
+            return {"ok": False, "note": "No cached SPY bars covering that window yet.", "rows": []}
+        rows = []
+        for side in sides:
+            sign = 1.0 if side == "long" else -1.0
+            for symbol in self._entry_candidates(side):
+                pct = window_pct(self.latest_bars.get(f"{symbol}|5 D|5 mins") or [])
+                if pct is None:
+                    continue
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "side": "LONG" if side == "long" else "SHORT",
+                        "window_pct": pct,
+                        "spy_pct": spy_pct,
+                        "excess": sign * (pct - spy_pct),
+                    }
+                )
+        rows.sort(key=lambda row: -row["excess"])
+        return {"ok": True, "spy_pct": spy_pct, "rows": rows}
+
+    def entry_assist_board_snapshot(self, movers_minutes=ENTRY_MOVERS_MINUTES):
+        """The always-on RS/RW board: everything entry assist can say, fresh.
+
+        Auto regime + live SPY pause detection + the ACTIVE window's ranking
+        as it stands right now (not just at close) + a pause-preview ranking
+        when SPY is pausing but no window is open + trailing strongest AND
+        weakest movers for both sides regardless of regime. Cached bars only
+        (never triggers an IB fetch) - safe to poll from the GUI thread."""
+        spy_bars = self.latest_bars.get("SPY|5 D|5 mins") or []
+        if not spy_bars:
+            return {}
+        env = self.get_market_environment()
+        today = spy_bars[-1].dt.date()
+        spy_today = [bar for bar in spy_bars if bar.dt.date() == today]
+        snapshot = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "env_key": env,
+            "env_label": str(MARKET_ENVIRONMENTS.get(env, {}).get("label", env)),
+            "bar_time": spy_today[-1].dt.strftime("%H:%M") if spy_today else "",
+            "movers_minutes": int(movers_minutes),
+        }
+
+        trend_side = "short" if env.startswith("bearish") else "long"
+        pause_start = self._detect_spy_pause_start(spy_today, trend_side) if spy_today else None
+        snapshot["pause"] = {
+            "trend_side": trend_side,
+            "detected": pause_start is not None,
+            "since": pause_start.strftime("%H:%M") if pause_start else "",
+        }
+
+        window = getattr(self, "_entry_window", None)
+        if window and spy_today:
+            window_bars = [bar for bar in spy_today if bar.dt.date() == window["date"]]
+            spy_window, _bars = self._window_change_pct(window_bars, window["start_dt"])
+            rankings = {}
+            if spy_window is not None:
+                for side in window["sides"]:
+                    rankings[side] = self._rank_entry_window_side(
+                        side, window["start_dt"], window["date"], spy_window, cached_only=True
+                    )
+            snapshot["window"] = {
+                "active": True,
+                "sides": list(window["sides"]),
+                "started": window["start_dt"].strftime("%H:%M"),
+                "source": window.get("source", ""),
+                "spy_pct": spy_window,
+                "rankings": rankings,
+            }
+        else:
+            snapshot["window"] = {"active": False}
+            # SPY is pausing but nothing is tracking it yet: show what a
+            # window opened at the pause start WOULD say right now.
+            if pause_start is not None:
+                preview = self.rank_window_movers(pause_start, spy_today[-1].dt, sides=(trend_side,))
+                if preview.get("ok"):
+                    snapshot["pause_preview"] = {
+                        "side": trend_side,
+                        "since": pause_start.strftime("%H:%M"),
+                        "spy_pct": preview.get("spy_pct"),
+                        "rows": (preview.get("rows") or [])[:ENTRY_WINDOW_TOP_N],
+                    }
+
+        snapshot["movers"] = {
+            side: self._rank_trailing_movers(side, movers_minutes, spy_bars, cached_only=True)
+            for side in ("long", "short")
+        }
+        return snapshot
+
+    def entry_assist_command(self, command):
+        """GUI button array: explicit entry-assist actions, independent of regime.
+
+        ``pullback_window`` / ``bounce_window`` toggle the tracking window for
+        their side (opening one while the other side's window is active first
+        closes it, emitting its ranked list). The movers commands emit the
+        trailing-30m list(s) immediately.
+        """
+        command = str(command or "").strip().lower()
+        if command in ("pullback_window", "bounce_window"):
+            sides = ("long",) if command == "pullback_window" else ("short",)
+            window = getattr(self, "_entry_window", None)
+            if window:
+                same_sides = tuple(window.get("sides") or ()) == sides
+                result = self.end_entry_window(source="manual")
+                if same_sides:
+                    return result
+            return self.start_entry_window(sides, source="manual")
+        if command == "strongest_30m":
+            return self.emit_trailing_movers(("long",), source="manual")
+        if command == "weakest_30m":
+            return self.emit_trailing_movers(("short",), source="manual")
+        if command == "movers_30m":
+            return self.emit_trailing_movers(("long", "short"), source="manual")
+        return {"ok": False, "note": f"Unknown entry-assist command: {command or '(empty)'}."}
 
     def entry_assist_auto_tick(self):
         """Auto mode: run the whole entry-assist cycle without clicks.

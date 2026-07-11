@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
 )
 
 from project_paths import get_local_setting, save_local_setting
-from ui.models.bounce import BounceAlert
+from ui.models.bounce import BounceAlert, is_entry_assist_text
 from ui.widgets.alert_feed_item import AlertFeedItem
+from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
 from ui.widgets.setup_detail_view import SetupDetailView
@@ -38,9 +39,12 @@ _TIER_RANK = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 0}
 MAX_FEED_ITEMS = 250
 MAX_D1_FEED_ITEMS = 100
 
-# D1 focus alerts that mark a "ready now" moment: price crossed a key armed
-# S/R level toward an A/S upgrade, or the scan confirmed a genuine bucket
-# upgrade. UPGRADE_WATCH / generic flags are context, not triggers.
+# D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
+# name: price crossed a key armed level toward an A/S upgrade, or the scan
+# confirmed a genuine bucket upgrade. Only these belong in the D1 Focus feed
+# (user rule 2026-07-09: "only things that turn a stock into a favourite or
+# high conviction bucket stock"); UPGRADE_WATCH / generic D1 flags are
+# context and route to the live feed under the normal tier gate instead.
 _D1_READY_PREFIXES = {
     "MASTER_AVWAP_D1_BUCKET_UPGRADE",
     "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
@@ -69,16 +73,32 @@ def is_banger_alert(alert: BounceAlert) -> bool:
     return "BANGER" in str(alert.raw_text or "").upper()
 
 
+# Learning-loop PROVEN stamp: this exact bounce configuration (type/combo/
+# swing trait/family/focus) has a measured winning record (n>=12, avg>=+0.45R,
+# median>=0). These are the "see it live, take it" alerts.
+_PROVEN_RE = re.compile(r"\bPROVEN\b")
+
+
+def is_proven_alert(alert: BounceAlert) -> bool:
+    return bool(_PROVEN_RE.search(str(alert.raw_text or "")))
+
+
+def is_entry_assist_alert(alert: BounceAlert) -> bool:
+    return str(alert.tag or "") == "entry_assist" or is_entry_assist_text(alert.raw_text)
+
+
 def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
     """Filter policy for the live feed (D1 alerts route to their own feed).
 
-    Bangers always pass (they are the sit-back-and-wait trades). Untiered
-    alerts (regime notes, pause-watch summaries) pass everything except the
-    S-only mode, where only bangers/S-tier remain.
+    Bangers always pass (they are the sit-back-and-wait trades), and so does
+    entry-assist output — the trader clicked a button asking for it, so it
+    must never be swallowed by the tier gate. Untiered alerts (regime notes,
+    pause-watch summaries) pass everything except the S-only mode, where only
+    bangers/S-tier remain.
     """
     if mode in ("", "all"):
         return True
-    if is_banger_alert(alert):
+    if is_banger_alert(alert) or is_proven_alert(alert) or is_entry_assist_alert(alert):
         return True
     tier = extract_alert_tier(alert)
     if not tier:
@@ -87,9 +107,10 @@ def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
 
 
 def alert_is_loud(alert: BounceAlert) -> bool:
-    """Alerts worth a sound: bangers, S/A tiers, and ready D1 focus alerts."""
+    """Alerts worth a sound: bangers, proven configs, S/A tiers, ready D1."""
     return (
         is_banger_alert(alert)
+        or is_proven_alert(alert)
         or is_ready_d1_alert(alert)
         or extract_alert_tier(alert) in {"S", "A"}
     )
@@ -164,9 +185,10 @@ class AlertCenterPanel(QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
 
     Top: the live intraday stream (bounce alerts, RW/RS bangers, regime
-    notes) behind the minimum-tier gate with an optional sound. Bottom: the
-    D1 Focus feed - key-level crossings and bucket upgrades where a
-    low-ranked swing name earns its way toward A/S. Clicking an alert opens
+    notes, and non-transition D1 level flags) behind the minimum-tier gate
+    with an optional sound. Bottom: the D1 Focus feed - ONLY the moments a
+    stock turns into a favorite/high-conviction name (confirmed bucket
+    upgrades + armed A/S upgrade-trigger crossings). Clicking an alert opens
     the symbol's setup docs and trade plan - in the embedded pane below by
     default, or routed out through `setupRequested` when the desk disables
     the embedded pane (workspace mode shows the plan once, in the setups
@@ -220,9 +242,20 @@ class AlertCenterPanel(QFrame):
         if self.focus_service is not None:
             self.rrs_snapshot.set_focus_service(self.focus_service)
 
+        # RS/RW Board tab: the automatic entry-assist board on top (regime +
+        # pause detection + live window / preview rankings + 30m movers, no
+        # clicks) over the RRS sweep snapshot.
+        self.entry_board = EntryAssistBoard()
+        board_tab = QWidget()
+        board_layout = QVBoxLayout(board_tab)
+        board_layout.setContentsMargins(0, 0, 0, 0)
+        board_layout.setSpacing(8)
+        board_layout.addWidget(self.entry_board, 3)
+        board_layout.addWidget(self.rrs_snapshot, 2)
+
         self.tabs = QTabWidget()
         self.tabs.addTab(feed_scroll, "Alerts")
-        self.tabs.addTab(self.rrs_snapshot, "RRS Board")
+        self.tabs.addTab(board_tab, "RS/RW Board")
 
         self.d1_feed_container = QWidget()
         self.d1_feed_layout = QVBoxLayout(self.d1_feed_container)
@@ -241,7 +274,9 @@ class AlertCenterPanel(QFrame):
         d1_section_layout.addWidget(
             SectionHeader(
                 "D1 Focus",
-                "Key S/R crossings + bucket upgrades: low-ranked swing names earning their way to A/S.",
+                "Favorite-bucket transitions ONLY: confirmed bucket upgrades and armed A/S "
+                "upgrade-trigger crossings - real-time 'this just became high conviction'. "
+                "Other D1 level flags stay in the live stream above.",
             )
         )
         d1_section_layout.addWidget(d1_scroll, 1)
@@ -281,11 +316,18 @@ class AlertCenterPanel(QFrame):
         service.alertReceived.connect(self.add_alert)
         service.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)
         service.statusChanged.connect(self._maybe_add_status_alert)
+        board_signal = getattr(service, "entryBoardChanged", None)
+        if board_signal is not None:
+            board_signal.connect(self.entry_board.update_board)
 
     def add_alert(self, alert: BounceAlert) -> None:
         if _is_feed_noise_alert(alert):
             return
-        if alert.is_d1:
+        # D1 Focus is reserved for favorite/high-conviction transitions
+        # (bucket upgrades + armed A/S upgrade-trigger crossings). Other D1
+        # chatter (UPGRADE_WATCH context, generic level flags) stays visible
+        # but in the live stream, behind the normal tier gate.
+        if alert.is_d1 and is_ready_d1_alert(alert):
             self._add_d1_alert(alert)
             return
         self._alerts.insert(0, alert)
@@ -307,10 +349,9 @@ class AlertCenterPanel(QFrame):
 
     def _emit_feed_status(self) -> None:
         loud = sum(1 for item in self._alerts if alert_should_sound(item, is_focus=self._alert_is_focus(item)))
-        ready = sum(1 for item in self._d1_alerts if is_ready_d1_alert(item))
         self.statusChanged.emit(
             f"Alert center: {len(self._alerts)} live alert(s), {loud} loud; "
-            f"{len(self._d1_alerts)} D1 focus, {ready} ready."
+            f"{len(self._d1_alerts)} favorite-bucket transition(s) in D1 Focus."
         )
 
     def clear_feed(self) -> None:

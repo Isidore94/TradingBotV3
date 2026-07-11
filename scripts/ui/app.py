@@ -81,11 +81,18 @@ class MainWindow(QMainWindow):
         self.trading_panel.rowsChanged.connect(self._set_setup_counts)
         self.trading_panel.connectionChanged.connect(self._set_ib_status)
 
-        # Self-heal a stale universe on every launch (not just Auto Pilot ON):
-        # the swing scans fold universe_longs/shorts into every run, so a
-        # stale pool quietly degrades manual scans too. yfinance-only, in a
-        # background thread - IB and the UI are untouched.
+        # Self-heal a stale universe on launch AND on a recurring check (the
+        # app often stays open across sessions, so launch-only healing left
+        # the universe stale all day whenever the one launch attempt failed
+        # or the close simply passed while running). The swing scans fold
+        # universe_longs/shorts into every run, so a stale pool quietly
+        # degrades manual scans too. yfinance-only, in a background thread -
+        # IB and the UI are untouched; the rebuild lock dedupes callers.
         QTimer.singleShot(2500, self._self_heal_universe)
+        self._universe_heal_timer = QTimer(self)
+        self._universe_heal_timer.setInterval(30 * 60_000)
+        self._universe_heal_timer.timeout.connect(self._self_heal_universe)
+        self._universe_heal_timer.start()
 
     def _build_shell(self) -> None:
         nav = QFrame()
@@ -218,6 +225,9 @@ class MainWindow(QMainWindow):
     def _self_heal_universe(self) -> None:
         import autopilot_core as core
 
+        poll = getattr(self, "_universe_poll", None)
+        if poll is not None and poll.isActive():
+            return  # a heal attempt is already being tracked
         if not core.universe_is_stale(datetime.now()):
             self.universe_status.setText(_universe_status_text())
             return

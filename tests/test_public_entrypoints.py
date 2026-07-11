@@ -112,11 +112,12 @@ def test_mini_pc_shared_scan_delegates_to_master_avwap_outputs(monkeypatch):
 
     assert filter_summary["message"] == "filter ok"
     assert scan_result["watchlist_label"] == "home folder watchlists + swing watchlists"
+    # include_theta was removed from run_master (theta is unconditional with
+    # deferred enrichment); passing it crashed every scheduled scan.
     assert calls["kwargs"] == {
         "use_shared_watchlists": True,
         "update_setup_tracker": False,
         "require_ib_for_setup_tracker": True,
-        "include_theta": True,
     }
     assert master_avwap_mini_pc.MASTER_AVWAP_REPORT_FILE == project_paths.MASTER_AVWAP_REPORT_FILE
     assert master_avwap_mini_pc.MASTER_AVWAP_PRIORITY_SETUPS_FILE == project_paths.MASTER_AVWAP_PRIORITY_SETUPS_FILE

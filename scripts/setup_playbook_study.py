@@ -69,13 +69,18 @@ from master_avwap_lib.legacy import (  # noqa: E402
 
 PLAYBOOK_EPISODES_CSV = OUTPUT_DIR / "reports" / "setup_playbook_episodes.csv"
 PLAYBOOK_LEADERBOARD_CSV = OUTPUT_DIR / "reports" / "setup_playbook_leaderboard.csv"
+PLAYBOOK_SHORT_TERM_CSV = OUTPUT_DIR / "reports" / "setup_playbook_short_term.csv"
 PLAYBOOK_CONTEXT_CSV = OUTPUT_DIR / "reports" / "setup_playbook_context.csv"
 PLAYBOOK_REPORT_TXT = OUTPUT_DIR / "reports" / "setup_playbook_report.txt"
 PLAYBOOK_AI_DIGEST_JSON = OUTPUT_DIR / "reports" / "setup_playbook_ai_digest.json"
 
 STOP_ATR_BUFFER = 0.10
 TAG_ATR_TOLERANCE = 0.15
-HORIZON_MARK_SESSIONS = (5, 10)
+# Marks at 1 and 2 sessions feed the short-term (next 1-2 day) playbook; 5 and
+# 10 remain the swing checkpoints.
+HORIZON_MARK_SESSIONS = (1, 2, 5, 10)
+SHORT_TERM_HORIZON_SESSIONS = 2
+SHORT_TERM_MIN_SAMPLES = 12
 MIN_BARS_REQUIRED = 80
 MIN_PRICE = 3.0
 LEADERBOARD_MIN_CLOSED = 8
@@ -123,6 +128,10 @@ class SymbolContext:
     upper2: np.ndarray
     anchor_idx: np.ndarray  # bar index of day-i's anchor start (-1 if none)
     mirrored: bool = False
+    # Signed completed-week streak vs the weekly 8EMA, in ctx orientation
+    # (mirrored contexts see the negated streak, so "weekly weak" long-form
+    # detectors transparently read "weekly strong breaking down" for shorts).
+    weekly_streak: np.ndarray | None = None
     earnings_session_idx: list[int] = field(default_factory=list)  # bar idx at/after each earnings date
     _anchor_key: list[str] = field(default_factory=list)
     _anchor_hist: dict[str, dict[str, dict]] = field(default_factory=dict)
@@ -257,6 +266,8 @@ def build_symbol_context(
         mirrored=mirrored,
         _anchor_key=[""] * n,
     )
+    streaks = compute_weekly_streak_series(df)
+    ctx.weekly_streak = -streaks if mirrored else streaks
 
     for iso in sorted({str(v) for v in earnings_dates or []}):
         parsed = datetime.fromisoformat(iso).date() if iso else None
@@ -495,6 +506,80 @@ def detect_post_earnings_avwape_first_tag(ctx: SymbolContext, i: int) -> bool:
     return True
 
 
+def _volume_spike_recent(ctx: SymbolContext, i: int, lookback: int = 3, mult: float = 2.0) -> bool:
+    if i < 21:
+        return False
+    avg_volume = float(np.mean(ctx.volume[i - 20 : i]))
+    if avg_volume <= 0:
+        return False
+    return any(ctx.volume[j] >= mult * avg_volume for j in range(max(0, i - lookback + 1), i + 1))
+
+
+# Move-forensics promotions (2026-07-09, 150-session outcome-first study of
+# ~12k clean >=3 ATR moves): these four are the highest-lift condition combos
+# at move starts, written as tradeable detectors so the backfill measures them
+# with real entries/stops/costs before anything touches scoring.
+def detect_golden_pullback_sma50_vol(ctx: SymbolContext, i: int) -> bool:
+    """Golden pullback + recent 2x volume: lift 1.87x long / 2.29x short."""
+    return detect_golden_pullback_sma50(ctx, i) and _volume_spike_recent(ctx, i)
+
+
+def detect_post_earnings_volume_break(ctx: SymbolContext, i: int) -> bool:
+    """Fresh earnings (<=5 sessions) + 2x volume + a directional bar beyond the
+    8EMA. Forensics: earnings+volume preceded big SHORT moves at 1.91x (n=324);
+    the mirror measures the bearish original for shorts."""
+    since = ctx.sessions_since_last_earnings(i)
+    if since is None or since > 5:
+        return False
+    if not _volume_spike_recent(ctx, i):
+        return False
+    return (
+        ctx.close[i] > ctx.open[i]
+        and np.isfinite(ctx.ema8[i])
+        and ctx.close[i] > ctx.ema8[i]
+    )
+
+
+def detect_weekly_weak_volume_reclaim(ctx: SymbolContext, i: int) -> bool:
+    """Weekly-countertrend probe: 58% of big long moves fired NO tracked setup
+    and the dominant context was weekly-weak names. Washed-out weekly regime
+    (5+ completed weeks against), volume wakes up, first 8EMA reclaim."""
+    if ctx.weekly_streak is None or i < 25:
+        return False
+    if ctx.weekly_streak[i] > -WEEKLY_STREAK_STRONG_WEEKS:
+        return False
+    if not _volume_spike_recent(ctx, i):
+        return False
+    below = sum(
+        1
+        for j in range(i - 4, i)
+        if np.isfinite(ctx.ema8[j]) and ctx.close[j] < ctx.ema8[j]
+    )
+    return (
+        below >= 3
+        and np.isfinite(ctx.ema8[i])
+        and ctx.close[i] > ctx.ema8[i]
+        and ctx.close[i] > ctx.close[i - 1]
+    )
+
+
+def detect_ema15_bounce_trend(ctx: SymbolContext, i: int) -> bool:
+    """The 15EMA bounce with the qualifier it needs: alone it carried no lift
+    (0.89x - as common on ordinary days), but inside an established trend
+    (rising SMA50, price above it) the golden-pullback-style context lifted it
+    to ~1.5x. Tag-and-hold of the 15EMA with the trend intact."""
+    if i < 11 or not (
+        np.isfinite(ctx.ema15[i])
+        and np.isfinite(ctx.ema15[i - 1])
+        and np.isfinite(ctx.sma50[i])
+        and np.isfinite(ctx.sma50[i - 10])
+    ):
+        return False
+    if ctx.sma50[i] <= ctx.sma50[i - 10] or ctx.close[i] <= ctx.sma50[i]:
+        return False
+    return ctx.close[i - 1] > ctx.ema15[i - 1] and _tag_and_hold(ctx, i, ctx.ema15[i])
+
+
 def detect_baseline_every5(ctx: SymbolContext, i: int) -> bool:
     return (i + (hash(ctx.symbol) % 5)) % 5 == 0
 
@@ -510,9 +595,12 @@ PLAYBOOK: dict[str, dict] = {
     "band_test_rebound": {"fn": detect_band_test_rebound, "group": "avwap", "needs_bands": True},
     "ema8_pullback_uptrend": {"fn": detect_ema8_pullback_uptrend, "group": "ma"},
     "ema21_pullback_uptrend": {"fn": detect_ema21_pullback_uptrend, "group": "ma"},
+    "ema15_bounce_trend": {"fn": detect_ema15_bounce_trend, "group": "ma"},
     "sma50_reclaim": {"fn": detect_sma50_reclaim, "group": "ma"},
     "sma200_reclaim": {"fn": detect_sma200_reclaim, "group": "ma"},
     "golden_pullback_sma50": {"fn": detect_golden_pullback_sma50, "group": "ma"},
+    "golden_pullback_sma50_vol": {"fn": detect_golden_pullback_sma50_vol, "group": "ma"},
+    "weekly_weak_volume_reclaim": {"fn": detect_weekly_weak_volume_reclaim, "group": "reversal"},
     "high_252_breakout": {"fn": detect_high_252_breakout, "group": "structure"},
     "breakout_retest_252": {"fn": detect_breakout_retest_252, "group": "structure"},
     "range5d_break_above_vwap": {"fn": detect_range5d_break_above_vwap, "group": "structure", "needs_bands": True},
@@ -522,6 +610,7 @@ PLAYBOOK: dict[str, dict] = {
     "quiet_pullback_resume": {"fn": detect_quiet_pullback_resume, "group": "volume"},
     "post_earnings_gap_hold3": {"fn": detect_post_earnings_gap_hold3, "group": "earnings"},
     "post_earnings_avwape_first_tag": {"fn": detect_post_earnings_avwape_first_tag, "group": "earnings", "needs_bands": True},
+    "post_earnings_volume_break": {"fn": detect_post_earnings_volume_break, "group": "earnings"},
     "baseline_every5": {"fn": detect_baseline_every5, "group": "baseline"},
 }
 
@@ -702,9 +791,19 @@ def _aggregate_rows(frame: pd.DataFrame, keys: list[str]) -> list[dict]:
             mask &= closed[key] == value
         closed_group = closed[mask]
         net_r = closed_group["net_r"]
-        r5 = pd.to_numeric(group["r_5"], errors="coerce").dropna()
-        r10 = pd.to_numeric(group["r_10"], errors="coerce").dropna()
         std = float(net_r.std(ddof=1)) if len(net_r) > 1 else float("nan")
+        horizon_stats: dict[str, object] = {}
+        for h in HORIZON_MARK_SESSIONS:
+            column = f"r_{h}"
+            series = (
+                pd.to_numeric(group[column], errors="coerce").dropna()
+                if column in group.columns
+                else pd.Series(dtype=float)
+            )
+            horizon_stats[f"avg_r{h}"] = float(series.mean()) if len(series) else None
+            if h == SHORT_TERM_HORIZON_SESSIONS:
+                horizon_stats["short_term_samples"] = int(len(series))
+                horizon_stats["short_term_win_rate"] = float((series > 0).mean()) if len(series) else None
         rows.append(
             {
                 **dict(zip(keys, key_values)),
@@ -715,8 +814,7 @@ def _aggregate_rows(frame: pd.DataFrame, keys: list[str]) -> list[dict]:
                 "win_rate": float((net_r > 0).mean()) if len(net_r) else None,
                 "avg_r": float(net_r.mean()) if len(net_r) else None,
                 "median_r": float(net_r.median()) if len(net_r) else None,
-                "avg_r5": float(r5.mean()) if len(r5) else None,
-                "avg_r10": float(r10.mean()) if len(r10) else None,
+                **horizon_stats,
                 "stop_rate": float((closed_group["status"] == "STOPPED").mean()) if len(closed_group) else None,
                 "avg_hold": float(closed_group["hold_sessions"].mean()) if len(closed_group) else None,
                 "t_stat": (float(net_r.mean()) / (std / math.sqrt(len(net_r)))) if len(net_r) > 1 and std and std > 0 else None,
@@ -728,6 +826,46 @@ def _aggregate_rows(frame: pd.DataFrame, keys: list[str]) -> list[dict]:
 
 def aggregate_leaderboard(episodes: list[dict]) -> list[dict]:
     return _aggregate_rows(pd.DataFrame(episodes), ["family", "side"])
+
+
+def aggregate_short_term_leaderboard(episodes: list[dict]) -> list[dict]:
+    """Short-term playbook: family/side ranked by follow-through in the first
+    SHORT_TERM_HORIZON_SESSIONS sessions (mark-to-market R, stops still live),
+    with the edge vs the same-side baseline. Answers "which setups play out in
+    the next 1-2 days" for signals whose full swing needs weeks to resolve."""
+    base_rows = aggregate_leaderboard(episodes)
+    short_key = f"avg_r{SHORT_TERM_HORIZON_SESSIONS}"
+    baselines = {
+        row["side"]: row.get(short_key)
+        for row in base_rows
+        if row["family"] == "baseline_every5" and row.get(short_key) is not None
+    }
+    rows = []
+    for row in base_rows:
+        short_r = row.get(short_key)
+        if short_r is None:
+            continue
+        baseline_r = baselines.get(row["side"])
+        rows.append(
+            {
+                "family": row["family"],
+                "side": row["side"],
+                "group": row["group"],
+                "episodes": row["episodes"],
+                "short_term_samples": row.get("short_term_samples", 0),
+                "short_term_win_rate": row.get("short_term_win_rate"),
+                "avg_r1": row.get("avg_r1"),
+                "avg_r2": row.get("avg_r2"),
+                "edge_r2_vs_baseline": (short_r - baseline_r) if baseline_r is not None else None,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            int(row.get("short_term_samples", 0) or 0) < SHORT_TERM_MIN_SAMPLES,
+            -(row["avg_r2"] if row.get("avg_r2") is not None else -999.0),
+        )
+    )
+    return rows
 
 
 def aggregate_context_leaderboard(episodes: list[dict]) -> list[dict]:
@@ -801,6 +939,8 @@ def build_ai_digest(episodes: list[dict], *, days: int) -> dict:
                 "closed": row["closed"],
                 "win_rate": row["win_rate"],
                 "avg_r": row["avg_r"],
+                "avg_r1": row.get("avg_r1"),
+                "avg_r2": row.get("avg_r2"),
                 "avg_r5": row["avg_r5"],
                 "avg_r10": row["avg_r10"],
                 "stop_rate": row["stop_rate"],
@@ -837,12 +977,50 @@ def build_ai_digest(episodes: list[dict], *, days: int) -> dict:
         "baselines": {f"{side}|{ctx}": stats for (side, ctx), stats in baselines.items()},
         "actionable": [c for c in combos if c["verdict"] == "actionable"],
         "avoid": [c for c in combos if c["verdict"] == "avoid"],
+        "short_term_leaderboard": [
+            row
+            for row in aggregate_short_term_leaderboard(episodes)
+            if row["family"] != "baseline_every5"
+        ][:12],
         "all_combos": combos,
     }
 
 
-def render_report(leaderboard: list[dict], episodes: list[dict], *, days: int, digest: dict | None = None) -> str:
+def render_report(
+    leaderboard: list[dict],
+    episodes: list[dict],
+    *,
+    days: int,
+    digest: dict | None = None,
+    short_term_rows: list[dict] | None = None,
+) -> str:
     frame = pd.DataFrame(episodes)
+    short_term_rows = short_term_rows if short_term_rows is not None else aggregate_short_term_leaderboard(episodes)
+
+    def _fmt(value, pct=False, digits=2):
+        if value is None or (isinstance(value, float) and not np.isfinite(value)):
+            return "-"
+        return f"{value * 100:.0f}" if pct else f"{value:.{digits}f}"
+
+    best_swing = next(
+        (
+            row
+            for row in leaderboard
+            if row["family"] != "baseline_every5" and row["closed"] >= LEADERBOARD_MIN_CLOSED and row["avg_r"] is not None
+        ),
+        None,
+    )
+    best_short = next(
+        (
+            row
+            for row in short_term_rows
+            if row["family"] != "baseline_every5"
+            and int(row.get("short_term_samples", 0) or 0) >= SHORT_TERM_MIN_SAMPLES
+            and row.get("avg_r2") is not None
+        ),
+        None,
+    )
+
     lines = [
         f"SETUP PLAYBOOK STUDY  (generated {datetime.now().isoformat(timespec='minutes')})",
         f"Backfill window: last {days} sessions | entry next open, stop 0.1 ATR under signal bar,",
@@ -850,13 +1028,32 @@ def render_report(leaderboard: list[dict], episodes: list[dict], *, days: int, d
         f"Episodes: {len(frame)} across {frame['symbol'].nunique() if not frame.empty else 0} symbols.",
         "Compare every family to baseline_every5 (unconditional entries) before believing it.",
         "",
+        "=== BEST PERFORMING RIGHT NOW ===",
+    ]
+    if best_swing is not None:
+        lines.append(
+            f"Swing (full hold):    {best_swing['side']} {best_swing['family']}  "
+            f"avg {best_swing['avg_r']:+.2f}R (n={best_swing['closed']}, win {_fmt(best_swing['win_rate'], pct=True)}%)"
+        )
+    else:
+        lines.append("Swing (full hold):    not enough closed episodes yet")
+    if best_short is not None:
+        edge_text = (
+            f", edge {best_short['edge_r2_vs_baseline']:+.2f}R vs baseline"
+            if best_short.get("edge_r2_vs_baseline") is not None
+            else ""
+        )
+        lines.append(
+            f"Short-term (1-2 day): {best_short['side']} {best_short['family']}  "
+            f"R@2 {best_short['avg_r2']:+.2f}R (n={best_short['short_term_samples']}, "
+            f"win {_fmt(best_short['short_term_win_rate'], pct=True)}%{edge_text})"
+        )
+    else:
+        lines.append("Short-term (1-2 day): not enough 2-session marks yet")
+    lines += [
+        "",
         f"{'family':<32}{'side':<7}{'n':>5}{'clsd':>6}{'win%':>7}{'avgR':>7}{'medR':>7}{'R@5':>7}{'R@10':>7}{'stop%':>7}{'hold':>6}{'t':>6}",
     ]
-
-    def _fmt(value, pct=False, digits=2):
-        if value is None or (isinstance(value, float) and not np.isfinite(value)):
-            return "-"
-        return f"{value * 100:.0f}" if pct else f"{value:.{digits}f}"
 
     for row in leaderboard:
         if row["closed"] < LEADERBOARD_MIN_CLOSED and row["family"] != "baseline_every5":
@@ -870,6 +1067,29 @@ def render_report(leaderboard: list[dict], episodes: list[dict], *, days: int, d
     small = [r for r in leaderboard if r["closed"] < LEADERBOARD_MIN_CLOSED and r["family"] != "baseline_every5"]
     if small:
         lines += ["", f"(hidden: {len(small)} family/side rows with < {LEADERBOARD_MIN_CLOSED} closed episodes)"]
+
+    lines += [
+        "",
+        "== SHORT-TERM PLAYBOOK (follow-through in the first 1-2 sessions) ==",
+        "Ranked by R@2 (mark-to-market 2 sessions after entry, net of costs); top row = best short-term setup.",
+        f"{'family':<32}{'side':<7}{'n@2':>6}{'win2%':>7}{'R@1':>7}{'R@2':>7}{'edge2':>7}",
+    ]
+    shown_short = 0
+    for row in short_term_rows:
+        if row["family"] == "baseline_every5":
+            continue
+        if int(row.get("short_term_samples", 0) or 0) < SHORT_TERM_MIN_SAMPLES:
+            continue
+        lines.append(
+            f"{row['family']:<32}{row['side']:<7}{row['short_term_samples']:>6}"
+            f"{_fmt(row['short_term_win_rate'], pct=True):>7}{_fmt(row['avg_r1']):>7}{_fmt(row['avg_r2']):>7}"
+            f"{_fmt(row['edge_r2_vs_baseline']):>7}"
+        )
+        shown_short += 1
+        if shown_short >= 16:
+            break
+    if not shown_short:
+        lines.append(f"  (no family/side rows with >= {SHORT_TERM_MIN_SAMPLES} 2-session marks yet)")
 
     digest = digest if digest is not None else build_ai_digest(episodes, days=days)
     lines += [
@@ -922,12 +1142,14 @@ def run_playbook_study(
             logging.info("...%s symbols processed, %s episodes so far", processed, len(episodes))
 
     leaderboard = aggregate_leaderboard(episodes)
+    short_term_rows = aggregate_short_term_leaderboard(episodes)
     context_rows = aggregate_context_leaderboard(episodes)
     digest = build_ai_digest(episodes, days=days)
-    report = render_report(leaderboard, episodes, days=days, digest=digest)
+    report = render_report(leaderboard, episodes, days=days, digest=digest, short_term_rows=short_term_rows)
     if write_outputs:
         _write_csv(PLAYBOOK_EPISODES_CSV, episodes)
         _write_csv(PLAYBOOK_LEADERBOARD_CSV, leaderboard)
+        _write_csv(PLAYBOOK_SHORT_TERM_CSV, short_term_rows)
         _write_csv(PLAYBOOK_CONTEXT_CSV, context_rows)
         PLAYBOOK_REPORT_TXT.parent.mkdir(parents=True, exist_ok=True)
         PLAYBOOK_REPORT_TXT.write_text(report, encoding="utf-8")
@@ -941,6 +1163,7 @@ def run_playbook_study(
     return {
         "episodes": episodes,
         "leaderboard": leaderboard,
+        "short_term_rows": short_term_rows,
         "context_rows": context_rows,
         "digest": digest,
         "report": report,

@@ -48,6 +48,24 @@ COMPOSITE_DIMENSIONS = (
     ("master_avwap_priority_bucket", 0.8),
     ("master_avwap_focus", 0.6),
 )
+# PROVEN segments (2026-07-09, user rule "see the best bounces live"): a
+# segment with real sample size, strong average AND non-negative median R is a
+# proven winner - a live bounce matching one gets stamped PROVEN, upgraded,
+# and bypasses the Alert Center tier gate like a banger. Includes the
+# dimensions the tier composite does NOT blend (combos, swing traits, setup
+# family), because that is where the best measured results live
+# (trendline_break_recent +1.93R n=31, dynamic_vwap_upper_band +0.88R n=59,
+# eod_vwap+impulse_retest combo +0.53R with 88% 1R-hit).
+PROVEN_DIMENSIONS = (
+    "bounce_type",
+    "bounce_combo",
+    "master_avwap_setup_family",
+    "master_avwap_swing_trait",
+    "master_avwap_focus",
+)
+PROVEN_MIN_SAMPLES = 12
+PROVEN_MIN_AVG_R = 0.45
+PROVEN_MIN_MEDIAN_R = 0.0
 
 
 def _seg_key(direction: str, segment: str) -> str:
@@ -72,15 +90,23 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
             continue
         delta = int(max(-DELTA_CLIP_POINTS, min(DELTA_CLIP_POINTS, round(avg_close_r * DELTA_R_TO_POINTS))))
         muted = bool(dimension in MUTE_DIMENSIONS and avg_close_r <= MUTE_AVG_R_THRESHOLD)
+        median_close_r = _float_or_none(row.get("median_close_r"))
+        proven = bool(
+            dimension in PROVEN_DIMENSIONS
+            and sample_count >= PROVEN_MIN_SAMPLES
+            and avg_close_r >= PROVEN_MIN_AVG_R
+            and (median_close_r is None or median_close_r >= PROVEN_MIN_MEDIAN_R)
+        )
         segments.setdefault(dimension, {})[_seg_key(direction, segment)] = {
             "avg_close_r": round(avg_close_r, 3),
             "sample_count": sample_count,
             "stop_rate": _float_or_none(row.get("stop_rate")),
             "target_1r_rate": _float_or_none(row.get("target_1r_rate")),
             "avg_mfe_r": _float_or_none(row.get("avg_mfe_r")),
-            "median_close_r": _float_or_none(row.get("median_close_r")),
+            "median_close_r": median_close_r,
             "score_delta": delta,
             "muted": muted,
+            "proven": proven,
         }
     return {
         "schema_version": 1,
@@ -125,12 +151,18 @@ def evaluate_bounce_quality(
     market_environment: str = "",
     priority_bucket: str = "",
     focus_label: str = "",
+    bounce_combo: str = "",
+    setup_family: str = "",
+    swing_traits: list[str] | tuple = (),
 ) -> dict:
-    """Tier + mute decision + human-readable reasons for one confirmed bounce.
+    """Tier + mute + PROVEN decision + human-readable reasons for one bounce.
 
     The composite is a weighted mean of the measured avg R of every segment
     this bounce belongs to; unknown segments simply do not contribute, so a
     bounce with no history lands in the neutral B/C range instead of failing.
+    A bounce matching any PROVEN segment (see PROVEN_* thresholds) is flagged
+    so the alert path can stamp it and the Alert Center treats it like a
+    banger - unless a mute fires (proven negatives keep the veto).
     """
     segments = (state or {}).get("segments") or {}
     direction = str(direction or "").strip().lower()
@@ -151,6 +183,9 @@ def evaluate_bounce_quality(
         "market_environment": [market_environment],
         "master_avwap_priority_bucket": [priority_bucket],
         "master_avwap_focus": [focus_label],
+        "bounce_combo": [bounce_combo],
+        "master_avwap_setup_family": [setup_family],
+        "master_avwap_swing_trait": list(swing_traits or []),
     }
     for dimension, weight in COMPOSITE_DIMENSIONS:
         values = [v for v in dim_values.get(dimension, []) if str(v or "").strip()]
@@ -167,8 +202,23 @@ def evaluate_bounce_quality(
             if entry.get("muted") and dimension in MUTE_DIMENSIONS:
                 mute_reasons.append(f"{dimension}={value}: {entry['avg_close_r']:+.2f}R over {entry['sample_count']} — proven negative")
 
+    proven_reasons: list[str] = []
+    best_proven_avg = None
+    for dimension in PROVEN_DIMENSIONS:
+        for value in dim_values.get(dimension, []):
+            value = str(value or "").strip()
+            entry = _lookup(dimension, value)
+            if not entry or not entry.get("proven"):
+                continue
+            proven_reasons.append(
+                f"{value}: {entry['avg_close_r']:+.2f}R (n={entry['sample_count']})"
+            )
+            if best_proven_avg is None or entry["avg_close_r"] > best_proven_avg:
+                best_proven_avg = entry["avg_close_r"]
+
     composite = (weighted_sum / weight_used) if weight_used > 0 else None
     muted = bool(mute_reasons)
+    proven = bool(proven_reasons) and not muted
     if muted:
         tier = "D"
     elif composite is None:
@@ -179,12 +229,21 @@ def evaluate_bounce_quality(
             if composite >= threshold:
                 tier = label
                 break
+    if proven:
+        # Evidence-based floor: a proven match never rides below A, and a
+        # segment that clears the S composite bar on its own carries the S.
+        floor = "S" if (best_proven_avg or 0.0) >= TIER_THRESHOLDS[0][1] else "A"
+        order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+        if order.get(tier, 4) > order[floor]:
+            tier = floor
     return {
         "tier": tier,
         "composite_r": round(composite, 3) if composite is not None else None,
         "muted": muted,
         "mute_reasons": mute_reasons,
         "reasons": reasons[:4],
+        "proven": proven,
+        "proven_reasons": proven_reasons[:3],
     }
 
 

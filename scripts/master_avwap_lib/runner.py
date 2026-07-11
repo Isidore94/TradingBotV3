@@ -532,7 +532,7 @@ def run_master(
                                 ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
                             ]
                             for lbl, lvl in bounce_tests:
-                                if bounce_up_at_level(df, lvl):
+                                if bounce_up_at_level(df, lvl, zone_width=sd_c):
                                     add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
                         else:
                             bounce_tests = [
@@ -545,7 +545,7 @@ def run_master(
                                 ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
                             ]
                             for lbl, lvl in bounce_tests:
-                                if bounce_down_at_level(df, lvl):
+                                if bounce_down_at_level(df, lvl, zone_width=sd_c):
                                     add_signal(lbl, "CURRENT", curr_iso, vwap_c, sd_c, lvl)
 
                 else:
@@ -580,7 +580,7 @@ def run_master(
                             ("PREV_BOUNCE_UPPER_3", bands_p.get("UPPER_3")),
                         ]
                         for lbl, lvl in prev_bounce_tests:
-                            if bounce_up_at_level(df, lvl):
+                            if bounce_up_at_level(df, lvl, zone_width=sd_p):
                                 add_signal(lbl, "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
                     else:
                         prev_bounce_tests = [
@@ -593,7 +593,7 @@ def run_master(
                             ("PREV_BOUNCE_LOWER_3", bands_p.get("LOWER_3")),
                         ]
                         for lbl, lvl in prev_bounce_tests:
-                            if bounce_down_at_level(df, lvl):
+                            if bounce_down_at_level(df, lvl, zone_width=sd_p):
                                 add_signal(lbl, "PREVIOUS", prev_iso, vwap_p, sd_p, lvl)
 
                     # previous crosses
@@ -954,7 +954,9 @@ def run_master(
                         stdev_range_hits["long"].append(sym)
                     if current_upper_2 is not None and cross_up_through_level(df, current_upper_2):
                         stdev_cross_hits["long"].append(sym)
-                    if current_upper_2 is not None and bounce_up_at_level(df, current_upper_2):
+                    if current_upper_2 is not None and bounce_up_at_level(
+                        df, current_upper_2, zone_width=current_anchor_meta.get("stdev")
+                    ):
                         stdev_cross_hits["long"].append(f"{sym} (bounce)")
                 else:
                     if (
@@ -967,7 +969,9 @@ def run_master(
                         stdev_range_hits["short"].append(sym)
                     if current_lower_2 is not None and cross_down_through_level(df, current_lower_2):
                         stdev_cross_hits["short"].append(sym)
-                    if current_lower_2 is not None and bounce_down_at_level(df, current_lower_2):
+                    if current_lower_2 is not None and bounce_down_at_level(
+                        df, current_lower_2, zone_width=current_anchor_meta.get("stdev")
+                    ):
                         stdev_cross_hits["short"].append(f"{sym} (bounce)")
 
         current_position = current_band_context["active_level"]

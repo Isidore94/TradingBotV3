@@ -51,3 +51,28 @@ def test_saved_storage_dir_still_overrides_google_drive(monkeypatch, tmp_path):
 
     assert module.PERSISTENT_DATA_DIR == chosen
     assert module.PERSISTENT_DATA_DIR_SOURCE == "local_config"
+
+
+def test_wait_for_shared_drive_fails_clearly_when_drive_missing(monkeypatch, tmp_path):
+    import pytest
+
+    module = _load_project_paths(monkeypatch, tmp_path, google_drive_root=tmp_path / "My Drive")
+
+    # Mounted/local anchors: no wait, no error.
+    module._wait_for_shared_drive(tmp_path / "anything", "test")
+
+    # Unmounted drive letter + fail-fast: a clear actionable error, not a
+    # mkdir traceback (and never a silent local fallback).
+    missing = next(
+        (Path(f"{letter}:/") for letter in "QWXYZ" if not Path(f"{letter}:/").exists()),
+        None,
+    )
+    if missing is None:
+        return  # every letter mounted on this machine; nothing to simulate
+    monkeypatch.setenv("TRADINGBOTV3_DRIVE_WAIT_SECONDS", "0")
+    with pytest.raises(RuntimeError) as excinfo:
+        module._wait_for_shared_drive(missing / "My Drive" / "Trading", "test_config")
+    message = str(excinfo.value)
+    assert "not mounted" in message
+    assert "Google Drive" in message
+    assert "local fallback is refused" in message

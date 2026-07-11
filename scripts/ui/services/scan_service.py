@@ -132,7 +132,7 @@ def _run_master_scan_subprocess(
         run_call = (
             "run_master(use_shared_watchlists=True, "
             f"update_setup_tracker={bool(update_setup_tracker)!r}, "
-            "require_ib_for_setup_tracker=True, include_theta=True)"
+            "require_ib_for_setup_tracker=True)"
         )
     code = (
         "import faulthandler; "

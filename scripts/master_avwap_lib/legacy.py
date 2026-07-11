@@ -350,6 +350,9 @@ SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stat
 SETUP_TYPE_RECENT_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_recent_stats.csv")
 RECENT_SETUP_TYPE_LOOKBACK_DAYS = 30
 SETUP_PLAYBOOKS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
+# Short-term (1-2 session) playbook: per-family follow-through in the first
+# 1-2 sessions after entry, ranked so the top row is the current best.
+SETUP_SHORT_HORIZON_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_short_horizon.csv")
 CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 # Study namespace (B4): new setup ideas (1h/4h trend, HV-level break, compression
 # break, ...) are measured here for hit-rate / realized R BEFORE they touch scoring.
@@ -615,6 +618,21 @@ STUDY_SETUP_MAX_RECORDS = 4000
 STUDY_DISCOVERY_MIN_CLOSED_EPISODES = 5
 TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
 TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
+# Short-horizon (1-2 session) outcome marks. Most tracked setups are swing
+# setups that need days/weeks to resolve; these scalars capture what each setup
+# did in its first 1-2 sessions after entry so a separate short-term playbook
+# can rank families by immediate follow-through. Stored on the setup record
+# itself (not inside daily_marks) so they survive sealed-record compaction.
+TRACKER_SHORT_HORIZON_SESSIONS = (1, 2)
+TRACKER_SHORT_HORIZON_MIN_SAMPLES = 6
+TRACKER_SHORT_HORIZON_RECENT_DAYS = 30
+# "Last 30 Days" highlighting (2026-07-10, user rule): families first tracked
+# within this window are stamped NEW, and families outperforming recently
+# WITHOUT being favorite-bucket yet are stamped RISING - so freshly promoted
+# ideas and upgrade candidates never drown under high-sample veterans.
+TRACKER_NEW_FAMILY_DAYS = 21
+TRACKER_RISING_MIN_CLOSED = 3
+TRACKER_RISING_MIN_AVG_R = 0.25
 TRACKER_RECENT_FAMILY_MIN_TRACKED_SETUPS = 3
 TRACKER_RECENT_FAMILY_MIN_CLOSED_SETUPS = 2
 TRACKER_RECENT_FAMILY_MIN_SCORE_DELTA = 2
@@ -5303,6 +5321,7 @@ def recompute_tracker_setup_record(
     if daily_marks and isinstance(daily_marks[0].get("feature_snapshot"), dict):
         setup["entry_feature_snapshot"] = copy.deepcopy(daily_marks[0]["feature_snapshot"])
     setup["latest_snapshot"] = daily_marks[-1] if daily_marks else {}
+    setup["short_horizon"] = _build_tracker_short_horizon_summary(setup) or {}
     baseline_scenarios = [scenario for scenario in working_scenarios.values() if not bool(scenario.get("experimental"))]
     setup["open_scenario_count"] = sum(1 for scenario in baseline_scenarios if _scenario_is_open(scenario.get("status")))
     setup["closed_scenario_count"] = sum(
@@ -5505,6 +5524,87 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
         "any_target_hit": any(str(scenario.get("status", "")).upper() == "TARGET_HIT" for scenario in tradeable),
         "any_stopped": any(str(scenario.get("status", "")).upper() == "STOPPED" for scenario in tradeable),
     }
+
+
+def _tracker_short_horizon_risk_per_share(setup: dict) -> float | None:
+    """Risk-per-share used to express short-horizon marks in R: the representative
+    (primary protective-stop) scenario's initial risk, falling back to any tradeable
+    scenario so an R can still be quoted when the primary stop was untradeable."""
+    scenarios = [
+        scenario
+        for scenario in (setup.get("scenarios") or {}).values()
+        if isinstance(scenario, dict) and not bool(scenario.get("experimental"))
+    ]
+    primary_label = _representative_stop_label_for_setup(setup)
+    ordered = sorted(
+        scenarios,
+        key=lambda scenario: (
+            str(scenario.get("stop_reference_label") or "") != primary_label,
+            not bool(scenario.get("tradeable")),
+        ),
+    )
+    for scenario in ordered:
+        risk = _coerce_float(scenario.get("initial_risk_per_share"))
+        if risk is not None and risk > 0:
+            return float(risk)
+    return None
+
+
+def _build_tracker_short_horizon_summary(setup: dict) -> dict | None:
+    """Scalar 1-2 session outcome marks for one tracked setup, from its daily marks.
+
+    Independent of stops/targets on purpose: this measures pure short-term
+    follow-through (mark-to-market R at the close of session 1 and session 2
+    after entry, plus the favorable/adverse extremes inside that window) so the
+    short-term playbook can rank setup families by what they do in the next
+    1-2 days even though the swing scenarios need weeks to resolve. Close marks
+    are net of the tracker round-trip cost; extremes are gross. Must run while
+    ``daily_marks`` still exist (recompute, or sealing just before compaction)."""
+    if not isinstance(setup, dict):
+        return None
+    marks = [mark for mark in (setup.get("daily_marks") or []) if isinstance(mark, dict)]
+    entry_price = _coerce_float(setup.get("entry_price"))
+    risk_per_share = _tracker_short_horizon_risk_per_share(setup)
+    if not marks or entry_price is None or risk_per_share is None or risk_per_share <= 0:
+        return None
+    entry_pos = next((idx for idx, mark in enumerate(marks) if bool(mark.get("is_entry_day"))), 0)
+    post_marks = marks[entry_pos + 1 :]
+    if not post_marks:
+        return None
+
+    direction = 1.0 if normalize_side(setup.get("side")) == "LONG" else -1.0
+    round_trip_cost = _tracker_cost_per_share_per_side(entry_price) * 2.0
+    max_horizon = max(TRACKER_SHORT_HORIZON_SESSIONS)
+    summary: dict[str, object] = {
+        "risk_per_share": float(risk_per_share),
+        "bars_available": len(post_marks),
+        "complete": len(post_marks) >= max_horizon,
+    }
+    favorable_extremes = []
+    adverse_extremes = []
+    for horizon in TRACKER_SHORT_HORIZON_SESSIONS:
+        key = f"r_close_{horizon}d"
+        if len(post_marks) < horizon:
+            summary[key] = None
+            continue
+        close = _coerce_float(post_marks[horizon - 1].get("close"))
+        summary[key] = (
+            ((float(close) - float(entry_price)) * direction - round_trip_cost) / float(risk_per_share)
+            if close is not None
+            else None
+        )
+    for mark in post_marks[:max_horizon]:
+        high = _coerce_float(mark.get("high"))
+        low = _coerce_float(mark.get("low"))
+        favorable = high if direction > 0 else low
+        adverse = low if direction > 0 else high
+        if favorable is not None:
+            favorable_extremes.append((float(favorable) - float(entry_price)) * direction / float(risk_per_share))
+        if adverse is not None:
+            adverse_extremes.append((float(adverse) - float(entry_price)) * direction / float(risk_per_share))
+    summary[f"mfe_r_{max_horizon}d"] = max(favorable_extremes) if favorable_extremes else None
+    summary[f"mae_r_{max_horizon}d"] = min(adverse_extremes) if adverse_extremes else None
+    return summary
 
 
 def _weighted_mean(values_with_weights: list[tuple[object, object]]) -> float | None:
@@ -7746,6 +7846,120 @@ def build_tracker_playbook_recommendation_rows(playbook_rows: list[dict]) -> lis
     return recommendations
 
 
+def build_tracker_short_horizon_rows(
+    setups: dict[str, dict],
+    *,
+    reference_date: date | None = None,
+) -> list[dict]:
+    """Short-term playbook: per (side, setup family) follow-through in the first
+    1-2 sessions after entry, ranked best-first. Answers "which setups tend to
+    play out within the next 1-2 days" independently of the swing scenarios,
+    which need days/weeks to resolve. Correlated daily re-scans of the same
+    episode are collapsed to the first signal."""
+    if not isinstance(setups, dict) or not setups:
+        return []
+
+    episodes: dict[tuple, dict] = {}
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            continue
+        short_horizon = setup.get("short_horizon")
+        if not isinstance(short_horizon, dict) or _coerce_float(short_horizon.get("r_close_1d")) is None:
+            continue
+        key = _tracker_episode_key(setup)
+        existing = episodes.get(key)
+        if existing is not None and str(existing.get("scan_date") or "") <= str(setup.get("scan_date") or ""):
+            continue  # keep the first signal (the trade you would actually have taken)
+        episodes[key] = {
+            "symbol": str(setup.get("symbol") or "").strip().upper(),
+            "scan_date": str(setup.get("scan_date") or ""),
+            "side": normalize_side(setup.get("side") or ""),
+            "setup_family": _canonical_tracker_setup_family(setup),
+            "priority_bucket": _tracker_priority_bucket(setup),
+            "r_close_1d": _coerce_float(short_horizon.get("r_close_1d")),
+            "r_close_2d": _coerce_float(short_horizon.get("r_close_2d")),
+            "mfe_r_2d": _coerce_float(short_horizon.get("mfe_r_2d")),
+            "mae_r_2d": _coerce_float(short_horizon.get("mae_r_2d")),
+        }
+
+    reference_day = reference_date or datetime.now().date()
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for row in episodes.values():
+        grouped.setdefault((row["side"], row["setup_family"]), []).append(row)
+
+    def _clipped(rows: list[dict], key: str) -> list[float]:
+        return [
+            clipped
+            for clipped in (_clip_tracker_r_value(row.get(key), TRACKER_SCORING_R_CLIP) for row in rows)
+            if clipped is not None
+        ]
+
+    short_rows = []
+    for (side, setup_family), rows_for_group in grouped.items():
+        r1_values = _clipped(rows_for_group, "r_close_1d")
+        r2_rows = [row for row in rows_for_group if _coerce_float(row.get("r_close_2d")) is not None]
+        r2_values = _clipped(r2_rows, "r_close_2d")
+        mfe_values = _clipped(rows_for_group, "mfe_r_2d")
+        mae_values = _clipped(rows_for_group, "mae_r_2d")
+        recent_rows = []
+        for row in r2_rows:
+            scan_day = _parse_iso_date_or_none(row.get("scan_date"))
+            if scan_day is not None and 0 <= (reference_day - scan_day).days <= TRACKER_SHORT_HORIZON_RECENT_DAYS:
+                recent_rows.append(row)
+        recent_r2_values = _clipped(recent_rows, "r_close_2d")
+
+        avg_r_2d = mean(r2_values) if r2_values else None
+        median_r_2d = median(r2_values) if r2_values else None
+        win_rate_2d = mean(1.0 if value > 0 else 0.0 for value in r2_values) if r2_values else None
+        short_term_score = None
+        if avg_r_2d is not None:
+            short_term_score = (
+                (avg_r_2d * math.log1p(max(1, len(r2_values))))
+                + ((median_r_2d or 0.0) * 0.35)
+                + ((win_rate_2d or 0.0) * 0.20)
+            )
+
+        sample_rows = sorted(rows_for_group, key=lambda row: str(row.get("scan_date") or ""), reverse=True)
+        sample_examples = []
+        for sample_row in sample_rows[:8]:
+            sample_r2 = _coerce_float(sample_row.get("r_close_2d"))
+            sample_text = f"{sample_row['symbol']} {sample_row['scan_date']}"
+            if sample_r2 is not None:
+                sample_text += f" ({sample_r2:+.2f}R@2d)"
+            sample_examples.append(sample_text)
+
+        short_rows.append(
+            {
+                "side": side,
+                "setup_family": setup_family,
+                "tracked_setups": len(rows_for_group),
+                "samples_2d": len(r2_values),
+                "avg_r_1d": mean(r1_values) if r1_values else None,
+                "avg_r_2d": avg_r_2d,
+                "median_r_2d": median_r_2d,
+                "win_rate_2d": win_rate_2d,
+                "avg_mfe_r_2d": mean(mfe_values) if mfe_values else None,
+                "avg_mae_r_2d": mean(mae_values) if mae_values else None,
+                "recent_samples_2d": len(recent_r2_values),
+                "recent_avg_r_2d": mean(recent_r2_values) if recent_r2_values else None,
+                "short_term_score": short_term_score,
+                "sample_setups": "; ".join(sample_examples),
+            }
+        )
+
+    short_rows.sort(
+        key=lambda row: (
+            int(row.get("samples_2d", 0) or 0) < TRACKER_SHORT_HORIZON_MIN_SAMPLES,
+            row.get("short_term_score") is None,
+            -(row.get("short_term_score") if row.get("short_term_score") is not None else -9999.0),
+            -(row.get("avg_r_2d") if row.get("avg_r_2d") is not None else -9999.0),
+            -int(row.get("samples_2d", 0) or 0),
+            str(row.get("setup_family") or ""),
+        )
+    )
+    return short_rows
+
+
 def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
     if not isinstance(setups, dict) or not setups:
         return []
@@ -9475,6 +9689,23 @@ def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
     """
     if not isinstance(payload, dict):
         return []
+
+    # Family first-seen dates across every namespace: a family whose FIRST
+    # tracked record is inside TRACKER_NEW_FAMILY_DAYS is a fresh promotion.
+    family_first_seen: dict[str, str] = {}
+    for namespace in ("setups", "study_setups", "control_setups"):
+        for setup in (payload.get(namespace) or {}).values():
+            if not isinstance(setup, dict):
+                continue
+            family = _canonical_tracker_setup_family(setup)
+            scan_date = str(setup.get("scan_date") or "").strip()
+            if not family or not scan_date:
+                continue
+            current = family_first_seen.get(family)
+            if current is None or scan_date < current:
+                family_first_seen[family] = scan_date
+    today = datetime.now().date()
+
     rows: list[dict] = []
     for namespace, source_label in (("setups", "live"), ("study_setups", "study")):
         namespace_setups = payload.get(namespace)
@@ -9488,8 +9719,41 @@ def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
         for row in family_rows:
             row["namespace"] = source_label
         rows.extend(family_rows)
+
+    for row in rows:
+        family = str(row.get("setup_family") or "")
+        first_seen = family_first_seen.get(family, "")
+        first_seen_day = _parse_iso_date_or_none(first_seen)
+        is_new = bool(
+            first_seen_day is not None
+            and (today - first_seen_day).days <= TRACKER_NEW_FAMILY_DAYS
+        )
+        avg_closed_r = _coerce_float(row.get("avg_closed_r"))
+        edge = _coerce_float(row.get("avg_closed_r_edge"))
+        # RISING = recent outperformance WITHOUT favorite-bucket status yet:
+        # study families by definition, or live families still outside the
+        # favorite bucket - the upgrade candidates worth a manual look.
+        not_favorite_yet = (
+            str(row.get("namespace") or "") == "study"
+            or str(row.get("priority_bucket") or "").strip() != "favorite_setup"
+        )
+        is_rising = bool(
+            not_favorite_yet
+            and int(row.get("closed_setups") or 0) >= TRACKER_RISING_MIN_CLOSED
+            and avg_closed_r is not None
+            and avg_closed_r >= TRACKER_RISING_MIN_AVG_R
+            and (edge is None or edge >= 0)
+        )
+        row["family_first_seen"] = first_seen
+        row["is_new_family"] = is_new
+        row["is_rising_non_favorite"] = is_rising
+        row["status"] = " ".join(part for part, flag in (("NEW", is_new), ("RISING", is_rising)) if flag)
+
+    # Highlighted rows (with at least a little closed evidence) pin to the
+    # top; below them the usual evidence-first ordering.
     rows.sort(
         key=lambda row: (
+            not (row.get("status") and int(row.get("closed_setups") or 0) >= 2),
             -(row.get("closed_setups") or 0),
             -(_coerce_float(row.get("avg_closed_r")) or -10**9),
         )
@@ -9508,6 +9772,7 @@ def export_setup_tracker_views(payload: dict) -> None:
     setup_type_rows = build_tracker_setup_type_rows(setups)
     recent_setup_type_rows = build_recent_setup_type_stat_rows(payload)
     playbook_rows = build_tracker_playbook_rows(setups)
+    short_horizon_rows = build_tracker_short_horizon_rows(setups)
     payload["stats"] = stats_rows
     payload["setup_type_stats"] = setup_type_rows
 
@@ -9518,6 +9783,7 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(setup_type_rows).to_csv(SETUP_TYPE_STATS_FILE, index=False)
     pd.DataFrame(recent_setup_type_rows).to_csv(SETUP_TYPE_RECENT_STATS_FILE, index=False)
     pd.DataFrame(playbook_rows).to_csv(SETUP_PLAYBOOKS_FILE, index=False)
+    pd.DataFrame(short_horizon_rows).to_csv(SETUP_SHORT_HORIZON_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
 
@@ -9621,6 +9887,12 @@ def _compact_tracker_setup_record(setup: dict) -> bool:
         return False
     changed = False
     if setup.get("daily_marks"):
+        # Sealed records never recompute, so capture the scalar 1-2 session
+        # marks now while the per-bar detail still exists.
+        if not (setup.get("short_horizon") or {}).get("complete"):
+            short_horizon = _build_tracker_short_horizon_summary(setup)
+            if short_horizon:
+                setup["short_horizon"] = short_horizon
         setup["daily_marks"] = []
         changed = True
     scenarios = setup.get("scenarios")
@@ -14628,7 +14900,12 @@ def warm_durable_stores_for_watchlists(
 def calc_anchored_vwap_bands(df: pd.DataFrame, anchor_idx: int):
     """
     Anchored VWAP + 1/2/3σ bands from anchor_idx → end.
-    TradingView-style volume-weighted stdev.
+
+    σ accumulates each bar's deviation from the RUNNING AVWAP at that bar
+    (not TradingView's distribution stdev around the final AVWAP), so it runs
+    somewhat tighter on trending tapes. Every band consumer — events, zones,
+    tracker families, scoring history — is calibrated against this variant;
+    do not swap the formula without recalibrating them together.
     """
     cumVol = 0.0
     cumVP = 0.0
@@ -14838,7 +15115,7 @@ def get_atr20(df: pd.DataFrame, length: int = ATR_LENGTH):
         return None
     return float(atr)
 
-def bounce_up_at_level(df: pd.DataFrame, level: float) -> bool:
+def bounce_up_at_level(df: pd.DataFrame, level: float, zone_width: float | None = None) -> bool:
     if level is None or pd.isna(level) or len(df) < ATR_LENGTH + 3:
         return False
     atr = get_atr20(df)
@@ -14847,6 +15124,14 @@ def bounce_up_at_level(df: pd.DataFrame, level: float) -> bool:
     eps = max(BOUNCE_ATR_TOL_PCT * atr, BOUNCE_LEVEL_ATR_TOL_PCT * atr)
     push = ATR_MULT * atr
     B, C = df.iloc[-2], df.iloc[-1]
+
+    # A "bounce at level" is only an honest label while the close still lives
+    # in that level's own zone. Once price closes beyond the next band up
+    # (zone_width away, i.e. one stdev for AVWAP bands), the action belongs to
+    # the higher band's events instead of a bounce that is already left behind.
+    if zone_width is not None and not pd.isna(zone_width) and float(zone_width) > 0:
+        if C.close > level + float(zone_width):
+            return False
 
     # Same-day touch-and-reclaim (bounce happens on latest bar)
     touched_today = abs(C.low - level) <= eps
@@ -14861,7 +15146,7 @@ def bounce_up_at_level(df: pd.DataFrame, level: float) -> bool:
     confirm = C.close > B.close and (C.close >= level or C.close >= level + push)
     return bool(touched and reclaimed and confirm)
 
-def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
+def bounce_down_at_level(df: pd.DataFrame, level: float, zone_width: float | None = None) -> bool:
     if level is None or pd.isna(level) or len(df) < ATR_LENGTH + 3:
         return False
     atr = get_atr20(df)
@@ -14870,6 +15155,12 @@ def bounce_down_at_level(df: pd.DataFrame, level: float) -> bool:
     eps = max(BOUNCE_ATR_TOL_PCT * atr, BOUNCE_LEVEL_ATR_TOL_PCT * atr)
     push = ATR_MULT * atr
     B, C = df.iloc[-2], df.iloc[-1]
+
+    # Mirror of bounce_up_at_level: a rejection that has already closed beyond
+    # the next band down is that band's event, not a bounce at this level.
+    if zone_width is not None and not pd.isna(zone_width) and float(zone_width) > 0:
+        if C.close < level - float(zone_width):
+            return False
 
     # Same-day touch-and-reject (bounce happens on latest bar)
     touched_today = abs(C.high - level) <= eps
@@ -20902,10 +21193,10 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
             })
 
         if side == "LONG":
-            if bounce_up_at_level(df, avwap):
+            if bounce_up_at_level(df, avwap, zone_width=stdev):
                 add_anchor_event("BOUNCE_UP_AVWAP", "AVWAP")
         else:
-            if bounce_down_at_level(df, avwap):
+            if bounce_down_at_level(df, avwap, zone_width=stdev):
                 add_anchor_event("BOUNCE_DOWN_AVWAP", "AVWAP")
 
     disconnect_daily_data_client(ib)
@@ -21021,7 +21312,7 @@ def _evaluate_priority_snapshot_for_date(
                             ("BOUNCE_UPPER_3", bands_c["UPPER_3"]),
                         ]
                         for lbl, lvl in bounce_tests:
-                            if bounce_up_at_level(df, lvl):
+                            if bounce_up_at_level(df, lvl, zone_width=sd_c):
                                 add_signal(lbl, "CURRENT", current_anchor_iso, vwap_c, sd_c, lvl)
                     else:
                         bounce_tests = [
@@ -21034,7 +21325,7 @@ def _evaluate_priority_snapshot_for_date(
                             ("BOUNCE_LOWER_3", bands_c["LOWER_3"]),
                         ]
                         for lbl, lvl in bounce_tests:
-                            if bounce_down_at_level(df, lvl):
+                            if bounce_down_at_level(df, lvl, zone_width=sd_c):
                                 add_signal(lbl, "CURRENT", current_anchor_iso, vwap_c, sd_c, lvl)
 
     if previous_anchor_iso:
@@ -21062,7 +21353,7 @@ def _evaluate_priority_snapshot_for_date(
                         ("PREV_BOUNCE_UPPER_3", bands_p.get("UPPER_3")),
                     ]
                     for lbl, lvl in prev_bounce_tests:
-                        if bounce_up_at_level(df, lvl):
+                        if bounce_up_at_level(df, lvl, zone_width=sd_p):
                             add_signal(lbl, "PREVIOUS", previous_anchor_iso, vwap_p, sd_p, lvl)
                 else:
                     prev_bounce_tests = [
@@ -21075,7 +21366,7 @@ def _evaluate_priority_snapshot_for_date(
                         ("PREV_BOUNCE_LOWER_3", bands_p.get("LOWER_3")),
                     ]
                     for lbl, lvl in prev_bounce_tests:
-                        if bounce_down_at_level(df, lvl):
+                        if bounce_down_at_level(df, lvl, zone_width=sd_p):
                             add_signal(lbl, "PREVIOUS", previous_anchor_iso, vwap_p, sd_p, lvl)
 
                 primary_prev_cross = select_primary_cross_signal(df, side, "PREV_", vwap_p, bands_p)
@@ -24404,6 +24695,13 @@ def enrich_priority_rows_with_weekly_ema8_hold(
 PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY = "playbook_volume_thrust"
 PLAYBOOK_SECOND_DEV_POWER_HOLD_STUDY_FAMILY = "playbook_second_dev_power_hold"
 PLAYBOOK_QUIET_PULLBACK_STUDY_FAMILY = "playbook_quiet_pullback_resume"
+# Move-forensics candidates (2026-07-09, outcome-first study of ~12k clean
+# >=3 ATR moves over 150 sessions): the two highest-lift initiation combos,
+# tracked in the study namespace for forward evidence. Deliberately NOT in
+# PLAYBOOK_SCORE_BONUSES - forensics lift is association, and these only earn
+# scoring weight after the backfill study confirms tradable edge both sides.
+PLAYBOOK_GOLDEN_PULLBACK_VOL_STUDY_FAMILY = "playbook_golden_pullback_vol"
+PLAYBOOK_POST_EARNINGS_VOLUME_BREAK_STUDY_FAMILY = "playbook_post_earnings_volume_break"
 PLAYBOOK_STUDY_BUCKET = "study_playbook"
 PLAYBOOK_VOLUME_THRUST_MIN_MOVE = 0.015
 PLAYBOOK_VOLUME_THRUST_MIN_VOL_MULT = 2.0
@@ -24464,6 +24762,130 @@ def _playbook_detect_volume_thrust(df: pd.DataFrame | None, side: str, anchor_vw
     )
 
 
+def _playbook_frame_tail_ohlcv(df: pd.DataFrame | None, needed: int):
+    """Chronological (opens, highs, lows, closes, volumes) tails, or None."""
+    columns = ("open", "high", "low", "close", "volume")
+    if not isinstance(df, pd.DataFrame) or df.empty or any(col not in df.columns for col in columns):
+        return None
+    work = df.dropna(subset=["close"]).reset_index(drop=True)
+    if len(work) < needed:
+        return None
+    series = tuple([_coerce_float(v) for v in pd.to_numeric(work[col], errors="coerce").tolist()] for col in columns)
+    if any(any(v is None for v in values[-needed:]) for values in series):
+        return None
+    return series
+
+
+def _playbook_detect_golden_pullback_vol(df: pd.DataFrame | None, side: str) -> str | None:
+    """Golden pullback into the 50SMA on a volume spike (move-forensics combo:
+    lift 1.87x long / 2.29x short at big-move starts). Long: rising SMA50,
+    closes above it for 15 sessions, a tag-and-hold of the SMA, and >=2x 20d
+    volume within the last 3 sessions. Shorts are the mirror (declining SMA50
+    rejection)."""
+    tail = _playbook_frame_tail_ohlcv(df, 70)
+    if tail is None:
+        return None
+    _opens, highs, lows, closes, volumes = tail
+    n = len(closes)
+
+    def sma50_at(idx: int) -> float | None:
+        return _playbook_avg(closes[idx - 49 : idx + 1]) if idx >= 49 else None
+
+    sma_now = sma50_at(n - 1)
+    sma_prior = sma50_at(n - 11)
+    avg_volume = _playbook_avg(volumes[-23:-3])
+    if sma_now is None or sma_prior is None or not avg_volume or avg_volume <= 0:
+        return None
+    peak_recent_volume = max(volumes[-3:])
+    if peak_recent_volume < PLAYBOOK_VOLUME_THRUST_MIN_VOL_MULT * avg_volume:
+        return None
+    atr_proxy = _playbook_avg([h - l for h, l in zip(highs[-20:], lows[-20:])])
+    if not atr_proxy or atr_proxy <= 0:
+        return None
+    tolerance = 0.15 * atr_proxy
+
+    is_long = normalize_side(side) == "LONG"
+    for offset in range(16, 1, -1):
+        idx = n - offset
+        sma_j = sma50_at(idx)
+        if sma_j is None:
+            return None
+        if (closes[idx] <= sma_j) if is_long else (closes[idx] >= sma_j):
+            return None
+    if is_long:
+        if sma_now <= sma_prior:
+            return None
+        if lows[-1] > sma_now + tolerance or closes[-1] <= sma_now:
+            return None
+    else:
+        if sma_now >= sma_prior:
+            return None
+        if highs[-1] < sma_now - tolerance or closes[-1] >= sma_now:
+            return None
+    return (
+        f"Golden pullback + volume: {'rising' if is_long else 'declining'} SMA50 held 15 sessions, "
+        f"tagged and {'reclaimed' if is_long else 'rejected'} on {peak_recent_volume / avg_volume:.1f}x avg volume"
+    )
+
+
+def _playbook_sessions_since_earnings(df: pd.DataFrame | None, earnings_dates: list) -> int | None:
+    if not isinstance(df, pd.DataFrame) or df.empty or "datetime" not in df.columns or not earnings_dates:
+        return None
+    try:
+        bar_dates = [value.date() for value in pd.to_datetime(df["datetime"])]
+    except (TypeError, ValueError):
+        return None
+    last_earnings = None
+    for iso in earnings_dates:
+        try:
+            parsed = date.fromisoformat(str(iso))
+        except (TypeError, ValueError):
+            continue
+        if parsed <= bar_dates[-1] and (last_earnings is None or parsed > last_earnings):
+            last_earnings = parsed
+    if last_earnings is None:
+        return None
+    sessions = sum(1 for value in bar_dates if value > last_earnings)
+    return sessions
+
+
+def _playbook_detect_post_earnings_volume_break(
+    df: pd.DataFrame | None,
+    side: str,
+    earnings_dates: list,
+) -> str | None:
+    """Fresh earnings + volume churn + a directional bar beyond the 8EMA.
+
+    Move-forensics: earnings<=5 sessions + 2x volume preceded big SHORT moves
+    at 1.91x lift (n=324); both sides are recorded so the study leaderboard
+    can confirm the asymmetry forward."""
+    since = _playbook_sessions_since_earnings(df, earnings_dates)
+    if since is None or since > 5:
+        return None
+    tail = _playbook_frame_tail_ohlcv(df, PLAYBOOK_VOLUME_THRUST_VOL_AVG_SESSIONS + 5)
+    if tail is None:
+        return None
+    opens, _highs, _lows, closes, volumes = tail
+    avg_volume = _playbook_avg(volumes[-23:-3])
+    if not avg_volume or avg_volume <= 0:
+        return None
+    peak_recent_volume = max(volumes[-3:])
+    if peak_recent_volume < PLAYBOOK_VOLUME_THRUST_MIN_VOL_MULT * avg_volume:
+        return None
+    ema8 = pd.Series(closes).ewm(span=8, adjust=False).mean().iloc[-1]
+    is_long = normalize_side(side) == "LONG"
+    if is_long:
+        if closes[-1] <= opens[-1] or closes[-1] <= ema8:
+            return None
+    else:
+        if closes[-1] >= opens[-1] or closes[-1] >= ema8:
+            return None
+    return (
+        f"Post-earnings volume break: {since} session(s) since earnings, "
+        f"{peak_recent_volume / avg_volume:.1f}x avg volume, {'bullish' if is_long else 'bearish'} bar beyond the 8EMA"
+    )
+
+
 def _playbook_detect_quiet_pullback_resume(df: pd.DataFrame | None, side: str) -> str | None:
     tail = _playbook_frame_tail_values(df, 55)
     if tail is None:
@@ -24508,12 +24930,19 @@ def enrich_priority_rows_with_playbook_studies(
     - quiet_pullback_resume (both sides): 3 low-volume counter-trend sessions
       then a resumption bar, on the trend side of SMA50. Edge +0.24/+0.32R long,
       +0.22/+0.34R short.
+    - golden_pullback_vol + post_earnings_volume_break (both sides): the two
+      strongest move-forensics initiation combos (2026-07-09). Study-only, NO
+      score bonus until the backfill confirms tradable edge.
     """
     frames = daily_frames_by_symbol if isinstance(daily_frames_by_symbol, dict) else {}
     ai_symbols = ai_state.get("symbols") if isinstance(ai_state, dict) else {}
     if not isinstance(ai_symbols, dict):
         ai_symbols = {}
     feature_rows_by_symbol = feature_rows_by_symbol if isinstance(feature_rows_by_symbol, dict) else {}
+    try:
+        earnings_symbols = (load_earnings_date_cache() or {}).get("symbols", {})
+    except Exception:
+        earnings_symbols = {}
     study_rows: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
     for row in priority_rows or []:
@@ -24529,6 +24958,7 @@ def enrich_priority_rows_with_playbook_studies(
         current_anchor = symbol_entry.get("current_anchor")
         anchor_vwap = current_anchor.get("vwap") if isinstance(current_anchor, dict) else None
 
+        symbol_earnings_dates = (earnings_symbols.get(symbol) or {}).get("dates") or []
         detections: list[tuple[str, str, str | None]] = [
             (
                 PLAYBOOK_VOLUME_THRUST_STUDY_FAMILY,
@@ -24539,6 +24969,16 @@ def enrich_priority_rows_with_playbook_studies(
                 PLAYBOOK_QUIET_PULLBACK_STUDY_FAMILY,
                 "PLAYBOOK_QUIET_PULLBACK",
                 _playbook_detect_quiet_pullback_resume(df, side),
+            ),
+            (
+                PLAYBOOK_GOLDEN_PULLBACK_VOL_STUDY_FAMILY,
+                "PLAYBOOK_GOLDEN_PULLBACK_VOL",
+                _playbook_detect_golden_pullback_vol(df, side),
+            ),
+            (
+                PLAYBOOK_POST_EARNINGS_VOLUME_BREAK_STUDY_FAMILY,
+                "PLAYBOOK_POST_EARNINGS_VOLUME_BREAK",
+                _playbook_detect_post_earnings_volume_break(df, side, symbol_earnings_dates),
             ),
         ]
         if side == "LONG":

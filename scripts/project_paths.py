@@ -125,6 +125,52 @@ def _resolve_persistent_data_dir() -> tuple[Path, str]:
 
 PERSISTENT_DATA_DIR, PERSISTENT_DATA_DIR_SOURCE = _resolve_persistent_data_dir()
 
+
+def _wait_for_shared_drive(path: Path, source: str) -> None:
+    """Bounded wait for the shared store's drive letter to mount.
+
+    Google Drive mounts G: late at boot, so an auto-started GUI can race it
+    and die in ``_ensure_directories`` with a bare ``WinError 3`` mkdir
+    traceback. Waiting (default 120s, TRADINGBOTV3_DRIVE_WAIT_SECONDS to
+    change, 0 = fail fast) rides out the normal mount delay; if the drive
+    never appears the failure is a clear, actionable message instead.
+
+    Deliberately NO silent local fallback: the shared store carries the
+    tracker, watchlists, and outcome history that every machine syncs through
+    Drive - quietly writing them to a local folder would fork that state.
+    """
+    anchor = Path(path.anchor) if path.anchor else None
+    if anchor is None or str(anchor) in ("", ".") or anchor.exists():
+        return
+    try:
+        wait_seconds = float(os.environ.get("TRADINGBOTV3_DRIVE_WAIT_SECONDS", "120"))
+    except (TypeError, ValueError):
+        wait_seconds = 120.0
+    if wait_seconds > 0:
+        print(
+            f"[TradingBotV3] Shared data drive {anchor} is not mounted yet "
+            f"(store: {path}, configured via {source}). Waiting up to "
+            f"{int(wait_seconds)}s for Google Drive to mount...",
+            file=sys.stderr,
+            flush=True,
+        )
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            time.sleep(2.0)
+            if anchor.exists():
+                print(f"[TradingBotV3] Drive {anchor} mounted - continuing startup.", file=sys.stderr, flush=True)
+                return
+    raise RuntimeError(
+        f"Shared data drive {anchor} is not mounted, so the shared store at {path} is unreachable "
+        f"(configured via {source}). Start Google Drive (GoogleDriveFS) and relaunch - or point the app "
+        "elsewhere via the TRADINGBOTV3_DATA_DIR environment variable or 'shared_data_dir' in "
+        "local_settings.json. A silent local fallback is refused on purpose: it would fork the shared "
+        "tracker/watchlist state across machines. TRADINGBOTV3_DRIVE_WAIT_SECONDS adjusts the wait (0 = fail fast)."
+    )
+
+
+_wait_for_shared_drive(PERSISTENT_DATA_DIR, PERSISTENT_DATA_DIR_SOURCE)
+
 SHARED_HOME_DIR = PERSISTENT_DATA_DIR
 DATA_DIR = PERSISTENT_DATA_DIR / "data"
 OUTPUT_DIR = PERSISTENT_DATA_DIR / "output"

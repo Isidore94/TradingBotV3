@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -29,6 +30,7 @@ class BounceService(QObject):
     scanningChanged = Signal(bool)
     autoRegimeChanged = Signal(object)  # reading dict from get_auto_regime_reading(), or {}
     entryAssistChanged = Signal(object)  # state dict from entry_assist_state(), or {}
+    entryBoardChanged = Signal(object)  # board dict from entry_assist_board_snapshot(), or {}
     started = Signal()
     stopped = Signal()
     failed = Signal(str)
@@ -58,6 +60,14 @@ class BounceService(QObject):
         self._regime_timer.setInterval(30_000)
         self._regime_timer.timeout.connect(self.refresh_auto_regime)
         self.started.connect(self._start_regime_timer)
+
+        # Always-on RS/RW board: regime + pause detection + live window /
+        # pause-preview rankings + both-side trailing movers, recomputed from
+        # cached bars every minute with no clicks.
+        self._board_timer = QTimer(self)
+        self._board_timer.setInterval(60_000)
+        self._board_timer.timeout.connect(self.refresh_entry_board)
+        self.started.connect(self._start_board_timer)
 
     @property
     def running(self) -> bool:
@@ -146,6 +156,23 @@ class BounceService(QObject):
         self.refresh_auto_regime()
 
     @Slot()
+    def _start_board_timer(self) -> None:
+        self._board_timer.start()
+        self.refresh_entry_board()
+
+    @Slot()
+    def refresh_entry_board(self) -> None:
+        """Recompute + emit the always-on entry-assist RS/RW board."""
+        bot = self._current_bot()
+        board = None
+        if bot is not None:
+            try:
+                board = bot.entry_assist_board_snapshot()
+            except Exception:
+                board = None
+        self.entryBoardChanged.emit(board or {})
+
+    @Slot()
     def refresh_auto_regime(self) -> None:
         """Emit the bot's read-only auto-regime reading + entry-assist state."""
         bot = self._current_bot()
@@ -164,12 +191,48 @@ class BounceService(QObject):
         self.entryAssistChanged.emit(assist or {})
 
     def entry_assist(self) -> dict | None:
-        """The strip button: regime-tailored window toggle / movers output."""
+        """Regime-tailored window toggle / movers output (legacy single button)."""
         result = self._with_bot(lambda bot: bot.entry_assist_action())
         if isinstance(result, dict) and result.get("note"):
             self.statusChanged.emit(f"Entry assist: {result['note']}")
         self.refresh_auto_regime()
         return result
+
+    def entry_assist_command(self, command: str) -> dict | None:
+        """Explicit button-array action. Every click produces visible output:
+        successful actions emit their lists through the bot's gui_callback, and
+        failures (bot not connected, no SPY bars, window too short) surface as a
+        WATCH note in the Alert Center instead of dying in the status bar."""
+        bot = self._current_bot()
+        if bot is None:
+            self._emit_assist_note("Bot not connected yet - start BounceBot first.")
+            return None
+        try:
+            result = bot.entry_assist_command(command)
+        except Exception as exc:
+            self._emit_assist_note(f"Command failed: {exc}")
+            self.refresh_auto_regime()
+            return None
+        if isinstance(result, dict) and result.get("note"):
+            self.statusChanged.emit(f"Entry assist: {result['note']}")
+            if not result.get("ok"):
+                self._emit_assist_note(str(result["note"]))
+        self.refresh_auto_regime()
+        self.refresh_entry_board()  # window opens/closes show on the board immediately
+        return result
+
+    def _emit_assist_note(self, note: str) -> None:
+        self.statusChanged.emit(f"Entry assist: {note}")
+        self.alertReceived.emit(
+            BounceAlert(
+                time_text=datetime.now().strftime("%H:%M:%S"),
+                symbol="",
+                side="WATCH",
+                trigger=str(note),
+                tag="entry_assist",
+                raw_text=f"ENTRY ASSIST: {note}",
+            )
+        )
 
     @Slot()
     def refresh_health(self) -> None:

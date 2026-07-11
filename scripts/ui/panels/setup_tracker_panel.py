@@ -44,6 +44,8 @@ from ui.widgets.setup_detail_view import SetupDetailView
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 RECENT_SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_recent_stats.csv")
 SETUP_PLAYBOOKS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
+SHORT_HORIZON_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_short_horizon.csv")
+SHORT_TERM_MIN_SAMPLES = 6
 
 
 CURRENT_PICK_COLUMNS = (
@@ -76,6 +78,7 @@ SETUP_TYPE_COLUMNS = (
 )
 
 RECENT_TYPE_COLUMNS = (
+    ("status", "Status"),
     ("namespace", "Source"),
     ("side", "Side"),
     ("priority_bucket", "Bucket"),
@@ -87,6 +90,22 @@ RECENT_TYPE_COLUMNS = (
     ("target_hit_rate", "Target Hit"),
     ("stop_rate", "Stop"),
     ("representative_closed_r", "Repr R"),
+    ("sample_setups", "Recent Samples"),
+)
+
+SHORT_TERM_COLUMNS = (
+    ("side", "Side"),
+    ("setup_family", "Setup Family"),
+    ("samples_2d", "Samples"),
+    ("win_rate_2d", "Win @2d"),
+    ("avg_r_1d", "R @1d"),
+    ("avg_r_2d", "R @2d"),
+    ("median_r_2d", "Med R @2d"),
+    ("avg_mfe_r_2d", "MFE 2d"),
+    ("avg_mae_r_2d", "MAE 2d"),
+    ("recent_samples_2d", "N 30d"),
+    ("recent_avg_r_2d", "R @2d 30d"),
+    ("short_term_score", "Rank"),
     ("sample_setups", "Recent Samples"),
 )
 
@@ -163,6 +182,7 @@ HUMAN_PICK_COLUMNS = (
 PERCENT_KEYS = {
     "win_rate",
     "win_rate_closed",
+    "win_rate_2d",
     "target_hit_rate",
     "stop_rate",
     "positive_scan_factor_match_rate",
@@ -179,6 +199,13 @@ SIGNED_KEYS = {
     "robust_closed_r_edge",
     "avg_total_r",
     "avg_total_r_edge",
+    "avg_r_1d",
+    "avg_r_2d",
+    "median_r_2d",
+    "avg_mfe_r_2d",
+    "avg_mae_r_2d",
+    "recent_avg_r_2d",
+    "short_term_score",
     "side_return_edge_pct",
     "win_rate_edge",
     "success_score",
@@ -203,6 +230,7 @@ class SetupTrackerPanel(QFrame):
         self.current_pick_rows: list[dict[str, Any]] = []
         self.setup_type_rows: list[dict[str, Any]] = []
         self.recent_type_rows: list[dict[str, Any]] = []
+        self.short_term_rows: list[dict[str, Any]] = []
         self.playbook_rows: list[dict[str, Any]] = []
         self.scan_factor_rows: list[dict[str, Any]] = []
         self.tier_performance_rows: list[dict[str, Any]] = []
@@ -221,6 +249,7 @@ class SetupTrackerPanel(QFrame):
         self.tracked_tile = KpiTile("Tracked Setups", "0")
         self.current_tile = KpiTile("Current S/A Picks", "0", tone="favorite")
         self.best_type_tile = KpiTile("Best Type Edge", "-")
+        self.best_short_term_tile = KpiTile("Best 1-2d Setup", "-", tone="favorite")
         self.best_factor_tile = KpiTile("Best Scan Factor", "-")
 
         self.summary_view = QTextBrowser()
@@ -233,6 +262,7 @@ class SetupTrackerPanel(QFrame):
         self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
         self.setup_type_table, self.setup_type_model = self._make_table(SETUP_TYPE_COLUMNS)
         self.recent_type_table, self.recent_type_model = self._make_table(RECENT_TYPE_COLUMNS)
+        self.short_term_table, self.short_term_model = self._make_table(SHORT_TERM_COLUMNS)
         self.playbook_table, self.playbook_model = self._make_table(PLAYBOOK_COLUMNS)
         self.scan_factor_table, self.scan_factor_model = self._make_table(SCAN_FACTOR_COLUMNS)
         self.tier_performance_table, self.tier_performance_model = self._make_table(TIER_PERFORMANCE_COLUMNS)
@@ -240,6 +270,15 @@ class SetupTrackerPanel(QFrame):
         self.human_pick_table, self.human_pick_model = self._make_table(HUMAN_PICK_COLUMNS)
 
         self.tabs.addTab(self.current_table, "Current Picks")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "Which setup families follow through in the FIRST 1-2 SESSIONS after entry (mark-to-market R, "
+                "net of costs), independent of the swing outcome. Ranked best-first: the top row is the best "
+                "short-term setup right now.",
+                self.short_term_table,
+            ),
+            "Short-Term 1-2d",
+        )
         self.tabs.addTab(
             self._make_explained_tab(
                 "Compares snapshotted Focus Picks against bot S/A tier picks using the same side-return horizons.",
@@ -250,13 +289,21 @@ class SetupTrackerPanel(QFrame):
         self.tabs.addTab(self.setup_type_table, "Setup Types")
         self.tabs.addTab(
             self._make_explained_tab(
-                "What's worked in the last 30 days: per-family closed count, realized R, target/stop rates "
-                "across live setups and measured-only study families (incl. 1st- and 2nd-dev breakouts).",
+                "What's worked in the last 30 days across live setups and measured-only study families. "
+                "NEW = family first tracked within 3 weeks (fresh promotions); RISING = outperforming "
+                "recently but NOT favorite-bucket yet (upgrade candidates). Both pin to the top.",
                 self.recent_type_table,
             ),
             "Last 30 Days",
         )
-        self.tabs.addTab(self.playbook_table, "Playbooks")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "Stop/exit combos per setup type, ranked best-first by robust closed R: "
+                "the top row is the best-performing playbook right now.",
+                self.playbook_table,
+            ),
+            "Playbooks",
+        )
         self.tabs.addTab(self.scan_factor_table, "Scan Factors")
         self.tabs.addTab(
             self._make_explained_tab(
@@ -278,7 +325,7 @@ class SetupTrackerPanel(QFrame):
         # prices from the current anchor bands.
         self.detail_view = SetupDetailView(self, playbook_lookup=self._best_playbook_row)
         self.current_table.clicked.connect(self._on_pick_clicked)
-        for table in (self.setup_type_table, self.recent_type_table, self.playbook_table):
+        for table in (self.setup_type_table, self.recent_type_table, self.short_term_table, self.playbook_table):
             table.clicked.connect(self._on_family_row_clicked)
 
         self._build_layout()
@@ -296,7 +343,13 @@ class SetupTrackerPanel(QFrame):
         kpi_row = QHBoxLayout()
         kpi_row.setContentsMargins(0, 0, 0, 0)
         kpi_row.setSpacing(8)
-        for tile in (self.tracked_tile, self.current_tile, self.best_type_tile, self.best_factor_tile):
+        for tile in (
+            self.tracked_tile,
+            self.current_tile,
+            self.best_type_tile,
+            self.best_short_term_tile,
+            self.best_factor_tile,
+        ):
             kpi_row.addWidget(tile)
         kpi_row.addStretch(1)
 
@@ -354,6 +407,7 @@ class SetupTrackerPanel(QFrame):
         self.current_pick_rows = _rank_current_picks(_load_csv_rows(MASTER_AVWAP_TIER_LIST_FILE))
         self.setup_type_rows = _rank_setup_types(all_setup_type_rows, min_closed=min_closed)
         self.recent_type_rows = _rank_recent_types(_load_csv_rows(RECENT_SETUP_TYPE_STATS_FILE))
+        self.short_term_rows = _rank_short_term(_load_csv_rows(SHORT_HORIZON_FILE))
         self.playbook_rows = _rank_playbooks(all_playbook_rows, min_closed=min_closed)
         self.scan_factor_rows = _rank_scan_factors(_load_csv_rows(MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE))
         self.tier_performance_rows = _rank_tier_performance(tier_performance_export_rows)
@@ -367,6 +421,7 @@ class SetupTrackerPanel(QFrame):
         self.human_pick_model.set_rows(self.human_pick_rows)
         self.setup_type_model.set_rows(self.setup_type_rows[:300])
         self.recent_type_model.set_rows(self.recent_type_rows[:300])
+        self.short_term_model.set_rows(self.short_term_rows[:300])
         self.playbook_model.set_rows(self.playbook_rows[:300])
         self.scan_factor_model.set_rows(self.scan_factor_rows[:300])
         self.tier_performance_model.set_rows(self.tier_performance_rows)
@@ -376,6 +431,7 @@ class SetupTrackerPanel(QFrame):
             self.human_pick_table,
             self.setup_type_table,
             self.recent_type_table,
+            self.short_term_table,
             self.playbook_table,
             self.scan_factor_table,
             self.tier_performance_table,
@@ -388,6 +444,7 @@ class SetupTrackerPanel(QFrame):
         self.tracked_tile.set_value(str(tracked_setups))
         self.current_tile.set_value(str(current_sa))
         self.best_type_tile.set_value(_best_type_label(self.setup_type_rows))
+        self.best_short_term_tile.set_value(_best_short_term_label(self.short_term_rows))
         self.best_factor_tile.set_value(_best_factor_label(self.scan_factor_rows))
         self.summary_view.setHtml(_summary_html(self))
 
@@ -460,14 +517,31 @@ def _rank_setup_types(rows: list[dict[str, Any]], *, min_closed: int) -> list[di
 
 
 def _rank_recent_types(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # Surface families with the most recent closed evidence first, best realized R
-    # next; open-only families (no closed yet) fall to the bottom but stay visible.
+    # NEW/RISING families with some closed evidence pin to the top (freshly
+    # promoted ideas and not-yet-favorite outperformers must never drown under
+    # high-sample veterans); below them, most closed evidence first, best
+    # realized R next; open-only families fall to the bottom but stay visible.
     return sorted(
         rows,
         key=lambda row: (
+            not (str(row.get("status") or "").strip() and _int(row.get("closed_setups")) >= 2),
             -_int(row.get("closed_setups")),
             -_float(row.get("avg_closed_r"), -1e9),
             -_int(row.get("tracked_setups")),
+        ),
+    )
+
+
+def _rank_short_term(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Families with enough 2-session samples first, best short-term score next;
+    # thin families stay visible at the bottom while evidence accrues.
+    return sorted(
+        rows,
+        key=lambda row: (
+            _int(row.get("samples_2d")) < SHORT_TERM_MIN_SAMPLES,
+            -_float(row.get("short_term_score"), -1e9),
+            -_float(row.get("avg_r_2d"), -1e9),
+            -_int(row.get("samples_2d")),
         ),
     )
 
@@ -525,6 +599,7 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
     favorite_c = theme.color("favorite")
 
     parts = [f"<body style='color:{body}; font-size:9pt'>"]
+    parts.append(_best_now_banner_html(panel))
     parts.append("<table width='100%' cellspacing='0' cellpadding='4'><tr>")
     parts.append("<td valign='top' width='35%'>")
     parts.append(f"<h3 style='margin:0; color:{favorite_c}'>Current S/A picks</h3>")
@@ -593,12 +668,104 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
     return "".join(parts)
 
 
+def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
+    """One unmissable line per horizon: the best performing setup right now —
+    swing (recent 30d realized R) and short-term (1-2 session follow-through)."""
+    muted = theme.color("text_secondary")
+    favorite_c = theme.color("favorite")
+    long_c = theme.color("long")
+    short_c = theme.color("short")
+
+    def _side_color(side: Any) -> str:
+        return long_c if str(side or "").upper() == "LONG" else short_c
+
+    swing_row = next(
+        (
+            row
+            for row in sorted(panel.recent_type_rows, key=lambda r: -_float(r.get("avg_closed_r"), -1e9))
+            if _int(row.get("closed_setups")) >= 3 and _float(row.get("avg_closed_r")) is not None
+        ),
+        None,
+    )
+    short_row = next(
+        (
+            row
+            for row in panel.short_term_rows
+            if _int(row.get("samples_2d")) >= SHORT_TERM_MIN_SAMPLES and _float(row.get("avg_r_2d")) is not None
+        ),
+        None,
+    )
+
+    parts = [
+        f"<div style='border:1px solid {favorite_c}; padding:6px; margin-bottom:6px'>",
+        f"<b style='color:{favorite_c}; font-size:10pt'>BEST PERFORMING RIGHT NOW</b>",
+    ]
+    if short_row is not None:
+        parts.append(
+            f"<div><b>Short-term (1-2d):</b> "
+            f"<span style='color:{_side_color(short_row.get('side'))}'><b>{_esc(short_row.get('side'))}</b></span> "
+            f"<b>{_esc(short_row.get('setup_family'))}</b> "
+            f"{_signed(_float(short_row.get('avg_r_2d')))}R@2d, win {_pct(short_row.get('win_rate_2d'))} "
+            f"<span style='color:{muted}'>(n={_int(short_row.get('samples_2d'))}, "
+            f"last 30d {_signed(_float(short_row.get('recent_avg_r_2d')))}R)</span></div>"
+        )
+    else:
+        parts.append(
+            f"<div style='color:{muted}'><b>Short-term (1-2d):</b> not enough 2-session samples yet "
+            f"(accrues automatically each scan).</div>"
+        )
+    if swing_row is not None:
+        parts.append(
+            f"<div><b>Swing (30d realized):</b> "
+            f"<span style='color:{_side_color(swing_row.get('side'))}'><b>{_esc(swing_row.get('side'))}</b></span> "
+            f"<b>{_esc(swing_row.get('setup_family'))}</b> "
+            f"{_signed(_float(swing_row.get('avg_closed_r')))}R closed, target hit {_pct(swing_row.get('target_hit_rate'))} "
+            f"<span style='color:{muted}'>(closed {_int(swing_row.get('closed_setups'))})</span></div>"
+        )
+    else:
+        parts.append(
+            f"<div style='color:{muted}'><b>Swing (30d realized):</b> not enough closed setups in the last 30 days.</div>"
+        )
+
+    # Freshly promoted families + not-yet-favorite outperformers: the upgrade
+    # candidates the trader asked to see without digging through the tab.
+    highlighted = sorted(
+        (
+            row
+            for row in panel.recent_type_rows
+            if str(row.get("status") or "").strip() and _int(row.get("closed_setups")) >= 2
+        ),
+        key=lambda row: -_float(row.get("avg_closed_r"), -1e9),
+    )
+    if highlighted:
+        chips = []
+        for row in highlighted[:3]:
+            chips.append(
+                f"<span style='color:{_side_color(row.get('side'))}'><b>{_esc(row.get('side'))}</b></span> "
+                f"<b>{_esc(row.get('setup_family'))}</b> {_signed(_float(row.get('avg_closed_r')))}R "
+                f"<span style='color:{muted}'>({_esc(row.get('status'))}, closed {_int(row.get('closed_setups'))})</span>"
+            )
+        parts.append(f"<div><b>New &amp; rising (not favorites yet):</b> {' &middot; '.join(chips)}</div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def _best_type_label(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "-"
     row = rows[0]
     delta = _float(row.get("score_delta"), 0.0)
     return f"{_esc(row.get('side'))} {delta:+.0f}"
+
+
+def _best_short_term_label(rows: list[dict[str, Any]]) -> str:
+    qualified = [row for row in rows if _int(row.get("samples_2d")) >= SHORT_TERM_MIN_SAMPLES]
+    if not qualified:
+        return "-"
+    row = qualified[0]
+    avg_r_2d = _float(row.get("avg_r_2d"))
+    r_text = f" {avg_r_2d:+.2f}R" if avg_r_2d is not None else ""
+    return f"{_esc(row.get('side'))}{r_text}@2d"
 
 
 def _best_factor_label(rows: list[dict[str, Any]]) -> str:
@@ -613,6 +780,7 @@ def _export_files() -> list[Path]:
         SETUP_TYPE_STATS_FILE,
         RECENT_SETUP_TYPE_STATS_FILE,
         SETUP_PLAYBOOKS_FILE,
+        SHORT_HORIZON_FILE,
         MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
         MASTER_AVWAP_TIER_LIST_FILE,
         MASTER_AVWAP_TIER_PERFORMANCE_FILE,
@@ -643,6 +811,8 @@ def _looks_numeric_key(key: str) -> bool:
         or key.endswith("_pct")
         or key.endswith("_r")
         or key.endswith("_edge")
+        or key.endswith("_1d")
+        or key.endswith("_2d")
         or key in {"priority_score", "ranking_score", "horizon_sessions", "symbol_count", "score_delta"}
     )
 

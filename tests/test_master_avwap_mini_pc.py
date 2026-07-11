@@ -13,7 +13,10 @@ import master_avwap_mini_pc as mini_pc  # noqa: E402
 
 
 class MasterAvwapMiniPCTests(unittest.TestCase):
-    def test_watchlist_filter_scan_includes_theta_and_shared_swing_paths(self):
+    def test_watchlist_filter_scan_uses_shared_swing_paths(self):
+        # Theta is unconditional inside run_master now (deferred enrichment);
+        # the mini-PC caller must NOT pass the removed include_theta kwarg —
+        # doing so crashed every scheduled scan with a TypeError (2026-07-10).
         filter_summary = {"status": "ok", "message": "checked"}
         with patch.object(mini_pc, "filter_watchlists_by_previous_day_levels", return_value=filter_summary), patch.object(
             mini_pc,
@@ -29,7 +32,7 @@ class MasterAvwapMiniPCTests(unittest.TestCase):
         self.assertTrue(kwargs["use_shared_watchlists"])
         self.assertFalse(kwargs["update_setup_tracker"])
         self.assertTrue(kwargs["require_ib_for_setup_tracker"])
-        self.assertTrue(kwargs["include_theta"])
+        self.assertNotIn("include_theta", kwargs)
 
     def test_eod_journal_import_guard_runs_once_per_date(self):
         state = mini_pc.default_state(["10:00"])

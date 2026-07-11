@@ -131,6 +131,31 @@ def minutes_since_open(
     return (now - open_naive).total_seconds() / 60.0
 
 
+# Hands-off default (2026-07-09, user rule "everything automatic - all I do is
+# fill longs/shorts.txt"): Auto Pilot arms itself once per weekday at/after
+# this local hour. Arming once per day means a manual OFF sticks for the rest
+# of that day - the trader's hand always wins.
+AUTOPILOT_AUTO_ARM_HOUR = 7
+
+
+def autopilot_auto_arm_due(
+    now: datetime,
+    *,
+    enabled: bool,
+    armed_date: str | None,
+    auto_arm_enabled: bool = True,
+    arm_hour: int = AUTOPILOT_AUTO_ARM_HOUR,
+) -> bool:
+    """True when the daily 07:00 self-arm should flip Auto Pilot ON."""
+    if enabled or not auto_arm_enabled:
+        return False
+    if now.weekday() >= 5:
+        return False
+    if now.hour < int(arm_hour):
+        return False
+    return str(armed_date or "") != now.date().isoformat()
+
+
 # ---------------------------------------------------------------------------
 # Universe freshness (sporadic activation must self-heal a stale universe)
 # ---------------------------------------------------------------------------

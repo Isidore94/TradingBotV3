@@ -91,6 +91,7 @@ class DaytradeTrackerPanel(QFrame):
         self.status_label.setObjectName("MutedLabel")
 
         self.episodes_tile = KpiTile("Measured Segments", "0")
+        self.proven_tile = KpiTile("Proven Live Triggers", "0", tone="favorite")
         self.muted_tile = KpiTile("Muted Segments", "0", tone="short")
         self.best_tile = KpiTile("Best Segment", "-", tone="long")
         self.fresh_tile = KpiTile("Outcomes Updated", "-")
@@ -117,7 +118,7 @@ class DaytradeTrackerPanel(QFrame):
 
         kpi_row = QHBoxLayout()
         kpi_row.setSpacing(8)
-        for tile in (self.episodes_tile, self.muted_tile, self.best_tile, self.fresh_tile):
+        for tile in (self.episodes_tile, self.proven_tile, self.muted_tile, self.best_tile, self.fresh_tile):
             kpi_row.addWidget(tile)
         kpi_row.addStretch(1)
 
@@ -161,11 +162,14 @@ class DaytradeTrackerPanel(QFrame):
         state = load_bounce_learning_state() or {}
         learning_rows = []
         muted_count = 0
+        proven_count = 0
         for dimension, segments in (state.get("segments") or {}).items():
             for seg_key, entry in segments.items():
                 direction, _, segment = seg_key.partition("|")
                 muted = bool(entry.get("muted"))
+                proven = bool(entry.get("proven"))
                 muted_count += int(muted)
+                proven_count += int(proven)
                 learning_rows.append(
                     {
                         "dimension": dimension,
@@ -176,10 +180,13 @@ class DaytradeTrackerPanel(QFrame):
                         "score_delta": entry.get("score_delta"),
                         "stop_rate": entry.get("stop_rate"),
                         "target_1r_rate": entry.get("target_1r_rate"),
-                        "status": "MUTED" if muted else "active",
+                        "status": "MUTED" if muted else ("PROVEN" if proven else "active"),
                     }
                 )
-        learning_rows.sort(key=lambda r: (r["status"] != "MUTED", -_float(r.get("avg_close_r"), -999.0)))
+        status_order = {"PROVEN": 0, "MUTED": 1, "active": 2}
+        learning_rows.sort(
+            key=lambda r: (status_order.get(r["status"], 3), -_float(r.get("avg_close_r"), -999.0))
+        )
         self.learning_model.set_rows(learning_rows)
 
         for key, (table, _model) in self._dimension_tables.items():
@@ -187,6 +194,7 @@ class DaytradeTrackerPanel(QFrame):
         self.learning_table.fit_columns()
 
         self.episodes_tile.set_value(str(len(learning_rows)))
+        self.proven_tile.set_value(str(proven_count))
         self.muted_tile.set_value(str(muted_count))
         best = max(learning_rows, key=lambda r: _float(r.get("avg_close_r"), -999.0), default=None)
         if best:

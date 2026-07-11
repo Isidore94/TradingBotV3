@@ -9,60 +9,109 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QVBoxLayout,
 )
 
 from ui.services.bounce_service import BounceService, load_bounce_config
 
-def entry_assist_button_state(state) -> tuple[str, str, bool]:
-    """(label, tooltip, enabled) for the regime-tailored entry-assist button.
+def entry_assist_button_specs(state) -> list[dict]:
+    """One spec per entry-assist button, covering every major situation at once.
 
-    Strong regimes toggle a pullback/bounce window; weak regimes emit the
-    strongest/weakest trailing-30m list; neutral/chop emits both.
+    All five actions stay available in every regime; ``recommended`` marks the
+    one that matches the current auto/override regime so it can be highlighted.
+    Output from every action lands in the Alert Center.
     """
     state = state if isinstance(state, dict) else {}
+    connected = bool(state)
     env = str(state.get("env_key") or "")
-    if not state:
-        return ("Entry Assist", "Waiting for the bot to connect.", False)
-    if state.get("window_active"):
-        started = state.get("window_started") or "?"
-        if env == "bearish_strong":
-            return (
-                f"Bounce over → weakest (since {started})",
-                "SPY's bounce is done: click to rank which shorts stayed weakest through it. "
-                "Auto mode also closes auto-opened windows when the tape resumes.",
-                True,
-            )
-        return (
-            f"Pullback over → strongest (since {started})",
-            "SPY's pullback is done: click to rank which longs held up best through it. "
-            "Auto mode also closes auto-opened windows when the tape resumes.",
-            True,
+    window_active = bool(state.get("window_active"))
+    window_sides = {str(side or "").lower() for side in state.get("window_sides") or []}
+    started = state.get("window_started") or "?"
+    long_window = window_active and "long" in window_sides
+    short_window = window_active and "short" in window_sides
+
+    if long_window:
+        pullback_label = f"Pullback over → strongest (since {started})"
+        pullback_tip = (
+            "SPY's pullback is done: click to rank which longs held up best / stayed RS through it. "
+            "The ranked list lands in the Alert Center. Auto mode also closes auto-opened windows "
+            "when the tape resumes."
         )
-    if env == "bullish_strong":
-        return (
-            "⏱ Pullback started",
+    else:
+        pullback_label = "⏱ Pullback started"
+        pullback_tip = (
             "SPY starting to pull back? Click to open a window tracking which longs hold up / stay RS. "
-            "Click again when the pullback ends to get the ranked list. Auto mode does both on its own "
-            "via SPY pause detection.",
-            True,
+            "Click again when the pullback ends to get the ranked list in the Alert Center. "
+            "Auto mode does both on its own via SPY pause detection."
         )
-    if env == "bearish_strong":
-        return (
-            "⏱ Bounce started",
+    if short_window:
+        bounce_label = f"Bounce over → weakest (since {started})"
+        bounce_tip = (
+            "SPY's bounce is done: click to rank which shorts stayed weakest through it. "
+            "The ranked list lands in the Alert Center. Auto mode also closes auto-opened windows "
+            "when the tape resumes."
+        )
+    else:
+        bounce_label = "⏱ Bounce started"
+        bounce_tip = (
             "SPY starting to bounce? Click to open a window tracking which shorts stay weak / RW. "
-            "Click again when the bounce ends to get the ranked list. Auto mode does both on its own.",
-            True,
+            "Click again when the bounce ends to get the ranked list in the Alert Center. "
+            "Auto mode does both on its own."
         )
-    if env == "bullish_weak":
-        return ("Strongest 30m", "Emit the strongest longs vs SPY over the last 30 minutes. Auto mode emits this every 30m.", True)
-    if env == "bearish_weak":
-        return ("Weakest 30m", "Emit the weakest shorts vs SPY over the last 30 minutes. Auto mode emits this every 30m.", True)
-    return (
-        "Movers 30m",
-        "Neutral/chop: emit BOTH the strongest longs and weakest shorts of the last 30 minutes. "
-        "Auto mode emits both every 30m.",
-        True,
-    )
+
+    not_connected_tip = "Waiting for the bot to connect."
+    return [
+        {
+            "command": "pullback_window",
+            "label": pullback_label,
+            "tooltip": pullback_tip if connected else not_connected_tip,
+            "enabled": connected,
+            "recommended": env == "bullish_strong" or long_window,
+        },
+        {
+            "command": "bounce_window",
+            "label": bounce_label,
+            "tooltip": bounce_tip if connected else not_connected_tip,
+            "enabled": connected,
+            "recommended": env == "bearish_strong" or short_window,
+        },
+        {
+            "command": "strongest_30m",
+            "label": "Strongest 30m",
+            "tooltip": (
+                "Emit the strongest longs vs SPY over the last 30 minutes into the Alert Center. "
+                "Auto mode emits this every 30m in bullish-weak."
+                if connected
+                else not_connected_tip
+            ),
+            "enabled": connected,
+            "recommended": env == "bullish_weak",
+        },
+        {
+            "command": "weakest_30m",
+            "label": "Weakest 30m",
+            "tooltip": (
+                "Emit the weakest shorts vs SPY over the last 30 minutes into the Alert Center. "
+                "Auto mode emits this every 30m in bearish-weak."
+                if connected
+                else not_connected_tip
+            ),
+            "enabled": connected,
+            "recommended": env == "bearish_weak",
+        },
+        {
+            "command": "movers_30m",
+            "label": "Movers 30m",
+            "tooltip": (
+                "Emit BOTH the strongest longs and weakest shorts of the last 30 minutes into the "
+                "Alert Center. Auto mode emits both every 30m in neutral/chop."
+                if connected
+                else not_connected_tip
+            ),
+            "enabled": connected,
+            "recommended": env == "neutral_chop",
+        },
+    ]
 
 
 def format_auto_regime_reading(reading) -> tuple[str, str]:
@@ -148,13 +197,15 @@ BOUNCE_TOGGLE_ORDER = [
 
 
 class BouncePanel(QFrame):
-    """One-line BounceBot status strip for the Trading Desk.
+    """Compact BounceBot status strip for the Trading Desk.
 
     Owns the live service (auto-connects on startup) and shows only what
-    matters while trading, in a single row: health chips, the market-regime
-    chip with its manual override, RRS status, and Start/Stop scanning.
-    Connection management, RRS tuning, and bounce-type toggles live on the
-    Settings page; alert feeds live in the Alert Center.
+    matters while trading: health chips, the market-regime chip with its
+    manual override, RRS status, and Start/Stop scanning on the top row, and
+    the entry-assist button array (pullback/bounce windows, strongest/weakest/
+    movers 30m — all situations, all regimes) on the second row. Every assist
+    action outputs into the Alert Center. Connection management, RRS tuning,
+    and bounce-type toggles live on the Settings page.
     """
 
     statusChanged = Signal(str)
@@ -179,8 +230,15 @@ class BouncePanel(QFrame):
         self.start_scanning_button = QPushButton("Start Scanning")
         self.start_scanning_button.setObjectName("PrimaryButton")
         self.stop_scanning_button = QPushButton("Stop Scanning")
-        self.entry_assist_button = QPushButton("Entry Assist")
-        self.entry_assist_button.setEnabled(False)
+
+        # Entry-assist button array: every major situation stays clickable in
+        # every regime; the regime-recommended action gets the primary style.
+        self.entry_assist_buttons: dict[str, QPushButton] = {}
+        for spec in entry_assist_button_specs({}):
+            button = QPushButton(spec["label"])
+            button.setToolTip(spec["tooltip"])
+            button.setEnabled(spec["enabled"])
+            self.entry_assist_buttons[spec["command"]] = button
 
         self.regime_label = QLabel("Auto regime: n/a")
         self.regime_label.setObjectName("MutedLabel")
@@ -210,8 +268,8 @@ class BouncePanel(QFrame):
         # The RRS status shares the row; let it shrink/clip instead of forcing width.
         self.rrs_status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
-        strip = QHBoxLayout(self)
-        strip.setContentsMargins(12, 6, 12, 6)
+        strip = QHBoxLayout()
+        strip.setContentsMargins(0, 0, 0, 0)
         strip.setSpacing(12)
         strip.addWidget(title)
         strip.addWidget(self.connection_label)
@@ -221,9 +279,29 @@ class BouncePanel(QFrame):
         strip.addWidget(self.environment_input)
         strip.addWidget(self.environment_auto_button)
         strip.addWidget(self.rrs_status_label, 1)
-        strip.addWidget(self.entry_assist_button)
         strip.addWidget(self.start_scanning_button)
         strip.addWidget(self.stop_scanning_button)
+
+        assist_label = QLabel("Entry assist:")
+        assist_label.setObjectName("MutedLabel")
+        assist_label.setToolTip(
+            "On-demand entry help for every tape: pullback/bounce tracking windows in strong trends, "
+            "strongest/weakest trailing-30m lists otherwise. All output lands in the Alert Center; "
+            "the highlighted button is the one matching the current regime."
+        )
+        assist_row = QHBoxLayout()
+        assist_row.setContentsMargins(0, 0, 0, 0)
+        assist_row.setSpacing(8)
+        assist_row.addWidget(assist_label)
+        for button in self.entry_assist_buttons.values():
+            assist_row.addWidget(button)
+        assist_row.addStretch(1)
+
+        rows = QVBoxLayout(self)
+        rows.setContentsMargins(12, 6, 12, 6)
+        rows.setSpacing(4)
+        rows.addLayout(strip)
+        rows.addLayout(assist_row)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
     def _wire_service(self) -> None:
@@ -237,7 +315,10 @@ class BouncePanel(QFrame):
         self.service.connectionChanged.connect(self._set_connection)
         self.service.autoRegimeChanged.connect(self._set_auto_regime)
         self.service.entryAssistChanged.connect(self._set_entry_assist)
-        self.entry_assist_button.clicked.connect(self.service.entry_assist)
+        for command, button in self.entry_assist_buttons.items():
+            button.clicked.connect(
+                lambda _checked=False, cmd=command: self.service.entry_assist_command(cmd)
+            )
         self.service.activeBouncesChanged.connect(
             lambda count: self.active_label.setText(f"active bounces: {count}")
         )
@@ -279,10 +360,18 @@ class BouncePanel(QFrame):
         self.regime_label.setToolTip(tooltip)
 
     def _set_entry_assist(self, state) -> None:
-        label, tooltip, enabled = entry_assist_button_state(state)
-        self.entry_assist_button.setText(label)
-        self.entry_assist_button.setToolTip(tooltip)
-        self.entry_assist_button.setEnabled(enabled)
+        for spec in entry_assist_button_specs(state):
+            button = self.entry_assist_buttons.get(spec["command"])
+            if button is None:
+                continue
+            button.setText(spec["label"])
+            button.setToolTip(spec["tooltip"])
+            button.setEnabled(spec["enabled"])
+            wanted_name = "PrimaryButton" if spec["recommended"] else ""
+            if button.objectName() != wanted_name:
+                button.setObjectName(wanted_name)
+                button.style().unpolish(button)
+                button.style().polish(button)
 
     def _set_rrs_status(self, message: str) -> None:
         self.rrs_status_label.setText(message)

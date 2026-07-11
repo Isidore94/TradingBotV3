@@ -88,6 +88,101 @@ class MeasureEpisodeTests(unittest.TestCase):
         self.assertIsNone(study.measure_episode(o, h, l, c, atr, 5, "LONG"))
 
 
+def _bare_ctx(n=120, *, close=None, volume=None, ema8=None, ema15=None, sma50=None, weekly=None):
+    """Hand-built SymbolContext so each detector's exact conditions are testable."""
+    closes = np.array(close if close is not None else [100.0] * n, dtype=float)
+    ctx = study.SymbolContext(
+        symbol="TEST",
+        dates=[d.date() for d in pd.bdate_range("2026-01-02", periods=n)],
+        open=closes - 0.05,
+        high=closes + 0.3,
+        low=closes - 0.3,
+        close=closes,
+        volume=np.array(volume if volume is not None else [1_000_000.0] * n, dtype=float),
+        ema8=np.array(ema8 if ema8 is not None else closes, dtype=float),
+        ema15=np.array(ema15 if ema15 is not None else closes, dtype=float),
+        ema21=closes.copy(),
+        sma50=np.array(sma50 if sma50 is not None else closes, dtype=float),
+        sma200=closes.copy(),
+        atr=np.full(n, 1.0),
+        vwap=np.full(n, np.nan),
+        upper1=np.full(n, np.nan),
+        upper2=np.full(n, np.nan),
+        anchor_idx=np.full(n, -1, dtype=int),
+    )
+    ctx.weekly_streak = np.array(weekly if weekly is not None else [0] * n, dtype=int)
+    return ctx
+
+
+class ForensicsPromotedDetectorTests(unittest.TestCase):
+    def test_golden_pullback_vol_requires_the_volume_spike(self):
+        n = 120
+        closes = [100.0 + 0.05 * k for k in range(n)]
+        sma50 = [c - 0.2 for c in closes]  # rising, just under price
+        volume = [1_000_000.0] * n
+        ctx = _bare_ctx(n, close=closes, sma50=sma50, volume=volume)
+        i = n - 1
+        ctx.low[i] = ctx.sma50[i] - 0.05  # tag-and-hold of the rising SMA50
+        self.assertTrue(study.detect_golden_pullback_sma50(ctx, i))
+        self.assertFalse(study.detect_golden_pullback_sma50_vol(ctx, i))  # no spike yet
+        ctx.volume[i] = 2_500_000.0
+        self.assertTrue(study.detect_golden_pullback_sma50_vol(ctx, i))
+
+    def test_post_earnings_volume_break_gates_on_recency_volume_direction(self):
+        n = 60
+        closes = [100.0 + 0.2 * k for k in range(n)]
+        ctx = _bare_ctx(n, close=closes, ema8=[c - 0.5 for c in closes])
+        i = n - 1
+        ctx.earnings_session_idx = [i - 3]  # fresh earnings
+        self.assertFalse(study.detect_post_earnings_volume_break(ctx, i))  # no volume spike
+        ctx.volume[i] = 2_500_000.0
+        self.assertTrue(study.detect_post_earnings_volume_break(ctx, i))
+        ctx.earnings_session_idx = [i - 12]  # stale earnings
+        self.assertFalse(study.detect_post_earnings_volume_break(ctx, i))
+
+    def test_weekly_weak_volume_reclaim_fires_on_first_reclaim_only(self):
+        n = 120
+        closes = [200.0 - 0.5 * k for k in range(n)]
+        ema8 = [c + 0.4 for c in closes]  # downtrend: EMA above price
+        weekly = [-7] * n
+        ctx = _bare_ctx(n, close=closes, ema8=ema8, weekly=weekly)
+        i = n - 1
+        ctx.close[i] = ctx.ema8[i] + 1.0  # pop back above the 8EMA
+        ctx.volume[i] = 2_500_000.0
+        self.assertTrue(study.detect_weekly_weak_volume_reclaim(ctx, i))
+        ctx.weekly_streak = np.array([-2] * n)  # regime not washed out enough
+        self.assertFalse(study.detect_weekly_weak_volume_reclaim(ctx, i))
+
+    def test_ema15_bounce_trend_needs_rising_sma50_context(self):
+        n = 120
+        closes = [100.0 + 0.05 * k for k in range(n)]
+        ema15 = [c - 0.1 for c in closes]
+        rising = [c - 1.0 for c in closes]
+        ctx = _bare_ctx(n, close=closes, ema15=ema15, sma50=rising)
+        i = n - 1
+        ctx.low[i] = ctx.ema15[i] - 0.05  # tag the 15EMA, close recovers
+        self.assertTrue(study.detect_ema15_bounce_trend(ctx, i))
+        ctx.sma50 = np.array([100.0] * n)  # flat SMA50: no established trend
+        self.assertFalse(study.detect_ema15_bounce_trend(ctx, i))
+
+    def test_new_families_registered_and_context_carries_weekly_streak(self):
+        for family in (
+            "golden_pullback_sma50_vol",
+            "post_earnings_volume_break",
+            "weekly_weak_volume_reclaim",
+            "ema15_bounce_trend",
+        ):
+            self.assertIn(family, study.PLAYBOOK)
+        closes = [100.0 + 0.5 * k for k in range(80)]
+        frame = _frame(closes)
+        long_ctx = study.build_symbol_context("TEST", frame, [], scan_start_idx=40)
+        short_ctx = study.build_symbol_context("TEST", frame, [], scan_start_idx=40, mirrored=True)
+        self.assertEqual(len(long_ctx.weekly_streak), len(frame))
+        # Mirrored contexts see the negated streak so long-form "weekly weak"
+        # detectors read "weekly strong breaking down" for shorts.
+        self.assertTrue((short_ctx.weekly_streak == -long_ctx.weekly_streak).all())
+
+
 class ContextAndDetectorTests(unittest.TestCase):
     def _uptrend_with_pullback(self, periods=100):
         closes = []

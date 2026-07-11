@@ -102,6 +102,67 @@ def render_doc_html(key: str, doc: dict, *, heading_level: int = 2) -> str:
     return f"<body style='color:{body}; font-size:9pt'>" + "".join(parts) + "</body>"
 
 
+def render_best_now_html() -> str:
+    """Live 'best performing right now' banner from the tracker exports: the
+    top short-term (1-2 session) family and the top swing family (30d realized).
+    Re-read on every render so the playbook always shows current evidence."""
+    # Imported lazily: setup_tracker_panel imports setup_detail_view, which
+    # imports this module, so a module-level import here would be circular.
+    from ui.panels.setup_tracker_panel import (
+        RECENT_SETUP_TYPE_STATS_FILE,
+        SHORT_HORIZON_FILE,
+        SHORT_TERM_MIN_SAMPLES,
+        _float,
+        _int,
+        _load_csv_rows,
+    )
+
+    muted = theme.color("text_secondary")
+    favorite = theme.color("favorite")
+    long_c = theme.color("long")
+    short_c = theme.color("short")
+
+    short_rows = [
+        row
+        for row in _load_csv_rows(SHORT_HORIZON_FILE)
+        if _int(row.get("samples_2d")) >= SHORT_TERM_MIN_SAMPLES and _float(row.get("avg_r_2d")) is not None
+    ]
+    short_rows.sort(key=lambda row: -_float(row.get("short_term_score"), -1e9))
+    swing_rows = [
+        row
+        for row in _load_csv_rows(RECENT_SETUP_TYPE_STATS_FILE)
+        if _int(row.get("closed_setups")) >= 3 and _float(row.get("avg_closed_r")) is not None
+    ]
+    swing_rows.sort(key=lambda row: -_float(row.get("avg_closed_r"), -1e9))
+    if not short_rows and not swing_rows:
+        return ""
+
+    def _line(label: str, row: dict, r_key: str, r_suffix: str, count_key: str) -> str:
+        side = str(row.get("side") or "").upper()
+        side_color = long_c if side == "LONG" else short_c
+        r_value = _float(row.get(r_key))
+        r_text = f"{r_value:+.2f}R{r_suffix}" if r_value is not None else ""
+        return (
+            f"<div><b>{label}:</b> <span style='color:{side_color}'><b>{_esc(side)}</b></span> "
+            f"<b>{_esc(row.get('setup_family'))}</b> {r_text} "
+            f"<span style='color:{muted}'>(n={_int(row.get(count_key))})</span></div>"
+        )
+
+    parts = [
+        f"<div style='border:1px solid {favorite}; padding:6px; margin:0 0 8px 0'>",
+        f"<b style='color:{favorite}; font-size:10pt'>BEST PERFORMING RIGHT NOW</b>",
+    ]
+    if short_rows:
+        parts.append(_line("Short-term (1-2d)", short_rows[0], "avg_r_2d", "@2d", "samples_2d"))
+    if swing_rows:
+        parts.append(_line("Swing (30d realized)", swing_rows[0], "avg_closed_r", " closed", "closed_setups"))
+    parts.append(
+        f"<div style='color:{muted}'>Full evidence tables live in the Setup Tracker panel "
+        f"(Short-Term 1-2d / Last 30 Days / Playbooks tabs).</div></div>"
+    )
+    return "".join(parts)
+
+
 def render_all_docs_html() -> str:
     body = theme.color("text_primary")
     muted = theme.color("text_secondary")
@@ -109,6 +170,7 @@ def render_all_docs_html() -> str:
     parts = [
         f"<body style='color:{body}; font-size:9pt'>",
         f"<h2 style='margin:0; color:{favorite}'>Setup Playbook — every setup, exactly</h2>",
+        render_best_now_html(),
         f"<p style='color:{muted}'>Shared exit discipline: stops are LEVELS — a stop fires after "
         f"{STOP_CLOSE_FAILURES} daily closes beyond the level (1 close for post-earnings setups), never on an "
         f"intraday wick. Default profit plan: 50% at the 2nd deviation band, rest toward the 3rd band with the "

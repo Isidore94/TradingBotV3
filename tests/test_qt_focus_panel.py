@@ -254,30 +254,65 @@ def test_alert_center_routes_detail_out_when_embedded_pane_disabled(tmp_path):
     assert not panel.detail_view.isVisibleTo(panel)
 
 
-def test_entry_assist_button_states_follow_regime():
-    from ui.panels.bounce_panel import entry_assist_button_state
+def test_entry_assist_button_specs_cover_all_situations():
+    from ui.panels.bounce_panel import entry_assist_button_specs
 
-    label, _tip, enabled = entry_assist_button_state({})
-    assert label == "Entry Assist" and not enabled
+    # Disconnected: every button exists but is disabled.
+    specs = {spec["command"]: spec for spec in entry_assist_button_specs({})}
+    assert set(specs) == {"pullback_window", "bounce_window", "strongest_30m", "weakest_30m", "movers_30m"}
+    assert all(not spec["enabled"] for spec in specs.values())
 
-    label, tip, enabled = entry_assist_button_state({"env_key": "bullish_strong", "window_active": False})
-    assert label == "⏱ Pullback started" and enabled
-    assert "hold up" in tip
+    # Connected, bullish strong: all enabled, pullback window is the recommended action.
+    specs = {
+        spec["command"]: spec
+        for spec in entry_assist_button_specs({"env_key": "bullish_strong", "window_active": False})
+    }
+    assert all(spec["enabled"] for spec in specs.values())
+    assert specs["pullback_window"]["label"] == "⏱ Pullback started"
+    assert specs["pullback_window"]["recommended"]
+    assert "hold up" in specs["pullback_window"]["tooltip"]
+    assert specs["bounce_window"]["label"] == "⏱ Bounce started"
+    assert not specs["bounce_window"]["recommended"]
+    assert specs["strongest_30m"]["label"] == "Strongest 30m"
+    assert specs["weakest_30m"]["label"] == "Weakest 30m"
+    assert "BOTH" in specs["movers_30m"]["tooltip"]
 
-    label, _tip, _enabled = entry_assist_button_state(
-        {"env_key": "bullish_strong", "window_active": True, "window_started": "10:05"}
-    )
-    assert label == "Pullback over → strongest (since 10:05)"
+    # Active long window flips the pullback button to its "over" state.
+    specs = {
+        spec["command"]: spec
+        for spec in entry_assist_button_specs(
+            {
+                "env_key": "bullish_strong",
+                "window_active": True,
+                "window_started": "10:05",
+                "window_sides": ["long"],
+            }
+        )
+    }
+    assert specs["pullback_window"]["label"] == "Pullback over → strongest (since 10:05)"
+    assert specs["bounce_window"]["label"] == "⏱ Bounce started"
 
-    label, _tip, _enabled = entry_assist_button_state(
-        {"env_key": "bearish_strong", "window_active": True, "window_started": "11:00"}
-    )
-    assert label == "Bounce over → weakest (since 11:00)"
+    # Active short window flips the bounce button, even under a long-side regime.
+    specs = {
+        spec["command"]: spec
+        for spec in entry_assist_button_specs(
+            {
+                "env_key": "bullish_weak",
+                "window_active": True,
+                "window_started": "11:00",
+                "window_sides": ["short"],
+            }
+        )
+    }
+    assert specs["bounce_window"]["label"] == "Bounce over → weakest (since 11:00)"
+    assert specs["bounce_window"]["recommended"]  # open window = the action to finish
+    assert specs["strongest_30m"]["recommended"]  # bullish_weak's regime pick
 
-    assert entry_assist_button_state({"env_key": "bullish_weak"})[0] == "Strongest 30m"
-    assert entry_assist_button_state({"env_key": "bearish_weak"})[0] == "Weakest 30m"
-    label, tip, _enabled = entry_assist_button_state({"env_key": "neutral_chop"})
-    assert label == "Movers 30m" and "BOTH" in tip
+    # Weak/chop regimes recommend their movers list.
+    specs = {spec["command"]: spec for spec in entry_assist_button_specs({"env_key": "bearish_weak"})}
+    assert specs["weakest_30m"]["recommended"]
+    specs = {spec["command"]: spec for spec in entry_assist_button_specs({"env_key": "neutral_chop"})}
+    assert specs["movers_30m"]["recommended"]
 
 
 def test_auto_regime_readout_formatting():

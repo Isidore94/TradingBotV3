@@ -8,6 +8,16 @@ from typing import Any
 
 SYMBOL_RE = re.compile(r"\b([A-Z][A-Z0-9.\-]{0,9})\b")
 
+# Entry-assist outputs (window open/close summaries, trailing-movers lists,
+# failure notes). They are list-style messages, not single-symbol alerts, so
+# symbol extraction is skipped for them; the Alert Center also lets them
+# bypass the tier gate since the trader explicitly asked for the output.
+ENTRY_ASSIST_PREFIXES = ("ENTRY WINDOW", "ENTRY ASSIST", "STRONGEST ", "WEAKEST ")
+
+
+def is_entry_assist_text(text: Any) -> bool:
+    return str(text or "").strip().upper().startswith(ENTRY_ASSIST_PREFIXES)
+
 
 @dataclass
 class BounceAlert:
@@ -32,7 +42,7 @@ class BounceAlert:
 
         side = _side_from(feedback.get("direction") or tag_text or raw_text)
         symbol = str(feedback.get("symbol") or "").strip().upper()
-        if not symbol:
+        if not symbol and not is_entry_assist_text(raw_text):
             symbol = _extract_symbol(raw_text)
 
         trigger = str(feedback.get("bounce_types") or "").replace(";", ", ").strip()
