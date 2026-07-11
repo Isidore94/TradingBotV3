@@ -100,12 +100,13 @@ class ThetaFilterProxyModel(QSortFilterProxyModel):
         play_type: str,
         search_text: str,
     ) -> None:
+        self.beginFilterChange()
         self.min_score = min_score
         self.min_supports = min_supports
         self.max_dte = max_dte
         self.play_type = play_type
         self.search_text = search_text.strip().upper()
-        self.invalidateFilter()
+        self.endFilterChange()
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()

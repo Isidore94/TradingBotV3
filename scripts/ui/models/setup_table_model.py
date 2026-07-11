@@ -148,6 +148,7 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         max_dte: int | None = None,
         search_text: str | None = None,
     ) -> None:
+        self.beginFilterChange()
         if min_score is not None:
             self.min_score = float(min_score)
         if side is not None:
@@ -157,7 +158,7 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         self.max_dte = max_dte
         if search_text is not None:
             self.search_text = search_text.strip().lower()
-        self.invalidateFilter()
+        self.endFilterChange()
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()

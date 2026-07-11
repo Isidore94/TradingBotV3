@@ -96,10 +96,11 @@ class JournalFilterProxyModel(QSortFilterProxyModel):
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
     def set_filters(self, *, status: str, direction: str, search_text: str) -> None:
+        self.beginFilterChange()
         self.status = status
         self.direction = direction
         self.search_text = search_text.strip().lower()
-        self.invalidateFilter()
+        self.endFilterChange()
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()

@@ -18745,13 +18745,6 @@ def _priority_score_text(row: dict) -> str:
     return f"{score:.1f}" if abs(score - round(score)) > 0.01 else f"{score:.0f}"
 
 
-def _priority_expected_r_text(row: dict) -> str:
-    expected_r = _coerce_float(row.get("expected_r"))
-    if expected_r is None:
-        return "n/a"
-    return f"{expected_r:+.2f}R"
-
-
 def _priority_rows_by_setup_family(rows: list[dict]) -> list[tuple[str, list[dict]]]:
     groups: dict[str, list[dict]] = {}
     order: list[str] = []

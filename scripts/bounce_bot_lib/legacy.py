@@ -7380,7 +7380,7 @@ class BounceBot(EWrapper, EClient):
         except Exception as e:
             logging.warning(f"Error converting datetime: {e}")
             return None, None
-        current_date = df["datetimde"].iloc[-1].date()
+        current_date = df["datetime"].iloc[-1].date()
         prev_session = df[df["datetime"].dt.date < current_date]
         if prev_session.empty:
             return None, None
