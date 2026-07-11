@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import math
@@ -580,8 +581,15 @@ def detect_ema15_bounce_trend(ctx: SymbolContext, i: int) -> bool:
     return ctx.close[i - 1] > ctx.ema15[i - 1] and _tag_and_hold(ctx, i, ctx.ema15[i])
 
 
+def _stable_symbol_offset(symbol: str, modulo: int = 5) -> int:
+    """Digest-based offset: Python's hash() is salted per process, which made
+    the baseline cohort non-reproducible across runs (plan.md 22.9)."""
+    digest = hashlib.sha256(str(symbol).strip().upper().encode("utf-8")).digest()
+    return digest[0] % modulo
+
+
 def detect_baseline_every5(ctx: SymbolContext, i: int) -> bool:
-    return (i + (hash(ctx.symbol) % 5)) % 5 == 0
+    return (i + _stable_symbol_offset(ctx.symbol)) % 5 == 0
 
 
 PLAYBOOK: dict[str, dict] = {

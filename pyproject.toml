@@ -1,0 +1,30 @@
+# Plan.md Phase 10.8/10.9: one place for test/lint configuration and a
+# reproducible-install story. Install with:
+#   pip install -r requirements.txt -c constraints.txt
+# constraints.txt is regenerated from the known-good venv (pip freeze).
+
+[project]
+name = "tradingbotv3"
+version = "3.0.0"
+description = "Decision-support system for day and swing trading (no order execution)"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Category markers (plan.md 10.11): the fast suite runs everywhere; tests that
+# need network/broker access must be marked and run intentionally.
+markers = [
+    "network: requires internet access (excluded from the fast suite)",
+    "broker: requires a live IBKR/Questrade session",
+    "slow: long-running research/backfill tests",
+    "qt: requires a Qt platform (offscreen ok)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["scripts/master_avwap_lib/legacy.py", "scripts/bounce_bot_lib/legacy.py"]
+
+[tool.ruff.lint]
+# Start narrow on real defect classes; widen as the legacy cores shrink.
+select = ["E9", "F63", "F7", "F82", "F401"]

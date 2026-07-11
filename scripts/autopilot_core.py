@@ -184,14 +184,20 @@ def last_completed_session_close(
 
 
 def universe_built_at(paths: Iterable[Path] | None = None) -> datetime | None:
-    """Universe build stamp: newest mtime across the universe files."""
+    """Universe build stamp: the OLDEST mtime across all required files.
+
+    A multi-file generation is only as fresh as its stalest member; using the
+    newest mtime let one fresh file hide stale or missing companions
+    (plan.md 23.5). A missing required file means there is no valid
+    generation at all, so the caller treats the universe as stale/absent.
+    """
     stamps = []
     for path in paths or (UNIVERSE_ALL_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE):
         try:
             stamps.append(datetime.fromtimestamp(Path(path).stat().st_mtime))
         except OSError:
-            continue
-    return max(stamps) if stamps else None
+            return None  # incomplete generation: never report it as built
+    return min(stamps) if stamps else None
 
 
 _UNSET = object()

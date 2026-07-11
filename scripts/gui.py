@@ -6,8 +6,6 @@ from __future__ import annotations
 import argparse
 import sys
 
-from gui_app import app as _app
-
 
 def _launch_from_cli() -> int:
     parser = argparse.ArgumentParser(description="Launch the TradingBotV3 desktop GUI.", add_help=False)
@@ -28,6 +26,10 @@ def _launch_from_cli() -> int:
             raise
         return int(qt_app.main(remaining) or 0)
 
+    # Import the legacy Tk stack only when it is actually requested
+    # (plan.md 23.7): the Qt launch path must not pay its import cost.
+    from gui_app import app as _app
+
     sys.argv = [sys.argv[0], *remaining]
     _app.main()
     return 0
@@ -39,4 +41,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
 else:
+    from gui_app import app as _app
+
     sys.modules[__name__] = _app

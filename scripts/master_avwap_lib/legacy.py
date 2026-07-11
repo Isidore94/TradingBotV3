@@ -14952,8 +14952,12 @@ def _to_float(value):
 
 
 def normalize_side(value: str) -> str:
-    raw = str(value or "").strip().upper()
-    return "SHORT" if raw == "SHORT" else "LONG"
+    # Legacy adapter (plan.md 22.3): valid values parse strictly; anything
+    # else defaults to LONG but is counted in the run manifest and warned so
+    # corrupt/unlabeled rows can no longer become long candidates silently.
+    from side_types import coerce_side_legacy
+
+    return coerce_side_legacy(value, context="master_avwap.normalize_side")
 
 
 def _build_ordered_level_points(anchor_meta: dict) -> list[tuple[str, float]]:
