@@ -51,6 +51,24 @@ can test the foundations first.
    preserving the current scorecard pipeline) allows it;
    `scripts/smoke_check.py` + test.
 
+## Sol2 branch (2026-07-11, on top of Sol)
+
+10. **Scan-child ownership (P0 #5)** — closing the desk reaps every scan
+    subprocess it spawned (bounded wait, then terminate); found live when a
+    closed app left a 7.6GB scanner running. `owned_scan_process_count()`
+    ready for the Health surface.
+11. **SPY engine in shadow (sec 16 kickoff)** — `market_state_bridge` runs the
+    pure engine on the bot's cached SPY bars inside
+    `check_regime_pause_setups` and logs agreement/divergence vs the legacy
+    one-red-candle pause detector to
+    `machine diagnostics\spy_state_shadow.jsonl`. Legacy stays the champion;
+    the log accumulates promotion evidence.
+12. Weekend freshness label; two environment-dependent tests made hermetic.
+
+First production run manifest (2026-07-11): 1,270 symbols / 28.5 min; output
+writes 291s; `side_coercions_invalid: 7` — the strict-side counter caught 7
+corrupt side values on day one.
+
 ## Not yet implemented (next in plan order)
 
 - **Engine integration (sec 21 moves 7–8)**: wire `market_state` +
