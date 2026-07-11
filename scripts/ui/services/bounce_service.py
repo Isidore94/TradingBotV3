@@ -92,13 +92,22 @@ class BounceService(QObject):
             self._bot = None
             self._starting = False
         if bot is not None:
+            # Cooperative shutdown: disconnect alone left the strategy loop
+            # alive and auto-reconnecting (plan.md Packet A).
             try:
-                bot.disconnect()
+                stopper = getattr(bot, "stop", None)
+                if callable(stopper):
+                    stopper(timeout=5.0)
+                else:
+                    bot.disconnect()
             except Exception:
                 pass
         self._health_timer.stop()
         self._regime_timer.stop()
+        self._board_timer.stop()
         self.autoRegimeChanged.emit({})
+        self.entryAssistChanged.emit({})
+        self.entryBoardChanged.emit({})
         self.connectionChanged.emit("IB: disconnected")
         self.activeBouncesChanged.emit(0)
         self.statusChanged.emit("stopped")
@@ -258,8 +267,24 @@ class BounceService(QObject):
             self._apply_saved_state(bot)
             self._sync_state_from_bot(bot)
             with self._lock:
-                self._bot = bot
-                self._starting = False
+                if not self._starting:
+                    late_bot = bot  # stop() arrived during startup
+                else:
+                    late_bot = None
+                    self._bot = bot
+                    self._starting = False
+            if late_bot is not None:
+                # A stop that raced the startup wins: never install a live
+                # bot after the user asked for it to be stopped.
+                try:
+                    stopper = getattr(late_bot, "stop", None)
+                    if callable(stopper):
+                        stopper(timeout=5.0)
+                    else:
+                        late_bot.disconnect()
+                except Exception:
+                    pass
+                return
             self.connectionChanged.emit("IB: connected" if bool(getattr(bot, "connection_status", False)) else "IB: retrying")
             self.statusChanged.emit("connected")
             self.started.emit()

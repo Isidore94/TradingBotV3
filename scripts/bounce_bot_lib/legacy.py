@@ -907,14 +907,19 @@ class HistoricalDataFilter(logging.Filter):
 ##########################################
 # Utility Functions
 ##########################################
-def wait_for_candle_close():
+def wait_for_candle_close(stop_event=None):
     now = get_market_local_now()
     sec_since_5 = (now.minute % 5) * 60 + now.second
     sec_to_go = 300 - sec_since_5
     logging.info(f"Waiting for candle to close: {sec_to_go} seconds remaining.")
-    while sec_to_go > 0:
-        time.sleep(1)
-        sec_to_go -= 1
+    if stop_event is not None:
+        # Cancellable wait: shutdown must not block up to a full 5-minute bar.
+        if stop_event.wait(max(0, sec_to_go)):
+            return
+    else:
+        while sec_to_go > 0:
+            time.sleep(1)
+            sec_to_go -= 1
     logging.info("Candle has closed.")
 
 def read_tickers(file_path):
@@ -2266,6 +2271,10 @@ class BounceBot(EWrapper, EClient):
         self.client_id_conflict = False
         self.client_id_namespace = max(1, os.getpid() % 1000) * 1000
         self.api_thread = None
+        self.strategy_thread = None
+        # Cooperative shutdown: run_strategy exits, sleeps abort, and
+        # ensure_connected stops retrying once this is set (plan.md Packet A).
+        self._stop_event = threading.Event()
 
         self.data = {}
         self.data_ready_events = {}
@@ -9123,10 +9132,29 @@ class BounceBot(EWrapper, EClient):
         except Exception as e:
             logging.error(f"Error removing {symbol} from {filename}: {e}")
 
+    def stop(self, timeout: float = 10.0) -> None:
+        """Cooperative shutdown: end the strategy loop, disconnect IB, and
+        join owned threads (bounded). Safe to call repeatedly."""
+        self._stop_event.set()
+        try:
+            self.disconnect()
+        except Exception:
+            pass
+        for thread in (self.strategy_thread, self.api_thread):
+            if (
+                thread is not None
+                and thread.is_alive()
+                and thread is not threading.current_thread()
+            ):
+                thread.join(timeout=timeout)
+
+    def is_stopping(self) -> bool:
+        return self._stop_event.is_set()
+
     def run_strategy(self):
         last_warning_reset = datetime.now().date()
 
-        while True:
+        while not self._stop_event.is_set():
             try:
                 # Bookkeeping that needs no IB and no scanning: keep the
                 # learning state fresh even on paused/disconnected evenings.
@@ -9142,12 +9170,12 @@ class BounceBot(EWrapper, EClient):
                         self._maybe_refresh_auto_regime_while_paused()
                     except Exception:
                         logging.exception("Paused-mode auto regime refresh failed.")
-                    time.sleep(0.5)
+                    self._stop_event.wait(0.5)
                     continue
 
                 if not self.ensure_connected():
                     logging.warning("IB not connected; retrying in 5 seconds...")
-                    time.sleep(5)
+                    self._stop_event.wait(5)
                     continue
                 # Reset warning cache daily
                 current_date = datetime.now().date()
@@ -9297,12 +9325,14 @@ class BounceBot(EWrapper, EClient):
                     continue
 
                 self.check_removal_conditions()
-                wait_for_candle_close()
+                wait_for_candle_close(self._stop_event)
+                if self._stop_event.is_set():
+                    break
                 if self.gui_callback:
                     self.gui_callback("Candle has closed", "candle_line")
             except Exception as e:
                 logging.exception(f"Error in strategy loop: {e}")
-                time.sleep(5)
+                self._stop_event.wait(5)
 
 
     def check_dynamic_vwap_touches(self):
@@ -9482,6 +9512,7 @@ def run_bot_with_gui(gui_callback, start_scanning_enabled=False):
     api_thread.start()
     logging.info("Starting strategy loop (connection will auto-retry until IB is available)...")
     strategy_thread = threading.Thread(target=bot.run_strategy, daemon=True)
+    bot.strategy_thread = strategy_thread
     strategy_thread.start()
     return bot
 
