@@ -1065,8 +1065,41 @@ def write_bouncebot_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> N
 def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> None:
     """The bot's own morning picks - written every day in both modes so the
     picks accumulate a clean, separately-attributable outcome history."""
+    longs = [str(s).strip().upper() for s in longs if str(s).strip()]
+    shorts = [str(s).strip().upper() for s in shorts if str(s).strip()]
     write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
     write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
+    _mirror_auto_picks_into_registry(longs, shorts)
+
+
+def candidate_registry_path() -> Path:
+    from project_paths import CACHE_DIR
+
+    return Path(CACHE_DIR).parent / "candidate_registry.json"
+
+
+def _mirror_auto_picks_into_registry(longs: list[str], shorts: list[str]) -> None:
+    """Shadow adoption (plan.md Packet D step 2): the registry records the
+    same picks with provenance/leases while the text files stay the
+    authoritative export. Never allowed to break the write path."""
+    try:
+        from candidate_registry import CandidateRegistry, StaleWriterError
+
+        path = candidate_registry_path()
+        registry = CandidateRegistry.load(path)
+        registry.sync_source(
+            "open_scan",
+            {"LONG": longs, "SHORT": shorts},
+            lease_minutes=24 * 60,
+        )
+        try:
+            registry.save(path)
+        except StaleWriterError:
+            fresh = CandidateRegistry.load(path)
+            fresh.sync_source("open_scan", {"LONG": longs, "SHORT": shorts}, lease_minutes=24 * 60)
+            fresh.save(path)
+    except Exception:
+        logging.exception("Candidate-registry mirror failed (text watchlists unaffected).")
 
 
 # ---------------------------------------------------------------------------

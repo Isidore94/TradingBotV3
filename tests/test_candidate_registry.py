@@ -135,3 +135,30 @@ def test_watchlist_export_is_a_derived_view():
     reg.import_user_watchlist("SHORT", ["WOLF"], now=NOW)
     reg.add("MRNA", "SHORT", "open_scan", now=NOW)
     assert reg.export_watchlist_lines("SHORT") == ["MRNA", "WOLF"]
+
+
+def test_auto_watchlist_writer_mirrors_into_registry(tmp_path, monkeypatch):
+    """Packet D step 2: text files stay authoritative, registry gains provenance."""
+    import autopilot_core as core
+
+    monkeypatch.setattr(core, "AUTO_LONGS_FILE", tmp_path / "autolongs.txt")
+    monkeypatch.setattr(core, "AUTO_SHORTS_FILE", tmp_path / "autoshorts.txt")
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(core, "candidate_registry_path", lambda: registry_path)
+
+    core.write_auto_watchlists(["NVDA", "amd"], ["WOLF"])
+
+    assert (tmp_path / "autolongs.txt").read_text(encoding="utf-8").strip().splitlines() == ["NVDA", "AMD"]
+    registry = CandidateRegistry.load(registry_path)
+    nvda = registry.get("NVDA", "LONG")
+    assert nvda is not None and "open_scan" in nvda.memberships
+    assert registry.get("WOLF", "SHORT").memberships["open_scan"].lease_expires_at
+
+    # rotation replaces only the open_scan source; user names untouched
+    registry.import_user_watchlist("LONG", ["META"])
+    registry.save(registry_path)
+    core.write_auto_watchlists(["TSLA"], [])
+    registry = CandidateRegistry.load(registry_path)
+    assert registry.get("NVDA", "LONG") is None or not registry.get("NVDA", "LONG").active
+    assert registry.get("META", "LONG").active
+    assert registry.get("TSLA", "LONG").active

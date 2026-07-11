@@ -159,6 +159,18 @@ class MainWindow(QMainWindow):
     def _build_status_bar(self) -> None:
         status = QStatusBar()
         self.setStatusBar(status)
+        # Persistent Auto Mode control (plan.md sec 15.2): visible and
+        # clickable from every page - OFF -> AUTO-DESK -> AUTO-AWAY -> OFF.
+        self.auto_mode_button = QPushButton()
+        self.auto_mode_button.setObjectName("AutoModeButton")
+        self.auto_mode_button.setToolTip(
+            "Click to cycle Auto Mode: OFF -> AUTO-DESK -> AUTO-AWAY -> OFF. "
+            "Desk/Away change presentation only - never trading decisions."
+        )
+        self.auto_mode_button.clicked.connect(self._cycle_auto_mode)
+        self.autopilot_panel.service.enabledChanged.connect(lambda *_: self._sync_auto_mode_button())
+        self._sync_auto_mode_button()
+        status.addWidget(self.auto_mode_button)
         self.ib_status = QLabel("IB/TWS: unknown")
         self.scan_status = QLabel("Scan: idle")
         self.setup_status = QLabel("Setups: 0")
@@ -171,6 +183,27 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.watchlist_status)
         status.addPermanentWidget(self.universe_status)
         status.addPermanentWidget(self.data_status)
+
+    def _cycle_auto_mode(self) -> None:
+        service = self.autopilot_panel.service
+        mode = service.auto_mode
+        if mode == "OFF":
+            service.set_profile("DESK")
+            service.set_enabled(True)
+        elif mode == "DESK":
+            service.set_profile("AWAY")
+        else:
+            service.set_enabled(False)
+        self._sync_auto_mode_button()
+
+    def _sync_auto_mode_button(self) -> None:
+        mode = self.autopilot_panel.service.auto_mode
+        text = "Auto: OFF" if mode == "OFF" else f"Auto: {mode}"
+        self.auto_mode_button.setText(text)
+        color = {"OFF": "#8b8fa3", "DESK": "#3fb950", "AWAY": "#d29922"}.get(mode, "#8b8fa3")
+        self.auto_mode_button.setStyleSheet(
+            f"QPushButton#AutoModeButton {{ color: {color}; font-weight: 600; padding: 1px 10px; }}"
+        )
 
     def _bind_shortcuts(self) -> None:
         run_action = QAction("Run Shared Scan", self)
