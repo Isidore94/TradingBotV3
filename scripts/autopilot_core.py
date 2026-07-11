@@ -23,7 +23,10 @@ rendering are pure; the yfinance fetchers accept an injectable downloader.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+import tempfile
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1103,6 +1106,8 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     sections = [
         "TRADINGBOT AUTO PILOT - TODAY",
         f"Updated: {payload.get('generated_at', '')}",
+        f"Freshness: next planned update {payload.get('next_slot') or '(none left today)'} - "
+        "if Updated is hours old, automation is NOT running; do not trade this as current.",
         *header_bits,
         "",
         "== DAY TRADE LONGS (longs.txt) ==",
@@ -1138,11 +1143,69 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     return "\n".join(sections)
 
 
-def write_away_report(payload: Mapping[str, Any], path: Path | None = None) -> Path:
+def publish_away_report(
+    payload: Mapping[str, Any],
+    path: Path | None = None,
+    *,
+    archive: bool = True,
+    archive_keep: int = 30,
+) -> dict[str, Any]:
+    """Verified atomic publish (plan.md 23.8): render locally, replace
+    atomically, verify by readback hash, then archive a dated immutable copy.
+    A failure never clears the previous valid report, and the caller gets an
+    honest result instead of a path that may not have been written."""
+
     target = Path(path) if path is not None else Path(AUTOPILOT_REPORT_FILE)
+    result: dict[str, Any] = {"ok": False, "verified": False, "path": target, "error": ""}
+    try:
+        text = render_away_report(payload)
+    except Exception as exc:
+        result["error"] = f"render failed: {exc!r}"
+        logging.exception("Away report render failed; previous report left untouched.")
+        return result
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(render_away_report(payload), encoding="utf-8")
-    except Exception:
+        fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.write(text)
+            os.replace(tmp_name, target)
+        finally:
+            if os.path.exists(tmp_name):
+                try:
+                    os.remove(tmp_name)
+                except OSError:
+                    pass
+        readback = target.read_text(encoding="utf-8")
+        expected = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        actual = hashlib.sha256(readback.encode("utf-8")).hexdigest()
+        result["verified"] = expected == actual
+        result["ok"] = result["verified"]
+        if not result["verified"]:
+            result["error"] = "readback hash mismatch"
+    except Exception as exc:
+        result["error"] = f"publish failed: {exc!r}"
         logging.exception("Failed writing the Auto Pilot away report to %s", target)
-    return target
+        return result
+    if result["ok"] and archive:
+        try:
+            archive_dir = target.parent / "away_report_archive"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            (archive_dir / f"{target.stem}_{stamp}{target.suffix}").write_text(
+                text, encoding="utf-8"
+            )
+            history = sorted(archive_dir.glob(f"{target.stem}_*{target.suffix}"))
+            for stale in history[: max(0, len(history) - int(archive_keep))]:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+        except Exception:
+            logging.exception("Away report archive write failed (latest report is fine).")
+    return result
+
+
+def write_away_report(payload: Mapping[str, Any], path: Path | None = None) -> Path:
+    """Compatibility wrapper; prefer publish_away_report for an honest result."""
+    return Path(publish_away_report(payload, path)["path"])

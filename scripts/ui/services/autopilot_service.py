@@ -968,8 +968,23 @@ class AutopilotService(QObject):
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
             }
-            core.write_away_report(payload)
-            self._last_report_write = datetime.now()
+            publish = core.publish_away_report(payload)
+            self._last_report_attempt = datetime.now()
+            if publish.get("ok"):
+                # Only a verified publish counts as a fresh phone report
+                # (plan.md 23.8: last_attempt is not last_verified_success).
+                self._last_report_write = datetime.now()
+                if getattr(self, "_report_publish_failing", False):
+                    self._report_publish_failing = False
+                    self._log("Away report publishing recovered.")
+            else:
+                if not getattr(self, "_report_publish_failing", False):
+                    self._report_publish_failing = True
+                    self._log(
+                        f"Away report publish FAILED ({publish.get('error') or 'unknown'}) - "
+                        "phone report is stale until this recovers."
+                    )
+                logging.error("Away report publish failed: %s", publish.get("error"))
         except Exception:
             logging.exception("Auto Pilot report write failed")
 
