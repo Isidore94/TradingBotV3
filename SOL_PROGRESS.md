@@ -69,6 +69,16 @@ First production run manifest (2026-07-11): 1,270 symbols / 28.5 min; output
 writes 291s; `side_coercions_invalid: 7` — the strict-side counter caught 7
 corrupt side values on day one.
 
+13. **Phase 2.3-2.5 job ledger** — append-only JSONL job trail
+    (QUEUED/RUNNING/COMPLETED/FAILED/SKIPPED/STALE, attempts, per-error-class
+    retry budgets, restart replay + stale marking); every swing slot records
+    through it beside the legacy slots_done state.
+14. **Global Auto Mode header (sec 15.2)** — status-bar control on every
+    page: OFF -> AUTO-DESK -> AUTO-AWAY, color-coded, wired to the service.
+15. **Registry shadow adoption (Packet D.2)** — write_auto_watchlists mirrors
+    bot picks into the CandidateRegistry (open_scan source, 24h leases);
+    text files remain the authoritative export.
+
 ## Not yet implemented (next in plan order)
 
 - **Engine integration (sec 21 moves 7–8)**: wire `market_state` +
