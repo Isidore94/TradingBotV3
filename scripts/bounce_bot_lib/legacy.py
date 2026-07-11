@@ -3702,6 +3702,14 @@ class BounceBot(EWrapper, EClient):
         return events
 
     def emit_master_avwap_intraday_trigger_flags(self, symbol, today_df):
+        # Challenger in shadow (HIGH_CONVICTION plan 16.2): staged confirmation
+        # engine sees the same bars; live single-cross alerts stay untouched.
+        try:
+            from greatness_shadow import record_d1_shadow
+
+            record_d1_shadow(self, symbol, today_df)
+        except Exception:
+            logging.debug("Greatness shadow hook failed.", exc_info=True)
         events = self._find_master_avwap_intraday_trigger_events(symbol, today_df)
         if not events or not self.gui_callback:
             return 0
