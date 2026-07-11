@@ -1101,8 +1101,11 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
         return ",".join(items) if items else "(none)"
 
+    mode_text = str(payload.get("auto_mode") or ("ON" if payload.get("enabled") else "OFF"))
+    if mode_text in ("DESK", "AWAY"):
+        mode_text = f"AUTO - {mode_text}"
     header_bits = [
-        f"Mode: {'ON' if payload.get('enabled') else 'OFF'} | IB: {payload.get('ib_status', 'unknown')} | Regime: {payload.get('regime', 'unknown')}",
+        f"Mode: {mode_text} | IB: {payload.get('ib_status', 'unknown')} | Regime: {payload.get('regime', 'unknown')}",
     ]
     if payload.get("universe_line"):
         header_bits.append(str(payload["universe_line"]))

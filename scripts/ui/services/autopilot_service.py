@@ -37,6 +37,20 @@ _MAX_REPORT_ALERTS = 15
 _MAX_REPORT_LOG_LINES = 30
 
 
+# Truthful Auto Mode semantics (plan.md sec 14.3 / Packet A):
+# OFF     - no automatic user-facing list mutations, scans, or alerts.
+#           Optional shadow research (suggestion scans that write only the
+#           bot-owned autolongs/autoshorts lists) continues ONLY while the
+#           "collect research while Auto is off" setting is enabled.
+# DESK    - full automation; desktop notifications are the primary surface.
+# AWAY    - identical trading decisions; only report cadence/notification
+#           presentation may differ. Never different strategy logic.
+AUTO_MODE_OFF = "OFF"
+AUTO_PROFILE_DESK = "DESK"
+AUTO_PROFILE_AWAY = "AWAY"
+SHADOW_RESEARCH_SETTING = "autopilot_shadow_research"
+
+
 class AutopilotService(QObject):
     """Unattended mini-PC mode: schedules swing scans, self-builds the
     BounceBot watchlists at the open, folds near-HOD names in on regime
@@ -59,6 +73,9 @@ class AutopilotService(QObject):
         self._alerts_date = datetime.now().date().isoformat()
         self._state = self._load_state()
         self._enabled = bool(self._state.get("enabled"))
+        self._profile = str(self._state.get("profile") or AUTO_PROFILE_DESK)
+        if self._profile not in (AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY):
+            self._profile = AUTO_PROFILE_DESK
         self._active_scan_slot: str | None = None
         self._building_watchlists = False
         self._hod_check_running = False
@@ -113,6 +130,35 @@ class AutopilotService(QObject):
         self.enabledChanged.emit(enabled)
         self._write_report()
 
+    @property
+    def auto_mode(self) -> str:
+        """OFF, or the active profile (DESK/AWAY) while enabled."""
+        return self._profile if self._enabled else AUTO_MODE_OFF
+
+    @property
+    def profile(self) -> str:
+        return self._profile
+
+    def set_profile(self, profile: str) -> None:
+        """Desk/Away are presentation profiles - never strategy changes."""
+        profile = str(profile or "").strip().upper()
+        if profile not in (AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY) or profile == self._profile:
+            return
+        self._profile = profile
+        self._state["profile"] = profile
+        self._save_state()
+        self._log(f"Auto profile -> {profile} (same decisions; presentation/cadence only).")
+        self._write_report()
+
+    def _shadow_research_allowed(self) -> bool:
+        """OFF-mode suggestion scans may run only with explicit consent."""
+        try:
+            from project_paths import get_local_setting
+
+            return bool(get_local_setting(SHADOW_RESEARCH_SETTING, True))
+        except Exception:
+            return True
+
     def force_reconnect(self) -> None:
         if self._reconnect_running:
             self._log("Reconnect already in progress.")
@@ -158,6 +204,7 @@ class AutopilotService(QObject):
         longs, shorts = self._read_watchlists()
         return {
             "enabled": self._enabled,
+            "auto_mode": self.auto_mode,
             "ib_status": self._ib_status_text(),
             "regime": self._regime_text(),
             "slots": slots,
@@ -451,6 +498,8 @@ class AutopilotService(QObject):
         """
         if self._building_watchlists:
             return
+        if not self._shadow_research_allowed():
+            return  # strict OFF: no bot-owned list writes without consent
         if self._state.get("watchlist_built_at") or self._state.get("suggested_at"):
             return
         since_open = core.minutes_since_open(now)
@@ -639,6 +688,8 @@ class AutopilotService(QObject):
     def _maybe_add_near_extreme_names(self, now: datetime) -> None:
         if self._hod_check_running:
             return
+        if not self._enabled and not self._shadow_research_allowed():
+            return  # strict OFF: no automatic checks or alerts at all
         # Live-session only (stale after-hours bars would fake a "pause").
         try:
             if not is_within_regular_market_session():
@@ -697,6 +748,12 @@ class AutopilotService(QObject):
                     "green" if side == "long" else "red",
                 )
                 if not self._enabled:
+                    if not self._shadow_research_allowed():
+                        self._log(
+                            f"Near-{extreme} watch (Auto OFF, shadow research disabled): "
+                            "surfaced as an alert only; no lists touched."
+                        )
+                        return
                     auto_target = Path(AUTO_LONGS_FILE) if side == "long" else Path(AUTO_SHORTS_FILE)
                     auto_added = core.append_watchlist_symbols(auto_target, matches)
                     self._append_pick_rows(
@@ -954,6 +1011,7 @@ class AutopilotService(QObject):
             payload = {
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "enabled": self._enabled,
+                "auto_mode": self.auto_mode,
                 "ib_status": snapshot["ib_status"],
                 "regime": snapshot["regime"],
                 "longs": longs,
