@@ -288,6 +288,11 @@ class AutopilotService(QObject):
             self._maybe_run_swing_slot(now)
             self._maybe_run_wrapup(now)
             self._maybe_heartbeat_report(now)
+            core.write_heartbeat(
+                current_job=self._active_scan_slot or "",
+                next_job=str(self.status_snapshot().get("next_slot") or ""),
+                last_success=self._last_report_write.isoformat(timespec="seconds") if self._last_report_write else "",
+            )
             self.statusChanged.emit(self.status_snapshot())
         except Exception:
             logging.exception("Auto Pilot tick failed")

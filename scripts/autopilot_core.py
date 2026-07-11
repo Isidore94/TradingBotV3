@@ -1199,6 +1199,19 @@ def publish_away_report(
 
     target = Path(path) if path is not None else Path(AUTOPILOT_REPORT_FILE)
     result: dict[str, Any] = {"ok": False, "verified": False, "path": target, "error": ""}
+    # Single-writer lease (plan.md Phase 2.9): the desk and the mini-PC both
+    # publish this Drive export; a second machine must not clobber the active
+    # writer. Lease problems degrade to an honest skip, never a crash.
+    try:
+        from writer_lease import LeaseUnavailable, acquire
+
+        acquire(target.with_suffix(target.suffix + ".lease"))
+    except LeaseUnavailable as exc:
+        result["error"] = f"another machine is the active writer: {exc}"
+        logging.info("Away report publish skipped: %s", result["error"])
+        return result
+    except Exception:
+        logging.debug("Writer lease unavailable; publishing anyway.", exc_info=True)
     try:
         text = render_away_report(payload)
     except Exception as exc:
@@ -1246,6 +1259,45 @@ def publish_away_report(
         except Exception:
             logging.exception("Away report archive write failed (latest report is fine).")
     return result
+
+
+def write_heartbeat(
+    *,
+    current_job: str = "",
+    next_job: str = "",
+    last_success: str = "",
+    path: Path | None = None,
+) -> Path | None:
+    """Atomic heartbeat (plan.md Phase 2.8): proves the runtime is alive and
+    says what it is doing, machine-locally (not Drive-synced)."""
+    import socket
+    import tempfile
+
+    try:
+        from project_paths import CACHE_DIR
+
+        target = Path(path) if path is not None else Path(CACHE_DIR).parent / "diagnostics" / "heartbeat.json"
+        payload = {
+            "schema": "heartbeat_v1",
+            "machine": socket.gethostname(),
+            "pid": __import__("os").getpid(),
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "current_job": str(current_job or ""),
+            "next_job": str(next_job or ""),
+            "last_success": str(last_success or ""),
+        }
+        target.parent.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        import os as _os
+
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+        with _os.fdopen(fd, "w", encoding="utf-8") as handle:
+            _json.dump(payload, handle)
+        _os.replace(tmp, target)
+        return target
+    except Exception:
+        logging.debug("Heartbeat write failed.", exc_info=True)
+        return None
 
 
 def write_away_report(payload: Mapping[str, Any], path: Path | None = None) -> Path:
