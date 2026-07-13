@@ -5025,8 +5025,11 @@ class BounceBot(EWrapper, EClient):
             return None
         opening = sym_today[0]
         # RTH bars: the session's first 5m candle is the opening range. Guard
-        # against partial data where the cached series misses the open.
-        if (opening.dt.hour, opening.dt.minute) != (9, 30):
+        # against partial data where the cached series misses the open. Bar
+        # timestamps are machine-local naive, so the open must be derived the
+        # same way (9:30 ET is 06:30 on a Pacific box) - a hard-coded 9:30
+        # check silently killed this sweep on non-Eastern machines.
+        if opening.dt != get_market_session_open_naive(reference=opening.dt):
             return None
         earliest_break_dt = opening.dt + timedelta(minutes=ORB_DELAY_MINUTES)
         key = f"{symbol}|{side}"

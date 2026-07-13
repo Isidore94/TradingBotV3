@@ -640,35 +640,39 @@ def _flat_session(start, candles, price=100.0, half_range=0.5):
 
 
 def test_orb_break_fires_only_after_30_minutes():
-    from datetime import datetime
+    from datetime import date
 
-    start = datetime(2026, 7, 2, 9, 30)
+    from market_session import get_market_session_open_naive
+
+    # Machine-local session open (9:30 ET expressed in this box's timezone) -
+    # the sweep must work wherever the bot runs, not only on Eastern clocks.
+    start = get_market_session_open_naive(reference=date(2026, 7, 2))
     spy = _flat_session(start, 8)
 
-    # BRKR: OR high 101; a 9:45 wick through survives; first CLOSE through at 10:00.
+    # BRKR: OR high 101; a +15m wick through survives; first CLOSE through at +30m.
     brkr = _session_bars(
         start,
         [
             (100.0, 101.0, 99.0, 100.5),  # 9:30 opening range
             (100.5, 100.9, 100.2, 100.6),
             (100.6, 100.8, 100.1, 100.4),
-            (100.4, 101.3, 100.3, 100.8),  # 9:45 wick above the OR high, closes inside
+            (100.4, 101.3, 100.3, 100.8),  # +15m wick above the OR high, closes inside
             (100.8, 100.9, 100.4, 100.7),
             (100.7, 101.0, 100.5, 100.9),
-            (100.9, 101.6, 100.8, 101.4),  # 10:00 first close above 101 -> alert
+            (100.9, 101.6, 100.8, 101.4),  # +30m first close above 101 -> alert
         ],
     )
-    # ERLY: closes through the OR high at 9:40 -> the delayed break is dead all day.
+    # ERLY: closes through the OR high at +10m -> the delayed break is dead all day.
     erly = _session_bars(
         start,
         [
             (50.0, 50.5, 49.5, 50.2),
             (50.2, 50.6, 50.0, 50.4),
-            (50.4, 51.0, 50.3, 50.9),  # 9:40 early close through 50.5
+            (50.4, 51.0, 50.3, 50.9),  # +10m early close through 50.5
             (50.9, 50.9, 50.2, 50.3),
             (50.3, 50.4, 50.0, 50.1),
             (50.1, 50.3, 49.9, 50.0),
-            (50.0, 51.2, 49.9, 51.1),  # 10:00 breaks again - stays dead
+            (50.0, 51.2, 49.9, 51.1),  # +30m breaks again - stays dead
         ],
     )
     stub = _daytrade_sweep_stub(spy, {"BRKR": brkr, "ERLY": erly}, longs=["BRKR", "ERLY"])
@@ -686,12 +690,14 @@ def test_orb_break_fires_only_after_30_minutes():
 
 
 def test_orb_breakdown_shorts_and_stale_breaks_stay_quiet():
-    from datetime import datetime
+    from datetime import date
 
-    start = datetime(2026, 7, 2, 9, 30)
+    from market_session import get_market_session_open_naive
+
+    start = get_market_session_open_naive(reference=date(2026, 7, 2))
     spy = _flat_session(start, 13)
 
-    # SHRT: OR low 49.5 holds on closes (one wick through) until 10:05 -> breakdown.
+    # SHRT: OR low 49.5 holds on closes (one wick through) until +35m -> breakdown.
     shrt = _session_bars(
         start,
         [
@@ -702,10 +708,10 @@ def test_orb_breakdown_shorts_and_stale_breaks_stay_quiet():
             (49.7, 49.9, 49.6, 49.8),
             (49.8, 49.9, 49.5, 49.6),
             (49.6, 49.7, 49.5, 49.55),
-            (49.55, 49.6, 49.1, 49.2),  # 10:05 first close below 49.5
+            (49.55, 49.6, 49.1, 49.2),  # +35m first close below 49.5
         ],
     )
-    # STAL: legit 10:00 breakout, but first seen six candles later (restart) ->
+    # STAL: legit +30m breakout, but first seen six candles later (restart) ->
     # stale news, marked dead instead of alerted.
     stal_rows = [
         (100.0, 101.0, 99.0, 100.5),
@@ -714,7 +720,7 @@ def test_orb_breakdown_shorts_and_stale_breaks_stay_quiet():
         (100.4, 100.9, 100.3, 100.8),
         (100.8, 100.9, 100.4, 100.7),
         (100.7, 101.0, 100.5, 100.9),
-        (100.9, 101.6, 100.8, 101.4),  # 10:00 close through
+        (100.9, 101.6, 100.8, 101.4),  # +30m close through
     ] + [(101.4, 101.7, 101.2, 101.5)] * 6
     stal = _session_bars(start, stal_rows)
 
@@ -725,6 +731,38 @@ def test_orb_breakdown_shorts_and_stale_breaks_stay_quiet():
     assert hits[0]["level"] == 49.5
     assert hits[0]["minutes_after_open"] == 35
     assert "STAL|long" in stub._orb_break_state["dead"]
+
+
+def test_orb_break_accepts_non_eastern_local_clocks(monkeypatch):
+    # Regression (2026-07-13): bars are stamped in the machine's local clock,
+    # so on a Pacific box the opening 5m candle is 06:30. The old hard-coded
+    # (9, 30) guard rejected it and the ORB sweep never fired at all.
+    from datetime import datetime
+
+    import bounce_bot_lib.legacy as legacy
+
+    pacific_open = datetime(2026, 7, 2, 6, 30)
+    monkeypatch.setattr(
+        legacy, "get_market_session_open_naive", lambda reference=None, **_: pacific_open
+    )
+    spy = _flat_session(pacific_open, 8)
+    brkr = _session_bars(
+        pacific_open,
+        [
+            (100.0, 101.0, 99.0, 100.5),  # opening range
+            (100.5, 100.9, 100.2, 100.6),
+            (100.6, 100.8, 100.1, 100.4),
+            (100.4, 100.9, 100.3, 100.8),
+            (100.8, 100.9, 100.4, 100.7),
+            (100.7, 101.0, 100.5, 100.9),
+            (100.9, 101.6, 100.8, 101.4),  # +30m first close above 101 -> alert
+        ],
+    )
+    stub = _daytrade_sweep_stub(spy, {"BRKR": brkr}, longs=["BRKR"])
+    hits = stub.check_orb_break_setups()
+    assert [hit["symbol"] for hit in hits] == ["BRKR"]
+    assert hits[0]["minutes_after_open"] == 30
+    assert stub.orb_emitted and stub.orb_emitted[0]["symbol"] == "BRKR"
 
 
 def _ema8_grind_session_rows():
