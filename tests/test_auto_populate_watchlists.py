@@ -90,12 +90,18 @@ def test_adr_candidates_rank_by_move_plus_extreme_time():
     assert [row["symbol"] for row in result["longs"]][-1] == "MEH"
 
 
-def test_apply_auto_populate_rotates_only_owned_names(tmp_path):
-    from autopilot_core import apply_auto_populated_watchlists, record_auto_watchlist_cut
+def test_apply_auto_populate_rotates_only_owned_names(tmp_path, monkeypatch):
+    import autopilot_core as core
+    from candidate_registry import CandidateRegistry
+
+    apply_auto_populated_watchlists = core.apply_auto_populated_watchlists
+    record_auto_watchlist_cut = core.record_auto_watchlist_cut
 
     longs_path = tmp_path / "longs.txt"
     shorts_path = tmp_path / "shorts.txt"
     membership_path = tmp_path / "auto_membership.json"
+    registry_path = tmp_path / "candidate_registry.json"
+    monkeypatch.setattr(core, "candidate_registry_path", lambda: registry_path)
     longs_path.write_text("TRADER1\nTRADER2\n", encoding="utf-8")
     shorts_path.write_text("", encoding="utf-8")
 
@@ -117,6 +123,10 @@ def test_apply_auto_populate_rotates_only_owned_names(tmp_path):
     assert read_watchlist_symbols(shorts_path) == ["ZZZ"]
     assert first["long"]["added"] == ["AAA", "BBB"]
     assert first["long"]["trader_names"] == 2
+    registry = CandidateRegistry.load(registry_path)
+    assert registry.get("AAA", "LONG").memberships["auto_populate"].lease_expires_at
+    assert "auto_populate" in registry.get("ZZZ", "SHORT").memberships
+    assert registry.get("TRADER1", "LONG") is None
 
     # Next refresh: BBB drops out, CCC arrives; trader names untouched.
     second = apply_auto_populated_watchlists(
@@ -129,9 +139,14 @@ def test_apply_auto_populate_rotates_only_owned_names(tmp_path):
     assert read_watchlist_symbols(longs_path) == ["TRADER1", "TRADER2", "AAA", "CCC"]
     assert second["long"]["rotated_out"] == ["BBB"]
     assert second["long"]["added"] == ["CCC"]
+    registry = CandidateRegistry.load(registry_path)
+    assert not registry.get("BBB", "LONG").active
+    assert "auto_populate" in registry.get("CCC", "LONG").memberships
 
     # A VWAP-cut name is blacklisted for the day and not re-added.
     record_auto_watchlist_cut("AAA", "long", membership_path=membership_path)
+    registry = CandidateRegistry.load(registry_path)
+    assert not registry.get("AAA", "LONG").active
     third = apply_auto_populated_watchlists(
         candidates(["AAA", "CCC"], ["ZZZ"]),
         "neutral_chop",

@@ -47,3 +47,16 @@ def test_wait_for_scan_marker_accepts_marker_on_clean_fast_exit():
         [sys.executable, "-c", code], cwd=os.getcwd(), env=os.environ.copy()
     )
     assert "SCAN_SUBPROCESS_OK" in stdout_text
+
+
+def test_wait_for_scan_marker_reports_child_pid():
+    from ui.services.scan_service import _wait_for_scan_marker
+
+    pids = []
+    _wait_for_scan_marker(
+        [sys.executable, "-c", "print('SCAN_SUBPROCESS_OK', flush=True)"],
+        cwd=os.getcwd(),
+        env=os.environ.copy(),
+        on_process_started=pids.append,
+    )
+    assert len(pids) == 1 and isinstance(pids[0], int) and pids[0] > 0

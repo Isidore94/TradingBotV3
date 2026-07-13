@@ -98,6 +98,27 @@ def test_stale_writer_cannot_erase_current_state(tmp_path):
     assert reloaded.get("NVDA", "LONG") is not None
 
 
+def test_same_next_generation_still_rejects_stale_writer(tmp_path):
+    path = tmp_path / "registry.json"
+    seed = CandidateRegistry()
+    seed.add("AAPL", "LONG", "focus", now=NOW)
+    seed.save(path)
+
+    writer_a = CandidateRegistry.load(path)
+    writer_b = CandidateRegistry.load(path)
+    writer_a.add("NVDA", "LONG", "focus", now=NOW)
+    writer_b.add("MSFT", "LONG", "focus", now=NOW)
+    assert writer_a.to_dict()["generation"] == writer_b.to_dict()["generation"]
+
+    writer_a.save(path)
+    with pytest.raises(StaleWriterError):
+        writer_b.save(path)
+
+    reloaded = CandidateRegistry.load(path)
+    assert reloaded.get("NVDA", "LONG") is not None
+    assert reloaded.get("MSFT", "LONG") is None
+
+
 def test_restart_reconstructs_identical_active_candidates(tmp_path):
     path = tmp_path / "registry.json"
     reg = CandidateRegistry()
@@ -162,3 +183,22 @@ def test_auto_watchlist_writer_mirrors_into_registry(tmp_path, monkeypatch):
     assert registry.get("NVDA", "LONG") is None or not registry.get("NVDA", "LONG").active
     assert registry.get("META", "LONG").active
     assert registry.get("TSLA", "LONG").active
+
+
+def test_near_extreme_dual_write_adds_leased_membership(tmp_path, monkeypatch):
+    import autopilot_core as core
+
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(core, "candidate_registry_path", lambda: registry_path)
+
+    core.add_candidate_registry_memberships(
+        "near_extreme",
+        "short",
+        ["nvda", "NVDA", "wolf"],
+        lease_minutes=90,
+    )
+
+    registry = CandidateRegistry.load(registry_path)
+    assert len(registry.active_candidates("SHORT")) == 2
+    assert registry.get("NVDA", "SHORT").memberships["near_extreme"].lease_expires_at
+    assert registry.get("WOLF", "SHORT").active

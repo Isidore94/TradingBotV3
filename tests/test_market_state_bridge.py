@@ -59,7 +59,8 @@ def test_conversion_marks_only_a_forming_last_bar_incomplete():
     now_after_close = bars[-1].dt + timedelta(minutes=6)
     converted = bridge.m5_bars_from_bot_bars(bars, now=now_after_close)
     assert converted[-1].complete is True
-    assert converted[-1].ts == bars[-1].dt + timedelta(minutes=5)
+    assert converted[-1].ts.replace(tzinfo=None) == bars[-1].dt + timedelta(minutes=5)
+    assert converted[-1].ts.utcoffset() is not None
 
 
 def test_shadow_state_reaches_impulse_on_a_trend_day():
@@ -84,6 +85,13 @@ def test_record_appends_only_on_change_and_flags_agreement(tmp_path, monkeypatch
 
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 1, "unchanged state must not spam the shadow log"
+    assert rows[0]["schema"] == "spy_state_shadow_v2"
+    assert rows[0]["config_hash"] and rows[0]["machine"]
+    assert rows[0]["evaluated_at"] and rows[0]["bar_ts"]
+    assert datetime.fromisoformat(rows[0]["evaluated_at"]).utcoffset() is not None
+    assert datetime.fromisoformat(rows[0]["bar_ts"]).utcoffset() is not None
+    assert rows[0]["timezone"]
+    assert rows[0]["observation_id"].startswith("SPY|2026-07-10|")
     assert rows[0]["engine_paused"] is False
     assert rows[0]["legacy_paused"] is False
     assert rows[0]["agree"] is True
@@ -93,6 +101,12 @@ def test_record_appends_only_on_change_and_flags_agreement(tmp_path, monkeypatch
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 2
     assert rows[1]["legacy_paused"] is True and rows[1]["agree"] is False
+    status = json.loads(bridge.shadow_status_path().read_text(encoding="utf-8"))
+    assert status["schema"] == "spy_state_shadow_status_v1"
+    assert status["evaluations"] == 3
+    assert status["usable_evaluations"] == 3
+    assert status["rows_written"] == 2
+    assert status["errors"] == 0
 
 
 def test_record_never_raises_on_garbage(monkeypatch):
@@ -105,3 +119,19 @@ def test_record_never_raises_on_garbage(monkeypatch):
             raise RuntimeError("boom")
 
     assert bridge.record_spy_shadow([ExplodingBar()], 500.0) is None
+
+
+def test_legacy_spy_log_is_archived_before_v2_append(tmp_path, monkeypatch):
+    log = tmp_path / "spy_state_shadow.jsonl"
+    log.write_text('{"ts":"2026-07-10T09:30:00","state":"RANGE"}\n', encoding="utf-8")
+    monkeypatch.setattr(bridge, "shadow_log_path", lambda: log)
+    bridge.reset_shadow_dedupe()
+    bars = bot_bars(RALLY)
+    now = bars[-1].dt + timedelta(minutes=6)
+
+    bridge.record_spy_shadow(bars, PRIOR_CLOSE, legacy_pause_start=None, side="long", now=now)
+
+    archives = list(tmp_path.glob("spy_state_shadow.legacy-*.jsonl"))
+    assert len(archives) == 1
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1 and rows[0]["schema"] == "spy_state_shadow_v2"

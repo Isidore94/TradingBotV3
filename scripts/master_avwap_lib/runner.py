@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from copy import deepcopy
 
 from . import legacy as _legacy
+from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 
 # Scanner orchestration is extracted while helper functions continue to migrate.
 globals().update(
@@ -1666,6 +1668,19 @@ def _run_master_impl(
     # Study rows are pre-ranking shallow copies; refresh their score/ExpR so
     # capped originals don't leave stale stacked scores on the study clones.
     sync_study_row_ranking_fields(study_rows, priority_rows)
+    canonical_tag_count = canonicalize_priority_setup_tags(
+        priority_rows,
+        ai_state,
+        feature_rows_by_symbol,
+    )
+    for study_row in study_rows:
+        if isinstance(study_row, dict):
+            apply_setup_tag_payload(study_row)
+    logging.info(
+        "Setup tags v2 applied to %d priority row(s) and %d study row(s).",
+        canonical_tag_count,
+        len(study_rows),
+    )
     d1_upgrade_alert_payload = write_master_avwap_d1_upgrade_alert_outputs(
         alerts_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
         report_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
@@ -2276,7 +2291,11 @@ def run_master(
     structured run manifest - success or failure - with phase timings."""
     from diagnostics import ManifestRecorder, clear_active_recorder, set_active_recorder
 
-    recorder = ManifestRecorder(job_type="master_scan")
+    recorder = ManifestRecorder(
+        job_type="master_scan",
+        trigger=str(os.environ.get("TRADINGBOT_RUN_TRIGGER") or "unspecified"),
+        run_id=str(os.environ.get("TRADINGBOT_RUN_ID") or ""),
+    )
     recorder.set_counter("use_shared_watchlists", bool(use_shared_watchlists))
     recorder.set_counter("update_setup_tracker", update_setup_tracker)
     set_active_recorder(recorder)

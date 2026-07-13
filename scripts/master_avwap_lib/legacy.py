@@ -54,6 +54,7 @@ from gui_text_highlighter import (
     set_highlighted_text,
     tree_tags_for_values,
 )
+from .setup_tagging import derive_setup_tag_payload
 
 from project_paths import (
     LOCAL_SETTINGS_FILE,
@@ -4680,6 +4681,11 @@ def build_tracker_setup_record(
     setup_id = _setup_id_for_row(row, symbol_entry, scan_date=scan_date)
     tracker_setup_family = _canonical_tracker_setup_family(row)
     tracker_priority_bucket = _tracker_priority_bucket(row, tracker_setup_family)
+    tag_source = dict(symbol_entry)
+    if isinstance(feature_row, dict):
+        tag_source.update(feature_row)
+    tag_source.update(row)
+    tag_payload = derive_setup_tag_payload(tag_source)
 
     return {
         "setup_id": setup_id,
@@ -4699,7 +4705,13 @@ def build_tracker_setup_record(
         "setup_family": str(row.get("setup_family") or symbol_entry.get("setup_family") or ""),
         "tracker_setup_family": tracker_setup_family,
         "tracker_priority_bucket": tracker_priority_bucket,
-        "setup_tags": list(row.get("setup_tags") or symbol_entry.get("setup_tags") or []),
+        "setup_tags_schema": tag_payload["setup_tags_schema"],
+        "setup_tags": tag_payload["setup_tags"],
+        "setup_signal_tags": tag_payload["setup_signal_tags"],
+        "setup_source_tags": tag_payload["setup_source_tags"],
+        "setup_tag_roles": tag_payload["setup_tag_roles"],
+        "setup_tag_evidence": tag_payload["setup_tag_evidence"],
+        "setup_tag_warnings": tag_payload["setup_tag_warnings"],
         "setup_candidate": row.get("setup_candidate") or symbol_entry.get("setup_candidate") or {},
         "candidate_rejection_reasons": list(
             row.get("candidate_rejection_reasons") or symbol_entry.get("candidate_rejection_reasons") or []
@@ -29198,7 +29210,13 @@ def write_master_avwap_focus_feed(
             "rejection_score_cap": _coerce_float(row.get("rejection_score_cap")),
             "rejection_score_cap_delta": _coerce_float(row.get("rejection_score_cap_delta")),
             "rejection_score_cap_note": row.get("rejection_score_cap_note") or "",
+            "setup_tags_schema": row.get("setup_tags_schema") or "",
             "setup_tags": list(row.get("setup_tags") or []),
+            "setup_signal_tags": list(row.get("setup_signal_tags") or []),
+            "setup_source_tags": list(row.get("setup_source_tags") or []),
+            "setup_tag_roles": dict(row.get("setup_tag_roles") or {}),
+            "setup_tag_evidence": dict(row.get("setup_tag_evidence") or {}),
+            "setup_tag_warnings": list(row.get("setup_tag_warnings") or []),
             "favorite_zone": row.get("favorite_zone") or "",
             "trend_20d": row.get("trend_20d") or "SIDEWAYS",
             "htf_trend_1h": row.get("htf_trend_1h") or "",

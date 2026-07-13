@@ -67,6 +67,7 @@ class MasterAvwapPanel(QWidget):
         self.scheduler_slots_state: dict[str, str] = {}
         self.scheduler_note = "Hourly shared-watchlist scheduler is off."
         self.scheduler_covered_slots: list[str] = []
+        self.external_scheduler_owner = ""
 
         self.model = SetupTableModel()
         self.proxy = SetupFilterProxyModel(self)
@@ -156,6 +157,13 @@ class MasterAvwapPanel(QWidget):
         self._build_layout()
         self._configure_report_watcher()
         self.refresh_from_reports(emit_empty=False)
+        # QFileSystemWatcher can miss atomic replacements on synced/network
+        # drives.  Poll file metadata as a cheap fallback so Auto Pilot scans
+        # (which use a separate service) still refresh this page promptly.
+        self.report_poll_timer = QTimer(self)
+        self.report_poll_timer.setInterval(30_000)
+        self.report_poll_timer.timeout.connect(self._poll_report_changes)
+        self.report_poll_timer.start()
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
         self.scheduler_timer.timeout.connect(self._scheduler_tick)
@@ -241,6 +249,26 @@ class MasterAvwapPanel(QWidget):
             if Path(path).exists():
                 self.watcher.addPath(str(path))
         self.watcher.fileChanged.connect(lambda _path: self.refresh_from_reports(emit_empty=False))
+        self._report_signatures = self._current_report_signatures()
+
+    @staticmethod
+    def _path_signature(path: Path) -> tuple[int, int] | None:
+        try:
+            stat = Path(path).stat()
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
+
+    def _current_report_signatures(self) -> dict[str, tuple[int, int] | None]:
+        return {
+            str(path): self._path_signature(Path(path))
+            for path in (MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_PRIORITY_SETUPS_FILE)
+        }
+
+    def _poll_report_changes(self) -> None:
+        signatures = self._current_report_signatures()
+        if signatures != getattr(self, "_report_signatures", {}):
+            self.refresh_from_reports(emit_empty=False)
 
     def run_shared_scan(self) -> None:
         self.scan_service.run_shared_watchlist_scan()
@@ -249,6 +277,11 @@ class MasterAvwapPanel(QWidget):
         self.scan_service.run_local_watchlist_scan()
 
     def toggle_scheduler(self) -> None:
+        if self.external_scheduler_owner:
+            note = f"{self.external_scheduler_owner} owns scheduled scans while Auto mode is active."
+            self._refresh_scheduler_status(note=note)
+            self.statusChanged.emit(note)
+            return
         self.scheduler_enabled = not self.scheduler_enabled
         note = (
             "Hourly shared-watchlist scheduler started."
@@ -259,6 +292,24 @@ class MasterAvwapPanel(QWidget):
         self.statusChanged.emit(note)
         if self.scheduler_enabled:
             self._scheduler_tick()
+
+    def set_external_scheduler_owner(self, owner: str = "") -> None:
+        """Make scheduled-scan ownership explicit across the main GUI.
+
+        AutoPilot is the canonical scheduler while Auto mode is active.  The
+        Setups-page scheduler remains available for manual-mode days, but the
+        two can never both own the hourly slots.
+        """
+        owner = str(owner or "").strip()
+        if owner == self.external_scheduler_owner:
+            return
+        self.external_scheduler_owner = owner
+        if owner:
+            self.scheduler_enabled = False
+            note = f"{owner} owns hourly scans; Setups-page scheduler disabled."
+        else:
+            note = "AutoPilot is off; the Setups-page scheduler is available if needed."
+        self._refresh_scheduler_status(note=note)
 
     def _scheduler_slot_datetime(self, slot: str, reference: datetime | None = None) -> datetime:
         now = reference or datetime.now()
@@ -315,9 +366,14 @@ class MasterAvwapPanel(QWidget):
         session = get_market_session_window(reference=now)
         completed = [slot for slot, status in self.scheduler_slots_state.items() if status == "completed"]
         failed = [slot for slot, status in self.scheduler_slots_state.items() if status == "failed"]
-        state = "running" if self.scheduler_enabled else "stopped"
+        state = "externally owned" if self.external_scheduler_owner else ("running" if self.scheduler_enabled else "stopped")
         active_task = self.scheduler_active_slot or ("manual scan" if self.scan_service.running else "None")
-        self.scheduler_button.setText("Stop Scheduler" if self.scheduler_enabled else "Start Scheduler")
+        self.scheduler_button.setEnabled(not bool(self.external_scheduler_owner))
+        self.scheduler_button.setText(
+            f"Owned by {self.external_scheduler_owner}"
+            if self.external_scheduler_owner
+            else ("Stop Scheduler" if self.scheduler_enabled else "Start Scheduler")
+        )
         self.scheduler_status_label.setText(
             (
                 f"Hourly shared-watchlist scheduler: {state} | "
@@ -337,6 +393,12 @@ class MasterAvwapPanel(QWidget):
             return
         if not self.scheduler_enabled:
             self._refresh_scheduler_status()
+            return
+        if self.external_scheduler_owner:
+            self.scheduler_enabled = False
+            self._refresh_scheduler_status(
+                note=f"{self.external_scheduler_owner} owns scheduled scans; no duplicate launched."
+            )
             return
         stop_dt = self._scheduler_slot_datetime(get_default_stop_time_label(reference=now), reference=now)
         if now >= stop_dt:
@@ -360,8 +422,24 @@ class MasterAvwapPanel(QWidget):
     def _start_scheduled_shared_scan(self, trigger_slot: str, covered_slots: list[str]) -> None:
         self.scheduler_active_slot = trigger_slot
         self.scheduler_covered_slots = list(covered_slots)
-        label = f"Running scheduled shared-watchlist scan for {trigger_slot}..."
-        if not self.scan_service.run_shared_watchlist_scan(label):
+        coverage = (
+            f" (one catch-up scan covering {len(covered_slots)} due slots)"
+            if len(covered_slots) > 1
+            else ""
+        )
+        label = f"Running scheduled shared-watchlist scan for {trigger_slot}{coverage}..."
+        if not self.scan_service.run_shared_watchlist_scan(label, scheduled_slot=trigger_slot):
+            rejection = self.scan_service.last_rejection_reason
+            if rejection == "scheduled slot already completed":
+                for slot in self.scheduler_covered_slots:
+                    if slot in self.scheduler_slots_state:
+                        self.scheduler_slots_state[slot] = "completed"
+                self.scheduler_active_slot = ""
+                self.scheduler_covered_slots = []
+                self._refresh_scheduler_status(
+                    note=f"Scheduled slot {trigger_slot} was already completed; no duplicate scan launched."
+                )
+                return
             self.scheduler_active_slot = ""
             self.scheduler_covered_slots = []
             self._refresh_scheduler_status(note="Scheduler found a due slot, but another scan is already running.")
@@ -372,13 +450,19 @@ class MasterAvwapPanel(QWidget):
         if not self.scheduler_active_slot:
             return
         trigger_slot = self.scheduler_active_slot
+        covered_count = len(self.scheduler_covered_slots)
         for slot in self.scheduler_covered_slots:
             if slot in self.scheduler_slots_state:
                 self.scheduler_slots_state[slot] = "completed" if success else "failed"
         self.scheduler_active_slot = ""
         self.scheduler_covered_slots = []
         note = (
-            f"Scheduled shared-watchlist scan for {trigger_slot} completed."
+            (
+                f"Scheduled shared-watchlist scan for {trigger_slot} completed; "
+                f"one scan covered {covered_count} due slots."
+                if covered_count > 1
+                else f"Scheduled shared-watchlist scan for {trigger_slot} completed."
+            )
             if success
             else f"Scheduled shared-watchlist scan for {trigger_slot} failed: {error_text}"
         )
@@ -393,6 +477,7 @@ class MasterAvwapPanel(QWidget):
             self.statusChanged.emit(self.status_label.text())
         self._apply_data_as_of(meta)
         self._refresh_watcher_paths()
+        self._report_signatures = self._current_report_signatures()
 
     def _apply_data_as_of(self, meta: dict) -> None:
         data_date = meta.get("data_date")

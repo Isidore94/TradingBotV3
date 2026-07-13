@@ -1,18 +1,29 @@
 # Checkpoint marker
 
-[`plan.md`](plan.md) owns ALL status, roadmap, and promotion policy — the
-full implemented/remaining inventory lives in its Section 3, and the ordered
-work queue in Section 12. This file is only the small, frequently-refreshed
-checkpoint stamp (update it at each promotion checkpoint per Milestone 1;
-never duplicate plan.md content here).
+[`plan.md`](plan.md) owns all status, roadmap, and promotion policy. The full
+implemented/remaining inventory lives in Section 3, and the ordered work queue
+in Section 12. This file is only the small, frequently refreshed checkpoint
+stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
 - Branch: `Sol3`
-- Commit: `36bf7c8`
-- Date: 2026-07-11
-- Test baseline: **802 passed** (`.venv\Scripts\python.exe -m pytest tests/ -q`)
-- Smoke: 7/7 (`scripts/smoke_check.py`)
-- Live validation: NOT yet run — first session pending (plan.md sec 6)
-- Shadow engines: SPY state + Greatness both logging, neither promoted
-- Next queue item: plan.md sec 12, "Now" items 1–7
+- Integration base: `2183dca`; the verified July 13 Sol3 integration batch is
+  included in this checkpoint.
+- Date: 2026-07-13
+- Test baseline: **835 passed** (`.venv\Scripts\python.exe -m pytest tests -q`)
+- Smoke: **7/7** (`scripts/smoke_check.py`)
+- Live validation: **IN PROGRESS** — the July 13 session verified single-owner
+  scheduled scans, durable run IDs/PIDs, accurate heartbeat state, M5 completed-
+  candle processing, SPY shadow coverage, Greatness shadow coverage, and the
+  composed operations audit (**6/6 healthy**), and the 13:00 final scan
+  completed successfully in 1111.4s with one durable worker/run ID and zero
+  true log errors. The persisted focus feed had 166/166 v2-tagged rows and no
+  empty tag lists. Failure-matrix and two-machine drills remain outstanding.
+- Shadow engines: SPY state and Greatness both logging; neither is promoted.
+- Registry adoption: open scan, auto-populate, and near-extreme writers now
+  dual-write in shadow; text watchlists remain authoritative.
+- Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
+  provenance while preserving the raw trigger signals separately.
+- Next queue: finish the Section 6 operational drills, remaining
+  CandidateRegistry writer adoption, and Greatness readiness gates.

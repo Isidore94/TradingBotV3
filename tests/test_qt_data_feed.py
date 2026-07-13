@@ -112,7 +112,7 @@ def test_priority_report_parser_reads_ranked_expected_r_section(tmp_path):
         "\n"
         "Ranked by Expected-R (blended)\n"
         "------------------------------\n"
-        "NVDA LONG ExpR=+1.20R score=88 family=earnings gap bucket=favorite_setup\n",
+        "NVDA LONG ExpR=+1.20R score=88 WR=60%  PF=3.2  n=19  family=earnings gap bucket=favorite_setup\n",
         encoding="utf-8",
     )
 

@@ -39,6 +39,16 @@ def test_manifest_records_phases_counters_and_saves_atomically(tmp_path):
     assert [p["label"] for p in manifest["phases"]] == ["earnings", "symbols"]
 
 
+def test_manifest_aggregate_total_is_not_double_counted():
+    recorder = ManifestRecorder(job_type="master_scan", trigger="test")
+    recorder.record_phase("prep", 4.0)
+    recorder.record_phase("output", 6.0)
+    recorder.record_phase("TOTAL (theta enrichment deferred)", 10.0)
+    recorder.finalize(status="ok")
+
+    assert recorder.to_dict()["total_seconds"] == pytest.approx(10.0)
+
+
 def test_prune_keeps_bounded_history(tmp_path):
     for i in range(8):
         rec = ManifestRecorder(job_type="master_scan", run_id=f"run-{i}")
@@ -111,3 +121,19 @@ def test_run_master_manifest_records_success_counters(tmp_path, monkeypatch):
     assert manifest["counters"]["symbols_processed"] == 2
     assert manifest["counters"]["tracked_rows"] == 1
     assert manifest["outputs"]["watchlist_label"] == "test lists"
+
+
+def test_run_master_uses_parent_scheduler_identity(tmp_path, monkeypatch):
+    import diagnostics.run_manifest as rm
+    from master_avwap_lib import runner
+
+    monkeypatch.setattr(rm, "default_manifest_dir", lambda: tmp_path)
+    monkeypatch.setenv("TRADINGBOT_RUN_ID", "master_scan-parent-linked")
+    monkeypatch.setenv("TRADINGBOT_RUN_TRIGGER", "Auto Pilot swing scan (11:00)")
+    monkeypatch.setattr(runner, "_run_master_impl", lambda **kwargs: {})
+
+    runner.run_master(use_shared_watchlists=True)
+
+    manifest = load_recent_manifests(tmp_path, limit=1)[0]
+    assert manifest["run_id"] == "master_scan-parent-linked"
+    assert manifest["trigger"] == "Auto Pilot swing scan (11:00)"

@@ -67,6 +67,7 @@ AUTOPILOT_HOD_CHECK_COOLDOWN_MINUTES = 30
 # Universe freshness: Auto Pilot is used sporadically, so freshness is checked
 # on every activation/tick instead of trusting a nightly job to have run.
 AUTOPILOT_UNIVERSE_RETRY_MINUTES = 60
+_CANDIDATE_REGISTRY_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -949,6 +950,7 @@ def record_auto_watchlist_cut(
         # Ownership stays: if the name lingers in the file, the next rotation
         # sweeps it out (the blacklist only prevents re-adding today).
         _save_auto_populate_membership(membership_path, payload)
+    _remove_candidate_registry_membership(sym, side, "auto_populate")
 
 
 def apply_auto_populated_watchlists(
@@ -998,6 +1000,14 @@ def apply_auto_populated_watchlists(
             }
             membership[side] = picked
         _save_auto_populate_membership(membership_path, membership)
+        registry_longs = list(membership.get("long", {}))
+        registry_shorts = list(membership.get("short", {}))
+    _sync_candidate_registry_source(
+        "auto_populate",
+        registry_longs,
+        registry_shorts,
+        lease_minutes=90,
+    )
     return summary
 
 
@@ -1078,28 +1088,99 @@ def candidate_registry_path() -> Path:
     return Path(CACHE_DIR).parent / "candidate_registry.json"
 
 
-def _mirror_auto_picks_into_registry(longs: list[str], shorts: list[str]) -> None:
-    """Shadow adoption (plan.md Packet D step 2): the registry records the
-    same picks with provenance/leases while the text files stay the
-    authoritative export. Never allowed to break the write path."""
+def _mutate_candidate_registry(
+    operation: Callable[[Any], None],
+    *,
+    description: str,
+) -> None:
+    """Best-effort shadow mutation with one stale-writer merge retry.
+
+    Text watchlists remain authoritative during the migration, so registry
+    failures are visible but never allowed to break the established writer.
+    """
+
     try:
         from candidate_registry import CandidateRegistry, StaleWriterError
 
         path = candidate_registry_path()
-        registry = CandidateRegistry.load(path)
-        registry.sync_source(
-            "open_scan",
-            {"LONG": longs, "SHORT": shorts},
-            lease_minutes=24 * 60,
-        )
-        try:
-            registry.save(path)
-        except StaleWriterError:
-            fresh = CandidateRegistry.load(path)
-            fresh.sync_source("open_scan", {"LONG": longs, "SHORT": shorts}, lease_minutes=24 * 60)
-            fresh.save(path)
+        with _CANDIDATE_REGISTRY_LOCK:
+            for attempt in range(2):
+                registry = CandidateRegistry.load(path)
+                operation(registry)
+                try:
+                    registry.save(path)
+                    return
+                except StaleWriterError:
+                    if attempt == 0:
+                        continue
+                    raise
     except Exception:
-        logging.exception("Candidate-registry mirror failed (text watchlists unaffected).")
+        logging.exception("Candidate-registry %s failed (text watchlists unaffected).", description)
+
+
+def _sync_candidate_registry_source(
+    source: str,
+    longs: Iterable[str],
+    shorts: Iterable[str],
+    *,
+    lease_minutes: int | None,
+) -> None:
+    long_symbols = [str(symbol).strip().upper() for symbol in longs if str(symbol).strip()]
+    short_symbols = [str(symbol).strip().upper() for symbol in shorts if str(symbol).strip()]
+
+    def sync(registry) -> None:
+        registry.sync_source(
+            source,
+            {"LONG": long_symbols, "SHORT": short_symbols},
+            lease_minutes=lease_minutes,
+        )
+
+    _mutate_candidate_registry(sync, description=f"{source} sync")
+
+
+def _remove_candidate_registry_membership(symbol: str, side: str, source: str) -> None:
+    side_name = "SHORT" if str(side).lower().startswith("short") else "LONG"
+
+    def remove(registry) -> None:
+        registry.remove_source(symbol, side_name, source)
+
+    _mutate_candidate_registry(remove, description=f"{source} removal")
+
+
+def add_candidate_registry_memberships(
+    source: str,
+    side: str,
+    symbols: Iterable[str],
+    *,
+    lease_minutes: int | None,
+) -> None:
+    """Dual-write additive candidates without replacing earlier live leases."""
+
+    side_name = "SHORT" if str(side).lower().startswith("short") else "LONG"
+    cleaned = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+
+    def add_all(registry) -> None:
+        for symbol in cleaned:
+            registry.add(
+                symbol,
+                side_name,
+                source,
+                lease_minutes=lease_minutes,
+            )
+
+    _mutate_candidate_registry(add_all, description=f"{source} additions")
+
+
+def _mirror_auto_picks_into_registry(longs: list[str], shorts: list[str]) -> None:
+    """Shadow adoption (plan.md Packet D step 2): the registry records the
+    same picks with provenance/leases while the text files stay the
+    authoritative export. Never allowed to break the write path."""
+    _sync_candidate_registry_source(
+        "open_scan",
+        longs,
+        shorts,
+        lease_minutes=24 * 60,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1210,8 +1291,12 @@ def publish_away_report(
         result["error"] = f"another machine is the active writer: {exc}"
         logging.info("Away report publish skipped: %s", result["error"])
         return result
-    except Exception:
-        logging.debug("Writer lease unavailable; publishing anyway.", exc_info=True)
+    except Exception as exc:
+        result["error"] = f"writer lease check failed: {exc!r}"
+        logging.exception(
+            "Away report publish blocked because writer ownership could not be verified."
+        )
+        return result
     try:
         text = render_away_report(payload)
     except Exception as exc:
@@ -1274,9 +1359,9 @@ def write_heartbeat(
     import tempfile
 
     try:
-        from project_paths import CACHE_DIR
+        from project_paths import get_diagnostics_dir
 
-        target = Path(path) if path is not None else Path(CACHE_DIR).parent / "diagnostics" / "heartbeat.json"
+        target = Path(path) if path is not None else get_diagnostics_dir() / "heartbeat.json"
         payload = {
             "schema": "heartbeat_v1",
             "machine": socket.gethostname(),

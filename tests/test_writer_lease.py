@@ -61,6 +61,26 @@ def test_publisher_skips_honestly_when_other_machine_holds_lease(tmp_path, monke
     assert not target.exists(), "the other machine's report was not clobbered"
 
 
+def test_publisher_fails_closed_when_lease_check_errors(tmp_path, monkeypatch):
+    import autopilot_core as core
+
+    target = tmp_path / "autopilot_today.txt"
+    target.write_text("previous verified report", encoding="utf-8")
+
+    def broken_acquire(*_args, **_kwargs):
+        raise OSError("shared drive lease is unreadable")
+
+    monkeypatch.setattr(wl, "acquire", broken_acquire)
+    result = core.publish_away_report(
+        {"generated_at": "x", "enabled": True, "auto_mode": "DESK"},
+        target,
+    )
+
+    assert result["ok"] is False
+    assert "lease check failed" in result["error"]
+    assert target.read_text(encoding="utf-8") == "previous verified report"
+
+
 def test_heartbeat_writes_atomically(tmp_path):
     import autopilot_core as core
 

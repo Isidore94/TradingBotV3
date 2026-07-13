@@ -10,12 +10,14 @@ from project_paths import (
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
 )
+from master_avwap_lib.setup_tagging import derive_setup_tag_payload
 from ui.models.setup import SetupRow
 
 
 # The "Ranked by Expected-R (blended)" section of the priority report is the
 # machine-readable feed (flush-left, raw internal bucket names, e.g.
-#   AVB LONG ExpR=+0.12R score=112 family=mid earnings 1st-dev retest bucket=near_favorite_zone
+#   AVB LONG ExpR=+0.12R score=112 WR=60% PF=3.2 n=19
+#       family=mid earnings 1st-dev retest bucket=near_favorite_zone
 # The optional trailing "R" on ExpR is stripped; family may contain spaces so it
 # is captured lazily up to the " bucket=" delimiter.
 RANKED_LINE_RE = re.compile(
@@ -23,6 +25,7 @@ RANKED_LINE_RE = re.compile(
     r"(?P<side>LONG|SHORT)\s+"
     r"(?:ExpR=(?P<expected_r>[+-]?\d+(?:\.\d+)?)R?\s+)?"
     r"score=(?P<score>-?\d+(?:\.\d+)?)\s+"
+    r"(?:WR=\S+\s+)?(?:PF=\S+\s+)?(?:n=\S+\s+)?"
     r"family=(?P<family>.+?)\s+"
     r"bucket=(?P<bucket>\S+)\s*$"
 )
@@ -134,19 +137,19 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
         data = match.groupdict()
         symbol = (data.get("symbol") or "").upper()
         family = (data.get("family") or "").strip()
-        row = SetupRow(
-            symbol=symbol,
-            side=data.get("side") or "",
-            score=_float_or_none(data.get("score")),
-            bucket=(data.get("bucket") or "").strip(),
-            setup_tags=[family] if family else [],
-            key_level=zone_by_symbol.get(symbol, ""),
-            expected_r=_float_or_none(data.get("expected_r")),
+        row = setup_row_from_mapping(
+            {
+                "report_line": line,
+                "symbol": symbol,
+                "side": data.get("side") or "",
+                "score": data.get("score"),
+                "priority_bucket": (data.get("bucket") or "").strip(),
+                "setup_family": family,
+                "current_band_zone": zone_by_symbol.get(symbol, ""),
+                "expected_r": data.get("expected_r"),
+                **{k: v for k, v in data.items() if v},
+            },
             source="priority_report",
-            # The report renders the family as a display label ("mid earnings
-            # EMA15 retest"); keep it under setup_family so the detail pane can
-            # resolve the real family docs instead of falling back to general.
-            raw={"report_line": line, "setup_family": family, **{k: v for k, v in data.items() if v}},
         )
         identity = (row.symbol, row.side, row.bucket)
         if row.symbol and identity not in seen:
@@ -275,9 +278,10 @@ def setup_row_from_mapping(
         bucket = "study"
 
     score = _float_or_none(raw.get("priority_score", raw.get("score")))
-    tags = _listish(raw.get("setup_tags"))
-    if not tags:
-        tags = _listish(raw.get("favorite_signals"))[:3]
+    normalized_raw = dict(raw)
+    tag_payload = derive_setup_tag_payload(normalized_raw)
+    normalized_raw.update(tag_payload)
+    tags = tag_payload["setup_tags"]
 
     supports = _int_or_none(raw.get("support_count"))
     if supports is None:
@@ -303,7 +307,7 @@ def setup_row_from_mapping(
         days_to_earnings=_int_or_none(raw.get("days_to_next_earnings")),
         last_trade_date=str(raw.get("last_trade_date") or raw.get("scan_date") or ""),
         source=source,
-        raw=dict(raw),
+        raw=normalized_raw,
     )
 
 

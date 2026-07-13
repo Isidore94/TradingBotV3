@@ -23,9 +23,9 @@ DEFAULT_KEEP = 90
 
 def default_manifest_dir() -> Path:
     try:
-        from project_paths import CACHE_DIR
+        from project_paths import get_diagnostics_dir
 
-        return Path(CACHE_DIR).parent / "diagnostics" / "run_manifests"
+        return get_diagnostics_dir() / "run_manifests"
     except Exception:
         return Path.home() / ".tradingbotv3" / "run_manifests"
 
@@ -68,6 +68,21 @@ class ManifestRecorder:
 
     # ------------------------------------------------------------------
     def to_dict(self) -> dict:
+        # The scanner records both disjoint phases and one aggregate TOTAL
+        # phase. Summing all of them doubled every reported duration.
+        aggregate_total = next(
+            (
+                phase["seconds"]
+                for phase in reversed(self.phases)
+                if str(phase.get("label") or "").upper().startswith("TOTAL")
+            ),
+            None,
+        )
+        total_seconds = (
+            float(aggregate_total)
+            if aggregate_total is not None
+            else sum(float(phase["seconds"]) for phase in self.phases)
+        )
         return {
             "schema": self.schema,
             "run_id": self.run_id,
@@ -77,7 +92,7 @@ class ManifestRecorder:
             "ended_at": self.ended_at,
             "status": self.status,
             "error": self.error,
-            "total_seconds": round(sum(p["seconds"] for p in self.phases), 3),
+            "total_seconds": round(total_seconds, 3),
             "phases": self.phases,
             "counters": self.counters,
             "outputs": self.outputs,

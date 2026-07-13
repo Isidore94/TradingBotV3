@@ -231,8 +231,39 @@ def _ts(now: datetime | None) -> str:
 
 def default_ledger_path() -> Path:
     try:
-        from project_paths import CACHE_DIR
+        from project_paths import get_diagnostics_dir
 
-        return Path(CACHE_DIR).parent / "diagnostics" / "job_ledger.jsonl"
+        return get_diagnostics_dir() / "job_ledger.jsonl"
     except Exception:
         return Path.home() / ".tradingbotv3" / "job_ledger.jsonl"
+
+
+_default_ledger_lock = threading.Lock()
+_default_ledger: JobLedger | None = None
+_default_ledger_path: Path | None = None
+
+
+def get_default_ledger() -> JobLedger:
+    """Return the process-wide ledger used by every GUI scan owner.
+
+    MasterAvwapPanel and AutopilotService live in the same process.  Giving
+    each one an independently replayed ledger leaves both with stale in-memory
+    state and permits the same scheduled slot to be claimed twice.  A shared
+    instance makes the durable job key an actual process-wide idempotency
+    boundary as well as an audit trail.
+    """
+    global _default_ledger, _default_ledger_path
+    path = default_ledger_path()
+    with _default_ledger_lock:
+        if _default_ledger is None or _default_ledger_path != path:
+            _default_ledger = JobLedger(path)
+            _default_ledger_path = path
+        return _default_ledger
+
+
+def reset_default_ledger() -> None:
+    """Test hook: discard the cached process-wide ledger instance."""
+    global _default_ledger, _default_ledger_path
+    with _default_ledger_lock:
+        _default_ledger = None
+        _default_ledger_path = None

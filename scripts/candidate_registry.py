@@ -325,7 +325,7 @@ class CandidateRegistry:
                 disk_generation = int(on_disk.get("generation", 0))
             except (json.JSONDecodeError, OSError, ValueError):
                 disk_generation = 0
-            if disk_generation > max(self._loaded_generation, self._generation):
+            if disk_generation > self._loaded_generation:
                 raise StaleWriterError(
                     f"registry on disk is at generation {disk_generation}, "
                     f"this writer loaded {self._loaded_generation}; reload and merge"

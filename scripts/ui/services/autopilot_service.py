@@ -27,7 +27,7 @@ from market_session import is_within_regular_market_session
 from watchlist_utils import read_watchlist_symbols
 
 import autopilot_core as core
-from ui.services.scan_service import ScanService
+from ui.services.scan_service import ScanService, active_scan_label
 
 
 _TICK_INTERVAL_MS = 30_000
@@ -73,9 +73,9 @@ class AutopilotService(QObject):
         self._alerts_date = datetime.now().date().isoformat()
         self._state = self._load_state()
         try:
-            from job_ledger import JobLedger, default_ledger_path
+            from job_ledger import get_default_ledger
 
-            self._job_ledger = JobLedger(default_ledger_path())
+            self._job_ledger = get_default_ledger()
             for stale in self._job_ledger.mark_stale_running():
                 logging.warning("Job did not survive restart: %s", stale.key)
         except Exception:
@@ -86,6 +86,7 @@ class AutopilotService(QObject):
         if self._profile not in (AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY):
             self._profile = AUTO_PROFILE_DESK
         self._active_scan_slot: str | None = None
+        self._waiting_scan_slot: str | None = None
         self._building_watchlists = False
         self._hod_check_running = False
         self._reconnect_running = False
@@ -214,7 +215,15 @@ class AutopilotService(QObject):
             # a Saturday report claiming 07:30 reads as broken automation.
             next_slot = "next session"
         else:
-            next_slot = next((slot for slot in slots if slot not in done), None)
+            in_flight = {
+                str(slot)
+                for slot in (self._active_scan_slot, self._waiting_scan_slot)
+                if slot and str(slot) in slots
+            }
+            next_slot = next(
+                (slot for slot in slots if slot not in done and slot not in in_flight),
+                None,
+            )
         longs, shorts = self._read_watchlists()
         return {
             "enabled": self._enabled,
@@ -289,7 +298,7 @@ class AutopilotService(QObject):
             self._maybe_run_wrapup(now)
             self._maybe_heartbeat_report(now)
             core.write_heartbeat(
-                current_job=self._active_scan_slot or "",
+                current_job=self._active_scan_slot or active_scan_label(),
                 next_job=str(self.status_snapshot().get("next_slot") or ""),
                 last_success=self._last_report_write.isoformat(timespec="seconds") if self._last_report_write else "",
             )
@@ -645,6 +654,23 @@ class AutopilotService(QObject):
         if not due:
             return
         slot = due[-1]
+        ledger = getattr(self, "_job_ledger", None)
+        if ledger is not None:
+            try:
+                from job_ledger import job_key
+
+                key = job_key(now.date().isoformat(), "swing_scan", slot, "shared-v1")
+                if ledger.is_done(key):
+                    done.update(due)
+                    self._state["slots_done"] = sorted(done)
+                    self._save_state()
+                    self._log(
+                        f"Swing slot {slot} already completed in the job ledger; "
+                        "reconciled local scheduler state without rescanning."
+                    )
+                    return
+            except Exception:
+                logging.exception("Could not reconcile swing slot with the job ledger.")
         if len(due) > 1:
             self._log(f"Catching up: {len(due)} swing slots due; running {slot} and marking {', '.join(due[:-1])} skipped.")
         update = core.slot_writes_setup_tracker(slot, reference=now)
@@ -660,21 +686,33 @@ class AutopilotService(QObject):
         started = self._scan_service.run_autopilot_scan(
             update_setup_tracker=update_setup_tracker,
             label=f"Auto Pilot swing scan ({slot_label}, {tracker_text})",
+            slot_label=slot_label,
         )
         if started:
+            self._waiting_scan_slot = None
             self._log(f"Swing scan started for slot {slot_label} ({tracker_text}).")
-            self._ledger_event("start", slot_label)
         else:
+            rejection = self._scan_service.last_rejection_reason
+            if rejection == "scheduled slot already completed":
+                self._mark_slots_done()
+                self._log(f"Swing scan for slot {slot_label} was already completed; no duplicate scan launched.")
+                self._active_scan_slot = None
+                self._waiting_scan_slot = None
+                return
             self._active_scan_slot = None
             self._pending_slot_marks = []
+            holder = active_scan_label() or "another Master AVWAP scan"
+            if self._waiting_scan_slot != slot_label:
+                self._log(f"Swing scan for slot {slot_label} is waiting; {holder} is already running.")
+                self._waiting_scan_slot = slot_label
 
     @Slot(dict, list, str)
     def _on_scan_finished(self, run_result: dict, rows: list, stamp: str) -> None:
         slot = self._active_scan_slot or "?"
         self._mark_slots_done()
         self._log(f"Swing scan for slot {slot} finished at {stamp} ({len(rows)} setup rows).")
-        self._ledger_event("complete", slot)
         self._active_scan_slot = None
+        self._waiting_scan_slot = None
         self._write_report()
         self._maybe_run_wrapup(datetime.now())
 
@@ -685,34 +723,14 @@ class AutopilotService(QObject):
         detail = str(message or "").strip()
         first_line = detail.splitlines()[0] if detail else "unknown error"
         self._log(f"Swing scan for slot {slot} FAILED: {first_line}")
-        self._ledger_event("fail", slot, error=first_line)
         # The feed keeps one line for the phone report, but the subprocess
         # stderr/traceback lives in the remaining lines - keep it findable.
         if detail and detail != first_line:
             logging.error("Auto Pilot swing scan for slot %s failed:\n%s", slot, detail)
         self._active_scan_slot = None
+        self._waiting_scan_slot = None
         self._write_report()
         self._maybe_run_wrapup(datetime.now())
-
-    def _ledger_event(self, kind: str, slot_label: str, *, error: str = "") -> None:
-        """Durable job trail beside the legacy slots_done state (Phase 2.3)."""
-        ledger = getattr(self, "_job_ledger", None)
-        if ledger is None:
-            return
-        try:
-            from job_ledger import job_key
-
-            key = job_key(datetime.now().date().isoformat(), "swing_scan", str(slot_label))
-            if kind == "start":
-                ledger.schedule(datetime.now().date().isoformat(), "swing_scan", str(slot_label))
-                ledger.start(key)
-            elif kind == "complete":
-                ledger.complete(key)
-            elif kind == "fail":
-                error_class = "ib_disconnected" if "IB" in error else "unexpected"
-                ledger.fail(key, error_class=error_class, error=error)
-        except Exception:
-            logging.exception("Job ledger event failed (scheduling unaffected).")
 
     def _mark_slots_done(self) -> None:
         marks = getattr(self, "_pending_slot_marks", [])
@@ -796,6 +814,12 @@ class AutopilotService(QObject):
                             "surfaced as an alert only; no lists touched."
                         )
                         return
+                    core.add_candidate_registry_memberships(
+                        "near_extreme",
+                        side,
+                        matches,
+                        lease_minutes=90,
+                    )
                     auto_target = Path(AUTO_LONGS_FILE) if side == "long" else Path(AUTO_SHORTS_FILE)
                     auto_added = core.append_watchlist_symbols(auto_target, matches)
                     self._append_pick_rows(
@@ -806,6 +830,12 @@ class AutopilotService(QObject):
                         f"{', '.join(auto_added) if auto_added else '(already tracked)'}."
                     )
                     return
+                core.add_candidate_registry_memberships(
+                    "near_extreme",
+                    side,
+                    matches,
+                    lease_minutes=90,
+                )
                 target = Path(LONGS_FILE) if side == "long" else Path(SHORTS_FILE)
                 added = core.append_watchlist_symbols(target, matches)
                 if added:

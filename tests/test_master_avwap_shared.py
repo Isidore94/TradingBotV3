@@ -60,6 +60,30 @@ class MasterAvwapSharedTests(unittest.TestCase):
             self.assertEqual(second_stdev["AAPL"]["side"], "LONG")
             self.assertNotIn("TSLA", second_stdev)
 
+    def test_event_loading_accepts_rich_context_larger_than_csv_default(self):
+        trade_date = date.today()
+        oversized_context = "X" * 200_000
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            signals_path = Path(temp_dir) / "avwap_signals.csv"
+            signals_path.write_text(
+                "\n".join(
+                    [
+                        "run_date,symbol,trade_date,side,anchor_type,anchor_date,signal_type,priority_bucket,favorite_zone,favorite_signals,is_favorite_setup,is_near_favorite_zone,favorite_context_signals",
+                        f"{trade_date.isoformat()},AAPL,{trade_date.isoformat()},LONG,CURRENT,2026-04-01,CROSS_UP_UPPER_2,favorite_setup,upper_band,CROSS_UP_UPPER_2,1,0,{oversized_context}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            events = load_master_avwap_events_for_date(
+                trade_date=trade_date,
+                signals_path=signals_path,
+            )
+
+        self.assertEqual(set(events), {"AAPL"})
+        self.assertEqual(events["AAPL"][0]["signal_type"], "CROSS_UP_UPPER_2")
+
     def test_focus_map_and_focus_feed_groups(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             focus_path = Path(temp_dir) / "master_avwap_focus.json"

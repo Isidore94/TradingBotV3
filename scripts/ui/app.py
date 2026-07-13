@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from project_paths import get_shared_watchlist_details, get_tracker_storage_details
 from ui.panels.autopilot_panel import AutopilotPanel
+from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
@@ -48,8 +49,11 @@ class MainWindow(QMainWindow):
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel()
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
+        self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
+        self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
         self.settings_panel = SettingsPanel(self.state, bounce_service=self.trading_panel.bounce_panel.service)
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
+        self.health_panel = HealthPanel()
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)
@@ -58,6 +62,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.universe_panel)
         self.pages.addWidget(self.research_panel)
         self.pages.addWidget(self.autopilot_panel)
+        self.pages.addWidget(self.health_panel)
         self.pages.addWidget(self.settings_panel)
 
         self.title_label = QLabel("Trading Desk")
@@ -80,6 +85,7 @@ class MainWindow(QMainWindow):
         self.trading_panel.statusChanged.connect(self._set_scan_status)
         self.trading_panel.rowsChanged.connect(self._set_setup_counts)
         self.trading_panel.connectionChanged.connect(self._set_ib_status)
+        self.health_panel.statusChanged.connect(self._set_health_status)
 
         # Self-heal a stale universe on launch AND on a recurring check (the
         # app often stays open across sessions, so launch-only healing left
@@ -115,6 +121,7 @@ class MainWindow(QMainWindow):
             ("Universe", "mdi.earth"),
             ("Research", "mdi.flask-outline"),
             ("Auto Pilot", "mdi.robot-outline"),
+            ("System Health", "mdi.heart-pulse"),
             ("Settings", "mdi.cog-outline"),
         )
         for index, (label, icon_name) in enumerate(nav_items):
@@ -177,12 +184,14 @@ class MainWindow(QMainWindow):
         self.watchlist_status = QLabel(_watchlist_status_text())
         self.universe_status = QLabel(_universe_status_text())
         self.data_status = QLabel(_data_status_text())
+        self.health_status = QLabel("Health: checking...")
         status.addWidget(self.ib_status)
         status.addWidget(self.scan_status, 1)
         status.addPermanentWidget(self.setup_status)
         status.addPermanentWidget(self.watchlist_status)
         status.addPermanentWidget(self.universe_status)
         status.addPermanentWidget(self.data_status)
+        status.addPermanentWidget(self.health_status)
 
     def _cycle_auto_mode(self) -> None:
         service = self.autopilot_panel.service
@@ -205,6 +214,10 @@ class MainWindow(QMainWindow):
             f"QPushButton#AutoModeButton {{ color: {color}; font-weight: 600; padding: 1px 10px; }}"
         )
 
+    def _sync_scan_scheduler_owner(self, enabled: bool) -> None:
+        owner = "Auto Pilot" if bool(enabled) else ""
+        self.trading_panel.master_panel.set_external_scheduler_owner(owner)
+
     def _bind_shortcuts(self) -> None:
         run_action = QAction("Run Shared Scan", self)
         run_action.setShortcut(QKeySequence("Ctrl+R"))
@@ -217,7 +230,16 @@ class MainWindow(QMainWindow):
         self.addAction(focus_action)
 
     def _select_page(self, index: int) -> None:
-        titles = ("Trading Desk", "Focus Picks", "Journal", "Universe", "Research", "Auto Pilot", "Settings")
+        titles = (
+            "Trading Desk",
+            "Focus Picks",
+            "Journal",
+            "Universe",
+            "Research",
+            "Auto Pilot",
+            "System Health",
+            "Settings",
+        )
         self.pages.setCurrentIndex(index)
         self.title_label.setText(titles[index])
         for button_index, button in enumerate(self.nav_buttons):
@@ -251,6 +273,12 @@ class MainWindow(QMainWindow):
 
     def _set_ib_status(self, message: str) -> None:
         self.ib_status.setText(message if message.lower().startswith("ib") else f"IB/TWS: {message}")
+
+    def _set_health_status(self, status: str) -> None:
+        normalized = str(status or "unknown").strip().lower()
+        self.health_status.setText(f"Health: {normalized.upper()}")
+        color = {"healthy": "#3fb950", "degraded": "#d29922", "unhealthy": "#f85149"}.get(normalized, "#8b8fa3")
+        self.health_status.setStyleSheet(f"color: {color}; font-weight: 600;")
 
     def _set_setup_counts(self, total: int, favorites: int, near: int) -> None:
         self.setup_status.setText(f"Setups: {total} | Favorites: {favorites} | Near: {near}")
@@ -289,7 +317,15 @@ class MainWindow(QMainWindow):
             self._universe_poll.stop()
 
     def closeEvent(self, event) -> None:
-        for panel in (self.trading_panel, self.journal_panel, self.universe_panel, self.research_panel, self.autopilot_panel, self.settings_panel):
+        for panel in (
+            self.trading_panel,
+            self.journal_panel,
+            self.universe_panel,
+            self.research_panel,
+            self.autopilot_panel,
+            self.health_panel,
+            self.settings_panel,
+        ):
             try:
                 panel.shutdown()
             except Exception:

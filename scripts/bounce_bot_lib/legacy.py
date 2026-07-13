@@ -1156,16 +1156,21 @@ def _bounce_time_bucket(value) -> str:
     parsed = pd.to_datetime(value, errors="coerce")
     if pd.isna(parsed):
         return "unknown"
-    minutes = int(parsed.hour) * 60 + int(parsed.minute)
-    if minutes < (10 * 60 + 30):
-        return "opening_drive"
-    if minutes < (12 * 60):
-        return "late_morning"
-    if minutes < (14 * 60):
-        return "midday"
-    if minutes < (15 * 60 + 30):
-        return "afternoon"
-    return "closing_window"
+    from bounce_bot_lib.learning import time_bucket_for
+
+    return time_bucket_for(parsed.to_pydatetime())
+
+
+def _bounce_quality_time(row: dict) -> datetime | None:
+    """Prefer the signal/entry bar over delayed notification wall time."""
+    for key in ("signal_time", "entry_time", "bar_time", "timestamp"):
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        parsed = pd.to_datetime(value, errors="coerce")
+        if not pd.isna(parsed):
+            return parsed.to_pydatetime()
+    return None
 
 
 def _bounce_rrs_alignment(row: dict) -> str:
@@ -2360,7 +2365,8 @@ class BounceBot(EWrapper, EClient):
         # Learning-loop maintenance runs off-thread so startup stays instant:
         # refresh the alert-time learning state if stale (daily) and compact
         # the candidates CSV when the JSON-blob columns have bloated it.
-        threading.Thread(target=self._run_bounce_learning_maintenance, daemon=True).start()
+        if str(os.environ.get("TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE") or "").strip() != "1":
+            threading.Thread(target=self._run_bounce_learning_maintenance, daemon=True).start()
 
     def _run_bounce_learning_maintenance(self):
         try:
@@ -2569,7 +2575,7 @@ class BounceBot(EWrapper, EClient):
                 load_bounce_learning_state(),
                 direction=direction,
                 bounce_types=bounce_type_keys,
-                time_bucket=time_bucket_for(get_market_local_now()),
+                time_bucket=time_bucket_for(_bounce_quality_time(row) or get_market_local_now()),
                 market_environment=str(row.get("market_environment") or ""),
                 priority_bucket=str(row.get("master_avwap_priority_bucket") or ""),
                 focus_label=str(row.get("master_avwap_focus_label") or ""),
@@ -2779,6 +2785,11 @@ class BounceBot(EWrapper, EClient):
             "event_id": event_id,
             "event_type": event_type,
             "logged_at": get_market_local_now().isoformat(timespec="seconds"),
+            # Used immediately for the live verdict. Persistence already gets
+            # the same bar time through the outcome row's ``entry_time``;
+            # keeping this out of the candidate CSV avoids a 186 MB header
+            # migration on the first alert after upgrade.
+            "signal_time": trade_dt.isoformat(timespec="seconds") if trade_dt else "",
             "trade_date": trade_date,
             "symbol": symbol,
             "direction": direction,
@@ -3847,7 +3858,7 @@ class BounceBot(EWrapper, EClient):
             quality = evaluate_bounce_quality(
                 load_bounce_learning_state(),
                 direction=str(event.get("side") or event.get("direction") or "").lower(),
-                time_bucket=time_bucket_for(get_market_local_now()),
+                time_bucket=time_bucket_for(_bounce_quality_time(event) or get_market_local_now()),
                 market_environment=self.get_market_environment(),
                 priority_bucket=bucket,
                 focus_label=focus_label,
@@ -4985,17 +4996,22 @@ class BounceBot(EWrapper, EClient):
     # range breaks and 8-EMA grind squeezes into a new session extreme.
     # Candidates come from longs.txt / shorts.txt only.
     # ------------------------------------------------------------------
-    def _watchlist_day_sweep_symbols(self, side):
+    def _watchlist_day_sweep_symbols(self, side, symbols=None):
         watchlist = self.shorts if side == "short" else self.longs
-        return sorted(
-            {str(item or "").strip().upper() for item in watchlist if str(item or "").strip()}
-        )
+        selected = {
+            str(item or "").strip().upper() for item in watchlist if str(item or "").strip()
+        }
+        if symbols is not None:
+            selected &= {
+                str(item or "").strip().upper() for item in symbols if str(item or "").strip()
+            }
+        return sorted(selected)
 
     def _symbol_session_bars(self, symbol, today):
         bars = self.get_cached_5m_bars(symbol)
         return [bar for bar in bars or [] if bar.dt.date() == today]
 
-    def check_orb_break_setups(self):
+    def check_orb_break_setups(self, symbols=None):
         """First 5m close through the opening range at 30+ minutes after open."""
         spy_today, _prev_close = self._spy_session_bars()
         if not spy_today:
@@ -5007,7 +5023,7 @@ class BounceBot(EWrapper, EClient):
             self._orb_break_state = state
         hits = []
         for side in ("long", "short"):
-            for symbol in self._watchlist_day_sweep_symbols(side):
+            for symbol in self._watchlist_day_sweep_symbols(side, symbols):
                 key = f"{symbol}|{side}"
                 if key in state["alerted"] or key in state["dead"]:
                     continue
@@ -5111,7 +5127,7 @@ class BounceBot(EWrapper, EClient):
             quality=quality,
         )
 
-    def check_ema8_grind_setups(self):
+    def check_ema8_grind_setups(self, symbols=None):
         """Strong name rides the 5m 8-EMA, squeezes, then pushes to a new extreme."""
         spy_today, _prev_close = self._spy_session_bars()
         if not spy_today:
@@ -5123,7 +5139,7 @@ class BounceBot(EWrapper, EClient):
             self._ema8_grind_state = state
         hits = []
         for side in ("long", "short"):
-            for symbol in self._watchlist_day_sweep_symbols(side):
+            for symbol in self._watchlist_day_sweep_symbols(side, symbols):
                 key = f"{symbol}|{side}"
                 if key in state["alerted"]:
                     continue
@@ -5289,6 +5305,14 @@ class BounceBot(EWrapper, EClient):
         if not h1 or h1[-1].dt.date() != today:
             # Only the freshly closed candle is a live signal; anything older
             # (restart, stale cache) already played out.
+            return []
+        spy_bars = self.get_cached_5m_bars("SPY")
+        spy_h1 = _closed_h1_bars(spy_bars) if spy_bars else []
+        if not spy_h1 or h1[-1].dt != spy_h1[-1].dt:
+            # "Today" is not fresh enough: a symbol whose cache stopped an
+            # hour ago must not replay that old H1 candle during a later broad
+            # sweep. SPY is the session clock because it is continuously
+            # refreshed and uses the same RTH bucket boundaries.
             return []
         hits = detect_h1_color_signals(h1, side)
         for hit in hits:
@@ -9176,6 +9200,34 @@ class BounceBot(EWrapper, EClient):
     def is_stopping(self) -> bool:
         return self._stop_event.is_set()
 
+    def _scan_human_focus_fast_lane(self, enabled_bounce_types):
+        """Refresh trader-picked M5 names before the broad RRS/watchlist pass.
+
+        A large longs/shorts universe can take many minutes to hydrate from IB.
+        Focus picks are the explicit low-latency lane: fetch/detect them first,
+        then reuse those bars in the broad scan.  Returning the processed set
+        prevents a second historical request later in the same cycle.
+        """
+        focus_symbols = sorted(self._human_focus_symbols() & self.get_scan_symbol_set())
+        processed = set()
+        if not focus_symbols:
+            return processed
+        logging.info(
+            "M5 Focus fast lane: scanning %s trader-picked symbol(s) before the broad sweep.",
+            len(focus_symbols),
+        )
+        for symbol in focus_symbols:
+            if not self.is_scanning_enabled():
+                break
+            if self.atr_cache.get(symbol) is None:
+                continue
+            self.request_and_detect_bounce(symbol, allowed_bounce_types=enabled_bounce_types)
+            processed.add(symbol)
+        # These two M5 pattern families consume the bars just fetched above.
+        self.check_orb_break_setups(symbols=processed)
+        self.check_ema8_grind_setups(symbols=processed)
+        return processed
+
     def run_strategy(self):
         last_warning_reset = datetime.now().date()
 
@@ -9243,6 +9295,15 @@ class BounceBot(EWrapper, EClient):
                 except Exception:
                     logging.exception("Auto market regime update failed.")
 
+                enabled_bounce_types = {
+                    bounce_type for bounce_type, enabled in self.bounce_type_toggles.items() if enabled
+                }
+                try:
+                    focus_fast_lane_symbols = self._scan_human_focus_fast_lane(enabled_bounce_types)
+                except Exception:
+                    focus_fast_lane_symbols = set()
+                    logging.exception("M5 Focus fast-lane scan failed.")
+
                 # Log strongest/weakest names for key intraday timeframes each cycle.
                 for timeframe_key in ("5m", "15m", "1h"):
                     self.run_rrs_scan(timeframe_key_override=timeframe_key, emit_gui=False)
@@ -9308,11 +9369,8 @@ class BounceBot(EWrapper, EClient):
                 else:
                     scannable_symbols = set(all_symbols)
                 logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
-                processed_symbols = set()
-                outcome_update_symbols = set()
-                enabled_bounce_types = {
-                    bounce_type for bounce_type, enabled in self.bounce_type_toggles.items() if enabled
-                }
+                processed_symbols = set(focus_fast_lane_symbols)
+                outcome_update_symbols = set(focus_fast_lane_symbols)
                 non_ema_extreme_bounce_types = enabled_bounce_types - {"ema_8", "ema_15"}
 
                 # 1) Prioritize strongest/weakest names first.

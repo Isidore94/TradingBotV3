@@ -27,6 +27,7 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from market_session import get_market_session_window
 from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
 
 BOUNCE_LEARNING_STATE_FILE = INTRADAY_BOUNCE_OUTCOMES_FILE.with_name("intraday_bounce_learning_state.json")
@@ -127,17 +128,30 @@ def _float_or_none(value):
 
 
 def time_bucket_for(when: datetime | None) -> str:
-    """Same bucketing the performance aggregation uses (market-local time)."""
+    """Classify a timestamp by elapsed time in its NYSE session.
+
+    The former implementation compared local wall-clock hours with Eastern
+    cutoffs. On a Pacific machine that mislabeled nearly the entire session.
+    """
     if when is None:
         return "unknown"
-    minutes = when.hour * 60 + when.minute
-    if minutes < (10 * 60 + 30):
+    try:
+        session = get_market_session_window(reference=when)
+        moment = when
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=session.open_local.tzinfo)
+        else:
+            moment = moment.astimezone(session.open_local.tzinfo)
+        minutes = (moment - session.open_local).total_seconds() / 60.0
+    except Exception:
+        return "unknown"
+    if minutes < 60:
         return "opening_drive"
-    if minutes < (12 * 60):
+    if minutes < 150:
         return "late_morning"
-    if minutes < (14 * 60):
+    if minutes < 270:
         return "midday"
-    if minutes < (15 * 60 + 30):
+    if minutes < 360:
         return "afternoon"
     return "closing_window"
 

@@ -96,3 +96,27 @@ def test_report_header_renders_mode_labels():
     assert "Mode: OFF" in off
     assert "Mode: AUTO - DESK" in desk
     assert "Mode: AUTO - AWAY" in away
+
+
+def test_status_snapshot_does_not_advertise_the_active_slot_as_next(monkeypatch):
+    from types import SimpleNamespace
+
+    import autopilot_core as core
+
+    service = _bare_service(enabled=True)
+    service._state = {"slots_done": ["10:00"]}
+    service._active_scan_slot = "11:00"
+    service._waiting_scan_slot = None
+    service._read_watchlists = lambda: ([], [])
+    service._read_auto_watchlist = lambda _path: []
+    service._ib_status_text = lambda: "connected"
+    service._regime_text = lambda: "bearish_strong"
+    service._scan_service = SimpleNamespace(running=True)
+    service._universe_line = lambda _now: "Universe: fresh"
+    service._universe_rebuild_running = False
+    service._wrapup_running = False
+    monkeypatch.setattr(core, "get_autopilot_swing_slots", lambda _now: ["10:00", "11:00", "12:00"])
+
+    snapshot = service.status_snapshot()
+
+    assert snapshot["next_slot"] == "12:00"

@@ -20,6 +20,7 @@ from project_paths import (
 )
 
 VALID_SIDES = ("LONG", "SHORT")
+MASTER_AVWAP_CSV_FIELD_LIMIT = 10 * 1024 * 1024
 
 
 def _parse_iso_date_safe(value: Any) -> date | None:
@@ -296,20 +297,26 @@ def load_master_avwap_events_for_date(
     if not signals_path.exists():
         return {}
 
+    target_date = trade_date or datetime.now().date()
+    events_by_symbol: dict[str, list[dict[str, Any]]] = {}
     try:
+        # Rich scanner context columns can legitimately exceed Python's
+        # conservative 128 KiB CSV default.  One oversized context field used
+        # to make the entire live event map silently empty.  Keep a bounded
+        # ceiling, but make it comfortably larger than scanner output and
+        # stream rows so the 40+ MB export is not duplicated in memory.
+        if csv.field_size_limit() < MASTER_AVWAP_CSV_FIELD_LIMIT:
+            csv.field_size_limit(MASTER_AVWAP_CSV_FIELD_LIMIT)
         with signals_path.open("r", newline="", encoding="utf-8") as handle:
-            rows = list(csv.DictReader(handle))
+            for row in csv.DictReader(handle):
+                normalized = normalize_master_avwap_event_row(row)
+                if not normalized or normalized["trade_date"] != target_date:
+                    continue
+                events_by_symbol.setdefault(normalized["symbol"], []).append(normalized)
     except Exception as exc:
         logging.warning("Failed reading Master AVWAP signals file %s: %s", signals_path, exc)
         return {}
 
-    target_date = trade_date or datetime.now().date()
-    events_by_symbol: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        normalized = normalize_master_avwap_event_row(row)
-        if not normalized or normalized["trade_date"] != target_date:
-            continue
-        events_by_symbol.setdefault(normalized["symbol"], []).append(normalized)
     return events_by_symbol
 
 

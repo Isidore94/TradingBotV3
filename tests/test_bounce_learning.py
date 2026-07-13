@@ -4,6 +4,7 @@ import csv
 import sys
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -191,12 +192,33 @@ def test_format_bounce_alert_message_carries_proven_stamp():
 
 
 def test_time_bucket_for_matches_session_windows():
-    assert learning.time_bucket_for(datetime(2026, 7, 2, 9, 45)) == "opening_drive"
-    assert learning.time_bucket_for(datetime(2026, 7, 2, 11, 0)) == "late_morning"
-    assert learning.time_bucket_for(datetime(2026, 7, 2, 13, 0)) == "midday"
-    assert learning.time_bucket_for(datetime(2026, 7, 2, 14, 30)) == "afternoon"
-    assert learning.time_bucket_for(datetime(2026, 7, 2, 15, 45)) == "closing_window"
+    eastern = ZoneInfo("America/New_York")
+    assert learning.time_bucket_for(datetime(2026, 7, 2, 9, 45, tzinfo=eastern)) == "opening_drive"
+    assert learning.time_bucket_for(datetime(2026, 7, 2, 11, 0, tzinfo=eastern)) == "late_morning"
+    assert learning.time_bucket_for(datetime(2026, 7, 2, 13, 0, tzinfo=eastern)) == "midday"
+    assert learning.time_bucket_for(datetime(2026, 7, 2, 14, 30, tzinfo=eastern)) == "afternoon"
+    assert learning.time_bucket_for(datetime(2026, 7, 2, 15, 45, tzinfo=eastern)) == "closing_window"
     assert learning.time_bucket_for(None) == "unknown"
+
+
+def test_time_bucket_for_is_correct_on_a_pacific_machine():
+    pacific = ZoneInfo("America/Los_Angeles")
+    assert learning.time_bucket_for(datetime(2026, 7, 13, 6, 45, tzinfo=pacific)) == "opening_drive"
+    assert learning.time_bucket_for(datetime(2026, 7, 13, 9, 42, tzinfo=pacific)) == "midday"
+    assert learning.time_bucket_for(datetime(2026, 7, 13, 12, 45, tzinfo=pacific)) == "closing_window"
+
+
+def test_quality_time_prefers_signal_bar_over_notification_time():
+    from bounce_bot_lib.legacy import _bounce_quality_time, _bounce_time_bucket
+
+    row = {
+        "signal_time": "2026-07-13T09:42:00-07:00",
+        "logged_at": "2026-07-13T12:45:00-07:00",
+    }
+    signal_time = _bounce_quality_time(row)
+    assert signal_time is not None
+    assert learning.time_bucket_for(signal_time) == "midday"
+    assert _bounce_time_bucket(row["signal_time"]) == "midday"
 
 
 def test_compact_candidates_csv_event_type_aware_retention(tmp_path):
@@ -257,6 +279,37 @@ def test_priority_watchlist_emphasis_cycle_logic():
         stub._scan_cycle_index = cycle
         refresh_pattern.append(BounceBot._is_background_refresh_cycle(stub))
     assert refresh_pattern == [True, False, False, True]
+
+
+def test_human_focus_fast_lane_runs_before_broad_scan_and_reuses_bars():
+    from types import SimpleNamespace
+
+    from bounce_bot_lib.legacy import BounceBot
+
+    calls = []
+    stub = SimpleNamespace(
+        atr_cache={"AAPL": 2.0, "TSLA": 3.0},
+        _human_focus_symbols=lambda: {"AAPL", "TSLA"},
+        get_scan_symbol_set=lambda: {"AAPL", "TSLA", "NVDA"},
+        is_scanning_enabled=lambda: True,
+        request_and_detect_bounce=lambda symbol, allowed_bounce_types=None: calls.append(
+            ("bounce", symbol, frozenset(allowed_bounce_types or ()))
+        ),
+        check_orb_break_setups=lambda symbols=None: calls.append(("orb", frozenset(symbols or ()))),
+        check_ema8_grind_setups=lambda symbols=None: calls.append(("ema8", frozenset(symbols or ()))),
+    )
+
+    processed = BounceBot._scan_human_focus_fast_lane(stub, {"vwap", "ema_8"})
+
+    assert processed == {"AAPL", "TSLA"}
+    assert calls[:2] == [
+        ("bounce", "AAPL", frozenset({"vwap", "ema_8"})),
+        ("bounce", "TSLA", frozenset({"vwap", "ema_8"})),
+    ]
+    assert calls[2:] == [
+        ("orb", frozenset({"AAPL", "TSLA"})),
+        ("ema8", frozenset({"AAPL", "TSLA"})),
+    ]
 
 
 def test_prune_latest_bars_keeps_only_background_on_off_cycles():
@@ -551,6 +604,33 @@ def test_closed_h1_bars_drops_forming_bucket():
     assert len(_closed_h1_bars(_bars_5m(24))) == 2
     # A full 6.5h session: the short final bucket closes at the bell and counts.
     assert len(_closed_h1_bars(_bars_5m(78))) == 7
+
+
+def test_h1_live_sweep_rejects_a_same_day_but_stale_symbol_bucket(monkeypatch):
+    from datetime import timedelta
+
+    import bounce_bot_lib.legacy as legacy
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        _evaluate_h1_color_signals = BounceBot._evaluate_h1_color_signals
+
+    current = _make_bar(datetime(2026, 7, 13, 9, 30), 100.0, 101.0, 99.0, 100.5)
+    stale = _make_bar(current.dt - timedelta(hours=1), 100.0, 101.0, 99.0, 100.5)
+    stub = Stub()
+    cache = {"SPY": [current], "AWK": [stale]}
+    stub.get_cached_5m_bars = lambda symbol: cache.get(symbol, [])
+    monkeypatch.setattr(legacy, "_closed_h1_bars", lambda bars: list(bars))
+    monkeypatch.setattr(
+        legacy,
+        "detect_h1_color_signals",
+        lambda bars, side: [{"type": "test", "signal_bar": bars[-1]}],
+    )
+
+    assert stub._evaluate_h1_color_signals("AWK", "long", current.dt.date()) == []
+
+    cache["AWK"] = [current]
+    assert stub._evaluate_h1_color_signals("AWK", "long", current.dt.date())
 
 
 def test_h1_color_sweep_dedupes_per_candle():

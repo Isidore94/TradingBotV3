@@ -137,7 +137,16 @@ def test_focus_picks_is_top_level_app_page():
     window = MainWindow(UiState(workspace_mode="workspace"))
     labels = [button.text() for button in window.nav_buttons]
 
-    assert labels == ["Trading Desk", "Focus Picks", "Journal", "Universe", "Research", "Auto Pilot", "Settings"]
+    assert labels == [
+        "Trading Desk",
+        "Focus Picks",
+        "Journal",
+        "Universe",
+        "Research",
+        "Auto Pilot",
+        "System Health",
+        "Settings",
+    ]
     assert window.pages.widget(1) is window.trading_panel.focus_picks_panel
 
 
@@ -183,7 +192,7 @@ def test_master_panel_add_to_focus_routes_by_side(tmp_path):
     panel._on_table_clicked(proxy_index("NVDA", column=0))
     assert service.focus_category("NVDA") == "swing"
 
-    # The ✕ column logs a dislike (with the setups origin) and unfavorites.
+    # The x column logs a dislike (with the setups origin) and unfavorites.
     feedback = []
     service.record_feedback = lambda symbol, side, verdict, **kw: feedback.append((symbol, verdict, kw))
     panel._record_dislike(panel.model.rows()[0], "chased, no level")
@@ -193,6 +202,48 @@ def test_master_panel_add_to_focus_routes_by_side(tmp_path):
     assert kwargs["origin"] == "setups"
     assert kwargs["reason"] == "chased, no level"
     assert "bucket=" in kwargs["context"]
+
+
+def test_master_panel_report_poll_refreshes_only_when_signature_changes():
+    from types import SimpleNamespace
+
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+    calls = []
+    panel = SimpleNamespace(
+        _report_signatures={"report": (1, 100)},
+        _current_report_signatures=lambda: {"report": (1, 100)},
+        refresh_from_reports=lambda emit_empty=False: calls.append(emit_empty),
+    )
+    MasterAvwapPanel._poll_report_changes(panel)
+    assert calls == []
+
+    panel._current_report_signatures = lambda: {"report": (2, 120)}
+    MasterAvwapPanel._poll_report_changes(panel)
+    assert calls == [False]
+
+
+def test_autopilot_ownership_disables_the_setups_page_scheduler():
+    from types import SimpleNamespace
+
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+    notes = []
+    panel = SimpleNamespace(
+        external_scheduler_owner="",
+        scheduler_enabled=True,
+        _refresh_scheduler_status=lambda note="": notes.append(note),
+    )
+
+    MasterAvwapPanel.set_external_scheduler_owner(panel, "Auto Pilot")
+
+    assert panel.external_scheduler_owner == "Auto Pilot"
+    assert panel.scheduler_enabled is False
+    assert "owns hourly scans" in notes[-1]
+
+    MasterAvwapPanel.set_external_scheduler_owner(panel, "")
+    assert panel.external_scheduler_owner == ""
+    assert "available" in notes[-1]
 
 
 def test_alert_feed_item_focus_highlight():

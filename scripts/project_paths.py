@@ -178,6 +178,15 @@ LOG_DIR = PERSISTENT_DATA_DIR / "logs"
 
 LOCAL_MACHINE_CACHE_DIR = LOCAL_SETTINGS_DIR / "machine_cache"
 CACHE_DIR = LOCAL_MACHINE_CACHE_DIR
+DIAGNOSTICS_DIR_OVERRIDE_ENV = "TRADINGBOT_DIAGNOSTICS_DIR"
+
+
+def get_diagnostics_dir() -> Path:
+    """Machine-local diagnostics root, overridable for hermetic test runs."""
+    override = str(os.environ.get(DIAGNOSTICS_DIR_OVERRIDE_ENV) or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return CACHE_DIR.parent / "diagnostics"
 # Diagnostic app logs are per-machine and rotate (rename) frequently, which fights
 # Google Drive / OneDrive sync locks — keep them on local disk, not the shared store.
 LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"

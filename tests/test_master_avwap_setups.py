@@ -3467,6 +3467,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
         }
         self.assertIn("EMA_15", stop_labels)
         self.assertIn("EMA_8", stop_labels)
+        self.assertEqual(setup["setup_tags_schema"], "setup_tags_v2")
+        self.assertEqual(setup["setup_tags"], ["POST_EARNINGS_52W_BREAK"])
+        self.assertEqual(setup["setup_tag_roles"], {"POST_EARNINGS_52W_BREAK": "primary"})
 
     def test_post_earnings_tracker_targets_can_use_pre_earnings_anchor_overrides(self):
         scenario = {

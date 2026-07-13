@@ -111,6 +111,26 @@ def get_market_local_now(local_timezone_name: str | None = None) -> datetime:
     return datetime.now().astimezone(local_tz)
 
 
+def normalize_market_local_datetime(
+    reference: datetime | date | None = None,
+    local_timezone_name: str | None = None,
+    *,
+    local_timezone: tzinfo | None = None,
+) -> datetime:
+    """Return an aware datetime in the configured market-local timezone.
+
+    Providers and legacy adapters still supply a mixture of naive and aware
+    timestamps. Centralizing the conversion keeps persisted evidence explicit
+    and prevents aware/naive subtraction errors from weakening closed-bar
+    guards.
+    """
+
+    local_tz = local_timezone
+    if local_tz is None:
+        local_tz, _ = get_market_local_timezone(local_timezone_name)
+    return _normalize_reference_datetime(reference, local_tz)
+
+
 def get_market_session_window(
     reference: datetime | date | None = None,
     local_timezone_name: str | None = None,
