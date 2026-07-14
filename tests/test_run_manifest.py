@@ -110,6 +110,8 @@ def test_run_master_manifest_records_success_counters(tmp_path, monkeypatch):
         "daily_frames_by_symbol": {"AAPL": object(), "NVDA": object()},
         "tracked_rows": [{"symbol": "AAPL"}],
         "setup_tracker_updated": False,
+        "setup_tracker_allowed": False,
+        "setup_tracker_skip_reason": "IBKR daily bars unavailable for AAPL.",
     }
     monkeypatch.setattr(runner, "_run_master_impl", lambda **kwargs: fake_result)
 
@@ -120,7 +122,10 @@ def test_run_master_manifest_records_success_counters(tmp_path, monkeypatch):
     assert manifest["status"] == "ok"
     assert manifest["counters"]["symbols_processed"] == 2
     assert manifest["counters"]["tracked_rows"] == 1
+    assert manifest["counters"]["setup_tracker_updated"] is False
+    assert manifest["counters"]["setup_tracker_allowed"] is False
     assert manifest["outputs"]["watchlist_label"] == "test lists"
+    assert manifest["outputs"]["setup_tracker_skip_reason"] == "IBKR daily bars unavailable for AAPL."
 
 
 def test_run_master_uses_parent_scheduler_identity(tmp_path, monkeypatch):

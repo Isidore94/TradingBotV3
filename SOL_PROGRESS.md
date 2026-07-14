@@ -11,18 +11,29 @@ stamp; it must not duplicate the roadmap.
 - Integration base: `2183dca`; the verified July 13 Sol3 integration batch is
   included in this checkpoint.
 - Date: 2026-07-13
-- Test baseline: **835 passed** (`.venv\Scripts\python.exe -m pytest tests -q`)
+- Test baseline: **855 passed, 5 subtests passed**
+  (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
   scheduled scans, durable run IDs/PIDs, accurate heartbeat state, M5 completed-
   candle processing, SPY shadow coverage, Greatness shadow coverage, and the
-  composed operations audit (**6/6 healthy**), and the 13:00 final scan
+  composed operations audit (**6/6 healthy** before the Away-report check was
+  added), and the 13:00 final scan
   completed successfully in 1111.4s with one durable worker/run ID and zero
   true log errors. The persisted focus feed had 166/166 v2-tagged rows and no
-  empty tag lists. Failure-matrix and two-machine drills remain outstanding.
+  empty tag lists. The new seven-check audit and transactional Away publication
+  still need a restarted-app/live verification. Physical failure-matrix and
+  two-machine Drive drills remain outstanding.
 - Shadow engines: SPY state and Greatness both logging; neither is promoted.
 - Registry adoption: open scan, auto-populate, and near-extreme writers now
   dual-write in shadow; text watchlists remain authoritative.
+- Scanner reliability: compact tracker scoring snapshot, true trigger-date
+  freshness, invalid-side history sanitation, shared output-computation reuse,
+  atomic signal/feature/watchlist writes, and detailed output timings landed.
+- Away reliability: report + metadata publish transaction, hash/readback
+  audit, honest GUI status, phone-sized scan/tracker health, fail-closed writer
+  ownership, hour-aligned 07:00-through-close reports, persisted Away profile,
+  and simulated expiry/clock-skew/sleep-wake/failure tests landed.
 - Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
   provenance while preserving the raw trigger signals separately.
 - Next queue: finish the Section 6 operational drills, remaining

@@ -4,6 +4,8 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -19,6 +21,20 @@ REF = datetime(2026, 7, 2, 8, 0)
 def test_swing_slots_start_open_plus_hour_then_hourly_from_first_full_hour():
     slots = core.get_autopilot_swing_slots(REF, local_timezone_name=PACIFIC)
     assert slots == ["07:30", "09:00", "10:00", "11:00", "12:00", "13:00"]
+
+
+def test_hourly_away_report_slots_start_at_0700_and_run_once_per_hour():
+    before = datetime(2026, 7, 2, 6, 59)
+    at_seven = datetime(2026, 7, 2, 7, 0)
+    catch_up = datetime(2026, 7, 2, 8, 37)
+
+    assert core.hourly_away_report_slot_due(before) is None
+    seven_slot = core.hourly_away_report_slot_due(at_seven)
+    assert seven_slot == "2026-07-02|07:00"
+    assert core.hourly_away_report_slot_due(at_seven, last_completed_slot=seven_slot) is None
+    assert core.hourly_away_report_slot_due(catch_up, last_completed_slot=seven_slot) == "2026-07-02|08:00"
+    assert core.hourly_away_report_slot_due(datetime(2026, 7, 2, 14, 0)) is None
+    assert core.hourly_away_report_slot_due(datetime(2026, 7, 4, 9, 0)) is None
 
 
 def test_tracker_writes_only_in_the_final_hour_slots():
@@ -82,6 +98,21 @@ def test_append_watchlist_symbols(tmp_path):
     added = core.append_watchlist_symbols(target, ["msft", "NVDA", "AMD"])
     assert added == ["NVDA", "AMD"]
     assert target.read_text(encoding="utf-8").split() == ["AAPL", "MSFT", "NVDA", "AMD"]
+
+
+def test_watchlist_atomic_replace_preserves_previous_file_on_failure(tmp_path, monkeypatch):
+    target = tmp_path / "longs.txt"
+    target.write_text("AAPL\n", encoding="utf-8")
+
+    def fail_replace(_source, _target):
+        raise OSError("simulated shared-drive replace failure")
+
+    monkeypatch.setattr(core.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated shared-drive"):
+        core.write_watchlist_file(target, ["NVDA"])
+
+    assert target.read_text(encoding="utf-8") == "AAPL\n"
+    assert list(tmp_path.glob(".longs.txt.*.tmp")) == []
 
 
 def test_render_away_report_is_phone_digestible():

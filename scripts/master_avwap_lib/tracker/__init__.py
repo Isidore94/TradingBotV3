@@ -7,6 +7,9 @@ expose_legacy_names(
     (
         "load_setup_tracker_payload",
         "save_setup_tracker_payload",
+        "build_setup_tracker_scoring_payload",
+        "load_setup_tracker_scoring_payload",
+        "save_setup_tracker_scoring_payload",
         "build_tracker_setup_record",
         "recompute_tracker_setup_record",
         "build_recent_tracker_setup_family_rows",

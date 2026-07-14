@@ -1,5 +1,7 @@
 """Plan.md 23.8: verified atomic away-report publication."""
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -40,6 +42,9 @@ def test_publish_is_verified_and_archived(tmp_path):
     assert "Freshness: next planned update 10:00" in text
     archive = list((tmp_path / "away_report_archive").glob("autopilot_today_*.txt"))
     assert len(archive) == 1
+    metadata = json.loads((tmp_path / "autopilot_today.txt.meta.json").read_text(encoding="utf-8"))
+    assert metadata["schema"] == "away_report_publish_v1"
+    assert metadata["sha256"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def test_render_failure_never_clears_previous_valid_report(tmp_path, monkeypatch):
@@ -72,3 +77,87 @@ def test_write_away_report_compat_wrapper_still_returns_path(tmp_path):
     path = core.write_away_report(_payload(), target)
     assert path == target
     assert target.exists()
+
+
+def test_readback_mismatch_restores_previous_verified_report(tmp_path, monkeypatch):
+    target = tmp_path / "autopilot_today.txt"
+    assert core.publish_away_report(_payload(generated_at="first"), target)["ok"]
+    before = target.read_bytes()
+    real_replace = core.os.replace
+    target_replacements = 0
+
+    def corrupt_first_target_replace(source, destination):
+        nonlocal target_replacements
+        real_replace(source, destination)
+        if Path(destination) == target and target_replacements == 0:
+            target_replacements += 1
+            target.write_text("corrupted after replace", encoding="utf-8")
+
+    monkeypatch.setattr(core.os, "replace", corrupt_first_target_replace)
+    result = core.publish_away_report(_payload(generated_at="second"), target)
+
+    assert result["ok"] is False
+    assert result["restored_previous"] is True
+    assert target.read_bytes() == before
+
+
+def test_metadata_write_failure_restores_whole_previous_publication(tmp_path, monkeypatch):
+    target = tmp_path / "autopilot_today.txt"
+    metadata_path = tmp_path / "autopilot_today.txt.meta.json"
+    assert core.publish_away_report(_payload(generated_at="first"), target)["ok"]
+    before_report = target.read_bytes()
+    before_metadata = metadata_path.read_bytes()
+    real_replace = core.os.replace
+
+    def fail_new_metadata_replace(source, destination):
+        if Path(destination) == metadata_path:
+            raise OSError("simulated metadata replace failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(core.os, "replace", fail_new_metadata_replace)
+    result = core.publish_away_report(_payload(generated_at="second"), target)
+
+    assert result["ok"] is False
+    assert result["restored_previous"] is True
+    assert target.read_bytes() == before_report
+    assert metadata_path.read_bytes() == before_metadata
+
+
+def test_phone_digest_includes_operational_and_tracker_truth():
+    text = core.render_away_report(
+        _payload(
+            runtime_line="Runtime: DESKTOP pid=123",
+            operations_line="Health: DEGRADED",
+            last_scan_line="Last scan: 13:00 ok in 18.5m",
+            swing_data_line="Swing data: awaiting today's first completed scan.",
+            tracker_line="Tracker: WRITE SKIPPED - non-IBKR daily data",
+        )
+    )
+
+    assert "Health: DEGRADED" in text
+    assert "Last scan: 13:00 ok in 18.5m" in text
+    assert "awaiting today's first completed scan" in text
+    assert "Tracker: WRITE SKIPPED" in text
+
+
+def test_operations_audit_is_condensed_for_phone_report():
+    lines = core.build_away_operations_lines(
+        {
+            "status": "degraded",
+            "summary": {"healthy": 5, "degraded": 1, "unhealthy": 0},
+            "latest_manifest": {
+                "trigger": "Auto Pilot swing scan (13:00, WITH setup-tracker write)",
+                "status": "ok",
+                "total_seconds": 1110,
+                "counters": {
+                    "update_setup_tracker": True,
+                    "setup_tracker_updated": False,
+                },
+                "outputs": {"setup_tracker_skip_reason": "IBKR daily bars unavailable"},
+            },
+        }
+    )
+
+    assert lines["operations_line"].startswith("Health: DEGRADED")
+    assert "18.5m" in lines["last_scan_line"]
+    assert lines["tracker_line"] == "Tracker: WRITE SKIPPED - IBKR daily bars unavailable"

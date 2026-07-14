@@ -183,7 +183,22 @@ class AutopilotPanel(QFrame):
         else:
             done_at = snapshot.get("wrapup_done_at") or ""
             self.wrapup_value.setText(f"done at {done_at}" if done_at else "pending (after the last slot)")
-        self.report_value.setText(str(snapshot.get("report_path", "")))
+        report_path = str(snapshot.get("report_path", ""))
+        report_error = str(snapshot.get("report_error") or "")
+        report_attempt = str(snapshot.get("report_last_attempt") or "")
+        report_verified = str(snapshot.get("report_last_verified") or "")
+        if report_error:
+            verified_note = f"; last verified {report_verified}" if report_verified else "; no verified write this run"
+            self.report_value.setText(
+                f"{report_path}\nFAILED at {report_attempt or 'unknown'}: {report_error}{verified_note}"
+            )
+            self.report_value.setStyleSheet("color: #E06C75;")
+        elif report_verified:
+            self.report_value.setText(f"{report_path}\nverified {report_verified}")
+            self.report_value.setStyleSheet("color: #58C777;")
+        else:
+            self.report_value.setText(f"{report_path}\nnot verified in this app run")
+            self.report_value.setStyleSheet("color: #E5C07B;")
 
     def shutdown(self) -> None:
         self._refresh_timer.stop()

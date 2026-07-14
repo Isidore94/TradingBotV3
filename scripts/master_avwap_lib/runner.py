@@ -34,6 +34,25 @@ def _log_phase_duration(label: str, since: float) -> float:
     return now
 
 
+def _sanitize_existing_avwap_signal_rows(frame):
+    """Drop malformed legacy history rows before they re-enter every scan."""
+    if frame is None or frame.empty:
+        return frame, 0
+    from side_types import Side, parse_side
+
+    cleaned = frame.copy()
+    parsed_sides = cleaned["side"].map(parse_side)
+    valid_side = parsed_sides.isin((Side.LONG, Side.SHORT))
+    valid_run_date = pd.to_datetime(cleaned["run_date"], format="%Y-%m-%d", errors="coerce").notna()
+    valid_trade_date = pd.to_datetime(cleaned["trade_date"], format="%Y-%m-%d", errors="coerce").notna()
+    valid_symbol = cleaned["symbol"].fillna("").astype(str).str.fullmatch(r"[A-Za-z0-9.\-]{1,15}")
+    valid = valid_side & valid_run_date & valid_trade_date & valid_symbol
+    dropped = int((~valid).sum())
+    cleaned = cleaned.loc[valid].copy()
+    cleaned["side"] = parsed_sides.loc[valid].map(lambda side: side.value)
+    return cleaned, dropped
+
+
 def run_master_with_shared_watchlists():
     return run_master(use_shared_watchlists=True)
 
@@ -1623,19 +1642,20 @@ def _run_master_impl(
     # each re-parse the file. update_setup_tracker_from_scan mutates + saves this same
     # object below, so calibrate_expected_r_prior_anchors then reads the post-update
     # state in memory with no extra reload.
-    tracker_payload = load_setup_tracker_payload()
+    tracker_scoring_payload = load_setup_tracker_scoring_payload()
+    tracker_payload = None
     recent_family_rows = apply_recent_tracker_setup_family_adjustments(
         priority_rows,
         ai_state,
         feature_rows_by_symbol,
-        tracker_payload=tracker_payload,
+        tracker_payload=tracker_scoring_payload,
         reference_date=today_run,
     )
     apply_tracker_setup_type_adjustments(
         priority_rows,
         ai_state,
         feature_rows_by_symbol,
-        tracker_payload=tracker_payload,
+        tracker_payload=tracker_scoring_payload,
     )
     # BounceBot's intraday SPY-pause defiance observations (today only) ride
     # in as capped swing-row evidence before the guardrails/caps run.
@@ -1664,6 +1684,7 @@ def _run_master_impl(
         ai_state,
         feature_rows_by_symbol,
         recent_family_rows=recent_family_rows,
+        reference_date=today_run,
     )
     # Study rows are pre-ranking shallow copies; refresh their score/ExpR so
     # capped originals don't leave stale stacked scores on the study clones.
@@ -1812,6 +1833,10 @@ def _run_master_impl(
 
     _phase_t = _log_phase_duration("tracker scoring+ranking", _phase_t)
     if setup_tracker_allowed:
+        # The compact snapshot is sufficient for scoring. Only final-hour runs
+        # that actually passed the source-quality gate pay to load the large
+        # authoritative tracker for mutation and publication.
+        tracker_payload = load_setup_tracker_payload()
         control_rows = select_tracker_control_rows(
             priority_rows,
             tracked_rows,
@@ -1872,6 +1897,7 @@ def _run_master_impl(
 
     _phase_t = _log_phase_duration("tracker update+calibrate", _phase_t)
     disconnect_daily_data_client(ib)
+    _output_t = time.perf_counter()
 
     if csv_rows:
         df_signals = pd.DataFrame(csv_rows)
@@ -1882,13 +1908,24 @@ def _run_master_impl(
         if AVWAP_SIGNALS_FILE.exists() and AVWAP_SIGNALS_FILE.stat().st_size > 0:
             existing_signals = pd.read_csv(AVWAP_SIGNALS_FILE)
             existing_signals = existing_signals.reindex(columns=AVWAP_CSV_COLUMNS)
+            existing_signals, invalid_signal_rows = _sanitize_existing_avwap_signal_rows(existing_signals)
+            if invalid_signal_rows:
+                logging.warning(
+                    "Dropped %d malformed AVWAP signal-history row(s) before publication.",
+                    invalid_signal_rows,
+                )
+                try:
+                    from diagnostics import get_active_recorder
+
+                    recorder = get_active_recorder()
+                    if recorder is not None:
+                        recorder.incr("avwap_signal_rows_invalid_dropped", invalid_signal_rows)
+                except Exception:
+                    pass
             df_signals = pd.concat([existing_signals, df_signals], ignore_index=True)
             df_signals.sort_values(["run_date", "trade_date", "symbol", "signal_type"], inplace=True)
 
-        df_signals.to_csv(
-            AVWAP_SIGNALS_FILE,
-            index=False,
-        )
+        _write_dataframe_csv_atomic(df_signals, AVWAP_SIGNALS_FILE, index=False)
         logging.info(
             f"Appended {new_signal_count} AVWAP signals to {AVWAP_SIGNALS_FILE} "
             f"({len(df_signals)} total rows)."
@@ -1897,6 +1934,7 @@ def _run_master_impl(
         logging.info(
             f"No AVWAP signals generated for {today_run.isoformat()}; nothing appended."
         )
+    _output_t = _log_phase_duration("output/signals", _output_t)
 
     # trim history to last N days
     trim_history(history)
@@ -1991,6 +2029,7 @@ def _run_master_impl(
     )
     write_market_prep_files(market_prep_payload)
     run_result["market_prep_payload"] = market_prep_payload
+    _output_t = _log_phase_duration("output/reports", _output_t)
 
     feature_columns = [
         "symbol",
@@ -2181,7 +2220,7 @@ def _run_master_impl(
     ]
 
     df_features = pd.DataFrame(feature_rows, columns=feature_columns)
-    df_features.to_csv(D1_FEATURES_FILE, index=False)
+    _write_dataframe_csv_atomic(df_features, D1_FEATURES_FILE, index=False)
     append_d1_feature_history(
         df_features,
         {
@@ -2193,8 +2232,15 @@ def _run_master_impl(
             "scoring_config_updated_at": scoring_config_metadata.get("updated_at", ""),
         },
     )
+    _output_t = _log_phase_duration("output/feature-history", _output_t)
+    shared_history_df = None
+    shared_observation_rows = None
+    shared_leaderboard_rows = None
     try:
-        scan_factor_result = export_scan_factor_views()
+        scan_factor_result = export_scan_factor_views(include_data=True)
+        shared_history_df = scan_factor_result.pop("_history_df", None)
+        shared_observation_rows = scan_factor_result.pop("_observation_rows", None)
+        shared_leaderboard_rows = scan_factor_result.pop("_leaderboard_rows", None)
         run_result["scan_factor_observation_count"] = int(scan_factor_result.get("observation_count", 0) or 0)
         run_result["scan_factor_leaderboard_count"] = int(scan_factor_result.get("leaderboard_count", 0) or 0)
         logging.info(
@@ -2206,8 +2252,13 @@ def _run_master_impl(
         run_result["scan_factor_observation_count"] = 0
         run_result["scan_factor_leaderboard_count"] = 0
         logging.exception("Scan factor tracker export failed.")
+    _output_t = _log_phase_duration("output/scan-factors", _output_t)
     try:
-        tier_tracker_result = export_bot_tier_tracker_views()
+        tier_tracker_result = export_bot_tier_tracker_views(
+            history_df=shared_history_df,
+            observation_rows=shared_observation_rows,
+            leaderboard_rows=shared_leaderboard_rows,
+        )
         run_result["tier_pick_count"] = int(tier_tracker_result.get("tier_pick_count", 0) or 0)
         run_result["tier_outcome_count"] = int(tier_tracker_result.get("tier_outcome_count", 0) or 0)
         run_result["tier_catch_rate_count"] = int(tier_tracker_result.get("tier_catch_rate_count", 0) or 0)
@@ -2222,6 +2273,7 @@ def _run_master_impl(
         run_result["tier_outcome_count"] = 0
         run_result["tier_catch_rate_count"] = 0
         logging.exception("Bot tier tracker export failed.")
+    _output_t = _log_phase_duration("output/tier-tracker", _output_t)
 
     positions_payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -2236,8 +2288,7 @@ def _run_master_impl(
         },
     }
 
-    with open(MASTER_POSITIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(positions_payload, f, indent=2)
+    save_json(MASTER_POSITIONS_FILE, positions_payload, pretty=True)
 
     save_json(CURRENT_CACHE_FILE, curr_cache)
     save_json(PREV_CACHE_FILE, prev_cache)
@@ -2258,6 +2309,8 @@ def _run_master_impl(
     run_result["theta_enrichment_pending"] = theta_enrichment_pending
     if not theta_enrichment_pending:
         run_result["theta_enrichment_mode"] = "not_needed"
+
+    _log_phase_duration("output/state", _output_t)
 
     _phase_t = _log_phase_duration("output writes", _phase_t)
     _log_phase_duration("TOTAL (theta enrichment deferred)", _run_t0)
@@ -2315,6 +2368,12 @@ def run_master(
             recorder.outputs["watchlist_label"] = str(result.get("watchlist_label") or "")
             recorder.set_counter(
                 "setup_tracker_updated", bool(result.get("setup_tracker_updated"))
+            )
+            recorder.set_counter(
+                "setup_tracker_allowed", bool(result.get("setup_tracker_allowed"))
+            )
+            recorder.outputs["setup_tracker_skip_reason"] = str(
+                result.get("setup_tracker_skip_reason") or ""
             )
         recorder.finalize(status="ok")
         return result

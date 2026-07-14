@@ -32,6 +32,9 @@ def test_legacy_coercion_counts_into_run_manifest():
         clear_active_recorder()
     assert recorder.counters.get("side_coercions_invalid") == 1
     assert recorder.counters.get("side_coercions_empty") == 1
+    assert recorder.outputs["invalid_side_values"] == {
+        "LNOG": {"count": 1, "contexts": []}
+    }
 
 
 def test_master_normalize_side_keeps_valid_behavior():

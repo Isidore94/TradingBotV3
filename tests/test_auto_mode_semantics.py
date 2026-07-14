@@ -73,6 +73,47 @@ def test_away_profile_changes_labels_not_decisions():
     assert desk.auto_mode == "DESK" and away.auto_mode == "AWAY"
 
 
+def test_only_away_profile_runs_the_hourly_google_drive_report():
+    from datetime import datetime
+
+    writes = []
+    away = _bare_service(enabled=True, profile=AUTO_PROFILE_AWAY)
+    away._state = {"hourly_report_slot": None}
+    away._write_report = lambda: writes.append("write") or {"ok": True}
+    away._save_state = lambda: None
+    away._log = lambda _message: None
+
+    moment = datetime(2026, 7, 10, 7, 0)
+    away._maybe_hourly_away_report(moment)
+    away._maybe_hourly_away_report(moment)
+
+    assert writes == ["write"]
+    assert away._state["hourly_report_slot"] == "2026-07-10|07:00"
+
+    desk = _bare_service(enabled=True, profile=AUTO_PROFILE_DESK)
+    desk._write_report = lambda: writes.append("desk") or {"ok": True}
+    desk._maybe_hourly_away_report(datetime(2026, 7, 10, 8, 0))
+    assert writes == ["write"]
+
+
+def test_day_roll_preserves_away_profile_and_resets_hourly_report_slot():
+    service = _bare_service(enabled=True, profile=AUTO_PROFILE_AWAY)
+    service._state = {
+        "date": "2000-01-01",
+        "hourly_report_slot": "2000-01-01|13:00",
+        "autopilot_written": {"longs": ["AAPL"], "shorts": []},
+    }
+    service._scorecard_line = "old"
+    service._alerts_date = "2000-01-01"
+    service._alerts_today = []
+    service._save_state = lambda: None
+
+    service._roll_day_state()
+
+    assert service._state["profile"] == AUTO_PROFILE_AWAY
+    assert service._state["hourly_report_slot"] is None
+
+
 def test_report_header_renders_mode_labels():
     import autopilot_core as core
 
@@ -96,6 +137,7 @@ def test_report_header_renders_mode_labels():
     assert "Mode: OFF" in off
     assert "Mode: AUTO - DESK" in desk
     assert "Mode: AUTO - AWAY" in away
+    assert "hourly from 07:00 local" in away
 
 
 def test_status_snapshot_does_not_advertise_the_active_slot_as_next(monkeypatch):

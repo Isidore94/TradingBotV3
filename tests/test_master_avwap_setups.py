@@ -5664,6 +5664,35 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertEqual(tier_list.loc[0, "tier"], "S")
             self.assertIn("side_return_pct", tier_outcomes.columns)
 
+    def test_tier_export_reuses_precomputed_scan_factor_data_without_history_reread(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history = pd.DataFrame(
+                [
+                    {"run_id": "r1", "run_date": "2026-01-02", "symbol": "AAPL", "side": "LONG", "last_trade_date": "2026-01-02", "last_close": 100.0, "priority_bucket": "favorite_setup", "priority_score": 150.0},
+                    {"run_id": "r2", "run_date": "2026-01-05", "symbol": "AAPL", "side": "LONG", "last_trade_date": "2026-01-05", "last_close": 104.0, "priority_bucket": "favorite_setup", "priority_score": 150.0},
+                ]
+            )
+            observations = build_scan_factor_observation_rows(history)
+            leaderboard = build_scan_factor_leaderboard_rows(
+                history, observations, min_observations=1
+            )
+
+            result = export_bot_tier_tracker_views(
+                history_path=temp_path / "does-not-exist.csv",
+                tier_list_path=temp_path / "tier_list.csv",
+                tier_outcomes_path=temp_path / "tier_outcomes.csv",
+                tier_performance_path=temp_path / "tier_performance.csv",
+                tier_catch_rate_path=temp_path / "tier_catch_rate.csv",
+                min_observations=1,
+                history_df=history,
+                observation_rows=observations,
+                leaderboard_rows=leaderboard,
+            )
+
+            self.assertEqual(result["tier_pick_count"], 1)
+            self.assertTrue((temp_path / "tier_list.csv").exists())
+
     def test_append_user_favorites_logs_against_current_bot_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             feedback_path = Path(temp_dir) / "user_favorites.csv"

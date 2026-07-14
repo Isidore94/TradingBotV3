@@ -7,6 +7,7 @@ The large setup-tracker payload is intentionally outside this audit.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import tempfile
@@ -19,10 +20,12 @@ from typing import Any
 from diagnostics.run_manifest import load_recent_manifests
 from job_ledger import JobLedger
 from market_session import get_market_local_timezone, get_market_session_window, normalize_market_local_datetime
-from project_paths import CACHE_DIR, get_diagnostics_dir
+from project_paths import AUTOPILOT_REPORT_FILE, AUTOPILOT_STATE_FILE, CACHE_DIR, get_diagnostics_dir
 
 
 AUDIT_SCHEMA = "operations_audit_v1"
+AWAY_REPORT_DEGRADED_AFTER_MINUTES = 75.0
+AWAY_REPORT_UNHEALTHY_AFTER_MINUTES = 120.0
 _STATUS_ORDER = {"healthy": 0, "degraded": 1, "unhealthy": 2}
 
 
@@ -175,6 +178,11 @@ def _manifest_check(path: Path, market_date: str, now: datetime, local_tz, runni
     ended = latest.get("ended_at") or latest.get("started_at") or ""
     age = _age_minutes(ended, now, local_tz)
     latest_status = str(latest.get("status") or "").strip().lower()
+    counters = latest.get("counters") if isinstance(latest.get("counters"), dict) else {}
+    outputs = latest.get("outputs") if isinstance(latest.get("outputs"), dict) else {}
+    tracker_write_requested = counters.get("update_setup_tracker") is True
+    tracker_updated = counters.get("setup_tracker_updated") is True
+    tracker_skip_reason = str(outputs.get("setup_tracker_skip_reason") or "").strip()
     if latest_status not in {"ok", "success", "completed"}:
         status = "unhealthy"
     elif age is None:
@@ -183,11 +191,15 @@ def _manifest_check(path: Path, market_date: str, now: datetime, local_tz, runni
         status = "degraded"
     else:
         status = "healthy"
+    if status == "healthy" and tracker_write_requested and not tracker_updated:
+        status = "degraded"
     summary = (
         f"{latest.get('job_type') or 'scan'} {latest_status or 'unknown'}; "
         f"{float(latest.get('total_seconds') or 0.0) / 60.0:.1f}m; "
         f"{('unknown age' if age is None else f'{age:.1f}m old')}."
     )
+    if tracker_write_requested and not tracker_updated:
+        summary += " Requested setup-tracker write skipped."
     return (
         _check(
             "run_manifest",
@@ -202,11 +214,92 @@ def _manifest_check(path: Path, market_date: str, now: datetime, local_tz, runni
                 "status": latest_status,
                 "error": latest.get("error") or "",
                 "total_seconds": latest.get("total_seconds"),
-                "counters": latest.get("counters") or {},
+                "counters": counters,
+                "setup_tracker_skip_reason": tracker_skip_reason or "No skip reason recorded.",
                 "age_minutes": round(age, 2) if age is not None else None,
             },
         ),
         latest,
+    )
+
+
+def _away_report_check(
+    report_path: Path,
+    state_path: Path,
+    now: datetime,
+    local_tz,
+    market_phase: str,
+) -> dict[str, Any]:
+    state = _read_json(state_path) or {}
+    enabled = bool(state.get("enabled"))
+    if not report_path.exists():
+        status = "unhealthy" if enabled else "degraded"
+        return _check(
+            "away_report",
+            "Away report",
+            status,
+            "Report is missing." if enabled else "Report is missing; Auto Pilot is disabled.",
+            source=report_path,
+            details={"enabled": enabled},
+        )
+
+    metadata_path = report_path.with_suffix(report_path.suffix + ".meta.json")
+    metadata = _read_json(metadata_path)
+    verified_at = metadata.get("verified_at") if isinstance(metadata, dict) else None
+    if verified_at is None:
+        try:
+            verified_at = datetime.fromtimestamp(report_path.stat().st_mtime).isoformat()
+        except OSError:
+            verified_at = ""
+    age = _age_minutes(verified_at, now, local_tz)
+    hash_ok = None
+    if isinstance(metadata, dict) and metadata.get("sha256"):
+        try:
+            actual = hashlib.sha256(report_path.read_bytes()).hexdigest()
+            hash_ok = actual == str(metadata.get("sha256"))
+        except OSError:
+            hash_ok = False
+
+    if hash_ok is False:
+        status = "unhealthy"
+        summary = "Verified-publication hash no longer matches the report."
+    elif not isinstance(metadata, dict):
+        status = "degraded"
+        summary = "Report exists, but verified-publication metadata is missing."
+    elif not enabled:
+        status = "healthy"
+        summary = "Auto Pilot disabled; last verified Away report retained."
+    elif age is None:
+        status = "degraded"
+        summary = "Report exists, but verified freshness is unknown."
+    elif market_phase == "regular" and age > AWAY_REPORT_UNHEALTHY_AFTER_MINUTES:
+        status = "unhealthy"
+        summary = f"Report is {age:.1f}m old during the market session."
+    elif market_phase == "regular" and age > AWAY_REPORT_DEGRADED_AFTER_MINUTES:
+        status = "degraded"
+        summary = f"Report is {age:.1f}m old during the market session."
+    elif age > 24 * 60:
+        status = "degraded"
+        summary = f"Last verified report is {age / 60.0:.1f}h old."
+    else:
+        status = "healthy"
+        summary = f"Verified report is {age:.1f}m old." if age is not None else "Verified report is current."
+    return _check(
+        "away_report",
+        "Away report",
+        status,
+        summary,
+        source=report_path,
+        updated_at=str(verified_at or ""),
+        details={
+            "enabled": enabled,
+            "profile": state.get("profile") or "",
+            "metadata_path": str(metadata_path),
+            "hash_verified": hash_ok,
+            "age_minutes": round(age, 2) if age is not None else None,
+            "holder": metadata.get("holder") if isinstance(metadata, dict) else "",
+            "lease_expires_at": metadata.get("lease_expires_at") if isinstance(metadata, dict) else "",
+        },
     )
 
 
@@ -300,12 +393,20 @@ def build_operations_audit(
     now: datetime | None = None,
     diagnostics_dir: Path | str | None = None,
     candidate_registry_path: Path | str | None = None,
+    away_report_path: Path | str | None = None,
+    autopilot_state_path: Path | str | None = None,
 ) -> dict[str, Any]:
     local_tz, timezone_name = get_market_local_timezone()
     moment = normalize_market_local_datetime(now, local_timezone=local_tz)
     market_phase, session = _phase(moment)
     diagnostics = Path(diagnostics_dir) if diagnostics_dir is not None else get_diagnostics_dir()
     registry_path = Path(candidate_registry_path) if candidate_registry_path is not None else CACHE_DIR.parent / "candidate_registry.json"
+    report_path = Path(away_report_path) if away_report_path is not None else (
+        diagnostics / "autopilot_today.txt" if diagnostics_dir is not None else Path(AUTOPILOT_REPORT_FILE)
+    )
+    auto_state_path = Path(autopilot_state_path) if autopilot_state_path is not None else (
+        diagnostics / "autopilot_state.json" if diagnostics_dir is not None else Path(AUTOPILOT_STATE_FILE)
+    )
     market_date = session.market_date.isoformat()
 
     heartbeat = _heartbeat_check(diagnostics / "heartbeat.json", moment, local_tz)
@@ -318,6 +419,7 @@ def build_operations_audit(
         heartbeat,
         ledger,
         manifest,
+        _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
         _shadow_check(
             check_id="spy_shadow",
             label="SPY state shadow",

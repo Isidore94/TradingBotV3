@@ -29,11 +29,31 @@ def test_two_writers_cannot_hold_the_same_lease(tmp_path):
 def test_expired_lease_is_takeable_and_takeover_is_explicit(tmp_path):
     lease = tmp_path / "report.lease"
     wl.acquire(lease, holder="home", ttl_minutes=10, now=NOW)
-    grabbed = wl.acquire(lease, holder="mini-pc", now=NOW + timedelta(minutes=11))
+    grabbed = wl.acquire(lease, holder="mini-pc", now=NOW + timedelta(minutes=13))
     assert grabbed["holder"] == "mini-pc"
     # forced takeover before expiry must be explicit
-    forced = wl.acquire(lease, holder="home", now=NOW + timedelta(minutes=12), takeover=True)
+    forced = wl.acquire(lease, holder="home", now=NOW + timedelta(minutes=14), takeover=True)
     assert forced["holder"] == "home" and forced["takeover"] is True
+
+
+def test_bounded_clock_skew_cannot_cause_premature_takeover(tmp_path):
+    lease = tmp_path / "report.lease"
+    wl.acquire(lease, holder="home", ttl_minutes=10, now=NOW)
+
+    with pytest.raises(wl.LeaseUnavailable):
+        wl.acquire(lease, holder="mini-pc", now=NOW + timedelta(minutes=11))
+    assert wl.holder_of(lease, now=NOW + timedelta(minutes=11)) == "home"
+
+
+def test_sleeping_holder_reacquires_before_its_next_publish(tmp_path):
+    lease = tmp_path / "report.lease"
+    wl.acquire(lease, holder="home", ttl_minutes=10, now=NOW)
+
+    assert wl.holder_of(lease, now=NOW + timedelta(minutes=13)) is None
+    resumed = wl.acquire(lease, holder="home", ttl_minutes=10, now=NOW + timedelta(minutes=13))
+    assert resumed["holder"] == "home"
+    with pytest.raises(wl.LeaseUnavailable):
+        wl.acquire(lease, holder="mini-pc", now=NOW + timedelta(minutes=14))
 
 
 def test_release_never_drops_someone_elses_lease(tmp_path):

@@ -123,6 +123,8 @@ Still remaining from Phase 1:
 - Restart replay and stale-run marking.
 - Scan-child ownership and bounded reaping.
 - Verified atomic Away report replacement.
+- Transactional Away report plus verification-metadata publication with
+  readback validation and rollback of the previous verified pair.
 - Hash readback verification and bounded report archive.
 - Honest freshness headers and last-attempt versus last-success state.
 - Runtime heartbeat.
@@ -233,7 +235,8 @@ The lease substantially reduces accidental collisions, but a Drive-synchronized 
 
 - acquisition currently reads state and then atomically replaces the lease file;
 - two machines can race before synchronization converges;
-- unexpected lease errors currently degrade to publishing rather than failing closed;
+- unexpected lease errors now fail closed; the live Drive behavior still needs
+  the two-machine validation below;
 - clock skew, sleep/wake, stale files, and delayed sync can change takeover behavior.
 
 Until the two-machine drills in Section 6 pass, describe this as cross-machine writer protection, not a proof that clobbering is impossible.

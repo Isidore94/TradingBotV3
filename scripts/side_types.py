@@ -52,6 +52,14 @@ def coerce_side_legacy(value, *, default: Side = Side.LONG, context: str = "") -
         recorder = get_active_recorder()
         if recorder is not None:
             recorder.incr(counter)
+            if text:
+                evidence = recorder.outputs.setdefault("invalid_side_values", {})
+                key = text[:80]
+                item = evidence.setdefault(key, {"count": 0, "contexts": []})
+                item["count"] = int(item.get("count", 0) or 0) + 1
+                context_text = str(context or "").strip()
+                if context_text and context_text not in item["contexts"]:
+                    item["contexts"].append(context_text)
     except Exception:
         pass
     if text and text not in _warned_values:

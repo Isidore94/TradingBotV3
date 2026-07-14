@@ -24,6 +24,7 @@ rendering are pure; the yfinance fetchers accept an injectable downloader.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import tempfile
@@ -140,6 +141,33 @@ def minutes_since_open(
 # this local hour. Arming once per day means a manual OFF sticks for the rest
 # of that day - the trader's hand always wins.
 AUTOPILOT_AUTO_ARM_HOUR = 7
+AUTOPILOT_AWAY_REPORT_START_HOUR = 7
+
+
+def hourly_away_report_slot_due(
+    now: datetime,
+    *,
+    last_completed_slot: str | None = None,
+    start_hour: int = AUTOPILOT_AWAY_REPORT_START_HOUR,
+    local_timezone_name: str | None = None,
+) -> str | None:
+    """Return the current hourly report slot once, from 07:00 through close.
+
+    Starting the app partway through an hour performs one catch-up publication
+    for that hour. The persisted date in the slot key prevents yesterday's
+    completion marker from suppressing today's report.
+    """
+    if now.weekday() >= 5 or now.hour < int(start_hour):
+        return None
+    session = get_market_session_window(
+        reference=now,
+        local_timezone_name=local_timezone_name,
+    )
+    close_naive = session.close_local.replace(tzinfo=None)
+    if now.hour > close_naive.hour:
+        return None
+    slot = f"{now.date().isoformat()}|{now.hour:02d}:00"
+    return None if str(last_completed_slot or "") == slot else slot
 
 
 def autopilot_auto_arm_due(
@@ -1048,7 +1076,24 @@ def write_watchlist_file(path: Path, symbols: Iterable[str]) -> None:
             seen.add(symbol)
             cleaned.append(symbol)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(cleaned) + ("\n" if cleaned else ""), encoding="utf-8")
+    payload = "\n".join(cleaned) + ("\n" if cleaned else "")
+    fd, staged_name = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged_name, path)
+    finally:
+        if os.path.exists(staged_name):
+            try:
+                os.remove(staged_name)
+            except OSError:
+                pass
 
 
 def append_watchlist_symbols(path: Path, symbols: Iterable[str]) -> list[str]:
@@ -1186,6 +1231,44 @@ def _mirror_auto_picks_into_registry(longs: list[str], shorts: list[str]) -> Non
 # ---------------------------------------------------------------------------
 # Away report (shared Google Drive digest)
 # ---------------------------------------------------------------------------
+def build_away_operations_lines(audit: Mapping[str, Any] | None) -> dict[str, str]:
+    """Condense the local operations audit into phone-sized truthful lines."""
+    payload = audit if isinstance(audit, Mapping) else {}
+    status = str(payload.get("status") or "unknown").upper()
+    summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    operations_line = (
+        f"Health: {status} "
+        f"({int(summary.get('healthy', 0) or 0)} healthy, "
+        f"{int(summary.get('degraded', 0) or 0)} degraded, "
+        f"{int(summary.get('unhealthy', 0) or 0)} unhealthy)"
+    )
+
+    manifest = payload.get("latest_manifest") if isinstance(payload.get("latest_manifest"), Mapping) else {}
+    if manifest:
+        trigger = str(manifest.get("trigger") or manifest.get("job_type") or "scan")
+        manifest_status = str(manifest.get("status") or "unknown")
+        minutes = float(manifest.get("total_seconds") or 0.0) / 60.0
+        last_scan_line = f"Last scan: {trigger} | {manifest_status} | {minutes:.1f}m"
+    else:
+        last_scan_line = "Last scan: UNKNOWN - no manifest"
+
+    counters = manifest.get("counters") if isinstance(manifest.get("counters"), Mapping) else {}
+    outputs = manifest.get("outputs") if isinstance(manifest.get("outputs"), Mapping) else {}
+    if counters.get("update_setup_tracker") is True:
+        if counters.get("setup_tracker_updated") is True:
+            tracker_line = "Tracker: updated and verified by the latest requested scan"
+        else:
+            reason = str(outputs.get("setup_tracker_skip_reason") or "reason not recorded")
+            tracker_line = f"Tracker: WRITE SKIPPED - {reason}"
+    else:
+        tracker_line = "Tracker: latest scan was not a scheduled tracker-write slot"
+    return {
+        "operations_line": operations_line,
+        "last_scan_line": last_scan_line,
+        "tracker_line": tracker_line,
+    }
+
+
 def render_away_report(payload: Mapping[str, Any]) -> str:
     """Phone-first digest: tickers up top, operations detail below."""
 
@@ -1221,10 +1304,24 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     header_bits = [
         f"Mode: {mode_text} | IB: {payload.get('ib_status', 'unknown')} | Regime: {payload.get('regime', 'unknown')}",
     ]
+    if mode_text == "AUTO - AWAY":
+        header_bits.append(
+            "Report schedule: hourly from 07:00 local through market close; scan completions may add updates."
+        )
     if payload.get("universe_line"):
         header_bits.append(str(payload["universe_line"]))
     if payload.get("scorecard_line"):
         header_bits.append(str(payload["scorecard_line"]))
+    if payload.get("runtime_line"):
+        header_bits.append(str(payload["runtime_line"]))
+    if payload.get("operations_line"):
+        header_bits.append(str(payload["operations_line"]))
+    if payload.get("last_scan_line"):
+        header_bits.append(str(payload["last_scan_line"]))
+    if payload.get("swing_data_line"):
+        header_bits.append(str(payload["swing_data_line"]))
+    if payload.get("tracker_line"):
+        header_bits.append(str(payload["tracker_line"]))
 
     sections = [
         "TRADINGBOT AUTO PILOT - TODAY",
@@ -1279,14 +1376,26 @@ def publish_away_report(
     honest result instead of a path that may not have been written."""
 
     target = Path(path) if path is not None else Path(AUTOPILOT_REPORT_FILE)
-    result: dict[str, Any] = {"ok": False, "verified": False, "path": target, "error": ""}
+    metadata_path = target.with_suffix(target.suffix + ".meta.json")
+    result: dict[str, Any] = {
+        "ok": False,
+        "verified": False,
+        "path": target,
+        "error": "",
+        "holder": "",
+        "lease_expires_at": "",
+        "sha256": "",
+        "restored_previous": False,
+    }
     # Single-writer lease (plan.md Phase 2.9): the desk and the mini-PC both
     # publish this Drive export; a second machine must not clobber the active
     # writer. Lease problems degrade to an honest skip, never a crash.
     try:
         from writer_lease import LeaseUnavailable, acquire
 
-        acquire(target.with_suffix(target.suffix + ".lease"))
+        lease = acquire(target.with_suffix(target.suffix + ".lease"))
+        result["holder"] = str(lease.get("holder") or "")
+        result["lease_expires_at"] = str(lease.get("expires_at") or "")
     except LeaseUnavailable as exc:
         result["error"] = f"another machine is the active writer: {exc}"
         logging.info("Away report publish skipped: %s", result["error"])
@@ -1303,29 +1412,111 @@ def publish_away_report(
         result["error"] = f"render failed: {exc!r}"
         logging.exception("Away report render failed; previous report left untouched.")
         return result
+    previous_bytes = None
+    previous_metadata_bytes = None
+    try:
+        if target.exists():
+            previous_bytes = target.read_bytes()
+        if metadata_path.exists():
+            previous_metadata_bytes = metadata_path.read_bytes()
+    except OSError as exc:
+        result["error"] = f"could not preserve previous publication: {exc!r}"
+        logging.exception("Away report publish blocked because the previous publication was unreadable.")
+        return result
+
+    replaced = False
+    metadata_replaced = False
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-                handle.write(text)
+            report_bytes = text.encode("utf-8")
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(report_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            candidate = Path(tmp_name).read_bytes()
+            expected = hashlib.sha256(report_bytes).hexdigest()
+            candidate_hash = hashlib.sha256(candidate).hexdigest()
+            if candidate_hash != expected:
+                raise ValueError("staged report hash mismatch")
             os.replace(tmp_name, target)
+            replaced = True
         finally:
             if os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
                 except OSError:
                     pass
-        readback = target.read_text(encoding="utf-8")
-        expected = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        actual = hashlib.sha256(readback.encode("utf-8")).hexdigest()
-        result["verified"] = expected == actual
-        result["ok"] = result["verified"]
-        if not result["verified"]:
-            result["error"] = "readback hash mismatch"
+        readback = target.read_bytes()
+        actual = hashlib.sha256(readback).hexdigest()
+        if expected != actual:
+            raise ValueError("readback hash mismatch")
+        result["sha256"] = actual
+
+        metadata = {
+            "schema": "away_report_publish_v1",
+            "verified_at": datetime.now().isoformat(timespec="seconds"),
+            "report_generated_at": str(payload.get("generated_at") or ""),
+            "sha256": actual,
+            "bytes": len(readback),
+            "holder": result["holder"],
+            "lease_expires_at": result["lease_expires_at"],
+        }
+        metadata_bytes = (json.dumps(metadata, indent=1) + "\n").encode("utf-8")
+        fd, metadata_tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".meta.tmp")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(metadata_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(metadata_tmp, metadata_path)
+            metadata_replaced = True
+        finally:
+            if os.path.exists(metadata_tmp):
+                os.remove(metadata_tmp)
+        metadata_readback = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if (
+            metadata_readback.get("schema") != "away_report_publish_v1"
+            or metadata_readback.get("sha256") != actual
+            or metadata_readback.get("holder") != result["holder"]
+        ):
+            raise ValueError("publication metadata readback mismatch")
+        result["metadata_path"] = metadata_path
+        result["verified"] = True
+        result["ok"] = True
     except Exception as exc:
-        result["error"] = f"publish failed: {exc!r}"
+        result["ok"] = False
+        result["verified"] = False
+        result["error"] = str(exc) if isinstance(exc, ValueError) else f"publish failed: {exc!r}"
         logging.exception("Failed writing the Auto Pilot away report to %s", target)
+    if (replaced or metadata_replaced) and not result["ok"]:
+        try:
+            restore_items = []
+            if replaced:
+                restore_items.append((target, previous_bytes))
+            if metadata_replaced:
+                restore_items.append((metadata_path, previous_metadata_bytes))
+            for restore_target, restore_bytes in restore_items:
+                if restore_bytes is None:
+                    restore_target.unlink(missing_ok=True)
+                    continue
+                fd, restore_tmp = tempfile.mkstemp(
+                    dir=str(restore_target.parent), suffix=".restore.tmp"
+                )
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        handle.write(restore_bytes)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(restore_tmp, restore_target)
+                finally:
+                    if os.path.exists(restore_tmp):
+                        os.remove(restore_tmp)
+            result["restored_previous"] = True
+        except Exception as restore_exc:
+            result["error"] += f"; previous report restore failed: {restore_exc!r}"
+            logging.exception("Failed restoring the previous verified Away report.")
         return result
     if result["ok"] and archive:
         try:

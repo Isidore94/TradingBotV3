@@ -7,6 +7,7 @@ they live apart from the fast pure-math tests in ``test_expected_r.py``.
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -57,6 +58,53 @@ def _family_row_for(
 
 
 class ApplyExpectedRRankingTests(unittest.TestCase):
+    def test_signal_age_family_golden_cases(self):
+        reference = date(2026, 7, 13)
+        cases = [
+            ({"setup_family": "mid_earnings_ema15_retest", "mid_earnings_retest_date": "2026-07-09"}, 4, "2026-07-09"),
+            ({"setup_family": "sma_breakout_retest", "sma_breakout_breakout_date": "2026-07-05", "sma_breakout_retest_date": "2026-07-10", "sma_breakout_confirmation_date": "2026-07-12"}, 1, "2026-07-12"),
+            ({"setup_family": "post_earnings_avwap_bounce", "post_earnings_bounce_date": "2026-07-10"}, 3, "2026-07-10"),
+            ({"setup_family": "avwap_breakout", "last_trade_date": "2026-07-13"}, 0, "2026-07-13"),
+            ({"setup_family": "general"}, 0, ""),
+        ]
+
+        for row, expected_days, expected_date in cases:
+            with self.subTest(row=row):
+                days, signal_date = master_avwap._expected_r_signal_age(
+                    row, reference_date=reference
+                )
+                self.assertEqual(days, expected_days)
+                self.assertEqual(signal_date, expected_date)
+
+    def test_stale_dated_trigger_scores_below_fresh_trigger(self):
+        stale = _row("OLD", "LONG", "favorite_setup", "mid_earnings_ema15_retest", 140)
+        fresh = _row("NEW", "LONG", "favorite_setup", "mid_earnings_ema15_retest", 140)
+        stale["mid_earnings_retest_date"] = "2026-07-03"
+        fresh["mid_earnings_retest_date"] = "2026-07-13"
+        family_rows = [
+            _family_row_for(
+                stale,
+                closed=20,
+                avg_closed_r=1.0,
+                avg_total_r=0.9,
+                win_rate=0.60,
+                profit_factor=2.0,
+            )
+        ]
+
+        master_avwap.apply_expected_r_ranking(
+            [stale, fresh],
+            {"symbols": {}},
+            {},
+            recent_family_rows=family_rows,
+            reference_date=date(2026, 7, 13),
+        )
+
+        self.assertLess(stale["expected_r_freshness"], fresh["expected_r_freshness"])
+        self.assertLess(stale["score"], fresh["score"])
+        self.assertEqual(stale["expected_r_signal_date"], "2026-07-03")
+        self.assertEqual(stale["expected_r_signal_age_days"], 10)
+
     def test_attaches_expected_r_and_mirrors_to_state(self):
         row = _row("NVDA", "LONG", "favorite_setup", "post_earnings_52w_break", 150)
         family_rows = [_family_row_for(row, closed=9, avg_closed_r=1.4, avg_total_r=1.2, tracked=12)]

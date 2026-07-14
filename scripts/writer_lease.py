@@ -18,6 +18,7 @@ from pathlib import Path
 
 LEASE_SCHEMA = "writer_lease_v1"
 DEFAULT_TTL_MINUTES = 10
+DEFAULT_CLOCK_SKEW_SECONDS = 120
 
 
 def default_holder_id() -> str:
@@ -60,6 +61,7 @@ def acquire(
     *,
     holder: str | None = None,
     ttl_minutes: int = DEFAULT_TTL_MINUTES,
+    clock_skew_seconds: int = DEFAULT_CLOCK_SKEW_SECONDS,
     now: datetime | None = None,
     takeover: bool = False,
 ) -> dict:
@@ -76,7 +78,7 @@ def acquire(
             current.get("holder")
             and current["holder"] != holder
             and expires is not None
-            and expires > moment
+            and expires + timedelta(seconds=max(0, int(clock_skew_seconds))) > moment
         ):
             raise LeaseUnavailable(
                 f"{lease_path.name} held by {current['holder']} until {current['expires_at']}"
@@ -89,6 +91,7 @@ def acquire(
             timespec="seconds"
         ),
         "takeover": bool(takeover),
+        "clock_skew_seconds": max(0, int(clock_skew_seconds)),
     }
     _write(lease_path, payload)
     return payload
@@ -107,13 +110,22 @@ def release(lease_path: Path | str, *, holder: str | None = None) -> bool:
         return False
 
 
-def holder_of(lease_path: Path | str, *, now: datetime | None = None) -> str | None:
+def holder_of(
+    lease_path: Path | str,
+    *,
+    now: datetime | None = None,
+    clock_skew_seconds: int = DEFAULT_CLOCK_SKEW_SECONDS,
+) -> str | None:
     """Current unexpired holder, or None."""
     current = _read(Path(lease_path))
     if not current:
         return None
     expires = _parse_ts(current.get("expires_at"))
-    if expires is None or expires <= (now or datetime.now()):
+    if (
+        expires is None
+        or expires + timedelta(seconds=max(0, int(clock_skew_seconds)))
+        <= (now or datetime.now())
+    ):
         return None
     return str(current.get("holder") or "") or None
 

@@ -96,6 +96,7 @@ from project_paths import (
     MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE,
     REGIME_PAUSE_OBSERVATIONS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
+    MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE,
     MASTER_AVWAP_SETUP_SCENARIOS_FILE,
     MASTER_AVWAP_SETUP_DAILY_FILE,
     MASTER_AVWAP_SETUP_STATS_FILE,
@@ -334,6 +335,8 @@ TRADINGVIEW_REPORT_FILE = MASTER_AVWAP_TRADINGVIEW_REPORT_FILE
 MARKET_PREP_FILE = MASTER_AVWAP_MARKET_PREP_FILE
 MARKET_PREP_REPORT_FILE = MASTER_AVWAP_MARKET_PREP_REPORT_FILE
 SETUP_TRACKER_FILE = MASTER_AVWAP_SETUP_TRACKER_FILE
+TRACKER_SCORING_SNAPSHOT_FILE = MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
+TRACKER_SCORING_SNAPSHOT_SCHEMA_VERSION = 1
 SETUP_SCENARIOS_FILE = MASTER_AVWAP_SETUP_SCENARIOS_FILE
 SETUP_DAILY_FILE = MASTER_AVWAP_SETUP_DAILY_FILE
 SETUP_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE
@@ -1933,6 +1936,29 @@ def _write_text_atomic(path: Path, text: str, encoding: str = "utf-8") -> None:
         ) as handle:
             handle.write(text)
             temp_path = Path(handle.name)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+def _write_dataframe_csv_atomic(frame: pd.DataFrame, path: Path, **to_csv_kwargs) -> None:
+    """Write a DataFrame beside its destination and atomically replace it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+        frame.to_csv(temp_path, **to_csv_kwargs)
         os.replace(temp_path, path)
     finally:
         if temp_path is not None and temp_path.exists():
@@ -4328,6 +4354,113 @@ def load_setup_tracker_payload() -> dict:
     return tracker
 
 
+def _tracker_scoring_setup_projection(setup: dict) -> dict:
+    """Small, lossless-for-scoring projection of one large tracker record."""
+    entry_attributes = setup.get("entry_attributes") if isinstance(setup.get("entry_attributes"), dict) else {}
+    projected_attributes = {
+        key: entry_attributes.get(key)
+        for key in (
+            "levels.current_band_zone",
+            "trend.trend_20d",
+            "structure.previous_day_range_break",
+            "pattern.extreme_move_watch",
+        )
+        if key in entry_attributes
+    }
+    keys = (
+        "setup_id",
+        "symbol",
+        "side",
+        "scan_date",
+        "anchor_date",
+        "setup_status",
+        "priority_score",
+        "priority_bucket",
+        "setup_family",
+        "tracker_setup_family",
+        "tracker_priority_bucket",
+        "setup_tags",
+        "favorite_signals",
+        "context_signals",
+        "favorite_zone",
+        "retest_followthrough",
+        "retest_reference_level",
+        "mid_earnings_primary_trigger_level",
+        "retest_label",
+        "compression_flag",
+        "compression_label",
+        "market_regime_label",
+        "extreme_move_watch",
+        "recent_tracker_score_delta",
+        "setup_type_score_delta",
+    )
+    projection = {key: copy.deepcopy(setup.get(key)) for key in keys if key in setup}
+    projection["entry_attributes"] = projected_attributes
+    projection["_scoring_outcome_summary"] = _summarize_tracker_setup_outcome(setup)
+    return projection
+
+
+def build_setup_tracker_scoring_payload(tracker_payload: dict) -> dict:
+    tracker = tracker_payload if isinstance(tracker_payload, dict) else {}
+    setups = tracker.get("setups") if isinstance(tracker.get("setups"), dict) else {}
+    return {
+        "schema_version": TRACKER_SCORING_SNAPSHOT_SCHEMA_VERSION,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "source_updated_at": tracker.get("updated_at"),
+        "source_record_count": len(setups),
+        "setups": {
+            str(setup_id): _tracker_scoring_setup_projection(setup)
+            for setup_id, setup in setups.items()
+            if isinstance(setup, dict)
+        },
+    }
+
+
+def save_setup_tracker_scoring_payload(
+    tracker_payload: dict,
+    path: Path | None = None,
+) -> dict:
+    target = Path(path) if path is not None else TRACKER_SCORING_SNAPSHOT_FILE
+    snapshot = build_setup_tracker_scoring_payload(tracker_payload)
+    save_json(target, snapshot)
+    return snapshot
+
+
+def load_setup_tracker_scoring_payload(
+    path: Path | None = None,
+    *,
+    tracker_path: Path | None = None,
+) -> dict:
+    """Load the compact scoring view, rebuilding from the full tracker when stale.
+
+    A missing/corrupt snapshot is safe: the full tracker remains authoritative.
+    The mtime check avoids serving an older scoring view after another machine
+    publishes a newer full tracker.
+    """
+    target = Path(path) if path is not None else TRACKER_SCORING_SNAPSHOT_FILE
+    source = Path(tracker_path) if tracker_path is not None else SETUP_TRACKER_FILE
+    snapshot = load_json(target, default=None)
+    valid = bool(
+        isinstance(snapshot, dict)
+        and int(snapshot.get("schema_version", 0) or 0) == TRACKER_SCORING_SNAPSHOT_SCHEMA_VERSION
+        and isinstance(snapshot.get("setups"), dict)
+    )
+    if valid:
+        try:
+            valid = target.stat().st_mtime >= source.stat().st_mtime
+        except OSError:
+            valid = source.exists() is False
+    if valid:
+        return snapshot
+
+    tracker = load_setup_tracker_payload()
+    try:
+        return save_setup_tracker_scoring_payload(tracker, target)
+    except Exception as exc:
+        logging.warning("Could not publish tracker scoring snapshot (%s); using in-memory projection.", exc)
+        return build_setup_tracker_scoring_payload(tracker)
+
+
 def save_setup_tracker_payload(payload: dict, *, allow_empty: bool = False) -> None:
     payload["schema_version"] = SETUP_TRACKER_SCHEMA_VERSION
     payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -4363,6 +4496,10 @@ def save_setup_tracker_payload(payload: dict, *, allow_empty: bool = False) -> N
             logging.warning("Could not rotate setup tracker backup before save: %s", exc)
 
     save_json(SETUP_TRACKER_FILE, payload)
+    try:
+        save_setup_tracker_scoring_payload(payload)
+    except Exception as exc:
+        logging.warning("Could not publish tracker scoring snapshot after tracker save: %s", exc)
 
 
 def _normalized_setup_family_text(value: str | None) -> str:
@@ -5455,6 +5592,9 @@ def _flatten_tracker_daily_marks(setups: dict[str, dict]) -> list[dict]:
 
 
 def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool = False) -> dict[str, object]:
+    cached_summary = setup.get("_scoring_outcome_summary")
+    if isinstance(cached_summary, dict) and not include_experimental:
+        return copy.deepcopy(cached_summary)
     scenarios = [
         scenario
         for scenario in (setup.get("scenarios") or {}).values()
@@ -6719,14 +6859,50 @@ def _expected_r_realized_lookup(recent_family_rows: list[dict] | None) -> dict[t
     return lookup
 
 
-def _expected_r_days_since_signal(row: dict) -> int:
-    """Days since the setup's trigger fired, for freshness decay.
+def _expected_r_signal_age(
+    row: dict,
+    *,
+    reference_date: date | None = None,
+) -> tuple[int, str]:
+    """Return conservative calendar age + source date for the active trigger.
 
-    Placeholder returning 0 (treat as fresh) until per-family trigger-date
-    extraction lands; freshness is therefore a no-op today and never penalises a
-    setup incorrectly.  Wired separately in the freshness-decay change."""
+    Family-specific confirmation dates take precedence. Rows without a dated
+    trigger fall back to their latest completed trade date, which deliberately
+    keeps the former no-penalty behavior instead of inventing staleness.
+    """
+    family = str(row.get("setup_family") or "").strip().lower()
+    candidates: list[object] = [row.get("signal_date"), row.get("trigger_date")]
+    if family.startswith("mid_earnings_"):
+        candidates.extend([row.get("mid_earnings_retest_date")])
+    elif family.startswith("sma_breakout"):
+        candidates.extend(
+            [
+                row.get("sma_breakout_confirmation_date"),
+                row.get("sma_breakout_retest_date"),
+                row.get("sma_breakout_breakout_date"),
+            ]
+        )
+    elif family == "post_earnings_avwap_bounce":
+        candidates.extend([row.get("post_earnings_bounce_date")])
+    candidates.extend([row.get("last_trade_date"), row.get("trade_date")])
 
-    return 0
+    signal_day = None
+    signal_date_text = ""
+    for candidate in candidates:
+        parsed = _parse_iso_date_or_none(candidate)
+        if parsed is not None:
+            signal_day = parsed
+            signal_date_text = parsed.isoformat()
+            break
+    if signal_day is None:
+        return 0, ""
+    reference = reference_date or datetime.now().date()
+    return max(0, (reference - signal_day).days), signal_date_text
+
+
+def _expected_r_days_since_signal(row: dict, *, reference_date: date | None = None) -> int:
+    days, _signal_date = _expected_r_signal_age(row, reference_date=reference_date)
+    return days
 
 
 def _format_expected_r_note(result: dict) -> str:
@@ -6750,6 +6926,7 @@ def apply_expected_r_ranking(
     *,
     recent_family_rows: list[dict] | None = None,
     config: dict | None = None,
+    reference_date: date | None = None,
 ) -> None:
     """Attach an Expected-R estimate and a freshness-decayed rank score to every
     priority row.  This is the headline number the priority output is ranked by:
@@ -6776,17 +6953,26 @@ def apply_expected_r_ranking(
         realized_stats = realized_lookup.get(key) or {}
         realized_r = realized_stats.get("realized_r")
         closed_samples = int(realized_stats.get("samples", 0) or 0)
+        signal_age_days, signal_date = _expected_r_signal_age(
+            row,
+            reference_date=reference_date,
+        )
         result = compute_expected_r(
             quality_points=quality_points,
             realized_r=realized_r,
             closed_samples=closed_samples,
-            days_since_signal=_expected_r_days_since_signal(row),
+            days_since_signal=signal_age_days,
             config=config,
         )
 
         expected_r = round(float(result["expected_r"]), 3)
         rank_score = round(float(result["rank_score"]), 3)
         note = _format_expected_r_note(result)
+        if signal_date:
+            note += (
+                f" | trigger {signal_date}, age={signal_age_days}d, "
+                f"freshness={float(result['freshness_factor']):.2f}"
+            )
         realized_out = None if result["realized_r"] is None else round(float(result["realized_r"]), 3)
 
         row["expected_r"] = expected_r
@@ -6796,6 +6982,8 @@ def apply_expected_r_ranking(
         row["expected_r_blend_weight"] = round(float(result["blend_weight"]), 3)
         row["expected_r_samples"] = int(result["closed_samples"])
         row["expected_r_freshness"] = round(float(result["freshness_factor"]), 3)
+        row["expected_r_signal_date"] = signal_date
+        row["expected_r_signal_age_days"] = int(signal_age_days)
         row["expected_r_note"] = note
 
         # Proven-quality score (2026-07-05, replaces the negative-ExpR cap):
@@ -6839,12 +7027,18 @@ def apply_expected_r_ranking(
             symbol_entry["expected_r"] = expected_r
             symbol_entry["expected_r_rank_score"] = rank_score
             symbol_entry["expected_r_note"] = note
+            symbol_entry["expected_r_freshness"] = row["expected_r_freshness"]
+            symbol_entry["expected_r_signal_date"] = signal_date
+            symbol_entry["expected_r_signal_age_days"] = int(signal_age_days)
 
         feature_row = feature_rows_by_symbol.get(symbol)
         if isinstance(feature_row, dict):
             feature_row["expected_r"] = expected_r
             feature_row["expected_r_rank_score"] = rank_score
             feature_row["expected_r_note"] = note
+            feature_row["expected_r_freshness"] = row["expected_r_freshness"]
+            feature_row["expected_r_signal_date"] = signal_date
+            feature_row["expected_r_signal_age_days"] = int(signal_age_days)
 
 
 def _short_near_favorite_gate_reason(row: dict) -> str:
@@ -8922,8 +9116,7 @@ def build_scan_factor_leaderboard_rows(
 
 
 def _write_scan_factor_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows, columns=columns).to_csv(path, index=False)
+    _write_dataframe_csv_atomic(pd.DataFrame(rows, columns=columns), path, index=False)
 
 
 def export_scan_factor_views(
@@ -8933,6 +9126,7 @@ def export_scan_factor_views(
     *,
     lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
     min_observations: int = SCAN_FACTOR_MIN_OBSERVATIONS,
+    include_data: bool = False,
 ) -> dict:
     history_path = Path(history_path or D1_FEATURE_HISTORY_FILE)
     observations_path = Path(observations_path or SCAN_FACTOR_OBSERVATIONS_FILE)
@@ -8953,12 +9147,17 @@ def export_scan_factor_views(
     )
     _write_scan_factor_csv(observations_path, observation_rows, SCAN_FACTOR_OBSERVATION_COLUMNS)
     _write_scan_factor_csv(leaderboard_path, leaderboard_rows, SCAN_FACTOR_LEADERBOARD_COLUMNS)
-    return {
+    result = {
         "observation_count": len(observation_rows),
         "leaderboard_count": len(leaderboard_rows),
         "observations_path": str(observations_path),
         "leaderboard_path": str(leaderboard_path),
     }
+    if include_data:
+        result["_history_df"] = history_df
+        result["_observation_rows"] = observation_rows
+        result["_leaderboard_rows"] = leaderboard_rows
+    return result
 
 
 def load_scan_factor_leaderboard_rows(path: Path | None = None) -> list[dict]:
@@ -9555,6 +9754,9 @@ def export_bot_tier_tracker_views(
     *,
     lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
     min_observations: int = SCAN_FACTOR_MIN_OBSERVATIONS,
+    history_df: pd.DataFrame | None = None,
+    observation_rows: list[dict] | None = None,
+    leaderboard_rows: list[dict] | None = None,
 ) -> dict:
     history_path = Path(history_path or D1_FEATURE_HISTORY_FILE)
     tier_list_path = Path(tier_list_path or TIER_LIST_FILE)
@@ -9562,21 +9764,24 @@ def export_bot_tier_tracker_views(
     tier_performance_path = Path(tier_performance_path or TIER_PERFORMANCE_FILE)
     tier_catch_rate_path = Path(tier_catch_rate_path or TIER_CATCH_RATE_FILE)
 
-    if not history_path.exists() or history_path.stat().st_size == 0:
+    if history_df is None and (not history_path.exists() or history_path.stat().st_size == 0):
         _write_scan_factor_csv(tier_list_path, [], TIER_LIST_COLUMNS)
         _write_scan_factor_csv(tier_outcomes_path, [], TIER_OUTCOME_COLUMNS)
         _write_scan_factor_csv(tier_performance_path, [], TIER_PERFORMANCE_COLUMNS)
         _write_scan_factor_csv(tier_catch_rate_path, [], TIER_CATCH_RATE_COLUMNS)
         return {"tier_pick_count": 0, "tier_outcome_count": 0, "tier_performance_count": 0, "tier_catch_rate_count": 0}
 
-    history_df = pd.read_csv(history_path, low_memory=False)
-    observation_rows = build_scan_factor_observation_rows(history_df)
-    leaderboard_rows = build_scan_factor_leaderboard_rows(
-        history_df,
-        observation_rows,
-        lookback_days=lookback_days,
-        min_observations=min_observations,
-    )
+    if history_df is None:
+        history_df = pd.read_csv(history_path, low_memory=False)
+    if observation_rows is None:
+        observation_rows = build_scan_factor_observation_rows(history_df)
+    if leaderboard_rows is None:
+        leaderboard_rows = build_scan_factor_leaderboard_rows(
+            history_df,
+            observation_rows,
+            lookback_days=lookback_days,
+            min_observations=min_observations,
+        )
     tier_pick_rows = build_bot_tier_pick_rows(history_df, leaderboard_rows)
     tier_outcome_rows = build_bot_tier_outcome_rows(history_df, observation_rows, leaderboard_rows)
     tier_performance_rows = build_bot_tier_performance_rows(
@@ -23949,6 +24154,9 @@ def sync_study_row_ranking_fields(study_rows: list[dict] | None, priority_rows: 
             "expected_r",
             "expected_r_rank_score",
             "expected_r_note",
+            "expected_r_freshness",
+            "expected_r_signal_date",
+            "expected_r_signal_age_days",
             "expected_r_score_cap_note",
         ):
             if field in live:
@@ -29196,6 +29404,9 @@ def write_master_avwap_focus_feed(
             "expected_r": _coerce_float(row.get("expected_r")),
             "expected_r_rank_score": _coerce_float(row.get("expected_r_rank_score")),
             "expected_r_note": row.get("expected_r_note") or "",
+            "expected_r_freshness": _coerce_float(row.get("expected_r_freshness")),
+            "expected_r_signal_date": row.get("expected_r_signal_date") or "",
+            "expected_r_signal_age_days": int(row.get("expected_r_signal_age_days", 0) or 0),
             "setup_family": row.get("setup_family") or "",
             "recent_tracker_score_delta": int(row.get("recent_tracker_score_delta", 0) or 0),
             "recent_tracker_score_note": row.get("recent_tracker_score_note") or "",

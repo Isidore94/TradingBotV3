@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import socket
 import threading
 from collections import deque
 from datetime import datetime
@@ -31,7 +33,7 @@ from ui.services.scan_service import ScanService, active_scan_label
 
 
 _TICK_INTERVAL_MS = 30_000
-_REPORT_HEARTBEAT_MINUTES = 10
+_HOURLY_REPORT_RETRY_MINUTES = 5
 _MAX_LOG_LINES = 400
 _MAX_REPORT_ALERTS = 15
 _MAX_REPORT_LOG_LINES = 30
@@ -95,6 +97,10 @@ class AutopilotService(QObject):
         self._wrapup_running = False
         self._scorecard_line = ""
         self._last_report_write: datetime | None = None
+        self._last_report_attempt: datetime | None = None
+        self._last_report_error = ""
+        self._last_hourly_report_attempt_slot = ""
+        self._last_hourly_report_attempt_at: datetime | None = None
         self._last_ib_status: str | None = None
         self._weekend_logged_date: str | None = None
 
@@ -203,8 +209,11 @@ class AutopilotService(QObject):
         self._start_watchlist_build(manual=True)
 
     def write_report_now(self) -> None:
-        self._write_report()
-        self._log(f"Away report written to {AUTOPILOT_REPORT_FILE}")
+        publish = self._write_report()
+        if publish.get("ok"):
+            self._log(f"Away report verified at {AUTOPILOT_REPORT_FILE}")
+        else:
+            self._log(f"Away report NOT updated: {publish.get('error') or 'unknown failure'}")
 
     def status_snapshot(self) -> dict[str, Any]:
         now = datetime.now()
@@ -240,6 +249,17 @@ class AutopilotService(QObject):
             "auto_shorts_count": len(self._read_auto_watchlist(AUTO_SHORTS_FILE)),
             "scan_running": self._scan_service.running,
             "report_path": str(AUTOPILOT_REPORT_FILE),
+            "report_last_attempt": (
+                getattr(self, "_last_report_attempt", None).isoformat(timespec="seconds")
+                if getattr(self, "_last_report_attempt", None)
+                else ""
+            ),
+            "report_last_verified": (
+                getattr(self, "_last_report_write", None).isoformat(timespec="seconds")
+                if getattr(self, "_last_report_write", None)
+                else ""
+            ),
+            "report_error": getattr(self, "_last_report_error", ""),
             "universe_line": self._universe_line(now),
             "universe_rebuilding": self._universe_rebuild_running,
             "wrapup_done_at": self._state.get("wrapup_done_at") or "",
@@ -296,7 +316,7 @@ class AutopilotService(QObject):
             self._maybe_build_watchlists(now)
             self._maybe_run_swing_slot(now)
             self._maybe_run_wrapup(now)
-            self._maybe_heartbeat_report(now)
+            self._maybe_hourly_away_report(now)
             core.write_heartbeat(
                 current_job=self._active_scan_slot or active_scan_label(),
                 next_job=str(self.status_snapshot().get("next_slot") or ""),
@@ -312,7 +332,9 @@ class AutopilotService(QObject):
             self._state = {
                 "date": today,
                 "enabled": self._enabled,
+                "profile": self._profile,
                 "slots_done": [],
+                "hourly_report_slot": None,
                 "watchlist_built_at": None,
                 "suggested_at": None,
                 "hod_last_check": None,
@@ -886,13 +908,17 @@ class AutopilotService(QObject):
         return symbols
 
     @staticmethod
-    def _load_swing_rows() -> list:
+    def _load_swing_feed() -> dict[str, Any]:
         try:
-            from ui.services.data_feed import load_latest_setup_rows
+            from ui.services.data_feed import load_latest_setup_rows_with_meta
 
-            return load_latest_setup_rows()
+            return load_latest_setup_rows_with_meta()
         except Exception:
-            return []
+            return {"rows": [], "data_date": None, "source": "none", "is_stale": True}
+
+    @staticmethod
+    def _load_swing_rows() -> list:
+        return list(AutopilotService._load_swing_feed().get("rows") or [])
 
     # ------------------------------------------------------------------
     # After-close wrap-up: universe rebuild + learning refresh + scorecard
@@ -1058,18 +1084,42 @@ class AutopilotService(QObject):
     # ------------------------------------------------------------------
     # Away report
     # ------------------------------------------------------------------
-    def _maybe_heartbeat_report(self, now: datetime) -> None:
-        if self._last_report_write is None or (
-            (now - self._last_report_write).total_seconds() >= _REPORT_HEARTBEAT_MINUTES * 60
+    def _maybe_hourly_away_report(self, now: datetime) -> None:
+        """Publish once per local clock-hour in Away mode, starting at 07:00."""
+        if self._profile != AUTO_PROFILE_AWAY:
+            return
+        slot = core.hourly_away_report_slot_due(
+            now,
+            last_completed_slot=self._state.get("hourly_report_slot"),
+        )
+        if slot is None:
+            return
+        last_attempt_slot = getattr(self, "_last_hourly_report_attempt_slot", "")
+        last_attempt_at = getattr(self, "_last_hourly_report_attempt_at", None)
+        if (
+            last_attempt_slot == slot
+            and last_attempt_at is not None
+            and (now - last_attempt_at).total_seconds() < _HOURLY_REPORT_RETRY_MINUTES * 60
         ):
-            self._write_report()
+            return
+        self._last_hourly_report_attempt_slot = slot
+        self._last_hourly_report_attempt_at = now
+        publish = self._write_report()
+        if publish.get("ok"):
+            self._state["hourly_report_slot"] = slot
+            self._save_state()
+            self._log(f"Hourly Away swing report verified for {slot.split('|', 1)[1]}.")
 
-    def _write_report(self) -> None:
+    def _write_report(self) -> dict[str, Any]:
         try:
             longs, shorts = self._read_watchlists()
             snapshot = self.status_snapshot()
+            swing_feed = self._load_swing_feed()
+            swing_data_date = str(swing_feed.get("data_date") or "")
+            current_session_data = swing_data_date == datetime.now().date().isoformat()
+            swing_rows = list(swing_feed.get("rows") or []) if current_session_data else []
             picks = []
-            for row in self._load_swing_rows()[:60]:
+            for row in swing_rows[:60]:
                 expected = getattr(row, "expected_r", None)
                 picks.append(
                     {
@@ -1089,6 +1139,15 @@ class AutopilotService(QObject):
                 "longs": longs,
                 "shorts": shorts,
                 "swing_picks": picks,
+                "swing_data_line": (
+                    f"Swing data: current session {swing_data_date} ({swing_feed.get('source') or 'unknown'})"
+                    if current_session_data
+                    else (
+                        f"Swing data: awaiting today's first completed scan; prior data is {swing_data_date}."
+                        if swing_data_date
+                        else "Swing data: awaiting today's first completed scan."
+                    )
+                ),
                 "alerts": list(self._alerts_today)[-_MAX_REPORT_ALERTS:][::-1],
                 "slots_done": snapshot["slots_done"],
                 "next_slot": snapshot["next_slot"],
@@ -1097,17 +1156,32 @@ class AutopilotService(QObject):
                 "scorecard_line": self._scorecard_line,
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
+                "runtime_line": f"Runtime: {socket.gethostname()} pid={os.getpid()}",
             }
+            try:
+                from operations_audit import build_operations_audit
+
+                payload.update(core.build_away_operations_lines(build_operations_audit()))
+            except Exception as exc:
+                payload.update(
+                    {
+                        "operations_line": "Health: UNKNOWN - operations audit unavailable",
+                        "last_scan_line": "Last scan: UNKNOWN",
+                        "tracker_line": f"Tracker: UNKNOWN - {exc}",
+                    }
+                )
             publish = core.publish_away_report(payload)
             self._last_report_attempt = datetime.now()
             if publish.get("ok"):
                 # Only a verified publish counts as a fresh phone report
                 # (plan.md 23.8: last_attempt is not last_verified_success).
                 self._last_report_write = datetime.now()
+                self._last_report_error = ""
                 if getattr(self, "_report_publish_failing", False):
                     self._report_publish_failing = False
                     self._log("Away report publishing recovered.")
             else:
+                self._last_report_error = str(publish.get("error") or "unknown")
                 if not getattr(self, "_report_publish_failing", False):
                     self._report_publish_failing = True
                     self._log(
@@ -1115,8 +1189,13 @@ class AutopilotService(QObject):
                         "phone report is stale until this recovers."
                     )
                 logging.error("Away report publish failed: %s", publish.get("error"))
-        except Exception:
+            self.statusChanged.emit(self.status_snapshot())
+            return publish
+        except Exception as exc:
+            self._last_report_attempt = datetime.now()
+            self._last_report_error = repr(exc)
             logging.exception("Auto Pilot report write failed")
+            return {"ok": False, "verified": False, "path": AUTOPILOT_REPORT_FILE, "error": repr(exc)}
 
     # ------------------------------------------------------------------
     # Bot plumbing
@@ -1225,7 +1304,9 @@ class AutopilotService(QObject):
             return {
                 "date": today,
                 "enabled": bool(previous.get("enabled")),
+                "profile": str(previous.get("profile") or AUTO_PROFILE_DESK),
                 "slots_done": [],
+                "hourly_report_slot": None,
                 "watchlist_built_at": None,
                 "suggested_at": None,
                 "hod_last_check": None,
@@ -1235,6 +1316,8 @@ class AutopilotService(QObject):
                 "autopilot_written": previous.get("autopilot_written") or {"longs": [], "shorts": []},
             }
         payload.setdefault("slots_done", [])
+        payload.setdefault("profile", AUTO_PROFILE_DESK)
+        payload.setdefault("hourly_report_slot", None)
         payload.setdefault("hod_added", [])
         payload.setdefault("wrapup_done_at", None)
         payload.setdefault("suggested_at", None)

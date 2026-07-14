@@ -276,6 +276,7 @@ MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_upgrad
 # on the shared store where both processes (and both machines) can see it.
 REGIME_PAUSE_OBSERVATIONS_FILE = RUNTIME_DATA_DIR / "regime_pause_observations.json"
 MASTER_AVWAP_SETUP_TRACKER_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_tracker.json"
+MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tracker_scoring_snapshot.json"
 MASTER_AVWAP_SETUP_SCENARIOS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_scenarios.csv"
 MASTER_AVWAP_SETUP_DAILY_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_daily.csv"
 MASTER_AVWAP_SETUP_STATS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_stats.csv"
