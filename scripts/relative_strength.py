@@ -118,6 +118,10 @@ def compute_window_features(
 
     The window ends at the latest common timestamp — a symbol missing recent
     bars is never credited/blamed for an index move it has no data for.
+    The window is endpoint-inclusive: a bar exactly ``window_minutes`` back is
+    IN the window, so an N-minute window on 5m bars holds N/5 + 1 bars and the
+    measured return spans the full labeled duration (a 5-minute window is two
+    bars, one bar-to-bar return).
     """
     stock = _closes_by_ts(stock_bars)
     spy = _closes_by_ts(spy_bars)
@@ -139,8 +143,8 @@ def compute_window_features(
     if not common:
         return empty
     window_end = common[-1]
-    expected_bars = max(1, window_minutes // 5)
-    in_window = [ts for ts in common if (window_end - ts).total_seconds() < window_minutes * 60]
+    expected_bars = max(2, window_minutes // 5 + 1)
+    in_window = [ts for ts in common if (window_end - ts).total_seconds() <= window_minutes * 60]
     if len(in_window) < 2:
         return empty
     coverage = min(1.0, len(in_window) / expected_bars)

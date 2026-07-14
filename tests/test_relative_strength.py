@@ -174,6 +174,30 @@ def test_extension_and_earnings_penalties_are_named_components():
     }
 
 
+def test_every_window_measures_its_labeled_span():
+    # Endpoint-inclusive windows: an N-minute window on 5m bars spans exactly
+    # N minutes from first_ts to last_ts. Before the off-by-one fix the
+    # "60-min" window measured 55 minutes and the 5-min window was always
+    # empty (ok=False), silently dropping it from persistence.
+    stock = bars(ramp(100.0, 100.6))
+    spy = bars(SPY_PULLBACK)
+    for minutes in (5, 15, 30, 60):
+        features = compute_window_features(stock, spy, window_minutes=minutes, side_sign=1)
+        assert features.ok, f"{minutes}-min window must be usable with full 5m coverage"
+        assert features.aligned_bar_count == minutes // 5 + 1
+        span = (features.last_ts - features.first_ts).total_seconds() / 60.0
+        assert span == minutes, f"{minutes}-min window measured {span} minutes"
+
+
+def test_five_minute_window_is_one_bar_to_bar_return():
+    closes = [100.0] * 12 + [101.0]  # only the final bar moves
+    features = compute_window_features(
+        bars(closes), bars(SPY_PULLBACK), window_minutes=5, side_sign=1
+    )
+    assert features.ok
+    assert abs(features.stock_return_pct - 1.0) < 1e-9
+
+
 def test_structure_failure_is_invalid_regardless_of_strength():
     engine = RelativeStrengthEngine()
     broken = CandidateInput(
