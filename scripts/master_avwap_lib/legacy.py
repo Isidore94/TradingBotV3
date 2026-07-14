@@ -12339,8 +12339,6 @@ def analyze_post_earnings_setups(
     breakout_idx = _coerce_int(breakout_candle.get("idx")) if breakout_candle else None
     breakout_extreme = _coerce_float(breakout_candle.get("level")) if breakout_candle else None
     breakout_date = str(breakout_candle.get("date") or "").strip() if breakout_candle else ""
-    if breakout_idx == int(gap_idx) and not gap_candle_directional:
-        return result
     qualified_52w_gap = bool(breakout_idx is not None and breakout_extreme is not None)
     monitor_level = float(breakout_extreme) if qualified_52w_gap else (
         _coerce_float(anchor_meta.get("vwap")) if anchor_meta else None
@@ -12424,6 +12422,8 @@ def analyze_post_earnings_setups(
                 note_parts.append("waiting for post-gap break of earnings-candle extreme")
             else:
                 note_parts.append("waiting for post-breakout confirmation candle")
+        elif first_break_idx is None and breakout_idx == int(gap_idx):
+            note_parts.append("waiting for post-gap break of earnings-candle extreme")
         elif break_sessions_after_gap is not None and not break_in_setup_window:
             note_parts.append(
                 f"52-week break occurred after {int(break_sessions_after_gap)} candle(s), "
