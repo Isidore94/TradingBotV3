@@ -248,6 +248,7 @@ MASTER_AVWAP_DAILY_BARS_DIR = DATA_DIR / "daily_bars"
 MASTER_AVWAP_INTRADAY_BARS_DIR = DATA_DIR / "intraday_bars"
 
 EARNINGS_CACHE_FILE = CACHE_DIR / "earnings_cache.json"
+THETA_OPTION_CHAIN_CACHE_FILE = CACHE_DIR / "theta_option_chain_cache.json"
 PREV_EARNINGS_CACHE_FILE = CACHE_DIR / "prev_earnings_cache.json"
 EARNINGS_DATES_CACHE_FILE = CACHE_DIR / "earnings_dates_cache.json"
 EARNINGS_CALENDAR_CACHE_FILE = CACHE_DIR / "earnings_calendar_rows.json"
