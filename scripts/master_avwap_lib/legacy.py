@@ -486,6 +486,15 @@ THETA_OPTION_CHAIN_TIMEOUT_SEC = 8.0
 THETA_OPTION_REQUEST_DELAY_SEC = 0.08
 THETA_OPTION_ENRICHMENT_MAX_SECONDS = 240.0
 THETA_OPTION_ENRICHMENT_MAX_QUOTES = 160
+# Ladder early-exit: real put credit shrinks as strikes step lower, so a run
+# of consecutive below-cusp (or empty) quotes means the rest of the ladder
+# cannot produce an actionable credit and is skipped. A short streak (not a
+# single miss) tolerates noisy quotes on wide markets.
+THETA_LADDER_BELOW_CUSP_BAIL = 3
+THETA_LADDER_EMPTY_QUOTE_BAIL = 2
+# Fair-share quota: every theta row is guaranteed at least this many fresh
+# quote requests, so early rows cannot starve every later pick of a credit.
+THETA_MIN_QUOTES_PER_ROW = 6
 # Above this bid/ask spread (% of mid) the midpoint over-states a realistic fill,
 # so the conservative bid is used as the credit instead of the mid.
 THETA_OPTION_WIDE_SPREAD_PCT = 25.0
@@ -13981,17 +13990,42 @@ def _theta_option_budget_exhausted(budget: dict | None) -> bool:
     elapsed = time.monotonic() - float(budget.get("started_at", time.monotonic()) or time.monotonic())
     if elapsed >= THETA_OPTION_ENRICHMENT_MAX_SECONDS:
         budget["stopped"] = True
+        budget["stop_kind"] = "time"
         budget["stop_reason"] = (
             f"theta option enrichment reached {int(THETA_OPTION_ENRICHMENT_MAX_SECONDS)}s runtime budget"
         )
         return True
     if int(budget.get("quote_requests", 0) or 0) >= THETA_OPTION_ENRICHMENT_MAX_QUOTES:
         budget["stopped"] = True
+        budget["stop_kind"] = "quotes"
         budget["stop_reason"] = (
             f"theta option enrichment reached {THETA_OPTION_ENRICHMENT_MAX_QUOTES} option quote request budget"
         )
         return True
     return False
+
+
+def _theta_begin_row_quota(budget: dict | None, rows_remaining: int) -> None:
+    """Give the row about to be scanned its fair share of the remaining quote
+    budget (never less than THETA_MIN_QUOTES_PER_ROW), so the highest-scored
+    rows scanned first cannot starve every later pick of a strike/credit."""
+    if not isinstance(budget, dict):
+        return
+    used = int(budget.get("quote_requests", 0) or 0)
+    remaining = max(0, THETA_OPTION_ENRICHMENT_MAX_QUOTES - used)
+    budget["row_quota"] = max(THETA_MIN_QUOTES_PER_ROW, remaining // max(1, int(rows_remaining or 1)))
+    budget["row_quota_start"] = used
+
+
+def _theta_row_quota_exhausted(budget: dict | None) -> bool:
+    if not isinstance(budget, dict) or "row_quota" not in budget:
+        return False
+    used_by_row = int(budget.get("quote_requests", 0) or 0) - int(budget.get("row_quota_start", 0) or 0)
+    return used_by_row >= int(budget.get("row_quota", 0) or 0)
+
+
+def _theta_row_scan_should_stop(budget: dict | None) -> bool:
+    return _theta_option_budget_exhausted(budget) or _theta_row_quota_exhausted(budget)
 
 
 def _theta_option_budget_note(budget: dict | None) -> str:
@@ -14020,7 +14054,7 @@ def _fetch_theta_option_quote_cached(
     cache_key = (str(symbol).strip().upper(), expiration_key, strike_key, str(trading_class or ""), str(multiplier or "100"))
     if cache_key not in quote_cache:
         budget = quote_cache.get(_THETA_OPTION_BUDGET_KEY) if isinstance(quote_cache, dict) else None
-        if _theta_option_budget_exhausted(budget):
+        if _theta_row_scan_should_stop(budget):
             return {}
         if isinstance(budget, dict):
             budget["quote_requests"] = int(budget.get("quote_requests", 0) or 0) + 1
@@ -14068,10 +14102,12 @@ def _enrich_sold_put_row_with_ib_options(
     budget = quote_cache.get(_THETA_OPTION_BUDGET_KEY) if isinstance(quote_cache, dict) else None
     quote_rows = []
     for expiration_info in expirations:
-        if _theta_option_budget_exhausted(budget):
+        if _theta_row_scan_should_stop(budget):
             break
+        below_cusp_streak = 0
+        empty_streak = 0
         for strike_candidate in strike_candidates:
-            if _theta_option_budget_exhausted(budget):
+            if _theta_row_scan_should_stop(budget):
                 break
             quote = _fetch_theta_option_quote_cached(
                 ib,
@@ -14089,17 +14125,27 @@ def _enrich_sold_put_row_with_ib_options(
                     "quote": quote,
                 }
             )
+            credit, _credit_source = _option_quote_credit_with_source(quote)
+            if credit is None:
+                empty_streak += 1
+                if empty_streak >= THETA_LADDER_EMPTY_QUOTE_BAIL:
+                    break  # dead ladder: deeper strikes will not quote either
+                continue
+            empty_streak = 0
+            if credit < THETA_PUT_CUSP_MIN_CREDIT:
+                below_cusp_streak += 1
+                if below_cusp_streak >= THETA_LADDER_BELOW_CUSP_BAIL:
+                    break  # credit shrinks with the strike: rest is unactionable
+            else:
+                below_cusp_streak = 0
     row["sell_strike_quotes_checked"] = int(len(quote_rows))
     recommendations = _rank_sold_put_option_recommendations(row, quote_rows)
     if _theta_option_budget_exhausted(budget):
         _append_theta_note(row, _theta_option_budget_note(budget))
     if not recommendations:
-        if _theta_option_budget_exhausted(budget):
-            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
-            return
-        elif not strike_candidates:
+        if not strike_candidates:
             _append_theta_note(row, "IBKR sell-strike scan found no eligible strikes below the support stack")
-        else:
+        elif not _theta_option_budget_exhausted(budget):
             _append_theta_note(
                 row,
                 (
@@ -14107,6 +14153,11 @@ def _enrich_sold_put_row_with_ib_options(
                     f"none met >= {_format_option_decimal(THETA_PUT_CUSP_MIN_CREDIT)} minimum credit"
                 ),
             )
+        # No live credit, but the support-derived strike needs no quote: always
+        # surface it so the pick still shows an actionable strike zone.
+        fallback = _support_only_sold_put_option(row, all_strike_candidates, expirations)
+        if fallback is not None:
+            recommendations = [fallback]
     _apply_best_option_to_theta_row(row, recommendations, unavailable_reason="no_quote")
 
 
@@ -14137,10 +14188,12 @@ def _enrich_pcs_row_with_ib_options(
     budget = quote_cache.get(_THETA_OPTION_BUDGET_KEY) if isinstance(quote_cache, dict) else None
     spread_rows = []
     for expiration_info in expirations:
-        if _theta_option_budget_exhausted(budget):
+        if _theta_row_scan_should_stop(budget):
             break
+        below_cusp_streak = 0
+        empty_streak = 0
         for short_candidate in short_candidates:
-            if _theta_option_budget_exhausted(budget):
+            if _theta_row_scan_should_stop(budget):
                 break
             short_strike = float(short_candidate["short_strike"])
             short_quote = _fetch_theta_option_quote_cached(
@@ -14152,8 +14205,16 @@ def _enrich_pcs_row_with_ib_options(
                 trading_class=str(chain.get("tradingClass") or row.get("symbol") or ""),
                 multiplier=str(chain.get("multiplier") or "100"),
             )
+            short_credit, _short_source = _option_quote_credit_with_source(short_quote)
+            if short_credit is None:
+                empty_streak += 1
+                if empty_streak >= THETA_LADDER_EMPTY_QUOTE_BAIL:
+                    break  # dead ladder: deeper shorts will not quote either
+            else:
+                empty_streak = 0
+            best_ratio = None
             for long_strike in _pcs_long_strike_choices(short_strike, strikes, close_value):
-                if _theta_option_budget_exhausted(budget):
+                if _theta_row_scan_should_stop(budget):
                     break
                 long_quote = _fetch_theta_option_quote_cached(
                     ib,
@@ -14173,17 +14234,26 @@ def _enrich_pcs_row_with_ib_options(
                         "long_quote": long_quote,
                     }
                 )
+                credit, _spread_source = _pcs_spread_credit_with_source(short_quote, long_quote)
+                width = short_strike - float(long_strike)
+                if credit is not None and width > 0:
+                    ratio = credit / width
+                    best_ratio = ratio if best_ratio is None else max(best_ratio, ratio)
+            if best_ratio is not None:
+                if best_ratio < THETA_PCS_CUSP_CREDIT_WIDTH_RATIO:
+                    below_cusp_streak += 1
+                    if below_cusp_streak >= THETA_LADDER_BELOW_CUSP_BAIL:
+                        break  # spread credit shrinks with the short strike
+                else:
+                    below_cusp_streak = 0
     row["sell_strike_quotes_checked"] = int(len(spread_rows))
     recommendations = _rank_pcs_option_recommendations(row, spread_rows)
     if _theta_option_budget_exhausted(budget):
         _append_theta_note(row, _theta_option_budget_note(budget))
     if not recommendations:
-        if _theta_option_budget_exhausted(budget):
-            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
-            return
-        elif not short_candidates:
+        if not short_candidates:
             _append_theta_note(row, "IBKR PCS sell-strike scan found no eligible short strikes below the support stack")
-        else:
+        elif not _theta_option_budget_exhausted(budget):
             _append_theta_note(
                 row,
                 (
@@ -14191,6 +14261,11 @@ def _enrich_pcs_row_with_ib_options(
                     f"none met >= {THETA_PCS_CUSP_CREDIT_WIDTH_RATIO:.0%} minimum credit/width"
                 ),
             )
+        # Surface the support-derived spread even without a live credit so the
+        # pick still shows actionable strikes.
+        fallback = _support_only_pcs_option(row, all_short_candidates, strikes, expirations)
+        if fallback is not None:
+            recommendations = [fallback]
     _apply_best_option_to_theta_row(row, recommendations, unavailable_reason="no_quote")
 
 
@@ -14261,47 +14336,9 @@ def _pcs_filter_reason(row: dict | None) -> str:
     return "pcs_premium_below_target"
 
 
-def enrich_theta_rows_with_ib_option_premiums(
-    ib: IBApi | None,
-    theta_rows: list[dict],
-    pcs_rows: list[dict],
-    reference_date: date,
-) -> None:
-    total_sold_put_rows = len(theta_rows or [])
-    total_pcs_rows = len(pcs_rows or [])
-    rows_by_symbol: dict[str, dict] = {}
-    for row in list(theta_rows or []) + list(pcs_rows or []):
-        row.setdefault("base_score", row.get("score", 0))
-        symbol = str(row.get("symbol") or "").strip().upper()
-        if symbol:
-            rows_by_symbol.setdefault(symbol, {})
-
-    if not rows_by_symbol:
-        return
-    logging.info(
-        "Theta option enrichment starting for %d symbol(s): %d sold-put row(s), %d PCS row(s).",
-        len(rows_by_symbol),
-        total_sold_put_rows,
-        total_pcs_rows,
-    )
-    if not is_daily_data_client_connected(ib):
-        for row in list(theta_rows or []):
-            _apply_best_option_to_theta_row(row, [], unavailable_reason="ib_unavailable")
-        for row in list(pcs_rows or []):
-            _apply_best_option_to_theta_row(row, [], unavailable_reason="ib_unavailable")
-        logging.info("Theta option enrichment skipped because the IBKR option client is unavailable.")
-        return
-
-    chain_cache: dict[str, dict] = {}
-    budget = _new_theta_option_budget()
-    quote_cache: dict = {_THETA_OPTION_BUDGET_KEY: budget}
-    _set_theta_option_market_data_type(ib, THETA_OPTION_MARKET_DATA_TYPES[0])
-
-    for index, symbol in enumerate(rows_by_symbol, start=1):
-        if _theta_option_budget_exhausted(budget):
-            logging.warning("Theta option enrichment stopped during chain lookups: %s.", _theta_option_budget_note(budget))
-            break
-        logging.info("Theta option chain lookup %d/%d: %s.", index, len(rows_by_symbol), symbol)
+def _fetch_theta_chain_for_symbol(ib: IBApi | None, chain_cache: dict, symbol: str) -> dict:
+    if symbol not in chain_cache:
+        logging.info("Theta option chain lookup: %s.", symbol)
         definitions = _fetch_ib_option_chain_definitions(ib, symbol)
         chain_cache[symbol] = _select_ib_option_chain(definitions, symbol)
         chain = chain_cache.get(symbol, {})
@@ -14315,68 +14352,136 @@ def enrich_theta_rows_with_ib_option_premiums(
             )
         else:
             logging.warning("%s: no usable IBKR option chain selected.", symbol)
+    return chain_cache.get(symbol, {})
 
-    for index, row in enumerate(theta_rows or [], start=1):
+
+def _apply_support_only_theta_fallback(row: dict, kind: str, chain: dict, reference_date: date) -> bool:
+    """Zero-quote fallback for a row the quote budget could not reach: derive
+    the support-defended strike(s) from the already-fetched chain so the pick
+    still shows a strike zone. Returns True when a fallback was applied."""
+    strikes = _normalize_option_strikes(chain.get("strikes", []))
+    if kind == "pcs":
+        expirations = _select_option_expirations(
+            chain.get("expirations", []),
+            reference_date,
+            row,
+            min_market_days=THETA_PCS_MIN_EXPIRATION_MARKET_DAYS,
+            max_market_days=THETA_PCS_MAX_EXPIRATION_MARKET_DAYS,
+            limit=1,
+        )
+        fallback = _support_only_pcs_option(row, _pcs_short_strike_candidates(row, strikes), strikes, expirations)
+    else:
+        expirations = _select_option_expirations(
+            chain.get("expirations", []),
+            reference_date,
+            row,
+            min_market_days=1,
+            max_market_days=THETA_PUT_MAX_EXPIRATION_MARKET_DAYS,
+            limit=1,
+        )
+        fallback = _support_only_sold_put_option(row, _sold_put_candidate_strikes(row, strikes), expirations)
+    if fallback is None:
+        return False
+    _apply_best_option_to_theta_row(row, [fallback])
+    return True
+
+
+def enrich_theta_rows_with_ib_option_premiums(
+    ib: IBApi | None,
+    theta_rows: list[dict],
+    pcs_rows: list[dict],
+    reference_date: date,
+) -> None:
+    total_sold_put_rows = len(theta_rows or [])
+    total_pcs_rows = len(pcs_rows or [])
+    work: list[tuple[dict, str]] = [(row, "sold_put") for row in theta_rows or []] + [
+        (row, "pcs") for row in pcs_rows or []
+    ]
+    work = [
+        (row, kind)
+        for row, kind in work
+        if str(row.get("symbol") or "").strip().upper()
+    ]
+    for row, _kind in work:
+        row.setdefault("base_score", row.get("score", 0))
+
+    if not work:
+        return
+    logging.info(
+        "Theta option enrichment starting: %d sold-put row(s), %d PCS row(s).",
+        total_sold_put_rows,
+        total_pcs_rows,
+    )
+    if not is_daily_data_client_connected(ib):
+        for row, _kind in work:
+            _apply_best_option_to_theta_row(row, [], unavailable_reason="ib_unavailable")
+        logging.info("Theta option enrichment skipped because the IBKR option client is unavailable.")
+        return
+
+    # Highest-conviction rows first (sold-put and PCS interleaved) so the
+    # shared quote budget is always spent on the best picks, never on
+    # whichever symbols happened to scan first.
+    work.sort(key=lambda item: -float(item[0].get("base_score", item[0].get("score", 0)) or 0.0))
+
+    chain_cache: dict[str, dict] = {}
+    budget = _new_theta_option_budget()
+    quote_cache: dict = {_THETA_OPTION_BUDGET_KEY: budget}
+    _set_theta_option_market_data_type(ib, THETA_OPTION_MARKET_DATA_TYPES[0])
+
+    for index, (row, kind) in enumerate(work, start=1):
         symbol = str(row.get("symbol") or "").strip().upper()
         if _theta_option_budget_exhausted(budget):
-            logging.warning("%s: sold-put enrichment skipped: %s.", symbol, _theta_option_budget_note(budget))
+            if budget.get("stop_kind") == "quotes":
+                # Quote budget is gone but time remains: chains + support-only
+                # strikes cost zero quotes, so every remaining pick still gets
+                # a support-defended strike zone.
+                chain = _fetch_theta_chain_for_symbol(ib, chain_cache, symbol)
+                if not chain:
+                    _mark_theta_row_filtered(row, "no_option_chain")
+                    continue
+                if not _has_weekly_option_expirations(chain.get("expirations", [])):
+                    _mark_theta_row_filtered(row, "no_weekly_options")
+                    continue
+                _append_theta_note(row, _theta_option_budget_note(budget))
+                if _apply_support_only_theta_fallback(row, kind, chain, reference_date):
+                    continue
+            logging.warning("%s: %s enrichment skipped: %s.", symbol, kind, _theta_option_budget_note(budget))
             _mark_theta_row_budget_exhausted(row, budget)
             continue
-        chain = chain_cache.get(symbol, {})
+        chain = _fetch_theta_chain_for_symbol(ib, chain_cache, symbol)
         if not chain:
             _mark_theta_row_filtered(row, "no_option_chain")
             continue
         if not _has_weekly_option_expirations(chain.get("expirations", [])):
             _mark_theta_row_filtered(row, "no_weekly_options")
             continue
+        _theta_begin_row_quota(budget, rows_remaining=len(work) - index + 1)
         try:
-            logging.info("Theta sold-put quote scan %d/%d: %s.", index, total_sold_put_rows, symbol)
-            _enrich_sold_put_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
+            logging.info("Theta %s quote scan %d/%d: %s.", kind, index, len(work), symbol)
+            if kind == "pcs":
+                _enrich_pcs_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
+            else:
+                _enrich_sold_put_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
             logging.info(
-                "%s: sold-put option scan status=%s, candidates=%s, quote_rows=%s.",
+                "%s: %s option scan status=%s, candidates=%s, quote_rows=%s.",
                 symbol,
+                kind,
                 row.get("option_status") or "unknown",
                 row.get("sell_strike_candidates_checked", 0),
                 row.get("sell_strike_quotes_checked", 0),
             )
         except Exception as exc:
-            logging.warning("%s: sold-put option enrichment failed: %s", symbol, exc)
+            logging.warning("%s: %s option enrichment failed: %s", symbol, kind, exc)
             _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
-
-    for index, row in enumerate(pcs_rows or [], start=1):
-        symbol = str(row.get("symbol") or "").strip().upper()
-        if _theta_option_budget_exhausted(budget):
-            logging.warning("%s: PCS enrichment skipped: %s.", symbol, _theta_option_budget_note(budget))
-            _mark_theta_row_budget_exhausted(row, budget)
-            continue
-        chain = chain_cache.get(symbol, {})
-        if not chain:
-            _mark_theta_row_filtered(row, "no_option_chain")
-            continue
-        if not _has_weekly_option_expirations(chain.get("expirations", [])):
-            _mark_theta_row_filtered(row, "no_weekly_options")
-            continue
-        try:
-            logging.info("Theta PCS quote scan %d/%d: %s.", index, total_pcs_rows, symbol)
-            _enrich_pcs_row_with_ib_options(ib, row, chain, quote_cache, reference_date)
-            logging.info(
-                "%s: PCS option scan status=%s, candidates=%s, quote_combinations=%s.",
-                symbol,
-                row.get("option_status") or "unknown",
-                row.get("sell_strike_candidates_checked", 0),
-                row.get("sell_strike_quotes_checked", 0),
-            )
-        except Exception as exc:
-            logging.warning("%s: PCS option enrichment failed: %s", symbol, exc)
-            _apply_best_option_to_theta_row(row, [], unavailable_reason="no_quote")
-        option_status = str(
-            row.get("option_status") or (row.get("best_option") or {}).get("status") or ""
-        ).strip().lower()
-        if (
-            not _pcs_row_meets_credit_target(row)
-            and option_status not in {"cusp", "below_target", "no_quote", "ib_unavailable"}
-        ):
-            _mark_theta_row_filtered(row, _pcs_filter_reason(row))
+        if kind == "pcs":
+            option_status = str(
+                row.get("option_status") or (row.get("best_option") or {}).get("status") or ""
+            ).strip().lower()
+            if (
+                not _pcs_row_meets_credit_target(row)
+                and option_status not in {"cusp", "below_target", "support_only", "no_quote", "ib_unavailable"}
+            ):
+                _mark_theta_row_filtered(row, _pcs_filter_reason(row))
 
     sold_put_removed = 0
     pcs_removed = 0
@@ -17196,6 +17301,101 @@ def _option_quote_spread_pct(quote: dict | None) -> float | None:
     return max(0.0, (ask - bid) / mid * 100.0)
 
 
+def _pcs_spread_credit_with_source(short_quote: dict | None, long_quote: dict | None) -> tuple[float | None, str]:
+    """Conservative spread credit: short bid minus long ask when both sides
+    have a live market, otherwise mid-to-mid."""
+    short_bid = _quote_value(short_quote, "bid")
+    long_ask = _quote_value(long_quote, "ask")
+    if short_bid is not None and long_ask is not None:
+        return short_bid - long_ask, "bid/ask"
+    short_mid = _option_quote_mid(short_quote)
+    long_mid = _option_quote_mid(long_quote)
+    if short_mid is not None and long_mid is not None:
+        return short_mid - long_mid, "mid"
+    return None, "mid"
+
+
+def _support_context_option_fields(candidate: dict) -> dict:
+    return {
+        "covered_support_count": int(candidate.get("covered_support_count", 0) or 0),
+        "covered_major_sma_support_count": int(candidate.get("covered_major_sma_support_count", 0) or 0),
+        "covered_major_sma_support_summary": candidate.get("covered_major_sma_support_summary", ""),
+        "covered_avwap_support_count": int(candidate.get("covered_avwap_support_count", 0) or 0),
+        "covered_avwap_support_summary": candidate.get("covered_avwap_support_summary", ""),
+        "covered_previous_first_dev_support_count": int(
+            candidate.get("covered_previous_first_dev_support_count", 0) or 0
+        ),
+        "covered_previous_first_dev_support_summary": candidate.get(
+            "covered_previous_first_dev_support_summary",
+            "",
+        ),
+        "total_support_count": int(candidate.get("total_support_count", 0) or 0),
+        "surrendered_support_count": int(candidate.get("surrendered_support_count", 0) or 0),
+        "covered_support_summary": candidate.get("covered_support_summary", ""),
+        "support_quality_score": round(float(candidate.get("support_quality_score", 0.0) or 0.0), 3),
+    }
+
+
+def _support_only_sold_put_option(row: dict, strike_candidates: list[dict], expirations: list[dict]) -> dict | None:
+    """The support-derived strike costs zero quote requests: when no live
+    credit could be fetched (budget, timeouts, dead quotes), the pick still
+    surfaces its best support-defended strike instead of a bare no_quote."""
+    if not strike_candidates:
+        return None
+    candidate = strike_candidates[0]  # best pre-quote blend of proximity + support quality
+    expiration_info = expirations[0] if expirations else {}
+    base_score = int(row.get("base_score", row.get("score", 0)) or 0)
+    return {
+        "play_type": "sold_put",
+        "status": "support_only",
+        "rank_score": float(base_score),
+        "expiration": _format_option_expiration(expiration_info.get("expiration")) if expiration_info else None,
+        "expiration_date": expiration_info.get("expiration_date"),
+        "market_days": expiration_info.get("market_days"),
+        "strike": float(candidate.get("strike", 0.0) or 0.0),
+        "credit": None,
+        "credit_source": "",
+        **_support_context_option_fields(candidate),
+    }
+
+
+def _support_only_pcs_option(
+    row: dict,
+    short_candidates: list[dict],
+    strikes: list[float],
+    expirations: list[dict],
+) -> dict | None:
+    """PCS twin of _support_only_sold_put_option: support-defended short strike
+    plus the preferred-width long leg, credit unknown."""
+    if not short_candidates:
+        return None
+    candidate = short_candidates[0]
+    short_strike = _coerce_float(candidate.get("short_strike"))
+    if short_strike is None:
+        return None
+    close_value = _coerce_float(row.get("last_close")) or 0.0
+    long_choices = _pcs_long_strike_choices(float(short_strike), strikes, close_value)
+    if not long_choices:
+        return None
+    long_strike = float(long_choices[0])
+    expiration_info = expirations[0] if expirations else {}
+    base_score = int(row.get("base_score", row.get("score", 0)) or 0)
+    return {
+        "play_type": "pcs",
+        "status": "support_only",
+        "rank_score": float(base_score),
+        "expiration": _format_option_expiration(expiration_info.get("expiration")) if expiration_info else None,
+        "expiration_date": expiration_info.get("expiration_date"),
+        "market_days": expiration_info.get("market_days"),
+        "short_strike": float(short_strike),
+        "long_strike": long_strike,
+        "width": float(short_strike) - long_strike,
+        "credit": None,
+        "credit_source": "",
+        **_support_context_option_fields(candidate),
+    }
+
+
 def _contracts_needed_for_target_credit(credit: float | None) -> int | None:
     credit_value = _coerce_float(credit)
     if credit_value is None or credit_value <= 0:
@@ -17426,17 +17626,7 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
     for spread_row in spread_rows or []:
         short_quote = spread_row.get("short_quote") if isinstance(spread_row, dict) else None
         long_quote = spread_row.get("long_quote") if isinstance(spread_row, dict) else None
-        short_bid = _quote_value(short_quote, "bid")
-        long_ask = _quote_value(long_quote, "ask")
-        short_mid = _option_quote_mid(short_quote)
-        long_mid = _option_quote_mid(long_quote)
-        credit = None
-        credit_source = "mid"
-        if short_bid is not None and long_ask is not None:
-            credit = short_bid - long_ask
-            credit_source = "bid/ask"
-        elif short_mid is not None and long_mid is not None:
-            credit = short_mid - long_mid
+        credit, credit_source = _pcs_spread_credit_with_source(short_quote, long_quote)
         if credit is None or credit <= 0:
             continue
         short_strike = _coerce_float(spread_row.get("short_strike"))
@@ -17493,10 +17683,10 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
                 "credit_width_ratio": round(float(credit_ratio), 4),
                 "credit_width_pct": round(float(credit_ratio * 100.0), 1),
                 "max_loss": round(float((width - credit) * 100.0), 2),
-                "short_bid": short_bid,
+                "short_bid": _quote_value(short_quote, "bid"),
                 "short_ask": _quote_value(short_quote, "ask"),
                 "long_bid": _quote_value(long_quote, "bid"),
-                "long_ask": long_ask,
+                "long_ask": _quote_value(long_quote, "ask"),
                 "covered_support_count": int(spread_row.get("covered_support_count", 0) or 0),
                 "covered_major_sma_support_count": int(spread_row.get("covered_major_sma_support_count", 0) or 0),
                 "covered_major_sma_support_summary": spread_row.get("covered_major_sma_support_summary", ""),
@@ -17559,7 +17749,7 @@ def _theta_status_sort_rank(row: dict) -> int:
         return 1
     if status == "below_target":
         return 2
-    if status in {"no_quote", "ib_unavailable", "no_option_chain", "no_weekly_options"}:
+    if status in {"support_only", "no_quote", "ib_unavailable", "no_option_chain", "no_weekly_options"}:
         return 3
     return 4
 

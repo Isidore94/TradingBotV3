@@ -6406,6 +6406,180 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(row["best_option"]["long_strike"], 180.0)
         self.assertGreaterEqual(row["best_option"]["credit_width_ratio"], 0.20)
 
+    @staticmethod
+    def _sold_put_scan_row(score=80):
+        return {
+            "symbol": "ABC",
+            "last_close": 105.0,
+            "score": score,
+            "supports": [
+                {"label": "CURRENT_AVWAPE", "level": 100.0, "source": "avwape", "distance_atr": 0.5},
+                {"label": "SMA_50", "level": 98.0, "source": "sma", "distance_atr": 0.7},
+                {"label": "PREV_AVWAPE", "level": 96.0, "source": "previous_avwape", "distance_atr": 0.9},
+            ],
+        }
+
+    def test_sold_put_ladder_stops_after_consecutive_below_cusp_quotes(self):
+        # Real put credit is monotone in the strike: a run of below-cusp
+        # quotes means every deeper strike is also unactionable and the rest
+        # of the ladder is skipped instead of burning shared quote budget.
+        row = self._sold_put_scan_row()
+        chain = {
+            "tradingClass": "ABC",
+            "multiplier": "100",
+            "expirations": {"20260508"},
+            "strikes": {96, 95, 94, 93, 92, 91, 90, 89, 88},
+        }
+        quotes = {
+            96.0: {"bid": 0.10, "ask": 0.12},
+            95.0: {"bid": 0.07, "ask": 0.09},
+            94.0: {"bid": 0.04, "ask": 0.06},
+            93.0: {"bid": 0.02, "ask": 0.04},
+        }
+        quoted_strikes = []
+
+        def quote_stub(_ib, _quote_cache, **kwargs):
+            strike = float(kwargs["strike"])
+            quoted_strikes.append(strike)
+            return quotes.get(strike, {})
+
+        with patch.object(master_avwap, "_fetch_theta_option_quote_cached", side_effect=quote_stub):
+            master_avwap._enrich_sold_put_row_with_ib_options(
+                object(),
+                row,
+                chain,
+                {},
+                date(2026, 5, 5),
+            )
+
+        self.assertEqual(quoted_strikes, [96.0, 95.0, 94.0], "ladder must stop after 3 below-cusp quotes")
+        # Below-target quotes are still surfaced (strike + real credit) for
+        # monitoring; only a quote-less row falls back to support_only.
+        self.assertEqual(row["option_status"], "below_target")
+        self.assertGreater(row["best_option"]["strike"], 0.0)
+        self.assertIsNotNone(row["best_option"]["credit"])
+
+    def test_sold_put_ladder_bails_on_dead_quotes_and_surfaces_support_strike(self):
+        row = self._sold_put_scan_row()
+        chain = {
+            "tradingClass": "ABC",
+            "multiplier": "100",
+            "expirations": {"20260508"},
+            "strikes": {96, 95, 94, 93, 92},
+        }
+        quoted_strikes = []
+
+        def quote_stub(_ib, _quote_cache, **kwargs):
+            quoted_strikes.append(float(kwargs["strike"]))
+            return {}
+
+        with patch.object(master_avwap, "_fetch_theta_option_quote_cached", side_effect=quote_stub):
+            master_avwap._enrich_sold_put_row_with_ib_options(
+                object(),
+                row,
+                chain,
+                {},
+                date(2026, 5, 5),
+            )
+
+        self.assertEqual(len(quoted_strikes), 2, "two consecutive dead quotes must end the ladder")
+        self.assertEqual(row["option_status"], "support_only")
+        self.assertGreater(row["best_option"]["strike"], 0.0)
+        self.assertIsNone(row["best_option"]["credit"])
+        self.assertEqual(row["best_option"]["status"], "support_only")
+
+    def test_theta_row_quota_guarantees_every_row_a_scan_share(self):
+        budget = master_avwap._new_theta_option_budget()
+        master_avwap._theta_begin_row_quota(budget, rows_remaining=20)
+        self.assertEqual(budget["row_quota"], max(6, master_avwap.THETA_OPTION_ENRICHMENT_MAX_QUOTES // 20))
+        budget["quote_requests"] = budget["row_quota_start"] + budget["row_quota"] - 1
+        self.assertFalse(master_avwap._theta_row_quota_exhausted(budget))
+        budget["quote_requests"] += 1
+        self.assertTrue(master_avwap._theta_row_quota_exhausted(budget))
+        # A fresh row resets the per-row accounting.
+        master_avwap._theta_begin_row_quota(budget, rows_remaining=1)
+        self.assertFalse(master_avwap._theta_row_quota_exhausted(budget))
+
+    def test_theta_enrichment_scans_highest_scored_rows_first(self):
+        class FakeIb:
+            def reqMarketDataType(self, market_data_type):
+                self.market_data_type = market_data_type
+
+        sold_put_rows = [
+            {"symbol": "LOW", "score": 40},
+            {"symbol": "TOP", "score": 95},
+        ]
+        pcs_rows = [{"symbol": "MID", "score": 70}]
+        weekly_chain = [
+            {
+                "exchange": "SMART",
+                "tradingClass": "ABC",
+                "multiplier": "100",
+                "expirations": {"20260508", "20260515"},
+                "strikes": {90, 95, 100},
+            }
+        ]
+        scan_order = []
+
+        def mark_sold_put(_ib, row, _chain, _quote_cache, _reference_date):
+            scan_order.append(row["symbol"])
+
+        def mark_pcs(_ib, row, _chain, _quote_cache, _reference_date):
+            scan_order.append(row["symbol"])
+            row["option_status"] = "cusp"
+
+        with (
+            patch.object(master_avwap, "is_daily_data_client_connected", return_value=True),
+            patch.object(master_avwap, "_fetch_ib_option_chain_definitions", return_value=weekly_chain),
+            patch.object(master_avwap, "_enrich_sold_put_row_with_ib_options", side_effect=mark_sold_put),
+            patch.object(master_avwap, "_enrich_pcs_row_with_ib_options", side_effect=mark_pcs),
+        ):
+            master_avwap.enrich_theta_rows_with_ib_option_premiums(
+                FakeIb(),
+                sold_put_rows,
+                pcs_rows,
+                date(2026, 5, 5),
+            )
+
+        self.assertEqual(
+            scan_order,
+            ["TOP", "MID", "LOW"],
+            "budget must go to the best picks first, interleaving sold-put and PCS rows",
+        )
+
+    def test_theta_quote_budget_exhaustion_still_surfaces_support_only_strikes(self):
+        class FakeIb:
+            def reqMarketDataType(self, market_data_type):
+                self.market_data_type = market_data_type
+
+        row = self._sold_put_scan_row(score=88)
+        weekly_chain = [
+            {
+                "exchange": "SMART",
+                "tradingClass": "ABC",
+                "multiplier": "100",
+                "expirations": {"20260508", "20260515"},
+                "strikes": {96, 95, 94, 93},
+            }
+        ]
+
+        with (
+            patch.object(master_avwap, "is_daily_data_client_connected", return_value=True),
+            patch.object(master_avwap, "_fetch_ib_option_chain_definitions", return_value=weekly_chain),
+            patch.object(master_avwap, "THETA_OPTION_ENRICHMENT_MAX_QUOTES", 0),
+        ):
+            master_avwap.enrich_theta_rows_with_ib_option_premiums(
+                FakeIb(),
+                [row],
+                [],
+                date(2026, 5, 5),
+            )
+
+        self.assertEqual(row["option_status"], "support_only")
+        self.assertGreater(row["best_option"]["strike"], 0.0)
+        self.assertIsNone(row["best_option"]["credit"])
+        self.assertIn("quote request budget", row["notes"])
+
     def test_daily_bar_cache_paths_avoid_windows_reserved_device_names(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_dir = Path(temp_dir) / "daily_bars"
