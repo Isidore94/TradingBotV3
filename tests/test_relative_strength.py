@@ -12,7 +12,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 from market_state import M5Bar  # noqa: E402
 from relative_strength import (  # noqa: E402
     CandidateInput,
+    RelativeStrengthConfig,
     RelativeStrengthEngine,
+    compute_session_features,
     compute_window_features,
     mirror_candidate,
 )
@@ -167,9 +169,11 @@ def test_extension_and_earnings_penalties_are_named_components():
         "residual",
         "giveback",
         "persistence",
+        "session_residual",
         "sector_residual",
         "volume_quality",
         "setup_quality",
+        "d1_strength",
         "trigger",
     }
 
@@ -208,3 +212,91 @@ def test_structure_failure_is_invalid_regardless_of_strength():
     )
     ranks = engine.rank(bars(SPY_PULLBACK), [broken])
     assert ranks[0].tier == "INVALID"
+
+
+def _noisy(closes, amplitude=0.6):
+    return [c + (amplitude if i % 2 else -amplitude) for i, c in enumerate(closes)]
+
+
+def test_top_percentile_without_absolute_conviction_is_not_defiant():
+    # All names churn violently around a barely-positive drift: the best of
+    # the cohort still has a tiny volatility-adjusted residual. Percentile
+    # says "top name"; the |z| gate says "nothing extreme here today".
+    engine = RelativeStrengthEngine()
+    spy = bars([500.0] * 13)
+    candidates = [
+        CandidateInput(symbol="CHOP_A", side_sign=1, stock_bars=bars(_noisy(ramp(100.0, 100.08)))),
+        CandidateInput(symbol="CHOP_B", side_sign=1, stock_bars=bars(_noisy([100.0] * 13))),
+        CandidateInput(symbol="CHOP_C", side_sign=1, stock_bars=bars(_noisy(ramp(100.0, 99.95)))),
+    ]
+    ranks = {r.symbol: r for r in engine.rank(spy, candidates)}
+    top = ranks["CHOP_A"]
+    assert top.percentile >= 0.80
+    assert abs(top.windows[30].volatility_adjusted_residual) < 1.5
+    assert top.tier != "DEFIANT", "percentile without absolute conviction is not an extreme"
+
+    # Pure-percentile behavior stays reachable for calibration.
+    legacy = RelativeStrengthEngine(RelativeStrengthConfig(tier_min_abs_z=0.0))
+    legacy_ranks = {r.symbol: r for r in legacy.rank(spy, candidates)}
+    assert legacy_ranks["CHOP_A"].tier == "DEFIANT"
+
+
+def test_weakly_negative_residual_is_watching_not_fading():
+    engine = RelativeStrengthEngine()
+    spy = bars([500.0] * 13)
+    drifter = CandidateInput(symbol="DRIFT", side_sign=1, stock_bars=bars(_noisy(ramp(100.0, 99.97))))
+    anchor = CandidateInput(symbol="ANCHOR", side_sign=1, stock_bars=bars(ramp(100.0, 100.4)))
+    ranks = {r.symbol: r for r in engine.rank(spy, [drifter, anchor])}
+    drift = ranks["DRIFT"]
+    assert drift.windows[30].aligned_residual_pct < 0
+    assert drift.windows[30].volatility_adjusted_residual > -1.5
+    assert drift.tier == "WATCHING", "shallow slippage is not decisive weakness"
+
+
+def test_session_anchor_remembers_the_all_day_leader():
+    # LEADER rips in the first half hour then goes flat; RECENT only moves in
+    # the trailing bars. The trailing 30-min residual forgets LEADER; the
+    # session-anchored component does not.
+    spy = bars([500.0] * 13)
+    leader_closes = ramp(100.0, 101.2, n=7) + [101.2] * 6
+    recent_closes = [100.0] * 10 + list(ramp(100.0, 100.3, n=3))
+    leader = CandidateInput(symbol="LEADER", side_sign=1, stock_bars=bars(leader_closes))
+    recent = CandidateInput(symbol="RECENT", side_sign=1, stock_bars=bars(recent_closes))
+    engine = RelativeStrengthEngine()
+    ranks = {r.symbol: r for r in engine.rank(spy, [leader, recent])}
+
+    lead = ranks["LEADER"]
+    assert lead.session_window is not None and lead.session_window.ok
+    assert lead.session_window.aligned_residual_pct > 1.0
+    assert lead.components["session_residual"] > ranks["RECENT"].components["session_residual"]
+
+
+def test_session_features_ignore_prior_day_bars():
+    prior_day = bars(ramp(90.0, 95.0), start=START - timedelta(days=1))
+    today = bars([100.0] * 13)
+    spy_two_days = bars([500.0] * 13, start=START - timedelta(days=1)) + bars([500.0] * 13)
+    features = compute_session_features(prior_day + today, spy_two_days, side_sign=1)
+    assert features.first_ts == START, "session window must start at today's first aligned bar"
+    assert abs(features.stock_return_pct) < 1e-9, "yesterday's ramp must not leak into today"
+
+
+def test_d1_strength_breaks_intraday_ties_and_mirrors_cleanly():
+    spy = bars(SPY_PULLBACK)
+    strong_daily = CandidateInput(
+        symbol="UPTREND", side_sign=1, stock_bars=bars([100.0] * 13), d1_excess_return_pct=4.0
+    )
+    weak_daily = CandidateInput(
+        symbol="DOWNTREND", side_sign=1, stock_bars=bars([100.0] * 13), d1_excess_return_pct=-4.0
+    )
+    engine = RelativeStrengthEngine()
+    ranks = engine.rank(spy, [strong_daily, weak_daily])
+    assert [r.symbol for r in ranks] == ["UPTREND", "DOWNTREND"]
+
+    from market_state import mirror_bar
+
+    mirrored_spy = [mirror_bar(b, 500.0) for b in spy]
+    mirrored = [mirror_candidate(c, 100.0) for c in (strong_daily, weak_daily)]
+    short_ranks = engine.rank(mirrored_spy, mirrored)
+    assert [r.symbol for r in short_ranks] == [r.symbol for r in ranks]
+    for long_rank, short_rank in zip(ranks, short_ranks):
+        assert abs(short_rank.composite - long_rank.composite) < 1e-9

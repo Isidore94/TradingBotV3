@@ -28,15 +28,20 @@ DEFAULT_WINDOWS_MINUTES = (5, 15, 30, 60)
 class RelativeStrengthConfig:
     version: str = ENGINE_VERSION
     windows_minutes: tuple[int, ...] = DEFAULT_WINDOWS_MINUTES
+    # Session-anchored window (since today's first aligned bar) so an all-day
+    # leader that pauses in the trailing hour keeps its standing.
+    include_session_anchor: bool = True
     min_coverage: float = 0.8
     volatility_floor_pct: float = 0.05  # per-window normalization floor
     # component weights (sec 16.8 hypotheses; calibrate out of sample)
-    weight_residual: float = 0.30
-    weight_giveback: float = 0.20
+    weight_residual: float = 0.25
+    weight_giveback: float = 0.15
     weight_persistence: float = 0.15
+    weight_session_residual: float = 0.10
     weight_sector_residual: float = 0.10
     weight_volume_quality: float = 0.10
-    weight_setup_quality: float = 0.10
+    weight_setup_quality: float = 0.05
+    weight_d1_strength: float = 0.05
     weight_trigger_freshness: float = 0.05
     # explicit penalties (composite points, subtracted after the weighted mix)
     penalty_extension_per_atr: float = 8.0
@@ -47,6 +52,13 @@ class RelativeStrengthConfig:
     # tier thresholds (cross-sectional percentile of the composite)
     defiant_percentile: float = 0.80
     holding_percentile: float = 0.55
+    # Absolute conviction gate: percentile alone is cohort-relative — ~20% of
+    # any cohort clears defiant_percentile even on a dead tape. The reference
+    # window's volatility-adjusted residual (a z-score) must ALSO clear this
+    # magnitude (positive for DEFIANT, negative for FADING) so the extreme
+    # tiers mean absolute strength/weakness, not "best of a weak cohort".
+    # Set to 0.0 to restore pure-percentile tiering.
+    tier_min_abs_z: float = 1.5
 
 
 @dataclass(frozen=True)
@@ -75,6 +87,7 @@ class CandidateInput:
     volume_quality: float | None = None        # 0..1 relative-volume quality
     setup_quality: float | None = None         # 0..1 higher-timeframe quality
     trigger_proximity: float | None = None     # 0..1, 1 = at trigger and fresh
+    d1_excess_return_pct: float | None = None  # blended daily excess vs SPY (raw %, unsigned)
     extension_atr: float | None = None         # distance beyond valid entry ref
     earnings_within_days: int | None = None
     structure_ok: bool = True
@@ -90,6 +103,7 @@ class CandidateRank:
     components: dict[str, float] = field(default_factory=dict)
     penalties: dict[str, float] = field(default_factory=dict)
     windows: dict[int, AlignedWindowFeatures] = field(default_factory=dict)
+    session_window: AlignedWindowFeatures | None = None  # since today's first aligned bar
     coverage: float = 0.0
     data_ok: bool = True
     engine_version: str = ENGINE_VERSION
@@ -103,30 +117,8 @@ def _closes_by_ts(bars: list[M5Bar]) -> dict[datetime, float]:
     return {b.ts: b.close for b in bars if b.complete}
 
 
-def compute_window_features(
-    stock_bars: list[M5Bar],
-    spy_bars: list[M5Bar],
-    *,
-    window_minutes: int,
-    side_sign: int,
-    beta: float = 1.0,
-    sector_bars: list[M5Bar] | None = None,
-    min_coverage: float = 0.8,
-    volatility_floor_pct: float = 0.05,
-) -> AlignedWindowFeatures:
-    """Features over the EXACT common timestamps of stock and SPY.
-
-    The window ends at the latest common timestamp — a symbol missing recent
-    bars is never credited/blamed for an index move it has no data for.
-    The window is endpoint-inclusive: a bar exactly ``window_minutes`` back is
-    IN the window, so an N-minute window on 5m bars holds N/5 + 1 bars and the
-    measured return spans the full labeled duration (a 5-minute window is two
-    bars, one bar-to-bar return).
-    """
-    stock = _closes_by_ts(stock_bars)
-    spy = _closes_by_ts(spy_bars)
-    common = sorted(set(stock) & set(spy))
-    empty = AlignedWindowFeatures(
+def _empty_window_features(window_minutes: int) -> AlignedWindowFeatures:
+    return AlignedWindowFeatures(
         window_minutes=window_minutes,
         coverage=0.0,
         aligned_bar_count=0,
@@ -140,14 +132,22 @@ def compute_window_features(
         volatility_adjusted_residual=0.0,
         ok=False,
     )
-    if not common:
-        return empty
-    window_end = common[-1]
-    expected_bars = max(2, window_minutes // 5 + 1)
-    in_window = [ts for ts in common if (window_end - ts).total_seconds() <= window_minutes * 60]
-    if len(in_window) < 2:
-        return empty
-    coverage = min(1.0, len(in_window) / expected_bars)
+
+
+def _features_over_timestamps(
+    stock: dict[datetime, float],
+    in_window: list[datetime],
+    *,
+    spy: dict[datetime, float],
+    window_minutes: int,
+    expected_bars: int,
+    side_sign: int,
+    beta: float,
+    sector_bars: list[M5Bar] | None,
+    min_coverage: float,
+    volatility_floor_pct: float,
+) -> AlignedWindowFeatures:
+    coverage = min(1.0, len(in_window) / max(1, expected_bars))
     first_ts, last_ts = in_window[0], in_window[-1]
 
     def pct(series: dict[datetime, float]) -> float:
@@ -193,6 +193,89 @@ def compute_window_features(
         aligned_sector_residual_pct=sector_residual,
         volatility_adjusted_residual=vol_adj,
         ok=coverage >= min_coverage,
+    )
+
+
+def compute_window_features(
+    stock_bars: list[M5Bar],
+    spy_bars: list[M5Bar],
+    *,
+    window_minutes: int,
+    side_sign: int,
+    beta: float = 1.0,
+    sector_bars: list[M5Bar] | None = None,
+    min_coverage: float = 0.8,
+    volatility_floor_pct: float = 0.05,
+) -> AlignedWindowFeatures:
+    """Features over the EXACT common timestamps of stock and SPY.
+
+    The window ends at the latest common timestamp — a symbol missing recent
+    bars is never credited/blamed for an index move it has no data for.
+    The window is endpoint-inclusive: a bar exactly ``window_minutes`` back is
+    IN the window, so an N-minute window on 5m bars holds N/5 + 1 bars and the
+    measured return spans the full labeled duration (a 5-minute window is two
+    bars, one bar-to-bar return).
+    """
+    stock = _closes_by_ts(stock_bars)
+    spy = _closes_by_ts(spy_bars)
+    common = sorted(set(stock) & set(spy))
+    if not common:
+        return _empty_window_features(window_minutes)
+    window_end = common[-1]
+    expected_bars = max(2, window_minutes // 5 + 1)
+    in_window = [ts for ts in common if (window_end - ts).total_seconds() <= window_minutes * 60]
+    if len(in_window) < 2:
+        return _empty_window_features(window_minutes)
+    return _features_over_timestamps(
+        stock,
+        in_window,
+        spy=spy,
+        window_minutes=window_minutes,
+        expected_bars=expected_bars,
+        side_sign=side_sign,
+        beta=beta,
+        sector_bars=sector_bars,
+        min_coverage=min_coverage,
+        volatility_floor_pct=volatility_floor_pct,
+    )
+
+
+def compute_session_features(
+    stock_bars: list[M5Bar],
+    spy_bars: list[M5Bar],
+    *,
+    side_sign: int,
+    beta: float = 1.0,
+    sector_bars: list[M5Bar] | None = None,
+    min_coverage: float = 0.8,
+    volatility_floor_pct: float = 0.05,
+) -> AlignedWindowFeatures:
+    """Session-anchored features: every aligned bar sharing the last common
+    bar's date. Catches the all-day leader that a fixed trailing window
+    forgets when it pauses; window_minutes reports the actual span measured.
+    """
+    stock = _closes_by_ts(stock_bars)
+    spy = _closes_by_ts(spy_bars)
+    common = sorted(set(stock) & set(spy))
+    if not common:
+        return _empty_window_features(0)
+    window_end = common[-1]
+    in_window = [ts for ts in common if ts.date() == window_end.date()]
+    if len(in_window) < 2:
+        return _empty_window_features(0)
+    span_minutes = int((in_window[-1] - in_window[0]).total_seconds() // 60)
+    expected_bars = max(2, span_minutes // 5 + 1)
+    return _features_over_timestamps(
+        stock,
+        in_window,
+        spy=spy,
+        window_minutes=span_minutes,
+        expected_bars=expected_bars,
+        side_sign=side_sign,
+        beta=beta,
+        sector_bars=sector_bars,
+        min_coverage=min_coverage,
+        volatility_floor_pct=volatility_floor_pct,
     )
 
 
@@ -245,9 +328,22 @@ class RelativeStrengthEngine:
                     volatility_floor_pct=cfg.volatility_floor_pct,
                 )
             ref = windows.get(reference_window_minutes) or next(iter(windows.values()))
+            session = None
+            if cfg.include_session_anchor:
+                session = compute_session_features(
+                    cand.stock_bars,
+                    spy_bars,
+                    side_sign=cand.side_sign,
+                    beta=cand.beta,
+                    sector_bars=cand.sector_bars,
+                    min_coverage=cfg.min_coverage,
+                    volatility_floor_pct=cfg.volatility_floor_pct,
+                )
             persistence_values = [
                 w.aligned_residual_pct for w in windows.values() if w.ok
             ]
+            if session is not None and session.ok:
+                persistence_values.append(session.aligned_residual_pct)
             persistence = (
                 sum(1 for v in persistence_values if v > 0) / len(persistence_values)
                 if persistence_values
@@ -263,25 +359,50 @@ class RelativeStrengthEngine:
                     "cand": cand,
                     "windows": windows,
                     "ref": ref,
+                    "session": session,
                     "residual": ref.volatility_adjusted_residual,
                     "giveback": giveback_resistance,
                     "persistence": persistence,
+                    "session_residual": (
+                        session.volatility_adjusted_residual
+                        if session is not None and session.ok
+                        else 0.0
+                    ),
                     "sector_residual": ref.aligned_sector_residual_pct or 0.0,
                     "volume_quality": cand.volume_quality if cand.volume_quality is not None else 0.5,
                     "setup_quality": cand.setup_quality if cand.setup_quality is not None else 0.5,
+                    # Higher-timeframe strength is side-signed so D1 weakness
+                    # helps a short exactly as D1 strength helps a long.
+                    "d1_strength": (
+                        cand.side_sign * cand.d1_excess_return_pct
+                        if cand.d1_excess_return_pct is not None
+                        else 0.0
+                    ),
                     "trigger": cand.trigger_proximity if cand.trigger_proximity is not None else 0.0,
                 }
             )
 
-        keys = ("residual", "giveback", "persistence", "sector_residual", "volume_quality", "setup_quality", "trigger")
+        keys = (
+            "residual",
+            "giveback",
+            "persistence",
+            "session_residual",
+            "sector_residual",
+            "volume_quality",
+            "setup_quality",
+            "d1_strength",
+            "trigger",
+        )
         percentiles = {k: _percentile_ranks([r[k] for r in raw]) for k in keys}
         weights = {
             "residual": cfg.weight_residual,
             "giveback": cfg.weight_giveback,
             "persistence": cfg.weight_persistence,
+            "session_residual": cfg.weight_session_residual,
             "sector_residual": cfg.weight_sector_residual,
             "volume_quality": cfg.weight_volume_quality,
             "setup_quality": cfg.weight_setup_quality,
+            "d1_strength": cfg.weight_d1_strength,
             "trigger": cfg.weight_trigger_freshness,
         }
 
@@ -314,6 +435,7 @@ class RelativeStrengthEngine:
                     components=components,
                     penalties=penalties,
                     windows=r["windows"],
+                    session_window=r["session"],
                     coverage=r["ref"].coverage,
                     data_ok=data_ok,
                 )
@@ -337,9 +459,19 @@ class RelativeStrengthEngine:
         over_extended = (
             cand.extension_atr is not None and cand.extension_atr > cfg.max_extension_atr
         )
-        if ref.aligned_residual_pct < 0 and raw["persistence"] < 0.5:
+        # Extreme tiers require absolute conviction (|z| gate) on top of the
+        # relative read, so a quiet cohort produces few or no extremes.
+        if (
+            ref.aligned_residual_pct < 0
+            and raw["persistence"] < 0.5
+            and ref.volatility_adjusted_residual <= -cfg.tier_min_abs_z
+        ):
             return "FADING"
-        if res.percentile >= cfg.defiant_percentile and ref.aligned_residual_pct > 0:
+        if (
+            res.percentile >= cfg.defiant_percentile
+            and ref.aligned_residual_pct > 0
+            and ref.volatility_adjusted_residual >= cfg.tier_min_abs_z
+        ):
             return "WATCHING" if over_extended else "DEFIANT"
         if res.percentile >= cfg.holding_percentile and ref.aligned_residual_pct >= 0:
             return "WATCHING" if over_extended else "HOLDING"
@@ -359,6 +491,11 @@ def mirror_candidate(cand: CandidateInput, pivot: float) -> CandidateInput:
         volume_quality=cand.volume_quality,
         setup_quality=cand.setup_quality,
         trigger_proximity=cand.trigger_proximity,
+        # D1 excess flips with the mirrored price world so the side-signed
+        # component stays invariant.
+        d1_excess_return_pct=(
+            -cand.d1_excess_return_pct if cand.d1_excess_return_pct is not None else None
+        ),
         extension_atr=cand.extension_atr,
         earnings_within_days=cand.earnings_within_days,
         structure_ok=cand.structure_ok,
