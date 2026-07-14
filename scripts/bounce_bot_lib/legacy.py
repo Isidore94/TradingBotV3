@@ -3261,8 +3261,20 @@ class BounceBot(EWrapper, EClient):
                     if self.client_id_conflict:
                         continue
                 except Exception as e:
-                    logging.exception(f"Reconnect error: {e}")
-                    return False
+                    # A single attempt can fail on a transient ibapi race: the
+                    # stale EReader thread from the prior connection calls
+                    # Connection.disconnect() (nulling the socket) while
+                    # Connection.connect() is mid-handshake, surfacing as
+                    # "'NoneType' object has no attribute 'settimeout'". These
+                    # self-heal once the old reader exits, so retry until the
+                    # deadline instead of abandoning the whole reconnect.
+                    logging.warning(f"Reconnect attempt failed ({e}); retrying.")
+                    try:
+                        self.disconnect()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    continue
             logging.error("Failed to reconnect to IB within timeout.")
             return False
 
