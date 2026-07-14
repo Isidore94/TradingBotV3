@@ -69,6 +69,7 @@ from project_paths import (
     UNIVERSE_SHORTS_FILE,
     SWING_SHORTS_FILE,
     EARNINGS_CACHE_FILE,
+    THETA_OPTION_CHAIN_CACHE_FILE,
     PREV_EARNINGS_CACHE_FILE,
     EARNINGS_DATES_CACHE_FILE,
     EARNINGS_CALENDAR_CACHE_FILE,
@@ -484,8 +485,8 @@ THETA_MAX_OPTION_ALTERNATIVES = 3
 THETA_OPTION_QUOTE_TIMEOUT_SEC = 4.0
 THETA_OPTION_CHAIN_TIMEOUT_SEC = 8.0
 THETA_OPTION_REQUEST_DELAY_SEC = 0.08
-THETA_OPTION_ENRICHMENT_MAX_SECONDS = 240.0
-THETA_OPTION_ENRICHMENT_MAX_QUOTES = 160
+THETA_OPTION_ENRICHMENT_MAX_SECONDS = 360.0
+THETA_OPTION_ENRICHMENT_MAX_QUOTES = 240
 # Ladder early-exit: real put credit shrinks as strikes step lower, so a run
 # of consecutive below-cusp (or empty) quotes means the rest of the ladder
 # cannot produce an actionable credit and is skipped. A short streak (not a
@@ -13949,11 +13950,17 @@ def _fetch_ib_option_quote(
     if ib is None or not is_daily_data_client_connected(ib):
         return {}
     current_type = int(getattr(ib, "_theta_option_market_data_type", THETA_OPTION_MARKET_DATA_TYPES[0]))
-    market_data_types = [current_type] + [
-        int(value)
-        for value in THETA_OPTION_MARKET_DATA_TYPES
-        if int(value) != current_type
-    ]
+    if bool(getattr(ib, "_theta_option_type_confirmed", False)):
+        # A quote already priced with this market data type this session, so
+        # option entitlements are settled: a dead strike is just dead, and
+        # walking the fallback chain would triple the timeout cost for nothing.
+        market_data_types = [current_type]
+    else:
+        market_data_types = [current_type] + [
+            int(value)
+            for value in THETA_OPTION_MARKET_DATA_TYPES
+            if int(value) != current_type
+        ]
     last_quote: dict = {}
     for market_data_type in market_data_types:
         quote = _fetch_ib_option_quote_once(
@@ -13965,6 +13972,10 @@ def _fetch_ib_option_quote(
         if quote:
             last_quote = quote
         if _ib_quote_has_price(quote):
+            try:
+                setattr(ib, "_theta_option_type_confirmed", True)
+            except Exception:
+                pass
             return quote
         if quote and 200 in {int(code or 0) for code in quote.get("ib_error_codes", [])}:
             return quote
@@ -13988,6 +13999,9 @@ def _theta_option_budget_exhausted(budget: dict | None) -> bool:
     if budget.get("stopped"):
         return True
     elapsed = time.monotonic() - float(budget.get("started_at", time.monotonic()) or time.monotonic())
+    # Chain lookups are metered separately (they cost no quote requests), so
+    # a many-symbol chain phase cannot eat the quote-scanning time budget.
+    elapsed -= float(budget.get("chain_seconds", 0.0) or 0.0)
     if elapsed >= THETA_OPTION_ENRICHMENT_MAX_SECONDS:
         budget["stopped"] = True
         budget["stop_kind"] = "time"
@@ -14336,11 +14350,21 @@ def _pcs_filter_reason(row: dict | None) -> str:
     return "pcs_premium_below_target"
 
 
-def _fetch_theta_chain_for_symbol(ib: IBApi | None, chain_cache: dict, symbol: str) -> dict:
+def _fetch_theta_chain_for_symbol(
+    ib: IBApi | None,
+    chain_cache: dict,
+    symbol: str,
+    budget: dict | None = None,
+) -> dict:
     if symbol not in chain_cache:
         logging.info("Theta option chain lookup: %s.", symbol)
+        chain_started = time.monotonic()
         definitions = _fetch_ib_option_chain_definitions(ib, symbol)
         chain_cache[symbol] = _select_ib_option_chain(definitions, symbol)
+        if isinstance(budget, dict):
+            budget["chain_seconds"] = float(budget.get("chain_seconds", 0.0) or 0.0) + (
+                time.monotonic() - chain_started
+            )
         chain = chain_cache.get(symbol, {})
         if chain:
             logging.info(
@@ -14353,6 +14377,66 @@ def _fetch_theta_chain_for_symbol(ib: IBApi | None, chain_cache: dict, symbol: s
         else:
             logging.warning("%s: no usable IBKR option chain selected.", symbol)
     return chain_cache.get(symbol, {})
+
+
+def _jsonable_theta_chain(chain: dict) -> dict:
+    out = dict(chain or {})
+    for key in ("expirations", "strikes"):
+        value = out.get(key)
+        if isinstance(value, (set, frozenset, tuple)):
+            out[key] = sorted(value)
+    return out
+
+
+def _load_theta_chain_cache_from_disk(reference_date: date) -> tuple[dict[str, dict], int | None]:
+    """Same-day persisted option chains + last working market data type.
+
+    Chains barely change intraday, so reusing them skips the ~8s-per-symbol
+    chain phase on every scan after the first; remembering the market data
+    type that actually priced quotes skips the live-type timeout tax for
+    accounts without a live OPRA subscription."""
+    try:
+        payload = load_json(THETA_OPTION_CHAIN_CACHE_FILE, {})
+    except Exception:
+        return {}, None
+    if not isinstance(payload, dict) or str(payload.get("date") or "") != reference_date.isoformat():
+        return {}, None
+    chains = payload.get("chains") if isinstance(payload.get("chains"), dict) else {}
+    restored: dict[str, dict] = {}
+    for symbol, chain in chains.items():
+        symbol_key = str(symbol or "").strip().upper()
+        if symbol_key and isinstance(chain, dict) and chain:
+            restored[symbol_key] = chain
+    market_data_type = payload.get("market_data_type")
+    try:
+        market_data_type = int(market_data_type) if market_data_type is not None else None
+    except (TypeError, ValueError):
+        market_data_type = None
+    if market_data_type not in THETA_OPTION_MARKET_DATA_TYPES:
+        market_data_type = None
+    return restored, market_data_type
+
+
+def _save_theta_chain_cache_to_disk(
+    reference_date: date,
+    chain_cache: dict[str, dict],
+    market_data_type: int | None,
+) -> None:
+    try:
+        payload = {
+            "date": reference_date.isoformat(),
+            "market_data_type": market_data_type,
+            # Only usable chains persist: an empty result may be a transient
+            # IB failure and must retry on the next run.
+            "chains": {
+                symbol: _jsonable_theta_chain(chain)
+                for symbol, chain in (chain_cache or {}).items()
+                if isinstance(chain, dict) and chain
+            },
+        }
+        save_json(THETA_OPTION_CHAIN_CACHE_FILE, payload)
+    except Exception as exc:  # never let cache persistence break enrichment
+        logging.debug("Theta chain cache save skipped: %s", exc)
 
 
 def _apply_support_only_theta_fallback(row: dict, kind: str, chain: dict, reference_date: date) -> bool:
@@ -14394,16 +14478,15 @@ def enrich_theta_rows_with_ib_option_premiums(
 ) -> None:
     total_sold_put_rows = len(theta_rows or [])
     total_pcs_rows = len(pcs_rows or [])
-    work: list[tuple[dict, str]] = [(row, "sold_put") for row in theta_rows or []] + [
+    work: list[tuple[dict, str]] = []
+    for row, kind in [(row, "sold_put") for row in theta_rows or []] + [
         (row, "pcs") for row in pcs_rows or []
-    ]
-    work = [
-        (row, kind)
-        for row, kind in work
-        if str(row.get("symbol") or "").strip().upper()
-    ]
-    for row, _kind in work:
+    ]:
         row.setdefault("base_score", row.get("score", 0))
+        if str(row.get("symbol") or "").strip().upper():
+            work.append((row, kind))
+        else:
+            _mark_theta_row_filtered(row, "no_option_chain")
 
     if not work:
         return
@@ -14423,10 +14506,21 @@ def enrich_theta_rows_with_ib_option_premiums(
     # whichever symbols happened to scan first.
     work.sort(key=lambda item: -float(item[0].get("base_score", item[0].get("score", 0)) or 0.0))
 
+    # Persisted same-day chains + last working market data type make reruns
+    # cheap; only real IB clients touch the on-disk cache (unit-test fakes
+    # stay hermetic).
+    persist_chain_cache = isinstance(ib, IBApi)
     chain_cache: dict[str, dict] = {}
+    cached_market_data_type = None
+    if persist_chain_cache:
+        chain_cache, cached_market_data_type = _load_theta_chain_cache_from_disk(reference_date)
+        if chain_cache:
+            logging.info("Theta chain cache restored %d same-day chain(s).", len(chain_cache))
     budget = _new_theta_option_budget()
     quote_cache: dict = {_THETA_OPTION_BUDGET_KEY: budget}
-    _set_theta_option_market_data_type(ib, THETA_OPTION_MARKET_DATA_TYPES[0])
+    _set_theta_option_market_data_type(
+        ib, cached_market_data_type or THETA_OPTION_MARKET_DATA_TYPES[0]
+    )
 
     for index, (row, kind) in enumerate(work, start=1):
         symbol = str(row.get("symbol") or "").strip().upper()
@@ -14435,7 +14529,7 @@ def enrich_theta_rows_with_ib_option_premiums(
                 # Quote budget is gone but time remains: chains + support-only
                 # strikes cost zero quotes, so every remaining pick still gets
                 # a support-defended strike zone.
-                chain = _fetch_theta_chain_for_symbol(ib, chain_cache, symbol)
+                chain = _fetch_theta_chain_for_symbol(ib, chain_cache, symbol, budget)
                 if not chain:
                     _mark_theta_row_filtered(row, "no_option_chain")
                     continue
@@ -14448,7 +14542,7 @@ def enrich_theta_rows_with_ib_option_premiums(
             logging.warning("%s: %s enrichment skipped: %s.", symbol, kind, _theta_option_budget_note(budget))
             _mark_theta_row_budget_exhausted(row, budget)
             continue
-        chain = _fetch_theta_chain_for_symbol(ib, chain_cache, symbol)
+        chain = _fetch_theta_chain_for_symbol(ib, chain_cache, symbol, budget)
         if not chain:
             _mark_theta_row_filtered(row, "no_option_chain")
             continue
@@ -14482,6 +14576,15 @@ def enrich_theta_rows_with_ib_option_premiums(
                 and option_status not in {"cusp", "below_target", "support_only", "no_quote", "ib_unavailable"}
             ):
                 _mark_theta_row_filtered(row, _pcs_filter_reason(row))
+
+    if persist_chain_cache:
+        _save_theta_chain_cache_to_disk(
+            reference_date,
+            chain_cache,
+            int(getattr(ib, "_theta_option_market_data_type", THETA_OPTION_MARKET_DATA_TYPES[0]))
+            if bool(getattr(ib, "_theta_option_type_confirmed", False))
+            else cached_market_data_type,
+        )
 
     sold_put_removed = 0
     pcs_removed = 0
