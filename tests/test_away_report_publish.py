@@ -140,6 +140,64 @@ def test_phone_digest_includes_operational_and_tracker_truth():
     assert "Tracker: WRITE SKIPPED" in text
 
 
+def test_phone_digest_prioritizes_swings_before_intraday_candidates():
+    text = core.render_away_report(
+        _payload(
+            swing_data_current=True,
+            swing_picks=[
+                {
+                    "symbol": "NEAR",
+                    "side": "LONG",
+                    "bucket": "Near Favorite Zone",
+                    "expected_r": 0.8,
+                },
+                {"symbol": "FAVE", "side": "SHORT", "bucket": "Favorite", "expected_r": 1.0},
+                {
+                    "symbol": "BEST",
+                    "side": "LONG",
+                    "bucket": "High Conviction",
+                    "expected_r": 1.4,
+                },
+            ],
+            auto_longs=["AUTO"],
+            auto_shorts=["BOTSHORT"],
+        )
+    )
+
+    swing_at = text.index("== SWING OPPORTUNITIES ==")
+    day_longs_at = text.index("== DAY TRADE LONGS")
+    day_shorts_at = text.index("== DAY TRADE SHORTS")
+    bot_longs_at = text.index("== BOT PICKS - LONGS")
+
+    assert text.index("Updated:") < swing_at
+    assert swing_at < day_longs_at < day_shorts_at < bot_longs_at
+    assert text.index("BEST (LONG) | High Conviction | 1.40R") < text.index(
+        "FAVE (SHORT) | Favorite | 1.00R"
+    )
+    assert text.index("FAVE (SHORT) | Favorite | 1.00R") < text.index(
+        "NEAR (LONG) | Near Favorite Zone | 0.80R"
+    )
+
+
+def test_phone_digest_distinguishes_no_current_swings_from_unscanned_data():
+    current = core.render_away_report(
+        _payload(swing_picks=[], swing_data_current=True)
+    )
+    awaiting = core.render_away_report(
+        _payload(
+            swing_picks=[],
+            swing_data_current=False,
+            swing_data_line="Swing data: awaiting today's first completed scan.",
+        )
+    )
+
+    assert "No qualified current-session swing opportunity." in current
+    assert "Awaiting today's first completed swing scan." in awaiting
+    assert awaiting.index("== SWING OPPORTUNITIES ==") < awaiting.index(
+        "== DAY TRADE LONGS"
+    )
+
+
 def test_operations_audit_is_condensed_for_phone_report():
     lines = core.build_away_operations_lines(
         {

@@ -127,6 +127,9 @@ Still remaining from Phase 1:
   readback validation and rollback of the previous verified pair.
 - Hash readback verification and bounded report archive.
 - Honest freshness headers and last-attempt versus last-success state.
+- Swing-first phone-report ordering: the safety/freshness header remains first,
+  then current swing opportunities lead every intraday candidate section;
+  empty current-session and not-yet-scanned states are distinguished.
 - Runtime heartbeat.
 - Cross-machine writer-lease mechanism.
 - Global `OFF` / `AUTO-DESK` / `AUTO-AWAY` header and service semantics.

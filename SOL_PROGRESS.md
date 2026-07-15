@@ -7,11 +7,11 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch: `Sol3`
-- Integration base: `2183dca`; the verified July 13 Sol3 integration batch is
-  included in this checkpoint.
-- Date: 2026-07-13
-- Test baseline: **855 passed, 5 subtests passed**
+- Branch: `codex/gui-product-phase1`, based on current `main` after the
+  verified Sol3 integration and subsequent fixes.
+- Integration base: `fc05c96`.
+- Date: 2026-07-14
+- Test baseline: **874 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -33,7 +33,8 @@ stamp; it must not duplicate the roadmap.
 - Away reliability: report + metadata publish transaction, hash/readback
   audit, honest GUI status, phone-sized scan/tracker health, fail-closed writer
   ownership, hour-aligned 07:00-through-close reports, persisted Away profile,
-  and simulated expiry/clock-skew/sleep-wake/failure tests landed.
+  simulated expiry/clock-skew/sleep-wake/failure tests, and swing-first
+  candidate ordering with honest empty/unscanned states landed.
 - Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
   provenance while preserving the raw trigger signals separately.
 - Next queue: finish the Section 6 operational drills, remaining

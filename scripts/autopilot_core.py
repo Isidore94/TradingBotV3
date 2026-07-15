@@ -1280,10 +1280,24 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
         return ", ".join(items) if items else "(none)"
 
+    def _swing_bucket_priority(item: Mapping[str, Any]) -> int:
+        bucket = str(item.get("bucket") or "").strip().lower()
+        bucket = " ".join(bucket.replace("_", " ").replace("-", " ").split())
+        if bucket == "high conviction":
+            return 0
+        if bucket in {"favorite", "favorite setup"}:
+            return 1
+        return 2
+
+    indexed_picks = [
+        (index, pick)
+        for index, pick in enumerate(payload.get("swing_picks", []) or [])
+        if isinstance(pick, Mapping)
+    ]
+    indexed_picks.sort(key=lambda item: (_swing_bucket_priority(item[1]), item[0]))
+
     picks_lines = []
-    for pick in payload.get("swing_picks", []) or []:
-        if not isinstance(pick, Mapping):
-            continue
+    for _index, pick in indexed_picks:
         symbol = str(pick.get("symbol") or "").strip().upper()
         if not symbol:
             continue
@@ -1293,6 +1307,14 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         expected_text = f" | {float(expected_r):.2f}R" if expected_r is not None else ""
         bucket_text = f" | {bucket}" if bucket else ""
         picks_lines.append(f"{symbol} ({side}){bucket_text}{expected_text}")
+
+    swing_data_line = str(payload.get("swing_data_line") or "")
+    if picks_lines:
+        swing_lines = picks_lines
+    elif payload.get("swing_data_current") is False or "awaiting" in swing_data_line.lower():
+        swing_lines = ["Awaiting today's first completed swing scan."]
+    else:
+        swing_lines = ["No qualified current-session swing opportunity."]
 
     def _tv_line(items: Iterable[str]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
@@ -1330,6 +1352,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "if Updated is hours old, automation is NOT running; do not trade this as current.",
         *header_bits,
         "",
+        "== SWING OPPORTUNITIES ==",
+        _lines(swing_lines),
+        "",
         "== DAY TRADE LONGS (longs.txt) ==",
         _tickers(payload.get("longs", [])),
         f"TV paste: {_tv_line(payload.get('longs', []))}",
@@ -1345,9 +1370,6 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "== BOT PICKS - SHORTS (autoshorts.txt) ==",
         _tickers(payload.get("auto_shorts", [])),
         f"TV paste: {_tv_line(payload.get('auto_shorts', []))}",
-        "",
-        "== TOP SWING PICKS ==",
-        _lines(picks_lines),
         "",
         "== TODAY'S ALERTS (latest first) ==",
         _lines(payload.get("alerts", [])),

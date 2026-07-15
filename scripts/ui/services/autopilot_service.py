@@ -1139,6 +1139,7 @@ class AutopilotService(QObject):
                 "longs": longs,
                 "shorts": shorts,
                 "swing_picks": picks,
+                "swing_data_current": current_session_data,
                 "swing_data_line": (
                     f"Swing data: current session {swing_data_date} ({swing_feed.get('source') or 'unknown'})"
                     if current_session_data
