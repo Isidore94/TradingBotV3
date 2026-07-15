@@ -138,6 +138,37 @@ def test_render_away_report_is_phone_digestible():
     assert "ORB BREAKOUT" in text
 
 
+def test_industry_snapshot_identity_is_shared_and_mismatch_is_loud():
+    board = {"status": "ok", "snapshot_id": "board-123"}
+    intraday = {
+        "snapshot_id": "m5-456",
+        "source_board_snapshot_id": "board-123",
+        "qualified_industry_count": 12,
+        "industry_count": 20,
+    }
+    line = core.format_industry_snapshot_line(board, intraday)
+    assert "snapshot board-123" in line
+    assert "M5 advisory m5-456" in line
+    assert "12/20 qualified" in line
+    assert "SOURCE MISMATCH" not in line
+
+    mismatch = core.format_industry_snapshot_line(
+        board,
+        {**intraday, "source_board_snapshot_id": "old-board"},
+    )
+    assert "SOURCE MISMATCH" in mismatch
+
+    report = core.render_away_report(
+        {
+            "generated_at": "2026-07-14 10:00:00",
+            "industry_line": line,
+            "swing_data_current": True,
+        }
+    )
+    assert line in report
+    assert report.index(line) < report.index("== SWING OPPORTUNITIES ==")
+
+
 def _fake_frame(rows, start):
     import pandas as pd
 

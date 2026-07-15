@@ -100,6 +100,26 @@ class TrackerSortProxyModel(QSortFilterProxyModel):
         super().__init__(parent)
         self.setSortRole(SORT_ROLE)
 
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        """Numeric missing values stay last in both sort directions."""
+        source = self.sourceModel()
+        if (
+            isinstance(source, TrackerTableModel)
+            and left.column() == right.column()
+            and 0 <= left.column() < len(source.columns)
+        ):
+            key = source.columns[left.column()][0]
+            if key in source.numeric_keys:
+                left_row = source.row_at(left.row()) or {}
+                right_row = source.row_at(right.row()) or {}
+                left_missing = _float(left_row.get(key)) is None
+                right_missing = _float(right_row.get(key)) is None
+                if left_missing != right_missing:
+                    if self.sortOrder() == Qt.SortOrder.AscendingOrder:
+                        return not left_missing
+                    return left_missing
+        return super().lessThan(left, right)
+
 
 def _format_value(value: Any, key: str, *, percent_keys: set[str], signed_keys: set[str]) -> str:
     if value in (None, ""):

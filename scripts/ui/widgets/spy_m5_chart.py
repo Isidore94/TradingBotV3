@@ -118,9 +118,15 @@ class SpyM5Chart(pg.PlotWidget):
             end = self._index_for_dt(previous[1])
             if start is not None and end is not None and end > start:
                 return (start, end)
-        # Default: the trailing hour (12 five-minute bars).
+        # Default: the trailing hour (12 five-minute bars), bounded to the
+        # latest market date. Early-session Auto must say "not enough bars"
+        # rather than silently measuring an overnight/previous-session gap.
         end = len(self._bars) - 1
-        return (max(0, end - 12), end)
+        latest_date = self._bars[end]["dt"].date()
+        session_start = end
+        while session_start > 0 and self._bars[session_start - 1]["dt"].date() == latest_date:
+            session_start -= 1
+        return (max(session_start, end - 12), end)
 
     def _index_for_dt(self, stamp: datetime) -> float | None:
         for index, bar in enumerate(self._bars):

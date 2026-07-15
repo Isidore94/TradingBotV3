@@ -1,14 +1,29 @@
 # TradingBotV3 GUI, Decision Support, Journal, and AI Product Plan
 
-Status: discussion draft
+Status: phased implementation in progress; production-score promotion remains evidence-gated
 
 Audit date: 2026-07-14
 
-Scope: product and implementation planning only; this document changes no runtime behavior.
+Scope: living product/implementation addendum. Landed items are recorded below; future items remain subordinate to plan.md.
 
 ## 1. Relationship to the master roadmap
 
 This document is a product-focused addendum to plan.md. It does not replace plan.md, reorder its Section 12 execution list, or relax any evidence gate.
+
+### 1.1 Integration checkpoint (2026-07-14)
+
+The safe presentation, evidence, and workflow slices are integrated:
+
+- swing-first Auto/Away Drive reports;
+- single-flight hourly Industry Board refresh, atomic last-good state, freshness, numeric sorting, and strongest/weakest presets;
+- Master AVWAP opportunity deduplication across High Conviction and Favorite lanes;
+- Bounce Auto plus a separate N/A-by-default user override with append-only annotations;
+- automatic Entry Assist as the primary experience and final-upgrade-only D1 Focus;
+- novice explanations, deterministic What's Working, and journal lifecycle/review capture;
+- provider-neutral OpenAI/Claude A.I. Summary with explicit evidence selection, exact preview, secure credentials, and validated exports;
+- completed-M5 advisory industry-versus-SPY and stock-versus-primary-industry calculations, a sortable intraday industry board, coverage labels, atomic replay evidence, and A.I. evidence linkage.
+
+Intentionally not promoted: the advisory industry fields do not change production scores, alerts, gates, or candidate promotion. Canonical Opportunity replacement, shadow-engine promotion, and advanced ranking changes remain behind plan.md's fixtures, replay, live-evidence, and operational gates.
 
 The governing rules remain:
 

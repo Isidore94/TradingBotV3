@@ -83,6 +83,31 @@ def test_evidence_package_is_explicit_bounded_and_source_addressable(tmp_path):
         build_evidence_package(["made_up_scope"])
 
 
+def test_market_condition_evidence_includes_advisory_industry_m5_snapshot(tmp_path):
+    from ai_summary import build_evidence_package
+
+    intraday = tmp_path / "industry_intraday_rs_snapshot.json"
+    intraday.write_text(
+        json.dumps(
+            {
+                "schema": "industry_intraday_rs_snapshot_v1",
+                "advisory_only": True,
+                "production_score_effect": "none",
+                "industries": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = build_evidence_package(
+        ["market_conditions"],
+        source_overrides={"market.industry_intraday_rs": intraday},
+    )
+    by_id = {source["source_id"]: source for source in evidence["sources"]}
+    assert "market.industry_intraday_rs" in by_id
+    assert by_id["market.industry_intraday_rs"]["status"] == "available"
+    assert by_id["market.industry_intraday_rs"]["content"]["advisory_only"] is True
+
+
 def test_validation_rejects_hallucinated_evidence_reference(tmp_path):
     from ai_summary import build_evidence_package, validate_ai_summary
 

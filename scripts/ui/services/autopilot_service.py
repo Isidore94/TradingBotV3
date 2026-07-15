@@ -20,6 +20,8 @@ from project_paths import (
     AUTOPILOT_REPORT_FILE,
     AUTOPILOT_SCORECARD_FILE,
     AUTOPILOT_STATE_FILE,
+    INDUSTRY_BOARD_STATE_FILE,
+    INDUSTRY_INTRADAY_RS_STATE_FILE,
     INTRADAY_BOUNCE_CANDIDATES_FILE,
     INTRADAY_BOUNCE_OUTCOMES_FILE,
     LONGS_FILE,
@@ -261,6 +263,7 @@ class AutopilotService(QObject):
             ),
             "report_error": getattr(self, "_last_report_error", ""),
             "universe_line": self._universe_line(now),
+            "industry_line": self._industry_line(),
             "universe_rebuilding": self._universe_rebuild_running,
             "wrapup_done_at": self._state.get("wrapup_done_at") or "",
             "wrapup_running": self._wrapup_running,
@@ -275,6 +278,20 @@ class AutopilotService(QObject):
             return "Universe: MISSING - run the Universe builder."
         state = "stale" if core.universe_is_stale(now, built_at) else "fresh"
         return f"Universe: {state} (built {built_at:%Y-%m-%d %H:%M})"
+
+    @staticmethod
+    def _industry_line() -> str:
+        def read_payload(path: Path) -> dict:
+            try:
+                value = json.loads(Path(path).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+            return value if isinstance(value, dict) else {}
+
+        return core.format_industry_snapshot_line(
+            read_payload(INDUSTRY_BOARD_STATE_FILE),
+            read_payload(INDUSTRY_INTRADAY_RS_STATE_FILE),
+        )
 
     def shutdown(self) -> None:
         self._timer.stop()
@@ -1154,6 +1171,7 @@ class AutopilotService(QObject):
                 "next_slot": snapshot["next_slot"],
                 "log_lines": list(self._log_lines)[-_MAX_REPORT_LOG_LINES:][::-1],
                 "universe_line": snapshot.get("universe_line", ""),
+                "industry_line": snapshot.get("industry_line", ""),
                 "scorecard_line": self._scorecard_line,
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),

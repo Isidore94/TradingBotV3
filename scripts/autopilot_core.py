@@ -1231,6 +1231,36 @@ def _mirror_auto_picks_into_registry(longs: list[str], shorts: list[str]) -> Non
 # ---------------------------------------------------------------------------
 # Away report (shared Google Drive digest)
 # ---------------------------------------------------------------------------
+def format_industry_snapshot_line(
+    board_state: Mapping[str, Any] | None,
+    intraday_state: Mapping[str, Any] | None,
+) -> str:
+    """One truthful identity shared by Auto Pilot and its Drive report."""
+    board = board_state if isinstance(board_state, Mapping) else {}
+    intraday = intraday_state if isinstance(intraday_state, Mapping) else {}
+    board_id = str(board.get("snapshot_id") or "")
+    board_status = str(board.get("status") or "missing").upper()
+    if board_id:
+        parts = [f"Industry Board: {board_status} snapshot {board_id}"]
+    else:
+        parts = ["Industry Board: unavailable"]
+
+    intraday_id = str(intraday.get("snapshot_id") or "")
+    if intraday_id:
+        source_id = str(intraday.get("source_board_snapshot_id") or "")
+        qualified = int(intraday.get("qualified_industry_count") or 0)
+        total = int(intraday.get("industry_count") or 0)
+        parts.append(
+            f"M5 advisory {intraday_id} ({qualified}/{total} qualified; source board "
+            f"{source_id or 'unknown'})"
+        )
+        if board_id and source_id and source_id != board_id:
+            parts.append("SOURCE MISMATCH - refresh RS/RW")
+    else:
+        parts.append("M5 advisory not built yet")
+    return " | ".join(parts)
+
+
 def build_away_operations_lines(audit: Mapping[str, Any] | None) -> dict[str, str]:
     """Condense the local operations audit into phone-sized truthful lines."""
     payload = audit if isinstance(audit, Mapping) else {}
@@ -1340,6 +1370,8 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         header_bits.append(str(payload["operations_line"]))
     if payload.get("last_scan_line"):
         header_bits.append(str(payload["last_scan_line"]))
+    if payload.get("industry_line"):
+        header_bits.append(str(payload["industry_line"]))
     if payload.get("swing_data_line"):
         header_bits.append(str(payload["swing_data_line"]))
     if payload.get("tracker_line"):

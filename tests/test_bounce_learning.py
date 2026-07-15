@@ -1291,6 +1291,77 @@ def test_rank_window_movers_uses_explicit_from_to_window():
     assert not empty["ok"] and empty["rows"] == []
 
 
+def test_rank_window_movers_completed_only_excludes_forming_m5_and_exports_same_cache():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 7, 8, 9, 30)
+    bot = _entry_stub_bot(
+        "neutral_chop",
+        spy_closes=[100.0, 100.0, 110.0],
+        symbol_closes={"AAA": [50.0, 50.5, 60.0]},
+        start=start,
+        longs=("AAA",),
+    )
+    requested_end = start + timedelta(minutes=10)
+    now = requested_end + timedelta(minutes=2)  # 09:40 bar is still forming.
+
+    preview = bot.rank_window_movers(start, requested_end)
+    completed = bot.rank_window_movers(
+        start,
+        requested_end,
+        completed_only=True,
+        now=now,
+    )
+    assert preview["spy_pct"] != completed["spy_pct"]
+    assert completed["completed_only"] is True
+    assert completed["data_complete_through"] == (start + timedelta(minutes=5)).isoformat(
+        timespec="minutes"
+    )
+
+    cache = bot.cached_m5_window_bars(
+        start,
+        requested_end,
+        completed_only=True,
+        now=now,
+    )
+    assert set(cache) == {"SPY", "AAA"}
+    assert all(len(rows) == 2 for rows in cache.values())
+    assert all(rows[-1]["dt"] == start + timedelta(minutes=5) for rows in cache.values())
+
+
+def test_completed_window_ranking_requires_exact_spy_endpoints_and_reports_coverage():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 7, 8, 9, 30)
+    bot = _entry_stub_bot(
+        "neutral_chop",
+        spy_closes=[100, 101, 102, 103, 104],
+        symbol_closes={
+            "AAA": [50, 51, 52, 53, 54],
+            "BBB": [80, 81, 82, 83, 84],
+        },
+        start=start,
+        longs=("AAA", "BBB"),
+    )
+    # AAA lacks SPY's exact first endpoint. The old preview remains permissive,
+    # while the completed-bar advisory view excludes the misaligned name.
+    bot.latest_bars["AAA|5 D|5 mins"] = bot.latest_bars["AAA|5 D|5 mins"][1:]
+    end = start + timedelta(minutes=20)
+    preview = bot.rank_window_movers(start, end)
+    completed = bot.rank_window_movers(
+        start,
+        end,
+        completed_only=True,
+        now=end + timedelta(minutes=5),
+    )
+
+    assert {row["symbol"] for row in preview["rows"]} == {"AAA", "BBB"}
+    assert {row["symbol"] for row in completed["rows"]} == {"BBB"}
+    assert completed["candidate_coverage"] == 0.5
+    assert completed["candidates_considered"] == 2
+    assert completed["rows"][0]["timestamp_coverage"] == 1.0
+
+
 def test_spy_m5_chart_bars_cached_only():
     bot = _entry_stub_bot(
         "neutral_chop",

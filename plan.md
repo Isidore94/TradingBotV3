@@ -182,6 +182,14 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   Windows Credential Manager stores optional saved keys. Structured output is
   locally schema/source-reference validated, then written with its exact evidence
   package and manifest. It is export-only and has no bot mutation path.
+- The RS Window now measures its automatic view on completed M5 bars, keeps the
+  trailing window inside the current session, declares one primary industry
+  without cherry-picking overlapping themes, and publishes sortable
+  industry-vs-SPY plus stock-vs-industry fields with member/timestamp coverage.
+  The atomic `industry_intraday_rs_snapshot_v1` artifact is available to A.I.
+  evidence/replay; RS Window, Auto Pilot, and the Drive report expose its daily
+  source-board ID and flag mismatches. These fields are explicitly advisory and
+  have no production score, alert, gate, or promotion effect.
 
 ### 3.2 Implemented and running in shadow
 

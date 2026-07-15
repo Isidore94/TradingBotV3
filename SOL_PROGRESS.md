@@ -11,7 +11,7 @@ stamp; it must not duplicate the roadmap.
   verified Sol3 integration and subsequent fixes.
 - Integration base: `fc05c96`.
 - Date: 2026-07-14
-- Test baseline: **900 passed, 5 subtests passed**
+- Test baseline: **913 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -56,6 +56,14 @@ stamp; it must not duplicate the roadmap.
   It previews the exact bounded package, stores saved keys in Windows Credential
   Manager, validates structured results and every source ID, and exports the
   summary/evidence/manifest without any write path back into bot decisions.
+- Advisory industry RS/RW: the RS Window now excludes forming M5 bars and
+  prior-session spillover from its automatic window, declares a deterministic
+  primary industry, ranks all available intraday industry composites, and shows
+  industry-vs-SPY plus stock-vs-industry with member/timestamp coverage. The
+  atomic snapshot feeds replay and A.I. evidence only; production scoring,
+  alerts, and promotion remain unchanged pending the roadmap gates. RS Window,
+  Auto Pilot, and the swing-first Drive report expose the same source-board ID
+  and flag any stale-source mismatch.
 - Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
   provenance while preserving the raw trigger signals separately.
 - Next queue: finish the Section 6 operational drills, remaining

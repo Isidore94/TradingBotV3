@@ -28,6 +28,7 @@ from project_paths import (
     AUTOPILOT_REPORT_FILE,
     AUTOPILOT_STATE_FILE,
     INDUSTRY_BOARD_STATE_FILE,
+    INDUSTRY_INTRADAY_RS_STATE_FILE,
     MARKET_ENVIRONMENT_ANNOTATIONS_FILE,
     MASTER_AVWAP_MARKET_PREP_FILE,
     MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
@@ -123,6 +124,11 @@ def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
             ("market.auto_state", "Auto Pilot state", AUTOPILOT_STATE_FILE),
             ("market.master_prep_state", "Market prep scanner state", MASTER_AVWAP_MARKET_PREP_FILE),
             ("market.industry_snapshot", "Industry Board snapshot", INDUSTRY_BOARD_STATE_FILE),
+            (
+                "market.industry_intraday_rs",
+                "Completed-M5 advisory industry RS/RW snapshot",
+                INDUSTRY_INTRADAY_RS_STATE_FILE,
+            ),
             (
                 "market.user_environment_annotations",
                 "Trader market-environment annotations",

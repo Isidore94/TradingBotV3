@@ -312,6 +312,7 @@ MASTER_AVWAP_TRADINGVIEW_REPORT_FILE = REPORTS_DIR / "master_avwap_tradingview.t
 MASTER_AVWAP_D1_UPGRADE_ALERTS_REPORT_FILE = REPORTS_DIR / "master_avwap_d1_upgrade_alerts.txt"
 MASTER_AVWAP_MARKET_PREP_FILE = RUNTIME_DATA_DIR / "master_avwap_market_prep.json"
 INDUSTRY_BOARD_STATE_FILE = RUNTIME_DATA_DIR / "industry_board_snapshot.json"
+INDUSTRY_INTRADAY_RS_STATE_FILE = RUNTIME_DATA_DIR / "industry_intraday_rs_snapshot.json"
 MASTER_AVWAP_MARKET_PREP_REPORT_FILE = REPORTS_DIR / "master_avwap_market_prep.txt"
 EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE = REPORTS_DIR / "earnings_anchor_candidates.txt"
 

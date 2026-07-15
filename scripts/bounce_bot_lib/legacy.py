@@ -4776,40 +4776,156 @@ class BounceBot(EWrapper, EClient):
             if bar.dt.date() in keep
         ]
 
-    def rank_window_movers(self, start_dt, end_dt, sides=("long", "short")):
+    @staticmethod
+    def _m5_bar_completed(bar_dt, now=None):
+        """Whether a timestamped M5 bar is closed at ``now``.
+
+        IB's historical cache has no complete/forming marker. The timestamp is
+        the bar start, so a transition-grade bar closes five minutes later.
+        """
+        if not isinstance(bar_dt, datetime):
+            return False
+        moment = now or datetime.now(tz=bar_dt.tzinfo)
+        if bar_dt.tzinfo is None and moment.tzinfo is not None:
+            moment = moment.replace(tzinfo=None)
+        elif bar_dt.tzinfo is not None and moment.tzinfo is None:
+            moment = moment.replace(tzinfo=bar_dt.tzinfo)
+        return bar_dt + timedelta(minutes=5) <= moment
+
+    def cached_m5_window_bars(self, start_dt, end_dt, *, completed_only=True, now=None):
+        """All cached M5 symbols over a GUI window, without provider I/O.
+
+        This read model feeds advisory industry composites. It deliberately
+        exposes only keys from the existing ``5 D|5 mins`` cache and never
+        launches a second market-data loop.
+        """
+        result = {}
+        suffix = "|5 D|5 mins"
+        for key, cached in (getattr(self, "latest_bars", {}) or {}).items():
+            if not str(key).endswith(suffix):
+                continue
+            symbol = str(key)[: -len(suffix)].strip().upper()
+            if not symbol:
+                continue
+            window = [
+                bar
+                for bar in cached or []
+                if isinstance(getattr(bar, "dt", None), datetime)
+                and start_dt <= bar.dt <= end_dt
+                and (not completed_only or self._m5_bar_completed(bar.dt, now=now))
+            ]
+            if not window:
+                continue
+            window.sort(key=lambda bar: bar.dt)
+            result[symbol] = [
+                {
+                    "dt": bar.dt,
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": float(getattr(bar, "volume", 0) or 0),
+                }
+                for bar in window
+            ]
+        return result
+
+    def rank_window_movers(
+        self,
+        start_dt,
+        end_dt,
+        sides=("long", "short"),
+        *,
+        completed_only=False,
+        now=None,
+    ):
         """RS/RW ranking over an arbitrary from->to window (GUI chart selection).
 
         Same excess-vs-SPY math as the entry windows, but with an explicit end
         instead of "now", so the trader can measure any stretch of the session.
-        Cached bars only - safe from the GUI thread."""
+        Cached bars only - safe from the GUI thread. ``completed_only`` is the
+        advisory GUI contract: exclude forming bars and require every ranked
+        symbol to share SPY's exact endpoints with at least 80% timestamp
+        coverage. The legacy preview callers keep their existing default.
+        """
 
-        def window_pct(bars):
-            window = [bar for bar in bars if start_dt <= bar.dt <= end_dt]
+        def window_bars(bars):
+            return sorted(
+                [
+                    bar
+                    for bar in bars
+                    if start_dt <= bar.dt <= end_dt
+                    and (not completed_only or self._m5_bar_completed(bar.dt, now=now))
+                ],
+                key=lambda bar: bar.dt,
+            )
+
+        def window_pct(window):
             if not window or not window[0].open:
                 return None
             return (window[-1].close - window[0].open) / window[0].open * 100.0
 
-        spy_pct = window_pct(self.latest_bars.get("SPY|5 D|5 mins") or [])
+        spy_bars = window_bars(self.latest_bars.get("SPY|5 D|5 mins") or [])
+        spy_pct = window_pct(spy_bars)
         if spy_pct is None:
             return {"ok": False, "note": "No cached SPY bars covering that window yet.", "rows": []}
+        spy_timestamps = {bar.dt for bar in spy_bars}
+        first_spy_ts = spy_bars[0].dt
+        last_spy_ts = spy_bars[-1].dt
         rows = []
+        candidates_considered = 0
         for side in sides:
             sign = 1.0 if side == "long" else -1.0
             for symbol in self._entry_candidates(side):
-                pct = window_pct(self.latest_bars.get(f"{symbol}|5 D|5 mins") or [])
+                candidates_considered += 1
+                symbol_window = window_bars(
+                    self.latest_bars.get(f"{symbol}|5 D|5 mins") or []
+                )
+                timestamp_coverage = None
+                if completed_only:
+                    symbol_timestamps = {bar.dt for bar in symbol_window}
+                    timestamp_coverage = len(symbol_timestamps & spy_timestamps) / max(
+                        1, len(spy_timestamps)
+                    )
+                    if (
+                        first_spy_ts not in symbol_timestamps
+                        or last_spy_ts not in symbol_timestamps
+                        or timestamp_coverage < 0.8
+                    ):
+                        continue
+                pct = window_pct(symbol_window)
                 if pct is None:
                     continue
-                rows.append(
-                    {
-                        "symbol": symbol,
-                        "side": "LONG" if side == "long" else "SHORT",
-                        "window_pct": pct,
-                        "spy_pct": spy_pct,
-                        "excess": sign * (pct - spy_pct),
-                    }
-                )
+                row = {
+                    "symbol": symbol,
+                    "side": "LONG" if side == "long" else "SHORT",
+                    "window_pct": pct,
+                    "spy_pct": spy_pct,
+                    "excess": sign * (pct - spy_pct),
+                }
+                if completed_only:
+                    row.update(
+                        {
+                            "timestamp_coverage": timestamp_coverage,
+                            "alignment_status": "exact_completed",
+                        }
+                    )
+                rows.append(row)
         rows.sort(key=lambda row: -row["excess"])
-        return {"ok": True, "spy_pct": spy_pct, "rows": rows}
+        result = {"ok": True, "spy_pct": spy_pct, "rows": rows}
+        if completed_only:
+            result.update(
+                {
+                    "completed_only": True,
+                    "candidate_coverage": len(rows) / max(1, candidates_considered),
+                    "candidates_considered": candidates_considered,
+                    "candidates_ranked": len(rows),
+                    "data_complete_through": (
+                        spy_bars[-1].dt.isoformat(timespec="minutes") if spy_bars else ""
+                    ),
+                }
+            )
+        return result
 
     def entry_assist_board_snapshot(self, movers_minutes=ENTRY_MOVERS_MINUTES):
         """The always-on RS/RW board: everything entry assist can say, fresh.

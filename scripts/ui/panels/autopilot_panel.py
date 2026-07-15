@@ -68,6 +68,8 @@ class AutopilotPanel(QFrame):
         self.slots_value = QLabel("-")
         self.watchlist_value = QLabel("-")
         self.universe_value = QLabel("-")
+        self.industry_value = QLabel("-")
+        self.industry_value.setWordWrap(True)
         self.wrapup_value = QLabel("-")
         self.report_value = QLabel("-")
         self.report_value.setWordWrap(True)
@@ -83,6 +85,7 @@ class AutopilotPanel(QFrame):
                 ("Slots done", self.slots_value),
                 ("Watchlists", self.watchlist_value),
                 ("Universe", self.universe_value),
+                ("Industry evidence", self.industry_value),
                 ("After-close wrap-up", self.wrapup_value),
                 ("Away report", self.report_value),
             )
@@ -177,6 +180,13 @@ class AutopilotPanel(QFrame):
         self.universe_value.setText(universe_text)
         self.universe_value.setStyleSheet(
             "color: #E06C75;" if "stale" in universe_text or "MISSING" in universe_text else ""
+        )
+        industry_text = str(snapshot.get("industry_line") or "Industry Board: unavailable")
+        self.industry_value.setText(industry_text)
+        self.industry_value.setStyleSheet(
+            "color: #E06C75;"
+            if "unavailable" in industry_text.lower() or "mismatch" in industry_text.lower()
+            else ""
         )
         if snapshot.get("wrapup_running"):
             self.wrapup_value.setText("running...")
