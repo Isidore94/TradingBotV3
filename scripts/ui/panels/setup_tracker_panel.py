@@ -29,6 +29,7 @@ from project_paths import (
     MASTER_AVWAP_TIER_LIST_FILE,
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
 )
+from research_explanations import build_plain_english_whats_working
 from ui import theme
 from ui.models.tracker_table_model import ROW_ROLE, TrackerSortProxyModel, TrackerTableModel
 from ui.services.human_focus_tracker_feed import (
@@ -325,8 +326,20 @@ class SetupTrackerPanel(QFrame):
         # prices from the current anchor bands.
         self.detail_view = SetupDetailView(self, playbook_lookup=self._best_playbook_row)
         self.current_table.clicked.connect(self._on_pick_clicked)
-        for table in (self.setup_type_table, self.recent_type_table, self.short_term_table, self.playbook_table):
-            table.clicked.connect(self._on_family_row_clicked)
+        explained_tables = (
+            (self.setup_type_table, "setup_type"),
+            (self.recent_type_table, "setup_recent"),
+            (self.short_term_table, "setup_short_term"),
+            (self.playbook_table, "setup_playbook"),
+            (self.scan_factor_table, "setup_scan_factor"),
+            (self.tier_performance_table, "setup_tier_performance"),
+            (self.catch_rate_table, "setup_catch_rate"),
+            (self.human_pick_table, "setup_human_pick"),
+        )
+        for table, kind in explained_tables:
+            table.clicked.connect(
+                lambda index, explanation_kind=kind: self._on_research_row_clicked(index, explanation_kind)
+            )
 
         self._build_layout()
         self.refresh()
@@ -473,6 +486,12 @@ class SetupTrackerPanel(QFrame):
             return
         self.detail_view.show_family(str(row.get("setup_family") or ""), side=str(row.get("side") or ""))
 
+    def _on_research_row_clicked(self, index, kind: str) -> None:
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, dict):
+            return
+        self.detail_view.show_research_row(kind, row)
+
     def _best_playbook_row(self, side: str, family: str) -> dict[str, Any] | None:
         side = str(side or "").strip().upper()
         family = str(family or "").strip().lower()
@@ -599,12 +618,24 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
     favorite_c = theme.color("favorite")
 
     parts = [f"<body style='color:{body}; font-size:9pt'>"]
+    plain = build_plain_english_whats_working(
+        current_rows=panel.current_pick_rows,
+        short_term_rows=panel.short_term_rows,
+        recent_rows=panel.recent_type_rows,
+        playbook_rows=panel.playbook_rows,
+        short_term_min_samples=SHORT_TERM_MIN_SAMPLES,
+    )
+    parts.append(f"<div style='border:1px solid {favorite_c}; padding:7px; margin-bottom:7px'>")
+    parts.append(f"<h3 style='margin:0; color:{favorite_c}'>{_esc(plain['headline'])}</h3><ul>")
+    parts.extend(f"<li>{_esc(item)}</li>" for item in plain["bullets"])
+    parts.append(f"</ul><div style='color:{muted}'>{_esc(plain['caution'])}</div></div>")
     parts.append(_best_now_banner_html(panel))
     parts.append("<table width='100%' cellspacing='0' cellpadding='4'><tr>")
     parts.append("<td valign='top' width='35%'>")
     parts.append(f"<h3 style='margin:0; color:{favorite_c}'>Current S/A picks</h3>")
-    if panel.current_pick_rows:
-        for row in [row for row in panel.current_pick_rows if str(row.get("tier") or "").upper() in {"S", "A"}][:10]:
+    ready_rows = [row for row in panel.current_pick_rows if str(row.get("tier") or "").upper() in {"S", "A"}]
+    if ready_rows:
+        for row in ready_rows[:10]:
             color = long_c if str(row.get("side") or "").upper() == "LONG" else short_c
             parts.append(
                 f"<div><b style='color:{favorite_c}'>{_esc(row.get('tier'))}</b> "
@@ -616,7 +647,7 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
             if matches:
                 parts.append(f"<div style='color:{muted}; margin-left:14px'>{_esc(_shorten(matches, 140))}</div>")
     else:
-        parts.append(f"<div style='color:{muted}'>No current tier export found yet.</div>")
+        parts.append(f"<div style='color:{muted}'>No current stock clears the S/A quality gate.</div>")
     parts.append("</td>")
 
     parts.append("<td valign='top' width='32%'>")

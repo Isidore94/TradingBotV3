@@ -168,6 +168,14 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   manual window controls live under Advanced diagnostics.
 - D1 Focus routes final Favorite/High Conviction bucket-upgrade events only;
   armed/level-cross triggers remain developing evidence in the live stream.
+- Setup Tracker, Day Trade Tracker, and Move Forensics rows share deterministic
+  novice explanations that separate executable triggers from aggregate research,
+  spell out entry/invalidation/management, and expose sample-size cautions.
+- Setup Tracker leads with a plain-English, evidence-floor-aware "What's
+  Working" summary and leaves qualified lanes empty instead of backfilling them.
+- Journal schema v2 adds an append-only opportunity lifecycle ledger. Broker
+  imports create idempotent Taken/Closed events, and the GUI records structured
+  trade reviews alongside freeform notes for later daily/A.I. review.
 
 ### 3.2 Implemented and running in shadow
 

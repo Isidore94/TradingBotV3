@@ -10,6 +10,7 @@ from setup_docs import build_trade_plan, resolve_setup_doc
 from ui import theme
 from ui.panels.setup_docs_panel import render_doc_html
 from ui.services.ai_state_levels import load_symbol_levels
+from ui.widgets.research_explanation_view import render_research_explanation_html
 
 
 class SetupDetailView(QTextBrowser):
@@ -56,6 +57,8 @@ class SetupDetailView(QTextBrowser):
             "favorite_signals": list(favorite_signals or []),
             "tier": str(tier or "").strip().upper(),
             "last_close": last_close,
+            "research_kind": "",
+            "research_row": None,
         }
         needs_levels = bool(self._current["symbol"]) and not self._symbol_levels and not self._levels_loading
         if needs_levels:
@@ -66,6 +69,19 @@ class SetupDetailView(QTextBrowser):
 
     def show_family(self, setup_family: str, side: str = "") -> None:
         self.show_setup(symbol="", side=side or "LONG", setup_family=setup_family)
+
+    def show_research_row(self, kind: str, row: dict[str, Any]) -> None:
+        self._current = {
+            "symbol": "",
+            "side": str(row.get("side") or row.get("direction") or "LONG").strip().upper(),
+            "setup_family": str(row.get("setup_family") or ""),
+            "favorite_signals": [],
+            "tier": str(row.get("tier") or "").strip().upper(),
+            "last_close": None,
+            "research_kind": str(kind or ""),
+            "research_row": dict(row),
+        }
+        self._render()
 
     # ------------------------------------------------------------------
     def _load_levels_worker(self) -> None:
@@ -92,6 +108,14 @@ class SetupDetailView(QTextBrowser):
 
         body_open = f"<body style='color:{theme.color('text_primary')}; font-size:9pt'>"
         parts = [body_open]
+        if current.get("research_row") is not None:
+            parts.append(
+                render_research_explanation_html(
+                    str(current.get("research_kind") or "research"),
+                    current.get("research_row"),
+                    include_body=False,
+                )
+            )
         if symbol:
             side_color = theme.color("long" if side == "LONG" else "short")
             tier_text = (
@@ -104,8 +128,9 @@ class SetupDetailView(QTextBrowser):
                 f"<span style='color:{side_color}'>{_esc(side)}</span></h2>"
             )
             parts.append(self._plan_html(current))
-        doc_html = render_doc_html(doc_key, doc, heading_level=3)
-        parts.append(doc_html.replace(body_open, "").replace("</body>", ""))
+        if symbol or current.get("setup_family"):
+            doc_html = render_doc_html(doc_key, doc, heading_level=3)
+            parts.append(doc_html.replace(body_open, "").replace("</body>", ""))
         parts.append("</body>")
         self.setHtml("".join(parts))
         self.setVisible(True)
@@ -144,13 +169,13 @@ class SetupDetailView(QTextBrowser):
         def _r(value) -> str:
             return f"{value:+.1f}R" if isinstance(value, (int, float)) else "n/a"
 
-        parts = [f"<h3 style='margin:8px 0 2px 0; color:{favorite}'>The plan (from the last scan's anchor levels)</h3>"]
+        parts = [f"<h3 style='margin:8px 0 2px 0; color:{favorite}'>How to execute it, step by step</h3>"]
         parts.append(
-            f"<div><b>Reference price:</b> {_price(plan.get('entry_reference'))} "
+            f"<div><b>1. Entry reference:</b> {_price(plan.get('entry_reference'))} "
             f"<span style='color:{muted}'>(last scan close; anchor {_esc(levels.get('anchor_date'))})</span></div>"
         )
         parts.append(
-            f"<div><b style='color:{short_c}'>Stop:</b> {_esc(plan['stop_label'])} @ {_price(plan.get('stop_price'))} "
+            f"<div><b style='color:{short_c}'>2. Invalidation/stop:</b> {_esc(plan['stop_label'])} @ {_price(plan.get('stop_price'))} "
             f"<span style='color:{muted}'>— fires after {plan['stop_close_failures']} daily close(s) beyond it; "
             f"{_esc(plan['stop_reason'])}</span></div>"
         )
@@ -158,22 +183,27 @@ class SetupDetailView(QTextBrowser):
         if isinstance(risk, (int, float)):
             pct = plan.get("risk_pct_of_price")
             pct_text = f" ({pct:.1f}% of price)" if isinstance(pct, (int, float)) else ""
-            parts.append(f"<div><b>Risk/share:</b> {_price(risk)}{pct_text}</div>")
+            parts.append(f"<div><b>3. Risk per share (1R):</b> {_price(risk)}{pct_text}</div>")
         else:
             parts.append(
                 f"<div style='color:{short_c}'>Price is already beyond the stop level — the plan is stale; "
                 f"wait for the next valid trigger.</div>"
             )
         parts.append(
-            f"<div><b style='color:{long_c}'>TP1 (take 50%):</b> {_esc(plan['partial_label'])} @ "
+            f"<div><b style='color:{long_c}'>4. First target (take 50%):</b> {_esc(plan['partial_label'])} @ "
             f"{_price(plan.get('partial_price'))} <span style='color:{muted}'>({_r(plan.get('partial_r'))})</span></div>"
         )
         parts.append(
-            f"<div><b style='color:{long_c}'>TP2 (runner):</b> {_esc(plan['final_label'])} @ "
+            f"<div><b style='color:{long_c}'>5. Runner target:</b> {_esc(plan['final_label'])} @ "
             f"{_price(plan.get('final_price'))} <span style='color:{muted}'>({_r(plan.get('final_r'))}); trail stop to "
             f"{_esc(plan['trail_label'])} after TP1</span></div>"
         )
         parts.append(f"<div style='color:{muted}'>Time stop: {plan['time_stop_sessions']} sessions.</div>")
+        parts.append(
+            f"<div style='color:{muted}; margin-top:4px'><b>Novice glossary:</b> 1R is the planned loss "
+            "between entry and stop. A completed-bar close is required where the setup says so; an intraday "
+            "wick or preview is not confirmation.</div>"
+        )
 
         best = self._playbook_lookup(side, family) if self._playbook_lookup else None
         if best:

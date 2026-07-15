@@ -69,6 +69,41 @@ def save_annotation(trade_id: str, *, setup_tags: str, notes: str) -> None:
     _store().save_trade_annotation(trade_id, setup_tags=setup_tags, notes=notes)
 
 
+def record_trade_review(
+    trade_id: str,
+    *,
+    review_outcome: str,
+    decision_reason: str = "",
+    setup_tags: str = "",
+    notes: str = "",
+) -> dict[str, Any] | None:
+    trade = _store().get_trade(trade_id)
+    if trade is None:
+        return None
+    return _store().record_opportunity_event(
+        opportunity_id=f"trade:{trade_id}",
+        lifecycle_id=f"trade:{trade_id}",
+        event_type="REVIEWED",
+        symbol=str(trade.get("symbol") or ""),
+        side=str(trade.get("direction") or ""),
+        trade_id=trade_id,
+        reason=decision_reason,
+        payload={
+            "review_outcome": str(review_outcome or "").strip(),
+            "setup_tags": str(setup_tags or "").strip(),
+            "notes": str(notes or "").strip(),
+        },
+        source="journal_gui",
+    )
+
+
+def latest_trade_review(trade_id: str) -> dict[str, Any] | None:
+    try:
+        return _store().latest_trade_review(trade_id)
+    except Exception:
+        return None
+
+
 def export_trades_csv() -> Path:
     return _store().export_trades_csv()
 

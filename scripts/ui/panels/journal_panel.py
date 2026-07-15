@@ -336,9 +336,24 @@ class JournalPanel(QFrame):
         if row is not None:
             self.detail.set_trade(row)
 
-    def _on_annotation_saved(self, trade_id: str, setup_tags: str, notes: str) -> None:
+    def _on_annotation_saved(
+        self,
+        trade_id: str,
+        setup_tags: str,
+        notes: str,
+        review_outcome: str,
+        decision_reason: str,
+    ) -> None:
         try:
             journal_feed.save_annotation(trade_id, setup_tags=setup_tags, notes=notes)
+            if review_outcome != "Not reviewed" or decision_reason.strip():
+                journal_feed.record_trade_review(
+                    trade_id,
+                    review_outcome=review_outcome,
+                    decision_reason=decision_reason,
+                    setup_tags=setup_tags,
+                    notes=notes,
+                )
         except Exception as exc:
             QMessageBox.warning(self, "Save Failed", str(exc))
             return
@@ -360,7 +375,7 @@ class JournalPanel(QFrame):
 
 
 class JournalDetailPanel(QFrame):
-    annotationSaved = Signal(str, str, str)
+    annotationSaved = Signal(str, str, str, str, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -393,6 +408,22 @@ class JournalDetailPanel(QFrame):
 
         self.tags_input = QLineEdit()
         self.tags_input.setPlaceholderText("Setup tags (semicolon separated)")
+        self.review_input = QComboBox()
+        self.review_input.addItems(
+            [
+                "Not reviewed",
+                "Followed plan",
+                "Good trade / bad outcome",
+                "Late or chased entry",
+                "Poor stop discipline",
+                "Poor exit discipline",
+                "Oversized",
+                "Setup was invalid",
+                "Other lesson",
+            ]
+        )
+        self.decision_reason_input = QLineEdit()
+        self.decision_reason_input.setPlaceholderText("Why did you take this trade?")
         self.notes_input = QPlainTextEdit()
         self.notes_input.setPlaceholderText("Notes / review")
         save_button = QPushButton("Save Annotation")
@@ -408,6 +439,11 @@ class JournalDetailPanel(QFrame):
         tags_label.setObjectName("MutedLabel")
         layout.addWidget(tags_label)
         layout.addWidget(self.tags_input)
+        review_label = QLabel("Structured Review")
+        review_label.setObjectName("MutedLabel")
+        layout.addWidget(review_label)
+        layout.addWidget(self.review_input)
+        layout.addWidget(self.decision_reason_input)
         notes_label = QLabel("Notes")
         notes_label.setObjectName("MutedLabel")
         layout.addWidget(notes_label)
@@ -424,12 +460,24 @@ class JournalDetailPanel(QFrame):
         self.summary_label.setText(_trade_summary(trade))
         self.tags_input.setText(trade.tags)
         self.notes_input.setPlainText(trade.notes)
+        review = journal_feed.latest_trade_review(trade.trade_id) or {}
+        payload = review.get("payload") if isinstance(review.get("payload"), dict) else {}
+        outcome = str(payload.get("review_outcome") or "Not reviewed")
+        index = self.review_input.findText(outcome)
+        self.review_input.setCurrentIndex(index if index >= 0 else 0)
+        self.decision_reason_input.setText(str(review.get("reason") or ""))
         self.stack.setCurrentWidget(self.detail_view)
 
     def _save(self) -> None:
         if self._trade is None:
             return
-        self.annotationSaved.emit(self._trade.trade_id, self.tags_input.text(), self.notes_input.toPlainText())
+        self.annotationSaved.emit(
+            self._trade.trade_id,
+            self.tags_input.text(),
+            self.notes_input.toPlainText(),
+            self.review_input.currentText(),
+            self.decision_reason_input.text(),
+        )
 
 
 def _trade_summary(trade: JournalTrade) -> str:

@@ -6,21 +6,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSplitter,
     QTabWidget,
     QVBoxLayout,
 )
 
 from bounce_bot_lib.learning import BOUNCE_LEARNING_STATE_FILE, load_bounce_learning_state
 from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
-from ui.models.tracker_table_model import TrackerSortProxyModel, TrackerTableModel
+from ui.models.tracker_table_model import ROW_ROLE, TrackerSortProxyModel, TrackerTableModel
 from ui.widgets.data_table import DataTable
 from ui.widgets.kpi_tile import KpiTile
+from ui.widgets.research_explanation_view import ResearchExplanationView
 from ui.widgets.section_header import SectionHeader
 
 PERFORMANCE_COLUMNS = (
@@ -102,8 +104,17 @@ class DaytradeTrackerPanel(QFrame):
             table, model = self._make_table(PERFORMANCE_COLUMNS)
             self._dimension_tables[key] = (table, model)
             self.tabs.addTab(table, label)
+            table.clicked.connect(
+                lambda index, dimension=key: self._show_row_explanation(
+                    index, "daytrade_performance", dimension=dimension
+                )
+            )
         self.learning_table, self.learning_model = self._make_table(LEARNING_COLUMNS)
         self.tabs.addTab(self.learning_table, "Live Alert Rules")
+        self.learning_table.clicked.connect(
+            lambda index: self._show_row_explanation(index, "daytrade_learning")
+        )
+        self.explanation_view = ResearchExplanationView(self)
 
         self._refreshFinished.connect(self._on_refresh_finished)
         self._build_layout()
@@ -127,7 +138,12 @@ class DaytradeTrackerPanel(QFrame):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addLayout(kpi_row)
-        layout.addWidget(self.tabs, 1)
+        self.detail_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.detail_splitter.addWidget(self.tabs)
+        self.detail_splitter.addWidget(self.explanation_view)
+        self.detail_splitter.setStretchFactor(0, 3)
+        self.detail_splitter.setStretchFactor(1, 2)
+        layout.addWidget(self.detail_splitter, 1)
         layout.addWidget(self.status_label)
 
     def _make_table(self, columns) -> tuple[DataTable, TrackerTableModel]:
@@ -145,6 +161,15 @@ class DaytradeTrackerPanel(QFrame):
         table.setModel(proxy)
         table.setShowGrid(False)
         return table, model
+
+    def _show_row_explanation(self, index, kind: str, *, dimension: str = "") -> None:
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, dict):
+            return
+        payload = dict(row)
+        if dimension and not payload.get("dimension"):
+            payload["dimension"] = dimension
+        self.explanation_view.show_row(kind, payload)
 
     # ------------------------------------------------------------------
     def reload_from_disk(self) -> None:

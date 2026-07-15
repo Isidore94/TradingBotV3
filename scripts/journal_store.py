@@ -5,17 +5,31 @@ import hashlib
 import json
 import math
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from journal_analytics import AutoTagger
 from project_paths import JOURNAL_DB_FILE, JOURNAL_EXPORT_DIR
 
 
-JOURNAL_SCHEMA_VERSION = 1
+JOURNAL_SCHEMA_VERSION = 2
 EPSILON = 0.0000001
+
+OPPORTUNITY_EVENT_TYPES = {
+    "SEEN",
+    "PLANNED",
+    "TAKEN",
+    "SKIPPED",
+    "INVALIDATED",
+    "TARGET_HIT",
+    "STOPPED",
+    "CLOSED",
+    "REVIEWED",
+    "NOTE",
+}
 
 
 REGIME_PRESETS = {
@@ -269,10 +283,31 @@ class JournalStore:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS opportunity_events (
+                    event_id TEXT PRIMARY KEY,
+                    opportunity_id TEXT NOT NULL,
+                    lifecycle_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL DEFAULT '',
+                    side TEXT NOT NULL DEFAULT '',
+                    event_type TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    trade_id TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    source TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_raw_exec_date ON raw_executions(trade_date);
                 CREATE INDEX IF NOT EXISTS idx_raw_exec_symbol ON raw_executions(symbol);
                 CREATE INDEX IF NOT EXISTS idx_trades_date ON trades(trade_date);
                 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+                CREATE INDEX IF NOT EXISTS idx_opportunity_events_opportunity
+                    ON opportunity_events(opportunity_id, occurred_at);
+                CREATE INDEX IF NOT EXISTS idx_opportunity_events_trade
+                    ON opportunity_events(trade_id, occurred_at);
+                CREATE INDEX IF NOT EXISTS idx_opportunity_events_date
+                    ON opportunity_events(substr(occurred_at, 1, 10), event_type);
                 """
             )
             conn.execute(
@@ -517,10 +552,67 @@ class JournalStore:
                         leg["fees"],
                     ),
                 )
+            # Deterministic import-derived lifecycle events are append-only.
+            # Rebuilding the trade table cannot duplicate or rewrite them.
+            for trade in trade_payloads:
+                self._record_imported_trade_events(conn, trade)
 
         if refresh_tags:
             self.refresh_auto_tags()
         return len(trade_payloads)
+
+    @staticmethod
+    def _record_imported_trade_events(conn: sqlite3.Connection, trade: dict[str, Any]) -> None:
+        trade_id = str(trade.get("trade_id") or "")
+        opportunity_id = f"trade:{trade_id}"
+        common = (
+            opportunity_id,
+            opportunity_id,
+            str(trade.get("symbol") or "").upper(),
+            str(trade.get("direction") or "").upper(),
+            trade_id,
+        )
+        payload = _json_dumps(
+            {
+                "broker": trade.get("broker"),
+                "account_number": trade.get("account_number"),
+                "quantity_opened": trade.get("quantity_opened"),
+                "average_entry_price": trade.get("average_entry_price"),
+            }
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO opportunity_events(
+                event_id, opportunity_id, lifecycle_id, symbol, side, event_type,
+                occurred_at, trade_id, reason, payload_json, source, created_at
+            ) VALUES(?, ?, ?, ?, ?, 'TAKEN', ?, ?, '', ?, 'broker_import', ?)
+            """,
+            (f"trade:{trade_id}:taken", *common[:4], trade.get("opened_at") or _now_iso(), common[4], payload, _now_iso()),
+        )
+        if str(trade.get("status") or "").upper() == "CLOSED" and trade.get("closed_at"):
+            close_payload = _json_dumps(
+                {
+                    "average_exit_price": trade.get("average_exit_price"),
+                    "net_pnl": trade.get("net_pnl"),
+                    "pnl_usd": trade.get("pnl_usd"),
+                }
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO opportunity_events(
+                    event_id, opportunity_id, lifecycle_id, symbol, side, event_type,
+                    occurred_at, trade_id, reason, payload_json, source, created_at
+                ) VALUES(?, ?, ?, ?, ?, 'CLOSED', ?, ?, '', ?, 'broker_import', ?)
+                """,
+                (
+                    f"trade:{trade_id}:closed",
+                    *common[:4],
+                    trade.get("closed_at"),
+                    common[4],
+                    close_payload,
+                    _now_iso(),
+                ),
+            )
 
     def _new_trade_state(
         self,
@@ -717,6 +809,119 @@ class JournalStore:
                 """,
                 (trade_id, str(setup_tags or "").strip(), str(notes or "").strip(), _now_iso()),
             )
+
+    def record_opportunity_event(
+        self,
+        *,
+        opportunity_id: str,
+        event_type: str,
+        lifecycle_id: str = "",
+        symbol: str = "",
+        side: str = "",
+        occurred_at: str | datetime | None = None,
+        trade_id: str = "",
+        reason: str = "",
+        payload: Mapping[str, Any] | None = None,
+        source: str = "gui",
+        event_id: str = "",
+    ) -> dict[str, Any]:
+        """Append one immutable opportunity lifecycle event.
+
+        Scanner/UI callers may share ``lifecycle_id`` across evolving snapshot
+        IDs. Imported trades use deterministic IDs; human/research events use a
+        random event ID so repeated reviews remain an honest history.
+        """
+
+        opportunity = str(opportunity_id or "").strip()
+        if not opportunity:
+            raise ValueError("opportunity_id is required")
+        normalized_type = str(event_type or "").strip().upper()
+        if normalized_type not in OPPORTUNITY_EVENT_TYPES:
+            raise ValueError(f"unsupported opportunity event type: {event_type}")
+        normalized_side = str(side or "").strip().upper()
+        if normalized_side and normalized_side not in {"LONG", "SHORT"}:
+            raise ValueError("side must be LONG, SHORT, or blank")
+        if isinstance(occurred_at, datetime):
+            occurred_text = occurred_at.isoformat(timespec="seconds")
+        else:
+            occurred_text = str(occurred_at or _now_iso()).strip()
+        row = {
+            "event_id": str(event_id or uuid.uuid4().hex),
+            "opportunity_id": opportunity,
+            "lifecycle_id": str(lifecycle_id or opportunity).strip(),
+            "symbol": str(symbol or "").strip().upper(),
+            "side": normalized_side,
+            "event_type": normalized_type,
+            "occurred_at": occurred_text,
+            "trade_id": str(trade_id or "").strip(),
+            "reason": str(reason or "").strip(),
+            "payload_json": _json_dumps(dict(payload or {})),
+            "source": str(source or "").strip(),
+            "created_at": _now_iso(),
+        }
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO opportunity_events(
+                    event_id, opportunity_id, lifecycle_id, symbol, side, event_type,
+                    occurred_at, trade_id, reason, payload_json, source, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(row[key] for key in (
+                    "event_id", "opportunity_id", "lifecycle_id", "symbol", "side", "event_type",
+                    "occurred_at", "trade_id", "reason", "payload_json", "source", "created_at",
+                )),
+            )
+        result = dict(row)
+        result["payload"] = json.loads(result.pop("payload_json"))
+        return result
+
+    def list_opportunity_events(
+        self,
+        *,
+        opportunity_id: str = "",
+        lifecycle_id: str = "",
+        trade_id: str = "",
+        trade_date: str | date | None = None,
+        event_type: str = "",
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("opportunity_id", opportunity_id),
+            ("lifecycle_id", lifecycle_id),
+            ("trade_id", trade_id),
+        ):
+            if str(value or "").strip():
+                clauses.append(f"{column} = ?")
+                params.append(str(value).strip())
+        if trade_date:
+            clauses.append("substr(occurred_at, 1, 10) = ?")
+            params.append(_date_text(trade_date))
+        if str(event_type or "").strip():
+            clauses.append("event_type = ?")
+            params.append(str(event_type).strip().upper())
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, min(10000, int(limit))))
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM opportunity_events {where} ORDER BY occurred_at, created_at, event_id LIMIT ?",
+                params,
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for raw in rows:
+            row = _row_to_dict(raw)
+            try:
+                row["payload"] = json.loads(row.pop("payload_json") or "{}")
+            except json.JSONDecodeError:
+                row["payload"] = {}
+            result.append(row)
+        return result
+
+    def latest_trade_review(self, trade_id: str) -> dict[str, Any] | None:
+        rows = self.list_opportunity_events(trade_id=trade_id, event_type="REVIEWED", limit=10000)
+        return rows[-1] if rows else None
 
     def record_tag_corrections(self, trade: dict[str, Any], tags: str) -> None:
         symbol = str(trade.get("symbol") or "").strip().upper()

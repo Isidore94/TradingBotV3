@@ -28,8 +28,9 @@ from move_forensics import (
     FORENSICS_REPORT_TXT,
     run_move_forensics,
 )
-from ui.models.tracker_table_model import TrackerSortProxyModel, TrackerTableModel
+from ui.models.tracker_table_model import ROW_ROLE, TrackerSortProxyModel, TrackerTableModel
 from ui.widgets.data_table import DataTable
+from ui.widgets.research_explanation_view import ResearchExplanationView
 from ui.widgets.section_header import SectionHeader
 
 PATTERN_COLUMNS = (
@@ -110,6 +111,8 @@ class MoveForensicsPanel(QFrame):
         self.table = DataTable()
         self.table.setModel(proxy)
         self.table.setShowGrid(False)
+        self.explanation_view = ResearchExplanationView(self)
+        self.table.clicked.connect(self._show_row_explanation)
 
         self.report_view = QTextBrowser()
         self.report_view.setLineWrapMode(QTextBrowser.LineWrapMode.NoWrap)
@@ -134,9 +137,15 @@ class MoveForensicsPanel(QFrame):
             controls.addWidget(widget)
         controls.addStretch(1)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(self.table)
-        splitter.addWidget(self.report_view)
+        results_splitter = QSplitter(Qt.Orientation.Vertical)
+        results_splitter.addWidget(self.table)
+        results_splitter.addWidget(self.report_view)
+        results_splitter.setStretchFactor(0, 3)
+        results_splitter.setStretchFactor(1, 2)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(results_splitter)
+        splitter.addWidget(self.explanation_view)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
 
@@ -206,6 +215,11 @@ class MoveForensicsPanel(QFrame):
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
         self.statusChanged.emit(f"Move forensics: {message}")
+
+    def _show_row_explanation(self, index) -> None:
+        row = index.data(ROW_ROLE)
+        if isinstance(row, dict):
+            self.explanation_view.show_row("move_forensics", row)
 
 
 def _load_csv_rows(path) -> list[dict[str, Any]]:

@@ -11,7 +11,7 @@ stamp; it must not duplicate the roadmap.
   verified Sol3 integration and subsequent fixes.
 - Integration base: `fc05c96`.
 - Date: 2026-07-14
-- Test baseline: **886 passed, 5 subtests passed**
+- Test baseline: **893 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -46,6 +46,11 @@ stamp; it must not duplicate the roadmap.
   manual pullback/bounce windows under Advanced. D1 Focus now accepts only
   final Favorite/High Conviction bucket upgrades; developing crossings stay in
   the normal stream.
+- Research/journal UX: every Setup Tracker, Day Trade Tracker, and Move
+  Forensics row now has the same novice-friendly execution/evidence explanation;
+  Setup Tracker summarizes qualified leaders in plain English. Journal schema
+  v2 preserves append-only opportunity lifecycle events plus structured GUI
+  reviews, with broker-derived Taken/Closed events idempotent across rebuilds.
 - Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
   provenance while preserving the raw trigger signals separately.
 - Next queue: finish the Section 6 operational drills, remaining
