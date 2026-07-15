@@ -9,8 +9,8 @@ stamp; it must not duplicate the roadmap.
 
 - Branch: `main`, after the verified Sol3 integration and GUI product work.
 - Integration base: `3443c69`.
-- Date: 2026-07-14
-- Test baseline: **914 passed, 5 subtests passed**
+- Date: 2026-07-15
+- Test baseline: **918 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -26,6 +26,10 @@ stamp; it must not duplicate the roadmap.
 - Shadow engines: SPY state and Greatness both logging; neither is promoted.
 - Registry adoption: open scan, auto-populate, and near-extreme writers now
   dual-write in shadow; text watchlists remain authoritative.
+- Aggressive auto-populate: completed-M5 repeated HOD/LOD pressure and
+  legacy-SPY-pullback extreme holders now feed regime-inverted long/short
+  candidates with versioned golden coverage, while scheduled rotation and
+  triple-VWAP invalidation remain unchanged.
 - Scanner reliability: compact tracker scoring snapshot, true trigger-date
   freshness, invalid-side history sanitation, shared output-computation reuse,
   atomic signal/feature/watchlist writes, and detailed output timings landed.

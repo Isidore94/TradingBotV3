@@ -15,6 +15,9 @@ Runs the trading day without the trader at the desk:
 - Near-HOD adds on bullish pauses: when the tape is bullish but SPY prints
   red, the swing scanner's long rows are checked for names holding near their
   high of day and folded into longs.txt (inverted for bearish/LOD).
+- Aggressive universe discovery: repeated completed-M5 HODs on bearish days
+  seed counter-trend longs, while LOD holders during a legacy-detected SPY
+  rebound seed shorts. Bullish days mirror both rules exactly.
 - A phone-digestible report written to the shared Google Drive home folder.
 
 Everything here is deliberately testable: scheduling, ranking, filtering and
@@ -26,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import tempfile
 import threading
@@ -33,7 +37,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-from market_session import get_market_session_window
+from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import (
     AUTO_LONGS_FILE,
     AUTO_POPULATE_MEMBERSHIP_FILE,
@@ -748,6 +752,17 @@ AUTO_POPULATE_MIN_ADR_MOVE = 0.5
 # A 5m bar counts as "at the extreme" when its high (low) is within this % of
 # the day's final high (low); the fraction of such bars sweetens the score.
 AUTO_POPULATE_EXTREME_PROXIMITY_PCT = 0.3
+# Aggressive completed-M5 discovery. Three real extreme breaks in six bars is
+# deliberately more permissive than the PDH + 0.5 ADR rule, but avoids treating
+# one wick or sub-tick drift as persistent pressure. Pullback holders must be
+# tighter to HOD/LOD than the older 1% swing-row alert.
+AGGRESSIVE_EXTREME_FEATURE_VERSION = "aggressive_extremes_v1"
+AGGRESSIVE_EXTREME_WINDOW_BARS = 6
+AGGRESSIVE_MIN_NEW_EXTREMES = 3
+AGGRESSIVE_MIN_EXTREME_BREAK_PCT = 0.05
+AGGRESSIVE_NEAR_EXTREME_PCT = 0.35
+AGGRESSIVE_MAX_DATA_AGE_MINUTES = 15
+AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT = 0.03
 AUTO_POPULATE_CAPS = {
     "bullish": (150, 50),
     "bearish": (50, 150),
@@ -836,9 +851,15 @@ def fetch_intraday_profiles(
     downloader: Callable[..., Any] | None = None,
     chunk_size: int = AUTOPILOT_OPEN_SCAN_CHUNK_SIZE,
     proximity_pct: float = AUTO_POPULATE_EXTREME_PROXIMITY_PCT,
+    now: datetime | None = None,
     log: Callable[[str], None] | None = None,
-) -> dict[str, dict[str, float]]:
-    """{symbol: {last, day_high, day_low, time_at_high_frac, time_at_low_frac}}."""
+) -> dict[str, dict[str, Any]]:
+    """Build intraday profiles used by both legacy and aggressive discovery.
+
+    The original aggregate fields intentionally keep their prior semantics.
+    ``completed_*`` fields are a separate feature family and exclude the
+    forming M5 bar so they are safe for aggressive state transitions.
+    """
     downloader = downloader or _default_downloader
     pool = [str(s or "").strip().upper() for s in symbols]
     pool = [s for s in pool if s]
@@ -874,8 +895,138 @@ def fetch_intraday_profiles(
                 "day_low": day_low,
                 "time_at_high_frac": at_high / len(rows),
                 "time_at_low_frac": at_low / len(rows),
+                **_intraday_extreme_metrics(
+                    rows,
+                    now=now,
+                    proximity_pct=proximity_pct,
+                ),
             }
     return profiles
+
+
+def _intraday_extreme_metrics(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    now: datetime | None = None,
+    bar_minutes: int = 5,
+    recent_window_bars: int = AGGRESSIVE_EXTREME_WINDOW_BARS,
+    minimum_break_pct: float = AGGRESSIVE_MIN_EXTREME_BREAK_PCT,
+    proximity_pct: float = AUTO_POPULATE_EXTREME_PROXIMITY_PCT,
+) -> dict[str, Any]:
+    """Completed-bar HOD/LOD pressure metrics for one intraday series."""
+
+    def empty_metrics(health: str) -> dict[str, Any]:
+        return {
+            "feature_version": AGGRESSIVE_EXTREME_FEATURE_VERSION,
+            "last_complete": None,
+            "completed_day_high": None,
+            "completed_day_low": None,
+            "completed_time_at_high_frac": 0.0,
+            "completed_time_at_low_frac": 0.0,
+            "recent_new_highs": 0,
+            "recent_new_lows": 0,
+            "recent_window_bars": 0,
+            "completed_bar_count": 0,
+            "as_of": "",
+            "data_age_minutes": None,
+            "data_health": health,
+        }
+
+    moment = normalize_market_local_datetime(now)
+    completed: list[tuple[Mapping[str, Any], datetime, datetime]] = []
+    for row in rows:
+        raw_stamp = row.get("dt")
+        if not isinstance(raw_stamp, datetime):
+            continue
+        local_start = normalize_market_local_datetime(raw_stamp)
+        local_end = local_start + timedelta(minutes=max(1, int(bar_minutes)))
+        if local_end > moment:
+            continue
+        explicit_start = raw_stamp if raw_stamp.tzinfo is not None else local_start
+        explicit_end = explicit_start + timedelta(minutes=max(1, int(bar_minutes)))
+        completed.append((row, local_start, explicit_end))
+
+    if not completed:
+        return empty_metrics("missing_completed_bars")
+
+    latest_date = completed[-1][1].date()
+    session = [item for item in completed if item[1].date() == latest_date]
+    session_rows = [item[0] for item in session]
+    try:
+        numeric_rows = [
+            {
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+            }
+            for row in session_rows
+        ]
+    except (KeyError, TypeError, ValueError):
+        return empty_metrics("invalid_completed_bars")
+    if any(
+        not all(math.isfinite(value) for value in row.values()) or row["low"] > row["high"]
+        for row in numeric_rows
+    ):
+        return empty_metrics("invalid_completed_bars")
+    day_high = max(row["high"] for row in numeric_rows)
+    day_low = min(row["low"] for row in numeric_rows)
+    last_complete = numeric_rows[-1]["close"]
+    if not day_low <= last_complete <= day_high:
+        return empty_metrics("invalid_completed_bars")
+
+    at_high = sum(
+        1
+        for row in numeric_rows
+        if day_high > 0
+        and (day_high - row["high"]) / day_high * 100.0 <= proximity_pct
+    )
+    at_low = sum(
+        1
+        for row in numeric_rows
+        if row["low"] > 0
+        and (row["low"] - day_low) / row["low"] * 100.0 <= proximity_pct
+    )
+
+    new_high_flags = [False] * len(numeric_rows)
+    new_low_flags = [False] * len(numeric_rows)
+    if numeric_rows:
+        running_high = numeric_rows[0]["high"]
+        running_low = numeric_rows[0]["low"]
+        break_fraction = max(0.0, float(minimum_break_pct)) / 100.0
+        for index, row in enumerate(numeric_rows[1:], start=1):
+            high = row["high"]
+            low = row["low"]
+            if running_high > 0 and high >= running_high * (1.0 + break_fraction):
+                new_high_flags[index] = True
+            if running_low > 0 and low <= running_low * (1.0 - break_fraction):
+                new_low_flags[index] = True
+            running_high = max(running_high, high)
+            running_low = min(running_low, low)
+
+    window = min(max(1, int(recent_window_bars)), len(numeric_rows))
+    last_end_local = session[-1][1] + timedelta(minutes=max(1, int(bar_minutes)))
+    data_age_minutes = max(0.0, (moment - last_end_local).total_seconds() / 60.0)
+    if len(numeric_rows) < int(recent_window_bars):
+        health = "insufficient_completed_bars"
+    elif data_age_minutes > AGGRESSIVE_MAX_DATA_AGE_MINUTES:
+        health = "stale"
+    else:
+        health = "ok"
+    return {
+        "feature_version": AGGRESSIVE_EXTREME_FEATURE_VERSION,
+        "last_complete": last_complete,
+        "completed_day_high": day_high,
+        "completed_day_low": day_low,
+        "completed_time_at_high_frac": at_high / len(numeric_rows),
+        "completed_time_at_low_frac": at_low / len(numeric_rows),
+        "recent_new_highs": sum(new_high_flags[-window:]),
+        "recent_new_lows": sum(new_low_flags[-window:]),
+        "recent_window_bars": window,
+        "completed_bar_count": len(numeric_rows),
+        "as_of": session[-1][2].isoformat(timespec="seconds"),
+        "data_age_minutes": data_age_minutes,
+        "data_health": health,
+    }
 
 
 def build_adr_breakout_candidates(
@@ -930,6 +1081,176 @@ def build_adr_breakout_candidates(
     longs.sort(key=lambda row: (-row["score"], row["symbol"]))
     shorts.sort(key=lambda row: (-row["score"], row["symbol"]))
     return {"longs": longs, "shorts": shorts}
+
+
+def build_aggressive_regime_candidates(
+    profiles: Mapping[str, Mapping[str, Any]],
+    env_key: str,
+    *,
+    spy_pullback_active: bool = False,
+    minimum_new_extremes: int = AGGRESSIVE_MIN_NEW_EXTREMES,
+    recent_window_bars: int = AGGRESSIVE_EXTREME_WINDOW_BARS,
+    near_extreme_pct: float = AGGRESSIVE_NEAR_EXTREME_PCT,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build side-symmetric aggressive candidates from completed M5 bars.
+
+    Bearish: repeated HOD pressure -> long; LOD hold during a legacy SPY
+    rebound -> short. Bullish mirrors both rules. Neutral tape deliberately
+    produces nothing.
+    """
+    env = str(env_key or "").strip().lower()
+    if not (env.startswith("bearish") or env.startswith("bullish")):
+        return {"longs": [], "shorts": []}
+
+    longs: list[dict[str, Any]] = []
+    shorts: list[dict[str, Any]] = []
+    required_window = max(1, int(recent_window_bars))
+    required_extremes = max(1, int(minimum_new_extremes))
+    proximity = max(0.0, float(near_extreme_pct))
+
+    def candidate_row(
+        symbol: str,
+        profile: Mapping[str, Any],
+        *,
+        rule: str,
+        score: float,
+        reason: str,
+    ) -> dict[str, Any]:
+        as_of = str(profile.get("as_of") or "")
+        persisted_reason = (
+            f"{reason}; {AGGRESSIVE_EXTREME_FEATURE_VERSION}; "
+            f"{required_window} completed M5 bars; as of {as_of}"
+        )
+        return {
+            "symbol": symbol,
+            "score": score,
+            "reason": persisted_reason,
+            "source_rule": rule,
+            "feature_version": AGGRESSIVE_EXTREME_FEATURE_VERSION,
+            "calculation_horizon": f"{required_window}xcompleted_M5",
+            "as_of": as_of,
+            "data_age_minutes": profile.get("data_age_minutes"),
+            "data_health": "ok",
+        }
+
+    for symbol, profile in profiles.items():
+        sym = str(symbol or "").strip().upper()
+        if not sym or sym == "SPY" or str(profile.get("data_health") or "") != "ok":
+            continue
+        try:
+            last = float(profile["last_complete"])
+            day_high = float(profile["completed_day_high"])
+            day_low = float(profile["completed_day_low"])
+            new_highs = int(profile.get("recent_new_highs") or 0)
+            new_lows = int(profile.get("recent_new_lows") or 0)
+            actual_window = int(profile.get("recent_window_bars") or 0)
+            completed_bars = int(profile.get("completed_bar_count") or 0)
+            at_high = float(profile.get("completed_time_at_high_frac") or 0.0)
+            at_low = float(profile.get("completed_time_at_low_frac") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            not all(
+                math.isfinite(value)
+                for value in (last, day_high, day_low, at_high, at_low)
+            )
+            or last <= 0
+            or day_high <= 0
+            or day_low <= 0
+            or not day_low <= last <= day_high
+            or not 0.0 <= at_high <= 1.0
+            or not 0.0 <= at_low <= 1.0
+            or actual_window < required_window
+            or completed_bars < required_window
+            or not profile.get("as_of")
+        ):
+            continue
+
+        high_distance = max(0.0, (day_high - last) / day_high * 100.0)
+        low_distance = max(0.0, (last - day_low) / last * 100.0)
+        near_high = high_distance <= proximity
+        near_low = low_distance <= proximity
+
+        if env.startswith("bearish"):
+            if near_high and new_highs >= required_extremes:
+                score = 2.0 + new_highs / required_window + at_high
+                longs.append(
+                    candidate_row(
+                        sym,
+                        profile,
+                        rule="repeated_hod",
+                        score=score,
+                        reason=(
+                            f"Bearish-day strength: {new_highs} new HODs in {required_window} "
+                            f"completed M5 bars, close {high_distance:.2f}% off HOD"
+                        ),
+                    )
+                )
+            if spy_pullback_active and near_low:
+                score = 2.0 + max(0.0, 1.0 - low_distance / max(proximity, 0.000001)) + at_low
+                shorts.append(
+                    candidate_row(
+                        sym,
+                        profile,
+                        rule="bearish_pullback_lod",
+                        score=score,
+                        reason=f"Bearish-day SPY rebound: close {low_distance:.2f}% off LOD",
+                    )
+                )
+        else:
+            if near_low and new_lows >= required_extremes:
+                score = 2.0 + new_lows / required_window + at_low
+                shorts.append(
+                    candidate_row(
+                        sym,
+                        profile,
+                        rule="repeated_lod",
+                        score=score,
+                        reason=(
+                            f"Bullish-day weakness: {new_lows} new LODs in {required_window} "
+                            f"completed M5 bars, close {low_distance:.2f}% off LOD"
+                        ),
+                    )
+                )
+            if spy_pullback_active and near_high:
+                score = 2.0 + max(0.0, 1.0 - high_distance / max(proximity, 0.000001)) + at_high
+                longs.append(
+                    candidate_row(
+                        sym,
+                        profile,
+                        rule="bullish_pullback_hod",
+                        score=score,
+                        reason=f"Bullish-day SPY pullback: close {high_distance:.2f}% off HOD",
+                    )
+                )
+
+    longs.sort(key=lambda row: (-row["score"], row["symbol"]))
+    shorts.sort(key=lambda row: (-row["score"], row["symbol"]))
+    return {"longs": longs, "shorts": shorts}
+
+
+def merge_auto_populate_candidates(
+    *candidate_sets: Mapping[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Merge candidate families without duplicate symbols or unstable order."""
+    merged: dict[str, list[dict[str, Any]]] = {"longs": [], "shorts": []}
+    for side in ("longs", "shorts"):
+        by_symbol: dict[str, dict[str, Any]] = {}
+        for candidate_set in candidate_sets:
+            for raw_row in candidate_set.get(side) or []:
+                row = dict(raw_row)
+                symbol = str(row.get("symbol") or "").strip().upper()
+                if not symbol:
+                    continue
+                row["symbol"] = symbol
+                prior = by_symbol.get(symbol)
+                if prior is None or float(row.get("score") or 0.0) > float(prior.get("score") or 0.0):
+                    by_symbol[symbol] = row
+        merged[side] = sorted(
+            by_symbol.values(),
+            key=lambda row: (-float(row.get("score") or 0.0), row["symbol"]),
+        )
+    return merged
 
 
 def _load_auto_populate_membership(path: Path, today_iso: str) -> dict[str, Any]:
@@ -989,17 +1310,24 @@ def apply_auto_populated_watchlists(
     shorts_path: Path = SHORTS_FILE,
     membership_path: Path = AUTO_POPULATE_MEMBERSHIP_FILE,
     now: datetime | None = None,
+    preserve_existing_auto: bool = False,
 ) -> dict[str, Any]:
     """Rotate the auto-owned slice of longs.txt/shorts.txt to the new top-N.
 
     Trader-added names (anything not in the membership file) are never touched.
     Day-cut names are skipped. A symbol can only hold one side at a time.
+    Event-triggered pullback sweeps preserve the existing auto slice so they
+    can add promptly without changing the ordinary rotation/removal cadence.
     """
     today_iso = (now or datetime.now()).date().isoformat()
     long_cap, short_cap = auto_populate_caps(env_key)
     with _AUTO_POPULATE_LOCK:
         membership = _load_auto_populate_membership(membership_path, today_iso)
-        summary: dict[str, Any] = {"env": env_key, "caps": (long_cap, short_cap)}
+        summary: dict[str, Any] = {
+            "env": env_key,
+            "caps": (long_cap, short_cap),
+            "preserved_existing_auto": bool(preserve_existing_auto),
+        }
         taken: set[str] = set()
         for side, cap, path in (("long", long_cap, longs_path), ("short", short_cap, shorts_path)):
             rows = candidates.get(f"{side}s") or []
@@ -1008,14 +1336,22 @@ def apply_auto_populated_watchlists(
             owned = {str(s).strip().upper() for s in membership.get(side, {})}
             trader_names = [s for s in existing if s not in owned]
             trader_set = set(trader_names)
-            picked: dict[str, str] = {}
+            picked: dict[str, str] = (
+                {
+                    sym: str(membership.get(side, {}).get(sym) or "")
+                    for sym in existing
+                    if sym in owned and sym not in cut and sym not in taken
+                }
+                if preserve_existing_auto
+                else {}
+            )
             for row in rows:
+                if len(picked) >= cap:
+                    break
                 sym = str(row.get("symbol") or "").strip().upper()
                 if not sym or sym in cut or sym in taken or sym in trader_set or sym in picked:
                     continue
                 picked[sym] = str(row.get("reason") or "")
-                if len(picked) >= cap:
-                    break
             taken.update(trader_set)
             taken.update(picked)
             write_watchlist_file(Path(path), [*trader_names, *picked])
@@ -1043,6 +1379,9 @@ def refresh_auto_populated_watchlists(
     env_key: str,
     *,
     downloader: Callable[..., Any] | None = None,
+    spy_pullback_active: bool = False,
+    preserve_existing_auto: bool = False,
+    now: datetime | None = None,
     log: Callable[[str], None] | None = None,
 ) -> dict[str, Any] | None:
     """One full auto-populate pass: universe -> criteria -> regime-capped lists."""
@@ -1051,16 +1390,36 @@ def refresh_auto_populated_watchlists(
         if log:
             log("Auto-populate skipped: universe pool is empty.")
         return None
-    daily_context = load_daily_context(pool)
-    profiles = fetch_intraday_profiles(pool, downloader=downloader, log=log)
+    moment = now or datetime.now()
+    daily_context = load_daily_context(pool, reference_date=moment.date())
+    profiles = fetch_intraday_profiles(pool, downloader=downloader, now=moment, log=log)
     if not profiles:
         if log:
             log("Auto-populate skipped: no intraday profiles fetched.")
         return None
-    candidates = build_adr_breakout_candidates(profiles, daily_context)
-    summary = apply_auto_populated_watchlists(candidates, env_key)
+    aggressive = build_aggressive_regime_candidates(
+        profiles,
+        env_key,
+        spy_pullback_active=spy_pullback_active,
+    )
+    candidates = merge_auto_populate_candidates(
+        build_adr_breakout_candidates(profiles, daily_context),
+        aggressive,
+    )
+    summary = apply_auto_populated_watchlists(
+        candidates,
+        env_key,
+        now=moment,
+        preserve_existing_auto=preserve_existing_auto,
+    )
     summary["scanned"] = len(profiles)
     summary["candidates"] = {"longs": len(candidates["longs"]), "shorts": len(candidates["shorts"])}
+    summary["aggressive_candidates"] = {
+        "longs": len(aggressive["longs"]),
+        "shorts": len(aggressive["shorts"]),
+        "spy_pullback_active": bool(spy_pullback_active),
+        "feature_version": AGGRESSIVE_EXTREME_FEATURE_VERSION,
+    }
     return summary
 
 

@@ -1,7 +1,11 @@
 """Tests for the universe -> longs.txt/shorts.txt auto-populate engine."""
 
+import hashlib
+import json
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -9,6 +13,9 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from watchlist_utils import read_watchlist_symbols  # noqa: E402
+
+
+AGGRESSIVE_FIXTURE = Path(__file__).parent / "fixtures" / "aggressive_watchlist_candidates_v1.json"
 
 
 def test_auto_populate_caps_follow_regime():
@@ -88,6 +95,137 @@ def test_adr_candidates_rank_by_move_plus_extreme_time():
     assert scores["GRIND"] == pytest.approx(2.1)
     assert scores["MEH"] == pytest.approx(1.0)
     assert [row["symbol"] for row in result["longs"]][-1] == "MEH"
+
+
+def test_aggressive_regime_candidate_golden_fixture():
+    from autopilot_core import (
+        AGGRESSIVE_EXTREME_WINDOW_BARS,
+        AGGRESSIVE_MAX_DATA_AGE_MINUTES,
+        AGGRESSIVE_MIN_EXTREME_BREAK_PCT,
+        AGGRESSIVE_MIN_NEW_EXTREMES,
+        AGGRESSIVE_NEAR_EXTREME_PCT,
+        AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT,
+        build_aggressive_regime_candidates,
+    )
+
+    fixture = json.loads(AGGRESSIVE_FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["schema"] == "aggressive_watchlist_candidates_v1"
+    profile_payload = json.dumps(fixture["profiles"], sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256(profile_payload.encode()).hexdigest() == fixture["raw_input_sha256"]
+    assert fixture["configuration"] == {
+        "recent_window_bars": AGGRESSIVE_EXTREME_WINDOW_BARS,
+        "minimum_new_extremes": AGGRESSIVE_MIN_NEW_EXTREMES,
+        "minimum_break_pct": AGGRESSIVE_MIN_EXTREME_BREAK_PCT,
+        "near_extreme_pct": AGGRESSIVE_NEAR_EXTREME_PCT,
+        "maximum_data_age_minutes": AGGRESSIVE_MAX_DATA_AGE_MINUTES,
+        "minimum_spy_pullback_move_pct": AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT,
+    }
+    for case in fixture["cases"]:
+        result = build_aggressive_regime_candidates(
+            fixture["profiles"],
+            case["environment"],
+            spy_pullback_active=case["spy_pullback_active"],
+        )
+        stable = {
+            side: [[row["symbol"], row["source_rule"]] for row in result[side]]
+            for side in ("longs", "shorts")
+        }
+        assert stable == case["expected"], case["name"]
+
+
+def test_intraday_extreme_metrics_exclude_forming_bar():
+    from autopilot_core import _intraday_extreme_metrics
+
+    tz = ZoneInfo("America/New_York")
+    start = datetime(2026, 7, 14, 9, 30, tzinfo=tz)
+    highs = [100.0, 100.06, 100.12, 100.18, 100.18, 100.18, 105.0]
+    rows = [
+        {
+            "dt": start + timedelta(minutes=5 * index),
+            "open": high - 0.1,
+            "high": high,
+            "low": high - 0.2,
+            "close": high - 0.02,
+        }
+        for index, high in enumerate(highs)
+    ]
+
+    metrics = _intraday_extreme_metrics(
+        rows,
+        now=start + timedelta(minutes=34, seconds=59),
+    )
+
+    assert metrics["completed_bar_count"] == 6
+    assert metrics["completed_day_high"] == 100.18
+    assert metrics["recent_new_highs"] == 3
+    assert metrics["as_of"] == (start + timedelta(minutes=30)).isoformat(timespec="seconds")
+    assert metrics["data_health"] == "ok"
+
+    stale = _intraday_extreme_metrics(
+        rows,
+        now=start + timedelta(minutes=51),
+    )
+    assert stale["data_health"] == "stale"
+
+
+def test_new_legacy_spy_pullback_bypasses_auto_populate_cooldown(monkeypatch):
+    import autopilot_core as core
+    import bounce_bot_lib.legacy as legacy
+
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    calls = []
+    monkeypatch.setattr(core, "minutes_since_open", lambda _now: 90)
+    monkeypatch.setattr(legacy.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr(legacy.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        core,
+        "refresh_auto_populated_watchlists",
+        lambda env, **kwargs: calls.append(
+            (env, kwargs["spy_pullback_active"], kwargs["preserve_existing_auto"])
+        )
+        or {},
+    )
+
+    class Stub:
+        _auto_populate_last_ts = 990.0  # well inside the ordinary 30-minute cooldown
+        _auto_populate_running = False
+        _auto_populate_spy_pullback_key = ""
+        gui_callback = None
+
+        @staticmethod
+        def get_market_environment():
+            return "bearish_strong"
+
+        @staticmethod
+        def _spy_session_bars(*, cached_only=False):
+            assert cached_only
+            return [object()], 100.0
+
+        @staticmethod
+        def _detect_spy_pause_start(_bars, side):
+            assert side == "short"
+            return datetime(2026, 7, 14, 11, 0)
+
+        @staticmethod
+        def _window_change_pct(_bars, _pause_start):
+            return 0.08, _bars
+
+    too_small = Stub()
+    too_small._window_change_pct = lambda bars, _pause_start: (0.01, bars)
+    legacy.BounceBot._maybe_refresh_auto_populated_watchlists(too_small)
+    assert calls == []
+
+    stub = Stub()
+    legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
+    legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
+
+    assert calls == [("bearish_strong", True, True)]
 
 
 def test_apply_auto_populate_rotates_only_owned_names(tmp_path, monkeypatch):
@@ -193,3 +331,44 @@ def test_apply_auto_populate_respects_regime_caps_and_side_exclusivity(tmp_path)
     assert bearish["caps"] == (50, 150)
     assert len(read_watchlist_symbols(longs_path)) == 50
     assert len(read_watchlist_symbols(shorts_path)) == 150
+
+
+def test_pullback_refresh_appends_without_early_auto_rotation(tmp_path, monkeypatch):
+    import autopilot_core as core
+
+    longs_path = tmp_path / "longs.txt"
+    shorts_path = tmp_path / "shorts.txt"
+    membership_path = tmp_path / "auto_membership.json"
+    monkeypatch.setattr(core, "candidate_registry_path", lambda: tmp_path / "registry.json")
+
+    first = {
+        "longs": [
+            {"symbol": "OLD1", "score": 2.0, "reason": "scheduled"},
+            {"symbol": "OLD2", "score": 1.0, "reason": "scheduled"},
+        ],
+        "shorts": [],
+    }
+    core.apply_auto_populated_watchlists(
+        first,
+        "bullish_strong",
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+        membership_path=membership_path,
+    )
+
+    event = core.apply_auto_populated_watchlists(
+        {
+            "longs": [{"symbol": "NEW", "score": 3.0, "reason": "SPY pullback HOD"}],
+            "shorts": [],
+        },
+        "bullish_strong",
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+        membership_path=membership_path,
+        preserve_existing_auto=True,
+    )
+
+    assert read_watchlist_symbols(longs_path) == ["OLD1", "OLD2", "NEW"]
+    assert event["long"]["rotated_out"] == []
+    assert event["long"]["added"] == ["NEW"]
+    assert event["preserved_existing_auto"] is True

@@ -1,0 +1,145 @@
+{
+  "schema": "aggressive_watchlist_candidates_v1",
+  "feature_version": "aggressive_extremes_v1",
+  "raw_input_sha256": "a9b7ed1f976f9e9c418b568c4f5a4c775558f0c121ecb03202e3be7ba883ddb4",
+  "acquired_at": "2026-07-14T11:00:00-04:00",
+  "universe_version": "synthetic_aggressive_extremes_v1",
+  "provider_assumptions": "Synthetic regular-session M5 profiles; every as_of timestamp is a completed bar end.",
+  "intentional_difference": "Adds regime-side HOD/LOD grinders without PDH/PDL or 0.5-ADR qualification and adds extreme holders only during the legacy SPY pause signal.",
+  "numeric_tolerance": 1e-09,
+  "configuration": {
+    "recent_window_bars": 6,
+    "minimum_new_extremes": 3,
+    "minimum_break_pct": 0.05,
+    "near_extreme_pct": 0.35,
+    "maximum_data_age_minutes": 15,
+    "minimum_spy_pullback_move_pct": 0.03
+  },
+  "profiles": {
+    "HOD_GRINDER": {
+      "last_complete": 100.0,
+      "completed_day_high": 100.0,
+      "completed_day_low": 96.0,
+      "completed_time_at_high_frac": 0.6,
+      "completed_time_at_low_frac": 0.0,
+      "recent_new_highs": 3,
+      "recent_new_lows": 0,
+      "recent_window_bars": 6,
+      "completed_bar_count": 12,
+      "as_of": "2026-07-14T11:00:00-04:00",
+      "data_health": "ok"
+    },
+    "LOD_GRINDER": {
+      "last_complete": 90.0,
+      "completed_day_high": 94.0,
+      "completed_day_low": 90.0,
+      "completed_time_at_high_frac": 0.0,
+      "completed_time_at_low_frac": 0.7,
+      "recent_new_highs": 0,
+      "recent_new_lows": 4,
+      "recent_window_bars": 6,
+      "completed_bar_count": 12,
+      "as_of": "2026-07-14T11:00:00-04:00",
+      "data_health": "ok"
+    },
+    "HOD_HOLDER": {
+      "last_complete": 99.8,
+      "completed_day_high": 100.0,
+      "completed_day_low": 97.0,
+      "completed_time_at_high_frac": 0.5,
+      "completed_time_at_low_frac": 0.0,
+      "recent_new_highs": 1,
+      "recent_new_lows": 0,
+      "recent_window_bars": 6,
+      "completed_bar_count": 12,
+      "as_of": "2026-07-14T11:00:00-04:00",
+      "data_health": "ok"
+    },
+    "LOD_HOLDER": {
+      "last_complete": 90.18,
+      "completed_day_high": 94.0,
+      "completed_day_low": 90.0,
+      "completed_time_at_high_frac": 0.0,
+      "completed_time_at_low_frac": 0.5,
+      "recent_new_highs": 0,
+      "recent_new_lows": 1,
+      "recent_window_bars": 6,
+      "completed_bar_count": 12,
+      "as_of": "2026-07-14T11:00:00-04:00",
+      "data_health": "ok"
+    },
+    "ONE_SPIKE": {
+      "last_complete": 100.0,
+      "completed_day_high": 100.0,
+      "completed_day_low": 95.0,
+      "completed_time_at_high_frac": 0.2,
+      "completed_time_at_low_frac": 0.0,
+      "recent_new_highs": 2,
+      "recent_new_lows": 0,
+      "recent_window_bars": 6,
+      "completed_bar_count": 12,
+      "as_of": "2026-07-14T11:00:00-04:00",
+      "data_health": "ok"
+    },
+    "STALE": {
+      "last_complete": 100.0,
+      "completed_day_high": 100.0,
+      "completed_day_low": 95.0,
+      "completed_time_at_high_frac": 0.8,
+      "completed_time_at_low_frac": 0.0,
+      "recent_new_highs": 5,
+      "recent_new_lows": 0,
+      "recent_window_bars": 6,
+      "completed_bar_count": 12,
+      "as_of": "2026-07-14T10:00:00-04:00",
+      "data_health": "stale"
+    }
+  },
+  "cases": [
+    {
+      "name": "bearish_trend_extremes",
+      "environment": "bearish_strong",
+      "spy_pullback_active": false,
+      "expected": {
+        "longs": [["HOD_GRINDER", "repeated_hod"]],
+        "shorts": []
+      }
+    },
+    {
+      "name": "bearish_spy_rebound",
+      "environment": "bearish_weak",
+      "spy_pullback_active": true,
+      "expected": {
+        "longs": [["HOD_GRINDER", "repeated_hod"]],
+        "shorts": [["LOD_GRINDER", "bearish_pullback_lod"], ["LOD_HOLDER", "bearish_pullback_lod"]]
+      }
+    },
+    {
+      "name": "bullish_trend_extremes",
+      "environment": "bullish_strong",
+      "spy_pullback_active": false,
+      "expected": {
+        "longs": [],
+        "shorts": [["LOD_GRINDER", "repeated_lod"]]
+      }
+    },
+    {
+      "name": "bullish_spy_pullback",
+      "environment": "bullish_weak",
+      "spy_pullback_active": true,
+      "expected": {
+        "longs": [["HOD_GRINDER", "bullish_pullback_hod"], ["ONE_SPIKE", "bullish_pullback_hod"], ["HOD_HOLDER", "bullish_pullback_hod"]],
+        "shorts": [["LOD_GRINDER", "repeated_lod"]]
+      }
+    },
+    {
+      "name": "neutral_adds_nothing",
+      "environment": "neutral_chop",
+      "spy_pullback_active": true,
+      "expected": {
+        "longs": [],
+        "shorts": []
+      }
+    }
+  ]
+}

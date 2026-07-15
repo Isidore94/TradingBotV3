@@ -9260,16 +9260,20 @@ class BounceBot(EWrapper, EClient):
                     self.gui_callback(removal_msg, "blue")
 
     def _maybe_refresh_auto_populated_watchlists(self):
-        """Every ~30 min while scanning: refresh the auto-owned watchlist slice.
+        """Refresh the auto-owned watchlist slice every ~30 min while scanning.
 
         The heavy work (yfinance bulk + parquet reads) runs on a one-shot
-        daemon thread so the scan cycle never stalls behind it.
+        daemon thread so the scan cycle never stalls behind it. The legacy
+        SPY pause detector is passed through for side-symmetric pullback
+        discovery; the shadow market-state engine remains advisory only.
         """
-        from autopilot_core import AUTO_POPULATE_REFRESH_MINUTES, minutes_since_open
+        from autopilot_core import (
+            AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT,
+            AUTO_POPULATE_REFRESH_MINUTES,
+            minutes_since_open,
+        )
 
         now = time.time()
-        if now - float(getattr(self, "_auto_populate_last_ts", 0.0)) < AUTO_POPULATE_REFRESH_MINUTES * 60.0:
-            return
         try:
             since_open = minutes_since_open(datetime.now())
         except Exception:
@@ -9277,17 +9281,57 @@ class BounceBot(EWrapper, EClient):
         # Wait for a readable tape (30m in) and stop after the close.
         if since_open is None or since_open < 30 or since_open > 390:
             return
+        env = self.get_market_environment()
+        spy_pullback_active = False
+        pullback_key = ""
+        if str(env).startswith(("bullish", "bearish")):
+            try:
+                spy_today, _prev_close = self._spy_session_bars(cached_only=True)
+                trend_side = "short" if str(env).startswith("bearish") else "long"
+                pause_start = (
+                    self._detect_spy_pause_start(spy_today, trend_side) if spy_today else None
+                )
+                spy_change_pct, _window = (
+                    self._window_change_pct(spy_today, pause_start)
+                    if pause_start is not None
+                    else (None, [])
+                )
+                minimum_move = float(AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT)
+                spy_pullback_active = bool(
+                    spy_change_pct is not None
+                    and (
+                        (trend_side == "short" and spy_change_pct >= minimum_move)
+                        or (trend_side == "long" and spy_change_pct <= -minimum_move)
+                    )
+                )
+                if spy_pullback_active:
+                    pullback_key = trend_side
+            except Exception:
+                logging.debug("Auto-populate legacy SPY pause read failed.", exc_info=True)
         if getattr(self, "_auto_populate_running", False):
+            return
+        prior_pullback_key = str(getattr(self, "_auto_populate_spy_pullback_key", "") or "")
+        new_pullback = bool(pullback_key and pullback_key != prior_pullback_key)
+        self._auto_populate_spy_pullback_key = pullback_key
+        if (
+            not new_pullback
+            and now - float(getattr(self, "_auto_populate_last_ts", 0.0))
+            < AUTO_POPULATE_REFRESH_MINUTES * 60.0
+        ):
             return
         self._auto_populate_last_ts = now
         self._auto_populate_running = True
-        env = self.get_market_environment()
 
         def worker():
             try:
                 from autopilot_core import refresh_auto_populated_watchlists
 
-                summary = refresh_auto_populated_watchlists(env, log=logging.info)
+                summary = refresh_auto_populated_watchlists(
+                    env,
+                    spy_pullback_active=spy_pullback_active,
+                    preserve_existing_auto=new_pullback,
+                    log=logging.info,
+                )
                 if summary and self.gui_callback:
                     long_info = summary.get("long", {})
                     short_info = summary.get("short", {})

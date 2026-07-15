@@ -192,6 +192,12 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   evidence/replay; RS Window, Auto Pilot, and the Drive report expose its daily
   source-board ID and flag mismatches. These fields are explicitly advisory and
   have no production score, alert, gate, or promotion effect.
+- Auto-populate now has corrected-expectation coverage for aggressive,
+  completed-M5 regime discovery. Bearish tape admits persistent HOD grinders
+  as longs and LOD holders during a legacy-champion SPY rebound as shorts;
+  bullish tape mirrors both rules. New pullback episodes can trigger an
+  append-preserving sweep without changing scheduled rotation or triple-VWAP
+  removal behavior; the shadow SPY engine remains non-authoritative.
 
 ### 3.2 Implemented and running in shadow
 

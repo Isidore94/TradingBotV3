@@ -1,7 +1,8 @@
 """Candidate registry with provenance, leases, and lifecycle (plan.md Packet D).
 
 One store replaces the competing watchlist writers (open scan replace,
-30-minute auto-populate rotation, near-extreme appends, VWAP removals): every
+30-minute auto-populate rotation, aggressive regime discovery, near-extreme
+appends, VWAP removals): every
 automation is a *source* holding a membership lease on a symbol/side, and the
 bot-facing scan pool is DERIVED from the registry. Text watchlists become
 imports/exports, never the coordination database.
