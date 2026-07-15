@@ -25,8 +25,13 @@ from PySide6.QtWidgets import (
 )
 
 from project_paths import get_shared_watchlist_details, get_tracker_storage_details
+from technical_integrity import (
+    format_technical_integrity_snapshot,
+    load_technical_integrity_snapshot,
+)
 from ui.panels.ai_summary_panel import AiSummaryPanel
 from ui.panels.autopilot_panel import AutopilotPanel
+from ui.panels.bounce_panel import format_auto_regime_reading
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
 from ui.panels.research_panel import ResearchPanel
@@ -35,6 +40,7 @@ from ui.panels.trading_desk import TradingDeskPanel
 from ui.panels.universe_panel import UniversePanel
 from ui.state import UiState
 from ui.theme import apply_theme
+from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
 
 
 class MainWindow(QMainWindow):
@@ -89,6 +95,12 @@ class MainWindow(QMainWindow):
         self.trading_panel.rowsChanged.connect(self._set_setup_counts)
         self.trading_panel.connectionChanged.connect(self._set_ib_status)
         self.health_panel.statusChanged.connect(self._set_health_status)
+        self.trading_panel.bounce_panel.service.technicalIntegrityChanged.connect(
+            self._set_technical_integrity
+        )
+        self.trading_panel.bounce_panel.service.autoRegimeChanged.connect(self._set_auto_regime)
+        self._set_auto_regime({})
+        self._set_technical_integrity(load_technical_integrity_snapshot())
 
         # Self-heal a stale universe on launch AND on a recurring check (the
         # app often stays open across sessions, so launch-only healing left
@@ -192,10 +204,45 @@ class MainWindow(QMainWindow):
         status.addWidget(self.ib_status)
         status.addWidget(self.scan_status, 1)
         status.addPermanentWidget(self.setup_status)
+        self.market_regime_status = QLabel("Auto regime: n/a")
+        status.addPermanentWidget(self.market_regime_status)
+        self.technical_integrity_status = QPushButton("Technicals: building")
+        self.technical_integrity_status.setObjectName("TechnicalIntegrityButton")
+        self.technical_integrity_status.setFlat(True)
+        self.technical_integrity_status.clicked.connect(self._show_technical_integrity_details)
+        status.addPermanentWidget(self.technical_integrity_status)
         status.addPermanentWidget(self.watchlist_status)
         status.addPermanentWidget(self.universe_status)
         status.addPermanentWidget(self.data_status)
         status.addPermanentWidget(self.health_status)
+
+    def _set_auto_regime(self, reading) -> None:
+        chip, tooltip = format_auto_regime_reading(reading)
+        env_key = str((reading or {}).get("env_key") or "") if isinstance(reading, dict) else ""
+        if env_key.startswith("bearish"):
+            color = "#f85149"
+        elif env_key.startswith("bullish"):
+            color = "#3fb950"
+        else:
+            color = "#8b8fa3"
+        self.market_regime_status.setText(chip)
+        self.market_regime_status.setToolTip(tooltip)
+        self.market_regime_status.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    def _set_technical_integrity(self, snapshot) -> None:
+        self._technical_integrity_snapshot = snapshot if isinstance(snapshot, dict) else {}
+        chip, tooltip, color = format_technical_integrity_snapshot(snapshot)
+        self.technical_integrity_status.setText(chip)
+        self.technical_integrity_status.setToolTip(f"{tooltip}\n\nClick to search the full hierarchy.")
+        self.technical_integrity_status.setStyleSheet(
+            f"QPushButton#TechnicalIntegrityButton {{ color: {color}; font-weight: 600; padding: 1px 5px; }}"
+        )
+
+    def _show_technical_integrity_details(self) -> None:
+        TechnicalIntegrityDialog(
+            getattr(self, "_technical_integrity_snapshot", {}),
+            self,
+        ).exec()
 
     def _cycle_auto_mode(self) -> None:
         service = self.autopilot_panel.service

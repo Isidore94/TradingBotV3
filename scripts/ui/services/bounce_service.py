@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from market_environment_annotations import record_market_environment_annotation
 from project_paths import MARKET_ENVIRONMENT_ANNOTATIONS_FILE
+from technical_integrity import load_technical_integrity_snapshot
 from ui.models.bounce import BounceAlert
 
 
@@ -33,6 +34,7 @@ class BounceService(QObject):
     activeBouncesChanged = Signal(int)
     scanningChanged = Signal(bool)
     autoRegimeChanged = Signal(object)  # reading dict from get_auto_regime_reading(), or {}
+    technicalIntegrityChanged = Signal(object)  # advisory completed-M5 hierarchy, or {}
     entryAssistChanged = Signal(object)  # state dict from entry_assist_state(), or {}
     entryBoardChanged = Signal(object)  # board dict from entry_assist_board_snapshot(), or {}
     started = Signal()
@@ -74,6 +76,13 @@ class BounceService(QObject):
         self._regime_timer.setInterval(30_000)
         self._regime_timer.timeout.connect(self.refresh_auto_regime)
         self.started.connect(self._start_regime_timer)
+
+        # Advisory Technical Integrity is disk-backed so the UI never reaches
+        # into the scan thread. The same cached snapshot feeds every page.
+        self._integrity_timer = QTimer(self)
+        self._integrity_timer.setInterval(30_000)
+        self._integrity_timer.timeout.connect(self.refresh_technical_integrity)
+        self.started.connect(self._start_integrity_timer)
 
         # Always-on RS/RW board: regime + pause detection + live window /
         # pause-preview rankings + both-side trailing movers, recomputed from
@@ -118,6 +127,7 @@ class BounceService(QObject):
                 pass
         self._health_timer.stop()
         self._regime_timer.stop()
+        self._integrity_timer.stop()
         self._board_timer.stop()
         self.autoRegimeChanged.emit({})
         self.entryAssistChanged.emit({})
@@ -184,6 +194,15 @@ class BounceService(QObject):
     def _start_regime_timer(self) -> None:
         self._regime_timer.start()
         self.refresh_auto_regime()
+
+    @Slot()
+    def _start_integrity_timer(self) -> None:
+        self._integrity_timer.start()
+        self.refresh_technical_integrity()
+
+    @Slot()
+    def refresh_technical_integrity(self) -> None:
+        self.technicalIntegrityChanged.emit(load_technical_integrity_snapshot())
 
     @Slot()
     def _start_board_timer(self) -> None:

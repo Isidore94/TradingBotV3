@@ -149,6 +149,10 @@ def test_focus_picks_is_top_level_app_page():
         "Settings",
     ]
     assert window.pages.widget(1) is window.trading_panel.focus_picks_panel
+    assert window.market_regime_status.text().startswith("Auto regime:")
+    assert window.technical_integrity_status.text().startswith("Technicals:")
+    window._set_auto_regime({"env_key": "bearish_strong", "label": "Bearish Strong"})
+    assert window.market_regime_status.text() == "Auto: Bearish Strong"
 
 
 def _row(symbol, side, **kwargs):
@@ -387,6 +391,7 @@ def test_bounce_panel_defaults_user_to_na_and_hides_manual_windows(monkeypatch):
 
     panel = BouncePanel()
     assert panel.environment_input.currentData() == ""
+    assert panel.technical_integrity_label.text().startswith("Technicals:")
     assert "N/A" in panel.environment_input.currentText()
     assert panel.entry_assist_buttons["pullback_window"].isHidden()
     assert panel.entry_assist_buttons["bounce_window"].isHidden()

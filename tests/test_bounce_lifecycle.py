@@ -72,6 +72,7 @@ def test_bounce_service_stop_stops_bot_and_all_timers():
         service._bot = FakeBot()
     service._health_timer.start()
     service._regime_timer.start()
+    service._integrity_timer.start()
     service._board_timer.start()
 
     service.stop()
@@ -79,6 +80,7 @@ def test_bounce_service_stop_stops_bot_and_all_timers():
     assert calls.get("stop") == 5.0, "service.stop() must call bot.stop(), not bare disconnect"
     assert not service._health_timer.isActive()
     assert not service._regime_timer.isActive()
+    assert not service._integrity_timer.isActive(), "integrity timer must stop with the service"
     assert not service._board_timer.isActive(), "board timer must stop with the service"
     assert service._current_bot() is None
 

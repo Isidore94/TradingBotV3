@@ -7,10 +7,11 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch: `main`, after the verified Sol3 integration and GUI product work.
+- Branch: `codex/aggressive-auto-watchlists`, based on the verified Sol3
+  integration and GUI product work.
 - Integration base: `3443c69`.
 - Date: 2026-07-15
-- Test baseline: **918 passed, 5 subtests passed**
+- Test baseline: **928 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -30,6 +31,13 @@ stamp; it must not duplicate the roadmap.
   legacy-SPY-pullback extreme holders now feed regime-inverted long/short
   candidates with versioned golden coverage, while scheduled rotation and
   triple-VWAP invalidation remain unchanged.
+- Technical Integrity v1: a research-only completed-M5 level-respect score now
+  publishes market/sector/industry/stock hierarchy plus bullish/bearish break
+  pressure. Auto regime and Technicals are visible on every GUI page; hover
+  shows coverage and strongest/weakest industries, while clicking opens the
+  searchable full hierarchy. Append-only predictions and
+  outcomes feed daily plus on-demand point-in-time calibration, with a 100-event
+  / 5-session / both-outcome review floor and no automatic tuning path.
 - Scanner reliability: compact tracker scoring snapshot, true trigger-date
   freshness, invalid-side history sanitation, shared output-computation reuse,
   atomic signal/feature/watchlist writes, and detailed output timings landed.
@@ -70,5 +78,6 @@ stamp; it must not duplicate the roadmap.
   and flag any stale-source mismatch.
 - Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
   provenance while preserving the raw trigger signals separately.
-- Next queue: finish the Section 6 operational drills, remaining
-  CandidateRegistry writer adoption, and Greatness readiness gates.
+- Next queue: finish the Section 6 operational drills, collect/audit Technical
+  Integrity live evidence before considering any tuning, complete remaining
+  CandidateRegistry writer adoption, and finish Greatness readiness gates.

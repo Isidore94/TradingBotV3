@@ -198,6 +198,17 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   bullish tape mirrors both rules. New pullback episodes can trigger an
   append-preserving sweep without changing scheduled rotation or triple-VWAP
   removal behavior; the shadow SPY engine remains non-authoritative.
+- Technical Integrity v1 is a research-only 1-10 level-respect hierarchy for
+  the BounceBot-scanned market, sectors, industries, and stocks. It observes
+  completed M5 tests of the existing VWAP/band, EMA, and prior-day levels;
+  separates integrity from bullish/bearish break pressure; publishes an atomic
+  snapshot for the always-visible Auto-regime/Technicals GUI chips plus a
+  clickable searchable hierarchy; and keeps
+  an append-only start/resolution ledger with pre-outcome probabilities. The
+  after-close wrap-up and `scripts/analyze_technical_integrity.py` produce a
+  point-in-time calibration report. The score is advisory, cannot affect any
+  detector/watchlist/alert, and cannot propose a config for review before its
+  explicit multi-session evidence floor.
 
 ### 3.2 Implemented and running in shadow
 

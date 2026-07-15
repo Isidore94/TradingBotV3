@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from technical_integrity import format_technical_integrity_snapshot
 from ui.services.bounce_service import BounceService, load_bounce_config
 
 def entry_assist_button_specs(state) -> list[dict]:
@@ -256,6 +257,11 @@ class BouncePanel(QFrame):
 
         self.regime_label = QLabel("Auto regime: n/a")
         self.regime_label.setObjectName("MutedLabel")
+        self.technical_integrity_label = QLabel("Technicals: building")
+        self.technical_integrity_label.setObjectName("MutedLabel")
+        self.technical_integrity_label.setToolTip(
+            "Technical Integrity appears after completed-M5 level tests resolve. Advisory only."
+        )
         self.environment_input = QComboBox()
         self.environment_input.addItem("User mode: N/A (follow Auto)", "")
         for key, item in self.config["market_environments"].items():
@@ -291,6 +297,7 @@ class BouncePanel(QFrame):
         strip.addWidget(self.status_label)
         strip.addWidget(self.active_label)
         strip.addWidget(self.regime_label)
+        strip.addWidget(self.technical_integrity_label)
         strip.addWidget(self.environment_input)
         strip.addWidget(self.rrs_status_label, 1)
         strip.addWidget(self.start_scanning_button)
@@ -329,6 +336,7 @@ class BouncePanel(QFrame):
         self.service.statusChanged.connect(self._set_status)
         self.service.connectionChanged.connect(self._set_connection)
         self.service.autoRegimeChanged.connect(self._set_auto_regime)
+        self.service.technicalIntegrityChanged.connect(self._set_technical_integrity)
         self.service.entryAssistChanged.connect(self._set_entry_assist)
         for command, button in self.entry_assist_buttons.items():
             button.clicked.connect(
@@ -376,6 +384,12 @@ class BouncePanel(QFrame):
         chip, tooltip = format_auto_regime_reading(reading)
         self.regime_label.setText(chip)
         self.regime_label.setToolTip(tooltip)
+
+    def _set_technical_integrity(self, snapshot) -> None:
+        chip, tooltip, color = format_technical_integrity_snapshot(snapshot)
+        self.technical_integrity_label.setText(chip)
+        self.technical_integrity_label.setToolTip(tooltip)
+        self.technical_integrity_label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
     def _set_entry_assist(self, state) -> None:
         state = state if isinstance(state, dict) else {}

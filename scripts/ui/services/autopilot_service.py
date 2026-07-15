@@ -975,7 +975,21 @@ class AutopilotService(QObject):
                     self._log(f"Learning refresh failed: {exc}")
                     logging.exception("Auto Pilot learning refresh failed")
 
-                # 3) Scorecard: did the self-built lists produce anything?
+                # 3) Point-in-time Technical Integrity calibration. This only
+                #    writes a research report; it can never change live config.
+                try:
+                    from technical_integrity import write_technical_integrity_calibration_report
+
+                    report = write_technical_integrity_calibration_report()
+                    self._log(
+                        "Technical Integrity replay refreshed "
+                        f"({report['event_count']} outcomes / {report['session_count']} sessions)."
+                    )
+                except Exception as exc:
+                    self._log(f"Technical Integrity replay failed: {exc}")
+                    logging.exception("Technical Integrity replay failed")
+
+                # 4) Scorecard: did the self-built lists produce anything?
                 #    (idempotent - the always-on tick path may have run it)
                 try:
                     self._maybe_score_picks_daily(datetime.now())

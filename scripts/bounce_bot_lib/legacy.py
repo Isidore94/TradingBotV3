@@ -2302,6 +2302,9 @@ class BounceBot(EWrapper, EClient):
         self.auto_shorts = read_tickers(AUTO_SHORTS_FILENAME)
         self.atr_cache = {}
         self.symbol_metrics = {}  # Store precomputed VWAP and level metrics
+        # Lazily created on the first eligible scan. This observer is advisory:
+        # it may publish evidence, but never feeds bounce/watchlist decisions.
+        self._technical_integrity_monitor = None
 
         self.alerted_symbols = set()
         self.bounce_candidates = {}  # Track candidate bounces
@@ -2384,6 +2387,85 @@ class BounceBot(EWrapper, EClient):
                 logging.info("Bounce learning state refreshed at startup.")
         except Exception as exc:  # maintenance must never break the bot
             logging.warning("Bounce learning maintenance failed: %s", exc)
+
+    def _observe_technical_integrity(self, symbol, full_df):
+        """Publish completed-M5 level-test evidence without affecting decisions."""
+        try:
+            if full_df is None or full_df.empty or "datetime" not in full_df.columns:
+                return
+            now = get_market_local_now()
+            # IB timestamps are market-local naive bar starts. Recompute this
+            # observer's metrics on bars whose five-minute interval is over;
+            # champion preview metrics above remain completely untouched.
+            cutoff = now.replace(tzinfo=None)
+            completed_df = full_df[
+                full_df["datetime"] + pd.Timedelta(minutes=5) <= cutoff
+            ].copy().sort_values("datetime").reset_index(drop=True)
+            if completed_df.empty:
+                return
+            dates = sorted(completed_df["datetime"].dt.date.unique())
+            current_date = dates[-1]
+            prior_date = dates[-2] if len(dates) >= 2 else None
+            completed_today = completed_df[
+                completed_df["datetime"].dt.date == current_date
+            ].copy()
+            completed_prior = (
+                completed_df[completed_df["datetime"].dt.date == prior_date].copy()
+                if prior_date is not None
+                else pd.DataFrame()
+            )
+            if len(completed_today) < 2:
+                return
+
+            # Test the newest completed candle against levels frozen at the
+            # preceding completed close. Including the touch candle in its own
+            # EMA/VWAP would make the tested threshold subtly self-referential.
+            touch_start = completed_today["datetime"].iloc[-1]
+            level_df = completed_df[completed_df["datetime"] < touch_start].copy()
+            level_today = completed_today.iloc[:-1].copy()
+            std_vwap, std_upper, std_lower = self.calculate_vwap_with_stdev_bands(
+                level_today
+            )
+            dynamic_vwap, dynamic_upper, dynamic_lower = (
+                self.calculate_dynamic_vwap_with_stdev_bands(level_df)
+            )
+            eod_vwap, eod_upper, eod_lower = self.calculate_eod_vwap_with_stdev_bands(
+                level_df
+            )
+            close = level_today["close"]
+            completed_metrics = {
+                "std_vwap": std_vwap,
+                "dynamic_vwap": dynamic_vwap,
+                "eod_vwap": eod_vwap,
+                "prev_high": completed_prior["high"].max() if not completed_prior.empty else None,
+                "prev_low": completed_prior["low"].min() if not completed_prior.empty else None,
+                "vwap_1stdev_upper": std_upper,
+                "vwap_1stdev_lower": std_lower,
+                "dynamic_vwap_1stdev_upper": dynamic_upper,
+                "dynamic_vwap_1stdev_lower": dynamic_lower,
+                "eod_vwap_1stdev_upper": eod_upper,
+                "eod_vwap_1stdev_lower": eod_lower,
+                "ema_8": close.ewm(span=8, adjust=False).mean().iloc[-1] if len(close) >= 8 else None,
+                "ema_15": close.ewm(span=15, adjust=False).mean().iloc[-1] if len(close) >= 15 else None,
+                "ema_21": close.ewm(span=21, adjust=False).mean().iloc[-1] if len(close) >= 21 else None,
+            }
+            if self._technical_integrity_monitor is None:
+                from technical_integrity import TechnicalIntegrityMonitor
+
+                self._technical_integrity_monitor = TechnicalIntegrityMonitor()
+            self._technical_integrity_monitor.observe_symbol(
+                symbol,
+                completed_today,
+                completed_metrics,
+                atr=self.atr_cache.get(symbol),
+                classification=self.symbol_classification_cache.get(symbol, {}),
+                market_environment=self.get_market_environment(),
+                now=now,
+            )
+        except Exception as exc:
+            # Research instrumentation is fail-open by design. A diagnostics
+            # write or malformed row must never interrupt the champion path.
+            logging.warning("Technical Integrity observation failed for %s: %s", symbol, exc)
 
     def _load_pending_bounce_outcomes(self):
         if not INTRADAY_BOUNCE_OUTCOME_STATE_JSON.exists():
@@ -8825,6 +8907,8 @@ class BounceBot(EWrapper, EClient):
             "ema_21": ema_21,
             "vwap_invalidation": vwap_invalidation,
         }
+
+        self._observe_technical_integrity(symbol, df)
 
         # Then continue with detailed logging if LOGGING_MODE is enabled
         if LOGGING_MODE:
