@@ -114,8 +114,9 @@ def test_loud_alerts_are_sa_bangers_or_ready_d1():
     assert alert_is_loud(_alert("[A-TIER] AAA: Bounce confirmed"))
     assert alert_is_loud(_alert("[D-TIER] RS BANGER MSTR (long)"))
     assert not alert_is_loud(_alert("[B-TIER] AAA: Bounce confirmed"))
-    # D1 focus: a level-cross trigger or bucket upgrade is the "ready" moment.
-    assert alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) 1st-dev break UPPER_1@314.57", "d1_flag_long"))
+    # A level-cross trigger is developing evidence; only the final bucket
+    # upgrade is a D1 Focus/loud moment.
+    assert not alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) 1st-dev break UPPER_1@314.57", "d1_flag_long"))
     assert alert_is_loud(_alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade", "d1_flag_long"))
     assert not alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_WATCH: AAPL (long) AVWAPE retest", "d1_flag_long"))
     # The pause-watch summary line stays quiet by design.
@@ -146,13 +147,14 @@ def test_d1_focus_feed_only_gets_favorite_bucket_transitions():
 
     # Only the become-a-favorite moments live in the D1 Focus feed...
     d1_texts = [a.raw_text for a in panel._d1_alerts]
-    assert [t.split(":", 1)[0] for t in d1_texts] == [
-        "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
-        "MASTER_AVWAP_D1_BUCKET_UPGRADE",
-    ]
+    assert [t.split(":", 1)[0] for t in d1_texts] == ["MASTER_AVWAP_D1_BUCKET_UPGRADE"]
     # ...while WATCH/context flags stay visible in the live stream.
     live_prefixes = {a.raw_text.split(":", 1)[0] for a in panel._alerts}
-    assert live_prefixes == {"MASTER_AVWAP_D1_UPGRADE_WATCH", "MASTER_AVWAP_D1_FLAG"}
+    assert live_prefixes == {
+        "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
+        "MASTER_AVWAP_D1_UPGRADE_WATCH",
+        "MASTER_AVWAP_D1_FLAG",
+    }
 
 
 def test_entry_assist_board_renders_all_sections():

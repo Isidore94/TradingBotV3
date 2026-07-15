@@ -15,11 +15,11 @@ from PySide6.QtWidgets import (
 from ui.services.bounce_service import BounceService, load_bounce_config
 
 def entry_assist_button_specs(state) -> list[dict]:
-    """One spec per entry-assist button, covering every major situation at once.
+    """One spec per entry-assist action.
 
-    All five actions stay available in every regime; ``recommended`` marks the
-    one that matches the current auto/override regime so it can be highlighted.
-    Output from every action lands in the Alert Center.
+    Pullback/bounce windows are automatic in normal operation and therefore
+    marked as advanced manual diagnostics. The useful on-demand views remain
+    strongest, weakest, and both-side movers over the trailing 30 minutes.
     """
     state = state if isinstance(state, dict) else {}
     connected = bool(state)
@@ -67,6 +67,7 @@ def entry_assist_button_specs(state) -> list[dict]:
             "tooltip": pullback_tip if connected else not_connected_tip,
             "enabled": connected,
             "recommended": env == "bullish_strong" or long_window,
+            "advanced": True,
         },
         {
             "command": "bounce_window",
@@ -74,6 +75,7 @@ def entry_assist_button_specs(state) -> list[dict]:
             "tooltip": bounce_tip if connected else not_connected_tip,
             "enabled": connected,
             "recommended": env == "bearish_strong" or short_window,
+            "advanced": True,
         },
         {
             "command": "strongest_30m",
@@ -86,6 +88,7 @@ def entry_assist_button_specs(state) -> list[dict]:
             ),
             "enabled": connected,
             "recommended": env == "bullish_weak",
+            "advanced": False,
         },
         {
             "command": "weakest_30m",
@@ -98,6 +101,7 @@ def entry_assist_button_specs(state) -> list[dict]:
             ),
             "enabled": connected,
             "recommended": env == "bearish_weak",
+            "advanced": False,
         },
         {
             "command": "movers_30m",
@@ -110,6 +114,7 @@ def entry_assist_button_specs(state) -> list[dict]:
             ),
             "enabled": connected,
             "recommended": env == "neutral_chop",
+            "advanced": False,
         },
     ]
 
@@ -169,7 +174,7 @@ def format_auto_regime_reading(reading) -> tuple[str, str]:
     if reading.get("override_active"):
         lines.append(
             f"Manual override active ({reading.get('active_label')}); auto keeps measuring - "
-            "click Auto to hand control back."
+            "select User mode: N/A to hand control back."
         )
     return chip, "\n".join(lines)
 
@@ -201,11 +206,10 @@ class BouncePanel(QFrame):
 
     Owns the live service (auto-connects on startup) and shows only what
     matters while trading: health chips, the market-regime chip with its
-    manual override, RRS status, and Start/Stop scanning on the top row, and
-    the entry-assist button array (pullback/bounce windows, strongest/weakest/
-    movers 30m — all situations, all regimes) on the second row. Every assist
-    action outputs into the Alert Center. Connection management, RRS tuning,
-    and bounce-type toggles live on the Settings page.
+    user annotation/override, RRS status, and Start/Stop scanning on the top
+    row. Automatic pullback/bounce tracking is the default; the normal entry
+    row only exposes strongest/weakest/movers 30m. Manual window controls stay
+    available behind an advanced toggle for diagnostics.
     """
 
     statusChanged = Signal(str)
@@ -231,26 +235,37 @@ class BouncePanel(QFrame):
         self.start_scanning_button.setObjectName("PrimaryButton")
         self.stop_scanning_button = QPushButton("Stop Scanning")
 
-        # Entry-assist button array: every major situation stays clickable in
-        # every regime; the regime-recommended action gets the primary style.
+        # Auto owns pullback/bounce windows. Keep those manual controls hidden
+        # unless explicitly opened for diagnostics.
         self.entry_assist_buttons: dict[str, QPushButton] = {}
         for spec in entry_assist_button_specs({}):
             button = QPushButton(spec["label"])
             button.setToolTip(spec["tooltip"])
             button.setEnabled(spec["enabled"])
+            button.setVisible(not spec["advanced"])
             self.entry_assist_buttons[spec["command"]] = button
+
+        self.entry_assist_auto_label = QLabel("Auto entry monitoring: waiting for connection")
+        self.entry_assist_auto_label.setObjectName("MutedLabel")
+        self.entry_assist_advanced_button = QPushButton("Manual window tools")
+        self.entry_assist_advanced_button.setCheckable(True)
+        self.entry_assist_advanced_button.setToolTip(
+            "Advanced diagnostics only. Auto already opens and closes pullback/bounce windows "
+            "from completed SPY bars."
+        )
 
         self.regime_label = QLabel("Auto regime: n/a")
         self.regime_label.setObjectName("MutedLabel")
         self.environment_input = QComboBox()
+        self.environment_input.addItem("User mode: N/A (follow Auto)", "")
         for key, item in self.config["market_environments"].items():
-            self.environment_input.addItem(str(item.get("label", key)), key)
+            self.environment_input.addItem(f"User mode: {item.get('label', key)}", key)
         self.environment_input.setCurrentIndex(
-            max(0, self.environment_input.findData(self.service.market_environment))
+            max(0, self.environment_input.findData(self.service.market_environment or ""))
         )
-        self.environment_auto_button = QPushButton("Auto")
-        self.environment_auto_button.setToolTip(
-            "Return regime control to the bot (SPY green/red vs yesterday's close)."
+        self.environment_input.setToolTip(
+            "N/A is the default: Auto controls the active market regime. Choosing a value creates "
+            "a session-only user override and logs the bot's simultaneous Auto read for later review."
         )
 
         self._build_layout()
@@ -277,7 +292,6 @@ class BouncePanel(QFrame):
         strip.addWidget(self.active_label)
         strip.addWidget(self.regime_label)
         strip.addWidget(self.environment_input)
-        strip.addWidget(self.environment_auto_button)
         strip.addWidget(self.rrs_status_label, 1)
         strip.addWidget(self.start_scanning_button)
         strip.addWidget(self.stop_scanning_button)
@@ -285,16 +299,17 @@ class BouncePanel(QFrame):
         assist_label = QLabel("Entry assist:")
         assist_label.setObjectName("MutedLabel")
         assist_label.setToolTip(
-            "On-demand entry help for every tape: pullback/bounce tracking windows in strong trends, "
-            "strongest/weakest trailing-30m lists otherwise. All output lands in the Alert Center; "
-            "the highlighted button is the one matching the current regime."
+            "Auto handles pullback/bounce windows from completed SPY bars. These buttons request "
+            "plain trailing-30m strongest, weakest, or both-side mover lists."
         )
         assist_row = QHBoxLayout()
         assist_row.setContentsMargins(0, 0, 0, 0)
         assist_row.setSpacing(8)
         assist_row.addWidget(assist_label)
+        assist_row.addWidget(self.entry_assist_auto_label)
         for button in self.entry_assist_buttons.values():
             assist_row.addWidget(button)
+        assist_row.addWidget(self.entry_assist_advanced_button)
         assist_row.addStretch(1)
 
         rows = QVBoxLayout(self)
@@ -308,7 +323,7 @@ class BouncePanel(QFrame):
         self.start_scanning_button.clicked.connect(self.service.start_scanning)
         self.stop_scanning_button.clicked.connect(self.service.stop_scanning)
         self.environment_input.currentIndexChanged.connect(self._on_environment_changed)
-        self.environment_auto_button.clicked.connect(self._on_environment_auto)
+        self.entry_assist_advanced_button.toggled.connect(self._toggle_manual_entry_tools)
 
         self.service.rrsStatusChanged.connect(self._set_rrs_status)
         self.service.statusChanged.connect(self._set_status)
@@ -348,11 +363,14 @@ class BouncePanel(QFrame):
         key = self.environment_input.currentData()
         if key:
             self.service.set_market_environment(str(key))
-            self.service.refresh_auto_regime()  # re-render the chip with the override
-
-    def _on_environment_auto(self) -> None:
-        self.service.clear_market_environment_override()
+        else:
+            self.service.clear_market_environment_override()
         self.service.refresh_auto_regime()
+
+    def _toggle_manual_entry_tools(self, visible: bool) -> None:
+        for spec in entry_assist_button_specs({}):
+            if spec["advanced"]:
+                self.entry_assist_buttons[spec["command"]].setVisible(bool(visible))
 
     def _set_auto_regime(self, reading) -> None:
         chip, tooltip = format_auto_regime_reading(reading)
@@ -360,6 +378,16 @@ class BouncePanel(QFrame):
         self.regime_label.setToolTip(tooltip)
 
     def _set_entry_assist(self, state) -> None:
+        state = state if isinstance(state, dict) else {}
+        if not state:
+            auto_text = "Auto entry monitoring: waiting for connection"
+        elif state.get("window_active"):
+            sides = "/".join(str(side) for side in state.get("window_sides") or []) or "market"
+            source = str(state.get("window_source") or "auto")
+            auto_text = f"Auto entry monitoring: {source} {sides} window active"
+        else:
+            auto_text = "Auto entry monitoring: ON (completed-bar SPY pauses)"
+        self.entry_assist_auto_label.setText(auto_text)
         for spec in entry_assist_button_specs(state):
             button = self.entry_assist_buttons.get(spec["command"])
             if button is None:
@@ -381,20 +409,11 @@ class BouncePanel(QFrame):
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
         self.statusChanged.emit(f"BounceBot: {message}")
-        # Mirror the bot's auto-regime changes into the dropdown + readout.
+        # Auto is a read-only chip. Never mirror it into the user's selector:
+        # N/A stays N/A until the trader deliberately chooses an override.
         text = str(message or "")
         if text.startswith("Auto market regime"):
             self.service.refresh_auto_regime()
-            for key, item in self.config["market_environments"].items():
-                if str(item.get("label", "")) in text or key in text:
-                    self._syncing_environment = True
-                    try:
-                        self.environment_input.setCurrentIndex(
-                            max(0, self.environment_input.findData(key))
-                        )
-                    finally:
-                        self._syncing_environment = False
-                    break
 
     def _set_connection(self, message: str) -> None:
         self.connection_label.setText(message)

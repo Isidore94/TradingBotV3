@@ -111,6 +111,9 @@ def test_stop_during_startup_cannot_install_a_late_bot(monkeypatch):
         def set_market_environment(self, *_):
             pass
 
+        def clear_market_environment_override(self):
+            calls["startup_auto"] = True
+
         def set_scanning_enabled(self, *_):
             pass
 
@@ -142,4 +145,5 @@ def test_stop_during_startup_cannot_install_a_late_bot(monkeypatch):
     time.sleep(0.5)
 
     assert calls.get("late_stop"), "the late bot must be stopped, not installed"
+    assert calls.get("startup_auto"), "N/A must start BounceBot under automatic regime control"
     assert service._current_bot() is None

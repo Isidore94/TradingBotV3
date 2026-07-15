@@ -40,14 +40,14 @@ MAX_FEED_ITEMS = 250
 MAX_D1_FEED_ITEMS = 100
 
 # D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
-# name: price crossed a key armed level toward an A/S upgrade, or the scan
-# confirmed a genuine bucket upgrade. Only these belong in the D1 Focus feed
+# name: the scan confirmed a genuine bucket upgrade. An armed-level crossing
+# is still only developing evidence and stays in the normal live feed. Only a
+# final Favorite / High Conviction bucket result belongs in the D1 Focus feed
 # (user rule 2026-07-09: "only things that turn a stock into a favourite or
 # high conviction bucket stock"); UPGRADE_WATCH / generic D1 flags are
 # context and route to the live feed under the normal tier gate instead.
 _D1_READY_PREFIXES = {
     "MASTER_AVWAP_D1_BUCKET_UPGRADE",
-    "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
 }
 
 
@@ -324,9 +324,8 @@ class AlertCenterPanel(QFrame):
         if _is_feed_noise_alert(alert):
             return
         # D1 Focus is reserved for favorite/high-conviction transitions
-        # (bucket upgrades + armed A/S upgrade-trigger crossings). Other D1
-        # chatter (UPGRADE_WATCH context, generic level flags) stays visible
-        # but in the live stream, behind the normal tier gate.
+        # (final bucket upgrades only). Developing trigger/watch context stays
+        # visible in the live stream, behind the normal tier gate.
         if alert.is_d1 and is_ready_d1_alert(alert):
             self._add_d1_alert(alert)
             return

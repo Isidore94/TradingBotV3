@@ -11,7 +11,7 @@ stamp; it must not duplicate the roadmap.
   verified Sol3 integration and subsequent fixes.
 - Integration base: `fc05c96`.
 - Date: 2026-07-14
-- Test baseline: **882 passed, 5 subtests passed**
+- Test baseline: **886 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -40,6 +40,12 @@ stamp; it must not duplicate the roadmap.
   numeric strongest/weakest sorting. Master focus duplicates now merge by
   opportunity thesis/anchor instead of surviving solely because their buckets
   differ.
+- Bounce/entry trust: BounceBot now defaults to Auto with a separate N/A user
+  mode, logs every manual environment selection beside Auto's same-moment
+  evidence, makes automatic completed-bar entry monitoring explicit, and hides
+  manual pullback/bounce windows under Advanced. D1 Focus now accepts only
+  final Favorite/High Conviction bucket upgrades; developing crossings stay in
+  the normal stream.
 - Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
   provenance while preserving the raw trigger signals separately.
 - Next queue: finish the Section 6 operational drills, remaining

@@ -312,6 +312,8 @@ def test_entry_assist_button_specs_cover_all_situations():
     specs = {spec["command"]: spec for spec in entry_assist_button_specs({})}
     assert set(specs) == {"pullback_window", "bounce_window", "strongest_30m", "weakest_30m", "movers_30m"}
     assert all(not spec["enabled"] for spec in specs.values())
+    assert specs["pullback_window"]["advanced"] and specs["bounce_window"]["advanced"]
+    assert not specs["strongest_30m"]["advanced"]
 
     # Connected, bullish strong: all enabled, pullback window is the recommended action.
     specs = {
@@ -364,6 +366,34 @@ def test_entry_assist_button_specs_cover_all_situations():
     assert specs["weakest_30m"]["recommended"]
     specs = {spec["command"]: spec for spec in entry_assist_button_specs({"env_key": "neutral_chop"})}
     assert specs["movers_30m"]["recommended"]
+
+
+def test_bounce_panel_defaults_user_to_na_and_hides_manual_windows(monkeypatch):
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        monkeypatch.setattr(QTimer, "singleShot", lambda *_args: None)
+        from ui.panels.bounce_panel import BouncePanel
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    panel = BouncePanel()
+    assert panel.environment_input.currentData() == ""
+    assert "N/A" in panel.environment_input.currentText()
+    assert panel.entry_assist_buttons["pullback_window"].isHidden()
+    assert panel.entry_assist_buttons["bounce_window"].isHidden()
+    assert not panel.entry_assist_buttons["strongest_30m"].isHidden()
+
+    panel.entry_assist_advanced_button.setChecked(True)
+    assert not panel.entry_assist_buttons["pullback_window"].isHidden()
+    panel.stop()
 
 
 def test_auto_regime_readout_formatting():

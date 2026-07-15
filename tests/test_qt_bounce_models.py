@@ -51,7 +51,7 @@ def test_bounce_alert_marks_d1_flags():
     assert alert.context == "score=88"
 
 
-def test_ready_d1_alerts_are_bucket_upgrades_and_level_cross_triggers():
+def test_ready_d1_alerts_are_final_bucket_upgrades_only():
     from ui.models.bounce import BounceAlert
     try:
         from ui.panels.alert_center_panel import is_ready_d1_alert
@@ -84,6 +84,6 @@ def test_ready_d1_alerts_are_bucket_upgrades_and_level_cross_triggers():
     assert bucket_alert.symbol == "NVDA"
     assert bucket_alert.side == "LONG"
     assert is_ready_d1_alert(bucket_alert)
-    assert is_ready_d1_alert(trigger_alert)
+    assert not is_ready_d1_alert(trigger_alert)
     assert not is_ready_d1_alert(watch_alert)
     assert not is_ready_d1_alert(generic_alert)

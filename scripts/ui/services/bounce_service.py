@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import threading
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
+from market_environment_annotations import record_market_environment_annotation
+from project_paths import MARKET_ENVIRONMENT_ANNOTATIONS_FILE
 from ui.models.bounce import BounceAlert
 
 
@@ -35,13 +39,23 @@ class BounceService(QObject):
     stopped = Signal()
     failed = Signal(str)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        environment_annotations_path: Path = MARKET_ENVIRONMENT_ANNOTATIONS_FILE,
+    ) -> None:
         super().__init__(parent)
         config = load_bounce_config()
         self.bounce_type_settings: dict[str, bool] = dict(config["bounce_type_defaults"])
         self.rrs_threshold = 2.0
         self.rrs_timeframe_key = "5m"
-        self.market_environment = "bullish_strong"
+        # ``None`` is the user's N/A mode: the bot owns the regime through its
+        # automatic SPY read.  A concrete value is a session-only annotation
+        # and manual override; it is never silently inferred from Auto.
+        self.market_environment: str | None = None
+        self.environment_session_id = uuid.uuid4().hex
+        self.environment_annotations_path = Path(environment_annotations_path)
         self.scanning_enabled = False
         self.include_approaching = False
 
@@ -142,11 +156,18 @@ class BounceService(QObject):
             return
         self.market_environment = env_key
         self._with_bot(lambda bot: bot.set_market_environment(env_key))
+        logged = self._record_environment_annotation(env_key, event="manual_selected")
+        label = str(config["market_environments"][env_key].get("label", env_key))
+        suffix = "" if logged else " (annotation log unavailable)"
+        self.statusChanged.emit(f"User market mode: {label}; Auto still records its own read.{suffix}")
 
     def clear_market_environment_override(self) -> None:
         """Return regime control to the bot's SPY-based auto tracking."""
+        self.market_environment = None
         self._with_bot(lambda bot: bot.clear_market_environment_override())
-        self.statusChanged.emit("Market regime back on auto (SPY vs yesterday's close).")
+        logged = self._record_environment_annotation(None, event="returned_to_na")
+        suffix = "" if logged else " Annotation log unavailable."
+        self.statusChanged.emit(f"User market mode: N/A; Auto controls the active regime.{suffix}")
 
     def set_bounce_type_enabled(self, bounce_type: str, enabled: bool) -> None:
         if bounce_type not in self.bounce_type_settings:
@@ -319,7 +340,10 @@ class BounceService(QObject):
     def _apply_saved_state(self, bot) -> None:
         bot.set_rrs_threshold(self.rrs_threshold)
         bot.set_rrs_timeframe(self.rrs_timeframe_key)
-        bot.set_market_environment(self.market_environment)
+        if self.market_environment:
+            bot.set_market_environment(self.market_environment)
+        else:
+            bot.clear_market_environment_override()
         bot.set_scanning_enabled(self.scanning_enabled)
         for bounce_key, enabled in self.bounce_type_settings.items():
             bot.set_bounce_type_enabled(bounce_key, enabled)
@@ -327,10 +351,16 @@ class BounceService(QObject):
     def _sync_state_from_bot(self, bot) -> None:
         self.rrs_threshold = float(getattr(bot, "rrs_threshold", self.rrs_threshold))
         self.rrs_timeframe_key = str(getattr(bot, "rrs_timeframe_key", self.rrs_timeframe_key))
-        try:
-            self.market_environment = str(bot.get_market_environment())
-        except Exception:
-            pass
+        # Keep the user selector independent from the auto read.  The bot has
+        # an effective environment even in Auto; only mirror it when a genuine
+        # manual override is active.
+        if bool(getattr(bot, "market_environment_user_override", False)):
+            try:
+                self.market_environment = str(bot.get_market_environment())
+            except Exception:
+                self.market_environment = None
+        else:
+            self.market_environment = None
         try:
             self.scanning_enabled = bool(bot.is_scanning_enabled())
         except Exception:
@@ -359,3 +389,21 @@ class BounceService(QObject):
         except Exception as exc:
             self.statusChanged.emit(f"command failed: {exc}")
             return None
+
+    def _record_environment_annotation(self, selected: str | None, *, event: str) -> bool:
+        bot = self._current_bot()
+        reading: dict[str, Any] = {}
+        if bot is not None:
+            try:
+                candidate = bot.get_auto_regime_reading()
+                if isinstance(candidate, dict):
+                    reading = candidate
+            except Exception:
+                pass
+        return record_market_environment_annotation(
+            selected_environment=selected,
+            auto_reading=reading,
+            session_id=self.environment_session_id,
+            event=event,
+            path=self.environment_annotations_path,
+        ) is not None

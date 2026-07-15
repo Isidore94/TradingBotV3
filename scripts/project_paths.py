@@ -226,6 +226,11 @@ AUTO_POPULATE_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "auto_watchlist_membership.js
 # Lives in the shared home so it syncs across machines and can be handed to an
 # AI for review ("why did I like/hate these picks -> tune the scans").
 PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
+# Append-only trader annotations for the BounceBot market-environment control.
+# The bot's automatic SPY read remains separate; each manual selection records
+# that contemporaneous read so later research can learn where/why the trader
+# disagreed without treating the annotation as ground truth.
+MARKET_ENVIRONMENT_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "market_environment_annotations.jsonl"
 HUMAN_FOCUS_SNAPSHOT_STATE_FILE = RUNTIME_DATA_DIR / "human_focus_snapshot_state.json"
 HUMAN_FOCUS_DAILY_PICKS_FILE = RUNTIME_DATA_DIR / "human_focus_daily_picks.csv"
 HUMAN_FOCUS_OUTCOMES_FILE = RUNTIME_DATA_DIR / "human_focus_outcomes.csv"

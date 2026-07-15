@@ -159,6 +159,15 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   Health, and supports true numeric strongest/weakest sorting.
 - Master focus rows deduplicate by opportunity thesis/anchor rather than bucket,
   while preserving High Conviction/Favorite classification badges.
+- BounceBot starts with Auto owning the active regime and the user's selector
+  at N/A. Manual environment choices are session-only overrides recorded to an
+  append-only learning log with the contemporaneous Auto reading; selecting N/A
+  clears the override without hiding what Auto believes.
+- Entry Assist presents completed-bar automatic pullback/bounce monitoring as
+  the normal path. Strongest, weakest, and movers 30m remain on demand, while
+  manual window controls live under Advanced diagnostics.
+- D1 Focus routes final Favorite/High Conviction bucket-upgrade events only;
+  armed/level-cross triggers remain developing evidence in the live stream.
 
 ### 3.2 Implemented and running in shadow
 
