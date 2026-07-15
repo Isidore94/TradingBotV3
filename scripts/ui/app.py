@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from project_paths import get_shared_watchlist_details, get_tracker_storage_details
+from ui.panels.ai_summary_panel import AiSummaryPanel
 from ui.panels.autopilot_panel import AutopilotPanel
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
         self.settings_panel = SettingsPanel(self.state, bounce_service=self.trading_panel.bounce_panel.service)
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
         self.health_panel = HealthPanel()
+        self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)
@@ -62,6 +64,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.universe_panel)
         self.pages.addWidget(self.research_panel)
         self.pages.addWidget(self.autopilot_panel)
+        self.pages.addWidget(self.ai_summary_panel)
         self.pages.addWidget(self.health_panel)
         self.pages.addWidget(self.settings_panel)
 
@@ -121,6 +124,7 @@ class MainWindow(QMainWindow):
             ("Universe", "mdi.earth"),
             ("Research", "mdi.flask-outline"),
             ("Auto Pilot", "mdi.robot-outline"),
+            ("A.I. Summary", "mdi.brain"),
             ("System Health", "mdi.heart-pulse"),
             ("Settings", "mdi.cog-outline"),
         )
@@ -237,6 +241,7 @@ class MainWindow(QMainWindow):
             "Universe",
             "Research",
             "Auto Pilot",
+            "A.I. Summary",
             "System Health",
             "Settings",
         )
@@ -323,6 +328,7 @@ class MainWindow(QMainWindow):
             self.universe_panel,
             self.research_panel,
             self.autopilot_panel,
+            self.ai_summary_panel,
             self.health_panel,
             self.settings_panel,
         ):

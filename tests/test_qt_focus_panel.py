@@ -144,6 +144,7 @@ def test_focus_picks_is_top_level_app_page():
         "Universe",
         "Research",
         "Auto Pilot",
+        "A.I. Summary",
         "System Health",
         "Settings",
     ]

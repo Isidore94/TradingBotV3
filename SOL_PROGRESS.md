@@ -11,7 +11,7 @@ stamp; it must not duplicate the roadmap.
   verified Sol3 integration and subsequent fixes.
 - Integration base: `fc05c96`.
 - Date: 2026-07-14
-- Test baseline: **893 passed, 5 subtests passed**
+- Test baseline: **900 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -51,6 +51,11 @@ stamp; it must not duplicate the roadmap.
   Setup Tracker summarizes qualified leaders in plain English. Journal schema
   v2 preserves append-only opportunity lifecycle events plus structured GUI
   reviews, with broker-derived Taken/Closed events idempotent across rebuilds.
+- Optional A.I. review: a top-level A.I. Summary tab now attaches either
+  ChatGPT/OpenAI or Claude/Anthropic to explicit user-selected evidence scopes.
+  It previews the exact bounded package, stores saved keys in Windows Credential
+  Manager, validates structured results and every source ID, and exports the
+  summary/evidence/manifest without any write path back into bot decisions.
 - Setup tags: v2 semantic family/trigger/confirmation tags are integrated with
   provenance while preserving the raw trigger signals separately.
 - Next queue: finish the Section 6 operational drills, remaining

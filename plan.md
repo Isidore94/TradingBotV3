@@ -176,6 +176,12 @@ The registry has initial shadow adoption, but all legacy live writers have not y
 - Journal schema v2 adds an append-only opportunity lifecycle ledger. Broker
   imports create idempotent Taken/Closed events, and the GUI records structured
   trade reviews alongside freeform notes for later daily/A.I. review.
+- A top-level A.I. Summary workspace supports ChatGPT/OpenAI and Claude/Anthropic
+  through one provider-neutral contract. The trader explicitly selects and
+  previews bounded daily/market/setup/journal/forensics/feedback evidence;
+  Windows Credential Manager stores optional saved keys. Structured output is
+  locally schema/source-reference validated, then written with its exact evidence
+  package and manifest. It is export-only and has no bot mutation path.
 
 ### 3.2 Implemented and running in shadow
 
