@@ -1,10 +1,12 @@
 """Tests for the sector/industry RS index board (pure computation, no network)."""
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -158,6 +160,42 @@ class RenderTests(unittest.TestCase):
         self.assertIn("== INDUSTRY INDEXES", text)
         self.assertIn("XLK", text)
         self.assertIn("Photonics*", text)
+
+    def test_atomic_csv_failure_preserves_previous_board(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "industry.csv"
+            path.write_text("old-board\n", encoding="utf-8")
+            with patch.object(scanner.os, "replace", side_effect=OSError("simulated replace failure")):
+                with self.assertRaises(OSError):
+                    scanner._write_csv(path, [{"industry": "Semiconductors", "rs_score": 1.2}])
+            self.assertEqual(path.read_text(encoding="utf-8"), "old-board\n")
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
+    def test_incomplete_provider_result_never_replaces_last_good_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            text_path = root / "industry.txt"
+            sector_path = root / "sector.csv"
+            industry_path = root / "industry.csv"
+            for path in (text_path, sector_path, industry_path):
+                path.write_text("last-good\n", encoding="utf-8")
+
+            patches = (
+                patch.object(scanner, "INDUSTRY_BOARD_TEXT_FILE", text_path),
+                patch.object(scanner, "SECTOR_BOARD_CSV_FILE", sector_path),
+                patch.object(scanner, "INDUSTRY_BOARD_CSV_FILE", industry_path),
+                patch.object(scanner, "load_symbol_classifications", return_value={}),
+                patch.object(scanner, "load_custom_industry_groups", return_value={}),
+                patch.object(scanner, "load_industry_index_definitions", return_value={}),
+                patch.object(scanner, "gather_watchlist_symbols", return_value=[]),
+                patch.object(scanner, "fetch_daily_frames_yf", return_value={}),
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+                with self.assertRaises(RuntimeError):
+                    scanner.run_industry_scan(write_outputs=True)
+
+            for path in (text_path, sector_path, industry_path):
+                self.assertEqual(path.read_text(encoding="utf-8"), "last-good\n")
 
 
 if __name__ == "__main__":

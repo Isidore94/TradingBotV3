@@ -73,6 +73,20 @@ def _healthy_fixture(tmp_path: Path) -> tuple[Path, Path, datetime]:
         },
     )
     _write(diagnostics / "autopilot_state.json", {"enabled": True, "profile": "AWAY"})
+    _write(
+        diagnostics / "industry_board_snapshot.json",
+        {
+            "schema": "industry_board_snapshot_v1",
+            "status": "ok",
+            "last_attempt_at": "2026-07-13T12:20:00-07:00",
+            "last_success_at": "2026-07-13T12:20:00-07:00",
+            "snapshot_id": "snapshot-1",
+            "sector_count": 11,
+            "industry_count": 55,
+            "symbol_count": 800,
+            "error": "",
+        },
+    )
     return diagnostics, registry, now
 
 
@@ -84,9 +98,10 @@ def test_healthy_runtime_audit_composes_all_sol3_surfaces(tmp_path):
 
     assert payload["schema"] == "operations_audit_v1"
     assert payload["status"] == "healthy"
-    assert payload["summary"] == {"healthy": 7, "degraded": 0, "unhealthy": 0, "total": 7}
+    assert payload["summary"] == {"healthy": 8, "degraded": 0, "unhealthy": 0, "total": 8}
     assert {item["id"] for item in payload["checks"]} == {
-        "heartbeat", "job_ledger", "run_manifest", "away_report", "spy_shadow", "greatness_shadow", "candidate_registry"
+        "heartbeat", "job_ledger", "run_manifest", "away_report", "industry_board",
+        "spy_shadow", "greatness_shadow", "candidate_registry"
     }
     assert payload["latest_manifest"]["run_id"] == "run-1"
     assert payload["excluded"] == ["large setup-tracker payload"]

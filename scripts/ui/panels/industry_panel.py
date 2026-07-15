@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import csv
-import threading
-import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -23,8 +21,8 @@ from PySide6.QtWidgets import (
 from industry_scanner import (
     INDUSTRY_BOARD_CSV_FILE,
     SECTOR_BOARD_CSV_FILE,
-    run_industry_scan,
 )
+from ui.services.industry_board_service import IndustryBoardService, inspect_industry_snapshot
 from ui.widgets.section_header import SectionHeader
 
 POSITIVE_COLOR = QColor("#4CAF50")
@@ -54,6 +52,7 @@ INDUSTRY_COLUMNS = (
 )
 PCT_KEYS = {"pct_change_1d", "return_5d_pct", "return_20d_pct", "return_65d_pct", "volume_buzz_pct"}
 SIGNED_KEYS = PCT_KEYS | {"rs_score"}
+NUMERIC_KEYS = SIGNED_KEYS | {"rs_rank", "member_count"}
 
 
 class IndustryPanel(QFrame):
@@ -66,33 +65,49 @@ class IndustryPanel(QFrame):
     """
 
     statusChanged = Signal(str)
-    _refreshFinished = Signal(str)
-
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, service: IndustryBoardService | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
-        self._refresh_thread: threading.Thread | None = None
+        self.service = service or IndustryBoardService(self)
 
         self.refresh_button = QPushButton("Refresh Board (yfinance)")
         self.refresh_button.setObjectName("PrimaryButton")
-        self.refresh_button.clicked.connect(self.start_refresh)
+        self.refresh_button.clicked.connect(lambda: self.service.request_refresh(force=True))
         reload_button = QPushButton("Reload From Disk")
         reload_button.clicked.connect(self.reload_from_disk)
+        strongest_button = QPushButton("Strongest")
+        strongest_button.clicked.connect(
+            lambda: self._sort_strength(Qt.SortOrder.DescendingOrder)
+        )
+        weakest_button = QPushButton("Weakest")
+        weakest_button.clicked.connect(
+            lambda: self._sort_strength(Qt.SortOrder.AscendingOrder)
+        )
         self.as_of_label = QLabel("")
         self.as_of_label.setObjectName("MutedLabel")
 
         self.sector_table = _make_table(SECTOR_COLUMNS)
         self.industry_table = _make_table(INDUSTRY_COLUMNS)
 
-        self._refreshFinished.connect(self._on_refresh_finished)
-        self._build_layout(reload_button)
+        self.service.refreshStarted.connect(self._on_refresh_started)
+        self.service.refreshFinished.connect(self._on_refresh_finished)
+        self.service.snapshotChanged.connect(self._on_snapshot_changed)
+        self._build_layout(reload_button, strongest_button, weakest_button)
         self.reload_from_disk()
+        self.service.start()
 
-    def _build_layout(self, reload_button: QPushButton) -> None:
+    def _build_layout(
+        self,
+        reload_button: QPushButton,
+        strongest_button: QPushButton,
+        weakest_button: QPushButton,
+    ) -> None:
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
         action_row.addWidget(self.refresh_button)
         action_row.addWidget(reload_button)
+        action_row.addWidget(strongest_button)
+        action_row.addWidget(weakest_button)
         action_row.addWidget(self.as_of_label)
         action_row.addStretch(1)
 
@@ -136,45 +151,60 @@ class IndustryPanel(QFrame):
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
-    def reload_from_disk(self) -> None:
+    def reload_from_disk(self, snapshot: dict | None = None) -> None:
         sector_rows = _read_csv_rows(SECTOR_BOARD_CSV_FILE)
         industry_rows = _read_csv_rows(INDUSTRY_BOARD_CSV_FILE)
         _fill_table(self.sector_table, SECTOR_COLUMNS, sector_rows)
         _fill_table(self.industry_table, INDUSTRY_COLUMNS, industry_rows)
-        if SECTOR_BOARD_CSV_FILE.exists():
-            as_of = datetime.fromtimestamp(SECTOR_BOARD_CSV_FILE.stat().st_mtime)
-            self.as_of_label.setText(f"Board as of {as_of.isoformat(timespec='minutes')}")
+        snapshot = snapshot or inspect_industry_snapshot()
+        as_of = snapshot.get("as_of")
+        if isinstance(as_of, datetime):
+            state = str(snapshot.get("state") or "unknown").upper()
+            snapshot_id = str(snapshot.get("snapshot_id") or "")
+            self.as_of_label.setText(
+                f"{state} | board as of {as_of.isoformat(timespec='minutes')} | "
+                f"snapshot {snapshot_id or 'unknown'}"
+            )
         else:
             self.as_of_label.setText("No board yet -- click Refresh to build it.")
 
     def start_refresh(self) -> None:
-        if self._refresh_thread is not None and self._refresh_thread.is_alive():
-            return
+        self.service.request_refresh(force=True)
+
+    def _on_refresh_started(self) -> None:
         self.refresh_button.setEnabled(False)
         self.as_of_label.setText("Refreshing board (batched yfinance download)...")
-        self._refresh_thread = threading.Thread(target=self._refresh_worker, daemon=True)
-        self._refresh_thread.start()
 
-    def _refresh_worker(self) -> None:
-        try:
-            result = run_industry_scan(write_outputs=True)
-            message = (
-                f"Industry board refreshed: {len(result['sector_rows'])} sectors, "
-                f"{len(result['industry_rows'])} industries from {result['symbol_count']} symbols."
-            )
-        except Exception as exc:  # surfaced in the label, never crashes the desk
-            traceback.print_exc()
-            message = f"Industry board refresh failed: {exc}"
-        self._refreshFinished.emit(message)
-
-    def _on_refresh_finished(self, message: str) -> None:
+    def _on_refresh_finished(self, result: dict) -> None:
         self.refresh_button.setEnabled(True)
-        self.reload_from_disk()
+        self.reload_from_disk(result.get("snapshot") if isinstance(result, dict) else None)
+        if result.get("ok"):
+            message = (
+                f"Industry board refreshed: {result.get('sector_count', 0)} sectors, "
+                f"{result.get('industry_count', 0)} industries from "
+                f"{result.get('symbol_count', 0)} symbols."
+            )
+        else:
+            message = (
+                f"Industry board refresh failed: {result.get('error') or 'unknown error'}. "
+                "The last good snapshot remains visible."
+            )
         self.statusChanged.emit(message)
 
+    def _on_snapshot_changed(self, snapshot: dict) -> None:
+        if not self.service.running:
+            self.reload_from_disk(snapshot)
+
+    def _sort_strength(self, order: Qt.SortOrder) -> None:
+        for table, columns in (
+            (self.sector_table, SECTOR_COLUMNS),
+            (self.industry_table, INDUSTRY_COLUMNS),
+        ):
+            rs_column = next(index for index, (key, _label) in enumerate(columns) if key == "rs_score")
+            table.sortItems(rs_column, order)
+
     def shutdown(self) -> None:
-        # Daemon refresh thread finishes on its own; nothing to stop.
-        pass
+        self.service.shutdown()
 
 
 def _make_table(columns: tuple[tuple[str, str], ...]) -> QTableWidget:
@@ -185,6 +215,9 @@ def _make_table(columns: tuple[tuple[str, str], ...]) -> QTableWidget:
     table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     table.setAlternatingRowColors(True)
     table.horizontalHeader().setStretchLastSection(True)
+    table.setSortingEnabled(True)
+    rs_column = next(index for index, (key, _label) in enumerate(columns) if key == "rs_score")
+    table.sortItems(rs_column, Qt.SortOrder.DescendingOrder)
     return table
 
 
@@ -213,14 +246,48 @@ def _format_cell(key: str, value) -> str:
 
 
 def _fill_table(table: QTableWidget, columns: tuple[tuple[str, str], ...], rows: list[dict]) -> None:
+    sorting_enabled = table.isSortingEnabled()
+    header = table.horizontalHeader()
+    sort_column = header.sortIndicatorSection()
+    sort_order = header.sortIndicatorOrder()
+    table.setSortingEnabled(False)
     table.setRowCount(len(rows))
     for row_index, row in enumerate(rows):
         for col_index, (key, _label) in enumerate(columns):
             text = _format_cell(key, row.get(key))
-            item = QTableWidgetItem(text)
+            sort_value = _numeric_value(row.get(key)) if key in NUMERIC_KEYS else None
+            item = _SortableTableItem(text, sort_value=sort_value)
             if key in SIGNED_KEYS and text.startswith(("+", "-")):
                 item.setForeground(QBrush(POSITIVE_COLOR if text.startswith("+") else NEGATIVE_COLOR))
             if key not in {"sector", "industry", "top_movers"}:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             table.setItem(row_index, col_index, item)
     table.resizeColumnsToContents()
+    table.setSortingEnabled(sorting_enabled)
+    if sorting_enabled and sort_column >= 0:
+        table.sortItems(sort_column, sort_order)
+
+
+def _numeric_value(value) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+class _SortableTableItem(QTableWidgetItem):
+    def __init__(self, text: str, *, sort_value: float | None = None) -> None:
+        super().__init__(text)
+        self._sort_value = sort_value
+
+    def __lt__(self, other) -> bool:
+        if isinstance(other, _SortableTableItem):
+            if self._sort_value is not None and other._sort_value is not None:
+                return self._sort_value < other._sort_value
+            if self._sort_value is None and other._sort_value is not None:
+                return True
+            if self._sort_value is not None and other._sort_value is None:
+                return False
+        return super().__lt__(other)

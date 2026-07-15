@@ -45,7 +45,7 @@ def rows_from_run_result(run_result: dict[str, Any] | None) -> list[SetupRow]:
 
     theta_by_symbol = _theta_by_symbol(run_result)
     rows: list[SetupRow] = []
-    seen: set[tuple[str, str, str]] = set()
+    by_opportunity: dict[tuple[str, ...], SetupRow] = {}
 
     # Desk-worthy sources: tracked rows plus study families that are real
     # entry patterns with docs and a trade plan (playbook discoveries, weekly
@@ -62,15 +62,20 @@ def rows_from_run_result(run_result: dict[str, Any] | None) -> list[SetupRow]:
         is_study_source = source_key.endswith("_study_rows")
         for raw in _iter_dicts(run_result.get(source_key)):
             row = setup_row_from_mapping(raw, theta_by_symbol=theta_by_symbol, source=source_key)
-            identity = (row.symbol, row.side, row.bucket)
-            if not row.symbol or identity in seen:
+            if not row.symbol:
+                continue
+            identity = opportunity_identity(row)
+            existing = by_opportunity.get(identity)
+            if existing is not None:
+                _merge_classification_badges(existing, row)
                 continue
             # A study clone adds nothing when the symbol/side is already on the
             # board with its real bucket - skip it instead of duplicating.
             if is_study_source and (row.symbol, row.side) in seen_symbol_side:
                 continue
+            _ensure_classification_badge(row)
             rows.append(row)
-            seen.add(identity)
+            by_opportunity[identity] = row
             seen_symbol_side.add((row.symbol, row.side))
 
     rows.sort(key=_sort_key)
@@ -82,7 +87,7 @@ def _rows_from_focus_payload(payload: Any) -> list[SetupRow]:
         return []
 
     rows: list[SetupRow] = []
-    seen: set[tuple[str, str, str]] = set()
+    by_opportunity: dict[tuple[str, ...], SetupRow] = {}
     seen_symbol_side: set[tuple[str, str]] = set()
     for key in (
         "high_conviction",
@@ -96,13 +101,18 @@ def _rows_from_focus_payload(payload: Any) -> list[SetupRow]:
         is_study_source = key == "study_setups"
         for raw in _iter_dicts(payload.get(key)):
             row = setup_row_from_mapping(raw, source=f"focus:{key}")
-            identity = (row.symbol, row.side, row.bucket)
-            if not row.symbol or identity in seen:
+            if not row.symbol:
+                continue
+            identity = opportunity_identity(row)
+            existing = by_opportunity.get(identity)
+            if existing is not None:
+                _merge_classification_badges(existing, row)
                 continue
             if is_study_source and (row.symbol, row.side) in seen_symbol_side:
                 continue
+            _ensure_classification_badge(row)
             rows.append(row)
-            seen.add(identity)
+            by_opportunity[identity] = row
             seen_symbol_side.add((row.symbol, row.side))
 
     rows.sort(key=_sort_key)
@@ -111,6 +121,61 @@ def _rows_from_focus_payload(payload: Any) -> list[SetupRow]:
 
 def load_setup_rows_from_focus(path: Path = MASTER_AVWAP_FOCUS_FILE) -> list[SetupRow]:
     return _rows_from_focus_payload(_read_json(path))
+
+
+def opportunity_identity(row: SetupRow) -> tuple[str, ...]:
+    """Legacy opportunity fingerprint that deliberately excludes view buckets."""
+    raw = row.raw if isinstance(row.raw, dict) else {}
+    family = str(
+        raw.get("setup_family")
+        or raw.get("master_avwap_setup_family")
+        or raw.get("pattern_family")
+        or ""
+    ).strip().lower()
+    anchor = "|".join(
+        str(raw.get(key) or "").strip().lower()
+        for key in (
+            "anchor_id",
+            "anchor_date",
+            "anchor_type",
+            "retest_reference_label",
+        )
+        if str(raw.get(key) or "").strip()
+    )
+    return (
+        str(row.symbol or "").strip().upper(),
+        str(row.side or "").strip().upper(),
+        family,
+        anchor,
+    )
+
+
+def _ensure_classification_badge(row: SetupRow) -> None:
+    badges = row.raw.setdefault("classification_badges", [])
+    if not isinstance(badges, list):
+        badges = []
+        row.raw["classification_badges"] = badges
+    label = row.bucket_label
+    if label and label not in badges:
+        badges.append(label)
+
+
+def _merge_classification_badges(existing: SetupRow, duplicate: SetupRow) -> None:
+    _ensure_classification_badge(existing)
+    _ensure_classification_badge(duplicate)
+    badges = existing.raw["classification_badges"]
+    for label in duplicate.raw.get("classification_badges") or []:
+        if label and label not in badges:
+            badges.append(label)
+    priority = {"high_conviction": 0, "favorite_setup": 1}
+    if priority.get(duplicate.bucket, 99) < priority.get(existing.bucket, 99):
+        existing.bucket = duplicate.bucket
+    badges.sort(
+        key=lambda label: {
+            "High Conviction": 0,
+            "Favorite": 1,
+        }.get(str(label), 2)
+    )
 
 
 def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE) -> list[SetupRow]:

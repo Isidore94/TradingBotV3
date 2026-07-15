@@ -99,7 +99,7 @@ class SetupTableModel(QAbstractTableModel):
         if key == "score":
             return "" if row.score is None else f"{row.score:.1f}"
         if key == "bucket":
-            return row.bucket_label
+            return row.bucket_display
         if key == "setup_tags":
             return row.tags_text
         if key == "key_level":
@@ -221,4 +221,6 @@ def _tooltip(row: SetupRow, key: str) -> str:
         return str(row.raw.get("expected_r_note"))
     if key == "setup_tags":
         return row.tags_text
+    if key == "bucket":
+        return row.bucket_display
     return ""

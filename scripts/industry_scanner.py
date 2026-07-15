@@ -37,7 +37,9 @@ import argparse
 import csv
 import json
 import logging
+import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from statistics import median
@@ -719,12 +721,40 @@ def render_board_text(sector_rows: list[dict], industry_rows: list[dict]) -> str
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
-        return
+        raise ValueError(f"refusing to replace {path.name} with an empty board")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
 
 
 def run_industry_scan(
@@ -759,10 +789,14 @@ def run_industry_scan(
         industry_rows = build_industry_board(frames, industry_members)
 
     if write_outputs:
-        INDUSTRY_BOARD_TEXT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        INDUSTRY_BOARD_TEXT_FILE.write_text(render_board_text(sector_rows, industry_rows), encoding="utf-8")
+        if not sector_rows or (not sectors_only and not industry_rows):
+            raise RuntimeError(
+                "Industry provider returned incomplete boards; previous verified files were preserved."
+            )
+        _write_text(INDUSTRY_BOARD_TEXT_FILE, render_board_text(sector_rows, industry_rows))
         _write_csv(SECTOR_BOARD_CSV_FILE, sector_rows)
-        _write_csv(INDUSTRY_BOARD_CSV_FILE, industry_rows)
+        if not sectors_only:
+            _write_csv(INDUSTRY_BOARD_CSV_FILE, industry_rows)
         logging.info(
             "Industry scanner wrote %s sector row(s), %s industry row(s) to %s",
             len(sector_rows),

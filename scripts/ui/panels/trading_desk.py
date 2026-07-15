@@ -120,6 +120,7 @@ class TradingDeskPanel(QWidget):
     def shutdown(self) -> None:
         """Release live resources (IB connection, worker threads) on app close."""
         self.bounce_panel.on_close()
+        self.industry_panel.shutdown()
         self.master_panel.scan_service.shutdown()
 
     def _detach_mode_panels(self) -> None:

@@ -98,6 +98,66 @@ def test_copy_symbols_ranked_preserves_order_while_lists_alphabetize():
     assert copy_symbols(rows, "active") == "AAPL, NVDA, TSLA"
 
 
+def test_focus_payload_merges_bucket_duplicates_but_preserves_real_theses():
+    from ui.services.data_feed import _rows_from_focus_payload
+
+    common = {
+        "symbol": "NVDA",
+        "side": "LONG",
+        "setup_family": "earnings_gap_retest",
+        "anchor_date": "2026-06-01",
+        "score": 120,
+    }
+    rows = _rows_from_focus_payload(
+        {
+            "high_conviction": [{**common, "priority_bucket": "high_conviction"}],
+            "favorites": [{**common, "priority_bucket": "favorite_setup"}],
+            "near_favorite_zones": [
+                {
+                    **common,
+                    "anchor_date": "2026-05-01",
+                    "priority_bucket": "near_favorite_zone",
+                },
+                {
+                    **common,
+                    "symbol": "AMD",
+                    "setup_family": "weekly_ema8_hold_retest",
+                    "priority_bucket": "near_favorite_zone",
+                },
+            ],
+        }
+    )
+
+    nvda = [row for row in rows if row.symbol == "NVDA"]
+    assert len(nvda) == 2, "a separate anchor remains a separate opportunity"
+    merged = next(row for row in nvda if row.bucket == "high_conviction")
+    assert merged.bucket_display == "High Conviction / Favorite"
+    assert any(row.symbol == "AMD" for row in rows)
+
+
+def test_run_result_duplicate_promotes_the_primary_bucket_by_precedence():
+    from ui.services.data_feed import rows_from_run_result
+
+    common = {
+        "symbol": "AAPL",
+        "side": "LONG",
+        "setup_family": "avwap_retest",
+        "anchor_date": "2026-07-01",
+    }
+    rows = rows_from_run_result(
+        {
+            "tracked_rows": [
+                {**common, "priority_bucket": "favorite_setup"},
+                {**common, "priority_bucket": "high_conviction"},
+            ]
+        }
+    )
+
+    assert len(rows) == 1
+    assert rows[0].bucket == "high_conviction"
+    assert rows[0].bucket_display == "High Conviction / Favorite"
+
+
 def test_priority_report_parser_reads_ranked_expected_r_section(tmp_path):
     from ui.services.data_feed import load_setup_rows_from_priority_report
 

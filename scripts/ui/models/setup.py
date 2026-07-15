@@ -79,6 +79,12 @@ class SetupRow:
         )
 
     @property
+    def bucket_display(self) -> str:
+        badges = self.raw.get("classification_badges") if isinstance(self.raw, dict) else None
+        labels = [str(label).strip() for label in badges or [] if str(label).strip()]
+        return " / ".join(dict.fromkeys(labels)) if labels else self.bucket_label
+
+    @property
     def tags_text(self) -> str:
         return ", ".join(str(tag) for tag in self.setup_tags if str(tag).strip())
 

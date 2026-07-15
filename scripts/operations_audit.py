@@ -20,7 +20,13 @@ from typing import Any
 from diagnostics.run_manifest import load_recent_manifests
 from job_ledger import JobLedger
 from market_session import get_market_local_timezone, get_market_session_window, normalize_market_local_datetime
-from project_paths import AUTOPILOT_REPORT_FILE, AUTOPILOT_STATE_FILE, CACHE_DIR, get_diagnostics_dir
+from project_paths import (
+    AUTOPILOT_REPORT_FILE,
+    AUTOPILOT_STATE_FILE,
+    CACHE_DIR,
+    INDUSTRY_BOARD_STATE_FILE,
+    get_diagnostics_dir,
+)
 
 
 AUDIT_SCHEMA = "operations_audit_v1"
@@ -303,6 +309,60 @@ def _away_report_check(
     )
 
 
+def _industry_board_check(path: Path, now: datetime, local_tz, market_phase: str) -> dict[str, Any]:
+    payload = _read_json(path)
+    if payload is None:
+        return _check(
+            "industry_board",
+            "Industry Board",
+            "degraded",
+            "No verified Industry Board refresh state is available yet.",
+            source=path,
+        )
+    last_success = payload.get("last_success_at") or ""
+    age = _age_minutes(last_success, now, local_tz)
+    failed = str(payload.get("status") or "").lower() == "failed"
+    if not last_success:
+        status = "unhealthy"
+        summary = "Industry Board has not completed a successful refresh."
+    elif failed:
+        status = "degraded"
+        summary = (
+            "Latest Industry Board refresh failed; the last good snapshot remains active."
+        )
+    elif market_phase == "regular" and (age is None or age > 120.0):
+        status = "unhealthy"
+        summary = "Industry Board is stale during the market session."
+    elif age is None or age > 65.0:
+        status = "degraded"
+        summary = "Industry Board is older than the hourly freshness target."
+    else:
+        status = "healthy"
+        summary = (
+            f"Snapshot {payload.get('snapshot_id') or '?'}; "
+            f"{payload.get('sector_count', 0)} sectors / "
+            f"{payload.get('industry_count', 0)} industries; {age:.1f}m old."
+        )
+    return _check(
+        "industry_board",
+        "Industry Board",
+        status,
+        summary,
+        source=path,
+        updated_at=str(last_success),
+        details={
+            "last_attempt_at": payload.get("last_attempt_at") or "",
+            "last_success_at": last_success,
+            "snapshot_id": payload.get("snapshot_id") or "",
+            "sector_count": int(payload.get("sector_count", 0) or 0),
+            "industry_count": int(payload.get("industry_count", 0) or 0),
+            "symbol_count": int(payload.get("symbol_count", 0) or 0),
+            "last_error": payload.get("error") or "",
+            "age_minutes": round(age, 2) if age is not None else None,
+        },
+    )
+
+
 def _shadow_check(
     *,
     check_id: str,
@@ -395,6 +455,7 @@ def build_operations_audit(
     candidate_registry_path: Path | str | None = None,
     away_report_path: Path | str | None = None,
     autopilot_state_path: Path | str | None = None,
+    industry_state_path: Path | str | None = None,
 ) -> dict[str, Any]:
     local_tz, timezone_name = get_market_local_timezone()
     moment = normalize_market_local_datetime(now, local_timezone=local_tz)
@@ -406,6 +467,11 @@ def build_operations_audit(
     )
     auto_state_path = Path(autopilot_state_path) if autopilot_state_path is not None else (
         diagnostics / "autopilot_state.json" if diagnostics_dir is not None else Path(AUTOPILOT_STATE_FILE)
+    )
+    industry_path = Path(industry_state_path) if industry_state_path is not None else (
+        diagnostics / "industry_board_snapshot.json"
+        if diagnostics_dir is not None
+        else Path(INDUSTRY_BOARD_STATE_FILE)
     )
     market_date = session.market_date.isoformat()
 
@@ -420,6 +486,7 @@ def build_operations_audit(
         ledger,
         manifest,
         _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
+        _industry_board_check(industry_path, moment, local_tz, market_phase),
         _shadow_check(
             check_id="spy_shadow",
             label="SPY state shadow",

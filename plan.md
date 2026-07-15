@@ -109,10 +109,11 @@ Agreement with the legacy implementation is diagnostic, not the definition of co
 - Phase timings and counters are recorded.
 - Bounded local history exists.
 - Strict side coercions and data-quality events are countable.
+- The in-app Health page composes runtime, Away report, shadow, registry, and
+  Industry Board freshness evidence.
 
 Still remaining from Phase 1:
 
-- in-app Health page;
 - stable benchmark/golden fixtures;
 - trend reporting for timings, failures, provider calls, and coverage.
 
@@ -153,6 +154,11 @@ The registry has initial shadow adoption, but all legacy live writers have not y
 - Lazy legacy-Tk import.
 - Verified report publishing.
 - Truthful global Auto profile.
+- One single-flight Industry Board owner refreshes stale data at startup and
+  hourly, preserves last-good outputs atomically, exposes snapshot freshness in
+  Health, and supports true numeric strongest/weakest sorting.
+- Master focus rows deduplicate by opportunity thesis/anchor rather than bucket,
+  while preserving High Conviction/Favorite classification badges.
 
 ### 3.2 Implemented and running in shadow
 
