@@ -7,11 +7,10 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch: `codex/gui-product-phase1`, based on current `main` after the
-  verified Sol3 integration and subsequent fixes.
-- Integration base: `fc05c96`.
+- Branch: `main`, after the verified Sol3 integration and GUI product work.
+- Integration base: `3443c69`.
 - Date: 2026-07-14
-- Test baseline: **913 passed, 5 subtests passed**
+- Test baseline: **914 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests -q`)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
@@ -44,8 +43,9 @@ stamp; it must not duplicate the roadmap.
   mode, logs every manual environment selection beside Auto's same-moment
   evidence, makes automatic completed-bar entry monitoring explicit, and hides
   manual pullback/bounce windows under Advanced. D1 Focus now accepts only
-  final Favorite/High Conviction bucket upgrades; developing crossings stay in
-  the normal stream.
+  final Favorite/High Conviction bucket upgrades; developing A/S target touches
+  are named and logged as research-only evidence and cannot enter Alert Center
+  or Auto/Away alert summaries. Generic champion D1 flags remain unchanged.
 - Research/journal UX: every Setup Tracker, Day Trade Tracker, and Move
   Forensics row now has the same novice-friendly execution/evidence explanation;
   Setup Tracker summarizes qualified leaders in plain English. Journal schema

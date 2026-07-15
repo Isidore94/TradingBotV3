@@ -3726,7 +3726,9 @@ class BounceBot(EWrapper, EClient):
 
     def emit_master_avwap_intraday_trigger_flags(self, symbol, today_df):
         # Challenger in shadow (HIGH_CONVICTION plan 16.2): staged confirmation
-        # engine sees the same bars; live single-cross alerts stay untouched.
+        # engine sees the same bars. Generic champion level flags retain their
+        # live behavior; A/S target touches are research observations until a
+        # full scan confirms a Favorite / High Conviction bucket transition.
         try:
             from greatness_shadow import record_d1_shadow
 
@@ -3746,11 +3748,22 @@ class BounceBot(EWrapper, EClient):
             self.emitted_master_avwap_d1_flags.add(event_key)
             direction = str(event.get("direction") or "").strip().lower()
             message = self._format_master_avwap_d1_flag_event(event)
-            gui_tag = "d1_flag_long" if direction == "long" else "d1_flag_short" if direction == "short" else "d1_flag_watch"
-            self.gui_callback(message, gui_tag)
+            if not self._master_avwap_d1_event_is_research_only(event):
+                gui_tag = "d1_flag_long" if direction == "long" else "d1_flag_short" if direction == "short" else "d1_flag_watch"
+                self.gui_callback(message, gui_tag)
             self.log_symbol(symbol, message)
             emitted_count += 1
         return emitted_count
+
+    def _master_avwap_d1_event_is_research_only(self, event):
+        source = str(event.get("source") or "").strip()
+        return bool(
+            source == "watchlist_upgrade_target"
+            or (
+                source == "watchlist_trigger"
+                and (str(event.get("target_tier") or "").strip() or bool(event.get("upgrade_only")))
+            )
+        )
 
     def _format_master_avwap_d1_flag_event(self, event):
         symbol = str(event.get("symbol") or "").strip().upper()
@@ -3762,7 +3775,23 @@ class BounceBot(EWrapper, EClient):
         suffix_parts = []
         level_value = self._master_avwap_trigger_float(event.get("level"))
         target_tier = str(event.get("target_tier") or "").strip()
-        if target_tier and "upgrade" not in label.lower():
+        research_only = self._master_avwap_d1_event_is_research_only(event)
+        if research_only:
+            # These events are level observations (often an intraday wick), not
+            # a completed full-scan promotion. Keep the evidence while removing
+            # the old, misleading A/S-upgrade language.
+            label = re.sub(r"^(?:A/S\s+)?upgrade:\s*", "", label, flags=re.IGNORECASE)
+            reason = re.sub(
+                r"^A/S\s+upgrade\s+target:\s*",
+                "Developing target: ",
+                reason,
+                flags=re.IGNORECASE,
+            )
+            label = f"Developing level observation: {label}"
+            suffix_parts.append(
+                "status=research-only; await completed D1 scan confirmation into Favorite/High Conviction"
+            )
+        elif target_tier and "upgrade" not in label.lower():
             label = f"{target_tier} upgrade: {label}"
         if event.get("trigger_id") and level_value is not None:
             level_label = str(event.get("level_label") or "").strip()
@@ -3783,10 +3812,8 @@ class BounceBot(EWrapper, EClient):
         prefix = (
             "MASTER_AVWAP_D1_BUCKET_UPGRADE"
             if source == "bucket_upgrade"
-            else "MASTER_AVWAP_D1_UPGRADE_WATCH"
-            if source == "watchlist_upgrade_target"
-            else "MASTER_AVWAP_D1_UPGRADE_TRIGGER"
-            if source == "watchlist_trigger" and (target_tier or event.get("upgrade_only"))
+            else "MASTER_AVWAP_D1_RESEARCH"
+            if research_only
             else "MASTER_AVWAP_D1_FLAG"
         )
         return f"{prefix}: {symbol} ({direction or 'watch'}) {label}{suffix}"

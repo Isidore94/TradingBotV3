@@ -41,23 +41,35 @@ MAX_D1_FEED_ITEMS = 100
 
 # D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
 # name: the scan confirmed a genuine bucket upgrade. An armed-level crossing
-# is still only developing evidence and stays in the normal live feed. Only a
+# is still only developing evidence and stays out of both actionable feeds. A
 # final Favorite / High Conviction bucket result belongs in the D1 Focus feed
 # (user rule 2026-07-09: "only things that turn a stock into a favourite or
-# high conviction bucket stock"); UPGRADE_WATCH / generic D1 flags are
-# context and route to the live feed under the normal tier gate instead.
+# high conviction bucket stock"). Generic champion D1 flags retain their live
+# routing under the normal tier gate.
 _D1_READY_PREFIXES = {
     "MASTER_AVWAP_D1_BUCKET_UPGRADE",
 }
-
-
-def _is_feed_noise_alert(alert: BounceAlert) -> bool:
-    text = f"{alert.raw_text} {alert.trigger}".strip().lower()
-    return not alert.is_d1 and alert.side == "WATCH" and "candle has closed" in text
+_D1_DEVELOPING_PREFIXES = {
+    "MASTER_AVWAP_D1_RESEARCH",
+    # Compatibility with messages already queued by an older bot process.
+    "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
+    "MASTER_AVWAP_D1_UPGRADE_WATCH",
+}
 
 
 def _d1_alert_prefix(alert: BounceAlert) -> str:
     return str(alert.raw_text or "").split(":", 1)[0].strip().upper()
+
+
+def is_developing_d1_alert(alert: BounceAlert) -> bool:
+    return _d1_alert_prefix(alert) in _D1_DEVELOPING_PREFIXES
+
+
+def _is_feed_noise_alert(alert: BounceAlert) -> bool:
+    if is_developing_d1_alert(alert):
+        return True
+    text = f"{alert.raw_text} {alert.trigger}".strip().lower()
+    return not alert.is_d1 and alert.side == "WATCH" and "candle has closed" in text
 
 
 def is_ready_d1_alert(alert: BounceAlert) -> bool:
@@ -185,18 +197,18 @@ class AlertCenterPanel(QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
 
     Top: the live intraday stream (bounce alerts, RW/RS bangers, regime
-    notes, and non-transition D1 level flags) behind the minimum-tier gate
-    with an optional sound. Bottom: the D1 Focus feed - ONLY the moments a
-    stock turns into a favorite/high-conviction name (confirmed bucket
-    upgrades + armed A/S upgrade-trigger crossings). Clicking an alert opens
-    the symbol's setup docs and trade plan - in the embedded pane below by
-    default, or routed out through `setupRequested` when the desk disables
-    the embedded pane (workspace mode shows the plan once, in the setups
-    workspace's detail pane, instead of twice). Every alert carries a ★ at
-    its right edge: click to favorite the pick into Focus Picks (D1/H1
+    notes, and generic champion D1 flags) behind the minimum-tier gate with an
+    optional sound. Bottom: the D1 Focus feed - ONLY the moments a completed
+    scan confirms that a stock turned into a favorite/high-conviction name.
+    Developing armed-level observations remain in research logs. Clicking an
+    alert opens the symbol's setup docs and trade plan - in the embedded pane
+    below by default, or routed out through `setupRequested` when the desk
+    disables the embedded pane (workspace mode shows the plan once, in the
+    setups workspace's detail pane, instead of twice). Every alert carries a
+    ★ at its right edge: click to favorite the pick into Focus Picks (D1/H1
     alerts file as Swing, intraday as M5), click a lit star to unfavorite.
-    Favorited names come back gold-framed with a category badge, skip the
-    tier gate, and always sound. ✕ logs a dislike with a typed reason.
+    Favorited names come back gold-framed with a category badge, skip the tier
+    gate, and always sound. ✕ logs a dislike with a typed reason.
     """
 
     statusChanged = Signal(str)
@@ -274,9 +286,8 @@ class AlertCenterPanel(QFrame):
         d1_section_layout.addWidget(
             SectionHeader(
                 "D1 Focus",
-                "Favorite-bucket transitions ONLY: confirmed bucket upgrades and armed A/S "
-                "upgrade-trigger crossings - real-time 'this just became high conviction'. "
-                "Other D1 level flags stay in the live stream above.",
+                "Completed-rescan promotions into Favorite or High Conviction ONLY. "
+                "Developing armed-level observations stay in research logs, not alert feeds.",
             )
         )
         d1_section_layout.addWidget(d1_scroll, 1)
@@ -293,7 +304,7 @@ class AlertCenterPanel(QFrame):
 
         header = SectionHeader(
             "Alert Center",
-            "Live intraday stream on top; D1 focus level-crossings and upgrades below.",
+            "Live actionable alerts on top; confirmed Favorite / High Conviction D1 promotions below.",
         )
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
@@ -324,8 +335,8 @@ class AlertCenterPanel(QFrame):
         if _is_feed_noise_alert(alert):
             return
         # D1 Focus is reserved for favorite/high-conviction transitions
-        # (final bucket upgrades only). Developing trigger/watch context stays
-        # visible in the live stream, behind the normal tier gate.
+        # (final bucket upgrades only). Developing trigger/watch observations
+        # are research evidence and are excluded from both actionable feeds.
         if alert.is_d1 and is_ready_d1_alert(alert):
             self._add_d1_alert(alert)
             return

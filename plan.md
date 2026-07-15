@@ -167,7 +167,9 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   the normal path. Strongest, weakest, and movers 30m remain on demand, while
   manual window controls live under Advanced diagnostics.
 - D1 Focus routes final Favorite/High Conviction bucket-upgrade events only;
-  armed/level-cross triggers remain developing evidence in the live stream.
+  armed/level-cross triggers are labeled and logged as research-only evidence
+  and stay out of Alert Center plus Auto/Away alert summaries. The generic
+  champion D1 flag path remains unchanged.
 - Setup Tracker, Day Trade Tracker, and Move Forensics rows share deterministic
   novice explanations that separate executable triggers from aggregate research,
   spell out entry/invalidation/management, and expose sample-size cautions.

@@ -123,7 +123,45 @@ def test_loud_alerts_are_sa_bangers_or_ready_d1():
     assert not alert_is_loud(_alert("REGIME PAUSE WATCH (short): SPY paused (+0.15% window) - 3 swing shorts still pressing lows: A, B, C", "red"))
 
 
-def test_d1_focus_feed_only_gets_favorite_bucket_transitions():
+def test_developing_d1_crossings_are_research_only():
+    try:
+        from ui.panels.alert_center_panel import is_developing_d1_alert
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    developing = (
+        _alert(
+            "MASTER_AVWAP_D1_RESEARCH: DDOG (long) Developing level observation: "
+            "2nd-dev break UPPER_2@270.86",
+            "d1_flag_long",
+        ),
+        # Defensive compatibility: old bot processes can still have one of
+        # these messages queued while the GUI is being upgraded.
+        _alert(
+            "MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) A/S upgrade: "
+            "1st-dev break UPPER_1@314.57",
+            "d1_flag_long",
+        ),
+        _alert(
+            "MASTER_AVWAP_D1_UPGRADE_WATCH: AAPL (long) AVWAPE retest AVWAPE@309.38",
+            "d1_flag_long",
+        ),
+    )
+    assert all(is_developing_d1_alert(alert) for alert in developing)
+    assert not is_developing_d1_alert(
+        _alert(
+            "MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade",
+            "d1_flag_long",
+        )
+    )
+    assert not is_developing_d1_alert(
+        _alert("MASTER_AVWAP_D1_FLAG: MSFT (short) 15EMA break", "d1_flag_short")
+    )
+
+
+def test_actionable_feeds_exclude_developing_d1_crossings():
     try:
         import os
 
@@ -141,20 +179,22 @@ def test_d1_focus_feed_only_gets_favorite_bucket_transitions():
     upgrade = _alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade [score=245]", "d1_flag_long")
     trigger = _alert("MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) A/S upgrade: 1st-dev break UPPER_1@314.57", "d1_flag_long")
     watch = _alert("MASTER_AVWAP_D1_UPGRADE_WATCH: AAPL (long) AVWAPE retest AVWAPE@309.38", "d1_flag_long")
+    research = _alert(
+        "MASTER_AVWAP_D1_RESEARCH: DDOG (long) Developing level observation: "
+        "2nd-dev break UPPER_2@270.86",
+        "d1_flag_long",
+    )
     generic = _alert("MASTER_AVWAP_D1_FLAG: MSFT (short) 15EMA break [score=88]", "d1_flag_short")
-    for alert in (upgrade, trigger, watch, generic):
+    for alert in (upgrade, trigger, watch, research, generic):
         panel.add_alert(alert)
 
-    # Only the become-a-favorite moments live in the D1 Focus feed...
+    # Only a completed rescan's become-a-favorite moment is actionable.
     d1_texts = [a.raw_text for a in panel._d1_alerts]
     assert [t.split(":", 1)[0] for t in d1_texts] == ["MASTER_AVWAP_D1_BUCKET_UPGRADE"]
-    # ...while WATCH/context flags stay visible in the live stream.
+    # Developing observations are research evidence, not live alerts. Generic
+    # champion D1 flags retain their existing live-stream behavior.
     live_prefixes = {a.raw_text.split(":", 1)[0] for a in panel._alerts}
-    assert live_prefixes == {
-        "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
-        "MASTER_AVWAP_D1_UPGRADE_WATCH",
-        "MASTER_AVWAP_D1_FLAG",
-    }
+    assert live_prefixes == {"MASTER_AVWAP_D1_FLAG"}
 
 
 def test_entry_assist_board_renders_all_sections():

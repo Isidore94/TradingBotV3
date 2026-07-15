@@ -279,7 +279,7 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(tag, "d1_flag_short")
         self.assertEqual(len(bot.emitted_master_avwap_d1_flags), 2)
 
-    def test_d1_upgrade_watch_uses_watch_prefix(self):
+    def test_d1_upgrade_watch_formats_as_research_only(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
 
         message = bot._format_master_avwap_d1_flag_event(
@@ -296,8 +296,10 @@ class BounceFeedbackTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("MASTER_AVWAP_D1_UPGRADE_WATCH: MSFT", message)
-        self.assertIn("A/S upgrade: 1st-dev break", message)
+        self.assertIn("MASTER_AVWAP_D1_RESEARCH: MSFT", message)
+        self.assertIn("Developing level observation: 1st-dev break", message)
+        self.assertIn("status=research-only", message)
+        self.assertNotIn("A/S upgrade", message)
 
     def test_d1_bucket_upgrade_uses_bucket_prefix(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
@@ -446,7 +448,7 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(bot.emit_master_avwap_intraday_trigger_flags("AAPL", today_df), 0)
         bot.gui_callback.assert_called_once()
 
-    def test_d1_upgrade_watch_prime_does_not_block_intraday_trigger(self):
+    def test_d1_upgrade_wick_is_logged_as_research_without_gui_alert(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
         watch_event = {
             "symbol": "MSFT",
@@ -511,7 +513,10 @@ class BounceFeedbackTests(unittest.TestCase):
                     "open": 102.7,
                     "high": 103.4,
                     "low": 102.5,
-                    "close": 103.2,
+                    # A wick reached the armed level but the bar did not close
+                    # through it. This remains useful research evidence; it is
+                    # not an A/S upgrade or an actionable GUI alert.
+                    "close": 102.9,
                     "volume": 1200,
                     "time": "20260506  09:40:00",
                 },
@@ -519,10 +524,15 @@ class BounceFeedbackTests(unittest.TestCase):
         )
 
         self.assertEqual(bot.emit_master_avwap_intraday_trigger_flags("MSFT", today_df), 1)
-        message, tag = bot.gui_callback.call_args.args
-        self.assertIn("MASTER_AVWAP_D1_UPGRADE_TRIGGER: MSFT", message)
-        self.assertIn("A/S upgrade: 1st-dev break", message)
-        self.assertEqual(tag, "d1_flag_long")
+        bot.gui_callback.assert_not_called()
+        bot.log_symbol.assert_called_once()
+        logged_symbol, message = bot.log_symbol.call_args.args
+        self.assertEqual(logged_symbol, "MSFT")
+        self.assertIn("MASTER_AVWAP_D1_RESEARCH: MSFT", message)
+        self.assertIn("Developing level observation: 1st-dev break", message)
+        self.assertIn("price=102.90", message)
+        self.assertIn("status=research-only", message)
+        self.assertNotIn("A/S upgrade", message)
 
     def test_d1_preloaded_trigger_does_not_replay_earlier_intraday_cross(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
