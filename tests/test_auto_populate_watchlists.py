@@ -18,15 +18,14 @@ from watchlist_utils import read_watchlist_symbols  # noqa: E402
 AGGRESSIVE_FIXTURE = Path(__file__).parent / "fixtures" / "aggressive_watchlist_candidates_v1.json"
 
 
-def test_auto_populate_caps_follow_regime():
-    from autopilot_core import auto_populate_caps
+def test_auto_populate_caps_are_a_flat_ceiling():
+    """2026-07-16 trader directive: the quality bar governs the count; the
+    cap is only a symmetric ceiling (up to 100 per side), never a target."""
+    from autopilot_core import AUTO_POPULATE_MAX_PER_SIDE, auto_populate_caps
 
-    assert auto_populate_caps("bullish_strong") == (150, 50)
-    assert auto_populate_caps("bullish_weak") == (150, 50)
-    assert auto_populate_caps("bearish_strong") == (50, 150)
-    assert auto_populate_caps("bearish_weak") == (50, 150)
-    assert auto_populate_caps("neutral_chop") == (100, 100)
-    assert auto_populate_caps("") == (100, 100)
+    for env in ("bullish_strong", "bullish_weak", "bearish_strong", "bearish_weak", "neutral_chop", ""):
+        assert auto_populate_caps(env) == (AUTO_POPULATE_MAX_PER_SIDE, AUTO_POPULATE_MAX_PER_SIDE)
+    assert AUTO_POPULATE_MAX_PER_SIDE == 100
 
 
 def _ctx(prev_high, prev_low, prev_close, adr):
@@ -80,12 +79,12 @@ def test_adr_breakout_candidates_require_break_and_adr_move():
 def test_adr_candidates_rank_by_move_plus_extreme_time():
     import pytest
 
-    from autopilot_core import build_adr_breakout_candidates
+    from autopilot_core import AUTO_POPULATE_MIN_SCORE, build_adr_breakout_candidates
 
     profiles = {
         "FAST": _profile(104.0, at_high=0.1),  # 2.0 ADR + 0.1 -> ~2.1
         "GRIND": _profile(102.4, at_high=0.9),  # 1.2 ADR + 0.9 -> ~2.1 (grinder ties the spike)
-        "MEH": _profile(101.6, at_high=0.2),  # 0.8 ADR + 0.2 -> 1.0
+        "MEH": _profile(101.6, at_high=0.2),  # 0.8 ADR + 0.2 -> 1.0: under the quality bar
     }
     context = {sym: _ctx(100.5, 98.0, 100.0, 2.0) for sym in profiles}
 
@@ -93,8 +92,14 @@ def test_adr_candidates_rank_by_move_plus_extreme_time():
     scores = {row["symbol"]: row["score"] for row in result["longs"]}
     assert scores["FAST"] == pytest.approx(2.1)
     assert scores["GRIND"] == pytest.approx(2.1)
-    assert scores["MEH"] == pytest.approx(1.0)
-    assert [row["symbol"] for row in result["longs"]][-1] == "MEH"
+    # Quality over quantity: a qualifying-but-marginal breaker stays out
+    # entirely instead of padding the list toward the cap.
+    assert "MEH" not in scores
+    assert 1.0 < AUTO_POPULATE_MIN_SCORE
+    # The bar is a builder default, not baked in: an explicit lower bar
+    # still admits the marginal name (used by research/backtests).
+    loose = build_adr_breakout_candidates(profiles, context, min_score=0.0)
+    assert {row["symbol"] for row in loose["longs"]} == {"FAST", "GRIND", "MEH"}
 
 
 def test_aggressive_regime_candidate_golden_fixture():
@@ -296,8 +301,8 @@ def test_apply_auto_populate_rotates_only_owned_names(tmp_path, monkeypatch):
     assert third["long"]["total_auto"] == 1  # just CCC
 
 
-def test_apply_auto_populate_respects_regime_caps_and_side_exclusivity(tmp_path):
-    from autopilot_core import apply_auto_populated_watchlists
+def test_apply_auto_populate_respects_ceiling_and_side_exclusivity(tmp_path):
+    from autopilot_core import AUTO_POPULATE_MAX_PER_SIDE, apply_auto_populated_watchlists
 
     longs_path = tmp_path / "longs.txt"
     shorts_path = tmp_path / "shorts.txt"
@@ -315,22 +320,23 @@ def test_apply_auto_populate_respects_regime_caps_and_side_exclusivity(tmp_path)
         shorts_path=shorts_path,
         membership_path=membership_path,
     )
-    assert summary["caps"] == (150, 50)
-    assert len(read_watchlist_symbols(longs_path)) == 150
+    assert summary["caps"] == (AUTO_POPULATE_MAX_PER_SIDE, AUTO_POPULATE_MAX_PER_SIDE)
+    assert len(read_watchlist_symbols(longs_path)) == AUTO_POPULATE_MAX_PER_SIDE
     shorts = read_watchlist_symbols(shorts_path)
-    assert len(shorts) == 50
+    assert len(shorts) == AUTO_POPULATE_MAX_PER_SIDE
     assert "L000" not in shorts
 
-    bearish = apply_auto_populated_watchlists(
-        {"longs": long_rows, "shorts": short_rows},
+    # A short candidate list keeps its natural size: the ceiling is not a
+    # target (quality bar upstream decides how many qualify).
+    sparse = apply_auto_populated_watchlists(
+        {"longs": long_rows[:7], "shorts": short_rows[:5]},
         "bearish_weak",
         longs_path=longs_path,
         shorts_path=shorts_path,
         membership_path=membership_path,
     )
-    assert bearish["caps"] == (50, 150)
-    assert len(read_watchlist_symbols(longs_path)) == 50
-    assert len(read_watchlist_symbols(shorts_path)) == 150
+    assert sparse["long"]["total_auto"] == 7
+    assert len(read_watchlist_symbols(longs_path)) == 7
 
 
 def test_pullback_refresh_appends_without_early_auto_rotation(tmp_path, monkeypatch):

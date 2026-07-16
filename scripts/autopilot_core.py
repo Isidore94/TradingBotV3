@@ -763,24 +763,29 @@ AGGRESSIVE_MIN_EXTREME_BREAK_PCT = 0.05
 AGGRESSIVE_NEAR_EXTREME_PCT = 0.35
 AGGRESSIVE_MAX_DATA_AGE_MINUTES = 15
 AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT = 0.03
-AUTO_POPULATE_CAPS = {
-    "bullish": (150, 50),
-    "bearish": (50, 150),
-    "neutral": (100, 100),
-}
+# Quality bar (2026-07-16, trader directive): the auto slice takes what meets
+# the criteria well - it does not fill toward the cap. Score = |ADR move| +
+# fraction of the day spent at the extreme, so 1.25 means e.g. a 1.25-ADR
+# breaker, or a 0.8-ADR mover that spent ~half the session pressing HOD/LOD.
+# On the 2026-07-16 bearish tape this bar floats the short side to ~49 names
+# instead of a cap-pegged 150 whose tail ran -0.6 ADR barely-breakers.
+AUTO_POPULATE_MIN_SCORE = 1.25
+# Ceiling only - the quality bar governs the count, symmetric both sides.
+AUTO_POPULATE_MAX_PER_SIDE = 100
 
 _AUTO_POPULATE_LOCK = threading.Lock()
 _DAILY_CONTEXT_CACHE: dict[str, Any] = {"date": None, "contexts": {}}
 
 
 def auto_populate_caps(env_key) -> tuple[int, int]:
-    """(long_cap, short_cap) for a market regime key."""
-    env = str(env_key or "").strip().lower()
-    if env.startswith("bullish"):
-        return AUTO_POPULATE_CAPS["bullish"]
-    if env.startswith("bearish"):
-        return AUTO_POPULATE_CAPS["bearish"]
-    return AUTO_POPULATE_CAPS["neutral"]
+    """(long_cap, short_cap): a flat per-side ceiling, regime-independent.
+
+    Regime-scaled caps (150/50 style) are gone - they pressured the list
+    toward a count. The regime still shapes WHAT qualifies (the aggressive
+    discovery rules are side-specific); the cap only stops a runaway tape
+    from flooding the scan set.
+    """
+    return (AUTO_POPULATE_MAX_PER_SIDE, AUTO_POPULATE_MAX_PER_SIDE)
 
 
 def load_daily_context(
@@ -1034,8 +1039,13 @@ def build_adr_breakout_candidates(
     daily_context: Mapping[str, Mapping[str, float]],
     *,
     min_adr_move: float = AUTO_POPULATE_MIN_ADR_MOVE,
+    min_score: float = AUTO_POPULATE_MIN_SCORE,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Rank PDH-break longs / PDL-break shorts by ADR-relative move + HOD/LOD time."""
+    """Rank PDH-break longs / PDL-break shorts by ADR-relative move + HOD/LOD time.
+
+    Only names clearing ``min_score`` qualify - the list is however long the
+    tape deserves, not a fill toward the watchlist cap.
+    """
     longs: list[dict[str, Any]] = []
     shorts: list[dict[str, Any]] = []
     for symbol, profile in profiles.items():
@@ -1059,20 +1069,26 @@ def build_adr_breakout_candidates(
         at_high = float(profile.get("time_at_high_frac") or 0.0)
         at_low = float(profile.get("time_at_low_frac") or 0.0)
         if last > prev_high and adr_move >= min_adr_move:
+            score = adr_move + at_high
+            if score < min_score:
+                continue
             longs.append(
                 {
                     "symbol": sym,
-                    "score": adr_move + at_high,
+                    "score": score,
                     "adr_move": adr_move,
                     "time_at_extreme": at_high,
                     "reason": f"PDH break, {adr_move:+.1f} ADR, {at_high:.0%} of day at HOD",
                 }
             )
         elif last < prev_low and adr_move <= -min_adr_move:
+            score = -adr_move + at_low
+            if score < min_score:
+                continue
             shorts.append(
                 {
                     "symbol": sym,
-                    "score": -adr_move + at_low,
+                    "score": score,
                     "adr_move": adr_move,
                     "time_at_extreme": at_low,
                     "reason": f"PDL break, {adr_move:+.1f} ADR, {at_low:.0%} of day at LOD",
