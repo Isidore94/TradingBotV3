@@ -41,7 +41,20 @@ MUTE_MIN_SAMPLES = 30
 MUTE_MIN_SESSIONS = 10
 DELTA_R_TO_POINTS = 20.0
 DELTA_CLIP_POINTS = 30
-TIER_THRESHOLDS = (("S", 0.90), ("A", 0.45), ("B", 0.10), ("C", -0.15))
+# Calibrated 2026-07-16 by replaying all 3,579 unmuted historical confirmed
+# events through the shrunk entry-quality composite (in-sample): the ladder
+# separates measured forward quality monotonically -
+#   S >= 0.35: 0.4% of alerts, avg +1.49R closed, 93% touched +1R
+#   A >= 0.20: 6.2%, avg +1.19R (median +0.93), 83% touched +1R
+#   B >= 0.02: 38%, avg +0.09R (plus no-evidence alerts, which default to B)
+#   C >= -0.12: 35%, avg -0.39R;  D below: avg -0.84R
+# The old (0.90/0.45/...) bars predate shrinkage: no event ever reached S or
+# A by composite, piling everything good into B.
+TIER_THRESHOLDS = (("S", 0.35), ("A", 0.20), ("B", 0.02), ("C", -0.12))
+# PROVEN S-floor stays on the raw avg-close-R scale (deliberately decoupled
+# from the composite thresholds above): a matched proven segment carrying a
+# >= +0.90R measured average close floors the alert at S, others at A.
+PROVEN_S_FLOOR_AVG_R = 0.90
 # Thin segments earn partial credit in the composite: n=10 counts half,
 # n=30 counts 75%, n=90 counts ~90%.
 COMPOSITE_SHRINK_SAMPLES = 10
@@ -344,8 +357,8 @@ def evaluate_bounce_quality(
                 break
     if proven:
         # Evidence-based floor: a proven match never rides below A, and a
-        # segment that clears the S composite bar on its own carries the S.
-        floor = "S" if (best_proven_avg or 0.0) >= TIER_THRESHOLDS[0][1] else "A"
+        # segment whose measured average close clears the S bar carries the S.
+        floor = "S" if (best_proven_avg or 0.0) >= PROVEN_S_FLOOR_AVG_R else "A"
         order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4}
         if order.get(tier, 4) > order[floor]:
             tier = floor

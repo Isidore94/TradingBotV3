@@ -1,5 +1,5 @@
 {
-  "description": "Golden results for entry-quality tier scoring (2026-07-16). Segment inputs are real measured numbers from the live learning state of 2026-07-15. Guards: (1) entry_r = ambiguity-weighted blend of close-R and 1R-harvest expectancy, (2) mutes are bounce_type-only and need n>=30 across >=10 sessions, (3) composite uses sample-shrunk entry_r with context at reduced weight.",
+  "description": "Golden results for entry-quality tier scoring (2026-07-16). Segment inputs are real measured numbers from the live learning state of 2026-07-15. Guards: (1) entry_r = ambiguity-weighted blend of close-R and 1R-harvest expectancy, (2) mutes are bounce_type-only and need n>=30 across >=10 sessions, (3) composite uses sample-shrunk entry_r with context at reduced weight, (4) tier bars S/A/B/C = 0.35/0.20/0.02/-0.12, calibrated on the replayed historical distribution (S: 93% 1R-hit, A: +1.19R avg, B: flat, D: -0.84R); PROVEN S-floor stays on raw avg close-R >= 0.90.",
   "perf_rows": [
     {
       "dimension": "bounce_type",
@@ -312,7 +312,7 @@
         "market_environment": "bearish_weak"
       },
       "expected": {
-        "tier": "B",
+        "tier": "A",
         "muted": false,
         "proven": false,
         "composite_r": 0.23
@@ -348,7 +348,7 @@
         "market_environment": "bearish_weak"
       },
       "expected": {
-        "tier": "B",
+        "tier": "S",
         "muted": false,
         "proven": false,
         "composite_r": 0.409
@@ -366,7 +366,7 @@
         "market_environment": "bearish_weak"
       },
       "expected": {
-        "tier": "C",
+        "tier": "B",
         "muted": false,
         "proven": false,
         "composite_r": 0.071
@@ -409,7 +409,8 @@
       }
     },
     {
-      "name": "proven_short_h1_ema_15_floors_at_A",
+      "name": "proven_short_h1_ema_15_ranks_top",
+      "note": "PROVEN keeps the A floor; the calibrated composite carries this one to S.",
       "kwargs": {
         "direction": "short",
         "bounce_types": [
@@ -417,7 +418,7 @@
         ]
       },
       "expected": {
-        "tier": "A",
+        "tier": "S",
         "muted": false,
         "proven": true,
         "composite_r": 0.418
