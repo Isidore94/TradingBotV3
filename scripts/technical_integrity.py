@@ -45,6 +45,11 @@ class TechnicalIntegrityConfig:
     resolution_bars: int = 3
     touch_buffer_atr: float = 0.05
     break_buffer_atr: float = 0.10
+    # D1 major levels (daily SMAs, D1 trendlines, horizontal S/R) resolve on a
+    # longer window and tolerate a wider break buffer: they are coarser levels
+    # tested against the same daily-ATR yardstick.
+    d1_resolution_bars: int = 6
+    d1_break_buffer_atr: float = 0.15
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +71,32 @@ LEVEL_SPECS: tuple[tuple[str, str, float], ...] = (
     ("eod_vwap_1stdev_upper", "eod_vwap_upper_band", 0.75),
     ("eod_vwap_1stdev_lower", "eod_vwap_lower_band", 0.75),
 )
+
+# D1 major levels arrive through ``observe_symbol(extra_levels=...)`` with a
+# family name carrying this prefix. They are fixed prices (unlike the drifting
+# VWAP/EMA metrics), so several levels of one family may be under test at once.
+D1_FAMILY_PREFIX = "d1_"
+
+
+def family_timeframe(family: str) -> str:
+    return "d1" if str(family or "").startswith(D1_FAMILY_PREFIX) else "intraday"
+
+
+def _event_timeframe(event: Mapping[str, Any]) -> str:
+    explicit = str(event.get("level_timeframe") or "").strip().lower()
+    if explicit in {"d1", "intraday"}:
+        return explicit
+    return family_timeframe(str(event.get("level_family") or ""))
+
+
+def _candidate_dedupe_key(family: str, level_value: float) -> str:
+    # Drifting intraday metrics (VWAP/EMA) dedupe per family so a slowly moving
+    # level cannot open a second concurrent test. D1 levels are fixed prices and
+    # a symbol can legitimately test two different horizontals in one window, so
+    # they dedupe per (family, price).
+    if family_timeframe(family) == "d1":
+        return f"{family}@{float(level_value):.4f}"
+    return str(family)
 
 
 def technical_integrity_events_path() -> Path:
@@ -276,7 +307,7 @@ def _entity_row(
     pressure, break_up_weight, break_down_weight = _pressure(events)
     state = _score_state(score, test_count)
     confidence = _confidence(resolved_weight, len(symbols))
-    return {
+    row = {
         "entity_type": entity_type,
         "entity_key": entity_key,
         "label": label,
@@ -293,6 +324,28 @@ def _entity_row(
         "break_up_weight": round(break_up_weight, 3),
         "break_down_weight": round(break_down_weight, 3),
     }
+    # D1 major levels (daily SMAs, D1 trendlines, horizontal S/R) are the
+    # trader-priority read; intraday VWAP/EMA/band tests stay tracked but are
+    # reported separately so the D1 verdict is never diluted by M5 noise.
+    for timeframe, prefix in (("d1", "d1_"), ("intraday", "intraday_")):
+        subset = [event for event in events if _event_timeframe(event) == timeframe]
+        sub_probability, sub_weight, sub_count, sub_symbols = _integrity_probability(subset, config)
+        sub_score = round(1.0 + 9.0 * sub_probability, 1) if sub_count else None
+        sub_pressure, _up, _down = _pressure(subset)
+        row.update(
+            {
+                f"{prefix}score": sub_score,
+                f"{prefix}state": _score_state(sub_score if sub_score is not None else 5.5, sub_count),
+                f"{prefix}pressure": sub_pressure,
+                f"{prefix}confidence": _confidence(sub_weight, len(sub_symbols)),
+                f"{prefix}test_count": sub_count,
+                f"{prefix}symbol_count": len(sub_symbols),
+            }
+        )
+        if timeframe == "d1":
+            row["d1_support_integrity"] = _side_score(subset, "above", config)
+            row["d1_resistance_integrity"] = _side_score(subset, "below", config)
+    return row
 
 
 def _latest_environment(events: list[Mapping[str, Any]]) -> str:
@@ -436,7 +489,11 @@ def load_technical_integrity_snapshot(path: Path | None = None) -> dict[str, Any
     return payload if isinstance(payload, dict) and payload.get("schema") == SNAPSHOT_SCHEMA else {}
 
 
-def _level_candidates(metrics: Mapping[str, Any], atr: float) -> list[dict[str, Any]]:
+def _level_candidates(
+    metrics: Mapping[str, Any],
+    atr: float,
+    extra_levels: Iterable[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for metric_key, family, weight in LEVEL_SPECS:
         try:
@@ -453,6 +510,27 @@ def _level_candidates(metrics: Mapping[str, Any], atr: float) -> list[dict[str, 
                 "event_weight": float(weight),
             }
         )
+    for level in extra_levels or ():
+        if not isinstance(level, Mapping):
+            continue
+        family = str(level.get("family") or "").strip()
+        try:
+            value = float(level.get("value"))
+            weight = float(level.get("weight") or 1.0)
+        except (TypeError, ValueError):
+            continue
+        if not family or not math.isfinite(value) or value <= 0 or weight <= 0:
+            continue
+        candidate = {
+            "metric_key": str(level.get("metric_key") or family),
+            "level_family": family,
+            "level_value": value,
+            "event_weight": weight,
+        }
+        detail = level.get("detail")
+        if isinstance(detail, Mapping) and detail:
+            candidate["level_detail"] = dict(detail)
+        candidates.append(candidate)
     # Confluent levels should be one test, not three correlated votes.
     selected: list[dict[str, Any]] = []
     cluster_tolerance = max(0.0, float(atr)) * 0.05
@@ -476,8 +554,9 @@ def _new_level_tests(
     classification: Mapping[str, Any],
     market_environment: str,
     seen_ids: set[str],
-    pending_families: set[str],
+    pending_keys: set[str],
     config: TechnicalIntegrityConfig,
+    extra_levels: Iterable[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if len(bars) < 2 or atr <= 0:
         return []
@@ -485,10 +564,10 @@ def _new_level_tests(
     current = bars[-1]
     touch_buffer = config.touch_buffer_atr * atr
     tests: list[dict[str, Any]] = []
-    for candidate in _level_candidates(metrics, atr):
+    for candidate in _level_candidates(metrics, atr, extra_levels):
         family = candidate["level_family"]
         level = candidate["level_value"]
-        if family in pending_families:
+        if _candidate_dedupe_key(family, level) in pending_keys:
             continue
         if current["low"] > level + touch_buffer or current["high"] < level - touch_buffer:
             continue
@@ -500,33 +579,40 @@ def _new_level_tests(
         event_id = _test_id(symbol, current["bar_start"], family, level)
         if event_id in seen_ids:
             continue
-        tests.append(
-            {
-                "schema": EVENT_SCHEMA,
-                "feature_version": FEATURE_VERSION,
-                "event_type": "level_test_started",
-                "event_id": event_id,
-                "session_date": current["_start_local"].date().isoformat(),
-                "started_at": current["bar_end"],
-                "touch_bar_start": current["bar_start"],
-                "touch_bar_start_local": current["_start_local"].isoformat(timespec="seconds"),
-                "symbol": symbol,
-                "sector_key": str(classification.get("sectorKey") or "").strip().lower(),
-                "sector": str(classification.get("sector") or "").strip(),
-                "industry_key": str(classification.get("industryKey") or "").strip().lower(),
-                "industry": str(classification.get("industry") or "").strip(),
-                "market_environment": str(market_environment or ""),
-                "level_family": family,
-                "level_value": round(level, 6),
-                "event_weight": candidate["event_weight"],
-                "approach_side": "above" if approach_delta > 0 else "below",
-                "atr": float(atr),
-                "touch_buffer_atr": config.touch_buffer_atr,
-                "break_buffer_atr": config.break_buffer_atr,
-                "resolution_bars": config.resolution_bars,
-                "data_health": "ok",
-            }
-        )
+        timeframe = family_timeframe(family)
+        event = {
+            "schema": EVENT_SCHEMA,
+            "feature_version": FEATURE_VERSION,
+            "event_type": "level_test_started",
+            "event_id": event_id,
+            "session_date": current["_start_local"].date().isoformat(),
+            "started_at": current["bar_end"],
+            "touch_bar_start": current["bar_start"],
+            "touch_bar_start_local": current["_start_local"].isoformat(timespec="seconds"),
+            "symbol": symbol,
+            "sector_key": str(classification.get("sectorKey") or "").strip().lower(),
+            "sector": str(classification.get("sector") or "").strip(),
+            "industry_key": str(classification.get("industryKey") or "").strip().lower(),
+            "industry": str(classification.get("industry") or "").strip(),
+            "market_environment": str(market_environment or ""),
+            "level_family": family,
+            "level_timeframe": timeframe,
+            "level_value": round(level, 6),
+            "event_weight": candidate["event_weight"],
+            "approach_side": "above" if approach_delta > 0 else "below",
+            "atr": float(atr),
+            "touch_buffer_atr": config.touch_buffer_atr,
+            "break_buffer_atr": (
+                config.d1_break_buffer_atr if timeframe == "d1" else config.break_buffer_atr
+            ),
+            "resolution_bars": (
+                config.d1_resolution_bars if timeframe == "d1" else config.resolution_bars
+            ),
+            "data_health": "ok",
+        }
+        if candidate.get("level_detail"):
+            event["level_detail"] = candidate["level_detail"]
+        tests.append(event)
     return tests
 
 
@@ -771,6 +857,7 @@ class TechnicalIntegrityMonitor:
         classification: Mapping[str, Any] | None = None,
         market_environment: str = "",
         now: datetime | None = None,
+        extra_levels: Iterable[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         sym = str(symbol or "").strip().upper()
         try:
@@ -804,8 +891,11 @@ class TechnicalIntegrityMonitor:
                 pending_count=len(self.pending),
                 config=self.config,
             )
-            pending_families = {
-                str(row.get("level_family") or "")
+            pending_keys = {
+                _candidate_dedupe_key(
+                    str(row.get("level_family") or ""),
+                    float(row.get("level_value") or 0.0),
+                )
                 for row in self.pending.values()
                 if str(row.get("symbol") or "").upper() == sym
             }
@@ -817,8 +907,9 @@ class TechnicalIntegrityMonitor:
                 classification,
                 market_environment,
                 self.seen_test_ids,
-                pending_families,
+                pending_keys,
                 self.config,
+                extra_levels,
             )
             for event in new_tests:
                 prediction, source = _prediction_for_test(pre_snapshot, event)
@@ -1076,16 +1167,58 @@ def format_technical_integrity_snapshot(
     score = float(market.get("score") or 5.5)
     pressure = str(market.get("pressure") or "BALANCED")
     confidence = str(market.get("confidence") or "LOW")
-    confidence_short = {"HIGH": "HIGH", "MEDIUM": "MED", "LOW": "LOW"}.get(confidence, confidence)
-    chip = f"Technicals: {state} {score:.1f}/10 | {pressure} | {confidence_short}"
+    short = {"HIGH": "HIGH", "MEDIUM": "MED", "LOW": "LOW"}
+    confidence_short = short.get(confidence, confidence)
+    d1_test_count = int(market.get("d1_test_count") or 0)
+    intraday_test_count = int(market.get("intraday_test_count") or 0)
+    # D1 major levels are the headline; intraday M5 levels stay visible but
+    # secondary. Without any resolved D1 test yet, fall back to the combined
+    # score so the chip is never blank early in the session.
+    if d1_test_count > 0:
+        d1_score = float(market.get("d1_score") or 5.5)
+        d1_state = str(market.get("d1_state") or "BUILDING")
+        d1_pressure = str(market.get("d1_pressure") or "BALANCED")
+        d1_confidence = str(market.get("d1_confidence") or "LOW")
+        chip = f"Technicals D1: {d1_state} {d1_score:.1f}/10 | {d1_pressure} | {short.get(d1_confidence, d1_confidence)}"
+        if intraday_test_count > 0:
+            intraday_score = market.get("intraday_score")
+            if intraday_score is not None:
+                chip += f" · M5 {float(intraday_score):.1f}/10"
+        headline_pressure = d1_pressure
+        headline_state = d1_state
+    else:
+        chip = f"Technicals D1: building · M5 {state} {score:.1f}/10 | {pressure} | {confidence_short}"
+        headline_pressure = pressure
+        headline_state = state
     lines = [
         f"Scanned-market Technical Integrity: {score:.1f}/10 ({state})",
-        f"Break pressure: {pressure} | confidence: {confidence}",
-        f"Evidence: {int(market.get('test_count') or 0)} resolved tests across "
-        f"{int(market.get('symbol_count') or 0)} symbols; {int(market.get('pending_count') or 0)} pending.",
-        "1 means levels are breaking easily; 10 means levels are earning repeated respect.",
-        "Advisory only; coverage is the symbols BounceBot has scanned, not a full-market census.",
     ]
+    if d1_test_count > 0:
+        d1_score_value = market.get("d1_score")
+        lines.append(
+            f"D1 major levels (daily SMA 50/100/200, D1 trendlines, horizontal S/R): "
+            f"{float(d1_score_value):.1f}/10 ({market.get('d1_state')}) | "
+            f"break pressure {market.get('d1_pressure')} | confidence {market.get('d1_confidence')} | "
+            f"{d1_test_count} resolved D1 tests"
+        )
+    else:
+        lines.append(
+            "D1 major levels: building - no D1 level test has resolved yet this session."
+        )
+    if intraday_test_count > 0 and market.get("intraday_score") is not None:
+        lines.append(
+            f"Intraday M5 levels (VWAP/EMA/bands): {float(market.get('intraday_score')):.1f}/10 "
+            f"({market.get('intraday_state')}); {intraday_test_count} resolved tests"
+        )
+    lines.extend(
+        [
+            f"Break pressure: {pressure} | confidence: {confidence}",
+            f"Evidence: {int(market.get('test_count') or 0)} resolved tests across "
+            f"{int(market.get('symbol_count') or 0)} symbols; {int(market.get('pending_count') or 0)} pending.",
+            "1 means levels are breaking easily; 10 means levels are earning repeated respect.",
+            "Advisory only; coverage is the symbols BounceBot has scanned, not a full-market census.",
+        ]
+    )
     weak = snapshot.get("weakest_industries") or []
     strong = snapshot.get("strongest_industries") or []
     if weak:
@@ -1102,13 +1235,13 @@ def format_technical_integrity_snapshot(
             f"({row.get('pressure')}, n={row.get('test_count')})"
             for row in strong[:3]
         )
-    if pressure == "BEARISH":
+    if headline_pressure == "BEARISH":
         color = "#f85149"
-    elif pressure == "BULLISH":
+    elif headline_pressure == "BULLISH":
         color = "#3fb950"
-    elif state in {"VERY WEAK", "WEAK"}:
+    elif headline_state in {"VERY WEAK", "WEAK"}:
         color = "#d29922"
-    elif state in {"FIRM", "STRONG"}:
+    elif headline_state in {"FIRM", "STRONG"}:
         color = "#58a6ff"
     else:
         color = "#c9d1d9"

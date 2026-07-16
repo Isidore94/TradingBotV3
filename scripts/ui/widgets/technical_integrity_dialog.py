@@ -18,6 +18,9 @@ from PySide6.QtWidgets import (
 _COLUMNS = (
     ("Scope", "entity_type"),
     ("Name", "label"),
+    ("D1 integrity", "d1_score"),
+    ("D1 pressure", "d1_pressure"),
+    ("D1 tests", "d1_test_count"),
     ("Integrity", "score"),
     ("State", "state"),
     ("Break pressure", "pressure"),
@@ -25,6 +28,9 @@ _COLUMNS = (
     ("Tests", "test_count"),
     ("Symbols", "symbol_count"),
 )
+
+_NUMERIC_KEYS = {"score", "d1_score", "test_count", "d1_test_count", "symbol_count"}
+_SCORE_KEYS = {"score", "d1_score"}
 
 
 class TechnicalIntegrityDialog(QDialog):
@@ -40,6 +46,8 @@ class TechnicalIntegrityDialog(QDialog):
         title.setObjectName("SectionTitle")
         explanation = QLabel(
             "1 = technical levels are breaking easily; 10 = levels are repeatedly holding. "
+            "D1 columns cover only major daily levels (SMA 50/100/200, D1 trendlines, horizontal S/R) - "
+            "the priority read; the combined columns fold in intraday M5 levels too. "
             "Break pressure shows the direction of clean failures. Scores cover BounceBot-scanned "
             "symbols only and never change alerts, watchlists, or setup rankings."
         )
@@ -83,11 +91,11 @@ class TechnicalIntegrityDialog(QDialog):
             for column, (_label, key) in enumerate(_COLUMNS):
                 value = row.get(key)
                 item = QTableWidgetItem()
-                if key in {"score", "test_count", "symbol_count"}:
+                if key in _NUMERIC_KEYS:
                     number = float(value or 0.0)
                     item.setData(Qt.ItemDataRole.EditRole, number)
-                    if key == "score":
-                        item.setText(f"{number:.1f}")
+                    if key in _SCORE_KEYS:
+                        item.setText("" if value is None else f"{number:.1f}")
                 else:
                     item.setText(str(value or ""))
                 self.table.setItem(row_index, column, item)

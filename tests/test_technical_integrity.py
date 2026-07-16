@@ -102,6 +102,9 @@ def test_bounce_observer_recomputes_levels_without_forming_bar(monkeypatch):
 
     bot = legacy.BounceBot.__new__(legacy.BounceBot)
     bot._technical_integrity_monitor = FakeMonitor()
+    bot._d1_extra_levels_provider = lambda symbol, **kwargs: [
+        {"family": "d1_sma_50", "value": 99.5, "weight": 1.6}
+    ]
     bot.atr_cache = {"MU": 2.0}
     bot.symbol_classification_cache = {"MU": {"sectorKey": "technology"}}
     bot.get_market_environment = lambda: "bearish_strong"
@@ -119,6 +122,9 @@ def test_bounce_observer_recomputes_levels_without_forming_bar(monkeypatch):
     assert captured["metrics"]["std_vwap"] == 100.0
     assert captured["metrics"]["dynamic_vwap"] == 100.0
     assert captured["kwargs"]["now"] == now
+    assert captured["kwargs"]["extra_levels"] == [
+        {"family": "d1_sma_50", "value": 99.5, "weight": 1.6}
+    ]
 
 
 def test_monitor_resolves_support_break_and_dedupes(tmp_path):
@@ -315,6 +321,143 @@ def test_integrity_dialog_exposes_searchable_full_hierarchy():
     assert visible == ["MU"]
 
 
+def test_d1_extra_levels_use_d1_resolution_and_allow_concurrent_family_tests(tmp_path):
+    from technical_integrity import TechnicalIntegrityMonitor
+
+    tz = ZoneInfo("America/New_York")
+    start = datetime(2026, 7, 15, 9, 30, tzinfo=tz)
+    touch = [
+        {"datetime": start, "open": 101.2, "high": 101.4, "low": 100.9, "close": 101.0, "volume": 1000},
+        {"datetime": start + timedelta(minutes=5), "open": 101.0, "high": 101.1, "low": 99.98, "close": 100.2, "volume": 1400},
+    ]
+    monitor = TechnicalIntegrityMonitor(
+        events_path=tmp_path / "events.jsonl",
+        state_path=tmp_path / "state.json",
+        snapshot_path=tmp_path / "snapshot.json",
+    )
+    extra_levels = [
+        {"family": "d1_horizontal", "value": 100.0, "weight": 1.5, "detail": {"strength": 1.4}},
+        {"family": "d1_horizontal", "value": 100.6, "weight": 1.5},
+    ]
+    monitor.observe_symbol(
+        "MU",
+        touch,
+        {"std_vwap": 100.0},  # confluent with the 100.0 horizontal; D1 weight wins dedupe
+        atr=1.0,
+        now=start + timedelta(minutes=11),
+        extra_levels=extra_levels,
+    )
+    # Two different D1 horizontals may be under test at once (per-price dedupe),
+    # and the confluent VWAP candidate collapsed into the D1 test.
+    assert monitor.pending_count == 2
+    pending = list(monitor.pending.values())
+    assert {row["level_family"] for row in pending} == {"d1_horizontal"}
+    assert all(row["level_timeframe"] == "d1" for row in pending)
+    assert all(row["resolution_bars"] == 6 for row in pending)
+    assert all(row["break_buffer_atr"] == 0.15 for row in pending)
+
+    resolved_bars = touch + [
+        {
+            "datetime": start + timedelta(minutes=10 + 5 * index),
+            "open": 99.7,
+            "high": 99.8,
+            "low": 99.5,
+            "close": 99.7,
+            "volume": 1500,
+        }
+        for index in range(6)
+    ]
+    snapshot = monitor.observe_symbol(
+        "MU",
+        resolved_bars,
+        {},
+        atr=1.0,
+        now=start + timedelta(minutes=41),
+        extra_levels=extra_levels,
+    )
+    assert monitor.pending_count == 0
+    market = snapshot["market"]
+    assert market["d1_test_count"] == 2
+    assert market["intraday_test_count"] == 0
+    assert market["d1_pressure"] == "BEARISH"
+    rows = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    resolved = [row for row in rows if row["event_type"] == "level_resolved"]
+    assert {row["outcome"] for row in resolved} == {"broke"}
+    assert all(row["level_timeframe"] == "d1" for row in resolved)
+    assert all(row["level_family"] == "d1_horizontal" for row in resolved)
+    assert next(
+        row.get("level_detail") for row in resolved if row["level_value"] == 100.0
+    ) == {"strength": 1.4}
+
+
+def test_aggregation_splits_d1_and_intraday_and_chip_leads_with_d1():
+    from technical_integrity import aggregate_technical_integrity, format_technical_integrity_snapshot
+
+    def event(event_id, family, timeframe, outcome, weight, break_direction=""):
+        return {
+            "event_type": "level_resolved",
+            "event_id": event_id,
+            "session_date": "2026-07-15",
+            "resolved_at": f"2026-07-15T10:0{event_id[-1]}:00-04:00",
+            "symbol": "MU",
+            "sector_key": "technology",
+            "sector": "Technology",
+            "industry_key": "memory",
+            "industry": "Memory",
+            "level_family": family,
+            "level_timeframe": timeframe,
+            "outcome": outcome,
+            "break_direction": break_direction,
+            "event_weight": weight,
+            "approach_side": "above",
+        }
+
+    events = [
+        event("d1", "d1_sma_50", "d1", "held", 1.6),
+        event("d2", "d1_trendline", "d1", "held", 1.6),
+        event("m1", "vwap", "intraday", "broke", 1.2, "down"),
+        event("m2", "vwap", "intraday", "broke", 1.2, "down"),
+    ]
+    snapshot = aggregate_technical_integrity(
+        events,
+        as_of="2026-07-15T11:00:00-04:00",
+        session_date="2026-07-15",
+    )
+    market = snapshot["market"]
+    assert market["d1_test_count"] == 2
+    assert market["d1_score"] == 8.3
+    assert market["d1_state"] == "STRONG"
+    assert market["d1_pressure"] == "BALANCED"
+    assert market["intraday_test_count"] == 2
+    assert market["intraday_score"] == 3.0
+    assert market["pressure"] == "BEARISH"  # combined still sees the M5 breaks
+
+    chip, tooltip, color = format_technical_integrity_snapshot(
+        snapshot,
+        now=datetime(2026, 7, 15, 11, 31, tzinfo=ZoneInfo("America/New_York")),
+    )
+    assert chip == "Technicals D1: STRONG 8.3/10 | BALANCED | LOW · M5 3.0/10"
+    assert "D1 major levels" in tooltip
+    assert "Intraday M5 levels" in tooltip
+    assert color == "#58a6ff"  # colored by the D1 verdict, not the M5 breaks
+
+
+def test_legacy_events_without_timeframe_count_as_intraday():
+    from technical_integrity import aggregate_technical_integrity
+
+    fixture = _fixture()
+    snapshot = aggregate_technical_integrity(
+        fixture["events"],
+        as_of=fixture["as_of"],
+        session_date=fixture["session_date"],
+    )
+    market = snapshot["market"]
+    assert market["d1_test_count"] == 0
+    assert market["d1_state"] == "BUILDING"
+    assert market["intraday_test_count"] == market["test_count"]
+    assert market["intraday_score"] == market["score"]
+
+
 def test_market_state_formatter_is_plain_and_actionable():
     from technical_integrity import aggregate_technical_integrity, format_technical_integrity_snapshot
 
@@ -328,7 +471,9 @@ def test_market_state_formatter_is_plain_and_actionable():
         snapshot,
         now=datetime(2026, 7, 15, 11, 31, tzinfo=ZoneInfo("America/New_York")),
     )
-    assert chip == "Technicals: MIXED 5.7/10 | BEARISH | MED"
+    # No D1 evidence yet: the chip says so and falls back to the M5 read.
+    assert chip == "Technicals D1: building · M5 MIXED 5.7/10 | BEARISH | MED"
+    assert "D1 major levels: building" in tooltip
     assert "Memory 4.0/10 WEAK" in tooltip
     assert "Software 8.0/10 STRONG" in tooltip
     assert color == "#f85149"

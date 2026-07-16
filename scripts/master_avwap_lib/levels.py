@@ -146,6 +146,11 @@ def _level_kind_tolerance(
     return _level_tolerance(atr20, price, tol_frac=default_tol_frac)
 
 
+def level_is_effective_on(level: dict, as_of_date: str | date | None) -> bool:
+    """Public wrapper: is this stored level in force on ``as_of_date``?"""
+    return _level_is_effective_on(level, as_of_date)
+
+
 def _level_is_effective_on(level: dict, as_of_date: str | date | None) -> bool:
     if not as_of_date or str(level.get("kind") or "") != "cloud_flat":
         return True

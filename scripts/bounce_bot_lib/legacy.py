@@ -2330,6 +2330,9 @@ class BounceBot(EWrapper, EClient):
         # Lazily created on the first eligible scan. This observer is advisory:
         # it may publish evidence, but never feeds bounce/watchlist decisions.
         self._technical_integrity_monitor = None
+        # D1 major levels (daily SMAs, D1 trendlines, horizontal S/R) for the
+        # integrity observer; injectable so tests stay hermetic.
+        self._d1_extra_levels_provider = None
 
         self.alerted_symbols = set()
         self.bounce_candidates = {}  # Track candidate bounces
@@ -2478,6 +2481,21 @@ class BounceBot(EWrapper, EClient):
                 from technical_integrity import TechnicalIntegrityMonitor
 
                 self._technical_integrity_monitor = TechnicalIntegrityMonitor()
+            if self._d1_extra_levels_provider is None:
+                from d1_level_feed import get_d1_extra_levels
+
+                self._d1_extra_levels_provider = get_d1_extra_levels
+            try:
+                extra_levels = self._d1_extra_levels_provider(
+                    symbol,
+                    reference_price=float(completed_today["close"].iloc[-1]),
+                    atr20=self.atr_cache.get(symbol),
+                    now=now,
+                ) or []
+            except Exception as exc:
+                # D1 levels are additive evidence; the M5 observer still runs.
+                logging.debug("D1 level feed unavailable for %s: %s", symbol, exc)
+                extra_levels = []
             self._technical_integrity_monitor.observe_symbol(
                 symbol,
                 completed_today,
@@ -2486,6 +2504,7 @@ class BounceBot(EWrapper, EClient):
                 classification=self.symbol_classification_cache.get(symbol, {}),
                 market_environment=self.get_market_environment(),
                 now=now,
+                extra_levels=extra_levels,
             )
         except Exception as exc:
             # Research instrumentation is fail-open by design. A diagnostics
