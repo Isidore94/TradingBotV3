@@ -178,7 +178,11 @@ CHECK_BOUNCE_21_EMA = False
 CHECK_BOUNCE_10_CANDLE = True
 CHECK_BOUNCE_PREV_DAY_HIGH = True
 CHECK_BOUNCE_PREV_DAY_LOW = True
-CHECK_BOUNCE_VWAP_UPPER_BAND = False
+# Evidence flip (2026-07-16): upper-band respect longs measured +0.19R close
+# over 77 outcomes (62% touched +1R; pure-combo record +0.40R n=42) while it
+# sat disabled and learning-only. The lower-band short mirror stays off - it
+# measured -0.53R over 46 with clean (low-ambiguity) losses.
+CHECK_BOUNCE_VWAP_UPPER_BAND = True
 CHECK_BOUNCE_VWAP_LOWER_BAND = False
 CHECK_BOUNCE_DYNAMIC_VWAP_UPPER_BAND = True
 CHECK_BOUNCE_DYNAMIC_VWAP_LOWER_BAND = True
