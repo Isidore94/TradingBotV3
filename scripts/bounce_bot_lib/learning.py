@@ -33,20 +33,32 @@ from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
 BOUNCE_LEARNING_STATE_FILE = INTRADAY_BOUNCE_OUTCOMES_FILE.with_name("intraday_bounce_learning_state.json")
 
 MIN_SAMPLES = 10
-MUTE_AVG_R_THRESHOLD = -0.15
+# A mute suppresses the live alert entirely, so it demands far more evidence
+# than a tier: a real sample, spread across enough distinct sessions that one
+# bad week (or one mis-modeled stop) cannot silence a whole setup family.
+MUTE_ENTRY_R_THRESHOLD = -0.15
+MUTE_MIN_SAMPLES = 30
+MUTE_MIN_SESSIONS = 10
 DELTA_R_TO_POINTS = 20.0
 DELTA_CLIP_POINTS = 30
 TIER_THRESHOLDS = (("S", 0.90), ("A", 0.45), ("B", 0.10), ("C", -0.15))
+# Thin segments earn partial credit in the composite: n=10 counts half,
+# n=30 counts 75%, n=90 counts ~90%.
+COMPOSITE_SHRINK_SAMPLES = 10
 LEARNING_STATE_STALE_DAYS = 1
 
-# Dimensions that may MUTE an alert outright (direction-specific, evidence-based).
-MUTE_DIMENSIONS = ("bounce_type", "time_bucket", "market_environment")
-# Dimensions blended into the tier composite, with weights.
+# Only a setup's own identity may MUTE it (direction-specific, evidence-based).
+# Context dimensions (time bucket, market environment) weigh on the tier but
+# never veto: on 2026-07-16 the old context mutes had auto-D'd every long for
+# the first 2.5 session hours and silenced every classic short bounce type.
+MUTE_DIMENSIONS = ("bounce_type",)
+# Dimensions blended into the tier composite, with weights. Setup identity
+# carries the composite; context is a drag/boost, roughly half the say.
 COMPOSITE_DIMENSIONS = (
     ("bounce_type", 1.0),
-    ("time_bucket", 0.8),
-    ("market_environment", 0.6),
-    ("master_avwap_priority_bucket", 0.8),
+    ("time_bucket", 0.4),
+    ("market_environment", 0.4),
+    ("master_avwap_priority_bucket", 0.6),
     ("master_avwap_focus", 0.6),
 )
 # PROVEN segments (2026-07-09, user rule "see the best bounces live"): a
@@ -73,6 +85,62 @@ def _seg_key(direction: str, segment: str) -> str:
     return f"{str(direction or '').strip().lower()}|{str(segment or '').strip()}"
 
 
+def entry_quality_r(
+    avg_close_r: float,
+    target_1r_rate: float | None = None,
+    stop_rate: float | None = None,
+) -> tuple[float, float]:
+    """Entry quality in R units, corrected for stop-first measurement bias.
+
+    ``avg_close_r`` is recorded under a representative stop with conservative
+    stop-first adjudication: when an episode touches BOTH the stop and +1R,
+    the loss is booked. Right bias for outcome honesty, but a poor *entry
+    ranking* stat exactly where it matters — the tracker's headline finding
+    is avg MFE 2-3R against 0.3-0.7R closed.
+
+    ``ambiguity`` (stop_rate + target_1r_rate - 1, clipped to [0, 1]) is the
+    minimum fraction of episodes where adjudication, not the entry, decided
+    the recorded close. Blend the recorded close-R with the 1R-harvest
+    expectancy (take the +1R partial when it prints, -1R when it never does)
+    in proportion to it: clean segments keep their close-R verbatim;
+    both-touch-heavy segments rank by what the entry demonstrably reached.
+
+    Returns ``(entry_r, ambiguity)``.
+    """
+    if target_1r_rate is None or stop_rate is None:
+        return float(avg_close_r), 0.0
+    ambiguity = max(0.0, min(1.0, float(stop_rate) + float(target_1r_rate) - 1.0))
+    harvest_r = 2.0 * float(target_1r_rate) - 1.0
+    return (1.0 - ambiguity) * float(avg_close_r) + ambiguity * harvest_r, ambiguity
+
+
+def _segment_entry_r(entry: dict) -> float | None:
+    """The ranking stat for a stored segment (entry_r, or close-R on old states)."""
+    value = _float_or_none(entry.get("entry_r"))
+    if value is not None:
+        return value
+    return _float_or_none(entry.get("avg_close_r"))
+
+
+def _segment_is_muted(dimension: str, entry: dict) -> bool:
+    """Mute policy, recomputed from segment stats (never trusts stale flags).
+
+    Evaluated live so a pre-v2 state file on disk immediately follows the
+    current policy instead of its baked-in context mutes.
+    """
+    if dimension not in MUTE_DIMENSIONS:
+        return False
+    entry_r = _segment_entry_r(entry)
+    if entry_r is None or entry_r > MUTE_ENTRY_R_THRESHOLD:
+        return False
+    if int(entry.get("sample_count") or 0) < MUTE_MIN_SAMPLES:
+        return False
+    session_count = entry.get("session_count")
+    if session_count is not None and int(session_count) < MUTE_MIN_SESSIONS:
+        return False
+    return True
+
+
 def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLES) -> dict:
     """Distill performance rows into the alert-time learning state."""
     segments: dict[str, dict[str, dict]] = {}
@@ -89,8 +157,15 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
             continue
         if sample_count < min_samples:
             continue
-        delta = int(max(-DELTA_CLIP_POINTS, min(DELTA_CLIP_POINTS, round(avg_close_r * DELTA_R_TO_POINTS))))
-        muted = bool(dimension in MUTE_DIMENSIONS and avg_close_r <= MUTE_AVG_R_THRESHOLD)
+        stop_rate = _float_or_none(row.get("stop_rate"))
+        target_1r_rate = _float_or_none(row.get("target_1r_rate"))
+        entry_r, ambiguity = entry_quality_r(avg_close_r, target_1r_rate, stop_rate)
+        session_count = row.get("session_count")
+        try:
+            session_count = int(float(session_count)) if session_count not in (None, "") else None
+        except (TypeError, ValueError):
+            session_count = None
+        delta = int(max(-DELTA_CLIP_POINTS, min(DELTA_CLIP_POINTS, round(entry_r * DELTA_R_TO_POINTS))))
         median_close_r = _float_or_none(row.get("median_close_r"))
         proven = bool(
             dimension in PROVEN_DIMENSIONS
@@ -98,22 +173,28 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
             and avg_close_r >= PROVEN_MIN_AVG_R
             and (median_close_r is None or median_close_r >= PROVEN_MIN_MEDIAN_R)
         )
-        segments.setdefault(dimension, {})[_seg_key(direction, segment)] = {
+        entry = {
             "avg_close_r": round(avg_close_r, 3),
+            "entry_r": round(entry_r, 3),
+            "ambiguity": round(ambiguity, 3),
             "sample_count": sample_count,
-            "stop_rate": _float_or_none(row.get("stop_rate")),
-            "target_1r_rate": _float_or_none(row.get("target_1r_rate")),
+            "session_count": session_count,
+            "stop_rate": stop_rate,
+            "target_1r_rate": target_1r_rate,
             "avg_mfe_r": _float_or_none(row.get("avg_mfe_r")),
             "median_close_r": median_close_r,
             "score_delta": delta,
-            "muted": muted,
             "proven": proven,
         }
+        entry["muted"] = _segment_is_muted(dimension, entry)
+        segments.setdefault(dimension, {})[_seg_key(direction, segment)] = entry
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "min_samples": int(min_samples),
-        "mute_threshold_avg_r": MUTE_AVG_R_THRESHOLD,
+        "mute_threshold_entry_r": MUTE_ENTRY_R_THRESHOLD,
+        "mute_min_samples": MUTE_MIN_SAMPLES,
+        "mute_min_sessions": MUTE_MIN_SESSIONS,
         "segments": segments,
     }
 
@@ -171,9 +252,10 @@ def evaluate_bounce_quality(
 ) -> dict:
     """Tier + mute + PROVEN decision + human-readable reasons for one bounce.
 
-    The composite is a weighted mean of the measured avg R of every segment
-    this bounce belongs to; unknown segments simply do not contribute, so a
-    bounce with no history lands in the neutral B/C range instead of failing.
+    The composite is a weighted mean of the measured *entry quality* R (see
+    ``entry_quality_r``) of every segment this bounce belongs to, each shrunk
+    by sample size; unknown segments simply do not contribute, so a bounce
+    with no history lands in the neutral B/C range instead of failing.
     A bounce matching any PROVEN segment (see PROVEN_* thresholds) is flagged
     so the alert path can stamp it and the Alert Center treats it like a
     banger - unless a mute fires (proven negatives keep the veto).
@@ -185,6 +267,11 @@ def evaluate_bounce_quality(
         if not segment:
             return None
         return (segments.get(dimension) or {}).get(_seg_key(direction, segment))
+
+    def _shrunk(entry: dict) -> float:
+        value = _segment_entry_r(entry) or 0.0
+        n = max(0, int(entry.get("sample_count") or 0))
+        return value * n / float(n + COMPOSITE_SHRINK_SAMPLES)
 
     reasons: list[str] = []
     mute_reasons: list[str] = []
@@ -207,14 +294,26 @@ def evaluate_bounce_quality(
         entries = [(v, e) for v, e in entries if e]
         if not entries:
             continue
-        dim_avg = sum(e["avg_close_r"] for _v, e in entries) / len(entries)
+        dim_avg = sum(_shrunk(e) for _v, e in entries) / len(entries)
         weighted_sum += dim_avg * weight
         weight_used += weight
         for value, entry in entries:
-            tag = f"{value} {direction} {entry['avg_close_r']:+.2f}R (n={entry['sample_count']})"
+            entry_r = _segment_entry_r(entry) or 0.0
+            tag = (
+                f"{value} {direction} entry {entry_r:+.2f}R "
+                f"(close {entry['avg_close_r']:+.2f}R, n={entry['sample_count']})"
+            )
             reasons.append(tag)
-            if entry.get("muted") and dimension in MUTE_DIMENSIONS:
-                mute_reasons.append(f"{dimension}={value}: {entry['avg_close_r']:+.2f}R over {entry['sample_count']} — proven negative")
+            if _segment_is_muted(dimension, entry):
+                session_note = (
+                    f" across {int(entry['session_count'])} sessions"
+                    if entry.get("session_count") is not None
+                    else ""
+                )
+                mute_reasons.append(
+                    f"{dimension}={value}: entry {entry_r:+.2f}R over "
+                    f"{entry['sample_count']}{session_note} — proven negative"
+                )
 
     proven_reasons: list[str] = []
     best_proven_avg = None

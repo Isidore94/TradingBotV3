@@ -25,13 +25,18 @@ def _perf_row(dimension, direction, segment, n, avg_r, **extra):
         "target_1r_rate": extra.get("target_1r_rate", 0.6),
         "avg_mfe_r": extra.get("avg_mfe_r"),
         "median_close_r": extra.get("median_close_r"),
+        "session_count": extra.get("session_count"),
     }
 
 
 def _sample_state():
+    # Default rates (stop 0.5, 1R 0.6) give ambiguity 0.1 and harvest +0.2,
+    # so entry_r = 0.9*avg_close_r + 0.02 for every row below.
     rows = [
         _perf_row("bounce_type", "short", "dynamic_vwap_lower_band", 18, 1.42),
-        _perf_row("bounce_type", "long", "eod_vwap_upper_band", 25, -0.82),
+        _perf_row("bounce_type", "long", "eod_vwap_upper_band", 40, -0.82, session_count=15),
+        _perf_row("bounce_type", "long", "small_n_loser", 25, -0.82, session_count=15),
+        _perf_row("bounce_type", "long", "young_loser", 40, -0.82, session_count=3),
         _perf_row("bounce_type", "long", "vwap", 61, 0.74),
         _perf_row("time_bucket", "short", "midday", 21, -0.35),
         _perf_row("time_bucket", "short", "opening_drive", 49, 1.44),
@@ -42,21 +47,38 @@ def _sample_state():
     return learning.build_learning_state(rows)
 
 
+def test_entry_quality_r_ambiguity_blend():
+    # No rates -> close-R verbatim.
+    assert learning.entry_quality_r(-0.55) == (-0.55, 0.0)
+    # Clean measurements (stop + 1R rates below 1) -> close-R verbatim.
+    entry_r, ambiguity = learning.entry_quality_r(0.48, 0.42, 0.25)
+    assert ambiguity == 0.0 and entry_r == 0.48
+    # Heavy both-touch segment: the 1R-harvest expectancy takes over.
+    entry_r, ambiguity = learning.entry_quality_r(-0.55, 0.7759, 0.8103)
+    assert 0.58 < ambiguity < 0.59
+    assert 0.09 < entry_r < 0.11  # negative close-R, but 78% of entries reached +1R
+
+
 def test_build_learning_state_thresholds_and_mutes():
     state = _sample_state()
     segments = state["segments"]
     assert "thin_type" not in str(segments["bounce_type"])  # min-samples filter
     losers = segments["bounce_type"]["long|eod_vwap_upper_band"]
     assert losers["muted"] is True
-    assert losers["score_delta"] == -16
+    assert losers["score_delta"] == -14  # entry_r -0.718 * 20
+    # Mutes demand real evidence: sample floor and session spread.
+    assert segments["bounce_type"]["long|small_n_loser"]["muted"] is False
+    assert segments["bounce_type"]["long|young_loser"]["muted"] is False
     winner = segments["bounce_type"]["short|dynamic_vwap_lower_band"]
     assert winner["muted"] is False
-    assert winner["score_delta"] == 28
-    # master context can boost but never mute
+    assert winner["score_delta"] == 26  # entry_r 1.298 * 20
+    # Context can drag the tier but never mute.
     fav = segments["master_avwap_priority_bucket"]["long|favorite_setup"]
     assert fav["muted"] is False
     env = segments["market_environment"]["long|bearish_weak"]
-    assert env["muted"] is True
+    assert env["muted"] is False
+    bucket = segments["time_bucket"]["short|midday"]
+    assert bucket["muted"] is False
 
 
 def test_evaluate_quality_mutes_proven_losers():
@@ -81,9 +103,10 @@ def test_evaluate_quality_mutes_proven_losers():
     )
     assert verdict["muted"] is False
     assert verdict["tier"] == "S"
-    assert verdict["composite_r"] > 1.0
+    assert verdict["composite_r"] > 0.9
 
-    # Midday short mutes even when the bounce type is good
+    # A bad midday drags the tier but no longer mutes a good bounce type —
+    # and without the context veto the segment's PROVEN floor applies again.
     verdict = learning.evaluate_bounce_quality(
         state,
         direction="short",
@@ -91,7 +114,9 @@ def test_evaluate_quality_mutes_proven_losers():
         time_bucket="midday",
         market_environment="",
     )
-    assert verdict["muted"] is True
+    assert verdict["muted"] is False
+    assert verdict["proven"] is True
+    assert verdict["tier"] == "S"  # proven avg 1.42R clears the S bar
 
 
 def test_evaluate_quality_without_state_is_neutral():
@@ -161,16 +186,75 @@ def test_proven_segments_marked_and_flagged_live():
 def test_mute_overrides_proven():
     rows = [
         _perf_row("master_avwap_swing_trait", "long", "trendline_break_recent", 31, 1.93, median_close_r=1.72),
-        _perf_row("time_bucket", "long", "midday", 30, -0.40),
+        _perf_row("bounce_type", "long", "orb_breakout", 40, -0.90, session_count=15),
     ]
     state = learning.build_learning_state(rows)
     verdict = learning.evaluate_bounce_quality(
         state,
         direction="long",
+        bounce_types=["orb_breakout"],
         swing_traits=["trendline_break_recent"],
-        time_bucket="midday",
     )
     assert verdict["muted"] and not verdict["proven"] and verdict["tier"] == "D"
+
+
+def test_golden_fixture_entry_quality_scoring():
+    """Golden results (plan.md Milestone 3 discipline): real measured segments
+    from the 2026-07-15 learning state, frozen through the entry-quality
+    scoring path. Any drift in entry_r, mutes, or scenario tiers must be an
+    intentional, fixture-updating change."""
+    import json
+
+    fixture_path = ROOT_DIR / "tests" / "fixtures" / "bounce_entry_quality_v1.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    state = learning.build_learning_state(fixture["perf_rows"])
+    for dimension, expected_entries in fixture["expected_segments"].items():
+        for key, expected in expected_entries.items():
+            entry = state["segments"][dimension][key]
+            assert entry["entry_r"] == expected["entry_r"], (dimension, key)
+            assert entry["ambiguity"] == expected["ambiguity"], (dimension, key)
+            assert entry["muted"] == expected["muted"], (dimension, key)
+            assert entry["proven"] == expected["proven"], (dimension, key)
+
+    for scenario in fixture["scenarios"]:
+        verdict = learning.evaluate_bounce_quality(state, **scenario["kwargs"])
+        expected = scenario["expected"]
+        assert verdict["tier"] == expected["tier"], scenario["name"]
+        assert verdict["muted"] == expected["muted"], scenario["name"]
+        assert verdict["proven"] == expected["proven"], scenario["name"]
+        assert verdict["composite_r"] == expected["composite_r"], scenario["name"]
+
+
+def test_stale_v1_state_files_follow_the_new_mute_policy():
+    """A pre-v2 learning state on disk (no entry_r, baked-in context mutes)
+    must stop muting immediately: the mute verdict is recomputed live from
+    the stored stats, and context dimensions are no longer mutable."""
+    v1_state = {
+        "schema_version": 1,
+        "segments": {
+            "time_bucket": {
+                "long|opening_drive": {
+                    "avg_close_r": -0.34,
+                    "sample_count": 443,
+                    "muted": True,  # baked in by the old builder
+                }
+            },
+            "bounce_type": {
+                "long|vwap": {"avg_close_r": 0.74, "sample_count": 61, "muted": False},
+                "long|bad_type": {"avg_close_r": -0.9, "sample_count": 45, "muted": True},
+            },
+        },
+    }
+    verdict = learning.evaluate_bounce_quality(
+        v1_state, direction="long", bounce_types=["vwap"], time_bucket="opening_drive"
+    )
+    assert verdict["muted"] is False  # the old context mute is ignored
+    # A genuinely bad bounce_type (close-R fallback) still mutes.
+    verdict = learning.evaluate_bounce_quality(
+        v1_state, direction="long", bounce_types=["bad_type"]
+    )
+    assert verdict["muted"] is True
 
 
 def test_format_bounce_alert_message_carries_proven_stamp():

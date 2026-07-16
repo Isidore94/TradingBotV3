@@ -1380,6 +1380,7 @@ def build_intraday_bounce_performance_rows(
         common = {
             "direction": direction,
             "event_id": record.get("event_id"),
+            "trade_date": str(record.get("trade_date") or "").strip(),
             "symbol": str(record.get("symbol") or "").strip().upper(),
             "score": _bounce_perf_float(record.get("score")),
             "risk_per_share": _bounce_perf_float(record.get("risk_per_share")),
@@ -1455,6 +1456,9 @@ def build_intraday_bounce_performance_rows(
         sample_count = len(close_values)
         if sample_count <= 0:
             continue
+        # Distinct sessions backing the segment: the learning mute gate needs
+        # to know a bad average spans real history, not one bad week.
+        session_count = len({row["trade_date"] for row in group_rows if row.get("trade_date")})
         target_1r_rate = sum(1 for row in group_rows if row.get("target_1r_hit")) / float(len(group_rows))
         target_2r_rate = sum(1 for row in group_rows if row.get("target_2r_hit")) / float(len(group_rows))
         stop_rate = sum(1 for row in group_rows if row.get("stop_hit")) / float(len(group_rows))
@@ -1481,6 +1485,7 @@ def build_intraday_bounce_performance_rows(
                 "direction": direction,
                 "segment": segment,
                 "sample_count": sample_count,
+                "session_count": session_count,
                 "avg_score": (sum(score_values) / float(len(score_values))) if score_values else None,
                 "avg_risk_per_share": (sum(risk_values) / float(len(risk_values))) if risk_values else None,
                 "avg_eod_r": avg_close_r,

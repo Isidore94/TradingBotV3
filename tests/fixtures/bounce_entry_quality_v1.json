@@ -1,0 +1,460 @@
+{
+  "description": "Golden results for entry-quality tier scoring (2026-07-16). Segment inputs are real measured numbers from the live learning state of 2026-07-15. Guards: (1) entry_r = ambiguity-weighted blend of close-R and 1R-harvest expectancy, (2) mutes are bounce_type-only and need n>=30 across >=10 sessions, (3) composite uses sample-shrunk entry_r with context at reduced weight.",
+  "perf_rows": [
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "eod_vwap",
+      "sample_count": 116,
+      "avg_close_r": -0.55,
+      "target_1r_rate": 0.7759,
+      "stop_rate": 0.8103,
+      "median_close_r": -0.30165,
+      "avg_mfe_r": 2.673,
+      "session_count": 45
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "impulse_retest_vwap_eod",
+      "sample_count": 124,
+      "avg_close_r": -0.53,
+      "target_1r_rate": 0.7823,
+      "stop_rate": 0.8226,
+      "median_close_r": -0.30165,
+      "avg_mfe_r": 2.721,
+      "session_count": 45
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "vwap",
+      "sample_count": 101,
+      "avg_close_r": -0.76,
+      "target_1r_rate": 0.7723,
+      "stop_rate": 0.8119,
+      "median_close_r": -0.5882,
+      "avg_mfe_r": 2.667,
+      "session_count": 44
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "vwap_lower_band",
+      "sample_count": 46,
+      "avg_close_r": -0.53,
+      "target_1r_rate": 0.4783,
+      "stop_rate": 0.587,
+      "median_close_r": -0.25,
+      "avg_mfe_r": 1.44,
+      "session_count": 25
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "long",
+      "segment": "regime_pause_rs",
+      "sample_count": 472,
+      "avg_close_r": -0.5,
+      "target_1r_rate": 0.5763,
+      "stop_rate": 0.6377,
+      "median_close_r": 0.0,
+      "avg_mfe_r": 1.981,
+      "session_count": 30
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "regime_pause_rw",
+      "sample_count": 479,
+      "avg_close_r": -0.17,
+      "target_1r_rate": 0.8288,
+      "stop_rate": 0.8288,
+      "median_close_r": -0.2759,
+      "avg_mfe_r": 2.829,
+      "session_count": 30
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "orb_breakdown",
+      "sample_count": 26,
+      "avg_close_r": -1.11,
+      "target_1r_rate": 0.6154,
+      "stop_rate": 0.9615,
+      "median_close_r": -0.7524,
+      "avg_mfe_r": 1.92,
+      "session_count": 3
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "long",
+      "segment": "orb_breakout",
+      "sample_count": 31,
+      "avg_close_r": -0.74,
+      "target_1r_rate": 0.4194,
+      "stop_rate": 0.6452,
+      "median_close_r": -0.8824,
+      "avg_mfe_r": 1.495,
+      "session_count": 3
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "h1_green_to_yellow",
+      "sample_count": 158,
+      "avg_close_r": 0.22,
+      "target_1r_rate": 0.2785,
+      "stop_rate": 0.2785,
+      "median_close_r": 0.0984,
+      "avg_mfe_r": 0.991,
+      "session_count": 8
+    },
+    {
+      "dimension": "bounce_type",
+      "direction": "short",
+      "segment": "h1_ema_15",
+      "sample_count": 67,
+      "avg_close_r": 0.48,
+      "target_1r_rate": 0.4179,
+      "stop_rate": 0.2537,
+      "median_close_r": 0.228,
+      "avg_mfe_r": 1.277,
+      "session_count": 9
+    },
+    {
+      "dimension": "time_bucket",
+      "direction": "long",
+      "segment": "opening_drive",
+      "sample_count": 443,
+      "avg_close_r": -0.34,
+      "target_1r_rate": 0.4605,
+      "stop_rate": 0.5643,
+      "median_close_r": null,
+      "avg_mfe_r": null,
+      "session_count": 45
+    },
+    {
+      "dimension": "time_bucket",
+      "direction": "short",
+      "segment": "opening_drive",
+      "sample_count": 237,
+      "avg_close_r": 0.47,
+      "target_1r_rate": 0.4895,
+      "stop_rate": 0.4515,
+      "median_close_r": null,
+      "avg_mfe_r": null,
+      "session_count": 45
+    },
+    {
+      "dimension": "time_bucket",
+      "direction": "short",
+      "segment": "midday",
+      "sample_count": 442,
+      "avg_close_r": -0.07,
+      "target_1r_rate": 0.8122,
+      "stop_rate": 0.7262,
+      "median_close_r": null,
+      "avg_mfe_r": null,
+      "session_count": 45
+    },
+    {
+      "dimension": "market_environment",
+      "direction": "long",
+      "segment": "bullish_weak",
+      "sample_count": 720,
+      "avg_close_r": -0.49,
+      "target_1r_rate": 0.4847,
+      "stop_rate": 0.6375,
+      "median_close_r": null,
+      "avg_mfe_r": null,
+      "session_count": 40
+    },
+    {
+      "dimension": "market_environment",
+      "direction": "short",
+      "segment": "bearish_weak",
+      "sample_count": 474,
+      "avg_close_r": 0.3,
+      "target_1r_rate": 0.8333,
+      "stop_rate": 0.6709,
+      "median_close_r": null,
+      "avg_mfe_r": null,
+      "session_count": 40
+    },
+    {
+      "dimension": "market_environment",
+      "direction": "short",
+      "segment": "neutral_chop",
+      "sample_count": 27,
+      "avg_close_r": -0.41,
+      "target_1r_rate": 0.3704,
+      "stop_rate": 0.5926,
+      "median_close_r": null,
+      "avg_mfe_r": null,
+      "session_count": 12
+    }
+  ],
+  "expected_segments": {
+    "bounce_type": {
+      "short|eod_vwap": {
+        "entry_r": 0.096,
+        "ambiguity": 0.586,
+        "muted": false,
+        "proven": false
+      },
+      "short|impulse_retest_vwap_eod": {
+        "entry_r": 0.132,
+        "ambiguity": 0.605,
+        "muted": false,
+        "proven": false
+      },
+      "short|vwap": {
+        "entry_r": 0.002,
+        "ambiguity": 0.584,
+        "muted": false,
+        "proven": false
+      },
+      "short|vwap_lower_band": {
+        "entry_r": -0.498,
+        "ambiguity": 0.065,
+        "muted": true,
+        "proven": false
+      },
+      "long|regime_pause_rs": {
+        "entry_r": -0.36,
+        "ambiguity": 0.214,
+        "muted": true,
+        "proven": false
+      },
+      "short|regime_pause_rw": {
+        "entry_r": 0.374,
+        "ambiguity": 0.658,
+        "muted": false,
+        "proven": false
+      },
+      "short|orb_breakdown": {
+        "entry_r": -0.336,
+        "ambiguity": 0.577,
+        "muted": false,
+        "proven": false
+      },
+      "long|orb_breakout": {
+        "entry_r": -0.703,
+        "ambiguity": 0.065,
+        "muted": false,
+        "proven": false
+      },
+      "short|h1_green_to_yellow": {
+        "entry_r": 0.22,
+        "ambiguity": 0.0,
+        "muted": false,
+        "proven": false
+      },
+      "short|h1_ema_15": {
+        "entry_r": 0.48,
+        "ambiguity": 0.0,
+        "muted": false,
+        "proven": true
+      }
+    },
+    "time_bucket": {
+      "long|opening_drive": {
+        "entry_r": -0.334,
+        "ambiguity": 0.025,
+        "muted": false,
+        "proven": false
+      },
+      "short|opening_drive": {
+        "entry_r": 0.47,
+        "ambiguity": 0.0,
+        "muted": false,
+        "proven": false
+      },
+      "short|midday": {
+        "entry_r": 0.304,
+        "ambiguity": 0.538,
+        "muted": false,
+        "proven": false
+      }
+    },
+    "market_environment": {
+      "long|bullish_weak": {
+        "entry_r": -0.434,
+        "ambiguity": 0.122,
+        "muted": false,
+        "proven": false
+      },
+      "short|bearish_weak": {
+        "entry_r": 0.485,
+        "ambiguity": 0.504,
+        "muted": false,
+        "proven": false
+      },
+      "short|neutral_chop": {
+        "entry_r": -0.41,
+        "ambiguity": 0.0,
+        "muted": false,
+        "proven": false
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "name": "classic_short_vwap_bounce_midday_bearish_weak",
+      "note": "Previously bounce_type-muted (never emitted). 78% 1R-hit entries must surface.",
+      "kwargs": {
+        "direction": "short",
+        "bounce_types": [
+          "eod_vwap",
+          "impulse_retest_vwap_eod"
+        ],
+        "time_bucket": "midday",
+        "market_environment": "bearish_weak"
+      },
+      "expected": {
+        "tier": "B",
+        "muted": false,
+        "proven": false,
+        "composite_r": 0.23
+      }
+    },
+    {
+      "name": "regime_pause_rs_long_stays_muted",
+      "note": "Genuinely negative entry over 472 samples / 30 sessions keeps the veto.",
+      "kwargs": {
+        "direction": "long",
+        "bounce_types": [
+          "regime_pause_rs"
+        ],
+        "time_bucket": "opening_drive",
+        "market_environment": "bullish_weak"
+      },
+      "expected": {
+        "tier": "D",
+        "muted": true,
+        "proven": false,
+        "composite_r": -0.364
+      }
+    },
+    {
+      "name": "regime_pause_rw_short_promoted",
+      "note": "83% of these entries reached +1R (MFE 2.8R); close-R was adjudication noise.",
+      "kwargs": {
+        "direction": "short",
+        "bounce_types": [
+          "regime_pause_rw"
+        ],
+        "time_bucket": "opening_drive",
+        "market_environment": "bearish_weak"
+      },
+      "expected": {
+        "tier": "B",
+        "muted": false,
+        "proven": false,
+        "composite_r": 0.409
+      }
+    },
+    {
+      "name": "orb_breakdown_young_family_not_muted",
+      "note": "26 samples over 3 sessions cannot mute; shows as C while evidence accrues.",
+      "kwargs": {
+        "direction": "short",
+        "bounce_types": [
+          "orb_breakdown"
+        ],
+        "time_bucket": "opening_drive",
+        "market_environment": "bearish_weak"
+      },
+      "expected": {
+        "tier": "C",
+        "muted": false,
+        "proven": false,
+        "composite_r": 0.071
+      }
+    },
+    {
+      "name": "long_in_opening_drive_no_longer_auto_muted",
+      "note": "Context (time bucket) drags the tier but never vetoes the alert.",
+      "kwargs": {
+        "direction": "long",
+        "bounce_types": [
+          "orb_breakout"
+        ],
+        "time_bucket": "opening_drive",
+        "market_environment": "bullish_weak"
+      },
+      "expected": {
+        "tier": "D",
+        "muted": false,
+        "proven": false,
+        "composite_r": -0.463
+      }
+    },
+    {
+      "name": "h1_green_to_yellow_short_in_chop",
+      "note": "+0.22R signal in a chop tape: visible C/B, not context-muted D.",
+      "kwargs": {
+        "direction": "short",
+        "bounce_types": [
+          "h1_green_to_yellow"
+        ],
+        "time_bucket": "midday",
+        "market_environment": "neutral_chop"
+      },
+      "expected": {
+        "tier": "B",
+        "muted": false,
+        "proven": false,
+        "composite_r": 0.115
+      }
+    },
+    {
+      "name": "proven_short_h1_ema_15_floors_at_A",
+      "kwargs": {
+        "direction": "short",
+        "bounce_types": [
+          "h1_ema_15"
+        ]
+      },
+      "expected": {
+        "tier": "A",
+        "muted": false,
+        "proven": true,
+        "composite_r": 0.418
+      }
+    },
+    {
+      "name": "low_ambiguity_loser_still_muted",
+      "note": "vwap_lower_band shorts lose cleanly (a=0.07): the mute survives.",
+      "kwargs": {
+        "direction": "short",
+        "bounce_types": [
+          "vwap_lower_band"
+        ],
+        "time_bucket": "midday",
+        "market_environment": "bearish_weak"
+      },
+      "expected": {
+        "tier": "D",
+        "muted": true,
+        "proven": false,
+        "composite_r": -0.056
+      }
+    },
+    {
+      "name": "no_history_stays_neutral_B",
+      "kwargs": {
+        "direction": "long",
+        "bounce_types": [
+          "never_seen_type"
+        ]
+      },
+      "expected": {
+        "tier": "B",
+        "muted": false,
+        "proven": false,
+        "composite_r": null
+      }
+    }
+  ]
+}
