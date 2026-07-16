@@ -897,6 +897,74 @@ def test_orb_breakdown_shorts_and_stale_breaks_stay_quiet():
     assert "STAL|long" in stub._orb_break_state["dead"]
 
 
+def test_orb_break_window_expires_after_max_delay():
+    """Evidence cap (2026-07-16): breaks 60-270m after the open measured as
+    the worst bucket under every stop model - a first break past
+    ORB_MAX_DELAY_MINUTES is stale drift, not the delayed-ORB setup."""
+    from datetime import date
+
+    from market_session import get_market_session_open_naive
+
+    start = get_market_session_open_naive(reference=date(2026, 7, 2))
+    spy = _flat_session(start, 20)
+
+    def rows_with_break_at(minutes):
+        rows = [(100.0, 101.0, 99.0, 100.5)]  # opening range, high 101
+        rows += [(100.5, 100.9, 100.2, 100.6)] * (minutes // 5 - 1)
+        rows.append((100.6, 101.6, 100.5, 101.4))  # first close above 101
+        return rows
+
+    # LATE: first break at +90m -> the window expired at +60m, no alert.
+    late = _session_bars(start, rows_with_break_at(90))
+    # EDGE: break exactly at +60m is still inside the window.
+    edge = _session_bars(start, rows_with_break_at(60))
+    stub = _daytrade_sweep_stub(spy, {"LATE": late, "EDGE": edge}, longs=["LATE", "EDGE"])
+    hits = stub.check_orb_break_setups()
+    assert [hit["symbol"] for hit in hits] == ["EDGE"]
+    assert hits[0]["minutes_after_open"] == 60
+    assert "LATE|long" in stub._orb_break_state["dead"]
+
+
+def test_bounce_trade_plan_stop_override_and_atr_floor():
+    """The trade plan (alert text + outcome measurement) honors a
+    setup-defined stop and widens noise stops to the representative
+    0.15*ATR floor so recorded R is comparable across setups."""
+    from types import SimpleNamespace
+
+    from bounce_bot_lib.legacy import BOUNCE_STOP_ATR_FLOOR, BounceBot
+
+    stub = SimpleNamespace(atr_cache={"NOIS": 4.0, "WIDE": 4.0})
+    stub._to_float_or_blank = lambda value: BounceBot._to_float_or_blank(stub, value)
+    plan_for = lambda *args, **kwargs: BounceBot._build_bounce_trade_plan(stub, *args, **kwargs)
+
+    # Tiny signal bar (risk 0.10 on a 100.00 stock, ATR 4.00): the floor
+    # widens the stop to 0.15 * ATR = 0.60.
+    from pytest import approx
+
+    tiny_bar = {"time": "20260702  10:00:00", "open": 100.0, "high": 100.05, "low": 99.9, "close": 100.0}
+    plan = plan_for("long", {"vwap": 99.9}, tiny_bar, symbol="NOIS")
+    assert plan["risk_per_share"] == approx(BOUNCE_STOP_ATR_FLOOR * 4.0)
+    assert plan["stop_price"] == approx(100.0 - 0.6)
+    assert plan["target_1r"] == approx(100.6)
+
+    # A wide signal bar keeps its own stop (floor only ever widens).
+    wide_bar = {"time": "20260702  10:00:00", "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0}
+    plan = plan_for("long", {"vwap": 99.0}, wide_bar, symbol="WIDE")
+    assert plan["stop_price"] == approx(99.0) and plan["risk_per_share"] == approx(1.0)
+
+    # Setup-defined stop (ORB: OR opposite edge) replaces the bar extreme;
+    # shorts mirror. No ATR known -> no floor, override still honored.
+    stub2 = SimpleNamespace(atr_cache={})
+    stub2._to_float_or_blank = lambda value: BounceBot._to_float_or_blank(stub2, value)
+    short_bar = {"time": "20260702  10:00:00", "open": 50.0, "high": 50.1, "low": 49.8, "close": 49.9}
+    plan = BounceBot._build_bounce_trade_plan(
+        stub2, "short", {"orb_breakdown": 50.0}, short_bar, symbol="SHRT", stop_override=51.2
+    )
+    assert plan["stop_price"] == approx(51.2)
+    assert plan["risk_per_share"] == approx(51.2 - 49.9)
+    assert plan["target_1r"] == approx(49.9 - (51.2 - 49.9))
+
+
 def test_orb_break_accepts_non_eastern_local_clocks(monkeypatch):
     # Regression (2026-07-13): bars are stamped in the machine's local clock,
     # so on a Pacific box the opening 5m candle is 06:30. The old hard-coded

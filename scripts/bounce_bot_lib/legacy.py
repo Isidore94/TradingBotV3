@@ -456,11 +456,26 @@ def entry_assist_mode_for_env(env_key) -> dict:
 # setup for the day (wicks through are fine - failed pokes keep it alive).
 # longs.txt names break the OR high, shorts.txt names break the OR low.
 ORB_DELAY_MINUTES = 30
+# Evidence cap (2026-07-16, 92 measured events): breaks first closing through
+# 60-270 min after the open were the worst bucket under every stop model
+# (recorded: -1.6R median longs, 100% stopped; path-sim: -1.4R broken-level).
+# A first range break hours into the session is stale drift, not the delayed
+# ORB playbook setup - it stops being an ORB alert past this cutoff.
+ORB_MAX_DELAY_MINUTES = 60
 # A break older than this many bars when first seen (e.g. after a restart) is
 # stale news, not a live trigger - mark it dead instead of alerting.
 ORB_FRESH_BREAK_MAX_BARS = 2
 ORB_BREAKOUT_TYPE = "orb_breakout"
 ORB_BREAKDOWN_TYPE = "orb_breakdown"
+
+# Representative stop floor for outcome measurement + alert trade plans
+# (2026-07-16): signal-bar stops made R incomparable across setups - the
+# median recorded stop distance was 8.6% of the symbol's daily ATR (pure
+# noise; regime_pause rows ran 0.14% of price), inflating MFE to 3-5R and
+# stop rates to 90%+. Stops narrower than this fraction of daily ATR widen
+# to the floor; path-sim on the ORB family cut false stop-outs 100% -> 48%
+# while keeping 52% 1R-first hits.
+BOUNCE_STOP_ATR_FLOOR = 0.15
 
 # 8-EMA grind squeeze (2026-07-04). Longs: a strong name pulls back after the
 # initial push, then rides the 5m 8-EMA without a single close below it; the
@@ -2702,7 +2717,9 @@ class BounceBot(EWrapper, EClient):
         raw = f"{symbol}|{direction}|{candle_time}|{level_key}"
         return re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("_")
 
-    def _build_bounce_trade_plan(self, direction, levels, bounce_candle, current_candle=None):
+    def _build_bounce_trade_plan(
+        self, direction, levels, bounce_candle, current_candle=None, *, symbol=None, stop_override=None
+    ):
         candle = current_candle if current_candle is not None else bounce_candle
         if isinstance(candle, pd.Series):
             candle = candle.to_dict()
@@ -2716,12 +2733,31 @@ class BounceBot(EWrapper, EClient):
         if direction == "long":
             stop_price = self._to_float_or_blank(bounce_candle.get("low"))
             entry_trigger = self._to_float_or_blank(bounce_candle.get("high"))
+        else:
+            stop_price = self._to_float_or_blank(bounce_candle.get("high"))
+            entry_trigger = self._to_float_or_blank(bounce_candle.get("low"))
+        # A setup-defined stop (e.g. ORB: the opposite edge of the opening
+        # range) replaces the signal bar's extreme.
+        if stop_override is not None and self._to_float_or_blank(stop_override) != "":
+            stop_price = float(stop_override)
+        # Representative floor: a stop inside the noise (see
+        # BOUNCE_STOP_ATR_FLOOR) widens to a fraction of the daily ATR so
+        # recorded R means the same thing across setups and symbols.
+        if entry_price != "" and stop_price != "" and symbol:
+            atr = self.atr_cache.get(symbol) if isinstance(getattr(self, "atr_cache", None), dict) else None
+            try:
+                floor_dist = float(atr) * BOUNCE_STOP_ATR_FLOOR if atr else 0.0
+            except (TypeError, ValueError):
+                floor_dist = 0.0
+            sign = 1.0 if direction == "long" else -1.0
+            distance = sign * (float(entry_price) - float(stop_price))
+            if floor_dist > 0 and 0 < distance < floor_dist:
+                stop_price = float(entry_price) - sign * floor_dist
+        if direction == "long":
             risk = float(entry_price) - float(stop_price) if entry_price != "" and stop_price != "" else ""
             target_1r = float(entry_price) + risk if risk != "" and risk > 0 else ""
             target_2r = float(entry_price) + (2 * risk) if risk != "" and risk > 0 else ""
         else:
-            stop_price = self._to_float_or_blank(bounce_candle.get("high"))
-            entry_trigger = self._to_float_or_blank(bounce_candle.get("low"))
             risk = float(stop_price) - float(entry_price) if entry_price != "" and stop_price != "" else ""
             target_1r = float(entry_price) - risk if risk != "" and risk > 0 else ""
             target_2r = float(entry_price) - (2 * risk) if risk != "" and risk > 0 else ""
@@ -2841,6 +2877,7 @@ class BounceBot(EWrapper, EClient):
         reason="",
         candidate_id="",
         candles_waited=0,
+        stop_override=None,
     ):
         if isinstance(current_candle, pd.Series):
             current_candle = current_candle.to_dict()
@@ -2852,7 +2889,9 @@ class BounceBot(EWrapper, EClient):
         trade_dt = self._parse_bar_time(current_candle.get("time") or bounce_candle.get("time"))
         trade_date = trade_dt.date().isoformat() if trade_dt else get_market_local_now().date().isoformat()
         context = self._build_bounce_context_snapshot(symbol, direction)
-        plan = self._build_bounce_trade_plan(direction, levels, bounce_candle, current_candle or None)
+        plan = self._build_bounce_trade_plan(
+            direction, levels, bounce_candle, current_candle or None, symbol=symbol, stop_override=stop_override
+        )
         atr = self.atr_cache.get(symbol)
         metrics = self.symbol_metrics.get(symbol, {})
         focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
@@ -3081,14 +3120,18 @@ class BounceBot(EWrapper, EClient):
             now_local = now_local.astimezone(session.close_local.tzinfo)
         return now_local >= close_with_grace
 
-    def _register_bounce_outcome(self, symbol, direction, levels, bounce_candle, current_candle, candidate_id):
+    def _register_bounce_outcome(
+        self, symbol, direction, levels, bounce_candle, current_candle, candidate_id, *, stop_override=None
+    ):
         if isinstance(current_candle, pd.Series):
             current_candle = current_candle.to_dict()
         if isinstance(bounce_candle, pd.Series):
             bounce_candle = bounce_candle.to_dict()
         current_candle = current_candle if isinstance(current_candle, dict) else {}
         bounce_candle = bounce_candle if isinstance(bounce_candle, dict) else {}
-        plan = self._build_bounce_trade_plan(direction, levels, bounce_candle, current_candle)
+        plan = self._build_bounce_trade_plan(
+            direction, levels, bounce_candle, current_candle, symbol=symbol, stop_override=stop_override
+        )
         if plan.get("risk_per_share") == "":
             return
         entry_dt = self._parse_bar_time(current_candle.get("time"))
@@ -5290,14 +5333,24 @@ class BounceBot(EWrapper, EClient):
         if opening.dt != get_market_session_open_naive(reference=opening.dt):
             return None
         earliest_break_dt = opening.dt + timedelta(minutes=ORB_DELAY_MINUTES)
+        latest_break_dt = opening.dt + timedelta(minutes=ORB_MAX_DELAY_MINUTES)
         key = f"{symbol}|{side}"
         sign = 1.0 if side == "long" else -1.0
         level = opening.high if side == "long" else opening.low
         for index, bar in enumerate(sym_today[1:], start=1):
             if sign * (bar.close - level) <= 0:
+                if bar.dt >= latest_break_dt:
+                    # The delayed window expired without a break: done for the day.
+                    state["dead"].add(key)
+                    return None
                 continue
             if bar.dt < earliest_break_dt:
                 # Early close through the range: the delayed break is gone.
+                state["dead"].add(key)
+                return None
+            if bar.dt > latest_break_dt:
+                # Evidence cap (see ORB_MAX_DELAY_MINUTES): a first range break
+                # this late is stale drift, not the delayed-ORB setup.
                 state["dead"].add(key)
                 return None
             if index < len(sym_today) - ORB_FRESH_BREAK_MAX_BARS:
@@ -5330,6 +5383,11 @@ class BounceBot(EWrapper, EClient):
         }
         levels = {bounce_type: hit["level"]}
         edge = "high" if side == "long" else "low"
+        # The setup's stop is the opposite edge of the opening range, not the
+        # break bar's extreme: path-sim over every recorded ORB event showed
+        # the bar stop was noise (56-100% stopped, median risk 0.31% of
+        # price) while the OR edge stopped 24% at honest distances.
+        orb_stop = hit["or_low"] if side == "long" else hit["or_high"]
         event_row = self._log_bounce_candidate_event(
             "confirmed",
             symbol,
@@ -5340,17 +5398,21 @@ class BounceBot(EWrapper, EClient):
             reason=(
                 f"Delayed 5m ORB: first close through the opening-range {edge} "
                 f"{hit['level']:.2f} at {break_bar.dt:%H:%M} "
-                f"({hit['minutes_after_open']} min after open)"
+                f"({hit['minutes_after_open']} min after open); "
+                f"OR {hit['or_low']:.2f}-{hit['or_high']:.2f}"
             ),
+            stop_override=orb_stop,
         )
-        self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
+        self._register_bounce_outcome(
+            symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""), stop_override=orb_stop
+        )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
         label = "ORB BREAKOUT" if side == "long" else "ORB BREAKDOWN"
         message = (
             f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): first 5m close "
             f"{'above' if side == 'long' else 'below'} the opening-range {edge} {hit['level']:.2f} "
             f"at {break_bar.dt:%H:%M} ({hit['minutes_after_open']} min after open); "
-            f"OR {hit['or_low']:.2f}-{hit['or_high']:.2f}."
+            f"OR {hit['or_low']:.2f}-{hit['or_high']:.2f}; stop the OR {'low' if side == 'long' else 'high'}."
         )
         exit_note = self._measured_exit_suffix(side, levels)
         if exit_note:
