@@ -76,6 +76,7 @@ from project_paths import (
     SHORTS_FILE,
     AUTO_LONGS_FILE,
     AUTO_SHORTS_FILE,
+    AUTO_POPULATE_MEMBERSHIP_FILE,
     REPORTS_DIR,
     BOUNCE_LOG_FILE,
     SafeRotatingFileHandler,
@@ -5296,6 +5297,66 @@ class BounceBot(EWrapper, EClient):
             }
         return sorted(selected)
 
+    def _auto_populate_owned_symbols(self, side):
+        """Symbols the auto-populate engine currently owns in longs/shorts.txt.
+
+        Read from the membership file (mtime-cached); a file from a previous
+        session owns nothing today.
+        """
+        try:
+            stat = AUTO_POPULATE_MEMBERSHIP_FILE.stat()
+        except OSError:
+            return set()
+        cache = getattr(self, "_auto_populate_membership_cache", None)
+        key = (stat.st_mtime_ns, stat.st_size)
+        if cache and cache.get("key") == key:
+            payload = cache.get("payload") or {}
+        else:
+            try:
+                payload = json.loads(AUTO_POPULATE_MEMBERSHIP_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            self._auto_populate_membership_cache = {"key": key, "payload": payload}
+        if str(payload.get("date") or "") != datetime.now().date().isoformat():
+            return set()
+        side_map = payload.get("long" if side == "long" else "short") or {}
+        return {str(sym or "").strip().upper() for sym in side_map if str(sym or "").strip()}
+
+    def _h1_color_sweep_symbols(self, side):
+        """D1-anchored symbol set for the H1 color sweeps (2026-07-16).
+
+        An hourly reclaim or breakdown only means something on a name whose
+        DAILY picture already supports the side. Sweeping the raw watchlists
+        broke that once the auto-populate engine stocked them with intraday
+        movers: a bullish D1 pullback that is merely weak today lands in
+        shorts.txt and produced H1 short alerts against its daily. Sources
+        here are D1-vetted only - the trader's own typed names (watchlist
+        minus the auto-populate slice and the bot's auto lists), human focus
+        picks, and master-AVWAP D1 focus-board names on the matching side.
+        """
+        wanted = "LONG" if side == "long" else "SHORT"
+        watchlist = self.longs if side == "long" else self.shorts
+        auto_owned = self._auto_populate_owned_symbols(side)
+        auto_list = self.auto_longs if side == "long" else self.auto_shorts
+        auto_watch = {str(item or "").strip().upper() for item in auto_list or []}
+        selected = {
+            sym
+            for sym in (str(item or "").strip().upper() for item in watchlist)
+            if sym and sym not in auto_owned and sym not in auto_watch
+        }
+        selected |= self._human_focus_sets()[side]
+        focus_map = getattr(self, "master_avwap_focus_map", {}) or {}
+        for symbol, entry in focus_map.items():
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("side") or "").strip().upper() == wanted:
+                sym = str(symbol or "").strip().upper()
+                if sym:
+                    selected.add(sym)
+        return sorted(selected)
+
     def _symbol_session_bars(self, symbol, today):
         bars = self.get_cached_5m_bars(symbol)
         return [bar for bar in bars or [] if bar.dt.date() == today]
@@ -5583,7 +5644,7 @@ class BounceBot(EWrapper, EClient):
     # candle and feed the bounce outcome tracker for edge measurement.
     # ------------------------------------------------------------------
     def check_h1_color_setups(self):
-        """Sweep watchlists for H1 color signals on the last closed hourly candle."""
+        """Sweep D1-anchored names for H1 color signals on the last closed hourly candle."""
         spy_today, _prev_close = self._spy_session_bars()
         if not spy_today:
             return []
@@ -5594,7 +5655,7 @@ class BounceBot(EWrapper, EClient):
             self._h1_color_state = state
         hits = []
         for side in ("long", "short"):
-            for symbol in self._watchlist_day_sweep_symbols(side):
+            for symbol in self._h1_color_sweep_symbols(side):
                 for hit in self._evaluate_h1_color_signals(symbol, side, today):
                     key = f"{symbol}|{hit['type']}|{hit['signal_bar'].dt:%H:%M}"
                     if key in state["alerted"]:

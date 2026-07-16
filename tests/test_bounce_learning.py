@@ -725,7 +725,7 @@ def test_h1_color_sweep_dedupes_per_candle():
     class Stub:
         pass
 
-    for name in ("check_h1_color_setups", "_watchlist_day_sweep_symbols"):
+    for name in ("check_h1_color_setups",):
         setattr(Stub, name, getattr(BounceBot, name))
 
     today_bar = _make_bar(datetime(2026, 7, 2, 10, 30), 100.0, 100.5, 99.5, 100.2)
@@ -734,8 +734,7 @@ def test_h1_color_sweep_dedupes_per_candle():
     stub = Stub()
     stub._spy_session_bars = lambda: ([today_bar], 100.0)
     stub._h1_color_state = None
-    stub.longs = ["MSTR"]
-    stub.shorts = []
+    stub._h1_color_sweep_symbols = lambda side: ["MSTR"] if side == "long" else []
     stub.emitted = []
     stub._evaluate_h1_color_signals = lambda symbol, side, today: [
         {"type": H1_EMA10_BOUNCE_TYPE, "signal_bar": signal_bar, "symbol": symbol, "side": side}
@@ -754,6 +753,65 @@ def test_h1_color_sweep_dedupes_per_candle():
     ]
     assert len(stub.check_h1_color_setups()) == 1
     assert len(stub.emitted) == 2
+
+
+def test_h1_color_sweep_is_d1_anchored(tmp_path, monkeypatch):
+    """2026-07-16 (ELVN case): H1 color signals are swing-context entries and
+    must only sweep names whose DAILY picture supports the side - trader-typed
+    watchlist names, human focus picks, and matching-side D1 focus-board
+    names. The M5 auto-populate slice and autolongs/autoshorts are excluded."""
+    import json as _json
+
+    import bounce_bot_lib.legacy as legacy
+    from bounce_bot_lib.legacy import BounceBot
+
+    membership = tmp_path / "auto_watchlist_membership.json"
+    membership.write_text(
+        _json.dumps(
+            {
+                "date": datetime.now().date().isoformat(),
+                "long": {"AUTOPOP": "PDH break"},
+                "short": {"ELVN": "PDL break"},
+                "cut": {"long": [], "short": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(legacy, "AUTO_POPULATE_MEMBERSHIP_FILE", membership)
+
+    class Stub:
+        pass
+
+    for name in ("_h1_color_sweep_symbols", "_auto_populate_owned_symbols", "_human_focus_sets"):
+        setattr(Stub, name, getattr(BounceBot, name))
+
+    stub = Stub()
+    stub.longs = ["MANUAL", "AUTOPOP", "AUTOLIST"]
+    stub.shorts = ["ELVN", "MYSHORT"]
+    stub.auto_longs = ["AUTOLIST"]
+    stub.auto_shorts = []
+    stub.human_focus_map = {"long": {"HUMAN"}, "short": set()}
+    stub.master_avwap_focus_map = {
+        "BOARDSHORT": {"side": "SHORT", "setup_family": "mid_earnings_above_2nd_stdev"},
+        "BOARDLONG": {"side": "LONG", "setup_family": "top_pattern_tracking"},
+        "BROKEN": "not-a-dict",
+    }
+
+    # Longs: trader name + human pick + long-side board; the auto-populate
+    # slice (AUTOPOP) and the bot's auto list (AUTOLIST) stay out.
+    assert stub._h1_color_sweep_symbols("long") == ["BOARDLONG", "HUMAN", "MANUAL"]
+    # Shorts: ELVN (auto-populated intraday weakness on a bullish D1) is
+    # exactly the alert that must NOT fire; the typed short and the D1
+    # short board remain.
+    assert stub._h1_color_sweep_symbols("short") == ["BOARDSHORT", "MYSHORT"]
+
+    # A membership file from a previous session owns nothing today.
+    membership.write_text(
+        _json.dumps({"date": "2020-01-01", "long": {"AUTOPOP": "PDH"}, "short": {}}),
+        encoding="utf-8",
+    )
+    stub._auto_populate_membership_cache = None
+    assert "AUTOPOP" in stub._h1_color_sweep_symbols("long")
 
 
 def _daytrade_sweep_stub(spy_bars, sym_bars_map, *, longs=(), shorts=()):
