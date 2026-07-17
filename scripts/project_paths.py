@@ -222,6 +222,10 @@ FOCUS_PICK_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "focus_pick_membership.json"
 # rotation/cuts never delete a name the trader typed), plus the day's
 # VWAP-cut blacklist so a cut name is not re-added the same session.
 AUTO_POPULATE_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "auto_watchlist_membership.json"
+# The day's first directional regime read (bearish_*/bullish_*). Discovery
+# keeps hunting the opening side after the live label decays to neutral
+# (2026-07-17: bearish_strong open -> neutral by noon shut off RW shorts).
+AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
 # Append-only JSONL log of the trader's pick verdicts: star likes (with origin
 # alert timeframe/surface), X dislikes (with the typed reason), unfavorites.
 # Lives in the shared home so it syncs across machines and can be handed to an

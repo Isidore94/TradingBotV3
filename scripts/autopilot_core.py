@@ -610,6 +610,12 @@ def _frame_rows(frame) -> list[dict[str, Any]]:
             continue
         if open_val != open_val or close_val != close_val:  # NaN guard
             continue
+        try:
+            volume_val = float(row["Volume"])
+        except (KeyError, TypeError, ValueError):
+            volume_val = 0.0
+        if volume_val != volume_val or volume_val < 0:  # NaN guard
+            volume_val = 0.0
         rows.append(
             {
                 "dt": stamp.to_pydatetime() if hasattr(stamp, "to_pydatetime") else stamp,
@@ -617,6 +623,7 @@ def _frame_rows(frame) -> list[dict[str, Any]]:
                 "high": high_val,
                 "low": low_val,
                 "close": close_val,
+                "volume": volume_val,
             }
         )
     return rows
@@ -763,6 +770,16 @@ AGGRESSIVE_MIN_EXTREME_BREAK_PCT = 0.05
 AGGRESSIVE_NEAR_EXTREME_PCT = 0.35
 AGGRESSIVE_MAX_DATA_AGE_MINUTES = 15
 AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT = 0.03
+# Relative weakness/strength vs SPY (2026-07-17 study: SNPS/AA/SBLK/PSKY were
+# the day's clean shorts; all four showed session moves lagging SPY by >=2%
+# while pressing their lows on >=1.0 same-time-of-day relative volume, and the
+# first three flagged during SPY's opening bounce - exactly when a weak name
+# shows its hand by failing to lift).
+RELATIVE_WEAKNESS_FEATURE_VERSION = "relative_weakness_v1"
+RW_MIN_EXCESS_PCT = 2.0  # session move must lag (lead) SPY's by this much
+RW_MIN_SESSION_MOVE_PCT = 1.0  # and the name itself must be truly moving
+RW_NEAR_EXTREME_PCT = 1.0  # pressing: close within 1% of completed LOD/HOD
+RW_MIN_SESSION_RVOL = 1.0  # trader's TC2000 bar: over 1.00 = real participation
 # Quality bar (2026-07-16, trader directive): the auto slice takes what meets
 # the criteria well - it does not fill toward the cap. Score = |ADR move| +
 # fraction of the day spent at the extreme, so 1.25 means e.g. a 1.25-ADR
@@ -926,6 +943,8 @@ def _intraday_extreme_metrics(
             "last_complete": None,
             "completed_day_high": None,
             "completed_day_low": None,
+            "completed_session_open": None,
+            "completed_move_pct": None,
             "completed_time_at_high_frac": 0.0,
             "completed_time_at_low_frac": 0.0,
             "recent_new_highs": 0,
@@ -966,7 +985,10 @@ def _intraday_extreme_metrics(
             }
             for row in session_rows
         ]
+        session_open = float(session_rows[0].get("open", session_rows[0]["close"]))
     except (KeyError, TypeError, ValueError):
+        return empty_metrics("invalid_completed_bars")
+    if not math.isfinite(session_open) or session_open <= 0:
         return empty_metrics("invalid_completed_bars")
     if any(
         not all(math.isfinite(value) for value in row.values()) or row["low"] > row["high"]
@@ -1022,6 +1044,8 @@ def _intraday_extreme_metrics(
         "last_complete": last_complete,
         "completed_day_high": day_high,
         "completed_day_low": day_low,
+        "completed_session_open": session_open,
+        "completed_move_pct": (last_complete - session_open) / session_open * 100.0,
         "completed_time_at_high_frac": at_high / len(numeric_rows),
         "completed_time_at_low_frac": at_low / len(numeric_rows),
         "recent_new_highs": sum(new_high_flags[-window:]),
@@ -1245,6 +1269,269 @@ def build_aggressive_regime_candidates(
     return {"longs": longs, "shorts": shorts}
 
 
+def _is_directional_env(env_key: Any) -> bool:
+    return str(env_key or "").strip().lower().startswith(("bearish", "bullish"))
+
+
+def resolve_discovery_env(current_env: str, opening_env: str | None) -> str:
+    """The env label discovery should hunt with: current while directional,
+    else the day's opening read.
+
+    2026-07-17: the tape opened bearish_strong and decayed to bearish_weak
+    then neutral by mid-morning - and the decayed label switched aggressive
+    discovery off exactly while SNPS/AA/SBLK/PSKY kept bleeding. A day that
+    OPENED directional keeps that bias for discovery purposes; a genuine
+    reversal still wins because the current read is directional again.
+    """
+    current = str(current_env or "").strip().lower()
+    if _is_directional_env(current):
+        return current
+    opening = str(opening_env or "").strip().lower()
+    if _is_directional_env(opening):
+        return opening
+    return current
+
+
+def record_opening_environment(
+    env_key: str,
+    *,
+    path: Path | None = None,
+    now: datetime | None = None,
+) -> str:
+    """Persist the day's first directional regime read; returns today's anchor.
+
+    First directional write wins for the day: once the open is classified
+    bearish/bullish, later decay to neutral cannot erase it. Returns "" until
+    a directional read arrives.
+    """
+    if path is None:
+        from project_paths import AUTO_OPENING_ENV_FILE
+
+        path = AUTO_OPENING_ENV_FILE
+    today_iso = (now or datetime.now()).date().isoformat()
+    env = str(env_key or "").strip().lower()
+    with _AUTO_POPULATE_LOCK:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("date") == today_iso and _is_directional_env(payload.get("env")):
+            return str(payload["env"])
+        if not _is_directional_env(env):
+            return ""
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(
+                json.dumps(
+                    {
+                        "date": today_iso,
+                        "env": env,
+                        "recorded_at": (now or datetime.now()).isoformat(timespec="seconds"),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return env
+
+
+def load_opening_environment(
+    *,
+    path: Path | None = None,
+    now: datetime | None = None,
+) -> str:
+    """Today's recorded opening env, or "" when none was recorded."""
+    if path is None:
+        from project_paths import AUTO_OPENING_ENV_FILE
+
+        path = AUTO_OPENING_ENV_FILE
+    today_iso = (now or datetime.now()).date().isoformat()
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
+    except Exception:
+        return ""
+    if isinstance(payload, dict) and payload.get("date") == today_iso and _is_directional_env(payload.get("env")):
+        return str(payload["env"])
+    return ""
+
+
+def fetch_session_rvol(
+    symbols: Iterable[str],
+    *,
+    downloader: Callable[..., Any] | None = None,
+    chunk_size: int = AUTOPILOT_OPEN_SCAN_CHUNK_SIZE,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, float]:
+    """{symbol: session rvol} on the trader's TC2000 same-time-of-day basis.
+
+    Needs ~15 prior sessions of 5m volume, so it is fetched only for the
+    handful of names that already passed the RW/RS price gates - never for
+    the whole universe pool.
+    """
+    from rvol import session_rvol, split_sessions
+
+    downloader = downloader or _default_downloader
+    pool: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            pool.append(symbol)
+    readings: dict[str, float] = {}
+    chunk_size = max(1, int(chunk_size))
+    for start in range(0, len(pool), chunk_size):
+        chunk = pool[start : start + chunk_size]
+        try:
+            data = downloader(chunk, period="1mo", interval="5m")
+        except Exception as exc:
+            if log:
+                log(f"RVOL chunk failed ({chunk[0]}..{chunk[-1]}): {exc}")
+            continue
+        for symbol in chunk:
+            try:
+                frame = data[symbol] if len(chunk) > 1 else data
+            except Exception:
+                frame = None
+            rows = _frame_rows(frame)
+            sessions = split_sessions(
+                (row["dt"].date(), row.get("volume", 0.0))
+                for row in rows
+                if isinstance(row.get("dt"), datetime)
+            )
+            if len(sessions) < 2:
+                continue
+            value = session_rvol(sessions[-1], sessions[:-1])
+            if value is not None:
+                readings[symbol] = value
+    return readings
+
+
+def build_relative_weakness_candidates(
+    profiles: Mapping[str, Mapping[str, Any]],
+    anchor_env: str,
+    *,
+    rvol_by_symbol: Mapping[str, float] | None = None,
+    min_excess_pct: float = RW_MIN_EXCESS_PCT,
+    min_session_move_pct: float = RW_MIN_SESSION_MOVE_PCT,
+    near_extreme_pct: float = RW_NEAR_EXTREME_PCT,
+    min_session_rvol: float = RW_MIN_SESSION_RVOL,
+) -> dict[str, list[dict[str, Any]]]:
+    """RS/RW discovery keyed to the day's directional anchor (2026-07-17).
+
+    Bearish anchor -> shorts: names moving down harder than SPY on the
+    session, still pressing their lows (near completed LOD or printing fresh
+    ones), on elevated same-time-of-day volume. A weak name that cannot lift
+    while SPY bounces is exactly this signature - the excess-vs-SPY gate
+    fires hardest during SPY strength. Bullish anchor mirrors to longs.
+
+    Two-phase by design: ``rvol_by_symbol=None`` returns the price-qualified
+    pre-candidates (the list worth spending an RVOL fetch on); passing the
+    fetched readings applies the trader's >=1.00 participation gate, and a
+    name without a computable reading does not qualify.
+    """
+    env = str(anchor_env or "").strip().lower()
+    if not _is_directional_env(env):
+        return {"longs": [], "shorts": []}
+    spy = profiles.get("SPY") or {}
+    spy_move = spy.get("completed_move_pct")
+    if str(spy.get("data_health") or "") != "ok" or spy_move is None:
+        return {"longs": [], "shorts": []}
+    spy_move = float(spy_move)
+    bearish = env.startswith("bearish")
+
+    rows: list[dict[str, Any]] = []
+    for symbol, profile in profiles.items():
+        sym = str(symbol or "").strip().upper()
+        if not sym or sym == "SPY" or str(profile.get("data_health") or "") != "ok":
+            continue
+        move = profile.get("completed_move_pct")
+        if move is None:
+            continue
+        try:
+            move = float(move)
+            last = float(profile["last_complete"])
+            day_high = float(profile["completed_day_high"])
+            day_low = float(profile["completed_day_low"])
+            new_highs = int(profile.get("recent_new_highs") or 0)
+            new_lows = int(profile.get("recent_new_lows") or 0)
+            at_high = float(profile.get("completed_time_at_high_frac") or 0.0)
+            at_low = float(profile.get("completed_time_at_low_frac") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            not all(math.isfinite(value) for value in (move, last, day_high, day_low))
+            or last <= 0
+            or day_high <= 0
+            or day_low <= 0
+            or not day_low <= last <= day_high
+            or not profile.get("as_of")
+        ):
+            continue
+        excess = move - spy_move
+        if bearish:
+            pressing = (
+                max(0.0, (last - day_low) / last * 100.0) <= near_extreme_pct or new_lows >= 1
+            )
+            qualifies = (
+                move <= -float(min_session_move_pct)
+                and excess <= -float(min_excess_pct)
+                and pressing
+            )
+            extreme_frac = at_low
+            rule = "relative_weakness"
+            label = "RW"
+        else:
+            pressing = (
+                max(0.0, (day_high - last) / day_high * 100.0) <= near_extreme_pct or new_highs >= 1
+            )
+            qualifies = (
+                move >= float(min_session_move_pct)
+                and excess >= float(min_excess_pct)
+                and pressing
+            )
+            extreme_frac = at_high
+            rule = "relative_strength"
+            label = "RS"
+        if not qualifies:
+            continue
+        rvol_text = ""
+        rvol_bonus = 0.0
+        if rvol_by_symbol is not None:
+            rvol = rvol_by_symbol.get(sym)
+            if rvol is None or float(rvol) < float(min_session_rvol):
+                continue
+            rvol = float(rvol)
+            rvol_bonus = min(max(rvol - 1.0, 0.0), 1.5)
+            rvol_text = f", rvol {rvol:.2f}"
+        score = 2.0 + min(abs(excess), 6.0) / 2.0 + extreme_frac + rvol_bonus
+        as_of = str(profile.get("as_of") or "")
+        rows.append(
+            {
+                "symbol": sym,
+                "score": score,
+                "reason": (
+                    f"{label} vs SPY: {excess:+.1f}% excess "
+                    f"({move:+.1f}% session vs SPY {spy_move:+.1f}%){rvol_text}; "
+                    f"{RELATIVE_WEAKNESS_FEATURE_VERSION}; as of {as_of}"
+                ),
+                "source_rule": rule,
+                "feature_version": RELATIVE_WEAKNESS_FEATURE_VERSION,
+                "excess_pct": excess,
+                "as_of": as_of,
+                "data_age_minutes": profile.get("data_age_minutes"),
+                "data_health": "ok",
+            }
+        )
+
+    rows.sort(key=lambda row: (-row["score"], row["symbol"]))
+    if bearish:
+        return {"longs": [], "shorts": rows}
+    return {"longs": rows, "shorts": []}
+
+
 def merge_auto_populate_candidates(
     *candidate_sets: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -1394,6 +1681,7 @@ def apply_auto_populated_watchlists(
 def refresh_auto_populated_watchlists(
     env_key: str,
     *,
+    opening_env_key: str | None = None,
     downloader: Callable[..., Any] | None = None,
     spy_pullback_active: bool = False,
     preserve_existing_auto: bool = False,
@@ -1408,19 +1696,33 @@ def refresh_auto_populated_watchlists(
         return None
     moment = now or datetime.now()
     daily_context = load_daily_context(pool, reference_date=moment.date())
-    profiles = fetch_intraday_profiles(pool, downloader=downloader, now=moment, log=log)
+    # SPY rides along for the RW/RS excess baseline (builders never emit it).
+    profile_pool = pool if "SPY" in pool else ["SPY", *pool]
+    profiles = fetch_intraday_profiles(profile_pool, downloader=downloader, now=moment, log=log)
     if not profiles:
         if log:
             log("Auto-populate skipped: no intraday profiles fetched.")
         return None
+    discovery_env = resolve_discovery_env(env_key, opening_env_key)
     aggressive = build_aggressive_regime_candidates(
         profiles,
-        env_key,
+        discovery_env,
         spy_pullback_active=spy_pullback_active,
     )
+    rw_pre = build_relative_weakness_candidates(profiles, discovery_env)
+    relative = {"longs": [], "shorts": []}
+    pre_symbols = [row["symbol"] for side in ("longs", "shorts") for row in rw_pre[side]]
+    if pre_symbols:
+        rvol_readings = fetch_session_rvol(pre_symbols, downloader=downloader, log=log)
+        relative = build_relative_weakness_candidates(
+            profiles,
+            discovery_env,
+            rvol_by_symbol=rvol_readings,
+        )
     candidates = merge_auto_populate_candidates(
         build_adr_breakout_candidates(profiles, daily_context),
         aggressive,
+        relative,
     )
     summary = apply_auto_populated_watchlists(
         candidates,
@@ -1429,12 +1731,19 @@ def refresh_auto_populated_watchlists(
         preserve_existing_auto=preserve_existing_auto,
     )
     summary["scanned"] = len(profiles)
+    summary["discovery_env"] = discovery_env
     summary["candidates"] = {"longs": len(candidates["longs"]), "shorts": len(candidates["shorts"])}
     summary["aggressive_candidates"] = {
         "longs": len(aggressive["longs"]),
         "shorts": len(aggressive["shorts"]),
         "spy_pullback_active": bool(spy_pullback_active),
         "feature_version": AGGRESSIVE_EXTREME_FEATURE_VERSION,
+    }
+    summary["relative_candidates"] = {
+        "longs": len(relative["longs"]),
+        "shorts": len(relative["shorts"]),
+        "pre_rvol": len(pre_symbols),
+        "feature_version": RELATIVE_WEAKNESS_FEATURE_VERSION,
     }
     return summary
 

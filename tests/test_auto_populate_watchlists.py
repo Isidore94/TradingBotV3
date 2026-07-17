@@ -378,3 +378,241 @@ def test_pullback_refresh_appends_without_early_auto_rotation(tmp_path, monkeypa
     assert event["long"]["rotated_out"] == []
     assert event["long"]["added"] == ["NEW"]
     assert event["preserved_existing_auto"] is True
+
+
+# ---------------------------------------------------------------------------
+# Relative weakness/strength discovery (2026-07-17: SNPS/AA/SBLK/PSKY study)
+# ---------------------------------------------------------------------------
+def _rw_profile(
+    move_pct,
+    *,
+    low_distance_pct=5.0,
+    high_distance_pct=5.0,
+    new_lows=0,
+    new_highs=0,
+    at_low=0.0,
+    at_high=0.0,
+):
+    """A healthy completed-bars profile positioned move_pct off a 100.0 open."""
+    last = 100.0 * (1.0 + move_pct / 100.0)
+    day_high = last * (1.0 + high_distance_pct / 100.0)
+    day_low = last * (1.0 - low_distance_pct / 100.0)
+    return {
+        "last": last,
+        "last_complete": last,
+        "completed_day_high": max(day_high, last),
+        "completed_day_low": min(day_low, last),
+        "completed_session_open": 100.0,
+        "completed_move_pct": move_pct,
+        "completed_time_at_high_frac": at_high,
+        "completed_time_at_low_frac": at_low,
+        "recent_new_highs": new_highs,
+        "recent_new_lows": new_lows,
+        "recent_window_bars": 6,
+        "completed_bar_count": 12,
+        "as_of": "2026-07-17T10:00:00",
+        "data_age_minutes": 3.0,
+        "data_health": "ok",
+    }
+
+
+def test_resolve_discovery_env_prefers_current_then_opening():
+    from autopilot_core import resolve_discovery_env
+
+    assert resolve_discovery_env("bearish_weak", "bearish_strong") == "bearish_weak"
+    assert resolve_discovery_env("neutral_chop", "bearish_strong") == "bearish_strong"
+    assert resolve_discovery_env("neutral_chop", "") == "neutral_chop"
+    assert resolve_discovery_env("", None) == ""
+    # A genuine reversal wins over the opening anchor.
+    assert resolve_discovery_env("bullish_strong", "bearish_strong") == "bullish_strong"
+
+
+def test_opening_environment_first_directional_read_sticks(tmp_path):
+    from datetime import datetime as dt
+
+    from autopilot_core import load_opening_environment, record_opening_environment
+
+    path = tmp_path / "opening_env.json"
+    morning = dt(2026, 7, 17, 7, 5)
+
+    assert record_opening_environment("neutral_chop", path=path, now=morning) == ""
+    assert load_opening_environment(path=path, now=morning) == ""
+    assert record_opening_environment("bearish_strong", path=path, now=morning) == "bearish_strong"
+    # Decay to neutral cannot erase the opening read...
+    later = dt(2026, 7, 17, 11, 30)
+    assert record_opening_environment("neutral_chop", path=path, now=later) == "bearish_strong"
+    # ...nor can a later directional flip rewrite it (first write wins today).
+    assert record_opening_environment("bullish_weak", path=path, now=later) == "bearish_strong"
+    assert load_opening_environment(path=path, now=later) == "bearish_strong"
+    # A new day starts clean.
+    next_day = dt(2026, 7, 20, 7, 5)
+    assert load_opening_environment(path=path, now=next_day) == ""
+    assert record_opening_environment("bullish_strong", path=path, now=next_day) == "bullish_strong"
+
+
+def test_relative_weakness_pre_candidates_bearish_anchor():
+    from autopilot_core import build_relative_weakness_candidates
+
+    profiles = {
+        "SPY": _rw_profile(-0.5, low_distance_pct=0.4),
+        # Way weaker than SPY, pressing its lows: the SNPS signature.
+        "WEAK": _rw_profile(-3.5, low_distance_pct=0.2, new_lows=2, at_low=0.4),
+        # Weaker than SPY but lifted off the lows with no fresh ones: skip.
+        "LIFTED": _rw_profile(-3.5, low_distance_pct=2.5, new_lows=0),
+        # Down, but only in line with SPY (excess under the bar): skip.
+        "INLINE": _rw_profile(-1.8, low_distance_pct=0.1, new_lows=1),
+        # Grinding new lows mid-day even while off the LOD by >1%: the AA case.
+        "GRIND": _rw_profile(-2.9, low_distance_pct=1.4, new_lows=1, at_low=0.2),
+        # Sick data never qualifies.
+        "STALE": {**_rw_profile(-5.0, low_distance_pct=0.1, new_lows=3), "data_health": "stale"},
+    }
+
+    result = build_relative_weakness_candidates(profiles, "bearish_strong")
+
+    assert result["longs"] == []
+    short_symbols = [row["symbol"] for row in result["shorts"]]
+    assert short_symbols == ["WEAK", "GRIND"]
+    top = result["shorts"][0]
+    assert top["source_rule"] == "relative_weakness"
+    assert "RW vs SPY: -3.0% excess" in top["reason"]
+    assert "rvol" not in top["reason"]  # pre-candidates carry no rvol claim
+
+
+def test_relative_weakness_rvol_gate_and_scoring():
+    from autopilot_core import build_relative_weakness_candidates
+
+    profiles = {
+        "SPY": _rw_profile(-0.5, low_distance_pct=0.4),
+        "WEAK": _rw_profile(-3.5, low_distance_pct=0.2, new_lows=2, at_low=0.4),
+        "THIN": _rw_profile(-4.5, low_distance_pct=0.2, new_lows=2),
+    }
+
+    gated = build_relative_weakness_candidates(
+        profiles,
+        "bearish_weak",
+        rvol_by_symbol={"WEAK": 1.4, "THIN": 0.6},
+    )
+    symbols = [row["symbol"] for row in gated["shorts"]]
+    assert symbols == ["WEAK"]  # THIN fails the >=1.00 rvol bar
+    assert "rvol 1.40" in gated["shorts"][0]["reason"]
+
+    # A name with no computable reading does not qualify either.
+    missing = build_relative_weakness_candidates(
+        profiles,
+        "bearish_weak",
+        rvol_by_symbol={"THIN": 0.6},
+    )
+    assert missing["shorts"] == []
+
+    # Higher rvol sweetens the score (capped), never the other way round.
+    hotter = build_relative_weakness_candidates(
+        profiles, "bearish_weak", rvol_by_symbol={"WEAK": 4.4}
+    )
+    cooler = build_relative_weakness_candidates(
+        profiles, "bearish_weak", rvol_by_symbol={"WEAK": 1.1}
+    )
+    assert hotter["shorts"][0]["score"] > cooler["shorts"][0]["score"]
+    assert hotter["shorts"][0]["score"] - cooler["shorts"][0]["score"] <= 1.5
+
+
+def test_relative_strength_mirrors_on_bullish_anchor():
+    from autopilot_core import build_relative_weakness_candidates
+
+    profiles = {
+        "SPY": _rw_profile(0.4, high_distance_pct=0.3),
+        "STRONG": _rw_profile(3.1, high_distance_pct=0.2, new_highs=2, at_high=0.5),
+        "WEAKISH": _rw_profile(-2.8, low_distance_pct=0.2, new_lows=2),
+    }
+
+    result = build_relative_weakness_candidates(profiles, "bullish_strong")
+    assert [row["symbol"] for row in result["longs"]] == ["STRONG"]
+    assert result["shorts"] == []  # one-sided by anchor: no RW shorts on bullish days
+    assert result["longs"][0]["source_rule"] == "relative_strength"
+    assert "RS vs SPY: +2.7% excess" in result["longs"][0]["reason"]
+
+
+def test_relative_weakness_needs_directional_anchor_and_healthy_spy():
+    from autopilot_core import build_relative_weakness_candidates
+
+    weak_only = {"WEAK": _rw_profile(-3.5, low_distance_pct=0.2, new_lows=2)}
+    with_spy = {"SPY": _rw_profile(-0.5, low_distance_pct=0.4), **weak_only}
+
+    assert build_relative_weakness_candidates(with_spy, "neutral_chop") == {"longs": [], "shorts": []}
+    assert build_relative_weakness_candidates(weak_only, "bearish_strong") == {"longs": [], "shorts": []}
+    sick_spy = {**with_spy, "SPY": {**with_spy["SPY"], "data_health": "stale"}}
+    assert build_relative_weakness_candidates(sick_spy, "bearish_strong") == {"longs": [], "shorts": []}
+
+
+def test_fetch_session_rvol_uses_same_slot_baseline():
+    import pandas as pd
+
+    from autopilot_core import fetch_session_rvol
+
+    stamps = []
+    volumes = []
+    for day in range(1, 8):  # 6 prior sessions + today
+        for bar in range(3):
+            stamps.append(pd.Timestamp(2026, 7, 6 + day, 9, 30) + pd.Timedelta(minutes=5 * bar))
+            volumes.append(100.0 if day < 7 else 250.0)
+    frame = pd.DataFrame(
+        {
+            "Open": 10.0,
+            "High": 10.1,
+            "Low": 9.9,
+            "Close": 10.0,
+            "Volume": volumes,
+        },
+        index=pd.DatetimeIndex(stamps),
+    )
+
+    def downloader(symbols, *, period, interval):
+        assert period == "1mo" and interval == "5m"
+        assert symbols == ["WEAK"]
+        return frame
+
+    readings = fetch_session_rvol(["WEAK", "weak", ""], downloader=downloader)
+    assert readings == {"WEAK": 2.5}
+
+
+def test_refresh_pipeline_folds_rw_candidates_and_anchor(monkeypatch):
+    import autopilot_core as core
+
+    profiles = {
+        "SPY": _rw_profile(-0.5, low_distance_pct=0.4),
+        "WEAK": _rw_profile(-3.5, low_distance_pct=0.2, new_lows=2, at_low=0.4),
+    }
+    captured = {}
+
+    def fake_profiles(pool, **kwargs):
+        captured["profile_pool"] = list(pool)
+        return profiles
+
+    def fake_rvol(symbols, **kwargs):
+        captured["rvol_symbols"] = list(symbols)
+        return {"WEAK": 1.4}
+
+    def fake_apply(candidates, env_key, **kwargs):
+        captured["candidates"] = candidates
+        captured["env_key"] = env_key
+        return {}
+
+    monkeypatch.setattr(core, "load_universe_pool", lambda: ["WEAK"])
+    monkeypatch.setattr(core, "load_daily_context", lambda pool, **kwargs: {})
+    monkeypatch.setattr(core, "fetch_intraday_profiles", fake_profiles)
+    monkeypatch.setattr(core, "fetch_session_rvol", fake_rvol)
+    monkeypatch.setattr(core, "apply_auto_populated_watchlists", fake_apply)
+
+    summary = core.refresh_auto_populated_watchlists(
+        "neutral_chop",
+        opening_env_key="bearish_strong",
+    )
+
+    assert captured["profile_pool"][0] == "SPY"
+    assert captured["rvol_symbols"] == ["WEAK"]
+    assert [row["symbol"] for row in captured["candidates"]["shorts"]] == ["WEAK"]
+    assert "rvol 1.40" in captured["candidates"]["shorts"][0]["reason"]
+    # File rotation still runs under the LIVE env; the anchor drives discovery.
+    assert captured["env_key"] == "neutral_chop"
+    assert summary["discovery_env"] == "bearish_strong"
+    assert summary["relative_candidates"]["shorts"] == 1
+    assert summary["relative_candidates"]["feature_version"] == "relative_weakness_v1"

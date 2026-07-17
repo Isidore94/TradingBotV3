@@ -9506,6 +9506,8 @@ class BounceBot(EWrapper, EClient):
             AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT,
             AUTO_POPULATE_REFRESH_MINUTES,
             minutes_since_open,
+            record_opening_environment,
+            resolve_discovery_env,
         )
 
         now = time.time()
@@ -9517,12 +9519,21 @@ class BounceBot(EWrapper, EClient):
         if since_open is None or since_open < 30 or since_open > 390:
             return
         env = self.get_market_environment()
+        # A day that OPENED directional keeps that bias for discovery even
+        # after the live label decays to neutral (2026-07-17 directive: the
+        # bearish_strong open is why RW shorts stay interesting all session).
+        try:
+            opening_env = record_opening_environment(env)
+        except Exception:
+            logging.debug("Opening-environment record failed.", exc_info=True)
+            opening_env = ""
+        discovery_env = resolve_discovery_env(env, opening_env)
         spy_pullback_active = False
         pullback_key = ""
-        if str(env).startswith(("bullish", "bearish")):
+        if str(discovery_env).startswith(("bullish", "bearish")):
             try:
                 spy_today, _prev_close = self._spy_session_bars(cached_only=True)
-                trend_side = "short" if str(env).startswith("bearish") else "long"
+                trend_side = "short" if str(discovery_env).startswith("bearish") else "long"
                 pause_start = (
                     self._detect_spy_pause_start(spy_today, trend_side) if spy_today else None
                 )
@@ -9563,6 +9574,7 @@ class BounceBot(EWrapper, EClient):
 
                 summary = refresh_auto_populated_watchlists(
                     env,
+                    opening_env_key=opening_env,
                     spy_pullback_active=spy_pullback_active,
                     preserve_existing_auto=new_pullback,
                     log=logging.info,
@@ -9570,8 +9582,11 @@ class BounceBot(EWrapper, EClient):
                 if summary and self.gui_callback:
                     long_info = summary.get("long", {})
                     short_info = summary.get("short", {})
+                    env_label = str(summary.get("discovery_env") or env)
+                    if env_label != str(env):
+                        env_label = f"{env_label} anchor, live {env}"
                     self.gui_callback(
-                        f"AUTO WATCHLIST ({env}): longs {long_info.get('total_auto', 0)} auto "
+                        f"AUTO WATCHLIST ({env_label}): longs {long_info.get('total_auto', 0)} auto "
                         f"(+{len(long_info.get('added', []))}/-{len(long_info.get('rotated_out', []))}), "
                         f"shorts {short_info.get('total_auto', 0)} auto "
                         f"(+{len(short_info.get('added', []))}/-{len(short_info.get('rotated_out', []))}) "
