@@ -2127,6 +2127,56 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn("AMD    SHORT close_confirmed score=121.5", report)
         self.assertIn("ADBE   SHORT watch score=118.0 | pre-earnings AVWAPE rejection", report)
 
+    def test_market_prep_band_zone_sections_are_universe_wide_and_rs_sorted(self):
+        # Longs are ordered strongest-RS first; shorts weakest-first (relative
+        # weakness). Every band-zone list covers the whole scanned universe (both
+        # long and short ladders) and each side's new 1st-2nd and 2nd-3rd sections
+        # are present.
+        universe_strength_rows = [
+            {"symbol": sym, "daily_relative_strength_score": score}
+            for sym, score in {
+                "HIRS": 5.0,
+                "MIDRS": 2.0,
+                "LOWRS": -1.0,
+                "WEAK": -4.0,
+                "MILD": -1.0,
+                "STRONGISH": 2.0,
+                "L12A": 3.0,
+                "L12B": 1.0,
+                "S12A": -2.0,
+                "S12B": -5.0,
+                "L23": 4.0,
+                "S23": -3.0,
+            }.items()
+        ]
+        payload = build_market_prep_payload(
+            range_buckets={
+                "long_avwap_to_upper_1": ["LOWRS", "HIRS", "MIDRS"],
+                "short_avwap_to_lower_1": ["MILD", "WEAK", "STRONGISH"],
+                "long_upper_1_to_upper_2": ["L12B", "L12A"],
+                "short_lower_1_to_lower_2": ["S12A", "S12B"],
+            },
+            market_prep_range_buckets={
+                "long_upper_2_to_upper_3_2_sessions": ["L23"],
+                "short_lower_2_to_lower_3_2_sessions": ["S23"],
+            },
+            universe_strength_rows=universe_strength_rows,
+            reference_date=date(2026, 4, 24),
+            previous_session_date=date(2026, 4, 23),
+        )
+
+        sections = {section["id"]: section for section in payload["sections"]}
+
+        # Longs: strongest RS first.
+        self.assertEqual(sections["long_avwape_to_1stdev"]["copy_text"], "HIRS, MIDRS, LOWRS")
+        self.assertEqual(sections["long_avwape_to_1stdev"]["symbols"], ["HIRS", "MIDRS", "LOWRS"])
+        self.assertEqual(sections["long_1st_to_2nd_stdev"]["copy_text"], "L12A, L12B")
+        self.assertEqual(sections["long_2nd_to_3rd_stdev_2_sessions"]["copy_text"], "L23")
+        # Shorts: weakest (most negative RS) first.
+        self.assertEqual(sections["short_avwape_to_1stdev"]["copy_text"], "WEAK, MILD, STRONGISH")
+        self.assertEqual(sections["short_1st_to_2nd_stdev"]["copy_text"], "S12B, S12A")
+        self.assertEqual(sections["short_2nd_to_3rd_stdev_2_sessions"]["copy_text"], "S23")
+
     def test_market_prep_payload_builds_strength_and_weakness_deciles(self):
         symbols = [
             "AAA",

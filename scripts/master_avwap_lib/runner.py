@@ -481,6 +481,7 @@ def _run_master_impl(
     }
     market_prep_range_buckets = {
         "long_upper_2_to_upper_3_2_sessions": [],
+        "short_lower_2_to_lower_3_2_sessions": [],
     }
     stdev_range_hits = {"long": [], "short": []}
     stdev_cross_hits = {"long": [], "short": []}
@@ -934,22 +935,33 @@ def _run_master_impl(
             low, high = sorted([level_a, level_b])
             return low <= last_close <= high
 
-        if side == "LONG":
-            if _between(current_vwap, current_upper_1):
-                range_buckets["long_avwap_to_upper_1"].append(sym)
-            if _between(current_upper_1, current_upper_2):
-                range_buckets["long_upper_1_to_upper_2"].append(sym)
-            if (
-                current_upper_2 is not None
-                and current_upper_3 is not None
-                and closes_between_bands(df, current_upper_2, current_upper_3, 2)
-            ):
-                market_prep_range_buckets["long_upper_2_to_upper_3_2_sessions"].append(sym)
-        else:
-            if _between(current_lower_1, current_vwap):
-                range_buckets["short_avwap_to_lower_1"].append(sym)
-            if _between(current_lower_2, current_lower_1):
-                range_buckets["short_lower_1_to_lower_2"].append(sym)
+        # Market-prep band-zone classification is side-INDEPENDENT: a name lands in
+        # the long ladder when it trades above AVWAPE and in the short ladder when
+        # below, regardless of which watchlist (longs.txt / shorts.txt / universe
+        # files) it arrived on. This lets the whole scanned universe populate the
+        # prep lists instead of only each symbol's declared side. The per-symbol
+        # `side` variable and `favorite_zone` below stay untouched (they drive the
+        # setup detection and must remain side-specific).
+        if _between(current_vwap, current_upper_1):
+            range_buckets["long_avwap_to_upper_1"].append(sym)
+        if _between(current_upper_1, current_upper_2):
+            range_buckets["long_upper_1_to_upper_2"].append(sym)
+        if (
+            current_upper_2 is not None
+            and current_upper_3 is not None
+            and closes_between_bands(df, current_upper_2, current_upper_3, 2)
+        ):
+            market_prep_range_buckets["long_upper_2_to_upper_3_2_sessions"].append(sym)
+        if _between(current_lower_1, current_vwap):
+            range_buckets["short_avwap_to_lower_1"].append(sym)
+        if _between(current_lower_2, current_lower_1):
+            range_buckets["short_lower_1_to_lower_2"].append(sym)
+        if (
+            current_lower_2 is not None
+            and current_lower_3 is not None
+            and closes_between_bands(df, current_lower_3, current_lower_2, 2)
+        ):
+            market_prep_range_buckets["short_lower_2_to_lower_3_2_sessions"].append(sym)
 
         favorite_zone = None
         if side == "LONG" and _between(current_vwap, current_upper_1):

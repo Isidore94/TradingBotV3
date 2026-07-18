@@ -943,9 +943,27 @@ MARKET_PREP_SECTION_DEFINITIONS = [
         "empty_message": "None",
     },
     {
+        "id": "long_1st_to_2nd_stdev",
+        "title": "Longs: 1st to 2nd Dev",
+        "copy_label": "Copy Longs 1-2",
+        "empty_message": "None",
+    },
+    {
+        "id": "short_1st_to_2nd_stdev",
+        "title": "Shorts: 1st to 2nd Dev",
+        "copy_label": "Copy Shorts 1-2",
+        "empty_message": "None",
+    },
+    {
         "id": "long_2nd_to_3rd_stdev_2_sessions",
         "title": "Longs: 2nd to 3rd Dev, 2+ Sessions",
-        "copy_label": "Copy 2nd-3rd",
+        "copy_label": "Copy Longs 2-3",
+        "empty_message": "None",
+    },
+    {
+        "id": "short_2nd_to_3rd_stdev_2_sessions",
+        "title": "Shorts: 2nd to 3rd Dev, 2+ Sessions",
+        "copy_label": "Copy Shorts 2-3",
         "empty_message": "None",
     },
 ]
@@ -21521,10 +21539,17 @@ def _build_market_prep_section(
     symbols,
     details: list[str] | None = None,
     note: str = "",
+    preserve_order: bool = False,
 ) -> dict:
     definition = MARKET_PREP_SECTION_BY_ID.get(section_id, {})
     clean_symbols = _ordered_unique_symbols(symbols)
-    copy_text = _format_symbols_for_tc2000(clean_symbols)
+    # Band-zone lists arrive pre-ranked by RS/RW; keep that order in the copy text
+    # so the panel shows the strongest/weakest first. Other lists paste into TC2000
+    # where order is irrelevant, so they stay alphabetical.
+    if preserve_order:
+        copy_text = ", ".join(clean_symbols) if clean_symbols else "None"
+    else:
+        copy_text = _format_symbols_for_tc2000(clean_symbols)
     return {
         "id": section_id,
         "title": definition.get("title", section_id),
@@ -29959,6 +29984,46 @@ def write_master_avwap_focus_feed(
     }
     save_json(path, payload)
 
+def _market_prep_strength_lookup(strength_rows) -> dict[str, float]:
+    """Symbol -> D1 relative-strength score, for ordering the band-zone lists.
+
+    The RS score is side-independent (see ``build_universe_strength_rows``); longs
+    are ranked strongest-first and shorts weakest-first (relative weakness) off the
+    same number.
+    """
+    lookup: dict[str, float] = {}
+    for row in strength_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        score = _coerce_float(row.get("daily_relative_strength_score"))
+        if symbol and score is not None:
+            lookup[symbol] = score
+    return lookup
+
+
+def _sort_symbols_by_strength(symbols, rs_lookup, *, side: str) -> list[str]:
+    """Order a band-zone symbol list by relative strength.
+
+    Longs sort strongest-RS first; shorts sort weakest-first (relative weakness).
+    Names without an RS score fall to the bottom, then alphabetical for stability.
+    """
+    is_short = str(side or "").strip().upper() == "SHORT"
+    rs_lookup = rs_lookup if isinstance(rs_lookup, dict) else {}
+
+    def sort_key(symbol: str):
+        clean = str(symbol or "").strip().upper()
+        score = rs_lookup.get(clean)
+        has_score = score is not None
+        ordered = (score if is_short else -score) if has_score else 0.0
+        return (not has_score, ordered, clean)
+
+    return sorted(
+        (str(symbol).strip().upper() for symbol in symbols or [] if str(symbol).strip()),
+        key=sort_key,
+    )
+
+
 def build_market_prep_payload(
     *,
     range_buckets: dict | None = None,
@@ -30065,6 +30130,33 @@ def build_market_prep_payload(
         f"({len(weakest_rows)} of {strength_universe_count} symbols with RS data)."
     )
 
+    # Band-zone lists cover the whole scanned universe (both sides, classified by
+    # where each name trades vs its current anchor). Order them by relative
+    # strength: longs strongest-first, shorts weakest-first (relative weakness).
+    strength_lookup = _market_prep_strength_lookup(strength_source_rows)
+    long_avwape_1st = _sort_symbols_by_strength(
+        range_buckets.get("long_avwap_to_upper_1", []), strength_lookup, side="LONG"
+    )
+    short_avwape_1st = _sort_symbols_by_strength(
+        range_buckets.get("short_avwap_to_lower_1", []), strength_lookup, side="SHORT"
+    )
+    long_1st_2nd = _sort_symbols_by_strength(
+        range_buckets.get("long_upper_1_to_upper_2", []), strength_lookup, side="LONG"
+    )
+    short_1st_2nd = _sort_symbols_by_strength(
+        range_buckets.get("short_lower_1_to_lower_2", []), strength_lookup, side="SHORT"
+    )
+    long_2nd_3rd = _sort_symbols_by_strength(
+        market_prep_range_buckets.get("long_upper_2_to_upper_3_2_sessions", []),
+        strength_lookup,
+        side="LONG",
+    )
+    short_2nd_3rd = _sort_symbols_by_strength(
+        market_prep_range_buckets.get("short_lower_2_to_lower_3_2_sessions", []),
+        strength_lookup,
+        side="SHORT",
+    )
+
     sections = [
         _build_market_prep_section(
             "strongest_stocks_top_decile",
@@ -30098,18 +30190,39 @@ def build_market_prep_payload(
         ),
         _build_market_prep_section(
             "long_avwape_to_1stdev",
-            range_buckets.get("long_avwap_to_upper_1", []),
-            note="Current-anchor longs trading between AVWAPE and UPPER_1.",
+            long_avwape_1st,
+            note="Universe names trading between AVWAPE and UPPER_1 (current anchor), strongest RS first.",
+            preserve_order=True,
         ),
         _build_market_prep_section(
             "short_avwape_to_1stdev",
-            range_buckets.get("short_avwap_to_lower_1", []),
-            note="Current-anchor shorts trading between AVWAPE and LOWER_1.",
+            short_avwape_1st,
+            note="Universe names trading between LOWER_1 and AVWAPE (current anchor), weakest (RW) first.",
+            preserve_order=True,
+        ),
+        _build_market_prep_section(
+            "long_1st_to_2nd_stdev",
+            long_1st_2nd,
+            note="Universe names trading between UPPER_1 and UPPER_2 (current anchor), strongest RS first.",
+            preserve_order=True,
+        ),
+        _build_market_prep_section(
+            "short_1st_to_2nd_stdev",
+            short_1st_2nd,
+            note="Universe names trading between LOWER_2 and LOWER_1 (current anchor), weakest (RW) first.",
+            preserve_order=True,
         ),
         _build_market_prep_section(
             "long_2nd_to_3rd_stdev_2_sessions",
-            market_prep_range_buckets.get("long_upper_2_to_upper_3_2_sessions", []),
-            note="Current-anchor longs with the last two closes between UPPER_2 and UPPER_3.",
+            long_2nd_3rd,
+            note="Universe names with the last two closes between UPPER_2 and UPPER_3, strongest RS first.",
+            preserve_order=True,
+        ),
+        _build_market_prep_section(
+            "short_2nd_to_3rd_stdev_2_sessions",
+            short_2nd_3rd,
+            note="Universe names with the last two closes between LOWER_3 and LOWER_2, weakest (RW) first.",
+            preserve_order=True,
         ),
         _build_market_prep_section(
             "earnings_last_night_or_today",

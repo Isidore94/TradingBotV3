@@ -55,8 +55,23 @@ MARKET_PREP_SECTION_DEFINITIONS = [
         "empty_message": "None",
     },
     {
+        "id": "long_1st_to_2nd_stdev",
+        "title": "Longs: 1st to 2nd Dev",
+        "empty_message": "None",
+    },
+    {
+        "id": "short_1st_to_2nd_stdev",
+        "title": "Shorts: 1st to 2nd Dev",
+        "empty_message": "None",
+    },
+    {
         "id": "long_2nd_to_3rd_stdev_2_sessions",
         "title": "Longs: 2nd to 3rd Dev, 2+ Sessions",
+        "empty_message": "None",
+    },
+    {
+        "id": "short_2nd_to_3rd_stdev_2_sessions",
+        "title": "Shorts: 2nd to 3rd Dev, 2+ Sessions",
         "empty_message": "None",
     },
 ]
