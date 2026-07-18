@@ -50,3 +50,64 @@ class MasterAvwapMiniPCTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupTrackerPurityQuarantineTests(unittest.TestCase):
+    """2026-07-17: 1-2 chronic Yahoo symbols must not veto a whole week of
+    tracker writes; a large non-IB fraction (systemic fallback) still does."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pandas as pd
+
+        from master_avwap_lib import runner
+        from master_avwap_lib.legacy import DAILY_BAR_SOURCE_IBKR, _set_daily_bar_source
+
+        cls.runner = runner
+        cls.pd = pd
+        cls.ib_source = DAILY_BAR_SOURCE_IBKR
+        cls.set_source = staticmethod(_set_daily_bar_source)
+
+    def _frames(self, sources_by_symbol):
+        return {
+            symbol: self.set_source(self.pd.DataFrame({"close": [1.0]}), source)
+            for symbol, source in sources_by_symbol.items()
+        }
+
+    def test_clean_run_passes_with_no_quarantine(self):
+        frames = self._frames({"AAPL": self.ib_source, "MSFT": self.ib_source})
+        allowed, quarantined, reason = self.runner.evaluate_setup_tracker_purity(
+            ["AAPL", "MSFT"], frames
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(quarantined, [])
+        self.assertEqual(reason, "")
+
+    def test_small_dirty_tail_is_quarantined_not_vetoed(self):
+        sources = {f"SYM{i}": self.ib_source for i in range(9)}
+        sources["LC"] = "yahoo"
+        allowed, quarantined, reason = self.runner.evaluate_setup_tracker_purity(
+            list(sources), self._frames(sources)
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(quarantined, ["LC"])
+        self.assertEqual(reason, "")
+
+    def test_systemic_fallback_still_vetoes(self):
+        sources = {"AAPL": "yahoo", "MSFT": "yahoo", "NVDA": self.ib_source}
+        allowed, quarantined, reason = self.runner.evaluate_setup_tracker_purity(
+            list(sources), self._frames(sources)
+        )
+        self.assertFalse(allowed)
+        self.assertEqual(sorted(quarantined), ["AAPL", "MSFT"])
+        self.assertIn("non-IBKR daily data", reason)
+        self.assertIn("AAPL", reason)
+
+    def test_missing_frame_counts_as_dirty(self):
+        sources = {f"SYM{i}": self.ib_source for i in range(9)}
+        frames = self._frames(sources)
+        allowed, quarantined, reason = self.runner.evaluate_setup_tracker_purity(
+            [*sources, "GHOST"], frames
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(quarantined, ["GHOST"])

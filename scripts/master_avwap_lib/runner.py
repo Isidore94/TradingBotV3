@@ -19,6 +19,59 @@ globals().update(
 )
 
 
+# Purity quarantine (2026-07-17): the all-or-nothing non-IBKR veto blacked out
+# every scheduled tracker write for a week because 1-2 chronic symbols (LC;
+# BF.B symbology) always fall back to Yahoo daily bars. A small dirty tail is
+# now QUARANTINED (their rows and frames sit out this write; everyone else
+# refreshes). A large non-IB fraction still vetoes the whole write - that is
+# the systemic-fallback signature (e.g. IB client collision -> wholesale
+# Yahoo) the gate was built to catch.
+TRACKER_PURITY_MAX_QUARANTINE_FRACTION = 0.2
+
+
+def evaluate_setup_tracker_purity(
+    tracked_symbols,
+    daily_frames_by_symbol,
+    *,
+    max_quarantine_fraction=TRACKER_PURITY_MAX_QUARANTINE_FRACTION,
+):
+    """(allowed, quarantined_symbols, skip_reason) for the purity gate.
+
+    allowed=True with a non-empty quarantine list means: write the tracker for
+    the pure symbols and leave the quarantined ones untouched this run.
+    """
+    symbols = sorted(
+        {str(symbol or "").strip().upper() for symbol in tracked_symbols if str(symbol or "").strip()}
+    )
+    non_ib = [
+        symbol
+        for symbol in symbols
+        if _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) != DAILY_BAR_SOURCE_IBKR
+    ]
+    if not non_ib:
+        return True, [], ""
+    sources = sorted(
+        {
+            _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) or "unknown"
+            for symbol in non_ib
+        }
+    )
+    fraction = len(non_ib) / float(len(symbols)) if symbols else 1.0
+    if fraction > float(max_quarantine_fraction):
+        return (
+            False,
+            non_ib,
+            "Setup tracker refresh skipped for this mini-PC run because tracked setups "
+            f"used non-IBKR daily data (symbols={', '.join(non_ib)}; "
+            f"sources={', '.join(sources)}).",
+        )
+    return (
+        True,
+        non_ib,
+        "",
+    )
+
+
 def _log_phase_duration(label: str, since: float) -> float:
     """Log wall-clock seconds elapsed for a run_master phase; returns a fresh mark."""
     now = time.perf_counter()
@@ -1795,6 +1848,9 @@ def _run_master_impl(
     setup_tracker_skip_reason = ""
     run_result["setup_tracker_allowed"] = bool(setup_tracker_allowed)
 
+    tracker_quarantined_symbols: list[str] = []
+    tracker_tracked_rows = tracked_rows
+    tracker_daily_frames = daily_frames_by_symbol
     if setup_tracker_allowed and require_ib_for_setup_tracker:
         if not is_daily_data_client_connected(ib):
             setup_tracker_allowed = False
@@ -1803,33 +1859,35 @@ def _run_master_impl(
                 "client was unavailable."
             )
         else:
-            tracked_symbols = sorted(
-                {
-                    str(row.get("symbol", "")).strip().upper()
-                    for row in tracked_rows
-                    if str(row.get("symbol", "")).strip()
-                }
+            tracked_symbols = {
+                str(row.get("symbol", "")).strip().upper()
+                for row in tracked_rows
+                if str(row.get("symbol", "")).strip()
+            }
+            setup_tracker_allowed, tracker_quarantined_symbols, setup_tracker_skip_reason = (
+                evaluate_setup_tracker_purity(tracked_symbols, daily_frames_by_symbol)
             )
-            non_ib_symbols = [
-                symbol
-                for symbol in tracked_symbols
-                if _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) != DAILY_BAR_SOURCE_IBKR
-            ]
-            if non_ib_symbols:
-                sources = sorted(
-                    {
-                        _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) or "unknown"
-                        for symbol in non_ib_symbols
-                    }
-                )
-                setup_tracker_allowed = False
-                setup_tracker_skip_reason = (
-                    "Setup tracker refresh skipped for this mini-PC run because tracked setups "
-                    f"used non-IBKR daily data (symbols={', '.join(non_ib_symbols)}; "
-                    f"sources={', '.join(sources)})."
+            if setup_tracker_allowed and tracker_quarantined_symbols:
+                quarantined = set(tracker_quarantined_symbols)
+                tracker_tracked_rows = [
+                    row
+                    for row in tracked_rows
+                    if str(row.get("symbol", "")).strip().upper() not in quarantined
+                ]
+                tracker_daily_frames = {
+                    symbol: frame
+                    for symbol, frame in daily_frames_by_symbol.items()
+                    if str(symbol).strip().upper() not in quarantined
+                }
+                logging.warning(
+                    "Setup tracker purity quarantine: %s excluded from this write "
+                    "(non-IBKR daily bars); %s pure symbol(s) refresh normally.",
+                    ", ".join(tracker_quarantined_symbols),
+                    len(tracker_tracked_rows),
                 )
     run_result["setup_tracker_allowed"] = bool(setup_tracker_allowed)
     run_result["setup_tracker_skip_reason"] = setup_tracker_skip_reason
+    run_result["setup_tracker_quarantined_symbols"] = list(tracker_quarantined_symbols)
 
     _phase_t = _log_phase_duration("tracker scoring+ranking", _phase_t)
     if setup_tracker_allowed:
@@ -1839,14 +1897,14 @@ def _run_master_impl(
         tracker_payload = load_setup_tracker_payload()
         control_rows = select_tracker_control_rows(
             priority_rows,
-            tracked_rows,
+            tracker_tracked_rows,
             scan_date=today_run.isoformat() if hasattr(today_run, "isoformat") else str(today_run or ""),
         )
         update_setup_tracker_from_scan(
-            tracked_rows,
+            tracker_tracked_rows,
             ai_state,
             feature_rows_by_symbol,
-            daily_frames_by_symbol,
+            tracker_daily_frames,
             ib,
             control_rows=control_rows,
             study_rows=study_rows,
@@ -1857,7 +1915,7 @@ def _run_master_impl(
         run_result["study_setups_tracked"] = len(study_rows)
         logging.info(
             "Setup tracker updated for %s tracked symbol(s); %s control/holdout setup(s); %s study setup(s).",
-            len(tracked_rows),
+            len(tracker_tracked_rows),
             len(control_rows),
             len(study_rows),
         )
