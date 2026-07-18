@@ -179,6 +179,30 @@ def test_phone_digest_prioritizes_swings_before_intraday_candidates():
     )
 
 
+def test_phone_digest_caps_near_favorite_rows():
+    """2026-07-17 week review: near_favorite_zone measured -0.18R vs favorite
+    +1.01R - favorites always show, the near bucket is capped with a note."""
+    near = [
+        {"symbol": f"NEAR{i}", "side": "LONG", "bucket": "Near", "expected_r": -0.1}
+        for i in range(6)
+    ]
+    favorites = [
+        {"symbol": f"FAVE{i}", "side": "LONG", "bucket": "Favorite", "expected_r": 0.5}
+        for i in range(4)
+    ]
+    text = core.render_away_report(
+        _payload(swing_data_current=True, swing_picks=[*near, *favorites])
+    )
+
+    for i in range(4):
+        assert f"FAVE{i}" in text  # every favorite survives
+    shown_near = [f"NEAR{i}" for i in range(6) if f"NEAR{i} (LONG)" in text]
+    assert len(shown_near) == core.AWAY_REPORT_MAX_NEAR_ROWS
+    assert "+3 more near-favorite rows hidden" in text
+    # Favorites still lead the section.
+    assert text.index("FAVE0 (LONG)") < text.index("NEAR0 (LONG)")
+
+
 def test_phone_digest_distinguishes_no_current_swings_from_unscanned_data():
     current = core.render_away_report(
         _payload(swing_picks=[], swing_data_current=True)

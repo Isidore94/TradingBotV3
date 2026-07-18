@@ -2036,6 +2036,13 @@ def build_away_operations_lines(audit: Mapping[str, Any] | None) -> dict[str, st
     }
 
 
+# Near-favorite demotion (2026-07-17 week review): favorite_setup scenario
+# closes ran +1.01R avg (n=1,940) while near_favorite_zone ran -0.18R at 5x
+# the volume (n=9,164). Favorites lead the page; the near bucket is capped so
+# the measured-losing bucket cannot crowd the report.
+AWAY_REPORT_MAX_NEAR_ROWS = 3
+
+
 def render_away_report(payload: Mapping[str, Any]) -> str:
     """Phone-first digest: tickers up top, operations detail below."""
 
@@ -2064,16 +2071,29 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     indexed_picks.sort(key=lambda item: (_swing_bucket_priority(item[1]), item[0]))
 
     picks_lines = []
+    near_rows_shown = 0
+    near_rows_suppressed = 0
     for _index, pick in indexed_picks:
         symbol = str(pick.get("symbol") or "").strip().upper()
         if not symbol:
             continue
         side = str(pick.get("side") or "").strip().upper() or "?"
         bucket = str(pick.get("bucket") or "").strip()
+        is_near = "near" in bucket.lower()
+        if is_near:
+            if near_rows_shown >= AWAY_REPORT_MAX_NEAR_ROWS:
+                near_rows_suppressed += 1
+                continue
+            near_rows_shown += 1
         expected_r = pick.get("expected_r")
         expected_text = f" | {float(expected_r):.2f}R" if expected_r is not None else ""
         bucket_text = f" | {bucket}" if bucket else ""
         picks_lines.append(f"{symbol} ({side}){bucket_text}{expected_text}")
+    if near_rows_suppressed:
+        picks_lines.append(
+            f"(+{near_rows_suppressed} more near-favorite rows hidden - bucket measured "
+            "-0.18R avg vs favorites +1.01R, week of 2026-07-13)"
+        )
 
     swing_data_line = str(payload.get("swing_data_line") or "")
     if picks_lines:
