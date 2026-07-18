@@ -47,6 +47,11 @@ MAX_D1_FEED_ITEMS = 100
 # high conviction bucket stock"). Generic champion D1 flags retain their live
 # routing under the normal tier gate.
 _D1_READY_PREFIXES = {
+    # The D1 Focus feed is the M5 band-zone rubric: a scanned name bouncing off
+    # AVWAPE / 1st-dev / 15-21EMA or breaking the next band, confirmed on two
+    # completed bars. A fresh Favorite / High Conviction bucket upgrade still
+    # surfaces here too.
+    "MASTER_AVWAP_D1_ZONE",
     "MASTER_AVWAP_D1_BUCKET_UPGRADE",
 }
 _D1_DEVELOPING_PREFIXES = {
@@ -286,8 +291,9 @@ class AlertCenterPanel(QFrame):
         d1_section_layout.addWidget(
             SectionHeader(
                 "D1 Focus",
-                "Completed-rescan promotions into Favorite or High Conviction ONLY. "
-                "Developing armed-level observations stay in research logs, not alert feeds.",
+                "M5 band-zone rubric: a scanned name bouncing off AVWAPE / 1st-dev / "
+                "15-21EMA or breaking the next band (two-bar confirm), plus fresh "
+                "Favorite / High Conviction promotions.",
             )
         )
         d1_section_layout.addWidget(d1_scroll, 1)

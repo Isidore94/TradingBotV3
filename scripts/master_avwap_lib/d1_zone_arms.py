@@ -346,3 +346,66 @@ def build_d1_zone_arms(
         "active_current_scan": True,
         "trigger_levels": arms,
     }
+
+
+def detect_zone_arm_triggers(entry: Any, bars: Any) -> list[dict]:
+    """Arms that fired on the latest completed bar (two-bar bounce confirmation).
+
+    ``bars`` is a chronological list of *completed* M5 bars, each a mapping with
+    ``high`` / ``low`` / ``close``. Bar B (the newest completed bar) is the trigger
+    bar; bar A (the one before it) supplies the tag for the two-bar bounce rule:
+
+      - ``bounce_up``   bar A dips to within ``tolerance`` of the level and holds,
+                        then bar B closes higher than bar A and back above the level.
+      - ``bounce_down`` mirror (reject from below).
+      - ``break_above`` / ``break_below`` fire on a single-bar cross: bar A closed
+                        on the wrong side and bar B reaches through the level.
+
+    Returns a shallow copy of each fired arm dict (empty when nothing fired). Pure;
+    the caller adds symbol/direction/presentation and handles dedup.
+    """
+    if not isinstance(entry, dict):
+        return []
+    arms = entry.get("trigger_levels") or []
+    clean: list[tuple[float, float, float]] = []
+    for bar in bars or []:
+        if not isinstance(bar, dict):
+            continue
+        high = _finite(bar.get("high"))
+        low = _finite(bar.get("low"))
+        close = _finite(bar.get("close"))
+        if high is None or low is None or close is None:
+            continue
+        clean.append((high, low, close))
+    if len(clean) < 2 or not arms:
+        return []
+
+    a_high, a_low, a_close = clean[-2]
+    b_high, b_low, b_close = clean[-1]
+
+    fired: list[dict] = []
+    for arm in arms:
+        if not isinstance(arm, dict):
+            continue
+        level = _finite(arm.get("level"))
+        if level is None:
+            continue
+        tol = _finite(arm.get("tolerance")) or 0.0
+        action = str(arm.get("action") or "").strip().lower()
+
+        if action == "break_above":
+            hit = a_close < level <= b_high
+        elif action == "break_below":
+            hit = a_close > level >= b_low
+        elif action == "bounce_up":
+            tagged = a_low <= level + tol and a_close >= level - tol
+            hit = tagged and b_close > a_close and b_close > level
+        elif action == "bounce_down":
+            tagged = a_high >= level - tol and a_close <= level + tol
+            hit = tagged and b_close < a_close and b_close < level
+        else:
+            hit = False
+
+        if hit:
+            fired.append(dict(arm))
+    return fired

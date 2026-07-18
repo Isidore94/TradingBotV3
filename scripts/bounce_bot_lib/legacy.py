@@ -55,6 +55,7 @@ YFINANCE_NOISY_LOGGER_NAMES = (
     "yfinance.scrapers.quote",
 )
 
+from master_avwap_lib.d1_zone_arms import detect_zone_arm_triggers
 from master_avwap_shared import (
     build_master_avwap_active_level_map,
     build_master_avwap_d1_flag_events,
@@ -96,6 +97,7 @@ from project_paths import (
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE,
     MASTER_AVWAP_D1_WATCHLIST_FILE,
+    MASTER_AVWAP_D1_ZONE_ARMS_FILE,
     REGIME_PAUSE_OBSERVATIONS_FILE,
     APP_LOG_BACKUP_COUNT,
     get_tracker_storage_details,
@@ -128,6 +130,7 @@ MASTER_AVWAP_SIGNALS_FILENAME = AVWAP_SIGNALS_FILE
 MASTER_AVWAP_FOCUS_FILENAME = MASTER_AVWAP_FOCUS_FILE
 MASTER_AVWAP_D1_UPGRADE_ALERTS_FILENAME = MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE
 MASTER_AVWAP_D1_WATCHLIST_FILENAME = MASTER_AVWAP_D1_WATCHLIST_FILE
+MASTER_AVWAP_D1_ZONE_ARMS_FILENAME = MASTER_AVWAP_D1_ZONE_ARMS_FILE
 STRENGTH_SCAN_LOG_FILENAME = RRS_STRENGTH_LOG_FILE
 GROUP_STRENGTH_SCAN_LOG_FILENAME = RRS_GROUP_STRENGTH_LOG_FILE
 ENVIRONMENT_FOCUS_HISTORY_FILENAME = RRS_ENVIRONMENT_FOCUS_HISTORY_FILE
@@ -2541,6 +2544,7 @@ class BounceBot(EWrapper, EClient):
         self.master_avwap_second_stdev_cross_map = {}
         self.master_avwap_d1_upgrade_alerts = {}
         self.master_avwap_d1_watchlist = {}
+        self.master_avwap_d1_zone_arms = {}
         self.emitted_master_avwap_focus_alerts = set()
         self.emitted_master_avwap_second_stdev_alerts = set()
         self.emitted_master_avwap_d1_flags = set()
@@ -3874,6 +3878,24 @@ class BounceBot(EWrapper, EClient):
             alerts_path=MASTER_AVWAP_D1_UPGRADE_ALERTS_FILENAME,
         )
 
+    def load_master_avwap_d1_zone_arms(self):
+        """Per-symbol D1 band-zone arms written by the last master scan. These
+        drive the M5 D1 Focus rubric (two-bar bounce / break at the current-anchor
+        bands and daily 15/21 EMA)."""
+        payload = {}
+        try:
+            path = MASTER_AVWAP_D1_ZONE_ARMS_FILENAME
+            if path.exists():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {}
+        symbols = payload.get("symbols", {}) if isinstance(payload, dict) else {}
+        self.master_avwap_d1_zone_arms = {
+            str(symbol).strip().upper(): entry
+            for symbol, entry in (symbols or {}).items()
+            if isinstance(entry, dict)
+        }
+
     def get_master_avwap_d1_watch_symbols(self):
         symbols = set(getattr(self, "master_avwap_d1_watchlist", {}).keys())
         symbols.update(getattr(self, "master_avwap_d1_upgrade_alerts", {}).keys())
@@ -4123,6 +4145,94 @@ class BounceBot(EWrapper, EClient):
             self.log_symbol(symbol, message)
             emitted_count += 1
         return emitted_count
+
+    def emit_master_avwap_zone_arm_flags(self, symbol, today_df):
+        """M5 D1 Focus rubric: fire when a scanned name bounces/breaks at its armed
+        current-anchor band levels (two-bar confirmation on completed bars). This is
+        the band-zone rubric that defines the D1 Focus feed; decision-support only."""
+        symbol = str(symbol or "").strip().upper()
+        entry = getattr(self, "master_avwap_d1_zone_arms", {}).get(symbol)
+        if not entry or not self.gui_callback:
+            return 0
+        if today_df is None or getattr(today_df, "empty", True):
+            return 0
+
+        working = today_df.copy()
+        if "datetime" not in working.columns:
+            working["datetime"] = pd.to_datetime(
+                working.get("time"), format="%Y%m%d  %H:%M:%S", errors="coerce"
+            )
+            if working["datetime"].isna().all():
+                working["datetime"] = pd.to_datetime(working.get("time"), errors="coerce")
+        working = working.dropna(subset=["datetime"]).sort_values("datetime")
+        # Completed bars only - a still-forming M5 bar is preview, never a trigger.
+        cutoff = get_market_local_now().replace(tzinfo=None)
+        completed = working[working["datetime"] + pd.Timedelta(minutes=5) <= cutoff]
+        if len(completed) < 2:
+            return 0
+
+        bars = [
+            {"high": row.get("high"), "low": row.get("low"), "close": row.get("close")}
+            for _, row in completed.tail(2).iterrows()
+        ]
+        fired = detect_zone_arm_triggers(entry, bars)
+        if not fired:
+            return 0
+
+        side = str(entry.get("side") or "").strip().upper()
+        direction = "short" if side == "SHORT" else "long"
+        bar_time = completed["datetime"].iloc[-1]
+        if hasattr(bar_time, "to_pydatetime"):
+            bar_time = bar_time.to_pydatetime()
+        bar_time_text = bar_time.strftime("%H:%M") if bar_time is not None else ""
+        current_price = self._master_avwap_trigger_float(completed["close"].iloc[-1])
+
+        emitted_count = 0
+        today_iso = datetime.now().date().isoformat()
+        for arm in fired:
+            event = {
+                **arm,
+                "symbol": symbol,
+                "side": side or arm.get("side"),
+                "direction": direction,
+                "zone": entry.get("zone"),
+                "current_price": current_price,
+                "bar_time": bar_time_text,
+                "source": "zone_arm",
+            }
+            event_key = self._master_avwap_d1_flag_key(event, today_iso=today_iso)
+            if event_key in self.emitted_master_avwap_d1_flags:
+                continue
+            self.emitted_master_avwap_d1_flags.add(event_key)
+            message = self._format_master_avwap_zone_arm_event(event)
+            gui_tag = "d1_flag_long" if direction == "long" else "d1_flag_short"
+            self.gui_callback(message, gui_tag)
+            self.log_symbol(symbol, message)
+            emitted_count += 1
+        return emitted_count
+
+    def _format_master_avwap_zone_arm_event(self, event):
+        symbol = str(event.get("symbol") or "").strip().upper()
+        direction = str(event.get("direction") or "").strip().lower() or "watch"
+        zone = event.get("zone")
+        zone_text = f"zone{int(zone)}" if isinstance(zone, (int, float)) else "zone"
+        alert_label = str(event.get("alert_label") or event.get("label") or "zone event").strip()
+        level_value = self._master_avwap_trigger_float(event.get("level"))
+        price_value = self._master_avwap_trigger_float(event.get("current_price"))
+        bar_time = str(event.get("bar_time") or "").strip()
+        reason = str(event.get("reason") or "").strip()
+        critical = " CRITICAL 2nd-3rd pullback" if event.get("critical") else ""
+        parts = []
+        if level_value is not None:
+            parts.append(f"@{level_value:.2f}")
+        if price_value is not None:
+            parts.append(f"px={price_value:.2f}")
+        if bar_time:
+            parts.append(f"bar={bar_time}")
+        if reason:
+            parts.append(reason)
+        suffix = f" [{'; '.join(parts)}]" if parts else ""
+        return f"MASTER_AVWAP_D1_ZONE: {symbol} ({direction}) {zone_text} {alert_label}{critical}{suffix}"
 
     def _master_avwap_d1_event_is_research_only(self, event):
         source = str(event.get("source") or "").strip()
@@ -7396,6 +7506,7 @@ class BounceBot(EWrapper, EClient):
         self.load_master_avwap_focus()
         self.load_master_avwap_d1_watchlist()
         self.load_master_avwap_d1_upgrade_alerts()
+        self.load_master_avwap_d1_zone_arms()
         threshold, bar_size, duration, length, timeframe_key = self.get_rrs_settings()
         if timeframe_key_override in RRS_TIMEFRAMES:
             timeframe_key = timeframe_key_override
@@ -9189,6 +9300,7 @@ class BounceBot(EWrapper, EClient):
             return
 
         self.emit_master_avwap_intraday_trigger_flags(symbol, today_df)
+        self.emit_master_avwap_zone_arm_flags(symbol, today_df)
         self._update_pending_bounce_outcomes(symbol, df)
         if not scan_for_new_bounces:
             return
@@ -10062,6 +10174,7 @@ class BounceBot(EWrapper, EClient):
                 self.load_human_focus_picks()
                 self.load_master_avwap_d1_watchlist()
                 self.load_master_avwap_d1_upgrade_alerts()
+                self.load_master_avwap_d1_zone_arms()
                 self.update_watchlists_from_master_avwap()
                 self.emit_master_avwap_d1_flags()
                 self.alerted_symbols.clear()

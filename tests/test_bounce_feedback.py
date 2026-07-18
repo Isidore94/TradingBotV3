@@ -13,6 +13,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import bounce_bot  # noqa: E402
+from master_avwap_lib.d1_zone_arms import build_d1_zone_arms  # noqa: E402
 
 
 class _FakeSessionWindow:
@@ -447,6 +448,84 @@ class BounceFeedbackTests(unittest.TestCase):
 
         self.assertEqual(bot.emit_master_avwap_intraday_trigger_flags("AAPL", today_df), 0)
         bot.gui_callback.assert_called_once()
+
+    def test_d1_zone_arm_bounce_emits_focus_alert_once(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        entry = build_d1_zone_arms(
+            symbol="NVDA",
+            close=103.0,
+            avwape=100.0,
+            upper_1=105.0,
+            upper_2=110.0,
+            upper_3=115.0,
+            lower_1=95.0,
+            lower_2=90.0,
+            lower_3=85.0,
+            ema15=102.0,
+            ema21=101.0,
+            atr=5.0,
+        )
+        self.assertEqual(entry["zone"], 1)
+        bot.master_avwap_d1_zone_arms = {"NVDA": entry}
+        bot.emitted_master_avwap_d1_flags = set()
+        bot.gui_callback = Mock()
+        bot.log_symbol = Mock()
+
+        today_df = pd.DataFrame(
+            [
+                {  # bar A: dips to tag AVWAPE (100) and holds
+                    "datetime": pd.Timestamp("2026-05-06 09:35:00"),
+                    "open": 101.0, "high": 101.0, "low": 100.2, "close": 100.5,
+                    "volume": 1000, "time": "20260506  09:35:00",
+                },
+                {  # bar B: closes higher and back above the level -> reclaim
+                    "datetime": pd.Timestamp("2026-05-06 09:40:00"),
+                    "open": 100.6, "high": 103.0, "low": 100.8, "close": 102.0,
+                    "volume": 1200, "time": "20260506  09:40:00",
+                },
+            ]
+        )
+
+        self.assertEqual(bot.emit_master_avwap_zone_arm_flags("NVDA", today_df), 1)
+        message, tag = bot.gui_callback.call_args.args
+        self.assertTrue(message.startswith("MASTER_AVWAP_D1_ZONE: NVDA"))
+        self.assertIn("bounce off AVWAPE", message)
+        self.assertIn("@100.00", message)
+        self.assertEqual(tag, "d1_flag_long")
+
+        # Dedup: the same two completed bars must not re-fire.
+        self.assertEqual(bot.emit_master_avwap_zone_arm_flags("NVDA", today_df), 0)
+        bot.gui_callback.assert_called_once()
+
+    def test_d1_zone_arm_does_not_fire_without_reclaim(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        entry = build_d1_zone_arms(
+            symbol="NVDA", close=103.0, avwape=100.0, upper_1=105.0, upper_2=110.0,
+            upper_3=115.0, lower_1=95.0, lower_2=90.0, lower_3=85.0,
+            ema15=102.0, ema21=101.0, atr=5.0,
+        )
+        bot.master_avwap_d1_zone_arms = {"NVDA": entry}
+        bot.emitted_master_avwap_d1_flags = set()
+        bot.gui_callback = Mock()
+        bot.log_symbol = Mock()
+
+        today_df = pd.DataFrame(
+            [
+                {
+                    "datetime": pd.Timestamp("2026-05-06 09:35:00"),
+                    "open": 101.0, "high": 101.0, "low": 100.2, "close": 100.5,
+                    "volume": 1000, "time": "20260506  09:35:00",
+                },
+                {  # closes back below AVWAPE - not a reclaim
+                    "datetime": pd.Timestamp("2026-05-06 09:40:00"),
+                    "open": 100.4, "high": 100.6, "low": 99.0, "close": 99.4,
+                    "volume": 1200, "time": "20260506  09:40:00",
+                },
+            ]
+        )
+
+        self.assertEqual(bot.emit_master_avwap_zone_arm_flags("NVDA", today_df), 0)
+        bot.gui_callback.assert_not_called()
 
     def test_d1_upgrade_wick_is_logged_as_research_without_gui_alert(self):
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
