@@ -315,6 +315,89 @@ def test_industry_m5_snapshot_is_atomic_advisory_and_links_daily_board(tmp_path)
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_empty_regeneration_never_clobbers_a_snapshot_with_signal(tmp_path):
+    """2026-07-17: an after-close recalculation with an empty bar cache
+    overwrote the session's last useful advisory (5/67 qualified) with an
+    all-UNAVAILABLE husk. No-signal payloads keep the stored snapshot."""
+    import json
+    from datetime import timezone
+
+    from ui.services.rs_window_feed import save_industry_intraday_snapshot
+
+    board_state = tmp_path / "industry_board_snapshot.json"
+    board_state.write_text(json.dumps({"snapshot_id": "daily-board-123"}), encoding="utf-8")
+    target = tmp_path / "industry_intraday_rs_snapshot.json"
+    start = datetime(2026, 7, 8, 9, 30)
+    end = datetime(2026, 7, 8, 10, 0)
+    good_rows = [
+        _mover(
+            "AAA",
+            "LONG",
+            2.0,
+            industry="Widgets",
+            industry_m5_window_pct=1.0,
+            industry_m5_vs_spy=0.5,
+            industry_m5_members_used=4,
+            industry_m5_members_expected=5,
+            industry_m5_member_coverage=0.8,
+            industry_m5_timestamp_coverage=1.0,
+            industry_m5_status="QUALIFIED_ADVISORY",
+            industry_m5_first_ts="2026-07-08T09:30",
+            industry_m5_last_ts="2026-07-08T10:00",
+            industry_m5_snapshot_id="industry-1",
+            industry_m5_stock_window_pct=2.0,
+            stock_vs_industry_m5=1.0,
+            spy_window_pct=0.5,
+            advisory_only=True,
+        )
+    ]
+    good = save_industry_intraday_snapshot(
+        good_rows,
+        start_dt=start,
+        end_dt=end,
+        output_path=target,
+        board_state_path=board_state,
+        now=datetime(2026, 7, 8, 17, 0, tzinfo=timezone.utc),
+    )
+    assert good["qualified_industry_count"] == 1
+
+    # Empty after-close regeneration: the stored snapshot survives.
+    kept = save_industry_intraday_snapshot(
+        [],
+        start_dt=start,
+        end_dt=end,
+        output_path=target,
+        board_state_path=board_state,
+        now=datetime(2026, 7, 9, 0, 55, tzinfo=timezone.utc),
+    )
+    on_disk = json.loads(target.read_text(encoding="utf-8"))
+    assert on_disk == good == kept
+
+    # A later regeneration WITH signal still replaces it normally.
+    fresh = save_industry_intraday_snapshot(
+        good_rows,
+        start_dt=start,
+        end_dt=end.replace(minute=30),
+        output_path=target,
+        board_state_path=board_state,
+        now=datetime(2026, 7, 9, 1, 0, tzinfo=timezone.utc),
+    )
+    assert json.loads(target.read_text(encoding="utf-8")) == fresh
+    assert fresh["requested_window"]["end"] != good["requested_window"]["end"]
+
+    # And an empty payload with NO stored signal still writes (first run).
+    empty_target = tmp_path / "fresh_snapshot.json"
+    written = save_industry_intraday_snapshot(
+        [],
+        start_dt=start,
+        end_dt=end,
+        output_path=empty_target,
+        board_state_path=board_state,
+        now=datetime(2026, 7, 9, 1, 5, tzinfo=timezone.utc),
+    )
+    assert json.loads(empty_target.read_text(encoding="utf-8")) == written
+
+
 def test_sort_rows_supports_intraday_industry_advisory_fields():
     from ui.services.rs_window_feed import sort_mover_rows
 

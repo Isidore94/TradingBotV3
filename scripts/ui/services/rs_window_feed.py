@@ -627,6 +627,17 @@ def _read_board_snapshot_id(path: Path) -> str:
     return str(payload.get("snapshot_id") or "") if isinstance(payload, dict) else ""
 
 
+def _snapshot_has_signal(payload: Mapping[str, Any] | None) -> bool:
+    """True when a snapshot carries any qualified/thin/candidate content."""
+    if not isinstance(payload, Mapping):
+        return False
+    return bool(
+        int(payload.get("qualified_industry_count") or 0)
+        or int(payload.get("thin_preview_industry_count") or 0)
+        or int(payload.get("candidate_count") or 0)
+    )
+
+
 def save_industry_intraday_snapshot(
     rows: list[dict],
     *,
@@ -650,6 +661,18 @@ def save_industry_intraday_snapshot(
         industry_rows=industry_rows,
         now=now,
     )
+    if not _snapshot_has_signal(payload):
+        # 2026-07-17: an after-close regeneration with an empty bar cache
+        # overwrote the session's last useful advisory (5/67 qualified) with
+        # an all-UNAVAILABLE husk. A no-signal recalculation never replaces
+        # a stored snapshot that still has content - the trader's evening
+        # review keeps the last real read of the day.
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if _snapshot_has_signal(existing):
+            return existing
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(
         prefix=f".{target.name}.",
