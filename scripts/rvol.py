@@ -111,6 +111,55 @@ def session_rvol(
     return today_total / baseline_total
 
 
+def slot_baselines(
+    prior_sessions: Sequence[Sequence[float]],
+    *,
+    max_slots: int = 78,
+    sessions: int = RVOL_BASELINE_SESSIONS,
+    min_sessions: int = RVOL_MIN_BASELINE_SESSIONS,
+) -> list[float | None]:
+    """Per-bar-slot baseline volumes - the TC2000 denominator, precomputed.
+
+    The denominator of the trader's script is static all day (it only reads
+    PRIOR sessions), so live scanning computes it once per symbol per day and
+    divides fresh volume into it. Slots without enough history hold None.
+    """
+    return [
+        same_slot_baseline(prior_sessions, index, sessions=sessions, min_sessions=min_sessions)
+        for index in range(max(1, int(max_slots)))
+    ]
+
+
+def session_rvol_from_baseline(
+    today_volumes: Sequence[float],
+    baselines: Sequence[float | None],
+) -> float | None:
+    """Cumulative session rvol from live volumes and precomputed baselines."""
+    if not today_volumes or not baselines:
+        return None
+    today_total = 0.0
+    baseline_total = 0.0
+    counted = 0
+    for index, raw in enumerate(today_volumes):
+        if index >= len(baselines):
+            break
+        baseline = baselines[index]
+        if baseline is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value < 0:
+            continue
+        today_total += value
+        baseline_total += float(baseline)
+        counted += 1
+    if counted == 0 or baseline_total <= 0:
+        return None
+    return today_total / baseline_total
+
+
 def split_sessions(volumes_by_day: Iterable[tuple[object, float]]) -> list[list[float]]:
     """Group (session_key, volume) pairs, in order, into per-session lists.
 

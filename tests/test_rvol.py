@@ -11,7 +11,14 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from rvol import bar_rvol, same_slot_baseline, session_rvol, split_sessions  # noqa: E402
+from rvol import (  # noqa: E402
+    bar_rvol,
+    same_slot_baseline,
+    session_rvol,
+    session_rvol_from_baseline,
+    slot_baselines,
+    split_sessions,
+)
 
 
 def _flat_sessions(count: int, bars: int, volume: float) -> list[list[float]]:
@@ -76,3 +83,34 @@ class TestSplitSessions:
 
     def test_bad_volume_becomes_zero(self):
         assert split_sessions([("d1", "x")]) == [[0.0]]
+
+
+class TestSlotBaselinesAndLiveSession:
+    def test_slot_baselines_precompute_the_denominator(self):
+        prior = _flat_sessions(15, 78, 200.0)
+        baselines = slot_baselines(prior)
+        assert len(baselines) == 78
+        assert baselines[0] == pytest.approx(200.0)
+        assert baselines[77] == pytest.approx(200.0)
+
+    def test_thin_slots_hold_none(self):
+        prior = _flat_sessions(6, 30, 100.0)  # short sessions: slots 30+ have no history
+        baselines = slot_baselines(prior)
+        assert baselines[10] == pytest.approx(100.0)
+        assert baselines[40] is None
+
+    def test_session_rvol_from_baseline_matches_full_computation(self):
+        prior = _flat_sessions(15, 78, 100.0)
+        today = [250.0] * 12
+        assert session_rvol_from_baseline(today, slot_baselines(prior)) == pytest.approx(
+            session_rvol(today, prior)
+        )
+
+    def test_none_slots_are_skipped_not_zero(self):
+        baselines = [100.0, None, 100.0]
+        assert session_rvol_from_baseline([200.0, 999.0, 200.0], baselines) == pytest.approx(2.0)
+
+    def test_empty_inputs_return_none(self):
+        assert session_rvol_from_baseline([], [100.0]) is None
+        assert session_rvol_from_baseline([100.0], []) is None
+        assert session_rvol_from_baseline([100.0], [None]) is None

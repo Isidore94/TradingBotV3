@@ -2041,3 +2041,119 @@ def test_swing_traits_and_suffix_carry_h1_confirmation():
     assert "h1_riding_15ema" not in stub._master_avwap_swing_trait_tags(
         focus_entry, symbol="AAPL", direction="long"
     )
+
+
+# ---------------------------------------------------------------------------
+# TC2000 M5 rvol on the live alert path (2026-07-17)
+# ---------------------------------------------------------------------------
+def test_fetch_rvol_baselines_uses_prior_sessions_only():
+    import pandas as pd
+
+    from autopilot_core import fetch_rvol_baselines
+
+    stamps = []
+    volumes = []
+    for day in range(1, 8):  # 6 prior sessions + "today" (must be excluded)
+        for bar in range(3):
+            stamps.append(pd.Timestamp(2026, 7, 6 + day, 9, 30) + pd.Timedelta(minutes=5 * bar))
+            volumes.append(100.0 if day < 7 else 9_999.0)
+    frame = pd.DataFrame(
+        {"Open": 10.0, "High": 10.1, "Low": 9.9, "Close": 10.0, "Volume": volumes},
+        index=pd.DatetimeIndex(stamps),
+    )
+
+    def downloader(symbols, *, period, interval):
+        assert period == "1mo" and interval == "5m"
+        return frame
+
+    baselines = fetch_rvol_baselines(
+        ["AAPL"], downloader=downloader, reference_date=pd.Timestamp(2026, 7, 13).date()
+    )
+    assert baselines["AAPL"][0] == 100.0  # today's 9,999 prints never leak in
+    assert baselines["AAPL"][2] == 100.0
+    assert baselines["AAPL"][3] is None  # only 3 bars per session existed
+
+
+def test_session_rvol_for_reads_cached_ib_volume():
+    from datetime import timedelta
+
+    from bounce_bot_lib.legacy import BounceBot, IbBar
+
+    class Stub:
+        session_rvol_for = BounceBot.session_rvol_for
+
+    stub = Stub()
+    today_start = datetime(2026, 7, 17, 6, 30)
+    yesterday = today_start - timedelta(days=1)
+    bars = [
+        IbBar(dt=yesterday + timedelta(minutes=5 * i), open=1, high=1, low=1, close=1, volume=100.0)
+        for i in range(3)
+    ] + [
+        IbBar(dt=today_start + timedelta(minutes=5 * i), open=1, high=1, low=1, close=1, volume=150.0)
+        for i in range(3)
+    ]
+    stub.latest_bars = {"AAPL|5 D|5 mins": bars}
+    stub._rvol_state = {"date": today_start.date(), "baselines": {"AAPL": [100.0, 100.0, 100.0]}}
+
+    # Only today's bars count: 450 volume vs 300 baseline -> 1.5.
+    assert stub.session_rvol_for("AAPL") == 1.5
+    # No baseline / no bars / zero volume -> no reading, never zero.
+    assert stub.session_rvol_for("MSFT") is None
+    stub._rvol_state["baselines"]["GHOST"] = [100.0]
+    stub.latest_bars["GHOST|5 D|5 mins"] = []
+    assert stub.session_rvol_for("GHOST") is None
+
+
+def test_rvol_baseline_refresh_tops_up_missing_and_respects_cooldown(monkeypatch):
+    import bounce_bot_lib.legacy as legacy
+    from bounce_bot_lib.legacy import BounceBot
+
+    class ImmediateThread:
+        def __init__(self, *, target, name=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    calls = []
+
+    def fake_fetch(symbols, **kwargs):
+        calls.append(sorted(symbols))
+        return {symbol: [100.0] for symbol in symbols if symbol != "NODATA"}
+
+    import autopilot_core as core
+
+    monkeypatch.setattr(core, "fetch_rvol_baselines", fake_fetch)
+    monkeypatch.setattr(legacy.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(legacy.time, "time", lambda: 10_000.0)
+
+    class Stub:
+        _maybe_refresh_rvol_baselines = BounceBot._maybe_refresh_rvol_baselines
+        _rvol_watch_symbols = BounceBot._rvol_watch_symbols
+
+    stub = Stub()
+    stub.longs = ["AAPL"]
+    stub.shorts = ["NODATA"]
+    stub.auto_longs = []
+    stub.auto_shorts = []
+    stub.human_focus_map = {"long": set(), "short": set()}
+
+    stub._maybe_refresh_rvol_baselines()
+    assert calls == [["AAPL", "NODATA"]]
+    state = stub._rvol_state
+    assert state["baselines"]["AAPL"] == [100.0]
+    # The no-data symbol is parked (None) so the cooldown is honored...
+    assert state["baselines"]["NODATA"] is None
+    stub._maybe_refresh_rvol_baselines()
+    assert len(calls) == 1
+    # ...until a new symbol appears after the cooldown expires.
+    stub.longs = ["AAPL", "NEWSYM"]
+    monkeypatch.setattr(legacy.time, "time", lambda: 10_000.0 + 16 * 60)
+    stub._maybe_refresh_rvol_baselines()
+    assert calls[-1] == ["NEWSYM"]
+
+
+def test_rvol_gate_constant_matches_trader_bar():
+    from bounce_bot_lib.legacy import RVOL_MIN_ALERT
+
+    assert RVOL_MIN_ALERT == 1.0

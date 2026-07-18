@@ -1409,6 +1409,59 @@ def fetch_session_rvol(
     return readings
 
 
+def fetch_rvol_baselines(
+    symbols: Iterable[str],
+    *,
+    downloader: Callable[..., Any] | None = None,
+    chunk_size: int = AUTOPILOT_OPEN_SCAN_CHUNK_SIZE,
+    reference_date=None,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, list]:
+    """{symbol: per-slot baseline volumes} - the static TC2000 denominator.
+
+    Prior sessions only (today's bars are excluded), so one fetch per symbol
+    per day is enough; live scanning divides fresh IB volume into it.
+    """
+    from rvol import slot_baselines, split_sessions
+
+    downloader = downloader or _default_downloader
+    pool: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            pool.append(symbol)
+    today = reference_date or datetime.now().date()
+    baselines: dict[str, list] = {}
+    chunk_size = max(1, int(chunk_size))
+    for start in range(0, len(pool), chunk_size):
+        chunk = pool[start : start + chunk_size]
+        try:
+            data = downloader(chunk, period="1mo", interval="5m")
+        except Exception as exc:
+            if log:
+                log(f"RVOL baseline chunk failed ({chunk[0]}..{chunk[-1]}): {exc}")
+            continue
+        for symbol in chunk:
+            try:
+                frame = data[symbol] if len(chunk) > 1 else data
+            except Exception:
+                frame = None
+            rows = _frame_rows(frame)
+            sessions = split_sessions(
+                (row["dt"].date(), row.get("volume", 0.0))
+                for row in rows
+                if isinstance(row.get("dt"), datetime) and row["dt"].date() < today
+            )
+            if not sessions:
+                continue
+            slots = slot_baselines(sessions)
+            if any(value is not None for value in slots):
+                baselines[symbol] = slots
+    return baselines
+
+
 def build_relative_weakness_candidates(
     profiles: Mapping[str, Mapping[str, Any]],
     anchor_env: str,

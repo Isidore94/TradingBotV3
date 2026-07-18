@@ -523,6 +523,16 @@ H1_ALERTS_RETIRED = True
 # latest close. Mirrored for shorts.
 H1_TREND_LOOKBACK_BARS = 8
 H1_TREND_MIN_CLOSES_BEYOND = 6
+
+# TC2000 M5 relative volume (trader directive 2026-07-17: "focus on M5s with
+# more than 1.0 rvol"). The denominator - (V78+V156+...+V1170)/15 per bar
+# slot, i.e. the 15-session same-time-of-day average - is static all day, so
+# it is fetched once per symbol per day (yfinance, prior sessions only) and
+# live IB volume divides into it. Alerts on names under the bar keep
+# recording but route LEARNING_ONLY; missing baselines never suppress, and
+# human focus picks are never gated.
+RVOL_MIN_ALERT = 1.0
+RVOL_BASELINE_RETRY_MINUTES = 15
 MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
 MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
@@ -2818,6 +2828,10 @@ class BounceBot(EWrapper, EClient):
             if str(entry.get("symbol") or "").strip().upper() == str(symbol or "").strip().upper():
                 symbol_context = dict(entry)
                 break
+        try:
+            session_rvol = self.session_rvol_for(symbol)
+        except Exception:
+            session_rvol = None
         return {
             "rrs_timeframe": payload.get("timeframe_key", ""),
             "rrs_spy": spy_rrs.get("rrs", ""),
@@ -2826,6 +2840,7 @@ class BounceBot(EWrapper, EClient):
             "rrs_sector_signal": sector_rrs.get("signal", ""),
             "rrs_industry": industry_rrs.get("rrs", ""),
             "rrs_industry_signal": industry_rrs.get("signal", ""),
+            "session_rvol": round(session_rvol, 3) if session_rvol is not None else "",
             "sector": classification.get("sector", "") if isinstance(classification, dict) else "",
             "industry": classification.get("industry", "") if isinstance(classification, dict) else "",
             "sector_etf": sector_etf,
@@ -9388,8 +9403,24 @@ class BounceBot(EWrapper, EClient):
             h1_note = self._h1_confirmation_suffix(symbol, direction)
             if h1_note:
                 bounce_msg += f" | {h1_note}"
-            if learning_only or muted_by_learning:
-                mute_note = "; ".join(quality.get("mute_reasons") or []) or "learning-only candidate"
+            # TC2000 M5 rvol filter: the reading rides every alert; names
+            # under 1.00 keep recording but stay learning-only (a missing
+            # baseline never suppresses; human picks are never gated).
+            try:
+                rvol_value = self.session_rvol_for(symbol)
+            except Exception:
+                rvol_value = None
+            if rvol_value is not None:
+                bounce_msg += f" | rvol {rvol_value:.2f}"
+            low_rvol = bool(
+                rvol_value is not None and rvol_value < RVOL_MIN_ALERT and not human_pick
+            )
+            if learning_only or muted_by_learning or low_rvol:
+                mute_note = "; ".join(quality.get("mute_reasons") or [])
+                if low_rvol:
+                    rvol_note = f"session rvol {rvol_value:.2f} < {RVOL_MIN_ALERT:.2f} (TC2000 M5 filter)"
+                    mute_note = f"{mute_note}; {rvol_note}" if mute_note else rvol_note
+                mute_note = mute_note or "learning-only candidate"
                 self.log_symbol(symbol, f"LEARNING_ONLY [{quality.get('tier', '?')}]: {bounce_msg} | {mute_note}")
                 return
 
@@ -9710,6 +9741,96 @@ class BounceBot(EWrapper, EClient):
                 if self.gui_callback:
                     self.gui_callback(removal_msg, "blue")
 
+    def _rvol_watch_symbols(self):
+        symbols = set()
+        for source in (
+            getattr(self, "longs", None),
+            getattr(self, "shorts", None),
+            getattr(self, "auto_longs", None),
+            getattr(self, "auto_shorts", None),
+        ):
+            for symbol in source or []:
+                symbol = str(symbol or "").strip().upper()
+                if symbol:
+                    symbols.add(symbol)
+        for side_set in (getattr(self, "human_focus_map", None) or {}).values():
+            for symbol in side_set or []:
+                symbols.add(str(symbol).strip().upper())
+        return symbols
+
+    def _maybe_refresh_rvol_baselines(self):
+        """Top up the day's TC2000 volume baselines for the current watch set.
+
+        The baseline only reads PRIOR sessions, so one fetch per symbol per
+        day suffices; names added intraday (auto-populate, focus adds) get
+        theirs on the next pass. Fetches run on a daemon thread with a
+        cooldown so the scan cycle never stalls behind yfinance.
+        """
+        state = getattr(self, "_rvol_state", None)
+        if state is None:
+            state = {"date": None, "baselines": {}, "last_attempt": 0.0, "running": False}
+            self._rvol_state = state
+        today = datetime.now().date()
+        if state["date"] != today:
+            state["date"] = today
+            state["baselines"] = {}
+            state["last_attempt"] = 0.0
+        if state["running"]:
+            return
+        missing = sorted(self._rvol_watch_symbols() - set(state["baselines"]))
+        if not missing:
+            return
+        now = time.time()
+        if now - float(state["last_attempt"]) < RVOL_BASELINE_RETRY_MINUTES * 60.0:
+            return
+        state["last_attempt"] = now
+        state["running"] = True
+
+        def worker():
+            try:
+                from autopilot_core import fetch_rvol_baselines
+
+                fetched = fetch_rvol_baselines(missing, reference_date=today, log=logging.info)
+                # Symbols yfinance could not baseline are parked as None so
+                # they are not refetched every cooldown window.
+                state["baselines"].update({symbol: fetched.get(symbol) for symbol in missing})
+                have = sum(1 for value in state["baselines"].values() if value)
+                logging.info(
+                    "RVOL baselines refreshed: +%s fetched, %s/%s watch symbols covered.",
+                    len(fetched),
+                    have,
+                    len(state["baselines"]),
+                )
+            except Exception:
+                logging.exception("RVOL baseline fetch failed.")
+            finally:
+                state["running"] = False
+
+        threading.Thread(target=worker, name="rvol-baselines", daemon=True).start()
+
+    def session_rvol_for(self, symbol):
+        """Live TC2000 session rvol: today's cached IB volume vs the baseline.
+
+        None when the baseline is missing or today's bars carry no volume -
+        callers must treat None as "no reading", never as "low volume".
+        """
+        from rvol import session_rvol_from_baseline
+
+        state = getattr(self, "_rvol_state", None) or {}
+        baselines = (state.get("baselines") or {}).get(str(symbol or "").strip().upper())
+        if not baselines:
+            return None
+        bars = self.latest_bars.get(f"{symbol}|5 D|5 mins") or []
+        if not bars:
+            return None
+        today = bars[-1].dt.date()
+        today_volumes = [
+            float(getattr(bar, "volume", 0.0) or 0.0) for bar in bars if bar.dt.date() == today
+        ]
+        if not today_volumes or not any(value > 0 for value in today_volumes):
+            return None
+        return session_rvol_from_baseline(today_volumes, baselines)
+
     def _maybe_refresh_auto_populated_watchlists(self):
         """Refresh the auto-owned watchlist slice every ~30 min while scanning.
 
@@ -9995,6 +10116,14 @@ class BounceBot(EWrapper, EClient):
                     self._maybe_refresh_auto_populated_watchlists()
                 except Exception:
                     logging.exception("Auto-populate watchlist refresh failed.")
+
+                # TC2000 same-time-of-day volume baselines (static per day):
+                # fetched once per symbol per day so every alert can carry a
+                # live session rvol and the <1.00 names stay learning-only.
+                try:
+                    self._maybe_refresh_rvol_baselines()
+                except Exception:
+                    logging.exception("RVOL baseline refresh failed.")
 
                 # Trader-favorite day-trade sweeps on longs/shorts.txt: delayed
                 # 5m opening-range breaks and 8-EMA grind squeezes into HOD/LOD.
