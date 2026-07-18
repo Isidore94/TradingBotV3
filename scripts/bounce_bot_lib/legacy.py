@@ -1319,6 +1319,45 @@ def _latest_bounce_outcome_rows(outcomes_df: pd.DataFrame) -> pd.DataFrame:
     return outcomes.drop_duplicates(subset=["event_id"], keep="last")
 
 
+# The "produces quickly" milestone (2026-07-17 trader directive): 12 completed
+# M5 bars = the first 60 minutes after entry. 80% of historical episodes carry
+# this row; entries inside the session's final hour never get one.
+BOUNCE_QUICK_MILESTONE_BAR = 12
+
+
+def _quick_bounce_milestone_rows(
+    outcomes_df: pd.DataFrame,
+    milestone_bar: int = BOUNCE_QUICK_MILESTONE_BAR,
+) -> pd.DataFrame:
+    """Latest N-bar milestone row per event, prefixed quick_* for the join."""
+    if outcomes_df.empty or "event_id" not in outcomes_df.columns:
+        return pd.DataFrame()
+    event_type_series = (
+        outcomes_df["event_type"]
+        if "event_type" in outcomes_df.columns
+        else pd.Series([""] * len(outcomes_df), index=outcomes_df.index)
+    )
+    quick = outcomes_df[event_type_series.astype(str) == f"{int(milestone_bar)}_bar"].copy()
+    if quick.empty:
+        return pd.DataFrame()
+    logged_at_series = (
+        quick["logged_at"]
+        if "logged_at" in quick.columns
+        else pd.Series([""] * len(quick), index=quick.index)
+    )
+    quick["_logged_at"] = pd.to_datetime(logged_at_series, errors="coerce")
+    quick = quick.sort_values(["event_id", "_logged_at"]).drop_duplicates(subset=["event_id"], keep="last")
+    keep = {
+        "close_r": "quick_close_r",
+        "mfe_r": "quick_mfe_r",
+        "mae_r": "quick_mae_r",
+        "target_1r_hit": "quick_target_1r_hit",
+        "stop_hit": "quick_stop_hit",
+    }
+    columns = ["event_id", *[col for col in keep if col in quick.columns]]
+    return quick[columns].rename(columns=keep)
+
+
 def build_intraday_bounce_performance_rows(
     *,
     candidates_path: Path = INTRADAY_BOUNCE_CANDIDATES_CSV,
@@ -1351,6 +1390,7 @@ def build_intraday_bounce_performance_rows(
         "logged_at",
         "entry_time",
         "bars_elapsed",
+        "milestone_bar",
         "close_r",
         "mfe_r",
         "mae_r",
@@ -1388,6 +1428,9 @@ def build_intraday_bounce_performance_rows(
     joined = candidates.merge(latest_outcomes, on="event_id", how="inner", suffixes=("", "_outcome"))
     if joined.empty:
         return []
+    quick_rows = _quick_bounce_milestone_rows(outcomes)
+    if not quick_rows.empty:
+        joined = joined.merge(quick_rows, on="event_id", how="left", suffixes=("", "_quick"))
 
     observations = []
     for record in joined.to_dict("records"):
@@ -1414,6 +1457,13 @@ def build_intraday_bounce_performance_rows(
             "target_1r_hit": _bounce_perf_bool(record.get("target_1r_hit")),
             "target_2r_hit": _bounce_perf_bool(record.get("target_2r_hit")),
             "stop_hit": _bounce_perf_bool(record.get("stop_hit")),
+            # 60-minute milestone (quick production); None when the episode
+            # never got a 12-bar row (final-hour entries, pre-milestone data).
+            "quick_close_r": _bounce_perf_clip_r(record.get("quick_close_r")),
+            "quick_mfe_r": _bounce_perf_clip_r(record.get("quick_mfe_r")),
+            "quick_mae_r": _bounce_perf_clip_r(record.get("quick_mae_r")),
+            "quick_target_1r_hit": _bounce_perf_bool(record.get("quick_target_1r_hit")),
+            "quick_stop_hit": _bounce_perf_bool(record.get("quick_stop_hit")),
         }
         dimensions = [
             ("bounce_combo", combo),
@@ -1482,6 +1532,28 @@ def build_intraday_bounce_performance_rows(
         target_1r_rate = sum(1 for row in group_rows if row.get("target_1r_hit")) / float(len(group_rows))
         target_2r_rate = sum(1 for row in group_rows if row.get("target_2r_hit")) / float(len(group_rows))
         stop_rate = sum(1 for row in group_rows if row.get("stop_hit")) / float(len(group_rows))
+        # Quick production: the same stats measured at the 60-minute milestone,
+        # over the episodes that have one.
+        quick_group = [row for row in group_rows if row.get("quick_close_r") is not None]
+        quick_sample_count = len(quick_group)
+        if quick_sample_count:
+            quick_target_1r_rate = (
+                sum(1 for row in quick_group if row.get("quick_target_1r_hit")) / float(quick_sample_count)
+            )
+            quick_stop_rate = (
+                sum(1 for row in quick_group if row.get("quick_stop_hit")) / float(quick_sample_count)
+            )
+            avg_quick_close_r = sum(row["quick_close_r"] for row in quick_group) / float(quick_sample_count)
+            quick_mfe_values = [row["quick_mfe_r"] for row in quick_group if row.get("quick_mfe_r") is not None]
+            quick_mae_values = [row["quick_mae_r"] for row in quick_group if row.get("quick_mae_r") is not None]
+            avg_quick_mfe_r = (sum(quick_mfe_values) / len(quick_mfe_values)) if quick_mfe_values else None
+            avg_quick_mae_r = (sum(quick_mae_values) / len(quick_mae_values)) if quick_mae_values else None
+        else:
+            quick_target_1r_rate = None
+            quick_stop_rate = None
+            avg_quick_close_r = None
+            avg_quick_mfe_r = None
+            avg_quick_mae_r = None
         avg_close_r = sum(close_values) / float(len(close_values))
         median_close_r = float(pd.Series(close_values).median())
         positive_eod_rate = sum(1 for value in close_values if value > 0.0) / float(len(close_values))
@@ -1525,6 +1597,12 @@ def build_intraday_bounce_performance_rows(
                 "target_1r_rate": target_1r_rate,
                 "target_2r_rate": target_2r_rate,
                 "stop_rate": stop_rate,
+                "quick_sample_count": quick_sample_count,
+                "quick_target_1r_rate": quick_target_1r_rate,
+                "quick_stop_rate": quick_stop_rate,
+                "avg_quick_close_r": avg_quick_close_r,
+                "avg_quick_mfe_r": avg_quick_mfe_r,
+                "avg_quick_mae_r": avg_quick_mae_r,
                 "edge_score": edge_score,
                 "recommendation": recommendation,
                 "example_symbols": ", ".join(
@@ -1599,6 +1677,10 @@ def write_intraday_bounce_performance_report(
                 f"MAE={_format_bounce_perf_r(row.get('avg_mae_r'))} "
                 f"1Rseen={_format_bounce_perf_pct(row.get('target_1r_rate'))} "
                 f"stopSeen={_format_bounce_perf_pct(row.get('stop_rate'))} "
+                f"q60: 1R={_format_bounce_perf_pct(row.get('quick_target_1r_rate'))} "
+                f"stop={_format_bounce_perf_pct(row.get('quick_stop_rate'))} "
+                f"close={_format_bounce_perf_r(row.get('avg_quick_close_r'))} "
+                f"(nQ={int(row.get('quick_sample_count', 0) or 0)}) "
                 f"rec={row.get('recommendation')}"
             )
             if row.get("example_symbols"):

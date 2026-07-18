@@ -1184,6 +1184,93 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertAlmostEqual(trait_row["avg_mfe_r"], 1.20)
         self.assertEqual(trait_row["recommendation"], "focus")
 
+    def test_intraday_bounce_performance_joins_60_minute_milestone_stats(self):
+        """Quick production (2026-07-17): the 12-bar milestone rides the
+        aggregation so setups are rankable by what they do in the first hour,
+        not only by their EOD close."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            candidates_path = temp_path / "intraday_bounce_candidates.csv"
+            outcomes_path = temp_path / "intraday_bounce_outcomes.csv"
+
+            pd.DataFrame(
+                [
+                    {
+                        "event_id": f"SYM{i}_long",
+                        "event_type": "confirmed",
+                        "logged_at": f"2026-06-0{i}T10:00:00",
+                        "trade_date": f"2026-06-0{i}",
+                        "symbol": f"SYM{i}",
+                        "direction": "long",
+                        "bounce_types": "vwap",
+                        "score": 40,
+                        "risk_per_share": 0.50,
+                        "market_environment": "bullish",
+                    }
+                    for i in (1, 2, 3)
+                ]
+            ).to_csv(candidates_path, index=False)
+            outcome_rows = []
+            for i, (quick_close, quick_1r, quick_stop) in enumerate(
+                [(1.2, True, False), (-1.0, False, True), (None, None, None)], start=1
+            ):
+                if quick_close is not None:
+                    outcome_rows.append(
+                        {
+                            "event_id": f"SYM{i}_long",
+                            "event_type": "12_bar",
+                            "milestone_bar": 12,
+                            "logged_at": f"2026-06-0{i}T10:30:00",
+                            "entry_time": f"2026-06-0{i}T09:30:00",
+                            "bars_elapsed": 12,
+                            "close_r": quick_close,
+                            "mfe_r": quick_close + 0.5,
+                            "mae_r": -0.6,
+                            "target_1r_hit": quick_1r,
+                            "target_2r_hit": False,
+                            "stop_hit": quick_stop,
+                            "status": "open",
+                        }
+                    )
+                outcome_rows.append(
+                    {
+                        "event_id": f"SYM{i}_long",
+                        "event_type": "final",
+                        "logged_at": f"2026-06-0{i}T13:10:00",
+                        "entry_time": f"2026-06-0{i}T09:30:00",
+                        "bars_elapsed": 40,
+                        "close_r": 0.5,
+                        "mfe_r": 2.0,
+                        "mae_r": -0.8,
+                        "target_1r_hit": True,
+                        "target_2r_hit": False,
+                        "stop_hit": False,
+                        "status": "eod_complete",
+                    }
+                )
+            pd.DataFrame(outcome_rows).to_csv(outcomes_path, index=False)
+
+            rows = bounce_bot.build_intraday_bounce_performance_rows(
+                candidates_path=candidates_path,
+                outcomes_path=outcomes_path,
+                min_samples=2,
+            )
+
+        vwap_row = next(
+            row for row in rows
+            if row["dimension"] == "bounce_type"
+            and row["segment"] == "vwap"
+            and row["direction"] == "long"
+        )
+        # Quick stats cover only the two episodes that have a 12-bar row.
+        self.assertEqual(vwap_row["sample_count"], 3)
+        self.assertEqual(vwap_row["quick_sample_count"], 2)
+        self.assertAlmostEqual(vwap_row["quick_target_1r_rate"], 0.5)
+        self.assertAlmostEqual(vwap_row["quick_stop_rate"], 0.5)
+        self.assertAlmostEqual(vwap_row["avg_quick_close_r"], 0.1)
+        self.assertAlmostEqual(vwap_row["avg_quick_mfe_r"], 0.6)  # (1.7 + -0.5) / 2
+        self.assertAlmostEqual(vwap_row["avg_quick_mae_r"], -0.6)
+
     def test_intraday_bounce_performance_recommendation_categories_with_old_optional_columns_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

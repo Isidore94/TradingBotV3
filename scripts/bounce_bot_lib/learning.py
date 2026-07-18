@@ -41,16 +41,15 @@ MUTE_MIN_SAMPLES = 30
 MUTE_MIN_SESSIONS = 10
 DELTA_R_TO_POINTS = 20.0
 DELTA_CLIP_POINTS = 30
-# Calibrated 2026-07-16 by replaying all 3,579 unmuted historical confirmed
-# events through the shrunk entry-quality composite (in-sample): the ladder
-# separates measured forward quality monotonically -
-#   S >= 0.35: 0.4% of alerts, avg +1.49R closed, 93% touched +1R
-#   A >= 0.20: 6.2%, avg +1.19R (median +0.93), 83% touched +1R
-#   B >= 0.02: 38%, avg +0.09R (plus no-evidence alerts, which default to B)
-#   C >= -0.12: 35%, avg -0.39R;  D below: avg -0.84R
-# The old (0.90/0.45/...) bars predate shrinkage: no event ever reached S or
-# A by composite, piling everything good into B.
-TIER_THRESHOLDS = (("S", 0.35), ("A", 0.20), ("B", 0.02), ("C", -0.12))
+# Recalibrated 2026-07-17 for the production_r blend by replaying all 4,308
+# unmuted historical confirmed events (in-sample, same method as the
+# 2026-07-16 entry_r calibration). The blended composite compresses toward
+# zero (quick_r for slow grinders sits near 0), so the bars move down to keep
+# the same tier shares. At these bars the EOD ladder stays monotone AND the
+# top tier now selects fast producers -
+#   S: 17 alerts, avg +1.12R EOD, 60m harvest +0.05R (was -0.33R at blend 0)
+#   A: 267, avg +0.53R EOD | B: 1637, +0.21R | C: 1508, -0.15R | D: -0.43R
+TIER_THRESHOLDS = (("S", 0.23), ("A", 0.15), ("B", 0.05), ("C", -0.01))
 # PROVEN S-floor stays on the raw avg-close-R scale (deliberately decoupled
 # from the composite thresholds above): a matched proven segment carrying a
 # >= +0.90R measured average close floors the alert at S, others at A.
@@ -59,6 +58,22 @@ PROVEN_S_FLOOR_AVG_R = 0.90
 # n=30 counts 75%, n=90 counts ~90%.
 COMPOSITE_SHRINK_SAMPLES = 10
 LEARNING_STATE_STALE_DAYS = 1
+
+# Quick production (2026-07-17 trader directive: "prioritize setups that give
+# the biggest wins with the smallest losses or the highest WR ... that produce
+# quickly", not how they end at EOD). quick_r applies the same entry-quality
+# formula to the 60-minute (12-bar) milestone stats, and the ranking stat
+# becomes production_r = blend of quick and EOD entry quality. Measured basis:
+# the two rank orders correlate at only 0.33 across historical segments -
+# fast producers like regime_pause (77% touch +1R inside the hour) look dead
+# at EOD, while slow grinders like h1_green_to_yellow look great at EOD but
+# reach +1R inside the hour only 17% of the time. Segments without quick
+# evidence rank by entry_r unchanged.
+# Weight calibrated by replay sweep (0/0.4/0.5/0.6/0.8/1.0): 0.5 keeps the
+# EOD tier ladder monotone while flipping the S tier's 60m production
+# positive; 0.6+ drops S below A on EOD, and 0.8+ inverts the ladder.
+QUICK_MIN_SAMPLES = 10
+QUICK_BLEND_WEIGHT = 0.5
 
 # Only a setup's own identity may MUTE it (direction-specific, evidence-based).
 # Context dimensions (time bucket, market environment) weigh on the tier but
@@ -128,11 +143,16 @@ def entry_quality_r(
 
 
 def _segment_entry_r(entry: dict) -> float | None:
-    """The ranking stat for a stored segment (entry_r, or close-R on old states)."""
-    value = _float_or_none(entry.get("entry_r"))
-    if value is not None:
-        return value
-    return _float_or_none(entry.get("avg_close_r"))
+    """The ranking stat for a stored segment.
+
+    production_r (quick/EOD blend) when the segment has 60-minute evidence;
+    entry_r otherwise; close-R on pre-v2 states.
+    """
+    for field in ("production_r", "entry_r", "avg_close_r"):
+        value = _float_or_none(entry.get(field))
+        if value is not None:
+            return value
+    return None
 
 
 def _segment_is_muted(dimension: str, entry: dict) -> bool:
@@ -173,12 +193,25 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
         stop_rate = _float_or_none(row.get("stop_rate"))
         target_1r_rate = _float_or_none(row.get("target_1r_rate"))
         entry_r, ambiguity = entry_quality_r(avg_close_r, target_1r_rate, stop_rate)
+        # 60-minute milestone stats -> quick_r -> the production blend.
+        quick_sample_count = int(_float_or_none(row.get("quick_sample_count")) or 0)
+        avg_quick_close_r = _float_or_none(row.get("avg_quick_close_r"))
+        quick_target_1r_rate = _float_or_none(row.get("quick_target_1r_rate"))
+        quick_stop_rate = _float_or_none(row.get("quick_stop_rate"))
+        quick_r = None
+        quick_ambiguity = None
+        production_r = entry_r
+        if quick_sample_count >= QUICK_MIN_SAMPLES and avg_quick_close_r is not None:
+            quick_r, quick_ambiguity = entry_quality_r(
+                avg_quick_close_r, quick_target_1r_rate, quick_stop_rate
+            )
+            production_r = QUICK_BLEND_WEIGHT * quick_r + (1.0 - QUICK_BLEND_WEIGHT) * entry_r
         session_count = row.get("session_count")
         try:
             session_count = int(float(session_count)) if session_count not in (None, "") else None
         except (TypeError, ValueError):
             session_count = None
-        delta = int(max(-DELTA_CLIP_POINTS, min(DELTA_CLIP_POINTS, round(entry_r * DELTA_R_TO_POINTS))))
+        delta = int(max(-DELTA_CLIP_POINTS, min(DELTA_CLIP_POINTS, round(production_r * DELTA_R_TO_POINTS))))
         median_close_r = _float_or_none(row.get("median_close_r"))
         proven = bool(
             dimension in PROVEN_DIMENSIONS
@@ -190,6 +223,12 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
             "avg_close_r": round(avg_close_r, 3),
             "entry_r": round(entry_r, 3),
             "ambiguity": round(ambiguity, 3),
+            "production_r": round(production_r, 3),
+            "quick_r": round(quick_r, 3) if quick_r is not None else None,
+            "quick_ambiguity": round(quick_ambiguity, 3) if quick_ambiguity is not None else None,
+            "quick_sample_count": quick_sample_count,
+            "quick_target_1r_rate": quick_target_1r_rate,
+            "quick_stop_rate": quick_stop_rate,
             "sample_count": sample_count,
             "session_count": session_count,
             "stop_rate": stop_rate,
@@ -312,9 +351,12 @@ def evaluate_bounce_quality(
         weight_used += weight
         for value, entry in entries:
             entry_r = _segment_entry_r(entry) or 0.0
+            quick_note = ""
+            if entry.get("quick_target_1r_rate") is not None and entry.get("quick_r") is not None:
+                quick_note = f", 60m 1R {float(entry['quick_target_1r_rate']):.0%}"
             tag = (
                 f"{value} {direction} entry {entry_r:+.2f}R "
-                f"(close {entry['avg_close_r']:+.2f}R, n={entry['sample_count']})"
+                f"(close {entry['avg_close_r']:+.2f}R{quick_note}, n={entry['sample_count']})"
             )
             reasons.append(tag)
             if _segment_is_muted(dimension, entry):

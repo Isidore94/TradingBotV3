@@ -312,7 +312,7 @@
         "market_environment": "bearish_weak"
       },
       "expected": {
-        "tier": "A",
+        "tier": "S",
         "muted": false,
         "proven": false,
         "composite_r": 0.23
@@ -457,5 +457,6 @@
         "composite_r": null
       }
     }
-  ]
+  ],
+  "note": "2026-07-17: scenario tiers re-frozen for the production_r blend thresholds (S .23/A .15/B .05/C -.01); segment entry_r/ambiguity untouched."
 }

@@ -15,18 +15,20 @@ from bounce_bot_lib import learning  # noqa: E402
 
 
 def _perf_row(dimension, direction, segment, n, avg_r, **extra):
-    return {
+    row = {
         "dimension": dimension,
         "direction": direction,
         "segment": segment,
         "sample_count": n,
         "avg_close_r": avg_r,
-        "stop_rate": extra.get("stop_rate", 0.5),
-        "target_1r_rate": extra.get("target_1r_rate", 0.6),
-        "avg_mfe_r": extra.get("avg_mfe_r"),
-        "median_close_r": extra.get("median_close_r"),
-        "session_count": extra.get("session_count"),
+        "stop_rate": 0.5,
+        "target_1r_rate": 0.6,
+        "avg_mfe_r": None,
+        "median_close_r": None,
+        "session_count": None,
     }
+    row.update(extra)  # incl. the quick_* milestone stats when a test sets them
+    return row
 
 
 def _sample_state():
@@ -57,6 +59,68 @@ def test_entry_quality_r_ambiguity_blend():
     entry_r, ambiguity = learning.entry_quality_r(-0.55, 0.7759, 0.8103)
     assert 0.58 < ambiguity < 0.59
     assert 0.09 < entry_r < 0.11  # negative close-R, but 78% of entries reached +1R
+
+
+def test_production_r_blends_quick_and_eod_quality():
+    """2026-07-17 trader directive: rank by what a setup produces quickly,
+    not only by where it ends at EOD."""
+    import pytest
+
+    # A fast producer that gives it back by EOD: dead entry_r, strong quick_r.
+    fast = _perf_row(
+        "bounce_type", "long", "regime_pause_rs", 60, -0.05,
+        stop_rate=0.4, target_1r_rate=0.5,
+        quick_sample_count=45, avg_quick_close_r=0.35,
+        quick_target_1r_rate=0.77, quick_stop_rate=0.30,
+    )
+    # A slow grinder: same EOD close, no quick production.
+    slow = _perf_row(
+        "bounce_type", "short", "h1_green_to_yellow", 60, -0.05,
+        stop_rate=0.4, target_1r_rate=0.5,
+        quick_sample_count=45, avg_quick_close_r=-0.30,
+        quick_target_1r_rate=0.17, quick_stop_rate=0.20,
+    )
+    # No quick evidence at all -> entry_r carries the ranking unchanged.
+    thin_quick = _perf_row(
+        "bounce_type", "long", "fresh_setup", 30, 0.40,
+        stop_rate=0.4, target_1r_rate=0.5,
+        quick_sample_count=learning.QUICK_MIN_SAMPLES - 1,
+        avg_quick_close_r=3.0, quick_target_1r_rate=1.0, quick_stop_rate=0.0,
+    )
+    state = learning.build_learning_state([fast, slow, thin_quick])
+    segments = state["segments"]["bounce_type"]
+
+    fast_entry = segments["long|regime_pause_rs"]
+    slow_entry = segments["short|h1_green_to_yellow"]
+    thin_entry = segments["long|fresh_setup"]
+
+    # Same EOD entry quality, opposite quick production -> the ranking splits.
+    assert fast_entry["entry_r"] == slow_entry["entry_r"]
+    assert fast_entry["production_r"] > 0 > slow_entry["production_r"]
+    expected = (
+        learning.QUICK_BLEND_WEIGHT * fast_entry["quick_r"]
+        + (1 - learning.QUICK_BLEND_WEIGHT) * fast_entry["entry_r"]
+    )
+    assert fast_entry["production_r"] == pytest.approx(expected, abs=0.001)
+    # Below the quick evidence floor nothing blends.
+    assert thin_entry["quick_r"] is None
+    assert thin_entry["production_r"] == thin_entry["entry_r"]
+    # score deltas follow the production stat.
+    assert fast_entry["score_delta"] > 0 > slow_entry["score_delta"]
+
+
+def test_quick_evidence_shows_in_alert_reasons():
+    row = _perf_row(
+        "bounce_type", "long", "regime_pause_rs", 60, -0.05,
+        stop_rate=0.4, target_1r_rate=0.5,
+        quick_sample_count=45, avg_quick_close_r=0.35,
+        quick_target_1r_rate=0.77, quick_stop_rate=0.30,
+    )
+    state = learning.build_learning_state([row])
+    verdict = learning.evaluate_bounce_quality(
+        state, direction="long", bounce_types=["regime_pause_rs"]
+    )
+    assert any("60m 1R 77%" in reason for reason in verdict["reasons"])
 
 
 def test_build_learning_state_thresholds_and_mutes():
