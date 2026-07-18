@@ -282,6 +282,9 @@ ANCHOR_AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "master_anchor_avwap_signals.csv"
 MASTER_AVWAP_FOCUS_FILE = RUNTIME_DATA_DIR / "master_avwap_focus.json"
 MASTER_AVWAP_D1_WATCHLIST_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_watchlist.json"
 MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_upgrade_alerts.json"
+# Per-symbol D1 band-zone "arms" for every scanned symbol: the M5 bounce/break
+# rubric levels the bounce bot watches to fire D1 Focus alerts (decision-support).
+MASTER_AVWAP_D1_ZONE_ARMS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_zone_arms.json"
 # BounceBot's intraday SPY-pause defiance observations (day-scoped). The
 # hourly master scan reads these back as swing-row evidence, so the file lives
 # on the shared store where both processes (and both machines) can see it.
@@ -584,6 +587,7 @@ def migrate_legacy_layout() -> None:
         (REPO_DATA_DIR / "runtime" / "master_avwap_focus.json", MASTER_AVWAP_FOCUS_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_d1_watchlist.json", MASTER_AVWAP_D1_WATCHLIST_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_d1_upgrade_alerts.json", MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE),
+        (REPO_DATA_DIR / "runtime" / "master_avwap_d1_zone_arms.json", MASTER_AVWAP_D1_ZONE_ARMS_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_market_prep.json", MASTER_AVWAP_MARKET_PREP_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_setup_tracker.json", MASTER_AVWAP_SETUP_TRACKER_FILE),
         (REPO_DATA_DIR / "runtime" / "master_avwap_setup_scenarios.csv", MASTER_AVWAP_SETUP_SCENARIOS_FILE),
@@ -662,6 +666,7 @@ def migrate_legacy_layout() -> None:
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_focus.json", MASTER_AVWAP_FOCUS_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_d1_watchlist.json", MASTER_AVWAP_D1_WATCHLIST_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_d1_upgrade_alerts.json", MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE),
+        (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_d1_zone_arms.json", MASTER_AVWAP_D1_ZONE_ARMS_FILE),
         (LOCAL_SETTINGS_DIR / "data" / "runtime" / "master_avwap_market_prep.json", MASTER_AVWAP_MARKET_PREP_FILE),
         (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_tracker.json", MASTER_AVWAP_SETUP_TRACKER_FILE),
         (LOCAL_SETTINGS_DIR / "runtime" / "master_avwap_setup_scenarios.csv", MASTER_AVWAP_SETUP_SCENARIOS_FILE),

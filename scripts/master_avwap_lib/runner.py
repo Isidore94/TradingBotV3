@@ -7,6 +7,7 @@ import time
 from copy import deepcopy
 
 from . import legacy as _legacy
+from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 
 # Scanner orchestration is extracted while helper functions continue to migrate.
@@ -483,6 +484,8 @@ def _run_master_impl(
         "long_upper_2_to_upper_3_2_sessions": [],
         "short_lower_2_to_lower_3_2_sessions": [],
     }
+    # Per-symbol D1 band-zone arms (M5 bounce/break rubric) for every scanned name.
+    d1_zone_arms: dict[str, dict] = {}
     stdev_range_hits = {"long": [], "short": []}
     stdev_cross_hits = {"long": [], "short": []}
     ai_state = {
@@ -962,6 +965,46 @@ def _run_master_impl(
             and closes_between_bands(df, current_lower_3, current_lower_2, 2)
         ):
             market_prep_range_buckets["short_lower_2_to_lower_3_2_sessions"].append(sym)
+
+        # Arm the D1 band-zone M5 rubric for this name (side/zone decided purely by
+        # where the close sits vs the current bands, so every scanned symbol is
+        # covered). The bounce bot watches these levels for a two-bar bounce/break.
+        if last_close is not None and current_vwap is not None:
+            if last_close >= current_vwap:
+                zone3_sustained = bool(
+                    current_upper_2 is not None
+                    and current_upper_3 is not None
+                    and closes_between_bands(df, current_upper_2, current_upper_3, 2)
+                )
+            else:
+                zone3_sustained = bool(
+                    current_lower_2 is not None
+                    and current_lower_3 is not None
+                    and closes_between_bands(df, current_lower_3, current_lower_2, 2)
+                )
+            prev_bands = (prev_anchor_meta or {}).get("bands", {}) or {}
+            zone_arm_entry = build_d1_zone_arms(
+                symbol=sym,
+                close=last_close,
+                avwape=current_vwap,
+                upper_1=current_upper_1,
+                upper_2=current_upper_2,
+                upper_3=current_upper_3,
+                lower_1=current_lower_1,
+                lower_2=current_lower_2,
+                lower_3=current_lower_3,
+                ema15=_coerce_float(indicator_row.get("ema_15")) if indicator_row is not None else None,
+                ema21=_coerce_float(indicator_row.get("ema_21")) if indicator_row is not None else None,
+                prev_upper_1=prev_bands.get("UPPER_1"),
+                prev_lower_1=prev_bands.get("LOWER_1"),
+                stdev=current_anchor_meta.get("stdev") if current_anchor_meta else None,
+                atr=atr20,
+                sustained_2nd_3rd=zone3_sustained,
+                anchor_date=(current_anchor_meta or {}).get("date", "") if current_anchor_meta else "",
+                armed_at=today_run.isoformat(),
+            )
+            if zone_arm_entry:
+                d1_zone_arms[sym] = zone_arm_entry
 
         favorite_zone = None
         if side == "LONG" and _between(current_vwap, current_upper_1):
@@ -2099,6 +2142,14 @@ def _run_master_impl(
     )
     write_market_prep_files(market_prep_payload)
     run_result["market_prep_payload"] = market_prep_payload
+    d1_zone_arms_payload = {
+        "schema_version": 1,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "run_date": today_run.isoformat(),
+        "symbols": d1_zone_arms,
+    }
+    save_json(MASTER_AVWAP_D1_ZONE_ARMS_FILE, d1_zone_arms_payload, pretty=True)
+    run_result["d1_zone_arms_symbol_count"] = len(d1_zone_arms)
     _output_t = _log_phase_duration("output/reports", _output_t)
 
     feature_columns = [
