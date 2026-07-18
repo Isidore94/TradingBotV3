@@ -1895,3 +1895,149 @@ def test_format_bounce_alert_message_includes_tier_plan_and_reasons():
     assert "entry 12.34, stop 12.10 (risk 0.24)" in message
     assert "take 50% at +1R 12.58" in message
     assert "why: vwap long +0.74R" in message
+
+
+# ---------------------------------------------------------------------------
+# H1 retirement + D1-pick confirmation (2026-07-17)
+# ---------------------------------------------------------------------------
+def _trend_bars(count, step, start=100.0, start_dt=None):
+    from datetime import timedelta
+
+    start_dt = start_dt or datetime(2026, 7, 16, 6, 30)
+    bars = []
+    for index in range(count):
+        close = start + step * index
+        bars.append(
+            _make_bar(start_dt + timedelta(hours=index), close - step / 2, close + 0.2, close - 0.6, close)
+        )
+    return bars
+
+
+def test_assess_h1_riding_ema15_long_short_and_thin_history():
+    from bounce_bot_lib.legacy import assess_h1_riding_ema15
+
+    rising = _trend_bars(30, 0.5)
+    falling = _trend_bars(30, -0.5)
+
+    up = assess_h1_riding_ema15(rising, "long")
+    assert up["aligned"] and up["ema_trending"] and up["last_holds"]
+    assert "closes above a rising 15EMA" in up["detail"]
+    assert assess_h1_riding_ema15(rising, "short")["aligned"] is False
+
+    down = assess_h1_riding_ema15(falling, "short")
+    assert down["aligned"]
+    assert "closes below a falling 15EMA" in down["detail"]
+
+    # Rising EMA but price repeatedly losing it: not a riding trend.
+    choppy = _trend_bars(30, 0.5)
+    for bar_index in (-1, -2, -3):
+        bar = choppy[bar_index]
+        choppy[bar_index] = _make_bar(bar.dt, bar.open, bar.high, bar.low - 6.0, bar.close - 6.0)
+    assert assess_h1_riding_ema15(choppy, "long")["aligned"] is False
+
+    assert assess_h1_riding_ema15(_trend_bars(10, 0.5), "long") is None
+    assert assess_h1_riding_ema15(rising, "sideways") is None
+
+
+def test_h1_color_alerts_are_retired_to_learning_only():
+    from bounce_bot_lib.legacy import BounceBot, H1_ALERTS_RETIRED, H1_EMA10_BOUNCE_TYPE
+
+    assert H1_ALERTS_RETIRED is True
+
+    class Stub:
+        _emit_h1_color_alert = BounceBot._emit_h1_color_alert
+
+    stub = Stub()
+    stub.recorded = {"events": [], "outcomes": [], "logs": [], "gui": [], "files": []}
+    stub._log_bounce_candidate_event = (
+        lambda *args, **kwargs: stub.recorded["events"].append(args) or {"event_id": "evt-1"}
+    )
+    stub._register_bounce_outcome = lambda *args, **kwargs: stub.recorded["outcomes"].append(args)
+    stub._evaluate_bounce_alert_quality = lambda *args, **kwargs: {"tier": "B"}
+    stub.log_symbol = lambda symbol, message: stub.recorded["logs"].append(message)
+    stub.gui_callback = lambda *args, **kwargs: stub.recorded["gui"].append(args)
+    stub.log_bounce_to_file = lambda **kwargs: stub.recorded["files"].append(kwargs)
+
+    signal_bar = _make_bar(datetime(2026, 7, 17, 10, 30), 100.0, 100.6, 99.4, 100.4)
+    stub._emit_h1_color_alert(
+        {
+            "symbol": "AAPL",
+            "side": "long",
+            "type": H1_EMA10_BOUNCE_TYPE,
+            "level": 100.0,
+            "signal_bar": signal_bar,
+            "detail": "green H1 tagged the 10-EMA",
+        }
+    )
+
+    # Evidence keeps recording; the trader is not paged.
+    assert len(stub.recorded["events"]) == 1
+    assert len(stub.recorded["outcomes"]) == 1
+    assert any("LEARNING_ONLY [H1 retired]" in message for message in stub.recorded["logs"])
+    assert stub.recorded["gui"] == []
+    assert stub.recorded["files"] == []
+
+
+def test_h1_mid_earnings_candidates_marked_learning_only(monkeypatch):
+    import bounce_bot_lib.legacy as legacy
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        _evaluate_master_avwap_mid_earnings_h1_bounce = (
+            BounceBot._evaluate_master_avwap_mid_earnings_h1_bounce
+        )
+        _parse_bar_time = BounceBot._parse_bar_time
+
+    stub = Stub()
+    stub._is_top_pattern_h1_entry_focus = lambda symbol, direction: True
+    stub._is_mid_earnings_h1_bounce_focus = lambda symbol, direction: False
+    stub.atr_cache = {"AAPL": 1.0}
+    stub.latest_bars = {"AAPL": []}
+    stub.emitted_h1_mid_earnings_bounce_alerts = set()
+    monkeypatch.setattr(legacy, "_aggregate_bars_timeframe", lambda bars, minutes: list(bars))
+    monkeypatch.setattr(
+        legacy,
+        "detect_mid_earnings_h1_bounce",
+        lambda *args, **kwargs: {
+            "confirm_immediately": True,
+            "triggered_levels": ["h1_ema_15"],
+            "confirmation_candle": {"time": "20260717  10:30:00"},
+        },
+    )
+
+    candidate = stub._evaluate_master_avwap_mid_earnings_h1_bounce(
+        "AAPL", "long", datetime(2026, 7, 17).date()
+    )
+    assert candidate is not None
+    assert candidate["learning_only"] is True
+
+
+def test_swing_traits_and_suffix_carry_h1_confirmation():
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        _master_avwap_swing_trait_tags = BounceBot._master_avwap_swing_trait_tags
+        _h1_confirmation_suffix = BounceBot._h1_confirmation_suffix
+
+    stub = Stub()
+    aligned = {"aligned": True, "detail": "7/8 H1 closes above a rising 15EMA"}
+    stub._h1_trend_confirmation = lambda symbol, direction: aligned
+    stub.master_avwap_focus_map = {"AAPL": {"side": "LONG", "priority_bucket": "favorite_setup"}}
+
+    focus_entry = {"preferred_swing_focus": True, "priority_bucket": "favorite_setup"}
+    tags = stub._master_avwap_swing_trait_tags(focus_entry, symbol="AAPL", direction="long")
+    assert "h1_riding_15ema" in tags
+    # Without symbol context (legacy call sites) nothing new appears.
+    assert "h1_riding_15ema" not in stub._master_avwap_swing_trait_tags(focus_entry)
+
+    suffix = stub._h1_confirmation_suffix("AAPL", "long")
+    assert suffix == "H1 confirms D1 pick: 7/8 H1 closes above a rising 15EMA"
+    # Wrong side or off-board names carry no chip.
+    assert stub._h1_confirmation_suffix("AAPL", "short") == ""
+    assert stub._h1_confirmation_suffix("MSFT", "long") == ""
+
+    stub._h1_trend_confirmation = lambda symbol, direction: {"aligned": False, "detail": "x"}
+    assert stub._h1_confirmation_suffix("AAPL", "long") == ""
+    assert "h1_riding_15ema" not in stub._master_avwap_swing_trait_tags(
+        focus_entry, symbol="AAPL", direction="long"
+    )

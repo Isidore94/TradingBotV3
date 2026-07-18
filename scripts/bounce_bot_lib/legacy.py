@@ -509,6 +509,20 @@ H1_EMA10_BOUNCE_TOUCH_ATR = 0.02  # trader spec: |low - EMA10| <= 0.02 * ATR
 H1_EMA10_BOUNCE_TYPE = "h1_ema10_bounce"
 H1_BLUE_AFTER_RED_TYPE = "h1_blue_after_red"
 H1_GREEN_TO_YELLOW_TYPE = "h1_green_to_yellow"
+# H1 alerts retired 2026-07-17 (trader: "I get a lot of useless H1 alerts").
+# Measured basis: H1-sourced types were ~1,700 of 4,506 recorded episodes with
+# the worst quick production in the book (h1_ema10_bounce 13% 60-minute WR
+# over 763 events; h1_green_to_yellow reached +1R inside the hour 17% of the
+# time). Detection still runs and records LEARNING_ONLY so the evidence keeps
+# accruing and a signal can earn its way back; H1's live job is now to
+# CONFIRM D1 setup-tracker picks (see assess_h1_riding_ema15).
+H1_ALERTS_RETIRED = True
+# "A strong trend riding the H1 15EMA is a good sign for a long" (trader,
+# 2026-07-17): over the last window of closed H1 candles the 15EMA must slope
+# with the side and nearly every close must hold beyond it, including the
+# latest close. Mirrored for shorts.
+H1_TREND_LOOKBACK_BARS = 8
+H1_TREND_MIN_CLOSES_BEYOND = 6
 MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
 MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
@@ -2168,6 +2182,59 @@ def detect_h1_color_signals(h1_bars, side):
     return hits
 
 
+def assess_h1_riding_ema15(
+    h1_bars,
+    side,
+    *,
+    lookback=H1_TREND_LOOKBACK_BARS,
+    min_closes_beyond=H1_TREND_MIN_CLOSES_BEYOND,
+):
+    """H1 trend confirmation for a D1 pick: a strong trend riding the 15EMA.
+
+    Long: over the last ``lookback`` closed H1 candles the 15EMA is rising,
+    at least ``min_closes_beyond`` closes held at/above it, and the latest
+    close is above it. Shorts mirror below a falling 15EMA. Returns a dict
+    with ``aligned`` plus the evidence, or None when history is too thin
+    (15EMA warmup + the window).
+    """
+    bars = list(h1_bars or [])
+    normalized_side = str(side or "").strip().lower()
+    lookback = max(2, int(lookback))
+    if normalized_side not in {"long", "short"} or len(bars) < 15 + lookback:
+        return None
+    ema15 = _ema_series(bars, 15)
+    window = list(zip(bars[-lookback:], ema15[-lookback:]))
+    if normalized_side == "long":
+        ema_trending = ema15[-1] > ema15[-lookback]
+        closes_beyond = sum(1 for bar, ema in window if bar.close >= ema)
+        last_holds = window[-1][0].close >= window[-1][1]
+        slope_text = "rising"
+        hold_text = "above"
+    else:
+        ema_trending = ema15[-1] < ema15[-lookback]
+        closes_beyond = sum(1 for bar, ema in window if bar.close <= ema)
+        last_holds = window[-1][0].close <= window[-1][1]
+        slope_text = "falling"
+        hold_text = "below"
+    aligned = bool(ema_trending and last_holds and closes_beyond >= int(min_closes_beyond))
+    return {
+        "aligned": aligned,
+        "closes_beyond": closes_beyond,
+        "window": lookback,
+        "ema_trending": bool(ema_trending),
+        "last_holds": bool(last_holds),
+        "detail": (
+            f"{closes_beyond}/{lookback} H1 closes {hold_text} a {slope_text} 15EMA"
+            if aligned
+            else (
+                f"only {closes_beyond}/{lookback} H1 closes {hold_text} the 15EMA"
+                if ema_trending
+                else f"H1 15EMA not {slope_text}"
+            )
+        ),
+    }
+
+
 def real_relative_strength(symbol_bars, spy_bars, length=RRS_LENGTH):
     if not symbol_bars or not spy_bars:
         return None, None
@@ -2910,7 +2977,48 @@ class BounceBot(EWrapper, EClient):
             pass
         return round(float(score), 2)
 
-    def _master_avwap_swing_trait_tags(self, focus_entry):
+    def _h1_trend_confirmation(self, symbol, direction):
+        """H1 riding-the-15EMA assessment from cached bars (per-candle cache).
+
+        Advisory D1-pick confirmation only - never an alert source on its own
+        (H1 alerts are retired; see H1_ALERTS_RETIRED).
+        """
+        try:
+            bars = self.get_cached_5m_bars(symbol)
+        except Exception:
+            return None
+        h1 = _closed_h1_bars(bars) if bars else []
+        if not h1:
+            return None
+        cache = getattr(self, "_h1_trend_cache", None)
+        if cache is None:
+            cache = {}
+            self._h1_trend_cache = cache
+        key = (symbol, str(direction), h1[-1].dt)
+        if key not in cache:
+            if len(cache) > 2000:  # day-scale bound; entries are tiny
+                cache.clear()
+            cache[key] = assess_h1_riding_ema15(h1, direction)
+        return cache[key]
+
+    def _h1_confirmation_suffix(self, symbol, direction):
+        """"H1 confirms: ..." chip for a D1 focus pick, or "" when it doesn't.
+
+        Only names on the D1 focus board get the chip - the whole point is
+        strengthening a D1 setup-tracker pick, not annotating every ticker.
+        """
+        focus_entry = self.master_avwap_focus_map.get(symbol)
+        if not isinstance(focus_entry, dict):
+            return ""
+        focus_side = str(focus_entry.get("side") or "").upper()
+        if (direction == "long") != (focus_side == "LONG"):
+            return ""
+        trend = self._h1_trend_confirmation(symbol, direction)
+        if not trend or not trend.get("aligned"):
+            return ""
+        return f"H1 confirms D1 pick: {trend.get('detail', 'riding the 15EMA')}"
+
+    def _master_avwap_swing_trait_tags(self, focus_entry, symbol=None, direction=None):
         if not isinstance(focus_entry, dict):
             return []
 
@@ -2941,6 +3049,16 @@ class BounceBot(EWrapper, EClient):
         setup_family = str(focus_entry.get("setup_family") or "").strip().lower()
         if setup_family:
             tags.append(f"family:{setup_family}")
+        # Live H1 confirmation as a measurable trait (2026-07-17): recorded on
+        # every event for a D1 pick so the tracker can prove/disprove that a
+        # strong trend riding the H1 15EMA strengthens the pick.
+        if symbol and direction:
+            try:
+                trend = self._h1_trend_confirmation(symbol, direction)
+            except Exception:
+                trend = None
+            if trend and trend.get("aligned"):
+                tags.append("h1_riding_15ema")
 
         seen = set()
         deduped = []
@@ -3002,7 +3120,7 @@ class BounceBot(EWrapper, EClient):
         metrics = self.symbol_metrics.get(symbol, {})
         focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
         focus_label = self._describe_master_avwap_focus(focus_entry) if isinstance(focus_entry, dict) else ""
-        swing_traits = self._master_avwap_swing_trait_tags(focus_entry)
+        swing_traits = self._master_avwap_swing_trait_tags(focus_entry, symbol=symbol, direction=direction)
         human_focus_side = self._human_focus_side_for_symbol(symbol, direction=direction)
         human_focus_pick = bool(human_focus_side in {"LONG", "SHORT"})
         level_names = {str(key) for key in (levels or {}).keys()}
@@ -4250,6 +4368,11 @@ class BounceBot(EWrapper, EClient):
             return None
         candidate["h1_event_key"] = event_key
         candidate["master_avwap_h1_focus_type"] = "top_pattern" if top_pattern_focus else "mid_earnings"
+        if H1_ALERTS_RETIRED:
+            # Retired 2026-07-17: H1 15EMA/SMA20 entries still detect and
+            # record (the confirm path routes learning_only silently) but no
+            # longer page the trader.
+            candidate["learning_only"] = True
         return candidate
 
     def _emit_master_avwap_focus_bounce_alert(self, symbol, direction, levels_list):
@@ -4278,6 +4401,9 @@ class BounceBot(EWrapper, EClient):
                 reason = f"{reason}; {self._describe_master_avwap_second_stdev_cross(cross_entry)}"
         level_text = ", ".join(normalized_levels) if normalized_levels else "level"
         message = f"MASTER_AVWAP_FOCUS_BOUNCE: {symbol} ({direction}) {level_text} [{reason}]"
+        h1_note = self._h1_confirmation_suffix(symbol, direction)
+        if h1_note:
+            message += f" | {h1_note}"
         gui_tag = "master_avwap_focus_long" if direction == "long" else "master_avwap_focus_short"
         self.gui_callback(message, gui_tag)
         self.log_symbol(symbol, message)
@@ -5819,6 +5945,11 @@ class BounceBot(EWrapper, EClient):
             f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): {hit['detail']} "
             f"on the {signal_bar.dt:%H:%M} H1 candle."
         )
+        if H1_ALERTS_RETIRED:
+            # Retired 2026-07-17: the candidate + outcome above keep recording
+            # so the evidence accrues, but nothing reaches the trader.
+            self.log_symbol(symbol, f"LEARNING_ONLY [H1 retired]: {message}")
+            return
         exit_note = self._measured_exit_suffix(side, levels)
         if exit_note:
             message += f" | {exit_note}"
@@ -9254,6 +9385,9 @@ class BounceBot(EWrapper, EClient):
                 symbol, direction, levels_list, event_row, quality,
                 exit_note=self._measured_exit_suffix(direction, levels),
             )
+            h1_note = self._h1_confirmation_suffix(symbol, direction)
+            if h1_note:
+                bounce_msg += f" | {h1_note}"
             if learning_only or muted_by_learning:
                 mute_note = "; ".join(quality.get("mute_reasons") or []) or "learning-only candidate"
                 self.log_symbol(symbol, f"LEARNING_ONLY [{quality.get('tier', '?')}]: {bounce_msg} | {mute_note}")
