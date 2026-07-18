@@ -505,7 +505,8 @@ class AutopilotService(QObject):
                     self._save_state()
                     self._log("No fresh SPY session in the open-scan data (market holiday?) - watchlists unchanged.")
                     return
-                built = core.build_watchlists_from_moves(moves, spy_move)
+                trend_context = core.load_daily_context(list(moves.keys()))
+                built = core.build_watchlists_from_moves(moves, spy_move, trend_context=trend_context)
                 longs = built["longs"]
                 shorts = built["shorts"]
                 if not longs and not shorts:
@@ -593,7 +594,8 @@ class AutopilotService(QObject):
                     self._state["suggested_at"] = "skipped (no fresh session)"
                     self._save_state()
                     return
-                built = core.build_watchlists_from_moves(moves, spy_move)
+                trend_context = core.load_daily_context(list(moves.keys()))
+                built = core.build_watchlists_from_moves(moves, spy_move, trend_context=trend_context)
                 message = core.format_suggestion_message(built)
                 self._state["suggested_at"] = datetime.now().strftime("%H:%M:%S")
                 self._save_state()

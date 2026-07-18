@@ -504,11 +504,17 @@ def build_watchlists_from_moves(
     gap_min_pct: float = AUTOPILOT_GAP_MIN_PCT,
     rs_excess_min_pct: float = AUTOPILOT_RS_EXCESS_MIN_PCT,
     cap: int = AUTOPILOT_WATCHLIST_CAP,
+    trend_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Rank the open-scan moves into capped longs/shorts lists.
 
     Longs: gap up >= gap_min_pct OR early move beating SPY by rs_excess_min_pct.
     Shorts inverted. A symbol qualifying both ways keeps its stronger side.
+
+    When ``trend_context`` is provided (a :func:`load_daily_context` map), the
+    daily-trend gate is applied BEFORE the cap so quality names fill the list:
+    longs must sit above the daily 15EMA and 200SMA, shorts below the 15EMA and
+    50SMA. It fails open when the context is empty (no daily store available).
     """
     spy_early = 0.0
     if spy_move and spy_move.get("early_move_pct") is not None:
@@ -542,9 +548,11 @@ def build_watchlists_from_moves(
         long_score = max(gap, 0.0) + max(excess, 0.0)
         short_score = max(-gap, 0.0) + max(-excess, 0.0)
         if long_reasons and (not short_reasons or long_score >= short_score):
-            longs.append((long_score, symbol, ", ".join(long_reasons)))
+            if _daily_trend_allows("long", symbol, trend_context):
+                longs.append((long_score, symbol, ", ".join(long_reasons)))
         elif short_reasons:
-            shorts.append((short_score, symbol, ", ".join(short_reasons)))
+            if _daily_trend_allows("short", symbol, trend_context):
+                shorts.append((short_score, symbol, ", ".join(short_reasons)))
 
     longs.sort(key=lambda item: (-item[0], item[1]))
     shorts.sort(key=lambda item: (-item[0], item[1]))
@@ -793,6 +801,90 @@ AUTO_POPULATE_MAX_PER_SIDE = 100
 _AUTO_POPULATE_LOCK = threading.Lock()
 _DAILY_CONTEXT_CACHE: dict[str, Any] = {"date": None, "contexts": {}}
 
+# Daily-trend quality gate (2026-07-18, trader directive: "too many trash stocks
+# that are just 1-day wonders"). A long is only auto-added when its last COMPLETED
+# daily close sits above BOTH the daily 15EMA and 200SMA; a short only when the
+# close sits below BOTH the daily 15EMA and 50SMA. Evaluated on completed daily
+# bars so an intraday pop can't sneak a structurally broken name onto the list. A
+# name without enough history for the required average is treated as failing (it
+# cannot be "above its 200SMA" without 200 sessions). The gate fails OPEN only when
+# no daily store is available at all, so a missing store never empties the lists.
+AUTO_POPULATE_TREND_EMA = 15
+AUTO_POPULATE_LONG_TREND_SMA = 200
+AUTO_POPULATE_SHORT_TREND_SMA = 50
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def passes_daily_trend_gate(side: str, ctx: Mapping[str, Any] | None) -> bool:
+    """Daily-trend quality gate for one auto-populate candidate.
+
+    Long: close >= 15EMA and close >= 200SMA. Short: close <= 15EMA and close
+    <= 50SMA. Missing close/EMA/SMA -> fails (cannot verify the structure).
+    ``ctx`` is a daily-context entry from :func:`load_daily_context`.
+    """
+    if not isinstance(ctx, Mapping):
+        return False
+    close = _finite_float(ctx.get("prev_close"))
+    ema = _finite_float(ctx.get("ema15"))
+    if close is None or ema is None:
+        return False
+    if str(side or "").strip().lower().startswith("short"):
+        sma = _finite_float(ctx.get("sma50"))
+        if sma is None:
+            return False
+        return close <= ema and close <= sma
+    sma = _finite_float(ctx.get("sma200"))
+    if sma is None:
+        return False
+    return close >= ema and close >= sma
+
+
+def _daily_trend_allows(side: str, symbol: str, trend_context: Mapping[str, Any] | None) -> bool:
+    """Per-symbol gate wrapper. Fails OPEN when no gating is requested
+    (``trend_context is None``) or no daily store is available (empty context),
+    so the pipeline never empties when the durable daily bars are missing."""
+    if trend_context is None or not trend_context:
+        return True
+    return passes_daily_trend_gate(side, trend_context.get(str(symbol or "").strip().upper()))
+
+
+def filter_candidates_by_daily_trend(
+    candidates: Mapping[str, list[dict[str, Any]]],
+    trend_context: Mapping[str, Any] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Drop auto-populate candidate rows that fail the daily-trend gate."""
+    result: dict[str, list[dict[str, Any]]] = {}
+    for side_key, side in (("longs", "long"), ("shorts", "short")):
+        rows = candidates.get(side_key) or []
+        result[side_key] = [
+            row
+            for row in rows
+            if _daily_trend_allows(side, str(row.get("symbol") or ""), trend_context)
+        ]
+    for key, value in candidates.items():
+        result.setdefault(key, value)
+    return result
+
+
+def filter_symbols_by_daily_trend(
+    symbols: Iterable[str],
+    side: str,
+    trend_context: Mapping[str, Any] | None,
+) -> list[str]:
+    """Keep only symbols whose daily structure passes the trend gate for ``side``."""
+    return [
+        str(symbol).strip().upper()
+        for symbol in symbols or []
+        if _daily_trend_allows(side, symbol, trend_context)
+    ]
+
 
 def auto_populate_caps(env_key) -> tuple[int, int]:
     """(long_cap, short_cap): a flat per-side ceiling, regime-independent.
@@ -845,12 +937,31 @@ def load_daily_context(
 
             frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
             frame = frame.dropna(subset=["datetime"])
-            frame = frame[frame["datetime"].dt.date < today].tail(adr_sessions)
+            frame = frame[frame["datetime"].dt.date < today]
             if frame.empty or not {"high", "low", "close"} <= set(frame.columns):
                 continue
-            ranges = (frame["high"] - frame["low"]).astype(float)
+            # Daily-trend MAs are computed from the full completed history (before
+            # tailing to the ADR window) so the 200SMA has enough bars.
+            closes = frame["close"].astype(float)
+            ema15 = (
+                float(closes.ewm(span=AUTO_POPULATE_TREND_EMA, adjust=False).mean().iloc[-1])
+                if len(closes) >= AUTO_POPULATE_TREND_EMA
+                else None
+            )
+            sma50 = (
+                float(closes.tail(AUTO_POPULATE_SHORT_TREND_SMA).mean())
+                if len(closes) >= AUTO_POPULATE_SHORT_TREND_SMA
+                else None
+            )
+            sma200 = (
+                float(closes.tail(AUTO_POPULATE_LONG_TREND_SMA).mean())
+                if len(closes) >= AUTO_POPULATE_LONG_TREND_SMA
+                else None
+            )
+            recent = frame.tail(adr_sessions)
+            ranges = (recent["high"] - recent["low"]).astype(float)
             adr = float(ranges.mean())
-            last_row = frame.iloc[-1]
+            last_row = recent.iloc[-1]
             if adr <= 0:
                 continue
             contexts[sym] = {
@@ -858,6 +969,9 @@ def load_daily_context(
                 "prev_low": float(last_row["low"]),
                 "prev_close": float(last_row["close"]),
                 "adr": adr,
+                "ema15": ema15,
+                "sma50": sma50,
+                "sma200": sma200,
             }
         except Exception:
             continue
@@ -1777,6 +1891,10 @@ def refresh_auto_populated_watchlists(
         aggressive,
         relative,
     )
+    # Daily-trend quality gate: no 1-day wonders (longs must hold above the daily
+    # 15EMA/200SMA, shorts below the 15EMA/50SMA). Fails open if the daily store
+    # is unavailable so the lists never empty on missing data.
+    candidates = filter_candidates_by_daily_trend(candidates, daily_context)
     summary = apply_auto_populated_watchlists(
         candidates,
         env_key,

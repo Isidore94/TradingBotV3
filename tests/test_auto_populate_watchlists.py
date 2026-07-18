@@ -102,6 +102,83 @@ def test_adr_candidates_rank_by_move_plus_extreme_time():
     assert {row["symbol"] for row in loose["longs"]} == {"FAST", "GRIND", "MEH"}
 
 
+def _trend(prev_close, ema15, sma50, sma200):
+    return {"prev_close": prev_close, "ema15": ema15, "sma50": sma50, "sma200": sma200}
+
+
+def test_daily_trend_gate_long_and_short_rules():
+    from autopilot_core import passes_daily_trend_gate
+
+    # Long: needs close >= 15EMA and >= 200SMA.
+    assert passes_daily_trend_gate("long", _trend(110, 105, 102, 100)) is True
+    assert passes_daily_trend_gate("long", _trend(103, 102, 101, 108)) is False  # below 200SMA
+    assert passes_daily_trend_gate("long", _trend(104, 106, 100, 100)) is False  # below 15EMA
+    # Short: needs close <= 15EMA and <= 50SMA.
+    assert passes_daily_trend_gate("short", _trend(90, 95, 100, 80)) is True
+    assert passes_daily_trend_gate("short", _trend(97, 98, 95, 120)) is False  # above 50SMA
+    assert passes_daily_trend_gate("short", _trend(99, 96, 100, 80)) is False  # above 15EMA
+    # Missing the required average -> fails (cannot verify the structure).
+    assert passes_daily_trend_gate("long", _trend(110, 105, 102, None)) is False
+    assert passes_daily_trend_gate("short", _trend(90, 95, None, 80)) is False
+    assert passes_daily_trend_gate("long", None) is False
+
+
+def test_build_watchlists_from_moves_applies_daily_trend_gate():
+    from autopilot_core import build_watchlists_from_moves
+
+    moves = {
+        "SPY": {"early_move_pct": 0.0},
+        "GOOD": {"early_move_pct": 3.0, "gap_pct": 3.0},   # above 15EMA + 200SMA
+        "TRASH": {"early_move_pct": 3.0, "gap_pct": 3.0},  # 1-day pop, below 200SMA
+        "WEAKGOOD": {"early_move_pct": -3.0, "gap_pct": -3.0},   # below 15EMA + 50SMA
+        "WEAKTRASH": {"early_move_pct": -3.0, "gap_pct": -3.0},  # above 50SMA
+    }
+    trend = {
+        "GOOD": _trend(110, 105, 102, 100),
+        "TRASH": _trend(103, 102, 101, 108),
+        "WEAKGOOD": _trend(90, 95, 100, 80),
+        "WEAKTRASH": _trend(97, 98, 95, 120),
+    }
+
+    built = build_watchlists_from_moves(
+        moves, {"early_move_pct": 0.0}, gap_min_pct=1.0, trend_context=trend
+    )
+    assert built["longs"] == ["GOOD"]
+    assert built["shorts"] == ["WEAKGOOD"]
+
+    # Fails open with no daily store: every mover is kept.
+    ungated = build_watchlists_from_moves(moves, {"early_move_pct": 0.0}, gap_min_pct=1.0)
+    assert set(ungated["longs"]) == {"GOOD", "TRASH"}
+    assert set(ungated["shorts"]) == {"WEAKGOOD", "WEAKTRASH"}
+    empty_store = build_watchlists_from_moves(
+        moves, {"early_move_pct": 0.0}, gap_min_pct=1.0, trend_context={}
+    )
+    assert set(empty_store["longs"]) == {"GOOD", "TRASH"}
+
+
+def test_filter_candidates_by_daily_trend_drops_trash_and_fails_open():
+    from autopilot_core import filter_candidates_by_daily_trend
+
+    candidates = {
+        "longs": [{"symbol": "GOOD", "reason": "x"}, {"symbol": "TRASH", "reason": "y"}],
+        "shorts": [{"symbol": "WEAKGOOD", "reason": "z"}, {"symbol": "WEAKTRASH", "reason": "w"}],
+    }
+    trend = {
+        "GOOD": _trend(110, 105, 102, 100),
+        "TRASH": _trend(103, 102, 101, 108),
+        "WEAKGOOD": _trend(90, 95, 100, 80),
+        "WEAKTRASH": _trend(97, 98, 95, 120),
+    }
+
+    gated = filter_candidates_by_daily_trend(candidates, trend)
+    assert [row["symbol"] for row in gated["longs"]] == ["GOOD"]
+    assert [row["symbol"] for row in gated["shorts"]] == ["WEAKGOOD"]
+
+    # Empty context fails open (no daily store available) -> unchanged.
+    passthrough = filter_candidates_by_daily_trend(candidates, {})
+    assert [row["symbol"] for row in passthrough["longs"]] == ["GOOD", "TRASH"]
+
+
 def test_aggressive_regime_candidate_golden_fixture():
     from autopilot_core import (
         AGGRESSIVE_EXTREME_WINDOW_BARS,
