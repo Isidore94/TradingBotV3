@@ -53,6 +53,10 @@ _D1_READY_PREFIXES = {
     # surfaces here too.
     "MASTER_AVWAP_D1_ZONE",
     "MASTER_AVWAP_D1_BUCKET_UPGRADE",
+    # Pre-armed tier flip: a non-S/A name closed through the A/S upgrade-target
+    # level the scan armed one small move away - the headline D1 Focus event
+    # (few per day, rvol/context gated, predicted pending next-scan confirm).
+    "MASTER_AVWAP_D1_TIER_FLIP",
 }
 _D1_DEVELOPING_PREFIXES = {
     "MASTER_AVWAP_D1_RESEARCH",

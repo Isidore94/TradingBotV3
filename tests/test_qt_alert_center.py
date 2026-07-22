@@ -119,6 +119,14 @@ def test_loud_alerts_are_sa_bangers_or_ready_d1():
     assert not alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) 1st-dev break UPPER_1@314.57", "d1_flag_long"))
     assert alert_is_loud(_alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade", "d1_flag_long"))
     assert not alert_is_loud(_alert("MASTER_AVWAP_D1_UPGRADE_WATCH: AAPL (long) AVWAPE retest", "d1_flag_long"))
+    # A confirmed tier flip is THE D1 Focus moment - always loud.
+    assert alert_is_loud(
+        _alert(
+            "MASTER_AVWAP_D1_TIER_FLIP: HOMB (long) non-S/A -> A/S predicted "
+            "(next scan confirms) 1st-dev break [@102.00; px=102.30]",
+            "d1_flag_long",
+        )
+    )
     # The pause-watch summary line stays quiet by design.
     assert not alert_is_loud(_alert("REGIME PAUSE WATCH (short): SPY paused (+0.15% window) - 3 swing shorts still pressing lows: A, B, C", "red"))
 
@@ -195,6 +203,43 @@ def test_actionable_feeds_exclude_developing_d1_crossings():
     # champion D1 flags retain their existing live-stream behavior.
     live_prefixes = {a.raw_text.split(":", 1)[0] for a in panel._alerts}
     assert live_prefixes == {"MASTER_AVWAP_D1_FLAG"}
+
+
+def test_tier_flip_and_zone_alerts_route_to_d1_focus_feed():
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel, is_ready_d1_alert
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    tier_flip = _alert(
+        "MASTER_AVWAP_D1_TIER_FLIP: HOMB (long) non-S/A -> A/S predicted "
+        "(next scan confirms) 1st-dev break [@102.00; px=102.30; bar=10:35; "
+        "was: bucket none, score 62; ctx B-tier; rvol 1.50]",
+        "d1_flag_long",
+    )
+    zone = _alert(
+        "MASTER_AVWAP_D1_ZONE: NVDA (long) zone1 bounce off AVWAPE [@100.00; px=102.00]",
+        "d1_flag_long",
+    )
+    assert is_ready_d1_alert(tier_flip)
+    assert is_ready_d1_alert(zone)
+
+    panel = AlertCenterPanel()
+    panel.add_alert(tier_flip)
+    panel.add_alert(zone)
+    d1_prefixes = [a.raw_text.split(":", 1)[0] for a in panel._d1_alerts]
+    # Feed renders newest-first.
+    assert d1_prefixes == ["MASTER_AVWAP_D1_ZONE", "MASTER_AVWAP_D1_TIER_FLIP"]
+    # Neither leaks into the live bounce feed.
+    assert not panel._alerts
 
 
 def test_entry_assist_board_renders_all_sections():

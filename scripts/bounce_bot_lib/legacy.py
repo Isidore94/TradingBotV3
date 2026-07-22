@@ -56,6 +56,18 @@ YFINANCE_NOISY_LOGGER_NAMES = (
 )
 
 from master_avwap_lib.d1_zone_arms import detect_zone_arm_triggers
+from bounce_bot_lib.tier_flip import (
+    TIER_FLIP_MAX_PER_DAY,
+    TIER_FLIP_MAX_PER_SIDE_PER_DAY,
+    TIER_FLIP_MAX_RUN_AGE_DAYS,
+    TIER_FLIP_MIN_CONTEXT_TIER,
+    TIER_FLIP_SOURCE,
+    bounce_types_for_flip_event,
+    build_tier_flip_watch_entry,
+    context_tier_passes,
+    detect_tier_flip_triggers,
+    format_tier_flip_message,
+)
 from master_avwap_shared import (
     build_master_avwap_active_level_map,
     build_master_avwap_d1_flag_events,
@@ -122,6 +134,11 @@ TRADING_BOT_LOG_FILENAME = TRADING_BOT_LOG_FILE
 INTRADAY_BOUNCES_CSV = INTRADAY_BOUNCES_FILE
 INTRADAY_BOUNCE_CANDIDATES_CSV = INTRADAY_BOUNCE_CANDIDATES_FILE
 INTRADAY_BOUNCE_OUTCOMES_CSV = INTRADAY_BOUNCE_OUTCOMES_FILE
+# Persisted per-day tier-flip fired-set (local data dir, beside the outcome
+# stores): a mid-day GUI/bot restart must never re-fire an emitted flip.
+TIER_FLIP_FIRED_STATE_FILE = INTRADAY_BOUNCE_OUTCOMES_FILE.with_name(
+    "master_avwap_tier_flip_fired.json"
+)
 INTRADAY_BOUNCE_OUTCOME_STATE_JSON = INTRADAY_BOUNCE_OUTCOME_STATE_FILE
 INTRADAY_BOUNCE_FEEDBACK_CSV = INTRADAY_BOUNCE_FEEDBACK_FILE
 INTRADAY_BOUNCE_PERFORMANCE_CSV = INTRADAY_BOUNCE_CANDIDATES_CSV.with_name("intraday_bounce_performance.csv")
@@ -2560,6 +2577,7 @@ class BounceBot(EWrapper, EClient):
         self.emitted_master_avwap_d1_flags = set()
         self.master_avwap_d1_flags_primed_date = None
         self.emitted_h1_mid_earnings_bounce_alerts = set()
+        self._tier_flip_fired_state = None  # lazy-loaded persisted store
 
         self.sector_etf_map = load_sector_etf_map()
         self.industry_map_data = _load_industry_etf_map_file()
@@ -4243,6 +4261,207 @@ class BounceBot(EWrapper, EClient):
             parts.append(reason)
         suffix = f" [{'; '.join(parts)}]" if parts else ""
         return f"MASTER_AVWAP_D1_ZONE: {symbol} ({direction}) {zone_text} {alert_label}{critical}{suffix}"
+
+    # ------------------------------------------------------------------
+    # MASTER_AVWAP_D1_TIER_FLIP: pre-armed non-S/A -> S/A flip alerts.
+    # The scan's own A/S upgrade-target levels become the alert threshold:
+    # a non-S/A watchlist name closing through the armed level it sat one
+    # small move away from fires ONE self-explaining D1 Focus alert at M5
+    # latency, predicted pending the next scan's bucket confirmation.
+    # ------------------------------------------------------------------
+    def _tier_flip_fired_store(self):
+        """Per-day fired-set + side counts, persisted so a mid-day restart
+        never re-fires an emitted flip. Auto-resets on date change."""
+        today_iso = datetime.now().date().isoformat()
+        store = getattr(self, "_tier_flip_fired_state", None)
+        if store is None:
+            store = {"date": "", "keys": [], "long": 0, "short": 0}
+            try:
+                if TIER_FLIP_FIRED_STATE_FILE.exists():
+                    loaded = json.loads(TIER_FLIP_FIRED_STATE_FILE.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        for key in store:
+                            store[key] = loaded.get(key, store[key])
+            except (OSError, ValueError):
+                pass
+            self._tier_flip_fired_state = store
+        if store.get("date") != today_iso:
+            store["date"] = today_iso
+            store["keys"] = []
+            store["long"] = 0
+            store["short"] = 0
+        return store
+
+    def _tier_flip_record_emission(self, flip_key, direction):
+        store = self._tier_flip_fired_store()
+        if flip_key not in store["keys"]:
+            store["keys"].append(flip_key)
+        side_key = "short" if direction == "short" else "long"
+        store[side_key] = int(store.get(side_key) or 0) + 1
+        try:
+            TIER_FLIP_FIRED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            TIER_FLIP_FIRED_STATE_FILE.write_text(json.dumps(store), encoding="utf-8")
+        except OSError:
+            logging.warning("Could not persist tier-flip fired state.", exc_info=True)
+
+    def _tier_flip_run_date_fresh(self, run_date_text):
+        """Armed conditions from a scan older than the allowance never fire.
+
+        Yesterday's arms stay valid through the next open (the pre-first-scan
+        window is exactly when flips happen); a missing stamp fails open so
+        older artifacts degrade to the previous behavior, not to silence.
+        """
+        text = str(run_date_text or "").strip()
+        if not text:
+            return True
+        try:
+            run_date = datetime.strptime(text[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return True
+        age_days = (datetime.now().date() - run_date).days
+        return 0 <= age_days <= TIER_FLIP_MAX_RUN_AGE_DAYS
+
+    def emit_master_avwap_tier_flip_flags(self, symbol, today_df):
+        symbol = str(symbol or "").strip().upper()
+        if not symbol or not self.gui_callback:
+            return 0
+        entry = getattr(self, "master_avwap_d1_watchlist", {}).get(symbol)
+        if not entry:
+            return 0
+        watch = build_tier_flip_watch_entry(entry, atr=self.atr_cache.get(symbol))
+        if not watch or not self._tier_flip_run_date_fresh(watch.get("run_date")):
+            return 0
+        if today_df is None or getattr(today_df, "empty", True):
+            return 0
+
+        working = today_df.copy()
+        if "datetime" not in working.columns:
+            working["datetime"] = pd.to_datetime(
+                working.get("time"), format="%Y%m%d  %H:%M:%S", errors="coerce"
+            )
+            if working["datetime"].isna().all():
+                working["datetime"] = pd.to_datetime(working.get("time"), errors="coerce")
+        working = working.dropna(subset=["datetime"]).sort_values("datetime")
+        # Completed bars only - a still-forming M5 bar is preview, never a trigger.
+        cutoff = get_market_local_now().replace(tzinfo=None)
+        completed = working[working["datetime"] + pd.Timedelta(minutes=5) <= cutoff]
+        if len(completed) < 2:
+            return 0
+        bars = [{"close": row.get("close")} for _, row in completed.tail(2).iterrows()]
+        fired = detect_tier_flip_triggers(watch, bars)
+        if not fired:
+            return 0
+
+        side = watch["side"]
+        direction = "short" if side == "SHORT" else "long"
+        store = self._tier_flip_fired_store()
+        flip_key = f"{symbol}|{side}"
+        if flip_key in store["keys"]:
+            return 0
+
+        condition = fired[0]  # nearest armed level first
+        bar_time = completed["datetime"].iloc[-1]
+        if hasattr(bar_time, "to_pydatetime"):
+            bar_time = bar_time.to_pydatetime()
+        event = {
+            "symbol": symbol,
+            "side": side,
+            "direction": direction,
+            "trigger_id": condition.get("trigger_id"),
+            "event_type": condition.get("event_type"),
+            "label": condition.get("label"),
+            "alert_label": condition.get("alert_label"),
+            "level": condition.get("level"),
+            "reason": condition.get("reason"),
+            "distance_atr": condition.get("distance_atr"),
+            "scan_close": watch.get("last_close"),
+            "current_bucket": watch.get("current_bucket"),
+            "priority_score": watch.get("priority_score"),
+            "current_price": self._master_avwap_trigger_float(completed["close"].iloc[-1]),
+            "bar_time": bar_time.strftime("%H:%M") if bar_time is not None else "",
+            "source": TIER_FLIP_SOURCE,
+        }
+
+        # Scarcity caps first: the feed's contract is a handful a day, max.
+        total_fired = int(store.get("long") or 0) + int(store.get("short") or 0)
+        if total_fired >= TIER_FLIP_MAX_PER_DAY or int(store.get(direction) or 0) >= TIER_FLIP_MAX_PER_SIDE_PER_DAY:
+            self.log_symbol(
+                symbol, f"TIER_FLIP_SUPPRESSED (daily cap): {format_tier_flip_message(event)}"
+            )
+            return 0
+
+        human_pick = bool(self._human_focus_side_for_symbol(symbol))
+        # Same TC2000 M5 rvol policy as live bounce alerts: a missing baseline
+        # never suppresses, human picks are never gated. A suppressed moment
+        # does not consume the once-per-day slot - a later genuine re-cross
+        # with volume behind it still gets its alert.
+        try:
+            rvol_value = self.session_rvol_for(symbol)
+        except Exception:
+            rvol_value = None
+        if rvol_value is not None:
+            event["rvol"] = rvol_value
+        if rvol_value is not None and rvol_value < RVOL_MIN_ALERT and not human_pick:
+            self.log_symbol(
+                symbol,
+                f"TIER_FLIP_SUPPRESSED (rvol {rvol_value:.2f} < {RVOL_MIN_ALERT:.2f}): "
+                f"{format_tier_flip_message(event)}",
+            )
+            return 0
+
+        # Measured-context chip: grade the flip's entry context with the real
+        # learning engine (mapped M5 segment, live session context, and the
+        # predicted bucket's conservative A boundary as the counterfactual
+        # priority dimension). Fails open to an ungraded alert, never blocks.
+        context_tier = ""
+        muted = False
+        try:
+            from bounce_bot_lib.learning import (
+                evaluate_bounce_quality,
+                load_bounce_learning_state,
+                time_bucket_for,
+            )
+
+            focus_entry = getattr(self, "master_avwap_focus_map", {}).get(symbol)
+            focus_label = (
+                self._describe_master_avwap_focus(focus_entry)
+                if isinstance(focus_entry, dict)
+                else ""
+            )
+            quality = evaluate_bounce_quality(
+                load_bounce_learning_state(),
+                direction=direction,
+                bounce_types=bounce_types_for_flip_event(condition.get("event_type"), side),
+                time_bucket=time_bucket_for(get_market_local_now()),
+                market_environment=self.get_market_environment(),
+                priority_bucket="near_favorite_zone",
+                focus_label=focus_label,
+                setup_family=str(condition.get("setup_family") or watch.get("setup_family") or ""),
+            )
+            context_tier = str(quality.get("tier") or "")
+            event["context_tier"] = context_tier
+            event["context_note"] = "; ".join(quality.get("reasons") or [])[:160]
+            muted = bool(quality.get("muted")) and not human_pick
+        except Exception as exc:
+            logging.debug("Tier-flip learning check skipped: %s", exc)
+
+        message = format_tier_flip_message(event)
+        if muted:
+            self.log_symbol(symbol, f"TIER_FLIP_SUPPRESSED (learning mute): {message}")
+            return 0
+        if context_tier and not context_tier_passes(context_tier):
+            self.log_symbol(
+                symbol,
+                f"TIER_FLIP_SUPPRESSED (context {context_tier}-tier below "
+                f"{TIER_FLIP_MIN_CONTEXT_TIER}): {message}",
+            )
+            return 0
+
+        self._tier_flip_record_emission(flip_key, direction)
+        gui_tag = "d1_flag_long" if direction == "long" else "d1_flag_short"
+        self.gui_callback(message, gui_tag)
+        self.log_symbol(symbol, message)
+        return 1
 
     def _master_avwap_d1_event_is_research_only(self, event):
         source = str(event.get("source") or "").strip()
@@ -9311,6 +9530,7 @@ class BounceBot(EWrapper, EClient):
 
         self.emit_master_avwap_intraday_trigger_flags(symbol, today_df)
         self.emit_master_avwap_zone_arm_flags(symbol, today_df)
+        self.emit_master_avwap_tier_flip_flags(symbol, today_df)
         self._update_pending_bounce_outcomes(symbol, df)
         if not scan_for_new_bounces:
             return

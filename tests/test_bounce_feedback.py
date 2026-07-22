@@ -1488,5 +1488,190 @@ class SessionRvolUnitsTests(unittest.TestCase):
         self.assertFalse(warn.called)
 
 
+def _tier_flip_today_df(prev_close=101.6, last_close=102.3):
+    return pd.DataFrame(
+        [
+            {
+                "datetime": pd.Timestamp("2026-05-06 09:35:00"),
+                "open": 101.1, "high": 101.8, "low": 100.9, "close": prev_close,
+                "volume": 1000, "time": "20260506  09:35:00",
+            },
+            {
+                "datetime": pd.Timestamp("2026-05-06 09:40:00"),
+                "open": 101.7, "high": 102.4, "low": 101.5, "close": last_close,
+                "volume": 1200, "time": "20260506  09:40:00",
+            },
+        ]
+    )
+
+
+class TierFlipEmissionTests(unittest.TestCase):
+    """MASTER_AVWAP_D1_TIER_FLIP: a non-S/A watchlist name closing through
+    its armed A/S upgrade-target level fires ONE self-explaining D1 Focus
+    alert, gated by rvol + measured context, capped daily, and persisted so
+    a mid-day restart never re-fires."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fired_file = Path(self._tmp.name) / "tier_flip_fired.json"
+        patcher = patch.object(
+            sys.modules["bounce_bot_lib.legacy"], "TIER_FLIP_FIRED_STATE_FILE", self.fired_file
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Deterministic learning context: no state on disk -> composite None
+        # -> neutral B tier, which passes the default context gate.
+        learning_patch = patch(
+            "bounce_bot_lib.learning.load_bounce_learning_state", return_value=None
+        )
+        learning_patch.start()
+        self.addCleanup(learning_patch.stop)
+
+    def _bot(self, *, bucket="", rvol=1.5, run_date=None, level=102.0):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        if run_date is None:
+            run_date = datetime.now().date().isoformat()
+        bot.master_avwap_d1_watchlist = {
+            "HOMB": {
+                "symbol": "HOMB",
+                "side": "LONG",
+                "active_current_scan": True,
+                "priority_bucket": bucket,
+                "priority_score": 62.0,
+                "setup_family": "post_earnings_52w_break",
+                "watchlist_run_date": run_date,
+                "last_close": 101.0,
+                "atr20": None,
+                "trigger_levels": [
+                    {
+                        "trigger_id": f"first_dev_break:UPPER_1:{level:.4f}",
+                        "label": "UPPER_1",
+                        "level": level,
+                        "action": "break_above",
+                        "event_type": "first_dev_break",
+                        "alert_label": "1st-dev break",
+                        "reason": "A/S upgrade target: clear UPPER_1 resistance.",
+                        "source": "a_s_upgrade_target",
+                        "target_tier": "A/S",
+                        "upgrade_only": True,
+                        "armed_price": 101.0,
+                    }
+                ],
+            }
+        }
+        bot.atr_cache = {"HOMB": 4.0}  # distance = 1.0/4.0 = 0.25 ATR, armed
+        bot.master_avwap_focus_map = {}
+        bot.human_focus_map = {"long": set(), "short": set()}
+        bot._tier_flip_fired_state = None
+        bot.gui_callback = Mock()
+        bot.log_symbol = Mock()
+        bot.session_rvol_for = Mock(return_value=rvol)
+        bot.get_market_environment = Mock(return_value="neutral_chop")
+        return bot
+
+    def test_flip_emits_once_with_self_explaining_row(self):
+        bot = self._bot()
+        self.assertEqual(bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 1)
+        message, tag = bot.gui_callback.call_args.args
+        self.assertTrue(message.startswith("MASTER_AVWAP_D1_TIER_FLIP: HOMB (long)"))
+        self.assertIn("non-S/A -> A/S predicted (next scan confirms)", message)
+        self.assertIn("1st-dev break", message)
+        self.assertIn("@102.00", message)
+        self.assertIn("move 0.25 ATR from scan close 101.00", message)
+        self.assertIn("was: bucket none, score 62", message)
+        self.assertIn("A/S upgrade target: clear UPPER_1 resistance.", message)
+        self.assertIn("ctx B-tier", message)
+        self.assertIn("rvol 1.50", message)
+        self.assertEqual(tag, "d1_flag_long")
+
+        # Once per symbol/side per day, even on a genuine later re-cross.
+        self.assertEqual(bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 0)
+        bot.gui_callback.assert_called_once()
+
+    def test_fired_set_survives_restart(self):
+        bot = self._bot()
+        self.assertEqual(bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 1)
+        self.assertTrue(self.fired_file.exists())
+
+        rebooted = self._bot()  # fresh instance, same persisted sidecar
+        self.assertEqual(
+            rebooted.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 0
+        )
+        rebooted.gui_callback.assert_not_called()
+
+    def test_transition_only_already_sa_never_fires(self):
+        for bucket in ("favorite_setup", "near_favorite_zone"):
+            bot = self._bot(bucket=bucket)
+            self.assertEqual(
+                bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 0, bucket
+            )
+            bot.gui_callback.assert_not_called()
+
+    def test_wick_touch_never_fires(self):
+        bot = self._bot()
+        # Bar high reaches 102.4 but the close stays below the level.
+        self.assertEqual(
+            bot.emit_master_avwap_tier_flip_flags(
+                "HOMB", _tier_flip_today_df(prev_close=101.6, last_close=101.9)
+            ),
+            0,
+        )
+        bot.gui_callback.assert_not_called()
+
+    def test_stale_scan_never_fires(self):
+        bot = self._bot(run_date="2026-05-01")
+        self.assertEqual(bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 0)
+        bot.gui_callback.assert_not_called()
+
+    def test_low_rvol_suppresses_without_consuming_the_daily_slot(self):
+        bot = self._bot(rvol=0.4)
+        self.assertEqual(bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 0)
+        bot.gui_callback.assert_not_called()
+        logged = " ".join(str(call.args[1]) for call in bot.log_symbol.call_args_list)
+        self.assertIn("TIER_FLIP_SUPPRESSED (rvol 0.40", logged)
+
+        # Volume shows up on a later genuine re-cross: the alert still fires.
+        bot.session_rvol_for = Mock(return_value=1.6)
+        self.assertEqual(bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 1)
+
+    def test_weak_measured_context_suppresses(self):
+        # A real learning state whose mapped segment grades C-tier: composite
+        # = production_r * n/(n+10) = 0.03 * 0.8 = 0.024 -> C, below the B
+        # floor -> suppressed to a log line.
+        state = {
+            "segments": {
+                "bounce_type": {
+                    "long|dynamic_vwap_upper_band": {
+                        "production_r": 0.03,
+                        "entry_r": 0.03,
+                        "avg_close_r": 0.03,
+                        "sample_count": 40,
+                    }
+                }
+            }
+        }
+        with patch("bounce_bot_lib.learning.load_bounce_learning_state", return_value=state):
+            bot = self._bot()
+            self.assertEqual(
+                bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 0
+            )
+            bot.gui_callback.assert_not_called()
+            logged = " ".join(str(call.args[1]) for call in bot.log_symbol.call_args_list)
+            self.assertIn("TIER_FLIP_SUPPRESSED (context C-tier below B)", logged)
+
+    def test_daily_cap_suppresses(self):
+        self.fired_file.write_text(
+            '{"date": "%s", "keys": ["XXXX|LONG", "YYYY|LONG", "ZZZZ|LONG", "WWWW|LONG"], '
+            '"long": 4, "short": 0}' % datetime.now().date().isoformat(),
+            encoding="utf-8",
+        )
+        bot = self._bot()
+        self.assertEqual(bot.emit_master_avwap_tier_flip_flags("HOMB", _tier_flip_today_df()), 0)
+        bot.gui_callback.assert_not_called()
+        logged = " ".join(str(call.args[1]) for call in bot.log_symbol.call_args_list)
+        self.assertIn("TIER_FLIP_SUPPRESSED (daily cap)", logged)
+
+
 if __name__ == "__main__":
     unittest.main()
