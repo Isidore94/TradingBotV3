@@ -1673,5 +1673,129 @@ class TierFlipEmissionTests(unittest.TestCase):
         self.assertIn("TIER_FLIP_SUPPRESSED (daily cap)", logged)
 
 
+class GroupRrsMeasurementTests(unittest.TestCase):
+    """Sector/industry RS must be recorded for EVERY alert, not just the
+    threshold-crossing extremes (which biased the stored readings to a median
+    of +2.6 vs -0.07 for the SPY scope and left them blank on ~75% of alerts).
+
+    The widening is measurement-only: rrs_sector / rrs_industry keep their
+    original semantics because live scoring reads them, so the full-universe
+    values land in separate *_measured fields.
+    """
+
+    def _bot(self, payload):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        bot.latest_rrs_payload = payload
+        bot.symbol_classification_cache = {
+            "AAPL": {"sectorKey": "technology", "industryKey": "consumer-electronics",
+                     "sector": "Technology", "industry": "Consumer Electronics"}
+        }
+        bot.sector_etf_map = {"technology": "XLK"}
+        bot.session_rvol_for = Mock(return_value=1.5)
+        bot.get_market_environment = Mock(return_value="neutral_chop")
+        bot.get_symbol_direction = Mock(return_value="long")
+        return bot
+
+    def test_measured_fields_capture_non_crossers(self):
+        # AAPL's sector RRS is a real but unremarkable +0.4: it never enters
+        # results_sector, yet the learning row must still see it.
+        bot = self._bot({
+            "timeframe_key": "5m",
+            "results_sector": [],
+            "results_industry": [],
+            "rrs_sector_all": {"AAPL": (0.4, 1.1, "XLK")},
+            "rrs_industry_all": {"AAPL": (-0.8, 0.9, "SMH")},
+        })
+        ctx = bot._build_bounce_context_snapshot("AAPL", "long")
+        self.assertEqual(ctx["rrs_sector_measured"], 0.4)
+        self.assertEqual(ctx["rrs_industry_measured"], -0.8)
+        # Scoring inputs stay blank exactly as before.
+        self.assertEqual(ctx["rrs_sector"], "")
+        self.assertEqual(ctx["rrs_industry"], "")
+
+    def test_threshold_crossers_still_populate_scoring_fields(self):
+        bot = self._bot({
+            "timeframe_key": "5m",
+            "results_sector": [("RS", "AAPL", 3.2, 2.0)],
+            "results_industry": [("RS", "AAPL", 4.1, 2.5)],
+            "rrs_sector_all": {"AAPL": (3.2, 2.0, "XLK")},
+            "rrs_industry_all": {"AAPL": (4.1, 2.5, "SMH")},
+        })
+        ctx = bot._build_bounce_context_snapshot("AAPL", "long")
+        self.assertEqual(ctx["rrs_sector"], 3.2)
+        self.assertEqual(ctx["rrs_industry"], 4.1)
+        self.assertEqual(ctx["rrs_sector_measured"], 3.2)
+
+    def test_measured_fields_never_move_the_candidate_score(self):
+        """The invariant: widening the measurement must not change scoring.
+
+        rrs_sector is a presence check worth +4 and rrs_industry drives a
+        directional bonus, so if the measured values had been written into
+        those fields every weakly-aligned name would have silently gained
+        points.
+        """
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        levels = {"vwap": {}}
+        base = bot._score_bounce_candidate_snapshot(
+            "long", levels, {"rrs_spy": "", "rrs_sector": "", "rrs_industry": ""}
+        )
+        with_measured = bot._score_bounce_candidate_snapshot(
+            "long",
+            levels,
+            {
+                "rrs_spy": "", "rrs_sector": "", "rrs_industry": "",
+                "rrs_sector_measured": 3.0, "rrs_industry_measured": 3.0,
+            },
+        )
+        self.assertEqual(base, with_measured)
+
+    def test_alignment_helper_reads_the_requested_scope(self):
+        row_long = {"direction": "long", "rrs_spy": -1.0, "rrs_sector_measured": 2.5,
+                    "rrs_industry_measured": -0.3}
+        self.assertEqual(bounce_bot._bounce_rrs_alignment(row_long), "counter")
+        self.assertEqual(
+            bounce_bot._bounce_rrs_alignment(row_long, "rrs_sector_measured"), "strong_aligned"
+        )
+        self.assertEqual(
+            bounce_bot._bounce_rrs_alignment(row_long, "rrs_industry_measured"), "counter"
+        )
+        # A scope with no reading stays "unknown" rather than defaulting.
+        self.assertEqual(bounce_bot._bounce_rrs_alignment({"direction": "long"}, "rrs_sector_measured"), "unknown")
+
+    def test_fallback_tolerates_malformed_entries(self):
+        bot = self._bot({"rrs_sector_all": {"AAPL": None}})
+        self.assertEqual(bot._group_rrs_fallback(bot.latest_rrs_payload, "rrs_sector_all", "AAPL"), {})
+        self.assertEqual(bot._group_rrs_fallback({}, "rrs_sector_all", "AAPL"), {})
+
+
+class BarCacheCyclePolicyTests(unittest.TestCase):
+    """Regression lock: non-watchlist series (SPY, sector/industry ETFs) must
+    never survive a scan cycle. The sector/internals reads depend on this -
+    a stale 10:00 XLK series serving at 15:00 would silently poison the tape.
+    """
+
+    def _bot(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        bot.latest_bars = {
+            "SPY|5 D|5 mins": ["spy"],
+            "XLK|5 D|5 mins": ["xlk"],
+            "SMH|1 D|1 hour": ["smh"],
+            "AAPL|5 D|5 mins": ["aapl"],
+        }
+        return bot
+
+    def test_etf_series_are_evicted_on_a_background_refresh_cycle(self):
+        bot = self._bot()
+        bot._prune_latest_bars_for_cycle(True, {"AAPL"})
+        self.assertEqual(bot.latest_bars, {})
+
+    def test_etf_series_are_evicted_on_an_off_cycle_too(self):
+        # Only background watchlist symbols keep their bars; ETFs are not in
+        # the scan symbol set, so they always refetch.
+        bot = self._bot()
+        bot._prune_latest_bars_for_cycle(False, {"AAPL"})
+        self.assertEqual(set(bot.latest_bars), {"AAPL|5 D|5 mins"})
+
+
 if __name__ == "__main__":
     unittest.main()

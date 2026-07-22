@@ -693,6 +693,8 @@ BOUNCE_CANDIDATE_EVENT_COLUMNS = [
     "rrs_spy",
     "rrs_sector",
     "rrs_industry",
+    "rrs_sector_measured",
+    "rrs_industry_measured",
     "sector",
     "industry",
     "sector_etf",
@@ -1247,9 +1249,17 @@ def _bounce_quality_time(row: dict) -> datetime | None:
     return None
 
 
-def _bounce_rrs_alignment(row: dict) -> str:
+def _bounce_rrs_alignment(row: dict, field: str = "rrs_spy") -> str:
+    """Direction-aware alignment bucket for one RRS scope.
+
+    ``field`` selects the scope: ``rrs_spy`` (stock vs SPY, the original),
+    ``rrs_sector`` (stock vs its sector ETF) or ``rrs_industry`` (stock vs its
+    industry reference ETF). The group scopes only became measurable on every
+    alert once the scan started publishing full-universe readings; before that
+    they were recorded solely for threshold-crossing extremes.
+    """
     direction = str(row.get("direction") or "").strip().lower()
-    rrs_value = _bounce_perf_float(row.get("rrs_spy"))
+    rrs_value = _bounce_perf_float(row.get(field))
     if rrs_value is None:
         return "unknown"
     if direction == "long":
@@ -1431,6 +1441,8 @@ def build_intraday_bounce_performance_rows(
         "rrs_spy",
         "rrs_sector",
         "rrs_industry",
+        "rrs_sector_measured",
+        "rrs_industry_measured",
         "market_environment",
         "master_avwap_focus_label",
         "master_avwap_priority_bucket",
@@ -1523,6 +1535,12 @@ def build_intraday_bounce_performance_rows(
             ("bounce_combo", combo),
             ("market_environment", str(record.get("market_environment") or "unknown").strip() or "unknown"),
             ("rrs_alignment", _bounce_rrs_alignment(record)),
+            # Group-scope alignment, measured only. Deliberately NOT added to
+            # COMPOSITE_DIMENSIONS: these segments need real sample history
+            # before they may move a live tier (plan.md sec 6 - no tuning from
+            # one session).
+            ("rrs_sector_alignment", _bounce_rrs_alignment(record, "rrs_sector_measured")),
+            ("rrs_industry_alignment", _bounce_rrs_alignment(record, "rrs_industry_measured")),
             ("time_bucket", _bounce_time_bucket(record.get("entry_time") or record.get("logged_at"))),
             (
                 "master_avwap_focus",
@@ -2833,6 +2851,31 @@ class BounceBot(EWrapper, EClient):
                 }
         return {}
 
+    def _group_rrs_fallback(self, payload, key, symbol):
+        """Full-universe sector/industry RRS for one symbol, or ``{}``.
+
+        ``results_sector`` / ``results_industry`` only carry threshold
+        crossers, so reading them alone recorded a value on ~25% of alerts and
+        only when the group RRS was extreme and direction-aligned. The scan now
+        also publishes every scanned symbol's reading under ``rrs_*_all``;
+        signal stays blank here because a non-crosser has no alert signal.
+        """
+        if not isinstance(payload, dict):
+            return {}
+        entry = (payload.get(key) or {}).get(str(symbol or "").strip().upper())
+        if not entry:
+            return {}
+        try:
+            rrs_value, power_index, etf = (list(entry) + ["", "", ""])[:3]
+        except TypeError:
+            return {}
+        return {
+            "signal": "",
+            "rrs": self._to_float_or_blank(rrs_value),
+            "power_index": self._to_float_or_blank(power_index),
+            "etf": str(etf or "").strip().upper(),
+        }
+
     def _build_bounce_context_snapshot(self, symbol, direction):
         payload = self.latest_rrs_payload if isinstance(self.latest_rrs_payload, dict) else {}
         classification = self.symbol_classification_cache.get(str(symbol or "").strip().upper(), {})
@@ -2853,8 +2896,21 @@ class BounceBot(EWrapper, EClient):
                     "rrs": self._to_float_or_blank(rrs_value),
                     "power_index": self._to_float_or_blank(power_index),
                 }
+        # NOTE: rrs_sector / rrs_industry keep their original threshold-crosser
+        # semantics because _score_bounce_candidate_snapshot reads them live
+        # (rrs_sector is a presence check worth +4; rrs_industry drives a
+        # directional bonus). Widening them would silently inflate every
+        # candidate score - a detector/scoring change, which needs golden
+        # fixtures first (plan.md sec 5). The full-universe readings therefore
+        # land in separate *_measured fields that only the learning rows read.
         sector_rrs = self._extract_rrs_entry(payload, "results_sector", symbol)
         industry_rrs = self._extract_rrs_entry(payload, "results_industry", symbol)
+        sector_measured = self._group_rrs_fallback(payload, "rrs_sector_all", symbol)
+        industry_measured = self._group_rrs_fallback(payload, "rrs_industry_all", symbol)
+        if not sector_etf:
+            sector_etf = sector_measured.get("etf", "") or sector_etf
+        if not industry_etf:
+            industry_etf = industry_measured.get("etf", "") or industry_etf
         symbol_context = {}
         for entry in payload.get("symbol_context", []) or []:
             if str(entry.get("symbol") or "").strip().upper() == str(symbol or "").strip().upper():
@@ -2872,6 +2928,10 @@ class BounceBot(EWrapper, EClient):
             "rrs_sector_signal": sector_rrs.get("signal", ""),
             "rrs_industry": industry_rrs.get("rrs", ""),
             "rrs_industry_signal": industry_rrs.get("signal", ""),
+            # Measurement-only twins: every scanned symbol's real group RRS,
+            # whatever its value. Never read by scoring - see the note above.
+            "rrs_sector_measured": sector_measured.get("rrs", ""),
+            "rrs_industry_measured": industry_measured.get("rrs", ""),
             "session_rvol": round(session_rvol, 3) if session_rvol is not None else "",
             "sector": classification.get("sector", "") if isinstance(classification, dict) else "",
             "industry": classification.get("industry", "") if isinstance(classification, dict) else "",
@@ -3205,6 +3265,8 @@ class BounceBot(EWrapper, EClient):
             "rrs_spy": context.get("rrs_spy", ""),
             "rrs_sector": context.get("rrs_sector", ""),
             "rrs_industry": context.get("rrs_industry", ""),
+            "rrs_sector_measured": context.get("rrs_sector_measured", ""),
+            "rrs_industry_measured": context.get("rrs_industry_measured", ""),
             "sector": context.get("sector", ""),
             "industry": context.get("industry", ""),
             "sector_etf": context.get("sector_etf", ""),
@@ -7760,6 +7822,12 @@ class BounceBot(EWrapper, EClient):
         industry_results = []
         symbol_context = []
         all_scores = []
+        # Full-universe sector/industry RRS, keyed by symbol. ``*_results``
+        # above only collect threshold-crossers, which biased every recorded
+        # rrs_sector / rrs_industry toward extremes (median +2.6 vs -0.07 for
+        # the SPY scope) and left them blank on ~75% of alerts.
+        sector_all = {}
+        industry_all = {}
         intraday_profiles = {}
         current_market_date = spy_5m[-1].dt.date()
         previous_market_date = self._previous_market_date_from_bars(spy_5m, current_market_date)
@@ -7845,6 +7913,11 @@ class BounceBot(EWrapper, EClient):
                 aligned_sym_sec, aligned_sec = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in sec_bars})
                 sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
                 if sec_rrs is not None:
+                    # Every scanned symbol, not just threshold-crossers (see
+                    # rrs_sector_all below): the alert-time snapshot must be
+                    # able to record a symbol's real sector RRS whatever its
+                    # value, or the learning rows only ever see extremes.
+                    sector_all[symbol] = (sec_rrs, sec_power, sector_etf)
                     if symbol_direction == "long" and sec_rrs >= threshold:
                         sector_results.append(("RS", symbol, sec_rrs, sec_power))
                     elif symbol_direction == "short" and sec_rrs <= -threshold:
@@ -7857,6 +7930,7 @@ class BounceBot(EWrapper, EClient):
                 aligned_sym_ind, aligned_ind = _align_bars_with_map(sym_bars, {bar.dt: bar for bar in ind_bars})
                 ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
                 if ind_rrs is not None:
+                    industry_all[symbol] = (ind_rrs, ind_power, industry_ref)
                     if symbol_direction == "long" and ind_rrs >= threshold:
                         industry_results.append(("RS", symbol, ind_rrs, ind_power))
                     elif symbol_direction == "short" and ind_rrs <= -threshold:
@@ -7903,6 +7977,15 @@ class BounceBot(EWrapper, EClient):
             "rrs_all": {
                 str(symbol).strip().upper(): (rrs_value, power_index)
                 for symbol, rrs_value, power_index in all_scores
+            },
+            # Same full-universe treatment for the group scopes, so alert rows
+            # record what a symbol's sector/industry RRS actually was instead
+            # of only the extremes that cleared the alert threshold.
+            "rrs_sector_all": {
+                str(symbol).strip().upper(): value for symbol, value in sector_all.items()
+            },
+            "rrs_industry_all": {
+                str(symbol).strip().upper(): value for symbol, value in industry_all.items()
             },
         }
         if emit_gui:
