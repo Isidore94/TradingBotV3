@@ -54,8 +54,104 @@ def test_technical_integrity_golden_hierarchy():
         row = _entity(snapshot, entity_type, key)
         for field, value in expected[expected_key].items():
             assert row[field] == value
-    assert snapshot["weakest_industries"][0]["entity_key"] == expected["weakest_industry"]
-    assert snapshot["strongest_industries"][0]["entity_key"] == expected["strongest_industry"]
+    # Entities without enough decisive evidence report no score, so they are
+    # not rankable - the boards stay empty rather than ranking noise.
+    assert len(snapshot["weakest_industries"]) == expected["scored_industry_count"]
+    assert len(snapshot["strongest_industries"]) == expected["scored_industry_count"]
+
+    # With the evidence-sufficiency rule disabled the same events must still
+    # produce the exact scores above, which pins the scoring math itself
+    # independently of the suppression policy.
+    math_only = aggregate_technical_integrity(
+        fixture["events"],
+        as_of=fixture["as_of"],
+        session_date=fixture["session_date"],
+        config=TechnicalIntegrityConfig(min_decisive_weight_for_score=0.0),
+    )
+    expected_math = fixture["expected_math_only"]
+    for entity_type, key, expected_key in (
+        ("industry", "memory", "memory"),
+        ("industry", "software", "software"),
+        ("stock", "MU", "mu"),
+    ):
+        row = _entity(math_only, entity_type, key)
+        for field, value in expected_math[expected_key].items():
+            assert row[field] == value
+    assert math_only["weakest_industries"][0]["entity_key"] == expected_math["weakest_industry"]
+    assert math_only["strongest_industries"][0]["entity_key"] == expected_math["strongest_industry"]
+
+
+def test_chop_is_counted_but_never_scored():
+    """Chop was 69% of resolutions and its value equalled the prior, so it
+    added weight and zero information - the mechanical cause of every symbol
+    converging on ~6.15."""
+    from technical_integrity import TechnicalIntegrityConfig, aggregate_technical_integrity
+
+    def event(event_id, outcome):
+        return {
+            "event_type": "level_resolved", "event_id": event_id,
+            "session_date": "2026-07-22", "resolved_at": f"2026-07-22T10:00:0{event_id[-1]}-04:00",
+            "symbol": "MU", "sector_key": "technology", "sector": "Technology",
+            "industry_key": "memory", "industry": "Memory", "level_family": "vwap",
+            "level_timeframe": "intraday", "outcome": outcome, "break_direction": "",
+            "event_weight": 1.0, "approach_side": "above",
+        }
+
+    decisive = [event(f"h{i}", "held") for i in range(9)]
+    padded = decisive + [event(f"c{i}", "chop") for i in range(9)]
+    config = TechnicalIntegrityConfig()
+    kwargs = {"as_of": "2026-07-22T11:00:00-04:00", "session_date": "2026-07-22"}
+
+    clean = aggregate_technical_integrity(decisive, config=config, **kwargs)["market"]
+    with_chop = aggregate_technical_integrity(padded, config=config, **kwargs)["market"]
+
+    # Nine inconclusive tests must not drag a strong reading toward neutral.
+    assert with_chop["score"] == clean["score"]
+    assert with_chop["test_count"] == clean["test_count"] == 9
+    # ...but they are still reported, so the inconclusiveness stays visible.
+    assert with_chop["chop_count"] == 9
+    assert clean["chop_count"] == 0
+
+
+def test_score_is_centred_on_the_measured_base_respect_rate():
+    """5.5 must mean 'levels respected as often as they typically are'.
+
+    Under the old 1+9p map the neutral prior scored 5.5 only because the prior
+    was 0.5, while levels actually hold ~74% of the time - so a typical symbol
+    read 6.55 and 'above the midpoint' meant nothing.
+    """
+    from technical_integrity import (
+        TECHNICAL_INTEGRITY_BASE_RESPECT,
+        _score_from_probability,
+    )
+
+    base = TECHNICAL_INTEGRITY_BASE_RESPECT
+    assert _score_from_probability(base, base) == 5.5
+    assert _score_from_probability(0.0, base) == 1.0
+    assert _score_from_probability(1.0, base) == 10.0
+    # Respect below the norm reads below the midpoint, and vice versa.
+    assert _score_from_probability(base - 0.2, base) < 5.5
+    assert _score_from_probability(base + 0.1, base) > 5.5
+
+
+def test_thin_evidence_reports_building_instead_of_a_number():
+    from technical_integrity import TechnicalIntegrityConfig, aggregate_technical_integrity
+
+    one_test = [{
+        "event_type": "level_resolved", "event_id": "e1", "session_date": "2026-07-22",
+        "resolved_at": "2026-07-22T10:00:00-04:00", "symbol": "MU",
+        "sector_key": "technology", "sector": "Technology", "industry_key": "memory",
+        "industry": "Memory", "level_family": "vwap", "level_timeframe": "intraday",
+        "outcome": "held", "break_direction": "", "event_weight": 1.0,
+        "approach_side": "above",
+    }]
+    snapshot = aggregate_technical_integrity(
+        one_test, as_of="2026-07-22T11:00:00-04:00", session_date="2026-07-22",
+        config=TechnicalIntegrityConfig(),
+    )
+    row = _entity(snapshot, "stock", "MU")
+    assert row["score"] is None
+    assert row["state"] == "BUILDING"
 
 
 def test_completed_m5_filter_excludes_forming_bar():
@@ -174,9 +270,10 @@ def test_monitor_resolves_support_break_and_dedupes(tmp_path):
     )
     assert monitor.pending_count == 0
     assert snapshot["market"]["test_count"] == 1
-    # VWAP carries 1.2x evidence weight, so one clean break moves the neutral
-    # prior slightly farther than a generic 1.0-weight test.
-    assert snapshot["market"]["score"] == 3.8
+    # One resolved test is not a measurement: below min_decisive_weight_for_score
+    # the reading is the prior, so the score is withheld rather than printed.
+    assert snapshot["market"]["score"] is None
+    assert snapshot["market"]["state"] == "BUILDING"
     rows = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [row["event_type"] for row in rows] == ["level_test_started", "level_resolved"]
     assert rows[-1]["outcome"] == "broke"
@@ -412,31 +509,31 @@ def test_aggregation_splits_d1_and_intraday_and_chip_leads_with_d1():
             "approach_side": "above",
         }
 
-    events = [
-        event("d1", "d1_sma_50", "d1", "held", 1.6),
-        event("d2", "d1_trendline", "d1", "held", 1.6),
-        event("m1", "vwap", "intraday", "broke", 1.2, "down"),
-        event("m2", "vwap", "intraday", "broke", 1.2, "down"),
-    ]
+    # Each timeframe needs enough decisive weight to earn a score of its own
+    # (min_decisive_weight_for_score), so the split is exercised with a real
+    # sample rather than two tests per side.
+    events = [event(f"d{i}", "d1_sma_50", "d1", "held", 1.6) for i in range(5)]
+    events += [event(f"m{i}", "vwap", "intraday", "broke", 1.2, "down") for i in range(7)]
     snapshot = aggregate_technical_integrity(
         events,
         as_of="2026-07-15T11:00:00-04:00",
         session_date="2026-07-15",
     )
     market = snapshot["market"]
-    assert market["d1_test_count"] == 2
-    assert market["d1_score"] == 8.3
+    assert market["d1_test_count"] == 5
+    assert market["d1_score"] == 9.1
     assert market["d1_state"] == "STRONG"
     assert market["d1_pressure"] == "BALANCED"
-    assert market["intraday_test_count"] == 2
-    assert market["intraday_score"] == 3.0
+    assert market["intraday_test_count"] == 7
+    assert market["intraday_score"] == 1.9
     assert market["pressure"] == "BEARISH"  # combined still sees the M5 breaks
 
     chip, tooltip, color = format_technical_integrity_snapshot(
         snapshot,
         now=datetime(2026, 7, 15, 11, 31, tzinfo=ZoneInfo("America/New_York")),
     )
-    assert chip == "Technicals D1: STRONG 8.3/10 | BALANCED | LOW · M5 3.0/10"
+    # Confidence stays LOW: one symbol, however many tests it contributes.
+    assert chip == "Technicals D1: STRONG 9.1/10 | BALANCED | LOW · M5 1.9/10"
     assert "D1 major levels" in tooltip
     assert "Intraday M5 levels" in tooltip
     assert color == "#58a6ff"  # colored by the D1 verdict, not the M5 breaks
@@ -472,8 +569,14 @@ def test_market_state_formatter_is_plain_and_actionable():
         now=datetime(2026, 7, 15, 11, 31, tzinfo=ZoneInfo("America/New_York")),
     )
     # No D1 evidence yet: the chip says so and falls back to the M5 read.
-    assert chip == "Technicals D1: building · M5 MIXED 5.7/10 | BEARISH | MED"
+    # Recentred on the measured base respect rate: a tape with four clean
+    # breaks reads below the 5.5 midpoint instead of a reassuring "MIXED 5.7".
+    assert chip == "Technicals D1: building · M5 WEAK 4.5/10 | BEARISH | MED"
     assert "D1 major levels: building" in tooltip
-    assert "Memory 4.0/10 WEAK" in tooltip
-    assert "Software 8.0/10 STRONG" in tooltip
+    # The industry leader/laggard lines are gone from this fixture on purpose:
+    # 10 tests across 6 symbols cannot support a per-industry reading, so no
+    # industry is scored and none is ranked. Previously the tooltip named a
+    # "weakest" and "strongest" industry off 4 and 2 tests respectively.
+    assert "Memory" not in tooltip
+    assert "Software" not in tooltip
     assert color == "#f85149"

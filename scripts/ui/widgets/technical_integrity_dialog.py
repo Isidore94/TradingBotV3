@@ -25,11 +25,14 @@ _COLUMNS = (
     ("State", "state"),
     ("Break pressure", "pressure"),
     ("Confidence", "confidence"),
-    ("Tests", "test_count"),
+    ("Decisive tests", "test_count"),
+    ("Inconclusive", "chop_count"),
     ("Symbols", "symbol_count"),
 )
 
-_NUMERIC_KEYS = {"score", "d1_score", "test_count", "d1_test_count", "symbol_count"}
+_NUMERIC_KEYS = {
+    "score", "d1_score", "test_count", "d1_test_count", "chop_count", "symbol_count",
+}
 _SCORE_KEYS = {"score", "d1_score"}
 
 
@@ -45,11 +48,14 @@ class TechnicalIntegrityDialog(QDialog):
         title = QLabel("Technical Integrity: are levels earning respect today?")
         title.setObjectName("SectionTitle")
         explanation = QLabel(
-            "1 = technical levels are breaking easily; 10 = levels are repeatedly holding. "
-            "D1 columns cover only major daily levels (SMA 50/100/200, D1 trendlines, horizontal S/R) - "
-            "the priority read; the combined columns fold in intraday M5 levels too. "
-            "Break pressure shows the direction of clean failures. Scores cover BounceBot-scanned "
-            "symbols only and never change alerts, watchlists, or setup rankings."
+            "5.5 = levels are respected about as often as they normally are; below that they are "
+            "breaking more than usual, above that they are holding more. D1 columns cover only major "
+            "daily levels (SMA 50/100/200, D1 trendlines, horizontal S/R) - the priority read; the "
+            "combined columns fold in intraday M5 levels too. Inconclusive tests (price finishing "
+            "inside the break buffer) are counted but never scored, so a blank integrity score means "
+            "not enough decisive tests have resolved yet - most individual stocks will sit there all "
+            "session. Break pressure shows the direction of clean failures. Scores cover "
+            "BounceBot-scanned symbols only and never change alerts, watchlists, or setup rankings."
         )
         explanation.setWordWrap(True)
 

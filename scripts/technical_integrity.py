@@ -34,14 +34,38 @@ STATE_SCHEMA = "technical_integrity_monitor_state_v1"
 CALIBRATION_SCHEMA = "technical_integrity_calibration_v1"
 
 
+# Measured share of DECISIVE level tests that end in respect (held/reclaimed
+# weighted against broke). Levels mostly hold, so 0.5 was never the neutral
+# point: scoring against it put a typical symbol at 6.55 and made "above the
+# midpoint" meaningless. Re-measured 2026-07-22 over 1,293 decisive same-day
+# resolutions. Reviewed against fresh sessions, not tuned per-session.
+TECHNICAL_INTEGRITY_BASE_RESPECT = 0.736
+
+
 @dataclass(frozen=True)
 class TechnicalIntegrityConfig:
     prior_weight: float = 2.0
-    prior_respect_probability: float = 0.5
+    prior_respect_probability: float = TECHNICAL_INTEGRITY_BASE_RESPECT
     held_value: float = 1.0
     reclaimed_value: float = 0.65
     chop_value: float = 0.5
     broke_value: float = 0.0
+    # "chop" (price finishing inside the break buffer) was 69% of all
+    # resolutions, and its value equalled the prior exactly - so it added
+    # weight to the denominator and precisely zero information to the
+    # numerator. With the prior that was ~75% dead weight, which is why every
+    # symbol converged to ~6.15 and the cross-symbol spread measured as pure
+    # sampling noise (permutation null 0.657 vs observed 0.639; split-half
+    # r=0.09). Chop is now counted and reported, but never scored.
+    count_chop_as_evidence: bool = False
+    # Score midpoint: the probability that maps to 5.5/10.
+    neutral_respect_probability: float = TECHNICAL_INTEGRITY_BASE_RESPECT
+    # Below this much decisive (non-chop) evidence weight a score is not
+    # measurement, it is the prior echoing back. Such entities report a null
+    # score and BUILDING rather than a confident-looking number. Per-symbol
+    # rows carry ~1 decisive D1 test, so in practice only the market and
+    # sector rollups clear this bar - deliberately.
+    min_decisive_weight_for_score: float = 8.0
     resolution_bars: int = 3
     touch_buffer_atr: float = 0.05
     break_buffer_atr: float = 0.10
@@ -199,8 +223,25 @@ def completed_m5_bars(rows: Any, *, now: datetime | None = None) -> list[dict[st
     return [row for row in complete if row["_start_local"].date() == latest_date]
 
 
-def _score_state(score: float, test_count: int) -> str:
-    if test_count <= 0:
+def _score_from_probability(probability: float, neutral: float) -> float:
+    """Map a respect probability onto the 1-10 scale, centred on ``neutral``.
+
+    Piecewise-linear so the endpoints stay 1.0 and 10.0 while the measured
+    base rate lands on 5.5. Reading a score is then unambiguous: below 5.5
+    means levels are being respected LESS than they typically are, above
+    means more. The previous straight ``1 + 9p`` mapping put the typical
+    symbol at 6.55, so "6.1" looked mid-range while actually meaning
+    below-average respect.
+    """
+    neutral = min(max(float(neutral), 0.05), 0.95)
+    probability = min(max(float(probability), 0.0), 1.0)
+    if probability <= neutral:
+        return round(1.0 + 4.5 * (probability / neutral), 1)
+    return round(5.5 + 4.5 * ((probability - neutral) / (1.0 - neutral)), 1)
+
+
+def _score_state(score: float | None, test_count: int) -> str:
+    if test_count <= 0 or score is None:
         return "BUILDING"
     if score <= 3.0:
         return "VERY WEAK"
@@ -230,9 +271,11 @@ def _integrity_probability(
     total_weight = float(config.prior_weight)
     resolved_weight = 0.0
     test_count = 0
+    chop_count = 0
     symbols: set[str] = set()
     for event in events:
-        value = _outcome_value(str(event.get("outcome") or ""), config)
+        outcome = str(event.get("outcome") or "").strip().lower()
+        value = _outcome_value(outcome, config)
         if value is None:
             continue
         try:
@@ -241,15 +284,27 @@ def _integrity_probability(
             continue
         if weight <= 0:
             continue
+        symbol = str(event.get("symbol") or "").strip().upper()
+        if outcome == "chop":
+            # Counted for reporting, never scored: an inconclusive test is
+            # not evidence of respect or of failure.
+            chop_count += 1
+            if symbol:
+                symbols.add(symbol)
+            if not config.count_chop_as_evidence:
+                continue
         weighted_value += weight * value
         total_weight += weight
         resolved_weight += weight
         test_count += 1
-        symbol = str(event.get("symbol") or "").strip().upper()
         if symbol:
             symbols.add(symbol)
-    probability = weighted_value / total_weight if total_weight > 0 else 0.5
-    return probability, resolved_weight, test_count, symbols
+    probability = (
+        weighted_value / total_weight
+        if total_weight > 0
+        else config.prior_respect_probability
+    )
+    return probability, resolved_weight, test_count, symbols, chop_count
 
 
 def _pressure(events: Iterable[Mapping[str, Any]]) -> tuple[str, float, float]:
@@ -290,8 +345,10 @@ def _side_score(
     side_events = [event for event in events if str(event.get("approach_side") or "") == side]
     if not side_events:
         return None
-    probability, _weight, count, _symbols = _integrity_probability(side_events, config)
-    return round(1.0 + 9.0 * probability, 1) if count else None
+    probability, weight, count, _symbols, _chop = _integrity_probability(side_events, config)
+    if not count or weight < config.min_decisive_weight_for_score:
+        return None
+    return _score_from_probability(probability, config.neutral_respect_probability)
 
 
 def _entity_row(
@@ -302,8 +359,11 @@ def _entity_row(
     label: str,
     config: TechnicalIntegrityConfig,
 ) -> dict[str, Any]:
-    probability, resolved_weight, test_count, symbols = _integrity_probability(events, config)
-    score = round(1.0 + 9.0 * probability, 1)
+    probability, resolved_weight, test_count, symbols, chop_count = _integrity_probability(events, config)
+    # Thin decisive evidence reports no score rather than the prior wearing a
+    # decimal point - see min_decisive_weight_for_score.
+    has_score = test_count > 0 and resolved_weight >= config.min_decisive_weight_for_score
+    score = _score_from_probability(probability, config.neutral_respect_probability) if has_score else None
     pressure, break_up_weight, break_down_weight = _pressure(events)
     state = _score_state(score, test_count)
     confidence = _confidence(resolved_weight, len(symbols))
@@ -317,6 +377,7 @@ def _entity_row(
         "pressure": pressure,
         "confidence": confidence,
         "test_count": test_count,
+        "chop_count": chop_count,
         "resolved_weight": round(resolved_weight, 3),
         "symbol_count": len(symbols),
         "support_integrity": _side_score(events, "above", config),
@@ -329,16 +390,22 @@ def _entity_row(
     # reported separately so the D1 verdict is never diluted by M5 noise.
     for timeframe, prefix in (("d1", "d1_"), ("intraday", "intraday_")):
         subset = [event for event in events if _event_timeframe(event) == timeframe]
-        sub_probability, sub_weight, sub_count, sub_symbols = _integrity_probability(subset, config)
-        sub_score = round(1.0 + 9.0 * sub_probability, 1) if sub_count else None
+        sub_probability, sub_weight, sub_count, sub_symbols, sub_chop = _integrity_probability(subset, config)
+        sub_has_score = sub_count > 0 and sub_weight >= config.min_decisive_weight_for_score
+        sub_score = (
+            _score_from_probability(sub_probability, config.neutral_respect_probability)
+            if sub_has_score
+            else None
+        )
         sub_pressure, _up, _down = _pressure(subset)
         row.update(
             {
                 f"{prefix}score": sub_score,
-                f"{prefix}state": _score_state(sub_score if sub_score is not None else 5.5, sub_count),
+                f"{prefix}state": _score_state(sub_score, sub_count),
                 f"{prefix}pressure": sub_pressure,
                 f"{prefix}confidence": _confidence(sub_weight, len(sub_symbols)),
                 f"{prefix}test_count": sub_count,
+                f"{prefix}chop_count": sub_chop,
                 f"{prefix}symbol_count": len(sub_symbols),
             }
         )
@@ -423,10 +490,14 @@ def aggregate_technical_integrity(
 
     industries = [row for row in entities if row["entity_type"] == "industry"]
     sectors = [row for row in entities if row["entity_type"] == "sector"]
-    weakest_industries = sorted(industries, key=lambda row: (row["score"], -row["test_count"], row["label"]))[:5]
-    strongest_industries = sorted(industries, key=lambda row: (-row["score"], -row["test_count"], row["label"]))[:5]
-    weakest_sectors = sorted(sectors, key=lambda row: (row["score"], -row["test_count"], row["label"]))[:5]
-    strongest_sectors = sorted(sectors, key=lambda row: (-row["score"], -row["test_count"], row["label"]))[:5]
+    # Only scored rows can be ranked; an unscored row has no measurement to
+    # be strongest or weakest with.
+    scored_industries = [row for row in industries if row["score"] is not None]
+    scored_sectors = [row for row in sectors if row["score"] is not None]
+    weakest_industries = sorted(scored_industries, key=lambda row: (row["score"], -row["test_count"], row["label"]))[:5]
+    strongest_industries = sorted(scored_industries, key=lambda row: (-row["score"], -row["test_count"], row["label"]))[:5]
+    weakest_sectors = sorted(scored_sectors, key=lambda row: (row["score"], -row["test_count"], row["label"]))[:5]
+    strongest_sectors = sorted(scored_sectors, key=lambda row: (-row["score"], -row["test_count"], row["label"]))[:5]
 
     config_payload = active_config.to_dict()
     config_hash = hashlib.sha256(
@@ -1164,18 +1235,20 @@ def format_technical_integrity_snapshot(
             "#8b8fa3",
         )
     state = str(market.get("state") or "BUILDING")
-    score = float(market.get("score") or 5.5)
+    raw_score = market.get("score")
+    score = float(raw_score) if raw_score is not None else None
     pressure = str(market.get("pressure") or "BALANCED")
     confidence = str(market.get("confidence") or "LOW")
     short = {"HIGH": "HIGH", "MEDIUM": "MED", "LOW": "LOW"}
     confidence_short = short.get(confidence, confidence)
     d1_test_count = int(market.get("d1_test_count") or 0)
     intraday_test_count = int(market.get("intraday_test_count") or 0)
+    d1_raw_score = market.get("d1_score")
     # D1 major levels are the headline; intraday M5 levels stay visible but
-    # secondary. Without any resolved D1 test yet, fall back to the combined
-    # score so the chip is never blank early in the session.
-    if d1_test_count > 0:
-        d1_score = float(market.get("d1_score") or 5.5)
+    # secondary. A null score means the decisive evidence has not accumulated
+    # yet - say "building" instead of printing the prior as a reading.
+    if d1_test_count > 0 and d1_raw_score is not None:
+        d1_score = float(d1_raw_score)
         d1_state = str(market.get("d1_state") or "BUILDING")
         d1_pressure = str(market.get("d1_pressure") or "BALANCED")
         d1_confidence = str(market.get("d1_confidence") or "LOW")
@@ -1186,12 +1259,22 @@ def format_technical_integrity_snapshot(
                 chip += f" · M5 {float(intraday_score):.1f}/10"
         headline_pressure = d1_pressure
         headline_state = d1_state
-    else:
+    elif score is not None:
         chip = f"Technicals D1: building · M5 {state} {score:.1f}/10 | {pressure} | {confidence_short}"
         headline_pressure = pressure
         headline_state = state
+    else:
+        return (
+            "Technicals: building",
+            "Technical Integrity reports a score once enough level tests resolve "
+            "decisively (held/reclaimed/broke). Inconclusive 'chop' tests are "
+            "counted but never scored. Advisory only.",
+            "#8b8fa3",
+        )
     lines = [
-        f"Scanned-market Technical Integrity: {score:.1f}/10 ({state})",
+        f"Scanned-market Technical Integrity: {score:.1f}/10 ({state})"
+        if score is not None
+        else "Scanned-market Technical Integrity: building (not enough decisive tests)",
     ]
     if d1_test_count > 0:
         d1_score_value = market.get("d1_score")
