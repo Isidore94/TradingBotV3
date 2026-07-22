@@ -1768,6 +1768,58 @@ class GroupRrsMeasurementTests(unittest.TestCase):
         self.assertEqual(bot._group_rrs_fallback({}, "rrs_sector_all", "AAPL"), {})
 
 
+class InternalsWiringTests(unittest.TestCase):
+    """Internals readings ride every alert row as advisory context."""
+
+    def test_internals_fields_land_on_the_context_snapshot(self):
+        from market_internals import build_internals_snapshot
+
+        def series(prev, last):
+            return [
+                {"dt": datetime(2026, 7, 21, 12, 55), "close": prev},
+                {"dt": datetime(2026, 7, 22, 6, 30), "close": last},
+            ]
+
+        snapshot = build_internals_snapshot(
+            {"VXX": series(100.0, 103.0), "RSP": series(100.0, 100.2), "SPY": series(100.0, 101.0)}
+        )
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        bot.latest_rrs_payload = {"timeframe_key": "5m", "market_internals": snapshot}
+        bot.symbol_classification_cache = {}
+        bot.sector_etf_map = {}
+        bot.session_rvol_for = Mock(return_value=1.2)
+        bot.get_market_environment = Mock(return_value="bullish_strong")
+        bot.get_symbol_direction = Mock(return_value="long")
+
+        ctx = bot._build_bounce_context_snapshot("AAPL", "long")
+        self.assertEqual(ctx["internals_tape"], "risk_off")
+        self.assertEqual(ctx["internals_vol_pct"], 3.0)
+        self.assertAlmostEqual(ctx["internals_breadth_spread"], -0.8)
+
+    def test_missing_internals_leave_blank_columns(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        bot.latest_rrs_payload = {"timeframe_key": "5m"}
+        bot.symbol_classification_cache = {}
+        bot.sector_etf_map = {}
+        bot.session_rvol_for = Mock(return_value=None)
+        bot.get_market_environment = Mock(return_value="neutral_chop")
+        bot.get_symbol_direction = Mock(return_value="long")
+        ctx = bot._build_bounce_context_snapshot("AAPL", "long")
+        self.assertEqual(ctx["internals_vol_pct"], "")
+
+    def test_breadth_bucket_thresholds(self):
+        self.assertEqual(
+            bounce_bot._bounce_internals_breadth_bucket({"internals_breadth_spread": 0.4}), "broad"
+        )
+        self.assertEqual(
+            bounce_bot._bounce_internals_breadth_bucket({"internals_breadth_spread": 0.0}), "neutral"
+        )
+        self.assertEqual(
+            bounce_bot._bounce_internals_breadth_bucket({"internals_breadth_spread": -0.9}), "narrow"
+        )
+        self.assertEqual(bounce_bot._bounce_internals_breadth_bucket({}), "unknown")
+
+
 class BarCacheCyclePolicyTests(unittest.TestCase):
     """Regression lock: non-watchlist series (SPY, sector/industry ETFs) must
     never survive a scan cycle. The sector/internals reads depend on this -

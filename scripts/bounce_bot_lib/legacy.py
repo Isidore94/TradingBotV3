@@ -81,6 +81,7 @@ from master_avwap_shared import (
     normalize_master_avwap_event_row,
 )
 from focus_picks import load_focus_map
+from market_internals import format_internals_line, internals_context_fields
 from project_paths import (
     DATA_DIR,
     LOG_DIR,
@@ -695,6 +696,9 @@ BOUNCE_CANDIDATE_EVENT_COLUMNS = [
     "rrs_industry",
     "rrs_sector_measured",
     "rrs_industry_measured",
+    "internals_tape",
+    "internals_vol_pct",
+    "internals_breadth_spread",
     "sector",
     "industry",
     "sector_etf",
@@ -1249,6 +1253,23 @@ def _bounce_quality_time(row: dict) -> datetime | None:
     return None
 
 
+def _bounce_internals_breadth_bucket(row: dict) -> str:
+    """Was the average stock leading or lagging the index at alert time?
+
+    RSP-minus-SPY: positive means broad participation, negative means the
+    index is being carried by a few names. Bucketed rather than binned finely
+    so segments reach usable sample counts.
+    """
+    spread = _bounce_perf_float(row.get("internals_breadth_spread"))
+    if spread is None:
+        return "unknown"
+    if spread >= 0.25:
+        return "broad"
+    if spread > -0.25:
+        return "neutral"
+    return "narrow"
+
+
 def _bounce_rrs_alignment(row: dict, field: str = "rrs_spy") -> str:
     """Direction-aware alignment bucket for one RRS scope.
 
@@ -1443,6 +1464,8 @@ def build_intraday_bounce_performance_rows(
         "rrs_industry",
         "rrs_sector_measured",
         "rrs_industry_measured",
+        "internals_tape",
+        "internals_breadth_spread",
         "market_environment",
         "master_avwap_focus_label",
         "master_avwap_priority_bucket",
@@ -1541,6 +1564,9 @@ def build_intraday_bounce_performance_rows(
             # one session).
             ("rrs_sector_alignment", _bounce_rrs_alignment(record, "rrs_sector_measured")),
             ("rrs_industry_alignment", _bounce_rrs_alignment(record, "rrs_industry_measured")),
+            # Internals context, measured only (same promotion bar as above).
+            ("internals_tape", str(record.get("internals_tape") or "unknown").strip() or "unknown"),
+            ("internals_breadth", _bounce_internals_breadth_bucket(record)),
             ("time_bucket", _bounce_time_bucket(record.get("entry_time") or record.get("logged_at"))),
             (
                 "master_avwap_focus",
@@ -2940,6 +2966,12 @@ class BounceBot(EWrapper, EClient):
             "market_environment": self.get_market_environment(),
             "watchlist_bias": self.get_symbol_direction(symbol),
             "symbol_context": symbol_context,
+            # Internals context (advisory): the SPY-only environment cannot
+            # tell a calm selloff from a volatility spike, or a broad rally
+            # from four names carrying the index.
+            **internals_context_fields(
+                payload.get("market_internals") or getattr(self, "latest_market_internals", None)
+            ),
         }
 
     def _evaluate_bounce_alert_quality(self, direction, levels, event_row):
@@ -3267,6 +3299,9 @@ class BounceBot(EWrapper, EClient):
             "rrs_industry": context.get("rrs_industry", ""),
             "rrs_sector_measured": context.get("rrs_sector_measured", ""),
             "rrs_industry_measured": context.get("rrs_industry_measured", ""),
+            "internals_tape": context.get("internals_tape", ""),
+            "internals_vol_pct": context.get("internals_vol_pct", ""),
+            "internals_breadth_spread": context.get("internals_breadth_spread", ""),
             "sector": context.get("sector", ""),
             "industry": context.get("industry", ""),
             "sector_etf": context.get("sector_etf", ""),
@@ -7967,6 +8002,7 @@ class BounceBot(EWrapper, EClient):
             "results_sector": sector_payload,
             "results_industry": industry_payload,
             "group_strength": self.compute_group_strengths(),
+            "market_internals": self.compute_market_internals(),
             "symbol_context": symbol_context,
             "spy_move_ratio": spy_move_ratio,
             "environment_scan": environment_scan,
@@ -7998,6 +8034,9 @@ class BounceBot(EWrapper, EClient):
                 f"RRS scan complete ({len(ordered_results)} SPY, {len(sector_payload)} sector, "
                 f"{len(industry_payload)} industry refs)"
             )
+            internals_line = format_internals_line(snapshot_payload.get("market_internals"))
+            if internals_line and "unavailable" not in internals_line:
+                status_msg += f" | {internals_line}"
             if not environment_scan_active:
                 market_session = get_market_session_window(reference=get_market_local_now())
                 first_hour_end = market_session.open_local + timedelta(minutes=ENVIRONMENT_SCAN_DELAY_MINUTES)
@@ -8008,6 +8047,32 @@ class BounceBot(EWrapper, EClient):
                 status_msg,
                 "rrs_status",
             )
+
+    def compute_market_internals(self):
+        """Volatility / credit / duration / breadth / concentration snapshot.
+
+        Runs beside the group-strength pass so it rides the same cycle bar
+        cache (which the cycle prune clears every scan, so these never go
+        stale). Advisory-only: the result is stamped on alert rows and shown
+        in the status feed, and gates nothing - promotion to a live input
+        needs measured evidence first (plan.md sec 6-7).
+        """
+        from market_internals import INTERNALS_SYMBOLS, build_internals_snapshot
+
+        bars_by_symbol = {}
+        for symbol in INTERNALS_SYMBOLS:
+            try:
+                bars = self._get_cached_bars(symbol, "5 D", "5 mins")
+            except Exception:
+                logging.debug("Internals fetch failed for %s.", symbol, exc_info=True)
+                continue
+            if bars:
+                bars_by_symbol[symbol] = bars
+        snapshot = build_internals_snapshot(
+            bars_by_symbol, as_of=get_market_local_now().isoformat(timespec="minutes")
+        )
+        self.latest_market_internals = snapshot
+        return snapshot
 
     def compute_group_strengths(self):
         results = {}
