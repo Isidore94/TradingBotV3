@@ -536,6 +536,16 @@ H1_TREND_MIN_CLOSES_BEYOND = 6
 # human focus picks are never gated.
 RVOL_MIN_ALERT = 1.0
 RVOL_BASELINE_RETRY_MINUTES = 15
+# Units reconciliation (bug fix 2026-07-20): IB reqHistoricalData TRADES
+# reports US-stock volume in ROUND LOTS (hundreds of shares); the yfinance
+# baseline is in raw shares. Left unconverted the ratio deflates ~100x and
+# every name reads ~0.01, silently gating out every M5 bounce alert. Scale
+# live IB lots up to shares before dividing into the share-based baseline.
+IB_HISTORICAL_VOLUME_LOT_SIZE = 100
+# A whole scan reading below this after conversion means the units are wrong
+# again (a real universe never averages this quiet), not that the tape is
+# dead - log a loud warning instead of failing silent like the 100x bug did.
+RVOL_UNIT_SANITY_FLOOR = 0.05
 MIN_MOVE_RATIO_FOR_SIGNAL = 0.25
 MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL = 0.15
 MASTER_AVWAP_FOCUS_MIN_ABS_RRS = 2.75
@@ -9936,12 +9946,54 @@ class BounceBot(EWrapper, EClient):
         if not bars:
             return None
         today = bars[-1].dt.date()
+        # IB TRADES volume is in round lots (hundreds of shares); scale up to
+        # raw shares so it matches the yfinance share-based baseline. Without
+        # this the ratio deflates ~100x and gates out every bounce alert.
         today_volumes = [
-            float(getattr(bar, "volume", 0.0) or 0.0) for bar in bars if bar.dt.date() == today
+            float(getattr(bar, "volume", 0.0) or 0.0) * IB_HISTORICAL_VOLUME_LOT_SIZE
+            for bar in bars
+            if bar.dt.date() == today
         ]
         if not today_volumes or not any(value > 0 for value in today_volumes):
             return None
-        return session_rvol_from_baseline(today_volumes, baselines)
+        value = session_rvol_from_baseline(today_volumes, baselines)
+        if value is not None:
+            self._note_rvol_reading(value)
+        return value
+
+    def _note_rvol_reading(self, value):
+        """Watchdog for a units regression like the 100x round-lot bug.
+
+        A real universe never averages sub-floor rvol - some name is always
+        elevated - so a full rolling window all below the floor means the
+        numerator/denominator units have diverged again, not that the tape is
+        quiet. Warn loudly (throttled) instead of silently gating everything.
+        """
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return
+        window = getattr(self, "_rvol_reading_window", None)
+        if window is None:
+            window = self._rvol_reading_window = []
+        window.append(value)
+        if len(window) > 40:
+            del window[:-40]
+        if len(window) < 12 or max(window) >= RVOL_UNIT_SANITY_FLOOR:
+            return
+        now = time.time()
+        last_warned = getattr(self, "_rvol_units_warned_at", None)
+        if last_warned is not None and (now - last_warned) < 600:
+            return
+        self._rvol_units_warned_at = now
+        logging.warning(
+            "RVOL units check: last %d readings all below %.2f (max %.4f) - "
+            "the TC2000 rvol filter is likely mis-scaled and silently gating "
+            "every M5 bounce alert. Check IB round-lot vs yfinance share units.",
+            len(window),
+            RVOL_UNIT_SANITY_FLOOR,
+            max(window),
+        )
 
     def _maybe_refresh_auto_populated_watchlists(self):
         """Refresh the auto-owned watchlist slice every ~30 min while scanning.

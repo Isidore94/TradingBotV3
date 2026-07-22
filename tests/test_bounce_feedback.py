@@ -1419,5 +1419,74 @@ class BounceFeedbackTests(unittest.TestCase):
         self.assertEqual(by_type["dynamic_vwap"]["recommendation"], "neutral")
         self.assertEqual(by_type["eod_vwap"]["recommendation"], "watch_more_samples")
 
+
+class SessionRvolUnitsTests(unittest.TestCase):
+    """The TC2000 rvol filter must reconcile IB round-lot vs yfinance share
+    units (bug fix 2026-07-20): unconverted, every name deflated ~100x and the
+    >= 1.0 gate silently routed every M5 bounce alert to LEARNING_ONLY."""
+
+    def _bot_with_bars(self, *, lot_volumes, baselines):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        day = datetime(2026, 7, 20, 6, 30)
+        bot.latest_bars = {
+            "AAPL|5 D|5 mins": [
+                bounce_bot.IbBar(
+                    dt=day + timedelta(minutes=5 * idx),
+                    open=100.0,
+                    high=101.0,
+                    low=99.0,
+                    close=100.0,
+                    volume=float(vol),
+                )
+                for idx, vol in enumerate(lot_volumes)
+            ]
+        }
+        bot._rvol_state = {"baselines": {"AAPL": list(baselines)}}
+        return bot
+
+    def test_ib_round_lots_scaled_to_baseline_shares(self):
+        # 1000 lots == 100,000 shares; a 50,000-share baseline reads 2.0x, not
+        # the 0.02 the raw-lot ratio (the old bug) would have gated out.
+        bot = self._bot_with_bars(lot_volumes=[1000.0], baselines=[50000.0])
+        reading = bot.session_rvol_for("AAPL")
+        self.assertAlmostEqual(reading, 2.0)
+        self.assertGreater(reading, bounce_bot.RVOL_MIN_ALERT)
+
+    def test_flat_tape_reads_about_one_after_conversion(self):
+        # Cumulative volume matching the baseline (in shares) reads ~1.0.
+        bot = self._bot_with_bars(
+            lot_volumes=[100.0, 200.0, 300.0],
+            baselines=[10000.0, 20000.0, 30000.0],
+        )
+        self.assertAlmostEqual(bot.session_rvol_for("AAPL"), 1.0)
+
+    def test_missing_baseline_returns_none(self):
+        bot = self._bot_with_bars(lot_volumes=[1000.0], baselines=[50000.0])
+        bot._rvol_state = {"baselines": {}}
+        self.assertIsNone(bot.session_rvol_for("AAPL"))
+
+    def test_units_watchdog_warns_when_full_window_subfloor(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        with patch.object(bounce_bot.logging, "warning") as warn:
+            for _ in range(12):
+                bot._note_rvol_reading(0.01)
+        self.assertTrue(warn.called)
+
+    def test_units_watchdog_silent_on_healthy_universe(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        with patch.object(bounce_bot.logging, "warning") as warn:
+            for idx in range(20):
+                # a real universe always has some elevated names
+                bot._note_rvol_reading(0.01 if idx % 4 else 1.5)
+        self.assertFalse(warn.called)
+
+    def test_units_watchdog_quiet_below_min_window(self):
+        bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
+        with patch.object(bounce_bot.logging, "warning") as warn:
+            for _ in range(5):
+                bot._note_rvol_reading(0.01)
+        self.assertFalse(warn.called)
+
+
 if __name__ == "__main__":
     unittest.main()

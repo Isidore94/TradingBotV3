@@ -2081,6 +2081,7 @@ def test_session_rvol_for_reads_cached_ib_volume():
 
     class Stub:
         session_rvol_for = BounceBot.session_rvol_for
+        _note_rvol_reading = BounceBot._note_rvol_reading
 
     stub = Stub()
     today_start = datetime(2026, 7, 17, 6, 30)
@@ -2093,9 +2094,11 @@ def test_session_rvol_for_reads_cached_ib_volume():
         for i in range(3)
     ]
     stub.latest_bars = {"AAPL|5 D|5 mins": bars}
-    stub._rvol_state = {"date": today_start.date(), "baselines": {"AAPL": [100.0, 100.0, 100.0]}}
+    # Baseline is in yfinance shares; IB TRADES volume is round lots, scaled
+    # x100 to shares before dividing (bug fix 2026-07-20).
+    stub._rvol_state = {"date": today_start.date(), "baselines": {"AAPL": [10000.0, 10000.0, 10000.0]}}
 
-    # Only today's bars count: 450 volume vs 300 baseline -> 1.5.
+    # Only today's bars count: 450 lots -> 45,000 shares vs 30,000 baseline -> 1.5.
     assert stub.session_rvol_for("AAPL") == 1.5
     # No baseline / no bars / zero volume -> no reading, never zero.
     assert stub.session_rvol_for("MSFT") is None
