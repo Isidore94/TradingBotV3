@@ -599,6 +599,38 @@ def test_panel_ranks_through_stub_service():
     assert "AAA" in str(row)
 
 
+def test_rs_window_symbol_click_opens_snapshot_once(monkeypatch):
+    if _qt_app() is None:
+        return
+    from ui.panels.rs_window_panel import RsWindowPanel
+    import ui.widgets.symbol_snapshot_dialog as snapshot_dialog
+
+    bot = object()
+
+    class _StubService:
+        def current_bot(self):
+            return bot
+
+    panel = RsWindowPanel(_StubService())
+    panel.model.set_rows([{"symbol": "AAA", "side": "LONG", "excess": 1.2}])
+    calls = []
+    monkeypatch.setattr(
+        snapshot_dialog,
+        "show_symbol_snapshot",
+        lambda owner, symbol, **kwargs: calls.append(
+            (owner, symbol, kwargs.get("bot"), kwargs.get("side"))
+        ),
+    )
+
+    symbol_index = panel.table.model().index(0, 0)
+    panel.table.clicked.emit(symbol_index)
+    assert calls == [(panel, "AAA", bot, "LONG")]
+    panel._open_symbol_snapshot_from_double_click(symbol_index)
+    assert len(calls) == 1
+    panel.table.clicked.emit(panel.table.model().index(0, 1))
+    assert len(calls) == 1
+
+
 def test_panel_builds_sortable_completed_m5_industry_board(monkeypatch):
     if _qt_app() is None:
         return

@@ -45,6 +45,46 @@ def test_industry_table_uses_numeric_sorting_for_strength():
     assert [table.item(row, name_column).text() for row in range(3)] == ["Negative", "Two", "Ten"]
 
 
+def test_sector_etf_click_opens_cached_snapshot(monkeypatch):
+    _qapp()
+    from ui.panels.industry_panel import (
+        IndustryPanel,
+        SECTOR_COLUMNS,
+        _fill_table,
+    )
+    import ui.widgets.symbol_snapshot_dialog as snapshot_dialog
+
+    bot = object()
+
+    class _BounceService:
+        def current_bot(self):
+            return bot
+
+    panel = IndustryPanel()
+    panel.service.shutdown()
+    panel.set_bounce_service(_BounceService())
+    _fill_table(
+        panel.sector_table,
+        SECTOR_COLUMNS,
+        [{"etf": "XLK", "sector": "Technology", "rs_score": "2.5"}],
+    )
+    calls = []
+    monkeypatch.setattr(
+        snapshot_dialog,
+        "show_symbol_snapshot",
+        lambda owner, symbol, **kwargs: calls.append(
+            (owner, symbol, kwargs.get("bot"), kwargs.get("side"))
+        ),
+    )
+    etf_column = next(
+        index for index, (key, _label) in enumerate(SECTOR_COLUMNS) if key == "etf"
+    )
+    panel.sector_table.cellClicked.emit(0, etf_column)
+    assert calls == [(panel, "XLK", bot, "LONG")]
+    panel.sector_table.cellClicked.emit(0, etf_column + 1)
+    assert len(calls) == 1
+
+
 def test_industry_snapshot_freshness_uses_the_older_file(tmp_path):
     from ui.services.industry_board_service import (
         industry_refresh_due,

@@ -178,7 +178,8 @@ class RsWindowPanel(QFrame):
         self.table = DataTable()
         self.table.setModel(proxy)
         self.table.setShowGrid(False)
-        self.table.doubleClicked.connect(self._open_symbol_snapshot)
+        self.table.clicked.connect(self._on_table_clicked)
+        self.table.doubleClicked.connect(self._open_symbol_snapshot_from_double_click)
 
         self.industry_model = TrackerTableModel(
             INDUSTRY_M5_COLUMNS,
@@ -268,7 +269,7 @@ class RsWindowPanel(QFrame):
         return self.bounce_service.current_bot()
 
     def _open_symbol_snapshot(self, index) -> None:
-        """Double-click a ranked row: D1+M5 candle quick look for that name."""
+        """Open the cache-only D1+M5 quick look for a ranked symbol."""
         proxy = self.table.model()
         source_index = proxy.mapToSource(index)
         row = self.model.row_at(source_index.row()) or {}
@@ -283,6 +284,21 @@ class RsWindowPanel(QFrame):
             bot=self._current_bot(),
             side=str(row.get("side") or "").strip().upper(),
         )
+
+    def _on_table_clicked(self, index) -> None:
+        if not index.isValid():
+            return
+        source_index = self.table.model().mapToSource(index)
+        if COLUMNS[source_index.column()][0] == "symbol":
+            self._open_symbol_snapshot(index)
+
+    def _open_symbol_snapshot_from_double_click(self, index) -> None:
+        if not index.isValid():
+            return
+        source_index = self.table.model().mapToSource(index)
+        if COLUMNS[source_index.column()][0] == "symbol":
+            return
+        self._open_symbol_snapshot(index)
 
     def _auto_tick(self) -> None:
         """Hands-off refresh: new bars + re-rank, no clicks. The region keeps

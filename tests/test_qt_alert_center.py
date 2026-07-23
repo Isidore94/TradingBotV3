@@ -311,6 +311,77 @@ def test_entry_assist_board_renders_all_sections():
     assert "fills automatically" in board.view.toPlainText()
 
 
+def test_rs_rw_boards_emit_snapshot_symbols(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QUrl
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.entry_assist_board import EntryAssistBoard, _board_html as entry_html
+        from ui.widgets.rrs_snapshot import RrsSnapshotWidget, _board_html as rrs_html
+        import ui.widgets.symbol_snapshot_dialog as snapshot_dialog
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    entry_payload = {
+        "movers": {
+            "long": [{"symbol": "NVDA", "change_pct": 1.2}],
+            "short": [{"symbol": "TSLA", "change_pct": -1.4}],
+        }
+    }
+    assert "snapshot://long/NVDA" in entry_html(entry_payload)
+    assert "snapshot://short/TSLA" in entry_html(entry_payload)
+    entry = EntryAssistBoard()
+    entry_calls = []
+    entry.symbolActivated.connect(lambda symbol, side: entry_calls.append((symbol, side)))
+    entry._on_anchor_clicked(QUrl("snapshot://long/NVDA"))
+    assert entry_calls == [("NVDA", "LONG")]
+
+    rrs_payload = {
+        "threshold": 0.5,
+        "results": [("RS", "AMD", 2.1), ("RW", "META", -1.8)],
+    }
+    html = rrs_html(rrs_payload)
+    assert "snapshot://long/AMD" in html
+    assert "snapshot://short/META" in html
+    snapshot = RrsSnapshotWidget()
+    snapshot_calls = []
+    snapshot.symbolActivated.connect(
+        lambda symbol, side: snapshot_calls.append((symbol, side))
+    )
+    snapshot._on_anchor_clicked(QUrl("snapshot://short/META"))
+    assert snapshot_calls == [("META", "SHORT")]
+
+    bot = object()
+
+    class _Service:
+        def current_bot(self):
+            return bot
+
+    panel = AlertCenterPanel()
+    panel._bounce_service = _Service()
+    popup_calls = []
+    monkeypatch.setattr(
+        snapshot_dialog,
+        "show_symbol_snapshot",
+        lambda owner, symbol, **kwargs: popup_calls.append(
+            (owner, symbol, kwargs.get("bot"), kwargs.get("side"))
+        ),
+    )
+    panel.entry_board.symbolActivated.emit("NVDA", "LONG")
+    panel.rrs_snapshot.symbolActivated.emit("META", "SHORT")
+    assert popup_calls == [
+        (panel, "NVDA", bot, "LONG"),
+        (panel, "META", bot, "SHORT"),
+    ]
+
+
 def test_liked_focus_picks_skip_tier_gate_and_always_sound():
     try:
         from ui.panels.alert_center_panel import alert_passes_feed_gate, alert_should_sound

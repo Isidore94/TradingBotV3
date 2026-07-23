@@ -10,12 +10,15 @@ entry-assist buttons can produce, recomputed automatically - no clicks."""
 
 from typing import Any
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLabel, QTextBrowser, QVBoxLayout, QWidget
 
 from ui import theme
 
 
 class EntryAssistBoard(QWidget):
+    symbolActivated = Signal(str, str)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._board: dict[str, Any] = {}
@@ -23,7 +26,9 @@ class EntryAssistBoard(QWidget):
         self.title_label = QLabel("Auto RS/RW Board")
         self.title_label.setObjectName("SectionTitle")
         self.view = QTextBrowser()
+        self.view.setOpenLinks(False)
         self.view.setOpenExternalLinks(False)
+        self.view.anchorClicked.connect(self._on_anchor_clicked)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -42,6 +47,14 @@ class EntryAssistBoard(QWidget):
         stamp = self._board.get("bar_time") or ""
         self.title_label.setText(f"Auto RS/RW Board - {env} (bar {stamp})")
         self.view.setHtml(_board_html(self._board))
+
+    def _on_anchor_clicked(self, url) -> None:
+        if url.scheme().lower() != "snapshot":
+            return
+        symbol = url.path().strip("/").upper()
+        side = url.host().upper()
+        if symbol:
+            self.symbolActivated.emit(symbol, side if side in {"LONG", "SHORT"} else "")
 
 
 def _board_html(board: dict[str, Any]) -> str:
@@ -81,7 +94,7 @@ def _board_html(board: dict[str, Any]) -> str:
             color = long_c if side == "long" else short_c
             held = "holding strongest so far" if side == "long" else "staying weakest so far"
             parts.append(f"<div style='color:{color}'><b>{_esc(side.upper())}</b> {held}:</div>")
-            parts.append(_ranked_rows_html(rows, color, pct_key="window_pct"))
+            parts.append(_ranked_rows_html(rows, color, pct_key="window_pct", side=side))
     elif isinstance(board.get("pause_preview"), dict):
         preview = board["pause_preview"]
         side = str(preview.get("side") or "long")
@@ -92,7 +105,14 @@ def _board_html(board: dict[str, Any]) -> str:
             f"<h3 style='margin:8px 0 2px 0; color:{favorite_c}'>Pause preview ({_esc(side)}) "
             f"since {_esc(preview.get('since'))} - {spy_text}</h3>"
         )
-        parts.append(_ranked_rows_html(preview.get("rows") or [], color, pct_key="window_pct"))
+        parts.append(
+            _ranked_rows_html(
+                preview.get("rows") or [],
+                color,
+                pct_key="window_pct",
+                side=side,
+            )
+        )
 
     movers = board.get("movers") if isinstance(board.get("movers"), dict) else {}
     minutes = board.get("movers_minutes") or 30
@@ -103,7 +123,14 @@ def _board_html(board: dict[str, Any]) -> str:
     ):
         parts.append("<td valign='top' width='50%'>")
         parts.append(f"<h3 style='margin:8px 0 2px 0; color:{color}'>{_esc(title)}</h3>")
-        parts.append(_ranked_rows_html(movers.get(side) or [], color, pct_key="change_pct"))
+        parts.append(
+            _ranked_rows_html(
+                movers.get(side) or [],
+                color,
+                pct_key="change_pct",
+                side=side,
+            )
+        )
         parts.append("</td>")
     parts.append("</tr></table>")
 
@@ -115,23 +142,32 @@ def _board_html(board: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _ranked_rows_html(rows: list, color: str, *, pct_key: str) -> str:
+def _ranked_rows_html(rows: list, color: str, *, pct_key: str, side: str) -> str:
     if not rows:
         return f"<div style='color:{theme.color('text_muted')}; margin-left:8px'>none with fresh bars</div>"
     parts = []
     for row in rows[:8]:
         if not isinstance(row, dict):
             continue
-        symbol = _esc(row.get("symbol"))
+        symbol = str(row.get("symbol") or "").strip().upper()
         pct = row.get(pct_key)
         excess = row.get("excess")
         pct_text = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else ""
         excess_text = f" (x{excess:+.2f})" if isinstance(excess, (int, float)) else ""
         parts.append(
-            f"<div style='margin-left:8px'><b style='color:{color}'>{symbol}</b> "
+            f"<div style='margin-left:8px'><b>{_symbol_link(symbol, side, color)}</b> "
             f"{pct_text}<span style='color:{theme.color('text_muted')}'>{excess_text}</span></div>"
         )
     return "".join(parts)
+
+
+def _symbol_link(symbol: str, side: str, color: str) -> str:
+    if not symbol:
+        return ""
+    return (
+        f"<a href='snapshot://{_esc(side.lower())}/{_esc(symbol)}' "
+        f"style='color:{color}; text-decoration:none'>{_esc(symbol)}</a>"
+    )
 
 
 def _empty_html() -> str:

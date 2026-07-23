@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget
 
 from ui import theme
@@ -15,6 +16,8 @@ _GROUP_TIMEFRAMES = ("M5", "H1", "D1")
 
 class RrsSnapshotWidget(QWidget):
     """Compact relative-strength board for BounceBot snapshots."""
+
+    symbolActivated = Signal(str, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -40,7 +43,9 @@ class RrsSnapshotWidget(QWidget):
         top_row.addWidget(self.copy_rw_button)
 
         self.board = QTextBrowser()
+        self.board.setOpenLinks(False)
         self.board.setOpenExternalLinks(False)
+        self.board.anchorClicked.connect(self._on_anchor_clicked)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -67,6 +72,14 @@ class RrsSnapshotWidget(QWidget):
         self.env_label.setText(str(env))
         self.meta_label.setText(self._meta_text())
         self.board.setHtml(_board_html(self._payload, self._focus_map()))
+
+    def _on_anchor_clicked(self, url) -> None:
+        if url.scheme().lower() != "snapshot":
+            return
+        symbol = url.path().strip("/").upper()
+        side = url.host().upper()
+        if symbol:
+            self.symbolActivated.emit(symbol, side if side in {"LONG", "SHORT"} else "")
 
     def _copy_side(self, side: str) -> None:
         symbols: list[str] = []
@@ -137,9 +150,24 @@ def _scope_html(payload: dict[str, Any], scope: str, focus: dict[str, set] | Non
         rs = strong[index] if index < len(strong) else None
         rw = weak[index] if index < len(weak) else None
         parts.append("<tr>")
-        parts.append(_symbol_cell(rs.symbol if rs else "", long_c, focus_aligned=bool(rs and rs.symbol in focus["long"])))
+        parts.append(
+            _symbol_cell(
+                rs.symbol if rs else "",
+                long_c,
+                side="long",
+                focus_aligned=bool(rs and rs.symbol in focus["long"]),
+            )
+        )
         parts.append(_number_cell(rs.rrs if rs else None, long_c))
-        parts.append(_symbol_cell(rw.symbol if rw else "", short_c, left_pad=True, focus_aligned=bool(rw and rw.symbol in focus["short"])))
+        parts.append(
+            _symbol_cell(
+                rw.symbol if rw else "",
+                short_c,
+                side="short",
+                left_pad=True,
+                focus_aligned=bool(rw and rw.symbol in focus["short"]),
+            )
+        )
         parts.append(_number_cell(rw.rrs if rw else None, short_c))
         parts.append("</tr>")
     parts.append("</table>")
@@ -174,10 +202,10 @@ def _group_timeframe_html(groups: dict[str, Any], timeframe: str) -> str:
         ranked = sorted(items, key=lambda row: -(_f(row.get("rrs")) or 0.0))
         parts.append(f"<div style='color:{head_c}; margin-top:3px'>{_esc(label)}</div>")
         for item in ranked[:2]:
-            parts.append(_group_line(item, theme.color("long")))
+            parts.append(_group_line(item, theme.color("long"), side="long"))
         for item in reversed(ranked[-2:]):
             if item not in ranked[:2]:
-                parts.append(_group_line(item, theme.color("short")))
+                parts.append(_group_line(item, theme.color("short"), side="short"))
     return "".join(parts)
 
 
@@ -213,10 +241,18 @@ def _empty_html() -> str:
     )
 
 
-def _symbol_cell(value: str, color: str, *, left_pad: bool = False, focus_aligned: bool = False) -> str:
+def _symbol_cell(
+    value: str,
+    color: str,
+    *,
+    side: str,
+    left_pad: bool = False,
+    focus_aligned: bool = False,
+) -> str:
     padding = "padding-left:10px;" if left_pad else ""
     marker = f"<span style='color:{theme.color('favorite')}'>&#9733;</span> " if (focus_aligned and value) else ""
-    return f"<td style='color:{color}; {padding} font-weight:600'>{marker}{_esc(value)}</td>"
+    link = _symbol_link(str(value or ""), side, color)
+    return f"<td style='{padding} font-weight:600'>{marker}{link}</td>"
 
 
 def _number_cell(value: float | None, color: str) -> str:
@@ -224,17 +260,27 @@ def _number_cell(value: float | None, color: str) -> str:
     return f"<td align='right' style='color:{color}; white-space:nowrap'>{text}</td>"
 
 
-def _group_line(item: dict[str, Any], color: str) -> str:
+def _group_line(item: dict[str, Any], color: str, *, side: str) -> str:
     group_key = _esc(item.get("group_key", ""))
-    etf = _esc(item.get("etf", ""))
     rrs = _f(item.get("rrs"))
     power = _f(item.get("power_index"))
     rrs_text = f"{rrs:+.2f}" if rrs is not None else ""
     power_text = f"{power:+.2f}" if power is not None else ""
     muted = theme.color("text_muted")
+    etf_link = _symbol_link(str(item.get("etf") or ""), side, muted)
     return (
         f"<div style='color:{color}; margin-left:8px'>{group_key} "
-        f"<span style='color:{muted}'>{etf}</span> {rrs_text} {power_text}</div>"
+        f"{etf_link} {rrs_text} {power_text}</div>"
+    )
+
+
+def _symbol_link(symbol: str, side: str, color: str) -> str:
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return ""
+    return (
+        f"<a href='snapshot://{_esc(side.lower())}/{_esc(symbol)}' "
+        f"style='color:{color}; text-decoration:none'>{_esc(symbol)}</a>"
     )
 
 

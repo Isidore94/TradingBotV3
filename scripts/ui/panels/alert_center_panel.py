@@ -265,11 +265,13 @@ class AlertCenterPanel(QFrame):
         self.rrs_snapshot = RrsSnapshotWidget()
         if self.focus_service is not None:
             self.rrs_snapshot.set_focus_service(self.focus_service)
+        self.rrs_snapshot.symbolActivated.connect(self._show_board_symbol_snapshot)
 
         # RS/RW Board tab: the automatic entry-assist board on top (regime +
         # pause detection + live window / preview rankings + 30m movers, no
         # clicks) over the RRS sweep snapshot.
         self.entry_board = EntryAssistBoard()
+        self.entry_board.symbolActivated.connect(self._show_board_symbol_snapshot)
         board_tab = QWidget()
         board_layout = QVBoxLayout(board_tab)
         board_layout.setContentsMargins(0, 0, 0, 0)
@@ -501,6 +503,13 @@ class AlertCenterPanel(QFrame):
         """Ticker-name click: the D1+M5 candle quick look."""
         if not alert.symbol:
             return
+        self._show_board_symbol_snapshot(alert.symbol, alert.side)
+
+    def _show_board_symbol_snapshot(self, symbol: str, side: str = "") -> None:
+        """RS/RW-board ticker click: use the same cache-only quick look."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
         from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
 
         bot = None
@@ -509,7 +518,7 @@ class AlertCenterPanel(QFrame):
                 bot = self._bounce_service.current_bot()
             except Exception:
                 bot = None
-        show_symbol_snapshot(self, alert.symbol, bot=bot, side=alert.side)
+        show_symbol_snapshot(self, symbol, bot=bot, side=side)
 
     def _show_alert_detail(self, alert: BounceAlert) -> None:
         if not alert.symbol:

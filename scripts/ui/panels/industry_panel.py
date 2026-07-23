@@ -69,6 +69,7 @@ class IndustryPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self.service = service or IndustryBoardService(self)
+        self._bounce_service = None
 
         self.refresh_button = QPushButton("Refresh Board (yfinance)")
         self.refresh_button.setObjectName("PrimaryButton")
@@ -88,6 +89,7 @@ class IndustryPanel(QFrame):
 
         self.sector_table = _make_table(SECTOR_COLUMNS)
         self.industry_table = _make_table(INDUSTRY_COLUMNS)
+        self.sector_table.cellClicked.connect(self._on_sector_table_clicked)
 
         self.service.refreshStarted.connect(self._on_refresh_started)
         self.service.refreshFinished.connect(self._on_refresh_finished)
@@ -170,6 +172,38 @@ class IndustryPanel(QFrame):
 
     def start_refresh(self) -> None:
         self.service.request_refresh(force=True)
+
+    def set_bounce_service(self, service) -> None:
+        self._bounce_service = service
+
+    def _on_sector_table_clicked(self, row: int, column: int) -> None:
+        etf_column = next(
+            index for index, (key, _label) in enumerate(SECTOR_COLUMNS) if key == "etf"
+        )
+        if column != etf_column:
+            return
+        item = self.sector_table.item(row, etf_column)
+        symbol = str(item.text() if item is not None else "").strip().upper()
+        if not symbol:
+            return
+        rs_column = next(
+            index for index, (key, _label) in enumerate(SECTOR_COLUMNS) if key == "rs_score"
+        )
+        rs_item = self.sector_table.item(row, rs_column)
+        try:
+            rs_score = float(rs_item.text()) if rs_item is not None else 0.0
+        except ValueError:
+            rs_score = 0.0
+        side = "LONG" if rs_score > 0 else "SHORT" if rs_score < 0 else ""
+        bot = None
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+            except Exception:
+                bot = None
+        from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
+
+        show_symbol_snapshot(self, symbol, bot=bot, side=side)
 
     def _on_refresh_started(self) -> None:
         self.refresh_button.setEnabled(False)
