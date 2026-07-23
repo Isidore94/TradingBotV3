@@ -10,7 +10,7 @@ session VWAP with +/-1 sigma bands + EMA15/21 - just the candles otherwise.
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QLabel, QSizePolicy, QVBoxLayout
 
 from ui import theme
 from ui.widgets.candle_chart import CandleChart
@@ -42,7 +42,9 @@ def _legend_html(
             f"<span style='color:{theme.color('text_muted')};'>"
             f"({', '.join(missing)}: {missing_reason})</span>"
         )
-    return "&nbsp;&nbsp;".join(parts)
+    # Keep each marker visually grouped, but leave ordinary spaces between
+    # entries so a narrow popup can wrap instead of forcing one giant line.
+    return " &nbsp; ".join(parts)
 
 
 class SymbolSnapshotDialog(QDialog):
@@ -54,10 +56,12 @@ class SymbolSnapshotDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.Tool, True)
         self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.resize(880, 680)
+        self.resize(1180, 760)
 
         self.d1_legend = QLabel()
         self.d1_legend.setTextFormat(Qt.TextFormat.RichText)
+        self.d1_legend.setWordWrap(True)
+        self.d1_legend.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.d1_chart = CandleChart()
         self.d1_note = QLabel()
         self.d1_note.setObjectName("MutedLabel")
@@ -66,6 +70,8 @@ class SymbolSnapshotDialog(QDialog):
 
         self.m5_legend = QLabel()
         self.m5_legend.setTextFormat(Qt.TextFormat.RichText)
+        self.m5_legend.setWordWrap(True)
+        self.m5_legend.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.m5_chart = CandleChart()
         self.m5_note = QLabel()
         self.m5_note.setObjectName("MutedLabel")
@@ -105,7 +111,7 @@ class SymbolSnapshotDialog(QDialog):
             last = d1["bars"][-1]["dt"]
             self.d1_legend.setText(
                 self.d1_legend.text()
-                + f"&nbsp;&nbsp;<span style='color:{theme.color('text_muted')};'>"
+                + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
                 + f"through {last.strftime('%m/%d')}</span>"
             )
 
@@ -135,7 +141,7 @@ class SymbolSnapshotDialog(QDialog):
             last = m5["bars"][-1]["dt"]
             self.m5_legend.setText(
                 self.m5_legend.text()
-                + f"&nbsp;&nbsp;<span style='color:{theme.color('text_muted')};'>"
+                + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
                 + f"last bar {last.strftime('%m/%d %H:%M')}</span>"
             )
 

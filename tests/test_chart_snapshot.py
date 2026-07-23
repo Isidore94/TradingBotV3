@@ -231,13 +231,21 @@ def _qt_app():
 def test_candle_chart_renders_bars_and_overlays():
     if _qt_app() is None:
         return
-    from ui.widgets.candle_chart import CandleChart
+    from ui.widgets.candle_chart import CandleChart, _time_ticks
 
     chart = CandleChart()
     bars = _m5_bars(20)
     snapshot = chart_snapshot.build_m5_snapshot("TEST", bars)
     chart.set_data(snapshot["bars"], snapshot["overlays"], timeframe="m5")
     assert chart.bar_count() == 20
+    two_sessions = _m5_bars(78) + _m5_bars(
+        78,
+        start=datetime(2026, 7, 9, 9, 30),
+    )
+    ticks = _time_ticks(two_sessions, "m5")
+    assert len(ticks) <= 7
+    assert ticks[0][0] == 0 and ticks[-1][0] == 155
+    assert ticks[3] == (78, "07/09 09:30")
     chart.set_data([], [])
     assert chart.bar_count() == 0
 
@@ -265,6 +273,8 @@ def test_snapshot_dialog_populates_both_charts(monkeypatch):
             return _m5_bars(15)
 
     dialog = SymbolSnapshotDialog()
+    assert dialog.width() >= 1180
+    assert dialog.d1_legend.wordWrap() and dialog.m5_legend.wordWrap()
     dialog.show_symbol("NVDA", bot=StubBot(), side="LONG")
     assert dialog.d1_chart.bar_count() == 40
     assert dialog.m5_chart.bar_count() == 15

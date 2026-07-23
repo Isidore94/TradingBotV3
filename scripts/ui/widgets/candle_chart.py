@@ -13,9 +13,41 @@ import math
 
 import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPicture, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPicture, QPen
 
 from ui import theme
+
+
+_CANDLE_HALF_WIDTH = 0.27
+
+
+def _time_ticks(bars: list[dict], timeframe: str, *, max_ticks: int = 7) -> list[tuple[int, str]]:
+    """Sparse, session-aware labels for the integer-indexed time axis."""
+    if not bars:
+        return []
+    count = len(bars)
+    target = max(2, min(int(max_ticks), count))
+    if count <= target:
+        positions = list(range(count))
+    else:
+        positions = sorted(
+            {round(slot * (count - 1) / (target - 1)) for slot in range(target)}
+        )
+
+    daily = str(timeframe).lower().startswith("d")
+    ticks = []
+    previous_tick_date = None
+    for index in positions:
+        stamp = bars[index]["dt"]
+        if daily:
+            label = stamp.strftime("%m/%d")
+        elif previous_tick_date is None or stamp.date() != previous_tick_date:
+            label = stamp.strftime("%m/%d %H:%M")
+        else:
+            label = stamp.strftime("%H:%M")
+        ticks.append((index, label))
+        previous_tick_date = stamp.date()
+    return ticks
 
 
 class CandleItem(pg.GraphicsObject):
@@ -31,19 +63,33 @@ class CandleItem(pg.GraphicsObject):
         up = QColor(theme.color("long"))
         down = QColor(theme.color("short"))
         painter = QPainter(self._picture)
-        width = 0.35
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         for index, bar in enumerate(self._bars):
             color = up if bar["close"] >= bar["open"] else down
-            painter.setPen(QPen(color))
+            pen = QPen(color)
+            pen.setCosmetic(True)
+            pen.setWidthF(1.0)
+            painter.setPen(pen)
             painter.setBrush(color)
             painter.drawLine(
                 pg.QtCore.QPointF(index, bar["low"]), pg.QtCore.QPointF(index, bar["high"])
             )
             body_top = max(bar["open"], bar["close"])
             body_bottom = min(bar["open"], bar["close"])
-            painter.drawRect(
-                QRectF(index - width, body_bottom, width * 2, max(body_top - body_bottom, 1e-9))
-            )
+            if body_top == body_bottom:
+                painter.drawLine(
+                    pg.QtCore.QPointF(index - _CANDLE_HALF_WIDTH, body_top),
+                    pg.QtCore.QPointF(index + _CANDLE_HALF_WIDTH, body_top),
+                )
+            else:
+                painter.drawRect(
+                    QRectF(
+                        index - _CANDLE_HALF_WIDTH,
+                        body_bottom,
+                        _CANDLE_HALF_WIDTH * 2,
+                        body_top - body_bottom,
+                    )
+                )
         painter.end()
 
     def paint(self, painter, *_args) -> None:
@@ -67,6 +113,14 @@ class CandleChart(pg.PlotWidget):
         self.setMouseEnabled(x=True, y=False)
         self.getPlotItem().setMenuEnabled(False)
         self.getPlotItem().hideButtons()
+        axis_font = QFont()
+        axis_font.setPointSizeF(9.5)
+        for name in ("bottom", "left"):
+            axis = self.getPlotItem().getAxis(name)
+            axis.setTickFont(axis_font)
+            axis.setTextPen(pg.mkPen(theme.color("text_secondary")))
+            axis.setPen(pg.mkPen(theme.color("border")))
+            axis.setStyle(hideOverlappingLabels=True, tickTextOffset=7)
 
     def set_data(self, bars: list[dict], overlays: list[dict] = (), *, timeframe: str = "m5") -> None:
         self._bars = [dict(bar) for bar in bars or []]
@@ -87,7 +141,13 @@ class CandleChart(pg.PlotWidget):
                 width=float(overlay.get("width") or 1.0),
                 style=Qt.PenStyle.DashLine if overlay.get("dash") else Qt.PenStyle.SolidLine,
             )
-            plot.plot(list(range(len(values))), values, pen=pen, connect="finite")
+            plot.plot(
+                list(range(len(values))),
+                values,
+                pen=pen,
+                connect="finite",
+                antialias=True,
+            )
         self._set_ticks(timeframe)
         plot.setXRange(-1, len(self._bars), padding=0.01)
         lows = [bar["low"] for bar in self._bars]
@@ -96,19 +156,7 @@ class CandleChart(pg.PlotWidget):
 
     def _set_ticks(self, timeframe: str) -> None:
         axis = self.getPlotItem().getAxis("bottom")
-        daily = str(timeframe).lower().startswith("d")
-        step = max(1, len(self._bars) // 8)
-        ticks = []
-        for index in range(0, len(self._bars), step):
-            stamp = self._bars[index]["dt"]
-            if daily:
-                label = stamp.strftime("%m/%d")
-            else:
-                label = stamp.strftime("%H:%M")
-                if index == 0 or stamp.date() != self._bars[index - 1]["dt"].date():
-                    label = stamp.strftime("%m/%d %H:%M")
-            ticks.append((index, label))
-        axis.setTicks([ticks])
+        axis.setTicks([_time_ticks(self._bars, timeframe)])
 
     def bar_count(self) -> int:
         return len(self._bars)
