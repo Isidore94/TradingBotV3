@@ -74,7 +74,10 @@ def test_build_watchlists_gap_and_rs_selection():
 
 
 def test_build_watchlists_caps_and_resolves_conflicts():
-    moves = {f"L{i:02d}": {"gap_pct": 2.0 + i * 0.1, "early_move_pct": 1.0} for i in range(30)}
+    moves = {
+        f"L{i:02d}": {"gap_pct": 2.0 + i * 0.1, "early_move_pct": 1.0}
+        for i in range(core.AUTOPILOT_WATCHLIST_CAP + 5)
+    }
     # A name that gapped up but is dumping vs SPY: short side wins on score.
     moves["BOTH"] = {"gap_pct": 2.5, "early_move_pct": -9.0}
     built = core.build_watchlists_from_moves(moves, {"early_move_pct": 0.0})

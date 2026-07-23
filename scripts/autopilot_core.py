@@ -60,7 +60,11 @@ AUTOPILOT_WATCHLIST_BUILD_DEADLINE_MINUTES = 120
 # Watchlist self-build thresholds.
 AUTOPILOT_GAP_MIN_PCT = 2.0  # open vs yesterday's close
 AUTOPILOT_RS_EXCESS_MIN_PCT = 1.5  # early move minus SPY's early move
-AUTOPILOT_WATCHLIST_CAP = 25  # per side; protects BounceBot's IB pacing
+AUTOPILOT_WATCHLIST_CAP = 40  # per side; protects BounceBot's IB pacing
+# (25 -> 40 on 2026-07-23: the open scan hit the 25 cap on both sides nearly
+# every session since 07-10 while pick quality held up, so the cap - not the
+# gap/RS gates - was the binding constraint. Raise further only after a live
+# session confirms the pacing governor stays quiet at this size.)
 AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS = 1200
 AUTOPILOT_OPEN_SCAN_CHUNK_SIZE = 150
 
