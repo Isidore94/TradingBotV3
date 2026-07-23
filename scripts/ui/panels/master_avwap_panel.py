@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QItemSelection, Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -82,6 +83,12 @@ class MasterAvwapPanel(QWidget):
         self._bounce_service = None
         self.table.clicked.connect(self._on_table_clicked)
         self.table.doubleClicked.connect(self._open_symbol_snapshot_from_double_click)
+        self._next_snapshot_shortcut = QShortcut(
+            QKeySequence(Qt.Key.Key_Space),
+            self.table,
+        )
+        self._next_snapshot_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._next_snapshot_shortcut.activated.connect(self._open_next_symbol_snapshot)
         self.table.add_row_action("D1+M5 Snapshot Chart", self._open_symbol_snapshot)
         if self.focus_service is not None:
             self.delegate.set_focus_lookup(self.focus_service.is_focus)
@@ -637,6 +644,23 @@ class MasterAvwapPanel(QWidget):
         if self.model.COLUMNS[source_index.column()][0] == "symbol":
             return  # the first single click already opened it
         self._open_symbol_snapshot(proxy_index)
+
+    def _open_next_symbol_snapshot(self) -> None:
+        """Advance through visible setup rows and open the next snapshot."""
+        row_count = self.proxy.rowCount()
+        if row_count <= 0:
+            return
+        current = self.table.currentIndex()
+        next_row = (current.row() + 1) % row_count if current.isValid() else 0
+        symbol_column = next(
+            column
+            for column, (key, _label) in enumerate(self.model.COLUMNS)
+            if key == "symbol"
+        )
+        symbol_index = self.proxy.index(next_row, symbol_column)
+        self.table.setCurrentIndex(symbol_index)
+        self.table.scrollTo(symbol_index)
+        self._open_symbol_snapshot(symbol_index)
 
     def _on_selection_changed(self, selected: QItemSelection, _deselected: QItemSelection) -> None:
         indexes = selected.indexes()

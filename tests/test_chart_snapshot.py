@@ -347,6 +347,45 @@ def test_master_setups_symbol_click_opens_snapshot(monkeypatch):
     assert calls == [("NVDA", "LONG"), ("NVDA", "LONG")]
 
 
+def test_master_setups_space_advances_visible_rows_and_opens_snapshot(monkeypatch):
+    app = _qt_app()
+    if app is None:
+        return
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from ui.models.setup import SetupRow
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+    import ui.widgets.symbol_snapshot_dialog as snapshot_dialog
+
+    panel = MasterAvwapPanel(None)
+    panel.set_rows(
+        [
+            SetupRow(symbol="NVDA", side="LONG", score=90.0),
+            SetupRow(symbol="TSLA", side="SHORT", score=80.0),
+        ]
+    )
+    calls = []
+    monkeypatch.setattr(
+        snapshot_dialog,
+        "show_symbol_snapshot",
+        lambda owner, symbol, **kwargs: calls.append((symbol, kwargs.get("side"))),
+    )
+    panel.show()
+    first_symbol = panel.proxy.index(0, 2)
+    panel.table.setCurrentIndex(first_symbol)
+    panel.table.setFocus()
+    app.processEvents()
+
+    QTest.keyClick(panel.table, Qt.Key.Key_Space)
+    assert panel.table.currentIndex().row() == 1
+    assert calls == [("TSLA", "SHORT")]
+
+    QTest.keyClick(panel.table, Qt.Key.Key_Space)
+    assert panel.table.currentIndex().row() == 0
+    assert calls == [("TSLA", "SHORT"), ("NVDA", "LONG")]
+    panel.close()
+
+
 def test_alert_feed_symbol_click_does_not_propagate_to_row():
     if _qt_app() is None:
         return
