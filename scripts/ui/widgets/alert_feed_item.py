@@ -44,8 +44,8 @@ class AlertFeedItem(QWidget):
     every row (a clickable favorite column): hollow ☆ to favorite the pick,
     lit gold ★ to unfavorite. The hosting panel decides the category (D1/H1
     alerts -> Swing, intraday -> M5) and wires it into Focus Picks. Next to it,
-    ✕ records a dislike: the panel prompts for the reason and logs it to the
-    AI-reviewable pick-feedback file.
+    ✕ records a dislike, removes the symbol from this visual feed, and logs it
+    to the AI-reviewable pick-feedback file.
     """
 
     favoriteToggled = Signal()
@@ -115,7 +115,8 @@ class AlertFeedItem(QWidget):
             dislike.setText("✕")
             dislike.setToolTip(
                 f"Dislike {alert.symbol}: you'll be asked why, and the reason is logged to "
-                "pick_feedback.jsonl for AI review (also removes it from Focus Picks if starred)."
+                "pick_feedback.jsonl for AI review. The symbol is then hidden from future "
+                "Alert Center reviews and removed from Focus Picks if starred."
             )
             dislike.setCursor(Qt.CursorShape.PointingHandCursor)
             dislike.setStyleSheet(

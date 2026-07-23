@@ -398,3 +398,144 @@ def test_liked_focus_picks_skip_tier_gate_and_always_sound():
     assert alert_passes_feed_gate(quiet_b, "A", is_focus=True)
     assert alert_passes_feed_gate(quiet_b, "S", is_focus=True)
     assert alert_should_sound(quiet_b, is_focus=True)
+
+
+def test_visual_alert_review_queues_skips_and_adds_focus(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    rendered = []
+    monkeypatch.setattr(
+        SymbolSnapshotWidget,
+        "set_symbol",
+        lambda self, symbol, **kwargs: rendered.append(symbol),
+    )
+    service = _service(tmp_path)
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "alert_center_ignored.txt",
+    )
+    first = BounceAlert(
+        time_text="09:35:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] VWAP reclaim",
+        timeframe="5m",
+        raw_text="[S-TIER] NVDA: VWAP reclaim",
+    )
+    second = BounceAlert(
+        time_text="09:40:00",
+        symbol="TSLA",
+        side="SHORT",
+        trigger="[S-TIER] EMA rejection",
+        timeframe="5m",
+        raw_text="[S-TIER] TSLA: EMA rejection",
+    )
+
+    panel.add_alert(first)
+    panel.add_alert(second)
+
+    assert panel._current_review_alert is first
+    assert [alert.symbol for alert in panel._review_queue] == ["TSLA"]
+    assert panel.chart_review.alert is first
+    assert rendered == ["NVDA"]
+
+    panel._skip_review_alert(first)
+    assert panel._current_review_alert is second
+    assert panel.chart_review.alert is second
+    assert rendered == ["NVDA", "TSLA"]
+    assert not service.is_focus("TSLA")
+
+    panel._add_review_alert_to_focus(second)
+    assert service.is_focus("TSLA", "short", "m5")
+    assert panel._current_review_alert is None
+    assert panel.chart_review.alert is None
+
+
+def test_visual_dislike_persists_suppression_and_restore(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    ignored_path = tmp_path / "alert_center_ignored.txt"
+    service = _service(tmp_path)
+    feedback = []
+    service.record_feedback = lambda symbol, side, verdict, **kwargs: feedback.append(
+        (symbol, verdict, kwargs)
+    )
+    panel = AlertCenterPanel(service, ignored_symbols_path=ignored_path)
+    disliked = BounceAlert(
+        time_text="09:35:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] visual rejection",
+        timeframe="D1",
+        raw_text="[S-TIER] NVDA: visual rejection",
+        is_d1=True,
+    )
+    next_alert = BounceAlert(
+        time_text="09:40:00",
+        symbol="TSLA",
+        side="SHORT",
+        trigger="[S-TIER] next",
+        timeframe="5m",
+        raw_text="[S-TIER] TSLA: next",
+    )
+    panel.add_alert(disliked)
+    panel.add_alert(next_alert)
+
+    panel._dislike_review_alert(disliked)
+
+    assert ignored_path.read_text(encoding="utf-8") == "NVDA\n"
+    assert panel._ignored_symbols == {"NVDA"}
+    assert all(alert.symbol != "NVDA" for alert in panel._alerts + panel._d1_alerts)
+    assert panel._current_review_alert is next_alert
+    assert feedback == [
+        (
+            "NVDA",
+            "dislike",
+            {
+                "category": "swing",
+                "origin": "d1",
+                "reason": "visual D1 chart rejection",
+                "context": "[S-TIER] NVDA: visual rejection",
+            },
+        )
+    ]
+
+    # Future alerts stay off both the feed and review queue.
+    panel.add_alert(disliked)
+    assert all(alert.symbol != "NVDA" for alert in panel._alerts + panel._d1_alerts)
+    assert all(alert.symbol != "NVDA" for alert in panel._review_queue)
+
+    panel._restore_ignored_symbol("NVDA")
+    assert ignored_path.read_text(encoding="utf-8") == ""
+    panel.add_alert(disliked)
+    assert any(alert.symbol == "NVDA" for alert in panel._alerts)
+    assert any(alert.symbol == "NVDA" for alert in panel._review_queue)

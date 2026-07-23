@@ -10,7 +10,7 @@ session VWAP with +/-1 sigma bands + EMA15/21 - just the candles otherwise.
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QLabel, QSizePolicy, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from ui import theme
 from ui.widgets.candle_chart import CandleChart
@@ -47,17 +47,11 @@ def _legend_html(
     return " &nbsp; ".join(parts)
 
 
-class SymbolSnapshotDialog(QDialog):
-    """Non-modal two-chart snapshot, reused across clicks (one per panel)."""
+class SymbolSnapshotWidget(QWidget):
+    """Reusable embedded D1-over-M5 snapshot view."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setModal(False)
-        self.setWindowFlag(Qt.WindowType.Tool, True)
-        self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.resize(1180, 760)
-
         self.d1_legend = QLabel()
         self.d1_legend.setTextFormat(Qt.TextFormat.RichText)
         self.d1_legend.setWordWrap(True)
@@ -88,15 +82,12 @@ class SymbolSnapshotDialog(QDialog):
         layout.addWidget(self.m5_chart, 1)
         layout.addWidget(self.m5_note)
 
-    def show_symbol(self, symbol: str, *, bot=None, side: str = "") -> None:
+    def set_symbol(self, symbol: str, *, bot=None) -> None:
         import chart_snapshot
 
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
-        side_text = f" ({side})" if side in ("LONG", "SHORT") else ""
-        self.setWindowTitle(f"{symbol}{side_text} — D1 + M5 snapshot")
-
         d1 = chart_snapshot.build_d1_snapshot(symbol)
         self.d1_legend.setText(_legend_html(f"{symbol} · D1", d1["overlays"]))
         self.d1_chart.set_data(d1["bars"], d1["overlays"], timeframe="d1")
@@ -145,6 +136,40 @@ class SymbolSnapshotDialog(QDialog):
                 + f"last bar {last.strftime('%m/%d %H:%M')}</span>"
             )
 
+
+class SymbolSnapshotDialog(QDialog):
+    """Non-modal two-chart snapshot, reused across clicks (one per panel)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setModal(False)
+        self.setWindowFlag(Qt.WindowType.Tool, True)
+        self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.resize(1180, 760)
+
+        self.snapshot = SymbolSnapshotWidget(self)
+        # Compatibility aliases for existing callers and tests.
+        for name in (
+            "d1_legend",
+            "d1_chart",
+            "d1_note",
+            "m5_legend",
+            "m5_chart",
+            "m5_note",
+        ):
+            setattr(self, name, getattr(self.snapshot, name))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.snapshot)
+
+    def show_symbol(self, symbol: str, *, bot=None, side: str = "") -> None:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
+        side_text = f" ({side})" if side in ("LONG", "SHORT") else ""
+        self.setWindowTitle(f"{symbol}{side_text} — D1 + M5 snapshot")
+        self.snapshot.set_symbol(symbol, bot=bot)
         # show + raise only (no activateWindow): the popup must never steal
         # typing focus from a watchlist editor or the live feed.
         self.show()

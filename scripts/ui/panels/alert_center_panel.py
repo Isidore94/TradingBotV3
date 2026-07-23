@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -19,8 +20,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from project_paths import get_local_setting, save_local_setting
+from alert_review_state import load_ignored_alert_symbols, save_ignored_alert_symbols
+from project_paths import (
+    ALERT_CENTER_IGNORED_SYMBOLS_FILE,
+    get_local_setting,
+    save_local_setting,
+)
 from ui.models.bounce import BounceAlert, is_entry_assist_text
+from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.alert_feed_item import AlertFeedItem
 from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
@@ -225,14 +232,32 @@ class AlertCenterPanel(QFrame):
     statusChanged = Signal(str)
     setupRequested = Signal(dict)  # show_setup kwargs, when the embedded pane is off
 
-    def __init__(self, focus_service=None, parent=None) -> None:
+    def __init__(self, focus_service=None, parent=None, *, ignored_symbols_path=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self.focus_service = focus_service
         self._bounce_service = None
         self._alerts: list[BounceAlert] = []
         self._d1_alerts: list[BounceAlert] = []
+        self._review_queue: list[BounceAlert] = []
+        self._current_review_alert: BounceAlert | None = None
         self._embedded_detail_enabled = True
+        focus_store = getattr(self.focus_service, "store", None)
+        default_store = bool(
+            self.focus_service is not None
+            and getattr(focus_store, "uses_default_paths", lambda: False)()
+        )
+        persist_ignored = ignored_symbols_path is not None or default_store
+        self._ignored_symbols_path = (
+            Path(ignored_symbols_path or ALERT_CENTER_IGNORED_SYMBOLS_FILE)
+            if persist_ignored
+            else None
+        )
+        self._ignored_symbols = (
+            load_ignored_alert_symbols(self._ignored_symbols_path)
+            if self._ignored_symbols_path is not None
+            else set()
+        )
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
             # so every alert for that name immediately shows the gold flag.
@@ -251,6 +276,9 @@ class AlertCenterPanel(QFrame):
 
         clear_button = QPushButton("Clear")
         clear_button.clicked.connect(self.clear_feed)
+        self.ignored_button = QPushButton()
+        self.ignored_button.clicked.connect(self._restore_ignored_symbol_dialog)
+        self._refresh_ignored_button()
 
         self.feed_container = QWidget()
         self.feed_layout = QVBoxLayout(self.feed_container)
@@ -308,14 +336,20 @@ class AlertCenterPanel(QFrame):
         d1_section_layout.addWidget(d1_scroll, 1)
 
         self.detail_view = SetupDetailView(self)
+        self.chart_review = AlertChartReview(self)
+        self.chart_review.dislikeRequested.connect(self._dislike_review_alert)
+        self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
+        self.chart_review.skipRequested.connect(self._skip_review_alert)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self.chart_review)
         splitter.addWidget(self.tabs)
         splitter.addWidget(d1_section)
         splitter.addWidget(self.detail_view)
-        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(0, 5)
         splitter.setStretchFactor(1, 2)
-        splitter.setStretchFactor(2, 2)
+        splitter.setStretchFactor(2, 1)
+        splitter.setStretchFactor(3, 1)
 
         header = SectionHeader(
             "Alert Center",
@@ -328,6 +362,7 @@ class AlertCenterPanel(QFrame):
         controls.addWidget(self.min_tier_input)
         controls.addWidget(self.sound_input)
         controls.addStretch(1)
+        controls.addWidget(self.ignored_button)
         controls.addWidget(clear_button)
 
         layout = QVBoxLayout(self)
@@ -350,16 +385,20 @@ class AlertCenterPanel(QFrame):
     def add_alert(self, alert: BounceAlert) -> None:
         if _is_feed_noise_alert(alert):
             return
+        if alert.symbol and alert.symbol in self._ignored_symbols:
+            return
         # D1 Focus is reserved for favorite/high-conviction transitions
         # (final bucket upgrades only). Developing trigger/watch observations
         # are research evidence and are excluded from both actionable feeds.
         if alert.is_d1 and is_ready_d1_alert(alert):
+            self._enqueue_review_alert(alert)
             self._add_d1_alert(alert)
             return
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
         is_focus = self._alert_is_focus(alert)
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
+            self._enqueue_review_alert(alert)
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
             if self.sound_input.isChecked() and alert_should_sound(alert, is_focus=is_focus):
                 QApplication.beep()
@@ -383,6 +422,9 @@ class AlertCenterPanel(QFrame):
     def clear_feed(self) -> None:
         self._alerts.clear()
         self._d1_alerts.clear()
+        self._review_queue.clear()
+        self._current_review_alert = None
+        self.chart_review.clear()
         self._rebuild_feed()
         self.statusChanged.emit("Alert feeds cleared.")
 
@@ -441,10 +483,11 @@ class AlertCenterPanel(QFrame):
             reason=reason,
             context=alert.raw_text,
         )
-        message = f"✕ {alert.symbol}: dislike logged for AI review."
+        message = f"✕ {alert.symbol}: disliked and hidden from future Alert Center reviews."
         if self.focus_service.is_focus(alert.symbol):
             self.focus_service.remove_everywhere(alert.symbol)
-            message = f"✕ {alert.symbol}: dislike logged and removed from focus picks."
+            message += " Removed from focus picks."
+        self._ignore_alert_symbol(alert.symbol)
         self.statusChanged.emit(message)
 
     def _insert_item_into(self, layout, alert: BounceAlert, max_items: int) -> None:
@@ -484,13 +527,191 @@ class AlertCenterPanel(QFrame):
             [
                 a
                 for a in self._alerts
-                if alert_passes_feed_gate(a, mode, is_focus=self._alert_is_focus(a))
+                if a.symbol not in self._ignored_symbols
+                and alert_passes_feed_gate(a, mode, is_focus=self._alert_is_focus(a))
             ][:MAX_FEED_ITEMS]
         ):
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
         self._clear_feed_layout(self.d1_feed_layout)
-        for alert in reversed(self._d1_alerts[:MAX_D1_FEED_ITEMS]):
+        for alert in reversed(
+            [
+                alert
+                for alert in self._d1_alerts
+                if alert.symbol not in self._ignored_symbols
+            ][:MAX_D1_FEED_ITEMS]
+        ):
             self._insert_item_into(self.d1_feed_layout, alert, MAX_D1_FEED_ITEMS)
+
+    def _enqueue_review_alert(self, alert: BounceAlert) -> None:
+        """Queue one visual review per symbol; refresh the active symbol live."""
+        if not alert.symbol:
+            return
+        if (
+            self._current_review_alert is not None
+            and self._current_review_alert.symbol == alert.symbol
+        ):
+            self._current_review_alert = alert
+            self._render_current_review()
+            return
+        self._review_queue = [
+            queued for queued in self._review_queue if queued.symbol != alert.symbol
+        ]
+        self._review_queue.append(alert)
+        if self._current_review_alert is None:
+            self._advance_review_queue()
+        else:
+            self.chart_review.set_queued_count(len(self._review_queue))
+
+    def _select_review_alert(self, alert: BounceAlert) -> None:
+        """A feed-row click makes that alert the active visual review."""
+        if not alert.symbol or alert.symbol in self._ignored_symbols:
+            return
+        current = self._current_review_alert
+        if current is not None and current.symbol != alert.symbol:
+            self._review_queue = [
+                queued
+                for queued in self._review_queue
+                if queued.symbol not in {current.symbol, alert.symbol}
+            ]
+            self._review_queue.insert(0, current)
+        else:
+            self._review_queue = [
+                queued for queued in self._review_queue if queued.symbol != alert.symbol
+            ]
+        self._current_review_alert = alert
+        self._render_current_review()
+
+    def _advance_review_queue(self) -> None:
+        self._current_review_alert = (
+            self._review_queue.pop(0) if self._review_queue else None
+        )
+        self._render_current_review()
+
+    def _render_current_review(self) -> None:
+        alert = self._current_review_alert
+        if alert is None:
+            self.chart_review.clear()
+            return
+        bot = None
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+            except Exception:
+                bot = None
+        self.chart_review.set_alert(
+            alert,
+            bot=bot,
+            focus_category=favorite_category_for_alert(alert),
+            queued=len(self._review_queue),
+        )
+
+    def _skip_review_alert(self, alert: BounceAlert) -> None:
+        if (
+            self._current_review_alert is None
+            or self._current_review_alert.symbol != alert.symbol
+        ):
+            return
+        self.statusChanged.emit(
+            f"Skipped {alert.symbol} for now; its feed item remains available."
+        )
+        self._advance_review_queue()
+
+    def _add_review_alert_to_focus(self, alert: BounceAlert) -> None:
+        if self.focus_service is None or not alert.symbol:
+            return
+        category = favorite_category_for_alert(alert)
+        side = "short" if alert.side == "SHORT" else "long"
+        added = self.focus_service.add(
+            alert.symbol,
+            side,
+            category,
+            origin=favorite_origin_for_alert(alert),
+            context=alert.raw_text,
+        )
+        bucket = "Swing" if category == "swing" else "M5"
+        message = (
+            f"★ {alert.symbol}: added to {bucket} Focus {side}s."
+            if added
+            else f"★ {alert.symbol}: already in Focus Picks."
+        )
+        self.statusChanged.emit(message)
+        self._advance_review_queue()
+
+    def _dislike_review_alert(self, alert: BounceAlert) -> None:
+        """Fast visual verdict: persist suppression without a second dialog."""
+        if self.focus_service is None or not alert.symbol:
+            return
+        self._record_dislike(alert, "visual D1 chart rejection")
+
+    def _ignore_alert_symbol(self, symbol: str) -> None:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
+        self._ignored_symbols.add(symbol)
+        if self._ignored_symbols_path is not None:
+            try:
+                self._ignored_symbols = save_ignored_alert_symbols(
+                    self._ignored_symbols,
+                    self._ignored_symbols_path,
+                )
+            except OSError:
+                pass
+        self._alerts = [alert for alert in self._alerts if alert.symbol != symbol]
+        self._d1_alerts = [
+            alert for alert in self._d1_alerts if alert.symbol != symbol
+        ]
+        self._review_queue = [
+            alert for alert in self._review_queue if alert.symbol != symbol
+        ]
+        if (
+            self._current_review_alert is not None
+            and self._current_review_alert.symbol == symbol
+        ):
+            self._current_review_alert = None
+        self._rebuild_feed()
+        self._refresh_ignored_button()
+        if self._current_review_alert is None:
+            self._advance_review_queue()
+
+    def _restore_ignored_symbol_dialog(self) -> None:
+        if not self._ignored_symbols:
+            return
+        symbol, accepted = QInputDialog.getItem(
+            self,
+            "Restore Alert Center symbol",
+            "Show this symbol in future Alert Center alerts:",
+            sorted(self._ignored_symbols),
+            0,
+            False,
+        )
+        if accepted and symbol:
+            self._restore_ignored_symbol(symbol)
+
+    def _restore_ignored_symbol(self, symbol: str) -> None:
+        symbol = str(symbol or "").strip().upper()
+        if symbol not in self._ignored_symbols:
+            return
+        self._ignored_symbols.remove(symbol)
+        if self._ignored_symbols_path is not None:
+            try:
+                self._ignored_symbols = save_ignored_alert_symbols(
+                    self._ignored_symbols,
+                    self._ignored_symbols_path,
+                )
+            except OSError:
+                pass
+        self._refresh_ignored_button()
+        self.statusChanged.emit(
+            f"{symbol}: restored; future Alert Center alerts will be shown."
+        )
+
+    def _refresh_ignored_button(self) -> None:
+        count = len(self._ignored_symbols)
+        self.ignored_button.setText(f"Ignored ({count})")
+        self.ignored_button.setEnabled(count > 0)
+        self.ignored_button.setToolTip(
+            "Restore a symbol previously hidden by a visual-review dislike."
+        )
 
     def set_embedded_detail_enabled(self, enabled: bool) -> None:
         """Workspace mode turns the embedded plan pane off so the setup is
@@ -523,6 +744,7 @@ class AlertCenterPanel(QFrame):
     def _show_alert_detail(self, alert: BounceAlert) -> None:
         if not alert.symbol:
             return
+        self._select_review_alert(alert)
         feedback = alert.payload.get("feedback") if isinstance(alert.payload, dict) else {}
         feedback = feedback if isinstance(feedback, dict) else {}
         payload = {
