@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date, timedelta
 from pathlib import Path
@@ -301,6 +302,7 @@ def load_latest_setup_rows_with_meta() -> dict[str, Any]:
         priority_date is None or focus_date is None or focus_date >= priority_date
     )
     if focus_is_current:
+        enrich_setup_rows_for_display(focus_rows, supplemental_rows=focus_rows)
         return {
             "rows": focus_rows,
             "data_date": focus_date,
@@ -310,6 +312,7 @@ def load_latest_setup_rows_with_meta() -> dict[str, Any]:
 
     priority_rows = load_setup_rows_from_priority_report()
     if priority_rows:
+        enrich_setup_rows_for_display(priority_rows, supplemental_rows=focus_rows)
         return {
             "rows": priority_rows,
             "data_date": priority_date,
@@ -318,6 +321,7 @@ def load_latest_setup_rows_with_meta() -> dict[str, Any]:
         }
 
     # No fresher report available; show whatever the focus feed still holds.
+    enrich_setup_rows_for_display(focus_rows, supplemental_rows=focus_rows)
     return {
         "rows": focus_rows,
         "data_date": focus_date,
@@ -328,6 +332,27 @@ def load_latest_setup_rows_with_meta() -> dict[str, Any]:
 
 def load_latest_setup_rows() -> list[SetupRow]:
     return load_latest_setup_rows_with_meta()["rows"]
+
+
+def enrich_setup_rows_for_display(
+    rows: list[SetupRow],
+    *,
+    supplemental_rows: Iterable[SetupRow] = (),
+) -> list[SetupRow]:
+    """Best-effort local display enrichment; setup ranking stays untouched."""
+    if not rows:
+        return rows
+    try:
+        from ui.services.setup_group_context import (
+            enrich_setup_group_context,
+            write_unmapped_setup_classification_report,
+        )
+
+        enrich_setup_group_context(rows, supplemental_rows=supplemental_rows)
+        write_unmapped_setup_classification_report(rows)
+    except Exception as exc:
+        logging.warning("Could not enrich Master AVWAP group context: %s", exc)
+    return rows
 
 
 def setup_row_from_mapping(

@@ -61,6 +61,11 @@ class SetupRow:
     expected_r: float | None = None
     expected_r_rank: float | None = None
     days_to_earnings: int | None = None
+    sector: str = ""
+    industry: str = ""
+    d1_vs_sector: float | None = None
+    d1_vs_industry: float | None = None
+    industry_classification_source: str = ""
     last_trade_date: str = ""
     source: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
@@ -102,3 +107,10 @@ class SetupRow:
         if self.expected_r is None:
             return ""
         return f"{self.expected_r:.2f}R"
+
+    @staticmethod
+    def relative_strength_text(value: float | None) -> str:
+        if value is None:
+            return ""
+        label = "RS" if value > 0 else "RW" if value < 0 else "Flat"
+        return f"{label} {value:+.2f}"

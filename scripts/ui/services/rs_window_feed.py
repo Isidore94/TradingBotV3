@@ -204,6 +204,8 @@ def build_primary_industry_context(
             "industry_expected_members": len(member_symbols),
             "industry_rs": _to_float(primary_row.get("rs_score")) if primary_row else None,
             "industry_rank": _to_float(primary_row.get("rs_rank")) if primary_row else None,
+            "industry_return_1d_pct": _to_float(primary_row.get("pct_change_1d")) if primary_row else None,
+            "industry_return_5d_pct": _to_float(primary_row.get("return_5d_pct")) if primary_row else None,
         }
     return result
 
@@ -267,6 +269,8 @@ def load_industry_context_map(force_refresh: bool = False) -> dict[str, dict]:
             "sector": sector_name,
             "sector_rs": _to_float(sector_row.get("rs_score")) if sector_row else None,
             "sector_rank": _to_float(sector_row.get("rs_rank")) if sector_row else None,
+            "sector_return_1d_pct": _to_float(sector_row.get("pct_change_1d")) if sector_row else None,
+            "sector_return_5d_pct": _to_float(sector_row.get("return_5d_pct")) if sector_row else None,
             **industry,
         }
     _industry_context_cache["mtimes"] = mtimes

@@ -24,9 +24,10 @@ class SetupTableModel(QAbstractTableModel):
         ("setup_tags", "Setup Tags"),
         ("key_level", "Key Level / Entry"),
         ("supports", "Supports"),
-        ("theta", "Theta"),
-        ("expected_r", "Expected R"),
-        ("days_to_earnings", "DTE"),
+        ("sector", "Sector"),
+        ("d1_vs_sector", "D1 Sector RS/RW"),
+        ("industry", "Industry"),
+        ("d1_vs_industry", "D1 Industry RS/RW"),
         ("last_trade_date", "Last Bar"),
     )
 
@@ -55,7 +56,7 @@ class SetupTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if key in {"favorite", "dislike"}:
                 return int(Qt.AlignmentFlag.AlignCenter)
-            if key in {"score", "supports", "expected_r", "days_to_earnings"}:
+            if key in {"score", "supports", "d1_vs_sector", "d1_vs_industry"}:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole:
@@ -68,6 +69,10 @@ class SetupTableModel(QAbstractTableModel):
                     return QColor(theme.color("long"))
                 if row.score < 45:
                     return QColor(theme.color("caution"))
+            if key in {"d1_vs_sector", "d1_vs_industry"}:
+                value = getattr(row, key)
+                if value is not None and value != 0:
+                    return QColor(theme.color("long" if value > 0 else "short"))
             return None
         if role == Qt.ItemDataRole.ToolTipRole:
             return _tooltip(row, key)
@@ -106,12 +111,14 @@ class SetupTableModel(QAbstractTableModel):
             return row.key_level
         if key == "supports":
             return row.supports_text
-        if key == "theta":
-            return row.theta
-        if key == "expected_r":
-            return row.expected_r_text
-        if key == "days_to_earnings":
-            return "" if row.days_to_earnings is None else str(row.days_to_earnings)
+        if key == "sector":
+            return row.sector
+        if key == "d1_vs_sector":
+            return row.relative_strength_text(row.d1_vs_sector)
+        if key == "industry":
+            return row.industry
+        if key == "d1_vs_industry":
+            return row.relative_strength_text(row.d1_vs_industry)
         if key == "last_trade_date":
             return row.last_trade_date
         return ""
@@ -121,10 +128,9 @@ class SetupTableModel(QAbstractTableModel):
             return row.score if row.score is not None else -999999.0
         if key == "supports":
             return row.supports if row.supports is not None else -1
-        if key == "expected_r":
-            return row.expected_r if row.expected_r is not None else -999999.0
-        if key == "days_to_earnings":
-            return row.days_to_earnings if row.days_to_earnings is not None else 999999
+        if key in {"d1_vs_sector", "d1_vs_industry"}:
+            value = getattr(row, key)
+            return value if value is not None else -999999.0
         return self._display_value(row, key)
 
 
@@ -185,7 +191,8 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
                     row.bucket_label,
                     row.tags_text,
                     row.key_level,
-                    row.theta,
+                    row.sector,
+                    row.industry,
                 ]
             ).lower()
             if self.search_text not in haystack:
@@ -217,8 +224,12 @@ def _tooltip(row: SetupRow, key: str) -> str:
         )
     if key == "supports" and row.raw.get("hv_level_note"):
         return str(row.raw.get("hv_level_note"))
-    if key == "expected_r" and row.raw.get("expected_r_note"):
-        return str(row.raw.get("expected_r_note"))
+    if key == "d1_vs_sector":
+        return "Weighted D1 excess return versus the sector board: 35% of 1-day plus 65% of 5-day."
+    if key == "d1_vs_industry":
+        source = row.industry_classification_source.replace("_", " ")
+        detail = f" Classification: {source}." if source else ""
+        return "Weighted D1 excess return versus the displayed industry board composite." + detail
     if key == "setup_tags":
         return row.tags_text
     if key == "bucket":

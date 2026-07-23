@@ -15,7 +15,7 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from ui.models.setup import SetupRow
-from ui.services.data_feed import load_latest_setup_rows, rows_from_run_result
+from ui.services.data_feed import enrich_setup_rows_for_display, load_latest_setup_rows, rows_from_run_result
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2]
@@ -71,6 +71,8 @@ class ScanWorker(QObject):
             rows = rows_from_run_result(run_result)
             if not rows:
                 rows = load_latest_setup_rows()
+            else:
+                enrich_setup_rows_for_display(rows, supplemental_rows=rows)
             stamp = datetime.now().strftime("%H:%M:%S")
             self.finished.emit(run_result, rows, stamp)
         except Exception as exc:

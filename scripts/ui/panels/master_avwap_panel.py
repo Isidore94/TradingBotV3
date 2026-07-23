@@ -105,7 +105,8 @@ class MasterAvwapPanel(QWidget):
 
         self.empty_state = EmptyState(
             "Run a scan to see setups",
-            "Master AVWAP results will appear here as sortable rows with side, score, bucket, support stack, theta, and expected-R context.",
+            "Master AVWAP results will appear here as sortable rows with side, score, "
+            "bucket, support stack, and D1 sector/industry RS/RW context.",
             "Run Shared Scan",
         )
         self.empty_state.action_button.clicked.connect(self.run_shared_scan)
