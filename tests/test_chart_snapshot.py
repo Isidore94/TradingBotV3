@@ -245,6 +245,43 @@ def test_snapshot_dialog_populates_both_charts(monkeypatch):
     dialog.close()
 
 
+def test_snapshot_dialog_reuses_owner_child_without_stealing_editor_focus(monkeypatch):
+    app = _qt_app()
+    if app is None:
+        return
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
+    from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
+
+    monkeypatch.setattr(
+        chart_snapshot,
+        "build_d1_snapshot",
+        lambda symbol: {
+            "symbol": symbol,
+            "timeframe": "D1",
+            "bars": [],
+            "overlays": [],
+            "note": "no daily store",
+        },
+    )
+    owner = QWidget()
+    layout = QVBoxLayout(owner)
+    editor = QPlainTextEdit("AAPL")
+    layout.addWidget(editor)
+    owner.show()
+    editor.setFocus()
+    app.processEvents()
+
+    first = show_symbol_snapshot(owner, "AAPL")
+    app.processEvents()
+    assert first.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert first.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    assert show_symbol_snapshot(owner, "MSFT") is first
+    assert first.parent() is owner
+    first.close()
+    owner.close()
+
+
 def test_master_setups_double_click_opens_snapshot(monkeypatch):
     if _qt_app() is None:
         return

@@ -47,6 +47,8 @@ class SymbolSnapshotDialog(QDialog):
         super().__init__(parent)
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Tool, True)
+        self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.resize(880, 680)
 
         self.d1_legend = QLabel()
