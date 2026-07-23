@@ -125,6 +125,49 @@ def test_build_d1_snapshot_missing_store():
     assert snapshot["bars"] == [] and snapshot["note"] == "no daily store"
 
 
+def test_load_d1_bars_resolves_dotted_alias_and_caches_by_mtime(tmp_path, monkeypatch):
+    import os
+
+    import pandas as pd
+    import setup_playbook_study
+    from master_avwap_lib import legacy as master_legacy
+
+    stored = tmp_path / "BF-B.parquet"
+    stored.write_bytes(b"first")
+    monkeypatch.setattr(master_legacy, "MASTER_AVWAP_DAILY_BARS_DIR", tmp_path)
+    frame = pd.DataFrame(
+        {
+            "datetime": pd.date_range("2026-01-01", periods=80, freq="B"),
+            "open": [100.0] * 80,
+            "high": [101.0] * 80,
+            "low": [99.0] * 80,
+            "close": [100.5] * 80,
+            "volume": [1000.0] * 80,
+        }
+    )
+    loaded_stems = []
+
+    def fake_load(stem):
+        loaded_stems.append(stem)
+        return frame
+
+    monkeypatch.setattr(setup_playbook_study, "_load_daily_frame", fake_load)
+    chart_snapshot._daily_bars_cache.clear()
+    try:
+        assert len(chart_snapshot.load_d1_bars("BF.B")) == 80
+        assert loaded_stems == ["BF-B"]
+        assert len(chart_snapshot.load_d1_bars("BF.B")) == 80
+        assert loaded_stems == ["BF-B"]  # unchanged mtime: no parquet read
+
+        old_mtime = stored.stat().st_mtime_ns
+        stored.write_bytes(b"changed")
+        os.utime(stored, ns=(old_mtime + 1_000_000_000, old_mtime + 1_000_000_000))
+        assert len(chart_snapshot.load_d1_bars("BF.B")) == 80
+        assert loaded_stems == ["BF-B", "BF-B"]
+    finally:
+        chart_snapshot._daily_bars_cache.clear()
+
+
 def test_build_m5_snapshot_overlays():
     bars = _m5_bars(30)
     snapshot = chart_snapshot.build_m5_snapshot("TEST", bars)

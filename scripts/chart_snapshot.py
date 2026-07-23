@@ -19,9 +19,11 @@ band consumer is calibrated to. Do not "fix" it toward a distribution
 stdev; see plan.md section 5.
 """
 
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 D1_DEFAULT_SESSIONS = 90
+_daily_bars_cache: dict[str, tuple[tuple[str, int], list[dict[str, Any]]]] = {}
 
 D1_OVERLAY_SPECS = (
     ("sma", 50, "SMA50", "info", 1.6, False),
@@ -124,12 +126,61 @@ def _tail(values: list, count: int) -> list:
     return values[-count:] if count and len(values) > count else values
 
 
+def _daily_store_candidates(symbol: str) -> list[tuple[str, Path]]:
+    """Loader stems/paths in preference order for the durable daily store."""
+    from master_avwap_lib.legacy import (
+        MASTER_AVWAP_DAILY_BARS_DIR,
+        _sanitize_symbol_for_filename,
+    )
+
+    symbol = str(symbol or "").strip().upper()
+    aliases = [symbol]
+    # The universe/store use Yahoo's dashed class-share form (BF-B), while a
+    # user-entered watchlist can legitimately contain the exchange form BF.B.
+    if "." in symbol:
+        aliases.append(symbol.replace(".", "-"))
+    candidates = []
+    seen = set()
+    for alias in aliases:
+        stem = _sanitize_symbol_for_filename(alias)
+        if stem in seen:
+            continue
+        seen.add(stem)
+        candidates.append(
+            (stem, Path(MASTER_AVWAP_DAILY_BARS_DIR) / f"{stem}.parquet")
+        )
+    return candidates
+
+
 def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
-    """Full daily history from the durable parquet store as chart bars."""
+    """Full daily history from the durable parquet store as chart bars.
+
+    Results are cached by the resolved file's mtime. Each click still stats
+    the tiny per-symbol file path, but unchanged parquet is not re-read.
+    """
     from setup_playbook_study import _load_daily_frame
 
-    frame = _load_daily_frame(str(symbol or "").strip().upper())
+    symbol = str(symbol or "").strip().upper()
+    candidates = _daily_store_candidates(symbol)
+    resolved_stem, resolved_path, mtime_ns = "", None, 0
+    for stem, path in candidates:
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        resolved_stem, resolved_path = stem, path
+        break
+    if resolved_path is None and candidates:
+        resolved_stem, resolved_path = candidates[0]
+
+    cache_key = (str(resolved_path or ""), mtime_ns)
+    cached = _daily_bars_cache.get(symbol)
+    if cached is not None and cached[0] == cache_key:
+        return cached[1]
+
+    frame = _load_daily_frame(resolved_stem) if resolved_stem else None
     if frame is None:
+        _daily_bars_cache[symbol] = (cache_key, [])
         return []
     bars: list[dict[str, Any]] = []
     has_volume = "volume" in frame.columns
@@ -144,6 +195,7 @@ def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
                 "volume": float(getattr(row, "volume", 0.0) or 0.0) if has_volume else 0.0,
             }
         )
+    _daily_bars_cache[symbol] = (cache_key, bars)
     return bars
 
 
