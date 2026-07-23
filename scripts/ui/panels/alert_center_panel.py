@@ -172,6 +172,7 @@ class _ClickableItem(QFrame):
     clicked = Signal(object)
     favoriteToggled = Signal(object)  # alert
     dislikeRequested = Signal(object)  # alert
+    symbolClicked = Signal(object)  # alert - ticker name click -> chart snapshot
 
     def __init__(
         self,
@@ -192,6 +193,7 @@ class _ClickableItem(QFrame):
         )
         feed_item.favoriteToggled.connect(lambda: self.favoriteToggled.emit(self.alert))
         feed_item.dislikeRequested.connect(lambda: self.dislikeRequested.emit(self.alert))
+        feed_item.symbolClicked.connect(lambda: self.symbolClicked.emit(self.alert))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(feed_item)
@@ -227,6 +229,7 @@ class AlertCenterPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self.focus_service = focus_service
+        self._bounce_service = None
         self._alerts: list[BounceAlert] = []
         self._d1_alerts: list[BounceAlert] = []
         self._embedded_detail_enabled = True
@@ -334,6 +337,7 @@ class AlertCenterPanel(QFrame):
 
     # ------------------------------------------------------------------
     def attach_service(self, service) -> None:
+        self._bounce_service = service
         service.alertReceived.connect(self.add_alert)
         service.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)
         service.statusChanged.connect(self._maybe_add_status_alert)
@@ -455,6 +459,7 @@ class AlertCenterPanel(QFrame):
         item.clicked.connect(self._show_alert_detail)
         item.favoriteToggled.connect(self._toggle_favorite)
         item.dislikeRequested.connect(self._dislike_alert)
+        item.symbolClicked.connect(self._show_symbol_snapshot)
         layout.insertWidget(0, item)
         while layout.count() > max_items + 1:
             taken = layout.takeAt(layout.count() - 2)
@@ -491,6 +496,20 @@ class AlertCenterPanel(QFrame):
         self._embedded_detail_enabled = bool(enabled)
         if not self._embedded_detail_enabled:
             self.detail_view.setVisible(False)
+
+    def _show_symbol_snapshot(self, alert: BounceAlert) -> None:
+        """Ticker-name click: the D1+M5 candle quick look."""
+        if not alert.symbol:
+            return
+        from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
+
+        bot = None
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+            except Exception:
+                bot = None
+        show_symbol_snapshot(self, alert.symbol, bot=bot, side=alert.side)
 
     def _show_alert_detail(self, alert: BounceAlert) -> None:
         if not alert.symbol:

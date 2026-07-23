@@ -45,6 +45,7 @@ class TradingDeskPanel(QWidget):
         )
         self.alert_center = AlertCenterPanel(self.focus_service)
         self.alert_center.attach_service(self.bounce_panel.service)
+        self.watchlists_panel.set_bounce_service(self.bounce_panel.service)
         # In workspace mode the Alert Center's embedded plan pane is off; a
         # clicked alert opens in the setups workspace's detail pane instead,
         # so the setup is described in exactly one place.

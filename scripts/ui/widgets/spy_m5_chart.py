@@ -11,47 +11,11 @@ window - drag its edges to choose "from where to where".
 from datetime import datetime
 
 import pyqtgraph as pg
-from PySide6.QtCore import QRectF, Signal
-from PySide6.QtGui import QColor, QPainter, QPicture, QPen
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QColor
 
 from ui import theme
-
-
-class _CandleItem(pg.GraphicsObject):
-    def __init__(self, bars: list[dict]) -> None:
-        super().__init__()
-        self._bars = bars
-        self._picture = QPicture()
-        self._render()
-
-    def _render(self) -> None:
-        up = QColor(theme.color("long"))
-        down = QColor(theme.color("short"))
-        painter = QPainter(self._picture)
-        width = 0.35
-        for index, bar in enumerate(self._bars):
-            color = up if bar["close"] >= bar["open"] else down
-            painter.setPen(QPen(color))
-            painter.setBrush(color)
-            painter.drawLine(
-                pg.QtCore.QPointF(index, bar["low"]), pg.QtCore.QPointF(index, bar["high"])
-            )
-            body_top = max(bar["open"], bar["close"])
-            body_bottom = min(bar["open"], bar["close"])
-            painter.drawRect(
-                QRectF(index - width, body_bottom, width * 2, max(body_top - body_bottom, 1e-9))
-            )
-        painter.end()
-
-    def paint(self, painter, *_args) -> None:
-        painter.drawPicture(0, 0, self._picture)
-
-    def boundingRect(self) -> QRectF:
-        if not self._bars:
-            return QRectF()
-        lows = [bar["low"] for bar in self._bars]
-        highs = [bar["high"] for bar in self._bars]
-        return QRectF(-1, min(lows), len(self._bars) + 1, max(highs) - min(lows))
+from ui.widgets.candle_chart import CandleItem as _CandleItem
 
 
 class SpyM5Chart(pg.PlotWidget):

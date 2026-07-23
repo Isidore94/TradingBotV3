@@ -5594,11 +5594,16 @@ class BounceBot(EWrapper, EClient):
         }
 
     def spy_m5_chart_bars(self, max_sessions=2):
-        """Cached SPY 5m bars as plain dicts for the GUI chart.
+        return self.m5_chart_bars("SPY", max_sessions=max_sessions)
+
+    def m5_chart_bars(self, symbol, max_sessions=2):
+        """Cached 5m bars for any scanned symbol as plain dicts for GUI charts.
 
         Reads ``latest_bars`` only (never triggers an IB fetch), so it is safe
-        from the GUI thread; the scan / paused loop keeps the series fresh."""
-        bars = self.latest_bars.get("SPY|5 D|5 mins") or []
+        from the GUI thread; the scan / paused loop keeps the series fresh.
+        Symbols outside the current scan set simply return []."""
+        symbol = str(symbol or "").strip().upper()
+        bars = self.latest_bars.get(f"{symbol}|5 D|5 mins") or []
         if not bars:
             return []
         dates = sorted({bar.dt.date() for bar in bars})

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QTimer, Signal
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -33,12 +34,28 @@ from watchlist_utils import extract_watchlist_symbols
 from ui.widgets.section_header import SectionHeader
 
 
+class _SymbolTextEdit(QPlainTextEdit):
+    """Watchlist text area; double-clicking a symbol line opens the D1+M5
+    snapshot popup (one symbol per line, so the whole line is the ticker)."""
+
+    symbolActivated = Signal(str)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().mouseDoubleClickEvent(event)
+        cursor = self.cursorForPosition(event.position().toPoint())
+        cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+        symbols = extract_watchlist_symbols(cursor.selectedText())
+        if len(symbols) == 1:
+            self.symbolActivated.emit(symbols[0])
+
+
 class WatchlistsPanel(QFrame):
     statusChanged = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+        self._bounce_service = None
         self.shared = WatchlistEditorArea(
             "Shared BounceBot + Master AVWAP",
             "Shared Longs",
@@ -68,10 +85,30 @@ class WatchlistsPanel(QFrame):
         layout.addWidget(
             SectionHeader(
                 "Watchlists",
-                "Edit shared lists used by BounceBot and Master AVWAP, plus Master-only swing lists.",
+                "Edit shared lists used by BounceBot and Master AVWAP, plus Master-only swing lists. "
+                "Double-click any symbol line for its D1+M5 snapshot chart.",
             )
         )
         layout.addWidget(tabs, 1)
+
+        for area in (self.shared, self.master, self.auto):
+            for leaf in area.symbol_panels():
+                leaf.text.symbolActivated.connect(self._open_symbol_snapshot)
+
+    def set_bounce_service(self, service) -> None:
+        """Optional: cached M5 bars for the popup's lower chart."""
+        self._bounce_service = service
+
+    def _open_symbol_snapshot(self, symbol: str) -> None:
+        bot = None
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+            except Exception:
+                bot = None
+        from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
+
+        show_symbol_snapshot(self, symbol, bot=bot)
 
 
 class AutoWatchlistViewerArea(QWidget):
@@ -112,6 +149,9 @@ class AutoWatchlistViewerArea(QWidget):
         self.long_viewer.refresh_from_disk()
         self.short_viewer.refresh_from_disk()
 
+    def symbol_panels(self) -> tuple:
+        return (self.long_viewer, self.short_viewer)
+
 
 class AutoWatchlistViewerPanel(QFrame):
     def __init__(self, title: str, path: Path) -> None:
@@ -120,7 +160,7 @@ class AutoWatchlistViewerPanel(QFrame):
         self.title = title
         self.path = Path(path)
 
-        self.text = QPlainTextEdit()
+        self.text = _SymbolTextEdit()
         self.text.setReadOnly(True)
         self.text.setPlaceholderText("Empty - the bot has not written any picks here yet today.")
         self.status_label = QLabel("")
@@ -200,6 +240,9 @@ class WatchlistEditorArea(QWidget):
         peer = self.short_editor if source is self.long_editor else self.long_editor
         peer.remove_symbols(set(symbols))
 
+    def symbol_panels(self) -> tuple:
+        return (self.long_editor, self.short_editor)
+
 
 class WatchlistEditorPanel(QFrame):
     statusChanged = Signal(str)
@@ -214,7 +257,7 @@ class WatchlistEditorPanel(QFrame):
 
         self.add_symbol_input = QLineEdit()
         self.add_symbol_input.setPlaceholderText("Add ticker")
-        self.text = QPlainTextEdit()
+        self.text = _SymbolTextEdit()
         self.text.setPlaceholderText("One symbol per line")
         self.status_label = QLabel("Autosave is on.")
         self.status_label.setObjectName("MutedLabel")

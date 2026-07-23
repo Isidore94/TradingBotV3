@@ -15,6 +15,26 @@ _FOCUS_BADGE_TEXT = {
 }
 
 
+class _SymbolLabel(QLabel):
+    """The ticker name as a click target for the D1+M5 snapshot popup.
+
+    Accepts the press so it does not bubble to the row (whose click opens the
+    setup detail) - ticker click and row click stay two distinct actions.
+    """
+
+    clicked = Signal()
+
+    def __init__(self, symbol: str, parent=None) -> None:
+        super().__init__(symbol, parent)
+        self.setStyleSheet("font-weight: 700; text-decoration: underline;")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(f"{symbol}: D1 + M5 snapshot chart")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        event.accept()
+        self.clicked.emit()
+
+
 class AlertFeedItem(QWidget):
     """One alert row in a feed.
 
@@ -30,6 +50,7 @@ class AlertFeedItem(QWidget):
 
     favoriteToggled = Signal()
     dislikeRequested = Signal()
+    symbolClicked = Signal()
 
     def __init__(
         self,
@@ -58,8 +79,12 @@ class AlertFeedItem(QWidget):
         top.setSpacing(8)
         time_label = QLabel(alert.time_text)
         time_label.setObjectName("MutedLabel")
-        symbol_label = QLabel(alert.symbol or "Alert")
-        symbol_label.setStyleSheet("font-weight: 700;")
+        if alert.symbol:
+            symbol_label = _SymbolLabel(alert.symbol)
+            symbol_label.clicked.connect(self.symbolClicked.emit)
+        else:
+            symbol_label = QLabel("Alert")
+            symbol_label.setStyleSheet("font-weight: 700;")
         top.addWidget(time_label)
         top.addWidget(symbol_label)
         if is_focus:
