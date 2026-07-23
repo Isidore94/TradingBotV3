@@ -1698,6 +1698,10 @@ def test_spy_m5_chart_bars_cached_only():
     assert bars[-1]["close"] == 102.0
     bot.latest_bars["NVDA|5 D|5 mins"] = list(bot.latest_bars["SPY|5 D|5 mins"])
     assert bot.m5_chart_bars("nvda") == bars
+    # request_and_detect_bounce writes the just-fetched confirmation bars to
+    # the plain symbol key. Alert Center must see that exact cache shape too.
+    bot.latest_bars["BOUNCE"] = list(bot.latest_bars["SPY|5 D|5 mins"])
+    assert bot.m5_chart_bars("bounce") == bars
     assert bot.spy_m5_chart_bars() == bot.m5_chart_bars("SPY")
     bot.latest_bars["GHOST|5 D|5 mins"] = []
     assert bot.m5_chart_bars("GHOST") == []

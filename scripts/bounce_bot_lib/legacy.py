@@ -5644,7 +5644,13 @@ class BounceBot(EWrapper, EClient):
         from the GUI thread; the scan / paused loop keeps the series fresh.
         Symbols outside the current scan set simply return []."""
         symbol = str(symbol or "").strip().upper()
-        bars = self.latest_bars.get(f"{symbol}|5 D|5 mins") or []
+        # RRS fetches use the qualified key; request_and_detect_bounce stores
+        # its just-fetched confirmation series under the plain symbol key.
+        bars = (
+            self.latest_bars.get(f"{symbol}|5 D|5 mins")
+            or self.latest_bars.get(symbol)
+            or []
+        )
         if not bars:
             return []
         dates = sorted({bar.dt.date() for bar in bars})
