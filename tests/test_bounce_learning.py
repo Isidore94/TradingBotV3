@@ -1902,6 +1902,41 @@ def test_format_bounce_alert_message_includes_tier_plan_and_reasons():
     assert "why: vwap long +0.74R" in message
 
 
+def test_m5_bounce_delivery_keeps_rvol_and_learning_as_cautions():
+    from bounce_bot_lib.legacy import _m5_bounce_delivery
+
+    deliver, cautions = _m5_bounce_delivery(
+        {"muted": True, "mute_reasons": ["weak midday segment"]},
+        0.63,
+    )
+
+    assert deliver is True
+    assert cautions == [
+        "weak midday segment",
+        "session rvol 0.63 < 1.00",
+    ]
+
+
+def test_m5_bounce_delivery_still_respects_disabled_types_and_human_picks():
+    from bounce_bot_lib.legacy import _m5_bounce_delivery
+
+    deliver, cautions = _m5_bounce_delivery(
+        {"muted": False},
+        1.25,
+        learning_only=True,
+    )
+    assert deliver is False
+    assert cautions == ["disabled or retired bounce type"]
+
+    deliver, cautions = _m5_bounce_delivery(
+        {"muted": True, "mute_reasons": ["weak midday segment"]},
+        0.40,
+        human_pick=True,
+    )
+    assert deliver is True
+    assert cautions == []
+
+
 # ---------------------------------------------------------------------------
 # H1 retirement + D1-pick confirmation (2026-07-17)
 # ---------------------------------------------------------------------------

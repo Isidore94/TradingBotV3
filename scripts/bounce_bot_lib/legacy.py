@@ -549,9 +549,8 @@ H1_TREND_MIN_CLOSES_BEYOND = 6
 # more than 1.0 rvol"). The denominator - (V78+V156+...+V1170)/15 per bar
 # slot, i.e. the 15-session same-time-of-day average - is static all day, so
 # it is fetched once per symbol per day (yfinance, prior sessions only) and
-# live IB volume divides into it. Alerts on names under the bar keep
-# recording but route LEARNING_ONLY; missing baselines never suppress, and
-# human focus picks are never gated.
+# live IB volume divides into it. The reading is advisory on confirmed M5
+# bounce alerts; missing baselines simply omit it.
 RVOL_MIN_ALERT = 1.0
 RVOL_BASELINE_RETRY_MINUTES = 15
 # Units reconciliation (bug fix 2026-07-20): IB reqHistoricalData TRADES
@@ -1363,6 +1362,29 @@ def _format_bounce_alert_message(symbol, direction, levels_list, event_row, qual
     if reasons:
         parts.append("why: " + "; ".join(reasons[:3]))
     return " | ".join(parts)
+
+
+def _m5_bounce_delivery(quality, rvol_value, *, human_pick=False, learning_only=False):
+    """Return whether a confirmed M5 bounce is visible and any caution text.
+
+    Detector enablement remains authoritative: candidates found only by
+    disabled or retired types continue learning silently. RVOL and learned
+    segment quality are advisory so an enabled confirmed bounce is not lost.
+    """
+    if learning_only:
+        return False, ["disabled or retired bounce type"]
+    if human_pick:
+        return True, []
+
+    quality = quality if isinstance(quality, dict) else {}
+    cautions = []
+    if quality.get("muted"):
+        cautions.extend(str(reason) for reason in quality.get("mute_reasons") or [] if reason)
+        if not cautions:
+            cautions.append("learned-negative segment")
+    if rvol_value is not None and rvol_value < RVOL_MIN_ALERT:
+        cautions.append(f"session rvol {rvol_value:.2f} < {RVOL_MIN_ALERT:.2f}")
+    return True, cautions
 
 
 def _latest_bounce_outcome_rows(outcomes_df: pd.DataFrame) -> pd.DataFrame:
@@ -9884,13 +9906,11 @@ class BounceBot(EWrapper, EClient):
                 candidate_id,
             )
 
-            # Learning-loop verdict: tier from measured segment performance, and
-            # an evidence-based mute for proven-negative segments. Muted bounces
-            # keep recording (outcome already registered above) so a segment can
-            # earn its way back; human focus picks are never muted.
+            # Learning-loop verdict: tier from measured segment performance.
+            # Proven-negative segments remain visible with a caution so feedback
+            # cannot hide every confirmed, Settings-enabled M5 bounce.
             quality = self._evaluate_bounce_alert_quality(direction, levels, event_row)
             human_pick = bool(event_row.get("human_focus_pick"))
-            muted_by_learning = bool(quality.get("muted") and not human_pick)
             bounce_msg = _format_bounce_alert_message(
                 symbol, direction, levels_list, event_row, quality,
                 exit_note=self._measured_exit_suffix(direction, levels),
@@ -9898,26 +9918,29 @@ class BounceBot(EWrapper, EClient):
             h1_note = self._h1_confirmation_suffix(symbol, direction)
             if h1_note:
                 bounce_msg += f" | {h1_note}"
-            # TC2000 M5 rvol filter: the reading rides every alert; names
-            # under 1.00 keep recording but stay learning-only (a missing
-            # baseline never suppresses; human picks are never gated).
+            # TC2000 M5 rvol is advisory: the reading rides every alert and
+            # sub-1.00 names carry a caution instead of being suppressed.
             try:
                 rvol_value = self.session_rvol_for(symbol)
             except Exception:
                 rvol_value = None
             if rvol_value is not None:
                 bounce_msg += f" | rvol {rvol_value:.2f}"
-            low_rvol = bool(
-                rvol_value is not None and rvol_value < RVOL_MIN_ALERT and not human_pick
+            deliver, caution_notes = _m5_bounce_delivery(
+                quality,
+                rvol_value,
+                human_pick=human_pick,
+                learning_only=learning_only,
             )
-            if learning_only or muted_by_learning or low_rvol:
-                mute_note = "; ".join(quality.get("mute_reasons") or [])
-                if low_rvol:
-                    rvol_note = f"session rvol {rvol_value:.2f} < {RVOL_MIN_ALERT:.2f} (TC2000 M5 filter)"
-                    mute_note = f"{mute_note}; {rvol_note}" if mute_note else rvol_note
-                mute_note = mute_note or "learning-only candidate"
-                self.log_symbol(symbol, f"LEARNING_ONLY [{quality.get('tier', '?')}]: {bounce_msg} | {mute_note}")
+            if not deliver:
+                self.log_symbol(
+                    symbol,
+                    f"LEARNING_ONLY [{quality.get('tier', '?')}]: "
+                    f"{bounce_msg} | {'; '.join(caution_notes)}",
+                )
                 return
+            if caution_notes:
+                bounce_msg += f" | CAUTION: {'; '.join(caution_notes)}"
 
             bounce_payload = self._build_bounce_feedback_alert_payload(bounce_msg, event_row)
             if self.gui_callback:
