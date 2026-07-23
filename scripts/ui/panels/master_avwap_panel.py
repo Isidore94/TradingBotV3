@@ -80,12 +80,12 @@ class MasterAvwapPanel(QWidget):
         self.table.setShowGrid(False)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
         self._bounce_service = None
-        self.table.doubleClicked.connect(self._open_symbol_snapshot)
+        self.table.clicked.connect(self._on_table_clicked)
+        self.table.doubleClicked.connect(self._open_symbol_snapshot_from_double_click)
         self.table.add_row_action("D1+M5 Snapshot Chart", self._open_symbol_snapshot)
         if self.focus_service is not None:
             self.delegate.set_focus_lookup(self.focus_service.is_focus)
             # The ★ column: click to favorite into Swing Focus / click again to remove.
-            self.table.clicked.connect(self._on_table_clicked)
             self.table.add_row_action(
                 "Add to Swing Focus Picks",
                 lambda proxy_index: self._add_row_to_focus(proxy_index, "swing"),
@@ -629,6 +629,15 @@ class MasterAvwapPanel(QWidget):
         side = row.side if row.side in {"LONG", "SHORT"} else ""
         show_symbol_snapshot(self, row.symbol, bot=bot, side=side)
 
+    def _open_symbol_snapshot_from_double_click(self, proxy_index) -> None:
+        """Keep the existing row double-click without reopening symbol clicks."""
+        if not proxy_index.isValid():
+            return
+        source_index = self.proxy.mapToSource(proxy_index)
+        if self.model.COLUMNS[source_index.column()][0] == "symbol":
+            return  # the first single click already opened it
+        self._open_symbol_snapshot(proxy_index)
+
     def _on_selection_changed(self, selected: QItemSelection, _deselected: QItemSelection) -> None:
         indexes = selected.indexes()
         if not indexes:
@@ -659,11 +668,16 @@ class MasterAvwapPanel(QWidget):
         )
 
     def _on_table_clicked(self, proxy_index) -> None:
-        """★ column clicks toggle Swing Focus; ✕ column clicks log a dislike."""
-        if self.focus_service is None or not proxy_index.isValid():
+        """Symbol opens its snapshot; ★/✕ retain their existing actions."""
+        if not proxy_index.isValid():
             return
         source_index = self.proxy.mapToSource(proxy_index)
         key = self.model.COLUMNS[source_index.column()][0]
+        if key == "symbol":
+            self._open_symbol_snapshot(proxy_index)
+            return
+        if self.focus_service is None:
+            return
         if key not in {"favorite", "dislike"}:
             return
         row = self.model.row_at(source_index.row())

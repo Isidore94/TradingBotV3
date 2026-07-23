@@ -317,7 +317,7 @@ def test_snapshot_dialog_reuses_owner_child_without_stealing_editor_focus(monkey
     owner.close()
 
 
-def test_master_setups_double_click_opens_snapshot(monkeypatch):
+def test_master_setups_symbol_click_opens_snapshot(monkeypatch):
     if _qt_app() is None:
         return
     from ui.models.setup import SetupRow
@@ -332,12 +332,19 @@ def test_master_setups_double_click_opens_snapshot(monkeypatch):
         "show_symbol_snapshot",
         lambda owner, symbol, **kwargs: calls.append((symbol, kwargs.get("side"))),
     )
-    panel._open_symbol_snapshot(panel.proxy.index(0, 2))  # symbol column
+    symbol_index = panel.proxy.index(0, 2)
+    panel.table.clicked.emit(symbol_index)
     assert calls == [("NVDA", "LONG")]
+    # A double-click emits after the first single click; it must not reopen.
+    panel._open_symbol_snapshot_from_double_click(symbol_index)
+    assert calls == [("NVDA", "LONG")]
+    # Existing double-click behavior remains on the rest of the setup row.
+    panel._open_symbol_snapshot_from_double_click(panel.proxy.index(0, 4))
+    assert calls == [("NVDA", "LONG"), ("NVDA", "LONG")]
     # The ★/✕ cells are their own click targets: no popup from there.
     panel._open_symbol_snapshot(panel.proxy.index(0, 0))
     panel._open_symbol_snapshot(panel.proxy.index(0, 1))
-    assert calls == [("NVDA", "LONG")]
+    assert calls == [("NVDA", "LONG"), ("NVDA", "LONG")]
 
 
 def test_alert_feed_symbol_click_does_not_propagate_to_row():
