@@ -79,6 +79,9 @@ class MasterAvwapPanel(QWidget):
         self.table.setItemDelegate(self.delegate)
         self.table.setShowGrid(False)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        self._bounce_service = None
+        self.table.doubleClicked.connect(self._open_symbol_snapshot)
+        self.table.add_row_action("D1+M5 Snapshot Chart", self._open_symbol_snapshot)
         if self.focus_service is not None:
             self.delegate.set_focus_lookup(self.focus_service.is_focus)
             # The ★ column: click to favorite into Swing Focus / click again to remove.
@@ -598,6 +601,33 @@ class MasterAvwapPanel(QWidget):
         self.statusChanged.emit(self.status_label.text())
         self._finish_scheduler_run(success=False, error_text=summary)
         QMessageBox.critical(self, "Master AVWAP Scan Failed", message)
+
+    def set_bounce_service(self, service) -> None:
+        """Optional: cached M5 bars for the snapshot popup's lower chart."""
+        self._bounce_service = service
+
+    def _open_symbol_snapshot(self, proxy_index) -> None:
+        """Row double-click / context action: D1+M5 candle quick look."""
+        if not proxy_index.isValid():
+            return
+        source_index = self.proxy.mapToSource(proxy_index)
+        # The ★/✕ cells are click targets of their own; a fast double-click
+        # there must not also pop the chart.
+        if self.model.COLUMNS[source_index.column()][0] in {"favorite", "dislike"}:
+            return
+        row = self.model.row_at(source_index.row())
+        if row is None or not row.symbol:
+            return
+        bot = None
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+            except Exception:
+                bot = None
+        from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
+
+        side = row.side if row.side in {"LONG", "SHORT"} else ""
+        show_symbol_snapshot(self, row.symbol, bot=bot, side=side)
 
     def _on_selection_changed(self, selected: QItemSelection, _deselected: QItemSelection) -> None:
         indexes = selected.indexes()

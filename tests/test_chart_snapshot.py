@@ -202,6 +202,29 @@ def test_snapshot_dialog_populates_both_charts(monkeypatch):
     dialog.close()
 
 
+def test_master_setups_double_click_opens_snapshot(monkeypatch):
+    if _qt_app() is None:
+        return
+    from ui.models.setup import SetupRow
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+    import ui.widgets.symbol_snapshot_dialog as snapshot_dialog
+
+    panel = MasterAvwapPanel(None)
+    panel.set_rows([SetupRow(symbol="NVDA", side="LONG", score=90.0)])
+    calls = []
+    monkeypatch.setattr(
+        snapshot_dialog,
+        "show_symbol_snapshot",
+        lambda owner, symbol, **kwargs: calls.append((symbol, kwargs.get("side"))),
+    )
+    panel._open_symbol_snapshot(panel.proxy.index(0, 2))  # symbol column
+    assert calls == [("NVDA", "LONG")]
+    # The ★/✕ cells are their own click targets: no popup from there.
+    panel._open_symbol_snapshot(panel.proxy.index(0, 0))
+    panel._open_symbol_snapshot(panel.proxy.index(0, 1))
+    assert calls == [("NVDA", "LONG")]
+
+
 def test_alert_feed_item_symbol_click_signal():
     if _qt_app() is None:
         return
