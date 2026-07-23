@@ -16,7 +16,12 @@ from ui import theme
 from ui.widgets.candle_chart import CandleChart
 
 
-def _legend_html(title: str, overlays: list[dict]) -> str:
+def _legend_html(
+    title: str,
+    overlays: list[dict],
+    *,
+    missing_reason: str = "needs deeper stored history",
+) -> str:
     parts = [f"<b>{title}</b>"]
     seen = set()
     missing = []
@@ -35,7 +40,7 @@ def _legend_html(title: str, overlays: list[dict]) -> str:
     if missing:
         parts.append(
             f"<span style='color:{theme.color('text_muted')};'>"
-            f"({', '.join(missing)}: needs deeper stored history)</span>"
+            f"({', '.join(missing)}: {missing_reason})</span>"
         )
     return "&nbsp;&nbsp;".join(parts)
 
@@ -111,7 +116,13 @@ class SymbolSnapshotDialog(QDialog):
             except Exception:
                 m5_bars = []
         m5 = chart_snapshot.build_m5_snapshot(symbol, m5_bars)
-        self.m5_legend.setText(_legend_html(f"{symbol} · M5", m5["overlays"]))
+        self.m5_legend.setText(
+            _legend_html(
+                f"{symbol} · M5",
+                m5["overlays"],
+                missing_reason="needs positive cached volume",
+            )
+        )
         self.m5_chart.set_data(m5["bars"], m5["overlays"], timeframe="m5")
         self.m5_chart.setVisible(bool(m5["bars"]))
         self.m5_note.setVisible(not m5["bars"])

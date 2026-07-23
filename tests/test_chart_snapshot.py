@@ -197,6 +197,23 @@ def test_build_m5_snapshot_overlays():
     assert empty["bars"] == [] and empty["note"] == "no cached M5 bars"
 
 
+def test_zero_volume_m5_legend_explains_missing_vwap():
+    if _qt_app() is None:
+        return
+    from ui.widgets.symbol_snapshot_dialog import _legend_html
+
+    bars = _m5_bars(4)
+    for bar in bars:
+        bar["volume"] = 0.0
+    snapshot = chart_snapshot.build_m5_snapshot("TEST", bars)
+    legend = _legend_html(
+        "TEST · M5",
+        snapshot["overlays"],
+        missing_reason="needs positive cached volume",
+    )
+    assert "VWAP, +1σ, -1σ: needs positive cached volume" in legend
+
+
 # ---------------------------------------------------------------------------
 # Qt widgets (offscreen; skipped when PySide6 is unavailable)
 # ---------------------------------------------------------------------------
