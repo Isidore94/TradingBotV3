@@ -647,6 +647,56 @@ def test_regime_pause_inverts_for_bullish_tape():
     assert flagged[0]["side"] == "long"
 
 
+def test_regime_pause_summary_ranks_by_side_aligned_overall_rs_rw():
+    from bounce_bot_lib.legacy import BounceBot
+
+    class Stub:
+        _emit_regime_pause_summary = BounceBot._emit_regime_pause_summary
+
+    stub = Stub()
+    stub.messages = []
+    stub.gui_callback = lambda message, tag: stub.messages.append((message, tag))
+    state = {"alerted": {"AAA", "BBB", "CCC"}}
+    alphabetical_hits = [
+        {
+            "symbol": "AAA",
+            "day_excess": 1.2,
+            "sym_window": -0.4,
+            "spy_window": 0.2,
+        },
+        {
+            "symbol": "BBB",
+            "day_excess": 4.8,
+            "sym_window": -1.5,
+            "spy_window": 0.2,
+        },
+        {
+            "symbol": "CCC",
+            "day_excess": 2.6,
+            "sym_window": -0.8,
+            "spy_window": 0.2,
+        },
+    ]
+
+    stub._emit_regime_pause_summary("short", 0.2, alphabetical_hits, state)
+    assert (
+        stub.messages[0][0]
+        == "REGIME PAUSE WATCH (short): SPY paused (+0.20% window) - "
+        "3 swing shorts still pressing lows: BBB, CCC, AAA (3 today). "
+        "Recorded as swing-scan evidence, not an entry signal."
+    )
+    assert stub.messages[0][1] == "red"
+    assert [hit["symbol"] for hit in alphabetical_hits] == ["AAA", "BBB", "CCC"]
+
+    long_hits = [
+        {"symbol": "AAA", "day_excess": 1.0, "sym_window": 0.4, "spy_window": -0.2},
+        {"symbol": "BBB", "day_excess": 3.0, "sym_window": 1.1, "spy_window": -0.2},
+    ]
+    stub._emit_regime_pause_summary("long", -0.2, long_hits, {"alerted": {"AAA", "BBB"}})
+    assert "holding highs: BBB, AAA (2 today)" in stub.messages[1][0]
+    assert stub.messages[1][1] == "green"
+
+
 def _h1_trend_bars(start_close, step, count, start=None):
     """Hourly bars with a steady per-bar close drift (for H1 color signals)."""
     from datetime import timedelta

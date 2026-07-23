@@ -5422,7 +5422,26 @@ class BounceBot(EWrapper, EClient):
         Untiered on purpose: no [X-TIER] stamp and no BANGER token, so the
         line passes the feed's tier gate quietly and never fires the sound.
         """
-        symbols = ", ".join(hit["symbol"] for hit in hits)
+        sign = -1.0 if side == "short" else 1.0
+
+        def display_rank(hit):
+            try:
+                day_excess = float(hit.get("day_excess"))
+            except (TypeError, ValueError):
+                day_excess = -math.inf
+            try:
+                window_excess = sign * (
+                    float(hit.get("sym_window")) - float(hit.get("spy_window"))
+                )
+            except (TypeError, ValueError):
+                window_excess = -math.inf
+            return -day_excess, -window_excess, str(hit.get("symbol") or "")
+
+        # Presentation only: full-session excess is already the detector's
+        # side-aligned RS/RW measurement. Rank strongest RS longs / weakest RW
+        # shorts first, with pause-window excess as the deterministic tie-break.
+        ranked_hits = sorted(hits, key=display_rank)
+        symbols = ", ".join(hit["symbol"] for hit in ranked_hits)
         pressing = "pressing lows" if side == "short" else "holding highs"
         total_today = len(state.get("alerted") or ())
         message = (
