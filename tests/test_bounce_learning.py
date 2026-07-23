@@ -1646,6 +1646,11 @@ def test_spy_m5_chart_bars_cached_only():
     assert len(bars) == 3
     assert set(bars[0]) == {"dt", "open", "high", "low", "close", "volume"}
     assert bars[-1]["close"] == 102.0
+    bot.latest_bars["NVDA|5 D|5 mins"] = list(bot.latest_bars["SPY|5 D|5 mins"])
+    assert bot.m5_chart_bars("nvda") == bars
+    assert bot.spy_m5_chart_bars() == bot.m5_chart_bars("SPY")
+    bot.latest_bars["GHOST|5 D|5 mins"] = []
+    assert bot.m5_chart_bars("GHOST") == []
     bot.latest_bars = {}
     assert bot.spy_m5_chart_bars() == []
 

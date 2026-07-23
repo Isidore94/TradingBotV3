@@ -91,6 +91,24 @@ def test_session_vwap_zero_volume_carries_forward():
     assert all(value is not None for value in series["vwap"])
 
 
+def test_session_vwap_handles_single_bar_and_zero_volume_sessions():
+    single = _m5_bars(1)
+    series = chart_snapshot.session_vwap_series(single)
+    expected = sum(single[0][key] for key in ("open", "high", "low", "close")) / 4.0
+    assert series["vwap"] == [expected]
+    assert series["upper_1"] == series["lower_1"] == [expected]
+
+    zero_bars = _m5_bars(4)
+    for bar in zero_bars:
+        bar["volume"] = 0.0
+    zero_volume = chart_snapshot.session_vwap_series(zero_bars)
+    assert zero_volume == {
+        "vwap": [None] * 4,
+        "upper_1": [None] * 4,
+        "lower_1": [None] * 4,
+    }
+
+
 def test_build_d1_snapshot_overlays_and_tail():
     start = datetime(2026, 1, 1)
     bars = [
@@ -305,17 +323,48 @@ def test_master_setups_double_click_opens_snapshot(monkeypatch):
     assert calls == [("NVDA", "LONG")]
 
 
-def test_alert_feed_item_symbol_click_signal():
+def test_alert_feed_symbol_click_does_not_propagate_to_row():
     if _qt_app() is None:
         return
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
     from ui.models.bounce import BounceAlert
-    from ui.widgets.alert_feed_item import AlertFeedItem, _SymbolLabel
+    from ui.panels.alert_center_panel import _ClickableItem
+    from ui.widgets.alert_feed_item import _SymbolLabel
 
     alert = BounceAlert.from_callback("NVDA LONG [A-TIER] test bounce", "bounce")
-    item = AlertFeedItem(alert)
+    item = _ClickableItem(alert)
     fired = []
-    item.symbolClicked.connect(lambda: fired.append(True))
+    item.symbolClicked.connect(lambda _alert: fired.append("symbol"))
+    item.clicked.connect(lambda _alert: fired.append("row"))
+    item.show()
+    _qt_app().processEvents()
     label = item.findChild(_SymbolLabel)
     assert label is not None
-    label.clicked.emit()
-    assert fired == [True]
+    QTest.mouseClick(label, Qt.MouseButton.LeftButton)
+    assert fired == ["symbol"]
+    item.close()
+
+
+def test_watchlist_symbol_double_click_preserves_text_selection():
+    if _qt_app() is None:
+        return
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from ui.panels.watchlists_panel import _SymbolTextEdit
+
+    editor = _SymbolTextEdit()
+    editor.setPlainText("AAPL\nMSFT")
+    editor.resize(300, 100)
+    activated = []
+    editor.symbolActivated.connect(activated.append)
+    editor.show()
+    _qt_app().processEvents()
+    QTest.mouseDClick(
+        editor.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(20, 10),
+    )
+    assert activated == ["AAPL"]
+    assert editor.textCursor().selectedText() == "AAPL"
+    editor.close()
