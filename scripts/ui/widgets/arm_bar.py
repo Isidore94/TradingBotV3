@@ -96,8 +96,9 @@ class ArmBar(QFrame):
         self._quick_fill: Callable[[str], float | None] | None = None
 
         self.symbol_input = QLineEdit()
-        self.symbol_input.setPlaceholderText("Chart any symbol ⏎")
-        self.symbol_input.setMaximumWidth(150)
+        self.symbol_input.setPlaceholderText("Symbol ⏎")
+        self.symbol_input.setMinimumWidth(96)
+        self.symbol_input.setMaximumWidth(140)
         self.symbol_input.setToolTip(
             "Type a ticker and press Enter to chart it immediately - it does not "
             "have to have alerted, or even be in the current scan set."

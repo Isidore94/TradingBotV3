@@ -11,9 +11,6 @@ from ui.models.rrs import rrs_rows
 
 
 _SCOPES = ("SPY", "Sector", "Industry")
-_GROUP_TIMEFRAMES = ("M5", "H1", "D1")
-
-
 class RrsSnapshotWidget(QWidget):
     """Compact relative-strength board for BounceBot snapshots."""
 
@@ -121,7 +118,6 @@ def _board_html(payload: dict[str, Any], focus: dict[str, set] | None = None) ->
         parts.append(f"<td valign='top' width='33%' style='padding-right:8px'>{_scope_html(payload, scope, focus)}</td>")
     parts.append("</tr></table>")
     parts.append(f"<div style='height:8px; border-bottom:1px solid {border_c}'></div>")
-    parts.append(_group_strength_html(payload))
     parts.append(_environment_html(payload))
     parts.append(f"<p style='color:{head_c}; margin-top:8px'>RS = relative strength; RW = relative weakness.</p>")
     parts.append("</body></html>")
@@ -174,41 +170,6 @@ def _scope_html(payload: dict[str, Any], scope: str, focus: dict[str, set] | Non
     return "".join(parts)
 
 
-def _group_strength_html(payload: dict[str, Any]) -> str:
-    groups = payload.get("group_strength") if isinstance(payload.get("group_strength"), dict) else {}
-    if not groups:
-        return ""
-
-    head_c = theme.color("text_secondary")
-    parts = [f"<h3 style='margin:8px 0 4px 0; color:{head_c}'>Sector / Industry Tape</h3>"]
-    parts.append("<table width='100%' cellspacing='0' cellpadding='2'>")
-    parts.append("<tr>")
-    for timeframe in _GROUP_TIMEFRAMES:
-        parts.append(f"<td valign='top' width='33%'>{_group_timeframe_html(groups, timeframe)}</td>")
-    parts.append("</tr></table>")
-    return "".join(parts)
-
-
-def _group_timeframe_html(groups: dict[str, Any], timeframe: str) -> str:
-    frame = groups.get(timeframe) if isinstance(groups.get(timeframe), dict) else {}
-    head_c = theme.color("text_secondary")
-    if not frame:
-        return f"<div style='color:{head_c}'>{_esc(timeframe)}: no read</div>"
-    parts = [f"<div style='color:{head_c}; font-weight:600'>{_esc(timeframe)}</div>"]
-    for label, key in (("Sectors", "sectors"), ("Industries", "industries")):
-        items = [item for item in (frame.get(key) or []) if isinstance(item, dict)]
-        if not items:
-            continue
-        ranked = sorted(items, key=lambda row: -(_f(row.get("rrs")) or 0.0))
-        parts.append(f"<div style='color:{head_c}; margin-top:3px'>{_esc(label)}</div>")
-        for item in ranked[:2]:
-            parts.append(_group_line(item, theme.color("long"), side="long"))
-        for item in reversed(ranked[-2:]):
-            if item not in ranked[:2]:
-                parts.append(_group_line(item, theme.color("short"), side="short"))
-    return "".join(parts)
-
-
 def _environment_html(payload: dict[str, Any]) -> str:
     highlights = payload.get("environment_highlights") if isinstance(payload.get("environment_highlights"), list) else []
     if not highlights:
@@ -258,20 +219,6 @@ def _symbol_cell(
 def _number_cell(value: float | None, color: str) -> str:
     text = f"{value:+.2f}" if value is not None else ""
     return f"<td align='right' style='color:{color}; white-space:nowrap'>{text}</td>"
-
-
-def _group_line(item: dict[str, Any], color: str, *, side: str) -> str:
-    group_key = _esc(item.get("group_key", ""))
-    rrs = _f(item.get("rrs"))
-    power = _f(item.get("power_index"))
-    rrs_text = f"{rrs:+.2f}" if rrs is not None else ""
-    power_text = f"{power:+.2f}" if power is not None else ""
-    muted = theme.color("text_muted")
-    etf_link = _symbol_link(str(item.get("etf") or ""), side, muted)
-    return (
-        f"<div style='color:{color}; margin-left:8px'>{group_key} "
-        f"{etf_link} {rrs_text} {power_text}</div>"
-    )
 
 
 def _symbol_link(symbol: str, side: str, color: str) -> str:

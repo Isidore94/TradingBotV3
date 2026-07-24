@@ -19,6 +19,7 @@ from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
+from ui.widgets.group_tape_strip import GroupTapeStrip
 
 DESK_SPLIT_KEY = "qt_desk_split_sizes_v2"
 
@@ -91,7 +92,13 @@ class TradingDeskPanel(QWidget):
         tape_layout = QVBoxLayout(self.tape_host)
         tape_layout.setContentsMargins(0, 0, 0, 0)
         tape_layout.setSpacing(0)
-        self.tape_host.setVisible(False)
+        # Sector/industry strength, always visible across the desk. Fed off the
+        # SAME rrsSnapshotChanged payload the Alert Center already receives -
+        # no new service, thread, timer, or IB request.
+        self.group_tape = GroupTapeStrip()
+        self.group_tape.symbolActivated.connect(self.alert_center.chart_symbol)
+        self.bounce_panel.service.rrsSnapshotChanged.connect(self.group_tape.update_groups)
+        tape_layout.addWidget(self.group_tape)
         self.desk_splitter: QSplitter | None = None
         self._setups_expanded = False
 

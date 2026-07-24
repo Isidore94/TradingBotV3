@@ -494,14 +494,15 @@ class AlertCenterPanel(QFrame):
         )
         desk_layout.persist_sizes(self, splitter, ALERT_SPLIT_KEY)
 
-        header = SectionHeader(
-            "Alert Center",
-            "Live actionable alerts on top; confirmed Favorite / High Conviction D1 promotions below.",
-        )
+        # One control row, no section header. The header's subtitle described a
+        # D1 Focus feed sitting "below", which is now a tab, and this column's
+        # scarcest resource is the vertical space the charts read in.
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(8)
-        controls.addWidget(QLabel("Show"))
+        controls.setSpacing(6)
+        show_label = QLabel("Show")
+        show_label.setObjectName("MutedLabel")
+        controls.addWidget(show_label)
         controls.addWidget(self.min_tier_input)
         controls.addWidget(self.sound_input)
         controls.addStretch(1)
@@ -509,9 +510,8 @@ class AlertCenterPanel(QFrame):
         controls.addWidget(clear_button)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        layout.addWidget(header)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
         layout.addLayout(controls)
         layout.addWidget(splitter, 1)
 
