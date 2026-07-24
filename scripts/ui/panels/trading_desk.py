@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.panels import desk_layout
 from ui.panels.alert_center_panel import AlertCenterPanel
 from ui.panels.bounce_panel import BouncePanel
 from ui.panels.focus_picks_panel import FocusPicksPanel
@@ -18,6 +19,8 @@ from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
+
+DESK_SPLIT_KEY = "qt_desk_split_sizes_v2"
 
 
 class TradingDeskPanel(QWidget):
@@ -81,6 +84,17 @@ class TradingDeskPanel(QWidget):
         self.center_layout.setContentsMargins(0, 0, 0, 0)
         self.center_layout.setSpacing(0)
 
+        # Host for the group RS/RW tape. Empty (and zero-height) until the tape
+        # is installed, but created here so it is a stable mount point that
+        # survives mode switches.
+        self.tape_host = QWidget()
+        tape_layout = QVBoxLayout(self.tape_host)
+        tape_layout.setContentsMargins(0, 0, 0, 0)
+        tape_layout.setSpacing(0)
+        self.tape_host.setVisible(False)
+        self.desk_splitter: QSplitter | None = None
+        self._setups_expanded = False
+
         self._build_layout()
         self.set_mode(workspace_mode)
 
@@ -112,27 +126,45 @@ class TradingDeskPanel(QWidget):
             self.center_layout.addWidget(tabs)
             return
 
-        # Workspace mode: the Alert Center owns the left column at full
-        # height (the sit-back-and-wait surface); the right is the setups
-        # workspace over the one-line BounceBot strip (fixed height - no
-        # splitter, so it can't sprawl). Alert clicks show their plan in the
+        # Workspace mode: the Alert Center (chart column) leads on the left,
+        # the setups workspace takes the right, and the BounceBot strip runs
+        # full width along the bottom. Alert clicks show their plan in the
         # workspace's detail pane, not in a second embedded pane.
         self.alert_center.set_embedded_detail_enabled(False)
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(6)
-        right_layout.addWidget(self.master_workspace, 1)
-        right_layout.addWidget(self.bounce_panel)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.alert_center)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 1)
+        splitter.addWidget(self.master_workspace)
+        # The chart column now leads. The old 1:2 stretch meant every pixel
+        # added to the window went 2:1 to the setups table, so the charts got
+        # relatively SMALLER on a bigger monitor.
+        splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
-        splitter.setSizes([950, 1900])
-        self._mode_widget = splitter
-        self.center_layout.addWidget(splitter)
+        splitter.setChildrenCollapsible(False)
+        # Both columns aggregate large minimumSizeHints from their children
+        # (the setups workspace alone hinted 1372px wide). Their sum exceeded
+        # the desk, so QSplitter had no freedom and ignored setSizes entirely -
+        # the split was decided by size hints, not by the preset. An explicit
+        # minimum takes precedence over minimumSizeHint and hands the split
+        # back to us; both columns stay usable well below these floors.
+        self.alert_center.setMinimumWidth(360)
+        self.master_workspace.setMinimumWidth(420)
+        self.desk_splitter = splitter
+
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(6)
+        # Mount points for the group RS/RW tape (above) and the BounceBot strip
+        # (below). They are held as attributes and rescued in
+        # _detach_mode_panels so a workspace<->tabs switch cannot destroy them.
+        body_layout.addWidget(self.tape_host)
+        body_layout.addWidget(splitter, 1)
+        body_layout.addWidget(self.bounce_panel)
+
+        self._mode_widget = body
+        self.center_layout.addWidget(body)
+        self._apply_desk_split()
 
     def _show_setup_in_workspace(self, payload: dict) -> None:
         self.master_workspace.show_setups()
@@ -145,17 +177,73 @@ class TradingDeskPanel(QWidget):
         self.master_panel.scan_service.shutdown()
 
     def _detach_mode_panels(self) -> None:
+        # _clear_layout deletes whatever it still owns, so every long-lived
+        # child must be reparented out first - including the tape host, which
+        # a later mode switch would otherwise destroy under the tape.
+        rescued = (
+            self.master_workspace,
+            self.alert_center,
+            self.bounce_panel,
+            self.tape_host,
+        )
         if isinstance(self._mode_widget, QTabWidget):
-            for panel in (self.master_workspace, self.alert_center, self.bounce_panel):
+            for panel in rescued:
                 index = self._mode_widget.indexOf(panel)
                 if index >= 0:
                     self._mode_widget.removeTab(index)
 
-        for panel in (self.master_workspace, self.alert_center, self.bounce_panel):
+        for panel in rescued:
             try:
                 panel.setParent(None)
             except RuntimeError:
                 pass
+        self.desk_splitter = None
+
+    # ------------------------------------------------------------------
+    def _apply_desk_split(self) -> None:
+        """Open at the preset column weights, or the trader's saved drag."""
+        splitter = self.desk_splitter
+        if splitter is None:
+            return
+        desk_layout.apply_saved_sizes(
+            splitter,
+            DESK_SPLIT_KEY,
+            desk_layout.desk_split_for(self.width() or 1640),
+        )
+        # The chart column's share widens on a bigger desk instead of holding a
+        # fixed ratio - the opposite of the old 1:2 stretch, which shrank it.
+        desk_layout.track_preset(
+            self, splitter, DESK_SPLIT_KEY, desk_layout.desk_split_for
+        )
+        desk_layout.persist_sizes(self, splitter, DESK_SPLIT_KEY)
+
+    def toggle_setups_expanded(self) -> bool:
+        """F9: give the setups table the whole desk, and back again.
+
+        Expanded also switches the table to its full column profile, since the
+        reason to want the width is to read the columns the compact profile
+        hides. Returns the new state.
+        """
+        splitter = self.desk_splitter
+        if splitter is None:
+            return False
+        self._setups_expanded = not self._setups_expanded
+        if self._setups_expanded:
+            self._collapsed_sizes = splitter.sizes()
+            # Hide rather than size-to-zero: the columns carry an explicit
+            # minimum width and the splitter is non-collapsible, so a zero size
+            # would just be clamped back to that minimum.
+            self.alert_center.setVisible(False)
+            self.master_panel.set_column_profile("full")
+        else:
+            self.alert_center.setVisible(True)
+            saved = getattr(self, "_collapsed_sizes", None)
+            if saved and sum(saved) > 0:
+                splitter.setSizes(saved)
+            else:
+                self._apply_desk_split()
+            self.master_panel.set_column_profile("compact")
+        return self._setups_expanded
 
 
 class MasterAvwapWorkspace(QFrame):

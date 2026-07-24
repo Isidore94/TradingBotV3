@@ -280,6 +280,26 @@ class MainWindow(QMainWindow):
         focus_action.triggered.connect(lambda _checked=False: self.trading_panel.master_panel.search_input.setFocus())
         self.addAction(focus_action)
 
+        expand_action = QAction("Expand Setups", self)
+        expand_action.setShortcut(QKeySequence("F9"))
+        expand_action.triggered.connect(self._toggle_setups_expanded)
+        self.addAction(expand_action)
+
+    def _toggle_setups_expanded(self) -> None:
+        """F9: hand the setups table the whole desk, and give it back.
+
+        Only meaningful on the Trading Desk page, so it selects that page
+        first rather than silently doing nothing from elsewhere.
+        """
+        if self.pages.currentIndex() != 0:
+            self._select_page(0)
+        expanded = self.trading_panel.toggle_setups_expanded()
+        self._set_scan_status(
+            "setups expanded to full width (F9 to restore the chart column)"
+            if expanded
+            else "chart column restored"
+        )
+
     def _select_page(self, index: int) -> None:
         titles = (
             "Trading Desk",

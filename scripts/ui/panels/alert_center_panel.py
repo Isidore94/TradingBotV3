@@ -46,6 +46,7 @@ from project_paths import (
     get_local_setting,
     save_local_setting,
 )
+from ui.panels import desk_layout
 from ui.models.bounce import (
     BounceAlert,
     CHART_WATCH_TAG,
@@ -71,6 +72,8 @@ MIN_TIER_CHOICES = (
 _TIER_RANK = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 0}
 MAX_FEED_ITEMS = 250
 MAX_D1_FEED_ITEMS = 100
+
+ALERT_SPLIT_KEY = "qt_alert_center_split_sizes_v2"
 
 # D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
 # name: the scan confirmed a genuine bucket upgrade. An armed-level crossing
@@ -381,7 +384,6 @@ class AlertCenterPanel(QFrame):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(feed_scroll, "Alerts")
-        self.tabs.addTab(board_tab, "RS/RW Board")
 
         self.d1_feed_container = QWidget()
         self.d1_feed_layout = QVBoxLayout(self.d1_feed_container)
@@ -406,6 +408,19 @@ class AlertCenterPanel(QFrame):
             )
         )
         d1_section_layout.addWidget(d1_scroll, 1)
+        # D1 Focus used to hold a permanent full-width splitter section. It is
+        # occasionally-useful rather than continuously-useful, so it becomes a
+        # badged tab: still one click away with its unread count in peripheral
+        # vision, but no longer spending 104-119px of chart height all day.
+        # Deliberately NOT merged into the Alerts feed - D1 rows are untiered,
+        # so alert_passes_min_tier would silently drop every tier flip the
+        # moment the trader selects an S/A gate, and the separate 100-item
+        # retention would be lost.
+        self._d1_tab_index = self.tabs.addTab(d1_section, "D1 Focus")
+        self.tabs.addTab(board_tab, "RS/RW Board")
+        self._d1_unread = 0
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self._refresh_d1_tab_label()
 
         self.detail_view = SetupDetailView(self)
         self.chart_review = AlertChartReview(self)
@@ -435,12 +450,10 @@ class AlertCenterPanel(QFrame):
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.chart_review)
         splitter.addWidget(self.tabs)
-        splitter.addWidget(d1_section)
         splitter.addWidget(self.detail_view)
         splitter.setStretchFactor(0, 5)
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 1)
-        splitter.setStretchFactor(3, 1)
         # The 5:2 above is not enough on its own. QSplitter honours a child's
         # size POLICY ahead of its stretch factor, and the tab stack is
         # Expanding while the chart pane is only Preferred - which measured as
@@ -451,8 +464,20 @@ class AlertCenterPanel(QFrame):
         self.chart_review.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        splitter.setSizes([620, 250, 120, 0])
+        splitter.setChildrenCollapsible(False)
         self.splitter = splitter
+        # Versioned key: the child count changed 4 -> 3 when D1 Focus became a
+        # tab, so a split saved by an older build must not be restored.
+        desk_layout.apply_saved_sizes(
+            splitter, ALERT_SPLIT_KEY, desk_layout.ALERT_COLUMN_WEIGHTS
+        )
+        desk_layout.track_preset(
+            self,
+            splitter,
+            ALERT_SPLIT_KEY,
+            lambda _extent: desk_layout.ALERT_COLUMN_WEIGHTS,
+        )
+        desk_layout.persist_sizes(self, splitter, ALERT_SPLIT_KEY)
 
         header = SectionHeader(
             "Alert Center",
@@ -512,9 +537,27 @@ class AlertCenterPanel(QFrame):
         self._d1_alerts.insert(0, alert)
         del self._d1_alerts[MAX_D1_FEED_ITEMS * 2 :]
         self._insert_item_into(self.d1_feed_layout, alert, MAX_D1_FEED_ITEMS)
+        # Count only genuine scan events toward the badge. `_d1_alerts` doubles
+        # as the D1-Focus pin registry, so counting its length would make the
+        # badge grow every time the trader pins a name themselves.
+        if alert.tag != "d1_focus_pin" and not self._d1_tab_is_current():
+            self._d1_unread += 1
+            self._refresh_d1_tab_label()
         if self.sound_input.isChecked() and (is_ready_d1_alert(alert) or self._alert_is_focus(alert)):
             QApplication.beep()
         self._emit_feed_status()
+
+    def _d1_tab_is_current(self) -> bool:
+        return self.tabs.currentIndex() == self._d1_tab_index
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == self._d1_tab_index and self._d1_unread:
+            self._d1_unread = 0
+            self._refresh_d1_tab_label()
+
+    def _refresh_d1_tab_label(self) -> None:
+        label = f"D1 Focus ({self._d1_unread})" if self._d1_unread else "D1 Focus"
+        self.tabs.setTabText(self._d1_tab_index, label)
 
     def _emit_feed_status(self) -> None:
         loud = sum(1 for item in self._alerts if alert_should_sound(item, is_focus=self._alert_is_focus(item)))

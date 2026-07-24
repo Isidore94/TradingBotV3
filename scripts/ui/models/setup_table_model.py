@@ -29,6 +29,11 @@ class SetupTableModel(QAbstractTableModel):
         ("industry", "Industry"),
         ("d1_vs_industry", "D1 Industry RS/RW"),
         ("last_trade_date", "Last Bar"),
+        # Appended, never inserted: indices 0/1/2 (star / dislike / symbol) are
+        # click targets pinned by tests and by the panel's column handlers. The
+        # compact profile moves this into reading position with
+        # header.moveSection rather than by reordering COLUMNS.
+        ("expected_r", "Exp R"),
     )
 
     def __init__(self, rows: list[SetupRow] | None = None, parent=None) -> None:
@@ -56,7 +61,7 @@ class SetupTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if key in {"favorite", "dislike"}:
                 return int(Qt.AlignmentFlag.AlignCenter)
-            if key in {"score", "supports", "d1_vs_sector", "d1_vs_industry"}:
+            if key in {"score", "supports", "expected_r", "d1_vs_sector", "d1_vs_industry"}:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole:
@@ -121,6 +126,8 @@ class SetupTableModel(QAbstractTableModel):
             return row.relative_strength_text(row.d1_vs_industry)
         if key == "last_trade_date":
             return row.last_trade_date
+        if key == "expected_r":
+            return row.expected_r_text
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:
@@ -128,6 +135,8 @@ class SetupTableModel(QAbstractTableModel):
             return row.score if row.score is not None else -999999.0
         if key == "supports":
             return row.supports if row.supports is not None else -1
+        if key == "expected_r":
+            return row.expected_r if row.expected_r is not None else -999999.0
         if key in {"d1_vs_sector", "d1_vs_industry"}:
             value = getattr(row, key)
             return value if value is not None else -999999.0
@@ -248,6 +257,20 @@ def _tooltip(row: SetupRow, key: str) -> str:
         )
     if key == "supports" and row.raw.get("hv_level_note"):
         return str(row.raw.get("hv_level_note"))
+    if key == "key_level":
+        # The compact column profile hides `supports`, which would otherwise
+        # take the "how many levels are in the way" read with it. Fold it into
+        # the level's own tooltip so it survives.
+        parts = [part for part in (row.key_level, row.supports_text) if part]
+        note = str(row.raw.get("hv_level_note") or "")
+        if note:
+            parts.append(note)
+        return " — ".join(parts)
+    if key == "expected_r":
+        return (
+            "Tracker-led Expected R: the ranking spine the scan orders rows by. "
+            "Higher is a better measured risk-adjusted outcome for this setup family."
+        )
     if key == "d1_vs_sector":
         return "Weighted D1 excess return versus the sector board: 35% of 1-day plus 65% of 5-day."
     if key == "d1_vs_industry":

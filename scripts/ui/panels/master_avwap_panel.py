@@ -7,12 +7,14 @@ from PySide6.QtCore import QFileSystemWatcher, QItemSelection, Qt, QTimer, Signa
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -20,9 +22,15 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
-from project_paths import MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_PRIORITY_SETUPS_FILE
+from project_paths import (
+    MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+    get_local_setting,
+    save_local_setting,
+)
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
 from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
@@ -31,9 +39,47 @@ from ui.services.scan_service import ScanService
 from ui.widgets.data_table import DataTable
 from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
-from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
 from ui.widgets.setup_detail_view import SetupDetailView
+
+
+# The segmented bucket selector. Values are sets of RAW bucket keys, so a
+# selection can span several buckets - which the old single-label combo box
+# could not express at all.
+BUCKET_SELECTIONS = {
+    "fav_hc_near": ("Fav + HC + Near", "Favorites, high conviction, and near-zone setups"),
+    "fav_hc": ("Fav + HC", "Favorites and high conviction only"),
+    "all": ("All", "Every bucket, including study and tracking rows"),
+}
+BUCKET_SELECTION_KEYS = {
+    "fav_hc_near": {"favorite_setup", "high_conviction", "near_favorite_zone"},
+    "fav_hc": {"favorite_setup", "high_conviction"},
+    "all": set(),
+}
+DEFAULT_BUCKET_SELECTION = "fav_hc_near"
+
+# Columns the compact profile hides. Sector/industry NAMES go, but both RS/RW
+# readings stay: they are the group strength the trader actually reads, and in
+# the old layout they were among the columns pushed off-screen entirely.
+COMPACT_HIDDEN_COLUMNS = {"score", "supports", "sector", "last_trade_date"}
+
+# Explicit widths for the compact profile. These sum to under the desk's
+# setups viewport at 1640x980; DataTable.fit_columns' 80px floor cannot.
+COMPACT_COLUMN_WIDTHS = {
+    "favorite": 34,
+    "dislike": 34,
+    "symbol": 74,
+    # The side cell is a LONG/SHORT pill, not bare text - it elides to "L..."
+    # if it is squeezed under about 60px.
+    "side": 66,
+    "bucket": 96,
+    "key_level": 116,
+    "expected_r": 58,
+    "setup_tags": 120,
+    "industry": 130,
+    "d1_vs_sector": 84,
+    "d1_vs_industry": 88,
+}
 
 
 def _row_context(row: SetupRow) -> str:
@@ -124,6 +170,11 @@ class MasterAvwapPanel(QWidget):
         self.detail_splitter.addWidget(self.detail_view)
         self.detail_splitter.setStretchFactor(0, 3)
         self.detail_splitter.setStretchFactor(1, 2)
+        # Starts collapsed and opens on an explicit row click. Selection alone
+        # must not open it: Space-to-advance moves the current index, so a pane
+        # tied to selection would be open essentially always and permanently
+        # cost the table a third of its width.
+        self.detail_splitter.setSizes([1, 0])
 
         self.status_label = QLabel("Idle")
         self.status_label.setObjectName("MutedLabel")
@@ -137,10 +188,10 @@ class MasterAvwapPanel(QWidget):
         self.scheduler_button = QPushButton("Start Scheduler")
         self.scheduler_button.clicked.connect(self.toggle_scheduler)
 
-        self.total_tile = KpiTile("Setups", "0")
-        self.favorite_tile = KpiTile("Favorites", "0", tone="favorite")
-        self.near_tile = KpiTile("Near Zones", "0", tone="near")
-
+        # No KPI tiles: app.py already renders "Setups: N | Favorites: N |
+        # Near: N" permanently in the status bar from the same rowsChanged
+        # signal, so the tiles were a second copy of the same three numbers
+        # occupying prime vertical space above the table.
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Filter symbol, tag, level")
         self.search_input.textChanged.connect(self._apply_filters)
@@ -166,7 +217,15 @@ class MasterAvwapPanel(QWidget):
         self.max_dte_input.setValue(0)
         self.max_dte_input.valueChanged.connect(self._apply_filters)
 
+        self._build_bucket_toggle()
+        self._build_overflow_menu()
+        self._column_profile = ""
         self._build_layout()
+        self.set_column_profile("compact")
+        self.set_bucket_selection(
+            str(get_local_setting("qt_setups_bucket_filter", DEFAULT_BUCKET_SELECTION)
+                or DEFAULT_BUCKET_SELECTION)
+        )
         self._configure_report_watcher()
         self.refresh_from_reports(emit_empty=False)
         # QFileSystemWatcher can miss atomic replacements on synced/network
@@ -183,48 +242,73 @@ class MasterAvwapPanel(QWidget):
         self._refresh_scheduler_status()
 
     def _build_layout(self) -> None:
-        header = SectionHeader(
-            "Master AVWAP Setups",
-            "Ranked favorite, high-conviction, and near-zone setups.",
-        )
-        refresh_button = QPushButton("Refresh")
-        refresh_button.clicked.connect(self.refresh_from_reports)
-        header.add_action(refresh_button)
+        """One control strip over the table.
 
-        run_shared_button = QPushButton("Run Shared Scan")
-        run_shared_button.setObjectName("PrimaryButton")
-        run_shared_button.clicked.connect(self.run_shared_scan)
-        header.add_action(run_shared_button)
+        The old layout spent roughly 250px of the desk's most contested column
+        on chrome: three KPI tiles that duplicate the permanent status-bar
+        counts, a five-button Copy-visible row, a three-line scheduler status
+        block, four filter widgets and a section header. All of it still
+        exists - it moved into the overflow menu - but none of it earns
+        standing height above a table the trader reads all day.
+        """
+        strip = QHBoxLayout()
+        strip.setContentsMargins(0, 0, 0, 0)
+        strip.setSpacing(6)
+        for button in self.bucket_buttons.values():
+            strip.addWidget(button)
+        strip.addSpacing(6)
+        strip.addWidget(self.search_input, 1)
+        strip.addWidget(self.data_as_of_label)
+        strip.addWidget(self.overflow_button)
 
-        run_local_button = QPushButton("Run Local Scan")
-        run_local_button.clicked.connect(self.run_local_scan)
-        header.add_action(run_local_button)
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.addWidget(self.status_label)
+        status_row.addStretch(1)
+        status_row.addWidget(self.last_run_label)
 
-        header.add_action(self.scheduler_button)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        layout.addLayout(strip)
+        layout.addWidget(self.detail_splitter, 1)
+        layout.addLayout(status_row)
 
-        kpi_row = QHBoxLayout()
-        kpi_row.setContentsMargins(0, 0, 0, 0)
-        kpi_row.setSpacing(8)
-        kpi_row.addWidget(self.total_tile)
-        kpi_row.addWidget(self.favorite_tile)
-        kpi_row.addWidget(self.near_tile)
-        kpi_row.addStretch(1)
+    # ------------------------------------------------------------------
+    def _build_bucket_toggle(self) -> None:
+        """Segmented bucket selector replacing the combo box.
 
-        filter_row = QHBoxLayout()
-        filter_row.setContentsMargins(0, 0, 0, 0)
-        filter_row.setSpacing(8)
-        filter_row.addWidget(self.search_input, 2)
-        filter_row.addWidget(self.min_score_input)
-        filter_row.addWidget(self.side_input)
-        filter_row.addWidget(self.bucket_input)
-        filter_row.addWidget(self.max_dte_input)
+        The combo could only ever express ONE bucket label, so the desk's
+        headline view - favourites and high-conviction together - was
+        unselectable. These map to sets of raw bucket keys instead.
+        """
+        self.bucket_buttons: dict[str, QPushButton] = {}
+        self._bucket_group = QButtonGroup(self)
+        self._bucket_group.setExclusive(True)
+        for key, (label, tip) in BUCKET_SELECTIONS.items():
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setToolTip(tip)
+            button.clicked.connect(
+                lambda _checked=False, selection=key: self.set_bucket_selection(selection)
+            )
+            self._bucket_group.addButton(button)
+            self.bucket_buttons[key] = button
 
-        copy_row = QHBoxLayout()
-        copy_row.setContentsMargins(0, 0, 0, 0)
-        copy_row.setSpacing(8)
-        copy_label = QLabel("Copy visible:")
-        copy_label.setObjectName("MutedLabel")
-        copy_row.addWidget(copy_label)
+    def _build_overflow_menu(self) -> None:
+        """Everything removed from standing height, one click away."""
+        self.overflow_button = QPushButton("⋯")
+        self.overflow_button.setToolTip("Scans, scheduler, copy lists and extra filters")
+        menu = QMenu(self.overflow_button)
+        menu.addAction("Run Shared Scan", self.run_shared_scan)
+        menu.addAction("Run Local Scan", self.run_local_scan)
+        menu.addAction("Refresh from reports", self.refresh_from_reports)
+        menu.addSeparator()
+        self._scheduler_action = menu.addAction("Start Scheduler", self.toggle_scheduler)
+        self._scheduler_status_action = menu.addAction("")
+        self._scheduler_status_action.setEnabled(False)
+        menu.addSeparator()
+        copy_menu = menu.addMenu("Copy visible")
         for label, kind in (
             ("Longs", "longs"),
             ("Shorts", "shorts"),
@@ -232,28 +316,154 @@ class MasterAvwapPanel(QWidget):
             ("Active", "active"),
             ("Ranked", "ranked"),
         ):
-            button = QPushButton(label)
-            button.clicked.connect(lambda _checked=False, copy_kind=kind: self.copy_list(copy_kind))
-            copy_row.addWidget(button)
-        copy_row.addStretch(1)
+            copy_menu.addAction(
+                label, lambda copy_kind=kind: self.copy_list(copy_kind)
+            )
+        filters_menu = menu.addMenu("More filters")
+        for widget, label in (
+            (self.side_input, "Side"),
+            (self.min_score_input, "Minimum score"),
+            (self.max_dte_input, "Max days to earnings"),
+            (self.bucket_input, "Exact bucket"),
+        ):
+            action = QWidgetAction(filters_menu)
+            holder = QWidget()
+            holder_layout = QHBoxLayout(holder)
+            holder_layout.setContentsMargins(8, 2, 8, 2)
+            holder_layout.setSpacing(8)
+            caption = QLabel(label)
+            caption.setObjectName("MutedLabel")
+            holder_layout.addWidget(caption)
+            holder_layout.addWidget(widget, 1)
+            action.setDefaultWidget(holder)
+            filters_menu.addAction(action)
+        self.overflow_button.setMenu(menu)
+        self._overflow_menu = menu
 
-        status_row = QHBoxLayout()
-        status_row.setContentsMargins(0, 0, 0, 0)
-        status_row.addWidget(self.status_label)
-        status_row.addStretch(1)
-        status_row.addWidget(self.data_as_of_label)
-        status_row.addWidget(self.last_run_label)
+    def set_bucket_selection(self, selection: str) -> None:
+        """Filter the table to a named group of buckets, and remember it."""
+        selection = selection if selection in BUCKET_SELECTIONS else DEFAULT_BUCKET_SELECTION
+        self._bucket_selection = selection
+        button = self.bucket_buttons.get(selection)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        save_local_setting("qt_setups_bucket_filter", selection)
+        self._apply_filters()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-        layout.addWidget(header)
-        layout.addLayout(kpi_row)
-        layout.addLayout(filter_row)
-        layout.addLayout(copy_row)
-        layout.addWidget(self.detail_splitter, 1)
-        layout.addWidget(self.scheduler_status_label)
-        layout.addLayout(status_row)
+    def _active_bucket_keys(self) -> set[str]:
+        """The raw bucket keys the current selection allows.
+
+        Falls back to no filter when the loaded rows carry none of the
+        selected buckets, so a report of unbucketed or study-only rows shows
+        them rather than an empty table the trader cannot explain.
+        """
+        keys = BUCKET_SELECTION_KEYS.get(getattr(self, "_bucket_selection", ""), set())
+        if not keys:
+            return set()
+        available = {row.bucket.strip().lower() for row in self.model.rows()}
+        return keys if (keys & available) else set()
+
+    def set_column_profile(self, profile: str) -> None:
+        """Switch between the compact reading set and every column.
+
+        COLUMNS is never edited - the profile hides columns and pins widths.
+        Hiding alone is not enough: DataTable.fit_columns enforces an 80px
+        floor per column, so even the 9 compact columns at natural width
+        overflow the desk's setups pane at 1640x980. The explicit widths are
+        the fix.
+        """
+        profile = "full" if profile == "full" else "compact"
+        if profile == self._column_profile:
+            return
+        self._column_profile = profile
+        header = self.table.horizontalHeader()
+        for column, (key, _label) in enumerate(self.model.COLUMNS):
+            self.table.setColumnHidden(column, False)
+            if profile == "compact" and key in COMPACT_HIDDEN_COLUMNS:
+                self.table.setColumnHidden(column, True)
+        if profile == "compact":
+            header.setStretchLastSection(False)
+            for column, (key, _label) in enumerate(self.model.COLUMNS):
+                width = COMPACT_COLUMN_WIDTHS.get(key)
+                if width:
+                    header.resizeSection(column, width)
+            # Exp R is appended last in COLUMNS (indices 0/1/2 are pinned click
+            # targets), so move it into reading position beside the level.
+            self._move_column_after("expected_r", "key_level")
+            self._fit_compact_columns()
+            header.setStretchLastSection(True)
+        else:
+            self.table.fit_columns()
+            header.resizeSection(0, 36)
+            header.resizeSection(1, 36)
+
+    def _fit_compact_columns(self) -> None:
+        """Squeeze the compact profile into the viewport, never past it.
+
+        The whole point of the compact profile is that nothing hides behind a
+        horizontal scrollbar, so fixed widths are not enough on their own - the
+        setups pane is a splitter child and can be any width. Overflow is taken
+        out of the elastic text columns down to a readable floor; only if that
+        is not enough does a column drop out entirely.
+        """
+        header = self.table.horizontalHeader()
+        keys = [key for key, _label in self.model.COLUMNS]
+        viewport = self.table.viewport().width()
+        if viewport <= 0:
+            return
+
+        def visible_total() -> int:
+            return sum(
+                header.sectionSize(column)
+                for column in range(len(keys))
+                if not self.table.isColumnHidden(column)
+            )
+
+        overflow = visible_total() - viewport
+        if overflow <= 0:
+            return
+        # Elastic columns, widest-first, with the narrowest width each may take.
+        for key, floor in (("setup_tags", 72), ("industry", 84), ("key_level", 88)):
+            if overflow <= 0:
+                break
+            column = keys.index(key)
+            if self.table.isColumnHidden(column):
+                continue
+            current = header.sectionSize(column)
+            take = min(overflow, max(0, current - floor))
+            if take:
+                header.resizeSection(column, current - take)
+                overflow -= take
+        # Still over: drop columns in reverse value order rather than let a
+        # scrollbar hide them silently.
+        for key in ("d1_vs_sector", "industry", "setup_tags"):
+            if overflow <= 0:
+                break
+            column = keys.index(key)
+            if self.table.isColumnHidden(column):
+                continue
+            overflow -= header.sectionSize(column)
+            self.table.setColumnHidden(column, True)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        if self._column_profile == "compact":
+            profile, self._column_profile = self._column_profile, ""
+            self.set_column_profile(profile)
+
+    def _move_column_after(self, key: str, after_key: str) -> None:
+        header = self.table.horizontalHeader()
+        keys = [column_key for column_key, _label in self.model.COLUMNS]
+        try:
+            logical = keys.index(key)
+            anchor = keys.index(after_key)
+        except ValueError:
+            return
+        target = header.visualIndex(anchor)
+        current = header.visualIndex(logical)
+        if current < 0 or target < 0 or current == target + 1:
+            return
+        header.moveSection(current, target + 1 if current > target else target)
 
     def _configure_report_watcher(self) -> None:
         self.watcher = QFileSystemWatcher(self)
@@ -396,6 +606,14 @@ class MasterAvwapPanel(QWidget):
                 f"Note: {self.scheduler_note}"
             )
         )
+        # The three-line label no longer stands above the table; the same state
+        # rides the overflow menu (and its tooltip carries the full text).
+        self._scheduler_action.setEnabled(not bool(self.external_scheduler_owner))
+        self._scheduler_action.setText(self.scheduler_button.text())
+        self._scheduler_status_action.setText(
+            f"Scheduler {state} · next {next_slot or 'none'} · done {len(completed)}"
+        )
+        self.overflow_button.setToolTip(self.scheduler_status_label.text())
 
     def _scheduler_tick(self) -> None:
         now = datetime.now()
@@ -522,11 +740,14 @@ class MasterAvwapPanel(QWidget):
             # Expected-R). Preserve that order instead of forcing a score sort so
             # the headline ranking is what the trader sees first; column headers
             # remain click-sortable.
-            self.table.fit_columns()
-            # ★ / ✕ verdict columns stay icon-width.
-            self.table.horizontalHeader().resizeSection(0, 36)
-            self.table.horizontalHeader().resizeSection(1, 36)
-        self._update_kpis(rows)
+            #
+            # Re-apply the active profile rather than fit_columns unconditionally:
+            # fit_columns' 80px floor is exactly what makes the compact profile
+            # overflow, so letting it run here would undo the pinned widths on
+            # every report refresh.
+            profile = self._column_profile or "compact"
+            self._column_profile = ""
+            self.set_column_profile(profile)
         self.rowsChanged.emit(
             len(rows),
             sum(1 for row in rows if row.bucket.strip().lower() in {"favorite_setup", "high_conviction"}),
@@ -559,6 +780,7 @@ class MasterAvwapPanel(QWidget):
             min_score=self.min_score_input.value(),
             side=self.side_input.currentText(),
             bucket=self.bucket_input.currentText(),
+            buckets=self._active_bucket_keys(),
             max_dte=max_dte,
             search_text=self.search_input.text(),
         )
@@ -575,13 +797,6 @@ class MasterAvwapPanel(QWidget):
         index = self.bucket_input.findText(current)
         self.bucket_input.setCurrentIndex(index if index >= 0 else 0)
         self.bucket_input.blockSignals(False)
-
-    def _update_kpis(self, rows: list[SetupRow]) -> None:
-        favorite_count = sum(1 for row in rows if row.bucket.strip().lower() in {"favorite_setup", "high_conviction"})
-        near_count = sum(1 for row in rows if row.bucket.strip().lower() == "near_favorite_zone")
-        self.total_tile.set_value(str(len(rows)))
-        self.favorite_tile.set_value(str(favorite_count))
-        self.near_tile.set_value(str(near_count))
 
     def _refresh_watcher_paths(self) -> None:
         watched = set(self.watcher.files())
@@ -682,6 +897,13 @@ class MasterAvwapPanel(QWidget):
             self.setupSelected.emit(row)
             self._show_setup_detail(row)
 
+    def expand_detail_pane(self) -> None:
+        """Open the detail pane if the trader has it collapsed."""
+        sizes = self.detail_splitter.sizes()
+        if len(sizes) == 2 and sizes[1] <= 0:
+            total = max(sum(sizes), self.detail_splitter.width() or 600)
+            self.detail_splitter.setSizes([int(total * 0.62), int(total * 0.38)])
+
     def _show_setup_detail(self, row: SetupRow) -> None:
         from setup_docs import resolve_setup_family_from_candidates
 
@@ -710,6 +932,10 @@ class MasterAvwapPanel(QWidget):
         if key == "symbol":
             self._open_symbol_snapshot(proxy_index)
             return
+        if key not in {"favorite", "dislike"}:
+            # An explicit click on a data cell is the "tell me more" gesture;
+            # selection changes alone leave the pane as the trader left it.
+            self.expand_detail_pane()
         if self.focus_service is None:
             return
         if key not in {"favorite", "dislike"}:

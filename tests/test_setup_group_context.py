@@ -84,15 +84,27 @@ def test_unmapped_classification_report_is_sorted_and_ai_ready(tmp_path):
     assert written[1]["reason"] == "industry needs curated board mapping"
 
 
-def test_master_setup_columns_replace_theta_expected_r_and_dte():
+def test_master_setup_columns_carry_group_strength_and_expected_r():
+    """Group-strength columns stay; Expected R is back, appended last.
+
+    Expected R was dropped when the D1 group-strength columns landed, purely
+    for width - the table could not show both. The compact column profile
+    removes that constraint (it hides low-value columns and pins the rest to
+    the viewport), and Expected R is the scan's own ranking spine, so it earns
+    a slot again. It is APPENDED, never inserted: indices 0/1/2 are the star /
+    dislike / symbol click targets that other tests and the panel's column
+    handlers pin. Reading order is set with header.moveSection instead.
+    """
     from ui.models.setup_table_model import SetupTableModel
 
     keys = [key for key, _label in SetupTableModel.COLUMNS]
-    assert keys[-5:] == [
+    assert keys[:3] == ["favorite", "dislike", "symbol"]
+    assert keys[-6:] == [
         "sector",
         "d1_vs_sector",
         "industry",
         "d1_vs_industry",
         "last_trade_date",
+        "expected_r",
     ]
-    assert not {"theta", "expected_r", "days_to_earnings"} & set(keys)
+    assert not {"theta", "days_to_earnings"} & set(keys)
