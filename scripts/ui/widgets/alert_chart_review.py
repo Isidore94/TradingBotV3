@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 
 from chart_watch import WATCH_KINDS
 from ui.models.bounce import BounceAlert
+from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
 
@@ -29,6 +30,9 @@ class AlertChartReview(QWidget):
     crossFocusToggled = Signal(object)
     watchToggled = Signal(object, str)  # (alert, chart-watch kind)
     d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
+    symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
+    levelArmRequested = Signal(str, str, float)  # symbol, direction, level
+    levelDisarmRequested = Signal(str, str, float)  # symbol, direction, level
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -73,44 +77,45 @@ class AlertChartReview(QWidget):
         self.cross_focus_button.clicked.connect(
             lambda: self.alert is not None and self.crossFocusToggled.emit(self.alert)
         )
-        self.watch_buttons: dict[str, QPushButton] = {}
-        for kind, label in WATCH_KINDS.items():
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setToolTip(
-                f"Toggle a one-shot {label} watch for this symbol. The first "
-                "completed M5 bar that meets it fires a red alert in the "
-                "Alert Center (bypasses the tier gate and sounds). Click "
-                "again to disarm."
-            )
-            button.clicked.connect(
-                lambda _checked=False, k=kind: self.alert is not None
-                and self.watchToggled.emit(self.alert, k)
-            )
-            self.watch_buttons[kind] = button
+        # The four watch toggles live on the arm dock now, so this pane owns
+        # one row of queue verbs instead of two rows of mixed controls.
+        self.arm_bar = ArmBar(self)
+        self.arm_bar.set_quick_fill_source(self.snapshot.quick_fill)
+        self.arm_bar.watchToggled.connect(
+            lambda kind: self.alert is not None and self.watchToggled.emit(self.alert, kind)
+        )
+        self.arm_bar.symbolRequested.connect(self.symbolRequested)
+        self.arm_bar.levelArmRequested.connect(self._emit_level_arm)
+        self.arm_bar.levelDisarmRequested.connect(self._emit_level_disarm)
+        self.snapshot.pricePicked.connect(self.arm_bar.set_level)
+        # Kept for callers and tests that poke the toggles directly.
+        self.watch_buttons = self.arm_bar.watch_buttons
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.remove_today_button)
         buttons.addWidget(self.focus_button)
         buttons.addWidget(self.skip_button)
+        buttons.addWidget(self.cross_focus_button)
         buttons.addStretch(1)
         buttons.addWidget(self.queue_label)
 
-        watch_row = QHBoxLayout()
-        watch_row.addWidget(self.cross_focus_button)
-        for button in self.watch_buttons.values():
-            watch_row.addWidget(button)
-        watch_row.addStretch(1)
-
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(5)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
         layout.addWidget(self.title)
         layout.addWidget(self.alert_text)
         layout.addWidget(self.snapshot, 1)
+        layout.addWidget(self.arm_bar)
         layout.addLayout(buttons)
-        layout.addLayout(watch_row)
         self._set_actions_enabled(False)
+
+    def _emit_level_arm(self, direction: str, level: float) -> None:
+        if self.alert is not None and self.alert.symbol:
+            self.levelArmRequested.emit(self.alert.symbol, direction, float(level))
+
+    def _emit_level_disarm(self, direction: str, level: float) -> None:
+        if self.alert is not None and self.alert.symbol:
+            self.levelDisarmRequested.emit(self.alert.symbol, direction, float(level))
 
     def set_alert(
         self,
@@ -121,6 +126,7 @@ class AlertChartReview(QWidget):
         queued: int = 0,
         armed_kinds: Iterable[str] = (),
         cross_active: bool = False,
+        armed_levels: Iterable = (),
     ) -> None:
         self.alert = alert
         side = f" · {alert.side}" if alert.side else ""
@@ -149,7 +155,20 @@ class AlertChartReview(QWidget):
         self.queue_label.setText(f"{queued} waiting" if queued else "queue clear")
         self._set_actions_enabled(True)
         self.set_armed_kinds(armed_kinds)
+        self.set_armed_levels(armed_levels)
         self.set_cross_active(cross_active)
+        # Seed the price box with the last traded price so the trader adjusts
+        # from something real instead of typing a level from scratch.
+        self.arm_bar.apply_quick_fill("last")
+        # A session watch can only ever fire off cached M5 bars. Say so on the
+        # buttons rather than letting the trader wait on a watch that has
+        # nothing to evaluate against.
+        has_m5 = bool((self.snapshot._m5 or {}).get("bars"))
+        self.arm_bar.set_watch_availability(
+            has_m5,
+            "No cached M5 bars for this symbol yet - a session watch has "
+            "nothing to evaluate. A typed price level still works.",
+        )
 
     def clear(self) -> None:
         self.alert = None
@@ -167,12 +186,11 @@ class AlertChartReview(QWidget):
     def set_armed_kinds(self, kinds: Iterable[str]) -> None:
         """Reflect this symbol's armed watches; buttons stay clickable so a
         second click disarms."""
-        armed = set(kinds)
-        for kind, button in self.watch_buttons.items():
-            label = WATCH_KINDS[kind]
-            is_armed = kind in armed
-            button.setText(f"{label} ✓ armed" if is_armed else label)
-            button.setChecked(is_armed)
+        self.arm_bar.set_armed_kinds(kinds)
+
+    def set_armed_levels(self, levels: Iterable = ()) -> None:
+        """Show this symbol's armed price levels as dismissable chips."""
+        self.arm_bar.set_armed_levels(levels)
 
     def set_cross_active(self, active: bool) -> None:
         self.cross_focus_button.setText(self._cross_labels[1 if active else 0])
@@ -184,6 +202,8 @@ class AlertChartReview(QWidget):
             self.focus_button,
             self.skip_button,
             self.cross_focus_button,
-            *self.watch_buttons.values(),
         ):
             button.setEnabled(enabled)
+        # The symbol box stays live even with no alert on screen - typing a
+        # ticker is how the trader breaks out of an empty queue.
+        self.arm_bar.set_enabled_for_symbol(enabled)

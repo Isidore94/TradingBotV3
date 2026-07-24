@@ -112,6 +112,11 @@ class CandleChart(pg.PlotWidget):
     """
 
     barClicked = Signal(int)
+    # The y coordinate of the same click, in price. mousePressEvent already
+    # maps the click into view space to find the bar, so the price is free -
+    # it turns "the level I can see" into "the level I armed" without the
+    # trader reading it off the axis and retyping it.
+    priceClicked = Signal(int, float)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent, background=theme.color("bg_panel"))
@@ -179,12 +184,16 @@ class CandleChart(pg.PlotWidget):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self._bars:
+            price = None
             try:
                 scene_pos = self.mapToScene(event.position().toPoint())
                 view_pos = self.getPlotItem().vb.mapSceneToView(scene_pos)
                 index = int(round(view_pos.x()))
+                price = float(view_pos.y())
             except Exception:
                 index = -1
             if 0 <= index < len(self._bars):
                 self.barClicked.emit(index)
+                if price is not None and price > 0:
+                    self.priceClicked.emit(index, price)
         super().mousePressEvent(event)

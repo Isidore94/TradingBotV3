@@ -50,12 +50,14 @@ from ui.panels import desk_layout
 from ui.models.bounce import (
     BounceAlert,
     CHART_WATCH_TAG,
+    MANUAL_CHART_TAG,
     SYMBOL_RE,
     is_chart_watch_alert,
     is_entry_assist_text,
 )
 from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.alert_feed_item import AlertFeedItem
+from ui.widgets.armed_watch_list import ArmedWatchList
 from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
@@ -269,6 +271,7 @@ class AlertCenterPanel(QFrame):
 
     statusChanged = Signal(str)
     setupRequested = Signal(dict)  # show_setup kwargs, when the embedded pane is off
+    armedWatchesChanged = Signal()  # any arm/disarm, so the inventory can redraw
 
     def __init__(
         self,
@@ -382,6 +385,13 @@ class AlertCenterPanel(QFrame):
         board_layout.addWidget(self.entry_board, 3)
         board_layout.addWidget(self.rrs_snapshot, 2)
 
+        # The armed-watch inventory. Built before the tab bar that hosts it.
+        self.armed_list = ArmedWatchList(self)
+        self.armed_list.disarmWatchRequested.connect(self.disarm_chart_watch_for)
+        self.armed_list.disarmLevelRequested.connect(self.disarm_d1_level_watch)
+        self.armed_list.symbolActivated.connect(self.chart_symbol)
+        self.armedWatchesChanged.connect(self._refresh_armed_list)
+
         self.tabs = QTabWidget()
         self.tabs.addTab(feed_scroll, "Alerts")
 
@@ -418,6 +428,8 @@ class AlertCenterPanel(QFrame):
         # retention would be lost.
         self._d1_tab_index = self.tabs.addTab(d1_section, "D1 Focus")
         self.tabs.addTab(board_tab, "RS/RW Board")
+        self._armed_tab_index = self.tabs.addTab(self.armed_list, "Armed")
+        self._refresh_armed_list()
         self._d1_unread = 0
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._refresh_d1_tab_label()
@@ -432,6 +444,9 @@ class AlertCenterPanel(QFrame):
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
         self.chart_review.watchToggled.connect(self._toggle_chart_watch)
         self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
+        self.chart_review.symbolRequested.connect(self.chart_symbol)
+        self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
+        self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -713,7 +728,13 @@ class AlertCenterPanel(QFrame):
         self._review_queue = [
             queued for queued in self._review_queue if queued.symbol != alert.symbol
         ]
-        self._review_queue.append(alert)
+        if is_chart_watch_alert(alert):
+            # The trader armed this exact condition and is waiting on it, so it
+            # goes to the FRONT. Appending sent the one chart they asked for to
+            # the back of a queue that can be dozens deep.
+            self._review_queue.insert(0, alert)
+        else:
+            self._review_queue.append(alert)
         if self._current_review_alert is None:
             self._advance_review_queue()
         else:
@@ -762,6 +783,7 @@ class AlertCenterPanel(QFrame):
             queued=len(self._review_queue),
             armed_kinds=self.armed_watch_kinds(alert.symbol),
             cross_active=self._review_cross_active(alert),
+            armed_levels=self.armed_levels_for(alert.symbol),
         )
 
     def _skip_review_alert(self, alert: BounceAlert) -> None:
@@ -969,6 +991,7 @@ class AlertCenterPanel(QFrame):
         self._chart_watches.append(watch)
         self._save_chart_watches()
         self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()
         level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
         self.statusChanged.emit(
             f"{symbol}: {label} watch armed{level} - the first completed "
@@ -988,6 +1011,7 @@ class AlertCenterPanel(QFrame):
         ]
         self._save_chart_watches()
         self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()
         self.statusChanged.emit(
             f"{symbol}: {WATCH_KINDS.get(kind, kind)} watch disarmed."
         )
@@ -1149,6 +1173,7 @@ class AlertCenterPanel(QFrame):
             )
         )
         self._save_d1_level_watches()
+        self.armedWatchesChanged.emit()
         origin = f" (from the {candle_date} candle)" if candle_date else ""
         self.statusChanged.emit(
             f"{symbol}: D1 level alert armed - break {direction} {level:.2f}{origin}. "
@@ -1156,6 +1181,58 @@ class AlertCenterPanel(QFrame):
             "is not being scanned."
         )
         return True
+
+    def chart_symbol(self, symbol: str) -> bool:
+        """Put any symbol on the big chart on demand.
+
+        The review pane previously only ever showed what the alert queue handed
+        it, so on a quiet tape it sat on "Waiting for the next ticker alert"
+        with no way to look at a name. A typed symbol is charted immediately,
+        even if it has never alerted and is not in the scan set.
+
+        Typing a symbol also un-ignores it: "Remove for today" would otherwise
+        make it silently un-chartable for the rest of the session, which reads
+        as the box being broken.
+        """
+        symbol = str(symbol or "").strip().upper()
+        if not symbol or not SYMBOL_RE.fullmatch(symbol):
+            self.statusChanged.emit(f"{symbol or 'That'} is not a valid ticker.")
+            return False
+        if symbol in self._ignored_symbols:
+            self._restore_ignored_symbol(symbol)
+        alert = BounceAlert(
+            time_text=datetime.now().strftime("%H:%M:%S"),
+            symbol=symbol,
+            side="WATCH",
+            trigger="Charted on demand",
+            tag=MANUAL_CHART_TAG,
+            raw_text=f"MANUAL CHART {symbol}",
+        )
+        # Straight to the review pane; never into the alert feed, which is a
+        # record of what the scanner said, not of what was looked at.
+        self._select_review_alert(alert)
+        self.statusChanged.emit(f"{symbol}: charted on demand.")
+        return True
+
+    def _arm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
+        self.arm_d1_level_watch(symbol, direction, level)
+
+    def _disarm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
+        self.disarm_d1_level_watch(symbol, direction, level)
+
+    def armed_levels_for(self, symbol: str) -> list:
+        symbol = str(symbol or "").strip().upper()
+        return [watch for watch in self._d1_level_watches if watch.symbol == symbol]
+
+    def _refresh_armed_list(self) -> None:
+        self.armed_list.set_watches(
+            self._chart_watches,
+            self._d1_level_watches,
+            has_m5_bars=lambda symbol: bool(self._m5_bars_for(symbol)),
+        )
+        current = self._current_review_alert
+        if current is not None:
+            self.chart_review.set_armed_levels(self.armed_levels_for(current.symbol))
 
     def disarm_d1_level_watch(self, symbol: str, direction: str, level: float) -> bool:
         """Cancel a persistent D1 level alert. Returns True if one was removed.
@@ -1182,6 +1259,7 @@ class AlertCenterPanel(QFrame):
             return False
         self._d1_level_watches = remaining
         self._save_d1_level_watches()
+        self.armedWatchesChanged.emit()
         self.statusChanged.emit(
             f"{symbol}: D1 level alert break {direction} {level:.2f} disarmed."
         )

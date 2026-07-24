@@ -68,6 +68,8 @@ class SymbolSnapshotWidget(QWidget):
     """
 
     d1LevelAlertRequested = Signal(str, str, float, str)
+    # Click-to-price from either chart, for hosts with a level box to fill.
+    pricePicked = Signal(float)
 
     def __init__(self, parent=None, *, compact: bool = False) -> None:
         """``compact`` trades legend wrapping for chart height.
@@ -114,6 +116,10 @@ class SymbolSnapshotWidget(QWidget):
         # be armed by clicking the bar that shows it.
         self.m5_chart.barClicked.connect(self._on_m5_bar_clicked)
         self.m5_chart.setMinimumHeight(120)
+        for chart in (self.d1_chart, self.m5_chart):
+            chart.priceClicked.connect(
+                lambda _index, price: self.pricePicked.emit(price)
+            )
         self.m5_note = QLabel()
         self.m5_note.setObjectName("MutedLabel")
         self.m5_note.setWordWrap(True)
@@ -185,6 +191,20 @@ class SymbolSnapshotWidget(QWidget):
                 + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
                 + f"last bar {last.strftime('%m/%d %H:%M')}</span>"
             )
+
+    def quick_fill(self, source: str) -> float | None:
+        """Resolve a quick-fill source against the M5 chart's drawn series.
+
+        HOD/LOD/Last come from the intraday bars; VWAP and the sigma bands come
+        from the overlays already plotted on them, so the number that fills is
+        the line the trader is looking at.
+        """
+        from ui.widgets.arm_bar import quick_fill_value
+
+        snapshot = self._m5 or {}
+        return quick_fill_value(
+            source, snapshot.get("bars") or [], snapshot.get("overlays") or []
+        )
 
     def _on_d1_bar_clicked(self, index: int) -> None:
         self._popup_level_menu(self.d1_chart, index, "%m/%d")

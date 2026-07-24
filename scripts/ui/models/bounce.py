@@ -22,6 +22,10 @@ def is_entry_assist_text(text: Any) -> bool:
 # A user-armed chart watch (New HOD / New LOD / VWAP bounce) firing. These are
 # armed only from the visual M5 review chart and flag red in the Alert Center.
 CHART_WATCH_TAG = "chart_watch"
+# A symbol the trader typed into the chart box. It occupies the review pane
+# like an alert does, but is never a feed entry - the feed records what the
+# scanner said, not what was looked at.
+MANUAL_CHART_TAG = "manual_chart"
 
 
 def is_chart_watch_alert(alert: Any) -> bool:
