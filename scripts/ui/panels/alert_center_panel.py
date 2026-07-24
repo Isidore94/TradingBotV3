@@ -37,6 +37,7 @@ from project_paths import (
 from ui.models.bounce import (
     BounceAlert,
     CHART_WATCH_TAG,
+    SYMBOL_RE,
     is_chart_watch_alert,
     is_entry_assist_text,
 )
@@ -588,8 +589,13 @@ class AlertCenterPanel(QFrame):
             self._insert_item_into(self.d1_feed_layout, alert, MAX_D1_FEED_ITEMS)
 
     def _enqueue_review_alert(self, alert: BounceAlert) -> None:
-        """Queue one visual review per symbol; refresh the active symbol live."""
-        if not alert.symbol:
+        """Queue one visual review per symbol; refresh the active symbol live.
+
+        Only real tickers get a chart. Summary/list messages can carry junk
+        pseudo-symbols extracted from their prefix (e.g. "(BULLISH_STRONG)"
+        from an old AUTO WATCHLIST line) - those must never occupy the
+        review pane."""
+        if not alert.symbol or not SYMBOL_RE.fullmatch(alert.symbol):
             return
         if (
             self._current_review_alert is not None

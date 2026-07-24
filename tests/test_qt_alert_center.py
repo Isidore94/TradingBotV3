@@ -823,6 +823,42 @@ def test_swing_pick_cross_toggle_adds_to_m5_focus(tmp_path, monkeypatch):
     assert panel.chart_review.cross_focus_button.text() == "Add to M5 Focus"
 
 
+def test_junk_pseudo_symbols_never_occupy_the_visual_review(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel()
+    # The old AUTO WATCHLIST line parsed "(BULLISH_STRONG)" as its symbol.
+    # Even if such a summary reaches the panel (old bot process, future
+    # message shapes), a non-ticker must never occupy the review chart.
+    junk = BounceAlert.from_callback(
+        "AUTO WATCHLIST (BULLISH_STRONG): longs 37 auto (+8/-12), shorts 3 auto "
+        "(+0/-3) from 1195 universe names.",
+        "blue",
+    )
+    assert junk.symbol == "(BULLISH_STRONG)"
+    panel.add_alert(junk)
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
+
+    real = _alert("[S-TIER] NVDA: Bounce confirmed (long)")
+    panel.add_alert(real)
+    assert panel._current_review_alert is real
+
+
 def test_auto_watchlist_populate_summary_stays_out_of_alert_center():
     try:
         import os
