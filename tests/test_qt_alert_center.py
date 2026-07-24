@@ -169,7 +169,7 @@ def test_developing_d1_crossings_are_research_only():
     )
 
 
-def test_actionable_feeds_exclude_developing_d1_crossings():
+def test_actionable_feeds_exclude_developing_d1_crossings(monkeypatch):
     try:
         import os
 
@@ -178,11 +178,13 @@ def test_actionable_feeds_exclude_developing_d1_crossings():
 
         QApplication.instance() or QApplication([])
         from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return
         raise
 
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
     panel = AlertCenterPanel()
     upgrade = _alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade [score=245]", "d1_flag_long")
     trigger = _alert("MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) A/S upgrade: 1st-dev break UPPER_1@314.57", "d1_flag_long")
@@ -205,7 +207,7 @@ def test_actionable_feeds_exclude_developing_d1_crossings():
     assert live_prefixes == {"MASTER_AVWAP_D1_FLAG"}
 
 
-def test_tier_flip_and_zone_alerts_route_to_d1_focus_feed():
+def test_tier_flip_and_zone_alerts_route_to_d1_focus_feed(monkeypatch):
     try:
         import os
 
@@ -214,11 +216,13 @@ def test_tier_flip_and_zone_alerts_route_to_d1_focus_feed():
 
         QApplication.instance() or QApplication([])
         from ui.panels.alert_center_panel import AlertCenterPanel, is_ready_d1_alert
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return
         raise
 
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
     tier_flip = _alert(
         "MASTER_AVWAP_D1_TIER_FLIP: HOMB (long) non-S/A -> A/S predicted "
         "(next scan confirms) 1st-dev break [@102.00; px=102.30; bar=10:35; "
@@ -465,7 +469,43 @@ def test_visual_alert_review_queues_skips_and_adds_focus(tmp_path, monkeypatch):
     assert panel.chart_review.alert is None
 
 
-def test_visual_dislike_persists_suppression_and_restore(tmp_path, monkeypatch):
+def test_list_callback_posts_every_m5_name_to_review(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel(
+        _service(tmp_path),
+        ignored_symbols_path=tmp_path / "alert_center_ignored.txt",
+    )
+    alerts = BounceAlert.from_callback_many(
+        "STRONGEST 30M (long): NVDA +1.20%, AMD +0.90%, META +0.70% [manual]",
+        "green",
+    )
+
+    for alert in alerts:
+        panel.add_alert(alert)
+
+    assert [alert.symbol for alert in panel._alerts] == ["META", "AMD", "NVDA"]
+    assert panel._current_review_alert.symbol == "NVDA"
+    assert [alert.symbol for alert in panel._review_queue] == ["AMD", "META"]
+    assert all(alert.timeframe == "M5" for alert in alerts)
+
+
+def test_visual_remove_suppresses_for_today_and_restore(tmp_path, monkeypatch):
     try:
         import os
 
@@ -485,10 +525,6 @@ def test_visual_dislike_persists_suppression_and_restore(tmp_path, monkeypatch):
     monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
     ignored_path = tmp_path / "alert_center_ignored.txt"
     service = _service(tmp_path)
-    feedback = []
-    service.record_feedback = lambda symbol, side, verdict, **kwargs: feedback.append(
-        (symbol, verdict, kwargs)
-    )
     panel = AlertCenterPanel(service, ignored_symbols_path=ignored_path)
     disliked = BounceAlert(
         time_text="09:35:00",
@@ -510,32 +546,416 @@ def test_visual_dislike_persists_suppression_and_restore(tmp_path, monkeypatch):
     panel.add_alert(disliked)
     panel.add_alert(next_alert)
 
-    panel._dislike_review_alert(disliked)
+    panel._remove_review_alert_for_today(disliked)
 
-    assert ignored_path.read_text(encoding="utf-8") == "NVDA\n"
+    import json
+
+    stored = json.loads(ignored_path.read_text(encoding="utf-8"))
+    assert stored["market_date"] == panel._ignored_market_date
+    assert stored["symbols"] == ["NVDA"]
     assert panel._ignored_symbols == {"NVDA"}
     assert all(alert.symbol != "NVDA" for alert in panel._alerts + panel._d1_alerts)
     assert panel._current_review_alert is next_alert
-    assert feedback == [
-        (
-            "NVDA",
-            "dislike",
-            {
-                "category": "swing",
-                "origin": "d1",
-                "reason": "visual D1 chart rejection",
-                "context": "[S-TIER] NVDA: visual rejection",
-            },
-        )
-    ]
 
-    # Future alerts stay off both the feed and review queue.
+    # Future alerts stay off both the feed and review queue for this date.
     panel.add_alert(disliked)
     assert all(alert.symbol != "NVDA" for alert in panel._alerts + panel._d1_alerts)
     assert all(alert.symbol != "NVDA" for alert in panel._review_queue)
 
     panel._restore_ignored_symbol("NVDA")
-    assert ignored_path.read_text(encoding="utf-8") == ""
+    assert json.loads(ignored_path.read_text(encoding="utf-8"))["symbols"] == []
     panel.add_alert(disliked)
     assert any(alert.symbol == "NVDA" for alert in panel._alerts)
     assert any(alert.symbol == "NVDA" for alert in panel._review_queue)
+
+
+def test_chart_watch_hits_bypass_tier_gate_and_sound():
+    try:
+        from ui.models.bounce import BounceAlert, CHART_WATCH_TAG, is_chart_watch_alert
+        from ui.panels.alert_center_panel import alert_is_loud, alert_passes_min_tier
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    hit = BounceAlert(
+        time_text="10:35:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="New HOD 111.00 > armed day high 110.00 (bar 10:30)",
+        timeframe="M5",
+        tag=CHART_WATCH_TAG,
+        raw_text="CHART WATCH NVDA (LONG): New HOD 111.00 > armed day high 110.00 (bar 10:30)",
+        payload={"chart_watch_kind": "new_hod"},
+    )
+    assert is_chart_watch_alert(hit)
+    # The trader armed this exact condition: visible and audible in EVERY mode.
+    assert all(alert_passes_min_tier(hit, mode) for mode in ("all", "B", "A", "S"))
+    assert alert_is_loud(hit)
+    assert not is_chart_watch_alert(_alert("[B-TIER] AAA: Bounce confirmed (long)"))
+
+
+def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui import theme
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.alert_feed_item import AlertFeedItem
+        from ui.widgets.badge import Badge
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    import dataclasses
+    from datetime import datetime
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+
+    # Anchor every bar to fixed clock times on TODAY's date so completion
+    # math is deterministic regardless of when the suite runs.
+    noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    def bar(minute, high, low):
+        mid = (high + low) / 2
+        return {
+            "dt": noon.replace(hour=11, minute=minute),
+            "open": mid,
+            "high": high,
+            "low": low,
+            "close": mid,
+            "volume": 1000.0,
+        }
+
+    class _Bot:
+        def __init__(self):
+            self.bars = []
+
+        def m5_chart_bars(self, symbol, max_sessions=2):
+            return list(self.bars)
+
+    class _Service:
+        def __init__(self, bot):
+            self._bot = bot
+
+        def current_bot(self):
+            return self._bot
+
+    bot = _Bot()
+    bot.bars = [bar(20, 110.0, 99.0), bar(25, 108.0, 100.0)]
+    panel = AlertCenterPanel()
+    panel._bounce_service = _Service(bot)
+    alert = BounceAlert(
+        time_text="11:30:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] VWAP reclaim",
+        timeframe="5m",
+        raw_text="[S-TIER] NVDA: VWAP reclaim",
+    )
+    panel.add_alert(alert)
+    assert panel._current_review_alert is alert
+
+    button = panel.chart_review.watch_buttons["new_hod"]
+    assert button.isEnabled()
+    button.click()
+    assert [watch.kind for watch in panel._chart_watches] == ["new_hod"]
+    assert panel._chart_watches[0].baseline == 110.0
+    assert panel._chart_watches[0].symbol == "NVDA"
+    # The armed button stays clickable, showing its armed state.
+    assert button.isEnabled() and button.isChecked()
+    assert "armed" in button.text()
+
+    # It is a TOGGLE: a second click disarms (the stuck-armed bug).
+    button.click()
+    assert panel._chart_watches == []
+    assert not button.isChecked()
+    assert button.text() == "New HOD"
+
+    # Re-arm for the trigger flow below.
+    button.click()
+    assert [watch.kind for watch in panel._chart_watches] == ["new_hod"]
+
+    # Backdate the arm, then complete a bar that breaks the armed day high.
+    panel._chart_watches[0] = dataclasses.replace(
+        panel._chart_watches[0], armed_at=noon.replace(hour=11, minute=40)
+    )
+    bot.bars = bot.bars + [bar(45, 111.0, 104.0)]
+    panel._poll_chart_watches(now=noon)
+
+    # One-shot: the watch retires, the red alert leads the live feed, and the
+    # button unlocks for a re-arm.
+    assert panel._chart_watches == []
+    fired = panel._alerts[0]
+    assert fired.tag == "chart_watch"
+    assert fired.symbol == "NVDA"
+    assert "New HOD 111.00" in fired.trigger
+    assert panel.chart_review.watch_buttons["new_hod"].isEnabled()
+    assert not panel.chart_review.watch_buttons["new_hod"].isChecked()
+
+    # The requested red-font flag: red trigger text plus a red kind badge.
+    item = AlertFeedItem(fired)
+    assert theme.color("short") in item.trigger_label.styleSheet()
+    assert "NEW HOD" in [badge.text() for badge in item.findChildren(Badge)]
+
+
+def test_m5_pick_cross_toggle_adds_swing_focus_and_pins_without_advancing(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    service = _service(tmp_path)
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "alert_center_ignored.txt",
+    )
+    first = BounceAlert(
+        time_text="09:35:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] VWAP reclaim",
+        timeframe="5m",
+        raw_text="[S-TIER] NVDA: VWAP reclaim",
+    )
+    second = BounceAlert(
+        time_text="09:40:00",
+        symbol="TSLA",
+        side="SHORT",
+        trigger="[S-TIER] EMA rejection",
+        timeframe="5m",
+        raw_text="[S-TIER] TSLA: EMA rejection",
+    )
+    panel.add_alert(first)
+    panel.add_alert(second)
+    assert panel._current_review_alert is first
+    # M5 pick: the cross-promote files it as a swing name.
+    assert panel.chart_review.cross_focus_button.text() == "Add to D1 Focus"
+
+    panel.chart_review.cross_focus_button.click()
+
+    # The pick lands in the Focus Picks store (Swing bucket) AND the feed pin.
+    assert service.is_focus("NVDA", "long", "swing")
+    assert any(
+        alert.symbol == "NVDA" and alert.tag == "d1_focus_pin"
+        for alert in panel._d1_alerts
+    )
+    # A toggle never advances the review chart.
+    assert panel._current_review_alert is first
+    assert panel.chart_review.cross_focus_button.text() == "✓ In D1 Focus"
+    assert panel.chart_review.cross_focus_button.isChecked()
+
+    # Second click removes both.
+    panel.chart_review.cross_focus_button.click()
+    assert not service.is_focus("NVDA", "long", "swing")
+    assert panel._d1_alerts == []
+    assert panel._current_review_alert is first
+    assert panel.chart_review.cross_focus_button.text() == "Add to D1 Focus"
+    assert not panel.chart_review.cross_focus_button.isChecked()
+
+
+def test_swing_pick_cross_toggle_adds_to_m5_focus(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    service = _service(tmp_path)
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "alert_center_ignored.txt",
+    )
+    swing = BounceAlert(
+        time_text="10:05:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] 15EMA break",
+        timeframe="D1",
+        raw_text="[S-TIER] NVDA: 15EMA break",
+        is_d1=True,
+    )
+    panel.add_alert(swing)
+    assert panel._current_review_alert is swing
+    # Swing pick: the cross-promote is the M5 day-trade list.
+    assert panel.chart_review.cross_focus_button.text() == "Add to M5 Focus"
+    assert panel.chart_review.focus_button.text() == "Add to Swing Focus"
+
+    panel.chart_review.cross_focus_button.click()
+    assert service.is_focus("NVDA", "long", "m5")
+    # A toggle never advances the review chart.
+    assert panel._current_review_alert is swing
+    assert panel.chart_review.cross_focus_button.text() == "✓ In M5 Focus"
+
+    panel.chart_review.cross_focus_button.click()
+    assert not service.is_focus("NVDA", "long", "m5")
+    assert panel._current_review_alert is swing
+    assert panel.chart_review.cross_focus_button.text() == "Add to M5 Focus"
+
+
+def test_junk_pseudo_symbols_never_occupy_the_visual_review(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel()
+    # The old AUTO WATCHLIST line parsed "(BULLISH_STRONG)" as its symbol.
+    # Even if such a summary reaches the panel (old bot process, future
+    # message shapes), a non-ticker must never occupy the review chart.
+    junk = BounceAlert.from_callback(
+        "AUTO WATCHLIST (BULLISH_STRONG): longs 37 auto (+8/-12), shorts 3 auto "
+        "(+0/-3) from 1195 universe names.",
+        "blue",
+    )
+    assert junk.symbol == "(BULLISH_STRONG)"
+    panel.add_alert(junk)
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
+
+    real = _alert("[S-TIER] NVDA: Bounce confirmed (long)")
+    panel.add_alert(real)
+    assert panel._current_review_alert is real
+
+
+def test_auto_watchlist_populate_summary_stays_out_of_alert_center():
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.services.bounce_service import BounceService
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    service = BounceService()
+    received = []
+    service.alertReceived.connect(received.append)
+    callback = service._make_callback()
+
+    # The auto-populate engine's housekeeping summary is silent by design:
+    # the longs/shorts.txt adds just happen, with no Alert Center entry.
+    callback(
+        "AUTO WATCHLIST (bearish_strong anchor, live neutral_chop): longs 4 auto "
+        "(+2/-1), shorts 6 auto (+3/-0) from 900 universe names.",
+        "blue",
+    )
+    assert received == []
+
+    # Ordinary alerts still flow.
+    callback("[S-TIER] NVDA: Bounce confirmed (long)", "green")
+    assert [alert.symbol for alert in received] == ["NVDA"]
+
+
+def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotDialog, SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel()
+    dialog = SymbolSnapshotDialog()
+
+    # Without a watch host the popup stays a pure quick look.
+    dialog.show_symbol("NVDA", side="LONG")
+    assert not dialog.action_row.isVisibleTo(dialog)
+
+    # With the Alert Center as host, the chart-only actions appear.
+    dialog.show_symbol("NVDA", side="LONG", watch_host=panel)
+    assert dialog.action_row.isVisibleTo(dialog)
+
+    dialog.watch_buttons["new_lod"].click()
+    assert [watch.kind for watch in panel._chart_watches] == ["new_lod"]
+    assert panel._chart_watches[0].symbol == "NVDA"
+    assert panel._chart_watches[0].side == "LONG"
+    assert dialog.watch_buttons["new_lod"].isEnabled()
+    assert dialog.watch_buttons["new_lod"].isChecked()
+    assert "armed" in dialog.watch_buttons["new_lod"].text()
+    # Re-arming through the panel API cannot double-arm.
+    assert panel.arm_chart_watch_for("NVDA", "LONG", "new_lod") is False
+    assert len(panel._chart_watches) == 1
+    # A second click on the toggle disarms.
+    dialog.watch_buttons["new_lod"].click()
+    assert panel._chart_watches == []
+    assert not dialog.watch_buttons["new_lod"].isChecked()
+    assert dialog.watch_buttons["new_lod"].text() == "New LOD"
+
+    dialog.d1_focus_button.click()
+    assert [alert.symbol for alert in panel._d1_alerts] == ["NVDA"]
+    assert panel._d1_alerts[0].tag == "d1_focus_pin"
+    assert dialog.d1_focus_button.isEnabled()
+    assert dialog.d1_focus_button.text() == "✓ In D1 Focus"
+    # Second click unpins.
+    dialog.d1_focus_button.click()
+    assert panel._d1_alerts == []
+    assert dialog.d1_focus_button.text() == "Add to D1 Focus"
+
+    # No focus service on this panel: the M5 Focus toggle stays a no-op.
+    dialog.m5_focus_button.click()
+    assert not dialog.m5_focus_button.isChecked()
+
+    # Reopening re-reads live state from the host.
+    dialog.watch_buttons["new_hod"].click()
+    dialog.show_symbol("NVDA", side="LONG", watch_host=panel)
+    assert "armed" in dialog.watch_buttons["new_hod"].text()
+
+    # A different symbol starts clean.
+    dialog.show_symbol("TSLA", side="SHORT", watch_host=panel)
+    assert not dialog.watch_buttons["new_hod"].isChecked()
+    assert dialog.watch_buttons["new_hod"].text() == "New HOD"
+    dialog.close()

@@ -231,8 +231,9 @@ AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
 # Lives in the shared home so it syncs across machines and can be handed to an
 # AI for review ("why did I like/hate these picks -> tune the scans").
 PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
-# Trader-rejected Alert Center symbols. This suppresses only the visual alert
-# surface; it never removes a watchlist entry or changes a scanner.
+# Alert Center symbols removed from review for the current trading day. This
+# suppresses only the visual surface; it never removes a watchlist entry or
+# changes a scanner.
 ALERT_CENTER_IGNORED_SYMBOLS_FILE = PERSISTENT_DATA_DIR / "alert_center_ignored_symbols.txt"
 # Append-only trader annotations for the BounceBot market-environment control.
 # The bot's automatic SPY read remains separate; each manual selection records

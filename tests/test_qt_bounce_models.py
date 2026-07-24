@@ -51,6 +51,67 @@ def test_bounce_alert_marks_d1_flags():
     assert alert.context == "score=88"
 
 
+def test_entry_assist_lists_expand_to_one_m5_alert_per_symbol():
+    from ui.models.bounce import BounceAlert
+
+    alerts = BounceAlert.from_callback_many(
+        "STRONGEST 30M (long): NVDA +1.20%, AMD +0.90% [manual]",
+        "green",
+        timestamp=datetime(2026, 1, 2, 10, 0, 0),
+    )
+
+    assert [alert.symbol for alert in alerts] == ["NVDA", "AMD"]
+    assert [alert.side for alert in alerts] == ["LONG", "LONG"]
+    assert [alert.timeframe for alert in alerts] == ["M5", "M5"]
+    assert [alert.trigger for alert in alerts] == [
+        "M5 move +1.20%",
+        "M5 move +0.90%",
+    ]
+    assert [alert.payload["list_rank"] for alert in alerts] == [1, 2]
+
+
+def test_entry_window_list_expands_with_spy_excess():
+    from ui.models.bounce import BounceAlert
+
+    alerts = BounceAlert.from_callback_many(
+        "ENTRY WINDOW (short): SPY +0.60% since 10:05 - stayed weakest through it: "
+        "TSLA -0.40% (x+1.00), META -0.10% (x+0.70) [auto]",
+        "red",
+        timestamp=datetime(2026, 1, 2, 10, 30, 0),
+    )
+
+    assert [alert.symbol for alert in alerts] == ["TSLA", "META"]
+    assert all(alert.side == "SHORT" for alert in alerts)
+    assert alerts[0].trigger == "M5 move -0.40% · vs SPY x+1.00"
+
+
+def test_regime_pause_list_expands_without_a_bogus_regime_symbol():
+    from ui.models.bounce import BounceAlert
+
+    alerts = BounceAlert.from_callback_many(
+        "REGIME PAUSE WATCH (short): SPY paused (+0.15% window) - "
+        "3 swing shorts still pressing lows: AAOI, TSLA, META (3 today). "
+        "Recorded as swing-scan evidence, not an entry signal.",
+        "red",
+    )
+
+    assert [alert.symbol for alert in alerts] == ["AAOI", "TSLA", "META"]
+    assert all(alert.side == "SHORT" and alert.timeframe == "M5" for alert in alerts)
+    assert alerts[0].trigger == "M5 regime-pause watch · pressing lows"
+
+
+def test_non_list_callback_stays_one_alert():
+    from ui.models.bounce import BounceAlert
+
+    alerts = BounceAlert.from_callback_many(
+        "[A-TIER] NVDA: Bounce confirmed (long) from ema_15",
+        "green",
+    )
+
+    assert len(alerts) == 1
+    assert alerts[0].symbol == "NVDA"
+
+
 def test_ready_d1_alerts_are_final_bucket_upgrades_only():
     from ui.models.bounce import BounceAlert
     try:

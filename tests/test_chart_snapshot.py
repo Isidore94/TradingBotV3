@@ -357,6 +357,34 @@ def test_master_setups_symbol_click_opens_snapshot(monkeypatch):
     assert calls == [("NVDA", "LONG"), ("NVDA", "LONG")]
 
 
+def test_master_setups_popup_carries_chart_watch_host(monkeypatch):
+    if _qt_app() is None:
+        return
+    from ui.models.setup import SetupRow
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+    import ui.widgets.symbol_snapshot_dialog as snapshot_dialog
+
+    panel = MasterAvwapPanel(None)
+    panel.set_rows([SetupRow(symbol="NVDA", side="LONG", score=90.0)])
+    calls = []
+    monkeypatch.setattr(
+        snapshot_dialog,
+        "show_symbol_snapshot",
+        lambda owner, symbol, **kwargs: calls.append((symbol, kwargs.get("watch_host"))),
+    )
+    symbol_index = panel.proxy.index(0, 2)
+
+    # Standalone (no desk wiring): the popup opens without the action row.
+    panel._open_symbol_snapshot(symbol_index)
+    assert calls == [("NVDA", None)]
+
+    # Wired by the desk: the Alert Center rides along as the watch host.
+    host = object()
+    panel.set_chart_watch_host(host)
+    panel._open_symbol_snapshot(symbol_index)
+    assert calls == [("NVDA", None), ("NVDA", host)]
+
+
 def test_master_setups_space_advances_visible_rows_and_opens_snapshot(monkeypatch):
     app = _qt_app()
     if app is None:

@@ -3,8 +3,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QHBoxLayout, QToolButton, QVBoxLayout, QWidget
 
+from chart_watch import WATCH_KINDS
 from ui import theme
-from ui.models.bounce import BounceAlert
+from ui.models.bounce import BounceAlert, is_chart_watch_alert
 from ui.widgets.badge import Badge
 
 
@@ -65,7 +66,18 @@ class AlertFeedItem(QWidget):
         self.setObjectName("Panel")
         tone = "long" if alert.side == "LONG" else "short" if alert.side == "SHORT" else "neutral"
         is_focus = bool(focus_category)
-        if is_focus:
+        is_watch_hit = is_chart_watch_alert(alert)
+        if is_watch_hit:
+            # A user-armed chart watch fired: full red frame - it outranks
+            # even the gold focus treatment because the trader set this exact
+            # alarm and is waiting on it.
+            red = theme.color("short")
+            self.setStyleSheet(
+                f"QWidget#Panel {{ border: 1px solid {theme.with_alpha(red, 0.9)}; "
+                f"border-left: 4px solid {red}; "
+                f"background: {theme.with_alpha(red, 0.12)}; }}"
+            )
+        elif is_focus:
             # Liked picks: gold frame all the way around, not just a stripe.
             accent = theme.color("favorite")
             self.setStyleSheet(
@@ -87,6 +99,9 @@ class AlertFeedItem(QWidget):
             symbol_label.setStyleSheet("font-weight: 700;")
         top.addWidget(time_label)
         top.addWidget(symbol_label)
+        if is_watch_hit:
+            kind = str((alert.payload or {}).get("chart_watch_kind") or "")
+            top.addWidget(Badge(WATCH_KINDS.get(kind, "Chart watch").upper(), "short"))
         if is_focus:
             top.addWidget(Badge(_FOCUS_BADGE_TEXT.get(focus_category, "★ FOCUS"), "favorite"))
         top.addWidget(Badge(alert.side, tone))
@@ -115,8 +130,8 @@ class AlertFeedItem(QWidget):
             dislike.setText("✕")
             dislike.setToolTip(
                 f"Dislike {alert.symbol}: you'll be asked why, and the reason is logged to "
-                "pick_feedback.jsonl for AI review. The symbol is then hidden from future "
-                "Alert Center reviews and removed from Focus Picks if starred."
+                "pick_feedback.jsonl for AI review. The symbol is then removed from today's "
+                "Alert Center review and removed from Focus Picks if starred."
             )
             dislike.setCursor(Qt.CursorShape.PointingHandCursor)
             dislike.setStyleSheet(
@@ -129,6 +144,10 @@ class AlertFeedItem(QWidget):
         trigger = QLabel(alert.trigger or alert.raw_text)
         trigger.setWordWrap(True)
         trigger.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if is_watch_hit:
+            # The requested red-font flag for a fired chart watch.
+            trigger.setStyleSheet(f"color: {theme.color('short')}; font-weight: 700;")
+        self.trigger_label = trigger
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
