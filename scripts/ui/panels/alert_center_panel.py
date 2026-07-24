@@ -23,14 +23,25 @@ from PySide6.QtWidgets import (
 
 from alert_review_state import load_ignored_alert_symbols, save_ignored_alert_symbols
 from chart_watch import (
+    BAND_BOUNCE_PRIME_BUCKETS,
+    BAND_BOUNCE_TRACKER_TYPES,
     ChartWatch,
+    D1LevelWatch,
+    D1_LEVEL_KINDS,
     WATCH_KINDS,
     arm_chart_watch,
     evaluate_chart_watch,
+    evaluate_d1_level_watch,
+    load_chart_watches,
+    load_d1_level_watches,
+    save_chart_watches,
+    save_d1_level_watches,
     watch_is_stale,
 )
 from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
+    ALERT_CHART_WATCHES_FILE,
+    D1_LEVEL_WATCHES_FILE,
     get_local_setting,
     save_local_setting,
 )
@@ -255,7 +266,15 @@ class AlertCenterPanel(QFrame):
     statusChanged = Signal(str)
     setupRequested = Signal(dict)  # show_setup kwargs, when the embedded pane is off
 
-    def __init__(self, focus_service=None, parent=None, *, ignored_symbols_path=None) -> None:
+    def __init__(
+        self,
+        focus_service=None,
+        parent=None,
+        *,
+        ignored_symbols_path=None,
+        chart_watches_path=None,
+        d1_level_watches_path=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self.focus_service = focus_service
@@ -264,9 +283,6 @@ class AlertCenterPanel(QFrame):
         self._d1_alerts: list[BounceAlert] = []
         self._review_queue: list[BounceAlert] = []
         self._current_review_alert: BounceAlert | None = None
-        # One-shot chart watches armed from the visual M5 review. Session-
-        # scoped in-memory state, like the review queue itself.
-        self._chart_watches: list[ChartWatch] = []
         self._embedded_detail_enabled = True
         focus_store = getattr(self.focus_service, "store", None)
         default_store = bool(
@@ -287,6 +303,31 @@ class AlertCenterPanel(QFrame):
             )
             if self._ignored_symbols_path is not None
             else set()
+        )
+        # One-shot chart watches armed from the visual charts. Persisted to a
+        # trading-day-scoped file so a GUI restart keeps them armed; only a
+        # new session starts clean.
+        self._chart_watches_path = (
+            Path(chart_watches_path)
+            if chart_watches_path is not None
+            else (ALERT_CHART_WATCHES_FILE if persist_ignored else None)
+        )
+        self._chart_watches: list[ChartWatch] = (
+            load_chart_watches(self._chart_watches_path)
+            if self._chart_watches_path is not None
+            else []
+        )
+        # Persistent D1 candle-level alerts: kept ACROSS sessions until they
+        # flag, even for symbols outside the current scan set.
+        self._d1_level_watches_path = (
+            Path(d1_level_watches_path)
+            if d1_level_watches_path is not None
+            else (D1_LEVEL_WATCHES_FILE if persist_ignored else None)
+        )
+        self._d1_level_watches: list[D1LevelWatch] = (
+            load_d1_level_watches(self._d1_level_watches_path)
+            if self._d1_level_watches_path is not None
+            else []
         )
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
@@ -374,6 +415,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
         self.chart_review.watchToggled.connect(self._toggle_chart_watch)
+        self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -382,6 +424,12 @@ class AlertCenterPanel(QFrame):
         self._watch_timer.setInterval(30_000)
         self._watch_timer.timeout.connect(self._poll_chart_watches)
         self._watch_timer.start()
+        # Persistent D1 level alerts poll less often: the daily-store reads
+        # are mtime-cached and the evidence changes at most once per M5 bar.
+        self._d1_watch_timer = QTimer(self)
+        self._d1_watch_timer.setInterval(60_000)
+        self._d1_watch_timer.timeout.connect(self._poll_d1_level_watches)
+        self._d1_watch_timer.start()
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.chart_review)
@@ -468,6 +516,8 @@ class AlertCenterPanel(QFrame):
         self._d1_alerts.clear()
         self._review_queue.clear()
         self._chart_watches.clear()
+        self._save_chart_watches()
+        # Persistent D1 level alerts survive a feed clear by design.
         self._current_review_alert = None
         self.chart_review.clear()
         self._rebuild_feed()
@@ -861,6 +911,7 @@ class AlertCenterPanel(QFrame):
             source_text=source_text,
         )
         self._chart_watches.append(watch)
+        self._save_chart_watches()
         self._refresh_review_armed_kinds()
         level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
         self.statusChanged.emit(
@@ -879,6 +930,7 @@ class AlertCenterPanel(QFrame):
             for watch in self._chart_watches
             if not (watch.symbol == symbol and watch.kind == kind)
         ]
+        self._save_chart_watches()
         self._refresh_review_armed_kinds()
         self.statusChanged.emit(
             f"{symbol}: {WATCH_KINDS.get(kind, kind)} watch disarmed."
@@ -923,24 +975,168 @@ class AlertCenterPanel(QFrame):
         for hit in triggered:
             self.add_alert(self._chart_watch_alert(hit, moment))
         if len(remaining) != before:
+            self._save_chart_watches()
             self._refresh_review_armed_kinds()
 
     def _chart_watch_alert(self, hit, moment: datetime) -> BounceAlert:
         watch = hit.watch
+        resolved = str(getattr(hit, "resolved_side", "") or "").upper()
+        side = str(getattr(watch, "side", "") or "")
+        if side not in ("LONG", "SHORT"):
+            side = resolved if resolved in ("LONG", "SHORT") else "WATCH"
+        kind = watch.kind
+        trigger = hit.message
+        note = self._tracker_note_for(watch, hit, moment)
+        if note:
+            trigger = f"{trigger} | {note}"
         return BounceAlert(
             time_text=moment.strftime("%H:%M:%S"),
             symbol=watch.symbol,
-            side=watch.side,
-            trigger=hit.message,
-            timeframe="M5",
+            side=side,
+            trigger=trigger,
+            timeframe="D1" if kind in D1_LEVEL_KINDS else "M5",
             tag=CHART_WATCH_TAG,
-            raw_text=f"CHART WATCH {watch.symbol} ({watch.side}): {hit.message}",
+            raw_text=f"CHART WATCH {watch.symbol} ({side}): {trigger}",
             payload={
-                "chart_watch_kind": watch.kind,
+                "chart_watch_kind": kind,
                 "armed_at": watch.armed_at.isoformat(),
-                "source_text": watch.source_text,
+                "source_text": getattr(watch, "source_text", "")
+                or getattr(watch, "candle_date", ""),
             },
         )
+
+    def _tracker_note_for(self, watch, hit, moment: datetime) -> str:
+        """Day-trade-tracker context stamped onto σ-band triggers: the
+        measured segment stats plus whether we're inside the family's prime
+        production window. Read-only decision support - never changes tiering."""
+        if getattr(watch, "kind", "") != "band_bounce":
+            return ""
+        resolved = str(getattr(hit, "resolved_side", "") or "").lower()
+        segment_type = BAND_BOUNCE_TRACKER_TYPES.get(resolved)
+        if not segment_type:
+            return ""
+        bucket = ""
+        stats = ""
+        try:
+            from bounce_bot_lib.learning import load_bounce_learning_state, time_bucket_for
+
+            bucket = str(time_bucket_for(moment) or "")
+            state = load_bounce_learning_state() or {}
+            entry = ((state.get("segments") or {}).get("bounce_type") or {}).get(
+                f"{resolved}|{segment_type}"
+            )
+            if entry:
+                stats = f"{entry['avg_close_r']:+.2f}R n={entry['sample_count']}"
+        except Exception:
+            pass
+        window = ""
+        if bucket:
+            window = (
+                "prime window"
+                if bucket in BAND_BOUNCE_PRIME_BUCKETS
+                else f"off-window ({bucket})"
+            )
+        parts = [part for part in (f"tracker {segment_type} {stats}" if stats else "", window) if part]
+        return "; ".join(parts)
+
+    def _save_chart_watches(self) -> None:
+        if self._chart_watches_path is None:
+            return
+        try:
+            save_chart_watches(self._chart_watches, self._chart_watches_path)
+        except OSError:
+            pass
+
+    def _save_d1_level_watches(self) -> None:
+        if self._d1_level_watches_path is None:
+            return
+        try:
+            save_d1_level_watches(self._d1_level_watches, self._d1_level_watches_path)
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Persistent D1 candle-level alerts: armed by clicking a D1 chart candle,
+    # kept across sessions until they flag (symbol need not be scanned).
+    def _arm_d1_level_from_chart(
+        self, symbol: str, direction: str, level: float, candle_date: str
+    ) -> None:
+        self.arm_d1_level_watch(symbol, direction, level, candle_date=candle_date)
+
+    def arm_d1_level_watch(
+        self, symbol: str, direction: str, level: float, *, candle_date: str = ""
+    ) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        try:
+            level = float(level)
+        except (TypeError, ValueError):
+            return False
+        if not symbol or direction not in ("above", "below") or not level > 0:
+            return False
+        for watch in self._d1_level_watches:
+            if (
+                watch.symbol == symbol
+                and watch.direction == direction
+                and abs(watch.level - level) < 1e-6
+            ):
+                self.statusChanged.emit(
+                    f"{symbol}: D1 level alert break {direction} {level:.2f} already armed."
+                )
+                return False
+        self._d1_level_watches.append(
+            D1LevelWatch(
+                symbol=symbol,
+                direction=direction,
+                level=level,
+                armed_at=datetime.now(),
+                candle_date=str(candle_date or ""),
+            )
+        )
+        self._save_d1_level_watches()
+        origin = f" (from the {candle_date} candle)" if candle_date else ""
+        self.statusChanged.emit(
+            f"{symbol}: D1 level alert armed - break {direction} {level:.2f}{origin}. "
+            "It stays on across sessions until it flags, even while the symbol "
+            "is not being scanned."
+        )
+        return True
+
+    def _d1_bars_for(self, symbol: str) -> list:
+        try:
+            import chart_snapshot
+
+            return chart_snapshot.load_d1_bars(symbol) or []
+        except Exception:
+            return []
+
+    def _poll_d1_level_watches(self, now: datetime | None = None) -> None:
+        if not self._d1_level_watches:
+            return
+        moment = now or datetime.now()
+        remaining: list[D1LevelWatch] = []
+        triggered = []
+        for watch in self._d1_level_watches:
+            if watch.symbol in self._ignored_symbols:
+                # Removed-for-today symbols defer; the watch survives the day.
+                remaining.append(watch)
+                continue
+            hit = None
+            m5_bars = self._m5_bars_for(watch.symbol)
+            d1_bars = self._d1_bars_for(watch.symbol)
+            if m5_bars or d1_bars:
+                try:
+                    hit = evaluate_d1_level_watch(watch, m5_bars, d1_bars, now=moment)
+                except Exception:
+                    hit = None
+            if hit is None:
+                remaining.append(watch)
+            else:
+                triggered.append(hit)
+        self._d1_level_watches = remaining
+        if triggered:
+            self._save_d1_level_watches()
+        for hit in triggered:
+            self.add_alert(self._chart_watch_alert(hit, moment))
 
     def _refresh_review_armed_kinds(self) -> None:
         current = self._current_review_alert
@@ -982,6 +1178,7 @@ class AlertCenterPanel(QFrame):
         self._chart_watches = [
             watch for watch in self._chart_watches if watch.symbol != symbol
         ]
+        self._save_chart_watches()
         if (
             self._current_review_alert is not None
             and self._current_review_alert.symbol == symbol

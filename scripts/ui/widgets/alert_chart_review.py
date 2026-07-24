@@ -28,6 +28,7 @@ class AlertChartReview(QWidget):
     skipRequested = Signal(object)
     crossFocusToggled = Signal(object)
     watchToggled = Signal(object, str)  # (alert, chart-watch kind)
+    d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -44,6 +45,9 @@ class AlertChartReview(QWidget):
 
         self.snapshot = SymbolSnapshotWidget(self)
         self.snapshot.setVisible(False)
+        # Candle clicks on the embedded D1 chart arm persistent level alerts
+        # through the hosting panel.
+        self.snapshot.d1LevelAlertRequested.connect(self.d1LevelAlertRequested)
 
         self.remove_today_button = QPushButton("Remove for today")
         self.remove_today_button.setToolTip(

@@ -235,6 +235,13 @@ PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
 # suppresses only the visual surface; it never removes a watchlist entry or
 # changes a scanner.
 ALERT_CENTER_IGNORED_SYMBOLS_FILE = PERSISTENT_DATA_DIR / "alert_center_ignored_symbols.txt"
+# Armed visual-chart watches (New HOD/LOD, VWAP/σ-band bounces): trading-day
+# scoped so a GUI restart keeps them armed; a new session starts clean.
+ALERT_CHART_WATCHES_FILE = PERSISTENT_DATA_DIR / "alert_chart_watches.json"
+# Persistent D1 candle-level alerts: armed by clicking a D1 chart candle and
+# kept ACROSS sessions until the level flags (the symbol need not be in any
+# scan - evaluation waits for whatever price evidence appears).
+D1_LEVEL_WATCHES_FILE = PERSISTENT_DATA_DIR / "d1_level_watches.json"
 # Append-only trader annotations for the BounceBot market-environment control.
 # The bot's automatic SPY read remains separate; each manual selection records
 # that contemporaneous read so later research can learn where/why the trader

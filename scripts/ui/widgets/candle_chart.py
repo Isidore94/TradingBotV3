@@ -12,7 +12,7 @@ line (plotted as NaN with connect="finite").
 import math
 
 import pyqtgraph as pg
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPicture, QPen
 
 from ui import theme
@@ -104,7 +104,14 @@ class CandleItem(pg.GraphicsObject):
 
 
 class CandleChart(pg.PlotWidget):
-    """Candles + overlay lines; y-range follows the candles (overlays clip)."""
+    """Candles + overlay lines; y-range follows the candles (overlays clip).
+
+    A left click emits ``barClicked(index)`` for the candle nearest the click
+    (hosts use it e.g. to arm a D1 level alert off that candle's high/low);
+    panning still works because the press is not consumed.
+    """
+
+    barClicked = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent, background=theme.color("bg_panel"))
@@ -160,3 +167,24 @@ class CandleChart(pg.PlotWidget):
 
     def bar_count(self) -> int:
         return len(self._bars)
+
+    def bar_at(self, index: int) -> dict | None:
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= index < len(self._bars):
+            return dict(self._bars[index])
+        return None
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton and self._bars:
+            try:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                view_pos = self.getPlotItem().vb.mapSceneToView(scene_pos)
+                index = int(round(view_pos.x()))
+            except Exception:
+                index = -1
+            if 0 <= index < len(self._bars):
+                self.barClicked.emit(index)
+        super().mousePressEvent(event)

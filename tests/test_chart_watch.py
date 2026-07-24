@@ -10,9 +10,16 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from chart_watch import (  # noqa: E402
+    D1LevelWatch,
+    D1_LEVEL_KINDS,
     WATCH_KINDS,
     arm_chart_watch,
     evaluate_chart_watch,
+    evaluate_d1_level_watch,
+    load_chart_watches,
+    load_d1_level_watches,
+    save_chart_watches,
+    save_d1_level_watches,
     watch_is_stale,
 )
 
@@ -145,7 +152,134 @@ def test_watch_is_stale_next_session():
 
 
 def test_watch_kind_labels_cover_all_buttons():
-    assert list(WATCH_KINDS) == ["new_hod", "new_lod", "vwap_bounce"]
+    assert list(WATCH_KINDS) == ["new_hod", "new_lod", "vwap_bounce", "band_bounce"]
     assert WATCH_KINDS["new_hod"] == "New HOD"
     assert WATCH_KINDS["new_lod"] == "New LOD"
     assert WATCH_KINDS["vwap_bounce"] == "VWAP bounce"
+    assert WATCH_KINDS["band_bounce"] == "σ-band bounce"
+    assert set(D1_LEVEL_KINDS) == {"d1_level_above", "d1_level_below"}
+
+
+def test_band_bounce_touch_and_reclaim_by_side():
+    # Two volume bars build VWAP 102 with ±1σ ≈ 102 ± 1.414; the trigger bar
+    # carries zero volume so the band at its index is exactly that value.
+    base = [
+        _bar(9, 30),  # tp 100
+        _bar(9, 35, o=100.0, h=108.0, low=100.0, c=108.0),  # tp 104
+    ]
+    upper = 102.0 + (4000.0 / 2000.0) ** 0.5  # ≈ 103.414
+    lower = 102.0 - (4000.0 / 2000.0) ** 0.5  # ≈ 100.586
+    now = DAY.replace(hour=9, minute=50)
+    armed = DAY.replace(hour=9, minute=41)
+
+    long_hit = base + [
+        _bar(9, 45, o=upper + 0.6, h=upper + 0.9, low=upper - 0.2, c=upper + 0.7, v=0.0)
+    ]
+    long_watch = arm_chart_watch("band_bounce", "NVDA", "LONG", base, now=armed)
+    hit = evaluate_chart_watch(long_watch, long_hit, now=now)
+    assert hit is not None
+    assert "σ-band bounce (long)" in hit.message
+    assert hit.resolved_side == "long"
+
+    # The same tape is not a short bounce (never tagged the LOWER band).
+    short_watch = arm_chart_watch("band_bounce", "NVDA", "SHORT", base, now=armed)
+    assert evaluate_chart_watch(short_watch, long_hit, now=now) is None
+
+    short_hit = base + [
+        _bar(9, 45, o=lower - 0.3, h=lower + 0.2, low=lower - 0.6, c=lower - 0.4, v=0.0)
+    ]
+    hit = evaluate_chart_watch(short_watch, short_hit, now=now)
+    assert hit is not None
+    assert "σ-band bounce (short)" in hit.message
+    assert hit.resolved_side == "short"
+
+    # A bar that stays inside the bands fires neither side.
+    inside = base + [_bar(9, 45, o=102.0, h=102.5, low=101.5, c=102.2, v=0.0)]
+    watch_watch = arm_chart_watch("band_bounce", "NVDA", "WATCH", base, now=armed)
+    assert evaluate_chart_watch(watch_watch, inside, now=now) is None
+
+
+def test_chart_watches_persist_for_the_same_day_only(tmp_path):
+    path = tmp_path / "alert_chart_watches.json"
+    bars = [_bar(9, 30, h=110.0, low=99.0)]
+    armed = [
+        arm_chart_watch("new_hod", "NVDA", "LONG", bars, now=DAY.replace(hour=9, minute=40)),
+        arm_chart_watch("band_bounce", "TSLA", "SHORT", [], now=DAY.replace(hour=9, minute=41), source_text="ctx"),
+    ]
+    save_chart_watches(armed, path, market_date=DAY.date())
+
+    restored = load_chart_watches(path, market_date=DAY.date())
+    assert restored == armed  # frozen dataclasses compare by value
+
+    # A new session starts clean.
+    assert load_chart_watches(path, market_date=(DAY + timedelta(days=1)).date()) == []
+    # Corrupt file degrades to empty.
+    path.write_text("{not json", encoding="utf-8")
+    assert load_chart_watches(path, market_date=DAY.date()) == []
+
+
+def test_d1_level_watch_persistence_and_evaluation(tmp_path):
+    path = tmp_path / "d1_level_watches.json"
+    armed_at = DAY.replace(hour=14, minute=0)  # 2026-07-24 14:00
+    above = D1LevelWatch(
+        symbol="NVDA", direction="above", level=50.0, armed_at=armed_at, candle_date="2026-07-20"
+    )
+    below = D1LevelWatch(symbol="TSLA", direction="below", level=20.0, armed_at=armed_at)
+    save_d1_level_watches([above, below], path)
+    assert load_d1_level_watches(path) == [above, below]
+    assert above.kind == "d1_level_above" and below.kind == "d1_level_below"
+
+    def d1_bar(day_offset, high, low):
+        return {
+            "dt": DAY + timedelta(days=day_offset),
+            "open": (high + low) / 2,
+            "high": high,
+            "low": low,
+            "close": (high + low) / 2,
+            "volume": 1000.0,
+        }
+
+    # The armed day's own D1 bar never triggers (it contains pre-arm prices);
+    # a later completed session crossing the level does.
+    later = DAY + timedelta(days=3)
+    assert (
+        evaluate_d1_level_watch(above, [], [d1_bar(0, 51.0, 45.0)], now=later) is None
+    )
+    hit = evaluate_d1_level_watch(
+        above, [], [d1_bar(0, 51.0, 45.0), d1_bar(1, 50.4, 46.0)], now=later
+    )
+    assert hit is not None
+    assert hit.price == 50.4
+    assert "D1 level break above 50.00" in hit.message
+    assert hit.resolved_side == "long"
+    # Today's forming daily bar is preview only.
+    assert (
+        evaluate_d1_level_watch(above, [], [d1_bar(3, 55.0, 46.0)], now=later) is None
+    )
+
+    # Completed M5 evidence covers the armed day itself while scanned.
+    m5 = [
+        {
+            "dt": armed_at.replace(hour=14, minute=30),
+            "open": 49.5,
+            "high": 50.2,
+            "low": 49.4,
+            "close": 50.1,
+            "volume": 500.0,
+        }
+    ]
+    hit = evaluate_d1_level_watch(above, m5, [], now=armed_at.replace(hour=14, minute=40))
+    assert hit is not None and hit.price == 50.2
+    # ...but not while the bar is still forming.
+    assert (
+        evaluate_d1_level_watch(above, m5, [], now=armed_at.replace(hour=14, minute=33))
+        is None
+    )
+
+    # Short side: a later session probing under the level flags.
+    hit = evaluate_d1_level_watch(
+        below, [], [d1_bar(1, 22.0, 19.8)], now=later
+    )
+    assert hit is not None
+    assert hit.resolved_side == "short"
+    assert "D1 level break below 20.00" in hit.message

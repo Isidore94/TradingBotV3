@@ -9,11 +9,13 @@ fixed per the desk's reading style: D1 = SMA50/100/200 + EMA8/15/21, M5 =
 session VWAP with +/-1 sigma bands + EMA15/21 - just the candles otherwise.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -57,15 +59,25 @@ def _legend_html(
 
 
 class SymbolSnapshotWidget(QWidget):
-    """Reusable embedded D1-over-M5 snapshot view."""
+    """Reusable embedded D1-over-M5 snapshot view.
+
+    Clicking a D1 candle opens a small menu offering a persistent level
+    alert off that candle's high or low; the choice is emitted as
+    ``d1LevelAlertRequested(symbol, direction, level, candle_date)`` for the
+    hosting surface to arm (it stays on across sessions until it flags).
+    """
+
+    d1LevelAlertRequested = Signal(str, str, float, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._symbol = ""
         self.d1_legend = QLabel()
         self.d1_legend.setTextFormat(Qt.TextFormat.RichText)
         self.d1_legend.setWordWrap(True)
         self.d1_legend.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.d1_chart = CandleChart()
+        self.d1_chart.barClicked.connect(self._on_d1_bar_clicked)
         self.d1_note = QLabel()
         self.d1_note.setObjectName("MutedLabel")
         self.d1_note.setWordWrap(True)
@@ -97,6 +109,7 @@ class SymbolSnapshotWidget(QWidget):
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
+        self._symbol = symbol
         d1 = chart_snapshot.build_d1_snapshot(symbol)
         self.d1_legend.setText(_legend_html(f"{symbol} · D1", d1["overlays"]))
         self.d1_chart.set_data(d1["bars"], d1["overlays"], timeframe="d1")
@@ -145,6 +158,36 @@ class SymbolSnapshotWidget(QWidget):
                 + f"last bar {last.strftime('%m/%d %H:%M')}</span>"
             )
 
+    def _on_d1_bar_clicked(self, index: int) -> None:
+        bar = self.d1_chart.bar_at(index)
+        if bar is None or not self._symbol:
+            return
+        stamp = bar["dt"].strftime("%m/%d")
+        menu = QMenu(self)
+        above = menu.addAction(
+            f"D1 alert: break above {bar['high']:.2f} ({stamp} high)"
+        )
+        above.triggered.connect(
+            lambda: self.request_d1_level_alert("above", index)
+        )
+        below = menu.addAction(
+            f"D1 alert: break below {bar['low']:.2f} ({stamp} low)"
+        )
+        below.triggered.connect(
+            lambda: self.request_d1_level_alert("below", index)
+        )
+        menu.popup(QCursor.pos())
+
+    def request_d1_level_alert(self, direction: str, index: int) -> None:
+        """Emit the persistent level alert for a clicked candle's high/low."""
+        bar = self.d1_chart.bar_at(index)
+        if bar is None or not self._symbol or direction not in ("above", "below"):
+            return
+        level = float(bar["high"] if direction == "above" else bar["low"])
+        self.d1LevelAlertRequested.emit(
+            self._symbol, direction, level, bar["dt"].strftime("%Y-%m-%d")
+        )
+
 
 class SymbolSnapshotDialog(QDialog):
     """Non-modal two-chart snapshot, reused across clicks (one per panel).
@@ -172,6 +215,7 @@ class SymbolSnapshotDialog(QDialog):
         self._side = ""
 
         self.snapshot = SymbolSnapshotWidget(self)
+        self.snapshot.d1LevelAlertRequested.connect(self._on_d1_level_alert)
         # Compatibility aliases for existing callers and tests.
         for name in (
             "d1_legend",
@@ -301,6 +345,13 @@ class SymbolSnapshotDialog(QDialog):
             context=f"chart snapshot: {self.windowTitle()}",
         )
         self._refresh_watch_actions()
+
+    def _on_d1_level_alert(self, symbol: str, direction: str, level: float, candle_date: str) -> None:
+        if self.watch_host is None:
+            return
+        self.watch_host.arm_d1_level_watch(
+            symbol, direction, level, candle_date=candle_date
+        )
 
 
 def show_symbol_snapshot(

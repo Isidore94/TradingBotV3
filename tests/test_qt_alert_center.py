@@ -859,6 +859,150 @@ def test_junk_pseudo_symbols_never_occupy_the_visual_review(monkeypatch):
     assert panel._current_review_alert is real
 
 
+def test_armed_watches_survive_gui_restart_within_the_day(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    watches_path = tmp_path / "alert_chart_watches.json"
+    d1_path = tmp_path / "d1_level_watches.json"
+
+    panel = AlertCenterPanel(
+        chart_watches_path=watches_path, d1_level_watches_path=d1_path
+    )
+    assert panel.arm_chart_watch_for("NVDA", "LONG", "new_hod")
+    assert panel.arm_chart_watch_for("NVDA", "LONG", "band_bounce")
+    assert panel.arm_d1_level_watch("TSLA", "above", 250.0, candle_date="2026-07-20")
+
+    # "Restart": a fresh panel on the same files re-arms everything.
+    reborn = AlertCenterPanel(
+        chart_watches_path=watches_path, d1_level_watches_path=d1_path
+    )
+    assert reborn.armed_watch_kinds("NVDA") == {"new_hod", "band_bounce"}
+    assert [(w.symbol, w.direction, w.level) for w in reborn._d1_level_watches] == [
+        ("TSLA", "above", 250.0)
+    ]
+
+    # Disarm persists too.
+    reborn.disarm_chart_watch_for("NVDA", "new_hod")
+    third = AlertCenterPanel(
+        chart_watches_path=watches_path, d1_level_watches_path=d1_path
+    )
+    assert third.armed_watch_kinds("NVDA") == {"band_bounce"}
+
+    # A new trading day starts clean (the file itself is day-scoped).
+    from chart_watch import load_chart_watches
+    from datetime import date, timedelta
+
+    assert load_chart_watches(watches_path, market_date=date.today() + timedelta(days=1)) == []
+    # ...while the D1 level watch is deliberately NOT day-scoped.
+    from chart_watch import load_d1_level_watches
+
+    assert len(load_d1_level_watches(d1_path)) == 1
+
+
+def test_d1_candle_click_arms_persistent_level_alert_and_flags(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        import chart_snapshot
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    from datetime import datetime, timedelta
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel(
+        chart_watches_path=tmp_path / "watches.json",
+        d1_level_watches_path=tmp_path / "d1.json",
+    )
+
+    # The review pane's embedded snapshot: click a candle, choose "break above".
+    widget = panel.chart_review.snapshot
+    widget._symbol = "NVDA"
+    yesterday = datetime.now().replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) - timedelta(days=1)
+    widget.d1_chart.set_data(
+        [
+            {
+                "dt": yesterday,
+                "open": 48.0,
+                "high": 50.0,
+                "low": 47.0,
+                "close": 49.0,
+                "volume": 1000.0,
+            }
+        ],
+        [],
+        timeframe="d1",
+    )
+    widget.request_d1_level_alert("above", 0)
+    assert [(w.symbol, w.direction, w.level) for w in panel._d1_level_watches] == [
+        ("NVDA", "above", 50.0)
+    ]
+    # Re-clicking the same candle level does not double-arm.
+    widget.request_d1_level_alert("above", 0)
+    assert len(panel._d1_level_watches) == 1
+
+    # Not scanned (no bot): the durable daily store provides the evidence.
+    # Backdate the arm so a completed later session can exist.
+    import dataclasses
+
+    panel._d1_level_watches[0] = dataclasses.replace(
+        panel._d1_level_watches[0], armed_at=datetime.now() - timedelta(days=3)
+    )
+    breaking_day = datetime.now().replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) - timedelta(days=1)
+    monkeypatch.setattr(
+        chart_snapshot,
+        "load_d1_bars",
+        lambda symbol: [
+            {
+                "dt": breaking_day,
+                "open": 49.0,
+                "high": 51.2,
+                "low": 48.5,
+                "close": 50.8,
+                "volume": 1000.0,
+            }
+        ],
+    )
+    panel._poll_d1_level_watches()
+
+    assert panel._d1_level_watches == []
+    fired = panel._alerts[0]
+    assert fired.tag == "chart_watch"
+    assert fired.symbol == "NVDA"
+    assert fired.side == "LONG"
+    assert "D1 level break above 50.00" in fired.trigger
+    assert fired.payload.get("chart_watch_kind") == "d1_level_above"
+    # The retired watch is gone from the persistent store as well.
+    from chart_watch import load_d1_level_watches
+
+    assert load_d1_level_watches(tmp_path / "d1.json") == []
+
+
 def test_auto_watchlist_populate_summary_stays_out_of_alert_center():
     try:
         import os
