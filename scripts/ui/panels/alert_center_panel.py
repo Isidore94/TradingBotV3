@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import dataclasses
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,12 +23,24 @@ from PySide6.QtWidgets import (
 )
 
 from alert_review_state import load_ignored_alert_symbols, save_ignored_alert_symbols
+from chart_watch import (
+    ChartWatch,
+    WATCH_KINDS,
+    arm_chart_watch,
+    evaluate_chart_watch,
+    watch_is_stale,
+)
 from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
     get_local_setting,
     save_local_setting,
 )
-from ui.models.bounce import BounceAlert, is_entry_assist_text
+from ui.models.bounce import (
+    BounceAlert,
+    CHART_WATCH_TAG,
+    is_chart_watch_alert,
+    is_entry_assist_text,
+)
 from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.alert_feed_item import AlertFeedItem
 from ui.widgets.entry_assist_board import EntryAssistBoard
@@ -121,13 +134,19 @@ def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
 
     Bangers always pass (they are the sit-back-and-wait trades), and so does
     entry-assist output — the trader clicked a button asking for it, so it
-    must never be swallowed by the tier gate. Untiered alerts (regime notes,
-    pause-watch summaries) pass everything except the S-only mode, where only
-    bangers/S-tier remain.
+    must never be swallowed by the tier gate. Chart-watch hits pass for the
+    same reason: the trader armed that exact condition from the M5 chart.
+    Untiered alerts (regime notes, pause-watch summaries) pass everything
+    except the S-only mode, where only bangers/S-tier remain.
     """
     if mode in ("", "all"):
         return True
-    if is_banger_alert(alert) or is_proven_alert(alert) or is_entry_assist_alert(alert):
+    if (
+        is_banger_alert(alert)
+        or is_proven_alert(alert)
+        or is_entry_assist_alert(alert)
+        or is_chart_watch_alert(alert)
+    ):
         return True
     tier = extract_alert_tier(alert)
     if not tier:
@@ -136,11 +155,14 @@ def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
 
 
 def alert_is_loud(alert: BounceAlert) -> bool:
-    """Alerts worth a sound: bangers, proven configs, S/A tiers, ready D1."""
+    """Alerts worth a sound: bangers, proven configs, S/A tiers, ready D1,
+    and chart-watch hits (the trader armed the exact condition and is
+    waiting on it)."""
     return (
         is_banger_alert(alert)
         or is_proven_alert(alert)
         or is_ready_d1_alert(alert)
+        or is_chart_watch_alert(alert)
         or extract_alert_tier(alert) in {"S", "A"}
     )
 
@@ -242,6 +264,9 @@ class AlertCenterPanel(QFrame):
         self._d1_alerts: list[BounceAlert] = []
         self._review_queue: list[BounceAlert] = []
         self._current_review_alert: BounceAlert | None = None
+        # One-shot chart watches armed from the visual M5 review. Session-
+        # scoped in-memory state, like the review queue itself.
+        self._chart_watches: list[ChartWatch] = []
         self._embedded_detail_enabled = True
         focus_store = getattr(self.focus_service, "store", None)
         default_store = bool(
@@ -347,6 +372,16 @@ class AlertCenterPanel(QFrame):
         )
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
+        self.chart_review.d1FocusRequested.connect(self._pin_review_alert_to_d1_focus)
+        self.chart_review.watchRequested.connect(self._arm_chart_watch)
+
+        # Armed chart watches are re-checked against the bot's cached M5 bars
+        # every 30s (bars complete on 5-minute boundaries; this bounds the
+        # trigger latency the same way the integrity/regime timers do).
+        self._watch_timer = QTimer(self)
+        self._watch_timer.setInterval(30_000)
+        self._watch_timer.timeout.connect(self._poll_chart_watches)
+        self._watch_timer.start()
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.chart_review)
@@ -428,13 +463,16 @@ class AlertCenterPanel(QFrame):
         )
 
     def clear_feed(self) -> None:
+        armed = len(self._chart_watches)
         self._alerts.clear()
         self._d1_alerts.clear()
         self._review_queue.clear()
+        self._chart_watches.clear()
         self._current_review_alert = None
         self.chart_review.clear()
         self._rebuild_feed()
-        self.statusChanged.emit("Alert feeds cleared.")
+        suffix = f" {armed} armed chart watch(es) disarmed." if armed else ""
+        self.statusChanged.emit(f"Alert feeds cleared.{suffix}")
 
     # ------------------------------------------------------------------
     def _min_tier_mode(self) -> str:
@@ -611,6 +649,7 @@ class AlertCenterPanel(QFrame):
             bot=bot,
             focus_category=favorite_category_for_alert(alert),
             queued=len(self._review_queue),
+            armed_kinds=self._armed_watch_kinds(alert.symbol),
         )
 
     def _skip_review_alert(self, alert: BounceAlert) -> None:
@@ -645,6 +684,116 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(message)
         self._advance_review_queue()
 
+    def _pin_review_alert_to_d1_focus(self, alert: BounceAlert) -> None:
+        """The visual chart's 'Add to D1 Focus': pin this pick into the D1
+        Focus feed next to the confirmed favorite/high-conviction names."""
+        if not alert.symbol:
+            return
+        pinned = dataclasses.replace(
+            alert,
+            tag="d1_focus_pin",
+            payload={**alert.payload, "d1_focus_pin": True},
+        )
+        self._add_d1_alert(pinned)
+        self.statusChanged.emit(
+            f"{alert.symbol}: pinned to the D1 Focus feed from the visual review."
+        )
+        self._advance_review_queue()
+
+    # ------------------------------------------------------------------
+    # Chart watches: armed only from the visual M5 review chart; a hit fires
+    # a red Alert Center alert (tier-gate bypass + sound) and retires itself.
+    def _armed_watch_kinds(self, symbol: str) -> set[str]:
+        return {watch.kind for watch in self._chart_watches if watch.symbol == symbol}
+
+    def _m5_bars_for(self, symbol: str) -> list:
+        bot = None
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+            except Exception:
+                bot = None
+        if bot is None:
+            return []
+        try:
+            return bot.m5_chart_bars(symbol, max_sessions=1) or []
+        except Exception:
+            return []
+
+    def _arm_chart_watch(self, alert: BounceAlert, kind: str) -> None:
+        if not alert.symbol or kind not in WATCH_KINDS:
+            return
+        label = WATCH_KINDS[kind]
+        if kind in self._armed_watch_kinds(alert.symbol):
+            self.statusChanged.emit(f"{alert.symbol}: {label} watch already armed.")
+            return
+        watch = arm_chart_watch(
+            kind,
+            alert.symbol,
+            alert.side,
+            self._m5_bars_for(alert.symbol),
+            source_text=alert.raw_text,
+        )
+        self._chart_watches.append(watch)
+        self._refresh_review_armed_kinds()
+        level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
+        self.statusChanged.emit(
+            f"{alert.symbol}: {label} watch armed{level} - the first completed "
+            "M5 bar that meets it flags red in the Alert Center."
+        )
+
+    def _poll_chart_watches(self, now: datetime | None = None) -> None:
+        if not self._chart_watches:
+            return
+        moment = now or datetime.now()
+        before = len(self._chart_watches)
+        live = [
+            watch
+            for watch in self._chart_watches
+            if not watch_is_stale(watch, now=moment)
+        ]
+        remaining: list[ChartWatch] = []
+        triggered = []
+        for watch in live:
+            hit = None
+            bars = self._m5_bars_for(watch.symbol)
+            if bars:
+                try:
+                    hit = evaluate_chart_watch(watch, bars, now=moment)
+                except Exception:
+                    hit = None
+            if hit is None:
+                remaining.append(watch)
+            else:
+                triggered.append(hit)
+        self._chart_watches = remaining
+        for hit in triggered:
+            self.add_alert(self._chart_watch_alert(hit, moment))
+        if len(remaining) != before:
+            self._refresh_review_armed_kinds()
+
+    def _chart_watch_alert(self, hit, moment: datetime) -> BounceAlert:
+        watch = hit.watch
+        return BounceAlert(
+            time_text=moment.strftime("%H:%M:%S"),
+            symbol=watch.symbol,
+            side=watch.side,
+            trigger=hit.message,
+            timeframe="M5",
+            tag=CHART_WATCH_TAG,
+            raw_text=f"CHART WATCH {watch.symbol} ({watch.side}): {hit.message}",
+            payload={
+                "chart_watch_kind": watch.kind,
+                "armed_at": watch.armed_at.isoformat(),
+                "source_text": watch.source_text,
+            },
+        )
+
+    def _refresh_review_armed_kinds(self) -> None:
+        current = self._current_review_alert
+        if current is not None:
+            self.chart_review.set_armed_kinds(self._armed_watch_kinds(current.symbol))
+
     def _remove_review_alert_for_today(self, alert: BounceAlert) -> None:
         """Drop a name from today's visual processing without changing scans."""
         if not alert.symbol:
@@ -676,6 +825,9 @@ class AlertCenterPanel(QFrame):
         ]
         self._review_queue = [
             alert for alert in self._review_queue if alert.symbol != symbol
+        ]
+        self._chart_watches = [
+            watch for watch in self._chart_watches if watch.symbol != symbol
         ]
         if (
             self._current_review_alert is not None

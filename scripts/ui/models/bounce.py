@@ -19,6 +19,15 @@ def is_entry_assist_text(text: Any) -> bool:
     return str(text or "").strip().upper().startswith(ENTRY_ASSIST_PREFIXES)
 
 
+# A user-armed chart watch (New HOD / New LOD / VWAP bounce) firing. These are
+# armed only from the visual M5 review chart and flag red in the Alert Center.
+CHART_WATCH_TAG = "chart_watch"
+
+
+def is_chart_watch_alert(alert: Any) -> bool:
+    return str(getattr(alert, "tag", "") or "") == CHART_WATCH_TAG
+
+
 @dataclass
 class BounceAlert:
     time_text: str

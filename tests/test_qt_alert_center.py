@@ -567,3 +567,181 @@ def test_visual_remove_suppresses_for_today_and_restore(tmp_path, monkeypatch):
     panel.add_alert(disliked)
     assert any(alert.symbol == "NVDA" for alert in panel._alerts)
     assert any(alert.symbol == "NVDA" for alert in panel._review_queue)
+
+
+def test_chart_watch_hits_bypass_tier_gate_and_sound():
+    try:
+        from ui.models.bounce import BounceAlert, CHART_WATCH_TAG, is_chart_watch_alert
+        from ui.panels.alert_center_panel import alert_is_loud, alert_passes_min_tier
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    hit = BounceAlert(
+        time_text="10:35:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="New HOD 111.00 > armed day high 110.00 (bar 10:30)",
+        timeframe="M5",
+        tag=CHART_WATCH_TAG,
+        raw_text="CHART WATCH NVDA (LONG): New HOD 111.00 > armed day high 110.00 (bar 10:30)",
+        payload={"chart_watch_kind": "new_hod"},
+    )
+    assert is_chart_watch_alert(hit)
+    # The trader armed this exact condition: visible and audible in EVERY mode.
+    assert all(alert_passes_min_tier(hit, mode) for mode in ("all", "B", "A", "S"))
+    assert alert_is_loud(hit)
+    assert not is_chart_watch_alert(_alert("[B-TIER] AAA: Bounce confirmed (long)"))
+
+
+def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui import theme
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.alert_feed_item import AlertFeedItem
+        from ui.widgets.badge import Badge
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    import dataclasses
+    from datetime import datetime
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+
+    # Anchor every bar to fixed clock times on TODAY's date so completion
+    # math is deterministic regardless of when the suite runs.
+    noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    def bar(minute, high, low):
+        mid = (high + low) / 2
+        return {
+            "dt": noon.replace(hour=11, minute=minute),
+            "open": mid,
+            "high": high,
+            "low": low,
+            "close": mid,
+            "volume": 1000.0,
+        }
+
+    class _Bot:
+        def __init__(self):
+            self.bars = []
+
+        def m5_chart_bars(self, symbol, max_sessions=2):
+            return list(self.bars)
+
+    class _Service:
+        def __init__(self, bot):
+            self._bot = bot
+
+        def current_bot(self):
+            return self._bot
+
+    bot = _Bot()
+    bot.bars = [bar(20, 110.0, 99.0), bar(25, 108.0, 100.0)]
+    panel = AlertCenterPanel()
+    panel._bounce_service = _Service(bot)
+    alert = BounceAlert(
+        time_text="11:30:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] VWAP reclaim",
+        timeframe="5m",
+        raw_text="[S-TIER] NVDA: VWAP reclaim",
+    )
+    panel.add_alert(alert)
+    assert panel._current_review_alert is alert
+
+    button = panel.chart_review.watch_buttons["new_hod"]
+    assert button.isEnabled()
+    button.click()
+    assert [watch.kind for watch in panel._chart_watches] == ["new_hod"]
+    assert panel._chart_watches[0].baseline == 110.0
+    assert panel._chart_watches[0].symbol == "NVDA"
+    # The armed button locks and says so.
+    assert not button.isEnabled()
+    assert "armed" in button.text()
+
+    # A repeat request cannot double-arm.
+    panel.chart_review.watchRequested.emit(alert, "new_hod")
+    assert len(panel._chart_watches) == 1
+
+    # Backdate the arm, then complete a bar that breaks the armed day high.
+    panel._chart_watches[0] = dataclasses.replace(
+        panel._chart_watches[0], armed_at=noon.replace(hour=11, minute=40)
+    )
+    bot.bars = bot.bars + [bar(45, 111.0, 104.0)]
+    panel._poll_chart_watches(now=noon)
+
+    # One-shot: the watch retires, the red alert leads the live feed, and the
+    # button unlocks for a re-arm.
+    assert panel._chart_watches == []
+    fired = panel._alerts[0]
+    assert fired.tag == "chart_watch"
+    assert fired.symbol == "NVDA"
+    assert "New HOD 111.00" in fired.trigger
+    assert panel.chart_review.watch_buttons["new_hod"].isEnabled()
+
+    # The requested red-font flag: red trigger text plus a red kind badge.
+    item = AlertFeedItem(fired)
+    assert theme.color("short") in item.trigger_label.styleSheet()
+    assert "NEW HOD" in [badge.text() for badge in item.findChildren(Badge)]
+
+
+def test_add_to_d1_focus_pins_current_review(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel()
+    first = BounceAlert(
+        time_text="09:35:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] VWAP reclaim",
+        timeframe="5m",
+        raw_text="[S-TIER] NVDA: VWAP reclaim",
+    )
+    second = BounceAlert(
+        time_text="09:40:00",
+        symbol="TSLA",
+        side="SHORT",
+        trigger="[S-TIER] EMA rejection",
+        timeframe="5m",
+        raw_text="[S-TIER] TSLA: EMA rejection",
+    )
+    panel.add_alert(first)
+    panel.add_alert(second)
+    assert panel._current_review_alert is first
+
+    panel.chart_review.d1_focus_button.click()
+
+    assert [alert.symbol for alert in panel._d1_alerts] == ["NVDA"]
+    pinned = panel._d1_alerts[0]
+    assert pinned.tag == "d1_focus_pin"
+    assert pinned.payload.get("d1_focus_pin") is True
+    # The pin resolves this review and advances to the next queued name.
+    assert panel._current_review_alert.symbol == "TSLA"
