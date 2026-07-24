@@ -115,8 +115,8 @@ class AlertFeedItem(QWidget):
             dislike.setText("✕")
             dislike.setToolTip(
                 f"Dislike {alert.symbol}: you'll be asked why, and the reason is logged to "
-                "pick_feedback.jsonl for AI review. The symbol is then hidden from future "
-                "Alert Center reviews and removed from Focus Picks if starred."
+                "pick_feedback.jsonl for AI review. The symbol is then removed from today's "
+                "Alert Center review and removed from Focus Picks if starred."
             )
             dislike.setCursor(Qt.CursorShape.PointingHandCursor)
             dislike.setStyleSheet(

@@ -169,7 +169,7 @@ def test_developing_d1_crossings_are_research_only():
     )
 
 
-def test_actionable_feeds_exclude_developing_d1_crossings():
+def test_actionable_feeds_exclude_developing_d1_crossings(monkeypatch):
     try:
         import os
 
@@ -178,11 +178,13 @@ def test_actionable_feeds_exclude_developing_d1_crossings():
 
         QApplication.instance() or QApplication([])
         from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return
         raise
 
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
     panel = AlertCenterPanel()
     upgrade = _alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade [score=245]", "d1_flag_long")
     trigger = _alert("MASTER_AVWAP_D1_UPGRADE_TRIGGER: AAPL (long) A/S upgrade: 1st-dev break UPPER_1@314.57", "d1_flag_long")
@@ -205,7 +207,7 @@ def test_actionable_feeds_exclude_developing_d1_crossings():
     assert live_prefixes == {"MASTER_AVWAP_D1_FLAG"}
 
 
-def test_tier_flip_and_zone_alerts_route_to_d1_focus_feed():
+def test_tier_flip_and_zone_alerts_route_to_d1_focus_feed(monkeypatch):
     try:
         import os
 
@@ -214,11 +216,13 @@ def test_tier_flip_and_zone_alerts_route_to_d1_focus_feed():
 
         QApplication.instance() or QApplication([])
         from ui.panels.alert_center_panel import AlertCenterPanel, is_ready_d1_alert
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return
         raise
 
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
     tier_flip = _alert(
         "MASTER_AVWAP_D1_TIER_FLIP: HOMB (long) non-S/A -> A/S predicted "
         "(next scan confirms) 1st-dev break [@102.00; px=102.30; bar=10:35; "
@@ -465,7 +469,43 @@ def test_visual_alert_review_queues_skips_and_adds_focus(tmp_path, monkeypatch):
     assert panel.chart_review.alert is None
 
 
-def test_visual_dislike_persists_suppression_and_restore(tmp_path, monkeypatch):
+def test_list_callback_posts_every_m5_name_to_review(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel(
+        _service(tmp_path),
+        ignored_symbols_path=tmp_path / "alert_center_ignored.txt",
+    )
+    alerts = BounceAlert.from_callback_many(
+        "STRONGEST 30M (long): NVDA +1.20%, AMD +0.90%, META +0.70% [manual]",
+        "green",
+    )
+
+    for alert in alerts:
+        panel.add_alert(alert)
+
+    assert [alert.symbol for alert in panel._alerts] == ["META", "AMD", "NVDA"]
+    assert panel._current_review_alert.symbol == "NVDA"
+    assert [alert.symbol for alert in panel._review_queue] == ["AMD", "META"]
+    assert all(alert.timeframe == "M5" for alert in alerts)
+
+
+def test_visual_remove_suppresses_for_today_and_restore(tmp_path, monkeypatch):
     try:
         import os
 
@@ -485,10 +525,6 @@ def test_visual_dislike_persists_suppression_and_restore(tmp_path, monkeypatch):
     monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
     ignored_path = tmp_path / "alert_center_ignored.txt"
     service = _service(tmp_path)
-    feedback = []
-    service.record_feedback = lambda symbol, side, verdict, **kwargs: feedback.append(
-        (symbol, verdict, kwargs)
-    )
     panel = AlertCenterPanel(service, ignored_symbols_path=ignored_path)
     disliked = BounceAlert(
         time_text="09:35:00",
@@ -510,32 +546,24 @@ def test_visual_dislike_persists_suppression_and_restore(tmp_path, monkeypatch):
     panel.add_alert(disliked)
     panel.add_alert(next_alert)
 
-    panel._dislike_review_alert(disliked)
+    panel._remove_review_alert_for_today(disliked)
 
-    assert ignored_path.read_text(encoding="utf-8") == "NVDA\n"
+    import json
+
+    stored = json.loads(ignored_path.read_text(encoding="utf-8"))
+    assert stored["market_date"] == panel._ignored_market_date
+    assert stored["symbols"] == ["NVDA"]
     assert panel._ignored_symbols == {"NVDA"}
     assert all(alert.symbol != "NVDA" for alert in panel._alerts + panel._d1_alerts)
     assert panel._current_review_alert is next_alert
-    assert feedback == [
-        (
-            "NVDA",
-            "dislike",
-            {
-                "category": "swing",
-                "origin": "d1",
-                "reason": "visual D1 chart rejection",
-                "context": "[S-TIER] NVDA: visual rejection",
-            },
-        )
-    ]
 
-    # Future alerts stay off both the feed and review queue.
+    # Future alerts stay off both the feed and review queue for this date.
     panel.add_alert(disliked)
     assert all(alert.symbol != "NVDA" for alert in panel._alerts + panel._d1_alerts)
     assert all(alert.symbol != "NVDA" for alert in panel._review_queue)
 
     panel._restore_ignored_symbol("NVDA")
-    assert ignored_path.read_text(encoding="utf-8") == ""
+    assert json.loads(ignored_path.read_text(encoding="utf-8"))["symbols"] == []
     panel.add_alert(disliked)
     assert any(alert.symbol == "NVDA" for alert in panel._alerts)
     assert any(alert.symbol == "NVDA" for alert in panel._review_queue)

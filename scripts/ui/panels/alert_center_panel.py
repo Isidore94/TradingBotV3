@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -253,8 +254,12 @@ class AlertCenterPanel(QFrame):
             if persist_ignored
             else None
         )
+        self._ignored_market_date = date.today().isoformat()
         self._ignored_symbols = (
-            load_ignored_alert_symbols(self._ignored_symbols_path)
+            load_ignored_alert_symbols(
+                self._ignored_symbols_path,
+                market_date=self._ignored_market_date,
+            )
             if self._ignored_symbols_path is not None
             else set()
         )
@@ -337,7 +342,9 @@ class AlertCenterPanel(QFrame):
 
         self.detail_view = SetupDetailView(self)
         self.chart_review = AlertChartReview(self)
-        self.chart_review.dislikeRequested.connect(self._dislike_review_alert)
+        self.chart_review.removeTodayRequested.connect(
+            self._remove_review_alert_for_today
+        )
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
 
@@ -383,6 +390,7 @@ class AlertCenterPanel(QFrame):
             board_signal.connect(self.entry_board.update_board)
 
     def add_alert(self, alert: BounceAlert) -> None:
+        self._refresh_ignored_market_date()
         if _is_feed_noise_alert(alert):
             return
         if alert.symbol and alert.symbol in self._ignored_symbols:
@@ -483,7 +491,7 @@ class AlertCenterPanel(QFrame):
             reason=reason,
             context=alert.raw_text,
         )
-        message = f"✕ {alert.symbol}: disliked and hidden from future Alert Center reviews."
+        message = f"✕ {alert.symbol}: disliked and removed from today's Alert Center review."
         if self.focus_service.is_focus(alert.symbol):
             self.focus_service.remove_everywhere(alert.symbol)
             message += " Removed from focus picks."
@@ -637,13 +645,18 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(message)
         self._advance_review_queue()
 
-    def _dislike_review_alert(self, alert: BounceAlert) -> None:
-        """Fast visual verdict: persist suppression without a second dialog."""
-        if self.focus_service is None or not alert.symbol:
+    def _remove_review_alert_for_today(self, alert: BounceAlert) -> None:
+        """Drop a name from today's visual processing without changing scans."""
+        if not alert.symbol:
             return
-        self._record_dislike(alert, "visual D1 chart rejection")
+        self._ignore_alert_symbol(alert.symbol)
+        self.statusChanged.emit(
+            f"{alert.symbol}: removed from Alert Center processing for today. "
+            "BounceBot scanning and watchlists are unchanged."
+        )
 
     def _ignore_alert_symbol(self, symbol: str) -> None:
+        self._refresh_ignored_market_date()
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
@@ -653,6 +666,7 @@ class AlertCenterPanel(QFrame):
                 self._ignored_symbols = save_ignored_alert_symbols(
                     self._ignored_symbols,
                     self._ignored_symbols_path,
+                    market_date=self._ignored_market_date,
                 )
             except OSError:
                 pass
@@ -679,7 +693,7 @@ class AlertCenterPanel(QFrame):
         symbol, accepted = QInputDialog.getItem(
             self,
             "Restore Alert Center symbol",
-            "Show this symbol in future Alert Center alerts:",
+            "Return this symbol to today's Alert Center processing:",
             sorted(self._ignored_symbols),
             0,
             False,
@@ -688,6 +702,7 @@ class AlertCenterPanel(QFrame):
             self._restore_ignored_symbol(symbol)
 
     def _restore_ignored_symbol(self, symbol: str) -> None:
+        self._refresh_ignored_market_date()
         symbol = str(symbol or "").strip().upper()
         if symbol not in self._ignored_symbols:
             return
@@ -697,21 +712,37 @@ class AlertCenterPanel(QFrame):
                 self._ignored_symbols = save_ignored_alert_symbols(
                     self._ignored_symbols,
                     self._ignored_symbols_path,
+                    market_date=self._ignored_market_date,
                 )
             except OSError:
                 pass
         self._refresh_ignored_button()
         self.statusChanged.emit(
-            f"{symbol}: restored; future Alert Center alerts will be shown."
+            f"{symbol}: restored to today's Alert Center processing."
         )
 
     def _refresh_ignored_button(self) -> None:
         count = len(self._ignored_symbols)
-        self.ignored_button.setText(f"Ignored ({count})")
+        self.ignored_button.setText(f"Removed today ({count})")
         self.ignored_button.setEnabled(count > 0)
         self.ignored_button.setToolTip(
-            "Restore a symbol previously hidden by a visual-review dislike."
+            "Restore a symbol removed from today's Alert Center processing."
         )
+
+    def _refresh_ignored_market_date(self) -> None:
+        current = date.today().isoformat()
+        if current == self._ignored_market_date:
+            return
+        self._ignored_market_date = current
+        self._ignored_symbols = (
+            load_ignored_alert_symbols(
+                self._ignored_symbols_path,
+                market_date=current,
+            )
+            if self._ignored_symbols_path is not None
+            else set()
+        )
+        self._refresh_ignored_button()
 
     def set_embedded_detail_enabled(self, enabled: bool) -> None:
         """Workspace mode turns the embedded plan pane off so the setup is

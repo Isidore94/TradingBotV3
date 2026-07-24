@@ -352,7 +352,8 @@ class BounceService(QObject):
                 tag_text == "approaching" or tag_text.startswith("approaching_")
             ):
                 return
-            self.alertReceived.emit(BounceAlert.from_callback(message, tag_text))
+            for alert in BounceAlert.from_callback_many(message, tag_text):
+                self.alertReceived.emit(alert)
 
         return gui_callback
 

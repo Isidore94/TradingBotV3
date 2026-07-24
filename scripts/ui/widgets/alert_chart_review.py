@@ -10,7 +10,7 @@ from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
 
 class AlertChartReview(QWidget):
-    dislikeRequested = Signal(object)
+    removeTodayRequested = Signal(object)
     focusRequested = Signal(object)
     skipRequested = Signal(object)
 
@@ -29,13 +29,13 @@ class AlertChartReview(QWidget):
         self.snapshot = SymbolSnapshotWidget(self)
         self.snapshot.setVisible(False)
 
-        self.dislike_button = QPushButton("✕ Dislike D1 · hide symbol")
-        self.dislike_button.setToolTip(
-            "Record a visual-chart dislike, remove this symbol from Alert Center, "
-            "and suppress its future Alert Center alerts. Watchlists are untouched."
+        self.remove_today_button = QPushButton("Remove for today")
+        self.remove_today_button.setToolTip(
+            "Remove this symbol from today's Alert Center feed and review queue. "
+            "The BounceBot scanner and watchlists are untouched."
         )
-        self.dislike_button.clicked.connect(
-            lambda: self.alert is not None and self.dislikeRequested.emit(self.alert)
+        self.remove_today_button.clicked.connect(
+            lambda: self.alert is not None and self.removeTodayRequested.emit(self.alert)
         )
         self.focus_button = QPushButton("Add to Focus Picks")
         self.focus_button.clicked.connect(
@@ -47,7 +47,7 @@ class AlertChartReview(QWidget):
         )
 
         buttons = QHBoxLayout()
-        buttons.addWidget(self.dislike_button)
+        buttons.addWidget(self.remove_today_button)
         buttons.addWidget(self.focus_button)
         buttons.addWidget(self.skip_button)
         buttons.addStretch(1)
@@ -95,5 +95,5 @@ class AlertChartReview(QWidget):
         self.queue_label.setText(f"{count} waiting" if count else "queue clear")
 
     def _set_actions_enabled(self, enabled: bool) -> None:
-        for button in (self.dislike_button, self.focus_button, self.skip_button):
+        for button in (self.remove_today_button, self.focus_button, self.skip_button):
             button.setEnabled(enabled)
