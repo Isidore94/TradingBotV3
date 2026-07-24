@@ -706,7 +706,7 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     assert "NEW HOD" in [badge.text() for badge in item.findChildren(Badge)]
 
 
-def test_m5_pick_cross_toggle_pins_d1_focus_without_advancing(monkeypatch):
+def test_m5_pick_cross_toggle_adds_swing_focus_and_pins_without_advancing(tmp_path, monkeypatch):
     try:
         import os
 
@@ -717,13 +717,18 @@ def test_m5_pick_cross_toggle_pins_d1_focus_without_advancing(monkeypatch):
         from ui.models.bounce import BounceAlert
         from ui.panels.alert_center_panel import AlertCenterPanel
         from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return
         raise
 
     monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
-    panel = AlertCenterPanel()
+    service = _service(tmp_path)
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "alert_center_ignored.txt",
+    )
     first = BounceAlert(
         time_text="09:35:00",
         symbol="NVDA",
@@ -743,22 +748,25 @@ def test_m5_pick_cross_toggle_pins_d1_focus_without_advancing(monkeypatch):
     panel.add_alert(first)
     panel.add_alert(second)
     assert panel._current_review_alert is first
-    # M5 pick: the cross-promote is a D1 Focus pin.
+    # M5 pick: the cross-promote files it as a swing name.
     assert panel.chart_review.cross_focus_button.text() == "Add to D1 Focus"
 
     panel.chart_review.cross_focus_button.click()
 
-    assert [alert.symbol for alert in panel._d1_alerts] == ["NVDA"]
-    pinned = panel._d1_alerts[0]
-    assert pinned.tag == "d1_focus_pin"
-    assert pinned.payload.get("d1_focus_pin") is True
+    # The pick lands in the Focus Picks store (Swing bucket) AND the feed pin.
+    assert service.is_focus("NVDA", "long", "swing")
+    assert any(
+        alert.symbol == "NVDA" and alert.tag == "d1_focus_pin"
+        for alert in panel._d1_alerts
+    )
     # A toggle never advances the review chart.
     assert panel._current_review_alert is first
     assert panel.chart_review.cross_focus_button.text() == "✓ In D1 Focus"
     assert panel.chart_review.cross_focus_button.isChecked()
 
-    # Second click unpins.
+    # Second click removes both.
     panel.chart_review.cross_focus_button.click()
+    assert not service.is_focus("NVDA", "long", "swing")
     assert panel._d1_alerts == []
     assert panel._current_review_alert is first
     assert panel.chart_review.cross_focus_button.text() == "Add to D1 Focus"
@@ -813,6 +821,39 @@ def test_swing_pick_cross_toggle_adds_to_m5_focus(tmp_path, monkeypatch):
     assert not service.is_focus("NVDA", "long", "m5")
     assert panel._current_review_alert is swing
     assert panel.chart_review.cross_focus_button.text() == "Add to M5 Focus"
+
+
+def test_auto_watchlist_populate_summary_stays_out_of_alert_center():
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.services.bounce_service import BounceService
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    service = BounceService()
+    received = []
+    service.alertReceived.connect(received.append)
+    callback = service._make_callback()
+
+    # The auto-populate engine's housekeeping summary is silent by design:
+    # the longs/shorts.txt adds just happen, with no Alert Center entry.
+    callback(
+        "AUTO WATCHLIST (bearish_strong anchor, live neutral_chop): longs 4 auto "
+        "(+2/-1), shorts 6 auto (+3/-0) from 900 universe names.",
+        "blue",
+    )
+    assert received == []
+
+    # Ordinary alerts still flow.
+    callback("[S-TIER] NVDA: Bounce confirmed (long)", "green")
+    assert [alert.symbol for alert in received] == ["NVDA"]
 
 
 def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):

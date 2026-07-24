@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -688,8 +687,9 @@ class AlertCenterPanel(QFrame):
     def _toggle_review_cross_focus(self, alert: BounceAlert) -> None:
         """The chart's cross-promote toggle. Never advances the queue.
 
-        M5 pick: pin/unpin the alert in the D1 Focus feed. Swing pick:
-        add/remove the symbol on the M5 Focus day-trade list."""
+        M5 pick: toggle Swing Focus (the Focus Picks tab's D1/swing bucket)
+        plus a pin in the D1 Focus feed. Swing pick: toggle the M5 Focus
+        day-trade list."""
         if not alert.symbol:
             return
         if favorite_category_for_alert(alert) == "swing":
@@ -699,16 +699,13 @@ class AlertCenterPanel(QFrame):
                 origin=favorite_origin_for_alert(alert),
                 context=alert.raw_text,
             )
-        elif self.is_d1_focus_pinned(alert.symbol):
-            self._unpin_d1_focus(alert.symbol)
         else:
-            pinned = dataclasses.replace(
-                alert,
-                tag="d1_focus_pin",
-                payload={**alert.payload, "d1_focus_pin": True},
+            self.toggle_d1_focus(
+                alert.symbol,
+                alert.side,
+                origin=favorite_origin_for_alert(alert),
+                context=alert.raw_text,
             )
-            self._add_d1_alert(pinned)
-            self.statusChanged.emit(f"{alert.symbol}: pinned to the D1 Focus feed.")
         self._refresh_review_cross_state()
 
     def is_d1_focus_pinned(self, symbol: str) -> bool:
@@ -718,16 +715,40 @@ class AlertCenterPanel(QFrame):
             for alert in self._d1_alerts
         )
 
-    def toggle_d1_focus_pin(self, symbol: str, side: str = "", context: str = "") -> bool:
-        """Public pin toggle for chart popups; returns the new pinned state.
-        Never touches the review queue."""
+    def is_d1_focus_active(self, symbol: str, side: str = "") -> bool:
+        """On = the pick sits in Swing Focus (Focus Picks tab) or is pinned."""
+        symbol = str(symbol or "").strip().upper()
+        if self.is_d1_focus_pinned(symbol):
+            return True
+        if self.focus_service is None:
+            return False
+        focus_side = "short" if side == "SHORT" else "long"
+        return bool(self.focus_service.is_focus(symbol, focus_side, "swing"))
+
+    def toggle_d1_focus(
+        self, symbol: str, side: str = "", *, origin: str = "chart", context: str = ""
+    ) -> bool:
+        """'Add to D1 Focus' toggle: files the pick into SWING Focus (so it
+        lands on the Focus Picks tab and the swing watchlists) AND pins it in
+        the D1 Focus feed. Off removes both. Never touches the review queue.
+        Returns the new state."""
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return False
-        if self.is_d1_focus_pinned(symbol):
+        focus_side = "short" if side == "SHORT" else "long"
+        if self.is_d1_focus_active(symbol, side):
+            if self.focus_service is not None and self.focus_service.is_focus(
+                symbol, focus_side, "swing"
+            ):
+                self.focus_service.remove(symbol, focus_side, "swing")
             self._unpin_d1_focus(symbol)
+            self.statusChanged.emit(
+                f"{symbol}: removed from Swing Focus and unpinned from the D1 Focus feed."
+            )
             self._refresh_review_cross_state()
             return False
+        if self.focus_service is not None:
+            self.focus_service.add(symbol, focus_side, "swing", origin=origin, context=context)
         pinned = BounceAlert(
             time_text=datetime.now().strftime("%H:%M:%S"),
             symbol=symbol,
@@ -738,7 +759,10 @@ class AlertCenterPanel(QFrame):
             payload={"d1_focus_pin": True},
         )
         self._add_d1_alert(pinned)
-        self.statusChanged.emit(f"{symbol}: pinned to the D1 Focus feed.")
+        self.statusChanged.emit(
+            f"{symbol}: added to Swing Focus {focus_side}s (Focus Picks tab) "
+            "and pinned to the D1 Focus feed."
+        )
         self._refresh_review_cross_state()
         return True
 
@@ -749,7 +773,6 @@ class AlertCenterPanel(QFrame):
             if not (alert.symbol == symbol and alert.tag == "d1_focus_pin")
         ]
         self._rebuild_feed()
-        self.statusChanged.emit(f"{symbol}: unpinned from the D1 Focus feed.")
 
     def is_m5_focus(self, symbol: str, side: str = "") -> bool:
         if self.focus_service is None:
@@ -784,7 +807,7 @@ class AlertCenterPanel(QFrame):
             return False
         if favorite_category_for_alert(alert) == "swing":
             return self.is_m5_focus(alert.symbol, alert.side)
-        return self.is_d1_focus_pinned(alert.symbol)
+        return self.is_d1_focus_active(alert.symbol, alert.side)
 
     def _refresh_review_cross_state(self) -> None:
         current = self._current_review_alert

@@ -151,12 +151,13 @@ class SymbolSnapshotDialog(QDialog):
 
     When opened with a ``watch_host`` (the Alert Center panel, or anything
     exposing ``armed_watch_kinds`` / ``arm_chart_watch_for`` /
-    ``disarm_chart_watch_for`` / ``is_d1_focus_pinned`` /
-    ``toggle_d1_focus_pin`` / ``is_m5_focus`` / ``toggle_m5_focus``) the
-    popup grows the chart-only action row: "Add to D1 Focus" and "Add to
-    M5 Focus" toggles plus the one-shot watch toggles whose hits flag red
-    in the Alert Center. Everything is a toggle - a second click unpins or
-    disarms. Without a host the popup stays a pure quick look.
+    ``disarm_chart_watch_for`` / ``is_d1_focus_active`` /
+    ``toggle_d1_focus`` / ``is_m5_focus`` / ``toggle_m5_focus``) the popup
+    grows the chart-only action row: "Add to D1 Focus" (Swing Focus picks +
+    D1 Focus feed pin) and "Add to M5 Focus" (day-trade list) toggles plus
+    the one-shot watch toggles whose hits flag red in the Alert Center.
+    Everything is a toggle - a second click removes or disarms. Without a
+    host the popup stays a pure quick look.
     """
 
     def __init__(self, parent=None) -> None:
@@ -185,9 +186,9 @@ class SymbolSnapshotDialog(QDialog):
         self.d1_focus_button = QPushButton("Add to D1 Focus")
         self.d1_focus_button.setCheckable(True)
         self.d1_focus_button.setToolTip(
-            "Toggle a pin for this symbol in the Alert Center's D1 Focus "
-            "feed, next to the confirmed favorite / high-conviction names. "
-            "Click again to unpin."
+            "Toggle this pick into Swing Focus (it lands on the Focus Picks "
+            "tab and the swing watchlists) and pin it in the Alert Center's "
+            "D1 Focus feed. Click again to remove both."
         )
         self.d1_focus_button.clicked.connect(self._toggle_d1_focus)
         self.m5_focus_button = QPushButton("Add to M5 Focus")
@@ -258,7 +259,7 @@ class SymbolSnapshotDialog(QDialog):
             is_armed = kind in armed
             button.setText(f"{label} ✓ armed" if is_armed else label)
             button.setChecked(is_armed)
-        pinned = bool(host.is_d1_focus_pinned(self._symbol))
+        pinned = bool(host.is_d1_focus_active(self._symbol, self._side))
         self.d1_focus_button.setText("✓ In D1 Focus" if pinned else "Add to D1 Focus")
         self.d1_focus_button.setChecked(pinned)
         in_m5 = bool(host.is_m5_focus(self._symbol, self._side))
@@ -282,8 +283,11 @@ class SymbolSnapshotDialog(QDialog):
     def _toggle_d1_focus(self) -> None:
         if self.watch_host is None or not self._symbol:
             return
-        self.watch_host.toggle_d1_focus_pin(
-            self._symbol, self._side, context="pinned from chart snapshot"
+        self.watch_host.toggle_d1_focus(
+            self._symbol,
+            self._side,
+            origin="chart",
+            context=f"chart snapshot: {self.windowTitle()}",
         )
         self._refresh_watch_actions()
 

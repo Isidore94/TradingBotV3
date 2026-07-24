@@ -346,7 +346,13 @@ class BounceService(QObject):
             if tag_text == "rrs_snapshot":
                 self.rrsSnapshotChanged.emit(message)
                 return
-            if tag_text == "blue" and "removed from" in str(message):
+            message_text = str(message)
+            if tag_text == "blue" and "removed from" in message_text:
+                return
+            # Auto-populate watchlist housekeeping is silent by design
+            # (user rule 2026-07-24): the adds/rotations into longs/shorts.txt
+            # just happen - no Alert Center entry.
+            if message_text.startswith("AUTO WATCHLIST"):
                 return
             if not self.include_approaching and (
                 tag_text == "approaching" or tag_text.startswith("approaching_")

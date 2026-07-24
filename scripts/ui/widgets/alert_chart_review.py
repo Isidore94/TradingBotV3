@@ -131,12 +131,12 @@ class AlertChartReview(QWidget):
             )
         else:
             self.focus_button.setText("Add to M5 Focus")
-            # M5 pick: the cross-promote is a pin into the D1 Focus feed.
+            # M5 pick: the cross-promote files it as a swing name.
             self._cross_labels = ("Add to D1 Focus", "✓ In D1 Focus")
             self.cross_focus_button.setToolTip(
-                "Toggle a pin for this pick in the D1 Focus feed below, next "
-                "to the confirmed favorite / high-conviction names. Click "
-                "again to unpin."
+                "Toggle this pick into Swing Focus (it lands on the Focus "
+                "Picks tab and the swing watchlists) and pin it in the D1 "
+                "Focus feed below. Click again to remove both."
             )
         self.snapshot.set_symbol(alert.symbol, bot=bot)
         self.snapshot.setVisible(True)
