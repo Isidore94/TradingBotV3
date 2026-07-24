@@ -51,6 +51,12 @@ class TradingDeskPanel(QWidget):
         # Master AVWAP setups chart popups carry the Alert Center's chart-only
         # actions (D1 Focus pin + New HOD/LOD/VWAP-bounce watch arming).
         self.master_panel.set_chart_watch_host(self.alert_center)
+        # Every chart in the desk arms, not just the setups table's. The
+        # Industry Board and RS Window charts sit directly on the trader's
+        # sector/industry RS-RW path and used to open read-only.
+        self.industry_panel.set_chart_watch_host(self.alert_center)
+        self.rs_window_panel.set_chart_watch_host(self.alert_center)
+        self.watchlists_panel.set_chart_watch_host(self.alert_center)
         # In workspace mode the Alert Center's embedded plan pane is off; a
         # clicked alert opens in the setups workspace's detail pane instead,
         # so the setup is described in exactly one place.
@@ -84,7 +90,16 @@ class TradingDeskPanel(QWidget):
         layout.addWidget(self.center_container)
 
     def set_mode(self, workspace_mode: str) -> None:
-        self.workspace_mode = workspace_mode if workspace_mode in {"workspace", "tabs"} else "workspace"
+        workspace_mode = workspace_mode if workspace_mode in {"workspace", "tabs"} else "workspace"
+        # Any settings save calls this (app.py _apply_state_changes), so
+        # changing the theme used to tear down and rebuild the splitter -
+        # discarding whatever the trader had dragged. Rebuild only on a real
+        # mode change. The _mode_widget check matters: __init__ assigns
+        # self.workspace_mode BEFORE the first set_mode call, so guarding on
+        # the mode alone would return early and leave the desk empty.
+        if self._mode_widget is not None and workspace_mode == self.workspace_mode:
+            return
+        self.workspace_mode = workspace_mode
         self._detach_mode_panels()
         _clear_layout(self.center_layout)
         if self.workspace_mode == "tabs":

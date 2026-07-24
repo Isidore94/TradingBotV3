@@ -102,6 +102,7 @@ class RsWindowPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self.bounce_service = bounce_service
+        self._chart_watch_host = None
         self._decorated_rows: list[dict[str, Any]] = []
         self._industry_rows: list[dict[str, Any]] = []
         # Auto mode (hands-off default): the panel refreshes the chart and
@@ -268,6 +269,12 @@ class RsWindowPanel(QFrame):
             return None
         return self.bounce_service.current_bot()
 
+    def set_chart_watch_host(self, host) -> None:
+        """Optional: the Alert Center panel that owns chart watches, so charts
+        opened from this panel carry the arming actions instead of being a
+        read-only quick look."""
+        self._chart_watch_host = host
+
     def _open_symbol_snapshot(self, index) -> None:
         """Open the cache-only D1+M5 quick look for a ranked symbol."""
         proxy = self.table.model()
@@ -283,6 +290,7 @@ class RsWindowPanel(QFrame):
             symbol,
             bot=self._current_bot(),
             side=str(row.get("side") or "").strip().upper(),
+            watch_host=self._chart_watch_host,
         )
 
     def _on_table_clicked(self, index) -> None:

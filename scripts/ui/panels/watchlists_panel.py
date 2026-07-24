@@ -56,6 +56,7 @@ class WatchlistsPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self._bounce_service = None
+        self._chart_watch_host = None
         self.shared = WatchlistEditorArea(
             "Shared BounceBot + Master AVWAP",
             "Shared Longs",
@@ -99,6 +100,12 @@ class WatchlistsPanel(QFrame):
         """Optional: cached M5 bars for the popup's lower chart."""
         self._bounce_service = service
 
+    def set_chart_watch_host(self, host) -> None:
+        """Optional: the Alert Center panel that owns chart watches, so charts
+        opened from this panel carry the arming actions instead of being a
+        read-only quick look."""
+        self._chart_watch_host = host
+
     def _open_symbol_snapshot(self, symbol: str) -> None:
         bot = None
         if self._bounce_service is not None:
@@ -108,7 +115,7 @@ class WatchlistsPanel(QFrame):
                 bot = None
         from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
 
-        show_symbol_snapshot(self, symbol, bot=bot)
+        show_symbol_snapshot(self, symbol, bot=bot, watch_host=self._chart_watch_host)
 
 
 class AutoWatchlistViewerArea(QWidget):

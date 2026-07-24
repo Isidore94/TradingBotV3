@@ -70,6 +70,7 @@ class IndustryPanel(QFrame):
         self.setObjectName("Panel")
         self.service = service or IndustryBoardService(self)
         self._bounce_service = None
+        self._chart_watch_host = None
 
         self.refresh_button = QPushButton("Refresh Board (yfinance)")
         self.refresh_button.setObjectName("PrimaryButton")
@@ -176,6 +177,12 @@ class IndustryPanel(QFrame):
     def set_bounce_service(self, service) -> None:
         self._bounce_service = service
 
+    def set_chart_watch_host(self, host) -> None:
+        """Optional: the Alert Center panel that owns chart watches, so charts
+        opened from this panel carry the arming actions instead of being a
+        read-only quick look."""
+        self._chart_watch_host = host
+
     def _on_sector_table_clicked(self, row: int, column: int) -> None:
         etf_column = next(
             index for index, (key, _label) in enumerate(SECTOR_COLUMNS) if key == "etf"
@@ -203,7 +210,9 @@ class IndustryPanel(QFrame):
                 bot = None
         from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
 
-        show_symbol_snapshot(self, symbol, bot=bot, side=side)
+        show_symbol_snapshot(
+            self, symbol, bot=bot, side=side, watch_host=self._chart_watch_host
+        )
 
     def _on_refresh_started(self) -> None:
         self.refresh_button.setEnabled(False)

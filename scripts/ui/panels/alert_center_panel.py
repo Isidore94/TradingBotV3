@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -440,6 +441,18 @@ class AlertCenterPanel(QFrame):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 1)
         splitter.setStretchFactor(3, 1)
+        # The 5:2 above is not enough on its own. QSplitter honours a child's
+        # size POLICY ahead of its stretch factor, and the tab stack is
+        # Expanding while the chart pane is only Preferred - which measured as
+        # an inverted [232, 455] at 1640x980, i.e. the charts got 1/3 of the
+        # column the code intends them to own 5/7 of. Making the chart pane
+        # Expanding lets the stretch factor actually apply, and an explicit
+        # setSizes (there was none) pins the opening split.
+        self.chart_review.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        splitter.setSizes([620, 250, 120, 0])
+        self.splitter = splitter
 
         header = SectionHeader(
             "Alert Center",
@@ -1100,6 +1113,44 @@ class AlertCenterPanel(QFrame):
             "is not being scanned."
         )
         return True
+
+    def disarm_d1_level_watch(self, symbol: str, direction: str, level: float) -> bool:
+        """Cancel a persistent D1 level alert. Returns True if one was removed.
+
+        D1 level watches survive across sessions and are only otherwise removed
+        by firing, so without this the only way to cancel one was to hand-edit
+        d1_level_watches.json.
+        """
+        symbol = str(symbol or "").strip().upper()
+        try:
+            level = float(level)
+        except (TypeError, ValueError):
+            return False
+        remaining = [
+            watch
+            for watch in self._d1_level_watches
+            if not (
+                watch.symbol == symbol
+                and watch.direction == direction
+                and abs(watch.level - level) < 1e-6
+            )
+        ]
+        if len(remaining) == len(self._d1_level_watches):
+            return False
+        self._d1_level_watches = remaining
+        self._save_d1_level_watches()
+        self.statusChanged.emit(
+            f"{symbol}: D1 level alert break {direction} {level:.2f} disarmed."
+        )
+        return True
+
+    def armed_watches(self) -> list[ChartWatch]:
+        """Every armed session watch, for the armed-watch inventory UI."""
+        return list(self._chart_watches)
+
+    def armed_d1_levels(self) -> list[D1LevelWatch]:
+        """Every armed persistent level alert, for the inventory UI."""
+        return list(self._d1_level_watches)
 
     def _d1_bars_for(self, symbol: str) -> list:
         try:

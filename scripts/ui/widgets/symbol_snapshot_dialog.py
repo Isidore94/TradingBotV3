@@ -69,15 +69,36 @@ class SymbolSnapshotWidget(QWidget):
 
     d1LevelAlertRequested = Signal(str, str, float, str)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, compact: bool = False) -> None:
+        """``compact`` trades legend wrapping for chart height.
+
+        The standalone popup is 1180px wide with height to spare, so its
+        legends keep wrapping (a narrow popup showing one long unwrapped line
+        was a real complaint). The desk's embedded pane is the opposite: it is
+        height-starved, and wrapped legends measured 59px EACH at 2560x1440 -
+        43% of the whole snapshot - so there it stays on one line.
+        """
         super().__init__(parent)
         self._symbol = ""
+        self._compact = bool(compact)
+        # Latest snapshot dicts, retained so callers can quick-fill a price from
+        # a drawn overlay (VWAP, +/-1 sigma). set_data plots overlays and drops
+        # them, so without this the values are unrecoverable after rendering.
+        self._d1: dict = {}
+        self._m5: dict = {}
+        # The whole snapshot must be Expanding: it is the thing that should eat
+        # the column's spare height. It previously declared Preferred with
+        # verticalStretch 0, so the chart pane's stretch factor never reached
+        # the charts themselves.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        legend_v = QSizePolicy.Policy.Fixed if self._compact else QSizePolicy.Policy.Preferred
         self.d1_legend = QLabel()
         self.d1_legend.setTextFormat(Qt.TextFormat.RichText)
-        self.d1_legend.setWordWrap(True)
-        self.d1_legend.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.d1_legend.setWordWrap(not self._compact)
+        self.d1_legend.setSizePolicy(QSizePolicy.Policy.Expanding, legend_v)
         self.d1_chart = CandleChart()
         self.d1_chart.barClicked.connect(self._on_d1_bar_clicked)
+        self.d1_chart.setMinimumHeight(120)
         self.d1_note = QLabel()
         self.d1_note.setObjectName("MutedLabel")
         self.d1_note.setWordWrap(True)
@@ -85,9 +106,14 @@ class SymbolSnapshotWidget(QWidget):
 
         self.m5_legend = QLabel()
         self.m5_legend.setTextFormat(Qt.TextFormat.RichText)
-        self.m5_legend.setWordWrap(True)
-        self.m5_legend.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.m5_legend.setWordWrap(not self._compact)
+        self.m5_legend.setSizePolicy(QSizePolicy.Policy.Expanding, legend_v)
         self.m5_chart = CandleChart()
+        # M5 candle clicks used to be inert: only the D1 chart was wired, so an
+        # opening-range high, a premarket high, or any intraday level could not
+        # be armed by clicking the bar that shows it.
+        self.m5_chart.barClicked.connect(self._on_m5_bar_clicked)
+        self.m5_chart.setMinimumHeight(120)
         self.m5_note = QLabel()
         self.m5_note.setObjectName("MutedLabel")
         self.m5_note.setWordWrap(True)
@@ -111,6 +137,7 @@ class SymbolSnapshotWidget(QWidget):
             return
         self._symbol = symbol
         d1 = chart_snapshot.build_d1_snapshot(symbol)
+        self._d1 = d1
         self.d1_legend.setText(_legend_html(f"{symbol} · D1", d1["overlays"]))
         self.d1_chart.set_data(d1["bars"], d1["overlays"], timeframe="d1")
         self.d1_chart.setVisible(bool(d1["bars"]))
@@ -135,6 +162,7 @@ class SymbolSnapshotWidget(QWidget):
             except Exception:
                 m5_bars = []
         m5 = chart_snapshot.build_m5_snapshot(symbol, m5_bars)
+        self._m5 = m5
         self.m5_legend.setText(
             _legend_html(
                 f"{symbol} · M5",
@@ -159,28 +187,43 @@ class SymbolSnapshotWidget(QWidget):
             )
 
     def _on_d1_bar_clicked(self, index: int) -> None:
-        bar = self.d1_chart.bar_at(index)
+        self._popup_level_menu(self.d1_chart, index, "%m/%d")
+
+    def _on_m5_bar_clicked(self, index: int) -> None:
+        self._popup_level_menu(self.m5_chart, index, "%m/%d %H:%M")
+
+    def _popup_level_menu(self, chart, index: int, stamp_format: str) -> None:
+        """Offer a persistent break-above/below alert off a clicked candle.
+
+        Both timeframes route into the same persistent D1 level watch: the
+        watch is a price level, not a bar, so an M5 candle's high is as valid
+        an anchor as a daily candle's.
+        """
+        bar = chart.bar_at(index)
         if bar is None or not self._symbol:
             return
-        stamp = bar["dt"].strftime("%m/%d")
+        stamp = bar["dt"].strftime(stamp_format)
         menu = QMenu(self)
-        above = menu.addAction(
-            f"D1 alert: break above {bar['high']:.2f} ({stamp} high)"
-        )
+        above = menu.addAction(f"Alert: break above {bar['high']:.2f} ({stamp} high)")
         above.triggered.connect(
-            lambda: self.request_d1_level_alert("above", index)
+            lambda: self._emit_level_alert(chart, "above", index)
         )
-        below = menu.addAction(
-            f"D1 alert: break below {bar['low']:.2f} ({stamp} low)"
-        )
+        below = menu.addAction(f"Alert: break below {bar['low']:.2f} ({stamp} low)")
         below.triggered.connect(
-            lambda: self.request_d1_level_alert("below", index)
+            lambda: self._emit_level_alert(chart, "below", index)
         )
         menu.popup(QCursor.pos())
 
     def request_d1_level_alert(self, direction: str, index: int) -> None:
-        """Emit the persistent level alert for a clicked candle's high/low."""
-        bar = self.d1_chart.bar_at(index)
+        """Emit the persistent level alert for a clicked D1 candle's high/low."""
+        self._emit_level_alert(self.d1_chart, direction, index)
+
+    def request_m5_level_alert(self, direction: str, index: int) -> None:
+        """Emit the persistent level alert for a clicked M5 candle's high/low."""
+        self._emit_level_alert(self.m5_chart, direction, index)
+
+    def _emit_level_alert(self, chart, direction: str, index: int) -> None:
+        bar = chart.bar_at(index)
         if bar is None or not self._symbol or direction not in ("above", "below"):
             return
         level = float(bar["high"] if direction == "above" else bar["low"])

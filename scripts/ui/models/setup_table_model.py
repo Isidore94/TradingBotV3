@@ -134,12 +134,20 @@ class SetupTableModel(QAbstractTableModel):
         return self._display_value(row, key)
 
 
+_UNSET = object()
+
+
 class SetupFilterProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.min_score: float = 0.0
         self.side: str = "ALL"
         self.bucket: str = "ALL"
+        # Raw bucket keys (not display labels). Empty = no bucket-key filter, so
+        # the legacy label-matching `bucket` filter still drives the combo box.
+        # A set is required because the desk's headline view is "Favorites AND
+        # High Conviction", which the single-valued label filter cannot express.
+        self.buckets: set[str] = set()
         self.max_dte: int | None = None
         self.search_text: str = ""
         self.setSortRole(SORT_ROLE)
@@ -151,9 +159,18 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         min_score: float | None = None,
         side: str | None = None,
         bucket: str | None = None,
-        max_dte: int | None = None,
+        buckets=_UNSET,
+        max_dte=_UNSET,
         search_text: str | None = None,
     ) -> None:
+        """Update only the filters named by the caller.
+
+        `max_dte` and `buckets` take the `_UNSET` sentinel rather than None
+        because None is a meaningful value for them ("no DTE limit" / "no
+        bucket-key filter"). Before the sentinel, `max_dte` was assigned
+        unconditionally, so any partial call - e.g. a bucket toggle - silently
+        cleared a DTE limit the trader had set.
+        """
         self.beginFilterChange()
         if min_score is not None:
             self.min_score = float(min_score)
@@ -161,7 +178,12 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             self.side = side
         if bucket is not None:
             self.bucket = bucket
-        self.max_dte = max_dte
+        if buckets is not _UNSET:
+            self.buckets = {
+                str(key).strip().lower() for key in (buckets or ()) if str(key).strip()
+            }
+        if max_dte is not _UNSET:
+            self.max_dte = max_dte
         if search_text is not None:
             self.search_text = search_text.strip().lower()
         self.endFilterChange()
@@ -180,6 +202,8 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         if self.side != "ALL" and row.side != self.side:
             return False
         if self.bucket != "ALL" and row.bucket_label != self.bucket:
+            return False
+        if self.buckets and row.bucket.strip().lower() not in self.buckets:
             return False
         if self.max_dte is not None and row.days_to_earnings is not None and row.days_to_earnings > self.max_dte:
             return False

@@ -43,7 +43,9 @@ class AlertChartReview(QWidget):
         self.queue_label = QLabel("")
         self.queue_label.setObjectName("MutedLabel")
 
-        self.snapshot = SymbolSnapshotWidget(self)
+        # compact: this pane is height-starved in the desk column, so legends
+        # stay on one line and the candles get the pixels instead.
+        self.snapshot = SymbolSnapshotWidget(self, compact=True)
         self.snapshot.setVisible(False)
         # Candle clicks on the embedded D1 chart arm persistent level alerts
         # through the hosting panel.
