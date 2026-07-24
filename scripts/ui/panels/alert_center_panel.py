@@ -372,8 +372,8 @@ class AlertCenterPanel(QFrame):
         )
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
-        self.chart_review.d1FocusRequested.connect(self._pin_review_alert_to_d1_focus)
-        self.chart_review.watchRequested.connect(self._arm_chart_watch)
+        self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
+        self.chart_review.watchToggled.connect(self._toggle_chart_watch)
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -649,7 +649,8 @@ class AlertCenterPanel(QFrame):
             bot=bot,
             focus_category=favorite_category_for_alert(alert),
             queued=len(self._review_queue),
-            armed_kinds=self._armed_watch_kinds(alert.symbol),
+            armed_kinds=self.armed_watch_kinds(alert.symbol),
+            cross_active=self._review_cross_active(alert),
         )
 
     def _skip_review_alert(self, alert: BounceAlert) -> None:
@@ -684,26 +685,118 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(message)
         self._advance_review_queue()
 
-    def _pin_review_alert_to_d1_focus(self, alert: BounceAlert) -> None:
-        """The visual chart's 'Add to D1 Focus': pin this pick into the D1
-        Focus feed next to the confirmed favorite/high-conviction names."""
+    def _toggle_review_cross_focus(self, alert: BounceAlert) -> None:
+        """The chart's cross-promote toggle. Never advances the queue.
+
+        M5 pick: pin/unpin the alert in the D1 Focus feed. Swing pick:
+        add/remove the symbol on the M5 Focus day-trade list."""
         if not alert.symbol:
             return
-        pinned = dataclasses.replace(
-            alert,
+        if favorite_category_for_alert(alert) == "swing":
+            self.toggle_m5_focus(
+                alert.symbol,
+                alert.side,
+                origin=favorite_origin_for_alert(alert),
+                context=alert.raw_text,
+            )
+        elif self.is_d1_focus_pinned(alert.symbol):
+            self._unpin_d1_focus(alert.symbol)
+        else:
+            pinned = dataclasses.replace(
+                alert,
+                tag="d1_focus_pin",
+                payload={**alert.payload, "d1_focus_pin": True},
+            )
+            self._add_d1_alert(pinned)
+            self.statusChanged.emit(f"{alert.symbol}: pinned to the D1 Focus feed.")
+        self._refresh_review_cross_state()
+
+    def is_d1_focus_pinned(self, symbol: str) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        return any(
+            alert.symbol == symbol and alert.tag == "d1_focus_pin"
+            for alert in self._d1_alerts
+        )
+
+    def toggle_d1_focus_pin(self, symbol: str, side: str = "", context: str = "") -> bool:
+        """Public pin toggle for chart popups; returns the new pinned state.
+        Never touches the review queue."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return False
+        if self.is_d1_focus_pinned(symbol):
+            self._unpin_d1_focus(symbol)
+            self._refresh_review_cross_state()
+            return False
+        pinned = BounceAlert(
+            time_text=datetime.now().strftime("%H:%M:%S"),
+            symbol=symbol,
+            side=side if side in ("LONG", "SHORT") else "WATCH",
+            trigger=context or "Pinned to D1 Focus from a chart",
             tag="d1_focus_pin",
-            payload={**alert.payload, "d1_focus_pin": True},
+            raw_text=f"D1 FOCUS PIN {symbol}" + (f": {context}" if context else ""),
+            payload={"d1_focus_pin": True},
         )
         self._add_d1_alert(pinned)
-        self.statusChanged.emit(
-            f"{alert.symbol}: pinned to the D1 Focus feed from the visual review."
+        self.statusChanged.emit(f"{symbol}: pinned to the D1 Focus feed.")
+        self._refresh_review_cross_state()
+        return True
+
+    def _unpin_d1_focus(self, symbol: str) -> None:
+        self._d1_alerts = [
+            alert
+            for alert in self._d1_alerts
+            if not (alert.symbol == symbol and alert.tag == "d1_focus_pin")
+        ]
+        self._rebuild_feed()
+        self.statusChanged.emit(f"{symbol}: unpinned from the D1 Focus feed.")
+
+    def is_m5_focus(self, symbol: str, side: str = "") -> bool:
+        if self.focus_service is None:
+            return False
+        focus_side = "short" if side == "SHORT" else "long"
+        return bool(
+            self.focus_service.is_focus(str(symbol or "").strip().upper(), focus_side, "m5")
         )
-        self._advance_review_queue()
+
+    def toggle_m5_focus(
+        self, symbol: str, side: str = "", *, origin: str = "chart", context: str = ""
+    ) -> bool:
+        """Toggle a name on the M5 Focus day-trade list; returns new state."""
+        symbol = str(symbol or "").strip().upper()
+        if self.focus_service is None or not symbol:
+            return False
+        focus_side = "short" if side == "SHORT" else "long"
+        if self.focus_service.is_focus(symbol, focus_side, "m5"):
+            self.focus_service.remove(symbol, focus_side, "m5")
+            self.statusChanged.emit(f"{symbol}: removed from M5 Focus {focus_side}s.")
+            self._refresh_review_cross_state()
+            return False
+        self.focus_service.add(symbol, focus_side, "m5", origin=origin, context=context)
+        self.statusChanged.emit(
+            f"{symbol}: added to M5 Focus {focus_side}s - BounceBot M5-scans it now."
+        )
+        self._refresh_review_cross_state()
+        return True
+
+    def _review_cross_active(self, alert: BounceAlert) -> bool:
+        if not alert.symbol:
+            return False
+        if favorite_category_for_alert(alert) == "swing":
+            return self.is_m5_focus(alert.symbol, alert.side)
+        return self.is_d1_focus_pinned(alert.symbol)
+
+    def _refresh_review_cross_state(self) -> None:
+        current = self._current_review_alert
+        if current is not None:
+            self.chart_review.set_cross_active(self._review_cross_active(current))
 
     # ------------------------------------------------------------------
-    # Chart watches: armed only from the visual M5 review chart; a hit fires
-    # a red Alert Center alert (tier-gate bypass + sound) and retires itself.
-    def _armed_watch_kinds(self, symbol: str) -> set[str]:
+    # Chart watches: armed only from visual charts (the review pane here, or
+    # a snapshot popup passing this panel as its watch_host); a hit fires a
+    # red Alert Center alert (tier-gate bypass + sound) and retires itself.
+    def armed_watch_kinds(self, symbol: str) -> set[str]:
+        symbol = str(symbol or "").strip().upper()
         return {watch.kind for watch in self._chart_watches if watch.symbol == symbol}
 
     def _m5_bars_for(self, symbol: str) -> list:
@@ -720,27 +813,58 @@ class AlertCenterPanel(QFrame):
         except Exception:
             return []
 
-    def _arm_chart_watch(self, alert: BounceAlert, kind: str) -> None:
-        if not alert.symbol or kind not in WATCH_KINDS:
-            return
+    def arm_chart_watch_for(
+        self, symbol: str, side: str, kind: str, *, source_text: str = ""
+    ) -> bool:
+        """Public arming surface for any visual chart. Returns True on arm."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol or kind not in WATCH_KINDS:
+            return False
         label = WATCH_KINDS[kind]
-        if kind in self._armed_watch_kinds(alert.symbol):
-            self.statusChanged.emit(f"{alert.symbol}: {label} watch already armed.")
-            return
+        if kind in self.armed_watch_kinds(symbol):
+            self.statusChanged.emit(f"{symbol}: {label} watch already armed.")
+            return False
         watch = arm_chart_watch(
             kind,
-            alert.symbol,
-            alert.side,
-            self._m5_bars_for(alert.symbol),
-            source_text=alert.raw_text,
+            symbol,
+            side,
+            self._m5_bars_for(symbol),
+            source_text=source_text,
         )
         self._chart_watches.append(watch)
         self._refresh_review_armed_kinds()
         level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
         self.statusChanged.emit(
-            f"{alert.symbol}: {label} watch armed{level} - the first completed "
+            f"{symbol}: {label} watch armed{level} - the first completed "
             "M5 bar that meets it flags red in the Alert Center."
         )
+        return True
+
+    def disarm_chart_watch_for(self, symbol: str, kind: str) -> bool:
+        """Public disarm surface (the toggles' off-click). True if removed."""
+        symbol = str(symbol or "").strip().upper()
+        if kind not in self.armed_watch_kinds(symbol):
+            return False
+        self._chart_watches = [
+            watch
+            for watch in self._chart_watches
+            if not (watch.symbol == symbol and watch.kind == kind)
+        ]
+        self._refresh_review_armed_kinds()
+        self.statusChanged.emit(
+            f"{symbol}: {WATCH_KINDS.get(kind, kind)} watch disarmed."
+        )
+        return True
+
+    def _toggle_chart_watch(self, alert: BounceAlert, kind: str) -> None:
+        if not alert.symbol:
+            return
+        if kind in self.armed_watch_kinds(alert.symbol):
+            self.disarm_chart_watch_for(alert.symbol, kind)
+        else:
+            self.arm_chart_watch_for(
+                alert.symbol, alert.side, kind, source_text=alert.raw_text
+            )
 
     def _poll_chart_watches(self, now: datetime | None = None) -> None:
         if not self._chart_watches:
@@ -792,7 +916,7 @@ class AlertCenterPanel(QFrame):
     def _refresh_review_armed_kinds(self) -> None:
         current = self._current_review_alert
         if current is not None:
-            self.chart_review.set_armed_kinds(self._armed_watch_kinds(current.symbol))
+            self.chart_review.set_armed_kinds(self.armed_watch_kinds(current.symbol))
 
     def _remove_review_alert_for_today(self, alert: BounceAlert) -> None:
         """Drop a name from today's visual processing without changing scans."""
@@ -922,7 +1046,9 @@ class AlertCenterPanel(QFrame):
                 bot = self._bounce_service.current_bot()
             except Exception:
                 bot = None
-        show_symbol_snapshot(self, symbol, bot=bot, side=side)
+        # The popup is a visual chart, so it carries the chart-only actions
+        # (D1 Focus pin + armed watches) with this panel as their host.
+        show_symbol_snapshot(self, symbol, bot=bot, side=side, watch_host=self)
 
     def _show_alert_detail(self, alert: BounceAlert) -> None:
         if not alert.symbol:

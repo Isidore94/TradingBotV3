@@ -48,6 +48,9 @@ class TradingDeskPanel(QWidget):
         self.watchlists_panel.set_bounce_service(self.bounce_panel.service)
         self.master_panel.set_bounce_service(self.bounce_panel.service)
         self.industry_panel.set_bounce_service(self.bounce_panel.service)
+        # Master AVWAP setups chart popups carry the Alert Center's chart-only
+        # actions (D1 Focus pin + New HOD/LOD/VWAP-bounce watch arming).
+        self.master_panel.set_chart_watch_host(self.alert_center)
         # In workspace mode the Alert Center's embedded plan pane is off; a
         # clicked alert opens in the setups workspace's detail pane instead,
         # so the setup is described in exactly one place.

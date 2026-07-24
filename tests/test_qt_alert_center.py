@@ -669,13 +669,19 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     assert [watch.kind for watch in panel._chart_watches] == ["new_hod"]
     assert panel._chart_watches[0].baseline == 110.0
     assert panel._chart_watches[0].symbol == "NVDA"
-    # The armed button locks and says so.
-    assert not button.isEnabled()
+    # The armed button stays clickable, showing its armed state.
+    assert button.isEnabled() and button.isChecked()
     assert "armed" in button.text()
 
-    # A repeat request cannot double-arm.
-    panel.chart_review.watchRequested.emit(alert, "new_hod")
-    assert len(panel._chart_watches) == 1
+    # It is a TOGGLE: a second click disarms (the stuck-armed bug).
+    button.click()
+    assert panel._chart_watches == []
+    assert not button.isChecked()
+    assert button.text() == "New HOD"
+
+    # Re-arm for the trigger flow below.
+    button.click()
+    assert [watch.kind for watch in panel._chart_watches] == ["new_hod"]
 
     # Backdate the arm, then complete a bar that breaks the armed day high.
     panel._chart_watches[0] = dataclasses.replace(
@@ -692,6 +698,7 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     assert fired.symbol == "NVDA"
     assert "New HOD 111.00" in fired.trigger
     assert panel.chart_review.watch_buttons["new_hod"].isEnabled()
+    assert not panel.chart_review.watch_buttons["new_hod"].isChecked()
 
     # The requested red-font flag: red trigger text plus a red kind badge.
     item = AlertFeedItem(fired)
@@ -699,7 +706,7 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     assert "NEW HOD" in [badge.text() for badge in item.findChildren(Badge)]
 
 
-def test_add_to_d1_focus_pins_current_review(monkeypatch):
+def test_m5_pick_cross_toggle_pins_d1_focus_without_advancing(monkeypatch):
     try:
         import os
 
@@ -736,12 +743,142 @@ def test_add_to_d1_focus_pins_current_review(monkeypatch):
     panel.add_alert(first)
     panel.add_alert(second)
     assert panel._current_review_alert is first
+    # M5 pick: the cross-promote is a D1 Focus pin.
+    assert panel.chart_review.cross_focus_button.text() == "Add to D1 Focus"
 
-    panel.chart_review.d1_focus_button.click()
+    panel.chart_review.cross_focus_button.click()
 
     assert [alert.symbol for alert in panel._d1_alerts] == ["NVDA"]
     pinned = panel._d1_alerts[0]
     assert pinned.tag == "d1_focus_pin"
     assert pinned.payload.get("d1_focus_pin") is True
-    # The pin resolves this review and advances to the next queued name.
-    assert panel._current_review_alert.symbol == "TSLA"
+    # A toggle never advances the review chart.
+    assert panel._current_review_alert is first
+    assert panel.chart_review.cross_focus_button.text() == "✓ In D1 Focus"
+    assert panel.chart_review.cross_focus_button.isChecked()
+
+    # Second click unpins.
+    panel.chart_review.cross_focus_button.click()
+    assert panel._d1_alerts == []
+    assert panel._current_review_alert is first
+    assert panel.chart_review.cross_focus_button.text() == "Add to D1 Focus"
+    assert not panel.chart_review.cross_focus_button.isChecked()
+
+
+def test_swing_pick_cross_toggle_adds_to_m5_focus(tmp_path, monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    service = _service(tmp_path)
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "alert_center_ignored.txt",
+    )
+    swing = BounceAlert(
+        time_text="10:05:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="[S-TIER] 15EMA break",
+        timeframe="D1",
+        raw_text="[S-TIER] NVDA: 15EMA break",
+        is_d1=True,
+    )
+    panel.add_alert(swing)
+    assert panel._current_review_alert is swing
+    # Swing pick: the cross-promote is the M5 day-trade list.
+    assert panel.chart_review.cross_focus_button.text() == "Add to M5 Focus"
+    assert panel.chart_review.focus_button.text() == "Add to Swing Focus"
+
+    panel.chart_review.cross_focus_button.click()
+    assert service.is_focus("NVDA", "long", "m5")
+    # A toggle never advances the review chart.
+    assert panel._current_review_alert is swing
+    assert panel.chart_review.cross_focus_button.text() == "✓ In M5 Focus"
+
+    panel.chart_review.cross_focus_button.click()
+    assert not service.is_focus("NVDA", "long", "m5")
+    assert panel._current_review_alert is swing
+    assert panel.chart_review.cross_focus_button.text() == "Add to M5 Focus"
+
+
+def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotDialog, SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    panel = AlertCenterPanel()
+    dialog = SymbolSnapshotDialog()
+
+    # Without a watch host the popup stays a pure quick look.
+    dialog.show_symbol("NVDA", side="LONG")
+    assert not dialog.action_row.isVisibleTo(dialog)
+
+    # With the Alert Center as host, the chart-only actions appear.
+    dialog.show_symbol("NVDA", side="LONG", watch_host=panel)
+    assert dialog.action_row.isVisibleTo(dialog)
+
+    dialog.watch_buttons["new_lod"].click()
+    assert [watch.kind for watch in panel._chart_watches] == ["new_lod"]
+    assert panel._chart_watches[0].symbol == "NVDA"
+    assert panel._chart_watches[0].side == "LONG"
+    assert dialog.watch_buttons["new_lod"].isEnabled()
+    assert dialog.watch_buttons["new_lod"].isChecked()
+    assert "armed" in dialog.watch_buttons["new_lod"].text()
+    # Re-arming through the panel API cannot double-arm.
+    assert panel.arm_chart_watch_for("NVDA", "LONG", "new_lod") is False
+    assert len(panel._chart_watches) == 1
+    # A second click on the toggle disarms.
+    dialog.watch_buttons["new_lod"].click()
+    assert panel._chart_watches == []
+    assert not dialog.watch_buttons["new_lod"].isChecked()
+    assert dialog.watch_buttons["new_lod"].text() == "New LOD"
+
+    dialog.d1_focus_button.click()
+    assert [alert.symbol for alert in panel._d1_alerts] == ["NVDA"]
+    assert panel._d1_alerts[0].tag == "d1_focus_pin"
+    assert dialog.d1_focus_button.isEnabled()
+    assert dialog.d1_focus_button.text() == "✓ In D1 Focus"
+    # Second click unpins.
+    dialog.d1_focus_button.click()
+    assert panel._d1_alerts == []
+    assert dialog.d1_focus_button.text() == "Add to D1 Focus"
+
+    # No focus service on this panel: the M5 Focus toggle stays a no-op.
+    dialog.m5_focus_button.click()
+    assert not dialog.m5_focus_button.isChecked()
+
+    # Reopening re-reads live state from the host.
+    dialog.watch_buttons["new_hod"].click()
+    dialog.show_symbol("NVDA", side="LONG", watch_host=panel)
+    assert "armed" in dialog.watch_buttons["new_hod"].text()
+
+    # A different symbol starts clean.
+    dialog.show_symbol("TSLA", side="SHORT", watch_host=panel)
+    assert not dialog.watch_buttons["new_hod"].isChecked()
+    assert dialog.watch_buttons["new_hod"].text() == "New HOD"
+    dialog.close()

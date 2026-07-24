@@ -81,6 +81,7 @@ class MasterAvwapPanel(QWidget):
         self.table.setShowGrid(False)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
         self._bounce_service = None
+        self._chart_watch_host = None
         self.table.clicked.connect(self._on_table_clicked)
         self.table.doubleClicked.connect(self._open_symbol_snapshot_from_double_click)
         self._next_snapshot_shortcut = QShortcut(
@@ -614,6 +615,12 @@ class MasterAvwapPanel(QWidget):
         """Optional: cached M5 bars for the snapshot popup's lower chart."""
         self._bounce_service = service
 
+    def set_chart_watch_host(self, host) -> None:
+        """Optional: the Alert Center panel that owns chart watches and the
+        D1 Focus feed. With it, this panel's snapshot popups grow the same
+        chart-only actions (D1 Focus pin + New HOD/LOD/VWAP-bounce arming)."""
+        self._chart_watch_host = host
+
     def _open_symbol_snapshot(self, proxy_index) -> None:
         """Row double-click / context action: D1+M5 candle quick look."""
         if not proxy_index.isValid():
@@ -635,7 +642,9 @@ class MasterAvwapPanel(QWidget):
         from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
 
         side = row.side if row.side in {"LONG", "SHORT"} else ""
-        show_symbol_snapshot(self, row.symbol, bot=bot, side=side)
+        show_symbol_snapshot(
+            self, row.symbol, bot=bot, side=side, watch_host=self._chart_watch_host
+        )
 
     def _open_symbol_snapshot_from_double_click(self, proxy_index) -> None:
         """Keep the existing row double-click without reopening symbol clicks."""
