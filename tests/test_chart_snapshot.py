@@ -432,6 +432,132 @@ def test_master_setups_popup_carries_chart_watch_host(monkeypatch):
     assert calls == [("NVDA", None), ("NVDA", host)]
 
 
+def _focus_service(tmp_path):
+    from focus_picks import FocusPickStore
+    from ui.services.focus_service import FocusService
+
+    return FocusService(
+        FocusPickStore(
+            focus_longs_path=tmp_path / "focus_longs.txt",
+            focus_shorts_path=tmp_path / "focus_shorts.txt",
+            longs_path=tmp_path / "longs.txt",
+            shorts_path=tmp_path / "shorts.txt",
+            membership_path=tmp_path / "focus_pick_membership.json",
+        )
+    )
+
+
+def test_snapshot_popup_dislike_advances_to_next_chart(monkeypatch, tmp_path):
+    if _qt_app() is None:
+        return
+    from review_events import load_review_events
+    from ui.models.setup import SetupRow
+    import ui.panels.master_avwap_panel as panel_module
+
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: [])
+    events_path = tmp_path / "events.jsonl"
+    panel = panel_module.MasterAvwapPanel(
+        _focus_service(tmp_path), review_events_path=events_path
+    )
+    panel.set_rows(
+        [
+            SetupRow(symbol="NVDA", side="LONG", score=90.0, bucket="favorite_setup"),
+            SetupRow(symbol="TSLA", side="SHORT", score=80.0, bucket="high_conviction"),
+        ]
+    )
+    symbol_index = panel.proxy.index(0, 2)
+    panel.table.setCurrentIndex(symbol_index)
+    panel._open_symbol_snapshot(symbol_index)
+    dialog = panel._symbol_snapshot_dialog
+    assert dialog._symbol == "NVDA"
+    # Review host present: the ✕ shows; no watch host, so the focus/watch
+    # toggles stay hidden instead of sitting there dead.
+    assert dialog.dislike_button.isVisibleTo(dialog)
+    assert not dialog.d1_focus_button.isVisibleTo(dialog)
+
+    class _Prompt:
+        @staticmethod
+        def getMultiLineText(*_args, **_kwargs):
+            return ("too extended from the level", True)
+
+    monkeypatch.setattr(panel_module, "QInputDialog", _Prompt)
+    dialog._review_dislike()
+    # The dislike logged with the row's swing context and the popup advanced.
+    rows = load_review_events(events_path)
+    assert [row["action"] for row in rows] == ["dislike"]
+    assert rows[0]["symbol"] == "NVDA"
+    assert rows[0]["bucket"] == "favorite_setup"
+    assert rows[0]["detail"]["reason"] == "too extended from the level"
+    assert dialog._symbol == "TSLA"
+
+    # A cancelled reason prompt = no dislike, no advance.
+    class _Cancel:
+        @staticmethod
+        def getMultiLineText(*_args, **_kwargs):
+            return ("", False)
+
+    monkeypatch.setattr(panel_module, "QInputDialog", _Cancel)
+    dialog._review_dislike()
+    assert dialog._symbol == "TSLA"
+    assert len(load_review_events(events_path)) == 1
+
+
+def test_snapshot_popup_d1_focus_add_advances_to_next_chart(monkeypatch, tmp_path):
+    if _qt_app() is None:
+        return
+    from ui.models.setup import SetupRow
+    import ui.panels.master_avwap_panel as panel_module
+
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: [])
+
+    class _WatchHost:
+        def __init__(self):
+            self.toggles = []
+            self.next_state = True
+
+        def toggle_d1_focus(self, symbol, side="", *, origin="", context=""):
+            self.toggles.append((symbol, side))
+            return self.next_state
+
+        def armed_watch_kinds(self, _symbol):
+            return set()
+
+        def is_d1_focus_active(self, _symbol, _side=""):
+            return False
+
+        def is_m5_focus(self, _symbol, _side=""):
+            return False
+
+    host = _WatchHost()
+    panel = panel_module.MasterAvwapPanel(
+        _focus_service(tmp_path), review_events_path=tmp_path / "events.jsonl"
+    )
+    panel.set_chart_watch_host(host)
+    panel.set_rows(
+        [
+            SetupRow(symbol="NVDA", side="LONG", score=90.0),
+            SetupRow(symbol="TSLA", side="SHORT", score=80.0),
+        ]
+    )
+    symbol_index = panel.proxy.index(0, 2)
+    panel.table.setCurrentIndex(symbol_index)
+    panel._open_symbol_snapshot(symbol_index)
+    dialog = panel._symbol_snapshot_dialog
+    # Both hosts wired: ✕ and the focus/watch toggles all show.
+    assert dialog.dislike_button.isVisibleTo(dialog)
+    assert dialog.d1_focus_button.isVisibleTo(dialog)
+
+    dialog._toggle_d1_focus()
+    assert host.toggles == [("NVDA", "LONG")]
+    assert dialog._symbol == "TSLA"  # decision made -> next chart
+
+    # Toggling OFF is a correction, not a decision: stay on this chart.
+    host.next_state = False
+    dialog._toggle_d1_focus()
+    assert host.toggles[-1] == ("TSLA", "SHORT")
+    assert dialog._symbol == "TSLA"
+
+
 def test_master_setups_space_advances_visible_rows_and_opens_snapshot(monkeypatch):
     app = _qt_app()
     if app is None:

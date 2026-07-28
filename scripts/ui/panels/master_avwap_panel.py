@@ -875,7 +875,15 @@ class MasterAvwapPanel(QWidget):
 
         side = row.side if row.side in {"LONG", "SHORT"} else ""
         show_symbol_snapshot(
-            self, row.symbol, bot=bot, side=side, watch_host=self._chart_watch_host
+            self,
+            row.symbol,
+            bot=bot,
+            side=side,
+            watch_host=self._chart_watch_host,
+            # The popup's ✕ and its advance-to-next-chart flow route back
+            # through this panel, so a chart-by-chart pass over the table
+            # never requires touching the table itself.
+            review_host=self,
         )
 
     def _open_symbol_snapshot_from_double_click(self, proxy_index) -> None:
@@ -886,6 +894,34 @@ class MasterAvwapPanel(QWidget):
         if self.model.COLUMNS[source_index.column()][0] == "symbol":
             return  # the first single click already opened it
         self._open_symbol_snapshot(proxy_index)
+
+    # ------------------------------------------------------------------
+    # Snapshot review flow: the chart popup's ✕ / Add-to-D1-Focus buttons
+    # call back here so each decision advances to the next visible chart.
+    def snapshot_review_dislike(self, symbol: str) -> bool:
+        """Popup ✕: dislike the row (reason prompt) and advance on accept."""
+        row = self._visible_row_for_symbol(symbol)
+        if row is None or self.focus_service is None:
+            return False
+        accepted = self._dislike_row(row)
+        if accepted:
+            self._open_next_symbol_snapshot()
+        return accepted
+
+    def snapshot_review_advance(self) -> None:
+        """Popup follow-through (e.g. after Add to D1 Focus): next chart."""
+        self._open_next_symbol_snapshot()
+
+    def _visible_row_for_symbol(self, symbol: str) -> SetupRow | None:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return None
+        for proxy_row in range(self.proxy.rowCount()):
+            source = self.proxy.mapToSource(self.proxy.index(proxy_row, 0))
+            row = self.model.row_at(source.row())
+            if row is not None and row.symbol == symbol:
+                return row
+        return None
 
     def _open_next_symbol_snapshot(self) -> None:
         """Advance through visible setup rows and open the next snapshot."""
@@ -987,7 +1023,8 @@ class MasterAvwapPanel(QWidget):
         except Exception:
             pass
 
-    def _dislike_row(self, row: SetupRow) -> None:
+    def _dislike_row(self, row: SetupRow) -> bool:
+        """Prompt for the why and log the dislike. True when not cancelled."""
         reason, accepted = QInputDialog.getMultiLineText(
             self,
             f"Dislike {row.symbol}",
@@ -995,8 +1032,9 @@ class MasterAvwapPanel(QWidget):
             "review your dislikes and suggest scan/scoring changes.",
         )
         if not accepted:
-            return
+            return False
         self._record_dislike(row, reason)
+        return True
 
     def _record_dislike(self, row: SetupRow, reason: str) -> None:
         self._record_review_event(

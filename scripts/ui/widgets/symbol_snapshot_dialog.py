@@ -274,6 +274,10 @@ class SymbolSnapshotDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.resize(1180, 760)
         self.watch_host = None
+        # Review-flow host (the setups panel): supplies the popup's ✕ dislike
+        # and the advance-to-next-chart follow-through, so the trader can
+        # work the whole table chart by chart without touching it.
+        self.review_host = None
         self._symbol = ""
         self._side = ""
 
@@ -320,10 +324,22 @@ class SymbolSnapshotDialog(QDialog):
             )
             self.watch_buttons[kind] = button
 
+        # Review-flow ✕: log a dislike (with the typed reason) and advance to
+        # the next visible setup row's chart. Only shown when a review host
+        # (the setups panel) opened this popup.
+        self.dislike_button = QPushButton("✕ Dislike")
+        self.dislike_button.setToolTip(
+            "Log a dislike for this setup - you'll be asked why, and the "
+            "reason feeds the review-learning loop - then advance to the "
+            "next chart in the setups table."
+        )
+        self.dislike_button.clicked.connect(self._review_dislike)
+
         self.action_row = QWidget()
         action_layout = QHBoxLayout(self.action_row)
         action_layout.setContentsMargins(10, 0, 10, 8)
         action_layout.setSpacing(6)
+        action_layout.addWidget(self.dislike_button)
         action_layout.addWidget(self.d1_focus_button)
         action_layout.addWidget(self.m5_focus_button)
         for button in self.watch_buttons.values():
@@ -336,13 +352,16 @@ class SymbolSnapshotDialog(QDialog):
         layout.addWidget(self.snapshot)
         layout.addWidget(self.action_row)
 
-    def show_symbol(self, symbol: str, *, bot=None, side: str = "", watch_host=None) -> None:
+    def show_symbol(
+        self, symbol: str, *, bot=None, side: str = "", watch_host=None, review_host=None
+    ) -> None:
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
         self._symbol = symbol
         self._side = side if side in ("LONG", "SHORT") else ""
         self.watch_host = watch_host
+        self.review_host = review_host
         side_text = f" ({side})" if side in ("LONG", "SHORT") else ""
         self.setWindowTitle(f"{symbol}{side_text} — D1 + M5 snapshot")
         self.snapshot.set_symbol(symbol, bot=bot)
@@ -354,7 +373,13 @@ class SymbolSnapshotDialog(QDialog):
 
     def _refresh_watch_actions(self) -> None:
         host = self.watch_host
-        self.action_row.setVisible(host is not None)
+        reviewing = self.review_host is not None
+        self.action_row.setVisible(host is not None or reviewing)
+        self.dislike_button.setVisible(reviewing)
+        # Watch/focus toggles need a watch host to act through; hide them
+        # rather than showing dead buttons in a review-only popup.
+        for button in (self.d1_focus_button, self.m5_focus_button, *self.watch_buttons.values()):
+            button.setVisible(host is not None)
         if host is None:
             return
         try:
@@ -387,16 +412,28 @@ class SymbolSnapshotDialog(QDialog):
             )
         self._refresh_watch_actions()
 
+    def _review_dislike(self) -> None:
+        """The review-flow ✕: the host prompts for the reason, logs it, and
+        advances to the next chart; a cancelled prompt leaves this one up."""
+        if self.review_host is None or not self._symbol:
+            return
+        self.review_host.snapshot_review_dislike(self._symbol)
+
     def _toggle_d1_focus(self) -> None:
         if self.watch_host is None or not self._symbol:
             return
-        self.watch_host.toggle_d1_focus(
+        added = self.watch_host.toggle_d1_focus(
             self._symbol,
             self._side,
             origin="chart",
             context=f"chart snapshot: {self.windowTitle()}",
         )
         self._refresh_watch_actions()
+        # Review flow: filing the pick into D1 Focus is a decision made -
+        # move on to the next chart. Toggling OFF is a correction, not a
+        # decision; it stays on this chart.
+        if added and self.review_host is not None:
+            self.review_host.snapshot_review_advance()
 
     def _toggle_m5_focus(self) -> None:
         if self.watch_host is None or not self._symbol:
@@ -418,12 +455,14 @@ class SymbolSnapshotDialog(QDialog):
 
 
 def show_symbol_snapshot(
-    owner, symbol: str, *, bot=None, side: str = "", watch_host=None
+    owner, symbol: str, *, bot=None, side: str = "", watch_host=None, review_host=None
 ) -> SymbolSnapshotDialog:
     """Panel helper: lazily create one reusable dialog per owner widget."""
     dialog = getattr(owner, "_symbol_snapshot_dialog", None)
     if dialog is None:
         dialog = SymbolSnapshotDialog(owner)
         owner._symbol_snapshot_dialog = dialog
-    dialog.show_symbol(symbol, bot=bot, side=side, watch_host=watch_host)
+    dialog.show_symbol(
+        symbol, bot=bot, side=side, watch_host=watch_host, review_host=review_host
+    )
     return dialog
