@@ -686,6 +686,10 @@ def _fmt_pct(value) -> str:
     return f"{value:+.1f}%" if value is not None else "  n/a"
 
 
+def _fmt_rs(value) -> str:
+    return f"{value:+.2f}" if value is not None else "n/a"
+
+
 def render_board_text(sector_rows: list[dict], industry_rows: list[dict]) -> str:
     lines = [
         f"SECTOR / INDUSTRY INDEX BOARD  (generated {datetime.now().isoformat(timespec='minutes')})",
@@ -698,7 +702,7 @@ def render_board_text(sector_rows: list[dict], industry_rows: list[dict]) -> str
         lines.append(
             f"{row.get('rs_rank', ''):<5}{row['etf']:<6}{row['sector']:<26}"
             f"{_fmt_pct(row.get('pct_change_1d')):>8}"
-            f"{(f'{row['rs_score']:+.2f}' if row.get('rs_score') is not None else 'n/a'):>8}"
+            f"{_fmt_rs(row.get('rs_score')):>8}"
             f"{_fmt_pct(row.get('return_5d_pct')):>8}"
             f"{_fmt_pct(row.get('return_20d_pct')):>8}"
             f"{_fmt_pct(row.get('return_65d_pct')):>8}"
@@ -713,7 +717,7 @@ def render_board_text(sector_rows: list[dict], industry_rows: list[dict]) -> str
         lines.append(
             f"{row.get('rs_rank', ''):<5}{row['industry'][:37]:<38}{row['member_count']:>4}"
             f"{_fmt_pct(row.get('pct_change_1d')):>8}"
-            f"{(f'{row['rs_score']:+.2f}' if row.get('rs_score') is not None else 'n/a'):>8}"
+            f"{_fmt_rs(row.get('rs_score')):>8}"
             f"{_fmt_pct(row.get('volume_buzz_pct')):>9}  {row.get('top_movers', '')}"
         )
     return "\n".join(lines) + "\n"
