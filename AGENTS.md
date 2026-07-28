@@ -57,6 +57,37 @@ never leave the working tree broken.
   `scripts/diagnostics/` — Phase 2 runtime reliability + run manifests.
 - `scripts/smoke_check.py` — deterministic smoke command.
 
+## Review-learning loop (Alert Center) — AI-in-the-loop by design
+
+The visual alert review surface learns the trader's preferences in three
+phases. Phases 0-1 are live on `main` (2026-07-28); **Phase 2 is deliberately
+an AI review step, not hard-coded logic**: the user wants Fable or Sol to
+read the artifacts below periodically and decide what to prioritize and how
+to surface the best alerts.
+
+- **Raw decision log**: `<shared home>/alert_review_events.jsonl`
+  (`review_events.py`, schema `review_events_v1`). One row per decision -
+  shown impressions, skip/remove/restore, focus adds + cross-focus toggles,
+  favorite/dislike (with reason), watch arm/disarm/fired/expired, level
+  arm/disarm/fired with the quick-fill source - each with dwell time, queue
+  length, and structured alert context (tier, PROVEN/banger, bounce types,
+  RRS, rvol, market environment). `event_id` joins to
+  `intraday_bounce_candidates.csv` / `intraday_bounce_outcomes.csv`.
+- **Aggregated scoreboard**: `<shared home>/review_preference_state.json` +
+  `output/review_learning_report.txt` (`review_learning.py`, schema
+  `review_learning_v1`). P(take|shown) per segment with n/(n+10) shrinkage,
+  taken-vs-passed outcomes (close R via event join; 3/5-session forward
+  returns for D1 names), blind spots / leaks (min 8 shown), watch
+  conversion. Auto-rebuilt when stale by a GUI startup thread; on demand via
+  `python scripts/review_learning.py`.
+- **When reviewing as the AI**: read the report + state, cross-reference
+  `pick_feedback.jsonl` dislike reasons, and propose (a) review-queue
+  ordering, (b) "you usually skip this, but..." annotations, (c) watch-kind/
+  fill-source presets. Rank and annotate only - never auto-suppress an
+  alert (house rule: mute -> CAUTION, focus picks always surface).
+- Capture only starts once the GUI restarts onto a build >= c45d965; expect
+  ~2-3 weeks of sessions before segment samples clear the n>=8 gates.
+
 ## Runtime facts
 
 - Primary machine: single desktop PC (i5-8600K, 32GB). Mini-PC is secondary;
