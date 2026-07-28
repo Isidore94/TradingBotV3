@@ -48,6 +48,7 @@ from project_paths import (
     save_local_setting,
 )
 from review_events import record_review_event
+from review_guidance import AlertGuidance, ReviewGuide
 from ui.panels import desk_layout
 from ui.models.bounce import (
     BounceAlert,
@@ -284,6 +285,7 @@ class AlertCenterPanel(QFrame):
         chart_watches_path=None,
         d1_level_watches_path=None,
         review_events_path=None,
+        review_guide=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -351,6 +353,15 @@ class AlertCenterPanel(QFrame):
             if review_events_path is not None
             else (ALERT_REVIEW_EVENTS_FILE if persist_ignored else None)
         )
+        # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
+        # chart annotations (review_guidance.py). Advisory only; with no
+        # documents on disk every score is 0 and the queue stays FIFO.
+        self._review_guide = (
+            review_guide
+            if review_guide is not None
+            else (ReviewGuide() if persist_ignored else ReviewGuide(None, None))
+        )
+        self._review_guidance: dict[str, AlertGuidance] = {}
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
             # so every alert for that name immediately shows the gold flag.
@@ -763,11 +774,34 @@ class AlertCenterPanel(QFrame):
             # the back of a queue that can be dozens deep.
             self._review_queue.insert(0, alert)
         else:
-            self._review_queue.append(alert)
+            # Guidance-ordered insertion: higher scores review sooner. Armed
+            # chart-watch hits always stay ahead regardless of score, and
+            # equal scores keep arrival order, so with no guidance documents
+            # this degrades to the old FIFO exactly.
+            score = self._guidance_for(alert).score
+            index = len(self._review_queue)
+            for position, queued in enumerate(self._review_queue):
+                if is_chart_watch_alert(queued):
+                    continue
+                if self._guidance_for(queued).score < score:
+                    index = position
+                    break
+            self._review_queue.insert(index, alert)
         if self._current_review_alert is None:
             self._advance_review_queue()
         else:
             self.chart_review.set_queued_count(len(self._review_queue))
+
+    def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
+        """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""
+        guidance = self._review_guidance.get(alert.symbol)
+        if guidance is None:
+            try:
+                guidance = self._review_guide.guidance_for(alert)
+            except Exception:
+                guidance = AlertGuidance()
+            self._review_guidance[alert.symbol] = guidance
+        return guidance
 
     def _select_review_alert(self, alert: BounceAlert) -> None:
         """A feed-row click makes that alert the active visual review."""
@@ -819,13 +853,20 @@ class AlertCenterPanel(QFrame):
             self._review_shown_at = None
             self.chart_review.clear()
             return
+        guidance = self._guidance_for(alert)
         if alert.symbol != self._review_shown_symbol:
             # The impression: a chart for this symbol was put in front of the
             # trader. Same-symbol refreshes keep the original dwell clock.
             self._review_shown_symbol = alert.symbol
             self._review_shown_at = datetime.now()
+            detail = None
+            if guidance.score or guidance.take_prob is not None:
+                # Stamp what the guidance claimed at impression time, so a
+                # later pass can measure whether the ordering/annotations
+                # actually changed behavior (Phase 3 material).
+                detail = {"guidance_score": guidance.score, "take_prob": guidance.take_prob}
             self._record_review_event(
-                "shown", alert=alert, queue_len=len(self._review_queue)
+                "shown", alert=alert, queue_len=len(self._review_queue), detail=detail
             )
         bot = None
         if self._bounce_service is not None:
@@ -841,6 +882,7 @@ class AlertCenterPanel(QFrame):
             armed_kinds=self.armed_watch_kinds(alert.symbol),
             cross_active=self._review_cross_active(alert),
             armed_levels=self.armed_levels_for(alert.symbol),
+            guidance_text=guidance.summary_text(),
         )
 
     def _skip_review_alert(self, alert: BounceAlert) -> None:
@@ -1518,6 +1560,7 @@ class AlertCenterPanel(QFrame):
         self._review_queue = [
             alert for alert in self._review_queue if alert.symbol != symbol
         ]
+        self._review_guidance.pop(symbol, None)
         self._chart_watches = [
             watch for watch in self._chart_watches if watch.symbol != symbol
         ]

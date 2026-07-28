@@ -44,6 +44,13 @@ class AlertChartReview(QWidget):
         self.alert_text = QLabel("Waiting for the next ticker alert.")
         self.alert_text.setWordWrap(True)
         self.alert_text.setObjectName("MutedLabel")
+        # Guidance line from the review-learning loop (take-prob, segment
+        # edge, AI-policy notes like "Blind spot: ..."). Purely advisory -
+        # it annotates the chart the trader is already looking at.
+        self.guidance_label = QLabel("")
+        self.guidance_label.setWordWrap(True)
+        self.guidance_label.setObjectName("GuidanceLabel")
+        self.guidance_label.setVisible(False)
         self.queue_label = QLabel("")
         self.queue_label.setObjectName("MutedLabel")
 
@@ -104,6 +111,7 @@ class AlertChartReview(QWidget):
         layout.setSpacing(4)
         layout.addWidget(self.title)
         layout.addWidget(self.alert_text)
+        layout.addWidget(self.guidance_label)
         layout.addWidget(self.snapshot, 1)
         layout.addWidget(self.arm_bar)
         layout.addLayout(buttons)
@@ -127,8 +135,12 @@ class AlertChartReview(QWidget):
         armed_kinds: Iterable[str] = (),
         cross_active: bool = False,
         armed_levels: Iterable = (),
+        guidance_text: str = "",
     ) -> None:
         self.alert = alert
+        guidance_text = str(guidance_text or "").strip()
+        self.guidance_label.setText(guidance_text)
+        self.guidance_label.setVisible(bool(guidance_text))
         side = f" · {alert.side}" if alert.side else ""
         timeframe = f" · {alert.timeframe}" if alert.timeframe else ""
         self.title.setText(f"{alert.symbol}{side}{timeframe}")
@@ -174,6 +186,8 @@ class AlertChartReview(QWidget):
         self.alert = None
         self.title.setText("Visual Alert Review")
         self.alert_text.setText("Waiting for the next ticker alert.")
+        self.guidance_label.setText("")
+        self.guidance_label.setVisible(False)
         self.snapshot.setVisible(False)
         self.queue_label.setText("")
         self._set_actions_enabled(False)

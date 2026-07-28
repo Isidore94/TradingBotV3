@@ -49,6 +49,13 @@ QLabel#CautionLabel {
     color: @caution@;
 }
 
+/* Review-learning guidance line on the visual review pane: advisory
+   take-prob / blind-spot notes. Favorite-gold so it reads as "the desk
+   knows something here" without shouting. */
+QLabel#GuidanceLabel {
+    color: @favorite@;
+}
+
 QPushButton,
 QToolButton {
     background: @bg_elevated@;

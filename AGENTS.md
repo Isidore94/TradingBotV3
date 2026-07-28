@@ -81,10 +81,19 @@ to surface the best alerts.
   conversion. Auto-rebuilt when stale by a GUI startup thread; on demand via
   `python scripts/review_learning.py`.
 - **When reviewing as the AI**: read the report + state, cross-reference
-  `pick_feedback.jsonl` dislike reasons, and propose (a) review-queue
-  ordering, (b) "you usually skip this, but..." annotations, (c) watch-kind/
-  fill-source presets. Rank and annotate only - never auto-suppress an
-  alert (house rule: mute -> CAUTION, focus picks always surface).
+  `pick_feedback.jsonl` dislike reasons, and write your decisions to
+  `<shared home>/review_policy.json` (`review_policy.py`, schema
+  `review_policy_v1`): per-(dimension, segment) rules with `priority_delta`
+  (queue ordering, clamped +/-5), `annotation` (shown on the chart), and
+  `watch_kind`/`fill_source` presets (hint only, never auto-armed).
+  `python scripts/review_policy.py --draft` turns the scoreboard callouts
+  into `review_policy_draft.json` as a starting point - curate it, then
+  save as `review_policy.json`. The Alert Center picks the file up on mtime
+  change, no restart needed (`review_guidance.py` scores each alert as
+  take-prob*100 + segment-R*20 + delta*10; chart-watch hits always stay at
+  the queue front). Rank and annotate only - never auto-suppress an alert
+  (house rule: mute -> CAUTION, focus picks always surface), and the
+  policy format deliberately has no suppression field - do not add one.
 - Capture only starts once the GUI restarts onto a build >= c45d965; expect
   ~2-3 weeks of sessions before segment samples clear the n>=8 gates.
 

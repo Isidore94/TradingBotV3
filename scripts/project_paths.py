@@ -241,6 +241,13 @@ ALERT_REVIEW_EVENTS_FILE = PERSISTENT_DATA_DIR / "alert_review_events.jsonl"
 # outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.
 REVIEW_PREFERENCE_STATE_FILE = PERSISTENT_DATA_DIR / "review_preference_state.json"
 REVIEW_LEARNING_REPORT_FILE = OUTPUT_DIR / "review_learning_report.txt"
+# AI-authored review policy: segment-level priority deltas, annotations, and
+# watch presets decided by an AI (Fable/Sol) reviewing the scoreboard docs
+# (see AGENTS.md "Review-learning loop"). The Alert Center reads it to order
+# the review queue and annotate charts - advisory only, never suppression.
+# The draft is a mechanical starting point the AI curates before promoting.
+REVIEW_POLICY_FILE = PERSISTENT_DATA_DIR / "review_policy.json"
+REVIEW_POLICY_DRAFT_FILE = PERSISTENT_DATA_DIR / "review_policy_draft.json"
 # Alert Center symbols removed from review for the current trading day. This
 # suppresses only the visual surface; it never removes a watchlist entry or
 # changes a scanner.
