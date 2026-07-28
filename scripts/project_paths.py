@@ -236,6 +236,11 @@ PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
 # endings), each with the alert's structured context. The training data for
 # learning the trader's revealed preferences; see scripts/review_events.py.
 ALERT_REVIEW_EVENTS_FILE = PERSISTENT_DATA_DIR / "alert_review_events.jsonl"
+# Aggregated revealed-preference state derived from the review-events log by
+# scripts/review_learning.py: per-segment take rates, taken-vs-passed
+# outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.
+REVIEW_PREFERENCE_STATE_FILE = PERSISTENT_DATA_DIR / "review_preference_state.json"
+REVIEW_LEARNING_REPORT_FILE = OUTPUT_DIR / "review_learning_report.txt"
 # Alert Center symbols removed from review for the current trading day. This
 # suppresses only the visual surface; it never removes a watchlist entry or
 # changes a scanner.

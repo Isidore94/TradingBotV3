@@ -115,6 +115,23 @@ class MainWindow(QMainWindow):
         self._universe_heal_timer.timeout.connect(self._self_heal_universe)
         self._universe_heal_timer.start()
 
+        # Rebuild the review-preference scoreboard when it has gone stale
+        # (review_learning.py: P(take|shown) per segment + taken-vs-passed
+        # outcomes from the decision log). Background daemon thread; pure
+        # local file reads, never touches IB or the UI.
+        QTimer.singleShot(5000, self._refresh_review_learning)
+
+    def _refresh_review_learning(self) -> None:
+        def worker() -> None:
+            try:
+                from review_learning import refresh_review_learning_if_stale
+
+                refresh_review_learning_if_stale()
+            except Exception:
+                pass  # the scoreboard is advisory; startup must never notice
+
+        threading.Thread(target=worker, name="review-learning-refresh", daemon=True).start()
+
     def _build_shell(self) -> None:
         nav = QFrame()
         nav.setObjectName("NavRail")
