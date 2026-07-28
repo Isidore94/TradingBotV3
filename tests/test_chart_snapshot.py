@@ -4,6 +4,8 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import chart_snapshot
@@ -248,6 +250,51 @@ def test_candle_chart_renders_bars_and_overlays():
     assert ticks[3] == (78, "07/09 09:30")
     chart.set_data([], [])
     assert chart.bar_count() == 0
+
+
+def test_price_axis_labels_log_positions_with_round_prices():
+    from ui.widgets.candle_chart import _nice_price_ticks, _to_log_price
+
+    # A 40 -> 90 daily range: ticks must be round prices, not the 39.8/44.7
+    # levels evenly spaced log coordinates would land on.
+    prices, step = _nice_price_ticks(40.0, 90.0)
+    assert step == 10.0
+    assert prices == [40.0, 50.0, 60.0, 70.0, 80.0, 90.0]
+    # And they sit at their log positions, so the grid lines match the labels.
+    assert _to_log_price(100.0) == pytest.approx(2.0)
+
+
+def test_candle_chart_log_scaling_round_trips_clicked_prices():
+    if _qt_app() is None:
+        return
+    from ui.widgets.candle_chart import CandleChart
+
+    chart = CandleChart()
+    bars = _m5_bars(20)
+    chart.set_data(bars, [], timeframe="m5")
+    assert chart.is_log_scaled()
+    # Equal percentage moves must occupy equal vertical distance.
+    assert chart._y(80.0) - chart._y(40.0) == pytest.approx(chart._y(40.0) - chart._y(20.0))
+    # A clicked level is armed as a real price, never as its log coordinate.
+    assert chart.price_at(chart._y(70.75)) == pytest.approx(70.75)
+
+    chart.set_log_y(False)
+    assert not chart.is_log_scaled()
+    assert chart.price_at(70.75) == pytest.approx(70.75)
+    assert chart.bar_count() == 20
+
+
+def test_candle_chart_falls_back_to_linear_on_non_positive_prices():
+    if _qt_app() is None:
+        return
+    from ui.widgets.candle_chart import CandleChart
+
+    chart = CandleChart()
+    bars = _m5_bars(5)
+    bars[2]["low"] = 0.0  # a bad cache row: log10 is undefined here
+    chart.set_data(bars, [], timeframe="m5")
+    assert not chart.is_log_scaled()
+    assert chart.price_at(12.5) == pytest.approx(12.5)
 
 
 def test_snapshot_dialog_populates_both_charts(monkeypatch):
