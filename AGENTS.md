@@ -72,7 +72,14 @@ to surface the best alerts.
   arm/disarm/fired with the quick-fill source - each with dwell time, queue
   length, and structured alert context (tier, PROVEN/banger, bounce types,
   RRS, rvol, market environment). `event_id` joins to
-  `intraday_bounce_candidates.csv` / `intraday_bounce_outcomes.csv`.
+  `intraday_bounce_candidates.csv` / `intraday_bounce_outcomes.csv`. The
+  Master AVWAP setups table's ★/✕ (the trader's actual SWING decisions) log
+  here too with `surface: "setups"` and the row's structured context -
+  bucket, setup_family, setup_tags, expected_r, sector/industry RS - which
+  the scoreboard aggregates as extra dimensions (`bucket`, `setup_family`,
+  `setup_tag`, `expected_r_band`; policy rules may target them). Table
+  actions carry no "shown" impression, so their take rates are blank by
+  design - grade them by taken-vs-passed forward returns instead.
 - **Aggregated scoreboard**: `<shared home>/review_preference_state.json` +
   `output/review_learning_report.txt` (`review_learning.py`, schema
   `review_learning_v1`). P(take|shown) per segment with n/(n+10) shrinkage,

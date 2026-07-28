@@ -26,11 +26,13 @@ from PySide6.QtWidgets import (
 )
 
 from project_paths import (
+    ALERT_REVIEW_EVENTS_FILE,
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
     get_local_setting,
     save_local_setting,
 )
+from review_events import record_review_event, setup_context_fields
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
 from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
@@ -101,9 +103,24 @@ class MasterAvwapPanel(QWidget):
     rowsChanged = Signal(int, int, int)
     statusChanged = Signal(str)
 
-    def __init__(self, focus_service=None, parent=None) -> None:
+    def __init__(self, focus_service=None, parent=None, *, review_events_path=None) -> None:
         super().__init__(parent)
         self.focus_service = focus_service
+        # Swing-side decision log for the review-learning loop: the table's
+        # ★/✕ are the trader's actual swing decisions, and a SetupRow carries
+        # richer structured context (bucket/family/tags/expected R) than any
+        # alert. Gated exactly like pick_feedback: only a real default focus
+        # store writes, so test panels stay silent.
+        focus_store = getattr(focus_service, "store", None)
+        default_store = bool(
+            focus_service is not None
+            and getattr(focus_store, "uses_default_paths", lambda: False)()
+        )
+        self._review_events_path = (
+            Path(review_events_path)
+            if review_events_path is not None
+            else (ALERT_REVIEW_EVENTS_FILE if default_store else None)
+        )
         self.scan_service = ScanService(self)
         self.scan_service.started.connect(self._on_scan_started)
         self.scan_service.finished.connect(self._on_scan_finished)
@@ -947,11 +964,28 @@ class MasterAvwapPanel(QWidget):
             self._dislike_row(row)
         elif self.focus_service.is_focus(row.symbol):
             self.focus_service.remove_everywhere(row.symbol, origin="setups", context=_row_context(row))
+            self._record_review_event("favorite", row, {"on": False, "origin": "setups"})
             message = f"Unfavorited {row.symbol}: removed from focus picks."
             self.status_label.setText(message)
             self.statusChanged.emit(message)
         else:
             self._add_row_to_focus(proxy_index, "swing")
+
+    def _record_review_event(self, action: str, row: SetupRow, detail: dict) -> None:
+        """Swing decision -> alert_review_events.jsonl. Best-effort, never UI-visible."""
+        if self._review_events_path is None:
+            return
+        try:
+            record_review_event(
+                action,
+                symbol=row.symbol,
+                side=row.side,
+                detail=detail,
+                context_fields=setup_context_fields(row),
+                path=self._review_events_path,
+            )
+        except Exception:
+            pass
 
     def _dislike_row(self, row: SetupRow) -> None:
         reason, accepted = QInputDialog.getMultiLineText(
@@ -965,6 +999,9 @@ class MasterAvwapPanel(QWidget):
         self._record_dislike(row, reason)
 
     def _record_dislike(self, row: SetupRow, reason: str) -> None:
+        self._record_review_event(
+            "dislike", row, {"reason": str(reason or "").strip(), "origin": "setups"}
+        )
         self.focus_service.record_feedback(
             row.symbol,
             row.side,
@@ -991,6 +1028,11 @@ class MasterAvwapPanel(QWidget):
         else:
             side = "long" if row.side == "LONG" else "short"
             added = self.focus_service.add(row.symbol, side, category, origin="setups", context=_row_context(row))
+            self._record_review_event(
+                "favorite",
+                row,
+                {"on": True, "origin": "setups", "category": category, "added": bool(added)},
+            )
             message = (
                 f"Liked {row.symbol}: added to {bucket} Focus {side}s - its alerts now flag gold in the Alert Center."
                 if added

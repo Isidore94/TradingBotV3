@@ -131,6 +131,33 @@ def alert_context_fields(alert) -> dict[str, Any]:
     return fields
 
 
+def setup_context_fields(row) -> dict[str, Any]:
+    """Structured decision context from a SetupRow-shaped object (the Master
+    AVWAP setups table). The swing-side counterpart of ``alert_context_fields``
+    - buckets, families, and tags are the dimensions the swing scoreboard
+    aggregates on, and a setup row carries them natively.
+    """
+    fields: dict[str, Any] = {"surface": "setups", "is_d1": True, "timeframe": "D1"}
+    if row is None:
+        return fields
+    fields["bucket"] = str(getattr(row, "bucket", "") or "")
+    raw = getattr(row, "raw", None)
+    raw = raw if isinstance(raw, dict) else {}
+    fields["setup_family"] = str(
+        raw.get("setup_family") or raw.get("master_avwap_setup_family") or ""
+    )
+    tags = getattr(row, "setup_tags", None) or []
+    fields["setup_tags"] = ";".join(str(tag) for tag in tags if str(tag or "").strip())
+    fields["score"] = _as_float(getattr(row, "score", None))
+    fields["expected_r"] = _as_float(getattr(row, "expected_r", None))
+    fields["days_to_earnings"] = getattr(row, "days_to_earnings", None)
+    fields["d1_vs_sector"] = _as_float(getattr(row, "d1_vs_sector", None))
+    fields["d1_vs_industry"] = _as_float(getattr(row, "d1_vs_industry", None))
+    fields["sector"] = str(getattr(row, "sector", "") or "")
+    fields["industry"] = str(getattr(row, "industry", "") or "")
+    return fields
+
+
 def record_review_event(
     action: str,
     *,
@@ -138,6 +165,7 @@ def record_review_event(
     symbol: object = "",
     side: object = "",
     detail: dict[str, Any] | None = None,
+    context_fields: dict[str, Any] | None = None,
     dwell_ms: int | None = None,
     queue_len: int | None = None,
     now: datetime | None = None,
@@ -162,6 +190,11 @@ def record_review_event(
         "side": side_text,
     }
     row.update(alert_context_fields(alert))
+    if context_fields:
+        # Surface-specific structured context (e.g. setup_context_fields for
+        # the setups table). Applied after the alert extraction so a richer
+        # explicit snapshot wins over duck-typed defaults.
+        row.update({k: v for k, v in context_fields.items() if v not in (None, "")})
     if dwell_ms is not None:
         row["dwell_ms"] = max(0, int(dwell_ms))
     if queue_len is not None:

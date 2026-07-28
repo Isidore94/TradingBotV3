@@ -110,6 +110,13 @@ class Episode:
     market_environment: str = ""
     session_rvol: float | None = None
     rrs_spy: float | None = None
+    # Swing-side context from the setups table (setup_context_fields):
+    # the ★/✕ there are the trader's actual swing decisions.
+    surface: str = ""
+    bucket: str = ""
+    setup_family: str = ""
+    setup_tags: str = ""
+    expected_r: float | None = None
     close_r: float | None = None
     forward_pct: dict[int, float] = field(default_factory=dict)
 
@@ -145,6 +152,10 @@ _CONTEXT_KEYS = (
     "bounce_types",
     "market_environment",
     "event_id",
+    "surface",
+    "bucket",
+    "setup_family",
+    "setup_tags",
 )
 
 
@@ -188,7 +199,7 @@ def build_episodes(rows: Iterable[dict]) -> list[Episode]:
                 value = row.get(key)
                 if value not in (None, "", False) and not getattr(episode, key, None):
                     setattr(episode, key, value)
-            for key in ("session_rvol", "rrs_spy"):
+            for key in ("session_rvol", "rrs_spy", "expected_r"):
                 value = _as_float(row.get(key))
                 if value is not None and getattr(episode, key) is None:
                     setattr(episode, key, value)
@@ -250,6 +261,18 @@ def _time_bucket(ts_text: str) -> str:
         return "unknown"
 
 
+def _expected_r_band(value: float | None) -> list[str]:
+    if value is None:
+        return []
+    if value < 0:
+        return ["negative(<0)"]
+    if value < 0.5:
+        return ["thin(0-0.5)"]
+    if value < 1.0:
+        return ["decent(0.5-1)"]
+    return ["strong(>1)"]
+
+
 DIMENSIONS: dict[str, Callable[[Episode], list[str]]] = {
     "tier": lambda e: [e.tier or "untiered"],
     "side": lambda e: [e.side or "WATCH"],
@@ -259,6 +282,12 @@ DIMENSIONS: dict[str, Callable[[Episode], list[str]]] = {
     "market_environment": lambda e: [e.market_environment] if e.market_environment else [],
     "rvol_bucket": lambda e: [_rvol_bucket(e.session_rvol)],
     "rrs_alignment": lambda e: [_rrs_alignment(e)],
+    # Swing dimensions - populated by setups-table decisions (and any future
+    # surface that snapshots setup_context_fields).
+    "bucket": lambda e: [e.bucket] if e.bucket else [],
+    "setup_family": lambda e: [e.setup_family] if e.setup_family else [],
+    "setup_tag": lambda e: _split_bounce_types(e.setup_tags),
+    "expected_r_band": lambda e: _expected_r_band(e.expected_r),
 }
 
 
@@ -406,28 +435,41 @@ def aggregate_dimensions(episodes: list[Episode]) -> dict[str, Any]:
 
     dimensions: dict[str, dict[str, Any]] = {}
     for dim, key_fn in DIMENSIONS.items():
+        # Segment over ALL episodes: setups-table ★/✕ carry no impression
+        # (a table row on screen is not "shown" the way a chart is), but
+        # their outcomes absolutely belong in the taken-vs-passed grades.
         segments: dict[str, list[Episode]] = defaultdict(list)
-        for episode in shown:
+        for episode in episodes:
             for segment in key_fn(episode):
                 segments[segment].append(episode)
         table = {}
         for segment, members in segments.items():
-            n = len(members)
-            seg_takes = sum(1 for e in members if e.resolution == "take")
+            shown_members = [e for e in members if e.shown]
+            n_shown = len(shown_members)
+            seg_takes = sum(1 for e in shown_members if e.resolution == "take")
             taken = [e for e in members if e.resolution == "take"]
-            passed = [e for e in members if e.resolution != "take"]
+            # "Passed" means seen-and-not-taken: shown non-takes, plus
+            # explicit rejections from surfaces without impressions (the
+            # setups-table X is an active pass on a row the trader read).
+            passed = [
+                e
+                for e in members
+                if e.resolution != "take" and (e.shown or e.resolution == "reject")
+            ]
             take_dwells = [e.dwell_ms for e in taken if e.dwell_ms is not None]
             pass_dwells = [e.dwell_ms for e in passed if e.dwell_ms is not None]
             table[segment] = {
-                "shown": n,
+                "n": len(members),
+                "shown": n_shown,
                 "take": seg_takes,
+                "take_total": len(taken),
                 "skip": sum(1 for e in members if e.resolution == "skip"),
                 "reject": sum(1 for e in members if e.resolution == "reject"),
-                "take_rate": round(seg_takes / n, 3) if n else 0.0,
+                "take_rate": round(seg_takes / n_shown, 3) if n_shown else 0.0,
                 # Shrunk toward the trader's overall rate: thin segments read
                 # as "about average" until the evidence says otherwise.
                 "take_rate_shrunk": round(
-                    (seg_takes + SHRINK_SAMPLES * overall) / (n + SHRINK_SAMPLES), 3
+                    (seg_takes + SHRINK_SAMPLES * overall) / (n_shown + SHRINK_SAMPLES), 3
                 ),
                 "median_take_dwell_ms": median(take_dwells) if take_dwells else None,
                 "median_pass_dwell_ms": median(pass_dwells) if pass_dwells else None,
@@ -665,14 +707,16 @@ def render_report(state: dict[str, Any]) -> str:
             continue
         lines.append(f"== {dim.upper().replace('_', ' ')} ==")
         lines.append(
-            f"{'segment':<34}{'shown':>6}{'take%':>7}{'skip':>6}{'rej':>5}"
+            f"{'segment':<34}{'n':>5}{'shown':>6}{'take%':>7}{'skip':>6}{'rej':>5}"
             f"{'takenR':>9}{'passedR':>9}{'taken fwd':>10}{'passed fwd':>11}"
         )
-        ordered = sorted(table.items(), key=lambda kv: kv[1]["shown"], reverse=True)
+        ordered = sorted(
+            table.items(), key=lambda kv: kv[1].get("n", kv[1]["shown"]), reverse=True
+        )
         for segment, stats in ordered:
             taken, passed = stats["taken"], stats["passed"]
             lines.append(
-                f"{segment[:33]:<34}{stats['shown']:>6}"
+                f"{segment[:33]:<34}{stats.get('n', stats['shown']):>5}{stats['shown']:>6}"
                 f"{_fmt_rate(stats['take_rate_shrunk']):>7}"
                 f"{stats['skip']:>6}{stats['reject']:>5}"
                 f"{_fmt_r(taken['r_avg']):>9}{_fmt_r(passed['r_avg']):>9}"

@@ -164,6 +164,50 @@ def test_attach_forward_returns_grades_d1_names_side_adjusted():
 # ---------------------------------------------------------------------------
 # Callouts
 # ---------------------------------------------------------------------------
+def test_swing_setups_actions_feed_bucket_family_and_tag_dimensions():
+    closes = [
+        ("2026-07-27", 100.0),
+        ("2026-07-28", 103.0),
+        ("2026-07-29", 106.0),
+        ("2026-07-30", 109.0),
+    ]
+    swing_extra = {
+        "surface": "setups",
+        "is_d1": True,
+        "timeframe": "D1",
+        "bucket": "favorite_setup",
+        "setup_family": "avwap_breakout",
+        "setup_tags": "AVWAP_BREAKOUT;D1_RS",
+        "expected_r": 0.85,
+        "event_id": "",
+        "tier": "",
+        "bounce_types": "",
+    }
+    rows = [
+        # A ★ from the setups table (no impression) and a ✕ on another name.
+        _row("favorite", symbol="LNG", detail={"on": True, "origin": "setups"}, **swing_extra),
+        _row("dislike", symbol="WMT", detail={"reason": "meh", "origin": "setups"}, **swing_extra),
+    ]
+    episodes = build_episodes(rows)
+    assert {e.resolution for e in episodes} == {"take", "reject"}
+    assert all(e.bucket == "favorite_setup" for e in episodes)
+
+    matched = attach_forward_returns(episodes, load_frame=lambda _s: closes)
+    assert matched == 2  # both graded despite never being "shown"
+
+    aggregate = aggregate_dimensions(episodes)
+    bucket = aggregate["dimensions"]["bucket"]["favorite_setup"]
+    assert bucket["n"] == 2 and bucket["shown"] == 0
+    # The ★ lands in taken, the table-✕ counts as an active pass.
+    assert bucket["taken"]["fwd_n"] == 1
+    assert bucket["passed"]["fwd_n"] == 1
+    assert bucket["taken"]["fwd_avg_pct"] == 9.0  # 100 -> 109 over 3 sessions
+    family = aggregate["dimensions"]["setup_family"]["avwap_breakout"]
+    assert family["n"] == 2
+    assert aggregate["dimensions"]["setup_tag"]["AVWAP_BREAKOUT"]["n"] == 2
+    assert aggregate["dimensions"]["expected_r_band"]["decent(0.5-1)"]["n"] == 2
+
+
 def test_find_callouts_flags_blind_spots_and_leaks():
     rows = []
     for index in range(12):

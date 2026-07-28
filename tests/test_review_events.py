@@ -16,6 +16,7 @@ from review_events import (
     alert_context_fields,
     load_review_events,
     record_review_event,
+    setup_context_fields,
 )
 
 
@@ -127,6 +128,56 @@ def test_alert_context_fields_reads_chart_watch_payload():
     fields = alert_context_fields(alert)
     assert fields["chart_watch_kind"] == "band_bounce"
     assert fields["tag"] == "chart_watch"
+
+
+def _setup_row(**overrides):
+    fields = dict(
+        symbol="LNG",
+        side="LONG",
+        score=245.0,
+        bucket="favorite_setup",
+        setup_tags=["AVWAP_BREAKOUT", "D1_RS"],
+        expected_r=0.85,
+        days_to_earnings=21,
+        sector="Energy",
+        industry="Oil & Gas Midstream",
+        d1_vs_sector=1.8,
+        d1_vs_industry=2.4,
+        raw={"setup_family": "avwap_breakout"},
+    )
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def test_setup_context_fields_snapshots_the_swing_row(tmp_path):
+    fields = setup_context_fields(_setup_row())
+    assert fields["surface"] == "setups"
+    assert fields["is_d1"] is True and fields["timeframe"] == "D1"
+    assert fields["bucket"] == "favorite_setup"
+    assert fields["setup_family"] == "avwap_breakout"
+    assert fields["setup_tags"] == "AVWAP_BREAKOUT;D1_RS"
+    assert fields["expected_r"] == 0.85
+    assert fields["d1_vs_industry"] == 2.4
+
+    path = tmp_path / "events.jsonl"
+    row = record_review_event(
+        "dislike",
+        symbol="LNG",
+        side="LONG",
+        detail={"reason": "too extended", "origin": "setups"},
+        context_fields=fields,
+        path=path,
+    )
+    assert row["surface"] == "setups"
+    assert row["bucket"] == "favorite_setup"
+    assert row["setup_family"] == "avwap_breakout"
+    assert row["detail"]["reason"] == "too extended"
+    # A bare row still records the surface markers.
+    assert setup_context_fields(None) == {
+        "surface": "setups",
+        "is_d1": True,
+        "timeframe": "D1",
+    }
 
 
 def test_load_review_events_skips_bad_lines(tmp_path):
@@ -263,6 +314,53 @@ def test_panel_logs_level_arm_with_fill_source(tmp_path):
         "candle_date": "2026-07-25",
         "fill_source": "candle",
     }
+
+
+def test_setups_panel_logs_swing_star_and_dislike(tmp_path):
+    if _qt_app() is None:
+        return
+    from focus_picks import FocusPickStore
+    from ui.models.setup import SetupRow
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+    from ui.services.focus_service import FocusService
+
+    service = FocusService(
+        FocusPickStore(
+            focus_longs_path=tmp_path / "focus_longs.txt",
+            focus_shorts_path=tmp_path / "focus_shorts.txt",
+            longs_path=tmp_path / "longs.txt",
+            shorts_path=tmp_path / "shorts.txt",
+            membership_path=tmp_path / "focus_pick_membership.json",
+        )
+    )
+    path = tmp_path / "events.jsonl"
+    panel = MasterAvwapPanel(service, review_events_path=path)
+    row = SetupRow(
+        symbol="LNG",
+        side="LONG",
+        score=245.0,
+        bucket="favorite_setup",
+        setup_tags=["AVWAP_BREAKOUT"],
+        expected_r=0.85,
+        raw={"setup_family": "avwap_breakout"},
+    )
+    panel._record_review_event(
+        "favorite", row, {"on": True, "origin": "setups", "category": "swing"}
+    )
+    panel._record_dislike(row, "chasing; too far from the level")
+
+    rows = load_review_events(path)
+    assert [r["action"] for r in rows] == ["favorite", "dislike"]
+    star, dislike = rows
+    assert star["surface"] == "setups"
+    assert star["bucket"] == "favorite_setup"
+    assert star["setup_family"] == "avwap_breakout"
+    assert star["is_d1"] is True
+    assert dislike["detail"]["reason"] == "chasing; too far from the level"
+
+    # A bare test panel (no default store, no explicit path) must stay silent.
+    silent = MasterAvwapPanel(None)
+    assert silent._review_events_path is None
 
 
 def test_arm_bar_tracks_the_quick_fill_source():
