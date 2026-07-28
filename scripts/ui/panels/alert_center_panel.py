@@ -42,10 +42,12 @@ from chart_watch import (
 from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
     ALERT_CHART_WATCHES_FILE,
+    ALERT_REVIEW_EVENTS_FILE,
     D1_LEVEL_WATCHES_FILE,
     get_local_setting,
     save_local_setting,
 )
+from review_events import record_review_event
 from ui.panels import desk_layout
 from ui.models.bounce import (
     BounceAlert,
@@ -281,6 +283,7 @@ class AlertCenterPanel(QFrame):
         ignored_symbols_path=None,
         chart_watches_path=None,
         d1_level_watches_path=None,
+        review_events_path=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -291,6 +294,10 @@ class AlertCenterPanel(QFrame):
         self._review_queue: list[BounceAlert] = []
         self._current_review_alert: BounceAlert | None = None
         self._embedded_detail_enabled = True
+        # Decision-log dwell tracking: which symbol the review pane is showing
+        # and since when, so actions can report "considered for N ms".
+        self._review_shown_symbol = ""
+        self._review_shown_at: datetime | None = None
         focus_store = getattr(self.focus_service, "store", None)
         default_store = bool(
             self.focus_service is not None
@@ -335,6 +342,14 @@ class AlertCenterPanel(QFrame):
             load_d1_level_watches(self._d1_level_watches_path)
             if self._d1_level_watches_path is not None
             else []
+        )
+        # Append-only decision log (review_events.py): every shown/skip/focus/
+        # arm decision with its structured alert context. Gated exactly like
+        # the other persistence paths so bare test panels never write it.
+        self._review_events_path = (
+            Path(review_events_path)
+            if review_events_path is not None
+            else (ALERT_REVIEW_EVENTS_FILE if persist_ignored else None)
         )
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
@@ -614,11 +629,19 @@ class AlertCenterPanel(QFrame):
         origin = favorite_origin_for_alert(alert)
         if self.focus_service.is_focus(alert.symbol):
             self.focus_service.remove_everywhere(alert.symbol, origin=origin, context=alert.raw_text)
+            self._record_review_event(
+                "favorite", alert=alert, detail={"on": False, "origin": origin}
+            )
             message = f"Unfavorited {alert.symbol}: removed from focus picks."
         else:
             category = favorite_category_for_alert(alert)
             side = "short" if alert.side == "SHORT" else "long"
             self.focus_service.add(alert.symbol, side, category, origin=origin, context=alert.raw_text)
+            self._record_review_event(
+                "favorite",
+                alert=alert,
+                detail={"on": True, "origin": origin, "category": category},
+            )
             bucket = "Swing" if category == "swing" else "M5"
             message = (
                 f"★ {alert.symbol}: added to {bucket} Focus {side}s - its alerts now flag gold, "
@@ -641,6 +664,12 @@ class AlertCenterPanel(QFrame):
         self._record_dislike(alert, reason)
 
     def _record_dislike(self, alert: BounceAlert, reason: str) -> None:
+        self._record_review_event(
+            "dislike",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            detail={"reason": str(reason or "").strip()},
+        )
         self.focus_service.record_feedback(
             alert.symbol,
             alert.side,
@@ -765,11 +794,39 @@ class AlertCenterPanel(QFrame):
         )
         self._render_current_review()
 
+    # ------------------------------------------------------------------
+    # Decision logging: the training data for learning the trader's revealed
+    # preferences. Best-effort by design - a logging failure must never cost
+    # a click - and disabled whenever the panel runs on non-default stores.
+    def _record_review_event(self, action: str, **kwargs) -> None:
+        if self._review_events_path is None:
+            return
+        try:
+            record_review_event(action, path=self._review_events_path, **kwargs)
+        except Exception:
+            pass
+
+    def _review_dwell_ms(self, symbol: str) -> int | None:
+        """How long the review pane showed this symbol before the action."""
+        if self._review_shown_at is None or self._review_shown_symbol != symbol:
+            return None
+        return int((datetime.now() - self._review_shown_at).total_seconds() * 1000)
+
     def _render_current_review(self) -> None:
         alert = self._current_review_alert
         if alert is None:
+            self._review_shown_symbol = ""
+            self._review_shown_at = None
             self.chart_review.clear()
             return
+        if alert.symbol != self._review_shown_symbol:
+            # The impression: a chart for this symbol was put in front of the
+            # trader. Same-symbol refreshes keep the original dwell clock.
+            self._review_shown_symbol = alert.symbol
+            self._review_shown_at = datetime.now()
+            self._record_review_event(
+                "shown", alert=alert, queue_len=len(self._review_queue)
+            )
         bot = None
         if self._bounce_service is not None:
             try:
@@ -792,6 +849,12 @@ class AlertCenterPanel(QFrame):
             or self._current_review_alert.symbol != alert.symbol
         ):
             return
+        self._record_review_event(
+            "skip",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+        )
         self.statusChanged.emit(
             f"Skipped {alert.symbol} for now; its feed item remains available."
         )
@@ -808,6 +871,13 @@ class AlertCenterPanel(QFrame):
             category,
             origin=favorite_origin_for_alert(alert),
             context=alert.raw_text,
+        )
+        self._record_review_event(
+            "add_focus",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+            detail={"category": category, "added": bool(added)},
         )
         bucket = "Swing" if category == "swing" else "M5"
         message = (
@@ -876,6 +946,12 @@ class AlertCenterPanel(QFrame):
             ):
                 self.focus_service.remove(symbol, focus_side, "swing")
             self._unpin_d1_focus(symbol)
+            self._record_review_event(
+                "toggle_d1_focus",
+                symbol=symbol,
+                side=side,
+                detail={"on": False, "origin": origin},
+            )
             self.statusChanged.emit(
                 f"{symbol}: removed from Swing Focus and unpinned from the D1 Focus feed."
             )
@@ -883,6 +959,12 @@ class AlertCenterPanel(QFrame):
             return False
         if self.focus_service is not None:
             self.focus_service.add(symbol, focus_side, "swing", origin=origin, context=context)
+        self._record_review_event(
+            "toggle_d1_focus",
+            symbol=symbol,
+            side=side,
+            detail={"on": True, "origin": origin},
+        )
         pinned = BounceAlert(
             time_text=datetime.now().strftime("%H:%M:%S"),
             symbol=symbol,
@@ -926,10 +1008,22 @@ class AlertCenterPanel(QFrame):
         focus_side = "short" if side == "SHORT" else "long"
         if self.focus_service.is_focus(symbol, focus_side, "m5"):
             self.focus_service.remove(symbol, focus_side, "m5")
+            self._record_review_event(
+                "toggle_m5_focus",
+                symbol=symbol,
+                side=side,
+                detail={"on": False, "origin": origin},
+            )
             self.statusChanged.emit(f"{symbol}: removed from M5 Focus {focus_side}s.")
             self._refresh_review_cross_state()
             return False
         self.focus_service.add(symbol, focus_side, "m5", origin=origin, context=context)
+        self._record_review_event(
+            "toggle_m5_focus",
+            symbol=symbol,
+            side=side,
+            detail={"on": True, "origin": origin},
+        )
         self.statusChanged.emit(
             f"{symbol}: added to M5 Focus {focus_side}s - BounceBot M5-scans it now."
         )
@@ -992,6 +1086,15 @@ class AlertCenterPanel(QFrame):
         self._save_chart_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
+        current = self._current_review_alert
+        self._record_review_event(
+            "arm_watch",
+            alert=current if current is not None and current.symbol == symbol else None,
+            symbol=symbol,
+            side=side,
+            dwell_ms=self._review_dwell_ms(symbol),
+            detail={"kind": kind, "baseline": watch.baseline},
+        )
         level = f" against {watch.baseline:.2f}" if watch.baseline is not None else ""
         self.statusChanged.emit(
             f"{symbol}: {label} watch armed{level} - the first completed "
@@ -1012,6 +1115,9 @@ class AlertCenterPanel(QFrame):
         self._save_chart_watches()
         self._refresh_review_armed_kinds()
         self.armedWatchesChanged.emit()
+        self._record_review_event(
+            "disarm_watch", symbol=symbol, detail={"kind": kind}
+        )
         self.statusChanged.emit(
             f"{symbol}: {WATCH_KINDS.get(kind, kind)} watch disarmed."
         )
@@ -1032,11 +1138,20 @@ class AlertCenterPanel(QFrame):
             return
         moment = now or datetime.now()
         before = len(self._chart_watches)
-        live = [
-            watch
-            for watch in self._chart_watches
-            if not watch_is_stale(watch, now=moment)
-        ]
+        live = []
+        for watch in self._chart_watches:
+            if watch_is_stale(watch, now=moment):
+                # The third way an armed watch ends (besides firing and an
+                # explicit disarm) - without this the decision log could not
+                # tell them apart.
+                self._record_review_event(
+                    "watch_expired",
+                    symbol=watch.symbol,
+                    side=watch.side,
+                    detail={"kind": watch.kind},
+                )
+            else:
+                live.append(watch)
         remaining: list[ChartWatch] = []
         triggered = []
         for watch in live:
@@ -1053,6 +1168,12 @@ class AlertCenterPanel(QFrame):
                 triggered.append(hit)
         self._chart_watches = remaining
         for hit in triggered:
+            self._record_review_event(
+                "watch_fired",
+                symbol=hit.watch.symbol,
+                side=getattr(hit, "resolved_side", "") or hit.watch.side,
+                detail={"kind": hit.watch.kind, "message": str(hit.message or "")},
+            )
             self.add_alert(self._chart_watch_alert(hit, moment))
         if len(remaining) != before:
             self._save_chart_watches()
@@ -1141,10 +1262,18 @@ class AlertCenterPanel(QFrame):
     def _arm_d1_level_from_chart(
         self, symbol: str, direction: str, level: float, candle_date: str
     ) -> None:
-        self.arm_d1_level_watch(symbol, direction, level, candle_date=candle_date)
+        self.arm_d1_level_watch(
+            symbol, direction, level, candle_date=candle_date, fill_source="candle"
+        )
 
     def arm_d1_level_watch(
-        self, symbol: str, direction: str, level: float, *, candle_date: str = ""
+        self,
+        symbol: str,
+        direction: str,
+        level: float,
+        *,
+        candle_date: str = "",
+        fill_source: str = "",
     ) -> bool:
         symbol = str(symbol or "").strip().upper()
         try:
@@ -1174,6 +1303,19 @@ class AlertCenterPanel(QFrame):
         )
         self._save_d1_level_watches()
         self.armedWatchesChanged.emit()
+        current = self._current_review_alert
+        self._record_review_event(
+            "arm_level",
+            alert=current if current is not None and current.symbol == symbol else None,
+            symbol=symbol,
+            dwell_ms=self._review_dwell_ms(symbol),
+            detail={
+                "direction": direction,
+                "level": level,
+                "candle_date": str(candle_date or ""),
+                "fill_source": str(fill_source or ""),
+            },
+        )
         origin = f" (from the {candle_date} candle)" if candle_date else ""
         self.statusChanged.emit(
             f"{symbol}: D1 level alert armed - break {direction} {level:.2f}{origin}. "
@@ -1215,7 +1357,15 @@ class AlertCenterPanel(QFrame):
         return True
 
     def _arm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
-        self.arm_d1_level_watch(symbol, direction, level)
+        # The arm bar remembers which quick-fill button (vwap/+1σ/hod/...) or
+        # chart click produced the price - the "what do I arm levels off"
+        # half of the decision log.
+        fill_source = ""
+        try:
+            fill_source = self.chart_review.arm_bar.last_fill_source()
+        except Exception:
+            pass
+        self.arm_d1_level_watch(symbol, direction, level, fill_source=fill_source)
 
     def _disarm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
         self.disarm_d1_level_watch(symbol, direction, level)
@@ -1260,6 +1410,11 @@ class AlertCenterPanel(QFrame):
         self._d1_level_watches = remaining
         self._save_d1_level_watches()
         self.armedWatchesChanged.emit()
+        self._record_review_event(
+            "disarm_level",
+            symbol=symbol,
+            detail={"direction": direction, "level": level},
+        )
         self.statusChanged.emit(
             f"{symbol}: D1 level alert break {direction} {level:.2f} disarmed."
         )
@@ -1308,6 +1463,16 @@ class AlertCenterPanel(QFrame):
         if triggered:
             self._save_d1_level_watches()
         for hit in triggered:
+            self._record_review_event(
+                "level_fired",
+                symbol=hit.watch.symbol,
+                side=getattr(hit, "resolved_side", "") or "",
+                detail={
+                    "direction": hit.watch.direction,
+                    "level": hit.watch.level,
+                    "message": str(hit.message or ""),
+                },
+            )
             self.add_alert(self._chart_watch_alert(hit, moment))
 
     def _refresh_review_armed_kinds(self) -> None:
@@ -1319,6 +1484,12 @@ class AlertCenterPanel(QFrame):
         """Drop a name from today's visual processing without changing scans."""
         if not alert.symbol:
             return
+        self._record_review_event(
+            "remove_today",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+        )
         self._ignore_alert_symbol(alert.symbol)
         self.statusChanged.emit(
             f"{alert.symbol}: removed from Alert Center processing for today. "
@@ -1391,6 +1562,7 @@ class AlertCenterPanel(QFrame):
             except OSError:
                 pass
         self._refresh_ignored_button()
+        self._record_review_event("restore_today", symbol=symbol)
         self.statusChanged.emit(
             f"{symbol}: restored to today's Alert Center processing."
         )

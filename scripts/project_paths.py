@@ -231,6 +231,11 @@ AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
 # Lives in the shared home so it syncs across machines and can be handed to an
 # AI for review ("why did I like/hate these picks -> tune the scans").
 PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
+# Append-only JSONL log of every Alert Center review decision (shown, skip,
+# remove-for-today, focus adds, watch/level arms and their fired/expired
+# endings), each with the alert's structured context. The training data for
+# learning the trader's revealed preferences; see scripts/review_events.py.
+ALERT_REVIEW_EVENTS_FILE = PERSISTENT_DATA_DIR / "alert_review_events.jsonl"
 # Alert Center symbols removed from review for the current trading day. This
 # suppresses only the visual surface; it never removes a watchlist entry or
 # changes a scanner.

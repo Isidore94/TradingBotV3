@@ -94,6 +94,11 @@ class ArmBar(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self._quick_fill: Callable[[str], float | None] | None = None
+        # Which source produced the price in the level box ("vwap", "upper_1",
+        # "chart_click", "manual", ...). Logged with each armed level so the
+        # review-events learner can see e.g. "always arms off +1σ on shorts".
+        self._last_fill_source = ""
+        self._setting_level_programmatically = False
 
         self.symbol_input = QLineEdit()
         self.symbol_input.setPlaceholderText("Symbol ⏎")
@@ -121,6 +126,9 @@ class ArmBar(QFrame):
         self.level_input.setSingleStep(0.05)
         self.level_input.setMaximumWidth(110)
         self.level_input.setToolTip("Price level for the break alert")
+        # Any edit not made by apply_quick_fill/set_level is the trader typing
+        # or nudging the spinner - that overrides the remembered fill source.
+        self.level_input.valueChanged.connect(self._on_level_edited)
 
         self.direction_input = QComboBox()
         self.direction_input.addItem("Above", "above")
@@ -195,14 +203,30 @@ class ArmBar(QFrame):
         value = self._quick_fill(source)
         if value is None:
             return False
-        self.level_input.setValue(float(value))
+        self._set_level_value(float(value), source)
         return True
 
     def set_level(self, level: float) -> None:
         """Used by click-to-price on the charts."""
         value = _as_float(level)
         if value is not None and value > 0:
+            self._set_level_value(value, "chart_click")
+
+    def _set_level_value(self, value: float, source: str) -> None:
+        self._setting_level_programmatically = True
+        try:
             self.level_input.setValue(value)
+        finally:
+            self._setting_level_programmatically = False
+        self._last_fill_source = source
+
+    def _on_level_edited(self, *_args) -> None:
+        if not self._setting_level_programmatically:
+            self._last_fill_source = "manual"
+
+    def last_fill_source(self) -> str:
+        """Where the current level-box price came from, for decision logging."""
+        return self._last_fill_source
 
     def set_enabled_for_symbol(self, has_symbol: bool) -> None:
         for widget in (

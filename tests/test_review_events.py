@@ -1,0 +1,283 @@
+"""Review-decision capture: the writer module + the Alert Center's hooks."""
+
+import json
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT_DIR / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from review_events import (
+    REVIEW_EVENTS_SCHEMA,
+    alert_context_fields,
+    load_review_events,
+    record_review_event,
+)
+
+
+def _fake_alert(**overrides):
+    context = {
+        "rrs_spy": 1.42,
+        "rrs_sector": 0.8,
+        "rrs_industry": -0.3,
+        "session_rvol": 2.1,
+        "market_environment": "BULLISH_WEAK",
+        "internals_tape": "risk_on",
+        "sector": "Technology",
+        "industry": "Semiconductors",
+    }
+    fields = dict(
+        symbol="NVDA",
+        side="LONG",
+        trigger="Bounce confirmed",
+        timeframe="M5",
+        tag="green",
+        raw_text="[A-TIER] PROVEN NVDA: Bounce confirmed (long) from dynamic_vwap_upper_band",
+        is_d1=False,
+        payload={
+            "feedback": {
+                "event_id": "evt-123",
+                "bounce_types": "dynamic_vwap_upper_band",
+                "entry_price": "181.55",
+                "stop_price": "180.10",
+                "risk_per_share": "1.45",
+                "score": "42",
+                "is_focus_pick": False,
+                "context_json": json.dumps(context),
+            }
+        },
+    )
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+# ---------------------------------------------------------------------------
+# Writer module
+# ---------------------------------------------------------------------------
+def test_record_review_event_snapshots_structured_alert_context(tmp_path):
+    path = tmp_path / "events.jsonl"
+    row = record_review_event(
+        "skip",
+        alert=_fake_alert(),
+        dwell_ms=4200,
+        queue_len=3,
+        now=datetime(2026, 7, 28, 10, 15),
+        path=path,
+    )
+    assert row is not None
+    assert row["schema"] == REVIEW_EVENTS_SCHEMA
+    assert row["action"] == "skip"
+    assert row["symbol"] == "NVDA"
+    assert row["side"] == "LONG"
+    # The decision-relevant numbers land as real fields, not a text blob.
+    assert row["tier"] == "A"
+    assert row["proven"] is True
+    assert row["banger"] is False
+    assert row["event_id"] == "evt-123"
+    assert row["bounce_types"] == "dynamic_vwap_upper_band"
+    assert row["entry_price"] == 181.55
+    assert row["stop_price"] == 180.10
+    assert row["rrs_spy"] == 1.42
+    assert row["session_rvol"] == 2.1
+    assert row["market_environment"] == "BULLISH_WEAK"
+    assert row["dwell_ms"] == 4200
+    assert row["queue_len"] == 3
+    # And it round-trips off disk.
+    assert load_review_events(path) == [row]
+
+
+def test_record_review_event_requires_action_and_symbol(tmp_path):
+    path = tmp_path / "events.jsonl"
+    assert record_review_event("", alert=_fake_alert(), path=path) is None
+    assert record_review_event("skip", symbol="", path=path) is None
+    assert not path.exists()
+
+
+def test_record_review_event_survives_malformed_alerts(tmp_path):
+    path = tmp_path / "events.jsonl"
+    # No payload, no raw_text - a manual chart or a stand-in object.
+    bare = SimpleNamespace(symbol="AAPL", side="WATCH")
+    row = record_review_event("shown", alert=bare, path=path)
+    assert row is not None
+    assert row["tier"] == ""
+    assert row["event_id"] == ""
+    # context_json that fails to parse is dropped, not fatal.
+    broken = _fake_alert()
+    broken.payload["feedback"]["context_json"] = "{not json"
+    row = record_review_event("skip", alert=broken, path=path)
+    assert row is not None
+    assert "rrs_spy" not in row
+
+
+def test_alert_context_fields_reads_chart_watch_payload():
+    alert = SimpleNamespace(
+        symbol="TSLA",
+        side="SHORT",
+        raw_text="CHART WATCH TSLA (SHORT): -1σ bounce",
+        tag="chart_watch",
+        timeframe="M5",
+        is_d1=False,
+        trigger="-1σ bounce",
+        payload={"chart_watch_kind": "band_bounce", "armed_at": "2026-07-28T09:40:00"},
+    )
+    fields = alert_context_fields(alert)
+    assert fields["chart_watch_kind"] == "band_bounce"
+    assert fields["tag"] == "chart_watch"
+
+
+def test_load_review_events_skips_bad_lines(tmp_path):
+    path = tmp_path / "events.jsonl"
+    good = record_review_event("skip", alert=_fake_alert(), path=path)
+    path.open("a", encoding="utf-8").write("{broken\n[1,2]\n")
+    assert load_review_events(path) == [good]
+
+
+# ---------------------------------------------------------------------------
+# Alert Center hooks (offscreen Qt; skipped when PySide6 is unavailable)
+# ---------------------------------------------------------------------------
+def _qt_app():
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ModuleNotFoundError:
+        return None
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    return QApplication.instance() or QApplication([])
+
+
+def _bounce_alert(**overrides):
+    from ui.models.bounce import BounceAlert
+
+    fake = _fake_alert(**overrides)
+    return BounceAlert(
+        time_text="10:15:00",
+        symbol=fake.symbol,
+        side=fake.side,
+        trigger=fake.trigger,
+        timeframe=fake.timeframe,
+        tag=fake.tag,
+        raw_text=fake.raw_text,
+        is_d1=fake.is_d1,
+        payload=fake.payload,
+    )
+
+
+def _actions(path):
+    return [row["action"] for row in load_review_events(path)]
+
+
+def test_panel_logs_shown_and_skip_with_dwell_and_queue(tmp_path):
+    if _qt_app() is None:
+        return
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    path = tmp_path / "events.jsonl"
+    panel = AlertCenterPanel(review_events_path=path)
+    first = _bounce_alert()
+    second = _bounce_alert(symbol="AMD", raw_text="[B-TIER] AMD: Bounce confirmed (long)")
+    panel._enqueue_review_alert(first)
+    panel._enqueue_review_alert(second)
+
+    rows = load_review_events(path)
+    assert [row["action"] for row in rows] == ["shown"]
+    assert rows[0]["symbol"] == "NVDA"
+    assert rows[0]["tier"] == "A"
+    assert rows[0]["queue_len"] == 0  # AMD enqueued after NVDA was shown
+
+    panel._skip_review_alert(first)
+    rows = load_review_events(path)
+    # Skipping NVDA logs the skip and advances to AMD (a second impression).
+    assert [row["action"] for row in rows] == ["shown", "skip", "shown"]
+    skip = rows[1]
+    assert skip["symbol"] == "NVDA"
+    assert skip["dwell_ms"] >= 0
+    assert skip["queue_len"] == 1
+    assert rows[2]["symbol"] == "AMD"
+
+
+def test_panel_logs_remove_today_and_restore(tmp_path):
+    if _qt_app() is None:
+        return
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    path = tmp_path / "events.jsonl"
+    panel = AlertCenterPanel(review_events_path=path)
+    alert = _bounce_alert()
+    panel._enqueue_review_alert(alert)
+    panel._remove_review_alert_for_today(alert)
+    panel._restore_ignored_symbol("NVDA")
+    assert _actions(path) == ["shown", "remove_today", "restore_today"]
+
+
+def test_panel_logs_watch_arm_disarm_and_expiry(tmp_path):
+    if _qt_app() is None:
+        return
+    from chart_watch import ChartWatch
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    path = tmp_path / "events.jsonl"
+    panel = AlertCenterPanel(review_events_path=path)
+    assert panel.arm_chart_watch_for("NVDA", "LONG", "band_bounce")
+    assert panel.disarm_chart_watch_for("NVDA", "band_bounce")
+
+    # A watch armed yesterday is stale: the poll must log its expiry so the
+    # log can tell fired / disarmed / expired apart.
+    panel._chart_watches.append(
+        ChartWatch(
+            kind="new_hod",
+            symbol="AMD",
+            side="LONG",
+            armed_at=datetime.now() - timedelta(days=1),
+        )
+    )
+    panel._poll_chart_watches()
+
+    rows = load_review_events(path)
+    assert [row["action"] for row in rows] == ["arm_watch", "disarm_watch", "watch_expired"]
+    assert rows[0]["detail"]["kind"] == "band_bounce"
+    assert rows[2]["symbol"] == "AMD"
+    assert rows[2]["detail"]["kind"] == "new_hod"
+
+
+def test_panel_logs_level_arm_with_fill_source(tmp_path):
+    if _qt_app() is None:
+        return
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    path = tmp_path / "events.jsonl"
+    panel = AlertCenterPanel(review_events_path=path)
+    assert panel.arm_d1_level_watch(
+        "NVDA", "above", 181.55, candle_date="2026-07-25", fill_source="candle"
+    )
+    assert panel.disarm_d1_level_watch("NVDA", "above", 181.55)
+    rows = load_review_events(path)
+    assert [row["action"] for row in rows] == ["arm_level", "disarm_level"]
+    assert rows[0]["detail"] == {
+        "direction": "above",
+        "level": 181.55,
+        "candle_date": "2026-07-25",
+        "fill_source": "candle",
+    }
+
+
+def test_arm_bar_tracks_the_quick_fill_source():
+    if _qt_app() is None:
+        return
+    from ui.widgets.arm_bar import ArmBar
+
+    bar = ArmBar()
+    bar.set_quick_fill_source(lambda source: {"vwap": 100.5, "upper_1": 101.9}.get(source))
+    assert bar.apply_quick_fill("vwap")
+    assert bar.last_fill_source() == "vwap"
+    assert bar.apply_quick_fill("upper_1")
+    assert bar.last_fill_source() == "upper_1"
+    bar.set_level(99.25)
+    assert bar.last_fill_source() == "chart_click"
+    # The trader typing over the fill overrides the remembered source.
+    bar.level_input.setValue(97.10)
+    assert bar.last_fill_source() == "manual"
