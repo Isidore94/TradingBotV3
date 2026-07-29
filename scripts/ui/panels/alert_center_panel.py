@@ -1761,7 +1761,7 @@ class AlertCenterPanel(QFrame):
                 # daily store for its reference; without it there is nothing
                 # to measure against yet and the watch just waits.
                 avwape_anchor = None
-                if watch.kind in ("avwape_bounce", "avwape_break"):
+                if watch.kind.startswith("avwape_"):
                     try:
                         import chart_snapshot
 

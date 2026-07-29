@@ -64,11 +64,22 @@ D1_EVENT_KINDS = {
     "new_20d_high": "20d high",
     "new_20d_low": "20d low",
     "sma_break": "SMA break",
-    # AVWAPE (current earnings anchored VWAP) and its ±1/2/3σ bands: a bounce
-    # off any level (tag + close back on the side it came from) or a close
-    # THROUGH any level. The trigger message names the exact band.
+    # AVWAPE (current earnings anchored VWAP) levels. The trader trades the
+    # line itself and the FIRST deviation band - nothing watches 2σ/3σ (user
+    # rule 2026-07-29). Bounce = tag + close back on the approach side;
+    # break = close THROUGH. The trigger message names the exact level.
     "avwape_bounce": "AVWAPE bounce",
     "avwape_break": "AVWAPE break",
+    "avwape_dev1_bounce": "1σ bounce",
+    "avwape_dev1_break": "1σ break",
+}
+
+# Which of the derived AVWAPE levels each kind watches ("" = the line).
+_AVWAPE_KIND_BANDS = {
+    "avwape_bounce": ("",),
+    "avwape_break": ("",),
+    "avwape_dev1_bounce": ("+1σ", "-1σ"),
+    "avwape_dev1_break": ("+1σ", "-1σ"),
 }
 
 # SMA periods the sma_break watch monitors ("anyone up or down"): the desk's
@@ -682,8 +693,13 @@ def _d1_event_hit(
                     close,
                 )
         return None
-    if kind == "avwape_bounce":
-        pairs = levels.get("avwape_levels") or []
+    if kind in ("avwape_bounce", "avwape_dev1_bounce"):
+        allowed = _AVWAPE_KIND_BANDS[kind]
+        pairs = [
+            (label, level)
+            for label, level in (levels.get("avwape_levels") or [])
+            if label in allowed
+        ]
         if prev_close is None or not pairs:
             return None
         # A bounce approaches the level from prev_close's side, tags it, and
@@ -717,8 +733,13 @@ def _d1_event_hit(
                 close,
             )
         return None
-    if kind == "avwape_break":
-        pairs = levels.get("avwape_levels") or []
+    if kind in ("avwape_break", "avwape_dev1_break"):
+        allowed = _AVWAPE_KIND_BANDS[kind]
+        pairs = [
+            (label, level)
+            for label, level in (levels.get("avwape_levels") or [])
+            if label in allowed
+        ]
         if prev_close is None or not pairs:
             return None
         crossed_up = [
