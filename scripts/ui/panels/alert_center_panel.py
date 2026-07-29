@@ -62,6 +62,7 @@ from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.alert_feed_item import AlertFeedItem
 from ui.widgets.armed_watch_list import ArmedWatchList
 from ui.widgets.entry_assist_board import EntryAssistBoard
+from ui.widgets.focus_strength_board import FocusStrengthBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
 from ui.widgets.setup_detail_view import SetupDetailView
@@ -79,6 +80,8 @@ MAX_FEED_ITEMS = 250
 MAX_D1_FEED_ITEMS = 100
 
 ALERT_SPLIT_KEY = "qt_alert_center_split_sizes_v2"
+# The lower row of the alert column: tab stack | Focus strength board.
+ALERT_TABS_SPLIT_KEY = "qt_alert_tabs_row_split_sizes_v1"
 
 # D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
 # name: the scan confirmed a genuine bucket upgrade. An armed-level crossing
@@ -460,6 +463,40 @@ class AlertCenterPanel(QFrame):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._refresh_d1_tab_label()
 
+        # The alert feed is a narrow list in a column-wide tab stack, so the
+        # right half of that row was empty. A compact strongest/weakest board
+        # with the trader's Focus names pinned on top fills it, and stays
+        # visible on every tab - the RS/RW tab keeps the full entry-assist
+        # board for the deep read. Same rrsSnapshotChanged payload the RRS
+        # snapshot already consumes: no new service, thread, timer, or request.
+        self.focus_strength = FocusStrengthBoard()
+        if self.focus_service is not None:
+            self.focus_strength.set_focus_service(self.focus_service)
+        self.focus_strength.symbolActivated.connect(self._show_board_symbol_snapshot)
+
+        self.tabs_row = QSplitter(Qt.Orientation.Horizontal)
+        self.tabs_row.addWidget(self.tabs)
+        self.tabs_row.addWidget(self.focus_strength)
+        self.tabs_row.setStretchFactor(0, 3)
+        self.tabs_row.setStretchFactor(1, 2)
+        self.tabs_row.setChildrenCollapsible(False)
+        # The tab stack hints wide enough to squeeze the board out entirely;
+        # an explicit minimum takes precedence over minimumSizeHint and hands
+        # the split back to the preset (same fix the desk columns needed).
+        # 170 + the board's 170 stays inside the alert column's 360px floor, so
+        # adding the board cannot force the whole desk column wider.
+        self.tabs.setMinimumWidth(170)
+        desk_layout.apply_saved_sizes(
+            self.tabs_row, ALERT_TABS_SPLIT_KEY, desk_layout.ALERT_TABS_ROW_WEIGHTS
+        )
+        desk_layout.track_preset(
+            self,
+            self.tabs_row,
+            ALERT_TABS_SPLIT_KEY,
+            lambda _extent: desk_layout.ALERT_TABS_ROW_WEIGHTS,
+        )
+        desk_layout.persist_sizes(self, self.tabs_row, ALERT_TABS_SPLIT_KEY)
+
         self.detail_view = SetupDetailView(self)
         self.chart_review = AlertChartReview(self)
         self.chart_review.removeTodayRequested.connect(
@@ -490,7 +527,7 @@ class AlertCenterPanel(QFrame):
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.chart_review)
-        splitter.addWidget(self.tabs)
+        splitter.addWidget(self.tabs_row)
         splitter.addWidget(self.detail_view)
         splitter.setStretchFactor(0, 5)
         splitter.setStretchFactor(1, 2)
@@ -546,6 +583,7 @@ class AlertCenterPanel(QFrame):
         self._bounce_service = service
         service.alertReceived.connect(self.add_alert)
         service.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)
+        service.rrsSnapshotChanged.connect(self.focus_strength.update_snapshot)
         service.statusChanged.connect(self._maybe_add_status_alert)
         board_signal = getattr(service, "entryBoardChanged", None)
         if board_signal is not None:

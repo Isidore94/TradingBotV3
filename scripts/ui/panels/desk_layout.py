@@ -26,9 +26,13 @@ DESK_SPLIT_WIDE = (58, 42)
 # Above this desk content width the wide preset applies.
 WIDE_DESK_THRESHOLD = 2000
 
-# Alert Center column, top to bottom: chart pane, feed tabs, hidden detail
+# Alert Center column, top to bottom: chart pane, lower tab row, hidden detail
 # pane. Weights, not pixels - they are scaled to the real column height.
 ALERT_COLUMN_WEIGHTS = (62, 33, 0)
+# The lower row, left to right: the alert/D1/RS-RW/Armed tab stack and the
+# compact Focus strength board. The feed is a narrow list, so it does not need
+# the whole row; the board gets enough width for "SYMBOL +1.23 #4 vs Industry".
+ALERT_TABS_ROW_WEIGHTS = (60, 40)
 
 SAVE_DEBOUNCE_MS = 400
 
