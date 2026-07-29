@@ -841,6 +841,103 @@ def test_review_setup_text_is_large_and_red_only_for_live_alerts(monkeypatch):
     assert 'QLabel#ReviewSetupText[alertLive="true"]' in qss
 
 
+def test_skip_with_armed_d1_alert_parks_chart_for_the_day(tmp_path, monkeypatch):
+    """Arming a D1 alert then hitting Skip = decision made: ordinary alerts
+    stop re-occupying the chart that day. The armed watch firing still shows,
+    a Focus name still shows, and typing the ticker un-parks it."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert, CHART_WATCH_TAG
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+
+    class _FocusService:
+        def __init__(self):
+            self.symbols = set()
+
+        def is_focus(self, symbol, side=None, category=None):
+            return symbol in self.symbols
+
+        def focus_category(self, symbol):
+            return "m5" if symbol in self.symbols else None
+
+        def focus_side(self, symbol, category=None):
+            return None
+
+        def all_focus(self, category=None):
+            return {"long": sorted(self.symbols), "short": []}
+
+    def alert_for(symbol, trigger="[S-TIER] VWAP reclaim", tag="green"):
+        return BounceAlert(
+            time_text="11:30:00",
+            symbol=symbol,
+            side="LONG",
+            trigger=trigger,
+            timeframe="5m",
+            tag=tag,
+            raw_text=f"{trigger} {symbol}",
+        )
+
+    focus = _FocusService()
+    panel = AlertCenterPanel(
+        parked_symbols_path=tmp_path / "parked.json",
+        d1_event_watches_path=tmp_path / "events.json",
+    )
+    panel.focus_service = focus
+
+    panel.add_alert(alert_for("NVDA"))
+    assert panel._current_review_alert.symbol == "NVDA"
+
+    # Arm a D1 alert on the chart, then Skip: the symbol parks for the day.
+    panel.arm_d1_event_watch("NVDA", "new_5d_high")
+    panel._skip_review_alert(panel._current_review_alert)
+    assert "NVDA" in panel._parked_symbols
+    assert panel._current_review_alert is None
+
+    # Ordinary alerts for the parked name no longer occupy the chart...
+    panel.add_alert(alert_for("NVDA"))
+    assert panel._current_review_alert is None
+    # ...and the parking survives a panel restart within the day.
+    second = AlertCenterPanel(parked_symbols_path=tmp_path / "parked.json")
+    assert "NVDA" in second._parked_symbols
+
+    # The armed watch firing is exactly what was asked for: it still shows.
+    panel.add_alert(alert_for("NVDA", trigger="New 5-day high", tag=CHART_WATCH_TAG))
+    assert panel._current_review_alert is not None
+    assert panel._current_review_alert.tag == CHART_WATCH_TAG
+    panel._skip_review_alert(panel._current_review_alert)
+
+    # A Focus name is the trader's own: parked or not, it shows.
+    focus.symbols.add("NVDA")
+    panel.add_alert(alert_for("NVDA"))
+    assert panel._current_review_alert is not None
+    panel._skip_review_alert(panel._current_review_alert)
+    focus.symbols.discard("NVDA")
+
+    # Typing the ticker re-engages: un-parked, alerts occupy the chart again.
+    panel.chart_symbol("NVDA")
+    assert "NVDA" not in panel._parked_symbols
+
+    # A skip WITHOUT an armed D1 alert stays a plain skip (no parking).
+    panel2 = AlertCenterPanel(parked_symbols_path=tmp_path / "parked2.json")
+    panel2.add_alert(alert_for("TSLA"))
+    panel2._skip_review_alert(panel2._current_review_alert)
+    assert "TSLA" not in panel2._parked_symbols
+    panel2.add_alert(alert_for("TSLA"))
+    assert panel2._current_review_alert.symbol == "TSLA"
+
+
 def test_dock_d1_event_buttons_arm_poll_and_fire_red(monkeypatch):
     """The dock's D1 row: toggling arms a persistent event watch, the 60s
     poll fires it off the daily-store-derived level, and the one-shot retires

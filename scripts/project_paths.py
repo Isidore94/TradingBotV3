@@ -252,6 +252,11 @@ REVIEW_POLICY_DRAFT_FILE = PERSISTENT_DATA_DIR / "review_policy_draft.json"
 # suppresses only the visual surface; it never removes a watchlist entry or
 # changes a scanner.
 ALERT_CENTER_IGNORED_SYMBOLS_FILE = PERSISTENT_DATA_DIR / "alert_center_ignored_symbols.txt"
+# Symbols "parked" out of the review CHART queue for the day: the trader armed
+# a D1 alert on the chart and then hit Skip - decision made, the armed alert
+# does the watching. Feed items still record; Focus names and armed-watch hits
+# still occupy the chart.
+ALERT_REVIEW_PARKED_SYMBOLS_FILE = PERSISTENT_DATA_DIR / "alert_center_parked_symbols.json"
 # Armed visual-chart watches (New HOD/LOD, VWAP/σ-band bounces): trading-day
 # scoped so a GUI restart keeps them armed; a new session starts clean.
 ALERT_CHART_WATCHES_FILE = PERSISTENT_DATA_DIR / "alert_chart_watches.json"

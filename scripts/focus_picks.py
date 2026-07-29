@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -80,6 +80,42 @@ def _membership_key(symbol: str, side: str, category: str) -> str:
     return f"{symbol}|{side}|{category}"
 
 
+# --------------------------------------------------------------- m5 day stamp
+# The m5 category is a DAY-TRADE list: picks belong to one calendar day and
+# reset on the next (user rule 2026-07-29). The stamp sidecar rides next to
+# focus_longs.txt so both the store (which physically clears + un-injects on
+# a stale day) and the read-only engine accessors (which just exclude stale
+# m5 names) agree on which day the current list belongs to.
+def _m5_state_path_for(focus_longs_path: Path) -> Path:
+    return Path(focus_longs_path).with_name("focus_m5_state.json")
+
+
+def _read_m5_market_date(path: Path) -> str | None:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    stamp = str(payload.get("market_date") or "").strip()
+    return stamp or None
+
+
+def _write_m5_market_date(path: Path, date_text: str) -> None:
+    target = Path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staged = target.with_name(target.name + ".tmp")
+        staged.write_text(
+            json.dumps({"market_date": date_text}, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(staged, target)
+    except OSError:
+        # Cloud-synced folders can briefly lock files; the stamp is best-effort
+        # (a missed write just delays the reset to the next successful one).
+        pass
+
+
 class FocusPickStore:
     def __init__(
         self,
@@ -116,6 +152,7 @@ class FocusPickStore:
             },
         }
         self._membership_path = Path(membership_path)
+        self._m5_state_path = _m5_state_path_for(focus_longs_path)
         self._lists: dict[str, dict[str, list[str]]] = {
             category: {"long": [], "short": []} for category in FOCUS_CATEGORIES
         }
@@ -129,6 +166,40 @@ class FocusPickStore:
             for side, path in self._focus_paths[category].items():
                 self._lists[category][side] = read_watchlist_symbols(path)
         self._membership = self._load_membership()
+        # m5 is a day-trade list: a new calendar day starts it empty. This
+        # runs on every store construction (GUI start each morning), so the
+        # clear also physically un-injects yesterday's picks from
+        # longs/shorts.txt before the first scan reads them.
+        self.expire_m5_if_new_day()
+
+    def expire_m5_if_new_day(self, today: date | None = None) -> int:
+        """Reset the m5 (day-trade) lists when the calendar day has rolled.
+
+        Swing picks are untouched - they are multi-day by definition. A
+        missing stamp (first run after the upgrade) is grandfathered: the
+        current list is stamped as today's rather than guessed stale.
+        Returns the number of picks cleared.
+        """
+        today_text = (today or date.today()).isoformat()
+        stamp = _read_m5_market_date(self._m5_state_path)
+        if stamp == today_text:
+            return 0
+        if stamp is None:
+            _write_m5_market_date(self._m5_state_path, today_text)
+            return 0
+        removed = 0
+        for side in ("long", "short"):
+            for sym in list(self._lists["m5"][side]):
+                self._uninject_from_shared(sym, side, "m5", defer_membership_save=True)
+                removed += 1
+            self._lists["m5"][side] = []
+            self._write_focus(side, "m5")
+        if removed:
+            self._save_membership()
+        _write_m5_market_date(self._m5_state_path, today_text)
+        if removed:
+            self._notify()
+        return removed
 
     def focus_symbols(self, side: object, category: object = None) -> list[str]:
         """Symbols for a side; one category, or the swing-first union of both."""
@@ -203,6 +274,10 @@ class FocusPickStore:
         self._lists[category][side].append(sym)
         self._write_focus(side, category)
         self._inject_into_shared(sym, side, category)
+        if category == "m5":
+            # The pick belongs to today; keeps the day stamp honest even in a
+            # session that crossed midnight since the last reload.
+            _write_m5_market_date(self._m5_state_path, date.today().isoformat())
         self._notify()
         return True
 
@@ -222,6 +297,8 @@ class FocusPickStore:
         if added:
             self._write_focus(side, category)
             self._save_membership()
+            if category == "m5":
+                _write_m5_market_date(self._m5_state_path, date.today().isoformat())
             self._notify()
         return added
 
@@ -375,20 +452,29 @@ def load_focus_maps_by_category(
     focus_shorts_path: Path = FOCUS_SHORTS_FILE,
     focus_swing_longs_path: Path | None = None,
     focus_swing_shorts_path: Path | None = None,
+    today: date | None = None,
 ) -> dict[str, dict[str, set[str]]]:
-    """{'swing': {'long': {...}, 'short': {...}}, 'm5': {...}} straight from disk."""
+    """{'swing': {'long': {...}, 'short': {...}}, 'm5': {...}} straight from disk.
+
+    m5 is a day-trade list: when its stamp sidecar says the files belong to an
+    earlier day, the stale names are excluded here (read-only - the physical
+    clear happens when a FocusPickStore next loads). A missing stamp includes
+    the files unchanged, matching the store's grandfathering.
+    """
     focus_longs_path = Path(focus_longs_path)
     focus_shorts_path = Path(focus_shorts_path)
     swing_longs = Path(focus_swing_longs_path) if focus_swing_longs_path else focus_longs_path.with_name("focus_swing_longs.txt")
     swing_shorts = Path(focus_swing_shorts_path) if focus_swing_shorts_path else focus_shorts_path.with_name("focus_swing_shorts.txt")
+    stamp = _read_m5_market_date(_m5_state_path_for(focus_longs_path))
+    m5_stale = stamp is not None and stamp != (today or date.today()).isoformat()
     return {
         "swing": {
             "long": set(read_watchlist_symbols(swing_longs)),
             "short": set(read_watchlist_symbols(swing_shorts)),
         },
         "m5": {
-            "long": set(read_watchlist_symbols(focus_longs_path)),
-            "short": set(read_watchlist_symbols(focus_shorts_path)),
+            "long": set() if m5_stale else set(read_watchlist_symbols(focus_longs_path)),
+            "short": set() if m5_stale else set(read_watchlist_symbols(focus_shorts_path)),
         },
     }
 

@@ -48,6 +48,7 @@ from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
     ALERT_CHART_WATCHES_FILE,
     ALERT_REVIEW_EVENTS_FILE,
+    ALERT_REVIEW_PARKED_SYMBOLS_FILE,
     D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
     get_local_setting,
@@ -291,6 +292,7 @@ class AlertCenterPanel(QFrame):
         parent=None,
         *,
         ignored_symbols_path=None,
+        parked_symbols_path=None,
         chart_watches_path=None,
         d1_level_watches_path=None,
         d1_event_watches_path=None,
@@ -328,6 +330,24 @@ class AlertCenterPanel(QFrame):
                 market_date=self._ignored_market_date,
             )
             if self._ignored_symbols_path is not None
+            else set()
+        )
+        # Day-scoped "parked" set: the trader armed a D1 alert on the chart
+        # and then hit Skip - decision made, the armed alert does the
+        # watching, so the chart queue stops re-showing the name. The FEED
+        # still records its alerts; Focus names and armed-watch hits still
+        # occupy the chart. Same file format/day scoping as ignored symbols.
+        self._parked_symbols_path = (
+            Path(parked_symbols_path)
+            if parked_symbols_path is not None
+            else (ALERT_REVIEW_PARKED_SYMBOLS_FILE if persist_ignored else None)
+        )
+        self._parked_symbols = (
+            load_ignored_alert_symbols(
+                self._parked_symbols_path,
+                market_date=self._ignored_market_date,
+            )
+            if self._parked_symbols_path is not None
             else set()
         )
         # One-shot chart watches armed from the visual charts. Persisted to a
@@ -825,6 +845,16 @@ class AlertCenterPanel(QFrame):
         review pane."""
         if not alert.symbol or not SYMBOL_RE.fullmatch(alert.symbol):
             return
+        # Parked = the trader armed a D1 alert on this chart and skipped:
+        # decision made for the day, so ordinary alerts stop re-occupying the
+        # chart. The armed watch firing (chart_watch) is exactly what they
+        # asked to see, and a Focus name is theirs - both still show.
+        if (
+            alert.symbol in self._parked_symbols
+            and not is_chart_watch_alert(alert)
+            and not self._alert_is_focus(alert)
+        ):
+            return
         if (
             self._current_review_alert is not None
             and self._current_review_alert.symbol == alert.symbol
@@ -996,15 +1026,29 @@ class AlertCenterPanel(QFrame):
             or self._current_review_alert.symbol != alert.symbol
         ):
             return
+        # Skip after arming a D1 alert = "the alert does the watching now":
+        # park the chart for the rest of the day (user rule 2026-07-29).
+        parked = self._has_armed_d1_alerts(alert.symbol) and not self._alert_is_focus(
+            alert
+        )
+        if parked:
+            self._park_review_symbol(alert.symbol)
         self._record_review_event(
             "skip",
             alert=alert,
             dwell_ms=self._review_dwell_ms(alert.symbol),
             queue_len=len(self._review_queue),
+            detail={"parked": True} if parked else None,
         )
-        self.statusChanged.emit(
-            f"Skipped {alert.symbol} for now; its feed item remains available."
-        )
+        if parked:
+            self.statusChanged.emit(
+                f"Skipped {alert.symbol}: chart parked for today - its armed D1 "
+                "alert still fires red, and adding it to Focus un-parks it."
+            )
+        else:
+            self.statusChanged.emit(
+                f"Skipped {alert.symbol} for now; its feed item remains available."
+            )
         self._advance_review_queue()
 
     def _add_review_alert_to_focus(self, alert: BounceAlert) -> None:
@@ -1489,6 +1533,9 @@ class AlertCenterPanel(QFrame):
             return False
         if symbol in self._ignored_symbols:
             self._restore_ignored_symbol(symbol)
+        # Typing a parked symbol is re-engaging with it: un-park so its
+        # alerts can occupy the chart again.
+        self._unpark_review_symbol(symbol)
         alert = BounceAlert(
             time_text=datetime.now().strftime("%H:%M:%S"),
             symbol=symbol,
@@ -1855,7 +1902,55 @@ class AlertCenterPanel(QFrame):
             if self._ignored_symbols_path is not None
             else set()
         )
+        # Parked symbols are day-scoped exactly like ignored ones: the file's
+        # stale market_date loads as an empty set on the new day.
+        self._parked_symbols = (
+            load_ignored_alert_symbols(
+                self._parked_symbols_path,
+                market_date=current,
+            )
+            if self._parked_symbols_path is not None
+            else set()
+        )
         self._refresh_ignored_button()
+
+    def _park_review_symbol(self, symbol: str) -> None:
+        """Keep a symbol's chart out of the review queue for the day."""
+        self._refresh_ignored_market_date()
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
+        self._parked_symbols.add(symbol)
+        if self._parked_symbols_path is not None:
+            try:
+                self._parked_symbols = save_ignored_alert_symbols(
+                    self._parked_symbols,
+                    self._parked_symbols_path,
+                    market_date=self._ignored_market_date,
+                )
+            except Exception:
+                pass
+
+    def _unpark_review_symbol(self, symbol: str) -> None:
+        symbol = str(symbol or "").strip().upper()
+        if symbol not in self._parked_symbols:
+            return
+        self._parked_symbols.discard(symbol)
+        if self._parked_symbols_path is not None:
+            try:
+                self._parked_symbols = save_ignored_alert_symbols(
+                    self._parked_symbols,
+                    self._parked_symbols_path,
+                    market_date=self._ignored_market_date,
+                )
+            except Exception:
+                pass
+
+    def _has_armed_d1_alerts(self, symbol: str) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        return any(watch.symbol == symbol for watch in self._d1_level_watches) or any(
+            watch.symbol == symbol for watch in self._d1_event_watches
+        )
 
     def set_embedded_detail_enabled(self, enabled: bool) -> None:
         """Workspace mode turns the embedded plan pane off so the setup is
