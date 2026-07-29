@@ -28,18 +28,23 @@ _daily_bars_cache: dict[str, tuple[tuple[str, int], list[dict[str, Any]]]] = {}
 # (mtime, {symbol: [iso dates...]}) for the earnings-dates cache file.
 _earnings_dates_cache: list = [None, {}]
 
+# Fixed color assignments (user-specified 2026-07-29): the trader reads these
+# lines by color first. SMAs dotted, EMAs solid.
 D1_OVERLAY_SPECS = (
-    ("sma", 50, "SMA50", "info", 1.6, False),
-    ("sma", 100, "SMA100", "caution", 1.6, False),
-    ("sma", 200, "SMA200", "short", 1.6, False),
-    ("ema", 8, "EMA8", "favorite", 1.1, True),
-    ("ema", 15, "EMA15", "near", 1.1, True),
-    ("ema", 21, "EMA21", "study", 1.1, True),
+    ("sma", 50, "SMA50", "chart_light_blue", 1.6, "dot"),
+    ("sma", 100, "SMA100", "chart_pink", 1.6, "dot"),
+    ("sma", 200, "SMA200", "chart_purple", 1.6, "dot"),
+    ("ema", 8, "EMA8", "chart_grey", 1.1, False),
+    ("ema", 15, "EMA15", "chart_pink", 1.1, False),
+    ("ema", 21, "EMA21", "chart_yellow", 1.1, False),
 )
 
+# AVWAPE band colors by σ multiple (upper and lower share the color).
+AVWAPE_BAND_COLORS = {1: "chart_blue", 2: "chart_green", 3: "chart_light_blue"}
+
 M5_EMA_SPECS = (
-    ("ema", 15, "EMA15", "near", 1.1, True),
-    ("ema", 21, "EMA21", "study", 1.1, True),
+    ("ema", 15, "EMA15", "chart_pink", 1.1, True),
+    ("ema", 21, "EMA21", "chart_yellow", 1.1, True),
 )
 
 
@@ -201,31 +206,44 @@ def _earnings_dates_map() -> dict[str, list[str]]:
     return symbols
 
 
-def earnings_anchor_date(symbol: str, *, today: date | None = None) -> date | None:
-    """The CURRENT AVWAPE anchor the master system would use for ``symbol``.
+def earnings_anchor_dates(
+    symbol: str, *, today: date | None = None
+) -> tuple[date | None, date | None]:
+    """(current, previous) AVWAPE anchors the master system would use.
 
-    Same selection as the scanner (``pick_current_earnings_anchor_for_
-    reference_date``): the most recent earnings date, except a very fresh one
-    (< RECENT_DAYS) defers to the prior anchor while its own accumulation is
-    still thin. None when the earnings cache has nothing for the symbol.
+    Same selection as the scanner (``pick_current/previous_earnings_anchor_
+    for_reference_date``): the most recent earnings date, except a very fresh
+    one (< RECENT_DAYS) defers to the prior anchor while its own accumulation
+    is still thin; "previous" is the anchor before that. (None, None) when
+    the earnings cache has nothing for the symbol.
     """
     symbol = str(symbol or "").strip().upper()
     if not symbol:
-        return None
+        return (None, None)
     dates_map = _earnings_dates_map()
     dates = dates_map.get(symbol)
     if not dates and "." in symbol:
         dates = dates_map.get(symbol.replace(".", "-"))
     if not dates:
-        return None
+        return (None, None)
     try:
-        from master_avwap_lib.legacy import pick_current_earnings_anchor_for_reference_date
+        from master_avwap_lib.legacy import (
+            pick_current_earnings_anchor_for_reference_date,
+            pick_previous_earnings_anchor_for_reference_date,
+        )
 
-        return pick_current_earnings_anchor_for_reference_date(
-            dates, today or date.today()
+        reference = today or date.today()
+        return (
+            pick_current_earnings_anchor_for_reference_date(dates, reference),
+            pick_previous_earnings_anchor_for_reference_date(dates, reference),
         )
     except Exception:
-        return None
+        return (None, None)
+
+
+def earnings_anchor_date(symbol: str, *, today: date | None = None) -> date | None:
+    """The CURRENT AVWAPE anchor alone (watch evaluation uses only this)."""
+    return earnings_anchor_dates(symbol, today=today)[0]
 
 
 def _overlay(label: str, values: list[float | None], color: str, width: float, dash: bool) -> dict:
@@ -363,7 +381,7 @@ def build_d1_snapshot(
     sessions: int = D1_DEFAULT_SESSIONS,
     loader: Callable[[str], list[dict[str, Any]]] | None = None,
     intraday_bars: list[Mapping[str, Any]] | None = None,
-    anchor_resolver: Callable[[str], date | None] | None = None,
+    anchor_resolver: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
     """Daily candles + SMA50/100/200 + EMA8/15/21 + AVWAPE ±1/2/3σ bands,
     indicators computed on the full history so the displayed tail carries
@@ -374,7 +392,8 @@ def build_d1_snapshot(
     averages stay computed on completed sessions only - each overlay gets a
     trailing None, so the lines honestly stop at the last stored bar instead
     of previewing an indicator off a partial day. ``anchor_resolver``
-    overrides the earnings-anchor lookup (tests).
+    overrides the earnings-anchor lookup (tests); it may return either a
+    (current, previous) tuple or a bare current anchor date.
     """
     bars = (loader or load_d1_bars)(symbol)
     if not bars:
@@ -399,25 +418,45 @@ def build_d1_snapshot(
         overlays.append(_overlay(label, tail_values(series), color, width, dash))
 
     # AVWAPE + its σ bands, anchored where the master scanner anchors (the
-    # current earnings AVWAP). The six band overlays share one legend label so
-    # the legend gains two entries, not seven. Anchor date rides in the
-    # snapshot for hosts (legend stamp, watch evaluation).
-    anchor = (anchor_resolver or earnings_anchor_date)(symbol)
-    anchor_index = None
-    if anchor is not None:
+    # current earnings AVWAP), plus the PREVIOUS earnings AVWAP as a single
+    # yellow line. Upper/lower of each σ multiple share a label so the legend
+    # gains one entry per band pair, not one per line. Anchor dates ride in
+    # the snapshot for hosts (legend stamp, watch evaluation).
+    resolved = (anchor_resolver or earnings_anchor_dates)(symbol)
+    if isinstance(resolved, tuple):
+        anchor, prev_anchor = resolved
+    else:  # a bare current-anchor resolver (older tests/callers)
+        anchor, prev_anchor = resolved, None
+
+    def _anchor_index_for(target: date | None) -> int | None:
+        if target is None:
+            return None
         for index, bar in enumerate(bars):
             stamp = bar.get("dt")
-            if hasattr(stamp, "date") and stamp.date() == anchor:
-                anchor_index = index
-                break
+            if hasattr(stamp, "date") and stamp.date() == target:
+                return index
+        return None
+
+    anchor_index = _anchor_index_for(anchor)
+    prev_index = _anchor_index_for(prev_anchor)
     if anchor_index is not None:
         bands = anchored_vwap_band_series(bars, anchor_index)
-        overlays.append(_overlay("AVWAPE", tail_values(bands["avwap"]), "accent", 1.6, False))
-        for k, width in ((1, 1.1), (2, 0.9), (3, 0.7)):
+        overlays.append(
+            _overlay("AVWAPE", tail_values(bands["avwap"]), "chart_white", 1.6, False)
+        )
+        for k, width in ((1, 1.1), (2, 1.0), (3, 0.9)):
+            color = AVWAPE_BAND_COLORS[k]
             for side_key in (f"upper_{k}", f"lower_{k}"):
                 overlays.append(
-                    _overlay("AVWAPE ±1-3σ", tail_values(bands[side_key]), "accent", width, True)
+                    _overlay(f"±{k}σ", tail_values(bands[side_key]), color, width, True)
                 )
+    if prev_index is not None:
+        prev_bands = anchored_vwap_band_series(bars, prev_index)
+        overlays.append(
+            _overlay(
+                "AVWAPE prev", tail_values(prev_bands["avwap"]), "chart_yellow", 1.2, False
+            )
+        )
     return {
         "symbol": symbol,
         "timeframe": "D1",
@@ -425,6 +464,7 @@ def build_d1_snapshot(
         "overlays": overlays,
         "note": "",
         "avwape_anchor": anchor.isoformat() if anchor_index is not None else "",
+        "avwape_prev_anchor": prev_anchor.isoformat() if prev_index is not None else "",
     }
 
 

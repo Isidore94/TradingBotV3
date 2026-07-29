@@ -285,10 +285,19 @@ class CandleChart(pg.PlotWidget):
                 values = [
                     _to_log_price(value) if value > 0 else math.nan for value in values
                 ]
+            # "dash" is the overlay contract's line style: falsy = solid,
+            # "dot" = dotted (the SMAs), any other truthy = dashed.
+            dash = overlay.get("dash")
+            if dash == "dot":
+                style = Qt.PenStyle.DotLine
+            elif dash:
+                style = Qt.PenStyle.DashLine
+            else:
+                style = Qt.PenStyle.SolidLine
             pen = pg.mkPen(
                 QColor(theme.color(str(overlay.get("color") or "neutral"))),
                 width=float(overlay.get("width") or 1.0),
-                style=Qt.PenStyle.DashLine if overlay.get("dash") else Qt.PenStyle.SolidLine,
+                style=style,
             )
             plot.plot(
                 list(range(len(values))),

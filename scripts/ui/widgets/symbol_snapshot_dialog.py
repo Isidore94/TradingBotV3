@@ -229,6 +229,9 @@ class SymbolSnapshotWidget(QWidget):
                 # Which earnings the AVWAPE lines hang from - without it the
                 # bands are just unexplained curves.
                 reach += f" · AVWAPE from {anchor_iso[5:7]}/{anchor_iso[8:10]}"
+            prev_iso = str(d1.get("avwape_prev_anchor") or "")
+            if prev_iso:
+                reach += f" · prev {prev_iso[5:7]}/{prev_iso[8:10]}"
             self.d1_legend.setText(
                 self.d1_legend.text()
                 + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"

@@ -26,6 +26,19 @@ THEMES: dict[str, dict[str, str]] = {
         "study": "#9B7CFF",
         "input_bg": "#12161C",
         "selection": "#244B86",
+        # Chart-line palette (user-specified 2026-07-29): the D1 overlays are
+        # read by color first, label second, so these are fixed assignments -
+        # SMA200 purple / SMA100 pink / SMA50 light blue, EMA15 pink /
+        # EMA21 yellow / EMA8 grey, AVWAPE white (prev yellow), bands
+        # blue / green / light blue for 1/2/3σ.
+        "chart_purple": "#A855F7",
+        "chart_pink": "#F472B6",
+        "chart_light_blue": "#7DD3FC",
+        "chart_yellow": "#FDE047",
+        "chart_grey": "#9AA4B2",
+        "chart_white": "#F5F7FA",
+        "chart_blue": "#3B82F6",
+        "chart_green": "#34D399",
     },
     "light": {
         "bg_app": "#F4F6F9",
@@ -48,6 +61,16 @@ THEMES: dict[str, dict[str, str]] = {
         "study": "#7C3AED",
         "input_bg": "#F8FAFC",
         "selection": "#BFD7FF",
+        # Same assignments, darkened where the dark-theme value would wash
+        # out on a white panel (white -> near-black keeps AVWAPE readable).
+        "chart_purple": "#7E22CE",
+        "chart_pink": "#DB2777",
+        "chart_light_blue": "#0284C7",
+        "chart_yellow": "#CA8A04",
+        "chart_grey": "#64748B",
+        "chart_white": "#1F2937",
+        "chart_blue": "#1D4ED8",
+        "chart_green": "#059669",
     },
 }
 

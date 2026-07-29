@@ -225,34 +225,60 @@ def test_anchored_vwap_band_series_final_point_matches_calc_anchored_vwap_bands(
 def test_build_d1_snapshot_draws_avwape_bands_from_the_anchor():
     daily = _daily_bars(20)  # sessions 07/01..07/20
     anchor_date = daily[4]["dt"].date()  # 07/05
+    prev_date = daily[1]["dt"].date()  # 07/02
     snapshot = chart_snapshot.build_d1_snapshot(
         "TEST",
         sessions=90,
         loader=lambda _s: daily,
-        anchor_resolver=lambda _s: anchor_date,
+        anchor_resolver=lambda _s: (anchor_date, prev_date),
     )
     labels = [overlay["label"] for overlay in snapshot["overlays"]]
-    # One legend entry for the line, ONE shared entry for all six bands.
+    # One legend entry for the line, one per σ band pair, one for prev.
     assert labels.count("AVWAPE") == 1
-    assert labels.count("AVWAPE ±1-3σ") == 6
+    for k in (1, 2, 3):
+        assert labels.count(f"±{k}σ") == 2
+    assert labels.count("AVWAPE prev") == 1
     assert snapshot["avwape_anchor"] == anchor_date.isoformat()
-    avwape = next(o for o in snapshot["overlays"] if o["label"] == "AVWAPE")
+    assert snapshot["avwape_prev_anchor"] == prev_date.isoformat()
+    by_label = {o["label"]: o for o in snapshot["overlays"]}
+    # Fixed color assignments (user-specified): white line, yellow prev,
+    # blue/green/light-blue bands, dotted SMAs / solid EMAs.
+    assert by_label["AVWAPE"]["color"] == "chart_white"
+    assert by_label["AVWAPE prev"]["color"] == "chart_yellow"
+    assert by_label["±1σ"]["color"] == "chart_blue"
+    assert by_label["±2σ"]["color"] == "chart_green"
+    assert by_label["±3σ"]["color"] == "chart_light_blue"
+    assert by_label["SMA200"]["color"] == "chart_purple" and by_label["SMA200"]["dash"] == "dot"
+    assert by_label["SMA100"]["color"] == "chart_pink" and by_label["SMA100"]["dash"] == "dot"
+    assert by_label["SMA50"]["color"] == "chart_light_blue"
+    assert by_label["EMA8"]["color"] == "chart_grey" and by_label["EMA8"]["dash"] is False
+    assert by_label["EMA15"]["color"] == "chart_pink"
+    assert by_label["EMA21"]["color"] == "chart_yellow"
+    avwape = by_label["AVWAPE"]
     assert avwape["values"][3] is None  # before the anchor
     assert avwape["values"][4] is not None
     assert len(avwape["values"]) == len(snapshot["bars"])
+    prev_line = by_label["AVWAPE prev"]
+    assert prev_line["values"][0] is None
+    assert prev_line["values"][1] is not None
 
-    # No anchor (not in the earnings cache): no AVWAPE overlays, empty stamp.
+    # No anchor (not in the earnings cache): no AVWAPE overlays, empty stamps.
     bare = chart_snapshot.build_d1_snapshot(
-        "TEST", loader=lambda _s: daily, anchor_resolver=lambda _s: None
+        "TEST", loader=lambda _s: daily, anchor_resolver=lambda _s: (None, None)
     )
     assert all("AVWAPE" not in o["label"] for o in bare["overlays"])
-    assert bare["avwape_anchor"] == ""
+    assert bare["avwape_anchor"] == "" and bare["avwape_prev_anchor"] == ""
 
-    # An anchor date with no stored candle mirrors the runner: no lines.
+    # A bare current-anchor resolver (no tuple) still works; an anchor date
+    # with no stored candle mirrors the runner: no lines.
     from datetime import date as _date
 
+    single = chart_snapshot.build_d1_snapshot(
+        "TEST", loader=lambda _s: daily, anchor_resolver=lambda _s: anchor_date
+    )
+    assert [o["label"] for o in single["overlays"]].count("AVWAPE") == 1
     missing = chart_snapshot.build_d1_snapshot(
-        "TEST", loader=lambda _s: daily, anchor_resolver=lambda _s: _date(2020, 1, 1)
+        "TEST", loader=lambda _s: daily, anchor_resolver=lambda _s: (_date(2020, 1, 1), None)
     )
     assert all("AVWAPE" not in o["label"] for o in missing["overlays"])
 
