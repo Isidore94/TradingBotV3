@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from chart_watch import D1_LEVEL_KINDS, WATCH_KINDS
+from chart_watch import D1_EVENT_KINDS, D1_LEVEL_KINDS, WATCH_KINDS
 from ui import theme
 
 COLUMNS = ("Symbol", "Kind", "Level", "Armed", "Age", "Health", "")
@@ -42,7 +42,7 @@ def watch_health(kind: str, has_m5_bars: bool, armed_at: datetime, now: datetime
     day is already dead. Persistent level alerts have neither constraint - they
     also read the daily store - so they are always reported healthy.
     """
-    if kind in D1_LEVEL_KINDS:
+    if kind in D1_LEVEL_KINDS or kind in D1_EVENT_KINDS:
         return HEALTH_OK
     if armed_at.date() != now.date():
         return HEALTH_STALE
@@ -68,6 +68,7 @@ class ArmedWatchList(QFrame):
 
     disarmWatchRequested = Signal(str, str)  # symbol, kind
     disarmLevelRequested = Signal(str, str, float)  # symbol, direction, level
+    disarmEventRequested = Signal(str, str)  # symbol, D1 event kind
     symbolActivated = Signal(str)
 
     def __init__(self, parent=None) -> None:
@@ -100,8 +101,10 @@ class ArmedWatchList(QFrame):
         self._rows: list[tuple] = []
         self.set_watches([], [], has_m5_bars=lambda _symbol: True)
 
-    def set_watches(self, watches, levels, *, has_m5_bars, now: datetime | None = None) -> None:
-        """Render armed session watches and persistent level alerts together."""
+    def set_watches(
+        self, watches, levels, *, has_m5_bars, d1_events=(), now: datetime | None = None
+    ) -> None:
+        """Render armed session watches and persistent level/event alerts together."""
         moment = now or datetime.now()
         self._rows = []
         for watch in watches or []:
@@ -127,6 +130,21 @@ class ArmedWatchList(QFrame):
                     format_age(watch.armed_at, moment),
                     watch_health(kind, True, watch.armed_at, moment),
                     ("level", watch.symbol, watch.direction, float(watch.level)),
+                )
+            )
+        for watch in d1_events or []:
+            self._rows.append(
+                (
+                    watch.symbol,
+                    f"D1 {D1_EVENT_KINDS.get(watch.kind, watch.kind)}",
+                    # The reference level re-derives from the daily store on
+                    # every poll - printing one number here would freeze a
+                    # moving line.
+                    "auto",
+                    watch.armed_at.strftime("%m/%d"),
+                    format_age(watch.armed_at, moment),
+                    watch_health(watch.kind, True, watch.armed_at, moment),
+                    ("event", watch.symbol, watch.kind, 0.0),
                 )
             )
 
@@ -156,6 +174,8 @@ class ArmedWatchList(QFrame):
         if column == len(COLUMNS) - 1:
             if handle[0] == "watch":
                 self.disarmWatchRequested.emit(handle[1], handle[2])
+            elif handle[0] == "event":
+                self.disarmEventRequested.emit(handle[1], handle[2])
             else:
                 self.disarmLevelRequested.emit(handle[1], handle[2], handle[3])
             return

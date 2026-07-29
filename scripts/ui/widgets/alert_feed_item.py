@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QHBoxLayout, QToolButton, QVBoxLayout, QWidget
 
-from chart_watch import D1_LEVEL_KINDS, WATCH_KINDS
+from chart_watch import D1_EVENT_KINDS, D1_LEVEL_KINDS, WATCH_KINDS
 from ui import theme
 from ui.models.bounce import BounceAlert, is_chart_watch_alert
 from ui.widgets.badge import Badge
@@ -101,7 +101,12 @@ class AlertFeedItem(QWidget):
         top.addWidget(symbol_label)
         if is_watch_hit:
             kind = str((alert.payload or {}).get("chart_watch_kind") or "")
-            label = WATCH_KINDS.get(kind) or D1_LEVEL_KINDS.get(kind) or "Chart watch"
+            label = (
+                WATCH_KINDS.get(kind)
+                or D1_LEVEL_KINDS.get(kind)
+                or D1_EVENT_KINDS.get(kind)
+                or "Chart watch"
+            )
             top.addWidget(Badge(label.upper(), "short"))
         if is_focus:
             top.addWidget(Badge(_FOCUS_BADGE_TEXT.get(focus_category, "★ FOCUS"), "favorite"))

@@ -3,9 +3,16 @@
 Before this, a level alert could only be armed by right-clicking a D1 candle
 and taking that candle's literal high or low, and the four one-shot watches
 were only reachable when the review queue happened to hand you a symbol. This
-adds the three things a scanner-driven desk needs: chart any symbol on demand,
-arm an arbitrary price, and fill that price straight off a line already drawn
-on the chart instead of transcribing it.
+adds the things a scanner-driven desk needs: chart any symbol on demand, arm
+an arbitrary price (clicking either chart fills the box), and arm persistent
+D1 EVENT alerts - 15EMA rejection, new 5/20-day extremes, SMA breaks - whose
+levels move with the daily store instead of freezing at arm time.
+
+The old quick-fill button row (Last/HOD/LOD/VWAP/±1σ) is gone: click-to-price
+on the charts already fills the level box with the line the trader is looking
+at, so the row duplicated a click while D1 alerts had no home. The resolver
+plumbing stays - hosts still seed the box programmatically ("last") and the
+fill source still feeds the decision log.
 """
 
 from __future__ import annotations
@@ -25,19 +32,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from chart_watch import WATCH_KINDS
+from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
-
-# Quick-fill sources, in the order they appear. Each resolves against the
-# chart's own latest bars/overlays, so what fills is exactly what is drawn.
-QUICK_FILL_LABELS = (
-    ("last", "Last"),
-    ("hod", "HOD"),
-    ("lod", "LOD"),
-    ("vwap", "VWAP"),
-    ("upper_1", "+1σ"),
-    ("lower_1", "-1σ"),
-)
 
 
 def quick_fill_value(source: str, bars, overlays) -> float | None:
@@ -83,10 +79,11 @@ def _as_float(value) -> float | None:
 
 
 class ArmBar(QFrame):
-    """Symbol box, watch toggles, price level, quick-fill, and armed chips."""
+    """Symbol box, watch toggles, price level, D1 event toggles, armed chips."""
 
     symbolRequested = Signal(str)
     watchToggled = Signal(str)  # chart-watch kind
+    d1EventToggled = Signal(str)  # D1 event watch kind
     levelArmRequested = Signal(str, float)  # direction, level
     levelDisarmRequested = Signal(str, float)  # direction, level
 
@@ -143,13 +140,15 @@ class ArmBar(QFrame):
         )
         self.arm_level_button.clicked.connect(self._emit_level)
 
-        self.quick_fill_buttons: dict[str, QPushButton] = {}
-        for source, label in QUICK_FILL_LABELS:
+        self.d1_event_buttons: dict[str, QPushButton] = {}
+        for kind, label in D1_EVENT_KINDS.items():
             button = QPushButton(label)
-            button.setToolTip(f"Fill the price box with {label} from the chart")
-            button.setMaximumWidth(58)
-            button.clicked.connect(lambda _checked=False, s=source: self.apply_quick_fill(s))
-            self.quick_fill_buttons[source] = button
+            button.setCheckable(True)
+            button.setToolTip(self._d1_event_tooltip(kind))
+            button.clicked.connect(
+                lambda _checked=False, k=kind: self.d1EventToggled.emit(k)
+            )
+            self.d1_event_buttons[kind] = button
 
         self.armed_row = QWidget()
         self.armed_layout = QHBoxLayout(self.armed_row)
@@ -175,22 +174,27 @@ class ArmBar(QFrame):
         top.addWidget(self.direction_input)
         top.addWidget(self.arm_level_button)
 
-        fill = QHBoxLayout()
-        fill.setContentsMargins(0, 0, 0, 0)
-        fill.setSpacing(4)
-        fill_label = QLabel("Fill:")
-        fill_label.setObjectName("MutedLabel")
-        fill.addWidget(fill_label)
-        for button in self.quick_fill_buttons.values():
-            fill.addWidget(button)
-        fill.addStretch(1)
-        fill.addWidget(self.armed_row)
+        d1_row = QHBoxLayout()
+        d1_row.setContentsMargins(0, 0, 0, 0)
+        d1_row.setSpacing(4)
+        d1_label = QLabel("D1:")
+        d1_label.setObjectName("MutedLabel")
+        d1_label.setToolTip(
+            "Persistent D1 event alerts for this symbol. Levels re-derive "
+            "from the daily store every poll, so they track the moving "
+            "average / rolling extreme instead of a frozen price."
+        )
+        d1_row.addWidget(d1_label)
+        for button in self.d1_event_buttons.values():
+            d1_row.addWidget(button)
+        d1_row.addStretch(1)
+        d1_row.addWidget(self.armed_row)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
         layout.addLayout(top)
-        layout.addLayout(fill)
+        layout.addLayout(d1_row)
 
     # ------------------------------------------------------------------
     def set_quick_fill_source(self, resolver: Callable[[str], float | None]) -> None:
@@ -231,7 +235,7 @@ class ArmBar(QFrame):
     def set_enabled_for_symbol(self, has_symbol: bool) -> None:
         for widget in (
             *self.watch_buttons.values(),
-            *self.quick_fill_buttons.values(),
+            *self.d1_event_buttons.values(),
             self.level_input,
             self.direction_input,
             self.arm_level_button,
@@ -268,6 +272,38 @@ class ArmBar(QFrame):
             label = WATCH_KINDS[kind]
             button.setText(f"{label} ✓ armed" if kind in armed else label)
             button.setChecked(kind in armed)
+
+    def set_armed_d1_events(self, kinds: Iterable[str]) -> None:
+        """Reflect this symbol's armed D1 event watches; a second click disarms."""
+        armed = set(kinds or ())
+        for kind, button in self.d1_event_buttons.items():
+            label = D1_EVENT_KINDS[kind]
+            button.setText(f"{label} ✓" if kind in armed else label)
+            button.setChecked(kind in armed)
+
+    @staticmethod
+    def _d1_event_tooltip(kind: str) -> str:
+        label = D1_EVENT_KINDS[kind]
+        detail = {
+            "ema15_reject": (
+                "price tags the D1 15EMA and a completed M5 bar closes back "
+                "on the other side of it (fires long or short as it happens)"
+            ),
+            "new_5d_high": "a completed bar trades above the prior 5 sessions' high",
+            "new_5d_low": "a completed bar trades below the prior 5 sessions' low",
+            "new_20d_high": "a completed bar trades above the prior 20 sessions' high",
+            "new_20d_low": "a completed bar trades below the prior 20 sessions' low",
+            "sma_break": (
+                "a completed bar closes across the D1 SMA50/100/200 - any of "
+                "the three, either direction"
+            ),
+        }.get(kind, "")
+        return (
+            f"Toggle a persistent {label} alert for this symbol: {detail}. "
+            "The reference level re-derives from the daily store every poll. "
+            "One-shot, survives restarts and sessions, fires red in the "
+            "Alert Center. Click again to disarm."
+        )
 
     def set_armed_levels(self, levels: Iterable) -> None:
         """Render one dismissable chip per armed level for this symbol."""

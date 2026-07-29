@@ -259,6 +259,10 @@ ALERT_CHART_WATCHES_FILE = PERSISTENT_DATA_DIR / "alert_chart_watches.json"
 # kept ACROSS sessions until the level flags (the symbol need not be in any
 # scan - evaluation waits for whatever price evidence appears).
 D1_LEVEL_WATCHES_FILE = PERSISTENT_DATA_DIR / "d1_level_watches.json"
+# Persistent D1 EVENT watches (15EMA reject, new 5d/20d extreme, SMA break):
+# armed from the dock's D1 row, kept across sessions until they fire. Their
+# reference levels are re-derived from the daily store on every poll.
+D1_EVENT_WATCHES_FILE = PERSISTENT_DATA_DIR / "d1_event_watches.json"
 # Append-only trader annotations for the BounceBot market-environment control.
 # The bot's automatic SPY read remains separate; each manual selection records
 # that contemporaneous read so later research can learn where/why the trader

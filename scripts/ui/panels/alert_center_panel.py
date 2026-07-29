@@ -27,15 +27,20 @@ from chart_watch import (
     BAND_BOUNCE_PRIME_BUCKETS,
     BAND_BOUNCE_TRACKER_TYPES,
     ChartWatch,
+    D1EventWatch,
     D1LevelWatch,
+    D1_EVENT_KINDS,
     D1_LEVEL_KINDS,
     WATCH_KINDS,
     arm_chart_watch,
     evaluate_chart_watch,
+    evaluate_d1_event_watch,
     evaluate_d1_level_watch,
     load_chart_watches,
+    load_d1_event_watches,
     load_d1_level_watches,
     save_chart_watches,
+    save_d1_event_watches,
     save_d1_level_watches,
     watch_is_stale,
 )
@@ -43,6 +48,7 @@ from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
     ALERT_CHART_WATCHES_FILE,
     ALERT_REVIEW_EVENTS_FILE,
+    D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
     get_local_setting,
     save_local_setting,
@@ -287,6 +293,7 @@ class AlertCenterPanel(QFrame):
         ignored_symbols_path=None,
         chart_watches_path=None,
         d1_level_watches_path=None,
+        d1_event_watches_path=None,
         review_events_path=None,
         review_guide=None,
     ) -> None:
@@ -346,6 +353,19 @@ class AlertCenterPanel(QFrame):
         self._d1_level_watches: list[D1LevelWatch] = (
             load_d1_level_watches(self._d1_level_watches_path)
             if self._d1_level_watches_path is not None
+            else []
+        )
+        # Persistent D1 event watches (15EMA reject / 5d-20d extremes / SMA
+        # break): same lifecycle as level watches, but the reference level is
+        # re-derived from the daily store on every poll.
+        self._d1_event_watches_path = (
+            Path(d1_event_watches_path)
+            if d1_event_watches_path is not None
+            else (D1_EVENT_WATCHES_FILE if persist_ignored else None)
+        )
+        self._d1_event_watches: list[D1EventWatch] = (
+            load_d1_event_watches(self._d1_event_watches_path)
+            if self._d1_event_watches_path is not None
             else []
         )
         # Append-only decision log (review_events.py): every shown/skip/focus/
@@ -418,6 +438,7 @@ class AlertCenterPanel(QFrame):
         self.armed_list = ArmedWatchList(self)
         self.armed_list.disarmWatchRequested.connect(self.disarm_chart_watch_for)
         self.armed_list.disarmLevelRequested.connect(self.disarm_d1_level_watch)
+        self.armed_list.disarmEventRequested.connect(self.disarm_d1_event_watch)
         self.armed_list.symbolActivated.connect(self.chart_symbol)
         self.armedWatchesChanged.connect(self._refresh_armed_list)
 
@@ -506,6 +527,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
         self.chart_review.watchToggled.connect(self._toggle_chart_watch)
+        self.chart_review.d1EventToggled.connect(self._toggle_d1_event_watch)
         self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
@@ -525,9 +547,11 @@ class AlertCenterPanel(QFrame):
         self._watch_timer.start()
         # Persistent D1 level alerts poll less often: the daily-store reads
         # are mtime-cached and the evidence changes at most once per M5 bar.
+        # The D1 event watches (derived-level alerts) ride the same tick.
         self._d1_watch_timer = QTimer(self)
         self._d1_watch_timer.setInterval(60_000)
         self._d1_watch_timer.timeout.connect(self._poll_d1_level_watches)
+        self._d1_watch_timer.timeout.connect(self._poll_d1_event_watches)
         self._d1_watch_timer.start()
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -962,6 +986,7 @@ class AlertCenterPanel(QFrame):
             armed_kinds=self.armed_watch_kinds(alert.symbol),
             cross_active=self._review_cross_active(alert),
             armed_levels=self.armed_levels_for(alert.symbol),
+            armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
             guidance_text=guidance.summary_text(),
         )
 
@@ -1317,7 +1342,7 @@ class AlertCenterPanel(QFrame):
             symbol=watch.symbol,
             side=side,
             trigger=trigger,
-            timeframe="D1" if kind in D1_LEVEL_KINDS else "M5",
+            timeframe="D1" if (kind in D1_LEVEL_KINDS or kind in D1_EVENT_KINDS) else "M5",
             tag=CHART_WATCH_TAG,
             raw_text=f"CHART WATCH {watch.symbol} ({side}): {trigger}",
             payload={
@@ -1500,6 +1525,7 @@ class AlertCenterPanel(QFrame):
         self.armed_list.set_watches(
             self._chart_watches,
             self._d1_level_watches,
+            d1_events=self._d1_event_watches,
             has_m5_bars=lambda symbol: bool(self._m5_bars_for(symbol)),
         )
         current = self._current_review_alert
@@ -1597,10 +1623,128 @@ class AlertCenterPanel(QFrame):
             )
             self.add_alert(self._chart_watch_alert(hit, moment))
 
+    # ------------------------------------------------------------------
+    # Persistent D1 event watches: derived-level alerts (15EMA reject, new
+    # 5d/20d extreme, SMA break) armed from the dock's D1 row. Same rails as
+    # the level watches - 60s poll, red chart-watch alert, one-shot retire.
+    def armed_d1_event_kinds(self, symbol: str) -> set[str]:
+        symbol = str(symbol or "").strip().upper()
+        return {watch.kind for watch in self._d1_event_watches if watch.symbol == symbol}
+
+    def _save_d1_event_watches(self) -> None:
+        if self._d1_event_watches_path is not None:
+            try:
+                save_d1_event_watches(self._d1_event_watches, self._d1_event_watches_path)
+            except Exception:
+                pass
+
+    def _toggle_d1_event_watch(self, alert: BounceAlert, kind: str) -> None:
+        if alert is None or not alert.symbol:
+            return
+        if kind in self.armed_d1_event_kinds(alert.symbol):
+            self.disarm_d1_event_watch(alert.symbol, kind)
+        else:
+            self.arm_d1_event_watch(alert.symbol, kind)
+
+    def arm_d1_event_watch(self, symbol: str, kind: str) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol or kind not in D1_EVENT_KINDS:
+            return False
+        label = D1_EVENT_KINDS[kind]
+        if kind in self.armed_d1_event_kinds(symbol):
+            self.statusChanged.emit(f"{symbol}: {label} alert already armed.")
+            return False
+        self._d1_event_watches.append(
+            D1EventWatch(symbol=symbol, kind=kind, armed_at=datetime.now())
+        )
+        self._save_d1_event_watches()
+        self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()
+        current = self._current_review_alert
+        self._record_review_event(
+            "arm_d1_event",
+            alert=current if current is not None and current.symbol == symbol else None,
+            symbol=symbol,
+            dwell_ms=self._review_dwell_ms(symbol),
+            detail={"kind": kind},
+        )
+        self.statusChanged.emit(
+            f"{symbol}: {label} alert armed - it stays on across sessions "
+            "until it fires."
+        )
+        return True
+
+    def disarm_d1_event_watch(self, symbol: str, kind: str) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        remaining = [
+            watch
+            for watch in self._d1_event_watches
+            if not (watch.symbol == symbol and watch.kind == kind)
+        ]
+        if len(remaining) == len(self._d1_event_watches):
+            return False
+        self._d1_event_watches = remaining
+        self._save_d1_event_watches()
+        self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()
+        self._record_review_event(
+            "disarm_d1_event", symbol=symbol, detail={"kind": kind}
+        )
+        self.statusChanged.emit(
+            f"{symbol}: {D1_EVENT_KINDS.get(kind, kind)} alert disarmed."
+        )
+        return True
+
+    def _poll_d1_event_watches(self, now: datetime | None = None) -> None:
+        if not self._d1_event_watches:
+            return
+        moment = now or datetime.now()
+        remaining: list[D1EventWatch] = []
+        triggered = []
+        for watch in self._d1_event_watches:
+            if watch.symbol in self._ignored_symbols:
+                # Removed-for-today symbols defer; the watch survives the day.
+                remaining.append(watch)
+                continue
+            hit = None
+            m5_bars = self._m5_bars_for(watch.symbol)
+            d1_bars = self._d1_bars_for(watch.symbol)
+            if d1_bars:
+                # Unlike a frozen price level, every event kind needs the
+                # daily store for its reference; without it there is nothing
+                # to measure against yet and the watch just waits.
+                try:
+                    hit = evaluate_d1_event_watch(watch, m5_bars, d1_bars, now=moment)
+                except Exception:
+                    hit = None
+            if hit is None:
+                remaining.append(watch)
+            else:
+                triggered.append(hit)
+        self._d1_event_watches = remaining
+        if triggered:
+            self._save_d1_event_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+        for hit in triggered:
+            self._record_review_event(
+                "d1_event_fired",
+                symbol=hit.watch.symbol,
+                side=getattr(hit, "resolved_side", "") or "",
+                detail={
+                    "kind": hit.watch.kind,
+                    "message": str(hit.message or ""),
+                },
+            )
+            self.add_alert(self._chart_watch_alert(hit, moment))
+
     def _refresh_review_armed_kinds(self) -> None:
         current = self._current_review_alert
         if current is not None:
             self.chart_review.set_armed_kinds(self.armed_watch_kinds(current.symbol))
+            self.chart_review.set_armed_d1_events(
+                self.armed_d1_event_kinds(current.symbol)
+            )
 
     def _remove_review_alert_for_today(self, alert: BounceAlert) -> None:
         """Drop a name from today's visual processing without changing scans."""

@@ -10,15 +10,21 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from chart_watch import (  # noqa: E402
+    D1EventWatch,
     D1LevelWatch,
+    D1_EVENT_KINDS,
     D1_LEVEL_KINDS,
     WATCH_KINDS,
     arm_chart_watch,
+    d1_event_levels,
     evaluate_chart_watch,
+    evaluate_d1_event_watch,
     evaluate_d1_level_watch,
     load_chart_watches,
+    load_d1_event_watches,
     load_d1_level_watches,
     save_chart_watches,
+    save_d1_event_watches,
     save_d1_level_watches,
     watch_is_stale,
 )
@@ -283,3 +289,232 @@ def test_d1_level_watch_persistence_and_evaluation(tmp_path):
     assert hit is not None
     assert hit.resolved_side == "short"
     assert "D1 level break below 20.00" in hit.message
+
+
+# ---------------------------------------------------------------------------
+# Persistent D1 event watches: derived-level alerts (15EMA reject, new 5d/20d
+# extreme, SMA break) whose references re-derive from the daily store.
+# ---------------------------------------------------------------------------
+def _daily(day_offset, *, high, low, close):
+    return {
+        "dt": DAY + timedelta(days=day_offset),
+        "open": close,
+        "high": float(high),
+        "low": float(low),
+        "close": float(close),
+        "volume": 1000.0,
+    }
+
+
+def test_d1_event_kind_labels_cover_all_buttons():
+    assert set(D1_EVENT_KINDS) == {
+        "ema15_reject",
+        "new_5d_high",
+        "new_5d_low",
+        "new_20d_high",
+        "new_20d_low",
+        "sma_break",
+    }
+    assert all(label for label in D1_EVENT_KINDS.values())
+    # Kind namespaces never collide - the feed badge resolves across all three.
+    assert not set(D1_EVENT_KINDS) & (set(WATCH_KINDS) | set(D1_LEVEL_KINDS))
+
+
+def test_d1_event_levels_derive_from_completed_sessions_only():
+    # 25 sessions ending the day BEFORE the queried session; the session's own
+    # (possibly forming) bar must never feed its reference levels.
+    bars = [
+        _daily(-offset, high=100.0 + offset, low=90.0 - offset, close=95.0)
+        for offset in range(25, 0, -1)
+    ]
+    bars.append(_daily(0, high=500.0, low=1.0, close=250.0))  # today: ignored
+    levels = d1_event_levels(bars, session=DAY.date())
+
+    assert levels["high_5d"] == 105.0  # offsets 1..5
+    assert levels["low_5d"] == 85.0
+    assert levels["high_20d"] == 120.0
+    assert levels["low_20d"] == 70.0
+    assert levels["prev_close"] == 95.0
+    assert levels["ema15"] == pytest.approx(95.0)  # constant closes
+    # 25 sessions cannot support an SMA50/100/200.
+    assert "sma50" not in levels and "sma100" not in levels and "sma200" not in levels
+
+    # 50 sessions unlock the SMA50.
+    more = [
+        _daily(-offset, high=100.0, low=90.0, close=95.0)
+        for offset in range(50, 0, -1)
+    ]
+    assert d1_event_levels(more, session=DAY.date())["sma50"] == pytest.approx(95.0)
+
+
+def test_new_5d_high_fires_on_completed_post_arm_bar_only():
+    daily = [
+        _daily(-offset, high=100.0 + offset, low=90.0, close=95.0)
+        for offset in range(6, 0, -1)
+    ]  # prior 5-session high = 105 (offsets 1..5)
+    watch = D1EventWatch(symbol="NVDA", kind="new_5d_high", armed_at=DAY.replace(hour=10, minute=0))
+    pre_arm = _bar(9, 35, h=104.0, low=99.0, c=103.0)
+    breaker = _bar(10, 5, h=105.5, low=103.0, c=105.2)
+
+    # Pre-arm bars never fire, even above the level.
+    assert (
+        evaluate_d1_event_watch(
+            watch, [pre_arm, _bar(10, 5, h=104.9, low=103.0, c=104.0)], daily,
+            now=DAY.replace(hour=10, minute=15),
+        )
+        is None
+    )
+    hit = evaluate_d1_event_watch(
+        watch, [pre_arm, breaker], daily, now=DAY.replace(hour=10, minute=15)
+    )
+    assert hit is not None and hit.price == 105.5 and hit.resolved_side == "long"
+    assert "New 5-day high: 105.50 > 105.00" in hit.message and "M5 bar" in hit.message
+    # A forming breaker is preview only.
+    assert (
+        evaluate_d1_event_watch(
+            watch, [pre_arm, breaker], daily, now=DAY.replace(hour=10, minute=8)
+        )
+        is None
+    )
+
+
+def test_new_20d_low_fires_and_5d_low_mirrors():
+    daily = [
+        _daily(-offset, high=100.0, low=90.0 - (offset % 3), close=95.0)
+        for offset in range(21, 0, -1)
+    ]  # prior lows cycle 88/89/90 -> 20d low = 88
+    armed_at = DAY.replace(hour=10, minute=0)
+    probe = _bar(10, 5, h=95.0, low=87.5, c=88.0)
+    hit = evaluate_d1_event_watch(
+        D1EventWatch(symbol="X", kind="new_20d_low", armed_at=armed_at),
+        [probe],
+        daily,
+        now=DAY.replace(hour=10, minute=15),
+    )
+    assert hit is not None and hit.resolved_side == "short"
+    assert "New 20-day low: 87.50 < 88.00" in hit.message
+
+    hit = evaluate_d1_event_watch(
+        D1EventWatch(symbol="X", kind="new_5d_low", armed_at=armed_at),
+        [probe],
+        daily,
+        now=DAY.replace(hour=10, minute=15),
+    )
+    assert hit is not None and "New 5-day low" in hit.message
+
+
+def test_sma_break_counts_a_gap_over_the_line_once():
+    # 50 sessions: 49 closes at 100, last close 99 -> SMA50 = 99.98.
+    daily = [
+        _daily(-offset, high=101.0, low=98.0, close=(99.0 if offset == 1 else 100.0))
+        for offset in range(50, 0, -1)
+    ]
+    sma50 = (49 * 100.0 + 99.0) / 50.0
+    armed_at = DAY.replace(hour=10, minute=0)
+    watch = D1EventWatch(symbol="NVDA", kind="sma_break", armed_at=armed_at)
+
+    # Pre-arm gap over the SMA consumes the cross; post-arm bars holding above
+    # never "break" it again without first crossing back.
+    gap_open = _bar(9, 35, h=101.5, low=100.5, c=101.0)
+    hold = _bar(10, 5, h=102.0, low=101.0, c=101.8)
+    assert (
+        evaluate_d1_event_watch(watch, [gap_open, hold], daily, now=DAY.replace(hour=10, minute=15))
+        is None
+    )
+
+    # A post-arm close back through the line fires, naming the SMA and side.
+    back_under = _bar(10, 10, h=101.9, low=99.0, c=99.5)
+    hit = evaluate_d1_event_watch(
+        watch, [gap_open, hold, back_under], daily, now=DAY.replace(hour=10, minute=20)
+    )
+    assert hit is not None and hit.resolved_side == "short"
+    assert f"SMA50 break down: closed 99.50 under {sma50:.2f}" in hit.message
+
+    # And the up-cross mirrors (prev close 99 below, post-arm close above).
+    up = _bar(10, 5, h=100.5, low=98.5, c=100.3)
+    hit = evaluate_d1_event_watch(watch, [up], daily, now=DAY.replace(hour=10, minute=15))
+    assert hit is not None and hit.resolved_side == "long"
+    assert "SMA50 break up" in hit.message
+
+
+def test_ema15_reject_touch_and_reclaim_both_ways():
+    daily = [
+        _daily(-offset, high=101.0, low=99.0, close=100.0)
+        for offset in range(20, 0, -1)
+    ]  # EMA15 = 100 on constant closes
+    armed_at = DAY.replace(hour=10, minute=0)
+    watch = D1EventWatch(symbol="NVDA", kind="ema15_reject", armed_at=armed_at)
+
+    # Trades entirely above the line: no tag, no fire.
+    assert (
+        evaluate_d1_event_watch(
+            watch, [_bar(10, 5, h=102.0, low=100.5, c=101.5)], daily,
+            now=DAY.replace(hour=10, minute=15),
+        )
+        is None
+    )
+    # Dips to the D1 15EMA and closes back above: long rejection.
+    hit = evaluate_d1_event_watch(
+        watch, [_bar(10, 5, h=101.5, low=99.8, c=100.9)], daily,
+        now=DAY.replace(hour=10, minute=15),
+    )
+    assert hit is not None and hit.resolved_side == "long"
+    assert "D1 15EMA rejection (long): tagged 100.00" in hit.message
+    # Pops into it and closes back below: short rejection.
+    hit = evaluate_d1_event_watch(
+        watch, [_bar(10, 5, h=100.4, low=98.9, c=99.2)], daily,
+        now=DAY.replace(hour=10, minute=15),
+    )
+    assert hit is not None and hit.resolved_side == "short"
+
+
+def test_d1_event_watch_daily_fallback_for_unscanned_symbols():
+    # Armed on DAY; no M5 evidence. Store: 6 prior sessions (5d high 105),
+    # then a session 2 days later that breaks it. Today's own bar is preview.
+    daily = [
+        _daily(-offset, high=100.0 + offset, low=90.0, close=95.0)
+        for offset in range(6, 0, -1)
+    ]
+    watch = D1EventWatch(symbol="NVDA", kind="new_5d_high", armed_at=DAY.replace(hour=14, minute=0))
+    later = DAY + timedelta(days=4)
+
+    # The armed day's own daily bar never triggers (contains pre-arm prices).
+    assert (
+        evaluate_d1_event_watch(
+            watch, [], daily + [_daily(0, high=200.0, low=90.0, close=150.0)], now=later
+        )
+        is None
+    )
+    breaker = _daily(2, high=106.0, low=95.0, close=105.5)
+    hit = evaluate_d1_event_watch(watch, [], daily + [breaker], now=later)
+    assert hit is not None and hit.resolved_side == "long"
+    assert "D1 bar" in hit.message
+    # A break on today's (forming) session stays preview.
+    assert (
+        evaluate_d1_event_watch(
+            watch, [], daily + [_daily(4, high=200.0, low=95.0, close=150.0)], now=later
+        )
+        is None
+    )
+
+
+def test_d1_event_watch_persistence_roundtrip(tmp_path):
+    path = tmp_path / "d1_event_watches.json"
+    armed_at = DAY.replace(hour=14, minute=0)
+    watches = [
+        D1EventWatch(symbol="NVDA", kind="new_5d_high", armed_at=armed_at),
+        D1EventWatch(symbol="TSLA", kind="sma_break", armed_at=armed_at),
+    ]
+    save_d1_event_watches(watches, path)
+    assert load_d1_event_watches(path) == watches
+
+    # Unknown kinds (e.g. from a future build) are dropped, not crashed on.
+    import json
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["watches"].append(
+        {"symbol": "AMD", "kind": "warp_drive", "armed_at": armed_at.isoformat()}
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_d1_event_watches(path) == watches
+    assert load_d1_event_watches(tmp_path / "missing.json") == []

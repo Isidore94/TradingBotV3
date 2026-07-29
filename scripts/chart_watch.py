@@ -53,6 +53,26 @@ D1_LEVEL_KINDS = {
     "d1_level_below": "D1 break below",
 }
 
+# Persistent D1 EVENT watches (armed from the dock's D1 row). Unlike a level
+# watch, the reference is derived fresh from the daily store on every
+# evaluation - a 5-day extreme, an SMA, or the D1 15EMA moves each session,
+# and freezing it at arm time would alert on yesterday's number.
+D1_EVENT_KINDS = {
+    "ema15_reject": "15EMA reject",
+    "new_5d_high": "5d high",
+    "new_5d_low": "5d low",
+    "new_20d_high": "20d high",
+    "new_20d_low": "20d low",
+    "sma_break": "SMA break",
+}
+
+# SMA periods the sma_break watch monitors ("anyone up or down"): the desk's
+# three D1 majors, matching the snapshot chart's overlays.
+D1_BREAK_SMA_PERIODS = (50, 100, 200)
+# An EMA needs history to mean anything; below this many completed sessions
+# the 15EMA is mostly seed value and the reject watch just waits.
+D1_EMA15_MIN_SESSIONS = 15
+
 
 @dataclass(frozen=True)
 class ChartWatch:
@@ -474,6 +494,262 @@ def load_d1_level_watches(path: Path) -> list[D1LevelWatch]:
             if watch is not None:
                 watches.append(watch)
     return watches
+
+
+# ---------------------------------------------------------------------------
+# Persistent D1 event watches: condition alerts (new N-day extreme, SMA
+# break, 15EMA rejection) whose reference levels are re-derived from the
+# durable daily store on every poll. Kept across sessions until they fire.
+# Triggers need a COMPLETED bar - M5 while the symbol is scanned (intraday
+# latency), completed daily bars otherwise - plan.md section 5.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class D1EventWatch:
+    symbol: str
+    kind: str
+    armed_at: datetime
+
+    @property
+    def direction(self) -> str:
+        """For chip/badge coloring only; sma_break/ema15_reject go either way."""
+        return "below" if self.kind.endswith("_low") else "above"
+
+
+def d1_event_watch_to_dict(watch: D1EventWatch) -> dict:
+    return {
+        "symbol": watch.symbol,
+        "kind": watch.kind,
+        "armed_at": _naive(watch.armed_at).isoformat(),
+    }
+
+
+def d1_event_watch_from_dict(payload: Mapping[str, Any]) -> D1EventWatch | None:
+    try:
+        symbol = str(payload["symbol"] or "").strip().upper()
+        kind = str(payload["kind"])
+        armed_at = datetime.fromisoformat(str(payload["armed_at"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not symbol or kind not in D1_EVENT_KINDS:
+        return None
+    return D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
+
+
+def save_d1_event_watches(watches: Iterable[D1EventWatch], path: Path) -> None:
+    _atomic_write_json(
+        {"watches": [d1_event_watch_to_dict(watch) for watch in watches]},
+        path,
+    )
+
+
+def load_d1_event_watches(path: Path) -> list[D1EventWatch]:
+    target = Path(path)
+    try:
+        text = target.read_text(encoding="utf-8") if target.exists() else ""
+    except OSError:
+        return []
+    if not text.strip():
+        return []
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    watches = []
+    for item in payload.get("watches") or []:
+        if isinstance(item, Mapping):
+            watch = d1_event_watch_from_dict(item)
+            if watch is not None:
+                watches.append(watch)
+    return watches
+
+
+def d1_event_levels(
+    d1_bars: Iterable[Mapping[str, Any]] | None, *, session: date
+) -> dict[str, float]:
+    """Reference levels from COMPLETED daily sessions strictly before ``session``.
+
+    Keys (present only when enough history exists): high_5d / low_5d /
+    high_20d / low_20d (prior N-session extremes), sma50 / sma100 / sma200,
+    ema15 (pandas ewm(span, adjust=False) recursion, matching the snapshot
+    chart's drawn line), prev_close (the last completed session's close - the
+    cross-detection anchor for the first bar of a new session).
+    """
+    completed = []
+    for bar in d1_bars or []:
+        stamp = bar.get("dt")
+        if isinstance(stamp, datetime) and _naive(stamp).date() < session:
+            completed.append(bar)
+    completed.sort(key=lambda bar: _naive(bar["dt"]))
+    if not completed:
+        return {}
+    levels: dict[str, float] = {}
+    closes = [float(bar["close"]) for bar in completed]
+    levels["prev_close"] = closes[-1]
+    for count in (5, 20):
+        if len(completed) >= count:
+            tail = completed[-count:]
+            levels[f"high_{count}d"] = max(float(bar["high"]) for bar in tail)
+            levels[f"low_{count}d"] = min(float(bar["low"]) for bar in tail)
+    for period in D1_BREAK_SMA_PERIODS:
+        if len(closes) >= period:
+            levels[f"sma{period}"] = sum(closes[-period:]) / float(period)
+    if len(closes) >= D1_EMA15_MIN_SESSIONS:
+        alpha = 2.0 / 16.0
+        ema = closes[0]
+        for value in closes[1:]:
+            ema = alpha * value + (1.0 - alpha) * ema
+        levels["ema15"] = ema
+    return levels
+
+
+def _d1_event_hit(
+    kind: str,
+    levels: Mapping[str, float],
+    prev_close: float | None,
+    high: float,
+    low: float,
+    close: float,
+) -> tuple[str, str, float] | None:
+    """(message core, resolved side, trigger price) for one evidence bar."""
+    if kind in ("new_5d_high", "new_20d_high"):
+        key = "high_5d" if kind == "new_5d_high" else "high_20d"
+        level = levels.get(key)
+        days = "5" if key == "high_5d" else "20"
+        if level is not None and high > level:
+            return (
+                f"New {days}-day high: {high:.2f} > {level:.2f} (prior {days}-session high)",
+                "long",
+                high,
+            )
+        return None
+    if kind in ("new_5d_low", "new_20d_low"):
+        key = "low_5d" if kind == "new_5d_low" else "low_20d"
+        level = levels.get(key)
+        days = "5" if key == "low_5d" else "20"
+        if level is not None and low < level:
+            return (
+                f"New {days}-day low: {low:.2f} < {level:.2f} (prior {days}-session low)",
+                "short",
+                low,
+            )
+        return None
+    if kind == "sma_break":
+        if prev_close is None:
+            return None
+        for period in D1_BREAK_SMA_PERIODS:
+            sma = levels.get(f"sma{period}")
+            if sma is None:
+                continue
+            if prev_close < sma and close > sma:
+                return (
+                    f"SMA{period} break up: closed {close:.2f} over {sma:.2f}",
+                    "long",
+                    close,
+                )
+            if prev_close > sma and close < sma:
+                return (
+                    f"SMA{period} break down: closed {close:.2f} under {sma:.2f}",
+                    "short",
+                    close,
+                )
+        return None
+    if kind == "ema15_reject":
+        ema = levels.get("ema15")
+        if ema is None:
+            return None
+        # Touch-and-reclaim off the D1 15EMA, either way - the same shape as
+        # the VWAP bounce, but against the daily line the desk trades off.
+        if low <= ema and close > ema:
+            return (
+                f"D1 15EMA rejection (long): tagged {ema:.2f}, closed back above at {close:.2f}",
+                "long",
+                close,
+            )
+        if high >= ema and close < ema:
+            return (
+                f"D1 15EMA rejection (short): tagged {ema:.2f}, closed back below at {close:.2f}",
+                "short",
+                close,
+            )
+        return None
+    return None
+
+
+def evaluate_d1_event_watch(
+    watch: D1EventWatch,
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    d1_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> ChartWatchTrigger | None:
+    """First post-arm completed bar meeting the condition, or None.
+
+    Evidence mirrors the level watches: today's completed M5 bars against
+    levels from sessions before today (intraday latency while scanned), then
+    completed daily bars from sessions strictly after the arm date with
+    per-session levels (covers unscanned symbols). SMA crosses track the
+    running previous close so a gap over the line counts exactly once.
+    """
+    moment = _naive(now or datetime.now())
+    armed_at = _naive(watch.armed_at)
+
+    session_bars = _session_bars(m5_bars, moment)
+    completed = [bar for bar in session_bars if _bar_end(bar) <= moment]
+    if completed:
+        levels = d1_event_levels(d1_bars, session=_naive(completed[0]["dt"]).date())
+        prev_close = levels.get("prev_close")
+        for bar in completed:
+            high = float(bar["high"])
+            low = float(bar["low"])
+            close = float(bar["close"])
+            hit = None
+            if _bar_end(bar) > armed_at:
+                hit = _d1_event_hit(watch.kind, levels, prev_close, high, low, close)
+            prev_close = close
+            if hit is not None:
+                message, side, price = hit
+                stamp = _naive(bar["dt"])
+                return ChartWatchTrigger(
+                    watch=watch,  # type: ignore[arg-type] (duck-typed carrier)
+                    price=price,
+                    bar_dt=stamp,
+                    message=f"{message} (M5 bar {stamp:%m/%d %H:%M})",
+                    resolved_side=side,
+                )
+
+    daily = []
+    for bar in d1_bars or []:
+        stamp = bar.get("dt")
+        if isinstance(stamp, datetime):
+            daily.append(bar)
+    daily.sort(key=lambda bar: _naive(bar["dt"]))
+    for bar in daily:
+        bar_date = _naive(bar["dt"]).date()
+        # Completed sessions only, strictly after the arm date (the armed
+        # day's own daily bar also contains pre-arm prices).
+        if bar_date <= armed_at.date() or bar_date >= moment.date():
+            continue
+        levels = d1_event_levels(daily, session=bar_date)
+        hit = _d1_event_hit(
+            watch.kind,
+            levels,
+            levels.get("prev_close"),
+            float(bar["high"]),
+            float(bar["low"]),
+            float(bar["close"]),
+        )
+        if hit is not None:
+            message, side, price = hit
+            return ChartWatchTrigger(
+                watch=watch,  # type: ignore[arg-type]
+                price=price,
+                bar_dt=_naive(bar["dt"]),
+                message=f"{message} (D1 bar {bar_date:%m/%d})",
+                resolved_side=side,
+            )
+    return None
 
 
 def evaluate_d1_level_watch(

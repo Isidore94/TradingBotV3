@@ -34,6 +34,7 @@ class AlertChartReview(QWidget):
     skipRequested = Signal(object)
     crossFocusToggled = Signal(object)
     watchToggled = Signal(object, str)  # (alert, chart-watch kind)
+    d1EventToggled = Signal(object, str)  # (alert, D1 event watch kind)
     d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
     levelArmRequested = Signal(str, str, float)  # symbol, direction, level
@@ -96,6 +97,9 @@ class AlertChartReview(QWidget):
         self.arm_bar.watchToggled.connect(
             lambda kind: self.alert is not None and self.watchToggled.emit(self.alert, kind)
         )
+        self.arm_bar.d1EventToggled.connect(
+            lambda kind: self.alert is not None and self.d1EventToggled.emit(self.alert, kind)
+        )
         self.arm_bar.symbolRequested.connect(self.symbolRequested)
         self.arm_bar.levelArmRequested.connect(self._emit_level_arm)
         self.arm_bar.levelDisarmRequested.connect(self._emit_level_disarm)
@@ -140,6 +144,7 @@ class AlertChartReview(QWidget):
         armed_kinds: Iterable[str] = (),
         cross_active: bool = False,
         armed_levels: Iterable = (),
+        armed_d1_events: Iterable[str] = (),
         guidance_text: str = "",
     ) -> None:
         self.alert = alert
@@ -173,6 +178,7 @@ class AlertChartReview(QWidget):
         self._set_actions_enabled(True)
         self.set_armed_kinds(armed_kinds)
         self.set_armed_levels(armed_levels)
+        self.set_armed_d1_events(armed_d1_events)
         self.set_cross_active(cross_active)
         # Seed the price box with the last traded price so the trader adjusts
         # from something real instead of typing a level from scratch.
@@ -210,6 +216,7 @@ class AlertChartReview(QWidget):
         self.queue_label.setText("")
         self._set_actions_enabled(False)
         self.set_armed_kinds(())
+        self.set_armed_d1_events(())
         self.set_cross_active(False)
 
     def set_queued_count(self, count: int) -> None:
@@ -223,6 +230,10 @@ class AlertChartReview(QWidget):
     def set_armed_levels(self, levels: Iterable = ()) -> None:
         """Show this symbol's armed price levels as dismissable chips."""
         self.arm_bar.set_armed_levels(levels)
+
+    def set_armed_d1_events(self, kinds: Iterable[str] = ()) -> None:
+        """Reflect this symbol's armed D1 event watches on the dock's D1 row."""
+        self.arm_bar.set_armed_d1_events(kinds)
 
     def set_cross_active(self, active: bool) -> None:
         self.cross_focus_button.setText(self._cross_labels[1 if active else 0])

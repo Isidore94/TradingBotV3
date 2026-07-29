@@ -787,6 +787,115 @@ def test_review_chart_auto_refresh_pulls_new_bars(monkeypatch):
     panel._refresh_review_chart()
 
 
+def test_dock_d1_event_buttons_arm_poll_and_fire_red(monkeypatch):
+    """The dock's D1 row: toggling arms a persistent event watch, the 60s
+    poll fires it off the daily-store-derived level, and the one-shot retires
+    with a red chart-watch alert leading the feed."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    import dataclasses
+    from datetime import datetime, timedelta
+
+    import chart_snapshot
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+
+    noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    # Six completed sessions before today: prior 5-session high = 110.
+    daily = [
+        {
+            "dt": (noon - timedelta(days=offset)).replace(hour=0, minute=0),
+            "open": 100.0,
+            "high": 105.0 + offset if offset <= 5 else 100.0,
+            "low": 95.0,
+            "close": 100.0,
+            "volume": 1000.0,
+        }
+        for offset in range(6, 0, -1)
+    ]
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: daily)
+
+    def bar(minute, high, low):
+        mid = (high + low) / 2
+        return {
+            "dt": noon.replace(hour=11, minute=minute),
+            "open": mid,
+            "high": high,
+            "low": low,
+            "close": mid,
+            "volume": 1000.0,
+        }
+
+    class _Bot:
+        def __init__(self):
+            self.bars = [bar(20, 108.0, 104.0)]
+
+        def m5_chart_bars(self, symbol, max_sessions=2):
+            return list(self.bars)
+
+    class _Service:
+        def __init__(self, bot):
+            self._bot = bot
+
+        def current_bot(self):
+            return self._bot
+
+    bot = _Bot()
+    panel = AlertCenterPanel()
+    panel._bounce_service = _Service(bot)
+    panel.add_alert(
+        BounceAlert(
+            time_text="11:30:00",
+            symbol="NVDA",
+            side="LONG",
+            trigger="[S-TIER] VWAP reclaim",
+            timeframe="5m",
+            raw_text="[S-TIER] NVDA: VWAP reclaim",
+        )
+    )
+
+    button = panel.chart_review.arm_bar.d1_event_buttons["new_5d_high"]
+    assert button.isEnabled()
+    button.click()
+    assert [watch.kind for watch in panel._d1_event_watches] == ["new_5d_high"]
+    assert button.isChecked() and "✓" in button.text()
+
+    # It is a TOGGLE: a second click disarms.
+    button.click()
+    assert panel._d1_event_watches == []
+    assert not button.isChecked()
+
+    # Re-arm, backdate, and complete a bar breaking the prior 5-day high.
+    button.click()
+    panel._d1_event_watches[0] = dataclasses.replace(
+        panel._d1_event_watches[0], armed_at=noon.replace(hour=11, minute=40)
+    )
+    bot.bars = bot.bars + [bar(45, 110.6, 108.0)]
+    panel._poll_d1_event_watches(now=noon)
+
+    # One-shot: the watch retires and the red alert leads the live feed.
+    assert panel._d1_event_watches == []
+    fired = panel._alerts[0]
+    assert fired.tag == "chart_watch"
+    assert fired.symbol == "NVDA"
+    assert fired.timeframe == "D1"
+    assert "New 5-day high: 110.60 > 110.00" in fired.trigger
+    assert not panel.chart_review.arm_bar.d1_event_buttons["new_5d_high"].isChecked()
+
+
 def test_m5_pick_cross_toggle_adds_swing_focus_and_pins_without_advancing(tmp_path, monkeypatch):
     try:
         import os
