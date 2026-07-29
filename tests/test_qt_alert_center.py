@@ -1317,6 +1317,17 @@ def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
     # Re-arming through the panel API cannot double-arm.
     assert panel.arm_chart_watch_for("NVDA", "LONG", "new_lod") is False
     assert len(panel._chart_watches) == 1
+
+    # The D1 event alerts ride the same action row: arm, reflect, disarm.
+    event_button = dialog.d1_event_buttons["new_5d_high"]
+    assert event_button.isVisibleTo(dialog)
+    event_button.click()
+    assert [watch.kind for watch in panel._d1_event_watches] == ["new_5d_high"]
+    assert panel._d1_event_watches[0].symbol == "NVDA"
+    assert event_button.isChecked() and "✓" in event_button.text()
+    event_button.click()
+    assert panel._d1_event_watches == []
+    assert not event_button.isChecked()
     # A second click on the toggle disarms.
     dialog.watch_buttons["new_lod"].click()
     assert panel._chart_watches == []

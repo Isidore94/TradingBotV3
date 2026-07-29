@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from chart_watch import WATCH_KINDS
+from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
 from ui.widgets.candle_chart import CandleChart
 
@@ -385,6 +385,23 @@ class SymbolSnapshotDialog(QDialog):
                 lambda _checked=False, k=kind: self._toggle_watch(k)
             )
             self.watch_buttons[kind] = button
+        # Persistent D1 event alerts (15EMA reject, 5d/20d extremes, SMA
+        # break) - the same toggles the review pane's arm dock carries, so a
+        # setups-table chart can arm them without a detour through the dock.
+        self.d1_event_buttons: dict[str, QPushButton] = {}
+        for kind, label in D1_EVENT_KINDS.items():
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setToolTip(
+                f"Toggle a persistent {label} alert for this symbol. The "
+                "reference level re-derives from the daily store every poll; "
+                "one-shot, survives restarts and sessions, fires red in the "
+                "Alert Center. Click again to disarm."
+            )
+            button.clicked.connect(
+                lambda _checked=False, k=kind: self._toggle_d1_event(k)
+            )
+            self.d1_event_buttons[kind] = button
 
         # Review-flow ✕: log a dislike (with the typed reason) and advance to
         # the next visible setup row's chart. Only shown when a review host
@@ -405,6 +422,8 @@ class SymbolSnapshotDialog(QDialog):
         action_layout.addWidget(self.d1_focus_button)
         action_layout.addWidget(self.m5_focus_button)
         for button in self.watch_buttons.values():
+            action_layout.addWidget(button)
+        for button in self.d1_event_buttons.values():
             action_layout.addWidget(button)
         action_layout.addStretch(1)
         self.action_row.setVisible(False)
@@ -457,7 +476,12 @@ class SymbolSnapshotDialog(QDialog):
         self.dislike_button.setVisible(reviewing)
         # Watch/focus toggles need a watch host to act through; hide them
         # rather than showing dead buttons in a review-only popup.
-        for button in (self.d1_focus_button, self.m5_focus_button, *self.watch_buttons.values()):
+        for button in (
+            self.d1_focus_button,
+            self.m5_focus_button,
+            *self.watch_buttons.values(),
+            *self.d1_event_buttons.values(),
+        ):
             button.setVisible(host is not None)
         if host is None:
             return
@@ -469,6 +493,17 @@ class SymbolSnapshotDialog(QDialog):
             label = WATCH_KINDS[kind]
             is_armed = kind in armed
             button.setText(f"{label} ✓ armed" if is_armed else label)
+            button.setChecked(is_armed)
+        try:
+            armed_events = set(host.armed_d1_event_kinds(self._symbol))
+        except Exception:
+            # An older host without the D1-event API: leave the buttons
+            # visible-but-unchecked; a click will no-op through the same guard.
+            armed_events = set()
+        for kind, button in self.d1_event_buttons.items():
+            label = D1_EVENT_KINDS[kind]
+            is_armed = kind in armed_events
+            button.setText(f"{label} ✓" if is_armed else label)
             button.setChecked(is_armed)
         pinned = bool(host.is_d1_focus_active(self._symbol, self._side))
         self.d1_focus_button.setText("✓ In D1 Focus" if pinned else "Add to D1 Focus")
@@ -489,6 +524,18 @@ class SymbolSnapshotDialog(QDialog):
                 kind,
                 source_text=f"chart snapshot: {self.windowTitle()}",
             )
+        self._refresh_watch_actions()
+
+    def _toggle_d1_event(self, kind: str) -> None:
+        host = self.watch_host
+        if host is None or not self._symbol:
+            return
+        if not hasattr(host, "arm_d1_event_watch"):
+            return  # older host: the button is inert rather than a crash
+        if kind in set(host.armed_d1_event_kinds(self._symbol)):
+            host.disarm_d1_event_watch(self._symbol, kind)
+        else:
+            host.arm_d1_event_watch(self._symbol, kind)
         self._refresh_watch_actions()
 
     def _review_dislike(self) -> None:
