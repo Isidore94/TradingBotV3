@@ -706,6 +706,87 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     assert "NEW HOD" in [badge.text() for badge in item.findChildren(Badge)]
 
 
+def test_review_chart_auto_refresh_pulls_new_bars(monkeypatch):
+    """The review chart renders when an alert LANDS; the 30s tick (invoked
+    directly here) must redraw it with the bars of NOW, so a trader who gets
+    to the alert minutes later is not reading a stale M5 pane."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    from datetime import datetime
+
+    import chart_snapshot
+
+    # No daily store: this test is about the M5 pane and the refresh wiring.
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: [])
+
+    noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    def bar(minute, price):
+        return {
+            "dt": noon.replace(hour=11, minute=minute),
+            "open": price,
+            "high": price + 0.5,
+            "low": price - 0.5,
+            "close": price,
+            "volume": 1000.0,
+        }
+
+    class _Bot:
+        def __init__(self):
+            self.bars = [bar(20, 100.0), bar(25, 101.0)]
+
+        def m5_chart_bars(self, symbol, max_sessions=2):
+            return list(self.bars)
+
+    class _Service:
+        def __init__(self, bot):
+            self._bot = bot
+
+        def current_bot(self):
+            return self._bot
+
+    bot = _Bot()
+    panel = AlertCenterPanel()
+    panel._bounce_service = _Service(bot)
+    panel.add_alert(
+        BounceAlert(
+            time_text="11:30:00",
+            symbol="NVDA",
+            side="LONG",
+            trigger="[S-TIER] VWAP reclaim",
+            timeframe="5m",
+            raw_text="[S-TIER] NVDA: VWAP reclaim",
+        )
+    )
+    review = panel.chart_review
+    assert review.snapshot.m5_chart.bar_count() == 2
+
+    # Two more bars completed while the alert sat unreviewed.
+    bot.bars += [bar(30, 102.0), bar(35, 103.0)]
+    panel._refresh_review_chart()
+    assert review.snapshot.m5_chart.bar_count() == 4
+
+    # Unchanged cache: the next tick re-renders nothing.
+    panel._refresh_review_chart()
+    assert review.snapshot.refresh() is False
+
+    # No current review alert: the tick is a no-op, never a crash.
+    panel._current_review_alert = None
+    panel._refresh_review_chart()
+
+
 def test_m5_pick_cross_toggle_adds_swing_focus_and_pins_without_advancing(tmp_path, monkeypatch):
     try:
         import os

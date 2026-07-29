@@ -145,6 +145,63 @@ def test_build_d1_snapshot_missing_store():
     assert snapshot["bars"] == [] and snapshot["note"] == "no daily store"
 
 
+def _daily_bars(count, start=datetime(2026, 7, 1)):
+    return [
+        {
+            "dt": start + timedelta(days=index),
+            "open": 100.0 + index * 0.2,
+            "high": 100.4 + index * 0.2,
+            "low": 99.6 + index * 0.2,
+            "close": 100.1 + index * 0.2,
+            "volume": 1_000.0,
+        }
+        for index in range(count)
+    ]
+
+
+def test_forming_d1_preview_appends_todays_candle_from_m5():
+    """The durable store only gains a session's bar after the close; the M5
+    cache fills the gap with a preview candle so the D1 chart shows today."""
+    daily = _daily_bars(2)  # store ends 07/02
+    m5 = _m5_bars(6, datetime(2026, 7, 2, 9, 30)) + _m5_bars(
+        6, datetime(2026, 7, 3, 9, 30), base=105.0
+    )
+    snapshot = chart_snapshot.build_d1_snapshot(
+        "TEST", sessions=90, loader=lambda _s: daily, intraday_bars=m5
+    )
+    bars = snapshot["bars"]
+    assert len(bars) == 3
+    preview = bars[-1]
+    assert preview["preview"] is True
+    assert preview["dt"] == datetime(2026, 7, 3)
+    session = m5[6:]  # only the NEWEST intraday session aggregates
+    assert preview["open"] == session[0]["open"]
+    assert preview["high"] == max(bar["high"] for bar in session)
+    assert preview["low"] == min(bar["low"] for bar in session)
+    assert preview["close"] == session[-1]["close"]
+    assert preview["volume"] == pytest.approx(sum(bar["volume"] for bar in session))
+    # Indicators stay computed on completed sessions only: every overlay
+    # carries a trailing None at the preview candle (the line breaks there
+    # instead of previewing a moving average off a partial day).
+    for overlay in snapshot["overlays"]:
+        assert len(overlay["values"]) == len(bars)
+        assert overlay["values"][-1] is None
+
+
+def test_forming_d1_preview_skipped_when_store_is_current():
+    """After the close the store holds the session itself - the real bar wins
+    and no preview is appended (nor with an empty intraday cache)."""
+    daily = _daily_bars(3)  # store ends 07/03
+    m5 = _m5_bars(6, datetime(2026, 7, 3, 9, 30))
+    snapshot = chart_snapshot.build_d1_snapshot(
+        "TEST", loader=lambda _s: daily, intraday_bars=m5
+    )
+    assert len(snapshot["bars"]) == 3
+    assert all(not bar.get("preview") for bar in snapshot["bars"])
+    assert chart_snapshot.forming_d1_bar(daily, []) is None
+    assert chart_snapshot.forming_d1_bar([], m5) is not None  # no store: still a candle
+
+
 def test_load_d1_bars_resolves_dotted_alias_and_caches_by_mtime(tmp_path, monkeypatch):
     import os
 
@@ -248,6 +305,10 @@ def test_candle_chart_renders_bars_and_overlays():
     assert len(ticks) <= 7
     assert ticks[0][0] == 0 and ticks[-1][0] == 155
     assert ticks[3] == (78, "07/09 09:30")
+    # A forming preview candle draws (hollow) like any other bar.
+    chart.set_data(bars + [dict(bars[-1], preview=True)], [], timeframe="d1")
+    assert chart.bar_count() == 21
+    assert chart.bar_at(20)["preview"] is True
     chart.set_data([], [])
     assert chart.bar_count() == 0
 
@@ -323,7 +384,11 @@ def test_snapshot_dialog_populates_both_charts(monkeypatch):
     assert dialog.width() >= 1180
     assert dialog.d1_legend.wordWrap() and dialog.m5_legend.wordWrap()
     dialog.show_symbol("NVDA", bot=StubBot(), side="LONG")
-    assert dialog.d1_chart.bar_count() == 40
+    # 40 stored sessions + today's forming candle synthesized from the M5
+    # cache (the store itself only catches up after the close).
+    assert dialog.d1_chart.bar_count() == 41
+    assert dialog.d1_chart.bar_at(40)["preview"] is True
+    assert "forming" in dialog.d1_legend.text()
     assert dialog.m5_chart.bar_count() == 15
     assert "NVDA" in dialog.windowTitle()
     dialog.close()
@@ -337,6 +402,51 @@ def test_snapshot_dialog_populates_both_charts(monkeypatch):
     dialog.close()
 
 
+def test_snapshot_widget_refresh_renders_only_on_change(monkeypatch):
+    """The 30s refresh path: unchanged caches leave the widgets (and any
+    pan/zoom) alone; a new M5 bar redraws both panes, and the forming D1
+    candle tracks the newest session close."""
+    if _qt_app() is None:
+        return
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    daily = [
+        {
+            "dt": datetime(2026, 1, 1) + timedelta(days=index),
+            "open": 50.0,
+            "high": 51.0,
+            "low": 49.0,
+            "close": 50.5,
+            "volume": 0.0,
+        }
+        for index in range(40)
+    ]
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: daily)
+
+    class StubBot:
+        def __init__(self):
+            self.bars = _m5_bars(10)
+
+        def m5_chart_bars(self, symbol, max_sessions=2):
+            return list(self.bars)
+
+    bot = StubBot()
+    widget = SymbolSnapshotWidget()
+    widget.set_symbol("NVDA", bot=bot)
+    assert widget.m5_chart.bar_count() == 10
+    assert widget.d1_chart.bar_count() == 41  # 40 stored + forming preview
+
+    assert widget.refresh() is False  # nothing changed: no re-render
+
+    bot.bars = _m5_bars(11)
+    assert widget.refresh() is True
+    assert widget.m5_chart.bar_count() == 11
+    assert widget.d1_chart.bar_count() == 41
+    preview = widget.d1_chart.bar_at(40)
+    assert preview["preview"] is True
+    assert preview["close"] == pytest.approx(bot.bars[-1]["close"])
+
+
 def test_snapshot_dialog_reuses_owner_child_without_stealing_editor_focus(monkeypatch):
     app = _qt_app()
     if app is None:
@@ -348,7 +458,7 @@ def test_snapshot_dialog_reuses_owner_child_without_stealing_editor_focus(monkey
     monkeypatch.setattr(
         chart_snapshot,
         "build_d1_snapshot",
-        lambda symbol: {
+        lambda symbol, **_kwargs: {
             "symbol": symbol,
             "timeframe": "D1",
             "bars": [],

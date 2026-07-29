@@ -19,6 +19,7 @@ band consumer is calibrated to. Do not "fix" it toward a distribution
 stdev; see plan.md section 5.
 """
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -199,26 +200,89 @@ def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
     return bars
 
 
+def forming_d1_bar(
+    d1_bars: list[Mapping[str, Any]], intraday_bars: list[Mapping[str, Any]]
+) -> dict[str, Any] | None:
+    """Synthesize today's forming daily candle from cached intraday bars.
+
+    The durable daily store only gains a session's bar after the close, so
+    during the day a store-fed D1 chart always ends at the previous session.
+    Aggregating the bot's cached M5 bars for their newest session (open =
+    first open, high = max, low = min, close = last close, volume = sum)
+    yields a preview candle, marked ``"preview": True`` so the chart can draw
+    it distinctly. Display-only by design: nothing here feeds a detector, so
+    the completed-bars-only invariant (plan.md sec 5) is untouched.
+
+    Returns None when there are no intraday bars or the store already holds
+    that session (after the close the real bar wins).
+    """
+    if not intraday_bars:
+        return None
+    last_stamp = (intraday_bars[-1] or {}).get("dt")
+    session = last_stamp.date() if hasattr(last_stamp, "date") else None
+    if session is None:
+        return None
+    if d1_bars:
+        stored_stamp = (d1_bars[-1] or {}).get("dt")
+        stored_date = stored_stamp.date() if hasattr(stored_stamp, "date") else None
+        if stored_date is not None and stored_date >= session:
+            return None
+    session_bars = [
+        bar
+        for bar in intraday_bars
+        if hasattr(bar.get("dt"), "date") and bar["dt"].date() == session
+    ]
+    if not session_bars:
+        return None
+    try:
+        return {
+            "dt": datetime(session.year, session.month, session.day),
+            "open": float(session_bars[0]["open"]),
+            "high": max(float(bar["high"]) for bar in session_bars),
+            "low": min(float(bar["low"]) for bar in session_bars),
+            "close": float(session_bars[-1]["close"]),
+            "volume": sum(float(bar.get("volume") or 0.0) for bar in session_bars),
+            "preview": True,
+        }
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 def build_d1_snapshot(
     symbol: str,
     *,
     sessions: int = D1_DEFAULT_SESSIONS,
     loader: Callable[[str], list[dict[str, Any]]] | None = None,
+    intraday_bars: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Daily candles + SMA50/100/200 + EMA8/15/21, indicators computed on the
-    full history so the displayed tail carries correct long-lookback values."""
+    full history so the displayed tail carries correct long-lookback values.
+
+    ``intraday_bars`` (the bot's cached M5 series) appends today's forming
+    candle as a preview when the store has not caught up yet. The moving
+    averages stay computed on completed sessions only - each overlay gets a
+    trailing None, so the lines honestly stop at the last stored bar instead
+    of previewing an indicator off a partial day.
+    """
     bars = (loader or load_d1_bars)(symbol)
     if not bars:
         return {"symbol": symbol, "timeframe": "D1", "bars": [], "overlays": [], "note": "no daily store"}
     closes = [bar["close"] for bar in bars]
+    preview = forming_d1_bar(bars, intraday_bars or [])
+    shown = _tail(bars, sessions)
+    if preview is not None:
+        shown = shown + [preview]
     overlays = []
     for kind, period, label, color, width, dash in D1_OVERLAY_SPECS:
         series = sma_series(closes, period) if kind == "sma" else ema_series(closes, period)
-        overlays.append(_overlay(label, _tail(series, sessions), color, width, dash))
+        values = _tail(series, sessions)
+        if preview is not None:
+            values = values + [None]
+        overlays.append(_overlay(label, values, color, width, dash))
     return {
         "symbol": symbol,
         "timeframe": "D1",
-        "bars": _tail(bars, sessions),
+        "bars": shown,
         "overlays": overlays,
         "note": "",
     }

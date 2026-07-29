@@ -12,6 +12,11 @@ from ui.models.bounce import BounceAlert
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
+_NO_M5_WATCH_REASON = (
+    "No cached M5 bars for this symbol yet - a session watch has "
+    "nothing to evaluate. A typed price level still works."
+)
+
 
 class AlertChartReview(QWidget):
     """Chart + queue controls.
@@ -176,11 +181,24 @@ class AlertChartReview(QWidget):
         # buttons rather than letting the trader wait on a watch that has
         # nothing to evaluate against.
         has_m5 = bool((self.snapshot._m5 or {}).get("bars"))
-        self.arm_bar.set_watch_availability(
-            has_m5,
-            "No cached M5 bars for this symbol yet - a session watch has "
-            "nothing to evaluate. A typed price level still works.",
-        )
+        self.arm_bar.set_watch_availability(has_m5, _NO_M5_WATCH_REASON)
+
+    def refresh_chart(self, *, bot=None) -> None:
+        """Re-pull the visible D1/M5 charts from the local caches.
+
+        The hosting panel calls this on its 30s watch tick, so an alert the
+        trader gets to minutes after it fired shows the bars of NOW, not of
+        when it landed in the pane. Only the snapshot re-renders (and only
+        when a bar actually changed); the arm dock, typed levels, and queue
+        buttons are never touched.
+        """
+        if self.alert is None:
+            return
+        if self.snapshot.refresh(bot=bot):
+            # M5 bars can appear after the alert landed (e.g. the scan loop
+            # reached the symbol) - the watch buttons unlock with them.
+            has_m5 = bool((self.snapshot._m5 or {}).get("bars"))
+            self.arm_bar.set_watch_availability(has_m5, _NO_M5_WATCH_REASON)
 
     def clear(self) -> None:
         self.alert = None

@@ -169,7 +169,13 @@ class CandleItem(pg.GraphicsObject):
             pen.setCosmetic(True)
             pen.setWidthF(1.0)
             painter.setPen(pen)
-            painter.setBrush(color)
+            # A forming (preview) candle - e.g. today's D1 synthesized from
+            # cached M5 bars - draws hollow: colored outline, no body fill,
+            # so a completed bar and a still-moving one never read the same.
+            if bar.get("preview"):
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+            else:
+                painter.setBrush(color)
             painter.drawLine(
                 pg.QtCore.QPointF(index, self._y(bar["low"])),
                 pg.QtCore.QPointF(index, self._y(bar["high"])),

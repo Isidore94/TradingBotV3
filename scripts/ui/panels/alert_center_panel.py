@@ -517,6 +517,11 @@ class AlertCenterPanel(QFrame):
         self._watch_timer = QTimer(self)
         self._watch_timer.setInterval(30_000)
         self._watch_timer.timeout.connect(self._poll_chart_watches)
+        # The review chart rides the same tick: it renders when an alert
+        # LANDS, and the trader often reaches it minutes later - without a
+        # refresh the M5 pane is missing every bar since and the D1 preview
+        # candle never moves. Cheap local reads; re-renders only on change.
+        self._watch_timer.timeout.connect(self._refresh_review_chart)
         self._watch_timer.start()
         # Persistent D1 level alerts poll less often: the daily-store reads
         # are mtime-cached and the evidence changes at most once per M5 bar.
@@ -893,6 +898,31 @@ class AlertCenterPanel(QFrame):
             return None
         return int((datetime.now() - self._review_shown_at).total_seconds() * 1000)
 
+    def _current_bot(self):
+        """The bounce service's live bot, or None - never raises."""
+        if self._bounce_service is None:
+            return None
+        try:
+            return self._bounce_service.current_bot()
+        except Exception:
+            return None
+
+    def _refresh_review_chart(self) -> None:
+        """30s tick: keep the visible review chart on current bars.
+
+        Passes a fresh bot handle each tick (the service may have restarted
+        since the alert rendered). The chart widget itself skips the re-render
+        when nothing changed, so a quiet chart keeps its pan/zoom.
+        """
+        if self._current_review_alert is None:
+            return
+        try:
+            self.chart_review.refresh_chart(bot=self._current_bot())
+        except Exception:
+            # Display refresh only - it must never break the watch tick that
+            # shares this timer.
+            pass
+
     def _render_current_review(self) -> None:
         alert = self._current_review_alert
         if alert is None:
@@ -923,12 +953,7 @@ class AlertCenterPanel(QFrame):
             self._record_review_event(
                 "shown", alert=alert, queue_len=len(self._review_queue), detail=detail
             )
-        bot = None
-        if self._bounce_service is not None:
-            try:
-                bot = self._bounce_service.current_bot()
-            except Exception:
-                bot = None
+        bot = self._current_bot()
         self.chart_review.set_alert(
             alert,
             bot=bot,

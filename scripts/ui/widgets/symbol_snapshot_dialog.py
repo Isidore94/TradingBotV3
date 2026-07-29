@@ -9,7 +9,7 @@ fixed per the desk's reading style: D1 = SMA50/100/200 + EMA8/15/21, M5 =
 session VWAP with +/-1 sigma bands + EMA15/21 - just the candles otherwise.
 """
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QDialog,
@@ -58,6 +58,25 @@ def _legend_html(
     return " &nbsp; ".join(parts)
 
 
+# How often a visible snapshot re-pulls its charts from the local stores /
+# the bot's M5 cache. Matches the Alert Center's 30s watch tick: bars change
+# at most every 5 minutes, so this bounds display staleness the same way.
+REFRESH_INTERVAL_MS = 30_000
+
+
+def _bars_fingerprint(bars: list) -> tuple | None:
+    """Cheap change detector for a rendered bar series.
+
+    (count, last stamp, last close) moves whenever a bar is appended OR the
+    forming last bar updates in place - and refresh skips the full re-render
+    (which would also reset the trader's pan/zoom) when it has not moved.
+    """
+    if not bars:
+        return None
+    last = bars[-1]
+    return (len(bars), last.get("dt"), last.get("close"))
+
+
 class SymbolSnapshotWidget(QWidget):
     """Reusable embedded D1-over-M5 snapshot view.
 
@@ -82,6 +101,7 @@ class SymbolSnapshotWidget(QWidget):
         """
         super().__init__(parent)
         self._symbol = ""
+        self._bot = None
         self._compact = bool(compact)
         # Latest snapshot dicts, retained so callers can quick-fill a price from
         # a drawn overlay (VWAP, +/-1 sigma). set_data plots overlays and drops
@@ -136,13 +156,58 @@ class SymbolSnapshotWidget(QWidget):
         layout.addWidget(self.m5_note)
 
     def set_symbol(self, symbol: str, *, bot=None) -> None:
-        import chart_snapshot
-
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
         self._symbol = symbol
-        d1 = chart_snapshot.build_d1_snapshot(symbol)
+        # Retained so refresh() can re-pull the M5 cache on a timer tick. The
+        # hosting panel passes a fresh bot on its own ticks; this reference
+        # only carries the popup between clicks.
+        self._bot = bot
+        d1, m5 = self._build_snapshots()
+        self._render_snapshots(d1, m5)
+
+    def refresh(self, *, bot=None) -> bool:
+        """Re-pull both charts from the local stores/caches; render on change.
+
+        Everything here is the same synchronous local read as set_symbol (the
+        daily parquet is mtime-cached; M5 is the bot's in-memory cache), so a
+        30s timer can call it safely from the GUI thread. Returns whether a
+        re-render happened - unchanged data leaves the widgets (and any
+        pan/zoom) untouched.
+        """
+        if not self._symbol:
+            return False
+        if bot is not None:
+            self._bot = bot
+        d1, m5 = self._build_snapshots()
+        if _bars_fingerprint(d1["bars"]) == _bars_fingerprint(
+            self._d1.get("bars") or []
+        ) and _bars_fingerprint(m5["bars"]) == _bars_fingerprint(
+            self._m5.get("bars") or []
+        ):
+            return False
+        self._render_snapshots(d1, m5)
+        return True
+
+    def _build_snapshots(self) -> tuple[dict, dict]:
+        import chart_snapshot
+
+        m5_bars = []
+        if self._bot is not None:
+            try:
+                m5_bars = self._bot.m5_chart_bars(self._symbol, max_sessions=2)
+            except Exception:
+                m5_bars = []
+        # The M5 cache feeds the D1 build too: it synthesizes today's forming
+        # daily candle (hollow preview) while the durable store still ends at
+        # the previous close.
+        d1 = chart_snapshot.build_d1_snapshot(self._symbol, intraday_bars=m5_bars)
+        m5 = chart_snapshot.build_m5_snapshot(self._symbol, m5_bars)
+        return d1, m5
+
+    def _render_snapshots(self, d1: dict, m5: dict) -> None:
+        symbol = self._symbol
         self._d1 = d1
         self.d1_legend.setText(_legend_html(f"{symbol} · D1", d1["overlays"]))
         self.d1_chart.set_data(d1["bars"], d1["overlays"], timeframe="d1")
@@ -154,20 +219,17 @@ class SymbolSnapshotWidget(QWidget):
                 "(Universe tab rebuilds fill the store)."
             )
         else:
-            last = d1["bars"][-1]["dt"]
+            last_bar = d1["bars"][-1]
+            stamp = last_bar["dt"].strftime("%m/%d")
+            reach = (
+                f"{stamp} forming" if last_bar.get("preview") else f"through {stamp}"
+            )
             self.d1_legend.setText(
                 self.d1_legend.text()
                 + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
-                + f"through {last.strftime('%m/%d')}</span>"
+                + f"{reach}</span>"
             )
 
-        m5_bars = []
-        if bot is not None:
-            try:
-                m5_bars = bot.m5_chart_bars(symbol, max_sessions=2)
-            except Exception:
-                m5_bars = []
-        m5 = chart_snapshot.build_m5_snapshot(symbol, m5_bars)
         self._m5 = m5
         self.m5_legend.setText(
             _legend_html(
@@ -351,6 +413,23 @@ class SymbolSnapshotDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.snapshot)
         layout.addWidget(self.action_row)
+
+        # The popup is non-modal and stays open while the trader works, so
+        # its charts go stale exactly like the review pane's did. Re-pull on
+        # the same 30s cadence; refresh() only re-renders when a bar changed.
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(REFRESH_INTERVAL_MS)
+        self._refresh_timer.timeout.connect(self._auto_refresh)
+        self._refresh_timer.start()
+
+    def _auto_refresh(self) -> None:
+        if not self.isVisible() or not self._symbol:
+            return
+        try:
+            self.snapshot.refresh()
+        except Exception:
+            # A refresh must never take down the popup; the next tick retries.
+            pass
 
     def show_symbol(
         self, symbol: str, *, bot=None, side: str = "", watch_host=None, review_host=None
