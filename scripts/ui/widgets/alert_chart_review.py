@@ -8,7 +8,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from chart_watch import WATCH_KINDS
-from ui.models.bounce import BounceAlert
+from ui.models.bounce import MANUAL_CHART_TAG, BounceAlert
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
@@ -47,9 +47,12 @@ class AlertChartReview(QWidget):
 
         self.title = QLabel("Visual Alert Review")
         self.title.setObjectName("SectionTitle")
+        # The setup line: WHAT exactly fired/is being looked at. Styled large
+        # via ReviewSetupText, and red (alertLive property) when a live alert
+        # put this chart up - the trader reads it from across the desk.
         self.alert_text = QLabel("Waiting for the next ticker alert.")
         self.alert_text.setWordWrap(True)
-        self.alert_text.setObjectName("MutedLabel")
+        self.alert_text.setObjectName("ReviewSetupText")
         # Guidance line from the review-learning loop (take-prob, segment
         # edge, AI-policy notes like "Blind spot: ..."). Purely advisory -
         # it annotates the chart the trader is already looking at.
@@ -155,6 +158,10 @@ class AlertChartReview(QWidget):
         timeframe = f" · {alert.timeframe}" if alert.timeframe else ""
         self.title.setText(f"{alert.symbol}{side}{timeframe}")
         self.alert_text.setText(alert.trigger or alert.raw_text)
+        # Red setup text = a live alert put this chart up. A typed manual
+        # chart stays muted, so a glance separates "something fired" from
+        # "I was just looking".
+        self._set_setup_text_live(alert.tag != MANUAL_CHART_TAG)
         if focus_category == "swing":
             self.focus_button.setText("Add to Swing Focus")
             # Swing pick: the cross-promote is the M5 day-trade list.
@@ -206,10 +213,21 @@ class AlertChartReview(QWidget):
             has_m5 = bool((self.snapshot._m5 or {}).get("bars"))
             self.arm_bar.set_watch_availability(has_m5, _NO_M5_WATCH_REASON)
 
+    def _set_setup_text_live(self, live: bool) -> None:
+        """Flip the alertLive QSS property (red setup text) with a repolish."""
+        live = bool(live)
+        if bool(self.alert_text.property("alertLive")) == live:
+            return
+        self.alert_text.setProperty("alertLive", live)
+        style = self.alert_text.style()
+        style.unpolish(self.alert_text)
+        style.polish(self.alert_text)
+
     def clear(self) -> None:
         self.alert = None
         self.title.setText("Visual Alert Review")
         self.alert_text.setText("Waiting for the next ticker alert.")
+        self._set_setup_text_live(False)
         self.guidance_label.setText("")
         self.guidance_label.setVisible(False)
         self.snapshot.setVisible(False)

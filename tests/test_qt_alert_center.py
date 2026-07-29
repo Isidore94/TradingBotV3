@@ -787,6 +787,60 @@ def test_review_chart_auto_refresh_pulls_new_bars(monkeypatch):
     panel._refresh_review_chart()
 
 
+def test_review_setup_text_is_large_and_red_only_for_live_alerts(monkeypatch):
+    """The setup line uses the big ReviewSetupText style, and the alertLive
+    property (red via QSS) is on for queue-fed alerts but off for a typed
+    manual chart and for the cleared pane."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+
+    panel = AlertCenterPanel()
+    text = panel.chart_review.alert_text
+    assert text.objectName() == "ReviewSetupText"
+    assert not bool(text.property("alertLive"))
+
+    panel.add_alert(
+        BounceAlert(
+            time_text="11:30:00",
+            symbol="NVDA",
+            side="LONG",
+            trigger="[S-TIER] VWAP reclaim",
+            timeframe="5m",
+            raw_text="[S-TIER] NVDA: VWAP reclaim",
+        )
+    )
+    assert bool(text.property("alertLive"))
+    assert "VWAP reclaim" in text.text()
+
+    # Typing a ticker charts on demand: same pane, muted setup line.
+    assert panel.chart_symbol("MSFT")
+    assert not bool(text.property("alertLive"))
+
+    panel.chart_review.clear()
+    assert not bool(text.property("alertLive"))
+
+    # The style sheet actually carries the big/red rules the property drives.
+    from ui import theme
+
+    qss = theme.build_stylesheet()
+    assert "QLabel#ReviewSetupText" in qss
+    assert 'QLabel#ReviewSetupText[alertLive="true"]' in qss
+
+
 def test_dock_d1_event_buttons_arm_poll_and_fire_red(monkeypatch):
     """The dock's D1 row: toggling arms a persistent event watch, the 60s
     poll fires it off the daily-store-derived level, and the one-shot retires

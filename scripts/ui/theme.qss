@@ -56,6 +56,20 @@ QLabel#GuidanceLabel {
     color: @favorite@;
 }
 
+/* The review pane's setup line: WHAT the exact setup is, readable at a
+   glance from across the desk. When a live alert put the chart there it
+   turns red (alertLive property), so it separates instantly from a chart
+   the trader pulled up by typing a ticker. */
+QLabel#ReviewSetupText {
+    font-size: 12pt;
+    font-weight: 600;
+    color: @text_secondary@;
+}
+
+QLabel#ReviewSetupText[alertLive="true"] {
+    color: @short@;
+}
+
 QPushButton,
 QToolButton {
     background: @bg_elevated@;
