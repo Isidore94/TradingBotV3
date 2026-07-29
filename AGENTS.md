@@ -91,7 +91,8 @@ to surface the best alerts.
   `pick_feedback.jsonl` dislike reasons, and write your decisions to
   `<shared home>/review_policy.json` (`review_policy.py`, schema
   `review_policy_v1`): per-(dimension, segment) rules with `priority_delta`
-  (queue ordering, clamped +/-5), `annotation` (shown on the chart), and
+  (queue ordering, clamped +/-5, currently GATED - see below),
+  `annotation` (shown on the chart), and
   `watch_kind`/`fill_source` presets (hint only, never auto-armed).
   `python scripts/review_policy.py --draft` turns the scoreboard callouts
   into `review_policy_draft.json` as a starting point - curate it, then
@@ -103,6 +104,21 @@ to surface the best alerts.
   policy format deliberately has no suppression field - do not add one.
 - Capture only starts once the GUI restarts onto a build >= c45d965; expect
   ~2-3 weeks of sessions before segment samples clear the n>=8 gates.
+- **Ordering is gated to annotation-only** (`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`
+  Phase 0 task 6). Episodes still fold by `(trade_date, symbol)`, so a Swing
+  and an M5 thesis - or a long and a short - collapse into one sample, and
+  "take" still includes arming a watch. Until the Phase 3 identity/parity gate
+  passes, `priority_delta` and the segment scores annotate and are stamped on
+  every impression but do NOT move the active queue, which stays FIFO. Write
+  policy rules as usual; they are evidence and annotation now, ordering later.
+  Restore the pre-gate ordering with `ReviewGuide(ordering_mode="preference")`
+  or `TRADINGBOT_REVIEW_QUEUE_ORDERING=preference` - and expect System Health
+  to go unhealthy while it is on, by design.
+- Check capture readiness any time with
+  `.venv\Scripts\python.exe scripts/review_capture_audit.py`: decision-log
+  rows/sessions/malformed lines/writers, scoreboard segment-floor progress,
+  outcome join rate, policy gate, scoring-champion hash, and the
+  Exploratory / Non-Promotable label. All of it also renders in System Health.
 
 ## Runtime facts
 

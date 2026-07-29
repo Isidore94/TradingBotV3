@@ -97,14 +97,77 @@ def test_healthy_runtime_audit_composes_all_sol3_surfaces(tmp_path):
     payload = build_operations_audit(now=now, diagnostics_dir=diagnostics, candidate_registry_path=registry)
 
     assert payload["schema"] == "operations_audit_v1"
+    # Cold-start learning artifacts are degraded, not broken: runtime health
+    # must stay honest about the scheduler, not be dragged down by a ledger
+    # that no reviewed alert has created yet.
     assert payload["status"] == "healthy"
-    assert payload["summary"] == {"healthy": 8, "degraded": 0, "unhealthy": 0, "total": 8}
-    assert {item["id"] for item in payload["checks"]} == {
+    assert payload["summary"]["unhealthy"] == 0
+    operational = {
+        item["id"]
+        for item in payload["checks"]
+        if not item["id"].startswith(("review_", "setup_scoring"))
+    }
+    assert operational == {
         "heartbeat", "job_ledger", "run_manifest", "away_report", "industry_board",
         "spy_shadow", "greatness_shadow", "candidate_registry"
     }
+    assert payload["capture_readiness"]["status"] == "degraded"
+    assert payload["capture_readiness"]["evidence_label"] == "Exploratory / Non-Promotable"
     assert payload["latest_manifest"]["run_id"] == "run-1"
     assert payload["excluded"] == ["large setup-tracker payload"]
+
+
+def test_capture_readiness_checks_reach_the_audit_and_never_read_the_shared_home(tmp_path):
+    """Phase 0 task 4: the learning surfaces are visible in System Health."""
+    from operations_audit import build_operations_audit
+
+    diagnostics, registry, now = _healthy_fixture(tmp_path)
+    (diagnostics / "alert_review_events.jsonl").write_text(
+        json.dumps(
+            {
+                "schema": "review_events_v1",
+                "ts": "2026-07-13T10:15:00",
+                "trade_date": "2026-07-13",
+                "machine": "desk",
+                "action": "shown",
+                "symbol": "NVDA",
+                "side": "LONG",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    payload = build_operations_audit(
+        now=now, diagnostics_dir=diagnostics, candidate_registry_path=registry
+    )
+    checks = {item["id"]: item for item in payload["checks"]}
+
+    assert checks["review_event_log"]["status"] == "healthy"
+    assert checks["review_event_log"]["details"]["rows"] == 1
+    assert checks["review_policy_gate"]["details"]["orders_active_queue"] is False
+    assert checks["review_evidence_label"]["details"]["promotion_clock_started"] is False
+    # The sandbox is self-contained: no check resolved back to the shared home.
+    for check in payload["checks"]:
+        assert str(tmp_path) in check["source"] or check["source"].endswith(
+            ("review_capture_audit.py", "operations_audit.py")
+        )
+
+
+def test_a_capture_gate_violation_makes_the_whole_audit_unhealthy(tmp_path, monkeypatch):
+    """The gate that stopped holding is the one capture failure that must shout."""
+    from operations_audit import build_operations_audit
+    from review_guidance import ORDERING_MODE_ENV_VAR
+
+    diagnostics, registry, now = _healthy_fixture(tmp_path)
+    monkeypatch.setenv(ORDERING_MODE_ENV_VAR, "preference")
+    payload = build_operations_audit(
+        now=now, diagnostics_dir=diagnostics, candidate_registry_path=registry
+    )
+    checks = {item["id"]: item for item in payload["checks"]}
+
+    assert payload["status"] == "unhealthy"
+    assert checks["review_policy_gate"]["status"] == "unhealthy"
+    assert checks["review_evidence_label"]["status"] == "unhealthy"
 
 
 def test_stale_heartbeat_and_shadow_make_audit_unhealthy(tmp_path):

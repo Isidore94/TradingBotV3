@@ -12,6 +12,10 @@
   live-validation program; Section 7 defines shadow-evidence floors and the
   promotion ladder.
 - **`SOL_PROGRESS.md`** is the checkpoint ledger of what already landed.
+- **`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`** is the subordinate product
+  addendum for discovery/Focus/review/learning GUI work. Section 15 is its
+  ordered phase list; `GUI_LEARNING_PROGRESS.md` is its checkpoint stamp. It
+  never overrides `plan.md` sections 5-7 or the Section 12 order.
 - Do not re-implement anything marked implemented; do not promote anything
   marked shadow without the Section 7 evidence.
 

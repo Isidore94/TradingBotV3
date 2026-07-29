@@ -54,8 +54,9 @@ class HealthPanel(QFrame):
         refresh_button.clicked.connect(self.refresh)
         header = SectionHeader(
             "System Health",
-            "Sol3 heartbeat, scheduler, scan manifests, SPY/Greatness shadows, and candidate registry. "
-            "The large setup-tracker file is intentionally excluded.",
+            "Sol3 heartbeat, scheduler, scan manifests, SPY/Greatness shadows, candidate registry, and "
+            "learning capture readiness (decision log, scoreboard, outcome join, policy gate, scoring "
+            "champion). The large setup-tracker file is intentionally excluded.",
         )
         header.add_action(refresh_button)
 
@@ -132,11 +133,18 @@ class HealthPanel(QFrame):
         self.healthy_tile.set_value(str(int(summary.get("healthy", 0) or 0)))
         self.degraded_tile.set_value(str(int(summary.get("degraded", 0) or 0)))
         self.unhealthy_tile.set_value(str(int(summary.get("unhealthy", 0) or 0)))
-        self.meta_label.setText(
+        meta_text = (
             f"Audit {self._payload.get('generated_at') or 'unknown time'} | "
             f"market {self._payload.get('market_phase') or 'unknown'} "
             f"({self._payload.get('market_session') or '?'})"
         )
+        # Phase 0 task 8: every learning artifact on this page is pre-v2
+        # evidence, and the page must say so rather than let a reader assume
+        # the numbers are promotable.
+        label = str(self._payload.get("evidence_label") or "").strip()
+        if label:
+            meta_text += f" | learning evidence: {label}"
+        self.meta_label.setText(meta_text)
 
         checks = [item for item in self._payload.get("checks", []) if isinstance(item, dict)]
         selected_id = ""

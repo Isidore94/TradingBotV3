@@ -237,6 +237,12 @@ def _bounce_alert(symbol, tier, **overrides):
 
 
 def test_panel_orders_review_queue_by_guidance_score(tmp_path):
+    """Characterization replay of the pre-gate preference ordering.
+
+    Phase 0 task 6 of GUI_TRADE_DISCOVERY_LEARNING_PLAN.md requires this
+    behavior to stay reproducible behind the switch while the active queue
+    runs FIFO, so the champion can be restored without a code revert.
+    """
     if _qt_app() is None:
         return
     from ui.panels.alert_center_panel import AlertCenterPanel
@@ -245,7 +251,9 @@ def test_panel_orders_review_queue_by_guidance_score(tmp_path):
     state_path.write_text(json.dumps(_state()), encoding="utf-8")
     panel = AlertCenterPanel(
         review_events_path=tmp_path / "events.jsonl",
-        review_guide=ReviewGuide(state_path, tmp_path / "policy.json"),
+        review_guide=ReviewGuide(
+            state_path, tmp_path / "policy.json", ordering_mode="preference"
+        ),
     )
     # First alert occupies the pane; the queue then receives B (low score)
     # and A (high score) - A must jump ahead of B.
@@ -269,6 +277,73 @@ def test_panel_orders_review_queue_by_guidance_score(tmp_path):
     rows = load_review_events(tmp_path / "events.jsonl")
     shown = [row for row in rows if row["action"] == "shown"]
     assert shown and shown[0]["detail"]["guidance_score"] > 0
+    assert shown[0]["detail"]["queue_ordering"] == "preference"
+
+
+def test_default_ordering_mode_is_annotation_only(monkeypatch):
+    from review_guidance import (
+        ORDERING_ANNOTATION_ONLY,
+        ORDERING_MODE_ENV_VAR,
+        ORDERING_PREFERENCE,
+        resolve_ordering_mode,
+    )
+
+    monkeypatch.delenv(ORDERING_MODE_ENV_VAR, raising=False)
+    assert resolve_ordering_mode() == ORDERING_ANNOTATION_ONLY
+    assert resolve_ordering_mode("preference") == ORDERING_PREFERENCE
+    # A typo must fail closed, never re-enable ungated ordering.
+    assert resolve_ordering_mode("prefrence") == ORDERING_ANNOTATION_ONLY
+
+    gated = ReviewGuide(None, None)
+    assert not gated.orders_queue
+    assert gated.queue_score(AlertGuidance(score=93.4)) == 0.0
+    assert ReviewGuide(None, None, ordering_mode="preference").queue_score(
+        AlertGuidance(score=93.4)
+    ) == 93.4
+
+    monkeypatch.setenv(ORDERING_MODE_ENV_VAR, "preference")
+    assert resolve_ordering_mode() == ORDERING_PREFERENCE
+    # An explicit argument still wins over the environment.
+    assert resolve_ordering_mode("annotation_only") == ORDERING_ANNOTATION_ONLY
+
+
+def test_gated_guidance_annotates_without_reordering_the_queue(tmp_path, monkeypatch):
+    """Phase 0 gate: a populated scoreboard annotates but cannot reorder."""
+    if _qt_app() is None:
+        return
+    from review_guidance import ORDERING_MODE_ENV_VAR
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    monkeypatch.delenv(ORDERING_MODE_ENV_VAR, raising=False)
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(_state()), encoding="utf-8")
+    panel = AlertCenterPanel(
+        review_events_path=tmp_path / "events.jsonl",
+        review_guide=ReviewGuide(state_path, tmp_path / "policy.json"),
+    )
+    panel._enqueue_review_alert(_bounce_alert("FIRST", "A"))
+    panel._enqueue_review_alert(_bounce_alert("LOWB", "B"))
+    panel._enqueue_review_alert(_bounce_alert("HIGHA", "A"))
+    # Same documents as the characterization test above, but arrival order wins.
+    assert [alert.symbol for alert in panel._review_queue] == ["LOWB", "HIGHA"]
+
+    # An armed chart-watch hit is a trader instruction, not preference - it
+    # still goes to the front under the gate.
+    panel._enqueue_review_alert(_bounce_alert("WATCHED", "B", tag="chart_watch"))
+    assert panel._review_queue[0].symbol == "WATCHED"
+
+    # The annotation still reaches the chart and the impression still records
+    # the score - only the queue position is withheld.
+    assert "take-prob" in panel.chart_review.guidance_label.text()
+    from review_events import load_review_events
+
+    shown = [
+        row
+        for row in load_review_events(tmp_path / "events.jsonl")
+        if row["action"] == "shown"
+    ]
+    assert shown and shown[0]["detail"]["guidance_score"] > 0
+    assert shown[0]["detail"]["queue_ordering"] == "annotation_only"
 
 
 def test_panel_queue_stays_fifo_without_documents(tmp_path):

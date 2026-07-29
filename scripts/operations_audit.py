@@ -456,6 +456,8 @@ def build_operations_audit(
     away_report_path: Path | str | None = None,
     autopilot_state_path: Path | str | None = None,
     industry_state_path: Path | str | None = None,
+    review_capture: bool = True,
+    **review_capture_paths: Path | str | None,
 ) -> dict[str, Any]:
     local_tz, timezone_name = get_market_local_timezone()
     moment = normalize_market_local_datetime(now, local_timezone=local_tz)
@@ -474,6 +476,18 @@ def build_operations_audit(
         else Path(INDUSTRY_BOARD_STATE_FILE)
     )
     market_date = session.market_date.isoformat()
+    if diagnostics_dir is not None:
+        # Same convention the report/state/industry paths use above: an
+        # explicit diagnostics directory means "audit this sandbox", so the
+        # learning artifacts resolve inside it instead of the shared home.
+        for keyword, filename in (
+            ("review_events_path", "alert_review_events.jsonl"),
+            ("preference_state_path", "review_preference_state.json"),
+            ("policy_path", "review_policy.json"),
+            ("policy_draft_path", "review_policy_draft.json"),
+            ("scoring_config_path", "master_avwap_scoring_config.json"),
+        ):
+            review_capture_paths.setdefault(keyword, diagnostics / filename)
 
     heartbeat = _heartbeat_check(diagnostics / "heartbeat.json", moment, local_tz)
     ledger, jobs = _ledger_check(diagnostics / "job_ledger.jsonl", market_date, moment, local_tz, market_phase)
@@ -508,11 +522,59 @@ def build_operations_audit(
         ),
         _registry_check(registry_path, moment, local_tz, market_phase),
     ]
+    # Runtime health is what the unattended scheduler is judged on; capture
+    # readiness is a separate dimension that will read "degraded" every day
+    # until the trader has reviewed a first alert. Both are shown, but a
+    # cold-start learning ledger must not make the runtime look broken - only
+    # a capture check that is outright unhealthy (a held gate that stopped
+    # holding) raises the operational verdict.
     overall = max((check["status"] for check in checks), key=lambda item: _STATUS_ORDER[item])
+    capture_checks: list[dict[str, Any]] = []
+    evidence_label = ""
+    if review_capture:
+        # Imported lazily so a broken learning artifact can never take down
+        # the operational audit the unattended runtime depends on.
+        try:
+            from review_capture_audit import build_review_capture_checks
+
+            capture_checks = build_review_capture_checks(now=moment, **review_capture_paths)
+        except Exception as exc:
+            capture_checks = [
+                _check(
+                    "review_capture_audit",
+                    "Learning capture readiness",
+                    "unhealthy",
+                    f"Capture-readiness audit failed: {exc}",
+                    source=Path("review_capture_audit.py"),
+                )
+            ]
+        for check in capture_checks:
+            if check["id"] == "review_evidence_label":
+                evidence_label = str((check.get("details") or {}).get("label") or "")
+        if any(check["status"] == "unhealthy" for check in capture_checks):
+            overall = "unhealthy"
+        checks.extend(capture_checks)
+
     counts = Counter(check["status"] for check in checks)
+    capture_counts = Counter(check["status"] for check in capture_checks)
     return {
         "schema": AUDIT_SCHEMA,
         "generated_at": moment.isoformat(timespec="seconds"),
+        "evidence_label": evidence_label,
+        "capture_readiness": {
+            "status": max(
+                (check["status"] for check in capture_checks),
+                key=lambda item: _STATUS_ORDER[item],
+                default="healthy",
+            ),
+            "evidence_label": evidence_label,
+            "summary": {
+                "healthy": int(capture_counts.get("healthy", 0)),
+                "degraded": int(capture_counts.get("degraded", 0)),
+                "unhealthy": int(capture_counts.get("unhealthy", 0)),
+                "total": len(capture_checks),
+            },
+        },
         "timezone": timezone_name,
         "market_date": market_date,
         "market_phase": market_phase,

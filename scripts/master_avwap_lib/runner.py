@@ -95,15 +95,18 @@ def _sanitize_existing_avwap_signal_rows(frame):
     from side_types import Side, parse_side
 
     cleaned = frame.copy()
-    parsed_sides = cleaned["side"].map(parse_side)
-    valid_side = parsed_sides.isin((Side.LONG, Side.SHORT))
+    # Map straight to the plain string value: arrow-backed string columns cast
+    # the Side members (a str Enum) back to bare str, so an Enum-typed
+    # intermediate is not portable across pandas storage backends.
+    parsed_sides = cleaned["side"].map(lambda value: parse_side(value).value)
+    valid_side = parsed_sides.isin((Side.LONG.value, Side.SHORT.value))
     valid_run_date = pd.to_datetime(cleaned["run_date"], format="%Y-%m-%d", errors="coerce").notna()
     valid_trade_date = pd.to_datetime(cleaned["trade_date"], format="%Y-%m-%d", errors="coerce").notna()
     valid_symbol = cleaned["symbol"].fillna("").astype(str).str.fullmatch(r"[A-Za-z0-9.\-]{1,15}")
     valid = valid_side & valid_run_date & valid_trade_date & valid_symbol
     dropped = int((~valid).sum())
     cleaned = cleaned.loc[valid].copy()
-    cleaned["side"] = parsed_sides.loc[valid].map(lambda side: side.value)
+    cleaned["side"] = parsed_sides.loc[valid]
     return cleaned, dropped
 
 

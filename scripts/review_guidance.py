@@ -11,10 +11,20 @@ Phase 2 of the review-learning loop. Combines two documents:
 For each alert the panel asks ``ReviewGuide.guidance_for(alert)`` and gets an
 ``AlertGuidance``: an ordering score for the review queue, the take
 probability behind it, callout notes ("Blind spot: ..."), and an optional
-watch hint. The queue uses the score; the chart shows the notes. Nothing
-here can suppress an alert - the ceiling of this module's power is choosing
-what the trader sees FIRST, in keeping with the house rule that muted means
-CAUTION, not silence.
+watch hint. The chart shows the notes; whether the queue may USE the score is
+decided by the ordering mode below. Nothing here can suppress an alert - the
+ceiling of this module's power is choosing what the trader sees FIRST, in
+keeping with the house rule that muted means CAUTION, not silence.
+
+Ordering gate (GUI_TRADE_DISCOVERY_LEARNING_PLAN.md sec 4.6 / 14, Phase 0
+task 6): the scoreboard folds episodes by (trade_date, symbol), so a Swing
+and an M5 thesis for the same ticker - or a long and a short - currently
+collapse into one segment sample. Until the Phase 3 identity/parity gate
+lands, preference-derived ordering runs in ANNOTATION-ONLY mode: the score is
+still computed, shown on the chart, and stamped onto every impression, but
+the active queue stays FIFO. ``ordering_mode="preference"`` restores the
+champion-preference ordering without a code revert (also settable per process
+via ``TRADINGBOT_REVIEW_QUEUE_ORDERING=preference``).
 
 Cold start: with no state and no policy every alert scores 0 and the queue
 stays FIFO - the desk behaves exactly as it did before this module existed.
@@ -26,6 +36,7 @@ enqueue, and tests drive it headless.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
@@ -55,6 +66,30 @@ MIN_OUTCOME_SAMPLES = 4
 TAKE_PROB_WEIGHT = 100.0
 EDGE_R_WEIGHT = 20.0
 POLICY_DELTA_WEIGHT = 10.0
+
+# Queue-ordering modes. Annotation-only is the Phase 0 champion-compatible
+# default: guidance still annotates and stamps impressions, but contributes
+# zero to queue position, so the active order is exactly the pre-guidance
+# FIFO. "preference" is the pre-gate behavior, retained behind the switch.
+ORDERING_ANNOTATION_ONLY = "annotation_only"
+ORDERING_PREFERENCE = "preference"
+DEFAULT_ORDERING_MODE = ORDERING_ANNOTATION_ONLY
+ORDERING_MODE_ENV_VAR = "TRADINGBOT_REVIEW_QUEUE_ORDERING"
+
+
+def resolve_ordering_mode(mode: str | None = None) -> str:
+    """Explicit argument, then the env override, then the gated default.
+
+    Anything unrecognized falls back to annotation-only: a typo in the switch
+    must never silently re-enable ungated preference ordering.
+    """
+    for candidate in (mode, os.environ.get(ORDERING_MODE_ENV_VAR)):
+        text = str(candidate or "").strip().lower()
+        if text == ORDERING_PREFERENCE:
+            return ORDERING_PREFERENCE
+        if text == ORDERING_ANNOTATION_ONLY:
+            return ORDERING_ANNOTATION_ONLY
+    return DEFAULT_ORDERING_MODE
 
 
 @dataclass
@@ -212,6 +247,8 @@ class ReviewGuide:
         self,
         state_path: Path | None = REVIEW_PREFERENCE_STATE_FILE,
         policy_path: Path | None = REVIEW_POLICY_FILE,
+        *,
+        ordering_mode: str | None = None,
     ) -> None:
         self._state_path = Path(state_path) if state_path is not None else None
         self._policy_path = Path(policy_path) if policy_path is not None else None
@@ -219,10 +256,25 @@ class ReviewGuide:
         self._state_mtime: float | None = None
         self._rules: list[PolicyRule] = []
         self._rules_mtime: float | None = None
+        self.ordering_mode = resolve_ordering_mode(ordering_mode)
 
     @property
     def enabled(self) -> bool:
         return self._state_path is not None or self._policy_path is not None
+
+    @property
+    def orders_queue(self) -> bool:
+        """True only when preference is allowed to move the active queue."""
+        return self.ordering_mode == ORDERING_PREFERENCE
+
+    def queue_score(self, guidance: AlertGuidance) -> float:
+        """The score the review queue may sort on - 0.0 while gated.
+
+        Callers must route every queue-ordering decision through here rather
+        than reading ``guidance.score`` directly, so the gate cannot be
+        bypassed by a new call site.
+        """
+        return float(guidance.score) if self.orders_queue else 0.0
 
     def _mtime(self, path: Path | None) -> float | None:
         try:

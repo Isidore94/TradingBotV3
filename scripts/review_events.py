@@ -75,6 +75,23 @@ def _trade_date_text() -> str:
         return datetime.now().date().isoformat()
 
 
+def _machine_name() -> str:
+    """Which machine wrote the row.
+
+    The log lives in the shared home and syncs across machines, so an episode
+    count is only trustworthy if it can be attributed to one writer. Two
+    machines appending to the same trade date is the concurrent-writer hazard
+    the roadmap treats as an immediate rollback trigger; recording the name is
+    what makes it detectable (review_capture_audit.py reports it).
+    """
+    try:
+        import socket
+
+        return socket.gethostname()
+    except Exception:
+        return ""
+
+
 def _as_float(value) -> float | None:
     try:
         resolved = float(value)
@@ -185,6 +202,7 @@ def record_review_event(
         "schema": REVIEW_EVENTS_SCHEMA,
         "ts": (now or datetime.now()).isoformat(timespec="seconds"),
         "trade_date": _trade_date_text(),
+        "machine": _machine_name(),
         "action": action_text,
         "symbol": sym,
         "side": side_text,

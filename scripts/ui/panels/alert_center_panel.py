@@ -48,7 +48,7 @@ from project_paths import (
     save_local_setting,
 )
 from review_events import record_review_event
-from review_guidance import AlertGuidance, ReviewGuide
+from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
 from ui.panels import desk_layout
 from ui.models.bounce import (
     BounceAlert,
@@ -777,13 +777,15 @@ class AlertCenterPanel(QFrame):
             # Guidance-ordered insertion: higher scores review sooner. Armed
             # chart-watch hits always stay ahead regardless of score, and
             # equal scores keep arrival order, so with no guidance documents
-            # this degrades to the old FIFO exactly.
-            score = self._guidance_for(alert).score
+            # this degrades to the old FIFO exactly. While the Phase 0 gate
+            # holds every queue_score is 0.0 and the order is that same FIFO
+            # even when the scoreboard and policy are populated.
+            score = self._queue_score(alert)
             index = len(self._review_queue)
             for position, queued in enumerate(self._review_queue):
                 if is_chart_watch_alert(queued):
                     continue
-                if self._guidance_for(queued).score < score:
+                if self._queue_score(queued) < score:
                     index = position
                     break
             self._review_queue.insert(index, alert)
@@ -802,6 +804,13 @@ class AlertCenterPanel(QFrame):
                 guidance = AlertGuidance()
             self._review_guidance[alert.symbol] = guidance
         return guidance
+
+    def _queue_score(self, alert: BounceAlert) -> float:
+        """The only value allowed to influence review-queue position."""
+        try:
+            return self._review_guide.queue_score(self._guidance_for(alert))
+        except Exception:
+            return 0.0
 
     def _select_review_alert(self, alert: BounceAlert) -> None:
         """A feed-row click makes that alert the active visual review."""
@@ -863,8 +872,16 @@ class AlertCenterPanel(QFrame):
             if guidance.score or guidance.take_prob is not None:
                 # Stamp what the guidance claimed at impression time, so a
                 # later pass can measure whether the ordering/annotations
-                # actually changed behavior (Phase 3 material).
-                detail = {"guidance_score": guidance.score, "take_prob": guidance.take_prob}
+                # actually changed behavior (Phase 3 material). The ordering
+                # mode rides along: an episode collected under the FIFO gate
+                # is not evidence about preference-ordered delivery.
+                detail = {
+                    "guidance_score": guidance.score,
+                    "take_prob": guidance.take_prob,
+                    "queue_ordering": getattr(
+                        self._review_guide, "ordering_mode", ORDERING_ANNOTATION_ONLY
+                    ),
+                }
             self._record_review_event(
                 "shown", alert=alert, queue_len=len(self._review_queue), detail=detail
             )
