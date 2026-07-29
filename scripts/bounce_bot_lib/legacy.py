@@ -455,6 +455,10 @@ REGIME_PAUSE_RS_TYPE = "regime_pause_rs"
 # direction best through the counter-move). Weak regimes emit instant
 # strongest/weakest trailing-30m lists; neutral/chop emits both sides.
 ENTRY_WINDOW_TOP_N = 8
+# The always-on RS/RW board tab goes deeper than the emitted alert lines:
+# a feed line with 20 tickers would be unreadable, but the board is a tall
+# scrollable pane (mostly empty at 8 rows on a 4K desk).
+ENTRY_BOARD_TOP_N = 20
 ENTRY_WINDOW_MIN_BARS = 2
 ENTRY_MOVERS_MINUTES = 30
 ENTRY_AUTO_MOVERS_INTERVAL_MIN = 30
@@ -5516,7 +5520,9 @@ class BounceBot(EWrapper, EClient):
             self._emit_entry_window_summary(side, window, spy_window, ranked, source)
         return {"ok": True, "note": f"Entry window closed - ranked output emitted [{source}].", "results": results}
 
-    def _rank_entry_window_side(self, side, start_dt, today, spy_window, cached_only=False):
+    def _rank_entry_window_side(
+        self, side, start_dt, today, spy_window, cached_only=False, top_n=ENTRY_WINDOW_TOP_N
+    ):
         sign = 1.0 if side == "long" else -1.0
         rows = []
         for symbol in self._entry_candidates(side):
@@ -5536,7 +5542,7 @@ class BounceBot(EWrapper, EClient):
                 }
             )
         rows.sort(key=lambda row: -row["excess"])
-        return rows[:ENTRY_WINDOW_TOP_N]
+        return rows[:top_n]
 
     def _emit_entry_window_summary(self, side, window, spy_window, ranked, source):
         if not self.gui_callback:
@@ -5568,7 +5574,9 @@ class BounceBot(EWrapper, EClient):
             return None
         return (window[-1].close - window[0].open) / window[0].open * 100.0
 
-    def _rank_trailing_movers(self, side, minutes, spy_bars, cached_only=False):
+    def _rank_trailing_movers(
+        self, side, minutes, spy_bars, cached_only=False, top_n=ENTRY_WINDOW_TOP_N
+    ):
         sign = 1.0 if side == "long" else -1.0
         spy_change = self._trailing_return_pct(spy_bars or [], minutes) or 0.0
         rows = []
@@ -5588,7 +5596,7 @@ class BounceBot(EWrapper, EClient):
                 }
             )
         rows.sort(key=lambda row: -row["excess"])
-        return rows[:ENTRY_WINDOW_TOP_N]
+        return rows[:top_n]
 
     def emit_trailing_movers(self, sides, minutes=ENTRY_MOVERS_MINUTES, source="manual"):
         spy_bars = self.get_cached_5m_bars("SPY")
@@ -5857,7 +5865,12 @@ class BounceBot(EWrapper, EClient):
             if spy_window is not None:
                 for side in window["sides"]:
                     rankings[side] = self._rank_entry_window_side(
-                        side, window["start_dt"], window["date"], spy_window, cached_only=True
+                        side,
+                        window["start_dt"],
+                        window["date"],
+                        spy_window,
+                        cached_only=True,
+                        top_n=ENTRY_BOARD_TOP_N,
                     )
             snapshot["window"] = {
                 "active": True,
@@ -5878,11 +5891,13 @@ class BounceBot(EWrapper, EClient):
                         "side": trend_side,
                         "since": pause_start.strftime("%H:%M"),
                         "spy_pct": preview.get("spy_pct"),
-                        "rows": (preview.get("rows") or [])[:ENTRY_WINDOW_TOP_N],
+                        "rows": (preview.get("rows") or [])[:ENTRY_BOARD_TOP_N],
                     }
 
         snapshot["movers"] = {
-            side: self._rank_trailing_movers(side, movers_minutes, spy_bars, cached_only=True)
+            side: self._rank_trailing_movers(
+                side, movers_minutes, spy_bars, cached_only=True, top_n=ENTRY_BOARD_TOP_N
+            )
             for side in ("long", "short")
         }
         return snapshot

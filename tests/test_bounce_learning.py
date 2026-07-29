@@ -1583,6 +1583,37 @@ def test_entry_assist_board_snapshot_covers_every_option():
     assert bot.entry_assist_board_snapshot() == {}
 
 
+def test_entry_assist_board_goes_deeper_than_the_emitted_lines():
+    """The RS/RW board tab shows up to ENTRY_BOARD_TOP_N (20) rows per list,
+    while the alert-feed text lines keep the readable ENTRY_WINDOW_TOP_N (8)."""
+    from bounce_bot_lib.legacy import ENTRY_BOARD_TOP_N, ENTRY_WINDOW_TOP_N
+
+    assert ENTRY_BOARD_TOP_N > ENTRY_WINDOW_TOP_N
+    # 25 movers on each side: more than either cap, so both caps are visible.
+    longs = tuple(f"L{i:02d}" for i in range(25))
+    shorts = tuple(f"S{i:02d}" for i in range(25))
+    symbol_closes = {}
+    for rank, symbol in enumerate(longs):
+        symbol_closes[symbol] = [50.0] * 4 + [50.0, 50.0 + 0.1 * (rank + 1)]
+    for rank, symbol in enumerate(shorts):
+        symbol_closes[symbol] = [80.0] * 4 + [80.0, 80.0 - 0.1 * (rank + 1)]
+    bot = _entry_stub_bot(
+        "neutral_chop",
+        spy_closes=[100.0] * 6,
+        symbol_closes=symbol_closes,
+        longs=longs,
+        shorts=shorts,
+    )
+
+    board = bot.entry_assist_board_snapshot()
+    assert len(board["movers"]["long"]) == ENTRY_BOARD_TOP_N
+    assert len(board["movers"]["short"]) == ENTRY_BOARD_TOP_N
+
+    # The emitted feed line still carries at most ENTRY_WINDOW_TOP_N names.
+    emitted = bot.emit_trailing_movers(("long",), source="manual")
+    assert len(emitted["results"]["long"]) == ENTRY_WINDOW_TOP_N
+
+
 def test_rank_window_movers_uses_explicit_from_to_window():
     from datetime import datetime
 

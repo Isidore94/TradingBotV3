@@ -15,6 +15,11 @@ from PySide6.QtWidgets import QLabel, QTextBrowser, QVBoxLayout, QWidget
 
 from ui import theme
 
+# The board's snapshot ships ENTRY_BOARD_TOP_N (20) rows per list; show them
+# all. The tab is a tall scrollable pane that sat mostly empty at 8 rows on
+# large monitors - the QTextBrowser scrolls if a screen is ever shorter.
+_MAX_ROWS = 20
+
 
 class EntryAssistBoard(QWidget):
     symbolActivated = Signal(str, str)
@@ -146,7 +151,7 @@ def _ranked_rows_html(rows: list, color: str, *, pct_key: str, side: str) -> str
     if not rows:
         return f"<div style='color:{theme.color('text_muted')}; margin-left:8px'>none with fresh bars</div>"
     parts = []
-    for row in rows[:8]:
+    for row in rows[:_MAX_ROWS]:
         if not isinstance(row, dict):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()

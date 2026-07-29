@@ -11,6 +11,10 @@ from ui.models.rrs import rrs_rows
 
 
 _SCOPES = ("SPY", "Sector", "Industry")
+# Rows shown per Strongest/Weakest column in each scope table. The RS/RW tab
+# is a tall scrollable pane that sat mostly empty at 8 rows on large
+# monitors; the sweep payload itself is uncapped (Copy All RS proves it).
+_MAX_ROWS_PER_SIDE = 20
 class RrsSnapshotWidget(QWidget):
     """Compact relative-strength board for BounceBot snapshots."""
 
@@ -127,8 +131,12 @@ def _board_html(payload: dict[str, Any], focus: dict[str, set] | None = None) ->
 def _scope_html(payload: dict[str, Any], scope: str, focus: dict[str, set] | None = None) -> str:
     focus = focus or {"long": set(), "short": set()}
     rows = rrs_rows(payload, scope)
-    strong = sorted((row for row in rows if row.side == "RS"), key=lambda row: -row.rrs)[:8]
-    weak = sorted((row for row in rows if row.side == "RW"), key=lambda row: row.rrs)[:8]
+    strong = sorted((row for row in rows if row.side == "RS"), key=lambda row: -row.rrs)[
+        :_MAX_ROWS_PER_SIDE
+    ]
+    weak = sorted((row for row in rows if row.side == "RW"), key=lambda row: row.rrs)[
+        :_MAX_ROWS_PER_SIDE
+    ]
     long_c = theme.color("long")
     short_c = theme.color("short")
     head_c = theme.color("text_secondary")
