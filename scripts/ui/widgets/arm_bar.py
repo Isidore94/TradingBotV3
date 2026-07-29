@@ -297,6 +297,16 @@ class ArmBar(QFrame):
                 "a completed bar closes across the D1 SMA50/100/200 - any of "
                 "the three, either direction"
             ),
+            "avwape_bounce": (
+                "price tags AVWAPE or any of its ±1/2/3σ bands and closes "
+                "back on the side it came from; the alert names the band. "
+                "Needs an earnings anchor in the cache"
+            ),
+            "avwape_break": (
+                "a completed bar closes THROUGH AVWAPE or any of its ±1/2/3σ "
+                "bands, either direction; the alert names the band. Needs an "
+                "earnings anchor in the cache"
+            ),
         }.get(kind, "")
         return (
             f"Toggle a persistent {label} alert for this symbol: {detail}. "

@@ -1760,8 +1760,18 @@ class AlertCenterPanel(QFrame):
                 # Unlike a frozen price level, every event kind needs the
                 # daily store for its reference; without it there is nothing
                 # to measure against yet and the watch just waits.
+                avwape_anchor = None
+                if watch.kind in ("avwape_bounce", "avwape_break"):
+                    try:
+                        import chart_snapshot
+
+                        avwape_anchor = chart_snapshot.earnings_anchor_date(watch.symbol)
+                    except Exception:
+                        avwape_anchor = None
                 try:
-                    hit = evaluate_d1_event_watch(watch, m5_bars, d1_bars, now=moment)
+                    hit = evaluate_d1_event_watch(
+                        watch, m5_bars, d1_bars, now=moment, avwape_anchor=avwape_anchor
+                    )
                 except Exception:
                     hit = None
             if hit is None:

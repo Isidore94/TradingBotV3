@@ -19,12 +19,14 @@ band consumer is calibrated to. Do not "fix" it toward a distribution
 stdev; see plan.md section 5.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 D1_DEFAULT_SESSIONS = 90
 _daily_bars_cache: dict[str, tuple[tuple[str, int], list[dict[str, Any]]]] = {}
+# (mtime, {symbol: [iso dates...]}) for the earnings-dates cache file.
+_earnings_dates_cache: list = [None, {}]
 
 D1_OVERLAY_SPECS = (
     ("sma", 50, "SMA50", "info", 1.6, False),
@@ -117,6 +119,113 @@ def session_vwap_series(bars: list[Mapping[str, Any]]) -> dict[str, list[float |
             upper.append(None)
             lower.append(None)
     return {"vwap": vwap, "upper_1": upper, "lower_1": lower}
+
+
+def anchored_vwap_band_series(
+    bars: list[Mapping[str, Any]], anchor_index: int
+) -> dict[str, list[float | None]]:
+    """Anchored VWAP + ±1/2/3σ bands as aligned per-bar series.
+
+    Exactly ``calc_anchored_vwap_bands``'s running-deviation accumulation
+    (typical price = OHLC/4, σ from each bar's deviation vs the RUNNING
+    anchored VWAP, volume-weighted, zero-volume bars skipped): the value at
+    bar i is what that function returns for a frame ending at i. Bars before
+    the anchor are None. Do not swap toward a distribution σ - plan.md sec 5.
+    """
+    count = len(bars or [])
+    series: dict[str, list[float | None]] = {
+        key: [None] * count
+        for key in (
+            "avwap",
+            "upper_1",
+            "lower_1",
+            "upper_2",
+            "lower_2",
+            "upper_3",
+            "lower_3",
+        )
+    }
+    if not 0 <= anchor_index < count:
+        return series
+    cum_vol = cum_vp = cum_sd = 0.0
+    for index in range(anchor_index, count):
+        bar = bars[index]
+        try:
+            volume = float(bar.get("volume") or 0.0)
+        except (TypeError, ValueError):
+            volume = 0.0
+        if volume > 0:
+            tp = (
+                float(bar["open"]) + float(bar["high"]) + float(bar["low"]) + float(bar["close"])
+            ) / 4.0
+            cum_vol += volume
+            cum_vp += tp * volume
+            running = cum_vp / cum_vol
+            cum_sd += (tp - running) * (tp - running) * volume
+        if cum_vol > 0:
+            value = cum_vp / cum_vol
+            stdev = (cum_sd / cum_vol) ** 0.5
+            series["avwap"][index] = value
+            for k in (1, 2, 3):
+                series[f"upper_{k}"][index] = value + k * stdev
+                series[f"lower_{k}"][index] = value - k * stdev
+    return series
+
+
+def _earnings_dates_map() -> dict[str, list[str]]:
+    """{symbol: [iso earnings dates]} from the cache file, mtime-cached."""
+    import json
+
+    from project_paths import EARNINGS_DATES_CACHE_FILE
+
+    path = Path(EARNINGS_DATES_CACHE_FILE)
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    if _earnings_dates_cache[0] == mtime_ns:
+        return _earnings_dates_cache[1]
+    symbols: dict[str, list[str]] = {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = payload.get("symbols") or payload.get("data") or {}
+        for raw_symbol, entry in raw.items():
+            symbol = str(raw_symbol or "").strip().upper()
+            dates = entry.get("dates") if isinstance(entry, dict) else entry
+            if symbol and isinstance(dates, list):
+                symbols[symbol] = [str(value) for value in dates if value]
+    except (OSError, ValueError, TypeError, AttributeError):
+        symbols = {}
+    _earnings_dates_cache[0] = mtime_ns
+    _earnings_dates_cache[1] = symbols
+    return symbols
+
+
+def earnings_anchor_date(symbol: str, *, today: date | None = None) -> date | None:
+    """The CURRENT AVWAPE anchor the master system would use for ``symbol``.
+
+    Same selection as the scanner (``pick_current_earnings_anchor_for_
+    reference_date``): the most recent earnings date, except a very fresh one
+    (< RECENT_DAYS) defers to the prior anchor while its own accumulation is
+    still thin. None when the earnings cache has nothing for the symbol.
+    """
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return None
+    dates_map = _earnings_dates_map()
+    dates = dates_map.get(symbol)
+    if not dates and "." in symbol:
+        dates = dates_map.get(symbol.replace(".", "-"))
+    if not dates:
+        return None
+    try:
+        from master_avwap_lib.legacy import pick_current_earnings_anchor_for_reference_date
+
+        return pick_current_earnings_anchor_for_reference_date(
+            dates, today or date.today()
+        )
+    except Exception:
+        return None
 
 
 def _overlay(label: str, values: list[float | None], color: str, width: float, dash: bool) -> dict:
@@ -254,15 +363,18 @@ def build_d1_snapshot(
     sessions: int = D1_DEFAULT_SESSIONS,
     loader: Callable[[str], list[dict[str, Any]]] | None = None,
     intraday_bars: list[Mapping[str, Any]] | None = None,
+    anchor_resolver: Callable[[str], date | None] | None = None,
 ) -> dict[str, Any]:
-    """Daily candles + SMA50/100/200 + EMA8/15/21, indicators computed on the
-    full history so the displayed tail carries correct long-lookback values.
+    """Daily candles + SMA50/100/200 + EMA8/15/21 + AVWAPE ±1/2/3σ bands,
+    indicators computed on the full history so the displayed tail carries
+    correct long-lookback values.
 
     ``intraday_bars`` (the bot's cached M5 series) appends today's forming
     candle as a preview when the store has not caught up yet. The moving
     averages stay computed on completed sessions only - each overlay gets a
     trailing None, so the lines honestly stop at the last stored bar instead
-    of previewing an indicator off a partial day.
+    of previewing an indicator off a partial day. ``anchor_resolver``
+    overrides the earnings-anchor lookup (tests).
     """
     bars = (loader or load_d1_bars)(symbol)
     if not bars:
@@ -272,19 +384,47 @@ def build_d1_snapshot(
     shown = _tail(bars, sessions)
     if preview is not None:
         shown = shown + [preview]
+
+    def tail_values(series: list[float | None]) -> list[float | None]:
+        values = _tail(series, sessions)
+        if preview is not None:
+            # Indicators stay computed on completed sessions only; the line
+            # honestly stops at the last stored bar instead of previewing.
+            values = values + [None]
+        return values
+
     overlays = []
     for kind, period, label, color, width, dash in D1_OVERLAY_SPECS:
         series = sma_series(closes, period) if kind == "sma" else ema_series(closes, period)
-        values = _tail(series, sessions)
-        if preview is not None:
-            values = values + [None]
-        overlays.append(_overlay(label, values, color, width, dash))
+        overlays.append(_overlay(label, tail_values(series), color, width, dash))
+
+    # AVWAPE + its σ bands, anchored where the master scanner anchors (the
+    # current earnings AVWAP). The six band overlays share one legend label so
+    # the legend gains two entries, not seven. Anchor date rides in the
+    # snapshot for hosts (legend stamp, watch evaluation).
+    anchor = (anchor_resolver or earnings_anchor_date)(symbol)
+    anchor_index = None
+    if anchor is not None:
+        for index, bar in enumerate(bars):
+            stamp = bar.get("dt")
+            if hasattr(stamp, "date") and stamp.date() == anchor:
+                anchor_index = index
+                break
+    if anchor_index is not None:
+        bands = anchored_vwap_band_series(bars, anchor_index)
+        overlays.append(_overlay("AVWAPE", tail_values(bands["avwap"]), "accent", 1.6, False))
+        for k, width in ((1, 1.1), (2, 0.9), (3, 0.7)):
+            for side_key in (f"upper_{k}", f"lower_{k}"):
+                overlays.append(
+                    _overlay("AVWAPE ±1-3σ", tail_values(bands[side_key]), "accent", width, True)
+                )
     return {
         "symbol": symbol,
         "timeframe": "D1",
         "bars": shown,
         "overlays": overlays,
         "note": "",
+        "avwape_anchor": anchor.isoformat() if anchor_index is not None else "",
     }
 
 

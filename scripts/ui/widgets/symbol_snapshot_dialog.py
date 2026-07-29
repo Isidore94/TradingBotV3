@@ -224,6 +224,11 @@ class SymbolSnapshotWidget(QWidget):
             reach = (
                 f"{stamp} forming" if last_bar.get("preview") else f"through {stamp}"
             )
+            anchor_iso = str(d1.get("avwape_anchor") or "")
+            if anchor_iso:
+                # Which earnings the AVWAPE lines hang from - without it the
+                # bands are just unexplained curves.
+                reach += f" · AVWAPE from {anchor_iso[5:7]}/{anchor_iso[8:10]}"
             self.d1_legend.setText(
                 self.d1_legend.text()
                 + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"

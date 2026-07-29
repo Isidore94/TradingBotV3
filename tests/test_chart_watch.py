@@ -314,6 +314,8 @@ def test_d1_event_kind_labels_cover_all_buttons():
         "new_20d_high",
         "new_20d_low",
         "sma_break",
+        "avwape_bounce",
+        "avwape_break",
     }
     assert all(label for label in D1_EVENT_KINDS.values())
     # Kind namespaces never collide - the feed badge resolves across all three.
@@ -496,6 +498,162 @@ def test_d1_event_watch_daily_fallback_for_unscanned_symbols():
         )
         is None
     )
+
+
+def _flat_daily(count, *, close=100.0, spread=1.0, volume=1000.0):
+    """Constant-price daily history: AVWAPE == typical price, σ == 0... not
+    quite - OHLC/4 with symmetric spread keeps tp == close, so σ collapses to
+    0 and every band equals AVWAPE. Vary closes per-test where bands matter."""
+    return [
+        {
+            "dt": DAY + timedelta(days=-offset),
+            "open": close,
+            "high": close + spread,
+            "low": close - spread,
+            "close": close,
+            "volume": volume,
+        }
+        for offset in range(count, 0, -1)
+    ]
+
+
+def test_d1_event_levels_carry_avwape_bands_only_with_an_anchor():
+    daily = _flat_daily(10)
+    anchor = (DAY - timedelta(days=6)).date()
+
+    levels = d1_event_levels(daily, session=DAY.date())
+    assert "avwape_levels" not in levels  # no anchor given
+
+    levels = d1_event_levels(daily, session=DAY.date(), avwape_anchor=anchor)
+    pairs = dict()
+    for label, value in levels["avwape_levels"]:
+        pairs[label] = value
+    # Constant tape: tp == 100 every bar, so AVWAPE = 100 and σ = 0 - all
+    # seven levels collapse onto 100. That pins the accumulation is the
+    # running-deviation variant with OHLC/4 typical price.
+    assert pairs[""] == pytest.approx(100.0)
+    assert pairs["+3σ"] == pytest.approx(100.0)
+
+    # An anchor date with no stored session: no AVWAPE levels (mirror the
+    # runner's "no candle on earnings date" behavior).
+    levels = d1_event_levels(
+        daily, session=DAY.date(), avwape_anchor=(DAY - timedelta(days=200)).date()
+    )
+    assert "avwape_levels" not in levels
+
+
+def test_avwape_bounce_names_the_band_and_respects_approach_side():
+    # Anchor 6 sessions back; closes step up so σ > 0 and the bands separate.
+    daily = [
+        {
+            "dt": DAY + timedelta(days=-offset),
+            "open": 100.0 + (6 - offset) * 2.0,
+            "high": 101.0 + (6 - offset) * 2.0,
+            "low": 99.0 + (6 - offset) * 2.0,
+            "close": 100.0 + (6 - offset) * 2.0,
+            "volume": 1000.0,
+        }
+        for offset in range(6, 0, -1)
+    ]
+    anchor = daily[0]["dt"].date()
+    levels = d1_event_levels(daily, session=DAY.date(), avwape_anchor=anchor)
+    pairs = {label: value for label, value in levels["avwape_levels"]}
+    avwape = pairs[""]
+    upper_1 = pairs["+1σ"]
+    assert upper_1 > avwape
+
+    armed_at = DAY.replace(hour=10, minute=0)
+    watch = D1EventWatch(symbol="NVDA", kind="avwape_bounce", armed_at=armed_at)
+    prev_close = levels["prev_close"]  # 110: above +1σ on this tape
+    assert prev_close > upper_1
+
+    # Dip to +1σ and close back above it: a LONG bounce named "+1σ" (the
+    # close sits between +1σ and the next band, so the label is zone-honest).
+    bar = _bar(10, 5, h=prev_close, low=upper_1 - 0.05, c=upper_1 + 0.3)
+    hit = evaluate_d1_event_watch(
+        watch, [bar], daily, now=DAY.replace(hour=10, minute=15), avwape_anchor=anchor
+    )
+    assert hit is not None and hit.resolved_side == "long"
+    assert "AVWAPE +1σ bounce (long)" in hit.message
+
+    # Without the anchor the same evidence never fires.
+    assert (
+        evaluate_d1_event_watch(watch, [bar], daily, now=DAY.replace(hour=10, minute=15))
+        is None
+    )
+
+    # From BELOW a level, tag and close back under: a SHORT bounce off it.
+    below = avwape - 0.5
+    bar = _bar(10, 5, h=avwape + 0.05, low=below - 0.2, c=below)
+    # prev tracking: seed prev_close (110) is ABOVE avwape, so a same-bar
+    # short bounce cannot claim approach-from-below; use two bars so the
+    # first drags prev under the line first.
+    setup = _bar(9, 35, h=112.0, low=below - 0.3, c=below - 0.1)  # pre-arm
+    hit = evaluate_d1_event_watch(
+        watch,
+        [setup, bar],
+        daily,
+        now=DAY.replace(hour=10, minute=15),
+        avwape_anchor=anchor,
+    )
+    assert hit is not None and hit.resolved_side == "short"
+    assert "bounce (short)" in hit.message and "AVWAPE" in hit.message
+
+
+def test_avwape_break_crosses_once_and_names_the_furthest_band():
+    daily = [
+        {
+            "dt": DAY + timedelta(days=-offset),
+            "open": 100.0 + (6 - offset) * 2.0,
+            "high": 101.0 + (6 - offset) * 2.0,
+            "low": 99.0 + (6 - offset) * 2.0,
+            "close": 100.0 + (6 - offset) * 2.0,
+            "volume": 1000.0,
+        }
+        for offset in range(6, 0, -1)
+    ]
+    anchor = daily[0]["dt"].date()
+    levels = d1_event_levels(daily, session=DAY.date(), avwape_anchor=anchor)
+    pairs = {label: value for label, value in levels["avwape_levels"]}
+    avwape, upper_1, upper_2 = pairs[""], pairs["+1σ"], pairs["+2σ"]
+    prev_close = levels["prev_close"]
+
+    armed_at = DAY.replace(hour=10, minute=0)
+    watch = D1EventWatch(symbol="NVDA", kind="avwape_break", armed_at=armed_at)
+
+    # prev close sits above +1σ; a post-arm bar closing above +2σ crosses one
+    # level and is named for it.
+    assert upper_1 < prev_close < upper_2
+    breaker = _bar(10, 5, h=upper_2 + 1.0, low=prev_close - 0.5, c=upper_2 + 0.4)
+    hit = evaluate_d1_event_watch(
+        watch, [breaker], daily, now=DAY.replace(hour=10, minute=15), avwape_anchor=anchor
+    )
+    assert hit is not None and hit.resolved_side == "long"
+    assert "AVWAPE +2σ break up" in hit.message
+
+    # Gap-once: a pre-arm bar already above +2σ consumes the cross; holding
+    # above it post-arm never re-fires without first crossing back.
+    gap = _bar(9, 35, h=upper_2 + 1.0, low=upper_2 + 0.2, c=upper_2 + 0.5)
+    hold = _bar(10, 5, h=upper_2 + 1.2, low=upper_2 + 0.3, c=upper_2 + 0.8)
+    assert (
+        evaluate_d1_event_watch(
+            watch, [gap, hold], daily, now=DAY.replace(hour=10, minute=15), avwape_anchor=anchor
+        )
+        is None
+    )
+
+    # A close back down through BOTH +2σ and +1σ names the furthest level
+    # reached on the way down (min crossed) as a break down.
+    plunge = _bar(10, 10, h=upper_2 + 0.6, low=avwape + 0.05, c=(upper_1 - 0.05))
+    hit = evaluate_d1_event_watch(
+        watch,
+        [gap, hold, plunge],
+        daily,
+        now=DAY.replace(hour=10, minute=20),
+        avwape_anchor=anchor,
+    )
+    assert hit is not None and hit.resolved_side == "short"
+    assert "AVWAPE +1σ break down" in hit.message
 
 
 def test_d1_event_watch_persistence_roundtrip(tmp_path):

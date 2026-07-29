@@ -188,6 +188,75 @@ def test_forming_d1_preview_appends_todays_candle_from_m5():
         assert overlay["values"][-1] is None
 
 
+def test_anchored_vwap_band_series_final_point_matches_calc_anchored_vwap_bands():
+    """The drawn AVWAPE lines are the running-deviation σ variant: their final
+    point must equal calc_anchored_vwap_bands over the same bars (invariant:
+    never a second σ formula in the codebase)."""
+    import pandas as pd
+    from master_avwap_lib.legacy import calc_anchored_vwap_bands
+
+    bars = _daily_bars(30)
+    anchor = 7
+    series = chart_snapshot.anchored_vwap_band_series(bars, anchor)
+    frame = pd.DataFrame(
+        [
+            {
+                "open": bar["open"],
+                "high": bar["high"],
+                "low": bar["low"],
+                "close": bar["close"],
+                "volume": bar["volume"],
+            }
+            for bar in bars
+        ]
+    )
+    vwap, stdev, bands = calc_anchored_vwap_bands(frame, anchor)
+    assert series["avwap"][-1] == pytest.approx(vwap)
+    for k in (1, 2, 3):
+        assert series[f"upper_{k}"][-1] == pytest.approx(bands[f"UPPER_{k}"])
+        assert series[f"lower_{k}"][-1] == pytest.approx(bands[f"LOWER_{k}"])
+    # Pre-anchor bars carry no value (the chart breaks the line there).
+    assert series["avwap"][: anchor] == [None] * anchor
+    assert series["avwap"][anchor] is not None
+    # An out-of-range anchor yields an all-None series, never an exception.
+    assert chart_snapshot.anchored_vwap_band_series(bars, len(bars))["avwap"] == [None] * 30
+
+
+def test_build_d1_snapshot_draws_avwape_bands_from_the_anchor():
+    daily = _daily_bars(20)  # sessions 07/01..07/20
+    anchor_date = daily[4]["dt"].date()  # 07/05
+    snapshot = chart_snapshot.build_d1_snapshot(
+        "TEST",
+        sessions=90,
+        loader=lambda _s: daily,
+        anchor_resolver=lambda _s: anchor_date,
+    )
+    labels = [overlay["label"] for overlay in snapshot["overlays"]]
+    # One legend entry for the line, ONE shared entry for all six bands.
+    assert labels.count("AVWAPE") == 1
+    assert labels.count("AVWAPE ±1-3σ") == 6
+    assert snapshot["avwape_anchor"] == anchor_date.isoformat()
+    avwape = next(o for o in snapshot["overlays"] if o["label"] == "AVWAPE")
+    assert avwape["values"][3] is None  # before the anchor
+    assert avwape["values"][4] is not None
+    assert len(avwape["values"]) == len(snapshot["bars"])
+
+    # No anchor (not in the earnings cache): no AVWAPE overlays, empty stamp.
+    bare = chart_snapshot.build_d1_snapshot(
+        "TEST", loader=lambda _s: daily, anchor_resolver=lambda _s: None
+    )
+    assert all("AVWAPE" not in o["label"] for o in bare["overlays"])
+    assert bare["avwape_anchor"] == ""
+
+    # An anchor date with no stored candle mirrors the runner: no lines.
+    from datetime import date as _date
+
+    missing = chart_snapshot.build_d1_snapshot(
+        "TEST", loader=lambda _s: daily, anchor_resolver=lambda _s: _date(2020, 1, 1)
+    )
+    assert all("AVWAPE" not in o["label"] for o in missing["overlays"])
+
+
 def test_forming_d1_preview_skipped_when_store_is_current():
     """After the close the store holds the session itself - the real bar wins
     and no preview is appended (nor with an empty intraday cache)."""

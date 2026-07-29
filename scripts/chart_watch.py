@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from chart_snapshot import session_vwap_series
+from chart_snapshot import anchored_vwap_band_series, session_vwap_series
 
 M5_BAR_SPAN = timedelta(minutes=5)
 
@@ -64,6 +64,11 @@ D1_EVENT_KINDS = {
     "new_20d_high": "20d high",
     "new_20d_low": "20d low",
     "sma_break": "SMA break",
+    # AVWAPE (current earnings anchored VWAP) and its ±1/2/3σ bands: a bounce
+    # off any level (tag + close back on the side it came from) or a close
+    # THROUGH any level. The trigger message names the exact band.
+    "avwape_bounce": "AVWAPE bounce",
+    "avwape_break": "AVWAPE break",
 }
 
 # SMA periods the sma_break watch monitors ("anyone up or down"): the desk's
@@ -566,15 +571,21 @@ def load_d1_event_watches(path: Path) -> list[D1EventWatch]:
 
 
 def d1_event_levels(
-    d1_bars: Iterable[Mapping[str, Any]] | None, *, session: date
-) -> dict[str, float]:
+    d1_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    session: date,
+    avwape_anchor: date | None = None,
+) -> dict[str, Any]:
     """Reference levels from COMPLETED daily sessions strictly before ``session``.
 
     Keys (present only when enough history exists): high_5d / low_5d /
     high_20d / low_20d (prior N-session extremes), sma50 / sma100 / sma200,
     ema15 (pandas ewm(span, adjust=False) recursion, matching the snapshot
     chart's drawn line), prev_close (the last completed session's close - the
-    cross-detection anchor for the first bar of a new session).
+    cross-detection anchor for the first bar of a new session), and - when
+    ``avwape_anchor`` names a stored session - "avwape_levels": [(band label,
+    price), ...] for AVWAPE and its ±1/2/3σ bands via the calc_anchored_vwap_
+    bands running-deviation math (chart_snapshot.anchored_vwap_band_series).
     """
     completed = []
     for bar in d1_bars or []:
@@ -584,7 +595,7 @@ def d1_event_levels(
     completed.sort(key=lambda bar: _naive(bar["dt"]))
     if not completed:
         return {}
-    levels: dict[str, float] = {}
+    levels: dict[str, Any] = {}
     closes = [float(bar["close"]) for bar in completed]
     levels["prev_close"] = closes[-1]
     for count in (5, 20):
@@ -601,6 +612,22 @@ def d1_event_levels(
         for value in closes[1:]:
             ema = alpha * value + (1.0 - alpha) * ema
         levels["ema15"] = ema
+    if avwape_anchor is not None:
+        anchor_index = None
+        for index, bar in enumerate(completed):
+            if _naive(bar["dt"]).date() == avwape_anchor:
+                anchor_index = index
+                break
+        if anchor_index is not None:
+            series = anchored_vwap_band_series(completed, anchor_index)
+            if series["avwap"] and series["avwap"][-1] is not None:
+                pairs = [("", series["avwap"][-1])]
+                for k in (1, 2, 3):
+                    pairs.append((f"+{k}σ", series[f"upper_{k}"][-1]))
+                    pairs.append((f"-{k}σ", series[f"lower_{k}"][-1]))
+                levels["avwape_levels"] = [
+                    (label, float(value)) for label, value in pairs if value is not None
+                ]
     return levels
 
 
@@ -655,6 +682,69 @@ def _d1_event_hit(
                     close,
                 )
         return None
+    if kind == "avwape_bounce":
+        pairs = levels.get("avwape_levels") or []
+        if prev_close is None or not pairs:
+            return None
+        # A bounce approaches the level from prev_close's side, tags it, and
+        # closes back on that side. Picking the max (long) / min (short)
+        # qualifying level keeps the label zone-honest: the close can never
+        # sit beyond the next band out, or that band would qualify instead.
+        long_hits = [
+            (level, label)
+            for label, level in pairs
+            if prev_close > level and low <= level and close > level
+        ]
+        if long_hits:
+            level, label = max(long_hits)
+            name = f"AVWAPE {label}".rstrip()
+            return (
+                f"{name} bounce (long): tagged {level:.2f}, closed back above at {close:.2f}",
+                "long",
+                close,
+            )
+        short_hits = [
+            (level, label)
+            for label, level in pairs
+            if prev_close < level and high >= level and close < level
+        ]
+        if short_hits:
+            level, label = min(short_hits)
+            name = f"AVWAPE {label}".rstrip()
+            return (
+                f"{name} bounce (short): tagged {level:.2f}, closed back below at {close:.2f}",
+                "short",
+                close,
+            )
+        return None
+    if kind == "avwape_break":
+        pairs = levels.get("avwape_levels") or []
+        if prev_close is None or not pairs:
+            return None
+        crossed_up = [
+            (level, label) for label, level in pairs if prev_close < level < close
+        ]
+        if crossed_up:
+            # Name the furthest level the close carried through.
+            level, label = max(crossed_up)
+            name = f"AVWAPE {label}".rstrip()
+            return (
+                f"{name} break up: closed {close:.2f} over {level:.2f}",
+                "long",
+                close,
+            )
+        crossed_down = [
+            (level, label) for label, level in pairs if prev_close > level > close
+        ]
+        if crossed_down:
+            level, label = min(crossed_down)
+            name = f"AVWAPE {label}".rstrip()
+            return (
+                f"{name} break down: closed {close:.2f} under {level:.2f}",
+                "short",
+                close,
+            )
+        return None
     if kind == "ema15_reject":
         ema = levels.get("ema15")
         if ema is None:
@@ -683,14 +773,17 @@ def evaluate_d1_event_watch(
     d1_bars: Iterable[Mapping[str, Any]] | None,
     *,
     now: datetime | None = None,
+    avwape_anchor: date | None = None,
 ) -> ChartWatchTrigger | None:
     """First post-arm completed bar meeting the condition, or None.
 
     Evidence mirrors the level watches: today's completed M5 bars against
     levels from sessions before today (intraday latency while scanned), then
     completed daily bars from sessions strictly after the arm date with
-    per-session levels (covers unscanned symbols). SMA crosses track the
-    running previous close so a gap over the line counts exactly once.
+    per-session levels (covers unscanned symbols). SMA/AVWAPE crosses track
+    the running previous close so a gap over a line counts exactly once.
+    ``avwape_anchor`` (the current earnings anchor date) feeds the AVWAPE
+    kinds; without it they simply wait.
     """
     moment = _naive(now or datetime.now())
     armed_at = _naive(watch.armed_at)
@@ -698,7 +791,11 @@ def evaluate_d1_event_watch(
     session_bars = _session_bars(m5_bars, moment)
     completed = [bar for bar in session_bars if _bar_end(bar) <= moment]
     if completed:
-        levels = d1_event_levels(d1_bars, session=_naive(completed[0]["dt"]).date())
+        levels = d1_event_levels(
+            d1_bars,
+            session=_naive(completed[0]["dt"]).date(),
+            avwape_anchor=avwape_anchor,
+        )
         prev_close = levels.get("prev_close")
         for bar in completed:
             high = float(bar["high"])
@@ -731,7 +828,7 @@ def evaluate_d1_event_watch(
         # day's own daily bar also contains pre-arm prices).
         if bar_date <= armed_at.date() or bar_date >= moment.date():
             continue
-        levels = d1_event_levels(daily, session=bar_date)
+        levels = d1_event_levels(daily, session=bar_date, avwape_anchor=avwape_anchor)
         hit = _d1_event_hit(
             watch.kind,
             levels,
