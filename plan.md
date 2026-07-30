@@ -365,6 +365,41 @@ Each shadow artifact needs:
 
 Improve the logs before accumulating weeks of evidence that cannot answer promotion questions.
 
+#### W08/W09 session evidence acceptance criteria
+
+W08/W09 is **IMPLEMENTED + GREEN**, not **LIVE_VALIDATED**. Its acceptance
+contract is:
+
+- before the first row of a new session or configuration scope, atomically
+  rotate the prior active JSONL and finalize its coverage counters;
+- make rollover recovery idempotent across a crash after raw rotation but
+  before summary publication;
+- publish one atomic summary per engine, session date, and configuration with
+  engine/config/machine/timezone identity, the retained raw path and SHA-256,
+  coverage/error counters, replay-chain counts, and the enforced retention
+  policy;
+- derive SPY state observations, transition counts, and state-duration seconds,
+  plus SPY episode-chain counts; derive Greatness candidate-chain, meaningful
+  level-interaction, and confirm/fail/re-arm counts;
+- rescan retained raw bytes during audit and mark a scope incomplete when the
+  archive is missing/unreadable, malformed, checksum- or counter-inconsistent,
+  lacks coverage, records errors, has no usable evaluation, or has no
+  completed-bar evidence;
+- count a trading date once, and only as eligible when all finalized
+  configuration scopes for that date reconcile;
+- enforce bounded retention: raw evidence for 180 days and a 1 GiB budget,
+  subject to a safety floor retaining at least the newest 30 archives;
+  summaries for 365 days and a 20 MiB budget, subject to a safety floor
+  retaining at least the newest 60;
+- expose Section 7 counts as evidence progress only. Never infer manual review,
+  never promote either challenger, and never alter champion behavior.
+
+Live acceptance still requires a restarted build to cross a real
+session/configuration rollover, preserve the prior raw bytes and counters,
+start a clean active log, and reconcile the resulting summaries in the
+operations audit. Until then, the real Section 7 finalized-session counts are
+expected to remain zero.
+
 ---
 
 ## 5. Non-negotiable system invariants
@@ -1490,7 +1525,9 @@ The product should celebrate a correct thesis without mislabeling a late entry a
 ### Now — before promoting either shadow engine
 
 1. Verify and record the 802-test baseline.
-2. Improve shadow schemas, coverage counters, version/config metadata, and daily audit tooling.
+2. Improve shadow schemas, coverage counters, version/config metadata, and daily
+   audit tooling. W08/W09 session rollups and retention are **GREEN**, pending
+   the live rollover acceptance above.
 3. Run the first-session checklist and preserve artifacts.
 4. Complete the Phase 2 two-machine and failure drills.
 5. Build the Health page.

@@ -354,3 +354,14 @@ def test_new_session_prunes_old_candidates_instead_of_replaying_test_fixtures(tm
     board.update("NVDA", "LONG", LEVELS, bars, session_date="2026-07-13")
     assert {candidate.symbol for candidate in board.candidates.values()} == {"NVDA"}
     assert all("AAPL" not in key for key in board.last_bar_ts)
+    from diagnostics.shadow_session_rollup import (
+        GREATNESS_ENGINE,
+        evidence_directories,
+    )
+
+    raw_dir, summary_dir = evidence_directories(board.events_path, GREATNESS_ENGINE)
+    assert len(list(raw_dir.glob("*.jsonl"))) == 1
+    summary = json.loads(next(summary_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert summary["session_date"] == "2026-07-11"
+    assert summary["coverage"]["evaluations"] == 1
+    assert summary["promotion_decision"] == "NONE"

@@ -30,9 +30,9 @@ auditable, not merely present", sec 7.3):
 
 "No event" vs "not evaluated" (plan.md:303-305) is answered by *per-candidate
 evaluation counters* held in the status store and flushed into one daily
-``SESSION_SUMMARY`` row, not by a heartbeat row per candidate per bar: the live
-log is already ~14.5 MB and a per-bar heartbeat would bury the transitions it
-exists to record.
+crash-safe per-session summary artifact, not by a heartbeat row per candidate
+per bar: the live log is already ~14.5 MB and a per-bar heartbeat would bury
+the transitions it exists to record.
 """
 
 from __future__ import annotations
@@ -47,6 +47,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from diagnostics.artifact_io import append_jsonl_rows, atomic_write_json, config_hash
+from diagnostics.shadow_session_rollup import (
+    GREATNESS_ENGINE,
+    RETENTION_POLICY as SESSION_RETENTION_POLICY,
+    finalize_session,
+)
 from diagnostics.run_manifest import ManifestRecorder, get_active_recorder
 from greatness_monitor import (
     ConfirmationStep,
@@ -108,11 +113,9 @@ _HEALTH_SEVERITY = (
 
 #: Declared, and actually enforced, retention (plan.md sec 4).
 RETENTION_POLICY = {
-    "events": (
-        "append-only; never pruned or deleted by this writer. Rotate with "
-        "diagnostics.artifact_io.archive_dated (which copies)."
-    ),
-    "store": "current session only; prior sessions are summarized into a SESSION_SUMMARY row first",
+    "events": "current session/config scope; atomically rotated before reset",
+    "session_evidence": dict(SESSION_RETENTION_POLICY),
+    "store": "current session only; prior counters are atomically summarized before reset",
     "pre_v2_events": "archived beside the log on first write, never deleted",
 }
 
@@ -221,7 +224,7 @@ class GreatnessBoard:
         evaluated_at = normalize_market_local_datetime(
             evaluated_at, local_timezone=self.local_timezone
         )
-        self._activate_session(session_date)
+        self._activate_session(session_date, evaluated_at=evaluated_at)
         proposed = candidate_from_d1_trigger_levels(
             symbol, side, trigger_levels, session_date=session_date
         )
@@ -296,10 +299,13 @@ class GreatnessBoard:
         return events
 
     # ------------------------------------------------------------------
-    @staticmethod
-    def _empty_coverage(session_date: str) -> dict:
+    def _empty_coverage(self, session_date: str) -> dict:
         return {
             "session_date": str(session_date or ""),
+            "engine_version": ENGINE_VERSION,
+            "config_hash": self.config_hash,
+            "machine": self.machine,
+            "timezone": self.timezone_name,
             "evaluations": 0,
             "candidates_created": 0,
             "candidates_skipped_no_plan": 0,
@@ -321,8 +327,30 @@ class GreatnessBoard:
             "last_candidate_id": "",
         }
 
-    def _activate_session(self, session_date: str) -> None:
-        if self.coverage.get("session_date") != session_date:
+    def _activate_session(self, session_date: str, *, evaluated_at: datetime) -> None:
+        previous_session = str(self.coverage.get("session_date") or "")
+        previous_config = str(self.coverage.get("config_hash") or self.config_hash)
+        if previous_session and (
+            previous_session != session_date or previous_config != self.config_hash
+        ):
+            finalize_session(
+                engine=GREATNESS_ENGINE,
+                log_path=self.events_path,
+                coverage=dict(self.coverage),
+                finalized_at=evaluated_at,
+                reason=(
+                    "session_rollover"
+                    if previous_session != session_date
+                    else "configuration_changed"
+                ),
+                engine_version=str(
+                    self.coverage.get("engine_version") or ENGINE_VERSION
+                ),
+                machine=str(self.coverage.get("machine") or self.machine),
+                timezone=str(self.coverage.get("timezone") or self.timezone_name),
+                configuration=previous_config,
+            )
+        if previous_session != session_date or previous_config != self.config_hash:
             self.coverage = self._empty_coverage(session_date)
         stale_keys = [
             key
@@ -472,10 +500,7 @@ class GreatnessBoard:
             return
         try:
             self._rotate_legacy_events_if_needed()
-            self.events_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.events_path.open("a", encoding="utf-8") as handle:
-                for row in rows:
-                    handle.write(json.dumps(row) + "\n")
+            append_jsonl_rows(self.events_path, rows)
         except OSError as exc:
             self._bump("errors")
             self.coverage["last_error"] = f"event append failed: {exc}"[:500]
@@ -545,6 +570,12 @@ class GreatnessBoard:
             coverage = payload.get("coverage")
             if isinstance(coverage, dict):
                 self.coverage.update(coverage)
+                self.coverage.setdefault(
+                    "config_hash", str(payload.get("config_hash") or self.config_hash)
+                )
+                self.coverage.setdefault("engine_version", ENGINE_VERSION)
+                self.coverage.setdefault("machine", self.machine)
+                self.coverage.setdefault("timezone", self.timezone_name)
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             logging.warning("Greatness store load failed; starting fresh.", exc_info=True)
 

@@ -829,6 +829,10 @@ def _shadow_check(
         reconcile_session_date=session_date or market_date,
         claims=claims_builder(coverage),
     )
+    session_progress = shadow_log_audit.audit_shadow_session_progress(
+        log_path,
+        log_profile,
+    )
     log_evidence = {
         "log_path": str(log_path),
         "log_status": log["status"],
@@ -840,6 +844,7 @@ def _shadow_check(
         "sidecar_reconciliation": log["reconciliation"],
         "sidecar_schema": str(coverage_source.get("schema") or ""),
         "sidecar_state": state,
+        "session_progress": session_progress,
     }
 
     if payload is None:
@@ -1922,6 +1927,7 @@ def _shadow_evidence_view(checks: list[dict[str, Any]]) -> dict[str, Any]:
             "config_hashes": scan.get("config_hashes") or {},
             "latest_valid_record": scan.get("latest_valid_record") or {},
             "sidecar_reconciliation": details.get("sidecar_reconciliation") or [],
+            "session_progress": details.get("session_progress") or {},
         }
     return {
         "promotable": all(engine["promotable"] for engine in engines.values()),

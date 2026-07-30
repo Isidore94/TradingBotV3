@@ -313,14 +313,30 @@ def test_new_session_first_row_is_never_deduped(tmp_path, monkeypatch):
     now_two = day_two[-1].dt + timedelta(minutes=6)
     bridge.record_spy_shadow(day_two, PRIOR_CLOSE, now=now_two)
 
+    # The prior session is atomically archived before the new row is appended;
+    # evidence still has both observations, while the active log stays bounded
+    # to the current session.
+    from diagnostics.shadow_session_rollup import SPY_ENGINE, evidence_directories
+
     rows = read_log(tmp_path)
-    assert len(rows) == 2, "a new session's first observation was deduped away"
-    assert [row["session_date"] for row in rows] == ["2026-07-10", "2026-07-11"]
-    assert rows[0]["state"] == rows[1]["state"], "the fingerprints really were identical"
+    raw_dir, summary_dir = evidence_directories(log, SPY_ENGINE)
+    archive = next(raw_dir.glob("*.jsonl"))
+    archived = [
+        json.loads(line)
+        for line in archive.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1, "the active log must contain only the new session"
+    combined = archived + rows
+    assert [row["session_date"] for row in combined] == ["2026-07-10", "2026-07-11"]
+    assert combined[0]["state"] == combined[1]["state"], "the fingerprints really were identical"
+    summary = json.loads(next(summary_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert summary["coverage"]["session_date"] == "2026-07-10"
+    assert summary["promotion_decision"] == "NONE"
 
     # ... and the second session dedupes normally from there.
     bridge.record_spy_shadow(day_two, PRIOR_CLOSE, now=now_two)
-    assert len(read_log(tmp_path)) == 2
+    assert len(read_log(tmp_path)) == 1
 
     status = read_status()
     assert status["session_date"] == "2026-07-11"

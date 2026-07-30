@@ -57,6 +57,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from diagnostics.artifact_io import append_jsonl_rows, atomic_write_json
+from diagnostics.shadow_session_rollup import SPY_ENGINE, finalize_session
 from market_state import (
     ENGINE_VERSION,
     M5Bar,
@@ -380,11 +381,13 @@ def _config_hash(config: MarketStateConfig) -> str:
 
 
 def _empty_coverage(session_date: str, config_hash: str) -> dict:
+    _, timezone_name = get_market_local_timezone()
     return {
         "schema": STATUS_SCHEMA,
         "engine_version": ENGINE_VERSION,
         "config_hash": config_hash,
         "machine": socket.gethostname(),
+        "timezone": timezone_name,
         "session_date": session_date,
         # Cadence is part of the evidence, not a footnote (plan.md sec 4).
         "evaluation_cadence": EVALUATION_CADENCE,
@@ -442,6 +445,52 @@ def _load_coverage(session_date: str, config_hash: str) -> dict:
     return coverage
 
 
+def _coverage_from_disk_any_scope() -> dict:
+    path = shadow_status_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _activate_coverage_scope(evaluated_at: datetime, config_hash: str) -> None:
+    """Finalize the previous scope before any new-scope raw row is appended."""
+
+    global _coverage
+    session_date = evaluated_at.date().isoformat()
+    with _lock:
+        current = dict(_coverage)
+    if not current:
+        current = _coverage_from_disk_any_scope()
+    current_session = str(current.get("session_date") or "")
+    current_config = str(current.get("config_hash") or "")
+    if current_session == session_date and current_config == config_hash:
+        with _lock:
+            if not _coverage:
+                _coverage = _load_coverage(session_date, config_hash)
+        return
+    if current_session:
+        reason = (
+            "session_rollover"
+            if current_session != session_date
+            else "configuration_changed"
+        )
+        finalize_session(
+            engine=SPY_ENGINE,
+            log_path=shadow_log_path(),
+            coverage=current,
+            finalized_at=evaluated_at,
+            reason=reason,
+            engine_version=str(current.get("engine_version") or ENGINE_VERSION),
+            machine=str(current.get("machine") or socket.gethostname()),
+            timezone=str(current.get("timezone") or get_market_local_timezone()[1]),
+            configuration=current_config or config_hash,
+        )
+    with _lock:
+        _coverage = _load_coverage(session_date, config_hash)
+
+
 def _record_coverage(
     *,
     evaluated_at: datetime,
@@ -454,9 +503,8 @@ def _record_coverage(
 ) -> None:
     global _coverage
     session_date = evaluated_at.date().isoformat()
+    _activate_coverage_scope(evaluated_at, config_hash)
     with _lock:
-        if _coverage.get("session_date") != session_date or _coverage.get("config_hash") != config_hash:
-            _coverage = _load_coverage(session_date, config_hash)
         _coverage["evaluations"] = int(_coverage.get("evaluations", 0)) + 1
         _coverage["last_evaluation_at"] = evaluated_at.isoformat(timespec="seconds")
         snapshot = evaluation.snapshot if evaluation is not None else None
@@ -721,6 +769,9 @@ def record_spy_shadow(
     config_hash = _config_hash(active_config)
     session_date = moment.date().isoformat()
     try:
+        # Must precede evaluation and append: otherwise the first row of a new
+        # session would be rotated into yesterday's archive.
+        _activate_coverage_scope(moment, config_hash)
         evaluation = evaluate_spy_shadow(
             bot_bars,
             prev_close,
@@ -865,11 +916,14 @@ def record_spy_shadow(
         )
         return row
     except Exception as exc:
-        _record_coverage(
-            evaluated_at=moment,
-            config_hash=config_hash,
-            error=exc,
-        )
+        try:
+            _record_coverage(
+                evaluated_at=moment,
+                config_hash=config_hash,
+                error=exc,
+            )
+        except Exception:
+            logging.warning("SPY shadow coverage error could not be persisted.", exc_info=True)
         logging.warning("SPY shadow-state recording failed (live behavior unaffected).", exc_info=True)
         return None
 

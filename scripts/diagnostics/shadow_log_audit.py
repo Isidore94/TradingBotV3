@@ -52,12 +52,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from diagnostics.shadow_session_rollup import audit_session_summaries
+
 __all__ = [
     "SHADOW_LOG_AUDIT_SCHEMA",
     "GREATNESS_PROFILE",
     "SPY_PROFILE",
     "ShadowLogProfile",
     "audit_shadow_log",
+    "audit_shadow_session_progress",
     "parse_timestamp",
     "scan_shadow_log",
 ]
@@ -833,3 +836,12 @@ def audit_shadow_log(
             "claimed while this log is damaged, drifted, or contradicted by its sidecar."
         ),
     }
+
+
+def audit_shadow_session_progress(
+    log_path: Path | str,
+    profile: ShadowLogProfile,
+) -> dict[str, Any]:
+    """Section 7 counters from finalized sessions; never a promotion verdict."""
+
+    return audit_session_summaries(log_path, profile.name)

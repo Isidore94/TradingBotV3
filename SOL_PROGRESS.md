@@ -11,8 +11,11 @@ stamp; it must not duplicate the roadmap.
   integration and GUI product work it was based on is now merged into `main`.
 - Integration base: `3443c69` (an ancestor of `main`).
 - Date: 2026-07-30
-- Test baseline: **1580 passed, 5 subtests passed**
-  (`.venv\Scripts\python.exe -m pytest tests/ -q`, ~44s, pytest exit code 0)
+- Test baseline: **1625 passed, 5 subtests passed**
+  (`.venv\Scripts\python.exe -m pytest tests/ -q`, 57.32s, pytest exit code 0)
+- Qt thread-warning gate: **1625 passed, 5 subtests passed**
+  (`-W "error::pytest.PytestUnhandledThreadExceptionWarning"`, 57.08s,
+  pytest exit code 0; no warning suppression)
 - Smoke: **7/7** (`scripts/smoke_check.py`, exit code 0)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
   scheduled scans, durable run IDs/PIDs, accurate heartbeat state, M5 completed-
@@ -60,14 +63,33 @@ sec 6.1 first-session checklist have **not** been run.
 - The operations audit now **streams the real shadow JSONLs** instead of
   trusting writer-maintained sidecars; a corrupt or truncated log is visible and
   marks the evidence non-promotable.
+- BounceBot startup/shutdown now has generation-owned delivery guards, bounded
+  retirement, tracked late workers, and a terminal failure latch. A stopped
+  generation cannot re-arm Qt timers or overwrite a replacement generation,
+  and a still-retiring startup prevents a second same-client-ID connection.
+- Review-learning evidence now writes to one shard per stable, machine-local
+  installation ID, protected by a local cross-process lock. Readers merge the
+  read-only legacy ledger with all shards, deduplicate v2 record IDs, and keep
+  hostname as diagnostic metadata rather than writer authority.
+- W08/W09 session evidence now rotates each shadow log before a new session or
+  configuration writes, atomically publishes replay-reconciled per-session
+  summaries, reports eligible/incomplete sessions and Section 7 counters, and
+  enforces bounded raw/summary retention. These counters cannot promote either
+  challenger.
 
 Known gaps, deliberately not claimed as done:
 
 - Provider request / cache-hit / throttling / failure counters have no capture
   point anywhere in the repo and are an emitted **UNKNOWN**.
-- Neither shadow log has a retention policy or per-day rollup, and coverage
-  counters are still lost at session rollover — so the sec 7.2/7.3 evidence
-  floors remain **uncollectable** until that lands.
+- W08/W09 has not crossed a real session/configuration rollover on this build.
+  The current audit therefore honestly reports zero finalized summaries and
+  zero eligible sessions for both engines; the first restarted live session
+  must validate rotation, counter preservation, and reconciliation.
+- The review-log partition has not emitted a live v2 shard yet. The read-only
+  survey found 491 valid legacy rows, zero malformed rows, and two real active
+  installations (mini-PC `MainPC`, desktop `DESKTOP-IABHR62`) with no observed
+  temporal/session overlap. The legacy file is now read-only; a restarted GUI
+  must validate per-install writes and merged reads on both machines.
 - No lease renewal loop; clock skew beyond the supported grace, Drive sync
   convergence, and the sub-millisecond pre-replacement window remain open and
   are documented in plan.md sec 4 and the runbook.
@@ -98,16 +120,10 @@ Known gaps, deliberately not claimed as done:
   07:00-through-close reports, persisted Away profile, simulated
   expiry/clock-skew/sleep-wake/failure tests, and swing-first candidate
   ordering with honest empty/unscanned states landed.
-- Writer ownership is fail-closed **only at the publisher boundary**
-  (`scripts/autopilot_core.py:2332-2341`): `LeaseUnavailable` or any other
-  exception out of `acquire()` aborts the Away publish. The lease module itself
-  fails **open**. `scripts/writer_lease.py:37-41` swallows `OSError`,
-  `JSONDecodeError` and `ValueError` and returns `None`, so a corrupt or
-  half-synced lease file reads as "no lease" and `acquire()` overwrites it; the
-  guard at `:74-85` also requires a truthy `holder` and a parseable
-  `expires_at`, so a blank holder or a malformed timestamp (`_parse_ts` returns
-  `None`) skips the raise and lets the caller take the lease. Module-level
-  fail-closed is outstanding.
+- Writer ownership is fail-closed at both role resolution and lease parsing,
+  with local kernel exclusion and a fenced final ownership check. It remains
+  cross-machine writer protection rather than distributed exclusion until the
+  physical Section 6 drills pass.
 - GUI trust foundation: the Industry Board now has single-flight startup/hourly
   refresh, atomic last-good files, snapshot freshness/Health evidence, and
   numeric strongest/weakest sorting. Master focus duplicates now merge by

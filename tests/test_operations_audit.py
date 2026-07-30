@@ -1360,7 +1360,68 @@ def test_both_shadow_logs_are_actually_opened_and_reported(tmp_path):
         details = _shadow(payload, check_id)["details"]
         assert details["promotable"] is True
         assert details["non_promotable_reasons"] == []
+        assert details["session_progress"]["summary_count"] == 0
+        assert details["session_progress"]["affects_promotion"] is False
     assert payload["shadow_evidence"]["promotable"] is True
+
+
+def test_finalized_session_floor_progress_is_counted_but_never_promotes(tmp_path):
+    from diagnostics.shadow_session_rollup import SPY_ENGINE, finalize_session
+
+    diagnostics, registry, now = _measured_fixture(tmp_path)
+    historical = diagnostics / "spy_history_staging.jsonl"
+    rows = [
+        _spy_row("2026-07-12T12:10:00-07:00"),
+        {
+            **_spy_row("2026-07-12T12:20:00-07:00", schema="spy_episode_shadow_v1"),
+            "episode_uid": "SPY|2026-07-12|ep-old",
+            "episode_id": "ep-old",
+            "outcome": "RESUMED",
+            "direction": "BULLISH",
+            "derived_from_completed_bars": True,
+        },
+    ]
+    historical.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    finalize_session(
+        engine=SPY_ENGINE,
+        log_path=historical,
+        coverage={
+            "session_date": "2026-07-12",
+            "config_hash": "spy-config-1",
+            "evaluations": 3,
+            "usable_evaluations": 3,
+            "errors": 0,
+        },
+        finalized_at=now,
+        reason="session_rollover",
+        engine_version="spy_state_v1",
+        machine="test-machine",
+        timezone="America/Vancouver",
+        configuration="spy-config-1",
+    )
+
+    payload = _build(diagnostics, registry, now)
+    progress = _shadow(payload, "spy_shadow")["details"]["session_progress"]
+
+    assert progress["eligible_sessions"] == 1
+    assert progress["complete_chains"] == 1
+    assert progress["section_7_floor_progress"]["eligible_sessions"] == {
+        "count": 1,
+        "floor": 10,
+    }
+    assert progress["manual_reviewed_chains"] == 0
+    assert progress["promotion_decision"] == "NONE"
+    # Counter visibility does not alter the existing raw-log promotion verdict.
+    assert payload["shadow_evidence"]["promotable"] is True
+    assert (
+        payload["shadow_evidence"]["engines"]["spy_shadow"]["session_progress"][
+            "affects_promotion"
+        ]
+        is False
+    )
 
 
 def test_a_truncated_final_line_is_unhealthy_and_not_promotable(tmp_path):
