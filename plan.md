@@ -12,7 +12,13 @@ Checkpoint used for this revision:
 - Reported suite status: 802 tests passing
 - Verified repository evidence: Phase 0 foundations, most Phase 1 instrumentation, Phase 2 implementation, Packets A–D, the SPY pullback challenger, and the Greatness Monitor challenger are present in code and tests.
 
-The reported 802-test baseline should remain the minimum green baseline. Run the suite before and after each implementation packet and record the exact count in the relevant commit or run manifest.
+The checkpoint above is historical. As of 2026-07-30 (branch
+`milestone-1-observability`, commit `0995f51`) the verified green baseline is
+**1634 passed + 5 subtests** (pytest exit code 0, identically under
+`-W "error::pytest.PytestUnhandledThreadExceptionWarning"`) with `smoke_check.py`
+7/7; that count is the minimum green baseline. Run the suite before and after
+each implementation packet and record the exact count in the relevant commit or
+run manifest.
 
 This roadmap distinguishes four facts that must never be collapsed into one status:
 
@@ -262,7 +268,10 @@ What it does not yet prove:
 
 ### 3.3 Not implemented or not complete
 
-- Phase 1 Health page and benchmark fixtures.
+- Phase 1 benchmark fixtures and trend reporting. (The Section 6.3 Health page
+  landed 2026-07-30 with the full required-check inventory and a first-class
+  UNKNOWN status; within it, provider request/cache-hit/throttling/failure
+  counts still report UNKNOWN because no capture point exists yet.)
 - Phase 2 real-machine acceptance drills.
 - Phase 3 storage reclassification, journal migration off Drive, and OS credential storage.
 - Phase 4 provider repository, staged scanner, batching, and request coalescing.
@@ -364,6 +373,14 @@ Each shadow artifact needs:
 - daily summary and retention policy.
 
 Improve the logs before accumulating weeks of evidence that cannot answer promotion questions.
+
+Status 2026-07-30: every field above is IMPLEMENTED and GREEN for both engines
+(schema/engine/config identity, run and machine identity, completed-bar vs
+evaluation timestamps, episode/candidate identity with plan revisions, coverage
+counters, crash-safe per-session summaries with checksums, and enforced
+retention that archives rather than deletes). None of it is LIVE_VALIDATED:
+the first real session rollover on this build has not happened yet, and the
+operations audit honestly reports zero finalized summaries until it does.
 
 #### W08/W09 session evidence acceptance criteria
 
