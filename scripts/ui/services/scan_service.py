@@ -343,6 +343,64 @@ def owned_scan_process_count() -> int:
         return len(_owned_processes)
 
 
+def owned_scan_process_snapshot() -> dict[str, Any]:
+    """Read-only accounting of this process's scan children and worker threads.
+
+    plan.md sec 6.3 requires the Health page to show owned process/thread
+    counts, and sec 6.1's after-session checklist requires "owned child-process
+    count returns to zero" and "no scanner or worker remains orphaned". Both are
+    answerable only from *inside* the process that owns the children, so this is
+    the accounting hook the audit reads.
+
+    Strictly observational: unlike :func:`owned_scan_process_count` it does not
+    prune the registry, it never registers, reaps, claims or releases anything,
+    and it holds each lock only long enough to copy the state out. ``poll()`` is
+    the only way to learn whether a child is alive; it changes no ownership.
+    """
+    with _owned_processes_lock:
+        tracked = list(_owned_processes)
+    children: list[dict[str, Any]] = []
+    for proc in tracked:
+        try:
+            returncode = proc.poll()
+        except Exception:  # pragma: no cover - a handle that can no longer be polled
+            returncode = None
+        children.append(
+            {
+                "pid": getattr(proc, "pid", None),
+                "returncode": returncode,
+                "running": returncode is None,
+            }
+        )
+    live = [child for child in children if child["running"]]
+
+    # One lock acquisition for both the owner and its label: active_scan_label()
+    # takes the same non-reentrant lock, so calling it from inside would deadlock.
+    with _active_scan_lock:
+        owner = _active_scan_owner() if _active_scan_owner is not None else None
+        active_label = str(getattr(owner, "_active_label", "") or "") if owner is not None else ""
+    try:
+        scan_worker_threads = 1 if (owner is not None and owner.running) else 0
+    except Exception:  # pragma: no cover - deleted Qt wrapper
+        scan_worker_threads = 0
+
+    threads = list(threading.enumerate())
+    return {
+        "process_pid": os.getpid(),
+        "owned_child_count": len(live),
+        "registered_child_count": len(children),
+        "exited_children_pending_cleanup": len(children) - len(live),
+        "lingering_child_pids": [child["pid"] for child in live],
+        "children": children,
+        "active_scan_label": active_label,
+        "scan_owner_claimed": owner is not None,
+        "scan_worker_threads": scan_worker_threads,
+        "python_thread_count": len(threads),
+        "non_daemon_thread_count": sum(1 for thread in threads if not thread.daemon),
+        "thread_names": sorted(str(thread.name) for thread in threads),
+    }
+
+
 def terminate_owned_scan_processes(grace_seconds: float = 3.0) -> dict[str, int]:
     """Bounded-graceful reap of every owned child: wait briefly for a natural
     exit, then terminate. Only processes this GUI spawned are touched."""

@@ -365,9 +365,19 @@ class MainWindow(QMainWindow):
         self.ib_status.setText(message if message.lower().startswith("ib") else f"IB/TWS: {message}")
 
     def _set_health_status(self, status: str) -> None:
+        # UNKNOWN is a first-class status (plan.md sec 6.3): absent evidence
+        # gets its own purple chip, distinct from measured-and-bad, and never
+        # renders as green.
         normalized = str(status or "unknown").strip().lower()
+        if normalized not in {"healthy", "degraded", "unhealthy", "unknown"}:
+            normalized = "unknown"
         self.health_status.setText(f"Health: {normalized.upper()}")
-        color = {"healthy": "#3fb950", "degraded": "#d29922", "unhealthy": "#f85149"}.get(normalized, "#8b8fa3")
+        color = {
+            "healthy": "#3fb950",
+            "degraded": "#d29922",
+            "unhealthy": "#f85149",
+            "unknown": "#9b7cff",
+        }.get(normalized, "#8b8fa3")
         self.health_status.setStyleSheet(f"color: {color}; font-weight: 600;")
 
     def _set_setup_counts(self, total: int, favorites: int, near: int) -> None:

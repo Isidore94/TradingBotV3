@@ -78,12 +78,24 @@ def check_report_render() -> str:
 
     previous = {
         key: os.environ.get(key)
-        for key in ("TRADINGBOT_DESIGNATED_WRITER", "TRADINGBOT_WRITER_ROLE")
+        for key in (
+            "TRADINGBOT_DESIGNATED_WRITER",
+            "TRADINGBOT_WRITER_ROLE",
+            "TRADINGBOT_DIAGNOSTICS_DIR",
+        )
     }
     os.environ["TRADINGBOT_DESIGNATED_WRITER"] = socket.gethostname()
     os.environ["TRADINGBOT_WRITER_ROLE"] = "designated_writer"
     try:
         with tempfile.TemporaryDirectory() as tmp:
+            # Redirect diagnostics too, not just the report target. Publishing
+            # writes writer_health.json as a side effect, and without this the
+            # check would leave telemetry in the REAL diagnostics directory
+            # claiming this machine is a designated writer holding a lease --
+            # which the Health page would then report as the live role on a
+            # machine that is actually unconfigured and will refuse to publish.
+            # A smoke check must not be able to manufacture a green Health row.
+            os.environ["TRADINGBOT_DIAGNOSTICS_DIR"] = str(Path(tmp) / "diagnostics")
             result = core.publish_away_report(payload, Path(tmp) / "report.txt")
             assert result["ok"] and result["verified"], result
             assert not result.get("previous_pair_disagreement"), result
