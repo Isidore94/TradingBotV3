@@ -23,6 +23,11 @@ from market_state import M5Bar
 
 ENGINE_VERSION = "greatness_v1"
 
+#: Schema of the provenance blocks carried by candidates and steps.  Versioned
+#: independently of ENGINE_VERSION: provenance is descriptive metadata, so
+#: growing it must never move candidate identity or plan hashes.
+PROVENANCE_SCHEMA = "greatness_provenance_v1"
+
 
 class Stage(str, Enum):
     DISCOVERED = "DISCOVERED"
@@ -87,6 +92,10 @@ class ConfirmationStep:
     # runtime progress (persisted so restarts keep partial acceptance)
     accept_progress: int = 0
     closed_through: bool = False  # RETEST_HOLD phase 1 done
+    #: identity of the upstream D1 trigger row this step was built from
+    #: (trigger_id, event_type, reason, source, anchor, armed_at/price, ...).
+    #: Descriptive only - the engine never reads it.
+    provenance: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -104,6 +113,15 @@ class ConfirmationPlan:
     target: float | None = None
     rearm: RearmPolicy = field(default_factory=RearmPolicy)
     version: str = ENGINE_VERSION
+    #: Within-session revision of *this* plan for one symbol/side/family/session
+    #: lineage, starting at 1.  ``version`` identifies the plan *format*; the
+    #: D1 scan can re-arm different levels for the same symbol during a session,
+    #: and plan.md sec 7.3 requires that change to be an identifiable, ordered
+    #: event ("plan-revision events when D1 levels change") rather than an
+    #: anonymous new object.  The engine never reads it, and it is deliberately
+    #: excluded from the plan hash: the hash describes the plan's decision
+    #: content, the revision describes its position in the lineage.
+    revision: int = 1
 
     def mandatory_steps(self) -> list[ConfirmationStep]:
         return [s for s in self.steps if s.mandatory]
@@ -127,6 +145,9 @@ class DevelopmentCandidate:
     bars_since_fail: int = 0
     stage_entered_at: str = ""
     history: list[dict] = field(default_factory=list)
+    #: candidate-level source identity (which D1 triggers produced this plan,
+    #: how many rows were dropped, and why). Descriptive only.
+    provenance: dict = field(default_factory=dict)
 
     @property
     def side_sign(self) -> int:
@@ -154,12 +175,14 @@ class DevelopmentCandidate:
             "bars_since_fail": self.bars_since_fail,
             "stage_entered_at": self.stage_entered_at,
             "history": list(self.history),
+            "provenance": dict(self.provenance),
             "plan": {
                 "side_sign": self.plan.side_sign,
                 "invalidation": self.plan.invalidation,
                 "obstacle": self.plan.obstacle,
                 "target": self.plan.target,
                 "version": self.plan.version,
+                "revision": int(self.plan.revision),
                 "rearm": {
                     "max_attempts": self.plan.rearm.max_attempts,
                     "min_reset_bars": self.plan.rearm.min_reset_bars,
@@ -175,6 +198,7 @@ class DevelopmentCandidate:
                         "cleared_at": s.cleared_at,
                         "accept_progress": s.accept_progress,
                         "closed_through": s.closed_through,
+                        "provenance": dict(s.provenance),
                     }
                     for s in self.plan.steps
                 ],
@@ -190,6 +214,8 @@ class DevelopmentCandidate:
             obstacle=plan_raw.get("obstacle"),
             target=plan_raw.get("target"),
             version=str(plan_raw.get("version") or ENGINE_VERSION),
+            # stores written before plan revisions existed are revision 1
+            revision=max(1, int(plan_raw.get("revision") or 1)),
             rearm=RearmPolicy(
                 max_attempts=int((plan_raw.get("rearm") or {}).get("max_attempts", 2)),
                 min_reset_bars=int((plan_raw.get("rearm") or {}).get("min_reset_bars", 3)),
@@ -205,6 +231,8 @@ class DevelopmentCandidate:
                     cleared_at=str(s.get("cleared_at") or ""),
                     accept_progress=int(s.get("accept_progress", 0)),
                     closed_through=bool(s.get("closed_through")),
+                    # pre-provenance stores simply have no block: {} is correct
+                    provenance=dict(s.get("provenance") or {}),
                 )
                 for s in plan_raw.get("steps", [])
             ],
@@ -220,6 +248,7 @@ class DevelopmentCandidate:
             bars_since_fail=int(payload.get("bars_since_fail", 0)),
             stage_entered_at=str(payload.get("stage_entered_at") or ""),
             history=list(payload.get("history") or []),
+            provenance=dict(payload.get("provenance") or {}),
         )
 
 
@@ -385,6 +414,100 @@ class GreatnessEngine:
 # compatibility adapter (sec 16.1): existing D1 armed-level rows -> plan
 # ---------------------------------------------------------------------------
 
+#: Every identity/replay field the upstream D1 trigger rows already carry
+#: (``master_avwap_lib.legacy._append_d1_trigger_level``).  Copied verbatim so a
+#: shadow row can be traced back to the exact armed level that produced it.
+D1_TRIGGER_PROVENANCE_FIELDS = (
+    "schema_version",
+    "trigger_id",
+    "side",
+    "action",
+    "event_type",
+    "label",
+    "alert_label",
+    "level",
+    "reason",
+    "source",
+    "armed_at",
+    "armed_price",
+    "anchor_type",
+    "anchor_date",
+    "priority_bucket",
+    "setup_family",
+    "target_tier",
+    "upgrade_only",
+)
+
+
+def _d1_step_provenance(row: dict) -> dict:
+    """Project one upstream trigger row into a step provenance block.
+
+    ``trigger_id`` is always present so consumers have a stable key; an upstream
+    row that carries none yields ``""`` and is counted, never silently filled in
+    with a fabricated identifier.
+    """
+    provenance: dict = {
+        "schema": PROVENANCE_SCHEMA,
+        "trigger_id": str(row.get("trigger_id") or ""),
+    }
+    for key in D1_TRIGGER_PROVENANCE_FIELDS:
+        if key == "trigger_id":
+            continue
+        value = row.get(key)
+        if value is None:
+            continue
+        provenance[key] = value
+    provenance["superseded_trigger_ids"] = []
+    return provenance
+
+
+def _d1_candidate_provenance(
+    steps: list[ConfirmationStep],
+    *,
+    rows_total: int,
+    rows_dropped_no_level: int,
+    rows_dropped_duplicate_level: int,
+) -> dict:
+    """Candidate-level summary of where this plan came from."""
+    blocks = [step.provenance for step in steps]
+    trigger_ids = [str(block.get("trigger_id") or "") for block in blocks]
+    upgrade_flags = [block.get("upgrade_only") for block in blocks]
+    if any(flag is None for flag in upgrade_flags):
+        # a row that never declared it is uncertainty, not a silent "no"
+        upgrade_only = None
+    else:
+        upgrade_only = all(bool(flag) for flag in upgrade_flags)
+    armed_at = next(
+        (str(block.get("armed_at")) for block in blocks if block.get("armed_at")), ""
+    )
+    return {
+        "schema": PROVENANCE_SCHEMA,
+        "source": "d1_trigger_levels",
+        "primary_trigger_id": trigger_ids[0] if trigger_ids else "",
+        "trigger_ids": trigger_ids,
+        "event_types": [str(block.get("event_type") or "") for block in blocks],
+        "priority_buckets": [str(block.get("priority_bucket") or "") for block in blocks],
+        "sources": sorted({str(block.get("source")) for block in blocks if block.get("source")}),
+        "target_tiers": sorted(
+            {str(block.get("target_tier")) for block in blocks if block.get("target_tier")}
+        ),
+        "source_schema_versions": sorted(
+            {
+                int(block["schema_version"])
+                for block in blocks
+                if isinstance(block.get("schema_version"), int)
+            }
+        ),
+        "armed_at": armed_at,
+        "upgrade_only": upgrade_only,
+        "rows_total": int(rows_total),
+        "rows_used": len(steps),
+        "rows_dropped_no_level": int(rows_dropped_no_level),
+        "rows_dropped_duplicate_level": int(rows_dropped_duplicate_level),
+        "steps_missing_trigger_id": sum(1 for value in trigger_ids if not value),
+    }
+
+
 def candidate_from_d1_trigger_levels(
     symbol: str,
     side: str,
@@ -398,24 +521,42 @@ def candidate_from_d1_trigger_levels(
 ) -> DevelopmentCandidate | None:
     """Translate the existing `_build_d1_watchlist_trigger_levels` rows into
     an ordered ConfirmationPlan. Levels are ordered by aligned distance so the
-    nearest requirement is confirmed first; duplicates collapse."""
+    nearest requirement is confirmed first; duplicates collapse.
+
+    Each surviving step carries the full identity of the upstream trigger row it
+    came from (``trigger_id``, ``event_type``, ``reason``, ``source``, anchor,
+    ``armed_at``/``armed_price``, ``priority_bucket``, ``target_tier``,
+    ``upgrade_only``), and the candidate carries the aggregate plus drop counts.
+    This is pure plumbing: which steps exist, their order, their labels and
+    levels are decided exactly as before (pinned by
+    ``tests/fixtures/greatness_candidate_from_d1_v1.json``).
+    """
     side_norm = str(side or "LONG").strip().upper()
     sign = -1 if side_norm == "SHORT" else 1
     steps: list[ConfirmationStep] = []
-    seen: set[float] = set()
-    rows = [r for r in armed_levels or [] if r.get("level") is not None]
+    by_level: dict[float, ConfirmationStep] = {}
+    all_rows = list(armed_levels or [])
+    rows = [r for r in all_rows if r.get("level") is not None]
+    dropped_duplicate = 0
     for row in sorted(rows, key=lambda r: sign * float(r["level"])):
         level = round(float(row["level"]), 4)
-        if level in seen:
-            continue
-        seen.add(level)
-        steps.append(
-            ConfirmationStep(
-                label=str(row.get("label") or row.get("alert_label") or f"L{len(steps) + 1}"),
-                level=level,
-                condition=confirmation,
+        superseded = by_level.get(level)
+        if superseded is not None:
+            # the collapsed row is still evidence: keep its identity on the
+            # surviving step rather than dropping it on the floor.
+            superseded.provenance.setdefault("superseded_trigger_ids", []).append(
+                str(row.get("trigger_id") or "")
             )
+            dropped_duplicate += 1
+            continue
+        step = ConfirmationStep(
+            label=str(row.get("label") or row.get("alert_label") or f"L{len(steps) + 1}"),
+            level=level,
+            condition=confirmation,
+            provenance=_d1_step_provenance(row),
         )
+        by_level[level] = step
+        steps.append(step)
     if not steps:
         return None
     return DevelopmentCandidate(
@@ -430,4 +571,10 @@ def candidate_from_d1_trigger_levels(
             target=target,
         ),
         stage=Stage.DISCOVERED,
+        provenance=_d1_candidate_provenance(
+            steps,
+            rows_total=len(all_rows),
+            rows_dropped_no_level=len(all_rows) - len(rows),
+            rows_dropped_duplicate_level=dropped_duplicate,
+        ),
     )

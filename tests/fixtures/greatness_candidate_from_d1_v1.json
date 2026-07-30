@@ -1,0 +1,454 @@
+{
+  "schema": "greatness_candidate_from_d1_v1",
+  "feature_version": "greatness_v1",
+  "raw_input_keys": [
+    "trigger_rows"
+  ],
+  "raw_input_sha256": "c67f92a959ac8cf50260b8bd41b0d5a71e9fecdf326025fa6aaf70015e0581cc",
+  "acquired_at": "2026-07-30T09:30:00-04:00",
+  "as_of": "2026-07-30T09:30:00-04:00",
+  "universe_version": "synthetic_d1_trigger_levels_v1",
+  "provider_assumptions": "Synthetic D1 armed-level rows shaped exactly like master_avwap_lib.legacy._append_d1_trigger_level output (schema_version 1): levels are regular-session completed-D1 prices already rounded to 4dp by the producer, armed_at is the session date in market-local time, and no provider call is made - candidate_from_d1_trigger_levels is pure.",
+  "expected_keys": [
+    "expected"
+  ],
+  "numeric_tolerance": 1e-09,
+  "intentional_difference": "",
+  "configuration": {
+    "engine_version": "greatness_v1",
+    "default_confirmation": "CLOSE",
+    "rearm_max_attempts": 2,
+    "rearm_min_reset_bars": 3
+  },
+  "trigger_rows": {
+    "long_ordered_ladder": {
+      "symbol": "nvda",
+      "side": "LONG",
+      "session_date": "2026-07-13",
+      "setup_family": "",
+      "invalidation": 97.0,
+      "target": 112.0,
+      "confirmation": "CLOSE",
+      "rows": [
+        {
+          "schema_version": 1,
+          "trigger_id": "second_dev_break:UPPER_2:105.2500",
+          "side": "LONG",
+          "action": "break_above",
+          "event_type": "second_dev_break",
+          "label": "UPPER_2",
+          "alert_label": "2nd Dev",
+          "level": 105.25,
+          "reason": "close above the 2nd deviation band",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "anchor_type": "earnings",
+          "anchor_date": "2026-04-24",
+          "priority_bucket": "B",
+          "setup_family": "mid_earnings",
+          "target_tier": "A/S",
+          "upgrade_only": true,
+          "armed_price": 99.8
+        },
+        {
+          "schema_version": 1,
+          "trigger_id": "avwape_reclaim:AVWAPE:101.5000",
+          "side": "LONG",
+          "action": "break_above",
+          "event_type": "avwape_reclaim",
+          "label": "AVWAPE",
+          "alert_label": "AVWAP-E reclaim",
+          "level": 101.5,
+          "reason": "reclaim of the earnings anchored VWAP",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "anchor_type": "earnings",
+          "anchor_date": "2026-04-24",
+          "priority_bucket": "A",
+          "setup_family": "mid_earnings",
+          "target_tier": "A/S",
+          "upgrade_only": true,
+          "armed_price": 99.8
+        },
+        {
+          "schema_version": 1,
+          "trigger_id": "first_dev_break:UPPER_1:101.5000",
+          "side": "LONG",
+          "action": "break_above",
+          "event_type": "first_dev_break",
+          "label": "UPPER_1",
+          "alert_label": "1st Dev",
+          "level": 101.5,
+          "reason": "close above the 1st deviation band",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "anchor_type": "earnings",
+          "anchor_date": "2026-04-24",
+          "priority_bucket": "A",
+          "setup_family": "mid_earnings",
+          "target_tier": "A/S",
+          "upgrade_only": true,
+          "armed_price": 99.8
+        }
+      ]
+    },
+    "short_ordered_ladder": {
+      "symbol": "TSLA",
+      "side": "short",
+      "session_date": "2026-07-13",
+      "setup_family": "",
+      "invalidation": 99.5,
+      "target": 88.0,
+      "confirmation": "CLOSE",
+      "rows": [
+        {
+          "schema_version": 1,
+          "trigger_id": "first_dev_break:LOWER_1:95.0000",
+          "side": "SHORT",
+          "action": "break_below",
+          "event_type": "first_dev_break",
+          "label": "LOWER_1",
+          "alert_label": "1st Dev",
+          "level": 95.0,
+          "reason": "close below the 1st deviation band",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "anchor_type": "earnings",
+          "anchor_date": "2026-05-01",
+          "priority_bucket": "A",
+          "setup_family": "post_earnings",
+          "target_tier": "A/S",
+          "upgrade_only": true,
+          "armed_price": 97.4
+        },
+        {
+          "schema_version": 1,
+          "trigger_id": "second_dev_break:LOWER_2:91.2500",
+          "side": "SHORT",
+          "action": "break_below",
+          "event_type": "second_dev_break",
+          "label": "LOWER_2",
+          "alert_label": "2nd Dev",
+          "level": 91.25,
+          "reason": "close below the 2nd deviation band",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "anchor_type": "earnings",
+          "anchor_date": "2026-05-01",
+          "priority_bucket": "B",
+          "setup_family": "post_earnings",
+          "target_tier": "A/S",
+          "upgrade_only": true,
+          "armed_price": 97.4
+        },
+        {
+          "schema_version": 1,
+          "trigger_id": "previous_day_low_break:PDL:95.0000",
+          "side": "SHORT",
+          "action": "break_below",
+          "event_type": "previous_day_low_break",
+          "label": "PDL",
+          "alert_label": "Prev Day Low",
+          "level": 95.0,
+          "reason": "loss of the previous session low",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "anchor_type": "",
+          "anchor_date": "",
+          "priority_bucket": "B",
+          "setup_family": "post_earnings",
+          "target_tier": "A/S",
+          "upgrade_only": false,
+          "armed_price": 97.4
+        }
+      ]
+    },
+    "label_fallbacks_and_dropped_rows": {
+      "symbol": "AMD",
+      "side": "LONG",
+      "session_date": "2026-07-13",
+      "setup_family": "",
+      "invalidation": null,
+      "target": null,
+      "confirmation": "CLOSE",
+      "rows": [
+        {
+          "schema_version": 1,
+          "trigger_id": "previous_day_high_break::52.0000",
+          "side": "LONG",
+          "action": "break_above",
+          "event_type": "previous_day_high_break",
+          "level": 52.0,
+          "reason": "break of the previous session high",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "priority_bucket": "",
+          "setup_family": "range_break",
+          "target_tier": "A/S",
+          "upgrade_only": true
+        },
+        {
+          "schema_version": 1,
+          "trigger_id": "trendline_break_watch::50.0000",
+          "side": "LONG",
+          "action": "break_above",
+          "event_type": "trendline_break_watch",
+          "alert_label": "Trendline",
+          "level": 50.0,
+          "reason": "descending trendline break",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "setup_family": "range_break",
+          "target_tier": "A/S",
+          "upgrade_only": true
+        },
+        {
+          "schema_version": 1,
+          "trigger_id": "sma_obstacle_break:SMA50:",
+          "side": "LONG",
+          "action": "break_above",
+          "event_type": "sma_obstacle_break",
+          "label": "SMA50",
+          "level": null,
+          "reason": "no level resolved",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "setup_family": "range_break",
+          "target_tier": "A/S",
+          "upgrade_only": true
+        },
+        {
+          "event_type": "legacy_row_without_level",
+          "label": "LEGACY"
+        }
+      ]
+    },
+    "explicit_setup_family_and_accept": {
+      "symbol": "MSFT",
+      "side": "LONG",
+      "session_date": "2026-07-13",
+      "setup_family": "caller_supplied_family",
+      "invalidation": 395.0,
+      "target": 430.0,
+      "confirmation": "ACCEPT",
+      "rows": [
+        {
+          "schema_version": 1,
+          "trigger_id": "ema15_retest_watch:EMA15:410.1234",
+          "side": "LONG",
+          "action": "break_above",
+          "event_type": "ema15_retest_watch",
+          "label": "EMA15",
+          "alert_label": "15 EMA retest",
+          "level": 410.12344999,
+          "reason": "retest of the rising 15 EMA",
+          "source": "master_avwap_d1",
+          "armed_at": "2026-07-13",
+          "anchor_type": "earnings",
+          "anchor_date": "2026-04-30",
+          "priority_bucket": "A",
+          "setup_family": "row_supplied_family",
+          "target_tier": "A/S",
+          "upgrade_only": true,
+          "armed_price": 405.0
+        }
+      ]
+    },
+    "no_usable_levels": {
+      "symbol": "IWM",
+      "side": "LONG",
+      "session_date": "2026-07-13",
+      "setup_family": "",
+      "invalidation": null,
+      "target": null,
+      "confirmation": "CLOSE",
+      "rows": [
+        {
+          "schema_version": 1,
+          "trigger_id": "sma_obstacle_break:SMA200:",
+          "event_type": "sma_obstacle_break",
+          "label": "SMA200",
+          "level": null
+        }
+      ]
+    }
+  },
+  "expected": {
+    "long_ordered_ladder": {
+      "candidate": {
+        "symbol": "NVDA",
+        "side": "LONG",
+        "setup_family": "mid_earnings",
+        "session_date": "2026-07-13",
+        "stage": "DISCOVERED",
+        "attempts": 0,
+        "readiness": 0.0,
+        "plan": {
+          "side_sign": 1,
+          "version": "greatness_v1",
+          "invalidation": 97.0,
+          "obstacle": null,
+          "target": 112.0,
+          "rearm": {
+            "max_attempts": 2,
+            "min_reset_bars": 3
+          },
+          "steps": [
+            {
+              "label": "AVWAPE",
+              "level": 101.5,
+              "condition": "CLOSE",
+              "required_bars": 2,
+              "mandatory": true,
+              "cleared": false,
+              "cleared_at": "",
+              "accept_progress": 0,
+              "closed_through": false
+            },
+            {
+              "label": "UPPER_2",
+              "level": 105.25,
+              "condition": "CLOSE",
+              "required_bars": 2,
+              "mandatory": true,
+              "cleared": false,
+              "cleared_at": "",
+              "accept_progress": 0,
+              "closed_through": false
+            }
+          ]
+        }
+      }
+    },
+    "short_ordered_ladder": {
+      "candidate": {
+        "symbol": "TSLA",
+        "side": "SHORT",
+        "setup_family": "post_earnings",
+        "session_date": "2026-07-13",
+        "stage": "DISCOVERED",
+        "attempts": 0,
+        "readiness": 0.0,
+        "plan": {
+          "side_sign": -1,
+          "version": "greatness_v1",
+          "invalidation": 99.5,
+          "obstacle": null,
+          "target": 88.0,
+          "rearm": {
+            "max_attempts": 2,
+            "min_reset_bars": 3
+          },
+          "steps": [
+            {
+              "label": "LOWER_1",
+              "level": 95.0,
+              "condition": "CLOSE",
+              "required_bars": 2,
+              "mandatory": true,
+              "cleared": false,
+              "cleared_at": "",
+              "accept_progress": 0,
+              "closed_through": false
+            },
+            {
+              "label": "LOWER_2",
+              "level": 91.25,
+              "condition": "CLOSE",
+              "required_bars": 2,
+              "mandatory": true,
+              "cleared": false,
+              "cleared_at": "",
+              "accept_progress": 0,
+              "closed_through": false
+            }
+          ]
+        }
+      }
+    },
+    "label_fallbacks_and_dropped_rows": {
+      "candidate": {
+        "symbol": "AMD",
+        "side": "LONG",
+        "setup_family": "range_break",
+        "session_date": "2026-07-13",
+        "stage": "DISCOVERED",
+        "attempts": 0,
+        "readiness": 0.0,
+        "plan": {
+          "side_sign": 1,
+          "version": "greatness_v1",
+          "invalidation": null,
+          "obstacle": null,
+          "target": null,
+          "rearm": {
+            "max_attempts": 2,
+            "min_reset_bars": 3
+          },
+          "steps": [
+            {
+              "label": "Trendline",
+              "level": 50.0,
+              "condition": "CLOSE",
+              "required_bars": 2,
+              "mandatory": true,
+              "cleared": false,
+              "cleared_at": "",
+              "accept_progress": 0,
+              "closed_through": false
+            },
+            {
+              "label": "L2",
+              "level": 52.0,
+              "condition": "CLOSE",
+              "required_bars": 2,
+              "mandatory": true,
+              "cleared": false,
+              "cleared_at": "",
+              "accept_progress": 0,
+              "closed_through": false
+            }
+          ]
+        }
+      }
+    },
+    "explicit_setup_family_and_accept": {
+      "candidate": {
+        "symbol": "MSFT",
+        "side": "LONG",
+        "setup_family": "caller_supplied_family",
+        "session_date": "2026-07-13",
+        "stage": "DISCOVERED",
+        "attempts": 0,
+        "readiness": 0.0,
+        "plan": {
+          "side_sign": 1,
+          "version": "greatness_v1",
+          "invalidation": 395.0,
+          "obstacle": null,
+          "target": 430.0,
+          "rearm": {
+            "max_attempts": 2,
+            "min_reset_bars": 3
+          },
+          "steps": [
+            {
+              "label": "EMA15",
+              "level": 410.1234,
+              "condition": "ACCEPT",
+              "required_bars": 2,
+              "mandatory": true,
+              "cleared": false,
+              "cleared_at": "",
+              "accept_progress": 0,
+              "closed_through": false
+            }
+          ]
+        }
+      }
+    },
+    "no_usable_levels": {
+      "candidate": null
+    }
+  }
+}

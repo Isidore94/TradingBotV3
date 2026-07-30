@@ -14,10 +14,38 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from greatness_monitor import Stage  # noqa: E402
-from greatness_shadow import GreatnessBoard, record_d1_shadow  # noqa: E402
+from greatness_shadow import (  # noqa: E402
+    SHADOW_SCHEMA,
+    STORE_SCHEMA,
+    GreatnessBoard,
+    record_d1_shadow,
+)
 
 START = datetime(2026, 7, 13, 9, 35)
 LEVELS = [{"label": "UPPER_1", "level": 101.0, "setup_family": "test"}]
+#: A real D1 armed-level row, shaped like _append_d1_trigger_level's output.
+SOURCED_LEVELS = [
+    {
+        "schema_version": 1,
+        "trigger_id": "first_dev_break:UPPER_1:101.0000",
+        "side": "LONG",
+        "action": "break_above",
+        "event_type": "first_dev_break",
+        "label": "UPPER_1",
+        "alert_label": "1st Dev",
+        "level": 101.0,
+        "reason": "close above the 1st deviation band",
+        "source": "master_avwap_d1",
+        "armed_at": "2026-07-13",
+        "armed_price": 99.4,
+        "anchor_type": "earnings",
+        "anchor_date": "2026-04-24",
+        "priority_bucket": "A",
+        "setup_family": "test",
+        "target_tier": "A/S",
+        "upgrade_only": True,
+    }
+]
 
 
 def frame(rows):
@@ -65,7 +93,7 @@ def test_board_progresses_persists_and_never_double_counts(tmp_path):
 
     logged = [json.loads(x) for x in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert any(row["event"] == "READY" for row in logged)
-    assert all(row["schema"] == "greatness_shadow_v2" for row in logged)
+    assert all(row["schema"] == SHADOW_SCHEMA for row in logged)
     assert all(row["candidate_id"] == candidate_id for row in logged)
     assert all(row["evaluated_at"] and row["bar_ts"] for row in logged)
     assert all(datetime.fromisoformat(row["evaluated_at"]).utcoffset() is not None for row in logged)
@@ -73,7 +101,7 @@ def test_board_progresses_persists_and_never_double_counts(tmp_path):
     assert all(row["timezone"] for row in logged)
     assert all(row["engine_version"] == "greatness_v1" and row["config_hash"] for row in logged)
     stored = json.loads((tmp_path / "cands.json").read_text(encoding="utf-8"))
-    assert stored["schema"] == "greatness_store_v2"
+    assert stored["schema"] == STORE_SCHEMA
     assert stored["coverage"]["evaluations"] == 2
     assert stored["coverage"]["bars_consumed"] == 2
     assert stored["coverage"]["bars_skipped_duplicate"] == 2
@@ -138,7 +166,7 @@ def test_default_shadow_paths_honor_diagnostics_override(tmp_path, monkeypatch):
     assert bridge.shadow_log_path() == tmp_path / "spy_state_shadow.jsonl"
 
 
-def test_legacy_event_log_is_archived_before_v2_rows_are_written(tmp_path):
+def test_pre_v2_event_log_is_archived_before_current_rows_are_written(tmp_path):
     events_path = tmp_path / "events.jsonl"
     events_path.write_text('{"ts":"2026-05-06T09:40:00","symbol":"AAPL","event":"READY"}\n', encoding="utf-8")
     board = GreatnessBoard(store_path=tmp_path / "cands.json", events_path=events_path)
@@ -157,7 +185,164 @@ def test_legacy_event_log_is_archived_before_v2_rows_are_written(tmp_path):
     assert len(archives) == 1
     assert '"symbol":"AAPL"' in archives[0].read_text(encoding="utf-8")
     rows = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
-    assert rows and all(row["schema"] == "greatness_shadow_v2" for row in rows)
+    assert rows and all(row["schema"] == SHADOW_SCHEMA for row in rows)
+
+
+def test_v2_evidence_file_keeps_accumulating_instead_of_being_rotated(tmp_path):
+    """A schema bump must not break the shadow evidence run into pieces."""
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text(
+        json.dumps({"schema": "greatness_shadow_v2", "symbol": "AAPL", "event": "READY"}) + "\n",
+        encoding="utf-8",
+    )
+    board = GreatnessBoard(store_path=tmp_path / "cands.json", events_path=events_path)
+    df = frame([(100.0, 100.6, 99.8, 100.4), (100.4, 101.7, 100.2, 101.4)])
+
+    board.update(
+        "NVDA",
+        "LONG",
+        SOURCED_LEVELS,
+        _bars(board, df, START + timedelta(minutes=11)),
+        session_date="2026-07-13",
+        evaluated_at=START + timedelta(minutes=11),
+    )
+
+    assert list(tmp_path.glob("events.legacy-*.jsonl")) == []
+    rows = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["schema"] == "greatness_shadow_v2"
+    assert {row["schema"] for row in rows[1:]} == {SHADOW_SCHEMA}
+
+
+def test_shadow_rows_carry_the_real_d1_trigger_identity(tmp_path):
+    board = _board(tmp_path)
+    df = frame([(100.0, 100.6, 99.8, 100.4), (100.4, 101.7, 100.2, 101.4)])
+    now = START + timedelta(minutes=11)
+
+    board.update("NVDA", "LONG", SOURCED_LEVELS, _bars(board, df, now), session_date="2026-07-13")
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows
+    for row in rows:
+        # the fabricated hash no longer stands in for provenance
+        assert row["source_trigger_id"] == "first_dev_break:UPPER_1:101.0000"
+        assert row["source_trigger_id_synthesized"] is False
+        assert row["source_trigger_ids"] == ["first_dev_break:UPPER_1:101.0000"]
+        assert row["source_provenance"]["source"] == "d1_trigger_levels"
+        assert row["source_provenance"]["event_types"] == ["first_dev_break"]
+        assert row["source_provenance"]["armed_at"] == "2026-07-13"
+        assert row["source_provenance"]["upgrade_only"] is True
+        assert row["source_provenance"]["rows_used"] == 1
+        # the deprecated v2 value survives one schema version
+        assert row["source_trigger_id_legacy"].startswith("d1:NVDA:")
+
+    stepped = [row for row in rows if row["step"] == "UPPER_1"]
+    assert stepped
+    for row in stepped:
+        trigger = row["step_trigger"]
+        assert trigger["trigger_id"] == "first_dev_break:UPPER_1:101.0000"
+        assert trigger["reason"] == "close above the 1st deviation band"
+        assert trigger["anchor_type"] == "earnings"
+        assert trigger["anchor_date"] == "2026-04-24"
+        assert trigger["armed_price"] == 99.4
+        assert trigger["priority_bucket"] == "A"
+        assert trigger["target_tier"] == "A/S"
+        assert trigger["upgrade_only"] is True
+
+    coverage = json.loads((tmp_path / "cands.json").read_text(encoding="utf-8"))["coverage"]
+    assert coverage["candidates_with_trigger_provenance"] == 1
+    assert coverage["candidates_without_trigger_provenance"] == 0
+    assert coverage["steps_missing_trigger_id"] == 0
+
+
+def test_rows_without_upstream_ids_are_flagged_not_silently_filled(tmp_path):
+    """Missing provenance is uncertainty, never a fabricated identity."""
+    board = _board(tmp_path)
+    df = frame([(100.0, 100.6, 99.8, 100.4), (100.4, 101.7, 100.2, 101.4)])
+
+    board.update(
+        "NVDA", "LONG", LEVELS, _bars(board, df, START + timedelta(minutes=11)),
+        session_date="2026-07-13",
+    )
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows
+    for row in rows:
+        assert row["source_trigger_id_synthesized"] is True
+        assert row["source_trigger_id"] == row["source_trigger_id_legacy"]
+        assert row["source_provenance"]["steps_missing_trigger_id"] == 1
+        assert row["source_provenance"]["upgrade_only"] is None
+
+    coverage = json.loads((tmp_path / "cands.json").read_text(encoding="utf-8"))["coverage"]
+    assert coverage["candidates_without_trigger_provenance"] == 1
+    assert coverage["steps_missing_trigger_id"] == 1
+
+
+def test_pre_provenance_store_still_loads(tmp_path):
+    """v2 stores have no provenance block; a restart must not crash on them."""
+    store_path = tmp_path / "cands.json"
+    store_path.write_text(
+        json.dumps(
+            {
+                "schema": "greatness_store_v2",
+                "engine_version": "greatness_v1",
+                "candidates": {
+                    "NVDA|LONG|test|2026-07-13|greatness_v1|abc123abc123": {
+                        "schema": "greatness_v1",
+                        "symbol": "NVDA",
+                        "side": "LONG",
+                        "setup_family": "test",
+                        "session_date": "2026-07-13",
+                        "stage": "CONFIRMING",
+                        "attempts": 0,
+                        "bars_since_fail": 0,
+                        "stage_entered_at": "2026-07-13T09:45:00",
+                        "history": [],
+                        "plan": {
+                            "side_sign": 1,
+                            "invalidation": None,
+                            "obstacle": None,
+                            "target": None,
+                            "version": "greatness_v1",
+                            "rearm": {"max_attempts": 2, "min_reset_bars": 3},
+                            "steps": [
+                                {
+                                    "label": "UPPER_1",
+                                    "level": 101.0,
+                                    "condition": "CLOSE",
+                                    "required_bars": 2,
+                                    "mandatory": True,
+                                    "cleared": False,
+                                    "cleared_at": "",
+                                    "accept_progress": 0,
+                                    "closed_through": False,
+                                }
+                            ],
+                        },
+                    }
+                },
+                "last_bar_ts": {},
+                "coverage": {"session_date": "2026-07-13", "evaluations": 3},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    board = GreatnessBoard(store_path=store_path, events_path=tmp_path / "events.jsonl")
+
+    assert len(board.candidates) == 1
+    candidate = next(iter(board.candidates.values()))
+    assert candidate.stage.value == "CONFIRMING"
+    assert candidate.provenance == {}
+    assert candidate.plan.steps[0].provenance == {}
+    assert board.coverage["evaluations"] == 3
+    # the new counters exist even when the loaded coverage predates them
+    assert board.coverage["candidates_with_trigger_provenance"] == 0
 
 
 def test_new_session_prunes_old_candidates_instead_of_replaying_test_fixtures(tmp_path):

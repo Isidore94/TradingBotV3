@@ -6,6 +6,33 @@ feed a persistent DevelopmentCandidate. Stages/attempts survive restarts via
 an atomic JSON store; every typed transition appends to a JSONL log. Live
 alerts are untouched - this accumulates the evidence for replacing the
 single-cross rule with staged confirmation.
+
+What an auditor needs from these rows (plan.md sec 4 "shadow logs must be
+auditable, not merely present", sec 7.3):
+
+* **candidate identity** - ``symbol|side|setup_family|session|plan_version|
+  plan_revision|plan_hash``.  plan.md:549 says outright that the old
+  ``symbol|session_date`` key "is insufficient if a side or plan changes during
+  the session".  The lineage prefix (everything before the plan version) is the
+  stable thread through a session; the revision orders plan changes inside it.
+* **plan revisions** - when the D1 scan re-arms different levels mid-session the
+  board emits a ``PLAN_REVISED`` row carrying the old *and* new plan version,
+  revision and hash, the level diff, and exactly what lifecycle progress was
+  carried across.  Progress migration is the plan.md sec 5 invariant "rescans
+  and GUI refreshes must not erase valid lifecycle progress".
+* **data health** - every row carries the freshness / gap / provider state of
+  the bars that drove it, so a silent feed outage can never be read back as
+  "the setup simply never confirmed" (plan.md sec 5: missing data is
+  uncertainty, never silent confirmation).
+* **run and machine identity** - the run id comes from the existing run-manifest
+  mechanism (``diagnostics.run_manifest``) rather than a private scheme, so a
+  shadow row joins to the manifest of the scan that produced it.
+
+"No event" vs "not evaluated" (plan.md:303-305) is answered by *per-candidate
+evaluation counters* held in the status store and flushed into one daily
+``SESSION_SUMMARY`` row, not by a heartbeat row per candidate per bar: the live
+log is already ~14.5 MB and a per-bar heartbeat would bury the transitions it
+exists to record.
 """
 
 from __future__ import annotations
@@ -15,23 +42,80 @@ import hashlib
 import logging
 import os
 import socket
-import tempfile
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from diagnostics.artifact_io import append_jsonl_rows, atomic_write_json, config_hash
+from diagnostics.run_manifest import ManifestRecorder, get_active_recorder
 from greatness_monitor import (
+    ConfirmationStep,
     DevelopmentCandidate,
     ENGINE_VERSION,
     GreatnessEngine,
+    Stage,
+    TERMINAL_STAGES,
     candidate_from_d1_trigger_levels,
 )
 from market_state import M5Bar
 from market_session import get_market_local_timezone, normalize_market_local_datetime
 
 _BAR_MINUTES = 5
-SHADOW_SCHEMA = "greatness_shadow_v2"
-STORE_SCHEMA = "greatness_store_v2"
+#: v4 adds candidate lineage + plan revision identity, the ``data_health``
+#: block, run/machine identity, and the daily ``SESSION_SUMMARY`` row.  v3's
+#: fields are all still written.
+SHADOW_SCHEMA = "greatness_shadow_v4"
+#: v2, v3 and v4 rows are readable side by side, so an existing evidence file
+#: keeps accumulating instead of being rotated away mid-programme (plan.md sec
+#: 6.1 / sec 7: shadow evidence must not be broken up or deleted).  Only
+#: genuinely pre-v2 rows trigger an archive.
+COMPATIBLE_SHADOW_SCHEMAS = frozenset(
+    {"greatness_shadow_v2", "greatness_shadow_v3", SHADOW_SCHEMA}
+)
+STORE_SCHEMA = "greatness_store_v4"
+#: Sub-schemas of the blocks embedded in a row, versioned independently so a
+#: reader can tell "this field is absent" from "this field is older".
+DATA_HEALTH_SCHEMA = "greatness_data_health_v1"
+PLAN_REVISION_SCHEMA = "greatness_plan_revision_v1"
+RUN_IDENTITY_SCHEMA = "greatness_run_identity_v1"
+
+#: Board-emitted row kinds (the engine's own kinds live in ``EventType``).
+EVENT_PLAN_REVISED = "PLAN_REVISED"
+EVENT_SESSION_SUMMARY = "SESSION_SUMMARY"
+
+# --- data-health thresholds -------------------------------------------------
+#: The newest completed bar may be at most this many bar intervals old before an
+#: evaluation counts as stale.  Two intervals tolerates one late-arriving bar.
+_STALE_AFTER_BARS = 2.0
+#: Two consecutive completed bars further apart than this are a feed gap.
+_GAP_TOLERANCE_MINUTES = _BAR_MINUTES
+#: Clock skew beyond this (bar stamped ahead of the evaluation) is reported.
+_CLOCK_SKEW_TOLERANCE_SECONDS = 90.0
+
+HEALTH_OK = "OK"
+HEALTH_STALE = "STALE"
+HEALTH_GAPPED = "GAPPED"
+HEALTH_NO_COMPLETE_BAR = "NO_COMPLETE_BAR"
+HEALTH_NO_DATA = "NO_DATA"
+#: Worst-first severity; the reported ``status`` is the worst reason present.
+_HEALTH_SEVERITY = (
+    HEALTH_NO_DATA,
+    HEALTH_NO_COMPLETE_BAR,
+    HEALTH_GAPPED,
+    HEALTH_STALE,
+    HEALTH_OK,
+)
+
+#: Declared, and actually enforced, retention (plan.md sec 4).
+RETENTION_POLICY = {
+    "events": (
+        "append-only; never pruned or deleted by this writer. Rotate with "
+        "diagnostics.artifact_io.archive_dated (which copies)."
+    ),
+    "store": "current session only; prior sessions are summarized into a SESSION_SUMMARY row first",
+    "pre_v2_events": "archived beside the log on first write, never deleted",
+}
+
 _lock = threading.Lock()
 _board: "GreatnessBoard | None" = None
 
@@ -51,6 +135,12 @@ def _json_hash(payload) -> str:
 
 
 def _plan_hash(candidate: DevelopmentCandidate) -> str:
+    """Hash of the *decision* content of a plan.
+
+    Deliberately excludes provenance: candidate ids are built from this hash and
+    must stay stable across restarts and schema versions, so descriptive
+    metadata may never move them.
+    """
     plan = candidate.plan
     return _json_hash(
         {
@@ -165,6 +255,14 @@ class GreatnessBoard:
             candidate = proposed
             self.candidates[key] = candidate
             self._bump("candidates_created")
+            provenance = candidate.provenance or {}
+            if provenance.get("primary_trigger_id"):
+                self._bump("candidates_with_trigger_provenance")
+            else:
+                self._bump("candidates_without_trigger_provenance")
+            missing = int(provenance.get("steps_missing_trigger_id") or 0)
+            if missing:
+                self._bump("steps_missing_trigger_id", missing)
         self._bump("evaluations")
         self.coverage["last_evaluation_at"] = evaluated_at.isoformat(timespec="seconds")
         self.coverage["last_candidate_id"] = key
@@ -211,6 +309,10 @@ class GreatnessBoard:
             "bars_skipped_duplicate": 0,
             "events_emitted": 0,
             "plan_revisions": 0,
+            # provenance quality of the D1 triggers behind today's candidates
+            "candidates_with_trigger_provenance": 0,
+            "candidates_without_trigger_provenance": 0,
+            "steps_missing_trigger_id": 0,
             "errors": 0,
             "last_error": "",
             "last_error_at": "",
@@ -252,6 +354,12 @@ class GreatnessBoard:
         bar: M5Bar | None,
     ) -> dict:
         plan_hash = _plan_hash(candidate)
+        provenance = dict(candidate.provenance or {})
+        # v2 wrote this fabricated string and called it provenance; it is kept
+        # for one schema version so any external reader of the old value has a
+        # migration window, and is dropped in v4.
+        legacy_trigger_id = f"d1:{candidate.symbol.upper()}:{plan_hash[:12]}"
+        real_trigger_id = str(provenance.get("primary_trigger_id") or "")
         return {
             "schema": SHADOW_SCHEMA,
             "engine_version": ENGINE_VERSION,
@@ -260,7 +368,12 @@ class GreatnessBoard:
             "timezone": self.timezone_name,
             "session_date": candidate.session_date,
             "candidate_id": candidate_id,
-            "source_trigger_id": f"d1:{candidate.symbol.upper()}:{plan_hash[:12]}",
+            "source_trigger_id": real_trigger_id or legacy_trigger_id,
+            # never let a fallback masquerade as sourced provenance
+            "source_trigger_id_synthesized": not real_trigger_id,
+            "source_trigger_id_legacy": legacy_trigger_id,
+            "source_trigger_ids": list(provenance.get("trigger_ids") or []),
+            "source_provenance": provenance,
             "symbol": candidate.symbol.upper(),
             "side": candidate.side.upper(),
             "setup_family": candidate.setup_family,
@@ -281,6 +394,17 @@ class GreatnessBoard:
                 else {}
             ),
         }
+
+    @staticmethod
+    def _step_trigger(candidate: DevelopmentCandidate, step_label: str) -> dict:
+        """Provenance of the step a transition belongs to (empty when none)."""
+        label = str(step_label or "")
+        if not label:
+            return {}
+        for step in candidate.plan.steps:
+            if step.label == label:
+                return dict(step.provenance or {})
+        return {}
 
     def _audit_row(
         self,
@@ -303,6 +427,7 @@ class GreatnessBoard:
                 "ts": bar.ts.isoformat(timespec="seconds") if bar is not None else evaluated_at.isoformat(timespec="seconds"),
                 "event": str(event),
                 "step": "",
+                "step_trigger": {},
                 "price": bar.close if bar is not None else None,
                 "attempt": candidate.attempts,
                 "stage": candidate.stage.value,
@@ -333,6 +458,7 @@ class GreatnessBoard:
                     "ts": event.ts.isoformat(timespec="seconds"),
                     "event": event.event.value,
                     "step": event.step_label,
+                    "step_trigger": self._step_trigger(candidate, event.step_label),
                     "price": event.price,
                     "attempt": event.attempt,
                     "stage": event.stage.value,
@@ -369,7 +495,7 @@ class GreatnessBoard:
             payload = json.loads(first) if first else {}
         except (OSError, json.JSONDecodeError):
             payload = {}
-        if payload.get("schema") == SHADOW_SCHEMA:
+        if payload.get("schema") in COMPATIBLE_SHADOW_SCHEMAS:
             return
         stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
         archive = self.events_path.with_name(
@@ -398,10 +524,10 @@ class GreatnessBoard:
                 "last_bar_ts": self.last_bar_ts,
             }
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=str(self.store_path.parent), suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle)
-            os.replace(tmp, self.store_path)
+            # Shared primitive: same-dir temp + os.replace with guaranteed temp
+            # cleanup on every failure path (the hand-rolled mkstemp copy this
+            # replaces leaked a .tmp file whenever the write raised).
+            atomic_write_json(self.store_path, payload, indent=None)
         except OSError:
             logging.warning("Greatness store save failed.", exc_info=True)
 
