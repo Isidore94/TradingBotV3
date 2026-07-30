@@ -13,20 +13,22 @@ outranks this file.
 
 - Phase: **0 — Capture readiness and baseline** (code work complete; the
   live-session tasks below are still open)
-- Branch: `main`; audit base `41eabc4`
-- Date: 2026-07-28
-- Test baseline: **1209 passed, 5 subtests passed**
-  (`.venv\Scripts\python.exe -m pytest tests/ -q`)
+- Branch: `milestone-1-observability`, cut from `main` at `ed89265`; Phase 0
+  audit base `41eabc4`
+- Date: 2026-07-30
+- Test baseline: **1249 passed, 5 subtests passed**
+  (`.venv\Scripts\python.exe -m pytest tests/ -q`, ~38s)
 - Smoke: **7/7** (`.venv\Scripts\python.exe scripts/smoke_check.py`)
 - Learning evidence status: **Exploratory / Non-Promotable**. The promotion
   clock has not started and cannot start before the Phase 3 identity/parity
   exit gate.
 
-The suite baseline moved from 1189 passed + 1 failed to 1209 green: the
-`_sanitize_existing_avwap_signal_rows` side normalizer assumed `Series.map`
-preserved the `Side` enum, which arrow-backed string columns do not. It now
-maps straight to the string value. No scoring, detector, or alert behavior
-changed.
+Baseline history: at the 2026-07-28 Phase 0 stamp the suite moved from 1189
+passed + 1 failed to 1209 green — the `_sanitize_existing_avwap_signal_rows`
+side normalizer assumed `Series.map` preserved the `Side` enum, which
+arrow-backed string columns do not, and it now maps straight to the string
+value. No scoring, detector, or alert behavior changed. The count above (1249)
+is the current re-verified baseline, not that figure.
 
 ## Phase 0 — what landed
 

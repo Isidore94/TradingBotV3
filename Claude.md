@@ -21,16 +21,18 @@
 
 ## Branches
 
-Linear history: `main` → `Sol` → `Sol2` → `Sol3` (each contains the previous).
-Work on `Sol3` or branch from it. Merge to `main` only after a live-session
-validation day passes (plan.md sec 6). The user runs the app from this repo —
-never leave the working tree broken.
+`Sol`, `Sol2` and `Sol3` no longer exist as branches — all of that work is
+merged into `main` (verified: plan checkpoints `20cefb3` and `3443c69` are both
+ancestors of `main`). `main` is the trunk: branch from it for a milestone or a
+packet, then merge back after a live-session validation day passes (plan.md
+sec 6). The user runs the app from this repo — never leave the working tree
+broken.
 
 ## Verification gates (before every commit)
 
 - `.venv\Scripts\python.exe -m pytest tests/ -q` — full suite green
-  (baseline **802 passed**, ~25s). Check pytest's own exit code, not a piped
-  tail's.
+  (baseline **1249 passed, 5 subtests passed**, ~38s). Check pytest's own exit
+  code, not a piped tail's.
 - `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7 deterministic
   checks, no network needed.
 - Commit small and green; push to origin after each commit.
@@ -50,7 +52,7 @@ never leave the working tree broken.
 - Completed bars only for state transitions; a forming bar is preview.
 - Decision-support only: never add order execution.
 
-## Key modules added on Sol/Sol2/Sol3 (all pure + tested)
+## Key modules from the Sol line, now on `main` (all pure + tested)
 
 - `scripts/market_state.py` — SPY pullback state machine (side-symmetric).
 - `scripts/relative_strength.py` — aligned multi-window RS ranking engine.
@@ -60,6 +62,12 @@ never leave the working tree broken.
 - `scripts/job_ledger.py`, `scripts/writer_lease.py`,
   `scripts/diagnostics/` — Phase 2 runtime reliability + run manifests.
 - `scripts/smoke_check.py` — deterministic smoke command.
+- `scripts/operations_audit.py` — composed runtime + capture-readiness audit
+  (central to plan.md Section 12 items 2 and 5).
+- `scripts/review_capture_audit.py` — decision-log / scoreboard / policy-gate
+  capture readiness, also rendered in System Health.
+- `scripts/ui/panels/health_panel.py` — the System Health surface that renders
+  both audits.
 
 ## Runtime facts
 
@@ -70,5 +78,5 @@ never leave the working tree broken.
   `C:\Users\aaron\AppData\Local\TradingBotV3\diagnostics\`): `run_manifests\`,
   `spy_state_shadow.jsonl`, `greatness_shadow.jsonl`, `job_ledger.jsonl`,
   `heartbeat.json`.
-- First live session on Sol3: run plan.md sec 6 checklist; validate logging
+- First live session on any new build: run plan.md sec 6 checklist; validate logging
   and lifecycle behavior first; do NOT tune thresholds from one session.

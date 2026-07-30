@@ -7,12 +7,12 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch: `codex/aggressive-auto-watchlists`, based on the verified Sol3
-  integration and GUI product work.
-- Integration base: `3443c69`.
-- Date: 2026-07-15
-- Test baseline: **928 passed, 5 subtests passed**
-  (`.venv\Scripts\python.exe -m pytest tests -q`)
+- Branch: `milestone-1-observability`, cut from `main` at `ed89265`. The Sol
+  integration and GUI product work it was based on is now merged into `main`.
+- Integration base: `3443c69` (an ancestor of `main`).
+- Date: 2026-07-30
+- Test baseline: **1249 passed, 5 subtests passed**
+  (`.venv\Scripts\python.exe -m pytest tests/ -q`, ~38s)
 - Smoke: **7/7** (`scripts/smoke_check.py`)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
   scheduled scans, durable run IDs/PIDs, accurate heartbeat state, M5 completed-
@@ -29,8 +29,12 @@ stamp; it must not duplicate the roadmap.
   dual-write in shadow; text watchlists remain authoritative.
 - Aggressive auto-populate: completed-M5 repeated HOD/LOD pressure and
   legacy-SPY-pullback extreme holders now feed regime-inverted long/short
-  candidates with versioned golden coverage, while scheduled rotation and
-  triple-VWAP invalidation remain unchanged.
+  candidates, while scheduled rotation and triple-VWAP invalidation remain
+  unchanged. Golden coverage here is narrow, not general: exactly one pure
+  function, `autopilot_core.build_aggressive_regime_candidates`, is pinned to
+  `tests/fixtures/aggressive_watchlist_candidates_v1.json` (consumed by
+  `tests/test_auto_populate_watchlists.py`). The surrounding writer, rotation,
+  and invalidation paths have no golden fixture.
 - Technical Integrity v1: a research-only completed-M5 level-respect score now
   publishes market/sector/industry/stock hierarchy plus bullish/bearish break
   pressure. Auto regime and Technicals are visible on every GUI page; hover
@@ -42,10 +46,20 @@ stamp; it must not duplicate the roadmap.
   freshness, invalid-side history sanitation, shared output-computation reuse,
   atomic signal/feature/watchlist writes, and detailed output timings landed.
 - Away reliability: report + metadata publish transaction, hash/readback
-  audit, honest GUI status, phone-sized scan/tracker health, fail-closed writer
-  ownership, hour-aligned 07:00-through-close reports, persisted Away profile,
-  simulated expiry/clock-skew/sleep-wake/failure tests, and swing-first
-  candidate ordering with honest empty/unscanned states landed.
+  audit, honest GUI status, phone-sized scan/tracker health, hour-aligned
+  07:00-through-close reports, persisted Away profile, simulated
+  expiry/clock-skew/sleep-wake/failure tests, and swing-first candidate
+  ordering with honest empty/unscanned states landed.
+- Writer ownership is fail-closed **only at the publisher boundary**
+  (`scripts/autopilot_core.py:2332-2341`): `LeaseUnavailable` or any other
+  exception out of `acquire()` aborts the Away publish. The lease module itself
+  fails **open**. `scripts/writer_lease.py:37-41` swallows `OSError`,
+  `JSONDecodeError` and `ValueError` and returns `None`, so a corrupt or
+  half-synced lease file reads as "no lease" and `acquire()` overwrites it; the
+  guard at `:74-85` also requires a truthy `holder` and a parseable
+  `expires_at`, so a blank holder or a malformed timestamp (`_parse_ts` returns
+  `None`) skips the raise and lets the caller take the lease. Module-level
+  fail-closed is outstanding.
 - GUI trust foundation: the Industry Board now has single-flight startup/hourly
   refresh, atomic last-good files, snapshot freshness/Health evidence, and
   numeric strongest/weakest sorting. Master focus duplicates now merge by
