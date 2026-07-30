@@ -290,15 +290,46 @@ The next risk is no longer lack of code. It is confusing green tests or the firs
 
 #### The writer lease still needs adversarial validation
 
-The lease substantially reduces accidental collisions, but a Drive-synchronized file is not automatically a distributed lock:
+A Drive-synchronized file is not automatically a distributed lock. Writer
+coordination is therefore layered, and only the first layer is an authority:
 
-- acquisition currently reads state and then atomically replaces the lease file;
-- two machines can race before synchronization converges;
-- unexpected lease errors now fail closed; the live Drive behavior still needs
-  the two-machine validation below;
-- clock skew, sleep/wake, stale files, and delayed sync can change takeover behavior.
+- **Designated writer (authority).** An explicitly configured writer machine,
+  resolved from *machine-local* settings — never from a synchronized role file,
+  which would suffer the same convergence problem it is meant to solve. A
+  non-designated machine is a read-only secondary. An **unconfigured machine
+  fails closed**: it touches no report, metadata, or lease, and there is no
+  "first machine wins" fallback.
+- **Machine-local exclusion.** A Drive lease cannot arbitrate two processes on
+  the designated host, which see identical bytes with zero sync delay. A local
+  kernel-owned lock (named mutex plus exclusive byte-range lock) is held across
+  the whole publication transaction; both release on a hard kill rather than
+  wedging the writer.
+- **Fenced lease (defense in depth).** `FileNotFoundError` alone means "no
+  lease"; every other read/parse/validation failure blocks acquisition unless a
+  deliberately configured, time-bounded emergency override is active. Identity
+  is hostname + PID + per-process instance UUID, so hostname is never ownership
+  and an old-format lease without an instance ID is never "ours". A monotonic
+  fencing generation is enforced on the write path, and ownership is re-read
+  from disk immediately before each shared replacement.
 
-Until the two-machine drills in Section 6 pass, describe this as cross-machine writer protection, not a proof that clobbering is impossible.
+Module-level fail-closed behavior is verified by an independent adversarial
+suite (scenarios A–U) using real truncated, malformed, wrong-schema and
+unreadable lease files rather than mocked failures.
+
+Limits that remain, and are not solvable at this layer:
+
+- two machines can still each read "free" before synchronization converges;
+- a clock fast by more than the remaining TTL plus the supported grace can still
+  take over — from a lease file, "my clock is fast" and "this lease is old" are
+  the same observation;
+- a sub-millisecond window remains between the final ownership check and the
+  replacement, irreducible without a real compare-and-swap;
+- no renewal loop runs; the lease covers the publication transaction, and the
+  designated-writer configuration is the standing authority between publishes.
+
+All of the above is single-machine evidence. Until the two-machine drills in
+Section 6 pass, describe this as cross-machine writer protection, not a proof
+that clobbering is impossible.
 
 #### Shadow coverage is inherited from the champion path
 

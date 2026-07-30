@@ -11,9 +11,9 @@ stamp; it must not duplicate the roadmap.
   integration and GUI product work it was based on is now merged into `main`.
 - Integration base: `3443c69` (an ancestor of `main`).
 - Date: 2026-07-30
-- Test baseline: **1249 passed, 5 subtests passed**
-  (`.venv\Scripts\python.exe -m pytest tests/ -q`, ~38s)
-- Smoke: **7/7** (`scripts/smoke_check.py`)
+- Test baseline: **1580 passed, 5 subtests passed**
+  (`.venv\Scripts\python.exe -m pytest tests/ -q`, ~44s, pytest exit code 0)
+- Smoke: **7/7** (`scripts/smoke_check.py`, exit code 0)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
   scheduled scans, durable run IDs/PIDs, accurate heartbeat state, M5 completed-
   candle processing, SPY shadow coverage, Greatness shadow coverage, and the
@@ -24,6 +24,54 @@ stamp; it must not duplicate the roadmap.
   empty tag lists. The expanded eight-check audit and transactional Away publication
   still need a restarted-app/live verification. Physical failure-matrix and
   two-machine Drive drills remain outstanding.
+### Milestone 1 packets landed 2026-07-30 (IMPLEMENTED — none LIVE-VALIDATED)
+
+Every item below is **IMPLEMENTED + GREEN**. None is **LIVE-VALIDATED**: all
+evidence is single-machine and deterministic. The plan.md sec 6.2 physical
+drills (two-machine collision, lease expiry, clock skew, sleep/wake) and the
+sec 6.1 first-session checklist have **not** been run.
+
+- Champion invariance is now executable, not prose: a raising, poisoned, or
+  fully-enabled shadow engine leaves legacy SPY pause state and D1 trigger rows
+  byte-identical, proven behaviourally and by AST assertions. Verified to fail
+  when deliberately violated.
+- Milestone 3 fixture contract is **enforced** rather than merely declared;
+  `numeric_tolerance` and `raw_input_sha256` are now actually applied.
+- Shared diagnostics I/O (`scripts/diagnostics/artifact_io.py`) with guaranteed
+  temp cleanup, replacing hand-rolled `mkstemp` copies that leaked temp files.
+- SPY shadow: `last_complete_bar_at` can no longer point at a bar that never
+  completed; stale-vs-incomplete are separately counted; the cross-session
+  dedupe latch no longer swallows a new session's first row. Episodes are
+  emitted as replayable rows. **Absence of an episode is still not evidence of
+  no episode** — the hook fires per bounce-scan cycle, not per completed bar.
+- Greatness shadow: `source_trigger_id` carries real D1 provenance instead of a
+  fabricated hash, gated behind a characterization fixture proving the produced
+  candidate is byte-identical.
+- Writer coordination: designated-writer authority (machine-local), kernel-owned
+  local cross-process exclusion, and a fenced fail-closed lease. Verified by an
+  independent adversarial suite (scenarios A–U, ~140 cases) using real corrupt
+  files. **Publishing now requires a configured designated writer on each
+  machine** — `scripts/writer_role.py` switches it, and exits non-zero when the
+  machine cannot publish.
+- Health: UNKNOWN is a first-class status with precedence
+  UNHEALTHY > DEGRADED > UNKNOWN > HEALTHY; all 13 plan.md sec 6.3 dimensions
+  are emitted, with unmeasured ones reported as UNKNOWN rather than omitted, so
+  a partial payload can no longer roll up to HEALTHY.
+- The operations audit now **streams the real shadow JSONLs** instead of
+  trusting writer-maintained sidecars; a corrupt or truncated log is visible and
+  marks the evidence non-promotable.
+
+Known gaps, deliberately not claimed as done:
+
+- Provider request / cache-hit / throttling / failure counters have no capture
+  point anywhere in the repo and are an emitted **UNKNOWN**.
+- Neither shadow log has a retention policy or per-day rollup, and coverage
+  counters are still lost at session rollover — so the sec 7.2/7.3 evidence
+  floors remain **uncollectable** until that lands.
+- No lease renewal loop; clock skew beyond the supported grace, Drive sync
+  convergence, and the sub-millisecond pre-replacement window remain open and
+  are documented in plan.md sec 4 and the runbook.
+
 - Shadow engines: SPY state and Greatness both logging; neither is promoted.
 - Registry adoption: open scan, auto-populate, and near-extreme writers now
   dual-write in shadow; text watchlists remain authoritative.
