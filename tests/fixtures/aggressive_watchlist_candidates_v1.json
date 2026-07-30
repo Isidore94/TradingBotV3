@@ -1,11 +1,14 @@
 {
   "schema": "aggressive_watchlist_candidates_v1",
   "feature_version": "aggressive_extremes_v1",
+  "raw_input_keys": ["profiles"],
   "raw_input_sha256": "a9b7ed1f976f9e9c418b568c4f5a4c775558f0c121ecb03202e3be7ba883ddb4",
   "acquired_at": "2026-07-14T11:00:00-04:00",
+  "as_of": "2026-07-14T11:00:00-04:00",
   "universe_version": "synthetic_aggressive_extremes_v1",
-  "provider_assumptions": "Synthetic regular-session M5 profiles; every as_of timestamp is a completed bar end.",
+  "provider_assumptions": "Synthetic regular-session M5 profiles; every as_of timestamp is a completed bar end. The fixture-level as_of is the latest completed-bar stamp carried by the profiles themselves (STALE deliberately lags it by one hour so the data-age gate is exercised).",
   "intentional_difference": "Adds regime-side HOD/LOD grinders without PDH/PDL or 0.5-ADR qualification and adds extreme holders only during the legacy SPY pause signal.",
+  "expected_keys": ["cases"],
   "numeric_tolerance": 1e-09,
   "configuration": {
     "recent_window_bars": 6,

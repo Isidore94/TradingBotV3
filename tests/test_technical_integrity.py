@@ -1,9 +1,10 @@
-import hashlib
 import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from conftest import load_fixture_contract
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -12,11 +13,12 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "technical_integrity_scoring_v1.json"
+FIXTURE_NAME = "technical_integrity_scoring_v1"
 
 
 def _fixture():
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    """The contract-validated fixture (hash, as_of and tolerance enforced)."""
+    return load_fixture_contract(FIXTURE_NAME)
 
 
 def _entity(snapshot, entity_type, key):
@@ -30,11 +32,12 @@ def _entity(snapshot, entity_type, key):
 def test_technical_integrity_golden_hierarchy():
     from technical_integrity import TechnicalIntegrityConfig, aggregate_technical_integrity
 
+    # The loader has already re-verified raw_input_sha256 over fixture["events"]
+    # and the rest of the Milestone 3 contract; comparisons below run through
+    # the fixture's own declared numeric_tolerance.
     fixture = _fixture()
-    event_payload = json.dumps(fixture["events"], sort_keys=True, separators=(",", ":"))
-    assert hashlib.sha256(event_payload.encode()).hexdigest() == fixture["raw_input_sha256"]
     config = TechnicalIntegrityConfig()
-    assert config.to_dict() == fixture["configuration"]
+    fixture.assert_matches(config.to_dict(), fixture["configuration"], "configuration")
     snapshot = aggregate_technical_integrity(
         fixture["events"],
         as_of=fixture["as_of"],
@@ -44,7 +47,7 @@ def test_technical_integrity_golden_hierarchy():
     expected = fixture["expected"]
     market = snapshot["market"]
     for key, value in expected["market"].items():
-        assert market[key] == value
+        fixture.assert_matches(market[key], value, f"market.{key}")
     for entity_type, key, expected_key in (
         ("sector", "technology", "technology"),
         ("industry", "memory", "memory"),
@@ -53,7 +56,7 @@ def test_technical_integrity_golden_hierarchy():
     ):
         row = _entity(snapshot, entity_type, key)
         for field, value in expected[expected_key].items():
-            assert row[field] == value
+            fixture.assert_matches(row[field], value, f"{entity_type}.{key}.{field}")
     # Entities without enough decisive evidence report no score, so they are
     # not rankable - the boards stay empty rather than ranking noise.
     assert len(snapshot["weakest_industries"]) == expected["scored_industry_count"]
@@ -76,9 +79,17 @@ def test_technical_integrity_golden_hierarchy():
     ):
         row = _entity(math_only, entity_type, key)
         for field, value in expected_math[expected_key].items():
-            assert row[field] == value
-    assert math_only["weakest_industries"][0]["entity_key"] == expected_math["weakest_industry"]
-    assert math_only["strongest_industries"][0]["entity_key"] == expected_math["strongest_industry"]
+            fixture.assert_matches(row[field], value, f"math_only.{entity_type}.{key}.{field}")
+    fixture.assert_matches(
+        math_only["weakest_industries"][0]["entity_key"],
+        expected_math["weakest_industry"],
+        "math_only.weakest_industry",
+    )
+    fixture.assert_matches(
+        math_only["strongest_industries"][0]["entity_key"],
+        expected_math["strongest_industry"],
+        "math_only.strongest_industry",
+    )
 
 
 def test_chop_is_counted_but_never_scored():

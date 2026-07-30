@@ -1,11 +1,13 @@
 {
   "schema": "technical_integrity_scoring_fixture_v1",
   "feature_version": "technical_integrity_v1",
+  "raw_input_keys": ["events"],
   "raw_input_sha256": "3f80553dfc02310e8088709d78b6183043f1ddb83de6d827ddc7b2195a929e12",
   "acquired_at": "2026-07-15T11:30:00-04:00",
   "universe_version": "synthetic_technical_integrity_v1",
   "provider_assumptions": "Synthetic regular-session completed-M5 level resolutions with stable stock/industry/sector classifications.",
   "intentional_difference": "Rescored 2026-07-22. Two deliberate changes: (1) 'chop' resolutions are no longer evidence - their value equalled the prior, so they added denominator weight and zero information, which flattened every entity toward the middle (measured: cross-symbol spread 0.639 vs a 0.657 permutation null, split-half r=0.09); (2) the 1-10 map is centred on the measured base respect rate 0.736 instead of 0.5, so 5.5 now means typical respect. This fixture carries no chop events, so the value shifts here come purely from the recentring: the same breaking tape that read 'MIXED 5.7' now correctly reads 'WEAK 4.5'. Entities below min_decisive_weight_for_score report a null score instead of the prior wearing a decimal point.",
+  "expected_keys": ["expected", "expected_math_only"],
   "numeric_tolerance": 1e-09,
   "as_of": "2026-07-15T11:30:00-04:00",
   "session_date": "2026-07-15",

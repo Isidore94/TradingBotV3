@@ -1,10 +1,14 @@
-"""Golden behavior for the MASTER_AVWAP_D1_TIER_FLIP pure module.
+"""Hand-written behavior tests for the MASTER_AVWAP_D1_TIER_FLIP pure module.
 
-Locks the feature contract before any live wiring (plan.md Milestone 3):
-transition-only arming, the small-move ATR radius with its fallback chain,
-still-armed gating, strict close-through detection (wick touches and
-overnight gaps never fire), the side-aware bounce_type map, and the exact
-alert message shape.
+These are NOT golden-fixture tests: there is no recorded fixture and no
+Milestone 3 fixture contract behind them.  Every entry is built by the
+make_entry helper below and every expectation was written by hand from the
+intended rules.
+
+Locks the feature's behavior before any live wiring: transition-only arming,
+the small-move ATR radius with its fallback chain, still-armed gating, strict
+close-through detection (wick touches and overnight gaps never fire), the
+side-aware bounce_type map, and the exact alert message shape.
 """
 
 import sys

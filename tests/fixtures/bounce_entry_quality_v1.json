@@ -1,4 +1,15 @@
 {
+  "schema": "bounce_entry_quality_fixture_v1",
+  "feature_version": "bounce_learning_state_v2",
+  "raw_input_keys": ["perf_rows"],
+  "raw_input_sha256": "3195ba50d3238c2b51167809d1346bfabbbdacb3df46aab723d22217f6de5b2d",
+  "acquired_at": "2026-07-15T16:00:00-04:00",
+  "as_of": "2026-07-15T16:00:00-04:00",
+  "universe_version": "tracker_learning_state_2026-07-15",
+  "provider_assumptions": "Segment stats replayed from the BounceBot outcome tracker's post-close learning state (schema_version 2) for the 2026-07-15 regular session; no provider or network call is made. The tracker records session dates only, so acquired_at/as_of are pinned to that session's 16:00 ET close rather than a measured acquisition stamp.",
+  "expected_keys": ["expected_segments", "scenarios"],
+  "numeric_tolerance": 1e-09,
+  "intentional_difference": "2026-07-17: the scenario tiers were re-frozen for the production_r blend bars (S .23 / A .15 / B .05 / C -.01). The per-segment entry_r and ambiguity values are characterization values from the 2026-07-16 tier redesign and were not re-derived.",
   "description": "Golden results for entry-quality tier scoring (2026-07-16). Segment inputs are real measured numbers from the live learning state of 2026-07-15. Guards: (1) entry_r = ambiguity-weighted blend of close-R and 1R-harvest expectancy, (2) mutes are bounce_type-only and need n>=30 across >=10 sessions, (3) composite uses sample-shrunk entry_r with context at reduced weight, (4) tier bars S/A/B/C = 0.35/0.20/0.02/-0.12, calibrated on the replayed historical distribution (S: 93% 1R-hit, A: +1.19R avg, B: flat, D: -0.84R); PROVEN S-floor stays on raw avg close-R >= 0.90.",
   "perf_rows": [
     {

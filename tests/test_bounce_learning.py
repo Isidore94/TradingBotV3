@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from conftest import load_fixture_contract
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -266,28 +268,29 @@ def test_golden_fixture_entry_quality_scoring():
     """Golden results (plan.md Milestone 3 discipline): real measured segments
     from the 2026-07-15 learning state, frozen through the entry-quality
     scoring path. Any drift in entry_r, mutes, or scenario tiers must be an
-    intentional, fixture-updating change."""
-    import json
+    intentional, fixture-updating change.
 
-    fixture_path = ROOT_DIR / "tests" / "fixtures" / "bounce_entry_quality_v1.json"
-    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    The fixture is loaded through the Milestone 3 contract loader, so its
+    raw_input_sha256 over perf_rows, its as_of/acquisition stamps and its
+    declared numeric_tolerance are enforced rather than decorative."""
+    fixture = load_fixture_contract("bounce_entry_quality_v1")
 
     state = learning.build_learning_state(fixture["perf_rows"])
     for dimension, expected_entries in fixture["expected_segments"].items():
         for key, expected in expected_entries.items():
             entry = state["segments"][dimension][key]
-            assert entry["entry_r"] == expected["entry_r"], (dimension, key)
-            assert entry["ambiguity"] == expected["ambiguity"], (dimension, key)
-            assert entry["muted"] == expected["muted"], (dimension, key)
-            assert entry["proven"] == expected["proven"], (dimension, key)
+            for field in ("entry_r", "ambiguity", "muted", "proven"):
+                fixture.assert_matches(
+                    entry[field], expected[field], f"{dimension}.{key}.{field}"
+                )
 
     for scenario in fixture["scenarios"]:
         verdict = learning.evaluate_bounce_quality(state, **scenario["kwargs"])
         expected = scenario["expected"]
-        assert verdict["tier"] == expected["tier"], scenario["name"]
-        assert verdict["muted"] == expected["muted"], scenario["name"]
-        assert verdict["proven"] == expected["proven"], scenario["name"]
-        assert verdict["composite_r"] == expected["composite_r"], scenario["name"]
+        for field in ("tier", "muted", "proven", "composite_r"):
+            fixture.assert_matches(
+                verdict[field], expected[field], f"{scenario['name']}.{field}"
+            )
 
 
 def test_stale_v1_state_files_follow_the_new_mute_policy():

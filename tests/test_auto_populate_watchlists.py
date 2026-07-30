@@ -1,11 +1,11 @@
 """Tests for the universe -> longs.txt/shorts.txt auto-populate engine."""
 
-import hashlib
-import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from conftest import load_fixture_contract
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -15,7 +15,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from watchlist_utils import read_watchlist_symbols  # noqa: E402
 
 
-AGGRESSIVE_FIXTURE = Path(__file__).parent / "fixtures" / "aggressive_watchlist_candidates_v1.json"
+AGGRESSIVE_FIXTURE_NAME = "aggressive_watchlist_candidates_v1"
 
 
 def test_auto_populate_caps_are_a_flat_ceiling():
@@ -190,18 +190,22 @@ def test_aggressive_regime_candidate_golden_fixture():
         build_aggressive_regime_candidates,
     )
 
-    fixture = json.loads(AGGRESSIVE_FIXTURE.read_text(encoding="utf-8"))
-    assert fixture["schema"] == "aggressive_watchlist_candidates_v1"
-    profile_payload = json.dumps(fixture["profiles"], sort_keys=True, separators=(",", ":"))
-    assert hashlib.sha256(profile_payload.encode()).hexdigest() == fixture["raw_input_sha256"]
-    assert fixture["configuration"] == {
-        "recent_window_bars": AGGRESSIVE_EXTREME_WINDOW_BARS,
-        "minimum_new_extremes": AGGRESSIVE_MIN_NEW_EXTREMES,
-        "minimum_break_pct": AGGRESSIVE_MIN_EXTREME_BREAK_PCT,
-        "near_extreme_pct": AGGRESSIVE_NEAR_EXTREME_PCT,
-        "maximum_data_age_minutes": AGGRESSIVE_MAX_DATA_AGE_MINUTES,
-        "minimum_spy_pullback_move_pct": AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT,
-    }
+    # Loading validates the Milestone 3 contract and re-verifies
+    # raw_input_sha256 over fixture["profiles"].
+    fixture = load_fixture_contract(AGGRESSIVE_FIXTURE_NAME)
+    assert fixture.schema == "aggressive_watchlist_candidates_v1"
+    fixture.assert_matches(
+        {
+            "recent_window_bars": AGGRESSIVE_EXTREME_WINDOW_BARS,
+            "minimum_new_extremes": AGGRESSIVE_MIN_NEW_EXTREMES,
+            "minimum_break_pct": AGGRESSIVE_MIN_EXTREME_BREAK_PCT,
+            "near_extreme_pct": AGGRESSIVE_NEAR_EXTREME_PCT,
+            "maximum_data_age_minutes": AGGRESSIVE_MAX_DATA_AGE_MINUTES,
+            "minimum_spy_pullback_move_pct": AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT,
+        },
+        fixture["configuration"],
+        "configuration",
+    )
     for case in fixture["cases"]:
         result = build_aggressive_regime_candidates(
             fixture["profiles"],
@@ -212,7 +216,7 @@ def test_aggressive_regime_candidate_golden_fixture():
             side: [[row["symbol"], row["source_rule"]] for row in result[side]]
             for side in ("longs", "shorts")
         }
-        assert stable == case["expected"], case["name"]
+        fixture.assert_matches(stable, case["expected"], case["name"])
 
 
 def test_intraday_extreme_metrics_exclude_forming_bar():

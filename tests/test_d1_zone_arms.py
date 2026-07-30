@@ -1,8 +1,13 @@
-"""Fixture tests for the pure D1 band-zone arm builder.
+"""Hand-written behavior tests for the pure D1 band-zone arm builder.
 
-Golden-fixture coverage (plan.md Milestone 3) for build_d1_zone_arms before it is
-wired into the live M5 alert path: every zone on both sides, the prior-1st-dev
-condition, the zone-3 sustained gate, and the still-armed direction gating.
+These are NOT golden-fixture tests: there is no recorded fixture and no
+Milestone 3 fixture contract behind them.  Every input is the synthetic LADDER
+literal defined below plus per-test bars, and every expectation was written by
+hand from the intended rules - not captured from a run.
+
+Covers build_d1_zone_arms before it is wired into the live M5 alert path: every
+zone on both sides, the prior-1st-dev condition, the zone-3 sustained gate, and
+the still-armed direction gating.
 """
 
 import sys
