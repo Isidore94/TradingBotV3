@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import sys
 
 import threading
@@ -462,6 +463,38 @@ def _universe_status_text() -> str:
     return f"Universe: {state} ({built_at:%b %d %H:%M})"
 
 
+def install_gui_thread_gc(app: QApplication, interval_ms: int = 2_000) -> QTimer:
+    """Run all cyclic garbage collection on the GUI thread.
+
+    Every GUI session on 2026-07-29 died with an access violation inside
+    python314.dll while ``Garbage-collecting`` on a worker thread
+    (gui_crash.log, fault offset 0xc06b7). Automatic GC runs on whichever
+    thread happens to allocate; when a collection on a scanner or wrap-up
+    thread frees cycles that hold PySide6 wrappers, the QObject destructors
+    run off the GUI thread — undefined behavior in Qt that corrupts the
+    heap. Disabling automatic collection and sweeping from a main-thread
+    timer keeps every Qt destructor on the owning thread. Reference
+    counting still frees non-cyclic garbage immediately on any thread.
+
+    Young objects are swept every tick; the full heap every 30th tick —
+    a full collection of this app's pandas-heavy heap is too slow to run
+    every 2 seconds without stuttering the UI.
+    """
+    gc.disable()
+    timer = QTimer(app)
+    timer.setInterval(interval_ms)
+    tick = 0
+
+    def _sweep() -> None:
+        nonlocal tick
+        tick += 1
+        gc.collect(2 if tick % 30 == 0 else 0)
+
+    timer.timeout.connect(_sweep)
+    timer.start()
+    return timer
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Launch the PySide6 TradingBotV3 UI.")
     parser.add_argument(
@@ -490,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("TradingBotV3")
     app.setOrganizationName("TradingBotV3")
+    install_gui_thread_gc(app)
     apply_theme(app, state.theme_name, state.compact_density)
 
     window = MainWindow(state)
