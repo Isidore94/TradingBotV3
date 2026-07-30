@@ -92,6 +92,21 @@ COMPATIBLE_SHADOW_SCHEMAS = frozenset(
     {"spy_state_shadow_v2", "spy_state_shadow_v3", SHADOW_SCHEMA, EPISODE_SCHEMA}
 )
 STATUS_SCHEMA = "spy_state_shadow_status_v3"
+#: Persisted into the status sidecar when a session/configuration rollover
+#: fails, through a path that does NOT itself require the failed rollover.
+ROLLOVER_FAILURE_SCHEMA = "spy_rollover_failure_v1"
+
+
+class ShadowRolloverError(RuntimeError):
+    """A session/configuration rollover (finalize + rotate) failed.
+
+    Raised by :func:`_activate_coverage_scope` AFTER the failure has been
+    persisted loudly.  Callers must treat it as "recording is paused for this
+    call": no new-scope row may be appended to the prior scope's log, the prior
+    coverage bytes stay untouched, and the next recording call retries.  It
+    must never be answered by re-running the same activation - that is the
+    recursion this type exists to break.
+    """
 
 # Stamped on every row: this hook runs per bounce-scan cycle, not per completed
 # bar (see the module docstring). Anything reasoning about recall must read it.
@@ -442,6 +457,9 @@ def _load_coverage(session_date: str, config_hash: str) -> dict:
         coverage.update(loaded)
         coverage["schema"] = STATUS_SCHEMA
         coverage["engine_version"] = ENGINE_VERSION
+    # Failure telemetry is cleared by recovery, never inherited: a coverage
+    # scope that loads successfully is by definition past the failed rollover.
+    coverage.pop("rollover_failure", None)
     return coverage
 
 
@@ -454,8 +472,50 @@ def _coverage_from_disk_any_scope() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _persist_rollover_failure(
+    current: dict,
+    session_date: str,
+    config_hash: str,
+    exc: Exception,
+) -> None:
+    """Record a rollover failure WITHOUT going anywhere near the failed path.
+
+    Read-modify-write of the status sidecar: every existing coverage counter is
+    preserved byte-for-byte in value terms, and one ``rollover_failure`` block
+    is added so the operations audit can distinguish "evidence recording is
+    stuck" from "no shadow event occurred".  Never raises.
+    """
+    try:
+        payload = _coverage_from_disk_any_scope()
+        payload["rollover_failure"] = {
+            "schema": ROLLOVER_FAILURE_SCHEMA,
+            "failed_at": normalize_market_local_datetime().isoformat(timespec="seconds"),
+            "from_scope": {
+                "session_date": str(current.get("session_date") or ""),
+                "config_hash": str(current.get("config_hash") or ""),
+            },
+            "to_scope": {"session_date": session_date, "config_hash": config_hash},
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        }
+        atomic_write_json(shadow_status_path(), payload, fsync=False)
+    except Exception:
+        logging.warning(
+            "SPY shadow rollover-failure telemetry could not be persisted.",
+            exc_info=True,
+        )
+
+
 def _activate_coverage_scope(evaluated_at: datetime, config_hash: str) -> None:
-    """Finalize the previous scope before any new-scope raw row is appended."""
+    """Finalize the previous scope before any new-scope raw row is appended.
+
+    On finalization failure this raises :class:`ShadowRolloverError` AFTER
+    persisting loud telemetry.  The in-memory coverage and the active log are
+    left exactly as they were: no rotation happened for the failing case
+    (``finalize_session`` scans the active log before ``os.replace``), no
+    new-scope row has been appended yet, and the next recording call retries
+    the same activation from scratch.
+    """
 
     global _coverage
     session_date = evaluated_at.date().isoformat()
@@ -463,6 +523,9 @@ def _activate_coverage_scope(evaluated_at: datetime, config_hash: str) -> None:
         current = dict(_coverage)
     if not current:
         current = _coverage_from_disk_any_scope()
+    # Operational telemetry, not session evidence: it must never leak into a
+    # finalized summary's coverage block.
+    current.pop("rollover_failure", None)
     current_session = str(current.get("session_date") or "")
     current_config = str(current.get("config_hash") or "")
     if current_session == session_date and current_config == config_hash:
@@ -476,17 +539,33 @@ def _activate_coverage_scope(evaluated_at: datetime, config_hash: str) -> None:
             if current_session != session_date
             else "configuration_changed"
         )
-        finalize_session(
-            engine=SPY_ENGINE,
-            log_path=shadow_log_path(),
-            coverage=current,
-            finalized_at=evaluated_at,
-            reason=reason,
-            engine_version=str(current.get("engine_version") or ENGINE_VERSION),
-            machine=str(current.get("machine") or socket.gethostname()),
-            timezone=str(current.get("timezone") or get_market_local_timezone()[1]),
-            configuration=current_config or config_hash,
-        )
+        try:
+            finalize_session(
+                engine=SPY_ENGINE,
+                log_path=shadow_log_path(),
+                coverage=current,
+                finalized_at=evaluated_at,
+                reason=reason,
+                engine_version=str(current.get("engine_version") or ENGINE_VERSION),
+                machine=str(current.get("machine") or socket.gethostname()),
+                timezone=str(current.get("timezone") or get_market_local_timezone()[1]),
+                configuration=current_config or config_hash,
+            )
+        except Exception as exc:
+            _persist_rollover_failure(current, session_date, config_hash, exc)
+            logging.error(
+                "SPY shadow session rollover FAILED (%s -> %s): shadow evidence "
+                "recording is paused for this call and will retry on the next "
+                "one. The prior session's log and counters are preserved. "
+                "Health reports this as UNHEALTHY / not promotable.",
+                current_session,
+                session_date,
+                exc_info=True,
+            )
+            raise ShadowRolloverError(
+                f"rollover {current_session} -> {session_date} failed: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
     with _lock:
         _coverage = _load_coverage(session_date, config_hash)
 
@@ -503,7 +582,15 @@ def _record_coverage(
 ) -> None:
     global _coverage
     session_date = evaluated_at.date().isoformat()
-    _activate_coverage_scope(evaluated_at, config_hash)
+    try:
+        _activate_coverage_scope(evaluated_at, config_hash)
+    except ShadowRolloverError:
+        # The activation itself already persisted loud failure telemetry and
+        # logged at ERROR.  Re-raising here would recurse the same failed
+        # finalize through the caller's error path, and recording an error
+        # counter would require exactly the scope switch that just failed -
+        # so this call records nothing and the next one retries.
+        return
     with _lock:
         _coverage["evaluations"] = int(_coverage.get("evaluations", 0)) + 1
         _coverage["last_evaluation_at"] = evaluated_at.isoformat(timespec="seconds")
@@ -915,6 +1002,14 @@ def record_spy_shadow(
             episode_rows_written=len(pending_episodes),
         )
         return row
+    except ShadowRolloverError:
+        # One finalize attempt per recording call, made at the top of the try.
+        # Its failure is already persisted (rollover_failure block) and logged
+        # at ERROR by the activation; going through _record_coverage here would
+        # re-run the identical failed finalize - the recursion that used to
+        # freeze SPY shadow recording silently.  The champion caller is
+        # unaffected either way.
+        return None
     except Exception as exc:
         try:
             _record_coverage(

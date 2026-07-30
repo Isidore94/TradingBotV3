@@ -362,3 +362,111 @@ def test_a_failed_append_does_not_suppress_the_retry(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "append_jsonl_rows", real_append)
     assert bridge.record_spy_shadow(bars, PRIOR_CLOSE, now=now) is not None
     assert len(read_log(tmp_path)) == 1
+
+
+# ---------------------------------------------------------------------------
+# P0: a failed session rollover must be LOUD, attempted exactly once per
+# recording call, must preserve every prior byte of evidence, and must recover
+# on its own once the underlying failure is gone.  The old code re-ran the
+# failed finalize through the error-recording path (activation -> raise ->
+# except -> _record_coverage -> activation -> raise again), recorded nothing,
+# and said nothing above logging.warning: SPY shadow recording froze silently.
+# ---------------------------------------------------------------------------
+def _shift_day(bars, days=1):
+    return [
+        BotBar(
+            dt=bar.dt + timedelta(days=days),
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+        )
+        for bar in bars
+    ]
+
+
+def test_rollover_failure_is_loud_once_per_call_and_preserves_evidence(
+    tmp_path, monkeypatch, caplog
+):
+    import logging
+
+    log = tmp_path / "shadow.jsonl"
+    status = tmp_path / "status.json"
+    monkeypatch.setattr(bridge, "shadow_log_path", lambda: log)
+    monkeypatch.setattr(bridge, "shadow_status_path", lambda: status)
+    bridge.reset_shadow_dedupe()
+
+    day_one = bot_bars(RALLY)
+    now_one = day_one[-1].dt + timedelta(minutes=6)
+    assert bridge.record_spy_shadow(day_one, PRIOR_CLOSE, now=now_one) is not None
+    log_bytes_before = log.read_bytes()
+    counters_before = json.loads(status.read_text(encoding="utf-8"))
+
+    calls = {"count": 0, "fail": True}
+    real_finalize = bridge.finalize_session
+
+    def flaky_finalize(**kwargs):
+        calls["count"] += 1
+        if calls["fail"]:
+            raise TypeError("can't compare offset-naive and offset-aware datetimes")
+        return real_finalize(**kwargs)
+
+    monkeypatch.setattr(bridge, "finalize_session", flaky_finalize)
+
+    day_two = _shift_day(day_one)
+    now_two = day_two[-1].dt + timedelta(minutes=6)
+    with caplog.at_level(logging.ERROR):
+        assert bridge.record_spy_shadow(day_two, PRIOR_CLOSE, now=now_two) is None
+
+    # Exactly ONE finalize attempt for this recording call - the recovery path
+    # must never re-run the same failed finalize.
+    assert calls["count"] == 1
+    # No new-scope row was appended into the prior session's log, and the log
+    # was not rotated: evidence bytes are untouched.
+    assert log.read_bytes() == log_bytes_before
+    # The status sidecar kept every prior counter and gained ONLY the loud
+    # failure block - "recording is stuck" is a recorded fact now, not a
+    # debug-level whisper, and it is distinguishable from "no shadow event".
+    after = json.loads(status.read_text(encoding="utf-8"))
+    failure = after.pop("rollover_failure")
+    assert failure["schema"] == bridge.ROLLOVER_FAILURE_SCHEMA
+    assert failure["error_type"] == "TypeError"
+    assert failure["from_scope"]["session_date"] == "2026-07-10"
+    assert failure["to_scope"]["session_date"] == "2026-07-11"
+    assert after == counters_before
+    assert any(
+        "rollover FAILED" in record.message
+        for record in caplog.records
+        if record.levelno >= logging.ERROR
+    ), "a failed rollover must be logged at ERROR, not warning/debug"
+
+    # A second call retries once more (once per call), still touching nothing.
+    assert bridge.record_spy_shadow(day_two, PRIOR_CLOSE, now=now_two) is None
+    assert calls["count"] == 2
+    assert log.read_bytes() == log_bytes_before
+
+    # Recovery: underlying failure removed -> the next call finalizes day one,
+    # records day two, and the failure block clears itself.
+    calls["fail"] = False
+    assert bridge.record_spy_shadow(day_two, PRIOR_CLOSE, now=now_two) is not None
+    assert calls["count"] == 3
+    rows = read_log(tmp_path)
+    assert [row["session_date"] for row in rows] == ["2026-07-11"]
+    recovered = json.loads(status.read_text(encoding="utf-8"))
+    assert recovered["session_date"] == "2026-07-11"
+    assert "rollover_failure" not in recovered
+
+    from diagnostics.shadow_session_rollup import SPY_ENGINE, evidence_directories
+
+    raw_dir, summary_dir = evidence_directories(log, SPY_ENGINE)
+    archive_rows = [
+        json.loads(line)
+        for line in next(raw_dir.glob("*.jsonl")).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["session_date"] for row in archive_rows] == ["2026-07-10"]
+    summary = json.loads(next(summary_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert summary["coverage"]["session_date"] == "2026-07-10"
+    assert "rollover_failure" not in summary["coverage"], (
+        "operational failure telemetry must never leak into session evidence"
+    )

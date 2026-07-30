@@ -709,6 +709,33 @@ def test_shadow_store_needs_freshness_not_only_a_session_date_match(tmp_path):
     assert _check_status(tomorrow, "spy_shadow") == "unknown"
 
 
+def test_spy_rollover_failure_is_unhealthy_and_non_promotable(tmp_path):
+    """A persisted rollover failure is 'recording is STUCK', never mistaken for
+    'no shadow event occurred' - and it blocks promotability outright."""
+    diagnostics, registry, now = _measured_fixture(tmp_path)
+    spy = json.loads((diagnostics / "spy_state_shadow_status.json").read_text(encoding="utf-8"))
+    spy["rollover_failure"] = {
+        "schema": "spy_rollover_failure_v1",
+        "failed_at": "2026-07-13T06:31:00-07:00",
+        "from_scope": {"session_date": "2026-07-12", "config_hash": "abc"},
+        "to_scope": {"session_date": "2026-07-13", "config_hash": "abc"},
+        "error_type": "TypeError",
+        "error": "can't compare offset-naive and offset-aware datetimes",
+    }
+    _write(diagnostics / "spy_state_shadow_status.json", spy)
+
+    payload = _audit(diagnostics, registry, now)
+    check = next(item for item in payload["checks"] if item["id"] == "spy_shadow")
+    assert check["status"] == "unhealthy"
+    assert "rollover FAILED" in check["summary"]
+    assert "NOT 'no shadow event occurred'" in check["summary"]
+    assert check["details"]["promotable"] is False
+    assert any(
+        "rollover failed" in reason.lower()
+        for reason in check["details"]["non_promotable_reasons"]
+    )
+
+
 def test_away_report_with_autopilot_disabled_is_not_green_at_any_age(tmp_path):
     diagnostics, registry, now = _measured_fixture(tmp_path)
     _write(diagnostics / "autopilot_state.json", {"enabled": False, "profile": "DESK"})

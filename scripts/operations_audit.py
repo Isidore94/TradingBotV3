@@ -919,6 +919,29 @@ def _shadow_check(
         }
     )
     details.update(log_evidence)
+
+    # A persisted rollover failure means evidence recording is STUCK - the
+    # writer is alive but every call is refusing to record until the failed
+    # session rollover succeeds.  That is a different fact from "no shadow
+    # event occurred" and must never be mistaken for it (or for health).
+    rollover_failure = coverage_source.get("rollover_failure")
+    if isinstance(rollover_failure, dict) and rollover_failure:
+        status = STATUS_UNHEALTHY
+        failed_at = str(rollover_failure.get("failed_at") or "unknown time")
+        error = str(rollover_failure.get("error") or "unknown error")
+        summary = (
+            f"Shadow session rollover FAILED at {failed_at} "
+            f"({rollover_failure.get('error_type') or 'Exception'}: {error}). "
+            "Evidence recording is paused and retries each call; this is NOT "
+            f"'no shadow event occurred'. {summary}"
+        )
+        details["rollover_failure"] = dict(rollover_failure)
+        details["promotable"] = False
+        details["non_promotable_reasons"] = [
+            "A session rollover failed and shadow recording is paused; the "
+            "evidence stream has a gap of unknown length.",
+            *details.get("non_promotable_reasons", []),
+        ]
     return _check(check_id, label, status, summary, source=path, updated_at=str(last_eval), details=details)
 
 

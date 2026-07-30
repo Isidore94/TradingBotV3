@@ -24,6 +24,7 @@ from diagnostics.shadow_session_rollup import (  # noqa: E402
     evidence_directories,
     finalize_session,
     reset_audit_cache,
+    scan_raw_archive,
 )
 
 NOW = datetime(2026, 7, 14, 9, 30, tzinfo=timezone.utc)
@@ -422,3 +423,240 @@ def test_retention_keeps_the_newest_safety_floor(tmp_path):
 
     assert removed["raw_age_pruned"] == 5
     assert len(list(raw_dir.glob("*.jsonl"))) == RETENTION_POLICY["raw_keep_newest"]
+
+
+# ---------------------------------------------------------------------------
+# P0: total timestamp handling.  The real SPY log's first row (2026-07-13,
+# written before tz normalization) is NAIVE and carries no timezone field;
+# every later row is aware.  scan_raw_archive() used to raise TypeError on the
+# first naive/aware comparison, which killed the very first live rollover and
+# silently froze SPY shadow recording.  These tests are real-shaped: same
+# fields, same one-naive-then-aware sequence.
+# ---------------------------------------------------------------------------
+def _real_shaped_mixed_log(tmp_path: Path) -> Path:
+    log = tmp_path / "spy_state_shadow.jsonl"
+    _write_rows(
+        log,
+        [
+            # The legacy row: naive stamp, v2 schema, NO timezone field, no
+            # complete_bar_ts (exactly like the live 2026-07-13 first row).
+            {
+                "schema": "spy_state_shadow_v2",
+                "session_date": "2026-07-13",
+                "config_hash": "spy-cfg",
+                "engine_version": "spy-v1",
+                "machine": "desk",
+                "state": "BEAR_IMPULSE",
+                "evaluated_at": "2026-07-13T12:00:09",
+            },
+            _spy_row(
+                "spy_state_shadow_v2",
+                state="COUNTERMOVE_ARMED",
+                evaluated_at="2026-07-13T12:20:09-07:00",
+                timezone="Pacific Daylight Time",  # NOT zoneinfo-resolvable
+            ),
+            _spy_row(
+                "spy_state_shadow_v2",
+                state="RANGE",
+                evaluated_at="2026-07-13T13:18:35-07:00",
+                timezone="Pacific Daylight Time",
+            ),
+            _spy_row(
+                "spy_state_shadow_v4",
+                session="2026-07-14",
+                state="RANGE",
+                evaluated_at="2026-07-14T06:35:00-07:00",
+            ),
+        ],
+    )
+    return log
+
+
+def test_naive_legacy_timestamp_never_raises_and_scans_every_group(tmp_path):
+    log = _real_shaped_mixed_log(tmp_path)
+
+    scan = scan_raw_archive(log, SPY_ENGINE)  # must not raise
+
+    assert set(scan["groups"]) == {"2026-07-13|spy-cfg", "2026-07-14|spy-cfg"}
+    day1 = scan["groups"]["2026-07-13|spy-cfg"]
+    # The naive stamp was normalized from RECORDED evidence: the sibling rows'
+    # unanimous -07:00 offset ("Pacific Daylight Time" does not resolve via
+    # zoneinfo, so the row-timezone path correctly does not fire).
+    assert day1["timestamps_legacy_naive"] == 1
+    assert day1["timestamps_naive_normalized"] == 1
+    assert day1["timestamps_unresolved"] == 0
+    assert day1["naive_timezone_source"].startswith("sibling_offset:")
+    # With the naive row normalized, the 12:00:09 -> 12:20:09 boundary is a
+    # real 1200s duration attributed to the naive row's state.
+    assert day1["state_duration_seconds_observed"]["BEAR_IMPULSE"] == 1200
+    assert scan["timestamps_legacy_naive"] == 1
+    assert scan["timestamps_unresolved"] == 0
+
+
+def test_unknown_timezone_is_an_explicit_anomaly_with_no_fabricated_duration(
+    tmp_path, monkeypatch
+):
+    # No sibling aware rows, no row timezone, and no configured market tz:
+    # nothing trustworthy exists, so nothing may be invented.
+    monkeypatch.delenv("TRADINGBOT_MARKET_TIMEZONE", raising=False)
+    import market_session
+
+    monkeypatch.setattr(
+        market_session, "_resolve_configured_timezone_name", lambda *a: None
+    )
+    log = tmp_path / "spy_state_shadow.jsonl"
+    _write_rows(
+        log,
+        [
+            _spy_row("spy_state_shadow_v2", state="RANGE", evaluated_at="2026-07-13T09:35:00"),
+            _spy_row("spy_state_shadow_v2", state="BULL_IMPULSE", evaluated_at="2026-07-13T09:40:00"),
+        ],
+    )
+
+    scan = scan_raw_archive(log, SPY_ENGINE)
+
+    day = scan["groups"]["2026-07-13|spy-cfg"]
+    assert day["timestamps_legacy_naive"] == 2
+    assert day["timestamps_naive_normalized"] == 0
+    assert day["timestamps_unresolved"] == 2
+    # Rows are retained and counted; no duration is invented anywhere.
+    assert day["valid_rows"] == 2
+    assert day["state_observations"] == {"RANGE": 1, "BULL_IMPULSE": 1}
+    assert day["state_transitions"] == {"RANGE->BULL_IMPULSE": 1}
+    assert day["state_duration_seconds_observed"] == {}
+
+
+def test_configured_market_timezone_normalizes_deterministically(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADINGBOT_MARKET_TIMEZONE", "America/New_York")
+    log = tmp_path / "spy_state_shadow.jsonl"
+    _write_rows(
+        log,
+        [
+            _spy_row("spy_state_shadow_v2", state="RANGE", evaluated_at="2026-07-13T09:35:00"),
+            _spy_row("spy_state_shadow_v2", state="BULL_IMPULSE", evaluated_at="2026-07-13T09:50:00"),
+        ],
+    )
+
+    scan = scan_raw_archive(log, SPY_ENGINE)
+
+    day = scan["groups"]["2026-07-13|spy-cfg"]
+    assert day["timestamps_naive_normalized"] == 2
+    assert day["naive_timezone_source"] == "configured:America/New_York"
+    # Both stamps share the configured zone, so the duration is exact.
+    assert day["state_duration_seconds_observed"] == {"RANGE": 900}
+
+
+def test_mixed_utc_offsets_compare_correctly(tmp_path):
+    log = tmp_path / "spy_state_shadow.jsonl"
+    _write_rows(
+        log,
+        [
+            _spy_row("spy_state_shadow_v4", state="RANGE", evaluated_at="2026-07-13T09:35:00-07:00"),
+            # Same instant expressed in a different offset, plus 10 minutes.
+            _spy_row("spy_state_shadow_v4", state="BULL_IMPULSE", evaluated_at="2026-07-13T12:45:00-04:00"),
+        ],
+    )
+
+    scan = scan_raw_archive(log, SPY_ENGINE)
+
+    day = scan["groups"]["2026-07-13|spy-cfg"]
+    assert day["timestamps_legacy_naive"] == 0
+    assert day["state_duration_seconds_observed"] == {"RANGE": 600}
+
+
+def test_malformed_timestamp_breaks_the_duration_boundary(tmp_path):
+    log = tmp_path / "spy_state_shadow.jsonl"
+    _write_rows(
+        log,
+        [
+            _spy_row("spy_state_shadow_v4", state="RANGE", evaluated_at="2026-07-13T09:35:00-07:00"),
+            _spy_row("spy_state_shadow_v4", state="BULL_IMPULSE", evaluated_at="not-a-time"),
+            _spy_row("spy_state_shadow_v4", state="STABILIZING", evaluated_at="2026-07-13T10:35:00-07:00"),
+        ],
+    )
+
+    scan = scan_raw_archive(log, SPY_ENGINE)
+
+    day = scan["groups"]["2026-07-13|spy-cfg"]
+    assert day["timestamps_malformed"] == 1
+    # The old walker kept the pre-anomaly stamp and attributed the whole
+    # 09:35 -> 10:35 hour to the malformed row's state.  Elapsed time across an
+    # unknown clock boundary is invented time: the chain must restart instead.
+    assert day["state_duration_seconds_observed"] == {}
+    assert day["state_transitions"] == {
+        "RANGE->BULL_IMPULSE": 1,
+        "BULL_IMPULSE->STABILIZING": 1,
+    }
+
+
+def test_timestamp_anomalies_block_eligibility_and_tampering_is_detected(tmp_path, monkeypatch):
+    monkeypatch.delenv("TRADINGBOT_MARKET_TIMEZONE", raising=False)
+    import market_session
+
+    monkeypatch.setattr(
+        market_session, "_resolve_configured_timezone_name", lambda *a: None
+    )
+    log = tmp_path / "spy_state_shadow.jsonl"
+    # Unresolvable naive stamp in an otherwise complete-looking session.
+    _write_rows(
+        log,
+        [
+            _spy_row("spy_state_shadow_v2", state="RANGE", evaluated_at="2026-07-13T09:35:00"),
+            _spy_row(
+                "spy_state_shadow_v4",
+                state="BULL_IMPULSE",
+                evaluated_at="2026-07-14T09:40:00-07:00",
+                session="2026-07-14",
+            ),
+        ],
+    )
+    coverage = {
+        "session_date": "2026-07-13",
+        "config_hash": "spy-cfg",
+        "evaluations": 1,
+        "usable_evaluations": 1,
+        "errors": 0,
+    }
+    finalize_session(
+        engine=SPY_ENGINE,
+        log_path=log,
+        coverage=coverage,
+        finalized_at=NOW,
+        reason="session_rollover",
+        engine_version="spy-v1",
+        machine="desk",
+        timezone="UTC",
+        configuration="spy-cfg",
+    )
+
+    reset_audit_cache()
+    progress = audit_session_summaries(log, SPY_ENGINE)
+    day1 = next(
+        item
+        for item in progress["incomplete_session_details"]
+        if item["session_date"] == "2026-07-13"
+    )
+    assert any("unresolvable raw timestamps" in reason for reason in day1["reasons"])
+    assert progress["eligible_sessions"] == 0
+
+    # Tampering with the stored timestamp counters must break reconciliation.
+    _, summary_dir = evidence_directories(log, SPY_ENGINE)
+    target = next(
+        path
+        for path in summary_dir.glob("*.json")
+        if json.loads(path.read_text(encoding="utf-8"))["session_date"] == "2026-07-13"
+    )
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload["raw_stats"]["timestamps_unresolved"] = 0
+    target.write_text(json.dumps(payload), encoding="utf-8")
+
+    reset_audit_cache()
+    tampered = audit_session_summaries(log, SPY_ENGINE)
+    day1 = next(
+        item
+        for item in tampered["incomplete_session_details"]
+        if item["session_date"] == "2026-07-13"
+    )
+    assert any(
+        "summary counters do not reconcile" in reason for reason in day1["reasons"]
+    )

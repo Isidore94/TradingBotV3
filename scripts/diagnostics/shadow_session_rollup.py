@@ -18,7 +18,7 @@ import json
 import os
 import re
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +84,122 @@ def _empty_group(session_date: str, configuration: str) -> dict[str, Any]:
         "complete_chains": 0,
         "meaningful_interactions": 0,
         "confirm_fail_rearm_outcomes": 0,
+        # Timestamp anomaly accounting (never hidden, never fatal).  Legacy rows
+        # written before timezone normalization carry naive stamps; a naive
+        # stamp compared against an aware one used to raise TypeError and kill
+        # the whole scan.  Normalization is only ever done from RECORDED
+        # evidence or explicit configuration - never the host's current clock.
+        "timestamps_legacy_naive": 0,
+        "timestamps_naive_normalized": 0,
+        "timestamps_unresolved": 0,
+        "timestamps_malformed": 0,
+        "naive_timezone_source": "",
     }
+
+
+def _configured_market_zoneinfo():
+    """The explicitly configured market-local timezone, or None.
+
+    Deliberately uses only the CONFIGURED half of market_session's resolution
+    chain (env var / local settings).  The system-timezone fallback is exactly
+    the "silently assume the host's current timezone" behaviour that legacy
+    naive stamps must never inherit: the host's zone today says nothing about
+    the writer's clock on the day the row was written.
+    """
+    try:
+        from market_session import _coerce_zoneinfo, _resolve_configured_timezone_name
+
+        return _coerce_zoneinfo(_resolve_configured_timezone_name())
+    except Exception:
+        return None
+
+
+def _parse_stamp(text: str) -> tuple[datetime | None, str]:
+    """Parse one recorded timestamp; total over every input shape.
+
+    Returns ``(stamp, kind)`` where kind is ``aware``, ``naive`` or
+    ``malformed``.  Never raises.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return None, "malformed"
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None, "malformed"
+    if stamp.tzinfo is None:
+        return stamp, "naive"
+    return stamp, "aware"
+
+
+def _resolve_naive_stamps(
+    group: dict[str, Any],
+    parsed: list[list[Any]],
+) -> None:
+    """Attach a timezone to naive stamps from trustworthy evidence, in place.
+
+    Resolution order (first hit wins, and the source is recorded on the group):
+
+    1. the row's own recorded ``timezone`` name, when zoneinfo can resolve it;
+    2. the UNANIMOUS utc offset of the aware rows in the same session group -
+       recorded evidence from the same writer on the same day;
+    3. an explicitly configured market-local timezone (env / local settings).
+
+    A naive stamp with none of the above stays unresolved: the row itself is
+    kept and counted, but its duration boundary is unknown and is never used.
+    ``parsed`` entries are ``[stamp, kind, state, stamp_text, row_tz_name]``.
+    """
+    sibling_offsets = {
+        entry[0].utcoffset() for entry in parsed if entry[1] == "aware"
+    }
+    unanimous_offset = (
+        next(iter(sibling_offsets)) if len(sibling_offsets) == 1 else None
+    )
+    configured = None
+    configured_checked = False
+    for entry in parsed:
+        if entry[1] != "naive":
+            continue
+        group["timestamps_legacy_naive"] += 1
+        stamp, row_tz_name = entry[0], entry[4]
+        row_zone = None
+        if row_tz_name:
+            try:
+                import zoneinfo
+
+                row_zone = zoneinfo.ZoneInfo(str(row_tz_name))
+            except Exception:
+                row_zone = None
+        if row_zone is not None:
+            entry[0] = stamp.replace(tzinfo=row_zone)
+            entry[1] = "aware"
+            group["timestamps_naive_normalized"] += 1
+            group["naive_timezone_source"] = f"row_timezone:{row_tz_name}"
+            continue
+        if unanimous_offset is not None:
+            zone = timezone(unanimous_offset)
+            entry[0] = stamp.replace(tzinfo=zone)
+            entry[1] = "aware"
+            group["timestamps_naive_normalized"] += 1
+            # UTC-offset formatting ("-07:00"), not timedelta repr.
+            group["naive_timezone_source"] = (
+                f"sibling_offset:{stamp.replace(tzinfo=zone).strftime('%z')[:3]}:"
+                f"{stamp.replace(tzinfo=zone).strftime('%z')[3:]}"
+            )
+            continue
+        if not configured_checked:
+            configured = _configured_market_zoneinfo()
+            configured_checked = True
+        if configured is not None:
+            entry[0] = stamp.replace(tzinfo=configured)
+            entry[1] = "aware"
+            group["timestamps_naive_normalized"] += 1
+            group["naive_timezone_source"] = f"configured:{configured.key}"
+            continue
+        # No trustworthy timezone: keep the row, refuse to invent a clock.
+        entry[0] = None
+        entry[1] = "unresolved"
+        group["timestamps_unresolved"] += 1
 
 
 def scan_raw_archive(path: Path | str, engine: str) -> dict[str, Any]:
@@ -164,6 +279,7 @@ def scan_raw_archive(path: Path | str, engine: str) -> dict[str, Any]:
                             (
                                 str(row.get("evaluated_at") or row.get("ts") or ""),
                                 state,
+                                str(row.get("timezone") or "").strip(),
                             )
                         )
                 side = str(row.get("direction") or row.get("side_sign") or "").strip()
@@ -205,27 +321,39 @@ def scan_raw_archive(path: Path | str, engine: str) -> dict[str, Any]:
         if engine == SPY_ENGINE:
             transitions: Counter[str] = Counter()
             durations: Counter[str] = Counter()
+            parsed: list[list[Any]] = []
+            for stamp_text, state, row_tz in state_records[key]:
+                stamp, kind = _parse_stamp(stamp_text)
+                if kind == "malformed":
+                    group["timestamps_malformed"] += 1
+                parsed.append([stamp, kind, state, stamp_text, row_tz])
+            _resolve_naive_stamps(group, parsed)
             previous_stamp: datetime | None = None
             previous_state = ""
             last_state_at = ""
-            for stamp_text, state in state_records[key]:
-                try:
-                    stamp = datetime.fromisoformat(stamp_text.replace("Z", "+00:00"))
-                except ValueError:
-                    stamp = None
+            for stamp, kind, state, stamp_text, _row_tz in parsed:
                 if previous_state and state != previous_state:
                     transitions[f"{previous_state}->{state}"] += 1
-                if (
-                    previous_stamp is not None
-                    and stamp is not None
-                    and stamp >= previous_stamp
-                ):
-                    durations[previous_state] += int(
-                        (stamp - previous_stamp).total_seconds()
-                    )
-                if stamp is not None:
+                usable = kind == "aware" and stamp is not None
+                if previous_stamp is not None and usable:
+                    try:
+                        ordered = stamp >= previous_stamp
+                    except TypeError:  # belt-and-braces: never let a scan raise
+                        ordered = False
+                        group["timestamps_unresolved"] += 1
+                        usable = False
+                    if ordered:
+                        durations[previous_state] += int(
+                            (stamp - previous_stamp).total_seconds()
+                        )
+                if usable:
                     previous_stamp = stamp
                     last_state_at = stamp_text
+                else:
+                    # An unresolvable or malformed stamp is an unknown clock
+                    # boundary: elapsed time across it would be invented, so
+                    # the duration chain restarts at the next trusted stamp.
+                    previous_stamp = None
                 previous_state = state
             group["state_observations"] = dict(state_counts[key])
             group["state_transitions"] = dict(transitions)
@@ -264,6 +392,13 @@ def scan_raw_archive(path: Path | str, engine: str) -> dict[str, Any]:
         "sha256": digest.hexdigest(),
         "lines": lines,
         "malformed_lines": malformed,
+        # File-level anomaly visibility (per-group detail lives on each group).
+        "timestamps_legacy_naive": sum(
+            int(g.get("timestamps_legacy_naive", 0)) for g in groups.values()
+        ),
+        "timestamps_unresolved": sum(
+            int(g.get("timestamps_unresolved", 0)) for g in groups.values()
+        ),
         "groups": groups,
     }
 
@@ -552,6 +687,15 @@ def audit_session_summaries(log_path: Path | str, engine: str) -> dict[str, Any]
             reasons.append("no raw rows")
         if int(raw_stats.get("completed_bar_rows", 0) or 0) <= 0:
             reasons.append("no completed-bar raw evidence")
+        # A stamp with no trustworthy timezone means part of this session's
+        # clock is unknown.  Rows normalized from RECORDED evidence
+        # (timestamps_naive_normalized, with naive_timezone_source stating the
+        # source) do not block eligibility; unresolved ones do - an eligible
+        # session must not stand on invented time.
+        if int(raw_stats.get("timestamps_unresolved", 0) or 0) > 0:
+            reasons.append("unresolvable raw timestamps")
+        if int(raw_stats.get("timestamps_malformed", 0) or 0) > 0:
+            reasons.append("malformed raw timestamps")
         is_eligible = not reasons
         session_scope_results[str(payload.get("session_date") or "")].append(
             {
