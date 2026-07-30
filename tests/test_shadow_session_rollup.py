@@ -293,6 +293,47 @@ def test_multiple_eligible_config_scopes_count_as_one_session(tmp_path):
     assert progress["incomplete_sessions"] == 0
 
 
+def test_repeated_finalized_scope_fails_closed_and_preserves_active_rows(tmp_path):
+    log = tmp_path / "spy_state_shadow.jsonl"
+    coverage = {
+        "session_date": "2026-07-13",
+        "config_hash": "spy-cfg-a",
+        "evaluations": 1,
+        "usable_evaluations": 1,
+        "errors": 0,
+    }
+    _write_rows(log, [_spy_row("spy_state_shadow_v4", config="spy-cfg-a")])
+    finalize_session(
+        engine=SPY_ENGINE,
+        log_path=log,
+        coverage=coverage,
+        finalized_at=NOW,
+        reason="configuration_changed",
+        engine_version="spy-v1",
+        machine="desk",
+        timezone="UTC",
+        configuration="spy-cfg-a",
+    )
+
+    # A later A -> B -> A reversion must not overwrite A's first replay
+    # archive or strand the second A segment in a mixed next-session log.
+    _write_rows(log, [_spy_row("spy_state_shadow_v4", config="spy-cfg-a")])
+    active_bytes = log.read_bytes()
+    with pytest.raises(RuntimeError, match="already-finalized"):
+        finalize_session(
+            engine=SPY_ENGINE,
+            log_path=log,
+            coverage=coverage,
+            finalized_at=NOW,
+            reason="configuration_changed",
+            engine_version="spy-v1",
+            machine="desk",
+            timezone="UTC",
+            configuration="spy-cfg-a",
+        )
+    assert log.read_bytes() == active_bytes
+
+
 def test_greatness_floor_counters_are_raw_counts_not_promotion(tmp_path):
     log = tmp_path / "greatness_shadow.jsonl"
     _write_rows(

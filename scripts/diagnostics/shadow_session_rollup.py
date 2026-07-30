@@ -400,7 +400,23 @@ def finalize_session(
     ).strip()
     archive = _archive_path(log_path, engine, session_date, configuration)
     archive.parent.mkdir(parents=True, exist_ok=True)
-    if not archive.exists() and log_path.exists() and log_path.stat().st_size:
+    active_has_rows = log_path.exists() and log_path.stat().st_size
+    if active_has_rows:
+        active_scan = scan_raw_archive(log_path, engine)
+        for active_group in (active_scan.get("groups") or {}).values():
+            active_summary = _summary_path(
+                log_path,
+                engine,
+                str(active_group.get("session_date") or ""),
+                str(active_group.get("config_hash") or ""),
+            )
+            if active_summary.exists():
+                raise RuntimeError(
+                    "active shadow log contains an already-finalized "
+                    "session/configuration scope; refusing to overwrite its "
+                    f"replay evidence: {active_summary}"
+                )
+    if not archive.exists() and active_has_rows:
         os.replace(log_path, archive)
 
     scan = scan_raw_archive(archive, engine)

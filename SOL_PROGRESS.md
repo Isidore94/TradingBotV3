@@ -11,10 +11,10 @@ stamp; it must not duplicate the roadmap.
   integration and GUI product work it was based on is now merged into `main`.
 - Integration base: `3443c69` (an ancestor of `main`).
 - Date: 2026-07-30
-- Test baseline: **1625 passed, 5 subtests passed**
-  (`.venv\Scripts\python.exe -m pytest tests/ -q`, 57.32s, pytest exit code 0)
-- Qt thread-warning gate: **1625 passed, 5 subtests passed**
-  (`-W "error::pytest.PytestUnhandledThreadExceptionWarning"`, 57.08s,
+- Test baseline: **1626 passed, 5 subtests passed**
+  (`.venv\Scripts\python.exe -m pytest tests/ -q`, pytest exit code 0)
+- Qt thread-warning gate: **1626 passed, 5 subtests passed**
+  (`-W "error::pytest.PytestUnhandledThreadExceptionWarning"`,
   pytest exit code 0; no warning suppression)
 - Smoke: **7/7** (`scripts/smoke_check.py`, exit code 0)
 - Live validation: **IN PROGRESS** — the July 13 session verified single-owner
