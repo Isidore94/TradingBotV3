@@ -14,8 +14,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 from review_events import (
     REVIEW_EVENTS_SCHEMA,
     alert_context_fields,
+    get_review_installation_id,
     load_review_events,
     record_review_event,
+    review_event_shard_path,
     setup_context_fields,
 )
 
@@ -185,6 +187,116 @@ def test_load_review_events_skips_bad_lines(tmp_path):
     good = record_review_event("skip", alert=_fake_alert(), path=path)
     path.open("a", encoding="utf-8").write("{broken\n[1,2]\n")
     assert load_review_events(path) == [good]
+
+
+def test_installation_identity_is_machine_local_stable_and_not_a_hostname(tmp_path):
+    identity_path = tmp_path / "local" / "review_installation_id"
+    first = get_review_installation_id(identity_path)
+    second = get_review_installation_id(identity_path)
+
+    assert len(first) == 32
+    assert first == second
+    assert identity_path.read_text(encoding="ascii").strip() == first
+    assert review_event_shard_path(first, shards_dir=tmp_path / "shared").name == (
+        f"review-events-{first}.jsonl"
+    )
+
+
+def test_partitioned_writers_never_modify_the_legacy_shared_file(tmp_path):
+    legacy = tmp_path / "alert_review_events.jsonl"
+    legacy_row = {
+        "schema": "review_events_v1",
+        "ts": "2026-07-28T10:00:00",
+        "trade_date": "2026-07-28",
+        "machine": "MainPC",
+        "action": "shown",
+        "symbol": "CLMT",
+        "side": "LONG",
+    }
+    legacy_bytes = (json.dumps(legacy_row) + "\n").encode()
+    legacy.write_bytes(legacy_bytes)
+    shards = tmp_path / "alert_review_events"
+    desk_identity = "1" * 32
+    mini_identity = "2" * 32
+    desk_id_file = tmp_path / "desk-local-id"
+    mini_id_file = tmp_path / "mini-local-id"
+    desk_id_file.write_text(desk_identity, encoding="ascii")
+    mini_id_file.write_text(mini_identity, encoding="ascii")
+
+    desk = record_review_event(
+        "skip",
+        alert=_fake_alert(symbol="NVDA"),
+        now=datetime(2026, 7, 29, 10, 0),
+        path=legacy,
+        shards_dir=shards,
+        installation_id_path=desk_id_file,
+        partitioned=True,
+    )
+    mini = record_review_event(
+        "shown",
+        alert=_fake_alert(symbol="AMD"),
+        now=datetime(2026, 7, 29, 10, 1),
+        path=legacy,
+        shards_dir=shards,
+        installation_id_path=mini_id_file,
+        partitioned=True,
+    )
+
+    assert legacy.read_bytes() == legacy_bytes
+    assert desk["installation_id"] == desk_identity
+    assert mini["installation_id"] == mini_identity
+    assert review_event_shard_path(desk_identity, shards_dir=shards).exists()
+    assert review_event_shard_path(mini_identity, shards_dir=shards).exists()
+    rows = load_review_events(legacy, shards_dir=shards, include_shards=True)
+    assert [row["symbol"] for row in rows] == ["CLMT", "NVDA", "AMD"]
+
+
+def test_hostname_change_keeps_writing_the_same_installation_shard(tmp_path, monkeypatch):
+    import review_events
+
+    legacy = tmp_path / "alert_review_events.jsonl"
+    shards = tmp_path / "alert_review_events"
+    identity = "a" * 32
+    identity_path = tmp_path / "local-id"
+    identity_path.write_text(identity, encoding="ascii")
+    names = iter(["OLD-NAME", "NEW-NAME"])
+    monkeypatch.setattr(review_events, "_machine_name", lambda: next(names))
+
+    for symbol in ("NVDA", "AMD"):
+        assert record_review_event(
+            "shown",
+            symbol=symbol,
+            path=legacy,
+            shards_dir=shards,
+            installation_id_path=identity_path,
+            partitioned=True,
+        )
+
+    shard = review_event_shard_path(identity, shards_dir=shards)
+    assert [row["machine"] for row in load_review_events(shard)] == [
+        "OLD-NAME",
+        "NEW-NAME",
+    ]
+    assert list(shards.glob("*.jsonl")) == [shard]
+
+
+def test_malformed_existing_installation_identity_fails_closed(tmp_path):
+    legacy = tmp_path / "alert_review_events.jsonl"
+    identity_path = tmp_path / "local-id"
+    identity_path.write_text("half-synced-or-corrupt", encoding="ascii")
+
+    row = record_review_event(
+        "shown",
+        symbol="NVDA",
+        path=legacy,
+        shards_dir=tmp_path / "shards",
+        installation_id_path=identity_path,
+        partitioned=True,
+    )
+
+    assert row is None
+    assert not legacy.exists()
+    assert not (tmp_path / "shards").exists()
 
 
 # ---------------------------------------------------------------------------

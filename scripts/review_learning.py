@@ -58,7 +58,7 @@ from project_paths import (  # noqa: E402
     REVIEW_LEARNING_REPORT_FILE,
     REVIEW_PREFERENCE_STATE_FILE,
 )
-from review_events import load_review_events  # noqa: E402
+from review_events import load_review_events, review_event_store_mtime  # noqa: E402
 
 REVIEW_LEARNING_SCHEMA = "review_learning_v1"
 
@@ -760,13 +760,14 @@ def refresh_review_learning_if_stale(
     """
     events_path = Path(events_path)
     state_path = Path(state_path)
-    if not events_path.exists():
+    events_mtime = review_event_store_mtime(events_path)
+    if events_mtime is None:
         return False
     try:
         if state_path.exists():
             state_mtime = state_path.stat().st_mtime
             fresh = (datetime.now().timestamp() - state_mtime) < max_age_hours * 3600
-            if fresh and events_path.stat().st_mtime <= state_mtime:
+            if fresh and events_mtime <= state_mtime:
                 return False
     except OSError:
         pass

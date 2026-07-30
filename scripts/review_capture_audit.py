@@ -48,7 +48,14 @@ from project_paths import (  # noqa: E402
     REVIEW_POLICY_FILE,
     REVIEW_PREFERENCE_STATE_FILE,
 )
-from review_events import REVIEW_EVENTS_SCHEMA  # noqa: E402
+from review_events import (  # noqa: E402
+    LEGACY_REVIEW_EVENTS_SCHEMA,
+    REVIEW_EVENTS_SCHEMA,
+    SUPPORTED_REVIEW_EVENTS_SCHEMAS,
+    review_event_shard_installation_id,
+    review_event_sources,
+    review_event_store_mtime,
+)
 from review_guidance import (  # noqa: E402
     MIN_SEGMENT_SHOWN,
     ORDERING_PREFERENCE,
@@ -112,6 +119,19 @@ def _mtime_text(path: Path) -> str:
         return ""
 
 
+def _review_store_mtime_text(path: Path, *, shards_dir: Path | None = None) -> str:
+    value = review_event_store_mtime(
+        path,
+        shards_dir=shards_dir,
+        include_shards=(Path(path) == Path(ALERT_REVIEW_EVENTS_FILE) or shards_dir is not None),
+    )
+    return (
+        datetime.fromtimestamp(value).isoformat(timespec="seconds")
+        if value is not None
+        else ""
+    )
+
+
 def _age_days(value: str, now: datetime) -> float | None:
     """Age in days, comparing both sides as local wall clock.
 
@@ -150,7 +170,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 # Task 3 - the review-decision ledger
 # ---------------------------------------------------------------------------
-def scan_review_log(path: Path) -> dict[str, Any]:
+def scan_review_log(path: Path, *, shards_dir: Path | None = None) -> dict[str, Any]:
     """Parse the ledger the way an auditor would, not the way a reader does.
 
     ``load_review_events`` skips malformed lines so one corrupt row can never
@@ -159,64 +179,142 @@ def scan_review_log(path: Path) -> dict[str, Any]:
     that quietly drops rows is exactly the silent failure Phase 0 exists to
     surface.
     """
+    path = Path(path)
+    include_shards = path == Path(ALERT_REVIEW_EVENTS_FILE) or shards_dir is not None
+    sources = review_event_sources(
+        path,
+        shards_dir=shards_dir,
+        include_shards=include_shards,
+    )
     stats: dict[str, Any] = {
-        "exists": path.exists(),
+        "exists": bool(sources),
         "readable": True,
         "bytes": 0,
         "rows": 0,
+        "legacy_rows": 0,
+        "partitioned_rows": 0,
         "malformed_lines": 0,
         "schemas": {},
         "actions": {},
         "sessions": 0,
         "machines": {},
+        "installations": {},
+        "installation_machines": {},
+        "source_files": [str(source) for source in sources],
+        "shard_files": 0,
+        "legacy_exists": path.exists(),
+        "legacy_v2_rows": 0,
+        "shard_legacy_rows": 0,
+        "shard_identity_mismatches": 0,
+        "duplicate_record_ids": 0,
+        "source_details": [],
         "first_ts": "",
         "last_ts": "",
         "first_trade_date": "",
         "last_trade_date": "",
         "rows_missing_symbol": 0,
     }
-    if not path.exists():
-        return stats
-    try:
-        stats["bytes"] = path.stat().st_size
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        stats["readable"] = False
+    if not sources:
         return stats
 
     schemas: Counter[str] = Counter()
     actions: Counter[str] = Counter()
     machines: Counter[str] = Counter()
+    installations: Counter[str] = Counter()
+    installation_machines: dict[str, set[str]] = {}
     trade_dates: set[str] = set()
     timestamps: list[str] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    record_ids: set[str] = set()
+    for source in sources:
+        is_legacy = source == path
+        encoded_installation = (
+            "" if is_legacy else review_event_shard_installation_id(source)
+        )
         try:
-            row = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            stats["malformed_lines"] += 1
+            source_bytes = source.stat().st_size
+            text = source.read_text(encoding="utf-8")
+        except OSError:
+            stats["readable"] = False
             continue
-        if not isinstance(row, dict):
-            stats["malformed_lines"] += 1
-            continue
-        stats["rows"] += 1
-        schemas[str(row.get("schema") or "(missing)")] += 1
-        actions[str(row.get("action") or "(missing)")] += 1
-        machines[str(row.get("machine") or "(unrecorded)")] += 1
-        if not str(row.get("symbol") or "").strip():
-            stats["rows_missing_symbol"] += 1
-        trade_date = str(row.get("trade_date") or "").strip()
-        if trade_date:
-            trade_dates.add(trade_date)
-        ts = str(row.get("ts") or "").strip()
-        if ts:
-            timestamps.append(ts)
+        stats["bytes"] += source_bytes
+        if not is_legacy:
+            stats["shard_files"] += 1
+        source_rows = 0
+        source_malformed = 0
+        source_installations: Counter[str] = Counter()
+        source_machines: Counter[str] = Counter()
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                stats["malformed_lines"] += 1
+                source_malformed += 1
+                continue
+            if not isinstance(row, dict):
+                stats["malformed_lines"] += 1
+                source_malformed += 1
+                continue
+            stats["rows"] += 1
+            source_rows += 1
+            if is_legacy:
+                stats["legacy_rows"] += 1
+            else:
+                stats["partitioned_rows"] += 1
+            schema = str(row.get("schema") or "(missing)")
+            schemas[schema] += 1
+            actions[str(row.get("action") or "(missing)")] += 1
+            machine = str(row.get("machine") or "(unrecorded)")
+            machines[machine] += 1
+            source_machines[machine] += 1
+            installation_id = str(row.get("installation_id") or "").strip().lower()
+            if installation_id:
+                installations[installation_id] += 1
+                source_installations[installation_id] += 1
+                installation_machines.setdefault(installation_id, set()).add(machine)
+            if is_legacy and schema == REVIEW_EVENTS_SCHEMA:
+                stats["legacy_v2_rows"] += 1
+            if not is_legacy and schema == LEGACY_REVIEW_EVENTS_SCHEMA:
+                stats["shard_legacy_rows"] += 1
+            if not is_legacy and (
+                not encoded_installation or installation_id != encoded_installation
+            ):
+                stats["shard_identity_mismatches"] += 1
+            record_id = str(row.get("review_record_id") or "").strip()
+            if record_id:
+                if record_id in record_ids:
+                    stats["duplicate_record_ids"] += 1
+                record_ids.add(record_id)
+            if not str(row.get("symbol") or "").strip():
+                stats["rows_missing_symbol"] += 1
+            trade_date = str(row.get("trade_date") or "").strip()
+            if trade_date:
+                trade_dates.add(trade_date)
+            ts = str(row.get("ts") or "").strip()
+            if ts:
+                timestamps.append(ts)
+        stats["source_details"].append(
+            {
+                "path": str(source),
+                "kind": "legacy" if is_legacy else "installation_shard",
+                "encoded_installation_id": encoded_installation,
+                "rows": source_rows,
+                "malformed_lines": source_malformed,
+                "installations": dict(source_installations),
+                "machines": dict(source_machines),
+            }
+        )
 
     stats["schemas"] = dict(schemas)
     stats["actions"] = dict(actions)
     stats["machines"] = dict(machines)
+    stats["installations"] = dict(installations)
+    stats["installation_machines"] = {
+        identity: sorted(names)
+        for identity, names in sorted(installation_machines.items())
+    }
     stats["sessions"] = len(trade_dates)
     if trade_dates:
         stats["first_trade_date"] = min(trade_dates)
@@ -228,13 +326,20 @@ def scan_review_log(path: Path) -> dict[str, Any]:
 
 
 def review_log_check(
-    path: Path = ALERT_REVIEW_EVENTS_FILE, *, now: datetime | None = None
+    path: Path = ALERT_REVIEW_EVENTS_FILE,
+    *,
+    now: datetime | None = None,
+    shards_dir: Path | None = None,
 ) -> dict[str, Any]:
     moment = now or datetime.now()
-    stats = scan_review_log(Path(path))
+    path = Path(path)
+    partitioned_store = path == Path(ALERT_REVIEW_EVENTS_FILE) or shards_dir is not None
+    stats = scan_review_log(path, shards_dir=shards_dir)
     details = dict(stats)
     details["session_floor"] = CAPTURE_SESSION_FLOOR
     details["expected_schema"] = REVIEW_EVENTS_SCHEMA
+    details["supported_schemas"] = sorted(SUPPORTED_REVIEW_EVENTS_SCHEMAS)
+    details["partitioned_store"] = partitioned_store
 
     if not stats["exists"]:
         return _check(
@@ -255,40 +360,85 @@ def review_log_check(
             details=details,
         )
 
-    # A writer that is not this machine, on the same shared file, is the
-    # concurrent-append hazard the roadmap forbids before the storage
-    # migration - never a "degraded" curiosity.
     writers = [name for name in stats["machines"] if name != "(unrecorded)"]
     problems: list[str] = []
+    warnings: list[str] = []
     if stats["malformed_lines"]:
         problems.append(f"{stats['malformed_lines']} malformed line(s) skipped by readers")
     if stats["rows_missing_symbol"]:
         problems.append(f"{stats['rows_missing_symbol']} row(s) with no symbol")
     unexpected = sorted(
-        name for name in stats["schemas"] if name != REVIEW_EVENTS_SCHEMA
+        name for name in stats["schemas"] if name not in SUPPORTED_REVIEW_EVENTS_SCHEMAS
     )
     if unexpected:
         problems.append(f"unexpected schema(s): {', '.join(unexpected)}")
-    if len(writers) > 1:
+    if stats["shard_identity_mismatches"]:
+        problems.append(
+            f"{stats['shard_identity_mismatches']} shard row(s) do not match "
+            "their filename installation identity"
+        )
+    if stats["shard_legacy_rows"]:
+        problems.append(
+            f"{stats['shard_legacy_rows']} legacy-schema row(s) were written into installation shards"
+        )
+    if stats["duplicate_record_ids"]:
+        problems.append(
+            f"{stats['duplicate_record_ids']} duplicate review record id(s) across sources"
+        )
+    if partitioned_store and stats["legacy_v2_rows"]:
+        problems.append(
+            f"{stats['legacy_v2_rows']} current-schema row(s) were appended to the legacy shared file"
+        )
+    if not partitioned_store and len(writers) > 1:
         problems.append(f"{len(writers)} machines appended: {', '.join(sorted(writers))}")
+    if partitioned_store:
+        legacy_writers = sorted(
+            {
+                name
+                for source in stats["source_details"]
+                if source["kind"] == "legacy"
+                for name in source["machines"]
+                if name != "(unrecorded)"
+            }
+        )
+        if len(legacy_writers) > 1:
+            warnings.append(
+                f"legacy unpartitioned history contains {len(legacy_writers)} machine names "
+                f"({', '.join(legacy_writers)}); it remains readable but cannot prove no rows were lost"
+            )
+        if stats["legacy_rows"] and not stats["partitioned_rows"]:
+            warnings.append(
+                "partitioned review capture has no live row yet; storage migration is not live-validated"
+            )
+        details["legacy_writers"] = legacy_writers
     details["problems"] = problems
+    details["warnings"] = warnings
     details["writers"] = sorted(writers)
+    details["installation_writers"] = sorted(stats["installations"])
+    details["renamed_installations"] = {
+        identity: machines
+        for identity, machines in stats["installation_machines"].items()
+        if len(machines) > 1
+    }
 
     last_age = _age_days(stats["last_ts"], moment)
     details["last_event_age_days"] = round(last_age, 2) if last_age is not None else None
 
     if problems:
         status = "unhealthy"
-    elif stats["rows"] == 0:
+    elif warnings or stats["rows"] == 0:
         status = "degraded"
     else:
         status = "healthy"
     summary = (
         f"{stats['rows']} decision(s) over {stats['sessions']}/{CAPTURE_SESSION_FLOOR} "
-        f"session(s); {stats['malformed_lines']} malformed."
+        f"session(s), {len(stats['installations'])} partitioned installation(s); "
+        f"{stats['malformed_lines']} malformed."
     )
     if problems:
         summary += " " + "; ".join(problems) + "."
+    elif warnings:
+        summary += " " + "; ".join(warnings) + "."
     elif stats["rows"] == 0:
         summary += " Log is present but still empty."
     return _check(
@@ -297,7 +447,7 @@ def review_log_check(
         status,
         summary,
         source=path,
-        updated_at=stats["last_ts"] or _mtime_text(Path(path)),
+        updated_at=stats["last_ts"] or _review_store_mtime_text(path, shards_dir=shards_dir),
         details=details,
     )
 
@@ -340,7 +490,7 @@ def scoreboard_check(
     age = _age_days(generated_at, moment)
     # Stale means the ledger has grown past the scoreboard, not merely that
     # some hours passed: an unrebuilt scoreboard is guidance from yesterday.
-    log_mtime = _mtime_text(Path(log_path))
+    log_mtime = _review_store_mtime_text(Path(log_path))
     behind_log = bool(log_mtime and generated_at and log_mtime > generated_at)
     details = {
         "generated_at": generated_at,

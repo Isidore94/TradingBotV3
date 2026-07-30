@@ -340,3 +340,38 @@ def test_refresh_if_stale_gates_on_mtimes(tmp_path):
     assert refresh_review_learning_if_stale(
         events_path=events, outcomes_path=outcomes, state_path=state_path, report_path=report_path
     )
+
+
+def test_refresh_reads_partitioned_shards_when_legacy_file_does_not_exist(
+    tmp_path, monkeypatch
+):
+    import review_events
+
+    legacy = tmp_path / "alert_review_events.jsonl"
+    shards = tmp_path / "alert_review_events"
+    shards.mkdir()
+    identity = "a" * 32
+    _write_events(
+        shards / f"review-events-{identity}.jsonl",
+        [
+            _row(
+                "shown",
+                schema="review_events_v2",
+                installation_id=identity,
+                review_record_id="row-1",
+            )
+        ],
+    )
+    monkeypatch.setattr(review_events, "ALERT_REVIEW_EVENTS_FILE", legacy)
+    monkeypatch.setattr(review_events, "ALERT_REVIEW_EVENTS_DIR", shards)
+    state_path = tmp_path / "state.json"
+    report_path = tmp_path / "report.txt"
+
+    assert refresh_review_learning_if_stale(
+        events_path=legacy,
+        outcomes_path=tmp_path / "outcomes.csv",
+        state_path=state_path,
+        report_path=report_path,
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["event_rows"] == 1

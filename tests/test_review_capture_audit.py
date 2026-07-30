@@ -103,14 +103,102 @@ def test_malformed_lines_are_counted_not_silently_skipped(tmp_path):
 def test_unexpected_schema_and_second_writer_are_both_flagged(tmp_path):
     path = _write_log(
         tmp_path / "events.jsonl",
-        [_event(), _event(schema="review_events_v2", machine="mini-pc", symbol="AMD")],
+        [_event(), _event(schema="review_events_v3", machine="mini-pc", symbol="AMD")],
     )
     check = review_log_check(path, now=NOW)
     assert check["status"] == "unhealthy"
     problems = " ".join(check["details"]["problems"])
-    assert "review_events_v2" in problems
+    assert "review_events_v3" in problems
     assert "2 machines appended" in problems
     assert check["details"]["writers"] == ["desk", "mini-pc"]
+
+
+def test_partitioned_installations_are_safe_and_hostname_renames_are_diagnostic(tmp_path):
+    legacy = tmp_path / "alert_review_events.jsonl"
+    shards = tmp_path / "alert_review_events"
+    shards.mkdir()
+    desk_id = "1" * 32
+    mini_id = "2" * 32
+    _write_log(
+        shards / f"review-events-{desk_id}.jsonl",
+        [
+            _event(
+                schema="review_events_v2",
+                installation_id=desk_id,
+                review_record_id="desk-1",
+                machine="OLD-DESK",
+            ),
+            _event(
+                schema="review_events_v2",
+                installation_id=desk_id,
+                review_record_id="desk-2",
+                machine="NEW-DESK",
+                symbol="AMD",
+            ),
+        ],
+    )
+    _write_log(
+        shards / f"review-events-{mini_id}.jsonl",
+        [
+            _event(
+                schema="review_events_v2",
+                installation_id=mini_id,
+                review_record_id="mini-1",
+                machine="MainPC",
+                symbol="TSLA",
+            )
+        ],
+    )
+
+    check = review_log_check(legacy, shards_dir=shards, now=NOW)
+
+    assert check["status"] == "healthy"
+    assert check["details"]["partitioned_rows"] == 3
+    assert check["details"]["shard_files"] == 2
+    assert check["details"]["installation_writers"] == [desk_id, mini_id]
+    assert check["details"]["renamed_installations"] == {
+        desk_id: ["NEW-DESK", "OLD-DESK"]
+    }
+    assert check["details"]["problems"] == []
+
+
+def test_shard_identity_mismatch_is_unhealthy(tmp_path):
+    legacy = tmp_path / "alert_review_events.jsonl"
+    shards = tmp_path / "alert_review_events"
+    shards.mkdir()
+    filename_id = "1" * 32
+    row_id = "2" * 32
+    _write_log(
+        shards / f"review-events-{filename_id}.jsonl",
+        [
+            _event(
+                schema="review_events_v2",
+                installation_id=row_id,
+                review_record_id="wrong-owner",
+            )
+        ],
+    )
+
+    check = review_log_check(legacy, shards_dir=shards, now=NOW)
+
+    assert check["status"] == "unhealthy"
+    assert check["details"]["shard_identity_mismatches"] == 1
+    assert "filename installation identity" in check["summary"]
+
+
+def test_legacy_multi_machine_history_is_readable_but_not_live_validated(tmp_path):
+    legacy = _write_log(
+        tmp_path / "alert_review_events.jsonl",
+        [_event(machine="MainPC"), _event(machine="DESK", symbol="AMD")],
+    )
+    shards = tmp_path / "alert_review_events"
+
+    check = review_log_check(legacy, shards_dir=shards, now=NOW)
+
+    assert check["status"] == "degraded"
+    assert check["details"]["legacy_writers"] == ["DESK", "MainPC"]
+    assert check["details"]["problems"] == []
+    assert "cannot prove no rows were lost" in check["summary"]
 
 
 def test_scan_reports_rows_missing_a_symbol(tmp_path):
