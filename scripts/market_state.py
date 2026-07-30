@@ -173,6 +173,23 @@ class MarketStateEngine:
             return self.episodes[-1]
         return None
 
+    # -- read-only observation accessors -------------------------------
+    # Pure getters over values the state machine already computes. They exist
+    # so an observer (market_state_bridge) can RECORD the impulse-leg start and
+    # the counter-move extreme instead of re-deriving them from the bars, which
+    # would silently drift from the engine (e.g. a failure raised out of
+    # STABILIZING never tracks that bar's adverse edge). Nothing in the state
+    # machine reads these properties, so they cannot change a transition.
+    @property
+    def impulse_start_price(self) -> float | None:
+        """Close of the bar that qualified the current impulse leg."""
+        return self._impulse_start_price
+
+    @property
+    def countermove_extreme(self) -> float | None:
+        """Most adverse edge tracked for the open counter-move (None if closed)."""
+        return self._countermove_extreme
+
     def on_bar(self, bar: M5Bar) -> MarketStateSnapshot:
         if not bar.complete or self._is_stale(bar):
             # Incomplete or gapped data can never transition state (sec 16.3).
