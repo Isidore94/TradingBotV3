@@ -427,3 +427,100 @@ def resolve_emergency_override(now: datetime | None = None) -> EmergencyOverride
         source="; ".join(p for p in (source, expiry_source) if p),
         configured_value=shown,
     )
+
+
+# ---------------------------------------------------------------------------
+# operator CLI
+# ---------------------------------------------------------------------------
+# The role is deliberately machine-local, which means switching it is a manual
+# step on each machine. Hand-editing local_settings.json for that is a bad idea:
+# the file also holds API keys and broker tokens, so a slip while editing it
+# costs more than a wrong role. These helpers do a read-modify-write through
+# project_paths.save_local_setting, which preserves every other key.
+def set_role(role: str, writer: str) -> "WriterRole":
+    """Write this machine's role + the designated writer, then re-resolve.
+
+    Returns the freshly resolved role so a caller can confirm the write landed
+    rather than trusting that it did.
+    """
+    import project_paths
+
+    normalized = _normalized(role)
+    if normalized in _WRITER_ROLE_WORDS:
+        role_value = ROLE_DESIGNATED
+    elif normalized in _SECONDARY_ROLE_WORDS:
+        role_value = ROLE_SECONDARY
+    else:
+        raise ValueError(
+            f"unknown role {role!r}; use {ROLE_DESIGNATED!r} or {ROLE_SECONDARY!r}"
+        )
+    if not str(writer or "").strip():
+        raise ValueError("a designated writer machine name is required")
+
+    project_paths.save_local_setting(CONFIG_WRITER_KEYS[0], str(writer).strip())
+    project_paths.save_local_setting(CONFIG_ROLE_KEYS[0], role_value)
+    return resolve_writer_role()
+
+
+def _describe(resolved: "WriterRole") -> str:
+    lines = [
+        f"machine            : {resolved.machine}",
+        f"role               : {resolved.role}",
+        f"designated writer  : {resolved.designated_writer or '(none configured)'}",
+        f"may publish        : {resolved.may_publish}",
+        f"config source      : {resolved.source or '(nothing configured)'}",
+    ]
+    if not resolved.may_publish:
+        lines.append(f"read-only reason   : {resolved.reason}")
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="writer_role",
+        description=(
+            "Show or set this machine's shared-output writer role. The role is "
+            "machine-local by design: run this on EACH machine. Exactly one "
+            "machine should be the designated writer at a time."
+        ),
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--designate-self",
+        action="store_true",
+        help="make THIS machine the designated writer (it may publish)",
+    )
+    group.add_argument(
+        "--secondary",
+        metavar="WRITER_MACHINE",
+        help="make this machine a read-only secondary, naming the machine that writes",
+    )
+    args = parser.parse_args(argv)
+
+    if args.designate_self:
+        resolved = set_role(ROLE_DESIGNATED, local_machine_name())
+    elif args.secondary:
+        resolved = set_role(ROLE_SECONDARY, args.secondary)
+    else:
+        resolved = resolve_writer_role()
+
+    print(_describe(resolved))
+
+    override = resolve_emergency_override()
+    if override.active:
+        print(f"EMERGENCY OVERRIDE ACTIVE until {override.expires_at}: {override.reason}")
+
+    if args.designate_self or args.secondary:
+        print("\nWritten to machine-local settings. Restart the GUI to pick it up.")
+    # Exit non-zero when this machine cannot publish, so an away-day preflight
+    # can catch "I forgot to switch the role" instead of discovering it as a
+    # missing phone report hours later.
+    return 0 if resolved.may_publish else 1
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via main()
+    import sys
+
+    raise SystemExit(main(sys.argv[1:]))
