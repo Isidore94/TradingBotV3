@@ -66,10 +66,34 @@ def check_report_render() -> str:
     }
     text = core.render_away_report(payload)
     assert "TRADINGBOT AUTO PILOT" in text and "Freshness:" in text
-    with tempfile.TemporaryDirectory() as tmp:
-        result = core.publish_away_report(payload, Path(tmp) / "report.txt")
-        assert result["ok"] and result["verified"], result
-    return "away report renders + verified publish"
+
+    # Publishing is gated on a configured designated writer, and an unconfigured
+    # machine correctly refuses (there is no "first machine wins" fallback). The
+    # smoke check must not depend on how this particular box happens to be
+    # configured, so it names itself the writer for its own throwaway target -
+    # exactly what the runbook has an operator do - and restores the ambient
+    # configuration afterwards. Nothing shared is touched: the target is a temp
+    # directory.
+    import socket
+
+    previous = {
+        key: os.environ.get(key)
+        for key in ("TRADINGBOT_DESIGNATED_WRITER", "TRADINGBOT_WRITER_ROLE")
+    }
+    os.environ["TRADINGBOT_DESIGNATED_WRITER"] = socket.gethostname()
+    os.environ["TRADINGBOT_WRITER_ROLE"] = "designated_writer"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = core.publish_away_report(payload, Path(tmp) / "report.txt")
+            assert result["ok"] and result["verified"], result
+            assert not result.get("previous_pair_disagreement"), result
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    return "away report renders + verified publish (as the designated writer)"
 
 
 def check_engines() -> str:

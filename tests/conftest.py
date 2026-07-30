@@ -36,6 +36,7 @@ import json
 import math
 import os
 import shutil
+import socket
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -51,6 +52,15 @@ os.environ["LOCALAPPDATA"] = _TEST_LOCAL_APPDATA
 os.environ["TRADINGBOTV3_DATA_DIR"] = _TEST_SHARED_DIR
 os.environ["TRADINGBOT_DIAGNOSTICS_DIR"] = _TEST_DIAGNOSTICS_DIR
 os.environ["TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE"] = "1"
+# Shared-writer role (scripts/writer_role.py). Publishing shared mutable output
+# fails closed on an unconfigured machine, and conftest.py has already pointed
+# LOCALAPPDATA at an empty temp dir, so the suite has no machine-local settings
+# file to read. Name this machine the designated writer so tests about
+# publication *mechanics* exercise the happy path. Tests about the role gate
+# itself (tests/test_writer_lease_adversarial.py) clear these variables through
+# monkeypatch and set their own, so this default cannot mask them.
+os.environ.setdefault("TRADINGBOT_DESIGNATED_WRITER", socket.gethostname())
+os.environ.setdefault("TRADINGBOT_WRITER_ROLE", "designated_writer")
 atexit.register(shutil.rmtree, _TEST_SHARED_DIR, ignore_errors=True)
 atexit.register(shutil.rmtree, _TEST_DIAGNOSTICS_DIR, ignore_errors=True)
 atexit.register(shutil.rmtree, _TEST_LOCAL_APPDATA, ignore_errors=True)

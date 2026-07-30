@@ -1926,7 +1926,70 @@ def refresh_auto_populated_watchlists(
 # ---------------------------------------------------------------------------
 # Watchlist file IO
 # ---------------------------------------------------------------------------
-def write_watchlist_file(path: Path, symbols: Iterable[str]) -> None:
+def _is_shared_mutable_path(path: Path) -> bool:
+    """Does ``path`` live in the Drive-synchronized folder both machines mount?
+
+    Scoped by directory rather than by filename so a test target, a cache copy
+    or a machine-local export is never gated, and so a shared file added later
+    is covered without anybody remembering to add it to a list.
+    """
+    try:
+        from project_paths import SHARED_HOME_DIR
+
+        shared = Path(SHARED_HOME_DIR).resolve()
+    except Exception:
+        return False
+    try:
+        candidate = Path(path).resolve()
+    except OSError:
+        return False
+    return candidate == shared or shared in candidate.parents
+
+
+def shared_write_refusal(path: Path) -> str:
+    """Why this machine must not write ``path``, or ``""`` when it may.
+
+    The publication gate protected ``autopilot_today.txt`` and nothing else,
+    while ``longs.txt`` / ``shorts.txt`` / ``autolongs.txt`` / ``autoshorts.txt``
+    sit in the *same* Drive folder and were rewritten by whichever machine
+    happened to run a scheduled build. That put the plan.md sec 5 invariant
+    "user-entered watchlist names are never auto-removed" at cross-machine risk:
+    the merge basis is the local machine's own record of what it wrote, so a
+    secondary cannot know which names the desktop's trader added by hand.
+
+    Layer 1 is the authority here too - the same configured designated writer,
+    read from machine-local settings.
+    """
+    if not _is_shared_mutable_path(path):
+        return ""
+    try:
+        from writer_role import resolve_writer_role
+
+        role = resolve_writer_role()
+    except Exception as exc:  # fail closed: an unreadable role is not a licence
+        return (
+            "the designated-writer configuration could not be read, so this machine "
+            f"refuses to rewrite shared file {Path(path).name}: {exc!r}"
+        )
+    if role.may_publish:
+        return ""
+    return (
+        f"{Path(path).name} is shared Drive state and this machine may not write it: "
+        f"{role.reason}"
+    )
+
+
+def write_watchlist_file(path: Path, symbols: Iterable[str]) -> bool:
+    """Atomically replace a watchlist file. ``False`` when the role refused.
+
+    Returns ``True`` when the file was written. A read-only secondary gets
+    ``False`` and an error in the log; the previous contents - including any
+    names the designated writer's trader typed - are left exactly as they were.
+    """
+    refusal = shared_write_refusal(Path(path))
+    if refusal:
+        logging.error("Shared watchlist write refused: %s", refusal)
+        return False
     cleaned = []
     seen = set()
     for symbol in symbols:
@@ -1953,10 +2016,19 @@ def write_watchlist_file(path: Path, symbols: Iterable[str]) -> None:
                 os.remove(staged_name)
             except OSError:
                 pass
+    return True
 
 
 def append_watchlist_symbols(path: Path, symbols: Iterable[str]) -> list[str]:
-    """Append new symbols to a watchlist file; returns what was added."""
+    """Append new symbols to a watchlist file; returns what was added.
+
+    A machine that may not write this file adds nothing and says so, rather than
+    reporting names it did not manage to persist.
+    """
+    refusal = shared_write_refusal(Path(path))
+    if refusal:
+        logging.error("Shared watchlist append refused: %s", refusal)
+        return []
     existing = list(read_watchlist_symbols(Path(path))) if Path(path).exists() else []
     existing_set = {str(item).strip().upper() for item in existing}
     added = []
@@ -1966,24 +2038,35 @@ def append_watchlist_symbols(path: Path, symbols: Iterable[str]) -> list[str]:
             existing.append(symbol)
             existing_set.add(symbol)
             added.append(symbol)
-    if added:
-        write_watchlist_file(Path(path), existing)
+    if added and not write_watchlist_file(Path(path), existing):
+        return []
     return added
 
 
-def write_bouncebot_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> None:
-    write_watchlist_file(Path(LONGS_FILE), longs)
-    write_watchlist_file(Path(SHORTS_FILE), shorts)
+def write_bouncebot_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
+    """Replace the shared BounceBot watchlists; ``False`` when the role refused."""
+    wrote_longs = write_watchlist_file(Path(LONGS_FILE), longs)
+    wrote_shorts = write_watchlist_file(Path(SHORTS_FILE), shorts)
+    return bool(wrote_longs and wrote_shorts)
 
 
-def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> None:
+def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
     """The bot's own morning picks - written every day in both modes so the
-    picks accumulate a clean, separately-attributable outcome history."""
+    picks accumulate a clean, separately-attributable outcome history.
+
+    Gated on the configured designated writer, because these files live in the
+    same Drive folder as the report. ``False`` means nothing shared was touched;
+    the registry mirror is skipped too, so machine-local provenance never claims
+    a rotation that did not happen.
+    """
     longs = [str(s).strip().upper() for s in longs if str(s).strip()]
     shorts = [str(s).strip().upper() for s in shorts if str(s).strip()]
-    write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
-    write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
+    wrote_longs = write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
+    wrote_shorts = write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
+    if not (wrote_longs and wrote_shorts):
+        return False
     _mirror_auto_picks_into_registry(longs, shorts)
+    return True
 
 
 def candidate_registry_path() -> Path:
@@ -2296,6 +2379,76 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     return "\n".join(sections)
 
 
+def _writer_health_snapshot(
+    *,
+    role=None,
+    lease: Mapping[str, Any] | None = None,
+    lock_info: Mapping[str, Any] | None = None,
+    override=None,
+    lease_path: Path | None = None,
+    failure: tuple[str, str] | None = None,
+    publication: Mapping[str, Any] | None = None,
+    clock_offset_seconds: float | None = None,
+    pair_disagreement: str = "",
+) -> None:
+    """Write the Layer 5 health artifact for this publish attempt.
+
+    Called on every path - success, configuration refusal, ownership refusal -
+    because a machine that stopped publishing must be visible as such. Telemetry
+    failures are swallowed here on purpose: health reporting must never be the
+    thing that fails (or half-completes) a publication.
+    """
+    try:
+        import writer_lease as wl
+        from writer_health import write_writer_health
+
+        moment = datetime.now().isoformat(timespec="seconds")
+        state: dict[str, Any] = {
+            "machine": wl.machine_name(),
+            "pid": os.getpid(),
+            "instance_id": wl.process_instance_id(),
+            "holder_identity": wl.machine_holder_id(),
+            "lease_path": str(lease_path or ""),
+        }
+        if role is not None:
+            state.update(role.as_dict())
+        if lock_info:
+            state["local_lock"] = dict(lock_info)
+        if override is not None:
+            state["emergency_override"] = override.as_dict()
+        if lease:
+            state.update(
+                {
+                    "lease_holder": str(lease.get("holder") or ""),
+                    "lease_instance_id": str(lease.get("instance_id") or ""),
+                    "lease_acquired_at": str(lease.get("acquired_at") or ""),
+                    "lease_expires_at": str(lease.get("expires_at") or ""),
+                    # Only a real renewal fills this in. It used to be an alias
+                    # for the acquisition time, so a Health panel showed a
+                    # renewal timestamp for a lease that had never been renewed.
+                    "last_renewal_at": str(lease.get("renewed_at") or ""),
+                    "fencing_generation": lease.get("generation"),
+                }
+            )
+        if clock_offset_seconds is not None:
+            state["observed_clock_offset_seconds"] = clock_offset_seconds
+        if pair_disagreement:
+            state["previous_pair_disagreement"] = str(pair_disagreement)
+        if failure is not None:
+            kind, message = failure
+            state["last_failure"] = {"at": moment, "kind": kind, "message": str(message)}
+            state["last_blocked_at"] = moment
+            state["status"] = f"blocked: {kind}"
+            state["healthy"] = False
+        if publication is not None:
+            state["last_verified_publication"] = dict(publication)
+            state["status"] = "published"
+            state["healthy"] = True
+        write_writer_health(state)
+    except Exception:
+        logging.debug("Writer health telemetry write failed.", exc_info=True)
+
+
 def publish_away_report(
     payload: Mapping[str, Any],
     path: Path | None = None,
@@ -2303,13 +2456,52 @@ def publish_away_report(
     archive: bool = True,
     archive_keep: int = 30,
 ) -> dict[str, Any]:
-    """Verified atomic publish (plan.md 23.8): render locally, replace
-    atomically, verify by readback hash, then archive a dated immutable copy.
+    """Verified atomic publish (plan.md 23.8) behind the full publication gate.
+
+    The gate order is fixed and each step is a precondition for the next:
+
+    1. **configured writer role** - an unconfigured machine, or one configured
+       as a read-only secondary, touches nothing at all: not the report, not the
+       metadata, not the lease. There is no "first machine wins" fallback.
+    2. **machine-local cross-process lock** - real exclusion between two
+       processes on this PC, held around the lease acquisition *and* the whole
+       publication transaction.
+    3. **hardened Drive lease / fencing validation** - cross-machine writer
+       protection, failing closed on every state it cannot verify.
+    4. render / stage locally.
+    5. **re-verify ownership and fencing generation immediately before
+       replacement** - a writer that was fenced off while rendering aborts. The
+       check is made before the report replace *and* again before the metadata
+       replace, because both write shared Drive output.
+    6. replace report and metadata (a failure of either - including a
+       ``BaseException`` such as a hard interrupt between the two - rolls both
+       back, so the pair on disk never describes two different publications).
+    7. verified readback.
+
     A failure never clears the previous valid report, and the caller gets an
-    honest result instead of a path that may not have been written."""
+    honest result instead of a path that may not have been written.
+
+    RESIDUAL WINDOW, STATED PLAINLY
+    -------------------------------
+    Re-verifying immediately before ``os.replace`` narrows the ownership window;
+    it does not close it. A writer fenced off in the sub-millisecond gap between
+    the check and the replace still completes that replace and reports success.
+    Closing it would need an atomic compare-and-swap across machines, which a
+    Google Drive-synchronized file does not provide. This is cross-machine
+    writer protection - it makes ambiguous states fail closed and makes the
+    common races visible; it is not proof that clobbering cannot happen.
+
+    A report/metadata pair left disagreeing by a kill in an earlier cycle is
+    detected here and reported in ``previous_pair_disagreement`` and in Health
+    telemetry, rather than being silently overwritten.
+    """
+    import writer_lease as wl
+    from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
+    from writer_role import resolve_emergency_override, resolve_writer_role
 
     target = Path(path) if path is not None else Path(AUTOPILOT_REPORT_FILE)
     metadata_path = target.with_suffix(target.suffix + ".meta.json")
+    lease_path = target.with_suffix(target.suffix + ".lease")
     result: dict[str, Any] = {
         "ok": False,
         "verified": False,
@@ -2319,32 +2511,272 @@ def publish_away_report(
         "lease_expires_at": "",
         "sha256": "",
         "restored_previous": False,
+        "role": "",
+        "designated_writer": "",
+        "generation": None,
+        "takeover": False,
+        "previous_holder": "",
     }
-    # Single-writer lease (plan.md Phase 2.9): the desk and the mini-PC both
-    # publish this Drive export; a second machine must not clobber the active
-    # writer. Lease problems degrade to an honest skip, never a crash.
-    try:
-        from writer_lease import LeaseUnavailable, acquire
 
-        lease = acquire(target.with_suffix(target.suffix + ".lease"))
+    # --- gate 1: configured writer role (machine-local, never Drive-synced) ---
+    try:
+        role = resolve_writer_role()
+    except Exception as exc:
+        result["error"] = (
+            "the designated-writer configuration could not be read, so this machine "
+            f"refuses to publish shared output: {exc!r}"
+        )
+        logging.exception("Away report publish blocked: writer role configuration unreadable.")
+        _writer_health_snapshot(
+            lease_path=lease_path, failure=("configuration", result["error"])
+        )
+        return result
+
+    result["role"] = role.role
+    result["designated_writer"] = role.designated_writer
+    if not role.may_publish:
+        result["error"] = role.reason
+        logging.error("Away report publish refused: %s", role.reason)
+        _writer_health_snapshot(
+            role=role, lease_path=lease_path, failure=("configuration", role.reason)
+        )
+        return result
+
+    override = resolve_emergency_override()
+
+    # --- gate 2: machine-local cross-process exclusion, held for the whole
+    # publication transaction (not just the lease read/replace) ---
+    try:
+        with local_writer_lock(lock_key_for_path(lease_path)) as lock_state:
+            lock_info = lock_state.as_dict()
+            return _publish_under_local_lock(
+                payload,
+                target=target,
+                metadata_path=metadata_path,
+                lease_path=lease_path,
+                result=result,
+                role=role,
+                override=override,
+                lock_info=lock_info,
+                archive=archive,
+                archive_keep=archive_keep,
+                wl=wl,
+            )
+    except LocalLockUnavailable as exc:
+        result["error"] = (
+            f"another process on this machine is publishing the shared report: {exc}"
+        )
+        logging.error("Away report publish skipped: %s", result["error"])
+        _writer_health_snapshot(
+            role=role,
+            override=override,
+            lease_path=lease_path,
+            failure=("local_lock", result["error"]),
+        )
+        return result
+
+
+def _previous_pair_disagreement(target: Path, metadata_path: Path) -> str:
+    """Does the report on disk match the metadata beside it? ``""`` when it does.
+
+    Report and metadata are replaced by two separate ``os.replace`` calls. A
+    hard kill between them leaves the pair describing two different
+    publications, and nothing used to notice: the next publish overwrote both
+    and the discrepancy was never recorded. This is the detector - it never
+    modifies either file, because guessing which half is right is not a repair.
+    """
+    try:
+        if not target.exists() or not metadata_path.is_file():
+            return ""
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(metadata, dict):
+            return f"{metadata_path.name} is not a publication metadata object"
+        recorded = str(metadata.get("sha256") or "")
+        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        if recorded and recorded != actual:
+            return (
+                f"{metadata_path.name} describes sha256 {recorded[:12]} (holder "
+                f"{metadata.get('holder')!r}, generation {metadata.get('generation')!r}) but "
+                f"{target.name} on disk hashes to {actual[:12]}; the pair was left describing "
+                "two different publications, most likely by a kill between the two replaces"
+            )
+    except (OSError, ValueError):
+        # Unreadable metadata is a separate, already-reported condition; it is
+        # not evidence of a torn pair.
+        return ""
+    return ""
+
+
+def _observed_clock_offset(lease_path: Path, wl) -> float | None:
+    """Seconds by which the lease's writer appears to be ahead of our clock.
+
+    Recorded for the plan.md sec 6.2 clock-comparison drill. Only the "their
+    clock is ahead of ours" direction is observable from a lease; our own clock
+    running fast looks exactly like an old lease, which is why this is a
+    reported observation rather than a correction.
+    """
+    try:
+        state = wl.inspect_lease(lease_path)
+    except Exception:
+        return None
+    if state.get("kind") == "missing":
+        return None
+    try:
+        return wl.observed_clock_offset_seconds(state)
+    except Exception:
+        return None
+
+
+def _acquire_with_bounded_override(wl, lease_path: Path, override):
+    """Acquire the lease, using the emergency override only if it is needed.
+
+    An active override used to be passed as ``takeover=True`` on *every* publish,
+    so an emergency configured once broke whatever live lease the other machine
+    held, once per hour, for as long as the configuration stayed in place. The
+    override is a recovery action: try the normal path first, and break a live
+    lease only when the normal path is actually blocked.
+    """
+    try:
+        return wl.acquire(lease_path)
+    except wl.LeaseUnavailable:
+        if not bool(getattr(override, "active", False)):
+            raise
+        logging.warning(
+            "Away report lease blocked; using the configured emergency takeover "
+            "(expires %s, reason %r).",
+            getattr(override, "expires_at", ""),
+            getattr(override, "reason", ""),
+        )
+        return wl.acquire(
+            lease_path, takeover=True, reason=getattr(override, "reason", "")
+        )
+
+
+def _restore_previous_publication(
+    result: dict[str, Any],
+    *,
+    target: Path,
+    metadata_path: Path,
+    previous_bytes: bytes | None,
+    previous_metadata_bytes: bytes | None,
+    replaced: bool,
+    metadata_replaced: bool,
+) -> bool:
+    """Put the last verified report/metadata pair back. ``True`` if it ran.
+
+    A failed publish must never destroy the last verified report, and the pair
+    must never be left describing two different publications - so this restores
+    whichever halves were already replaced, together.
+    """
+    if result.get("ok") or not (replaced or metadata_replaced):
+        return False
+    try:
+        restore_items = []
+        if replaced:
+            restore_items.append((target, previous_bytes))
+        if metadata_replaced:
+            restore_items.append((metadata_path, previous_metadata_bytes))
+        for restore_target, restore_bytes in restore_items:
+            if restore_bytes is None:
+                restore_target.unlink(missing_ok=True)
+                continue
+            fd, restore_tmp = tempfile.mkstemp(
+                dir=str(restore_target.parent), suffix=".restore.tmp"
+            )
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(restore_bytes)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(restore_tmp, restore_target)
+            finally:
+                if os.path.exists(restore_tmp):
+                    os.remove(restore_tmp)
+        result["restored_previous"] = True
+    except Exception as restore_exc:
+        result["error"] += f"; previous report restore failed: {restore_exc!r}"
+        logging.exception("Failed restoring the previous verified Away report.")
+    return True
+
+
+def _publish_under_local_lock(
+    payload: Mapping[str, Any],
+    *,
+    target: Path,
+    metadata_path: Path,
+    lease_path: Path,
+    result: dict[str, Any],
+    role,
+    override,
+    lock_info: dict[str, Any],
+    archive: bool,
+    archive_keep: int,
+    wl,
+) -> dict[str, Any]:
+    """Steps 3-7 of the publication gate, with the local lock already held."""
+
+    disagreement = _previous_pair_disagreement(target, metadata_path)
+    if disagreement:
+        # Detection only - nothing is repaired here, because the previous
+        # verified pair is the thing being protected and a guess about which
+        # half is correct is not a repair. The next successful publish replaces
+        # both. Reported so a crash between the two replaces cannot pass
+        # unnoticed until somebody compares hashes by hand.
+        result["previous_pair_disagreement"] = disagreement
+        logging.error("Away report and its metadata disagree on disk: %s", disagreement)
+
+    # --- gate 3: hardened Drive lease + fencing validation ---
+    clock_offset = _observed_clock_offset(lease_path, wl)
+
+    def snapshot(**kwargs) -> None:
+        kwargs.setdefault("role", role)
+        kwargs.setdefault("override", override)
+        kwargs.setdefault("lock_info", lock_info)
+        kwargs.setdefault("lease_path", lease_path)
+        kwargs.setdefault("clock_offset_seconds", clock_offset)
+        kwargs.setdefault("pair_disagreement", disagreement)
+        _writer_health_snapshot(**kwargs)
+
+    try:
+        lease = _acquire_with_bounded_override(wl, lease_path, override)
         result["holder"] = str(lease.get("holder") or "")
         result["lease_expires_at"] = str(lease.get("expires_at") or "")
-    except LeaseUnavailable as exc:
+        result["generation"] = lease.get("generation")
+        result["takeover"] = bool(lease.get("takeover"))
+        result["previous_holder"] = str(lease.get("previous_holder") or "")
+    except wl.LeaseUnavailable as exc:
         result["error"] = f"another machine is the active writer: {exc}"
         logging.info("Away report publish skipped: %s", result["error"])
+        snapshot(failure=("lease", result["error"]))
         return result
     except Exception as exc:
         result["error"] = f"writer lease check failed: {exc!r}"
         logging.exception(
             "Away report publish blocked because writer ownership could not be verified."
         )
+        snapshot(failure=("lease", result["error"]))
         return result
+
+    # --- gate 4: render locally (nothing shared is touched yet) ---
     try:
         text = render_away_report(payload)
     except Exception as exc:
         result["error"] = f"render failed: {exc!r}"
         logging.exception("Away report render failed; previous report left untouched.")
+        snapshot(lease=lease, failure=("render", result["error"]))
         return result
+
+    # --- gate 5a: ownership can have changed while we rendered ---
+    try:
+        wl.assert_still_owned(
+            lease_path, holder=result["holder"], generation=result["generation"]
+        )
+    except wl.LeaseUnavailable as exc:
+        result["error"] = f"writer ownership was lost before publication: {exc}"
+        logging.error("Away report publish aborted: %s", result["error"])
+        snapshot(lease=lease, failure=("ownership_lost", result["error"]))
+        return result
+
     previous_bytes = None
     previous_metadata_bytes = None
     try:
@@ -2355,10 +2787,12 @@ def publish_away_report(
     except OSError as exc:
         result["error"] = f"could not preserve previous publication: {exc!r}"
         logging.exception("Away report publish blocked because the previous publication was unreadable.")
+        snapshot(lease=lease, failure=("previous_publication", result["error"]))
         return result
 
     replaced = False
     metadata_replaced = False
+    aborting: BaseException | None = None
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
@@ -2373,6 +2807,10 @@ def publish_away_report(
             candidate_hash = hashlib.sha256(candidate).hexdigest()
             if candidate_hash != expected:
                 raise ValueError("staged report hash mismatch")
+            # --- gate 5b: last check, immediately before the replacement ---
+            wl.assert_still_owned(
+                lease_path, holder=result["holder"], generation=result["generation"]
+            )
             os.replace(tmp_name, target)
             replaced = True
         finally:
@@ -2395,6 +2833,12 @@ def publish_away_report(
             "bytes": len(readback),
             "holder": result["holder"],
             "lease_expires_at": result["lease_expires_at"],
+            "generation": lease.get("generation"),
+            "instance_id": str(lease.get("instance_id") or ""),
+            "machine": str(lease.get("machine") or ""),
+            "designated_writer": role.designated_writer,
+            "takeover": bool(lease.get("takeover")),
+            "previous_holder": str(lease.get("previous_holder") or ""),
         }
         metadata_bytes = (json.dumps(metadata, indent=1) + "\n").encode("utf-8")
         fd, metadata_tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".meta.tmp")
@@ -2403,6 +2847,13 @@ def publish_away_report(
                 handle.write(metadata_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
+            # --- gate 5c: the metadata replace writes shared Drive output too,
+            # and the last ownership check was a whole readback + hash + stage
+            # ago. Re-verify here as well, so the second half of the pair is not
+            # published by a writer that has since been fenced off.
+            wl.assert_still_owned(
+                lease_path, holder=result["holder"], generation=result["generation"]
+            )
             os.replace(metadata_tmp, metadata_path)
             metadata_replaced = True
         finally:
@@ -2413,43 +2864,64 @@ def publish_away_report(
             metadata_readback.get("schema") != "away_report_publish_v1"
             or metadata_readback.get("sha256") != actual
             or metadata_readback.get("holder") != result["holder"]
+            or metadata_readback.get("generation") != lease.get("generation")
         ):
             raise ValueError("publication metadata readback mismatch")
         result["metadata_path"] = metadata_path
         result["verified"] = True
         result["ok"] = True
+    except wl.LeaseUnavailable as exc:
+        result["ok"] = False
+        result["verified"] = False
+        result["error"] = f"writer ownership was lost before publication: {exc}"
+        logging.error("Away report publish aborted: %s", result["error"])
     except Exception as exc:
         result["ok"] = False
         result["verified"] = False
         result["error"] = str(exc) if isinstance(exc, ValueError) else f"publish failed: {exc!r}"
         logging.exception("Failed writing the Auto Pilot away report to %s", target)
-    if (replaced or metadata_replaced) and not result["ok"]:
-        try:
-            restore_items = []
-            if replaced:
-                restore_items.append((target, previous_bytes))
-            if metadata_replaced:
-                restore_items.append((metadata_path, previous_metadata_bytes))
-            for restore_target, restore_bytes in restore_items:
-                if restore_bytes is None:
-                    restore_target.unlink(missing_ok=True)
-                    continue
-                fd, restore_tmp = tempfile.mkstemp(
-                    dir=str(restore_target.parent), suffix=".restore.tmp"
-                )
-                try:
-                    with os.fdopen(fd, "wb") as handle:
-                        handle.write(restore_bytes)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    os.replace(restore_tmp, restore_target)
-                finally:
-                    if os.path.exists(restore_tmp):
-                        os.remove(restore_tmp)
-            result["restored_previous"] = True
-        except Exception as restore_exc:
-            result["error"] += f"; previous report restore failed: {restore_exc!r}"
-            logging.exception("Failed restoring the previous verified Away report.")
+    except BaseException as exc:
+        # KeyboardInterrupt, SystemExit, a Qt/thread abort - anything that is
+        # NOT an Exception used to skip both handlers and therefore skip the
+        # rollback below, leaving the report replaced and the metadata still
+        # describing the previous publication. Layer 4 forbids exactly that, and
+        # this repo has a documented native-crash history, so the window is not
+        # hypothetical. Roll back first, then let the interrupt continue.
+        result["ok"] = False
+        result["verified"] = False
+        result["error"] = (
+            f"publish interrupted by {type(exc).__name__}; the previous verified "
+            "publication is being restored"
+        )
+        logging.error("Away report publish interrupted by %s.", type(exc).__name__)
+        aborting = exc
+    rolled_back = _restore_previous_publication(
+        result,
+        target=target,
+        metadata_path=metadata_path,
+        previous_bytes=previous_bytes,
+        previous_metadata_bytes=previous_metadata_bytes,
+        replaced=replaced,
+        metadata_replaced=metadata_replaced,
+    )
+    if result["ok"]:
+        snapshot(
+            lease=lease,
+            publication={
+                "at": datetime.now().isoformat(timespec="seconds"),
+                "path": str(target),
+                "holder": result["holder"],
+                "generation": lease.get("generation"),
+                "sha256": result["sha256"],
+                "takeover": bool(lease.get("takeover")),
+                "previous_holder": str(lease.get("previous_holder") or ""),
+            },
+        )
+    else:
+        snapshot(lease=lease, failure=("publish", result["error"]))
+    if aborting is not None:
+        raise aborting
+    if rolled_back:
         return result
     if result["ok"] and archive:
         try:
@@ -2468,6 +2940,39 @@ def publish_away_report(
         except Exception:
             logging.exception("Away report archive write failed (latest report is fine).")
     return result
+
+
+def release_away_report_lease(path: Path | None = None) -> bool:
+    """Hand the away-report writer lease back on a clean shutdown.
+
+    Called from ``AutopilotService.shutdown`` and ``MainWindow.closeEvent``.
+    Without it the lease sat on disk until its TTL expired, so the other machine
+    (or this one, restarted) was locked out of the writer slot for up to a full
+    TTL after a perfectly clean exit - and ``release`` was dead code that only
+    the tests ever called.
+
+    Safety is unchanged either way:
+
+    * it releases only a lease this exact process instance can prove is its own,
+      so it can never drop the other machine's claim, nor another process's on
+      this machine;
+    * a **hard kill**, where this never runs, is covered by expiry. The stale
+      lease is recovered through the normal acquisition path once it ages out -
+      never by a later process claiming the dead one's lease was already its
+      own. A killed writer therefore degrades to a bounded wait, not a wedge.
+    """
+    try:
+        import writer_lease as wl
+
+        target = Path(path) if path is not None else Path(AUTOPILOT_REPORT_FILE)
+        lease_path = target.with_suffix(target.suffix + ".lease")
+        released = wl.release(lease_path)
+        if released:
+            logging.info("Away report writer lease released on shutdown (%s).", lease_path.name)
+        return bool(released)
+    except Exception:
+        logging.debug("Away report writer lease release failed.", exc_info=True)
+        return False
 
 
 def write_heartbeat(
@@ -2510,5 +3015,17 @@ def write_heartbeat(
 
 
 def write_away_report(payload: Mapping[str, Any], path: Path | None = None) -> Path:
-    """Compatibility wrapper; prefer publish_away_report for an honest result."""
-    return Path(publish_away_report(payload, path)["path"])
+    """Compatibility wrapper; prefer :func:`publish_away_report`.
+
+    Raises ``RuntimeError`` when the publish was refused. It used to return the
+    *target* path either way - and ``result["path"]`` is pre-populated before any
+    gate runs - so a read-only secondary, or a machine with no designated writer
+    configured, handed the caller a path to a file it had not written and had no
+    intention of writing. This is the one function whose name promises a write.
+    """
+    result = publish_away_report(payload, path)
+    if not result.get("ok"):
+        raise RuntimeError(
+            f"the away report was not written: {result.get('error') or 'refused'}"
+        )
+    return Path(result["path"])

@@ -421,6 +421,16 @@ class MainWindow(QMainWindow):
                 panel.shutdown()
             except Exception:
                 pass
+        # Backstop for the shared writer lease: AutopilotService.shutdown
+        # normally releases it, but a panel that failed to shut down must not
+        # leave the lease held. Releasing twice is a no-op, and a lease this
+        # process instance does not own is never touched.
+        try:
+            import autopilot_core as core
+
+            core.release_away_report_lease()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 

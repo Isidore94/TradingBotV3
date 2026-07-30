@@ -296,6 +296,13 @@ class AutopilotService(QObject):
     def shutdown(self) -> None:
         self._timer.stop()
         self._save_state()
+        # Hand the shared writer lease back before the scan service goes away:
+        # a clean exit must not leave the other machine locked out for the rest
+        # of the lease TTL. Only a lease this process instance owns is dropped.
+        try:
+            core.release_away_report_lease()
+        except Exception:
+            logging.debug("Away report lease release failed on shutdown.", exc_info=True)
         self._scan_service.shutdown()
 
     # ------------------------------------------------------------------
@@ -519,10 +526,23 @@ class AutopilotService(QObject):
                 current_longs, current_shorts = self._read_watchlists()
                 merged_longs = core.merge_autopilot_watchlist(longs, current_longs, written.get("longs", []))
                 merged_shorts = core.merge_autopilot_watchlist(shorts, current_shorts, written.get("shorts", []))
-                core.write_bouncebot_watchlists(merged_longs["symbols"], merged_shorts["symbols"])
+                wrote = core.write_bouncebot_watchlists(
+                    merged_longs["symbols"], merged_shorts["symbols"]
+                )
                 # The raw bot picks also land in autolongs/autoshorts.txt so
                 # they build a separately-attributable outcome history.
-                core.write_auto_watchlists(longs, shorts)
+                wrote = core.write_auto_watchlists(longs, shorts) and wrote
+                if not wrote:
+                    # A read-only secondary must not record picks it did not
+                    # write: `autopilot_written` is the merge basis that keeps
+                    # the trader's hand-added names, and a false record of it
+                    # would let a later merge drop names this machine never
+                    # placed (plan.md sec 5).
+                    self._log(
+                        "Shared watchlists not updated: this machine is not the "
+                        "designated writer for shared Drive state."
+                    )
+                    return
                 self._state["autopilot_written"] = {"longs": list(longs), "shorts": list(shorts)}
                 self._state["watchlist_built_at"] = datetime.now().strftime("%H:%M:%S")
                 self._save_state()
