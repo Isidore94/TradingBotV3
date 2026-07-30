@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -179,9 +181,19 @@ class TradingDeskPanel(QWidget):
 
     def shutdown(self) -> None:
         """Release live resources (IB connection, worker threads) on app close."""
-        self.bounce_panel.on_close()
-        self.industry_panel.shutdown()
-        self.master_panel.scan_service.shutdown()
+        components = (
+            ("BounceBot", self.bounce_panel.on_close),
+            ("industry board", self.industry_panel.shutdown),
+            ("master scan service", self.master_panel.scan_service.shutdown),
+        )
+        for label, close in components:
+            try:
+                close()
+            except Exception:
+                # App close is a best-effort fan-out: one service exposing a
+                # real shutdown bug must not prevent the remaining owned
+                # processes and threads from receiving their bounded cleanup.
+                logging.exception("%s shutdown failed; continuing app cleanup.", label)
 
     def _detach_mode_panels(self) -> None:
         # _clear_layout deletes whatever it still owns, so every long-lived

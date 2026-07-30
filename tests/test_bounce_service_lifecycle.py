@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -110,7 +111,15 @@ class ThreadExceptionRecorder:
 def thread_exceptions():
     recorder = ThreadExceptionRecorder()
     previous = threading.excepthook
-    threading.excepthook = recorder
+
+    def record_and_chain(args):
+        recorder(args)
+        previous(args)
+
+    # Keep pytest's threadexception hook active: the explicit recorder gives
+    # precise assertions, while -W error must still exercise pytest's own
+    # PytestUnhandledThreadExceptionWarning path.
+    threading.excepthook = record_and_chain
     try:
         yield recorder
     finally:
@@ -1056,11 +1065,12 @@ def test_shutdown_latches_before_close_time_signals_can_restart(
     service.shutdown()
     time.sleep(0.05)
 
-    # Terminal shutdown suppresses close-time status emissions altogether.  If
-    # a direct slot is added later, start() is still refused by the early latch.
-    assert restart_results == []
+    # Stop remains observable, but the separate terminal latch refuses both
+    # direct-connected restart attempts before any worker can launch.
+    assert restart_results == [False, False]
     assert calls["n"] == 0
     assert service._liveness.closed
+    assert service._terminal.is_set()
     assert thread_exceptions.events == []
 
 
@@ -1086,3 +1096,57 @@ def test_connecting_signal_can_cancel_start_before_worker_launch(
     assert not service.running
     assert statuses == ["stopped"], "the cancelled start must not publish a trailing connecting state"
     assert thread_exceptions.events == []
+
+
+def test_every_blocked_start_is_visible_and_names_the_safe_recovery(
+    service_factory, thread_exceptions
+):
+    release = threading.Event()
+
+    def construct(callback, start_scanning_enabled=False):
+        release.wait(timeout=JOIN_TIMEOUT)
+        return FakeBot("stuck", gui_callback=callback)
+
+    service = service_factory(construct)
+    service.STOP_BUDGET = 0.2
+    statuses: list[str] = []
+    service.statusChanged.connect(statuses.append)
+    assert service.start() is True
+    worker = service_factory.track(service)
+    assert _await(lambda: service.running)
+    service.stop()
+
+    before = len(statuses)
+    assert service.start() is False
+    assert service.start() is False
+    blocked = statuses[before:]
+    assert len(blocked) == 2
+    assert all("has not retired" in message for message in blocked)
+    assert all("restart the app" in message for message in blocked)
+
+    release.set()
+    _join(worker)
+    assert thread_exceptions.events == []
+
+
+def test_trading_desk_shutdown_continues_after_one_component_raises(caplog):
+    from ui.panels.trading_desk import TradingDeskPanel
+
+    calls: list[str] = []
+
+    def broken_bounce():
+        calls.append("bounce")
+        raise RuntimeError("timer stop failed")
+
+    fake_desk = SimpleNamespace(
+        bounce_panel=SimpleNamespace(on_close=broken_bounce),
+        industry_panel=SimpleNamespace(shutdown=lambda: calls.append("industry")),
+        master_panel=SimpleNamespace(
+            scan_service=SimpleNamespace(shutdown=lambda: calls.append("scan"))
+        ),
+    )
+
+    TradingDeskPanel.shutdown(fake_desk)
+
+    assert calls == ["bounce", "industry", "scan"]
+    assert "continuing app cleanup" in caplog.text

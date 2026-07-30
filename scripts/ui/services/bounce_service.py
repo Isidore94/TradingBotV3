@@ -204,6 +204,10 @@ class BounceService(QObject):
         self._generation = 0
         self._session: _StartupSession | None = None
         self._liveness = _Liveness()
+        # Separate from QObject liveness: terminal shutdown must refuse a
+        # re-entrant start *before* stop signals fire, while those signals
+        # should remain observable until stop() has completed.
+        self._terminal = threading.Event()
         # Owned threads that outlived their shutdown budget.  They are never
         # forgotten: they are reported (``unretired_workers``), they gate a new
         # startup, and ``shutdown()`` makes one final bounded attempt on them.
@@ -337,18 +341,16 @@ class BounceService(QObject):
     def start(self) -> bool:
         """Open a startup generation.  True when one was actually opened.
 
-        Returns False (and stays quiet about it beyond a log/status line) when
-        the service is retired, already running, or - the case hole 6 covers -
-        when a previous generation has not yet come back out of
-        ``run_bot_with_gui``.  Two concurrent constructions would each call
-        ``bot.connect(..., clientId=bot.ib_client_id)`` with the same hard-coded
-        id, which is this repo's known IB Error 326 collision and two live IB
-        sessions.  The refusal is self-healing: the stuck generation is already
-        cancelled, so the next Auto Pilot tick or Start click gets through as
-        soon as it clears.
+        Returns False when the service is terminal, already running, or a
+        previous startup/retirement worker still may own the hard-coded IB
+        client id.  That includes post-connect state sync and disconnect/join,
+        not only ``run_bot_with_gui`` itself: opening across either window can
+        produce Error 326 or two live sessions.  Every blocked attempt emits an
+        actionable status; it self-heals when the owner exits, while a worker
+        that never exits honestly requires an app restart.
         """
 
-        if self._liveness.closed:
+        if self._terminal.is_set() or self._liveness.closed:
             return False  # retired service: never resurrect a startup worker
         with self._lock:
             if self._bot is not None or self._session is not None:
@@ -369,22 +371,28 @@ class BounceService(QObject):
                 first_report = not self._start_deferred_reported
                 self._start_deferred_reported = True
         if blocked_by is not None:
-            logging.warning(
-                "BounceService.start deferred: %s has not retired; a second IB connect "
-                "would collide on the same client id.",
-                blocked_by,
-            )
             if first_report:
-                self._emit(
-                    self.statusChanged,
-                    "start deferred: the previous BounceBot worker has not retired",
+                logging.warning(
+                    "BounceService.start deferred: %s has not retired; a second IB connect "
+                    "would collide on the same client id.",
+                    blocked_by,
                 )
+            # Every manual click gets truthful feedback.  Suppressing this
+            # after the first refusal made a permanently blocked IB connect
+            # look like a dead Start button.  Auto Pilot already deduplicates
+            # its own activity-log line.
+            self._emit(
+                self.statusChanged,
+                f"start deferred: {blocked_by} has not retired; retry shortly, "
+                "or restart the app if it does not clear",
+            )
             return False
         self._emit(self.connectionChanged, "IB: connecting")
         with self._lock:
             may_continue = (
                 self._session is session
                 and not session.is_cancelled
+                and not self._terminal.is_set()
                 and not self._liveness.closed
             )
         if not may_continue:
@@ -399,6 +407,7 @@ class BounceService(QObject):
             may_start = (
                 self._session is session
                 and not session.is_cancelled
+                and not self._terminal.is_set()
                 and not self._liveness.closed
             )
         if not may_start:
@@ -464,10 +473,10 @@ class BounceService(QObject):
         and reports whatever is still outstanding.
         """
 
-        # Latch first.  ``stop()`` is reversible and emits direct-connected
-        # signals; latching only afterwards allowed a close-time slot to call
-        # start() synchronously and open a new generation during shutdown.
-        self._liveness.close()
+        # Refuse re-entrant starts before the direct-connected stop signals
+        # fire, but keep the QObject observably alive until stop() and the final
+        # bounded joins finish.
+        self._terminal.set()
         try:
             self.stop()
         finally:
@@ -486,6 +495,7 @@ class BounceService(QObject):
                     len(outstanding),
                     ", ".join(outstanding),
                 )
+            self._liveness.close()
 
     def _stop_timers(self) -> None:
         """Stop every timer this service owns.
