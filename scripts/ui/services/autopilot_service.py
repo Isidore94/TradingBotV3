@@ -105,6 +105,7 @@ class AutopilotService(QObject):
         self._last_hourly_report_attempt_at: datetime | None = None
         self._last_ib_status: str | None = None
         self._weekend_logged_date: str | None = None
+        self._bot_start_deferred = False
 
         if bounce_service is not None:
             bounce_service.alertReceived.connect(self._on_alert)
@@ -419,8 +420,22 @@ class AutopilotService(QObject):
         if service is None:
             return
         if not service.running:
-            self._log("Starting BounceBot (IB connect + intraday scanning).")
-            service.start()
+            # BounceService owns the "may a startup begin?" decision: a tick
+            # landing while a previous startup worker is still inside its IB
+            # connect gets False back instead of a second worker (two
+            # run_bot_with_gui calls share one hard-coded client id -> IB
+            # Error 326 and two live sessions). Log the deferral once, not
+            # once per tick.
+            if service.start() is False:
+                if not service.running and not self._bot_start_deferred:
+                    self._bot_start_deferred = True
+                    self._log(
+                        "BounceBot start deferred: the previous BounceBot worker has not "
+                        "retired. Auto Pilot will retry on the next tick."
+                    )
+            else:
+                self._bot_start_deferred = False
+                self._log("Starting BounceBot (IB connect + intraday scanning).")
         if not service.scanning_enabled:
             service.set_scanning_enabled(True)
 

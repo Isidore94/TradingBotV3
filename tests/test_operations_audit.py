@@ -893,6 +893,31 @@ def test_owned_process_counts_are_measured_in_process_and_unknown_outside_it(tmp
     assert lingering["status"] == "degraded"
     assert "9001" in lingering["summary"]
 
+    overdue_bounce = dict(_IDLE_PROCESS_SNAPSHOT)
+    overdue_bounce.update(
+        {
+            "bounce_service_count": 1,
+            "bounce_service_running_count": 0,
+            "bounce_service_connected_count": 0,
+            "bounce_unretired_worker_count": 1,
+            "bounce_unretired_workers": ["startup worker (qt-bouncebot-start)"],
+        }
+    )
+    overdue = next(
+        item
+        for item in _build(
+            diagnostics,
+            registry,
+            now,
+            review_capture=False,
+            process_snapshot=overdue_bounce,
+        )["checks"]
+        if item["id"] == "owned_process_counts"
+    )
+    assert overdue["status"] == "degraded"
+    assert "exceeded the shutdown budget" in overdue["summary"]
+    assert overdue["details"]["bounce_unretired_worker_count"] == 1
+
     # Out of process the count is not zero - it is unmeasurable, and reporting
     # zero from a CLI that owns nothing would be a fabricated green.
     import operations_audit

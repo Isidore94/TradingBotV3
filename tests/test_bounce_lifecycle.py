@@ -138,14 +138,100 @@ def test_stop_during_startup_cannot_install_a_late_bot(monkeypatch):
     monkeypatch.setattr(bounce_bot, "run_bot_with_gui", fake_run_bot_with_gui)
 
     service = BounceService()
+    service.STARTUP_RETIRE_TIMEOUT = 0.25
     service.start()
+    worker = service._session.thread  # this service owns exactly one startup thread
     time.sleep(0.2)
-    assert service.running  # _starting is True while the worker is blocked
+    assert service.running  # the startup generation is in flight
 
     service.stop()  # user stops while startup is still in flight
     release.set()  # startup then completes late
-    time.sleep(0.5)
+    # Join the worker instead of sleeping: the monkeypatched constructor must
+    # not outlive the test (it did, and produced a real IB-connected bot).
+    worker.join(timeout=10)
+    assert not worker.is_alive()
 
     assert calls.get("late_stop"), "the late bot must be stopped, not installed"
-    assert calls.get("startup_auto"), "N/A must start BounceBot under automatic regime control"
+    assert not calls.get("startup_auto"), (
+        "a cancelled startup generation must not configure the bot it is about to discard; "
+        "saved-state application on a healthy startup is covered by "
+        "test_healthy_startup_hands_the_regime_to_auto_tracking (below)"
+    )
     assert service._current_bot() is None
+
+
+def test_healthy_startup_hands_the_regime_to_auto_tracking(monkeypatch):
+    """N/A must start BounceBot under automatic regime control.
+
+    This is the positive half of the assertion that
+    ``test_stop_during_startup_cannot_install_a_late_bot`` used to carry, before
+    that test was narrowed to the *cancelled* path (where saved-state
+    application must not run at all).  Keep both: cancelled -> configure
+    nothing, healthy -> configure everything.
+    """
+
+    _qapp()
+    import bounce_bot
+
+    from ui.services.bounce_service import BounceService
+
+    calls = {}
+
+    class FakeBot:
+        connection_status = True
+        rrs_threshold = 2.0
+        rrs_timeframe_key = "5m"
+        market_environment_user_override = False
+
+        def stop(self, timeout=None):
+            calls["stop"] = timeout
+
+        def disconnect(self):
+            calls["disconnect"] = True
+
+        def set_rrs_threshold(self, *_):
+            calls["rrs_threshold"] = True
+
+        def set_rrs_timeframe(self, *_):
+            calls["rrs_timeframe"] = True
+
+        def set_market_environment(self, *_):
+            calls["manual_env"] = True
+
+        def clear_market_environment_override(self):
+            calls["startup_auto"] = True
+
+        def set_scanning_enabled(self, *_):
+            calls["scanning"] = True
+
+        def set_bounce_type_enabled(self, *_):
+            calls["bounce_types"] = True
+
+        def get_market_environment(self):
+            return "bullish_strong"
+
+        def is_scanning_enabled(self):
+            return False
+
+        def is_bounce_type_enabled(self, *_):
+            return True
+
+    monkeypatch.setattr(
+        bounce_bot, "run_bot_with_gui", lambda callback, start_scanning_enabled=False: FakeBot()
+    )
+
+    service = BounceService()
+    try:
+        service.STARTUP_RETIRE_TIMEOUT = 5.0
+        assert service.start() is True
+        worker = service._session.thread
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+
+        assert service._current_bot() is not None, "a healthy startup must install its bot"
+        assert calls.get("startup_auto"), "N/A must start BounceBot under automatic regime control"
+        assert not calls.get("manual_env"), "no manual override was set"
+        assert calls.get("rrs_threshold") and calls.get("rrs_timeframe")
+        assert calls.get("scanning") and calls.get("bounce_types")
+    finally:
+        service.shutdown()

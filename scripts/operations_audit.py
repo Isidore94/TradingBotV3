@@ -1224,6 +1224,7 @@ def _writer_health_checks(path: Path, now: datetime, local_tz) -> list[dict[str,
 #: The module that owns the scan children. Process ownership is per-process, so
 #: the count is only meaningful when the audit runs *inside* the owning process.
 _PROCESS_OWNER_MODULE = "ui.services.scan_service"
+_BOUNCE_OWNER_MODULE = "ui.services.bounce_service"
 
 
 def _runtime_process_snapshot() -> dict[str, Any] | None:
@@ -1238,8 +1239,19 @@ def _runtime_process_snapshot() -> dict[str, Any] | None:
     module = sys.modules.get(_PROCESS_OWNER_MODULE)
     getter = getattr(module, "owned_scan_process_snapshot", None) if module is not None else None
     if getter is None:
+        # This row primarily answers scan-process ownership.  Bounce-only
+        # telemetry must not turn an unmeasured scan count into a green zero.
         return None
-    return dict(getter())
+    snapshot = dict(getter())
+    bounce_module = sys.modules.get(_BOUNCE_OWNER_MODULE)
+    bounce_getter = (
+        getattr(bounce_module, "owned_bounce_thread_snapshot", None)
+        if bounce_module is not None
+        else None
+    )
+    if bounce_getter is not None:
+        snapshot.update(dict(bounce_getter()))
+    return snapshot
 
 
 def _process_check(
@@ -1290,11 +1302,21 @@ def _process_check(
     lingering = list(snapshot.get("lingering_child_pids") or [])
     active_label = str(snapshot.get("active_scan_label") or "")
     worker_threads = int(snapshot.get("scan_worker_threads", 0) or 0)
+    bounce_overdue = int(snapshot.get("bounce_unretired_worker_count", 0) or 0)
+    bounce_workers = list(snapshot.get("bounce_unretired_workers") or [])
     threads = int(snapshot.get("python_thread_count", 0) or 0)
     details = dict(snapshot)
     details.update({"audit_pid": os.getpid(), "market_phase": market_phase})
 
-    if live == 0:
+    if bounce_overdue:
+        status = STATUS_DEGRADED
+        summary = (
+            f"{bounce_overdue} BounceBot worker(s) exceeded the shutdown budget "
+            f"({', '.join(bounce_workers)}); {live} owned scan child(ren), "
+            f"{worker_threads} scan worker thread(s), {threads} thread(s) in "
+            f"PID {snapshot.get('process_pid')}."
+        )
+    elif live == 0:
         status = STATUS_HEALTHY
         summary = (
             f"No owned scan children; {worker_threads} scan worker thread(s), {threads} thread(s) "

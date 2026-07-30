@@ -363,7 +363,10 @@ class BouncePanel(QFrame):
         self.service.stop_scanning()
 
     def on_close(self) -> None:
-        self.service.stop()
+        # App close is terminal.  ``stop`` is deliberately reversible and
+        # therefore does not latch worker emissions or make the final bounded
+        # join attempt; ``shutdown`` does both.
+        self.service.shutdown()
 
     def _on_environment_changed(self) -> None:
         if self._syncing_environment:

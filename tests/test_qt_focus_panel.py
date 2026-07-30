@@ -399,7 +399,10 @@ def test_bounce_panel_defaults_user_to_na_and_hides_manual_windows(monkeypatch):
 
     panel.entry_assist_advanced_button.setChecked(True)
     assert not panel.entry_assist_buttons["pullback_window"].isHidden()
-    panel.stop()
+    terminal_calls = []
+    monkeypatch.setattr(panel.service, "shutdown", lambda: terminal_calls.append(True))
+    panel.on_close()
+    assert terminal_calls == [True], "app close must use terminal service shutdown"
 
 
 def test_auto_regime_readout_formatting():
