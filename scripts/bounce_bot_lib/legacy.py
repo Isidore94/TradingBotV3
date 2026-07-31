@@ -82,6 +82,11 @@ from master_avwap_shared import (
 )
 from focus_picks import load_focus_map
 from market_internals import format_internals_line, internals_context_fields
+from vold_recorder import (
+    CONTRACT_CANDIDATES as VOLD_CONTRACT_CANDIDATES,
+    VoldSessionRecorder,
+    contract_metadata as vold_contract_metadata,
+)
 from project_paths import (
     DATA_DIR,
     LOG_DIR,
@@ -2568,6 +2573,8 @@ class BounceBot(EWrapper, EClient):
         self.data = {}
         self.data_ready_events = {}
         self.reqid_to_symbol = {}
+        self.contract_details_data = {}
+        self.contract_details_ready_events = {}
         self.invalid_security_symbols = set()
 
         # IB pacing backoff state (see IB_PACING_* constants).
@@ -2592,6 +2599,14 @@ class BounceBot(EWrapper, EClient):
         # D1 major levels (daily SMAs, D1 trendlines, horizontal S/R) for the
         # integrity observer; injectable so tests stay hermetic.
         self._d1_extra_levels_provider = None
+        # Independent completed-M5 breadth collector. It owns no trading state
+        # and is polled on its own thread so a 28-minute broad scan cannot skip
+        # bars. The exact IBKR contract is qualified and data-verified at
+        # runtime; fallbacks remain labeled as proxies in every ledger row.
+        self._vold_recorder = VoldSessionRecorder()
+        self._vold_contract = None
+        self._vold_contract_metadata = {}
+        self._vold_thread = None
 
         self.alerted_symbols = set()
         self.bounce_candidates = {}  # Track candidate bounces
@@ -2659,6 +2674,12 @@ class BounceBot(EWrapper, EClient):
         # the candidates CSV when the JSON-blob columns have bloated it.
         if str(os.environ.get("TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE") or "").strip() != "1":
             threading.Thread(target=self._run_bounce_learning_maintenance, daemon=True).start()
+            self._vold_thread = threading.Thread(
+                target=self._run_vold_recorder,
+                name="vold-m5-recorder",
+                daemon=True,
+            )
+            self._vold_thread.start()
 
     def _run_bounce_learning_maintenance(self):
         try:
@@ -7892,6 +7913,193 @@ class BounceBot(EWrapper, EClient):
             self.reqid_to_symbol.pop(reqId, None)
         return bars
 
+    def _request_contract_details(self, candidate, timeout=6.0):
+        """Qualify one breadth candidate through IB's contract database."""
+        if not self.ensure_connected():
+            return []
+        req_id = self.getReqId()
+        ready = threading.Event()
+        with self.data_lock:
+            self.contract_details_data[req_id] = []
+            self.contract_details_ready_events[req_id] = ready
+        contract = Contract()
+        contract.symbol = candidate.symbol
+        contract.secType = candidate.sec_type
+        contract.exchange = candidate.exchange
+        contract.currency = candidate.currency
+        try:
+            self.reqContractDetails(req_id, contract)
+            ready.wait(timeout=max(0.1, float(timeout)))
+            with self.data_lock:
+                return list(self.contract_details_data.get(req_id, []))
+        finally:
+            with self.data_lock:
+                self.contract_details_data.pop(req_id, None)
+                self.contract_details_ready_events.pop(req_id, None)
+
+    def _request_historical_contract_bars(
+        self,
+        contract,
+        *,
+        duration="1 D",
+        bar_size="5 mins",
+        timeout=15.0,
+    ):
+        """Fetch completed-bar source rows for an already-qualified contract."""
+        if not self.ensure_connected():
+            return []
+        self._respect_pacing_backoff()
+        req_id = self.getReqId()
+        ready = threading.Event()
+        with self.data_lock:
+            self.data[req_id] = []
+            self.data_ready_events[req_id] = ready
+        try:
+            self.reqHistoricalData(
+                reqId=req_id,
+                contract=contract,
+                endDateTime="",
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow="TRADES",
+                useRTH=1,
+                formatDate=1,
+                keepUpToDate=False,
+                chartOptions=[],
+            )
+            ready.wait(timeout=max(0.1, float(timeout)))
+            with self.data_lock:
+                return list(self.data.get(req_id, []))
+        finally:
+            with self.data_lock:
+                self.data_ready_events.pop(req_id, None)
+                self.data.pop(req_id, None)
+                self.reqid_to_symbol.pop(req_id, None)
+
+    def _qualify_vold_contract(self):
+        """Find the first IB-qualified NYSE breadth contract with M5 data."""
+        attempts = []
+        for candidate in VOLD_CONTRACT_CANDIDATES:
+            if self.is_stopping():
+                return False
+            try:
+                details_rows = self._request_contract_details(candidate)
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "candidate": candidate.symbol,
+                        "exchange": candidate.exchange,
+                        "status": "contract_query_failed",
+                        "error": str(exc),
+                    }
+                )
+                continue
+            if not details_rows:
+                attempts.append(
+                    {
+                        "candidate": candidate.symbol,
+                        "exchange": candidate.exchange,
+                        "status": "no_contract_definition",
+                    }
+                )
+                continue
+            for details in details_rows:
+                qualified = details.contract
+                try:
+                    bars = self._request_historical_contract_bars(qualified)
+                except Exception as exc:
+                    bars = []
+                    error_text = str(exc)
+                else:
+                    error_text = ""
+                if not bars:
+                    attempts.append(
+                        {
+                            "candidate": candidate.symbol,
+                            "exchange": candidate.exchange,
+                            "con_id": int(getattr(qualified, "conId", 0) or 0),
+                            "status": "qualified_but_no_m5_data",
+                            "error": error_text,
+                        }
+                    )
+                    continue
+                metadata = vold_contract_metadata(
+                    qualified,
+                    candidate=candidate,
+                    long_name=str(getattr(details, "longName", "") or ""),
+                    valid_exchanges=str(getattr(details, "validExchanges", "") or ""),
+                )
+                self._vold_contract = qualified
+                self._vold_contract_metadata = metadata
+                self._vold_recorder.activate_contract(
+                    metadata,
+                    as_of=get_market_local_now(),
+                )
+                appended = self._vold_recorder.observe(bars, now=get_market_local_now())
+                level = logging.INFO if metadata.get("is_exact_vold") else logging.CRITICAL
+                logging.log(
+                    level,
+                    "$VOLD recorder contract verified: requested=%s, actual=%s@%s "
+                    "conId=%s proxy=%s (%s); initial completed M5 rows=%s.",
+                    candidate.symbol,
+                    metadata.get("symbol"),
+                    metadata.get("exchange"),
+                    metadata.get("con_id"),
+                    metadata.get("proxy_kind"),
+                    metadata.get("semantic_description"),
+                    appended,
+                )
+                return True
+        reason = (
+            "$VOLD recorder unavailable: IBKR returned no candidate with usable "
+            "historical 5-minute data. Collection is unhealthy; no silent skip."
+        )
+        self._vold_recorder.record_unavailable(attempts, reason=reason)
+        logging.critical("%s Attempts=%s", reason, attempts)
+        return False
+
+    def _poll_vold_once(self):
+        if self._vold_contract is None and not self._qualify_vold_contract():
+            return False
+        try:
+            bars = self._request_historical_contract_bars(self._vold_contract)
+        except Exception as exc:
+            bars = []
+            reason = f"breadth historical request failed: {exc}"
+        else:
+            reason = "breadth historical request returned no rows"
+        if not bars:
+            self._vold_recorder.record_data_gap(reason=reason, now=get_market_local_now())
+            logging.error("$VOLD recorder data gap: %s", reason)
+            return False
+        self._vold_recorder.observe(bars, now=get_market_local_now())
+        return True
+
+    def _run_vold_recorder(self):
+        """Own the point-in-time breadth feed independently of scan cadence."""
+        retry_seconds = 10.0
+        while not self._stop_event.is_set():
+            if not self.connection_status:
+                self._stop_event.wait(retry_seconds)
+                continue
+            now = get_market_local_now()
+            session = get_market_session_window(now)
+            try:
+                self._poll_vold_once()
+            except Exception:
+                logging.exception(
+                    "$VOLD recorder failed. Collection is unhealthy; the error is not suppressed."
+                )
+                self._vold_recorder.record_data_gap(
+                    reason="unhandled recorder exception; see application log",
+                    now=now,
+                )
+            # Poll often enough to append every completed M5 bar, but stay far
+            # below IB's historical-request pacing budget. Outside RTH, one
+            # five-minute cadence is enough to catch a late/final provider bar.
+            wait_seconds = 60.0 if session.open_local <= now <= session.close_local else 300.0
+            self._stop_event.wait(wait_seconds)
+
     def get_cached_5m_bars(self, symbol):
         return self._get_cached_bars(symbol, "5 D", "5 mins")
 
@@ -8270,6 +8478,8 @@ class BounceBot(EWrapper, EClient):
                     self.invalid_security_symbols.add(symbol)
                 if reqId in self.data_ready_events:
                     self.data_ready_events[reqId].set()
+                if reqId in self.contract_details_ready_events:
+                    self.contract_details_ready_events[reqId].set()
         if errorCode in (162, 366):
             # Failed/cancelled historical query: release the waiting request
             # instead of letting it burn its full timeout.
@@ -8289,6 +8499,17 @@ class BounceBot(EWrapper, EClient):
     def connectionClosed(self):
         self.connection_status = False
         logging.warning("IB connection closed.")
+
+    def contractDetails(self, reqId, details):
+        with self.data_lock:
+            if reqId in self.contract_details_data:
+                self.contract_details_data[reqId].append(details)
+
+    def contractDetailsEnd(self, reqId):
+        with self.data_lock:
+            ready = self.contract_details_ready_events.get(reqId)
+            if ready is not None:
+                ready.set()
 
     def historicalData(self, reqId, bar):
         with self.data_lock:
@@ -10575,7 +10796,7 @@ class BounceBot(EWrapper, EClient):
             self.disconnect()
         except Exception:
             pass
-        for thread in (self.strategy_thread, self.api_thread):
+        for thread in (self.strategy_thread, self._vold_thread, self.api_thread):
             if (
                 thread is not None
                 and thread.is_alive()
