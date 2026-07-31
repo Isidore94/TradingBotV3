@@ -190,6 +190,7 @@ def test_comparison_is_structural_and_type_strict(tmp_path):
         "aggressive_watchlist_candidates_v1",
         "technical_integrity_scoring_v1",
         "bounce_entry_quality_v1",
+        "laguerre_rsi_v1",
     ],
 )
 def test_shipped_fixtures_satisfy_the_contract(name):
