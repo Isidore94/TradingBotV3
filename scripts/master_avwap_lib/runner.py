@@ -2476,6 +2476,12 @@ def run_master(
     recorder.set_counter("use_shared_watchlists", bool(use_shared_watchlists))
     recorder.set_counter("update_setup_tracker", update_setup_tracker)
     set_active_recorder(recorder)
+    # Provider counters are per-run: reset here, flushed into this manifest on
+    # both the success and the failure path (a failed scan's provider counts
+    # are exactly what diagnoses it).
+    from diagnostics import provider_counters
+
+    provider_counters.reset()
     try:
         result = _run_master_impl(
             longs_path=longs_path,
@@ -2499,9 +2505,11 @@ def run_master(
             recorder.outputs["setup_tracker_skip_reason"] = str(
                 result.get("setup_tracker_skip_reason") or ""
             )
+        provider_counters.flush_to_manifest(recorder)
         recorder.finalize(status="ok")
         return result
     except BaseException as exc:
+        provider_counters.flush_to_manifest(recorder)
         recorder.finalize(status="failed", error=repr(exc))
         raise
     finally:

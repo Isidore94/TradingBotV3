@@ -409,24 +409,24 @@ def test_every_plan_6_3_dimension_is_declared_and_emitted(tmp_path):
 
     emitted = {item["id"] for item in payload["checks"]}
     unimplemented = [entry for entry in REQUIRED_CHECK_INVENTORY if not entry.covered_by]
-    # H2 flipped owned processes, universe/market data and disk from "nothing
-    # collects this" to measured checks. Provider counters are the last gap:
-    # there is no capture point anywhere in the codebase, so it must stay an
-    # emitted UNKNOWN rather than acquire an invented number.
-    assert {entry.id for entry in unimplemented} == {"provider_counters"}
-    for entry in unimplemented:
-        # The rule that outlives the gap: never silently absent from max().
-        assert entry.id in emitted
-        check = next(item for item in payload["checks"] if item["id"] == entry.id)
-        assert check["status"] == "unknown"
-        assert check["details"]["requirement"] == entry.requirement
-        assert rows[entry.id]["implemented"] is False
-
-    # Every other dimension is now attempted by a real implementation.
+    # Every sec 6.3 dimension now has a measuring check: provider counters -
+    # the last gap - gained a capture point (diagnostics.provider_counters via
+    # the run manifest) and a real check that reports UNKNOWN until the first
+    # instrumented scan writes counters. The rule that outlives the gaps:
+    # every declared dimension is emitted, never silently absent from max().
+    assert unimplemented == []
     for entry in REQUIRED_CHECK_INVENTORY:
-        if entry.id == "provider_counters":
-            continue
+        assert set(entry.covered_by) & emitted, (
+            f"declared dimension {entry.id!r} has no emitted check covering it"
+        )
         assert rows[entry.id]["implemented"] is True, entry.id
+
+    # Honest cold start: the provider dimension is implemented but its check
+    # still reports UNKNOWN until the first instrumented scan writes
+    # provider.* counters into a manifest ("not measured" != "measured zero").
+    provider = next(item for item in payload["checks"] if item["id"] == "provider_counters")
+    assert provider["status"] == "unknown"
+    assert provider["details"]["captured"] is False
 
 
 def test_a_partial_payload_can_never_roll_up_to_healthy(tmp_path):
@@ -707,6 +707,64 @@ def test_shadow_store_needs_freshness_not_only_a_session_date_match(tmp_path):
     tomorrow = _audit(diagnostics, registry, next_day)
     assert _check_status(tomorrow, "greatness_shadow") == "unknown"
     assert _check_status(tomorrow, "spy_shadow") == "unknown"
+
+
+def test_provider_counters_unknown_until_measured_then_graded(tmp_path):
+    """Sec 6.3 bullet 9 flips from inventory-gap UNKNOWN to a measured check.
+
+    'Measured and zero' (provider.captured stamped, all counts zero) is healthy;
+    failures or a real pacing-class throttle are degraded; a failure share above
+    the unhealthy ratio is unhealthy.  A manifest with no provider counters at
+    all - a pre-instrumentation build - stays honestly UNKNOWN.
+    """
+    diagnostics, registry, now = _measured_fixture(tmp_path)
+
+    # The fixture's manifest predates instrumentation: UNKNOWN, and emitted as
+    # ONE check (no duplicate inventory-gap row for the same dimension).
+    payload = _audit(diagnostics, registry, now)
+    provider_rows = [c for c in payload["checks"] if c["id"] == "provider_counters"]
+    assert len(provider_rows) == 1
+    assert provider_rows[0]["status"] == "unknown"
+    assert provider_rows[0]["details"]["captured"] is False
+
+    def _with_counters(counters):
+        manifest = {
+            "schema": "run_manifest_v1",
+            "run_id": "run-2",
+            "job_type": "master_scan",
+            "started_at": "2026-07-13T19:30:00+00:00",
+            "ended_at": "2026-07-13T19:48:00+00:00",
+            "status": "ok",
+            "total_seconds": 1080,
+            "counters": {"provider.captured": 1, **counters},
+        }
+        _write(diagnostics / "run_manifests" / "run-2.json", manifest)
+        result = _audit(diagnostics, registry, now)
+        return next(c for c in result["checks"] if c["id"] == "provider_counters")
+
+    clean = _with_counters(
+        {"provider.daily_bars.request": 40, "provider.daily_bars.cache_hit": 160}
+    )
+    assert clean["status"] == "healthy"
+    assert clean["details"]["totals"]["request"] == 40
+    assert clean["details"]["cache_hit_ratio"] == 0.8
+
+    throttled = _with_counters(
+        {
+            "provider.daily_bars.request": 40,
+            "provider.ibkr_historical.throttle": 2,
+        }
+    )
+    assert throttled["status"] == "degraded"
+    assert "throttling was observed" in throttled["summary"].lower()
+
+    failing = _with_counters(
+        {
+            "provider.daily_bars.request": 40,
+            "provider.daily_bars.failure": 20,
+        }
+    )
+    assert failing["status"] == "unhealthy"
 
 
 def test_spy_rollover_failure_is_unhealthy_and_non_promotable(tmp_path):

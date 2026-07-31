@@ -26,11 +26,12 @@ Omitting them is what let a machine with unknown disk, unknown provider health,
 an unknown owned-process count and an unknown universe age render HEALTHY.
 
 Disk/storage, owned process and thread counts, universe and market-data
-freshness, runtime profile and writer coordination are now *measured* here.
-Provider request / cache-hit / throttle / failure counters are the one sec 6.3
-dimension with no capture point anywhere in the codebase; it therefore keeps
-emitting UNKNOWN. Inventing a number for it would be exactly the silent
-confirmation the four-status model exists to prevent.
+freshness, runtime profile, writer coordination and provider request /
+cache-hit / throttle / failure counters are now *measured* here.  The provider
+counters come from :mod:`diagnostics.provider_counters` via the newest run
+manifest's ``provider.*`` counters; until the first scan on an instrumented
+build has written a manifest carrying ``provider.captured``, the dimension
+honestly reports UNKNOWN rather than inventing a number.
 
 The shadow rows are graded on the RAW LOGS, not on the writers' sidecars. This
 module used to read ``spy_state_shadow_status.json`` and
@@ -194,6 +195,7 @@ REQUIRED_CHECK_INVENTORY: tuple[RequiredCheck, ...] = (
         "provider_counters",
         "Provider request, cache-hit, throttling, and failure counts",
         "provider request, cache-hit, throttling, and failure counts",
+        ("provider_counters",),
     ),
     RequiredCheck(
         "universe_and_market_data_freshness",
@@ -1538,6 +1540,88 @@ def _disk_check(diagnostics: Path, now: datetime) -> dict[str, Any]:
     )
 
 
+#: Above this failure share of live requests the provider layer is failing,
+#: not merely degraded.
+PROVIDER_FAILURE_UNHEALTHY_RATIO = 0.25
+
+
+def _provider_check(latest_manifest: dict[str, Any], manifests_dir: Path) -> dict[str, Any]:
+    """Sec 6.3 bullet 9, measured from the newest run manifest.
+
+    ``diagnostics.provider_counters`` records request / cache-hit / throttle /
+    failure events at the fetch boundary and flushes them into the manifest as
+    ``provider.<endpoint>.<outcome>`` counters, with ``provider.captured``
+    stamped even on an all-zero run so "measured and zero" is distinguishable
+    from "not measured".  A manifest without that stamp (any scan from a
+    pre-instrumentation build, or no scan at all) is honestly UNKNOWN.
+    """
+    counters = (
+        latest_manifest.get("counters")
+        if isinstance(latest_manifest.get("counters"), dict)
+        else {}
+    )
+    check_id, label = "provider_counters", "Provider request/cache/throttle/failure counts"
+    run_id = str(latest_manifest.get("run_id") or "") if latest_manifest else ""
+    if not counters.get("provider.captured"):
+        return _check(
+            check_id,
+            label,
+            STATUS_UNKNOWN,
+            "Not measured yet: the newest scan manifest carries no provider "
+            "counters (pre-instrumentation build, or no scan has run). The "
+            "first master scan on this build will record them.",
+            source=manifests_dir,
+            details={"manifest_run_id": run_id, "captured": False},
+        )
+    per_endpoint: dict[str, dict[str, int]] = {}
+    rollup = {"request": 0, "cache_hit": 0, "failure": 0, "throttle": 0}
+    for key, value in counters.items():
+        text = str(key)
+        if not text.startswith("provider.") or text == "provider.captured":
+            continue
+        parts = text.split(".")
+        if len(parts) != 3:
+            continue
+        _, endpoint, outcome = parts
+        per_endpoint.setdefault(endpoint, {})[outcome] = int(value or 0)
+        if outcome in rollup:
+            rollup[outcome] += int(value or 0)
+    requests = rollup["request"]
+    failures = rollup["failure"]
+    throttles = rollup["throttle"]
+    cache_hits = rollup["cache_hit"]
+    total_lookups = requests + cache_hits
+    cache_ratio = (cache_hits / total_lookups) if total_lookups else None
+    if requests and (failures / requests) > PROVIDER_FAILURE_UNHEALTHY_RATIO:
+        status = STATUS_UNHEALTHY
+    elif failures or throttles:
+        status = STATUS_DEGRADED
+    else:
+        status = STATUS_HEALTHY
+    summary = (
+        f"Last scan: {requests} live request(s), {cache_hits} cache hit(s)"
+        + (f" ({cache_ratio:.0%} of lookups)" if cache_ratio is not None else "")
+        + f", {failures} failure(s), {throttles} throttle event(s)."
+    )
+    if throttles:
+        summary += " Pacing-class throttling was observed."
+    return _check(
+        check_id,
+        label,
+        status,
+        summary,
+        source=manifests_dir,
+        details={
+            "manifest_run_id": run_id,
+            "captured": True,
+            "totals": rollup,
+            "cache_hit_ratio": round(cache_ratio, 4) if cache_ratio is not None else None,
+            "per_endpoint": per_endpoint,
+            "failure_unhealthy_ratio": PROVIDER_FAILURE_UNHEALTHY_RATIO,
+        },
+    )
+
+
 def _symbol_count(path: Path) -> int | None:
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -1853,6 +1937,7 @@ def build_operations_audit(
         _process_check(moment, market_phase, process_snapshot),
         _universe_check(universe_files, market_probe, market_date, moment, local_tz),
         _disk_check(diagnostics, moment),
+        _provider_check(latest_manifest, diagnostics / "run_manifests"),
     ]
     # Every sec 6.3 dimension nothing measures is emitted as UNKNOWN, so the
     # roll-up below can see the gaps instead of averaging over what happens to

@@ -2226,6 +2226,20 @@ def _ibkr_historical_errors_are_circuit_worthy(errors: list[dict] | None) -> boo
     return False
 
 
+def _provider_count(endpoint: str, outcome: str) -> None:
+    """Provider-boundary accounting (diagnostics.provider_counters).
+
+    Counting only: never influences fetch, caching, retry, or circuit
+    behaviour, and an accounting failure must never break a scan.
+    """
+    try:
+        from diagnostics.provider_counters import record
+
+        record(endpoint, outcome)
+    except Exception:
+        pass
+
+
 def _record_ibkr_historical_result(
     symbol: str,
     *,
@@ -2237,6 +2251,13 @@ def _record_ibkr_historical_result(
     if succeeded:
         _IBKR_HISTORICAL_FAILURE_COUNT = 0
         return
+    # Honest throttle accounting: only a real pacing-class signal (IB error
+    # 162/366 or a pacing/rate-limit message) counts as throttling. A timeout
+    # is an ordinary failure.
+    if _ibkr_historical_errors_are_circuit_worthy(errors):
+        _provider_count("ibkr_historical", "throttle")
+    elif timed_out:
+        _provider_count("ibkr_historical", "failure")
     if not (timed_out or _ibkr_historical_errors_are_circuit_worthy(errors)):
         return
     _IBKR_HISTORICAL_FAILURE_COUNT += 1
@@ -14785,9 +14806,11 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
     # Prefer fresh local bars. A full IBKR->Yahoo miss can cost seconds per
     # symbol, so do not refresh symbols whose cache was updated recently.
     if cache_has_history and cache_data_is_recent and _daily_bar_cache_is_recent(normalized_symbol):
+        _provider_count("daily_bars", "cache_hit")
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
     if cache_has_history and cache_data_is_recent and _daily_bar_live_failure_in_cooldown(normalized_symbol):
+        _provider_count("daily_bars", "cache_hit")
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
     if not cache_has_history:
@@ -14808,6 +14831,7 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
             requested_days,
             max(DAILY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS),
         )
+    _provider_count("daily_bars", "request")
     fresh = _fetch_live_daily_bars(ib, normalized_symbol, refresh_days)
     if fresh is not None and not fresh.empty:
         if _daily_bar_cache_data_is_recent(fresh):
@@ -14823,6 +14847,7 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
             fresh_last_date.isoformat() if fresh_last_date else "unknown",
         )
 
+    _provider_count("daily_bars", "failure")
     _mark_daily_bar_live_fetch_result(normalized_symbol, succeeded=False)
     if not cached.empty:
         if not cache_data_is_recent:
@@ -15195,6 +15220,7 @@ def fetch_intraday_bars(
     cached = _load_cached_intraday_bar_frame(normalized_symbol, token)
     cache_has_history = _intraday_cache_covers_history(cached, duration_days)
     if cache_has_history and _intraday_cache_data_is_recent(cached) and _intraday_cache_is_recent(key):
+        _provider_count("intraday_bars", "cache_hit")
         return cached.copy()
 
     if not cache_has_history:
@@ -15211,7 +15237,10 @@ def fetch_intraday_bars(
             max(INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS),
         )
 
+    _provider_count("intraday_bars", "request")
     fresh = _fetch_live_intraday_bars(ib, normalized_symbol, bar_size=bar_size, duration=f"{int(refresh_days)} D")
+    if not (fresh is not None and not fresh.empty and _intraday_cache_data_is_recent(fresh)):
+        _provider_count("intraday_bars", "failure")
     if fresh is not None and not fresh.empty and _intraday_cache_data_is_recent(fresh):
         merged = _merge_intraday_bar_frames(cached, fresh)
         if persist:
