@@ -26,6 +26,14 @@ CHART_WATCH_TAG = "chart_watch"
 # like an alert does, but is never a feed entry - the feed records what the
 # scanner said, not what was looked at.
 MANUAL_CHART_TAG = "manual_chart"
+# A DESK-mode auto-populate proposal awaiting the trader's verdict. It rides
+# the review queue as a chart with Approve/Pass verbs and, like a manual
+# chart, never lands in the alert feed.
+AUTO_PICK_TAG = "auto_pick"
+
+
+def is_auto_pick_alert(alert: Any) -> bool:
+    return str(getattr(alert, "tag", "") or "") == AUTO_PICK_TAG
 
 
 def is_chart_watch_alert(alert: Any) -> bool:

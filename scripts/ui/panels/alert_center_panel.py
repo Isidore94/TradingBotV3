@@ -49,6 +49,7 @@ from project_paths import (
     ALERT_CHART_WATCHES_FILE,
     ALERT_REVIEW_EVENTS_FILE,
     ALERT_REVIEW_PARKED_SYMBOLS_FILE,
+    AUTO_POPULATE_PENDING_FILE,
     D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
     get_local_setting,
@@ -58,10 +59,12 @@ from review_events import record_review_event
 from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
 from ui.panels import desk_layout
 from ui.models.bounce import (
+    AUTO_PICK_TAG,
     BounceAlert,
     CHART_WATCH_TAG,
     MANUAL_CHART_TAG,
     SYMBOL_RE,
+    is_auto_pick_alert,
     is_chart_watch_alert,
     is_entry_assist_text,
 )
@@ -298,6 +301,7 @@ class AlertCenterPanel(QFrame):
         d1_event_watches_path=None,
         review_events_path=None,
         review_guide=None,
+        auto_pick_pending_path=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -396,6 +400,18 @@ class AlertCenterPanel(QFrame):
             if review_events_path is not None
             else (ALERT_REVIEW_EVENTS_FILE if persist_ignored else None)
         )
+        # DESK-mode auto-populate approval queue: the engine stages its picks
+        # in this file instead of writing the watchlists; the panel charts
+        # each one with Approve/Pass verbs. Gated like the other persistence
+        # paths so bare test panels never read or write the real queue.
+        self._auto_pick_pending_path = (
+            Path(auto_pick_pending_path)
+            if auto_pick_pending_path is not None
+            else (AUTO_POPULATE_PENDING_FILE if persist_ignored else None)
+        )
+        # (date, side, symbol) triples already turned into a review chart, so
+        # a pick the trader skipped is not re-queued on every poll tick.
+        self._auto_picks_enqueued: set[tuple[str, str, str]] = set()
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
         # chart annotations (review_guidance.py). Advisory only; with no
         # documents on disk every score is 0 and the queue stays FIFO.
@@ -552,6 +568,8 @@ class AlertCenterPanel(QFrame):
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
         self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
+        self.chart_review.autoPickApproved.connect(self._approve_auto_pick)
+        self.chart_review.autoPickPassed.connect(self._pass_auto_pick)
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -564,6 +582,9 @@ class AlertCenterPanel(QFrame):
         # refresh the M5 pane is missing every bar since and the D1 preview
         # candle never moves. Cheap local reads; re-renders only on change.
         self._watch_timer.timeout.connect(self._refresh_review_chart)
+        # DESK-mode auto picks ride the same 30s tick: the staging file is a
+        # cheap local read and a new pick is not latency-critical.
+        self._watch_timer.timeout.connect(self._poll_auto_pick_pending)
         self._watch_timer.start()
         # Persistent D1 level alerts poll less often: the daily-store reads
         # are mtime-cached and the evidence changes at most once per M5 bar.
@@ -1078,6 +1099,113 @@ class AlertCenterPanel(QFrame):
         )
         self.statusChanged.emit(message)
         self._advance_review_queue()
+
+    # ------------------------------------------------------------------
+    # DESK-mode auto-populate picks: chart first, watchlist only on approval.
+    def _poll_auto_pick_pending(self) -> None:
+        """Turn newly staged auto-populate picks into review-queue charts."""
+        if self._auto_pick_pending_path is None:
+            return
+        try:
+            from autopilot_core import load_auto_populate_pending_picks
+
+            payload = load_auto_populate_pending_picks(self._auto_pick_pending_path)
+        except Exception:
+            return
+        day = str(payload.get("date") or "")
+        for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
+            entries = payload.get("pending", {}).get(side_key) or {}
+            for symbol, entry in entries.items():
+                symbol = str(symbol or "").strip().upper()
+                if not symbol or not SYMBOL_RE.fullmatch(symbol):
+                    continue
+                key = (day, side_key, symbol)
+                if key in self._auto_picks_enqueued:
+                    continue
+                self._auto_picks_enqueued.add(key)
+                entry = entry if isinstance(entry, dict) else {}
+                reason = str(entry.get("reason") or "auto-populate pick")
+                score = entry.get("score")
+                trigger = f"Auto pick ({side_label.lower()}): {reason}"
+                if score:
+                    trigger += f" · score {float(score):.2f}"
+                self._enqueue_review_alert(
+                    BounceAlert(
+                        time_text=str(entry.get("staged_at") or "")
+                        or datetime.now().strftime("%H:%M:%S"),
+                        symbol=symbol,
+                        side=side_label,
+                        trigger=trigger,
+                        timeframe="M5",
+                        tag=AUTO_PICK_TAG,
+                        raw_text=f"AUTO PICK {side_label} {symbol}: {reason}",
+                        payload={"auto_pick": dict(entry), "auto_pick_side": side_key},
+                    )
+                )
+
+    def _resolve_auto_pick(self, alert: BounceAlert, approved: bool) -> None:
+        if (
+            self._current_review_alert is None
+            or self._current_review_alert.symbol != alert.symbol
+        ):
+            return
+        result = self._record_auto_pick_verdict(alert, approved)
+        symbol = alert.symbol
+        if approved:
+            if result.get("written"):
+                side_word = "shorts" if alert.side == "SHORT" else "longs"
+                self.statusChanged.emit(
+                    f"✓ {symbol}: approved auto pick - added to the {side_word} "
+                    "watchlist (BounceBot picks it up on its next M5 cycle)."
+                )
+            elif result.get("already_listed"):
+                self.statusChanged.emit(
+                    f"✓ {symbol}: approved auto pick - already on a watchlist, nothing to add."
+                )
+            else:
+                self.statusChanged.emit(
+                    f"{symbol}: approval recorded, but the watchlist write was "
+                    "refused on this machine - check the log."
+                )
+        else:
+            self.statusChanged.emit(
+                f"✕ {symbol}: passed on auto pick - it will not be proposed again today."
+            )
+        self._advance_review_queue()
+
+    def _record_auto_pick_verdict(self, alert: BounceAlert, approved: bool) -> dict:
+        """File the verdict in the staging store + the decision log."""
+        result: dict = {}
+        if self._auto_pick_pending_path is not None:
+            try:
+                from autopilot_core import resolve_auto_populate_pick
+
+                result = resolve_auto_populate_pick(
+                    alert.symbol,
+                    str(alert.payload.get("auto_pick_side") or alert.side),
+                    approved,
+                    pending_path=self._auto_pick_pending_path,
+                )
+            except Exception:
+                result = {}
+        self._record_review_event(
+            "auto_pick_approve" if approved else "auto_pick_pass",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+            detail={
+                "written": bool(result.get("written")),
+                "already_listed": bool(result.get("already_listed")),
+                "auto_pick": alert.payload.get("auto_pick") or None,
+            },
+        )
+        return result
+
+    def _approve_auto_pick(self, alert: BounceAlert) -> None:
+        self._resolve_auto_pick(alert, True)
+
+    def _pass_auto_pick(self, alert: BounceAlert) -> None:
+        self._resolve_auto_pick(alert, False)
 
     def _toggle_review_cross_focus(self, alert: BounceAlert) -> None:
         """The chart's cross-promote toggle. Never advances the queue.
@@ -1807,6 +1935,10 @@ class AlertCenterPanel(QFrame):
         """Drop a name from today's visual processing without changing scans."""
         if not alert.symbol:
             return
+        if is_auto_pick_alert(alert):
+            # Removing an auto-pick chart is a "no" verdict too: retire the
+            # staged proposal so the pending file carries no orphan.
+            self._record_auto_pick_verdict(alert, False)
         self._record_review_event(
             "remove_today",
             alert=alert,

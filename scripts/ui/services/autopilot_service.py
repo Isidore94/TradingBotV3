@@ -72,8 +72,14 @@ _MAX_REPORT_LOG_LINES = 30
 #           bot-owned autolongs/autoshorts lists) continues ONLY while the
 #           "collect research while Auto is off" setting is enabled.
 # DESK    - full automation; desktop notifications are the primary surface.
-# AWAY    - identical trading decisions; only report cadence/notification
-#           presentation may differ. Never different strategy logic.
+#           The trader is at the desk, so auto-populate watchlist picks stage
+#           for chart approval in the Alert Center instead of self-applying
+#           (2026-07-31 directive) - a human-in-the-loop gate, not different
+#           discovery logic.
+# AWAY    - identical trading decisions and discovery; auto-populate picks
+#           self-apply (nobody is present to approve), and report cadence/
+#           notification presentation may differ. Never different strategy
+#           logic.
 AUTO_MODE_OFF = "OFF"
 AUTO_PROFILE_DESK = "DESK"
 AUTO_PROFILE_AWAY = "AWAY"

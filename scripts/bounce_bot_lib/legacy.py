@@ -10778,7 +10778,9 @@ class BounceBot(EWrapper, EClient):
         from autopilot_core import (
             AGGRESSIVE_SPY_PULLBACK_MIN_MOVE_PCT,
             AUTO_POPULATE_REFRESH_MINUTES,
+            auto_populate_clock_open,
             minutes_since_open,
+            read_auto_pilot_mode,
             record_opening_environment,
             resolve_discovery_env,
         )
@@ -10791,6 +10793,14 @@ class BounceBot(EWrapper, EClient):
         # Wait for a readable tape (30m in) and stop after the close.
         if since_open is None or since_open < 30 or since_open > 390:
             return
+        # Picks start at 07:00 local (trader directive 2026-07-31) - on a
+        # normal session open+30m IS 07:00, but the clock gate holds on
+        # shifted sessions too.
+        if not auto_populate_clock_open(datetime.now()):
+            return
+        # DESK = trader at the desk: stage picks for chart approval in the
+        # Alert Center. AWAY (and OFF, the historical path) applies directly.
+        stage_only = read_auto_pilot_mode() == "DESK"
         env = self.get_market_environment()
         # A day that OPENED directional keeps that bias for discovery even
         # after the live label decays to neutral (2026-07-17 directive: the
@@ -10850,6 +10860,7 @@ class BounceBot(EWrapper, EClient):
                     opening_env_key=opening_env,
                     spy_pullback_active=spy_pullback_active,
                     preserve_existing_auto=new_pullback,
+                    stage_only=stage_only,
                     log=logging.info,
                 )
                 if summary and self.gui_callback:
@@ -10858,14 +10869,25 @@ class BounceBot(EWrapper, EClient):
                     env_label = str(summary.get("discovery_env") or env)
                     if env_label != str(env):
                         env_label = f"{env_label} anchor, live {env}"
-                    self.gui_callback(
-                        f"AUTO WATCHLIST ({env_label}): longs {long_info.get('total_auto', 0)} auto "
-                        f"(+{len(long_info.get('added', []))}/-{len(long_info.get('rotated_out', []))}), "
-                        f"shorts {short_info.get('total_auto', 0)} auto "
-                        f"(+{len(short_info.get('added', []))}/-{len(short_info.get('rotated_out', []))}) "
-                        f"from {summary.get('scanned', 0)} universe names.",
-                        "blue",
-                    )
+                    if summary.get("mode") == "staged":
+                        self.gui_callback(
+                            f"AUTO WATCHLIST PICKS ({env_label}): "
+                            f"{len(long_info.get('staged', []))} longs / "
+                            f"{len(short_info.get('staged', []))} shorts staged for chart "
+                            f"approval ({long_info.get('pending', 0)}L/"
+                            f"{short_info.get('pending', 0)}S waiting) "
+                            f"from {summary.get('scanned', 0)} universe names.",
+                            "blue",
+                        )
+                    else:
+                        self.gui_callback(
+                            f"AUTO WATCHLIST ({env_label}): longs {long_info.get('total_auto', 0)} auto "
+                            f"(+{len(long_info.get('added', []))}/-{len(long_info.get('rotated_out', []))}), "
+                            f"shorts {short_info.get('total_auto', 0)} auto "
+                            f"(+{len(short_info.get('added', []))}/-{len(short_info.get('rotated_out', []))}) "
+                            f"from {summary.get('scanned', 0)} universe names.",
+                            "blue",
+                        )
             except Exception:
                 logging.exception("Auto-populate worker failed.")
             finally:

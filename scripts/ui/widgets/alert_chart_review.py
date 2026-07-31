@@ -8,7 +8,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from chart_watch import WATCH_KINDS
-from ui.models.bounce import MANUAL_CHART_TAG, BounceAlert
+from ui.models.bounce import MANUAL_CHART_TAG, BounceAlert, is_auto_pick_alert
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
@@ -39,6 +39,8 @@ class AlertChartReview(QWidget):
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
     levelArmRequested = Signal(str, str, float)  # symbol, direction, level
     levelDisarmRequested = Signal(str, str, float)  # symbol, direction, level
+    autoPickApproved = Signal(object)  # DESK-mode auto pick: add to watchlist
+    autoPickPassed = Signal(object)  # DESK-mode auto pick: decline for today
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -88,6 +90,27 @@ class AlertChartReview(QWidget):
             lambda: self.alert is not None and self.skipRequested.emit(self.alert)
         )
 
+        # DESK-mode auto-pick verdict verbs. Hidden except when an auto-populate
+        # proposal occupies the chart; both advance the review queue.
+        self.auto_approve_button = QPushButton("✓ Add to watchlist")
+        self.auto_approve_button.setToolTip(
+            "Approve this auto pick: it joins the auto-owned slice of the "
+            "BounceBot watchlist and gets M5-scanned immediately."
+        )
+        self.auto_approve_button.clicked.connect(
+            lambda: self.alert is not None and self.autoPickApproved.emit(self.alert)
+        )
+        self.auto_pass_button = QPushButton("✕ Pass")
+        self.auto_pass_button.setToolTip(
+            "Decline this auto pick for today - it will not be proposed again "
+            "this session and the watchlists are untouched."
+        )
+        self.auto_pass_button.clicked.connect(
+            lambda: self.alert is not None and self.autoPickPassed.emit(self.alert)
+        )
+        self.auto_approve_button.setVisible(False)
+        self.auto_pass_button.setVisible(False)
+
         self.cross_focus_button = QPushButton(self._cross_labels[0])
         self.cross_focus_button.setCheckable(True)
         self.cross_focus_button.clicked.connect(
@@ -111,6 +134,8 @@ class AlertChartReview(QWidget):
         self.watch_buttons = self.arm_bar.watch_buttons
 
         buttons = QHBoxLayout()
+        buttons.addWidget(self.auto_approve_button)
+        buttons.addWidget(self.auto_pass_button)
         buttons.addWidget(self.remove_today_button)
         buttons.addWidget(self.focus_button)
         buttons.addWidget(self.skip_button)
@@ -159,9 +184,12 @@ class AlertChartReview(QWidget):
         self.title.setText(f"{alert.symbol}{side}{timeframe}")
         self.alert_text.setText(alert.trigger or alert.raw_text)
         # Red setup text = a live alert put this chart up. A typed manual
-        # chart stays muted, so a glance separates "something fired" from
-        # "I was just looking".
-        self._set_setup_text_live(alert.tag != MANUAL_CHART_TAG)
+        # chart and a staged auto pick stay muted, so a glance separates
+        # "something fired" from "I was just looking / deciding".
+        is_auto_pick = is_auto_pick_alert(alert)
+        self._set_setup_text_live(alert.tag != MANUAL_CHART_TAG and not is_auto_pick)
+        self.auto_approve_button.setVisible(is_auto_pick)
+        self.auto_pass_button.setVisible(is_auto_pick)
         if focus_category == "swing":
             self.focus_button.setText("Add to Swing Focus")
             # Swing pick: the cross-promote is the M5 day-trade list.
@@ -232,6 +260,8 @@ class AlertChartReview(QWidget):
         self.guidance_label.setVisible(False)
         self.snapshot.setVisible(False)
         self.queue_label.setText("")
+        self.auto_approve_button.setVisible(False)
+        self.auto_pass_button.setVisible(False)
         self._set_actions_enabled(False)
         self.set_armed_kinds(())
         self.set_armed_d1_events(())
@@ -263,6 +293,8 @@ class AlertChartReview(QWidget):
             self.focus_button,
             self.skip_button,
             self.cross_focus_button,
+            self.auto_approve_button,
+            self.auto_pass_button,
         ):
             button.setEnabled(enabled)
         # The symbol box stays live even with no alert on screen - typing a

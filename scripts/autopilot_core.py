@@ -41,8 +41,10 @@ from market_session import get_market_session_window, normalize_market_local_dat
 from project_paths import (
     AUTO_LONGS_FILE,
     AUTO_POPULATE_MEMBERSHIP_FILE,
+    AUTO_POPULATE_PENDING_FILE,
     AUTO_SHORTS_FILE,
     AUTOPILOT_REPORT_FILE,
+    AUTOPILOT_STATE_FILE,
     LONGS_FILE,
     MASTER_AVWAP_DAILY_BARS_DIR,
     SHORTS_FILE,
@@ -801,6 +803,9 @@ RW_MIN_SESSION_RVOL = 1.0  # trader's TC2000 bar: over 1.00 = real participation
 AUTO_POPULATE_MIN_SCORE = 1.25
 # Ceiling only - the quality bar governs the count, symmetric both sides.
 AUTO_POPULATE_MAX_PER_SIDE = 100
+# Auto-populate never runs before this local-clock hour (trader directive
+# 2026-07-31: picks start at 07:00, same clock as the Auto Pilot auto-arm).
+AUTO_POPULATE_START_HOUR = 7
 
 _AUTO_POPULATE_LOCK = threading.Lock()
 _DAILY_CONTEXT_CACHE: dict[str, Any] = {"date": None, "contexts": {}}
@@ -1849,6 +1854,197 @@ def apply_auto_populated_watchlists(
     return summary
 
 
+def read_auto_pilot_mode(state_path: Path = AUTOPILOT_STATE_FILE) -> str:
+    """The GUI's Auto mode as OFF/DESK/AWAY, read from the machine-local
+    Auto Pilot state file. The BounceBot scan loop runs off-GUI-thread (and on
+    the mini-PC, off-GUI-process), so the file is the one shared truth. An
+    unreadable or absent file reads as OFF - the historical auto-apply path."""
+    try:
+        payload = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "OFF"
+    if not isinstance(payload, dict) or not payload.get("enabled"):
+        return "OFF"
+    profile = str(payload.get("profile") or "DESK").strip().upper()
+    return profile if profile in ("DESK", "AWAY") else "DESK"
+
+
+def auto_populate_clock_open(now: datetime | None = None) -> bool:
+    """Picks start at 07:00 local - before that the engine stays quiet."""
+    return (now or datetime.now()).hour >= AUTO_POPULATE_START_HOUR
+
+
+def _load_auto_populate_pending(path: Path, today_iso: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict) or payload.get("date") != today_iso:
+        payload = {"date": today_iso}
+    for key in ("pending", "decided"):
+        bucket = payload.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket.setdefault("long", {})
+        bucket.setdefault("short", {})
+        payload[key] = bucket
+    return payload
+
+
+def _save_auto_populate_pending(path: Path, payload: Mapping[str, Any]) -> None:
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def stage_auto_populate_candidates(
+    candidates: Mapping[str, list[dict[str, Any]]],
+    env_key: str,
+    *,
+    pending_path: Path = AUTO_POPULATE_PENDING_FILE,
+    membership_path: Path = AUTO_POPULATE_MEMBERSHIP_FILE,
+    longs_path: Path = LONGS_FILE,
+    shorts_path: Path = SHORTS_FILE,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """DESK mode: queue the picks for chart approval instead of writing them.
+
+    Nothing touches longs.txt/shorts.txt here - the trader approves or passes
+    each pick off its chart in the Alert Center. A symbol proposes at most once
+    per day (pending or already decided), day-cut names stay out, and anything
+    already on either watchlist is never proposed.
+    """
+    moment = now or datetime.now()
+    today_iso = moment.date().isoformat()
+    long_cap, short_cap = auto_populate_caps(env_key)
+    with _AUTO_POPULATE_LOCK:
+        membership = _load_auto_populate_membership(membership_path, today_iso)
+        pending = _load_auto_populate_pending(pending_path, today_iso)
+        listed = {
+            str(s).strip().upper()
+            for path in (longs_path, shorts_path)
+            for s in read_watchlist_symbols(Path(path))
+        }
+        decided = {
+            sym
+            for side in ("long", "short")
+            for sym in pending["decided"].get(side, {})
+        }
+        queued = {
+            sym
+            for side in ("long", "short")
+            for sym in pending["pending"].get(side, {})
+        }
+        summary: dict[str, Any] = {"env": env_key, "mode": "staged", "caps": (long_cap, short_cap)}
+        for side, cap in (("long", long_cap), ("short", short_cap)):
+            rows = candidates.get(f"{side}s") or []
+            cut = {str(s).strip().upper() for s in membership["cut"].get(side, [])}
+            staged: list[str] = []
+            side_pending = pending["pending"][side]
+            for row in rows:
+                if len(side_pending) >= cap:
+                    break
+                sym = str(row.get("symbol") or "").strip().upper()
+                if not sym or sym in cut or sym in listed or sym in decided or sym in queued:
+                    continue
+                side_pending[sym] = {
+                    "reason": str(row.get("reason") or ""),
+                    "score": float(row.get("score") or 0.0),
+                    "staged_at": moment.strftime("%H:%M:%S"),
+                    "env": env_key,
+                }
+                queued.add(sym)
+                staged.append(sym)
+            summary[side] = {"staged": staged, "pending": len(side_pending)}
+        _save_auto_populate_pending(pending_path, pending)
+    return summary
+
+
+def load_auto_populate_pending_picks(
+    pending_path: Path = AUTO_POPULATE_PENDING_FILE,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Today's approval queue (day-scoped; yesterday's leftovers read empty)."""
+    today_iso = (now or datetime.now()).date().isoformat()
+    with _AUTO_POPULATE_LOCK:
+        return _load_auto_populate_pending(pending_path, today_iso)
+
+
+def resolve_auto_populate_pick(
+    symbol: str,
+    side: str,
+    approved: bool,
+    *,
+    pending_path: Path = AUTO_POPULATE_PENDING_FILE,
+    membership_path: Path = AUTO_POPULATE_MEMBERSHIP_FILE,
+    longs_path: Path = LONGS_FILE,
+    shorts_path: Path = SHORTS_FILE,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Record the trader's verdict on one staged pick.
+
+    Approve appends the symbol to its side's watchlist and files it under
+    auto-populate membership (so the ordinary VWAP-cut path still owns it);
+    Pass just retires the proposal for the day. Either way the symbol never
+    re-proposes today.
+    """
+    sym = str(symbol or "").strip().upper()
+    side = "short" if str(side or "").lower().startswith("short") else "long"
+    moment = now or datetime.now()
+    today_iso = moment.date().isoformat()
+    result: dict[str, Any] = {
+        "symbol": sym,
+        "side": side,
+        "approved": bool(approved),
+        "written": False,
+        "already_listed": False,
+    }
+    if not sym:
+        return result
+    registry_sync: tuple[list[str], list[str]] | None = None
+    with _AUTO_POPULATE_LOCK:
+        pending = _load_auto_populate_pending(pending_path, today_iso)
+        entry = pending["pending"][side].pop(sym, None)
+        result["was_pending"] = entry is not None
+        pending["decided"][side][sym] = {
+            "decision": "approved" if approved else "passed",
+            "at": moment.strftime("%H:%M:%S"),
+        }
+        _save_auto_populate_pending(pending_path, pending)
+        if approved:
+            target = Path(longs_path if side == "long" else shorts_path)
+            listed = {
+                str(s).strip().upper()
+                for path in (longs_path, shorts_path)
+                for s in read_watchlist_symbols(Path(path))
+            }
+            if sym in listed:
+                result["already_listed"] = True
+            else:
+                existing = list(read_watchlist_symbols(target))
+                if write_watchlist_file(target, [*existing, sym]):
+                    result["written"] = True
+                    membership = _load_auto_populate_membership(membership_path, today_iso)
+                    reason = str((entry or {}).get("reason") or "trader-approved auto pick")
+                    membership[side][sym] = reason
+                    _save_auto_populate_membership(membership_path, membership)
+                    registry_sync = (
+                        list(membership.get("long", {})),
+                        list(membership.get("short", {})),
+                    )
+    if registry_sync is not None:
+        _sync_candidate_registry_source(
+            "auto_populate",
+            registry_sync[0],
+            registry_sync[1],
+            lease_minutes=90,
+        )
+    return result
+
+
 def refresh_auto_populated_watchlists(
     env_key: str,
     *,
@@ -1856,6 +2052,7 @@ def refresh_auto_populated_watchlists(
     downloader: Callable[..., Any] | None = None,
     spy_pullback_active: bool = False,
     preserve_existing_auto: bool = False,
+    stage_only: bool = False,
     now: datetime | None = None,
     log: Callable[[str], None] | None = None,
 ) -> dict[str, Any] | None:
@@ -1899,12 +2096,18 @@ def refresh_auto_populated_watchlists(
     # 15EMA/200SMA, shorts below the 15EMA/50SMA). Fails open if the daily store
     # is unavailable so the lists never empty on missing data.
     candidates = filter_candidates_by_daily_trend(candidates, daily_context)
-    summary = apply_auto_populated_watchlists(
-        candidates,
-        env_key,
-        now=moment,
-        preserve_existing_auto=preserve_existing_auto,
-    )
+    if stage_only:
+        # DESK mode: the trader is at the desk - picks queue for chart
+        # approval instead of landing on the watchlists unseen.
+        summary = stage_auto_populate_candidates(candidates, env_key, now=moment)
+    else:
+        summary = apply_auto_populated_watchlists(
+            candidates,
+            env_key,
+            now=moment,
+            preserve_existing_auto=preserve_existing_auto,
+        )
+        summary["mode"] = "applied"
     summary["scanned"] = len(profiles)
     summary["discovery_env"] = discovery_env
     summary["candidates"] = {"longs": len(candidates["longs"]), "shorts": len(candidates["shorts"])}

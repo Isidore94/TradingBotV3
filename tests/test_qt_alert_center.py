@@ -1455,3 +1455,96 @@ def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
     assert not dialog.watch_buttons["new_hod"].isChecked()
     assert dialog.watch_buttons["new_hod"].text() == "New HOD"
     dialog.close()
+
+
+def test_desk_auto_picks_chart_for_approval(tmp_path, monkeypatch):
+    """DESK-mode staged auto-populate picks occupy the review chart with
+    Approve/Pass verbs; the verdict routes through resolve_auto_populate_pick
+    and advances the queue (2026-07-31 directive)."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        import autopilot_core as core
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    rendered = []
+    monkeypatch.setattr(
+        SymbolSnapshotWidget,
+        "set_symbol",
+        lambda self, symbol, **kwargs: rendered.append(symbol),
+    )
+    pending_path = tmp_path / "auto_populate_pending.json"
+    core.stage_auto_populate_candidates(
+        {
+            "longs": [{"symbol": "NVDA", "score": 2.1, "reason": "PDH break"}],
+            "shorts": [{"symbol": "TSLA", "score": 1.6, "reason": "PDL break"}],
+        },
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=tmp_path / "membership.json",
+        longs_path=tmp_path / "longs.txt",
+        shorts_path=tmp_path / "shorts.txt",
+    )
+
+    resolved = []
+    monkeypatch.setattr(
+        core,
+        "resolve_auto_populate_pick",
+        lambda symbol, side, approved, **kwargs: resolved.append(
+            (symbol, side, approved)
+        )
+        or {"written": approved, "already_listed": False, "was_pending": True},
+    )
+
+    panel = AlertCenterPanel(
+        ignored_symbols_path=tmp_path / "ignored.txt",
+        review_events_path=tmp_path / "review_events.jsonl",
+        auto_pick_pending_path=pending_path,
+    )
+    panel._poll_auto_pick_pending()
+
+    current = panel._current_review_alert
+    assert current is not None and current.symbol == "NVDA"
+    assert current.tag == "auto_pick"
+    assert current.side == "LONG"
+    assert "PDH break" in current.trigger and "score 2.10" in current.trigger
+    # Widget visibility needs a shown window; assert the intent flags instead.
+    assert not panel.chart_review.auto_approve_button.isHidden()
+    assert not panel.chart_review.auto_pass_button.isHidden()
+    assert [alert.symbol for alert in panel._review_queue] == ["TSLA"]
+
+    panel.chart_review.auto_approve_button.click()
+    assert resolved == [("NVDA", "long", True)]
+    assert panel._current_review_alert.symbol == "TSLA"
+
+    panel.chart_review.auto_pass_button.click()
+    assert resolved[-1] == ("TSLA", "short", False)
+    assert panel._current_review_alert is None
+    # An ordinary alert never shows the verdict verbs.
+    from ui.models.bounce import BounceAlert
+
+    panel.add_alert(
+        BounceAlert(
+            time_text="09:35:00",
+            symbol="AMD",
+            side="LONG",
+            trigger="[S-TIER] VWAP reclaim",
+            timeframe="5m",
+            raw_text="[S-TIER] AMD: VWAP reclaim",
+        )
+    )
+    assert panel.chart_review.auto_approve_button.isHidden()
+    assert panel.chart_review.auto_pass_button.isHidden()
+
+    # A poll tick never re-queues decided or already-enqueued picks.
+    panel._poll_auto_pick_pending()
+    assert [alert.symbol for alert in panel._review_queue] == []

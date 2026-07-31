@@ -222,6 +222,11 @@ FOCUS_PICK_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "focus_pick_membership.json"
 # rotation/cuts never delete a name the trader typed), plus the day's
 # VWAP-cut blacklist so a cut name is not re-added the same session.
 AUTO_POPULATE_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "auto_watchlist_membership.json"
+# DESK-mode approval queue: auto-populate candidates proposed while the trader
+# is at the desk. The Alert Center charts each one; Approve appends it to the
+# auto-owned watchlist slice, Pass records the decision for the day. AWAY mode
+# never writes this file - its picks apply directly.
+AUTO_POPULATE_PENDING_FILE = RUNTIME_DATA_DIR / "auto_populate_pending.json"
 # The day's first directional regime read (bearish_*/bullish_*). Discovery
 # keeps hunting the opening side after the live label decays to neutral
 # (2026-07-17: bearish_strong open -> neutral by noon shut off RW shorts).

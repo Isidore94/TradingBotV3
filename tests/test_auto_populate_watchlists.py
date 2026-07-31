@@ -267,6 +267,8 @@ def test_new_legacy_spy_pullback_bypasses_auto_populate_cooldown(monkeypatch):
 
     calls = []
     monkeypatch.setattr(core, "minutes_since_open", lambda _now: 90)
+    monkeypatch.setattr(core, "auto_populate_clock_open", lambda _now=None: True)
+    monkeypatch.setattr(core, "read_auto_pilot_mode", lambda: "AWAY")
     monkeypatch.setattr(legacy.time, "time", lambda: 1_000.0)
     monkeypatch.setattr(legacy.threading, "Thread", ImmediateThread)
     monkeypatch.setattr(
@@ -697,3 +699,256 @@ def test_refresh_pipeline_folds_rw_candidates_and_anchor(monkeypatch):
     assert summary["discovery_env"] == "bearish_strong"
     assert summary["relative_candidates"]["shorts"] == 1
     assert summary["relative_candidates"]["feature_version"] == "relative_weakness_v1"
+
+
+# ---------------------------------------------------------------------------
+# DESK-mode approval staging (2026-07-31 directive: at the desk the picks come
+# up as charts and the trader decides; AWAY keeps the direct auto-apply).
+# ---------------------------------------------------------------------------
+def _pick_rows(long_syms=(), short_syms=()):
+    return {
+        "longs": [{"symbol": s, "score": 10 - i, "reason": "PDH break"} for i, s in enumerate(long_syms)],
+        "shorts": [{"symbol": s, "score": 10 - i, "reason": "PDL break"} for i, s in enumerate(short_syms)],
+    }
+
+
+def test_auto_populate_clock_gate_opens_at_seven():
+    from autopilot_core import AUTO_POPULATE_START_HOUR, auto_populate_clock_open
+
+    assert AUTO_POPULATE_START_HOUR == 7
+    assert not auto_populate_clock_open(datetime(2026, 7, 31, 6, 59))
+    assert auto_populate_clock_open(datetime(2026, 7, 31, 7, 0))
+    assert auto_populate_clock_open(datetime(2026, 7, 31, 12, 30))
+
+
+def test_read_auto_pilot_mode(tmp_path):
+    import json
+
+    from autopilot_core import read_auto_pilot_mode
+
+    state = tmp_path / "autopilot_state.json"
+    assert read_auto_pilot_mode(state) == "OFF"  # absent file
+    state.write_text("not json", encoding="utf-8")
+    assert read_auto_pilot_mode(state) == "OFF"
+    state.write_text(json.dumps({"enabled": False, "profile": "DESK"}), encoding="utf-8")
+    assert read_auto_pilot_mode(state) == "OFF"
+    state.write_text(json.dumps({"enabled": True, "profile": "DESK"}), encoding="utf-8")
+    assert read_auto_pilot_mode(state) == "DESK"
+    state.write_text(json.dumps({"enabled": True, "profile": "AWAY"}), encoding="utf-8")
+    assert read_auto_pilot_mode(state) == "AWAY"
+    state.write_text(json.dumps({"enabled": True, "profile": "weird"}), encoding="utf-8")
+    assert read_auto_pilot_mode(state) == "DESK"
+
+
+def test_stage_auto_populate_candidates_stages_without_writing(tmp_path):
+    import autopilot_core as core
+
+    longs_path = tmp_path / "longs.txt"
+    shorts_path = tmp_path / "shorts.txt"
+    membership_path = tmp_path / "auto_membership.json"
+    pending_path = tmp_path / "pending.json"
+    longs_path.write_text("TRADER1\n", encoding="utf-8")
+
+    summary = core.stage_auto_populate_candidates(
+        _pick_rows(["AAA", "TRADER1"], ["ZZZ"]),
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+    )
+    # Nothing hit the watchlists; already-listed TRADER1 was never proposed.
+    assert read_watchlist_symbols(longs_path) == ["TRADER1"]
+    assert not shorts_path.exists()
+    assert summary["mode"] == "staged"
+    assert summary["long"]["staged"] == ["AAA"]
+    assert summary["short"]["staged"] == ["ZZZ"]
+
+    pending = core.load_auto_populate_pending_picks(pending_path)
+    assert set(pending["pending"]["long"]) == {"AAA"}
+    assert pending["pending"]["long"]["AAA"]["reason"] == "PDH break"
+    assert pending["pending"]["long"]["AAA"]["score"] == 10.0
+
+    # Re-staging the same candidates adds nothing new (no duplicate charts).
+    again = core.stage_auto_populate_candidates(
+        _pick_rows(["AAA"], ["ZZZ"]),
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+    )
+    assert again["long"]["staged"] == []
+    assert again["short"]["staged"] == []
+
+
+def test_stage_skips_day_cut_names(tmp_path):
+    import autopilot_core as core
+
+    membership_path = tmp_path / "auto_membership.json"
+    pending_path = tmp_path / "pending.json"
+    core.record_auto_watchlist_cut("CUTLONG", "long", membership_path=membership_path)
+
+    summary = core.stage_auto_populate_candidates(
+        _pick_rows(["CUTLONG", "FRESH"]),
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=tmp_path / "longs.txt",
+        shorts_path=tmp_path / "shorts.txt",
+    )
+    assert summary["long"]["staged"] == ["FRESH"]
+
+
+def test_resolve_auto_populate_pick_approve_and_pass(tmp_path, monkeypatch):
+    import autopilot_core as core
+    from candidate_registry import CandidateRegistry
+
+    longs_path = tmp_path / "longs.txt"
+    shorts_path = tmp_path / "shorts.txt"
+    membership_path = tmp_path / "auto_membership.json"
+    pending_path = tmp_path / "pending.json"
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(core, "candidate_registry_path", lambda: registry_path)
+    longs_path.write_text("TRADER1\n", encoding="utf-8")
+
+    core.stage_auto_populate_candidates(
+        _pick_rows(["AAA", "BBB"], ["ZZZ"]),
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+    )
+
+    approved = core.resolve_auto_populate_pick(
+        "AAA",
+        "long",
+        True,
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+    )
+    assert approved["written"] and approved["was_pending"]
+    assert read_watchlist_symbols(longs_path) == ["TRADER1", "AAA"]
+    registry = CandidateRegistry.load(registry_path)
+    assert "auto_populate" in registry.get("AAA", "LONG").memberships
+
+    passed = core.resolve_auto_populate_pick(
+        "BBB",
+        "long",
+        False,
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+    )
+    assert not passed["written"] and passed["was_pending"]
+    assert read_watchlist_symbols(longs_path) == ["TRADER1", "AAA"]
+
+    # Both verdicts retire the proposal: neither symbol re-stages today.
+    restage = core.stage_auto_populate_candidates(
+        _pick_rows(["AAA", "BBB"]),
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+    )
+    assert restage["long"]["staged"] == []
+    pending = core.load_auto_populate_pending_picks(pending_path)
+    assert pending["pending"]["long"] == {}
+    assert pending["decided"]["long"]["AAA"]["decision"] == "approved"
+    assert pending["decided"]["long"]["BBB"]["decision"] == "passed"
+
+    # An approved auto pick is membership-owned, so the ordinary VWAP-cut
+    # removal path still works on it.
+    core.record_auto_watchlist_cut("AAA", "long", membership_path=membership_path)
+    registry = CandidateRegistry.load(registry_path)
+    assert not registry.get("AAA", "LONG").active
+
+
+def test_refresh_stage_only_routes_to_staging(monkeypatch):
+    import autopilot_core as core
+
+    profiles = {
+        "SPY": _rw_profile(-0.5, low_distance_pct=0.4),
+        "WEAK": _rw_profile(-3.5, low_distance_pct=0.2, new_lows=2, at_low=0.4),
+    }
+    captured = {}
+
+    def fail_apply(*_args, **_kwargs):
+        raise AssertionError("apply must not run in stage_only mode")
+
+    monkeypatch.setattr(core, "load_universe_pool", lambda: ["WEAK"])
+    monkeypatch.setattr(core, "load_daily_context", lambda pool, **kwargs: {})
+    monkeypatch.setattr(core, "fetch_intraday_profiles", lambda pool, **kwargs: profiles)
+    monkeypatch.setattr(core, "fetch_session_rvol", lambda symbols, **kwargs: {"WEAK": 1.4})
+    monkeypatch.setattr(core, "apply_auto_populated_watchlists", fail_apply)
+    monkeypatch.setattr(
+        core,
+        "stage_auto_populate_candidates",
+        lambda candidates, env_key, **kwargs: captured.update(
+            candidates=candidates, env_key=env_key
+        )
+        or {"mode": "staged"},
+    )
+
+    summary = core.refresh_auto_populated_watchlists(
+        "neutral_chop",
+        opening_env_key="bearish_strong",
+        stage_only=True,
+    )
+    assert summary["mode"] == "staged"
+    assert captured["env_key"] == "neutral_chop"
+    assert [row["symbol"] for row in captured["candidates"]["shorts"]] == ["WEAK"]
+
+
+def test_bot_loop_desk_mode_stages_and_clock_gate_holds(monkeypatch):
+    import autopilot_core as core
+    import bounce_bot_lib.legacy as legacy
+
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    calls = []
+    monkeypatch.setattr(core, "minutes_since_open", lambda _now: 90)
+    monkeypatch.setattr(core, "auto_populate_clock_open", lambda _now=None: False)
+    monkeypatch.setattr(core, "read_auto_pilot_mode", lambda: "DESK")
+    monkeypatch.setattr(legacy.time, "time", lambda: 10_000.0)
+    monkeypatch.setattr(legacy.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        core,
+        "refresh_auto_populated_watchlists",
+        lambda env, **kwargs: calls.append((env, kwargs["stage_only"])) or {},
+    )
+
+    class Stub:
+        _auto_populate_last_ts = 0.0
+        _auto_populate_running = False
+        _auto_populate_spy_pullback_key = ""
+        gui_callback = None
+
+        @staticmethod
+        def get_market_environment():
+            return "neutral_chop"
+
+    stub = Stub()
+    # Before 07:00 nothing runs, even with the cooldown long expired.
+    legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
+    assert calls == []
+
+    monkeypatch.setattr(core, "auto_populate_clock_open", lambda _now=None: True)
+    legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
+    assert calls == [("neutral_chop", True)]
+
+    # AWAY applies directly (stage_only False).
+    monkeypatch.setattr(core, "read_auto_pilot_mode", lambda: "AWAY")
+    stub._auto_populate_last_ts = 0.0
+    legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
+    assert calls[-1] == ("neutral_chop", False)
