@@ -1211,6 +1211,33 @@ def write_technical_integrity_calibration_report(
     return report
 
 
+def calibration_report_is_current(
+    *,
+    output_path: Path | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """True when today's calibration replay already completed.
+
+    The report replays every stored outcome under five candidate configs; with
+    a 100 MB+ append-only event log that is an hour-class, core-pegging job.
+    The after-close wrap-up used to stamp only the END of its whole chain, so
+    a crash or an impatient shutdown after this step re-burned the entire
+    replay on every restart - measured live on 2026-07-30 as a full core
+    pegged from launch, with the newest completed report a week old.  The
+    report's own ``generated_at`` is the step-level completion stamp; missing,
+    unreadable, corrupt or stale all honestly mean "not current" and the
+    replay runs.
+    """
+    try:
+        path = Path(output_path or technical_integrity_calibration_path())
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        stamp = datetime.fromisoformat(str(payload.get("generated_at") or ""))
+    except Exception:
+        return False
+    moment = normalize_market_local_datetime(now)
+    return normalize_market_local_datetime(stamp).date() >= moment.date()
+
+
 def format_technical_integrity_snapshot(
     payload: Mapping[str, Any] | None,
     *,

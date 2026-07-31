@@ -1,6 +1,6 @@
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -591,3 +591,48 @@ def test_market_state_formatter_is_plain_and_actionable():
     assert "Memory" not in tooltip
     assert "Software" not in tooltip
     assert color == "#f85149"
+
+
+def test_calibration_report_is_current_gates_the_replay(tmp_path):
+    """The after-close wrap-up's step-level completion stamp (live burn fix).
+
+    The calibration replay pegs a core for as long as the 100MB+ event log
+    takes to chew, and the wrap-up only stamped completion at the END of its
+    whole chain - so a crash after this step re-burned the replay on every
+    restart (measured live 2026-07-30: newest completed report a week old,
+    one core pegged from launch). Today's report on disk must skip the replay;
+    stale, absent or corrupt must run it - honesty over economy.
+    """
+    import json as _json
+
+    from technical_integrity import calibration_report_is_current
+
+    now = datetime(2026, 7, 30, 18, 30, tzinfo=timezone(timedelta(hours=-7)))
+    report = tmp_path / "technical_integrity_calibration.json"
+
+    # Absent -> not current (replay runs).
+    assert calibration_report_is_current(output_path=report, now=now) is False
+
+    # Completed earlier TODAY -> current (replay skipped).
+    report.write_text(
+        _json.dumps({"generated_at": "2026-07-30T14:18:45-07:00"}), encoding="utf-8"
+    )
+    assert calibration_report_is_current(output_path=report, now=now) is True
+
+    # A week stale (the live failure shape) -> not current.
+    report.write_text(
+        _json.dumps({"generated_at": "2026-07-23T14:18:45-07:00"}), encoding="utf-8"
+    )
+    assert calibration_report_is_current(output_path=report, now=now) is False
+
+    # Corrupt JSON and a missing/garbage stamp -> not current, never a raise.
+    report.write_text("{not json", encoding="utf-8")
+    assert calibration_report_is_current(output_path=report, now=now) is False
+    report.write_text(_json.dumps({"generated_at": "garbage"}), encoding="utf-8")
+    assert calibration_report_is_current(output_path=report, now=now) is False
+
+    # A naive stamp from an older build still gates correctly.
+    report.write_text(
+        _json.dumps({"generated_at": "2026-07-30T14:18:45"}), encoding="utf-8"
+    )
+    assert calibration_report_is_current(output_path=report, now=now) is True

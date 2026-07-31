@@ -38,6 +38,31 @@ _TICK_INTERVAL_MS = 30_000
 _HOURLY_REPORT_RETRY_MINUTES = 5
 _MAX_LOG_LINES = 400
 _MAX_REPORT_ALERTS = 15
+
+
+def _enter_background_thread_mode() -> None:
+    """Drop the CALLING thread to Windows background mode (CPU and I/O).
+
+    The after-close wrap-up legitimately grinds for a long time (universe
+    rebuild, learning refresh, the Technical Integrity calibration replay over
+    a 100 MB+ event log). At normal priority that pegged a core and lagged the
+    whole desk - measured live on 2026-07-30. Background mode
+    (THREAD_MODE_BACKGROUND_BEGIN) tells the scheduler AND the I/O manager to
+    yield to everything interactive; the work still completes, just politely.
+    Falls back to lowest thread priority, and to a no-op off Windows. Never
+    raises: a priority tweak must not be able to break the wrap-up itself.
+    """
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetCurrentThread()
+        thread_mode_background_begin = 0x00010000
+        thread_priority_lowest = -2
+        if not kernel32.SetThreadPriority(handle, thread_mode_background_begin):
+            kernel32.SetThreadPriority(handle, thread_priority_lowest)
+    except Exception:
+        pass
 _MAX_REPORT_LOG_LINES = 30
 
 
@@ -994,6 +1019,11 @@ class AutopilotService(QObject):
         self._log("After-close wrap-up: rebuilding universe, refreshing day-trade learning, scoring today's picks...")
 
         def worker() -> None:
+            # The wrap-up legitimately does hour-class work (universe rebuild,
+            # learning refresh, the calibration replay). Background mode
+            # deprioritizes this thread's CPU AND I/O so the trader's machine
+            # stays responsive while it grinds; the work still completes.
+            _enter_background_thread_mode()
             try:
                 # 1) Fresh universe with today's closes -> tomorrow's open scan
                 #    is instantly ready (post-close means it is stale by rule).
@@ -1014,14 +1044,26 @@ class AutopilotService(QObject):
 
                 # 3) Point-in-time Technical Integrity calibration. This only
                 #    writes a research report; it can never change live config.
+                #    The report's own generated_at is a step-level completion
+                #    stamp: a restart after a crash later in this chain must
+                #    not re-burn the whole multi-config replay (it pegs a core
+                #    for as long as the 100MB+ event log takes to chew).
                 try:
-                    from technical_integrity import write_technical_integrity_calibration_report
-
-                    report = write_technical_integrity_calibration_report()
-                    self._log(
-                        "Technical Integrity replay refreshed "
-                        f"({report['event_count']} outcomes / {report['session_count']} sessions)."
+                    from technical_integrity import (
+                        calibration_report_is_current,
+                        write_technical_integrity_calibration_report,
                     )
+
+                    if calibration_report_is_current():
+                        self._log(
+                            "Technical Integrity replay already completed today; skipping."
+                        )
+                    else:
+                        report = write_technical_integrity_calibration_report()
+                        self._log(
+                            "Technical Integrity replay refreshed "
+                            f"({report['event_count']} outcomes / {report['session_count']} sessions)."
+                        )
                 except Exception as exc:
                     self._log(f"Technical Integrity replay failed: {exc}")
                     logging.exception("Technical Integrity replay failed")
