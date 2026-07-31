@@ -27,6 +27,7 @@ _FAMILY_TAGS = {
     "mid_earnings_ema21_retest": "MID_EARNINGS_EMA21_RETEST",
     "mid_earnings_1stdev_retest": "MID_EARNINGS_FIRST_DEV_RETEST",
     "post_earnings_52w_break": "POST_EARNINGS_52W_BREAK",
+    "post_earnings_candle_break": "POST_EARNINGS_CANDLE_BREAK",
     "post_earnings_avwap_bounce": "POST_EARNINGS_AVWAP_BOUNCE",
     "sma_breakout": "SMA_BREAKOUT_CONFIRMED",
     "sma_breakout_retest_tracking": "SMA_BREAKOUT_WATCH",

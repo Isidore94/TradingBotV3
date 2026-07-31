@@ -192,6 +192,35 @@ SETUP_DOCS: dict[str, dict] = {
             "(+0.54R avg, n=73) — the gap-hold variant beats the raw 52w-break variant."
         ),
     },
+    "post_earnings_candle_break": {
+        "label": "Post-Earnings Candle Break",
+        "group": "Earnings cycle",
+        "what": (
+            "The trader's flagship post-earnings play (2026-07-31; VFC/NEOG/CAKE/MMM): a big directional "
+            "earnings gap with an ALIGNED earnings candle (red gap-down for shorts, green gap-up for longs), "
+            "then the tape breaks that candle's low (short) / high (long) — continuation with the whole "
+            "earnings reaction behind it."
+        ),
+        "detection": [
+            "Post-earnings anchor active, gap >= 1.0 ATR in the trade direction, earnings-candle color aligned "
+            "with the gap.",
+            "POST_EARNINGS_CANDLE_BREAK signal: first intraday tag through the earnings candle's low/high after "
+            "the gap session (a tag that later rejects still flags — CAKE 2026-07-30); a close through it adds "
+            "POST_EARNINGS_CLOSE_CONFIRM.",
+            "No 52-week requirement — the stricter 52w variant is its own signal and never stacks with this one.",
+        ],
+        "entry": "The break of the earnings candle's extreme (close-confirmed is the higher-conviction form).",
+        "stop": (
+            "The earnings candle's other extreme (POST_EARNINGS_CANDLE_HIGH for shorts / _LOW for longs), with "
+            "the pre-earnings AVWAPE overhead/underneath as the wider structural invalidation."
+        ),
+        "targets": "50% at band 2 of the post-earnings anchor, rest to band 3, trail band 1. Time stop 18 sessions.",
+        "evidence": (
+            "New 2026-07-31 (trader-specified from live examples: VFC short 2026-07-31, NEOG long 2026-07-31, "
+            "CAKE long flag 2026-07-30, MMM short 2026-01). No tracker history yet — weight parked at the 52w "
+            "break's 75 until the tracker measures it."
+        ),
+    },
     "post_earnings_avwap_bounce": {
         "label": "Post-Earnings AVWAPE Bounce",
         "group": "Earnings cycle",

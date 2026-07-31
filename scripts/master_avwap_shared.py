@@ -415,6 +415,8 @@ def load_master_avwap_focus_map(
             "post_earnings_active": bool(entry.get("post_earnings_active")),
             "post_earnings_break_intraday": bool(entry.get("post_earnings_break_intraday")),
             "post_earnings_break_close": bool(entry.get("post_earnings_break_close")),
+            "post_earnings_candle_break_intraday": bool(entry.get("post_earnings_candle_break_intraday")),
+            "post_earnings_candle_break_close": bool(entry.get("post_earnings_candle_break_close")),
             "mid_earnings_ema15_trigger": bool(entry.get("mid_earnings_ema15_trigger")),
             "mid_earnings_ema21_trigger": bool(entry.get("mid_earnings_ema21_trigger")),
             "mid_earnings_first_dev_trigger": bool(entry.get("mid_earnings_first_dev_trigger")),
@@ -545,6 +547,7 @@ def load_master_avwap_d1_watchlist(
             "post_earnings_monitor_level": _coerce_float(entry.get("post_earnings_monitor_level")),
             "post_earnings_monitor_level_label": str(entry.get("post_earnings_monitor_level_label") or "").strip(),
             "post_earnings_break_intraday": bool(entry.get("post_earnings_break_intraday")),
+            "post_earnings_candle_break_intraday": bool(entry.get("post_earnings_candle_break_intraday")),
             "post_earnings_note": str(entry.get("post_earnings_note") or "").strip(),
             "trigger_levels": _normalize_d1_trigger_levels(entry.get("trigger_levels"), entry.get("side")),
             "upgrade_targets": _normalize_d1_trigger_levels(

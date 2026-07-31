@@ -3226,6 +3226,171 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(summary["events"], [])
         self.assertIn("waiting for post-gap break", summary["note"])
 
+    # ------------------------------------------------------------------
+    # POST_EARNINGS_CANDLE_BREAK (2026-07-31 trader play, VFC/NEOG/CAKE/MMM):
+    # big directional gap + ALIGNED earnings candle color, then a break of
+    # that candle's low/high. No 52-week requirement.
+    def _build_candle_break_history(self, *, side: str = "SHORT") -> pd.DataFrame:
+        """VFC-style short (NEOG-style long): the earnings candle is NOT a
+        52-week extreme because older history printed beyond it."""
+        periods = 33
+        dates = pd.bdate_range("2026-01-02", periods=periods)
+        rows = []
+        for idx, dt_value in enumerate(dates):
+            if side == "SHORT":
+                close_price = 17.0 + idx * 0.02
+                open_price = close_price - 0.05
+                high_price = close_price + 0.3
+                low_price = close_price - 0.3
+                if idx < 3:
+                    low_price = 13.0  # old 52w low far below the earnings candle
+                if idx == 30:  # earnings gap-down, RED candle (VFC 2026-07-29)
+                    open_price, high_price, low_price, close_price = 16.04, 16.26, 14.70, 15.08
+                elif idx == 31:  # tags below the candle low, closes back inside
+                    open_price, high_price, low_price, close_price = 15.03, 15.19, 14.65, 14.96
+                elif idx == 32:  # closes through the candle low
+                    open_price, high_price, low_price, close_price = 14.94, 15.08, 14.55, 14.56
+            else:
+                close_price = 10.0 - idx * 0.01
+                open_price = close_price + 0.03
+                high_price = close_price + 0.2
+                low_price = close_price - 0.2
+                if idx < 3:
+                    high_price = 18.0  # old 52w high far above the earnings candle
+                if idx == 30:  # earnings gap-up, GREEN candle (NEOG 2026-07-30)
+                    open_price, high_price, low_price, close_price = 10.50, 11.56, 9.92, 11.53
+                elif idx == 31:  # breaks and closes above the candle high
+                    open_price, high_price, low_price, close_price = 11.77, 11.80, 11.30, 11.71
+                elif idx == 32:
+                    open_price, high_price, low_price, close_price = 11.75, 11.95, 11.60, 11.90
+            rows.append(
+                {
+                    "datetime": dt_value,
+                    "open": open_price,
+                    "high": high_price,
+                    "low": low_price,
+                    "close": close_price,
+                    "volume": 1_000_000,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def _build_candle_break_release_context(self, df: pd.DataFrame, *, side: str = "SHORT") -> dict:
+        gap_idx = 30
+        anchor_idx = gap_idx - 1
+        anchor_date = df.iloc[anchor_idx]["datetime"].date().isoformat()
+        return {
+            "active": True,
+            "earnings_date": anchor_date,
+            "release_session": "amc",
+            "gap_date": df.iloc[gap_idx]["datetime"].date().isoformat(),
+            "anchor_date": anchor_date,
+            "gap_idx": gap_idx,
+            "anchor_idx": anchor_idx,
+            "gap_atr_multiple": 3.4,
+            "gap_is_up": side == "LONG",
+            "gap_is_down": side != "LONG",
+            "sessions_since_gap": len(df) - gap_idx - 1,
+            "in_post_earnings_window": True,
+            "anchor_meta": {
+                "date": anchor_date,
+                "vwap": 15.8 if side == "SHORT" else 10.4,
+                "stdev": 1.0,
+                "bands": {},
+            },
+        }
+
+    def test_post_earnings_candle_break_short_vfc_style(self):
+        df = self._build_candle_break_history(side="SHORT")
+        context = self._build_candle_break_release_context(df, side="SHORT")
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "SHORT", context)
+
+        self.assertTrue(summary["active"])
+        self.assertFalse(summary["qualified_52w_gap"])  # old low 13 is below 14.70
+        self.assertTrue(summary["gap_candle_directional"])  # red candle on a gap-down
+        self.assertTrue(summary["qualified_candle_break_gap"])
+        self.assertEqual(summary["candle_trigger_level"], 14.70)
+        self.assertEqual(summary["monitor_level"], 14.70)
+        self.assertEqual(summary["monitor_level_label"], "EARNINGS_CANDLE_LOW")
+        self.assertTrue(summary["candle_break_signal"])
+        # First break was the +1 intraday tag; the +2 close confirms.
+        self.assertEqual(summary["candle_break_sessions_after_gap"], 1)
+        self.assertTrue(summary["candle_break_close"])
+        self.assertEqual(summary["family"], master_avwap.POST_EARNINGS_CANDLE_BREAK_SIGNAL)
+        self.assertIn(master_avwap.POST_EARNINGS_CANDLE_BREAK_SIGNAL, summary["events"])
+        self.assertIn(master_avwap.POST_EARNINGS_CLOSE_CONFIRM_SIGNAL, summary["events"])
+        self.assertNotIn(master_avwap.POST_EARNINGS_BREAK_SIGNAL, summary["events"])
+
+    def test_post_earnings_candle_break_long_neog_style(self):
+        df = self._build_candle_break_history(side="LONG")
+        context = self._build_candle_break_release_context(df, side="LONG")
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "LONG", context)
+
+        self.assertTrue(summary["active"])
+        self.assertFalse(summary["qualified_52w_gap"])  # old high 18 sits above 11.56
+        self.assertTrue(summary["qualified_candle_break_gap"])
+        self.assertEqual(summary["candle_trigger_level"], 11.56)
+        self.assertEqual(summary["monitor_level_label"], "EARNINGS_CANDLE_HIGH")
+        self.assertTrue(summary["candle_break_signal"])
+        self.assertTrue(summary["candle_break_close"])
+        self.assertEqual(summary["family"], master_avwap.POST_EARNINGS_CANDLE_BREAK_SIGNAL)
+
+    def test_post_earnings_candle_break_requires_aligned_candle_color(self):
+        # Gap-down with a GREEN earnings candle (VFC 2026-01-28 style): the
+        # candle-break play stands down entirely.
+        df = self._build_candle_break_history(side="SHORT")
+        gap_idx = 30
+        df.loc[df.index[gap_idx], "close"] = float(df.loc[df.index[gap_idx], "open"]) + 0.30
+        context = self._build_candle_break_release_context(df, side="SHORT")
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "SHORT", context)
+
+        self.assertFalse(summary["qualified_candle_break_gap"])
+        self.assertFalse(summary["candle_break_signal"])
+        self.assertNotIn(master_avwap.POST_EARNINGS_CANDLE_BREAK_SIGNAL, summary["events"])
+
+    def test_post_earnings_candle_break_watch_stays_active_before_the_break(self):
+        # CAKE 2026-07-29: aligned candle, break not yet - the row must stay
+        # an active watch (it used to fall out after 2 sessions without a 52w
+        # candidate or bounce).
+        df = self._build_candle_break_history(side="SHORT")
+        df = df.iloc[:31].copy()  # gap candle is the last bar
+        df = pd.concat(
+            [
+                df,
+                pd.DataFrame(
+                    [
+                        {
+                            "datetime": pd.bdate_range(df.iloc[-1]["datetime"], periods=3)[1],
+                            "open": 15.0,
+                            "high": 15.3,
+                            "low": 14.8,
+                            "close": 15.1,
+                        },
+                        {
+                            "datetime": pd.bdate_range(df.iloc[-1]["datetime"], periods=3)[2],
+                            "open": 15.1,
+                            "high": 15.4,
+                            "low": 14.9,
+                            "close": 15.2,
+                        },
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+        df["volume"] = df["volume"].fillna(1_000_000)
+        context = self._build_candle_break_release_context(df, side="SHORT")
+
+        summary = master_avwap.analyze_post_earnings_setups(df, "SHORT", context)
+
+        self.assertTrue(summary["active"])
+        self.assertTrue(summary["qualified_candle_break_gap"])
+        self.assertFalse(summary["candle_break_signal"])
+        self.assertIn("waiting for earnings-candle low break", summary["note"])
+
     def test_post_earnings_52w_break_can_start_on_day_after_earnings(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=1)
         df.loc[30, ["open", "high", "low", "close"]] = [119.05, 119.20, 117.50, 118.90]
@@ -3396,7 +3561,16 @@ class MasterAvwapSetupTests(unittest.TestCase):
         bounce_mock.assert_not_called()
         self.assertTrue(summary["active"])
         self.assertFalse(summary["bounce_signal"])
-        self.assertEqual(summary["events"], [])
+        # The bounce waits, but this frame's aligned green candle broke its
+        # own high on the +1 session - the 2026-07-31 candle-break play
+        # legitimately flags it (it needs no bounce and no 52w extreme).
+        self.assertEqual(
+            summary["events"],
+            [
+                master_avwap.POST_EARNINGS_CANDLE_BREAK_SIGNAL,
+                master_avwap.POST_EARNINGS_CLOSE_CONFIRM_SIGNAL,
+            ],
+        )
 
     def test_post_earnings_avwape_bounce_can_fire_on_second_session_after_gap(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=1)
@@ -3409,7 +3583,15 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         self.assertTrue(summary["bounce_signal"])
         self.assertEqual(summary["bounce_sessions_after_gap"], 2)
-        self.assertEqual(summary["events"], [master_avwap.POST_EARNINGS_BOUNCE_SIGNAL])
+        # The +1 candle-high break stays fresh too, so both plays report
+        # (no close-confirm: the LAST close sits back under the candle high).
+        self.assertEqual(
+            summary["events"],
+            [
+                master_avwap.POST_EARNINGS_CANDLE_BREAK_SIGNAL,
+                master_avwap.POST_EARNINGS_BOUNCE_SIGNAL,
+            ],
+        )
 
     def test_post_earnings_52w_break_rejects_gap_day_break_and_bounce(self):
         df = _build_post_earnings_52w_history(extra_sessions_after_break=0).iloc[:-1].copy()

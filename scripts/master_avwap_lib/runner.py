@@ -796,6 +796,25 @@ def _run_master_impl(
                     post_anchor_meta.get("stdev"),
                     post_earnings_summary.get("monitor_level"),
                 )
+        if post_earnings_summary.get("candle_break_signal"):
+            post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
+            add_signal(
+                POST_EARNINGS_CANDLE_BREAK_SIGNAL,
+                "POST_EARNINGS",
+                post_earnings_summary.get("anchor_date", ""),
+                post_anchor_meta.get("vwap"),
+                post_anchor_meta.get("stdev"),
+                post_earnings_summary.get("candle_trigger_level"),
+            )
+            if post_earnings_summary.get("candle_break_close") and not post_earnings_summary.get("break_close"):
+                add_signal(
+                    POST_EARNINGS_CLOSE_CONFIRM_SIGNAL,
+                    "POST_EARNINGS",
+                    post_earnings_summary.get("anchor_date", ""),
+                    post_anchor_meta.get("vwap"),
+                    post_anchor_meta.get("stdev"),
+                    post_earnings_summary.get("candle_trigger_level"),
+                )
         if post_earnings_summary.get("bounce_signal"):
             post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
             add_signal(
@@ -1201,6 +1220,8 @@ def _run_master_impl(
             "post_earnings_monitor_level_label": post_earnings_summary.get("monitor_level_label", ""),
             "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
             "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+            "post_earnings_candle_break_intraday": bool(post_earnings_summary.get("candle_break_signal")),
+            "post_earnings_candle_break_close": bool(post_earnings_summary.get("candle_break_close")),
             "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
             "post_earnings_bounce_date": post_earnings_summary.get("bounce_date", ""),
             "post_earnings_bounce_age_sessions": post_earnings_summary.get("bounce_age_sessions"),
@@ -1343,6 +1364,8 @@ def _run_master_impl(
         )
         priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
         priority_summary["post_earnings_break_close"] = bool(post_earnings_summary.get("break_close"))
+        priority_summary["post_earnings_candle_break_intraday"] = bool(post_earnings_summary.get("candle_break_signal"))
+        priority_summary["post_earnings_candle_break_close"] = bool(post_earnings_summary.get("candle_break_close"))
         priority_summary["post_earnings_sessions_since_gap"] = post_earnings_summary.get("sessions_since_gap")
         priority_summary["post_earnings_gap_atr_multiple"] = _coerce_float(post_earnings_summary.get("gap_atr_multiple"))
         priority_summary["next_earnings_date"] = next_earnings_summary.get("next_earnings_date", "")
@@ -1540,6 +1563,8 @@ def _run_master_impl(
             "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
             "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
             "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+            "post_earnings_candle_break_intraday": bool(post_earnings_summary.get("candle_break_signal")),
+            "post_earnings_candle_break_close": bool(post_earnings_summary.get("candle_break_close")),
             "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
             "post_earnings_gap_atr_multiple": _coerce_float(post_earnings_summary.get("gap_atr_multiple")),
             "post_earnings_bounce_date": post_earnings_summary.get("bounce_date", ""),
@@ -2276,6 +2301,8 @@ def _run_master_impl(
         "post_earnings_monitor_level",
         "post_earnings_break_intraday",
         "post_earnings_break_close",
+        "post_earnings_candle_break_intraday",
+        "post_earnings_candle_break_close",
         "post_earnings_sessions_since_gap",
         "post_earnings_gap_atr_multiple",
         "post_earnings_bounce_date",

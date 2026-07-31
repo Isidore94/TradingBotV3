@@ -265,6 +265,7 @@ FAVORITE_CURRENT_SIGNALS = {
         "SMA_BREAKOUT_200_RECLAIM": 108,
         "EXTREME_MOVE_RETEST": 112,
         "POST_EARNINGS_52W_BREAK": 75,
+        "POST_EARNINGS_CANDLE_BREAK": 75,
         "POST_EARNINGS_AVWAPE_BOUNCE": 64,
         "MID_EARNINGS_EMA15_RETEST": 69,
         "MID_EARNINGS_EMA21_RETEST": 65,
@@ -279,6 +280,7 @@ FAVORITE_CURRENT_SIGNALS = {
         "BOUNCE_LOWER_1": 116,
         "EXTREME_MOVE_RETEST": 112,
         "POST_EARNINGS_52W_BREAK": 75,
+        "POST_EARNINGS_CANDLE_BREAK": 75,
         "POST_EARNINGS_AVWAPE_BOUNCE": 64,
         "MID_EARNINGS_EMA15_RETEST": 69,
         "MID_EARNINGS_EMA21_RETEST": 65,
@@ -671,6 +673,13 @@ POST_EARNINGS_BOUNCE_MIN_SESSIONS_SINCE_GAP = 2
 POST_EARNINGS_MAX_CALENDAR_DAYS = 16
 POST_EARNINGS_BREAK_SIGNAL = "POST_EARNINGS_52W_BREAK"
 POST_EARNINGS_BOUNCE_SIGNAL = "POST_EARNINGS_AVWAPE_BOUNCE"
+# Trader's flagship post-earnings play (2026-07-31; examples VFC/NEOG/CAKE/
+# MMM): big directional earnings gap WITH an aligned earnings candle (red for
+# shorts, green for longs), then a break of that candle's low (short) / high
+# (long). No 52-week requirement - the stricter 52W variant keeps its own
+# signal and never stacks with this one (correlated group below).
+POST_EARNINGS_CANDLE_BREAK_SIGNAL = "POST_EARNINGS_CANDLE_BREAK"
+POST_EARNINGS_CANDLE_BREAK_FAMILY = "post_earnings_candle_break"
 POST_EARNINGS_CLOSE_CONFIRM_SIGNAL = "POST_EARNINGS_CLOSE_CONFIRM"
 POST_EARNINGS_STOP_LABEL = "POST_EARNINGS_AVWAPE"
 POST_EARNINGS_CANDLE_STOP_LABEL_LONG = "POST_EARNINGS_CANDLE_LOW"
@@ -716,6 +725,7 @@ SMA_BREAKOUT_TRACKING_SCORE_BONUS = {
 }
 MAIN_SWING_SETUP_FAMILIES = {
     "post_earnings_52w_break",
+    "post_earnings_candle_break",
     "post_earnings_avwap_bounce",
     AVWAPE_TO_FIRST_DEV_FAMILY,
     MID_EARNINGS_EMA15_RETEST_FAMILY,
@@ -752,6 +762,9 @@ PRIORITY_CURRENT_SIGNAL_WEIGHT_DEFAULT_CAP = 110
 # highest-weight fired member.
 CORRELATED_CURRENT_SIGNAL_GROUPS = (
     frozenset({"MID_EARNINGS_EMA15_RETEST", "MID_EARNINGS_EMA21_RETEST", "MID_EARNINGS_FIRST_DEV_RETEST"}),
+    # A 52-week earnings-candle break IS an earnings-candle break with extra
+    # confluence - the two must never double-count one move.
+    frozenset({"POST_EARNINGS_52W_BREAK", "POST_EARNINGS_CANDLE_BREAK"}),
 )
 # Expected-R coherence guard: below this ExpR the static score gets capped so
 # stacked signals can never outrank outcome-backed setups.
@@ -760,6 +773,7 @@ PRIORITY_NEGATIVE_EXPECTED_R_SCORE_CAP = 120
 PRIORITY_CONTEXT_SIGNAL_WEIGHT_CAP = 28
 PRIORITY_CURRENT_SIGNAL_WEIGHT_CAPS = {
     "POST_EARNINGS_52W_BREAK": 120,
+    "POST_EARNINGS_CANDLE_BREAK": 120,
     "POST_EARNINGS_AVWAPE_BOUNCE": 112,
     "MID_EARNINGS_EMA15_RETEST": 118,
     "MID_EARNINGS_EMA21_RETEST": 112,
@@ -4627,6 +4641,8 @@ def _canonical_tracker_setup_family(setup: dict | None) -> str:
     signals = _setup_signal_set(setup)
     if POST_EARNINGS_BREAK_SIGNAL in signals:
         return "post_earnings_52w_break"
+    if POST_EARNINGS_CANDLE_BREAK_SIGNAL in signals:
+        return POST_EARNINGS_CANDLE_BREAK_FAMILY
     if POST_EARNINGS_BOUNCE_SIGNAL in signals:
         return "post_earnings_avwap_bounce"
     if MID_EARNINGS_EMA15_RETEST_SIGNAL in signals:
@@ -7121,6 +7137,8 @@ def _short_near_favorite_gate_reason(row: dict) -> str:
         or row.get("trendline_break_recent")
         or row.get("post_earnings_break_intraday")
         or row.get("post_earnings_break_close")
+        or row.get("post_earnings_candle_break_intraday")
+        or row.get("post_earnings_candle_break_close")
     )
     if not fresh_trigger:
         missing.append("fresh downside trigger")
@@ -8619,6 +8637,8 @@ SCAN_FACTOR_BOOL_FIELDS = {
     "post_earnings_active": ("earnings", "Post-earnings active"),
     "post_earnings_break_intraday": ("earnings", "Post-earnings intraday break"),
     "post_earnings_break_close": ("earnings", "Post-earnings close break"),
+    "post_earnings_candle_break_intraday": ("earnings", "Post-earnings candle-break intraday"),
+    "post_earnings_candle_break_close": ("earnings", "Post-earnings candle-break close"),
     "mid_earnings_watch": ("earnings", "Mid-earnings watch"),
     "mid_earnings_active_second_stdev_hold": ("earnings", "Mid-earnings second-stdev hold"),
     "mid_earnings_ema15_trigger": ("earnings", "Mid-earnings EMA15 trigger"),
@@ -12355,6 +12375,14 @@ def analyze_post_earnings_setups(
         "bounce_date": "",
         "bounce_age_sessions": None,
         "bounce_sessions_after_gap": None,
+        "qualified_candle_break_gap": False,
+        "candle_trigger_level": None,
+        "candle_break_signal": False,
+        "candle_break_close": False,
+        "candle_break_fresh": False,
+        "candle_break_age_sessions": None,
+        "candle_break_sessions_after_gap": None,
+        "first_candle_break_date": "",
         "events": [],
         "note": "",
         "anchor_meta": None,
@@ -12435,6 +12463,41 @@ def analyze_post_earnings_setups(
     )
     break_intraday = bool(break_fresh)
     break_close = bool(break_fresh and _is_close_beyond_level(side, last_close, breakout_extreme))
+    # Trader's flagship candle-break play (2026-07-31; VFC/NEOG/CAKE/MMM):
+    # requires the earnings candle's COLOR to align with the gap (red gap-down
+    # for shorts, green gap-up for longs), then a break of that candle's
+    # low/high in the gap direction. Intraday tag triggers (CAKE tagged and
+    # rejected - still a flag); a close through it confirms. Unlike the 52w
+    # variant the break may come any time inside the 10-session window, but
+    # only a FRESH break (<=2 sessions old) flags.
+    candle_trigger_level = _coerce_float(gap_row.get("high" if side_norm == "LONG" else "low"))
+    qualified_candle_break_gap = bool(gap_candle_directional and candle_trigger_level is not None)
+    candle_break_idx = None
+    if qualified_candle_break_gap and len(df) > int(gap_idx) + 1:
+        candle_break_idx = _find_first_post_earnings_break_index(
+            df,
+            side,
+            candle_trigger_level,
+            int(gap_idx) + 1,
+        )
+    first_candle_break_date = ""
+    candle_break_age_sessions = None
+    candle_break_sessions_after_gap = None
+    if candle_break_idx is not None:
+        first_candle_break_date = _trade_date_text_from_bar(df.iloc[candle_break_idx])
+        candle_break_age_sessions = max(0, len(df) - 1 - int(candle_break_idx))
+        candle_break_sessions_after_gap = int(candle_break_idx) - int(gap_idx)
+    candle_break_fresh = bool(
+        candle_break_sessions_after_gap is not None
+        and int(candle_break_sessions_after_gap) >= 1
+        and candle_break_age_sessions is not None
+        and candle_break_age_sessions <= POST_EARNINGS_BREAK_FRESH_SESSIONS
+    )
+    candle_break_intraday = bool(candle_break_fresh)
+    candle_break_close = bool(
+        candle_break_fresh
+        and _is_close_beyond_level(side, last_close, candle_trigger_level)
+    )
     bounce_info = (
         _find_recent_post_earnings_avwap_bounce(
             df,
@@ -12446,7 +12509,7 @@ def analyze_post_earnings_setups(
         else {}
     )
     bounce_signal = bool(bounce_info.get("bounce_signal"))
-    if not qualified_52w_gap and not bounce_signal:
+    if not qualified_52w_gap and not bounce_signal and not qualified_candle_break_gap:
         if sessions_since_gap >= POST_EARNINGS_BOUNCE_MIN_SESSIONS_SINCE_GAP:
             return result
 
@@ -12456,6 +12519,12 @@ def analyze_post_earnings_setups(
         events.append(POST_EARNINGS_BREAK_SIGNAL)
         family = POST_EARNINGS_BREAK_SIGNAL
         if break_close:
+            events.append(POST_EARNINGS_CLOSE_CONFIRM_SIGNAL)
+    if candle_break_intraday:
+        events.append(POST_EARNINGS_CANDLE_BREAK_SIGNAL)
+        if not family:
+            family = POST_EARNINGS_CANDLE_BREAK_SIGNAL
+        if candle_break_close and POST_EARNINGS_CLOSE_CONFIRM_SIGNAL not in events:
             events.append(POST_EARNINGS_CLOSE_CONFIRM_SIGNAL)
     if bounce_signal:
         events.append(POST_EARNINGS_BOUNCE_SIGNAL)
@@ -12503,6 +12572,27 @@ def analyze_post_earnings_setups(
             f"not a new 52-week {'high' if side_norm == 'LONG' else 'low'}; "
             f"pre-earnings AVWAPE {avwap_retest_word} watch"
         )
+    candle_extreme_word = "high" if side_norm == "LONG" else "low"
+    if candle_break_intraday:
+        note_parts.append(
+            f"earnings-candle {candle_extreme_word} break {float(candle_trigger_level):.2f}"
+        )
+        if first_candle_break_date:
+            note_parts.append(f"first candle break {first_candle_break_date}")
+        if candle_break_close:
+            note_parts.append("candle break close confirmed")
+    elif qualified_candle_break_gap:
+        if candle_break_idx is None:
+            note_parts.append(
+                f"waiting for earnings-candle {candle_extreme_word} break "
+                f"{float(candle_trigger_level):.2f}"
+            )
+        else:
+            note_parts.append(
+                f"candle break stale after {int(candle_break_age_sessions or 0)} session(s)"
+            )
+    elif not gap_candle_directional:
+        note_parts.append("earnings candle color against the gap; candle-break play stands down")
     if break_close:
         note_parts.append("close confirmed")
     if bounce_signal:
@@ -12524,10 +12614,28 @@ def analyze_post_earnings_setups(
             "qualified_52w_gap": bool(qualified_52w_gap),
             "qualified_pre_earnings_avwap_gap": True,
             "gap_candle_directional": bool(gap_candle_directional),
-            "monitor_level": monitor_level,
+            # The monitor follows whichever play is live: 52w candidacy keeps
+            # its extreme; a fired candle break (or a candle watch with no
+            # bounce) monitors the earnings-candle extreme; a fired AVWAPE
+            # bounce keeps the anchor VWAP.
+            "monitor_level": (
+                monitor_level
+                if qualified_52w_gap
+                else (
+                    float(candle_trigger_level)
+                    if qualified_candle_break_gap and (candle_break_intraday or not bounce_signal)
+                    else monitor_level
+                )
+            ),
             "monitor_level_label": (
-                "52W_HIGH" if side_norm == "LONG" else "52W_LOW"
-            ) if qualified_52w_gap else "PRE_EARN_AVWAP",
+                ("52W_HIGH" if side_norm == "LONG" else "52W_LOW")
+                if qualified_52w_gap
+                else (
+                    ("EARNINGS_CANDLE_HIGH" if side_norm == "LONG" else "EARNINGS_CANDLE_LOW")
+                    if qualified_candle_break_gap and (candle_break_intraday or not bounce_signal)
+                    else "PRE_EARN_AVWAP"
+                )
+            ),
             "earnings_candle_stop_level": float(earnings_candle_stop_level),
             "earnings_candle_stop_label": _post_earnings_candle_stop_label(side_norm),
             "anchor_date": str(release_context.get("anchor_date") or ""),
@@ -12547,6 +12655,16 @@ def analyze_post_earnings_setups(
             "bounce_date": str(bounce_info.get("bounce_date") or ""),
             "bounce_age_sessions": bounce_info.get("bounce_age_sessions"),
             "bounce_sessions_after_gap": bounce_info.get("bounce_sessions_after_gap"),
+            "qualified_candle_break_gap": bool(qualified_candle_break_gap),
+            "candle_trigger_level": (
+                float(candle_trigger_level) if candle_trigger_level is not None else None
+            ),
+            "candle_break_signal": bool(candle_break_intraday),
+            "candle_break_close": bool(candle_break_close),
+            "candle_break_fresh": bool(candle_break_fresh),
+            "candle_break_age_sessions": candle_break_age_sessions,
+            "candle_break_sessions_after_gap": candle_break_sessions_after_gap,
+            "first_candle_break_date": first_candle_break_date,
             "events": events,
             "note": "; ".join(note_parts),
             "anchor_meta": anchor_meta,
@@ -15967,6 +16085,8 @@ def _derive_setup_family(
 
     if POST_EARNINGS_BREAK_SIGNAL in tags:
         return "post_earnings_52w_break", tags
+    if POST_EARNINGS_CANDLE_BREAK_SIGNAL in tags:
+        return POST_EARNINGS_CANDLE_BREAK_FAMILY, tags
     if POST_EARNINGS_BOUNCE_SIGNAL in tags:
         return "post_earnings_avwap_bounce", tags
     mid_earnings_family = _mid_earnings_setup_family_from_trigger_level(mid_earnings_primary_trigger_level)
@@ -16088,7 +16208,11 @@ def _append_unique_reason(existing: str, reason: str) -> str:
     return "; ".join(existing_parts)
 
 
-POST_EARNINGS_ALLOWED_SETUP_FAMILIES = {"post_earnings_52w_break", "post_earnings_avwap_bounce"}
+POST_EARNINGS_ALLOWED_SETUP_FAMILIES = {
+    "post_earnings_52w_break",
+    "post_earnings_candle_break",
+    "post_earnings_avwap_bounce",
+}
 
 
 def _is_allowed_post_earnings_priority_setup(row: dict | None) -> bool:
@@ -16099,7 +16223,11 @@ def _is_allowed_post_earnings_priority_setup(row: dict | None) -> bool:
         return True
     signals = {str(value or "").strip().upper() for value in row.get("favorite_signals") or []}
     signals.update(str(value or "").strip().upper() for value in row.get("context_signals") or [])
-    return bool(POST_EARNINGS_BREAK_SIGNAL in signals or POST_EARNINGS_BOUNCE_SIGNAL in signals)
+    return bool(
+        POST_EARNINGS_BREAK_SIGNAL in signals
+        or POST_EARNINGS_CANDLE_BREAK_SIGNAL in signals
+        or POST_EARNINGS_BOUNCE_SIGNAL in signals
+    )
 
 
 def _post_earnings_hard_rule_reason(sessions_since_gap: int, gap_date: str, setup_family: str) -> str:
@@ -16107,8 +16235,8 @@ def _post_earnings_hard_rule_reason(sessions_since_gap: int, gap_date: str, setu
     family_text = str(setup_family or "general").strip() or "general"
     return (
         f"post-earnings hard rule: {family_text} blocked {int(sessions_since_gap)} session(s) "
-        f"after earnings gap {gap_text}; only post_earnings_52w_break and "
-        f"post_earnings_avwap_bounce are allowed before session {POST_EARNINGS_MAX_SESSIONS}"
+        f"after earnings gap {gap_text}; only the post-earnings setup families "
+        f"are allowed before session {POST_EARNINGS_MAX_SESSIONS}"
     )
 
 
@@ -16117,8 +16245,8 @@ def _post_earnings_hard_rule_calendar_reason(calendar_days: int, earnings_date: 
     family_text = str(setup_family or "general").strip() or "general"
     return (
         f"post-earnings hard rule: {family_text} blocked {int(calendar_days)} calendar day(s) "
-        f"after earnings {date_text}; daily earnings-gap context was unavailable, so only "
-        f"post_earnings_52w_break and post_earnings_avwap_bounce are allowed"
+        f"after earnings {date_text}; daily earnings-gap context was unavailable, so "
+        f"only the post-earnings setup families are allowed"
     )
 
 
@@ -18889,8 +19017,12 @@ def _short_setup_confirmation_reasons(row: dict, symbol_entry: dict | None = Non
     if bool(
         row.get("post_earnings_break_intraday")
         or row.get("post_earnings_break_close")
+        or row.get("post_earnings_candle_break_intraday")
+        or row.get("post_earnings_candle_break_close")
         or symbol_entry.get("post_earnings_break_intraday")
         or symbol_entry.get("post_earnings_break_close")
+        or symbol_entry.get("post_earnings_candle_break_intraday")
+        or symbol_entry.get("post_earnings_candle_break_close")
     ):
         reasons.append("post-earnings break")
     if bool(row.get("bouncebot_bearish_weak_short_seen_today") or symbol_entry.get("bouncebot_bearish_weak_short_seen_today")):
@@ -19028,6 +19160,8 @@ def _has_countertrend_confirmation(row: dict, symbol_entry: dict | None = None) 
         or row.get("trendline_break_recent")
         or row.get("post_earnings_break_intraday")
         or row.get("post_earnings_break_close")
+        or row.get("post_earnings_candle_break_intraday")
+        or row.get("post_earnings_candle_break_close")
         or symbol_entry.get("bouncebot_relevant_focus_hit_today")
         or row.get("bouncebot_relevant_focus_hit_today")
     )
@@ -19219,10 +19353,15 @@ def _is_post_earnings_play_ready(row: dict) -> bool:
         return False
     signals = set(row.get("favorite_signals") or []) | set(row.get("context_signals") or [])
     return bool(
-        str(row.get("setup_family") or "") in {"post_earnings_52w_break", "post_earnings_avwap_bounce"}
+        str(row.get("setup_family") or "") in POST_EARNINGS_ALLOWED_SETUP_FAMILIES
         or row.get("post_earnings_break_intraday")
         or row.get("post_earnings_break_close")
+        or row.get("post_earnings_candle_break_intraday")
+        or row.get("post_earnings_candle_break_close")
+        or row.get("post_earnings_candle_break_intraday")
+        or row.get("post_earnings_candle_break_close")
         or POST_EARNINGS_BREAK_SIGNAL in signals
+        or POST_EARNINGS_CANDLE_BREAK_SIGNAL in signals
         or POST_EARNINGS_BOUNCE_SIGNAL in signals
     )
 
@@ -22081,6 +22220,25 @@ def _evaluate_priority_snapshot_for_date(
                 post_anchor_meta.get("stdev"),
                 post_earnings_summary.get("monitor_level"),
             )
+    if post_earnings_summary.get("candle_break_signal"):
+        post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
+        add_signal(
+            POST_EARNINGS_CANDLE_BREAK_SIGNAL,
+            "POST_EARNINGS",
+            post_earnings_summary.get("anchor_date", ""),
+            post_anchor_meta.get("vwap"),
+            post_anchor_meta.get("stdev"),
+            post_earnings_summary.get("candle_trigger_level"),
+        )
+        if post_earnings_summary.get("candle_break_close") and not post_earnings_summary.get("break_close"):
+            add_signal(
+                POST_EARNINGS_CLOSE_CONFIRM_SIGNAL,
+                "POST_EARNINGS",
+                post_earnings_summary.get("anchor_date", ""),
+                post_anchor_meta.get("vwap"),
+                post_anchor_meta.get("stdev"),
+                post_earnings_summary.get("candle_trigger_level"),
+            )
     if post_earnings_summary.get("bounce_signal"):
         post_anchor_meta = post_earnings_summary.get("anchor_meta") if isinstance(post_earnings_summary.get("anchor_meta"), dict) else {}
         add_signal(
@@ -22352,6 +22510,8 @@ def _evaluate_priority_snapshot_for_date(
         "post_earnings_monitor_level_label": post_earnings_summary.get("monitor_level_label", ""),
         "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
         "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+        "post_earnings_candle_break_intraday": bool(post_earnings_summary.get("candle_break_signal")),
+        "post_earnings_candle_break_close": bool(post_earnings_summary.get("candle_break_close")),
         "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
         "post_earnings_qualified_52w_gap": bool(post_earnings_summary.get("qualified_52w_gap")),
         "post_earnings_qualified_pre_earnings_avwap_gap": bool(
@@ -22460,6 +22620,8 @@ def _evaluate_priority_snapshot_for_date(
     )
     priority_summary["post_earnings_break_intraday"] = bool(post_earnings_summary.get("break_intraday"))
     priority_summary["post_earnings_break_close"] = bool(post_earnings_summary.get("break_close"))
+    priority_summary["post_earnings_candle_break_intraday"] = bool(post_earnings_summary.get("candle_break_signal"))
+    priority_summary["post_earnings_candle_break_close"] = bool(post_earnings_summary.get("candle_break_close"))
     priority_summary["post_earnings_sessions_since_gap"] = post_earnings_summary.get("sessions_since_gap")
     priority_summary["post_earnings_qualified_52w_gap"] = bool(post_earnings_summary.get("qualified_52w_gap"))
     priority_summary["post_earnings_qualified_pre_earnings_avwap_gap"] = bool(
@@ -22587,6 +22749,8 @@ def _evaluate_priority_snapshot_for_date(
         "post_earnings_monitor_level": _coerce_float(post_earnings_summary.get("monitor_level")),
         "post_earnings_break_intraday": bool(post_earnings_summary.get("break_intraday")),
         "post_earnings_break_close": bool(post_earnings_summary.get("break_close")),
+        "post_earnings_candle_break_intraday": bool(post_earnings_summary.get("candle_break_signal")),
+        "post_earnings_candle_break_close": bool(post_earnings_summary.get("candle_break_close")),
         "post_earnings_sessions_since_gap": post_earnings_summary.get("sessions_since_gap"),
         "post_earnings_qualified_52w_gap": bool(post_earnings_summary.get("qualified_52w_gap")),
         "post_earnings_qualified_pre_earnings_avwap_gap": bool(
@@ -26496,6 +26660,8 @@ def _priority_has_buying_interest_confirmation(row: dict) -> bool:
         or row.get("trendline_break_recent")
         or row.get("post_earnings_break_intraday")
         or row.get("post_earnings_break_close")
+        or row.get("post_earnings_candle_break_intraday")
+        or row.get("post_earnings_candle_break_close")
         or row.get("sma_breakout_previous_day_high_break")
         or row.get("sma_breakout_higher_high_confirmed")
         or row.get("top_pattern_entry")
@@ -30190,15 +30356,23 @@ def build_market_prep_payload(
             if isinstance(row, dict) and _is_post_earnings_play_ready(row)
         ],
         key=lambda row: (
-            not bool(row.get("post_earnings_break_intraday")),
+            not bool(
+                row.get("post_earnings_break_intraday")
+                or row.get("post_earnings_candle_break_intraday")
+            ),
             -float(row.get("score", 0.0) or 0.0),
             str(row.get("symbol") or ""),
         ),
     )
     post_earnings_details = []
     for row in post_earnings_rows:
-        status = "triggered" if row.get("post_earnings_break_intraday") else "watch"
-        if row.get("post_earnings_break_close"):
+        status = (
+            "triggered"
+            if row.get("post_earnings_break_intraday")
+            or row.get("post_earnings_candle_break_intraday")
+            else "watch"
+        )
+        if row.get("post_earnings_break_close") or row.get("post_earnings_candle_break_close"):
             status = "close_confirmed"
         note = str(row.get("post_earnings_note") or "").strip()
         post_earnings_details.append(
