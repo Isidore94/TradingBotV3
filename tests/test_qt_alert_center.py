@@ -1553,3 +1553,129 @@ def test_desk_auto_picks_chart_for_approval(tmp_path, monkeypatch):
     # A poll tick never re-queues decided or already-enqueued picks.
     panel._poll_auto_pick_pending()
     assert [alert.symbol for alert in panel._review_queue] == []
+
+
+def test_focus_review_button_queues_every_pick(tmp_path, monkeypatch):
+    """2026-07-31: the strength board's Review button walks every Focus pick
+    through the review chart - swing first, one chart per symbol, muted setup
+    text (a review, not a live alert)."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+    service = _service(tmp_path)
+    service.add("NVDA", "long", "swing", origin="test", context="")
+    service.add("TSLA", "short", "m5", origin="test", context="")
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "ignored.txt",
+        review_events_path=tmp_path / "review_events.jsonl",
+    )
+
+    panel.focus_strength.review_button.click()
+
+    current = panel._current_review_alert
+    assert current is not None and current.symbol == "NVDA"  # swing first
+    assert current.tag == "focus_review"
+    assert [alert.symbol for alert in panel._review_queue] == ["TSLA"]
+    assert not panel.chart_review.alert_text.property("alertLive")
+
+    # Skip walks to the M5 pick; the queue then runs dry.
+    panel._skip_review_alert(current)
+    assert panel._current_review_alert.symbol == "TSLA"
+    assert panel._current_review_alert.side == "SHORT"
+
+
+def test_focus_picks_flag_on_any_d1_interest_once_per_day(tmp_path, monkeypatch):
+    """2026-07-31: Focus picks are auto-watched for the whole D1 event set;
+    each (symbol, event) flags once per session into the D1 Focus feed."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+    from datetime import datetime, timedelta
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+    service = _service(tmp_path)
+    service.add("NVDA", "long", "swing", origin="test", context="")
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "ignored.txt",
+        review_events_path=tmp_path / "review_events.jsonl",
+        focus_d1_flags_path=tmp_path / "focus_d1_flags.json",
+    )
+
+    moment = datetime(2026, 7, 31, 12, 0)
+    day = moment.date()
+    d1_bars = [
+        {
+            "dt": datetime(2026, 7, 20, 0, 0) + timedelta(days=i),
+            "open": 100.0,
+            "high": 100.0 + i,
+            "low": 95.0,
+            "close": 99.0 + i,
+            "volume": 1_000.0,
+        }
+        for i in range(8)
+    ]
+    # Today's completed M5 bar prints above every prior session high.
+    m5_bars = [
+        {
+            "dt": datetime(day.year, day.month, day.day, 9, 30),
+            "open": 108.0,
+            "high": 120.0,
+            "low": 107.5,
+            "close": 119.0,
+            "volume": 5_000.0,
+        }
+    ]
+    panel._d1_bars_for = lambda symbol: list(d1_bars)
+    panel._m5_bars_for = lambda symbol: list(m5_bars)
+
+    panel._poll_focus_d1_interest(now=moment)
+
+    flagged = [alert for alert in panel._d1_alerts if alert.tag == "focus_d1_event"]
+    assert flagged, "a new multi-session high must flag the Focus pick"
+    assert all(alert.symbol == "NVDA" for alert in flagged)
+    assert any("NVDA|new_5d_high" == flag or flag.startswith("NVDA|") for flag in panel._focus_d1_flags)
+    assert "NVDA|new_5d_high" in panel._focus_d1_flags
+
+    # Second poll: everything already flagged today - nothing new.
+    before = len(panel._d1_alerts)
+    panel._poll_focus_d1_interest(now=moment)
+    assert len(panel._d1_alerts) == before
+
+    # A fresh panel on the same day reloads the fired registry from disk.
+    rebuilt = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "ignored.txt",
+        review_events_path=tmp_path / "review_events.jsonl",
+        focus_d1_flags_path=tmp_path / "focus_d1_flags.json",
+    )
+    assert "NVDA|new_5d_high" in rebuilt._focus_d1_flags

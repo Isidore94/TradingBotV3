@@ -75,5 +75,64 @@ def save_ignored_alert_symbols(
     return normalized
 
 
+def load_day_scoped_flags(path: Path, *, market_date: date | str | None = None) -> set[str]:
+    """Day-scoped set of opaque flag strings (e.g. "SYM|event_kind").
+
+    Same lifecycle as the ignored-symbols store - a stored date other than
+    today reads empty - but values are kept verbatim, not run through the
+    symbol extractor.
+    """
+    target = Path(path)
+    try:
+        text = target.read_text(encoding="utf-8") if target.exists() else ""
+    except OSError:
+        return set()
+    if not text.strip():
+        return set()
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    if str(payload.get("market_date") or "") != _market_date_text(market_date):
+        return set()
+    values = payload.get("flags")
+    if not isinstance(values, list):
+        return set()
+    return {str(value) for value in values if str(value or "").strip()}
+
+
+def save_day_scoped_flags(
+    flags: Iterable[str],
+    path: Path,
+    *,
+    market_date: date | str | None = None,
+) -> set[str]:
+    normalized = {str(value) for value in flags if str(value or "").strip()}
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(target.name + ".tmp")
+    try:
+        staged.write_text(
+            json.dumps(
+                {
+                    "market_date": _market_date_text(market_date),
+                    "flags": sorted(normalized),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(staged, target)
+    finally:
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return normalized
+
+
 def _market_date_text(value: date | str | None) -> str:
     return value.isoformat() if isinstance(value, date) else str(value or date.today().isoformat())

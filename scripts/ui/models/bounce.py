@@ -30,6 +30,15 @@ MANUAL_CHART_TAG = "manual_chart"
 # the review queue as a chart with Approve/Pass verbs and, like a manual
 # chart, never lands in the alert feed.
 AUTO_PICK_TAG = "auto_pick"
+# A Focus pick queued for a chart walkthrough by the strength board's
+# "Review" button. Occupies the review pane like a manual chart; never a
+# feed entry.
+FOCUS_REVIEW_TAG = "focus_review"
+# An automatic D1 interest flag on a Focus pick (15EMA reject, 5d/20d
+# extreme, SMA break, AVWAPE touch...). Routed to the D1 Focus feed + the
+# review chart queue - Focus names get flagged for ANYTHING remotely
+# interesting on the D1 (trader rule 2026-07-31).
+FOCUS_D1_EVENT_TAG = "focus_d1_event"
 
 
 def is_auto_pick_alert(alert: Any) -> bool:

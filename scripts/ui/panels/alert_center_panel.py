@@ -22,7 +22,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from alert_review_state import load_ignored_alert_symbols, save_ignored_alert_symbols
+from alert_review_state import (
+    load_day_scoped_flags,
+    load_ignored_alert_symbols,
+    save_day_scoped_flags,
+    save_ignored_alert_symbols,
+)
 from chart_watch import (
     BAND_BOUNCE_PRIME_BUCKETS,
     BAND_BOUNCE_TRACKER_TYPES,
@@ -50,6 +55,7 @@ from project_paths import (
     ALERT_REVIEW_EVENTS_FILE,
     ALERT_REVIEW_PARKED_SYMBOLS_FILE,
     AUTO_POPULATE_PENDING_FILE,
+    FOCUS_D1_FLAGS_FILE,
     D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
     get_local_setting,
@@ -62,6 +68,8 @@ from ui.models.bounce import (
     AUTO_PICK_TAG,
     BounceAlert,
     CHART_WATCH_TAG,
+    FOCUS_D1_EVENT_TAG,
+    FOCUS_REVIEW_TAG,
     MANUAL_CHART_TAG,
     SYMBOL_RE,
     is_auto_pick_alert,
@@ -302,6 +310,7 @@ class AlertCenterPanel(QFrame):
         review_events_path=None,
         review_guide=None,
         auto_pick_pending_path=None,
+        focus_d1_flags_path=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -412,6 +421,22 @@ class AlertCenterPanel(QFrame):
         # (date, side, symbol) triples already turned into a review chart, so
         # a pick the trader skipped is not re-queued on every poll tick.
         self._auto_picks_enqueued: set[tuple[str, str, str]] = set()
+        # Focus-pick D1 interest flags: every Focus name is auto-watched for
+        # the whole D1 event set (15EMA reject, 5d/20d extremes, SMA breaks,
+        # AVWAPE touches). "SYM|kind" fires at most once per session; the
+        # registry is day-scoped like the ignored/parked stores.
+        self._focus_d1_flags_path = (
+            Path(focus_d1_flags_path)
+            if focus_d1_flags_path is not None
+            else (FOCUS_D1_FLAGS_FILE if persist_ignored else None)
+        )
+        self._focus_d1_flags: set[str] = (
+            load_day_scoped_flags(
+                self._focus_d1_flags_path, market_date=self._ignored_market_date
+            )
+            if self._focus_d1_flags_path is not None
+            else set()
+        )
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
         # chart annotations (review_guidance.py). Advisory only; with no
         # documents on disk every score is 0 and the queue stays FIFO.
@@ -530,6 +555,7 @@ class AlertCenterPanel(QFrame):
         if self.focus_service is not None:
             self.focus_strength.set_focus_service(self.focus_service)
         self.focus_strength.symbolActivated.connect(self._show_board_symbol_snapshot)
+        self.focus_strength.reviewAllRequested.connect(self.review_focus_picks)
 
         self.tabs_row = QSplitter(Qt.Orientation.Horizontal)
         self.tabs_row.addWidget(self.tabs)
@@ -591,6 +617,9 @@ class AlertCenterPanel(QFrame):
         self._d1_watch_timer.setInterval(60_000)
         self._d1_watch_timer.timeout.connect(self._poll_d1_level_watches)
         self._d1_watch_timer.timeout.connect(self._poll_d1_event_watches)
+        # Focus picks are auto-watched for every D1 event kind - no arming
+        # needed. Rides the same 60s cadence as the armed D1 watches.
+        self._d1_watch_timer.timeout.connect(self._poll_focus_d1_interest)
         self._d1_watch_timer.start()
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -662,6 +691,12 @@ class AlertCenterPanel(QFrame):
         if _is_feed_noise_alert(alert):
             return
         if alert.symbol and alert.symbol in self._ignored_symbols:
+            return
+        # A Focus pick's automatic D1 interest flag belongs in the D1 Focus
+        # feed (the name is already the trader's) plus the chart queue.
+        if alert.tag == FOCUS_D1_EVENT_TAG:
+            self._enqueue_review_alert(alert)
+            self._add_d1_alert(alert)
             return
         # D1 Focus is reserved for favorite/high-conviction transitions
         # (final bucket upgrades only). Developing trigger/watch observations
@@ -1204,6 +1239,154 @@ class AlertCenterPanel(QFrame):
             },
         )
         return result
+
+    # ------------------------------------------------------------------
+    # Focus picks: desk-side chart walkthrough + automatic D1 interest flags
+    # (2026-07-31 user request).
+    def review_focus_picks(self) -> None:
+        """Queue every current Focus pick onto the review chart.
+
+        Fired by the strength board's "Review ▶" button. Swing picks first
+        (the headline bucket), then M5; one chart per symbol; walk them with
+        the ordinary verb row. Ignored-for-today names stay out.
+        """
+        if self.focus_service is None:
+            self.statusChanged.emit("Focus review: no Focus store attached.")
+            return
+        try:
+            by_category = self.focus_service.all_focus_by_category()
+        except Exception:
+            by_category = {}
+        queued = 0
+        seen: set[str] = set()
+        now_text = datetime.now().strftime("%H:%M:%S")
+        for category, bucket in (("swing", "Swing"), ("m5", "M5")):
+            sides = by_category.get(category) or {}
+            for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
+                for symbol in sides.get(side_key) or []:
+                    symbol = str(symbol or "").strip().upper()
+                    if (
+                        not symbol
+                        or symbol in seen
+                        or symbol in self._ignored_symbols
+                        or not SYMBOL_RE.fullmatch(symbol)
+                    ):
+                        continue
+                    seen.add(symbol)
+                    self._enqueue_review_alert(
+                        BounceAlert(
+                            time_text=now_text,
+                            symbol=symbol,
+                            side=side_label,
+                            trigger=f"Focus review · {bucket} {side_key}",
+                            timeframe="D1" if category == "swing" else "M5",
+                            tag=FOCUS_REVIEW_TAG,
+                            raw_text=f"FOCUS REVIEW {symbol} ({bucket} {side_key})",
+                        )
+                    )
+                    queued += 1
+        if queued:
+            self._record_review_event("focus_review_started", detail={"count": queued})
+            self.statusChanged.emit(
+                f"Reviewing {queued} Focus pick(s) on the chart - Skip walks to the next."
+            )
+        else:
+            self.statusChanged.emit("Focus review: no Focus picks to show.")
+
+    def _poll_focus_d1_interest(self, now=None) -> None:
+        """Flag Focus picks on ANYTHING remotely interesting on the D1.
+
+        Every Focus name is implicitly watched for the whole D1 event set
+        (15EMA reject, 5d/20d extremes, SMA50/100/200 breaks, AVWAPE line/1σ
+        bounces and breaks) - no arming needed. Each (symbol, event) flags at
+        most once per session; hits land in the D1 Focus feed and the chart
+        queue.
+        """
+        if self.focus_service is None or self._focus_d1_flags_path is None:
+            return
+        self._refresh_ignored_market_date()
+        try:
+            focus = self.focus_service.all_focus()
+        except Exception:
+            return
+        moment = now or datetime.now()
+        day_start = datetime(moment.year, moment.month, moment.day)
+        hits: list[tuple[str, str, str, object]] = []
+        for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
+            for symbol in focus.get(side_key) or []:
+                symbol = str(symbol or "").strip().upper()
+                if not symbol or symbol in self._ignored_symbols:
+                    continue
+                pending_kinds = [
+                    kind
+                    for kind in D1_EVENT_KINDS
+                    if f"{symbol}|{kind}" not in self._focus_d1_flags
+                ]
+                if not pending_kinds:
+                    continue
+                d1_bars = self._d1_bars_for(symbol)
+                if not d1_bars:
+                    continue
+                m5_bars = self._m5_bars_for(symbol)
+                avwape_anchor = None
+                if any(kind.startswith("avwape_") for kind in pending_kinds):
+                    try:
+                        import chart_snapshot
+
+                        avwape_anchor = chart_snapshot.earnings_anchor_date(symbol)
+                    except Exception:
+                        avwape_anchor = None
+                for kind in pending_kinds:
+                    watch = D1EventWatch(symbol=symbol, kind=kind, armed_at=day_start)
+                    try:
+                        hit = evaluate_d1_event_watch(
+                            watch,
+                            m5_bars,
+                            d1_bars,
+                            now=moment,
+                            avwape_anchor=avwape_anchor if kind.startswith("avwape_") else None,
+                        )
+                    except Exception:
+                        hit = None
+                    if hit is None:
+                        continue
+                    self._focus_d1_flags.add(f"{symbol}|{kind}")
+                    hits.append((symbol, side_label, kind, hit))
+        if not hits:
+            return
+        self._save_focus_d1_flags()
+        for symbol, side_label, kind, hit in hits:
+            self._record_review_event(
+                "focus_d1_flag",
+                symbol=symbol,
+                side=side_label,
+                detail={"kind": kind, "message": hit.message},
+            )
+            self.add_alert(
+                BounceAlert(
+                    time_text=datetime.now().strftime("%H:%M:%S"),
+                    symbol=symbol,
+                    side=side_label,
+                    trigger=f"Focus D1 · {hit.message}",
+                    timeframe="D1",
+                    tag=FOCUS_D1_EVENT_TAG,
+                    raw_text=f"FOCUS D1 {symbol} ({side_label}): {hit.message}",
+                    is_d1=True,
+                    payload={"focus_d1_kind": kind},
+                )
+            )
+
+    def _save_focus_d1_flags(self) -> None:
+        if self._focus_d1_flags_path is None:
+            return
+        try:
+            self._focus_d1_flags = save_day_scoped_flags(
+                self._focus_d1_flags,
+                self._focus_d1_flags_path,
+                market_date=self._ignored_market_date,
+            )
+        except OSError:
+            pass
 
     def _toggle_review_cross_focus(self, alert: BounceAlert) -> None:
         """The chart's cross-promote toggle. Never advances the queue.
@@ -2052,6 +2235,13 @@ class AlertCenterPanel(QFrame):
                 market_date=current,
             )
             if self._parked_symbols_path is not None
+            else set()
+        )
+        # Focus D1 interest flags reset with the session too - yesterday's
+        # "already flagged" must not mute today's events.
+        self._focus_d1_flags = (
+            load_day_scoped_flags(self._focus_d1_flags_path, market_date=current)
+            if self._focus_d1_flags_path is not None
             else set()
         )
         self._refresh_ignored_button()

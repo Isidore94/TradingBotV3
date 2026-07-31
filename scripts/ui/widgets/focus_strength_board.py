@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QTextBrowser,
     QVBoxLayout,
@@ -40,6 +41,7 @@ class FocusStrengthBoard(QWidget):
     """Focus picks pinned above the strongest/weakest field."""
 
     symbolActivated = Signal(str, str)
+    reviewAllRequested = Signal()  # walk every Focus pick through the chart
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -50,12 +52,21 @@ class FocusStrengthBoard(QWidget):
         self.title_label.setObjectName("SectionTitle")
         self.meta_label = QLabel("--:--")
         self.meta_label.setObjectName("MutedLabel")
+        # One-click chart walkthrough of every Focus pick (2026-07-31 user
+        # request: review Focus picks from the desk itself).
+        self.review_button = QPushButton("Review ▶")
+        self.review_button.setToolTip(
+            "Queue every Focus pick (Swing + M5) onto the review chart - "
+            "walk them one by one with the usual buttons."
+        )
+        self.review_button.clicked.connect(self.reviewAllRequested)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(6)
         header.addWidget(self.title_label)
         header.addStretch(1)
+        header.addWidget(self.review_button)
         header.addWidget(self.meta_label)
 
         self.board = QTextBrowser()

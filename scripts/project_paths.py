@@ -227,6 +227,10 @@ AUTO_POPULATE_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "auto_watchlist_membership.js
 # auto-owned watchlist slice, Pass records the decision for the day. AWAY mode
 # never writes this file - its picks apply directly.
 AUTO_POPULATE_PENDING_FILE = RUNTIME_DATA_DIR / "auto_populate_pending.json"
+# Day-scoped registry of D1 interest flags already raised on Focus picks
+# ("SYM|kind" strings, same file format as the ignored-symbols store) so each
+# event flags a Focus name at most once per session.
+FOCUS_D1_FLAGS_FILE = RUNTIME_DATA_DIR / "focus_d1_flags.json"
 # The day's first directional regime read (bearish_*/bullish_*). Discovery
 # keeps hunting the opening side after the live label decays to neutral
 # (2026-07-17: bearish_strong open -> neutral by noon shut off RW shorts).

@@ -8,7 +8,12 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from chart_watch import WATCH_KINDS
-from ui.models.bounce import MANUAL_CHART_TAG, BounceAlert, is_auto_pick_alert
+from ui.models.bounce import (
+    FOCUS_REVIEW_TAG,
+    MANUAL_CHART_TAG,
+    BounceAlert,
+    is_auto_pick_alert,
+)
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
@@ -182,7 +187,9 @@ class AlertChartReview(QWidget):
         # chart and a staged auto pick stay muted, so a glance separates
         # "something fired" from "I was just looking / deciding".
         is_auto_pick = is_auto_pick_alert(alert)
-        self._set_setup_text_live(alert.tag != MANUAL_CHART_TAG and not is_auto_pick)
+        self._set_setup_text_live(
+            alert.tag not in (MANUAL_CHART_TAG, FOCUS_REVIEW_TAG) and not is_auto_pick
+        )
         if focus_category == "swing":
             self.focus_button.setText("Add to Swing Focus")
             # Swing pick: the cross-promote is the M5 day-trade list.
