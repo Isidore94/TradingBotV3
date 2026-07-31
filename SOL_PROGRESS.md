@@ -79,6 +79,14 @@ sec 6.1 first-session checklist have **not** been run.
 
 Known gaps, deliberately not claimed as done:
 
+- Regime Infrastructure Phase 1 collection is **IMPLEMENTED + GREEN, not
+  LIVE_VALIDATED** on `regime-infrastructure-phase1`: Technical Integrity
+  appends +30/+60/+90 outcome windows and live-only 10:30/12:00 snapshots,
+  SPY first-hour/ATR baseline evidence, and an independent verified-breadth
+  M5 ledger; standalone adaptive Laguerre RSI is pure and golden-tested. The
+  first live session must pass `scripts/regime_collection_audit.py`. Evidence
+  remains **EXPLORATORY / NON-PROMOTABLE** until at least 40 instrumented
+  sessions (60 preferred) support a point-in-time predictive study.
 - Provider telemetry is **IMPLEMENTED + GREEN, not LIVE_VALIDATED**: schema-v2
   counters (lookup / cache-hit / per-provider attempt, success, failure /
   pacing-class throttle / fallback) are captured at the IBKR, Yahoo and
