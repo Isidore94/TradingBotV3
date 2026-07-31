@@ -568,8 +568,6 @@ class AlertCenterPanel(QFrame):
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
         self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
-        self.chart_review.autoPickApproved.connect(self._approve_auto_pick)
-        self.chart_review.autoPickPassed.connect(self._pass_auto_pick)
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -1073,6 +1071,11 @@ class AlertCenterPanel(QFrame):
         self._advance_review_queue()
 
     def _add_review_alert_to_focus(self, alert: BounceAlert) -> None:
+        # Unified verb row (2026-07-31): the add button's "yes" for a DESK
+        # auto pick is the watchlist, not Focus.
+        if is_auto_pick_alert(alert):
+            self._resolve_auto_pick(alert, True)
+            return
         if self.focus_service is None or not alert.symbol:
             return
         category = favorite_category_for_alert(alert)
@@ -1169,7 +1172,8 @@ class AlertCenterPanel(QFrame):
                 )
         else:
             self.statusChanged.emit(
-                f"✕ {symbol}: passed on auto pick - it will not be proposed again today."
+                f"✕ {symbol}: not today - this auto pick will not be proposed "
+                "again this session; watchlists untouched."
             )
         self._advance_review_queue()
 
@@ -1200,12 +1204,6 @@ class AlertCenterPanel(QFrame):
             },
         )
         return result
-
-    def _approve_auto_pick(self, alert: BounceAlert) -> None:
-        self._resolve_auto_pick(alert, True)
-
-    def _pass_auto_pick(self, alert: BounceAlert) -> None:
-        self._resolve_auto_pick(alert, False)
 
     def _toggle_review_cross_focus(self, alert: BounceAlert) -> None:
         """The chart's cross-promote toggle. Never advances the queue.
@@ -1935,10 +1933,12 @@ class AlertCenterPanel(QFrame):
         """Drop a name from today's visual processing without changing scans."""
         if not alert.symbol:
             return
+        # Unified verb row (2026-07-31): "✕ Not today" on an auto pick is the
+        # decline verdict - retire the proposal for the day, advance the
+        # queue, and leave the symbol's ordinary alerting untouched.
         if is_auto_pick_alert(alert):
-            # Removing an auto-pick chart is a "no" verdict too: retire the
-            # staged proposal so the pending file carries no orphan.
-            self._record_auto_pick_verdict(alert, False)
+            self._resolve_auto_pick(alert, False)
+            return
         self._record_review_event(
             "remove_today",
             alert=alert,

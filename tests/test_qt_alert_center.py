@@ -1517,19 +1517,24 @@ def test_desk_auto_picks_chart_for_approval(tmp_path, monkeypatch):
     assert current.tag == "auto_pick"
     assert current.side == "LONG"
     assert "PDH break" in current.trigger and "score 2.10" in current.trigger
-    # Widget visibility needs a shown window; assert the intent flags instead.
-    assert not panel.chart_review.auto_approve_button.isHidden()
-    assert not panel.chart_review.auto_pass_button.isHidden()
+    # Unified verb row (2026-07-31 user rule): the SAME buttons in the SAME
+    # spots, with adapted labels - no dedicated auto-pick buttons.
+    assert panel.chart_review.focus_button.text() == "✓ Add to watchlist"
+    assert panel.chart_review.remove_today_button.text() == "✕ Not today"
     assert [alert.symbol for alert in panel._review_queue] == ["TSLA"]
 
-    panel.chart_review.auto_approve_button.click()
+    # The add slot approves the pick (watchlist, not Focus).
+    panel.chart_review.focus_button.click()
     assert resolved == [("NVDA", "long", True)]
     assert panel._current_review_alert.symbol == "TSLA"
 
-    panel.chart_review.auto_pass_button.click()
+    # The not-today slot declines it.
+    panel.chart_review.remove_today_button.click()
     assert resolved[-1] == ("TSLA", "short", False)
     assert panel._current_review_alert is None
-    # An ordinary alert never shows the verdict verbs.
+    # A declined pick's symbol is NOT day-ignored - only the proposal dies.
+    assert "TSLA" not in panel._ignored_symbols
+    # An ordinary alert gets the ordinary labels back in the same spots.
     from ui.models.bounce import BounceAlert
 
     panel.add_alert(
@@ -1542,8 +1547,8 @@ def test_desk_auto_picks_chart_for_approval(tmp_path, monkeypatch):
             raw_text="[S-TIER] AMD: VWAP reclaim",
         )
     )
-    assert panel.chart_review.auto_approve_button.isHidden()
-    assert panel.chart_review.auto_pass_button.isHidden()
+    assert panel.chart_review.focus_button.text() == "Add to M5 Focus"
+    assert panel.chart_review.remove_today_button.text() == "✕ Not today"
 
     # A poll tick never re-queues decided or already-enqueued picks.
     panel._poll_auto_pick_pending()
