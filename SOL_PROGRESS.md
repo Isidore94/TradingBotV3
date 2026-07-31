@@ -7,13 +7,18 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch: `milestone-1-observability`, cut from `main` at `ed89265`. The Sol
-  integration and GUI product work it was based on is now merged into `main`.
-- Integration base: `3443c69` (an ancestor of `main`).
+- Branch: `main`, fast-forwarded 2026-07-30 evening from
+  `regime-infrastructure-phase1` (which contains all of
+  `milestone-1-observability`). One combined line: Milestone 1 observability,
+  writer coordination, shadow evidence, perf/crash fixes, provider telemetry,
+  the D1 stale-tail backfill, and the Regime Infrastructure Phase 1
+  collection packets.
+- Runtime: Python 3.14.6 on the desktop (upgraded from 3.14.2 the same
+  evening; the mini-PC still needs the upgrade).
 - Date: 2026-07-30
-- Test baseline: **1647 passed, 5 subtests passed**
+- Test baseline: **1678 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests/ -q`, pytest exit code 0)
-- Qt thread-warning gate: **1647 passed, 5 subtests passed**
+- Qt thread-warning gate: **1678 passed, 5 subtests passed**
   (`-W "error::pytest.PytestUnhandledThreadExceptionWarning"`,
   pytest exit code 0; no warning suppression)
 - Smoke: **7/7** (`scripts/smoke_check.py`, exit code 0)
