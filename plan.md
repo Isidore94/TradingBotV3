@@ -270,8 +270,12 @@ What it does not yet prove:
 
 - Phase 1 benchmark fixtures and trend reporting. (The Section 6.3 Health page
   landed 2026-07-30 with the full required-check inventory and a first-class
-  UNKNOWN status; within it, provider request/cache-hit/throttling/failure
-  counts still report UNKNOWN because no capture point exists yet.)
+  UNKNOWN status. Provider request/cache-hit/throttling/failure telemetry is
+  now IMPLEMENTED + GREEN at the IBKR/Yahoo/Nasdaq boundaries with a declared
+  boundary inventory and completeness contract - partial coverage or capture
+  errors can never grade healthy - but it is NOT LIVE_VALIDATED: the Health
+  row honestly reports UNKNOWN until the first instrumented scan writes a
+  manifest.)
 - Phase 2 real-machine acceptance drills.
 - Phase 3 storage reclassification, journal migration off Drive, and OS credential storage.
 - Phase 4 provider repository, staged scanner, batching, and request coalescing.

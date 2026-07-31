@@ -710,24 +710,30 @@ def test_shadow_store_needs_freshness_not_only_a_session_date_match(tmp_path):
 
 
 def test_provider_counters_unknown_until_measured_then_graded(tmp_path):
-    """Sec 6.3 bullet 9 flips from inventory-gap UNKNOWN to a measured check.
+    """Sec 6.3 bullet 9, v2 contract.
 
-    'Measured and zero' (provider.captured stamped, all counts zero) is healthy;
-    failures or a real pacing-class throttle are degraded; a failure share above
-    the unhealthy ratio is unhealthy.  A manifest with no provider counters at
-    all - a pre-instrumentation build - stays honestly UNKNOWN.
+    Pre-instrumentation manifests stay UNKNOWN; an empty run is HEALTHY only
+    when the declared boundary coverage is complete; partial coverage, capture
+    errors, orphans, throttles and per-provider failure ratios each degrade or
+    fail the row - and ratios only ever use matching (family, provider)
+    attempt denominators.
     """
+    from diagnostics import provider_counters as pc
+
     diagnostics, registry, now = _measured_fixture(tmp_path)
 
     # The fixture's manifest predates instrumentation: UNKNOWN, and emitted as
-    # ONE check (no duplicate inventory-gap row for the same dimension).
+    # ONE check (no duplicate inventory-gap row for the same dimension). An
+    # old v1 provider.captured stamp alone must NOT count as measured.
     payload = _audit(diagnostics, registry, now)
     provider_rows = [c for c in payload["checks"] if c["id"] == "provider_counters"]
     assert len(provider_rows) == 1
     assert provider_rows[0]["status"] == "unknown"
     assert provider_rows[0]["details"]["captured"] is False
 
-    def _with_counters(counters):
+    full = ",".join(pc.FAMILIES_EXPECTED)
+
+    def _with(counters, *, instrumented=full, expected=full):
         manifest = {
             "schema": "run_manifest_v1",
             "run_id": "run-2",
@@ -736,35 +742,100 @@ def test_provider_counters_unknown_until_measured_then_graded(tmp_path):
             "ended_at": "2026-07-13T19:48:00+00:00",
             "status": "ok",
             "total_seconds": 1080,
-            "counters": {"provider.captured": 1, **counters},
+            "counters": {
+                "provider.schema_version": 2,
+                "provider.capture_errors": 0,
+                "provider.orphan_events": 0,
+                **counters,
+            },
+            "outputs": {
+                "provider_families_expected": expected,
+                "provider_families_instrumented": instrumented,
+            },
         }
         _write(diagnostics / "run_manifests" / "run-2.json", manifest)
         result = _audit(diagnostics, registry, now)
         return next(c for c in result["checks"] if c["id"] == "provider_counters")
 
-    clean = _with_counters(
-        {"provider.daily_bars.request": 40, "provider.daily_bars.cache_hit": 160}
+    # v1 stamp alone (no schema_version) is still UNKNOWN.
+    legacy_v1_manifest = {
+        "schema": "run_manifest_v1",
+        "run_id": "run-2",
+        "job_type": "master_scan",
+        "started_at": "2026-07-13T19:30:00+00:00",
+        "status": "ok",
+        "counters": {"provider.captured": 1},
+    }
+    _write(diagnostics / "run_manifests" / "run-2.json", legacy_v1_manifest)
+    v1_only = next(
+        c
+        for c in _audit(diagnostics, registry, now)["checks"]
+        if c["id"] == "provider_counters"
+    )
+    assert v1_only["status"] == "unknown"
+
+    # Measured true zero with COMPLETE declared coverage: healthy, and says so.
+    zero = _with({})
+    assert zero["status"] == "healthy"
+    assert "zero provider lookups occurred" in zero["summary"]
+
+    # The same empty run with a missing instrumentation family: never healthy.
+    partial = _with({}, instrumented="daily_bars,intraday_bars")
+    assert partial["status"] == "degraded"
+    assert "PARTIAL coverage" in partial["summary"]
+    assert "theta_options" in partial["summary"]
+
+    # Capture errors: the accounting itself failed - not healthy.
+    broken_capture = _with({"provider.capture_errors": 2})
+    assert broken_capture["status"] == "degraded"
+    assert "capture error" in broken_capture["summary"]
+
+    # A healthy measured run with real per-provider numbers.
+    clean = _with(
+        {
+            "provider.daily_bars.lookup": 200,
+            "provider.daily_bars.cache_hit": 160,
+            "provider.daily_bars.attempt.ibkr": 40,
+            "provider.daily_bars.success.ibkr": 40,
+        }
     )
     assert clean["status"] == "healthy"
-    assert clean["details"]["totals"]["request"] == 40
+    assert clean["details"]["totals"]["lookup"] == 200
     assert clean["details"]["cache_hit_ratio"] == 0.8
 
-    throttled = _with_counters(
+    # Throttle without any ordinary failure: degraded, named as pacing.
+    throttled = _with(
         {
-            "provider.daily_bars.request": 40,
-            "provider.ibkr_historical.throttle": 2,
+            "provider.daily_bars.attempt.ibkr": 40,
+            "provider.daily_bars.success.ibkr": 40,
+            "provider.daily_bars.throttle.ibkr": 2,
         }
     )
     assert throttled["status"] == "degraded"
-    assert "throttling was observed" in throttled["summary"].lower()
+    assert "throttle" in throttled["summary"].lower()
 
-    failing = _with_counters(
+    # Per-provider ratio uses the MATCHING denominator: 20 ibkr failures over
+    # 40 ibkr attempts is unhealthy even though 200 logical lookups happened.
+    failing = _with(
         {
-            "provider.daily_bars.request": 40,
-            "provider.daily_bars.failure": 20,
+            "provider.daily_bars.lookup": 200,
+            "provider.daily_bars.attempt.ibkr": 40,
+            "provider.daily_bars.failure.ibkr": 20,
         }
     )
     assert failing["status"] == "unhealthy"
+    assert "daily_bars/ibkr" in failing["summary"]
+
+    # Failures with no recorded attempts is an accounting anomaly, reported as
+    # such - never divided by an unrelated total, never silently green.
+    orphan_failures = _with({"provider.daily_bars.failure.yahoo": 3})
+    assert orphan_failures["status"] == "degraded"
+    assert "no recorded attempts" in orphan_failures["summary"]
+
+    # Malformed counter values are tolerated and flagged, never a crash.
+    malformed = _with({"provider.daily_bars.attempt.ibkr": "garbage"})
+    assert malformed["status"] == "degraded"
+    assert malformed["details"]["malformed_counter_values"] == 1
 
 
 def test_spy_rollover_failure_is_unhealthy_and_non_promotable(tmp_path):

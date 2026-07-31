@@ -2226,18 +2226,25 @@ def _ibkr_historical_errors_are_circuit_worthy(errors: list[dict] | None) -> boo
     return False
 
 
-def _provider_count(endpoint: str, outcome: str) -> None:
-    """Provider-boundary accounting (diagnostics.provider_counters).
+def _provider_count(family: str, outcome: str, provider: str | None = None) -> None:
+    """Provider-boundary accounting (diagnostics.provider_counters, schema v2).
 
     Counting only: never influences fetch, caching, retry, or circuit
-    behaviour, and an accounting failure must never break a scan.
+    behaviour, and an accounting failure must never break a scan - but it is
+    never silent either: the counter module records its own capture errors,
+    and this wrapper reports an import-level failure the same way when it can.
     """
     try:
         from diagnostics.provider_counters import record
 
-        record(endpoint, outcome)
+        record(family, outcome, provider)
     except Exception:
-        pass
+        try:
+            from diagnostics.provider_counters import note_capture_error
+
+            note_capture_error()
+        except Exception:
+            pass
 
 
 def _record_ibkr_historical_result(
@@ -2246,18 +2253,17 @@ def _record_ibkr_historical_result(
     succeeded: bool,
     errors: list[dict] | None = None,
     timed_out: bool = False,
+    family: str = "daily_bars",
 ) -> None:
     global _IBKR_HISTORICAL_FAILURE_COUNT, _IBKR_HISTORICAL_YAHOO_ONLY
     if succeeded:
         _IBKR_HISTORICAL_FAILURE_COUNT = 0
         return
     # Honest throttle accounting: only a real pacing-class signal (IB error
-    # 162/366 or a pacing/rate-limit message) counts as throttling. A timeout
-    # is an ordinary failure.
+    # 162/366 or a pacing/rate-limit message) counts as throttling - never a
+    # plain timeout, which the fetch boundary already counts as failure.
     if _ibkr_historical_errors_are_circuit_worthy(errors):
-        _provider_count("ibkr_historical", "throttle")
-    elif timed_out:
-        _provider_count("ibkr_historical", "failure")
+        _provider_count(family, "throttle", "ibkr")
     if not (timed_out or _ibkr_historical_errors_are_circuit_worthy(errors)):
         return
     _IBKR_HISTORICAL_FAILURE_COUNT += 1
@@ -2563,12 +2569,15 @@ def _get_cached_symbol_metadata(symbol: str, ticker_obj=None) -> dict:
 
     cache = _load_symbol_metadata_cache()
     cached = cache.get(normalized_symbol)
+    _provider_count("symbol_metadata", "lookup")
     if _symbol_metadata_is_fresh(cached):
+        _provider_count("symbol_metadata", "cache_hit")
         return cached
 
     if ticker_obj is None:
         ticker_obj = yf.Ticker(normalized_symbol)
 
+    _provider_count("symbol_metadata", "attempt", "yahoo")
     info = _get_info_with_fallbacks(ticker_obj)
     try:
         options = sorted(
@@ -2580,6 +2589,11 @@ def _get_cached_symbol_metadata(symbol: str, ticker_obj=None) -> dict:
     except Exception:
         options = []
 
+    _provider_count(
+        "symbol_metadata",
+        "success" if (info or options) else "failure",
+        "yahoo",
+    )
     payload = {
         "updated_on": datetime.now().date().isoformat(),
         "market_cap": _coerce_int(
@@ -10953,6 +10967,7 @@ def _fetch_nasdaq_earnings_rows_with_retries(date_str: str) -> tuple[list[dict],
     last_error = None
     attempts = max(1, int(EARNINGS_CALENDAR_REQUEST_RETRIES) + 1)
     for attempt in range(attempts):
+        _provider_count("earnings_calendar", "attempt", "nasdaq")
         try:
             resp = requests.get(
                 API_URL.format(date=date_str),
@@ -10960,8 +10975,10 @@ def _fetch_nasdaq_earnings_rows_with_retries(date_str: str) -> tuple[list[dict],
                 timeout=EARNINGS_CALENDAR_REQUEST_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
+            _provider_count("earnings_calendar", "success", "nasdaq")
             return _extract_nasdaq_earnings_rows(resp.json()), None
         except Exception as exc:
+            _provider_count("earnings_calendar", "failure", "nasdaq")
             last_error = exc
             if attempt < attempts - 1 and EARNINGS_CALENDAR_RETRY_BACKOFF_SECONDS:
                 time.sleep(float(EARNINGS_CALENDAR_RETRY_BACKOFF_SECONDS) * (2 ** attempt))
@@ -10969,10 +10986,12 @@ def _fetch_nasdaq_earnings_rows_with_retries(date_str: str) -> tuple[list[dict],
 
 
 def fetch_earnings_for_date(date_str: str):
+    _provider_count("earnings_calendar", "lookup")
     cache = _load_earnings_calendar_rows_cache()
     cached_entry = cache.get(date_str) if isinstance(cache, dict) else None
     cached_rows = _earnings_calendar_rows_from_cache_entry(cached_entry)
     if _earnings_calendar_cache_entry_is_fresh(date_str, cached_entry):
+        _provider_count("earnings_calendar", "cache_hit")
         _record_shared_nasdaq_rows_safely(cached_rows, date_str)
         return cached_rows
 
@@ -11244,9 +11263,11 @@ def yf_earnings_dates(symbol: str):
         logger.setLevel(logging.CRITICAL)
         logger.propagate = False
 
+    _provider_count("earnings_dates", "attempt", "yahoo")
     try:
         t = yf.Ticker(symbol)
         ed = t.get_earnings_dates(limit=8)
+        _provider_count("earnings_dates", "success", "yahoo")
         if ed is None or getattr(ed, "empty", True):
             return []
         if not hasattr(ed, "index") or ed.index is None:
@@ -11259,12 +11280,16 @@ def yf_earnings_dates(symbol: str):
     except Exception as e:
         message = str(e)
         if "Import lxml" in message:
+            _provider_count("earnings_dates", "failure", "yahoo")
             global YF_EARNINGS_LOOKUP_DISABLED_REASON
             YF_EARNINGS_LOOKUP_DISABLED_REASON = "lxml is not installed"
             _can_attempt_yf_earnings_lookup(log_once=True)
             return []
         if any(marker in message for marker in YF_EARNINGS_NO_DATA_MARKERS):
+            # The provider answered "no data" - a successful response.
+            _provider_count("earnings_dates", "success", "yahoo")
             return []
+        _provider_count("earnings_dates", "failure", "yahoo")
         logging.warning(f"{symbol}: yfinance earnings lookup failed: {e}")
         return []
     finally:
@@ -13817,11 +13842,15 @@ def _fetch_ib_stock_contract_details(ib: IBApi | None, symbol: str, timeout_sec:
     req_id = ib.next_request_id()
     ib.contract_details[req_id] = []
     ib.contract_details_ready[req_id] = False
+    _provider_count("theta_options", "attempt", "ibkr")
     try:
         ib.reqContractDetails(req_id, create_contract(symbol))
         _wait_for_ib_flag(ib.contract_details_ready, req_id, timeout_sec)
-        return list(ib.contract_details.get(req_id, []) or [])
+        details = list(ib.contract_details.get(req_id, []) or [])
+        _provider_count("theta_options", "success" if details else "failure", "ibkr")
+        return details
     except Exception as exc:
+        _provider_count("theta_options", "failure", "ibkr")
         logging.warning("%s: IBKR stock contract detail request failed: %s", symbol, exc)
         return []
     finally:
@@ -13852,11 +13881,15 @@ def _fetch_ib_option_chain_definitions(
     req_id = ib.next_request_id()
     ib.option_chain_params[req_id] = []
     ib.option_chain_ready[req_id] = False
+    _provider_count("theta_options", "attempt", "ibkr")
     try:
         ib.reqSecDefOptParams(req_id, str(symbol).strip().upper(), "", "STK", underlying_con_id)
         _wait_for_ib_flag(ib.option_chain_ready, req_id, timeout_sec)
-        return list(ib.option_chain_params.get(req_id, []) or [])
+        params = list(ib.option_chain_params.get(req_id, []) or [])
+        _provider_count("theta_options", "success" if params else "failure", "ibkr")
+        return params
     except Exception as exc:
+        _provider_count("theta_options", "failure", "ibkr")
         logging.warning("%s: IBKR option-chain request failed: %s", symbol, exc)
         return []
     finally:
@@ -13943,6 +13976,7 @@ def _fetch_ib_option_quote_once(
     req_id = ib.next_request_id()
     ib.option_quotes[req_id] = {}
     ib.option_quotes_ready[req_id] = False
+    _provider_count("theta_options", "attempt", "ibkr")
     try:
         # IBKR rejects snapshot requests when generic ticks are requested.
         ib.reqMktData(req_id, contract, "", True, False, [])
@@ -13960,8 +13994,12 @@ def _fetch_ib_option_quote_once(
                 for item in request_errors
                 if str(item.get("message") or "").strip()
             ]
+            if _ibkr_historical_errors_are_circuit_worthy(request_errors):
+                _provider_count("theta_options", "throttle", "ibkr")
+        _provider_count("theta_options", "success" if quote else "failure", "ibkr")
         return quote
     except Exception as exc:
+        _provider_count("theta_options", "failure", "ibkr")
         logging.warning(
             "%s %s %.2f%s: IBKR option quote request failed: %s",
             getattr(contract, "symbol", ""),
@@ -14673,6 +14711,7 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
     """Fetch daily OHLCV bars from Yahoo Finance."""
 
     period = f"{max(days, ATR_LENGTH + 5)}d"
+    _provider_count("daily_bars", "attempt", "yahoo")
     try:
         df = yf.download(
             symbol,
@@ -14685,10 +14724,12 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
             multi_level_index=False,
         )
     except Exception as e:
+        _provider_count("daily_bars", "failure", "yahoo")
         logging.error(f"{symbol}: failed to download daily bars from Yahoo: {e}")
         return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
 
     if df is None or df.empty:
+        _provider_count("daily_bars", "failure", "yahoo")
         logging.warning(f"{symbol}: no daily data returned from Yahoo.")
         return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
 
@@ -14705,9 +14746,11 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
     required = {"open", "high", "low", "close", "volume"}
     missing = required - set(df.columns)
     if missing:
+        _provider_count("daily_bars", "failure", "yahoo")
         logging.error(f"{symbol}: missing expected columns from Yahoo response: {sorted(missing)}")
         return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
 
+    _provider_count("daily_bars", "success", "yahoo")
     df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
     df = df.dropna(subset=list(required))
     df = df.sort_values("datetime")
@@ -14725,6 +14768,7 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         return fetch_daily_bars_from_yahoo(symbol, days)
 
     # Try IBKR first
+    _provider_count("daily_bars", "attempt", "ibkr")
     reqId = None
     request_completed = False
     try:
@@ -14772,8 +14816,10 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         if not df.empty:
             df["datetime"] = pd.to_datetime(df["time"], format="%Y%m%d", errors="coerce")
             df = df.sort_values("datetime").reset_index(drop=True)
+            _provider_count("daily_bars", "success", "ibkr")
             _record_ibkr_historical_result(symbol, succeeded=True)
             return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_IBKR)
+        _provider_count("daily_bars", "failure", "ibkr")
         _record_ibkr_historical_result(
             symbol,
             succeeded=False,
@@ -14782,6 +14828,7 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         )
         logging.warning(f"{symbol}: no daily bars returned from IBKR, falling back to Yahoo.")
     except Exception as e:
+        _provider_count("daily_bars", "failure", "ibkr")
         _record_ibkr_historical_result(symbol, succeeded=False, timed_out=True)
         logging.error(f"{symbol}: IBKR daily fetch failed ({e}), falling back to Yahoo.")
     finally:
@@ -14793,10 +14840,14 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
             except Exception:
                 pass
 
+    # Reached only after a real IBKR attempt failed: this Yahoo call is a
+    # fallback, distinct from the yahoo-only paths above.
+    _provider_count("daily_bars", "fallback_used")
     return fetch_daily_bars_from_yahoo(symbol, days)
 
 
 def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
+    _provider_count("daily_bars", "lookup")
     normalized_symbol = str(symbol or "").strip().upper()
     requested_days = max(int(days), ATR_LENGTH + 5)
     cached = _load_cached_daily_bar_frame(normalized_symbol)
@@ -14831,7 +14882,6 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
             requested_days,
             max(DAILY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS),
         )
-    _provider_count("daily_bars", "request")
     fresh = _fetch_live_daily_bars(ib, normalized_symbol, refresh_days)
     if fresh is not None and not fresh.empty:
         if _daily_bar_cache_data_is_recent(fresh):
@@ -14847,7 +14897,11 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
             fresh_last_date.isoformat() if fresh_last_date else "unknown",
         )
 
-    _provider_count("daily_bars", "failure")
+    # Wrapper-level outcome only: the live refresh yielded nothing usable
+    # (which can include a stale-but-successful provider response). The real
+    # provider failures are counted at the IBKR/Yahoo boundary itself and this
+    # key is excluded from failure ratios.
+    _provider_count("daily_bars", "refresh_unusable")
     _mark_daily_bar_live_fetch_result(normalized_symbol, succeeded=False)
     if not cached.empty:
         if not cache_data_is_recent:
@@ -14908,6 +14962,7 @@ def fetch_intraday_bars_from_yahoo(
     if not normalized_symbol:
         return _empty_intraday_bar_frame()
     period = f"{max(5, int(period_days or 0))}d"
+    _provider_count("intraday_bars", "attempt", "yahoo")
     try:
         df = yf.download(
             normalized_symbol,
@@ -14920,12 +14975,15 @@ def fetch_intraday_bars_from_yahoo(
             multi_level_index=False,
         )
     except Exception as e:
+        _provider_count("intraday_bars", "failure", "yahoo")
         logging.error("%s: failed to download intraday bars from Yahoo: %s", normalized_symbol, e)
         return _empty_intraday_bar_frame()
 
     if df is None or df.empty:
+        _provider_count("intraday_bars", "failure", "yahoo")
         logging.warning("%s: no intraday data returned from Yahoo.", normalized_symbol)
         return _empty_intraday_bar_frame()
+    _provider_count("intraday_bars", "success", "yahoo")
 
     df = _flatten_yahoo_daily_bar_columns(df.reset_index())
     date_col = next(
@@ -14963,6 +15021,7 @@ def _fetch_live_intraday_bars(
         )
         return fetch_intraday_bars_from_yahoo(normalized_symbol, period_days=days)
 
+    _provider_count("intraday_bars", "attempt", "ibkr")
     reqId = None
     request_completed = False
     try:
@@ -15004,17 +15063,23 @@ def _fetch_live_intraday_bars(
         if not df.empty:
             if "datetime" not in df.columns and "time" in df.columns:
                 df["datetime"] = pd.to_datetime(df["time"], errors="coerce")
+            _provider_count("intraday_bars", "success", "ibkr")
             _record_ibkr_historical_result(normalized_symbol, succeeded=True)
             return _normalize_intraday_bar_frame(df)
+        _provider_count("intraday_bars", "failure", "ibkr")
         _record_ibkr_historical_result(
             normalized_symbol,
             succeeded=False,
             errors=request_errors,
             timed_out=not request_completed,
+            family="intraday_bars",
         )
         logging.warning("%s: no intraday bars returned from IBKR, falling back to Yahoo.", normalized_symbol)
     except Exception as e:
-        _record_ibkr_historical_result(normalized_symbol, succeeded=False, timed_out=True)
+        _provider_count("intraday_bars", "failure", "ibkr")
+        _record_ibkr_historical_result(
+            normalized_symbol, succeeded=False, timed_out=True, family="intraday_bars"
+        )
         logging.error("%s: IBKR intraday fetch failed (%s), falling back to Yahoo.", normalized_symbol, e)
     finally:
         if reqId is not None:
@@ -15025,6 +15090,8 @@ def _fetch_live_intraday_bars(
             except Exception:
                 pass
 
+    # Reached only after a real IBKR attempt failed.
+    _provider_count("intraday_bars", "fallback_used")
     try:
         days = int(str(duration).split()[0])
     except (TypeError, ValueError, IndexError):
@@ -15213,6 +15280,7 @@ def fetch_intraday_bars(
     normalized_symbol = str(symbol or "").strip().upper()
     if not normalized_symbol:
         return _empty_intraday_bar_frame()
+    _provider_count("intraday_bars", "lookup")
     token = _intraday_bar_size_token(bar_size)
     duration_days = _duration_to_days(duration or HTF_INTRADAY_DURATION, INTRADAY_BAR_DEFAULT_DURATION_DAYS)
     key = _intraday_cache_key(normalized_symbol, token)
@@ -15237,10 +15305,11 @@ def fetch_intraday_bars(
             max(INTRADAY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + INTRADAY_BAR_CACHE_HISTORY_BUFFER_DAYS),
         )
 
-    _provider_count("intraday_bars", "request")
     fresh = _fetch_live_intraday_bars(ib, normalized_symbol, bar_size=bar_size, duration=f"{int(refresh_days)} D")
     if not (fresh is not None and not fresh.empty and _intraday_cache_data_is_recent(fresh)):
-        _provider_count("intraday_bars", "failure")
+        # Wrapper-level: live refresh yielded nothing usable (may include a
+        # stale-but-successful provider response); excluded from ratios.
+        _provider_count("intraday_bars", "refresh_unusable")
     if fresh is not None and not fresh.empty and _intraday_cache_data_is_recent(fresh):
         merged = _merge_intraday_bar_frames(cached, fresh)
         if persist:

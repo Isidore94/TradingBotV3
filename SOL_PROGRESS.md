@@ -11,9 +11,9 @@ stamp; it must not duplicate the roadmap.
   integration and GUI product work it was based on is now merged into `main`.
 - Integration base: `3443c69` (an ancestor of `main`).
 - Date: 2026-07-30
-- Test baseline: **1626 passed, 5 subtests passed**
+- Test baseline: **1647 passed, 5 subtests passed**
   (`.venv\Scripts\python.exe -m pytest tests/ -q`, pytest exit code 0)
-- Qt thread-warning gate: **1626 passed, 5 subtests passed**
+- Qt thread-warning gate: **1647 passed, 5 subtests passed**
   (`-W "error::pytest.PytestUnhandledThreadExceptionWarning"`,
   pytest exit code 0; no warning suppression)
 - Smoke: **7/7** (`scripts/smoke_check.py`, exit code 0)
@@ -79,8 +79,16 @@ sec 6.1 first-session checklist have **not** been run.
 
 Known gaps, deliberately not claimed as done:
 
-- Provider request / cache-hit / throttling / failure counters have no capture
-  point anywhere in the repo and are an emitted **UNKNOWN**.
+- Provider telemetry is **IMPLEMENTED + GREEN, not LIVE_VALIDATED**: schema-v2
+  counters (lookup / cache-hit / per-provider attempt, success, failure /
+  pacing-class throttle / fallback) are captured at the IBKR, Yahoo and
+  Nasdaq boundaries across the declared inventory (daily_bars, intraday_bars,
+  symbol_metadata, earnings_dates, earnings_calendar, theta_options) with a
+  completeness contract - partial coverage, capture errors, orphan events or
+  malformed values can never grade healthy, and failure ratios only ever use
+  matching per-provider attempt denominators. The Health row honestly reports
+  **UNKNOWN** until the first instrumented scan writes a manifest, and no
+  live scan has run on this build yet.
 - W08/W09 has not crossed a real session/configuration rollover on this build.
   The current audit therefore honestly reports zero finalized summaries and
   zero eligible sessions for both engines; the first restarted live session

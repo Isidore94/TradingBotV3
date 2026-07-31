@@ -2476,12 +2476,14 @@ def run_master(
     recorder.set_counter("use_shared_watchlists", bool(use_shared_watchlists))
     recorder.set_counter("update_setup_tracker", update_setup_tracker)
     set_active_recorder(recorder)
-    # Provider counters are per-run: reset here, flushed into this manifest on
-    # both the success and the failure path (a failed scan's provider counts
-    # are exactly what diagnoses it).
+    # Provider counters are per-run: begin_run opens a fresh isolated bucket
+    # (late workers from a previous run land in a visible orphan bucket, never
+    # here), and the flush below closes it into this manifest on both the
+    # success and the failure path - a failed scan's provider counts are
+    # exactly what diagnoses it.
     from diagnostics import provider_counters
 
-    provider_counters.reset()
+    provider_counters.begin_run()
     try:
         result = _run_master_impl(
             longs_path=longs_path,

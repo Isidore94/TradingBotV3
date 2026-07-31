@@ -93,6 +93,7 @@ def _empty_group(session_date: str, configuration: str) -> dict[str, Any]:
         "timestamps_naive_normalized": 0,
         "timestamps_unresolved": 0,
         "timestamps_malformed": 0,
+        "timestamps_out_of_order": 0,
         "naive_timezone_source": "",
     }
 
@@ -331,6 +332,7 @@ def scan_raw_archive(path: Path | str, engine: str) -> dict[str, Any]:
             previous_stamp: datetime | None = None
             previous_state = ""
             last_state_at = ""
+            last_state_at_recorded = ""
             for stamp, kind, state, stamp_text, _row_tz in parsed:
                 if previous_state and state != previous_state:
                     transitions[f"{previous_state}->{state}"] += 1
@@ -342,13 +344,24 @@ def scan_raw_archive(path: Path | str, engine: str) -> dict[str, Any]:
                         ordered = False
                         group["timestamps_unresolved"] += 1
                         usable = False
+                    else:
+                        if not ordered:
+                            # Time ran backwards between two trusted stamps.
+                            # Count it, never compute a duration across it, and
+                            # restart the chain AT this stamp - the anomaly is
+                            # the boundary, not the row.
+                            group["timestamps_out_of_order"] += 1
                     if ordered:
                         durations[previous_state] += int(
                             (stamp - previous_stamp).total_seconds()
                         )
                 if usable:
                     previous_stamp = stamp
-                    last_state_at = stamp_text
+                    # The AWARE instant feeds durations and reconciliation
+                    # downstream (_session_metrics compares it against aware
+                    # coverage stamps); the original text is provenance.
+                    last_state_at = stamp.isoformat(timespec="seconds")
+                    last_state_at_recorded = stamp_text
                 else:
                     # An unresolvable or malformed stamp is an unknown clock
                     # boundary: elapsed time across it would be invented, so
@@ -360,6 +373,7 @@ def scan_raw_archive(path: Path | str, engine: str) -> dict[str, Any]:
             group["state_duration_seconds_observed"] = dict(durations)
             group["last_state"] = previous_state
             group["last_state_at"] = last_state_at
+            group["last_state_at_recorded"] = last_state_at_recorded
             chains = spy_chains[key]
             group["distinct_chains"] = len(chains)
             group["complete_chains"] = sum(
@@ -696,6 +710,10 @@ def audit_session_summaries(log_path: Path | str, engine: str) -> dict[str, Any]
             reasons.append("unresolvable raw timestamps")
         if int(raw_stats.get("timestamps_malformed", 0) or 0) > 0:
             reasons.append("malformed raw timestamps")
+        # Trusted stamps running backwards is an unexplained ordering anomaly;
+        # an eligible session cannot stand on a clock that went backwards.
+        if int(raw_stats.get("timestamps_out_of_order", 0) or 0) > 0:
+            reasons.append("out-of-order raw timestamps")
         is_eligible = not reasons
         session_scope_results[str(payload.get("session_date") or "")].append(
             {

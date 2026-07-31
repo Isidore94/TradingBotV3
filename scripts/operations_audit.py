@@ -1540,71 +1540,182 @@ def _disk_check(diagnostics: Path, now: datetime) -> dict[str, Any]:
     )
 
 
-#: Above this failure share of live requests the provider layer is failing,
-#: not merely degraded.
+#: Above this failure share of a provider's OWN attempts (never a mixed or
+#: unrelated denominator), that (family, provider) pair is failing outright.
 PROVIDER_FAILURE_UNHEALTHY_RATIO = 0.25
 
 
 def _provider_check(latest_manifest: dict[str, Any], manifests_dir: Path) -> dict[str, Any]:
-    """Sec 6.3 bullet 9, measured from the newest run manifest.
+    """Sec 6.3 bullet 9, measured from the newest run manifest (schema v2).
 
-    ``diagnostics.provider_counters`` records request / cache-hit / throttle /
-    failure events at the fetch boundary and flushes them into the manifest as
-    ``provider.<endpoint>.<outcome>`` counters, with ``provider.captured``
-    stamped even on an all-zero run so "measured and zero" is distinguishable
-    from "not measured".  A manifest without that stamp (any scan from a
-    pre-instrumentation build, or no scan at all) is honestly UNKNOWN.
+    Honesty rules, in grading order:
+
+    * no ``provider.schema_version`` -> UNKNOWN (pre-instrumentation build or
+      no scan; an old ``provider.captured`` stamp alone proves nothing).
+    * instrumented families != declared expected families -> PARTIAL coverage,
+      capped at DEGRADED.  An empty run may be HEALTHY only when the contract
+      proves every required boundary was instrumented and zero lookups
+      occurred.
+    * ``capture_errors`` or ``orphan_events`` -> not healthy: the accounting
+      itself was damaged or contaminated-adjacent, and saying so beats a
+      confident number.
+    * failure ratios are computed per (family, provider) against that
+      provider's own attempt denominator only.
+    * malformed counter values are tolerated, counted, and reported - never a
+      crash, never silently zero.
     """
     counters = (
         latest_manifest.get("counters")
         if isinstance(latest_manifest.get("counters"), dict)
         else {}
     )
+    outputs = (
+        latest_manifest.get("outputs")
+        if isinstance(latest_manifest.get("outputs"), dict)
+        else {}
+    )
     check_id, label = "provider_counters", "Provider request/cache/throttle/failure counts"
     run_id = str(latest_manifest.get("run_id") or "") if latest_manifest else ""
-    if not counters.get("provider.captured"):
+
+    def _int(value) -> tuple[int, bool]:
+        try:
+            return int(value), True
+        except (TypeError, ValueError):
+            return 0, False
+
+    schema_version, schema_ok = _int(counters.get("provider.schema_version"))
+    if not schema_ok or schema_version < 2:
         return _check(
             check_id,
             label,
             STATUS_UNKNOWN,
-            "Not measured yet: the newest scan manifest carries no provider "
-            "counters (pre-instrumentation build, or no scan has run). The "
-            "first master scan on this build will record them.",
+            "Not measured yet: the newest scan manifest carries no v2 provider "
+            "telemetry (pre-instrumentation build, or no scan has run). The "
+            "first master scan on this build will record it.",
             source=manifests_dir,
             details={"manifest_run_id": run_id, "captured": False},
         )
-    per_endpoint: dict[str, dict[str, int]] = {}
-    rollup = {"request": 0, "cache_hit": 0, "failure": 0, "throttle": 0}
-    for key, value in counters.items():
+
+    expected = [f for f in str(outputs.get("provider_families_expected") or "").split(",") if f]
+    instrumented = [
+        f for f in str(outputs.get("provider_families_instrumented") or "").split(",") if f
+    ]
+    missing_families = sorted(set(expected) - set(instrumented))
+
+    malformed_values = 0
+    per_family: dict[str, dict[str, int]] = {}
+    provider_attempts: dict[tuple[str, str], int] = {}
+    provider_failures: dict[tuple[str, str], int] = {}
+    totals = {
+        "lookup": 0,
+        "cache_hit": 0,
+        "attempt": 0,
+        "success": 0,
+        "failure": 0,
+        "throttle": 0,
+        "fallback_used": 0,
+        "refresh_unusable": 0,
+    }
+    for key, raw in counters.items():
         text = str(key)
-        if not text.startswith("provider.") or text == "provider.captured":
+        if not text.startswith("provider.") or text in (
+            "provider.schema_version",
+            "provider.capture_errors",
+            "provider.orphan_events",
+            "provider.captured",
+        ):
             continue
         parts = text.split(".")
-        if len(parts) != 3:
+        value, ok = _int(raw)
+        if not ok:
+            malformed_values += 1
             continue
-        _, endpoint, outcome = parts
-        per_endpoint.setdefault(endpoint, {})[outcome] = int(value or 0)
-        if outcome in rollup:
-            rollup[outcome] += int(value or 0)
-    requests = rollup["request"]
-    failures = rollup["failure"]
-    throttles = rollup["throttle"]
-    cache_hits = rollup["cache_hit"]
-    total_lookups = requests + cache_hits
-    cache_ratio = (cache_hits / total_lookups) if total_lookups else None
-    if requests and (failures / requests) > PROVIDER_FAILURE_UNHEALTHY_RATIO:
+        if len(parts) == 3:
+            _, family, outcome = parts
+            provider = ""
+        elif len(parts) == 4:
+            _, family, outcome, provider = parts
+        else:
+            malformed_values += 1
+            continue
+        per_family.setdefault(family, {})[".".join(parts[2:])] = value
+        if outcome in totals:
+            totals[outcome] += value
+        if provider:
+            if outcome == "attempt":
+                provider_attempts[(family, provider)] = (
+                    provider_attempts.get((family, provider), 0) + value
+                )
+            elif outcome == "failure":
+                provider_failures[(family, provider)] = (
+                    provider_failures.get((family, provider), 0) + value
+                )
+
+    capture_errors, _ = _int(counters.get("provider.capture_errors"))
+    orphan_events, _ = _int(counters.get("provider.orphan_events"))
+
+    # Matching denominators only: a (family, provider) failure count is judged
+    # against that pair's own attempts, never a mixed total.
+    failing_pairs = []
+    for pair, failures in provider_failures.items():
+        attempts = provider_attempts.get(pair, 0)
+        if failures and not attempts:
+            # Failures with no recorded attempts is itself an accounting
+            # anomaly - report it rather than dividing by something unrelated.
+            failing_pairs.append((pair, failures, 0, None))
+        elif attempts and (failures / attempts) > PROVIDER_FAILURE_UNHEALTHY_RATIO:
+            failing_pairs.append((pair, failures, attempts, failures / attempts))
+
+    problems: list[str] = []
+    if missing_families:
+        problems.append(
+            f"PARTIAL coverage: uninstrumented boundary families: {', '.join(missing_families)}."
+        )
+    if capture_errors:
+        problems.append(f"{capture_errors} capture error(s): the accounting itself failed.")
+    if orphan_events:
+        problems.append(
+            f"{orphan_events} orphan event(s) from workers that outlived their run."
+        )
+    if malformed_values:
+        problems.append(f"{malformed_values} malformed counter value(s).")
+    if totals["throttle"]:
+        problems.append(f"{totals['throttle']} pacing-class throttle event(s).")
+    for pair, failures, attempts, ratio in failing_pairs:
+        family, provider = pair
+        if ratio is None:
+            problems.append(
+                f"{family}/{provider}: {failures} failure(s) with no recorded attempts."
+            )
+        else:
+            problems.append(
+                f"{family}/{provider}: {failures}/{attempts} attempts failed ({ratio:.0%})."
+            )
+
+    if any(ratio is not None for _, _, _, ratio in failing_pairs):
         status = STATUS_UNHEALTHY
-    elif failures or throttles:
+    elif problems:
         status = STATUS_DEGRADED
     else:
         status = STATUS_HEALTHY
+
+    lookups = totals["lookup"]
+    cache_ratio = (totals["cache_hit"] / lookups) if lookups else None
     summary = (
-        f"Last scan: {requests} live request(s), {cache_hits} cache hit(s)"
-        + (f" ({cache_ratio:.0%} of lookups)" if cache_ratio is not None else "")
-        + f", {failures} failure(s), {throttles} throttle event(s)."
+        f"Last scan: {lookups} lookup(s), {totals['cache_hit']} cache hit(s)"
+        + (f" ({cache_ratio:.0%})" if cache_ratio is not None else "")
+        + f", {totals['attempt']} outbound attempt(s), {totals['success']} success(es), "
+        f"{totals['failure']} failure(s), {totals['throttle']} throttle(s), "
+        f"{totals['fallback_used']} fallback(s)."
     )
-    if throttles:
-        summary += " Pacing-class throttling was observed."
+    if not lookups and not problems:
+        summary = (
+            "Instrumentation active across all declared boundaries; zero provider "
+            f"lookups occurred this run. {summary}"
+        )
+    if problems:
+        summary += " " + " ".join(problems)
+
     return _check(
         check_id,
         label,
@@ -1614,9 +1725,16 @@ def _provider_check(latest_manifest: dict[str, Any], manifests_dir: Path) -> dic
         details={
             "manifest_run_id": run_id,
             "captured": True,
-            "totals": rollup,
+            "schema_version": schema_version,
+            "families_expected": expected,
+            "families_instrumented": instrumented,
+            "families_missing": missing_families,
+            "totals": totals,
             "cache_hit_ratio": round(cache_ratio, 4) if cache_ratio is not None else None,
-            "per_endpoint": per_endpoint,
+            "per_family": per_family,
+            "capture_errors": capture_errors,
+            "orphan_events": orphan_events,
+            "malformed_counter_values": malformed_values,
             "failure_unhealthy_ratio": PROVIDER_FAILURE_UNHEALTHY_RATIO,
         },
     )

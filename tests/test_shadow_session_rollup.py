@@ -589,6 +589,96 @@ def test_malformed_timestamp_breaks_the_duration_boundary(tmp_path):
     }
 
 
+def test_normalized_naive_final_row_keeps_the_duration_tail(tmp_path):
+    """Finding 2: the LAST state row is naive but normalized from trustworthy
+    sibling evidence; the tail duration against aware coverage must survive.
+
+    Before the fix, last_state_at stored the ORIGINAL naive text, and
+    _session_metrics' aware-vs-naive comparison raised TypeError, silently
+    dropping the final state's duration."""
+    from diagnostics.shadow_session_rollup import _session_metrics
+
+    log = tmp_path / "spy_state_shadow.jsonl"
+    _write_rows(
+        log,
+        [
+            _spy_row(
+                "spy_state_shadow_v2",
+                state="RANGE",
+                evaluated_at="2026-07-13T12:40:00-07:00",
+                timezone="Pacific Daylight Time",
+            ),
+            # The naive LAST row, normalizable from the sibling's -07:00 offset.
+            {
+                "schema": "spy_state_shadow_v2",
+                "session_date": "2026-07-13",
+                "config_hash": "spy-cfg",
+                "engine_version": "spy-v1",
+                "machine": "desk",
+                "state": "BULL_IMPULSE",
+                "evaluated_at": "2026-07-13T12:55:00",
+            },
+        ],
+    )
+    scan = scan_raw_archive(log, SPY_ENGINE)
+    day = scan["groups"]["2026-07-13|spy-cfg"]
+    # The aware instant feeds durations; the recorded text stays as provenance.
+    assert day["last_state_at"] == "2026-07-13T12:55:00-07:00"
+    assert day["last_state_at_recorded"] == "2026-07-13T12:55:00"
+    assert day["timestamps_naive_normalized"] == 1
+
+    metrics = _session_metrics(
+        SPY_ENGINE, day, {"last_evaluation_at": "2026-07-13T13:10:00-07:00"}
+    )
+    # 12:55 -> 13:10 aware-vs-aware: the final state's 900s tail is counted.
+    assert metrics["state_duration_seconds"]["BULL_IMPULSE"] == 900
+
+
+def test_out_of_order_timestamps_are_counted_and_block_eligibility(tmp_path):
+    log = tmp_path / "spy_state_shadow.jsonl"
+    _write_rows(
+        log,
+        [
+            _spy_row("spy_state_shadow_v4", state="RANGE", evaluated_at="2026-07-13T10:00:00-07:00"),
+            # Time runs BACKWARDS between two trusted stamps.
+            _spy_row("spy_state_shadow_v4", state="BULL_IMPULSE", evaluated_at="2026-07-13T09:30:00-07:00"),
+            _spy_row("spy_state_shadow_v4", state="STABILIZING", evaluated_at="2026-07-13T09:45:00-07:00"),
+        ],
+    )
+    scan = scan_raw_archive(log, SPY_ENGINE)
+    day = scan["groups"]["2026-07-13|spy-cfg"]
+    assert day["timestamps_out_of_order"] == 1
+    # No duration across the backwards boundary; the chain restarts AT the
+    # anomalous stamp, so the later ordered pair still measures honestly.
+    assert day["state_duration_seconds_observed"] == {"BULL_IMPULSE": 900}
+
+    finalize_session(
+        engine=SPY_ENGINE,
+        log_path=log,
+        coverage={
+            "session_date": "2026-07-13",
+            "config_hash": "spy-cfg",
+            "evaluations": 3,
+            "usable_evaluations": 3,
+            "errors": 0,
+        },
+        finalized_at=NOW,
+        reason="session_rollover",
+        engine_version="spy-v1",
+        machine="desk",
+        timezone="UTC",
+        configuration="spy-cfg",
+    )
+    reset_audit_cache()
+    progress = audit_session_summaries(log, SPY_ENGINE)
+    day1 = next(
+        item
+        for item in progress["incomplete_session_details"]
+        if item["session_date"] == "2026-07-13"
+    )
+    assert any("out-of-order raw timestamps" in reason for reason in day1["reasons"])
+
+
 def test_timestamp_anomalies_block_eligibility_and_tampering_is_detected(tmp_path, monkeypatch):
     monkeypatch.delenv("TRADINGBOT_MARKET_TIMEZONE", raising=False)
     import market_session
