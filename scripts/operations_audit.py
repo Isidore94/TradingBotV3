@@ -1673,10 +1673,10 @@ def _provider_check(latest_manifest: dict[str, Any], manifests_dir: Path) -> dic
         )
     if capture_errors:
         problems.append(f"{capture_errors} capture error(s): the accounting itself failed.")
-    if orphan_events:
-        problems.append(
-            f"{orphan_events} orphan event(s) from workers that outlived their run."
-        )
+    # Out-of-run events are NOT a problem: the GUI legitimately hits provider
+    # boundaries between scans (e.g. the D1 chart's stale-tail backfill). The
+    # bucket exists so they can never contaminate a run's counts; the count is
+    # reported for attribution honesty, not graded.
     if malformed_values:
         problems.append(f"{malformed_values} malformed counter value(s).")
     if totals["throttle"]:
@@ -1715,6 +1715,11 @@ def _provider_check(latest_manifest: dict[str, Any], manifests_dir: Path) -> dic
         )
     if problems:
         summary += " " + " ".join(problems)
+    if orphan_events:
+        summary += (
+            f" {orphan_events} out-of-run event(s) (GUI/backfill activity between "
+            "scans; excluded from this run's counts)."
+        )
 
     return _check(
         check_id,

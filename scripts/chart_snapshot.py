@@ -19,7 +19,7 @@ band consumer is calibrated to. Do not "fix" it toward a distribution
 stdev; see plan.md section 5.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -325,6 +325,54 @@ def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
         )
     _daily_bars_cache[symbol] = (cache_key, bars)
     return bars
+
+
+def latest_completed_session_date(now: datetime | None = None) -> date:
+    """The most recent session whose daily bar should exist by ``now``.
+
+    Weekdays before that day's close -> the previous weekday; after the close
+    -> today; weekends -> Friday. Holidays are not modelled (no exchange
+    calendar in the repo): on a holiday this names a session that never
+    traded, which callers must treat as "possibly stale" - never as proof.
+    """
+    from market_session import get_market_session_window, normalize_market_local_datetime
+
+    moment = normalize_market_local_datetime(now)
+    candidate = moment.date()
+    try:
+        window = get_market_session_window(candidate)
+        before_close = moment < window.close_local
+    except Exception:
+        before_close = moment.hour < 13  # market-local fallback
+    if before_close:
+        candidate = candidate - timedelta(days=1)
+    while candidate.weekday() >= 5:  # Sat/Sun -> back to Friday
+        candidate = candidate - timedelta(days=1)
+    return candidate
+
+
+def d1_store_is_stale(
+    d1_bars: list[Mapping[str, Any]], now: datetime | None = None
+) -> bool:
+    """True when the newest STORED bar predates the last completed session.
+
+    The trader's complaint this answers: "sometimes the latest D1 bar isn't
+    loaded in." The chart deliberately performs no provider call during paint
+    (plan.md Milestone 8), so a symbol outside the current scan set - nothing
+    refreshing its durable store, no cached M5 bars to preview from - could
+    show a tail days old with nothing ever noticing. This predicate is the
+    noticing: hosts use it to trigger an OFF-paint background backfill.
+    Preview candles do not count as stored evidence. An EMPTY store is not
+    "stale" (that is the out-of-universe case with its own note).
+    """
+    stored = [bar for bar in d1_bars or [] if not bar.get("preview")]
+    if not stored:
+        return False
+    stamp = (stored[-1] or {}).get("dt")
+    last = stamp.date() if hasattr(stamp, "date") else None
+    if last is None:
+        return True
+    return last < latest_completed_session_date(now)
 
 
 def forming_d1_bar(

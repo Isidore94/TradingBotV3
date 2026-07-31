@@ -22,9 +22,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import logging
+import threading
+from datetime import datetime, timedelta
+
 from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
 from ui.widgets.candle_chart import CandleChart
+
+#: Per-symbol backfill cooldown, shared across every snapshot widget so two
+#: open charts of one stale symbol cannot double-fetch, and a holiday (which
+#: the session calendar cannot see) costs at most one probe per window.
+_D1_BACKFILL_ATTEMPTS: dict[str, datetime] = {}
+_D1_BACKFILL_COOLDOWN = timedelta(minutes=10)
 
 
 def _legend_html(
@@ -89,6 +99,8 @@ class SymbolSnapshotWidget(QWidget):
     d1LevelAlertRequested = Signal(str, str, float, str)
     # Click-to-price from either chart, for hosts with a level box to fill.
     pricePicked = Signal(float)
+    # A background D1 backfill finished for this symbol; re-read the store.
+    _d1BackfillDone = Signal(str)
 
     def __init__(self, parent=None, *, compact: bool = False) -> None:
         """``compact`` trades legend wrapping for chart height.
@@ -103,6 +115,8 @@ class SymbolSnapshotWidget(QWidget):
         self._symbol = ""
         self._bot = None
         self._compact = bool(compact)
+        self._d1_backfill_thread: threading.Thread | None = None
+        self._d1BackfillDone.connect(self._on_d1_backfill_done)
         # Latest snapshot dicts, retained so callers can quick-fill a price from
         # a drawn overlay (VWAP, +/-1 sigma). set_data plots overlays and drops
         # them, so without this the values are unrecoverable after rendering.
@@ -204,7 +218,56 @@ class SymbolSnapshotWidget(QWidget):
         # the previous close.
         d1 = chart_snapshot.build_d1_snapshot(self._symbol, intraday_bars=m5_bars)
         m5 = chart_snapshot.build_m5_snapshot(self._symbol, m5_bars)
+        # "Sometimes the latest D1 bar isn't loaded in": a symbol outside the
+        # current scan set has nothing refreshing its durable store and no M5
+        # cache to preview from, so its tail silently goes stale. Painting
+        # stays fetch-free (plan.md Milestone 8); the backfill runs on a
+        # worker thread and the chart re-reads the store when it lands.
+        try:
+            if chart_snapshot.d1_store_is_stale(d1.get("bars") or []):
+                self._start_d1_backfill(self._symbol)
+        except Exception:
+            logging.debug("D1 staleness probe failed.", exc_info=True)
         return d1, m5
+
+    def _start_d1_backfill(self, symbol: str) -> None:
+        """Refresh the durable daily store for ``symbol`` off the GUI thread.
+
+        Guards: one backfill per widget at a time, and a per-symbol cooldown
+        shared across widgets so a dead provider (or a holiday, which the
+        session calendar cannot see) cannot turn a stale chart into a fetch
+        loop. fetch_daily_bars itself merges + persists to the durable store,
+        which busts load_d1_bars' mtime cache, so the next refresh() simply
+        sees the new tail.
+        """
+        if self._d1_backfill_thread is not None and self._d1_backfill_thread.is_alive():
+            return
+        now = datetime.now()
+        attempted_at = _D1_BACKFILL_ATTEMPTS.get(symbol)
+        if attempted_at is not None and (now - attempted_at) < _D1_BACKFILL_COOLDOWN:
+            return
+        _D1_BACKFILL_ATTEMPTS[symbol] = now
+
+        def worker() -> None:
+            try:
+                from master_avwap_lib import legacy
+
+                legacy.fetch_daily_bars(None, symbol, 260)
+            except Exception:
+                logging.warning("D1 store backfill failed for %s.", symbol, exc_info=True)
+            try:
+                self._d1BackfillDone.emit(symbol)
+            except RuntimeError:
+                pass  # widget deleted while the fetch ran
+
+        self._d1_backfill_thread = threading.Thread(
+            target=worker, name=f"d1-backfill-{symbol}", daemon=True
+        )
+        self._d1_backfill_thread.start()
+
+    def _on_d1_backfill_done(self, symbol: str) -> None:
+        if symbol == self._symbol:
+            self.refresh()
 
     def _render_snapshots(self, d1: dict, m5: dict) -> None:
         symbol = self._symbol

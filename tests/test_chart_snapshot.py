@@ -847,3 +847,124 @@ def test_watchlist_symbol_double_click_preserves_text_selection():
     assert activated == ["AAPL"]
     assert editor.textCursor().selectedText() == "AAPL"
     editor.close()
+
+
+# ---------------------------------------------------------------------------
+# "Sometimes the latest D1 bar isn't loaded in" (live complaint, 2026-07-30):
+# a symbol outside the current scan set has nothing refreshing its durable
+# store and no cached M5 bars to preview from, so the chart tail silently
+# went stale. The predicate below is the noticing; the widget backfill test
+# proves the off-paint refresh and its cooldown.
+# ---------------------------------------------------------------------------
+def _d1_row(day, **extra):
+    row = {
+        "dt": datetime(day.year, day.month, day.day),
+        "open": 10.0,
+        "high": 11.0,
+        "low": 9.0,
+        "close": 10.5,
+        "volume": 1000.0,
+    }
+    row.update(extra)
+    return row
+
+
+def test_latest_completed_session_date_covers_the_clock(monkeypatch):
+    from datetime import date, timezone
+
+    monkeypatch.setenv("TRADINGBOT_MARKET_TIMEZONE", "America/Los_Angeles")
+    tz = timezone(timedelta(hours=-7))
+    f = chart_snapshot.latest_completed_session_date
+
+    # Wednesday during RTH -> Tuesday is the last completed session.
+    assert f(datetime(2026, 7, 29, 10, 0, tzinfo=tz)) == date(2026, 7, 28)
+    # Wednesday after the 13:00 close -> Wednesday itself.
+    assert f(datetime(2026, 7, 29, 14, 0, tzinfo=tz)) == date(2026, 7, 29)
+    # Saturday -> Friday; Monday pre-open -> Friday.
+    assert f(datetime(2026, 8, 1, 11, 0, tzinfo=tz)) == date(2026, 7, 31)
+    assert f(datetime(2026, 8, 3, 5, 0, tzinfo=tz)) == date(2026, 7, 31)
+
+
+def test_d1_store_is_stale_notices_a_missing_latest_bar(monkeypatch):
+    from datetime import date, timezone
+
+    monkeypatch.setenv("TRADINGBOT_MARKET_TIMEZONE", "America/Los_Angeles")
+    tz = timezone(timedelta(hours=-7))
+    during = datetime(2026, 7, 29, 10, 0, tzinfo=tz)   # Wed RTH
+    after = datetime(2026, 7, 29, 14, 0, tzinfo=tz)    # Wed post-close
+
+    tue = _d1_row(date(2026, 7, 28))
+    mon = _d1_row(date(2026, 7, 27))
+    wed = _d1_row(date(2026, 7, 29))
+
+    # Through Tuesday during Wednesday RTH: current (today is preview's job).
+    assert chart_snapshot.d1_store_is_stale([mon, tue], now=during) is False
+    # Ends Monday during Wednesday RTH: Tuesday's bar is MISSING -> stale.
+    assert chart_snapshot.d1_store_is_stale([mon], now=during) is True
+    # After Wednesday's close the store must hold Wednesday itself.
+    assert chart_snapshot.d1_store_is_stale([mon, tue], now=after) is True
+    assert chart_snapshot.d1_store_is_stale([mon, tue, wed], now=after) is False
+    # A preview candle is display-only, never stored evidence.
+    preview = _d1_row(date(2026, 7, 29), preview=True)
+    assert chart_snapshot.d1_store_is_stale([mon, tue, preview], now=after) is True
+    # An empty store is the out-of-universe case, not staleness.
+    assert chart_snapshot.d1_store_is_stale([], now=after) is False
+
+
+def test_stale_d1_tail_triggers_one_backfill_with_cooldown(monkeypatch):
+    """The widget kicks exactly one off-paint backfill per symbol per window,
+    and re-renders when it lands. Paint itself never fetches."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+
+    import master_avwap_lib.legacy as legacy
+    import ui.widgets.symbol_snapshot_dialog as snap_mod
+
+    calls: list[tuple] = []
+
+    def fake_fetch(ib, symbol, days):
+        calls.append((ib, symbol, days))
+        import pandas as pd
+
+        return pd.DataFrame()
+
+    monkeypatch.setattr(legacy, "fetch_daily_bars", fake_fetch)
+    monkeypatch.setattr(
+        chart_snapshot, "d1_store_is_stale", lambda bars, now=None: True
+    )
+    stale_d1 = {"symbol": "STAL", "timeframe": "D1", "bars": [_d1_row(datetime(2026, 7, 27).date())], "overlays": []}
+    monkeypatch.setattr(
+        chart_snapshot, "build_d1_snapshot", lambda *a, **k: dict(stale_d1)
+    )
+    monkeypatch.setattr(
+        chart_snapshot,
+        "build_m5_snapshot",
+        lambda *a, **k: {"symbol": "STAL", "timeframe": "M5", "bars": [], "overlays": []},
+    )
+    monkeypatch.setattr(snap_mod, "_D1_BACKFILL_ATTEMPTS", {})
+
+    widget = snap_mod.SymbolSnapshotWidget()
+    try:
+        widget.set_symbol("STAL")
+        thread = widget._d1_backfill_thread
+        assert thread is not None, "a stale tail must start a backfill worker"
+        thread.join(5.0)
+        assert calls == [(None, "STAL", 260)]
+
+        # Completion queued a refresh through the signal; deliver it.
+        app.processEvents()
+
+        # Same symbol inside the cooldown window: no second fetch.
+        widget.refresh()
+        thread = widget._d1_backfill_thread
+        if thread is not None:
+            thread.join(5.0)
+        app.processEvents()
+        assert len(calls) == 1, "cooldown must prevent a backfill loop"
+    finally:
+        widget.deleteLater()
+        app.processEvents()
