@@ -712,6 +712,48 @@ def _pick_rows(long_syms=(), short_syms=()):
     }
 
 
+def test_prev_day_extreme_gate_rule():
+    """2026-07-31 trader rule: auto-pick longs must trade above the previous
+    day's high, shorts below the previous day's low - across ALL discovery
+    families, not just the ADR-breakout builder."""
+    from autopilot_core import filter_candidates_by_prev_day_extremes
+
+    daily_context = {
+        "ABOVE": _ctx(prev_high=100.0, prev_low=90.0, prev_close=95.0, adr=3.0),
+        "INSIDE": _ctx(prev_high=100.0, prev_low=90.0, prev_close=95.0, adr=3.0),
+        "BELOW": _ctx(prev_high=100.0, prev_low=90.0, prev_close=95.0, adr=3.0),
+        "NOLEVELS": {"prev_high": None, "prev_low": None},
+    }
+    profiles = {
+        "ABOVE": _profile(101.0),
+        "INSIDE": _profile(99.0),
+        "BELOW": _profile(89.0),
+        "NOLEVELS": _profile(120.0),
+    }
+    candidates = {
+        "longs": [
+            {"symbol": "ABOVE", "score": 3.0, "reason": "aggressive HODs"},
+            {"symbol": "INSIDE", "score": 2.5, "reason": "aggressive HODs"},
+            {"symbol": "NOLEVELS", "score": 2.2, "reason": "RS vs SPY"},
+            {"symbol": "MISSING", "score": 2.0, "reason": "RS vs SPY"},
+        ],
+        "shorts": [
+            {"symbol": "BELOW", "score": 3.0, "reason": "RW vs SPY"},
+            {"symbol": "INSIDE", "score": 2.5, "reason": "RW vs SPY"},
+            {"symbol": "ABOVE", "score": 2.0, "reason": "RW vs SPY"},
+        ],
+    }
+
+    gated = filter_candidates_by_prev_day_extremes(candidates, profiles, daily_context)
+    assert [row["symbol"] for row in gated["longs"]] == ["ABOVE"]
+    assert [row["symbol"] for row in gated["shorts"]] == ["BELOW"]
+
+    # No daily store at all -> fail open, never empty the lists on missing data.
+    ungated = filter_candidates_by_prev_day_extremes(candidates, profiles, {})
+    assert ungated["longs"] == candidates["longs"]
+    assert ungated["shorts"] == candidates["shorts"]
+
+
 def test_auto_populate_clock_gate_opens_at_seven():
     from autopilot_core import AUTO_POPULATE_START_HOUR, auto_populate_clock_open
 

@@ -882,6 +882,55 @@ def filter_candidates_by_daily_trend(
     return result
 
 
+def passes_prev_day_extreme_gate(
+    side: str,
+    last: Any,
+    ctx: Mapping[str, Any] | None,
+) -> bool:
+    """PDH/PDL break gate for one auto pick (trader rule 2026-07-31): a long
+    must trade ABOVE the previous day's high, a short BELOW the previous
+    day's low. Missing price or level -> fails (cannot verify the break)."""
+    price = _finite_float(last)
+    if price is None or not isinstance(ctx, Mapping):
+        return False
+    if str(side or "").strip().lower().startswith("short"):
+        prev_low = _finite_float(ctx.get("prev_low"))
+        return prev_low is not None and price < prev_low
+    prev_high = _finite_float(ctx.get("prev_high"))
+    return prev_high is not None and price > prev_high
+
+
+def filter_candidates_by_prev_day_extremes(
+    candidates: Mapping[str, list[dict[str, Any]]],
+    profiles: Mapping[str, Mapping[str, Any]],
+    daily_context: Mapping[str, Any] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Drop auto-populate candidate rows that have not broken yesterday's range.
+
+    The ADR-breakout family requires the break by construction; this makes the
+    rule universal across the aggressive-extremes and RW/RS families too. Like
+    the daily-trend gate it fails OPEN only when no daily store is available at
+    all, so missing data never empties the lists; a symbol whose own price or
+    prior-day level is unknown fails (the break cannot be verified).
+    """
+    if daily_context is None or not daily_context:
+        return {key: list(value) for key, value in candidates.items()}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for side_key, side in (("longs", "long"), ("shorts", "short")):
+        rows = candidates.get(side_key) or []
+        kept = []
+        for row in rows:
+            sym = str(row.get("symbol") or "").strip().upper()
+            profile = profiles.get(sym) if isinstance(profiles, Mapping) else None
+            last = profile.get("last") if isinstance(profile, Mapping) else None
+            if passes_prev_day_extreme_gate(side, last, daily_context.get(sym)):
+                kept.append(row)
+        result[side_key] = kept
+    for key, value in candidates.items():
+        result.setdefault(key, value)
+    return result
+
+
 def filter_symbols_by_daily_trend(
     symbols: Iterable[str],
     side: str,
@@ -2092,6 +2141,11 @@ def refresh_auto_populated_watchlists(
         aggressive,
         relative,
     )
+    # PDH/PDL break rule (trader directive 2026-07-31): every auto pick must
+    # be trading beyond yesterday's range - longs above the previous day's
+    # high, shorts below the previous day's low - regardless of which
+    # discovery family produced it.
+    candidates = filter_candidates_by_prev_day_extremes(candidates, profiles, daily_context)
     # Daily-trend quality gate: no 1-day wonders (longs must hold above the daily
     # 15EMA/200SMA, shorts below the 15EMA/50SMA). Fails open if the daily store
     # is unavailable so the lists never empty on missing data.
