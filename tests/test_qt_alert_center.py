@@ -1599,6 +1599,19 @@ def test_focus_review_button_queues_every_pick(tmp_path, monkeypatch):
     assert panel._current_review_alert.symbol == "TSLA"
     assert panel._current_review_alert.side == "SHORT"
 
+    # The verb row adapts for the walkthrough: keep / skip / delete-pick.
+    assert panel.chart_review.focus_button.text() == "★ Keep in Focus"
+    assert panel.chart_review.remove_today_button.text() == "✕ Remove from Focus"
+
+    # Remove DELETES the pick from the Focus store and advances...
+    panel.chart_review.remove_today_button.click()
+    assert not service.is_focus("TSLA")
+    assert panel._current_review_alert is None
+    # ...but never day-ignores the symbol (alerts still show).
+    assert "TSLA" not in panel._ignored_symbols
+    # NVDA was only skipped, so it is still a Focus pick.
+    assert service.is_focus("NVDA", "long", "swing")
+
 
 def test_focus_picks_flag_on_any_d1_interest_once_per_day(tmp_path, monkeypatch):
     """2026-07-31: Focus picks are auto-watched for the whole D1 event set;

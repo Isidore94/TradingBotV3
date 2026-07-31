@@ -216,15 +216,29 @@ class AlertChartReview(QWidget):
                 "Approve this auto pick: it joins the auto-owned slice of the "
                 "BounceBot watchlist and gets M5-scanned within a cycle."
             )
+            self.remove_today_button.setText("✕ Not today")
             self.remove_today_button.setToolTip(
                 "Decline this auto pick - it will not be proposed again today "
                 "and the watchlists are untouched."
+            )
+        elif alert.tag == FOCUS_REVIEW_TAG:
+            # Focus walkthrough: the row becomes keep / skip / delete-pick.
+            self.focus_button.setText("★ Keep in Focus")
+            self.focus_button.setToolTip(
+                "Keep this Focus pick as-is and show the next chart."
+            )
+            self.remove_today_button.setText("✕ Remove from Focus")
+            self.remove_today_button.setToolTip(
+                "Delete this pick from Focus Picks (every bucket and side; "
+                "its focus-injected watchlist entries go with it). The "
+                "symbol itself is not muted - alerts still show."
             )
         else:
             self.focus_button.setToolTip(
                 "File this pick into Focus (it gets the heavier alert "
                 "treatment) and show the next chart."
             )
+            self.remove_today_button.setText("✕ Not today")
             self.remove_today_button.setToolTip(
                 "Done with this name for the day: removed from today's Alert "
                 "Center feed and chart queue. The BounceBot scanner and "

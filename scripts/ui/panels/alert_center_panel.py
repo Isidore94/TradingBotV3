@@ -1111,6 +1111,18 @@ class AlertCenterPanel(QFrame):
         if is_auto_pick_alert(alert):
             self._resolve_auto_pick(alert, True)
             return
+        # Focus walkthrough: the pick is already in Focus - "keep" just
+        # records the verdict and walks on.
+        if alert.tag == FOCUS_REVIEW_TAG:
+            self._record_review_event(
+                "focus_review_keep",
+                alert=alert,
+                dwell_ms=self._review_dwell_ms(alert.symbol),
+                queue_len=len(self._review_queue),
+            )
+            self.statusChanged.emit(f"★ {alert.symbol}: kept in Focus.")
+            self._advance_review_queue()
+            return
         if self.focus_service is None or not alert.symbol:
             return
         category = favorite_category_for_alert(alert)
@@ -2121,6 +2133,34 @@ class AlertCenterPanel(QFrame):
         # queue, and leave the symbol's ordinary alerting untouched.
         if is_auto_pick_alert(alert):
             self._resolve_auto_pick(alert, False)
+            return
+        # Focus walkthrough: the dismiss verb DELETES the pick from Focus
+        # (every bucket/side; un-injects its watchlist entries; logs the
+        # unfavorite to pick feedback). The symbol itself is not muted.
+        if alert.tag == FOCUS_REVIEW_TAG:
+            removed = 0
+            if self.focus_service is not None:
+                try:
+                    removed = int(
+                        self.focus_service.remove_everywhere(
+                            alert.symbol, origin="focus_review", context=alert.raw_text
+                        )
+                    )
+                except Exception:
+                    removed = 0
+            self._record_review_event(
+                "focus_review_remove",
+                alert=alert,
+                dwell_ms=self._review_dwell_ms(alert.symbol),
+                queue_len=len(self._review_queue),
+                detail={"entries_removed": removed},
+            )
+            self.statusChanged.emit(
+                f"✕ {alert.symbol}: removed from Focus Picks."
+                if removed
+                else f"{alert.symbol}: was not in Focus Picks anymore."
+            )
+            self._advance_review_queue()
             return
         self._record_review_event(
             "remove_today",
