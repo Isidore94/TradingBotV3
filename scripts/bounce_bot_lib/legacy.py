@@ -466,7 +466,6 @@ ENTRY_WINDOW_TOP_N = 8
 ENTRY_BOARD_TOP_N = 20
 ENTRY_WINDOW_MIN_BARS = 2
 ENTRY_MOVERS_MINUTES = 30
-ENTRY_AUTO_MOVERS_INTERVAL_MIN = 30
 
 
 def entry_assist_mode_for_env(env_key) -> dict:
@@ -4147,6 +4146,27 @@ class BounceBot(EWrapper, EClient):
             source = list(getattr(self, "auto_longs", [])) + list(getattr(self, "auto_shorts", []))
         return {str(item or "").strip().upper() for item in source if str(item or "").strip()}
 
+    def _chart_watch_symbols(self):
+        """Symbols with armed GUI chart watches (one-shot M5 alerts).
+
+        Arming an M5 alert must get the symbol's M5 bars cached even when it
+        sits on no watchlist (trader rule 2026-07-31), so the Alert Center's
+        30s watch poll has bars to evaluate. The watches file is trading-day
+        scoped, so this set - like the watches themselves - empties at the
+        next session.
+        """
+        try:
+            from chart_watch import load_chart_watches
+            from project_paths import ALERT_CHART_WATCHES_FILE
+
+            return {
+                str(watch.symbol or "").strip().upper()
+                for watch in load_chart_watches(ALERT_CHART_WATCHES_FILE)
+                if str(watch.symbol or "").strip()
+            }
+        except Exception:
+            return set()
+
     def get_scan_symbol_set(self):
         base_symbols = {
             str(item or "").strip().upper()
@@ -4158,18 +4178,21 @@ class BounceBot(EWrapper, EClient):
             | self._auto_watch_symbols()
             | set(self.get_master_avwap_d1_watch_symbols())
             | self._human_focus_symbols()
+            | self._chart_watch_symbols()
         )
 
     def get_priority_scan_symbols(self):
         """Every-candle names: the trader's longs.txt / shorts.txt intraday
-        dumps, human focus picks, and (so the bot's picks earn a clean tracked
-        history) the auto watchlists."""
+        dumps, human focus picks, armed chart-watch symbols (their cached M5
+        bars are what the GUI's watch poll evaluates - they must stay fresh),
+        and (so the bot's picks earn a clean tracked history) the auto
+        watchlists."""
         base_symbols = {
             str(item or "").strip().upper()
             for item in (self.longs + self.shorts)
             if str(item or "").strip()
         }
-        priority = base_symbols | self._human_focus_symbols()
+        priority = base_symbols | self._human_focus_symbols() | self._chart_watch_symbols()
         if AUTO_WATCHLIST_PRIORITY:
             priority |= self._auto_watch_symbols()
         return priority
@@ -5974,7 +5997,11 @@ class BounceBot(EWrapper, EClient):
 
         Strong regimes: open a window when SPY pauses against the tape and
         close it (emitting the ranked list) when the tape resumes. Weak and
-        chop regimes: emit the trailing-30m list(s) every 30 minutes.
+        chop regimes: nothing auto-emits - the scheduled 30-minute trailing
+        movers lists were pure Alert Center clutter (trader directive
+        2026-07-31: "remove the intraday alerts for big M5 moves"). The Entry
+        Assist board still shows the live movers continuously, and the manual
+        strongest/weakest buttons still emit on demand.
         """
         env = self.get_market_environment()
         mode = entry_assist_mode_for_env(env)
@@ -5995,10 +6022,6 @@ class BounceBot(EWrapper, EClient):
         # drop it quietly so the button and auto stay in sync.
         if window is not None and window.get("source") == "auto":
             self._entry_window = None
-        now = time.time()
-        if now - float(getattr(self, "_entry_movers_last_ts", 0.0)) >= ENTRY_AUTO_MOVERS_INTERVAL_MIN * 60.0:
-            self._entry_movers_last_ts = now
-            self.emit_trailing_movers(mode["sides"], source="auto")
 
     def _regime_pause_observation_store(self, today):
         store = getattr(self, "_regime_pause_observations", None)

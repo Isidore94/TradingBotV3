@@ -421,6 +421,7 @@ def test_priority_watchlist_emphasis_cycle_logic():
         latest_bars={},
     )
     stub._auto_watch_symbols = lambda side=None: BounceBot._auto_watch_symbols(stub, side)
+    stub._chart_watch_symbols = lambda: set()
     priority = BounceBot.get_priority_scan_symbols(stub)
     assert priority == {"AAPL", "NVDA", "TSLA", "HOOD", "GAPR"}
 
@@ -1765,6 +1766,23 @@ def test_entry_assist_auto_tick_opens_and_closes_pullback_window():
     assert any(message.startswith("ENTRY WINDOW (long)") for message, _tag in bot.alerts)
 
 
+def test_entry_assist_auto_tick_never_emits_scheduled_movers():
+    """2026-07-31 trader directive: the scheduled 30-minute STRONGEST/WEAKEST
+    movers lists cluttered the Alert Center - the auto tick emits nothing in
+    weak/chop regimes (the board still shows movers; manual buttons still
+    work, covered above)."""
+    bot = _entry_stub_bot(
+        "neutral_chop",
+        spy_closes=[100.0] * 8,
+        symbol_closes={"AAA": [50.0] * 4 + [50.0, 50.5, 51.0, 51.5]},
+        longs=("AAA",),
+    )
+    bot.entry_assist_auto_tick()
+    bot.entry_assist_auto_tick()
+    assert bot.alerts == []
+    assert not bot.entry_assist_state()["window_active"]
+
+
 def test_auto_regime_reading_classifies_mixed_mature_tape_as_chop():
     from datetime import datetime, timedelta
 
@@ -1850,6 +1868,7 @@ def test_auto_watchlists_get_same_treatment_as_trader_lists():
     stub.auto_shorts = ["AMD"]
     stub._human_focus_side_for_symbol = lambda symbol, direction=None: ""
     stub._human_focus_symbols = lambda: set()
+    stub._chart_watch_symbols = lambda: set()
     stub.master_avwap_d1_watchlist = {}
     stub.master_avwap_d1_upgrade_alerts = {}
     stub.master_avwap_focus_map = {}

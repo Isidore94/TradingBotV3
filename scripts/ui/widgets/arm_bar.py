@@ -256,6 +256,19 @@ class ArmBar(QFrame):
         for kind, button in self.watch_buttons.items():
             button.setToolTip(self._tooltip_for(kind))
 
+    _WATCH_KIND_DETAILS = {
+        "hod_avwap": (
+            "AVWAP anchored on whichever candle made today's HOD (re-anchors if "
+            "a new HOD prints); fires when a completed bar tags the line from "
+            "below and closes above it."
+        ),
+        "lod_avwap": (
+            "AVWAP anchored on whichever candle made today's LOD (re-anchors if "
+            "a new LOD prints); fires when a completed bar tags the line from "
+            "above and closes below it."
+        ),
+    }
+
     def _tooltip_for(self, kind: str) -> str:
         label = WATCH_KINDS[kind]
         base = (
@@ -263,6 +276,9 @@ class ArmBar(QFrame):
             "completed M5 bar that meets it fires a red alert in the Alert "
             "Center (bypasses the tier gate and sounds). Click again to disarm."
         )
+        detail = self._WATCH_KIND_DETAILS.get(kind)
+        if detail:
+            base = f"{base}\n\n{detail}"
         warning = getattr(self, "_watch_warning", "")
         return f"{base}\n\n⚠ {warning}" if warning else base
 

@@ -30,17 +30,19 @@ from ui import theme
 COLUMNS = ("Symbol", "Kind", "Level", "Armed", "Age", "Health", "")
 
 HEALTH_OK = "ok"
-HEALTH_NO_BARS = "no M5 bars"
+HEALTH_NO_BARS = "caching M5 bars…"
 HEALTH_STALE = "stale"
 
 
 def watch_health(kind: str, has_m5_bars: bool, armed_at: datetime, now: datetime) -> str:
-    """Why an armed watch might never fire.
+    """Why an armed watch might not fire yet.
 
     Session watches evaluate against cached M5 bars and die at midnight, so a
-    symbol with no cached bars cannot progress and a watch armed on an earlier
-    day is already dead. Persistent level alerts have neither constraint - they
-    also read the daily store - so they are always reported healthy.
+    watch armed on an earlier day is already dead. A symbol with no cached
+    bars is only WAITING: arming folds the name into BounceBot's M5 scan set,
+    so its bars land within a scan cycle and the watch starts evaluating.
+    Persistent level alerts have neither constraint - they also read the
+    daily store - so they are always reported healthy.
     """
     if kind in D1_LEVEL_KINDS or kind in D1_EVENT_KINDS:
         return HEALTH_OK

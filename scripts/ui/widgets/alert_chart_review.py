@@ -13,8 +13,9 @@ from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
 _NO_M5_WATCH_REASON = (
-    "No cached M5 bars for this symbol yet - a session watch has "
-    "nothing to evaluate. A typed price level still works."
+    "No cached M5 bars for this symbol yet - arming still works: BounceBot "
+    "folds armed names into its M5 scan set, so bars land within a scan "
+    "cycle and the watch starts evaluating then."
 )
 
 

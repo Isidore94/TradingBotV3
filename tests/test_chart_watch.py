@@ -158,12 +158,112 @@ def test_watch_is_stale_next_session():
 
 
 def test_watch_kind_labels_cover_all_buttons():
-    assert list(WATCH_KINDS) == ["new_hod", "new_lod", "vwap_bounce", "band_bounce"]
+    assert list(WATCH_KINDS) == [
+        "new_hod",
+        "new_lod",
+        "hod_avwap",
+        "lod_avwap",
+        "vwap_bounce",
+        "band_bounce",
+    ]
     assert WATCH_KINDS["new_hod"] == "New HOD"
     assert WATCH_KINDS["new_lod"] == "New LOD"
+    assert WATCH_KINDS["hod_avwap"] == "HOD AVWAP"
+    assert WATCH_KINDS["lod_avwap"] == "LOD AVWAP"
     assert WATCH_KINDS["vwap_bounce"] == "VWAP bounce"
     assert WATCH_KINDS["band_bounce"] == "σ-band bounce"
     assert set(D1_LEVEL_KINDS) == {"d1_level_above", "d1_level_below"}
+
+
+def test_lod_avwap_cross_and_close_below_fires_short():
+    """2026-07-31 trader request: AVWAP anchored on the candle that made the
+    session LOW; the first completed post-arm bar that trades through it and
+    CLOSES below fires. M5-only, session-scoped like every chart watch."""
+    bars = [
+        _bar(9, 30, o=101.0, h=101.5, low=100.5, c=101.0),
+        # The LOD candle - the AVWAP anchors here (typical 100.175).
+        _bar(9, 35, o=100.8, h=100.9, low=99.0, c=100.0),
+        # Recovery bar rides above the anchored VWAP: no trigger.
+        _bar(9, 40, o=100.5, h=101.5, low=100.4, c=101.2),
+    ]
+    armed = arm_chart_watch("lod_avwap", "NVDA", "WATCH", bars, now=DAY.replace(hour=9, minute=41))
+    assert armed.baseline is None  # anchor is re-derived every evaluation
+
+    # Cross bar: high tags the AVWAP (~100.49) from above, close 100.0 below.
+    bars.append(_bar(9, 45, o=100.8, h=100.9, low=99.9, c=100.0))
+    # Forming: preview only.
+    assert evaluate_chart_watch(armed, bars, now=DAY.replace(hour=9, minute=49)) is None
+    hit = evaluate_chart_watch(armed, bars, now=DAY.replace(hour=9, minute=50))
+    assert hit is not None
+    assert hit.price == 100.0
+    assert hit.resolved_side == "short"
+    assert "LOD AVWAP break" in hit.message
+    assert "09:35 LOD candle" in hit.message
+
+    # A bar that stays above the line never fires.
+    no_cross = bars[:3] + [_bar(9, 45, o=101.0, h=101.4, low=100.8, c=101.1)]
+    assert evaluate_chart_watch(armed, no_cross, now=DAY.replace(hour=9, minute=50)) is None
+
+
+def test_hod_avwap_cross_and_close_above_fires_long():
+    bars = [
+        _bar(9, 30, o=99.0, h=99.5, low=98.5, c=99.0),
+        # The HOD candle - anchor (typical 99.825).
+        _bar(9, 35, o=99.2, h=101.0, low=99.1, c=100.0),
+        # Fade below the anchored VWAP; closing below is NOT the signal.
+        _bar(9, 40, o=99.5, h=99.6, low=98.5, c=98.8),
+    ]
+    armed = arm_chart_watch("hod_avwap", "NVDA", "WATCH", bars, now=DAY.replace(hour=9, minute=41))
+
+    # Reclaim bar: low tags the AVWAP (~99.5) from below, close 99.9 above.
+    bars.append(_bar(9, 45, o=99.2, h=100.0, low=99.2, c=99.9))
+    hit = evaluate_chart_watch(armed, bars, now=DAY.replace(hour=9, minute=50))
+    assert hit is not None
+    assert hit.price == 99.9
+    assert hit.resolved_side == "long"
+    assert "HOD AVWAP reclaim" in hit.message
+    assert "09:35 HOD candle" in hit.message
+
+
+def test_extreme_avwap_anchor_candle_itself_never_triggers():
+    # The LOD bar closes below its own typical price - that is the anchor
+    # forming, not a cross of a level anyone traded against.
+    bars = [
+        _bar(9, 30, o=101.0, h=101.5, low=100.5, c=101.0),
+        _bar(9, 35, o=100.8, h=100.9, low=99.0, c=99.1),
+    ]
+    armed = arm_chart_watch("lod_avwap", "NVDA", "SHORT", [], now=DAY.replace(hour=9, minute=31))
+    assert evaluate_chart_watch(armed, bars, now=DAY.replace(hour=9, minute=45)) is None
+
+
+def test_armed_chart_watch_symbols_join_bouncebot_scan_sets(tmp_path, monkeypatch):
+    """Arming an M5 alert must get the symbol's M5 bars cached: BounceBot
+    folds armed chart-watch symbols into both scan sets (2026-07-31 rule)."""
+    import bounce_bot_lib.legacy as legacy
+    import project_paths
+
+    path = tmp_path / "chart_watches.json"
+    watch = arm_chart_watch("lod_avwap", "xyz", "SHORT", [], now=datetime.now())
+    save_chart_watches([watch], path)
+    monkeypatch.setattr(project_paths, "ALERT_CHART_WATCHES_FILE", path)
+
+    class Stub:
+        longs = ["AAA"]
+        shorts = []
+        _human_focus_symbols = staticmethod(lambda: set())
+        _auto_watch_symbols = staticmethod(lambda side=None: set())
+        get_master_avwap_d1_watch_symbols = staticmethod(lambda: [])
+        _chart_watch_symbols = legacy.BounceBot._chart_watch_symbols
+
+    stub = Stub()
+    assert legacy.BounceBot._chart_watch_symbols(stub) == {"XYZ"}
+    assert "XYZ" in legacy.BounceBot.get_scan_symbol_set(stub)
+    # Priority too: the GUI's 30s watch poll needs FRESH bars, not one fetch.
+    assert "XYZ" in legacy.BounceBot.get_priority_scan_symbols(stub)
+
+    # The watches file is day-scoped; yesterday's watches pull nothing in.
+    save_chart_watches([watch], path, market_date=(datetime.now().date() - timedelta(days=1)))
+    assert legacy.BounceBot._chart_watch_symbols(stub) == set()
 
 
 def test_band_bounce_touch_and_reclaim_by_side():

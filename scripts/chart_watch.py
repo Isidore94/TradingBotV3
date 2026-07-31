@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """User-armed one-shot M5 chart watches for the visual alert review surface.
 
-The trader arms a watch ("New HOD", "New LOD", "VWAP bounce") while looking
-at a symbol's M5 chart in the Alert Center's visual review pane. Each watch
+The trader arms a watch ("New HOD", "New LOD", "HOD/LOD AVWAP", "VWAP
+bounce") while looking at a symbol's M5 chart in the Alert Center's visual
+review pane. Each watch
 is session-scoped and one-shot: the first COMPLETED M5 bar that meets the
 condition produces a trigger (the hosting panel turns it into a red Alert
 Center alert) and the watch is retired. A forming bar is preview only and
@@ -31,6 +32,8 @@ M5_BAR_SPAN = timedelta(minutes=5)
 WATCH_KINDS = {
     "new_hod": "New HOD",
     "new_lod": "New LOD",
+    "hod_avwap": "HOD AVWAP",
+    "lod_avwap": "LOD AVWAP",
     "vwap_bounce": "VWAP bounce",
     "band_bounce": "σ-band bounce",
 }
@@ -190,6 +193,8 @@ def evaluate_chart_watch(
         return None
     if watch.kind in ("new_hod", "new_lod"):
         return _evaluate_extreme(watch, completed)
+    if watch.kind in ("hod_avwap", "lod_avwap"):
+        return _evaluate_extreme_avwap(watch, completed)
     if watch.kind == "vwap_bounce":
         return _evaluate_vwap_bounce(watch, completed)
     if watch.kind == "band_bounce":
@@ -231,6 +236,71 @@ def _evaluate_extreme(
                     f"(bar {stamp:%H:%M})"
                 )
             return ChartWatchTrigger(watch=watch, price=value, bar_dt=stamp, message=message)
+    return None
+
+
+def _evaluate_extreme_avwap(
+    watch: ChartWatch, completed: list[dict[str, Any]]
+) -> ChartWatchTrigger | None:
+    """Cross-and-close through the AVWAP anchored on the session's extreme
+    candle (trader request 2026-07-31; M5-only like every session watch).
+
+    lod_avwap: the anchor is whichever completed bar printed the session LOW
+    (the earliest when several share it; a fresh LOD re-anchors automatically
+    on the next evaluation). Fires on the first completed post-arm bar that
+    trades through that anchored VWAP from above (high >= AVWAP) and CLOSES
+    below it. hod_avwap mirrors: anchor on the session-high candle, fire on a
+    tag from below that closes above.
+
+    The anchor candle itself never triggers - a one-bar AVWAP is just that
+    bar's typical price, not a level anyone traded against.
+    """
+    is_low_anchor = watch.kind == "lod_avwap"
+    armed_at = _naive(watch.armed_at)
+    if is_low_anchor:
+        extremes = [float(bar["low"]) for bar in completed]
+        anchor_index = extremes.index(min(extremes))
+    else:
+        extremes = [float(bar["high"]) for bar in completed]
+        anchor_index = extremes.index(max(extremes))
+    avwap_values = anchored_vwap_band_series(completed, anchor_index)["avwap"]
+    anchor_stamp = _naive(completed[anchor_index]["dt"])
+    for index, bar in enumerate(completed):
+        if index <= anchor_index:
+            continue
+        if _bar_end(bar) <= armed_at:
+            continue
+        avwap = avwap_values[index]
+        if avwap is None:
+            continue
+        low = float(bar["low"])
+        high = float(bar["high"])
+        close = float(bar["close"])
+        stamp = _naive(bar["dt"])
+        if is_low_anchor and high >= avwap and close < avwap:
+            return ChartWatchTrigger(
+                watch=watch,
+                price=close,
+                bar_dt=stamp,
+                message=(
+                    f"LOD AVWAP break: closed {close:.2f} below AVWAP {avwap:.2f} "
+                    f"anchored on the {anchor_stamp:%H:%M} LOD candle "
+                    f"(bar {stamp:%H:%M})"
+                ),
+                resolved_side="short",
+            )
+        if not is_low_anchor and low <= avwap and close > avwap:
+            return ChartWatchTrigger(
+                watch=watch,
+                price=close,
+                bar_dt=stamp,
+                message=(
+                    f"HOD AVWAP reclaim: closed {close:.2f} above AVWAP {avwap:.2f} "
+                    f"anchored on the {anchor_stamp:%H:%M} HOD candle "
+                    f"(bar {stamp:%H:%M})"
+                ),
+                resolved_side="long",
+            )
     return None
 
 
