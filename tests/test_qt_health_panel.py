@@ -226,3 +226,38 @@ def test_a_status_the_panel_does_not_recognize_renders_as_unknown():
     assert panel.table.item(0, 0).text() == "UNKNOWN"
     assert statuses[-1] == "unknown"
     panel.shutdown()
+
+
+def test_refresh_never_blocks_the_gui_thread_even_when_the_audit_is_slow(monkeypatch):
+    """The live regression: build_operations_audit streams multi-MB shadow logs
+    (~0.4s measured on the real machine, worse mid-scan) and ran synchronously
+    on the GUI thread every 15s - a recurring visible freeze.  refresh() must
+    return immediately and deliver the payload from a worker thread."""
+    import time
+
+    import ui.panels.health_panel as hp
+
+    marker = _payload("degraded")
+
+    def slow_audit():
+        time.sleep(0.5)
+        return marker
+
+    monkeypatch.setattr(hp, "build_operations_audit", slow_audit)
+    panel = hp.HealthPanel(refresh_interval_ms=3_600_000)
+    try:
+        started = time.perf_counter()
+        panel.refresh()
+        elapsed = time.perf_counter() - started
+        assert elapsed < 0.2, (
+            f"refresh() blocked the GUI thread for {elapsed:.3f}s; the audit "
+            "must run on a worker thread"
+        )
+        # A tick landing while an audit is in flight is skipped, not queued.
+        panel.refresh()
+        panel.wait_for_audit()
+        _app.processEvents()
+        assert panel.overall_tile.value_label.text() == "DEGRADED"
+    finally:
+        panel.deleteLater()
+        _app.processEvents()

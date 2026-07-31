@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -80,6 +81,9 @@ class HealthPanel(QFrame):
     """Live Sol3 operational evidence without touching the large tracker."""
 
     statusChanged = Signal(str)
+    #: Worker-thread audit results arrive here; the queued connection delivers
+    #: them on the GUI thread.
+    _audit_ready = Signal(dict)
 
     def __init__(self, parent=None, *, refresh_interval_ms: int = 15_000) -> None:
         super().__init__(parent)
@@ -162,6 +166,8 @@ class HealthPanel(QFrame):
         layout.addWidget(self.meta_label)
         layout.addWidget(splitter, 1)
 
+        self._audit_thread: threading.Thread | None = None
+        self._audit_ready.connect(self.set_payload)
         self._timer = QTimer(self)
         self._timer.setInterval(max(5_000, int(refresh_interval_ms)))
         self._timer.timeout.connect(self.refresh)
@@ -169,6 +175,27 @@ class HealthPanel(QFrame):
         QTimer.singleShot(0, self.refresh)
 
     def refresh(self) -> None:
+        """Kick off one audit on a worker thread; never block the GUI.
+
+        build_operations_audit streams the multi-megabyte shadow JSONLs, walks
+        the diagnostics footprint and probes the disk - measured at ~0.4s on
+        the live machine, and worse while a scan is churning the log mtimes
+        (each refresh re-streams the whole greatness log). Running that
+        synchronously here froze the GUI for that long every refresh interval,
+        which is exactly the recurring stutter the trader reported. One audit
+        runs at a time; a tick that lands while one is in flight is skipped -
+        the running audit's result is at most seconds away.
+        """
+        if self._audit_thread is not None and self._audit_thread.is_alive():
+            return
+        self._audit_thread = threading.Thread(
+            target=self._build_audit_payload,
+            name="qt-health-audit",
+            daemon=True,
+        )
+        self._audit_thread.start()
+
+    def _build_audit_payload(self) -> None:
         try:
             payload = build_operations_audit()
         except Exception as exc:
@@ -190,7 +217,18 @@ class HealthPanel(QFrame):
                     }
                 ],
             }
-        self.set_payload(payload)
+        try:
+            self._audit_ready.emit(payload)
+        except RuntimeError:
+            # The panel's C++ half was deleted while the audit ran (app
+            # shutdown). Nothing to update, nothing to leak.
+            pass
+
+    def wait_for_audit(self, timeout: float = 10.0) -> None:
+        """Test/shutdown helper: join the in-flight audit thread, if any."""
+        thread = self._audit_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
 
     def set_payload(self, payload: dict[str, Any]) -> None:
         self._payload = payload if isinstance(payload, dict) else {}
