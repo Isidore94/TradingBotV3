@@ -2596,6 +2596,8 @@ class BounceBot(EWrapper, EClient):
         # Lazily created on the first eligible scan. This observer is advisory:
         # it may publish evidence, but never feeds bounce/watchlist decisions.
         self._technical_integrity_monitor = None
+        self._technical_integrity_init_lock = threading.Lock()
+        self._technical_evidence_thread = None
         # D1 major levels (daily SMAs, D1 trendlines, horizontal S/R) for the
         # integrity observer; injectable so tests stay hermetic.
         self._d1_extra_levels_provider = None
@@ -2680,6 +2682,12 @@ class BounceBot(EWrapper, EClient):
                 daemon=True,
             )
             self._vold_thread.start()
+            self._technical_evidence_thread = threading.Thread(
+                target=self._run_technical_evidence_clock,
+                name="technical-evidence-clock",
+                daemon=True,
+            )
+            self._technical_evidence_thread.start()
 
     def _run_bounce_learning_maintenance(self):
         try:
@@ -2697,6 +2705,21 @@ class BounceBot(EWrapper, EClient):
                 logging.info("Bounce learning state refreshed at startup.")
         except Exception as exc:  # maintenance must never break the bot
             logging.warning("Bounce learning maintenance failed: %s", exc)
+
+    def _get_technical_integrity_monitor(self):
+        monitor = getattr(self, "_technical_integrity_monitor", None)
+        if monitor is not None:
+            return monitor
+        lock = getattr(self, "_technical_integrity_init_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._technical_integrity_init_lock = lock
+        with lock:
+            if self._technical_integrity_monitor is None:
+                from technical_integrity import TechnicalIntegrityMonitor
+
+                self._technical_integrity_monitor = TechnicalIntegrityMonitor()
+            return self._technical_integrity_monitor
 
     def _observe_technical_integrity(self, symbol, full_df):
         """Publish completed-M5 level-test evidence without affecting decisions."""
@@ -2759,10 +2782,7 @@ class BounceBot(EWrapper, EClient):
                 "ema_15": close.ewm(span=15, adjust=False).mean().iloc[-1] if len(close) >= 15 else None,
                 "ema_21": close.ewm(span=21, adjust=False).mean().iloc[-1] if len(close) >= 21 else None,
             }
-            if self._technical_integrity_monitor is None:
-                from technical_integrity import TechnicalIntegrityMonitor
-
-                self._technical_integrity_monitor = TechnicalIntegrityMonitor()
+            monitor = self._get_technical_integrity_monitor()
             if self._d1_extra_levels_provider is None:
                 from d1_level_feed import get_d1_extra_levels
 
@@ -2778,7 +2798,7 @@ class BounceBot(EWrapper, EClient):
                 # D1 levels are additive evidence; the M5 observer still runs.
                 logging.debug("D1 level feed unavailable for %s: %s", symbol, exc)
                 extra_levels = []
-            self._technical_integrity_monitor.observe_symbol(
+            monitor.observe_symbol(
                 symbol,
                 completed_today,
                 completed_metrics,
@@ -8100,6 +8120,101 @@ class BounceBot(EWrapper, EClient):
             wait_seconds = 60.0 if session.open_local <= now <= session.close_local else 300.0
             self._stop_event.wait(wait_seconds)
 
+    def _build_spy_opening_range_baseline(self, now):
+        """Fetch the point-in-time SPY first-hour comparator without caching forward data."""
+        from technical_integrity import build_opening_range_baseline
+
+        if not self.connection_status:
+            return None
+        spy_rows = self.request_historical_bars("SPY", "1 D", "5 mins", timeout=12.0)
+        daily_rows = self.request_historical_bars("SPY", "30 D", "1 day", timeout=12.0)
+        spy_atr = None
+        if daily_rows:
+            daily = pd.DataFrame(daily_rows)
+            if not daily.empty and "time" in daily:
+                daily["datetime"] = pd.to_datetime(daily["time"], errors="coerce")
+                market_date = get_market_session_window(now).market_date
+                daily = daily[
+                    daily["datetime"].notna()
+                    & (daily["datetime"].dt.date < market_date)
+                ].copy()
+                if len(daily) >= ATR_PERIOD:
+                    spy_atr = self.calculate_atr(daily, period=ATR_PERIOD)
+        return build_opening_range_baseline(
+            spy_rows or [],
+            spy_daily_atr=spy_atr,
+            now=now,
+        )
+
+    def _run_technical_evidence_clock(self):
+        """Capture fixed-time evidence independently of the broad scan loop."""
+        try:
+            monitor = self._get_technical_integrity_monitor()
+        except Exception:
+            logging.exception("Technical evidence clock could not initialize its monitor.")
+            return
+        while not self._stop_event.is_set():
+            now = get_market_local_now()
+            baseline = None
+            try:
+                if monitor.needs_opening_range_baseline(now=now):
+                    baseline = self._build_spy_opening_range_baseline(now)
+                written = monitor.capture_frozen_snapshots(
+                    now=now,
+                    opening_range_baseline=baseline,
+                )
+                for row in written:
+                    logging.info(
+                        "Technical evidence wrote %s for %s (as_of=%s, data_gap=%s).",
+                        row.get("event_type"),
+                        row.get("snapshot_key"),
+                        row.get("as_of"),
+                        row.get("data_gap", False),
+                    )
+            except Exception:
+                logging.exception(
+                    "Technical frozen-snapshot clock failed; this capture window is unhealthy."
+                )
+            session = get_market_session_window(now)
+            wait_seconds = 15.0 if session.open_local <= now <= session.close_local else 60.0
+            self._stop_event.wait(wait_seconds)
+
+    def _refresh_orphaned_technical_followups(self, active_symbols):
+        """Complete windows for names no longer owned by the scan universe."""
+        monitor = getattr(self, "_technical_integrity_monitor", None)
+        if monitor is None:
+            return
+        active = {str(symbol or "").upper() for symbol in active_symbols}
+        orphans = sorted(monitor.followup_symbols - active)
+        for symbol in orphans:
+            if self.is_stopping() or not self.is_scanning_enabled():
+                break
+            try:
+                bars = self.request_historical_bars(
+                    symbol,
+                    "1 D",
+                    "5 mins",
+                    timeout=12.0,
+                )
+                if bars:
+                    monitor.observe_followups(symbol, bars, now=get_market_local_now())
+                else:
+                    monitor.mark_followup_data_gap(
+                        symbol,
+                        reason="symbol left scan universe and IB returned no completed M5 bars",
+                        now=get_market_local_now(),
+                    )
+            except Exception as exc:
+                monitor.mark_followup_data_gap(
+                    symbol,
+                    reason=f"orphaned follow-up fetch failed: {exc}",
+                    now=get_market_local_now(),
+                )
+                logging.exception(
+                    "Technical follow-up fetch failed for orphaned symbol %s.",
+                    symbol,
+                )
+
     def get_cached_5m_bars(self, symbol):
         return self._get_cached_bars(symbol, "5 D", "5 mins")
 
@@ -10796,7 +10911,12 @@ class BounceBot(EWrapper, EClient):
             self.disconnect()
         except Exception:
             pass
-        for thread in (self.strategy_thread, self._vold_thread, self.api_thread):
+        for thread in (
+            self.strategy_thread,
+            getattr(self, "_technical_evidence_thread", None),
+            getattr(self, "_vold_thread", None),
+            self.api_thread,
+        ):
             if (
                 thread is not None
                 and thread.is_alive()
@@ -11019,6 +11139,12 @@ class BounceBot(EWrapper, EClient):
                         allowed_bounce_types=set(),
                         scan_for_new_bounces=False,
                     )
+
+                # Technical follow-ups are evidence-only, but a symbol leaving
+                # every watchlist must not silently erase its open +30/+60/+90
+                # windows. Fetch only those orphaned names; active names were
+                # already refreshed by the normal scan above.
+                self._refresh_orphaned_technical_followups(all_symbols)
 
                 if not self.is_scanning_enabled():
                     continue

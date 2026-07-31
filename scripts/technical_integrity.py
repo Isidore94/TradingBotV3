@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from market_session import normalize_market_local_datetime
+from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import get_diagnostics_dir
 
 
@@ -32,6 +32,12 @@ SNAPSHOT_SCHEMA = "technical_integrity_snapshot_v1"
 EVENT_SCHEMA = "technical_integrity_event_v1"
 STATE_SCHEMA = "technical_integrity_monitor_state_v1"
 CALIBRATION_SCHEMA = "technical_integrity_calibration_v1"
+COLLECTION_CODE_VERSION = "regime_infrastructure_phase1_v1"
+FOLLOWUP_SCHEMA = "technical_integrity_followup_v1"
+FROZEN_SNAPSHOT_SCHEMA = "technical_integrity_frozen_snapshot_v1"
+OPENING_RANGE_SCHEMA = "technical_integrity_opening_range_v1"
+FOLLOWUP_HORIZONS_MINUTES = (30, 60, 90)
+FROZEN_SNAPSHOT_GRACE_MINUTES = 5
 
 
 # Measured share of DECISIVE level tests that end in respect (held/reclaimed
@@ -757,6 +763,245 @@ def _resolve_pending(
     return row
 
 
+def _resolution_direction(event: Mapping[str, Any]) -> tuple[str, int, str]:
+    outcome = str(event.get("outcome") or "").lower()
+    break_direction = str(event.get("break_direction") or "").lower()
+    if outcome == "broke" and break_direction in {"up", "down"}:
+        return break_direction, (1 if break_direction == "up" else -1), "clean_break"
+    approach_side = str(event.get("approach_side") or "").lower()
+    if approach_side == "above":
+        return "up", 1, "held_or_reclaimed_side" if outcome != "chop" else "approach_side"
+    if approach_side == "below":
+        return "down", -1, "held_or_reclaimed_side" if outcome != "chop" else "approach_side"
+    return "", 0, "unavailable"
+
+
+def _followup_tracking_event(resolution: Mapping[str, Any]) -> dict[str, Any] | None:
+    event_id = str(resolution.get("event_id") or "")
+    resolved_at = str(resolution.get("resolved_at") or "")
+    direction, direction_sign, direction_basis = _resolution_direction(resolution)
+    if not event_id or not resolved_at or not direction_sign:
+        return None
+    return {
+        "schema": FOLLOWUP_SCHEMA,
+        "feature_version": FEATURE_VERSION,
+        "code_version": COLLECTION_CODE_VERSION,
+        "event_type": "post_resolution_tracking_started",
+        "event_id": f"{event_id}|followup",
+        "followup_id": f"{event_id}|followup",
+        "source_resolution_id": event_id,
+        "session_date": str(resolution.get("session_date") or ""),
+        "symbol": str(resolution.get("symbol") or "").upper(),
+        "level_family": str(resolution.get("level_family") or ""),
+        "level_timeframe": _event_timeframe(resolution),
+        "level_value": float(resolution.get("level_value") or 0.0),
+        "atr": float(resolution.get("atr") or 0.0),
+        "resolution_outcome": str(resolution.get("outcome") or ""),
+        "resolution_direction": direction,
+        "direction_sign": direction_sign,
+        "direction_basis": direction_basis,
+        "resolution_bar_close": resolved_at,
+        "completed_horizons": [],
+        "as_of": resolved_at,
+    }
+
+
+def _post_resolution_events(
+    tracking: Mapping[str, Any],
+    bars: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    force_data_gap_reason: str = "",
+) -> list[dict[str, Any]]:
+    resolution_raw = _parse_datetime(tracking.get("resolution_bar_close"))
+    if resolution_raw is None:
+        return []
+    resolution_at = normalize_market_local_datetime(resolution_raw)
+    moment = normalize_market_local_datetime(now)
+    session = get_market_session_window(resolution_at)
+    try:
+        level = float(tracking.get("level_value"))
+        atr = float(tracking.get("atr"))
+        direction_sign = int(tracking.get("direction_sign") or 0)
+    except (TypeError, ValueError):
+        return []
+    if not math.isfinite(level) or not math.isfinite(atr) or atr <= 0 or direction_sign not in {-1, 1}:
+        return []
+    completed = {
+        int(value)
+        for value in tracking.get("completed_horizons") or []
+        if str(value).isdigit()
+    }
+    available = [
+        bar
+        for bar in bars
+        if bar["_start_local"] >= session.open_local
+        and bar["_start_local"] < session.close_local
+        and normalize_market_local_datetime(_parse_datetime(bar["bar_end"])) > resolution_at
+    ]
+    events: list[dict[str, Any]] = []
+    for horizon in FOLLOWUP_HORIZONS_MINUTES:
+        if horizon in completed:
+            continue
+        target_at = resolution_at + timedelta(minutes=horizon)
+        truncated = target_at > session.close_local
+        window_end = min(target_at, session.close_local)
+        if moment < window_end:
+            continue
+        window = [
+            bar
+            for bar in available
+            if normalize_market_local_datetime(_parse_datetime(bar["bar_end"])) <= window_end
+        ]
+        expected_count = max(
+            0,
+            int((window_end - resolution_at).total_seconds() // (5 * 60)),
+        )
+        actual_count = len(window)
+        data_gap = bool(force_data_gap_reason) or actual_count < expected_count
+        suffix = str(horizon)
+        metrics: dict[str, float | None] = {
+            f"displacement_atr_{suffix}": None,
+            f"mfe_atr_{suffix}": None,
+            f"mae_atr_{suffix}": None,
+            f"range_atr_{suffix}": None,
+        }
+        if window:
+            final_close = float(window[-1]["close"])
+            highest = max(float(bar["high"]) for bar in window)
+            lowest = min(float(bar["low"]) for bar in window)
+            displacement = direction_sign * (final_close - level) / atr
+            if direction_sign > 0:
+                favorable = max(0.0, (highest - level) / atr)
+                adverse = max(0.0, (level - lowest) / atr)
+            else:
+                favorable = max(0.0, (level - lowest) / atr)
+                adverse = max(0.0, (highest - level) / atr)
+            metrics = {
+                f"displacement_atr_{suffix}": round(displacement, 6),
+                f"mfe_atr_{suffix}": round(favorable, 6),
+                f"mae_atr_{suffix}": round(adverse, 6),
+                f"range_atr_{suffix}": round((highest - lowest) / atr, 6),
+            }
+        as_of = window[-1]["bar_end"] if window else resolution_at.isoformat(timespec="seconds")
+        followup_id = str(tracking.get("followup_id") or tracking.get("event_id") or "")
+        events.append(
+            {
+                "schema": FOLLOWUP_SCHEMA,
+                "feature_version": FEATURE_VERSION,
+                "code_version": COLLECTION_CODE_VERSION,
+                "event_type": "post_resolution_followup",
+                "event_id": f"{followup_id}|{horizon}",
+                "followup_id": followup_id,
+                "source_resolution_id": str(tracking.get("source_resolution_id") or ""),
+                "session_date": str(tracking.get("session_date") or ""),
+                "symbol": str(tracking.get("symbol") or "").upper(),
+                "level_family": str(tracking.get("level_family") or ""),
+                "level_timeframe": str(tracking.get("level_timeframe") or ""),
+                "level_value": level,
+                "atr": atr,
+                "resolution_outcome": str(tracking.get("resolution_outcome") or ""),
+                "resolution_direction": str(tracking.get("resolution_direction") or ""),
+                "direction_basis": str(tracking.get("direction_basis") or ""),
+                "resolution_bar_close": resolution_at.isoformat(timespec="seconds"),
+                "horizon_minutes": horizon,
+                "window_target_at": target_at.isoformat(timespec="seconds"),
+                "actual_bar_count": actual_count,
+                "expected_bar_count": expected_count,
+                "truncated": truncated,
+                "data_gap": data_gap,
+                "data_gap_reason": (
+                    str(force_data_gap_reason)
+                    if force_data_gap_reason
+                    else ("missing_completed_m5_bars" if data_gap else "")
+                ),
+                **metrics,
+                "as_of": as_of,
+            }
+        )
+    return events
+
+
+def build_opening_range_baseline(
+    spy_rows: Any,
+    *,
+    spy_daily_atr: float | None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Point-in-time first-hour SPY range baseline from completed M5 bars."""
+
+    moment = normalize_market_local_datetime(now)
+    session = get_market_session_window(moment)
+    first_hour_end = session.open_local + timedelta(hours=1)
+    bars = [
+        bar
+        for bar in completed_m5_bars(spy_rows, now=moment)
+        if session.open_local <= bar["_start_local"] < first_hour_end
+        and normalize_market_local_datetime(_parse_datetime(bar["bar_end"])) <= first_hour_end
+    ]
+    try:
+        atr = float(spy_daily_atr)
+    except (TypeError, ValueError):
+        atr = 0.0
+    data_gap = len(bars) != 12 or not math.isfinite(atr) or atr <= 0
+    range_value = None
+    if bars and math.isfinite(atr) and atr > 0:
+        range_value = round(
+            (max(float(bar["high"]) for bar in bars) - min(float(bar["low"]) for bar in bars))
+            / atr,
+            6,
+        )
+    return {
+        "schema": OPENING_RANGE_SCHEMA,
+        "feature_version": FEATURE_VERSION,
+        "code_version": COLLECTION_CODE_VERSION,
+        "event_type": "opening_range_baseline",
+        "session_date": session.market_date.isoformat(),
+        "target_metric": "SPY first-hour range / SPY daily ATR",
+        "spy_first_hour_range_atr": range_value,
+        "spy_daily_atr": atr if atr > 0 and math.isfinite(atr) else None,
+        "actual_bar_count": len(bars),
+        "expected_bar_count": 12,
+        "data_gap": data_gap,
+        "scanned_market_composite_range_atr": None,
+        "composite_note": "Not collected in Phase 1; no canonical fixed-weight scanned-market price composite exists.",
+        "as_of": (
+            bars[-1]["bar_end"]
+            if bars
+            else session.open_local.isoformat(timespec="seconds")
+        ),
+    }
+
+
+def _family_resolution_mix(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    by_timeframe = {"d1": 0, "m5": 0}
+    by_family: dict[str, dict[str, Any]] = {}
+    for event in events:
+        timeframe = "d1" if _event_timeframe(event) == "d1" else "m5"
+        by_timeframe[timeframe] += 1
+        family = str(event.get("level_family") or "unknown")
+        key = f"{timeframe}:{family}"
+        row = by_family.setdefault(
+            key,
+            {
+                "timeframe": timeframe,
+                "level_family": family,
+                "resolved_count": 0,
+                "decisive_count": 0,
+                "chop_count": 0,
+            },
+        )
+        row["resolved_count"] += 1
+        if str(event.get("outcome") or "") == "chop":
+            row["chop_count"] += 1
+        else:
+            row["decisive_count"] += 1
+    return {
+        "by_timeframe": by_timeframe,
+        "by_family": [by_family[key] for key in sorted(by_family)],
+    }
+
+
 def _prediction_for_test(snapshot: Mapping[str, Any], event: Mapping[str, Any]) -> tuple[float, str]:
     entities = snapshot.get("entities") if isinstance(snapshot, Mapping) else []
     entities = entities if isinstance(entities, list) else []
@@ -798,21 +1043,35 @@ class TechnicalIntegrityMonitor:
         state_path: Path | None = None,
         snapshot_path: Path | None = None,
         config: TechnicalIntegrityConfig | None = None,
+        collector_started_at: datetime | None = None,
     ) -> None:
         self.events_path = Path(events_path or technical_integrity_events_path())
         self.state_path = Path(state_path or technical_integrity_state_path())
         self.snapshot_path = Path(snapshot_path or technical_integrity_snapshot_path())
         self.config = config or TechnicalIntegrityConfig()
+        self.collector_started_at = normalize_market_local_datetime(collector_started_at)
         self._lock = threading.RLock()
         self.session_date = ""
         self.pending: dict[str, dict[str, Any]] = {}
         self.seen_test_ids: set[str] = set()
         self.resolved_events: list[dict[str, Any]] = []
+        self.pending_followups: dict[str, dict[str, Any]] = {}
+        self.followup_event_ids: set[str] = set()
+        self.frozen_snapshot_markers: set[str] = set()
+        self.latest_completed_bar_end = ""
         self._load_state()
 
     @property
     def pending_count(self) -> int:
         return len(self.pending)
+
+    @property
+    def followup_symbols(self) -> set[str]:
+        return {
+            str(row.get("symbol") or "").upper()
+            for row in self.pending_followups.values()
+            if str(row.get("symbol") or "").strip()
+        }
 
     def _load_state(self) -> None:
         if not self.state_path.exists():
@@ -830,6 +1089,22 @@ class TechnicalIntegrityMonitor:
             if isinstance(value, dict)
         }
         self.seen_test_ids = {str(value) for value in payload.get("seen_test_ids") or [] if str(value)}
+        self.pending_followups = {
+            str(key): dict(value)
+            for key, value in (payload.get("pending_followups") or {}).items()
+            if isinstance(value, dict)
+        }
+        self.followup_event_ids = {
+            str(value)
+            for value in payload.get("followup_event_ids") or []
+            if str(value)
+        }
+        self.frozen_snapshot_markers = {
+            str(value)
+            for value in payload.get("frozen_snapshot_markers") or []
+            if str(value)
+        }
+        self.latest_completed_bar_end = str(payload.get("latest_completed_bar_end") or "")
         self._load_resolved_events()
 
     def _load_resolved_events(self) -> None:
@@ -838,6 +1113,8 @@ class TechnicalIntegrityMonitor:
             return
         started: dict[str, dict[str, Any]] = {}
         resolved: dict[str, dict[str, Any]] = {}
+        followup_started: dict[str, dict[str, Any]] = {}
+        completed_horizons: dict[str, set[int]] = {}
         try:
             with self.events_path.open("r", encoding="utf-8") as handle:
                 for line in handle:
@@ -847,15 +1124,44 @@ class TechnicalIntegrityMonitor:
                         continue
                     if not isinstance(row, dict) or str(row.get("session_date") or "") != self.session_date:
                         continue
-                    event_id = str(row.get("event_id") or "")
-                    if not event_id:
-                        continue
                     event_type = str(row.get("event_type") or "")
-                    self.seen_test_ids.add(event_id)
+                    event_id = str(row.get("event_id") or "")
                     if event_type == "level_test_started":
+                        if not event_id:
+                            continue
+                        self.seen_test_ids.add(event_id)
                         started[event_id] = row
                     elif event_type == "level_resolved":
+                        if not event_id:
+                            continue
+                        self.seen_test_ids.add(event_id)
                         resolved[event_id] = row
+                    elif event_type == "post_resolution_tracking_started":
+                        followup_id = str(row.get("followup_id") or "")
+                        if followup_id:
+                            followup_started[followup_id] = row
+                    elif event_type == "post_resolution_followup":
+                        followup_id = str(row.get("followup_id") or "")
+                        try:
+                            horizon = int(row.get("horizon_minutes"))
+                        except (TypeError, ValueError):
+                            horizon = 0
+                        if followup_id and horizon:
+                            completed_horizons.setdefault(followup_id, set()).add(horizon)
+                        if event_id:
+                            self.followup_event_ids.add(event_id)
+                    elif event_type in {
+                        "frozen_intraday_snapshot",
+                        "missed_snapshot",
+                        "opening_range_baseline",
+                        "missed_opening_range_baseline",
+                    }:
+                        marker = str(row.get("snapshot_key") or "")
+                        if marker:
+                            self.frozen_snapshot_markers.add(marker)
+                    as_of = str(row.get("as_of") or "")
+                    if as_of > self.latest_completed_bar_end:
+                        self.latest_completed_bar_end = as_of
         except OSError:
             self.resolved_events = []
             return
@@ -876,6 +1182,27 @@ class TechnicalIntegrityMonitor:
             }
         )
         self.pending = recovered_pending
+        recovered_followups: dict[str, dict[str, Any]] = {}
+        for followup_id, row in followup_started.items():
+            candidate = dict(row)
+            complete = completed_horizons.get(followup_id, set())
+            candidate["completed_horizons"] = sorted(complete)
+            if complete != set(FOLLOWUP_HORIZONS_MINUTES):
+                recovered_followups[followup_id] = candidate
+        for followup_id, row in self.pending_followups.items():
+            if followup_id in recovered_followups:
+                continue
+            candidate = dict(row)
+            complete = {
+                int(value)
+                for value in candidate.get("completed_horizons") or []
+                if str(value).isdigit()
+            }
+            complete.update(completed_horizons.get(followup_id, set()))
+            candidate["completed_horizons"] = sorted(complete)
+            if complete != set(FOLLOWUP_HORIZONS_MINUTES):
+                recovered_followups[followup_id] = candidate
+        self.pending_followups = recovered_followups
 
     def _ensure_session(self, session_date: str) -> None:
         if self.session_date == session_date:
@@ -883,12 +1210,31 @@ class TechnicalIntegrityMonitor:
         self.session_date = session_date
         self.pending = {}
         self.seen_test_ids = set()
+        self.pending_followups = {}
+        self.followup_event_ids = set()
+        self.frozen_snapshot_markers = set()
+        self.latest_completed_bar_end = ""
         self._load_resolved_events()
 
     def _append_event(self, row: Mapping[str, Any]) -> None:
+        payload = dict(row)
+        payload.setdefault("code_version", COLLECTION_CODE_VERSION)
+        payload.setdefault(
+            "as_of",
+            str(
+                payload.get("resolved_at")
+                or payload.get("started_at")
+                or payload.get("resolution_bar_close")
+                or ""
+            ),
+        )
+        payload.setdefault(
+            "written_at",
+            normalize_market_local_datetime().isoformat(timespec="seconds"),
+        )
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
         with self.events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(dict(row), separators=(",", ":")) + "\n")
+            handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
 
@@ -901,6 +1247,11 @@ class TechnicalIntegrityMonitor:
                 "session_date": self.session_date,
                 "pending": self.pending,
                 "seen_test_ids": sorted(self.seen_test_ids),
+                "pending_followups": self.pending_followups,
+                "followup_event_ids": sorted(self.followup_event_ids),
+                "frozen_snapshot_markers": sorted(self.frozen_snapshot_markers),
+                "latest_completed_bar_end": self.latest_completed_bar_end,
+                "code_version": COLLECTION_CODE_VERSION,
                 "updated_at": normalize_market_local_datetime().isoformat(timespec="seconds"),
             },
         )
@@ -917,6 +1268,269 @@ class TechnicalIntegrityMonitor:
             snapshot["market"]["market_environment"] = market_environment
         _atomic_write_json(self.snapshot_path, snapshot)
         return snapshot
+
+    def _start_followup(self, resolution: Mapping[str, Any]) -> bool:
+        tracking = _followup_tracking_event(resolution)
+        if tracking is None:
+            return False
+        followup_id = str(tracking["followup_id"])
+        if followup_id in self.pending_followups:
+            return False
+        self._append_event(tracking)
+        self.pending_followups[followup_id] = dict(tracking)
+        return True
+
+    def _process_followups(
+        self,
+        symbol: str,
+        bars: list[dict[str, Any]],
+        *,
+        now: datetime | None = None,
+        force_data_gap_reason: str = "",
+    ) -> int:
+        sym = str(symbol or "").upper()
+        appended = 0
+        for followup_id, tracking in list(self.pending_followups.items()):
+            if str(tracking.get("symbol") or "").upper() != sym:
+                continue
+            events = _post_resolution_events(
+                tracking,
+                bars,
+                now=now,
+                force_data_gap_reason=force_data_gap_reason,
+            )
+            completed = {
+                int(value)
+                for value in tracking.get("completed_horizons") or []
+                if str(value).isdigit()
+            }
+            for event in events:
+                event_id = str(event.get("event_id") or "")
+                horizon = int(event.get("horizon_minutes") or 0)
+                if not event_id or event_id in self.followup_event_ids or not horizon:
+                    continue
+                self._append_event(event)
+                self.followup_event_ids.add(event_id)
+                completed.add(horizon)
+                appended += 1
+            if completed == set(FOLLOWUP_HORIZONS_MINUTES):
+                self.pending_followups.pop(followup_id, None)
+            else:
+                updated = dict(tracking)
+                updated["completed_horizons"] = sorted(completed)
+                self.pending_followups[followup_id] = updated
+        return appended
+
+    def observe_followups(
+        self,
+        symbol: str,
+        rows: Any,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Advance existing windows without discovering any new level tests."""
+
+        sym = str(symbol or "").strip().upper()
+        bars = completed_m5_bars(rows, now=now)
+        if not sym or not bars:
+            return 0
+        with self._lock:
+            self._ensure_session(bars[-1]["_start_local"].date().isoformat())
+            self.latest_completed_bar_end = max(
+                self.latest_completed_bar_end,
+                str(bars[-1]["bar_end"]),
+            )
+            appended = self._process_followups(sym, bars, now=now)
+            if appended:
+                self._save_state()
+            return appended
+
+    def mark_followup_data_gap(
+        self,
+        symbol: str,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> int:
+        """Finalize only due horizons with an explicit missing-data marker."""
+
+        with self._lock:
+            appended = self._process_followups(
+                symbol,
+                [],
+                now=now,
+                force_data_gap_reason=str(reason or "completed M5 data unavailable"),
+            )
+            if appended:
+                self._save_state()
+            return appended
+
+    @staticmethod
+    def _frozen_targets(now: datetime | None = None) -> tuple[tuple[str, str, datetime], ...]:
+        session = get_market_session_window(normalize_market_local_datetime(now))
+        return (
+            ("10:30", "open_plus_60m", session.open_local + timedelta(minutes=60)),
+            ("12:00", "open_plus_150m", session.open_local + timedelta(minutes=150)),
+        )
+
+    def needs_opening_range_baseline(self, *, now: datetime | None = None) -> bool:
+        moment = normalize_market_local_datetime(now)
+        session = get_market_session_window(moment)
+        opening_key = f"{session.market_date.isoformat()}|opening_range"
+        _label, _name, target = self._frozen_targets(moment)[0]
+        return (
+            target <= moment < target + timedelta(minutes=FROZEN_SNAPSHOT_GRACE_MINUTES)
+            and opening_key not in self.frozen_snapshot_markers
+        )
+
+    def capture_frozen_snapshots(
+        self,
+        *,
+        now: datetime | None = None,
+        opening_range_baseline: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Append due point-in-time snapshots or explicit missed markers."""
+
+        moment = normalize_market_local_datetime(now)
+        session = get_market_session_window(moment)
+        session_date = session.market_date.isoformat()
+        written: list[dict[str, Any]] = []
+        with self._lock:
+            self._ensure_session(session_date)
+            for market_label, target_name, target in self._frozen_targets(moment):
+                snapshot_key = f"{session_date}|{market_label}"
+                if moment < target:
+                    continue
+                grace_end = target + timedelta(minutes=FROZEN_SNAPSHOT_GRACE_MINUTES)
+                collector_was_live = self.collector_started_at <= target
+                if market_label == "10:30":
+                    opening_key = f"{session_date}|opening_range"
+                    if opening_key not in self.frozen_snapshot_markers:
+                        baseline = dict(opening_range_baseline or {})
+                        if not collector_was_live or moment >= grace_end or not baseline:
+                            baseline = {
+                                "schema": OPENING_RANGE_SCHEMA,
+                                "feature_version": FEATURE_VERSION,
+                                "code_version": COLLECTION_CODE_VERSION,
+                                "event_type": (
+                                    "missed_opening_range_baseline"
+                                    if not collector_was_live or moment >= grace_end
+                                    else "opening_range_baseline"
+                                ),
+                                "session_date": session_date,
+                                "spy_first_hour_range_atr": None,
+                                "actual_bar_count": 0,
+                                "expected_bar_count": 12,
+                                "data_gap": True,
+                                "data_gap_reason": (
+                                    "collector_process_was_not_live_at_the_snapshot_target"
+                                    if not collector_was_live
+                                    else "snapshot_clock_did_not_run_inside_the_five_minute_capture_window"
+                                    if moment >= grace_end
+                                    else "SPY bars or daily ATR unavailable at snapshot time"
+                                ),
+                                "as_of": self.latest_completed_bar_end,
+                            }
+                        baseline.update(
+                            {
+                                "event_id": f"snapshot|{opening_key}",
+                                "snapshot_key": opening_key,
+                                "snapshot_target": "open_plus_60m",
+                                "target_market_time": "10:30",
+                                "target_at": target.isoformat(timespec="seconds"),
+                            }
+                        )
+                        self._append_event(baseline)
+                        self.frozen_snapshot_markers.add(opening_key)
+                        written.append(baseline)
+                if snapshot_key in self.frozen_snapshot_markers:
+                    continue
+                if not collector_was_live or moment >= grace_end:
+                    missed = {
+                        "schema": FROZEN_SNAPSHOT_SCHEMA,
+                        "feature_version": FEATURE_VERSION,
+                        "code_version": COLLECTION_CODE_VERSION,
+                        "event_type": "missed_snapshot",
+                        "event_id": f"snapshot|{snapshot_key}|missed",
+                        "snapshot_key": snapshot_key,
+                        "snapshot_target": target_name,
+                        "target_market_time": market_label,
+                        "target_at": target.isoformat(timespec="seconds"),
+                        "session_date": session_date,
+                        "reason": (
+                            "collector_process_was_not_live_at_the_snapshot_target"
+                            if not collector_was_live
+                            else "snapshot_clock_did_not_run_inside_the_five_minute_capture_window"
+                        ),
+                        "data_gap": True,
+                        "as_of": self.latest_completed_bar_end,
+                    }
+                    self._append_event(missed)
+                    self.frozen_snapshot_markers.add(snapshot_key)
+                    written.append(missed)
+                    continue
+
+                aggregate = aggregate_technical_integrity(
+                    self.resolved_events,
+                    as_of=self.latest_completed_bar_end or target.isoformat(timespec="seconds"),
+                    session_date=session_date,
+                    pending_count=len(self.pending),
+                    config=self.config,
+                )
+                market = aggregate["market"]
+                d1_decisive = int(market.get("d1_test_count") or 0)
+                d1_chop = int(market.get("d1_chop_count") or 0)
+                m5_decisive = int(market.get("intraday_test_count") or 0)
+                m5_chop = int(market.get("intraday_chop_count") or 0)
+                unique_symbols = {
+                    str(event.get("symbol") or "").upper()
+                    for event in self.resolved_events
+                    if str(event.get("symbol") or "").strip()
+                }
+                frozen = {
+                    "schema": FROZEN_SNAPSHOT_SCHEMA,
+                    "feature_version": FEATURE_VERSION,
+                    "code_version": COLLECTION_CODE_VERSION,
+                    "event_type": "frozen_intraday_snapshot",
+                    "event_id": f"snapshot|{snapshot_key}",
+                    "snapshot_key": snapshot_key,
+                    "snapshot_target": target_name,
+                    "target_market_time": market_label,
+                    "target_at": target.isoformat(timespec="seconds"),
+                    "session_date": session_date,
+                    "d1_chop_rate": (
+                        round(d1_chop / (d1_decisive + d1_chop), 6)
+                        if d1_decisive + d1_chop
+                        else None
+                    ),
+                    "m5_chop_rate": (
+                        round(m5_chop / (m5_decisive + m5_chop), 6)
+                        if m5_decisive + m5_chop
+                        else None
+                    ),
+                    "decisive_count": d1_decisive + m5_decisive,
+                    "chop_count": d1_chop + m5_chop,
+                    "pending_count": len(self.pending),
+                    "unique_symbol_count": len(unique_symbols),
+                    "d1_decisive_count": d1_decisive,
+                    "d1_chop_count": d1_chop,
+                    "m5_decisive_count": m5_decisive,
+                    "m5_chop_count": m5_chop,
+                    "family_resolution_mix": _family_resolution_mix(self.resolved_events),
+                    "break_pressure": {
+                        "combined": str(market.get("pressure") or "BALANCED"),
+                        "d1": str(market.get("d1_pressure") or "BALANCED"),
+                        "m5": str(market.get("intraday_pressure") or "BALANCED"),
+                    },
+                    "as_of": self.latest_completed_bar_end
+                    or target.isoformat(timespec="seconds"),
+                }
+                self._append_event(frozen)
+                self.frozen_snapshot_markers.add(snapshot_key)
+                written.append(frozen)
+            if written:
+                self._save_state()
+        return written
 
     def observe_symbol(
         self,
@@ -943,6 +1557,10 @@ class TechnicalIntegrityMonitor:
 
         with self._lock:
             self._ensure_session(session_date)
+            self.latest_completed_bar_end = max(
+                self.latest_completed_bar_end,
+                str(bars[-1]["bar_end"]),
+            )
             changed = False
             for event_id, pending in list(self.pending.items()):
                 if str(pending.get("symbol") or "").upper() != sym:
@@ -950,9 +1568,14 @@ class TechnicalIntegrityMonitor:
                 resolved = _resolve_pending(pending, bars, self.config)
                 if resolved is None:
                     continue
+                resolved["followup_tracking_version"] = COLLECTION_CODE_VERSION
                 self._append_event(resolved)
                 self.resolved_events.append(resolved)
                 self.pending.pop(event_id, None)
+                self._start_followup(resolved)
+                changed = True
+
+            if self._process_followups(sym, bars, now=now):
                 changed = True
 
             pre_snapshot = aggregate_technical_integrity(

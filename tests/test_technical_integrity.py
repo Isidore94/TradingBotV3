@@ -286,9 +286,14 @@ def test_monitor_resolves_support_break_and_dedupes(tmp_path):
     assert snapshot["market"]["score"] is None
     assert snapshot["market"]["state"] == "BUILDING"
     rows = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    assert [row["event_type"] for row in rows] == ["level_test_started", "level_resolved"]
-    assert rows[-1]["outcome"] == "broke"
-    assert rows[-1]["break_direction"] == "down"
+    assert [row["event_type"] for row in rows] == [
+        "level_test_started",
+        "level_resolved",
+        "post_resolution_tracking_started",
+    ]
+    resolution = next(row for row in rows if row["event_type"] == "level_resolved")
+    assert resolution["outcome"] == "broke"
+    assert resolution["break_direction"] == "down"
 
     monitor.observe_symbol(
         "MU",
@@ -299,7 +304,7 @@ def test_monitor_resolves_support_break_and_dedupes(tmp_path):
         market_environment="bearish_strong",
         now=start + timedelta(minutes=26),
     )
-    assert len((tmp_path / "events.jsonl").read_text().splitlines()) == 2
+    assert len((tmp_path / "events.jsonl").read_text().splitlines()) == 3
 
 
 def test_monitor_recovers_pending_test_from_append_only_ledger(tmp_path):
@@ -312,7 +317,12 @@ def test_monitor_recovers_pending_test_from_append_only_ledger(tmp_path):
         "state_path": tmp_path / "state.json",
         "snapshot_path": tmp_path / "snapshot.json",
     }
-    monitor = TechnicalIntegrityMonitor(**paths)
+    monitor = TechnicalIntegrityMonitor(
+        **paths,
+        collector_started_at=datetime(
+            2026, 7, 15, 9, 0, tzinfo=ZoneInfo("America/New_York")
+        ),
+    )
     touch = [
         {"datetime": start, "open": 101.2, "high": 101.4, "low": 100.8, "close": 101.0, "volume": 1000},
         {"datetime": start + timedelta(minutes=5), "open": 101.0, "high": 101.1, "low": 99.98, "close": 100.2, "volume": 1400},
@@ -335,7 +345,327 @@ def test_monitor_recovers_pending_test_from_append_only_ledger(tmp_path):
     )
     assert snapshot["market"]["test_count"] == 1
     rows = [json.loads(line) for line in paths["events_path"].read_text().splitlines()]
-    assert [row["event_type"] for row in rows] == ["level_test_started", "level_resolved"]
+    assert [row["event_type"] for row in rows] == [
+        "level_test_started",
+        "level_resolved",
+        "post_resolution_tracking_started",
+    ]
+
+
+def _resolution(event_id="resolved-1", *, resolved_at=None, outcome="broke"):
+    stamp = resolved_at or datetime(
+        2026, 7, 15, 10, 0, tzinfo=ZoneInfo("America/New_York")
+    )
+    return {
+        "event_type": "level_resolved",
+        "event_id": event_id,
+        "session_date": "2026-07-15",
+        "resolved_at": stamp.isoformat(timespec="seconds"),
+        "symbol": "MU",
+        "level_family": "vwap",
+        "level_timeframe": "intraday",
+        "level_value": 100.0,
+        "atr": 2.0,
+        "outcome": outcome,
+        "break_direction": "down" if outcome == "broke" else "",
+        "approach_side": "above",
+        "event_weight": 1.2,
+    }
+
+
+def _followup_bars(resolution_at, count, *, step=-0.5):
+    rows = []
+    prior = 100.0
+    for index in range(count):
+        close = prior + step
+        rows.append(
+            {
+                "datetime": resolution_at + timedelta(minutes=5 * index),
+                "open": prior,
+                "high": max(prior, close) + 0.2,
+                "low": min(prior, close) - 0.2,
+                "close": close,
+                "volume": 1000,
+            }
+        )
+        prior = close
+    return rows
+
+
+def test_post_resolution_30_minute_metrics_are_signed_in_resolution_direction():
+    from technical_integrity import (
+        _followup_tracking_event,
+        _post_resolution_events,
+        completed_m5_bars,
+    )
+
+    resolution_at = datetime(2026, 7, 15, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    tracking = _followup_tracking_event(_resolution(resolved_at=resolution_at))
+    raw = _followup_bars(resolution_at, 6)
+    bars = completed_m5_bars(raw, now=resolution_at + timedelta(minutes=30))
+    events = _post_resolution_events(
+        tracking,
+        bars,
+        now=resolution_at + timedelta(minutes=30),
+    )
+
+    assert len(events) == 1
+    row = events[0]
+    assert row["horizon_minutes"] == 30
+    assert row["actual_bar_count"] == row["expected_bar_count"] == 6
+    assert row["truncated"] is False
+    assert row["data_gap"] is False
+    assert row["displacement_atr_30"] == 1.5
+    assert row["mfe_atr_30"] == 1.6
+    assert row["mae_atr_30"] == 0.1
+    assert row["range_atr_30"] == 1.7
+
+
+def test_post_resolution_windows_crossing_close_are_truncated_with_actual_bars():
+    from technical_integrity import (
+        _followup_tracking_event,
+        _post_resolution_events,
+        completed_m5_bars,
+    )
+
+    resolution_at = datetime(2026, 7, 15, 15, 50, tzinfo=ZoneInfo("America/New_York"))
+    tracking = _followup_tracking_event(_resolution(resolved_at=resolution_at))
+    raw = _followup_bars(resolution_at, 2)
+    now = datetime(2026, 7, 15, 16, 1, tzinfo=ZoneInfo("America/New_York"))
+    bars = completed_m5_bars(raw, now=now)
+    events = _post_resolution_events(tracking, bars, now=now)
+
+    assert [row["horizon_minutes"] for row in events] == [30, 60, 90]
+    assert all(row["truncated"] is True for row in events)
+    assert all(row["actual_bar_count"] == row["expected_bar_count"] == 2 for row in events)
+    assert all(row["data_gap"] is False for row in events)
+
+
+def test_due_followup_with_missing_bars_is_written_as_data_gap():
+    from technical_integrity import (
+        _followup_tracking_event,
+        _post_resolution_events,
+        completed_m5_bars,
+    )
+
+    resolution_at = datetime(2026, 7, 15, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    tracking = _followup_tracking_event(_resolution(resolved_at=resolution_at))
+    bars = completed_m5_bars(
+        _followup_bars(resolution_at, 3),
+        now=resolution_at + timedelta(minutes=31),
+    )
+    events = _post_resolution_events(
+        tracking,
+        bars,
+        now=resolution_at + timedelta(minutes=31),
+    )
+
+    assert len(events) == 1
+    assert events[0]["actual_bar_count"] == 3
+    assert events[0]["expected_bar_count"] == 6
+    assert events[0]["data_gap"] is True
+    assert events[0]["data_gap_reason"] == "missing_completed_m5_bars"
+
+
+def test_followup_windows_survive_restart_and_do_not_double_write(tmp_path):
+    from technical_integrity import TechnicalIntegrityMonitor
+
+    paths = {
+        "events_path": tmp_path / "events.jsonl",
+        "state_path": tmp_path / "state.json",
+        "snapshot_path": tmp_path / "snapshot.json",
+    }
+    resolution_at = datetime(2026, 7, 15, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    monitor = TechnicalIntegrityMonitor(
+        **paths,
+        collector_started_at=datetime(
+            2026, 7, 15, 9, 0, tzinfo=ZoneInfo("America/New_York")
+        ),
+    )
+    monitor._ensure_session("2026-07-15")
+    assert monitor._start_followup(_resolution(resolved_at=resolution_at))
+    monitor._save_state()
+
+    recovered = TechnicalIntegrityMonitor(**paths)
+    assert recovered.followup_symbols == {"MU"}
+    rows = _followup_bars(resolution_at, 6)
+    assert recovered.observe_followups(
+        "MU",
+        rows,
+        now=resolution_at + timedelta(minutes=31),
+    ) == 1
+
+    recovered_again = TechnicalIntegrityMonitor(**paths)
+    assert recovered_again.observe_followups(
+        "MU",
+        rows,
+        now=resolution_at + timedelta(minutes=31),
+    ) == 0
+    events = [json.loads(line) for line in paths["events_path"].read_text().splitlines()]
+    assert sum(row["event_type"] == "post_resolution_tracking_started" for row in events) == 1
+    assert sum(row["event_type"] == "post_resolution_followup" for row in events) == 1
+
+
+def test_orphaned_followup_adapter_fetches_names_outside_active_scan():
+    from unittest.mock import Mock
+
+    from bounce_bot_lib import legacy
+
+    bot = object.__new__(legacy.BounceBot)
+    bot._technical_integrity_monitor = Mock(followup_symbols={"MU", "NVDA"})
+    bot.is_stopping = Mock(return_value=False)
+    bot.is_scanning_enabled = Mock(return_value=True)
+    bot.request_historical_bars = Mock(return_value=_followup_bars(
+        datetime(2026, 7, 15, 10, 0, tzinfo=ZoneInfo("America/New_York")),
+        6,
+    ))
+
+    legacy.BounceBot._refresh_orphaned_technical_followups(bot, {"NVDA"})
+
+    bot.request_historical_bars.assert_called_once_with(
+        "MU",
+        "1 D",
+        "5 mins",
+        timeout=12.0,
+    )
+    bot._technical_integrity_monitor.observe_followups.assert_called_once()
+    bot._technical_integrity_monitor.mark_followup_data_gap.assert_not_called()
+
+
+def _snapshot_event(event_id, timeframe, outcome, resolved_at):
+    return {
+        "event_type": "level_resolved",
+        "event_id": event_id,
+        "session_date": "2026-07-15",
+        "resolved_at": resolved_at.isoformat(timespec="seconds"),
+        "symbol": "MU" if event_id.endswith("1") else "NVDA",
+        "sector_key": "technology",
+        "sector": "Technology",
+        "industry_key": "semiconductors",
+        "industry": "Semiconductors",
+        "level_family": "d1_horizontal" if timeframe == "d1" else "vwap",
+        "level_timeframe": timeframe,
+        "outcome": outcome,
+        "break_direction": "down" if outcome == "broke" else "",
+        "event_weight": 1.5 if timeframe == "d1" else 1.2,
+        "approach_side": "above",
+    }
+
+
+def test_frozen_snapshot_and_opening_range_are_live_only_and_restart_safe(tmp_path):
+    from technical_integrity import (
+        TechnicalIntegrityMonitor,
+        build_opening_range_baseline,
+    )
+
+    paths = {
+        "events_path": tmp_path / "events.jsonl",
+        "state_path": tmp_path / "state.json",
+        "snapshot_path": tmp_path / "snapshot.json",
+    }
+    now = datetime(2026, 7, 15, 10, 31, tzinfo=ZoneInfo("America/New_York"))
+    monitor = TechnicalIntegrityMonitor(
+        **paths,
+        collector_started_at=datetime(
+            2026, 7, 15, 9, 0, tzinfo=ZoneInfo("America/New_York")
+        ),
+    )
+    monitor._ensure_session("2026-07-15")
+    monitor.resolved_events = [
+        _snapshot_event("d1", "d1", "held", now - timedelta(minutes=20)),
+        _snapshot_event("d2", "d1", "chop", now - timedelta(minutes=15)),
+        _snapshot_event("m1", "intraday", "broke", now - timedelta(minutes=10)),
+        _snapshot_event("m2", "intraday", "chop", now - timedelta(minutes=5)),
+    ]
+    monitor.latest_completed_bar_end = datetime(
+        2026, 7, 15, 10, 30, tzinfo=ZoneInfo("America/New_York")
+    ).isoformat(timespec="seconds")
+    spy_open = datetime(2026, 7, 15, 9, 30, tzinfo=ZoneInfo("America/New_York"))
+    spy_rows = [
+        {
+            "datetime": spy_open + timedelta(minutes=5 * index),
+            "open": 600 + index * 0.1,
+            "high": 600.4 + index * 0.1,
+            "low": 599.8 + index * 0.1,
+            "close": 600.2 + index * 0.1,
+            "volume": 1000,
+        }
+        for index in range(12)
+    ]
+    baseline = build_opening_range_baseline(spy_rows, spy_daily_atr=4.0, now=now)
+    written = monitor.capture_frozen_snapshots(
+        now=now,
+        opening_range_baseline=baseline,
+    )
+
+    assert [row["event_type"] for row in written] == [
+        "opening_range_baseline",
+        "frozen_intraday_snapshot",
+    ]
+    frozen = written[-1]
+    assert frozen["d1_chop_rate"] == 0.5
+    assert frozen["m5_chop_rate"] == 0.5
+    assert frozen["decisive_count"] == 2
+    assert frozen["chop_count"] == 2
+    assert frozen["unique_symbol_count"] == 2
+    assert frozen["as_of"].endswith("10:30:00-04:00")
+    assert written[0]["spy_first_hour_range_atr"] is not None
+    assert written[0]["actual_bar_count"] == 12
+    assert written[0]["data_gap"] is False
+
+    restarted = TechnicalIntegrityMonitor(
+        **paths,
+        collector_started_at=datetime(
+            2026, 7, 15, 9, 0, tzinfo=ZoneInfo("America/New_York")
+        ),
+    )
+    assert restarted.capture_frozen_snapshots(
+        now=now + timedelta(minutes=1),
+        opening_range_baseline=baseline,
+    ) == []
+
+
+def test_late_recovery_writes_missed_markers_without_backfill(tmp_path):
+    from technical_integrity import TechnicalIntegrityMonitor
+
+    monitor = TechnicalIntegrityMonitor(
+        events_path=tmp_path / "events.jsonl",
+        state_path=tmp_path / "state.json",
+        snapshot_path=tmp_path / "snapshot.json",
+    )
+    now = datetime(2026, 7, 15, 12, 6, tzinfo=ZoneInfo("America/New_York"))
+    written = monitor.capture_frozen_snapshots(now=now)
+
+    assert [row["event_type"] for row in written] == [
+        "missed_opening_range_baseline",
+        "missed_snapshot",
+        "missed_snapshot",
+    ]
+    assert all(row["data_gap"] is True for row in written)
+    assert not any(row["event_type"] == "frozen_intraday_snapshot" for row in written)
+
+
+def test_restart_inside_grace_is_still_missed_when_process_was_down_at_target(tmp_path):
+    from technical_integrity import TechnicalIntegrityMonitor
+
+    collector_started = datetime(
+        2026, 7, 15, 10, 31, tzinfo=ZoneInfo("America/New_York")
+    )
+    monitor = TechnicalIntegrityMonitor(
+        events_path=tmp_path / "events.jsonl",
+        state_path=tmp_path / "state.json",
+        snapshot_path=tmp_path / "snapshot.json",
+        collector_started_at=collector_started,
+    )
+    written = monitor.capture_frozen_snapshots(
+        now=collector_started + timedelta(minutes=1)
+    )
+
+    assert [row["event_type"] for row in written] == [
+        "missed_opening_range_baseline",
+        "missed_snapshot",
+    ]
+    assert written[-1]["reason"] == "collector_process_was_not_live_at_the_snapshot_target"
 
 
 def test_calibration_report_ranks_candidate_configs():
