@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextBrowser,
     QVBoxLayout,
-    QWidget,
 )
 
 from ai_credentials import AiCredentialVault
@@ -84,7 +83,8 @@ class AiSummaryPanel(QFrame):
         self.key_input.setPlaceholderText("Paste API key for this run (never displayed or exported)")
         self.key_status = QLabel("")
         self.key_status.setObjectName("MutedLabel")
-        self.save_key_button = QPushButton("Save in Windows Credential Manager")
+        backend_label = getattr(self.credential_vault.backend, "LABEL", None) or "secure key store"
+        self.save_key_button = QPushButton(f"Save in {backend_label}")
         self.delete_key_button = QPushButton("Delete saved key")
 
         saved_scopes = get_local_setting(

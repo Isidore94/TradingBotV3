@@ -1,14 +1,16 @@
 """Provider API-key storage for the optional A.I. Summary workspace.
 
-Environment variables always win. On Windows, saved keys use Credential
-Manager (generic credentials) and never enter local_settings.json, logs,
-evidence packages, prompts, or exports.
+Environment variables always win. Saved keys use the OS credential store —
+Credential Manager (generic credentials) on Windows, the login Keychain on
+macOS — and never enter local_settings.json, logs, evidence packages,
+prompts, or exports.
 """
 
 from __future__ import annotations
 
 import ctypes
 import os
+import subprocess
 import sys
 from ctypes import wintypes
 from typing import Mapping, Protocol
@@ -29,6 +31,8 @@ class CredentialBackend(Protocol):
 
 class MemoryCredentialBackend:
     """Small injectable backend used by contract tests."""
+
+    LABEL = "saved key store"
 
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
@@ -62,6 +66,8 @@ if sys.platform == "win32":
 
 
 class WindowsCredentialBackend:
+    LABEL = "Windows Credential Manager"
+
     CRED_TYPE_GENERIC = 1
     CRED_PERSIST_LOCAL_MACHINE = 2
     ERROR_NOT_FOUND = 1168
@@ -123,6 +129,77 @@ class WindowsCredentialBackend:
             raise OSError(error, "CredDeleteW failed")
 
 
+class MacKeychainCredentialBackend:
+    """macOS login-Keychain storage via the ``security`` CLI (generic passwords).
+
+    Mirrors the Windows backend's contract: ``read`` returns ``""`` for a
+    missing item, ``delete`` tolerates a missing item, ``write`` upserts and
+    treats an empty secret as delete. The secret does pass through the
+    ``security`` argv for the duration of the call — acceptable on a
+    single-user desktop, and it keeps the key out of every file the app writes.
+    """
+
+    LABEL = "macOS Keychain"
+
+    _ACCOUNT = "TradingBotV3"
+    _COMMENT = "TradingBotV3 optional A.I. Summary provider key"
+    # errSecItemNotFound; the security CLI exits with the OSStatus low byte.
+    _ERR_ITEM_NOT_FOUND = 44
+
+    def __init__(self, runner=None) -> None:
+        if runner is None and sys.platform != "darwin":
+            raise RuntimeError("macOS Keychain is unavailable on this platform")
+        self._runner = runner if runner is not None else self._run_security
+
+    @staticmethod
+    def _run_security(args: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["security", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def read(self, target: str) -> str:
+        result = self._runner(
+            ["find-generic-password", "-s", target, "-a", self._ACCOUNT, "-w"]
+        )
+        if result.returncode == self._ERR_ITEM_NOT_FOUND:
+            return ""
+        if result.returncode != 0:
+            raise OSError(result.returncode, "security find-generic-password failed")
+        return result.stdout.rstrip("\n")
+
+    def write(self, target: str, secret: str) -> None:
+        raw = str(secret)
+        if not raw:
+            self.delete(target)
+            return
+        result = self._runner(
+            [
+                "add-generic-password",
+                "-s",
+                target,
+                "-a",
+                self._ACCOUNT,
+                "-w",
+                raw,
+                "-j",
+                self._COMMENT,
+                "-U",
+            ]
+        )
+        if result.returncode != 0:
+            raise OSError(result.returncode, "security add-generic-password failed")
+
+    def delete(self, target: str) -> None:
+        result = self._runner(
+            ["delete-generic-password", "-s", target, "-a", self._ACCOUNT]
+        )
+        if result.returncode not in (0, self._ERR_ITEM_NOT_FOUND):
+            raise OSError(result.returncode, "security delete-generic-password failed")
+
+
 class AiCredentialVault:
     def __init__(
         self,
@@ -135,6 +212,8 @@ class AiCredentialVault:
             self.backend = backend
         elif sys.platform == "win32":
             self.backend = WindowsCredentialBackend()
+        elif sys.platform == "darwin":
+            self.backend = MacKeychainCredentialBackend()
         else:
             self.backend = None
 
@@ -154,7 +233,8 @@ class AiCredentialVault:
         if self.backend is None:
             return "", "not configured"
         value = str(self.backend.read(_TARGET_PREFIX + normalized) or "").strip()
-        return (value, "Windows Credential Manager") if value else ("", "not configured")
+        label = getattr(self.backend, "LABEL", "saved key store")
+        return (value, label) if value else ("", "not configured")
 
     def save(self, provider: str, secret: str) -> None:
         normalized = self._provider(provider)

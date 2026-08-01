@@ -48,7 +48,7 @@ def test_credential_vault_prefers_environment_and_never_exposes_value():
     backend = MemoryCredentialBackend()
     vault = AiCredentialVault(backend, environ={})
     vault.save("openai", "saved-secret")
-    assert vault.resolve("openai") == ("saved-secret", "Windows Credential Manager")
+    assert vault.resolve("openai") == ("saved-secret", "saved key store")
     assert "saved-secret" not in vault.status("openai")
 
     env_vault = AiCredentialVault(backend, environ={"OPENAI_API_KEY": "env-secret"})
