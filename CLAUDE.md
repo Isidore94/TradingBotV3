@@ -56,6 +56,7 @@ is permanently out of scope (plan.md sec 1).
 - `GUI_PRODUCT_PLAN.md` — consumer GUI product design.
 - `docs/decisions/` — backfilled decision records; read before changing a library, storage, or architecture choice.
 - `docs/REVIEW_LEARNING_LOOP.md` — how the AI reads review artifacts and writes `review_policy.json`.
+- `docs/SETUPS_MAJOR.md` / `docs/SETUPS_TEST.md` — AI-stated understanding of the production setups and the study/research setups, under trader review; fold corrections back in.
 - `docs/FIRST_SESSION_CHECKLIST.md`, `docs/AWAY_SCANNER_RUNBOOK.md`, `docs/REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md` — operational runbooks for live sessions.
 - `docs/SHIP_READINESS.md`, `docs/BROKER_ADAPTERS.md`, `packaging/README.md` — shipping direction and future multi-broker architecture.
 - Runtime facts: primary desktop i5-8600K/32GB; full scan ≈ 28.5 min, network-bound. Post-session artifacts under `%LOCALAPPDATA%\TradingBotV3\diagnostics\` (`run_manifests\`, `spy_state_shadow.jsonl`, `greatness_shadow.jsonl`, `job_ledger.jsonl`, `heartbeat.json`).
