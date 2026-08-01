@@ -141,9 +141,21 @@ def test_report_header_renders_mode_labels():
 
 
 def test_status_snapshot_does_not_advertise_the_active_slot_as_next(monkeypatch):
+    from datetime import datetime
     from types import SimpleNamespace
 
     import autopilot_core as core
+    import ui.services.autopilot_service as autopilot_service_module
+
+    class _FridaySession(datetime):
+        """Pin the snapshot to a weekday: on a real weekend the method
+        (correctly) reports "next session" instead of a slot."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 10, 11, 30)
+
+    monkeypatch.setattr(autopilot_service_module, "datetime", _FridaySession)
 
     service = _bare_service(enabled=True)
     service._state = {"slots_done": ["10:00"]}
@@ -157,7 +169,7 @@ def test_status_snapshot_does_not_advertise_the_active_slot_as_next(monkeypatch)
     service._universe_line = lambda _now: "Universe: fresh"
     service._universe_rebuild_running = False
     service._wrapup_running = False
-    monkeypatch.setattr(core, "get_autopilot_swing_slots", lambda _now: ["10:00", "11:00", "12:00"])
+    monkeypatch.setattr(core, "get_autopilot_swing_slots", lambda _now, **_kw: ["10:00", "11:00", "12:00"])
 
     snapshot = service.status_snapshot()
 

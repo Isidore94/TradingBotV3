@@ -56,6 +56,9 @@ from watchlist_utils import read_watchlist_symbols
 
 # Scheduling (minutes are relative to the session open, local clock).
 AUTOPILOT_FIRST_SCAN_AFTER_OPEN_MINUTES = 60
+# Evening mode's early Master AVWAP run: open+30 = 07:00 on a normal session,
+# so the briefing's best-D1 ranking is ready before the trader sits down.
+AUTOPILOT_EVENING_EARLY_SCAN_AFTER_OPEN_MINUTES = 30
 AUTOPILOT_WATCHLIST_BUILD_AFTER_OPEN_MINUTES = 30
 AUTOPILOT_WATCHLIST_BUILD_DEADLINE_MINUTES = 120
 
@@ -87,6 +90,8 @@ _CANDIDATE_REGISTRY_LOCK = threading.Lock()
 def get_autopilot_swing_slots(
     reference: datetime | None = None,
     local_timezone_name: str | None = None,
+    *,
+    include_early_slot: bool = False,
 ) -> list[str]:
     """The away-day swing scan slots as local HH:MM labels.
 
@@ -94,6 +99,11 @@ def get_autopilot_swing_slots(
     strong/weak discovery. Hourly top-of-hour slots resume from the first
     full hour after that (09:00 for a 06:30 open - deliberately skipping
     08:00) through the close slot.
+
+    ``include_early_slot`` (Evening mode) prepends an open+30 slot - 07:00 on
+    a normal 06:30 session - so the Master AVWAP setups are already scanned
+    when the trader arrives at 07:00-07:30, and the morning briefing can rank
+    the best D1s off a current run instead of yesterday's.
     """
     session = get_market_session_window(reference=reference, local_timezone_name=local_timezone_name)
     open_naive = session.open_local.replace(tzinfo=None)
@@ -101,6 +111,10 @@ def get_autopilot_swing_slots(
 
     first = open_naive + timedelta(minutes=AUTOPILOT_FIRST_SCAN_AFTER_OPEN_MINUTES)
     slots = [first]
+    if include_early_slot:
+        early = open_naive + timedelta(minutes=AUTOPILOT_EVENING_EARLY_SCAN_AFTER_OPEN_MINUTES)
+        if early < first:
+            slots.insert(0, early)
     cursor = first + timedelta(minutes=60)
     if cursor.minute or cursor.second or cursor.microsecond:
         cursor = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -1904,7 +1918,7 @@ def apply_auto_populated_watchlists(
 
 
 def read_auto_pilot_mode(state_path: Path = AUTOPILOT_STATE_FILE) -> str:
-    """The GUI's Auto mode as OFF/DESK/AWAY, read from the machine-local
+    """The GUI's Auto mode as OFF/DESK/AWAY/EVENING, read from the machine-local
     Auto Pilot state file. The BounceBot scan loop runs off-GUI-thread (and on
     the mini-PC, off-GUI-process), so the file is the one shared truth. An
     unreadable or absent file reads as OFF - the historical auto-apply path."""
@@ -1915,7 +1929,7 @@ def read_auto_pilot_mode(state_path: Path = AUTOPILOT_STATE_FILE) -> str:
     if not isinstance(payload, dict) or not payload.get("enabled"):
         return "OFF"
     profile = str(payload.get("profile") or "DESK").strip().upper()
-    return profile if profile in ("DESK", "AWAY") else "DESK"
+    return profile if profile in ("DESK", "AWAY", "EVENING") else "DESK"
 
 
 def auto_populate_clock_open(now: datetime | None = None) -> bool:
@@ -2570,14 +2584,19 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         return ",".join(items) if items else "(none)"
 
     mode_text = str(payload.get("auto_mode") or ("ON" if payload.get("enabled") else "OFF"))
-    if mode_text in ("DESK", "AWAY"):
+    if mode_text in ("DESK", "AWAY", "EVENING"):
         mode_text = f"AUTO - {mode_text}"
     header_bits = [
         f"Mode: {mode_text} | IB: {payload.get('ib_status', 'unknown')} | Regime: {payload.get('regime', 'unknown')}",
     ]
-    if mode_text == "AUTO - AWAY":
+    if mode_text in ("AUTO - AWAY", "AUTO - EVENING"):
         header_bits.append(
             "Report schedule: hourly from 07:00 local through market close; scan completions may add updates."
+        )
+    if mode_text == "AUTO - EVENING":
+        header_bits.append(
+            "Evening mode: picks stage for chart approval only (no self-applied trades); "
+            "morning briefing finalizes after the 07:30 strength check."
         )
     if payload.get("universe_line"):
         header_bits.append(str(payload["universe_line"]))
@@ -2596,6 +2615,11 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     if payload.get("tracker_line"):
         header_bits.append(str(payload["tracker_line"]))
 
+    briefing_sections: list[str] = []
+    briefing_lines = [str(line) for line in (payload.get("evening_briefing_lines") or []) if str(line).strip()]
+    if briefing_lines:
+        briefing_sections = ["== MORNING BRIEFING (EVENING MODE) ==", _lines(briefing_lines), ""]
+
     sections = [
         "TRADINGBOT AUTO PILOT - TODAY",
         f"Updated: {payload.get('generated_at', '')}",
@@ -2603,6 +2627,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "if Updated is hours old, automation is NOT running; do not trade this as current.",
         *header_bits,
         "",
+        *briefing_sections,
         "== SWING OPPORTUNITIES ==",
         _lines(swing_lines),
         "",

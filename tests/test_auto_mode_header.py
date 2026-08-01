@@ -48,7 +48,7 @@ def _shell_stub():
     return stub, service
 
 
-def test_cycle_walks_off_desk_away_off():
+def test_cycle_walks_off_desk_away_evening_off():
     stub, service = _shell_stub()
     from ui.app import MainWindow
 
@@ -57,6 +57,8 @@ def test_cycle_walks_off_desk_away_off():
     assert service.auto_mode == "DESK" and ("enabled", True) in service.calls
     MainWindow._cycle_auto_mode(stub)
     assert service.auto_mode == "AWAY"
+    MainWindow._cycle_auto_mode(stub)
+    assert service.auto_mode == "EVENING"
     MainWindow._cycle_auto_mode(stub)
     assert service.auto_mode == "OFF" and ("enabled", False) in service.calls
 

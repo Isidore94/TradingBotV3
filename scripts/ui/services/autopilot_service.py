@@ -31,6 +31,9 @@ from market_session import is_within_regular_market_session
 from watchlist_utils import read_watchlist_symbols
 
 import autopilot_core as core
+import evening_mode
+import price_alerts
+import push_notify
 from ui.services.scan_service import ScanService, active_scan_label
 
 
@@ -80,9 +83,22 @@ _MAX_REPORT_LOG_LINES = 30
 #           self-apply (nobody is present to approve), and report cadence/
 #           notification presentation may differ. Never different strategy
 #           logic.
+# EVENING - armed the night before a sleep-in morning (trader home at 23:30,
+#           at the desk 07:00-07:30). Identical discovery to DESK: picks stage
+#           for chart approval and are NEVER self-applied or pushed as trade
+#           recommendations while the mode is on. On top of that it runs the
+#           Master AVWAP swing scan one slot early (open+30 = 07:00 on a
+#           normal session), takes 07:00/07:15/07:30 strength-persistence
+#           checks on the staged intraday picks, and writes a morning
+#           briefing (market environment + best D1s + picks that stayed
+#           strong) so everything is ready the moment the trader sits down.
+#           Price-level alerts (Research -> Price Alerts) push to the phone
+#           at wake-the-trader priority while this profile is active.
 AUTO_MODE_OFF = "OFF"
 AUTO_PROFILE_DESK = "DESK"
 AUTO_PROFILE_AWAY = "AWAY"
+AUTO_PROFILE_EVENING = "EVENING"
+AUTO_PROFILES = (AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY, AUTO_PROFILE_EVENING)
 SHADOW_RESEARCH_SETTING = "autopilot_shadow_research"
 
 
@@ -118,7 +134,7 @@ class AutopilotService(QObject):
             self._job_ledger = None
         self._enabled = bool(self._state.get("enabled"))
         self._profile = str(self._state.get("profile") or AUTO_PROFILE_DESK)
-        if self._profile not in (AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY):
+        if self._profile not in AUTO_PROFILES:
             self._profile = AUTO_PROFILE_DESK
         self._active_scan_slot: str | None = None
         self._waiting_scan_slot: str | None = None
@@ -128,6 +144,8 @@ class AutopilotService(QObject):
         self._universe_rebuild_running = False
         self._universe_last_attempt: datetime | None = None
         self._wrapup_running = False
+        self._evening_prep_running = False
+        self._evening_briefing_lines: list[str] = []
         self._scorecard_line = ""
         self._last_report_write: datetime | None = None
         self._last_report_attempt: datetime | None = None
@@ -190,14 +208,21 @@ class AutopilotService(QObject):
         return self._profile
 
     def set_profile(self, profile: str) -> None:
-        """Desk/Away are presentation profiles - never strategy changes."""
+        """Desk/Away/Evening are presentation profiles - never strategy changes."""
         profile = str(profile or "").strip().upper()
-        if profile not in (AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY) or profile == self._profile:
+        if profile not in AUTO_PROFILES or profile == self._profile:
             return
         self._profile = profile
         self._state["profile"] = profile
         self._save_state()
-        self._log(f"Auto profile -> {profile} (same decisions; presentation/cadence only).")
+        if profile == AUTO_PROFILE_EVENING:
+            self._log(
+                "Auto profile -> EVENING (sleep-in mode: same discovery, picks stage "
+                "silently, 07:00 early swing scan + morning briefing, price alerts "
+                "push to the phone at urgent priority)."
+            )
+        else:
+            self._log(f"Auto profile -> {profile} (same decisions; presentation/cadence only).")
         self._write_report()
 
     def _shadow_research_allowed(self) -> bool:
@@ -232,9 +257,16 @@ class AutopilotService(QObject):
 
         threading.Thread(target=worker, name="autopilot-reconnect", daemon=True).start()
 
+    def _swing_slots(self, now: datetime) -> list[str]:
+        """Today's swing slots; Evening mode adds the open+30 early run."""
+        return core.get_autopilot_swing_slots(
+            now,
+            include_early_slot=self._enabled and self._profile == AUTO_PROFILE_EVENING,
+        )
+
     def run_swing_scan_now(self) -> None:
         now = datetime.now()
-        slots = core.get_autopilot_swing_slots(now)
+        slots = self._swing_slots(now)
         slot = now.strftime("%H:%M")
         update = core.slot_writes_setup_tracker(slot, reference=now) if slots else False
         self._start_swing_scan(slot_label=f"manual {slot}", update_setup_tracker=update, mark_slots=[])
@@ -251,7 +283,7 @@ class AutopilotService(QObject):
 
     def status_snapshot(self) -> dict[str, Any]:
         now = datetime.now()
-        slots = core.get_autopilot_swing_slots(now)
+        slots = self._swing_slots(now)
         done = set(self._state.get("slots_done", []))
         if now.weekday() >= 5:
             # Weekend: never advertise a weekday slot as the "next update" -
@@ -372,6 +404,7 @@ class AutopilotService(QObject):
             self._maybe_build_watchlists(now)
             self._maybe_run_swing_slot(now)
             self._maybe_run_wrapup(now)
+            self._maybe_run_evening_prep(now)
             self._maybe_hourly_away_report(now)
             core.write_heartbeat(
                 current_job=self._active_scan_slot or active_scan_label(),
@@ -751,7 +784,7 @@ class AutopilotService(QObject):
     def _maybe_run_swing_slot(self, now: datetime) -> None:
         if self._scan_service.running:
             return
-        slots = core.get_autopilot_swing_slots(now)
+        slots = self._swing_slots(now)
         done = set(self._state.get("slots_done", []))
         due = [
             slot
@@ -1198,11 +1231,86 @@ class AutopilotService(QObject):
         return lines
 
     # ------------------------------------------------------------------
+    # Evening mode: strength checks + the morning briefing
+    # ------------------------------------------------------------------
+    def _maybe_run_evening_prep(self, now: datetime) -> None:
+        """EVENING only: take the due 07:00/07:15/07:30 strength check and
+        keep the morning briefing current so the desk is ready on arrival."""
+        if self._profile != AUTO_PROFILE_EVENING or self._evening_prep_running:
+            return
+        state = evening_mode.load_evening_state(now)
+        recorded = list((state.get("checks") or {}).keys())
+        slot = evening_mode.due_strength_check(now, recorded)
+        # No new check due: only rebuild when a restart lost the in-memory
+        # briefing lines but today's checks already exist on disk.
+        if slot is None and (self._evening_briefing_lines or not recorded):
+            return
+        self._evening_prep_running = True
+
+        def worker() -> None:
+            try:
+                moment = datetime.now()
+                state = evening_mode.load_evening_state(moment)
+                if slot is not None:
+                    staged = evening_mode.staged_picks_from_pending(
+                        core.load_auto_populate_pending_picks(now=moment)
+                    )
+                    symbols = sorted({pick["symbol"] for pick in staged})
+                    snapshot = core.fetch_day_snapshot(symbols, log=self._log) if symbols else {}
+                    evening_mode.record_strength_check(state, slot, staged, snapshot, moment)
+                    self._log(
+                        f"Evening strength check {slot}: observed "
+                        f"{len(snapshot)}/{len(symbols)} staged picks."
+                    )
+                swing_feed = self._load_swing_feed()
+                payload = evening_mode.build_evening_briefing(
+                    now=moment,
+                    regime=self._regime_text(),
+                    swing_rows=list(swing_feed.get("rows") or []),
+                    swing_data_current=(
+                        str(swing_feed.get("data_date") or "") == moment.date().isoformat()
+                    ),
+                    persistence=evening_mode.assess_pick_persistence(state),
+                    overnight_triggers=price_alerts.todays_triggers(moment),
+                    checks_done=list((state.get("checks") or {}).keys()),
+                )
+                text = evening_mode.render_evening_briefing(payload)
+                evening_mode.write_evening_briefing_file(text)
+                self._evening_briefing_lines = evening_mode.briefing_summary_lines(payload)
+                final_slot = evening_mode.EVENING_STRENGTH_CHECK_SLOTS[-1]
+                if slot == final_slot and not state.get("announced_at"):
+                    # One arrival ping at normal priority - the urgent channel
+                    # stays reserved for position price levels.
+                    state["announced_at"] = moment.strftime("%H:%M:%S")
+                    summary = " | ".join(self._evening_briefing_lines[:3])
+                    self._emit_info_alert(f"MORNING BRIEFING READY - {summary}", "blue")
+                    push_notify.send_push(
+                        "Morning briefing ready",
+                        "\n".join(self._evening_briefing_lines),
+                        priority="default",
+                        tags="sunrise",
+                    )
+                    self._log("Morning briefing finalized after the 07:30 strength check.")
+                evening_mode.save_evening_state(state)
+                self._write_report()
+            except Exception as exc:
+                self._log(f"Evening briefing update failed: {exc}")
+                logging.exception("Evening briefing update failed")
+            finally:
+                self._evening_prep_running = False
+
+        threading.Thread(target=worker, name="autopilot-evening", daemon=True).start()
+
+    # ------------------------------------------------------------------
     # Away report
     # ------------------------------------------------------------------
     def _maybe_hourly_away_report(self, now: datetime) -> None:
-        """Publish once per local clock-hour in Away mode, starting at 07:00."""
-        if self._profile != AUTO_PROFILE_AWAY:
+        """Publish once per local clock-hour in Away/Evening mode, from 07:00.
+
+        Evening gets the same cadence: the trader wakes up to a phone that
+        already has the current picture without opening the desk.
+        """
+        if self._profile not in (AUTO_PROFILE_AWAY, AUTO_PROFILE_EVENING):
             return
         slot = core.hourly_away_report_slot_due(
             now,
@@ -1274,6 +1382,11 @@ class AutopilotService(QObject):
                 "scorecard_line": self._scorecard_line,
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
+                "evening_briefing_lines": (
+                    list(self._evening_briefing_lines)
+                    if self.auto_mode == AUTO_PROFILE_EVENING
+                    else []
+                ),
                 "runtime_line": f"Runtime: {socket.gethostname()} pid={os.getpid()}",
             }
             try:

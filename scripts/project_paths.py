@@ -384,6 +384,18 @@ AUTOPILOT_LOG_FILE = LOCAL_LOG_DIR / "autopilot.log"
 AUTOPILOT_PICKS_FILE = RUNTIME_DATA_DIR / "autopilot_picks.csv"
 AUTOPILOT_SCORECARD_FILE = RUNTIME_DATA_DIR / "autopilot_pick_scorecard.csv"
 
+# Auto Evening mode (sleep-in support). The price-alert watchlist (tickers +
+# above/below levels, edited in Research -> Price Alerts) lives on the shared
+# store so it syncs like the other watchlists; the trigger history feeds the
+# morning briefing's "overnight alerts" section. Briefing state is per-machine
+# (only the machine running Evening mode takes the strength checks); the
+# rendered briefing sits next to autopilot_today.txt so it is one tap in the
+# Drive mobile app.
+PRICE_ALERTS_FILE = SHARED_HOME_DIR / "price_alerts.json"
+PRICE_ALERT_TRIGGERS_FILE = RUNTIME_DATA_DIR / "price_alert_triggers.csv"
+EVENING_BRIEFING_STATE_FILE = LOCAL_MACHINE_CACHE_DIR / "evening_briefing_state.json"
+EVENING_BRIEFING_FILE = SHARED_HOME_DIR / "evening_briefing.txt"
+
 BOUNCE_LOG_FILE = LOG_DIR / "bouncers.txt"
 # Rotating diagnostic log lives on local disk (see LOCAL_LOG_DIR) so rotation never
 # collides with cloud-sync file locks; data-style logs (bouncers, RRS CSVs) stay on

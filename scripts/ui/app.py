@@ -100,6 +100,9 @@ class MainWindow(QMainWindow):
             self._set_technical_integrity
         )
         self.trading_panel.bounce_panel.service.autoRegimeChanged.connect(self._set_auto_regime)
+        # Price-level alert crossings land in the normal alert stream too, so
+        # the Alert Center is the on-desk record of what buzzed the phone.
+        self.research_panel.price_alerts_panel.service.triggered.connect(self._on_price_alert)
         self._set_auto_regime({})
         self._set_technical_integrity(load_technical_integrity_snapshot())
 
@@ -201,12 +204,15 @@ class MainWindow(QMainWindow):
         status = QStatusBar()
         self.setStatusBar(status)
         # Persistent Auto Mode control (plan.md sec 15.2): visible and
-        # clickable from every page - OFF -> AUTO-DESK -> AUTO-AWAY -> OFF.
+        # clickable from every page - OFF -> AUTO-DESK -> AUTO-AWAY ->
+        # AUTO-EVENING -> OFF.
         self.auto_mode_button = QPushButton()
         self.auto_mode_button.setObjectName("AutoModeButton")
         self.auto_mode_button.setToolTip(
-            "Click to cycle Auto Mode: OFF -> AUTO-DESK -> AUTO-AWAY -> OFF. "
-            "Desk/Away change presentation only - never trading decisions."
+            "Click to cycle Auto Mode: OFF -> AUTO-DESK -> AUTO-AWAY -> AUTO-EVENING -> OFF. "
+            "Profiles change presentation only - never trading decisions. "
+            "EVENING = arm the night before a sleep-in morning: picks stage silently, "
+            "the morning briefing builds itself, and price alerts push to your phone."
         )
         self.auto_mode_button.clicked.connect(self._cycle_auto_mode)
         self.autopilot_panel.service.enabledChanged.connect(lambda *_: self._sync_auto_mode_button())
@@ -256,6 +262,16 @@ class MainWindow(QMainWindow):
             f"QPushButton#TechnicalIntegrityButton {{ color: {color}; font-weight: 600; padding: 1px 5px; }}"
         )
 
+    def _on_price_alert(self, message: str) -> None:
+        try:
+            from ui.models.bounce import BounceAlert
+
+            self.trading_panel.bounce_panel.service.alertReceived.emit(
+                BounceAlert.from_callback(f"PRICE ALERT: {message}", "red")
+            )
+        except Exception:
+            pass  # the push already went out; the desk echo is best-effort
+
     def _show_technical_integrity_details(self) -> None:
         TechnicalIntegrityDialog(
             getattr(self, "_technical_integrity_snapshot", {}),
@@ -270,6 +286,8 @@ class MainWindow(QMainWindow):
             service.set_enabled(True)
         elif mode == "DESK":
             service.set_profile("AWAY")
+        elif mode == "AWAY":
+            service.set_profile("EVENING")
         else:
             service.set_enabled(False)
         self._sync_auto_mode_button()
@@ -278,7 +296,7 @@ class MainWindow(QMainWindow):
         mode = self.autopilot_panel.service.auto_mode
         text = "Auto: OFF" if mode == "OFF" else f"Auto: {mode}"
         self.auto_mode_button.setText(text)
-        color = {"OFF": "#8b8fa3", "DESK": "#3fb950", "AWAY": "#d29922"}.get(mode, "#8b8fa3")
+        color = {"OFF": "#8b8fa3", "DESK": "#3fb950", "AWAY": "#d29922", "EVENING": "#58a6ff"}.get(mode, "#8b8fa3")
         self.auto_mode_button.setStyleSheet(
             f"QPushButton#AutoModeButton {{ color: {color}; font-weight: 600; padding: 1px 10px; }}"
         )

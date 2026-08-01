@@ -32,6 +32,28 @@ stamp; it must not duplicate the roadmap.
   empty tag lists. The expanded eight-check audit and transactional Away publication
   still need a restarted-app/live verification. Physical failure-matrix and
   two-machine Drive drills remain outstanding.
+### Auto EVENING mode + phone price alerts landed 2026-08-01 (IMPLEMENTED — not LIVE-VALIDATED)
+
+- Auto Mode cycle is now OFF -> DESK -> AWAY -> EVENING -> OFF. EVENING is the
+  sleep-in profile: discovery identical to DESK (auto-populate picks stage for
+  chart approval; nothing self-applies or recommends until the mode is turned
+  off), plus an early open+30 Master AVWAP swing slot, 07:00/07:15/07:30
+  strength-persistence checks on staged picks (held vs faded), and a morning
+  briefing (environment + best D1s by expected R + held picks + overnight
+  alerts) written to `evening_briefing.txt`, folded into the hourly phone
+  report (EVENING publishes hourly like AWAY), and announced via push.
+- Price-level alert watchlist (Research -> Price Alerts): trader-entered
+  tickers with above/below levels, polled every minute from 1m bars including
+  pre/post market, pushed to phone + watch over ntfy (outbound HTTPS only; no
+  ports). Each side fires once per arm then disarms; entries are never
+  auto-removed; only the designated writer machine monitors. Urgent priority
+  while EVENING is active. New modules: `evening_mode.py`, `price_alerts.py`,
+  `push_notify.py`, `ui/services/price_alert_service.py`,
+  `ui/panels/price_alerts_panel.py`; runbook at `docs/EVENING_MODE_RUNBOOK.md`.
+- Not live-validated: needs one real sleep-in session (arm the night before,
+  verify the 07:00 early scan, the 07:30 briefing finalization, and an actual
+  level-cross push reaching the phone/watch).
+
 ### Milestone 1 packets landed 2026-07-30 (IMPLEMENTED — none LIVE-VALIDATED)
 
 Every item below is **IMPLEMENTED + GREEN**. None is **LIVE-VALIDATED**: all

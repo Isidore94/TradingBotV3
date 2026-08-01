@@ -10822,8 +10822,11 @@ class BounceBot(EWrapper, EClient):
         if not auto_populate_clock_open(datetime.now()):
             return
         # DESK = trader at the desk: stage picks for chart approval in the
-        # Alert Center. AWAY (and OFF, the historical path) applies directly.
-        stage_only = read_auto_pilot_mode() == "DESK"
+        # Alert Center. EVENING = trader asleep during the open: stage too, so
+        # nothing self-applies or gets recommended until the trader wakes up
+        # and flips the mode. AWAY (and OFF, the historical path) applies
+        # directly.
+        stage_only = read_auto_pilot_mode() in ("DESK", "EVENING")
         env = self.get_market_environment()
         # A day that OPENED directional keeps that bias for discovery even
         # after the live label decays to neutral (2026-07-17 directive: the
