@@ -35,6 +35,20 @@ def test_default_persistent_dir_prefers_google_drive(monkeypatch, tmp_path):
     assert module.PERSISTENT_DATA_DIR_SOURCE == "google_drive_default"
 
 
+def test_default_persistent_dir_finds_macos_cloudstorage_mount(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    mount = home / "Library" / "CloudStorage" / "GoogleDrive-trader@example.com" / "My Drive"
+    mount.mkdir(parents=True)
+    # Path.home() reads HOME on POSIX and USERPROFILE on Windows.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    module = _load_project_paths(monkeypatch, tmp_path)
+
+    expected = mount / "Trading" / "TradingBot"
+    assert module.PERSISTENT_DATA_DIR == expected
+    assert module.PERSISTENT_DATA_DIR_SOURCE == "google_drive_default"
+
+
 def test_saved_storage_dir_still_overrides_google_drive(monkeypatch, tmp_path):
     localappdata = tmp_path / "localappdata"
     settings_dir = localappdata / "TradingBotV3"
@@ -61,17 +75,27 @@ def test_wait_for_shared_drive_fails_clearly_when_drive_missing(monkeypatch, tmp
     # Mounted/local anchors: no wait, no error.
     module._wait_for_shared_drive(tmp_path / "anything", "test")
 
-    # Unmounted drive letter + fail-fast: a clear actionable error, not a
-    # mkdir traceback (and never a silent local fallback).
-    missing = next(
-        (Path(f"{letter}:/") for letter in "QWXYZ" if not Path(f"{letter}:/").exists()),
-        None,
-    )
-    if missing is None:
-        return  # every letter mounted on this machine; nothing to simulate
+    # Unmounted shared store + fail-fast: a clear actionable error, not a
+    # mkdir traceback (and never a silent local fallback). Windows simulates
+    # a missing drive letter; POSIX simulates a macOS CloudStorage mount that
+    # is absent because the Drive client is not running.
+    if sys.platform == "win32":
+        target = next(
+            (Path(f"{letter}:/") for letter in "QWXYZ" if not Path(f"{letter}:/").exists()),
+            None,
+        )
+        if target is None:
+            return  # every letter mounted on this machine; nothing to simulate
+        target = target / "My Drive" / "Trading"
+    else:
+        home = tmp_path / "cloudhome"
+        (home / "Library" / "CloudStorage").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        target = home / "Library" / "CloudStorage" / "GoogleDrive-trader@example.com" / "My Drive" / "Trading"
     monkeypatch.setenv("TRADINGBOTV3_DRIVE_WAIT_SECONDS", "0")
     with pytest.raises(RuntimeError) as excinfo:
-        module._wait_for_shared_drive(missing / "My Drive" / "Trading", "test_config")
+        module._wait_for_shared_drive(target, "test_config")
     message = str(excinfo.value)
     assert "not mounted" in message
     assert "Google Drive" in message

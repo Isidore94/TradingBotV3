@@ -99,6 +99,10 @@ def _default_google_drive_shared_dir() -> Path | None:
             home / "Google Drive",
         ]
     )
+    # Modern macOS Drive clients mount under ~/Library/CloudStorage as
+    # "GoogleDrive-<account>/My Drive" instead of a home-level folder. Sorted
+    # so a multi-account machine resolves deterministically.
+    roots.extend(sorted((home / "Library" / "CloudStorage").glob("GoogleDrive-*/My Drive")))
 
     for root in roots:
         if root.exists():
@@ -126,21 +130,47 @@ def _resolve_persistent_data_dir() -> tuple[Path, str]:
 PERSISTENT_DATA_DIR, PERSISTENT_DATA_DIR_SOURCE = _resolve_persistent_data_dir()
 
 
-def _wait_for_shared_drive(path: Path, source: str) -> None:
-    """Bounded wait for the shared store's drive letter to mount.
+def _unmounted_shared_anchor(path: Path) -> Path | None:
+    """Return the mount point startup must wait on, or None when none is missing.
 
-    Google Drive mounts G: late at boot, so an auto-started GUI can race it
-    and die in ``_ensure_directories`` with a bare ``WinError 3`` mkdir
-    traceback. Waiting (default 120s, TRADINGBOTV3_DRIVE_WAIT_SECONDS to
-    change, 0 = fail fast) rides out the normal mount delay; if the drive
-    never appears the failure is a clear, actionable message instead.
+    Windows: the shared store's drive letter (Google Drive mounts G: late at
+    boot). macOS: the File Provider mount under ``~/Library/CloudStorage``
+    (``GoogleDrive-<account>``), which likewise only exists while the Drive
+    client is running - mkdir would otherwise fork the store into a plain
+    local folder.
+    """
+    anchor = Path(path.anchor) if path.anchor else None
+    if anchor is not None and str(anchor) not in ("", ".") and not anchor.exists():
+        return anchor
+
+    cloud_root = Path.home() / "Library" / "CloudStorage"
+    try:
+        relative = path.relative_to(cloud_root)
+    except ValueError:
+        return None
+    if relative.parts:
+        mount = cloud_root / relative.parts[0]
+        if not mount.exists():
+            return mount
+    return None
+
+
+def _wait_for_shared_drive(path: Path, source: str) -> None:
+    """Bounded wait for the shared store's mount point to appear.
+
+    Google Drive mounts G: (or the macOS CloudStorage folder) late at boot,
+    so an auto-started GUI can race it and die in ``_ensure_directories``
+    with a bare mkdir traceback. Waiting (default 120s,
+    TRADINGBOTV3_DRIVE_WAIT_SECONDS to change, 0 = fail fast) rides out the
+    normal mount delay; if the drive never appears the failure is a clear,
+    actionable message instead.
 
     Deliberately NO silent local fallback: the shared store carries the
     tracker, watchlists, and outcome history that every machine syncs through
     Drive - quietly writing them to a local folder would fork that state.
     """
-    anchor = Path(path.anchor) if path.anchor else None
-    if anchor is None or str(anchor) in ("", ".") or anchor.exists():
+    anchor = _unmounted_shared_anchor(path)
+    if anchor is None:
         return
     try:
         wait_seconds = float(os.environ.get("TRADINGBOTV3_DRIVE_WAIT_SECONDS", "120"))

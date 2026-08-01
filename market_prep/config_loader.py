@@ -4,6 +4,7 @@ import copy
 import json
 import logging
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -366,6 +367,8 @@ def _local_market_prep_secret_file() -> Path:
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "TradingBotV3" / "market_prep_secrets.json"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "TradingBotV3" / "market_prep_secrets.json"
     return Path.home() / ".local" / "share" / "TradingBotV3" / "market_prep_secrets.json"
 
 
