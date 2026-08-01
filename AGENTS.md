@@ -8,7 +8,7 @@ journal, and a controlled research/promotion program for new setups. Order execu
 is permanently out of scope (plan.md sec 1).
 
 ## Core loop / data flow
-- Entry: `TradingBotV3_GUI.cmd` / `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). `scripts/gui.py --ui tk` is the legacy Tk UI kept during migration.
+- Entry: `TradingBotV3_GUI.cmd` (Windows) / `TradingBotV3_GUI.command` (macOS) / `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). `scripts/gui.py --ui tk` is the legacy Tk UI kept during migration.
 - Market data: IBKR TWS/Gateway on `127.0.0.1:7496` (`ibapi`) primary, `yfinance` fallback; bar source is tracked per scan. See `docs/BROKER_ADAPTERS.md`.
 - Engines: `scripts/master_avwap.py` (+`master_avwap_lib/`) D1 AVWAP swing scanner; `scripts/bounce_bot.py` (+`bounce_bot_lib/`) intraday M5 bounce detector; `market_prep/` pre-session services.
 - Inputs: plain-text watchlists (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`) in the user-selected shared "home folder".
@@ -29,7 +29,7 @@ is permanently out of scope (plan.md sec 1).
 - `review_policy.json` ranks and annotates only — it deliberately has no suppression field; do not add one.
 
 ## Tech stack + key deps
-- Python ≥3.12 (desktop runs 3.14.6), Windows-first, repo-local `.venv`.
+- Python ≥3.12 (desktop runs 3.14.6), Windows-first with macOS support (`docs/MACOS_SETUP.md`; same code, no fork — platform differences live in launchers, `project_paths.py`, and `ai_credentials.py`), repo-local `.venv`.
 - `PySide6`/`qtawesome`/`pyqtgraph` — new Trading Desk UI (`PyQt5` remains only for legacy `TickerMover.py`); Tk — legacy GUI.
 - `ibapi` — IBKR market data; `yfinance` — fallback bars; `pandas`/`pyarrow` — bar frames and arrow-backed columns.
 - `feedparser` — news RSS for market prep; `openai` — provider-neutral one-way advisory summaries (`scripts/ai_summary.py`, `market_prep/services/ai_service.py`).
@@ -39,7 +39,7 @@ is permanently out of scope (plan.md sec 1).
 ## Commands
 - Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `SOL_PROGRESS.md`. Check pytest's own exit code, not a piped tail's.
 - Smoke (offline, deterministic): `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7.
-- Run: `.\TradingBotV3_GUI.cmd` (or `launch_gui.py`); IB TWS/Gateway must be connected for data.
+- Run: `.\TradingBotV3_GUI.cmd` (Windows) or `./TradingBotV3_GUI.command` (macOS; `./setup_macos.command` once first) — both wrap `launch_gui.py`; IB TWS/Gateway must be connected for data. On POSIX the venv python is `.venv/bin/python`.
 - Audits: `scripts/operations_audit.py` (runtime), `scripts/review_capture_audit.py` (capture readiness) — both also render in System Health.
 - No deploy pipeline: the user runs the app from this repo on `main`. Never leave the working tree broken.
 
@@ -58,6 +58,7 @@ is permanently out of scope (plan.md sec 1).
 - `docs/REVIEW_LEARNING_LOOP.md` — how the AI reads review artifacts and writes `review_policy.json`.
 - `docs/SETUPS_MAJOR.md` / `docs/SETUPS_TEST.md` — AI-stated understanding of the production setups and the study/research setups, under trader review; fold corrections back in.
 - `docs/FIRST_SESSION_CHECKLIST.md`, `docs/AWAY_SCANNER_RUNBOOK.md`, `docs/REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md` — operational runbooks for live sessions.
+- `docs/MACOS_SETUP.md` — running the desk on macOS (native TWS, CloudStorage Drive mount, Keychain keys).
 - `docs/SHIP_READINESS.md`, `docs/BROKER_ADAPTERS.md`, `packaging/README.md` — shipping direction and future multi-broker architecture.
 - Runtime facts: primary desktop i5-8600K/32GB; full scan ≈ 28.5 min, network-bound. Post-session artifacts under `%LOCALAPPDATA%\TradingBotV3\diagnostics\` (`run_manifests\`, `spy_state_shadow.jsonl`, `greatness_shadow.jsonl`, `job_ledger.jsonl`, `heartbeat.json`).
 
