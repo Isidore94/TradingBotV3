@@ -692,6 +692,15 @@ class AlertCenterPanel(QFrame):
         """Relay interrupt-worthy alerts to Desk Link satellites (Tier 1)."""
         self._desk_link = service
 
+    def attach_remote_feed(self, feed) -> None:
+        """Satellite desk mode: relayed alerts enter the real feeds here.
+
+        The feed's payload bot also backs the M5 charts (see _current_bot),
+        so the desk renders as if the live bot's cache were local.
+        """
+        self._remote_feed = feed
+        feed.alertReceived.connect(self.add_alert)
+
     def apply_desk_link_intent(self, machine: str, intent: dict) -> tuple[bool, str]:
         """Apply one controller decision from a Desk Link satellite (Tier 2).
 
@@ -1075,13 +1084,22 @@ class AlertCenterPanel(QFrame):
         return int((datetime.now() - self._review_shown_at).total_seconds() * 1000)
 
     def _current_bot(self):
-        """The bounce service's live bot, or None - never raises."""
-        if self._bounce_service is None:
-            return None
-        try:
-            return self._bounce_service.current_bot()
-        except Exception:
-            return None
+        """The bounce service's live bot, or None - never raises.
+
+        Satellite desk mode: with no live bot, fall back to the Desk Link
+        feed's payload-backed cache so M5 charts render from relayed bars.
+        """
+        bot = None
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+            except Exception:
+                bot = None
+        if bot is None:
+            feed = getattr(self, "_remote_feed", None)
+            if feed is not None:
+                return feed.payload_bot()
+        return bot
 
     def _refresh_review_chart(self) -> None:
         """30s tick: keep the visible review chart on current bars.

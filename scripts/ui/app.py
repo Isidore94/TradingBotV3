@@ -47,9 +47,10 @@ from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, state: UiState) -> None:
+    def __init__(self, state: UiState, *, satellite_desk: bool = False) -> None:
         super().__init__()
         self.state = state
+        self._satellite_desk = satellite_desk
         self.setWindowTitle("TradingBotV3 Trading Desk")
         # Open at the desk's preferred size, but never larger than the screen
         # actually offers: a 1640x980 default on a 1680x954 laptop opened the
@@ -79,7 +80,29 @@ class MainWindow(QMainWindow):
         self.trading_panel.alert_center.attach_desk_link(self.desk_link_service)
         self.desk_link_service.controlChanged.connect(self._on_desk_link_control_changed)
         self.desk_link_service.intentReceived.connect(self._on_desk_link_intent)
-        if desk_link_enabled():
+        self.desk_link_feed = None
+        if satellite_desk:
+            # Satellite desk (--satellite-desk): the FULL desk UI, fed by the
+            # main's relay instead of TWS. Never serves, never scans on its
+            # own, never re-relays - and deliberately does not auto-start the
+            # local Desk Link server even if this machine has it enabled.
+            import socket as _socket
+
+            from ui.satellite import load_saved_connection
+            from ui.services.desk_link_feed import DeskLinkFeedService
+
+            host, port, link_token = load_saved_connection()
+            self.desk_link_feed = DeskLinkFeedService(self)
+            self.trading_panel.alert_center.attach_remote_feed(self.desk_link_feed)
+            self.desk_link_feed.linkStatusChanged.connect(self._on_satellite_link_status)
+            if host and link_token:
+                self.desk_link_feed.start(
+                    host=host,
+                    port=port,
+                    token=link_token,
+                    machine_name=_socket.gethostname() or "satellite-desk",
+                )
+        elif desk_link_enabled():
             self.desk_link_service.start()
 
         self.settings_panel = SettingsPanel(
@@ -285,6 +308,11 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.universe_status)
         status.addPermanentWidget(self.data_status)
         status.addPermanentWidget(self.health_status)
+        self.satellite_link_label = None
+        if self._satellite_desk:
+            self.setWindowTitle("TradingBotV3 Trading Desk — SATELLITE (fed by main)")
+            self.satellite_link_label = QLabel("LINK … connecting")
+            status.addPermanentWidget(self.satellite_link_label)
 
     def _set_auto_regime(self, reading) -> None:
         chip, tooltip = format_auto_regime_reading(reading)
@@ -507,6 +535,18 @@ class MainWindow(QMainWindow):
             self.universe_status.setStyleSheet("" if done else "color: #E06C75;")
             self._universe_poll.stop()
 
+    def _on_satellite_link_status(self, link_state: str, detail: str) -> None:
+        if getattr(self, "satellite_link_label", None) is None:
+            return
+        texts = {
+            "connected": f"LINK ● {detail}",
+            "connecting": "LINK … connecting",
+            "disconnected": f"LINK ✕ {detail}",
+            "rejected": "LINK ✕ token rejected - launch the satellite window once to re-pair",
+            "stopped": "LINK ✕ stopped",
+        }
+        self.satellite_link_label.setText(texts.get(link_state, f"LINK {link_state}"))
+
     def _on_desk_link_control_changed(self, machine: str) -> None:
         """Satellite in control -> this desk is a relay: decision surfaces
         lock, engines keep running, and only 'Take back control' stays live."""
@@ -549,6 +589,11 @@ class MainWindow(QMainWindow):
             self.desk_link_service.stop()
         except Exception:
             pass
+        if self.desk_link_feed is not None:
+            try:
+                self.desk_link_feed.stop()
+            except Exception:
+                pass
         # Backstop for the shared writer lease: AutopilotService.shutdown
         # normally releases it, but a panel that failed to shut down must not
         # leave the lease held. Releasing twice is a no-op, and a lease this
@@ -681,6 +726,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Desk Link token from the main machine. Saved locally after first use.",
     )
     parser.add_argument(
+        "--satellite-desk",
+        action="store_true",
+        help=(
+            "Launch the FULL Trading Desk fed by the main's Desk Link relay instead of "
+            "TWS: relayed alerts land in the real Alert Center as if this machine were "
+            "connected to the API. Uses the saved satellite pairing (or prompts for it)."
+        ),
+    )
+    parser.add_argument(
         "--ui-scale",
         choices=tuple(sorted(VALID_UI_SCALES)),
         default=None,
@@ -718,7 +772,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.satellite is not None:
         return _run_satellite(app, args.satellite, args.link_token)
 
-    window = MainWindow(state)
+    if args.satellite_desk:
+        from ui.satellite import ConnectDialog, load_saved_connection, save_connection
+
+        if args.link_token:
+            host, port, _ = load_saved_connection()
+            if host:
+                save_connection(host, port, args.link_token)
+        host, _, link_token = load_saved_connection()
+        if not host or not link_token:
+            from PySide6.QtWidgets import QDialog
+
+            dialog = ConnectDialog()
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return 2
+            save_connection(*dialog.connection())
+
+    window = MainWindow(state, satellite_desk=bool(args.satellite_desk))
     window.show()
     return app.exec()
 
