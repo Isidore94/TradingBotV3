@@ -84,24 +84,50 @@ def _load_local_settings() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _is_writable_dir(path: Path) -> bool:
+    """True only for an existing directory we can actually create files in.
+
+    macOS Drive File Stream exposes the *account* root (the parent of
+    "My Drive") as a read-only directory, so a plain ``exists()`` probe
+    happily selects it and every mkdir under it dies with EACCES.
+    """
+    try:
+        return path.is_dir() and os.access(path, os.W_OK)
+    except OSError:
+        return False
+
+
 def _default_google_drive_shared_dir() -> Path | None:
     """Return the app's shared Google Drive folder when Drive is mounted."""
 
     roots: list[Path] = []
     env_value = os.environ.get("GOOGLE_DRIVE")
     if env_value:
-        roots.append(Path(env_value).expanduser())
+        env_root = Path(env_value).expanduser()
+        roots.extend([env_root, env_root / "My Drive"])
 
     home = Path.home()
     roots.extend(
         [
             home / "My Drive",
+            # ~/Google Drive is the account root on macOS (a symlink into
+            # Library/CloudStorage) but the sync folder itself on Windows, so
+            # try the "My Drive" child before falling back to the root.
+            home / "Google Drive" / "My Drive",
             home / "Google Drive",
         ]
     )
+    if sys.platform == "darwin":
+        # Drive File Stream mounts each signed-in account here; the optional
+        # ~/Google Drive symlink may be missing entirely.
+        try:
+            accounts = sorted((home / "Library" / "CloudStorage").glob("GoogleDrive-*"))
+        except OSError:
+            accounts = []
+        roots.extend(account / "My Drive" for account in accounts)
 
     for root in roots:
-        if root.exists():
+        if _is_writable_dir(root):
             return root / "Trading" / "TradingBot"
     return None
 
