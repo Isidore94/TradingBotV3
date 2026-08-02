@@ -1,8 +1,16 @@
 # Multi-machine desk — design proposal (for trader review)
 
-Status: **PROPOSAL — not scheduled.** Nothing here is implemented. If approved,
-this enters plan.md Section 12 as an ordered milestone; until then it binds
-nothing. It deliberately reuses the invariants and single-writer machinery the
+Status: **APPROVED 2026-08-02 — Tier 1 in progress** (plan.md sec 12, "Desk
+Link"). Trader decisions on the open questions:
+
+- The main can **take back control at any time** — an immediate override,
+  no grace period, always available while a satellite holds the lease.
+- **No first-connection confirmation** on the main (single-user system): a
+  satellite that presents the stored link token connects directly.
+- **Tier 1 ships first** (relay + live alert popups, view-only satellite).
+  Tiers 2-3 wait for Tier 1 to prove out live.
+
+The design deliberately reuses the invariants and single-writer machinery the
 repo already has.
 
 ## Goal
@@ -57,11 +65,16 @@ control, so every plan.md sec 5 invariant survives handoffs.
 
 ## Transport: a small server on the main
 
-- A LAN-only WebSocket server inside the main's GUI process (or a sibling
-  thread owned by one component, per the one-owner-per-thread invariant).
-- Pairing: first connection requires a short pairing code shown on the main;
-  thereafter a stored per-machine token. Bind to the LAN interface only —
-  never the public internet; no inbound cloud hop.
+- A LAN-only TCP socket server (newline-delimited JSON messages — our own
+  client on both ends, so no WebSocket/browser framing is needed and the
+  stack stays stdlib-only) inside the main's GUI process, its accept/writer
+  threads owned by one Desk Link component per the one-owner-per-thread
+  invariant. A slow or stuck satellite gets dropped, never blocks the desk.
+- Pairing: the main generates a link token once and stores it in its local
+  settings; the satellite is configured with main's host + token one time.
+  No per-connection confirmation (trader decision — single-user system).
+  Bind to the LAN interface only — never the public internet; no inbound
+  cloud hop.
 - The Drive shared store stays the durable record. The socket is a live
   mirror + command channel, not a second source of truth: a satellite that
   reconnects resyncs from the main's state snapshot, and everything the main
@@ -113,11 +126,11 @@ satellite has open. Forming bars remain preview-only everywhere.
    heartbeat/reclaim, intent applier on the main.
 3. **Live chart streaming.** Incremental bars for open satellite charts.
 
-## Open questions for the trader
+## Resolved questions (trader, 2026-08-02)
 
-1. Grace window before the main auto-reclaims control: 30 s? 60 s?
-2. While a satellite holds control, is the main's UI fully locked, or should
-   an emergency "take back control now" button on the main override?
-3. Should satellite sign-in require the main to confirm (a click on the main
-   PC) the first time each day, or is the stored pairing token enough?
-4. Tier 1 alone useful enough to ship first? (Recommended: yes.)
+1. Grace window before auto-reclaim: default **45 s** (configurable) — and
+   moot in most cases because of (2).
+2. The main keeps a **"Take back control" button at all times** while a
+   satellite holds the lease; it reclaims immediately.
+3. **No first-connection confirmation** — stored link token is enough.
+4. **Tier 1 ships first.**

@@ -1554,6 +1554,13 @@ The product should celebrate a correct thesis without mislabeling a late entry a
 5. Build the Health page.
 6. Build golden/benchmark fixtures.
 7. Keep legacy SPY and D1 alert behavior as champion.
+7a. **Desk Link Tier 1** (trader-directed insertion, 2026-08-02; numbered
+   7a so the existing 8-22 references stay stable): LAN relay
+   server on the main + view-only satellite mode with live alert chart
+   popups, per `docs/MULTI_MACHINE_DESK_PROPOSAL.md`. Decision surfaces,
+   scanners, TWS, and all shared-state writing stay on the main; satellites
+   render payloads only, so no sec 5 invariant is touched. Control lease
+   (Tier 2) and live chart streaming (Tier 3) wait for Tier 1 live evidence.
 
 ### Next — after initial live evidence
 
