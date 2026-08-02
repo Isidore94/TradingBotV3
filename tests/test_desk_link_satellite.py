@@ -160,6 +160,54 @@ def test_desk_link_service_relays_to_live_satellite_client(monkeypatch):
         service.stop()
 
 
+def test_send_test_popup_reaches_a_live_satellite(monkeypatch):
+    _qapp()
+    import ui.services.desk_link_service as service_module
+    from desk_link.client import DeskLinkClient
+
+    settings: dict = {"desk_link_port": 0}
+    monkeypatch.setattr(service_module, "get_local_setting", lambda key, default=None: settings.get(key, default))
+    monkeypatch.setattr(service_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value))
+
+    service = service_module.DeskLinkService(machine_name="main-under-test")
+    assert service.start()
+    try:
+        assert service.send_test_popup() is False  # nobody listening yet
+
+        received: list[dict] = []
+        got_popup = threading.Event()
+
+        def on_message(message: dict) -> None:
+            received.append(message)
+            if message["type"] == protocol.TYPE_ALERT_POPUP:
+                got_popup.set()
+
+        client = DeskLinkClient(
+            host="127.0.0.1",
+            port=service._server.address[1],
+            token=settings["desk_link_token"],
+            machine_name="test-satellite",
+            on_message=on_message,
+        )
+        client.start()
+        try:
+            waiter = threading.Event()
+            for _ in range(50):
+                if service.has_satellites:
+                    break
+                waiter.wait(0.1)
+            assert service.send_test_popup() is True
+            assert got_popup.wait(timeout=WAIT)
+            popup = next(m for m in received if m["type"] == protocol.TYPE_ALERT_POPUP)
+            restored = restore_alert_popup_payload(popup["payload"])
+            assert restored["alert"]["symbol"] == "SPY"
+            assert restored["alert"]["side"] == "TEST"
+        finally:
+            client.stop()
+    finally:
+        service.stop()
+
+
 def test_service_stays_off_without_the_local_setting(monkeypatch):
     import ui.services.desk_link_service as service_module
 

@@ -251,6 +251,8 @@ class SettingsPanel(QFrame):
         copy_button.clicked.connect(self._copy_desk_link_token)
         regenerate_button = QPushButton("Regenerate token")
         regenerate_button.clicked.connect(self._regenerate_desk_link_token)
+        test_popup_button = QPushButton("Send test popup")
+        test_popup_button.clicked.connect(self._send_desk_link_test_popup)
 
         form = QFormLayout()
         form.setSpacing(8)
@@ -263,6 +265,7 @@ class SettingsPanel(QFrame):
         token_row.setSpacing(8)
         token_row.addWidget(copy_button)
         token_row.addWidget(regenerate_button)
+        token_row.addWidget(test_popup_button)
         token_row.addStretch(1)
         section_layout.addLayout(token_row)
 
@@ -321,6 +324,16 @@ class SettingsPanel(QFrame):
         self.desk_link_token_view.setText(token)
         QApplication.clipboard().setText(token)
         self.desk_link_status.setText("Token copied to clipboard - paste it into the satellite's first launch.")
+
+    def _send_desk_link_test_popup(self) -> None:
+        if self.desk_link_service.send_test_popup():
+            self.desk_link_status.setText(
+                "Test popup sent - it should appear on every connected satellite now."
+            )
+        else:
+            self.desk_link_status.setText(
+                "No satellite is connected (or serving is off) - nothing to send the test popup to."
+            )
 
     def _regenerate_desk_link_token(self) -> None:
         token = self.desk_link_service.regenerate_token()

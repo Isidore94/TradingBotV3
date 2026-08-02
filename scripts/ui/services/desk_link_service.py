@@ -276,6 +276,37 @@ class DeskLinkService(QObject):
         if server is not None:
             server.send_alert_popup(payload)
 
+    def send_test_popup(self, symbol: str = "SPY") -> bool:
+        """Fire a synthetic popup so the link can be tested without a live
+        market: real chart payload from the local daily store, clearly
+        labeled as a test, sent through the exact relay path alerts use.
+        Returns False when nothing is listening."""
+        if not self.has_satellites:
+            return False
+        try:
+            from datetime import datetime
+
+            from desk_link.popup_payload import capture_alert_popup
+
+            payload = capture_alert_popup(
+                {
+                    "time_text": datetime.now().strftime("%H:%M:%S"),
+                    "symbol": str(symbol or "SPY").strip().upper(),
+                    "side": "TEST",
+                    "trigger": "Desk Link test popup",
+                    "timeframe": "D1",
+                    "context": "connection check - not a signal",
+                    "tag": "desk_link_test",
+                },
+                bot=None,
+                guidance_text="Test popup: confirms relay, chart payload, and rendering end to end.",
+            )
+            self.publish_alert_popup(payload)
+            return True
+        except Exception:
+            log.exception("Desk Link test popup failed.")
+            return False
+
     def publish_state_snapshot(self) -> None:
         server = self._server
         if server is None:
