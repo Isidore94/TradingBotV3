@@ -117,6 +117,31 @@ satellite has open. Forming bars remain preview-only everywhere.
 | Drive down, LAN up | Live flow unaffected; publishes queue exactly as they do today (failed publish never destroys the last verified report). |
 | LAN down, Drive up | Degrades to today's behavior: satellite sees synced files; intents land via the JSONL path with sync latency. |
 
+## Running Tier 1 (implemented)
+
+On the **main PC**:
+
+1. Add `"desk_link_enabled": true` to `local_settings.json`
+   (`%LOCALAPPDATA%\TradingBotV3` on Windows, `~/Library/Application
+   Support/TradingBotV3` on macOS). Optional: `"desk_link_port"` (default
+   47600).
+2. Relaunch the desk. The first start generates `"desk_link_token"` in the
+   same file — copy it for the satellite. Allow the port through the OS
+   firewall for your private network only.
+
+On the **satellite** (same repo, same setup, no TWS needed):
+
+    .venv/bin/python scripts/gui.py --ui qt --satellite <main-hostname-or-ip> --link-token <token>
+
+(`.venv\Scripts\python.exe` on Windows; the token is saved locally after
+the first run, so later launches only need `--satellite <host>`.)
+
+The satellite shows link status, a desk mirror line (watchlists/Focus), a
+rolling alert feed, and pops the same chart popup the main renders —
+gated by the alert-sound rule, not by the main's sound checkbox, so a
+muted main still pops the satellite. Alert relay activates only while a
+satellite is connected and never blocks the desk.
+
 ## Rollout tiers (each independently shippable)
 
 1. **Relay + popups (view-only).** Server, pairing, state snapshot, live

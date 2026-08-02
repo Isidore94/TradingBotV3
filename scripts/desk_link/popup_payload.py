@@ -95,6 +95,45 @@ def build_alert_popup_payload(
     }
 
 
+def capture_alert_popup(
+    alert: Any,
+    *,
+    bot: Any = None,
+    armed_kinds: list[str] | None = None,
+    armed_levels: list[dict[str, Any]] | None = None,
+    armed_d1_events: list[dict[str, Any]] | None = None,
+    guidance_text: str = "",
+) -> dict[str, Any]:
+    """Build the full popup payload for an alert on the main desk.
+
+    Same synchronous local reads as the main's own popup
+    (SymbolSnapshotWidget._build_snapshots): the bot's in-memory M5 cache
+    plus the mtime-cached daily store — never a fetch. The satellite has no
+    store to backfill, so unlike the local popup no staleness backfill is
+    triggered here; a stale tail renders as-is with its date visible.
+    """
+    import chart_snapshot  # local import keeps desk_link import-light for the transport tests
+
+    symbol = str(getattr(alert, "symbol", "") or (alert.get("symbol") if isinstance(alert, dict) else "") or "")
+    m5_bars: list[dict[str, Any]] = []
+    if bot is not None and symbol:
+        try:
+            m5_bars = bot.m5_chart_bars(symbol, max_sessions=2)
+        except Exception:
+            m5_bars = []
+    d1 = chart_snapshot.build_d1_snapshot(symbol, intraday_bars=m5_bars)
+    m5 = chart_snapshot.build_m5_snapshot(symbol, m5_bars)
+    return build_alert_popup_payload(
+        alert,
+        d1_snapshot=d1,
+        m5_snapshot=m5,
+        armed_kinds=armed_kinds,
+        armed_levels=armed_levels,
+        armed_d1_events=armed_d1_events,
+        guidance_text=guidance_text,
+    )
+
+
 def restore_alert_popup_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Rebuild render-ready structures from a wire payload.
 

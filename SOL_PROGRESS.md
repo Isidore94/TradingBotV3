@@ -7,6 +7,18 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
+- Branch `claude/macos-gui-tws-compat-0nv0gs` (2026-08-02, not yet merged):
+  macOS support (CloudStorage Drive detection, Keychain AI keys, `.command`
+  launchers, `docs/MACOS_SETUP.md`) plus **Desk Link Tier 1** (plan.md sec 12
+  item 7a): LAN relay server + view-only satellite with live alert chart
+  popups (`scripts/desk_link/`, `ui/services/desk_link_service.py`,
+  `ui/satellite.py`, `--satellite` launch flag). Test baseline on that
+  branch: **1747 passed, 2 skipped, 5 subtests** (Linux, TZ=America/Vancouver);
+  smoke 7/7. Live validation of the link is pending a real two-machine
+  session.
+
+## Previous checkpoint (main)
+
 - Branch: `main`, fast-forwarded 2026-07-30 evening from
   `regime-infrastructure-phase1` (which contains all of
   `milestone-1-observability`). One combined line: Milestone 1 observability,

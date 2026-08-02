@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -686,6 +687,39 @@ class AlertCenterPanel(QFrame):
         if board_signal is not None:
             board_signal.connect(self.entry_board.update_board)
 
+    def attach_desk_link(self, service) -> None:
+        """Relay interrupt-worthy alerts to Desk Link satellites (Tier 1)."""
+        self._desk_link = service
+
+    def _relay_alert_popup(self, alert: BounceAlert, *, is_focus: bool) -> None:
+        """Ship a self-contained chart popup to connected satellites.
+
+        Gated on the same "loud enough to interrupt" rule as the beep, but
+        NOT on the local sound checkbox - muting the main desk must not
+        silence the machine the trader is actually sitting at. Payload
+        capture is the same synchronous local read the main's own popup
+        performs; a failure here never touches the desk.
+        """
+        service = getattr(self, "_desk_link", None)
+        if service is None or not service.has_satellites or not alert.symbol:
+            return
+        if not (alert_should_sound(alert, is_focus=is_focus) or is_ready_d1_alert(alert)):
+            return
+        try:
+            from desk_link.popup_payload import capture_alert_popup
+
+            payload = capture_alert_popup(
+                alert,
+                bot=self._current_bot(),
+                armed_kinds=sorted(self.armed_watch_kinds(alert.symbol)),
+                armed_levels=[watch.to_dict() for watch in self.armed_levels_for(alert.symbol)],
+                armed_d1_events=[{"kind": kind} for kind in sorted(self.armed_d1_event_kinds(alert.symbol))],
+                guidance_text=self._guidance_for(alert).summary_text(),
+            )
+            service.publish_alert_popup(payload)
+        except Exception:
+            logging.exception("Desk Link alert relay failed; the desk itself is unaffected.")
+
     def add_alert(self, alert: BounceAlert) -> None:
         self._refresh_ignored_market_date()
         if _is_feed_noise_alert(alert):
@@ -713,6 +747,7 @@ class AlertCenterPanel(QFrame):
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
             if self.sound_input.isChecked() and alert_should_sound(alert, is_focus=is_focus):
                 QApplication.beep()
+            self._relay_alert_popup(alert, is_focus=is_focus)
         self._emit_feed_status()
 
     def _add_d1_alert(self, alert: BounceAlert) -> None:
@@ -727,6 +762,7 @@ class AlertCenterPanel(QFrame):
             self._refresh_d1_tab_label()
         if self.sound_input.isChecked() and (is_ready_d1_alert(alert) or self._alert_is_focus(alert)):
             QApplication.beep()
+        self._relay_alert_popup(alert, is_focus=self._alert_is_focus(alert))
         self._emit_feed_status()
 
     def _d1_tab_is_current(self) -> bool:

@@ -181,6 +181,29 @@ class SymbolSnapshotWidget(QWidget):
         d1, m5 = self._build_snapshots()
         self._render_snapshots(d1, m5)
 
+    def show_payload_snapshots(self, symbol: str, d1: dict, m5: dict) -> None:
+        """Render prebuilt snapshots (Desk Link satellite path).
+
+        The satellite has no local store, no bot cache, and no TWS: the
+        payload IS the data. No backfill is triggered and refresh() has
+        nothing to re-read, so the render is a frozen picture of what the
+        main saw at alert time.
+        """
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
+        self._symbol = symbol
+        self._bot = None
+
+        def normalized(snapshot: dict) -> dict:
+            snapshot = dict(snapshot or {})
+            snapshot.setdefault("bars", [])
+            snapshot.setdefault("overlays", [])
+            snapshot.setdefault("note", "")
+            return snapshot
+
+        self._render_snapshots(normalized(d1), normalized(m5))
+
     def refresh(self, *, bot=None) -> bool:
         """Re-pull both charts from the local stores/caches; render on change.
 

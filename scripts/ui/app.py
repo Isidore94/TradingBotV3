@@ -64,6 +64,18 @@ class MainWindow(QMainWindow):
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
 
+        # Desk Link relay (docs/MULTI_MACHINE_DESK_PROPOSAL.md Tier 1): serve
+        # satellites only when the machine-local setting enables it. Failure
+        # to start (port in use) degrades to a normal single-machine desk.
+        self.desk_link_service = None
+        from ui.services.desk_link_service import DeskLinkService, desk_link_enabled
+
+        if desk_link_enabled():
+            service = DeskLinkService(self)
+            if service.start():
+                self.desk_link_service = service
+                self.trading_panel.alert_center.attach_desk_link(service)
+
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)
         self.pages.addWidget(self.trading_panel.focus_picks_panel)
@@ -449,6 +461,11 @@ class MainWindow(QMainWindow):
                 panel.shutdown()
             except Exception:
                 pass
+        if self.desk_link_service is not None:
+            try:
+                self.desk_link_service.stop()
+            except Exception:
+                pass
         # Backstop for the shared writer lease: AutopilotService.shutdown
         # normally releases it, but a panel that failed to shut down must not
         # leave the lease held. Releasing twice is a no-op, and a lease this
@@ -547,6 +564,20 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="GUI color theme. Saved as the default for future launches.",
     )
+    parser.add_argument(
+        "--satellite",
+        metavar="HOST[:PORT]",
+        default=None,
+        help=(
+            "Launch as a view-only Desk Link satellite mirroring the main desk "
+            "at HOST (docs/MULTI_MACHINE_DESK_PROPOSAL.md). No TWS, no scanners."
+        ),
+    )
+    parser.add_argument(
+        "--link-token",
+        default=None,
+        help="Desk Link token from the main machine. Saved locally after first use.",
+    )
     args = parser.parse_args(argv)
 
     state = UiState.load()
@@ -564,7 +595,49 @@ def main(argv: list[str] | None = None) -> int:
     install_gui_thread_gc(app)
     apply_theme(app, state.theme_name, state.compact_density)
 
+    if args.satellite:
+        return _run_satellite(app, args.satellite, args.link_token)
+
     window = MainWindow(state)
+    window.show()
+    return app.exec()
+
+
+def _run_satellite(app: QApplication, target: str, cli_token: str | None) -> int:
+    import socket as _socket
+
+    from desk_link.server import DEFAULT_PORT
+    from project_paths import get_local_setting, save_local_setting
+    from ui.satellite import SatelliteWindow
+
+    host, _, port_text = str(target).partition(":")
+    port = int(port_text) if port_text.strip() else DEFAULT_PORT
+
+    token = str(cli_token or "").strip()
+    if token:
+        save_local_setting("desk_link_token", token)
+    else:
+        token = str(get_local_setting("desk_link_token", "") or "").strip()
+    if not token:
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+        token, accepted = QInputDialog.getText(
+            None,
+            "Desk Link token",
+            "Paste the link token from the main desk\n(local settings key 'desk_link_token' on that machine):",
+            QLineEdit.EchoMode.Normal,
+        )
+        token = str(token or "").strip()
+        if not accepted or not token:
+            return 2
+        save_local_setting("desk_link_token", token)
+
+    if host:
+        save_local_setting("desk_link_host", f"{host}:{port}")
+
+    window = SatelliteWindow(
+        host=host, port=port, token=token, machine_name=_socket.gethostname() or "satellite"
+    )
     window.show()
     return app.exec()
 
