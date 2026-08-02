@@ -40,7 +40,8 @@ from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
 from ui.panels.trading_desk import TradingDeskPanel
 from ui.panels.universe_panel import UniversePanel
-from ui.state import UiState
+from ui import theme
+from ui.state import VALID_UI_SCALES, UiState
 from ui.theme import apply_theme
 from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
 
@@ -50,8 +51,16 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state
         self.setWindowTitle("TradingBotV3 Trading Desk")
-        self.resize(1640, 980)
-        self.setMinimumSize(1180, 760)
+        # Open at the desk's preferred size, but never larger than the screen
+        # actually offers: a 1640x980 default on a 1680x954 laptop opened the
+        # window taller than the workspace, so the status strip sat under the
+        # Dock. The floor scales too, or the minimum alone would force the
+        # same overflow back.
+        available = _available_screen_size()
+        self.resize(min(1640, available[0]), min(980, available[1]))
+        self.setMinimumSize(
+            min(theme.px(1180), available[0]), min(theme.px(760), available[1])
+        )
 
         self.trading_panel = TradingDeskPanel(workspace_mode=self.state.workspace_mode)
         self.journal_panel = JournalPanel()
@@ -157,11 +166,12 @@ class MainWindow(QMainWindow):
     def _build_shell(self) -> None:
         nav = QFrame()
         nav.setObjectName("NavRail")
-        nav.setMinimumWidth(178)
-        nav.setMaximumWidth(220)
+        self.nav_rail = nav
+        nav.setMinimumWidth(theme.px(178))
+        nav.setMaximumWidth(theme.px(220))
         nav_layout = QVBoxLayout(nav)
-        nav_layout.setContentsMargins(10, 10, 10, 10)
-        nav_layout.setSpacing(8)
+        nav_layout.setContentsMargins(*(theme.px(10),) * 4)
+        nav_layout.setSpacing(theme.px(8))
 
         brand = QLabel("TradingBotV3")
         brand.setObjectName("SectionTitle")
@@ -187,7 +197,7 @@ class MainWindow(QMainWindow):
             icon = _nav_icon(icon_name)
             if icon is not None:
                 button.setIcon(icon)
-                button.setIconSize(QSize(18, 18))
+                button.setIconSize(QSize(theme.px(18), theme.px(18)))
             button.clicked.connect(lambda _checked=False, page=index: self._select_page(page))
             self.nav_buttons.append(button)
             nav_layout.addWidget(button)
@@ -197,7 +207,9 @@ class MainWindow(QMainWindow):
         top_bar = QFrame()
         top_bar.setObjectName("TopBar")
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(12, 10, 12, 10)
+        top_layout.setContentsMargins(
+            theme.px(12), theme.px(10), theme.px(12), theme.px(10)
+        )
         top_layout.addWidget(self.title_label)
         top_layout.addStretch(1)
         top_layout.addWidget(self.workspace_button)
@@ -228,8 +240,8 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         central_layout = QHBoxLayout(central)
-        central_layout.setContentsMargins(8, 8, 8, 0)
-        central_layout.setSpacing(8)
+        central_layout.setContentsMargins(theme.px(8), theme.px(8), theme.px(8), 0)
+        central_layout.setSpacing(theme.px(8))
         central_layout.addWidget(nav)
         central_layout.addWidget(right, 1)
         self.setCentralWidget(central)
@@ -406,9 +418,36 @@ class MainWindow(QMainWindow):
     def _apply_state_changes(self) -> None:
         app = QApplication.instance()
         if app is not None:
-            apply_theme(app, self.state.theme_name, self.state.compact_density)
+            apply_theme(
+                app,
+                self.state.theme_name,
+                self.state.compact_density,
+                theme.resolve_scale(self.state.ui_scale, _available_screen_size()),
+            )
+        self._apply_scaled_metrics()
         self.trading_panel.set_mode(self.state.workspace_mode)
         self._sync_mode_buttons()
+
+    def _apply_scaled_metrics(self) -> None:
+        """Re-apply the pixel budgets that live in Python, not the stylesheet.
+
+        The stylesheet restyles itself on every apply_theme, but explicit
+        minimum widths do not - and those are exactly what decides whether a
+        column can shrink. Without this pass, moving the scale down restyled
+        the text and left the layout jammed against its old floors.
+        """
+        available = _available_screen_size()
+        self.setMinimumSize(
+            min(theme.px(1180), available[0]), min(theme.px(760), available[1])
+        )
+        nav = getattr(self, "nav_rail", None)
+        if nav is not None:
+            nav.setMinimumWidth(theme.px(178))
+            nav.setMaximumWidth(theme.px(220))
+        for button in self.nav_buttons:
+            if not button.icon().isNull():
+                button.setIconSize(QSize(theme.px(18), theme.px(18)))
+        self.trading_panel.apply_scaled_metrics()
 
     def _set_scan_status(self, message: str) -> None:
         self.scan_status.setText(f"Scan: {message}")
@@ -529,6 +568,22 @@ def _mode_button(label: str) -> QPushButton:
     return button
 
 
+def _available_screen_size() -> tuple[int, int]:
+    """Usable logical size of the screen the desk will open on.
+
+    availableGeometry, not geometry: it already excludes the macOS menu bar and
+    Dock (and the Windows taskbar), which is the space the window actually has.
+    Falls back to the 4K desk's workspace when no screen is reachable, e.g. an
+    offscreen test run.
+    """
+    app = QApplication.instance()
+    screen = app.primaryScreen() if app is not None else None
+    if screen is None:
+        return (2560, 1440)
+    size = screen.availableGeometry()
+    return (max(640, size.width()), max(480, size.height()))
+
+
 def _nav_icon(name: str) -> QIcon | None:
     """Material Design icon for the nav rail; degrade gracefully if qtawesome
     (or its font cache) is unavailable so the shell still launches."""
@@ -625,6 +680,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Desk Link token from the main machine. Saved locally after first use.",
     )
+    parser.add_argument(
+        "--ui-scale",
+        choices=tuple(sorted(VALID_UI_SCALES)),
+        default=None,
+        help=(
+            "Shell scale: auto sizes it from the screen (the 4K desk gets 1.00, "
+            "a 1680px laptop 0.85). Saved as the default for future launches."
+        ),
+    )
     args = parser.parse_args(argv)
 
     state = UiState.load()
@@ -634,13 +698,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.theme:
         state.theme_name = args.theme
         state.save()
+    if args.ui_scale:
+        state.ui_scale = args.ui_scale
+        state.save()
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
     app = QApplication(sys.argv[:1])
     app.setApplicationName("TradingBotV3")
     app.setOrganizationName("TradingBotV3")
     install_gui_thread_gc(app)
-    apply_theme(app, state.theme_name, state.compact_density)
+    # Scale first: every widget built below reads theme.px() at construction.
+    apply_theme(
+        app,
+        state.theme_name,
+        state.compact_density,
+        theme.resolve_scale(state.ui_scale, _available_screen_size()),
+    )
 
     if args.satellite is not None:
         return _run_satellite(app, args.satellite, args.link_token)

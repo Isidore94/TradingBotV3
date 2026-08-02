@@ -1,8 +1,8 @@
 QWidget {
     background: @bg_app@;
     color: @text_primary@;
-    font-family: "Segoe UI";
-    font-size: 10.5pt;
+    font-family: @ui_font@;
+    font-size: @font_body@;
 }
 
 QMainWindow,
@@ -17,7 +17,7 @@ QFrame#StatusStrip,
 QFrame#InfoDrawer {
     background: @bg_panel@;
     border: 1px solid @border@;
-    border-radius: 10px;
+    border-radius: @radius_panel@;
 }
 
 QFrame#DeskLinkBanner {
@@ -34,13 +34,13 @@ QFrame#TopBar {
 }
 
 QLabel#TitleLabel {
-    font-size: 17pt;
+    font-size: @font_title@;
     font-weight: 650;
     color: @text_primary@;
 }
 
 QLabel#SectionTitle {
-    font-size: 13pt;
+    font-size: @font_section@;
     font-weight: 650;
     color: @text_primary@;
 }
@@ -67,7 +67,7 @@ QLabel#GuidanceLabel {
    turns red (alertLive property), so it separates instantly from a chart
    the trader pulled up by typing a ticker. */
 QLabel#ReviewSetupText {
-    font-size: 12pt;
+    font-size: @font_setup@;
     font-weight: 600;
     color: @text_secondary@;
 }
@@ -81,8 +81,8 @@ QToolButton {
     background: @bg_elevated@;
     color: @text_primary@;
     border: 1px solid @border@;
-    border-radius: 8px;
-    padding: @padding_small@ @padding_medium@;
+    border-radius: @radius@;
+    padding: @pad_small@ @pad_medium@;
 }
 
 QPushButton:hover,
@@ -107,9 +107,9 @@ QPushButton#PrimaryButton {
 
 QPushButton#NavButton {
     text-align: left;
-    padding: 9px 12px;
+    padding: @nav_pad_v@ @nav_pad_h@;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: @radius@;
     background: transparent;
     color: @text_secondary@;
     font-weight: 600;
@@ -136,8 +136,8 @@ QTextEdit {
     background: @input_bg@;
     color: @text_primary@;
     border: 1px solid @border@;
-    border-radius: 8px;
-    padding: @padding_small@;
+    border-radius: @radius@;
+    padding: @pad_small@;
     selection-background-color: @selection@;
 }
 
@@ -146,7 +146,7 @@ QTableView {
     alternate-background-color: @bg_elevated@;
     color: @text_primary@;
     border: 1px solid @border@;
-    border-radius: 8px;
+    border-radius: @radius@;
     gridline-color: @border@;
     selection-background-color: @selection@;
     selection-color: @text_primary@;
@@ -158,19 +158,19 @@ QHeaderView::section {
     border: 0;
     border-right: 1px solid @border@;
     border-bottom: 1px solid @border@;
-    padding: 7px 8px;
+    padding: @header_pad_v@ @header_pad_h@;
     font-weight: 650;
 }
 
 QTableView::item {
     min-height: @row_height@;
-    padding-left: 6px;
-    padding-right: 6px;
+    padding-left: @cell_pad@;
+    padding-right: @cell_pad@;
 }
 
 QTabWidget::pane {
     border: 1px solid @border@;
-    border-radius: 8px;
+    border-radius: @radius@;
     top: -1px;
 }
 
@@ -179,9 +179,9 @@ QTabBar::tab {
     color: @text_secondary@;
     border: 1px solid @border@;
     border-bottom: 0;
-    padding: 8px 14px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
+    padding: @tab_pad_v@ @tab_pad_h@;
+    border-top-left-radius: @radius@;
+    border-top-right-radius: @radius@;
 }
 
 QTabBar::tab:selected {
@@ -198,13 +198,13 @@ QScrollBar:vertical,
 QScrollBar:horizontal {
     background: @bg_app@;
     border: 0;
-    width: 12px;
-    height: 12px;
+    width: @scrollbar@;
+    height: @scrollbar@;
 }
 
 QScrollBar::handle {
     background: @border@;
-    border-radius: 6px;
+    border-radius: @cell_pad@;
 }
 
 QScrollBar::handle:hover {

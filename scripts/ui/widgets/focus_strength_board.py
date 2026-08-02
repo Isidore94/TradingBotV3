@@ -84,9 +84,13 @@ class FocusStrengthBoard(QWidget):
         layout.addLayout(header)
         layout.addWidget(self.board, 1)
 
-        self.setMinimumWidth(MIN_BOARD_WIDTH)
+        self.apply_scaled_metrics()
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.board.setHtml(_empty_html())
+
+    def apply_scaled_metrics(self) -> None:
+        """Board floor at the current UI scale (see ui.theme.px)."""
+        self.setMinimumWidth(theme.px(MIN_BOARD_WIDTH))
 
     # ------------------------------------------------------------------
     def set_focus_service(self, service) -> None:

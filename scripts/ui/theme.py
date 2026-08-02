@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Mapping
 
@@ -108,11 +109,138 @@ def with_alpha(hex_color: str, alpha: float) -> str:
     return f"rgba({red}, {green}, {blue}, {max(0.0, min(1.0, alpha)):.3f})"
 
 
-def build_stylesheet(theme_name: str = "dark", compact: bool = False) -> str:
+def ui_font_family() -> str:
+    """Native UI font per platform.
+
+    Windows keeps Segoe UI. Naming a family the platform does not ship makes Qt
+    populate every font alias looking for it (~60 ms at startup) before falling
+    back, so macOS asks for the system font by its real family name.
+    """
+    if sys.platform == "darwin":
+        return '".AppleSystemUIFont"'
+    if sys.platform.startswith("win"):
+        return '"Segoe UI"'
+    return "sans-serif"
+
+
+# ----------------------------------------------------------------------
+# UI scale
+#
+# Every size in the shell is expressed at scale 1.0 = the 4K desktop's
+# appearance, then multiplied through. Fonts are emitted in px rather than pt
+# on purpose: Qt reports 96 logical DPI on Windows but 72 on macOS, so the same
+# "10.5pt" rule rendered 14px of text on the desk and 10.5px on the MacBook -
+# tiny type inside chrome that stayed the same size. px is device-independent
+# on both, so one number means one appearance and the scale factor is the only
+# thing that changes it.
+# ----------------------------------------------------------------------
+
+VALID_SCALES = ("auto", "0.80", "0.85", "0.90", "0.95", "1.00", "1.10", "1.25")
+MIN_SCALE, MAX_SCALE = 0.7, 1.5
+
+# px at scale 1.0.
+BASE_METRICS: dict[str, float] = {
+    "font_body": 14,
+    "font_title": 23,
+    "font_section": 17,
+    "font_setup": 16,
+    "row_height": 32,
+    "row_height_compact": 24,
+    "pad_small": 6,
+    "pad_small_compact": 4,
+    "pad_medium": 12,
+    "pad_medium_compact": 8,
+    "cell_pad": 6,
+    "radius": 8,
+    "radius_panel": 10,
+    "header_pad_v": 7,
+    "header_pad_h": 8,
+    "nav_pad_v": 9,
+    "nav_pad_h": 12,
+    "tab_pad_v": 8,
+    "tab_pad_h": 14,
+    "scrollbar": 12,
+}
+
+_ACTIVE_SCALE = 1.0
+
+
+def auto_scale_for(width: int, height: int) -> float:
+    """Pick a scale from the screen's available *logical* size.
+
+    Logical, not physical: the 4K desk reports ~2560x1440 of workspace after
+    Windows display scaling, while the MacBook reports 1680x954 no matter how
+    dense the panel is. The desk's three-column workspace needs roughly
+    1900 logical px to lay out without squeezing control rows, so anything
+    narrower gets proportionally smaller chrome instead of clipped widgets.
+    """
+    width = int(width or 0)
+    height = int(height or 0)
+    if width >= 2400 and height >= 1300:
+        return 1.00
+    if width >= 1900 and height >= 1050:
+        return 0.95
+    if width >= 1560:
+        return 0.85
+    return 0.80
+
+
+def resolve_scale(setting: str, screen_size: tuple[int, int] | None = None) -> float:
+    """Turn a stored ui_scale setting into a usable multiplier."""
+    raw = str(setting or "auto").strip().lower()
+    if raw in ("", "auto"):
+        if screen_size is None:
+            return 1.0
+        return auto_scale_for(*screen_size)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    # Tolerate "90" as well as "0.90" so a percentage typed into settings works.
+    # The threshold is 10, not MAX_SCALE: reading "9.0" as 9% would clamp a
+    # too-large value to the SMALLEST shell, which is the opposite of asked.
+    if value >= 10:
+        value = value / 100.0
+    return max(MIN_SCALE, min(MAX_SCALE, value))
+
+
+def active_scale() -> float:
+    return _ACTIVE_SCALE
+
+
+def px(value: float) -> int:
+    """Scale a design pixel for use in Python-side sizing (min widths, icons).
+
+    Widgets that hard-code a pixel budget must route it through here, or the
+    stylesheet shrinks while the widget's own floor does not - which is how a
+    1680px-wide desk ends up with truncated button rows.
+    """
+    return max(1, round(float(value) * _ACTIVE_SCALE))
+
+
+def metrics(compact: bool = False) -> dict[str, int]:
+    """Every scaled shell metric, as whole pixels."""
+    values = {name: px(base) for name, base in BASE_METRICS.items()}
+    if compact:
+        values["row_height"] = values["row_height_compact"]
+        values["pad_small"] = values["pad_small_compact"]
+        values["pad_medium"] = values["pad_medium_compact"]
+    return values
+
+
+def build_stylesheet(
+    theme_name: str = "dark", compact: bool = False, scale: float | None = None
+) -> str:
+    global _ACTIVE_SCALE
+    if scale is not None:
+        _ACTIVE_SCALE = max(MIN_SCALE, min(MAX_SCALE, float(scale)))
     values = tokens(theme_name)
-    values["row_height"] = "24px" if compact else "32px"
-    values["padding_small"] = "4px" if compact else "6px"
-    values["padding_medium"] = "8px" if compact else "12px"
+    values["ui_font"] = ui_font_family()
+    for name, size in metrics(compact).items():
+        values[name] = f"{size}px"
+    # Kept for any stylesheet still using the pre-scale token names.
+    values["padding_small"] = values["pad_small"]
+    values["padding_medium"] = values["pad_medium"]
     template = (Path(__file__).with_name("theme.qss")).read_text(encoding="utf-8")
     return _replace_tokens(template, values)
 
@@ -124,7 +252,9 @@ def _replace_tokens(template: str, values: Mapping[str, str]) -> str:
     return rendered
 
 
-def apply_theme(app, theme_name: str = "dark", compact: bool = False) -> None:
+def apply_theme(
+    app, theme_name: str = "dark", compact: bool = False, scale: float | None = None
+) -> None:
     global _ACTIVE_THEME
     _ACTIVE_THEME = theme_name if theme_name in THEMES else "dark"
-    app.setStyleSheet(build_stylesheet(_ACTIVE_THEME, compact))
+    app.setStyleSheet(build_stylesheet(_ACTIVE_THEME, compact, scale))
