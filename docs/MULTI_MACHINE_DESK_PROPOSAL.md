@@ -1,7 +1,8 @@
 # Multi-machine desk — design proposal (for trader review)
 
-Status: **APPROVED 2026-08-02 — Tier 1 in progress** (plan.md sec 12, "Desk
-Link"). Trader decisions on the open questions:
+Status: **APPROVED 2026-08-02 — Tiers 1 and 2 implemented** (plan.md sec 12
+item 7a, "Desk Link"); live two-machine validation pending; Tier 3 (live
+chart streaming) not started. Trader decisions on the open questions:
 
 - The main can **take back control at any time** — an immediate override,
   no grace period, always available while a satellite holds the lease.
@@ -142,6 +143,26 @@ rolling alert feed, and pops the same chart popup the main renders —
 gated by the alert-sound rule, not by the main's sound checkbox, so a
 muted main still pops the satellite. Alert relay activates only while a
 satellite is connected and never blocks the desk.
+
+## Using control (Tier 2, implemented)
+
+- Satellite: **Take control** (top of the window). On grant, the popups'
+  action buttons go live — *Remove for day*, *Focus long/short*,
+  *Unfocus* — and every action applies on the main through the exact code
+  path a local click takes (same review events, same focus feedback with
+  ``origin=desk_link``). **Release control** hands it back.
+- Main, while a satellite holds control: a banner appears
+  ("CONTROLLED BY <machine> — this desk is relaying"), the page stack and
+  status bar lock, engines/scans/TWS keep running, and **Take back
+  control** on the banner reclaims immediately — always available.
+- The lease dies with the connection: pings renew it implicitly and the
+  server's 30 s idle timeout is the grace window, so a sleeping laptop or
+  dead Wi-Fi returns control to the main automatically.
+- Delivery: every satellite decision is journaled locally
+  (``desk_link_intent_journal.jsonl``) before it is sent, acked by the
+  main, and resent on the next grant if unacked. The three actions are
+  idempotent, so at-least-once delivery is safe. A non-controller's
+  intent is refused, never applied.
 
 ## Rollout tiers (each independently shippable)
 

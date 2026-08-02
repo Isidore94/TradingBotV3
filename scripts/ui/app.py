@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import logging
 import sys
 
 import threading
@@ -67,6 +68,8 @@ class MainWindow(QMainWindow):
 
         self.desk_link_service = DeskLinkService(self)
         self.trading_panel.alert_center.attach_desk_link(self.desk_link_service)
+        self.desk_link_service.controlChanged.connect(self._on_desk_link_control_changed)
+        self.desk_link_service.intentReceived.connect(self._on_desk_link_intent)
         if desk_link_enabled():
             self.desk_link_service.start()
 
@@ -200,10 +203,26 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.workspace_button)
         top_layout.addWidget(self.tabs_button)
 
+        # Desk Link control banner (Tier 2): visible only while a satellite
+        # holds the lease. It lives OUTSIDE the locked page stack so "Take
+        # back control" stays clickable at all times (trader decision).
+        self.desk_link_banner = QFrame()
+        self.desk_link_banner.setObjectName("DeskLinkBanner")
+        banner_layout = QHBoxLayout(self.desk_link_banner)
+        banner_layout.setContentsMargins(12, 8, 12, 8)
+        self.desk_link_banner_label = QLabel()
+        self.desk_link_banner_label.setWordWrap(True)
+        take_back_button = QPushButton("Take back control")
+        take_back_button.clicked.connect(lambda: self.desk_link_service.take_back_control())
+        banner_layout.addWidget(self.desk_link_banner_label, 1)
+        banner_layout.addWidget(take_back_button)
+        self.desk_link_banner.setVisible(False)
+
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
+        right_layout.addWidget(self.desk_link_banner)
         right_layout.addWidget(top_bar)
         right_layout.addWidget(self.pages, 1)
 
@@ -448,6 +467,29 @@ class MainWindow(QMainWindow):
             self.universe_status.setText(_universe_status_text())
             self.universe_status.setStyleSheet("" if done else "color: #E06C75;")
             self._universe_poll.stop()
+
+    def _on_desk_link_control_changed(self, machine: str) -> None:
+        """Satellite in control -> this desk is a relay: decision surfaces
+        lock, engines keep running, and only 'Take back control' stays live."""
+        controlled = bool(machine)
+        self.desk_link_banner.setVisible(controlled)
+        if controlled:
+            self.desk_link_banner_label.setText(
+                f"CONTROLLED BY {machine.upper()} — this desk is relaying. "
+                "Alerts, scans, and TWS keep running here; decisions happen on the satellite."
+            )
+        self.pages.setEnabled(not controlled)
+        status_bar = self.statusBar()
+        if status_bar is not None:
+            status_bar.setEnabled(not controlled)
+
+    def _on_desk_link_intent(self, machine: str, intent: dict) -> None:
+        try:
+            ok, detail = self.trading_panel.alert_center.apply_desk_link_intent(machine, intent)
+        except Exception:
+            logging.exception("Desk Link intent application failed.")
+            ok, detail = False, "intent application raised; see the main desk log"
+        self.desk_link_service.send_intent_result(machine, intent.get("seq"), ok, detail)
 
     def closeEvent(self, event) -> None:
         for panel in (

@@ -38,6 +38,18 @@ TYPE_PING = "ping"
 TYPE_PONG = "pong"
 TYPE_STATE_SNAPSHOT = "state_snapshot"
 TYPE_ALERT_POPUP = "alert_popup"
+# Tier 2 control lease + intents (docs/MULTI_MACHINE_DESK_PROPOSAL.md).
+# The lease lives and dies with the satellite's authenticated connection:
+# pings renew it implicitly, and the server's idle timeout is the grace
+# window - a satellite that sleeps or drops off Wi-Fi loses control when
+# its connection is reaped, never silently keeps it.
+TYPE_LEASE_REQUEST = "lease_request"   # sat -> main: take control
+TYPE_LEASE_RELEASE = "lease_release"   # sat -> main: give control back
+TYPE_LEASE_GRANT = "lease_grant"       # main -> sat: you have control
+TYPE_LEASE_DENIED = "lease_denied"     # main -> sat: someone else holds it
+TYPE_LEASE_REVOKED = "lease_revoked"   # main -> sat: control taken back
+TYPE_INTENT = "intent"                 # sat -> main: one decision to apply
+TYPE_INTENT_RESULT = "intent_result"   # main -> sat: ack {seq, ok, detail}
 
 
 class DeskLinkProtocolError(ValueError):

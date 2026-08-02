@@ -691,6 +691,37 @@ class AlertCenterPanel(QFrame):
         """Relay interrupt-worthy alerts to Desk Link satellites (Tier 1)."""
         self._desk_link = service
 
+    def apply_desk_link_intent(self, machine: str, intent: dict) -> tuple[bool, str]:
+        """Apply one controller decision from a Desk Link satellite (Tier 2).
+
+        Every action routes through the exact code path the same click takes
+        locally, so evidence recording (review events, focus feedback with
+        origin) is identical to a decision made at the desk. All actions are
+        idempotent, which keeps at-least-once delivery safe.
+        """
+        action = str(intent.get("action") or "")
+        symbol = str(intent.get("symbol") or "").strip().upper()
+        if not symbol:
+            return False, "intent carries no symbol"
+        context = f"desk_link:{machine}"
+        if action == "ignore_for_day":
+            self._ignore_alert_symbol(symbol)
+            return True, f"{symbol} removed for the day"
+        if action == "focus_add":
+            side = str(intent.get("side") or "").strip().lower()
+            if side not in ("long", "short"):
+                return False, f"focus_add needs side long|short, got {side!r}"
+            if self.focus_service is None:
+                return False, "no focus service on the main desk"
+            self.focus_service.add(symbol, side, origin="desk_link", context=context)
+            return True, f"{symbol} added to Focus {side}s"
+        if action == "focus_remove":
+            if self.focus_service is None:
+                return False, "no focus service on the main desk"
+            removed = self.focus_service.remove_everywhere(symbol, origin="desk_link", context=context)
+            return True, f"{symbol} removed from Focus ({removed} entries)"
+        return False, f"unknown intent action {action!r}"
+
     def _relay_alert_popup(self, alert: BounceAlert, *, is_focus: bool) -> None:
         """Ship a self-contained chart popup to connected satellites.
 

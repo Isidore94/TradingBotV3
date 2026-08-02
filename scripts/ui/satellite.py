@@ -13,6 +13,7 @@ turns them into Qt signals so all widget work stays on the GUI thread.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
@@ -34,9 +35,10 @@ from PySide6.QtWidgets import (
 
 from desk_link import protocol
 from desk_link.client import DeskLinkClient
+from desk_link.outbox import IntentOutbox
 from desk_link.popup_payload import restore_alert_popup_payload
 from desk_link.server import DEFAULT_PORT
-from project_paths import get_local_setting, save_local_setting
+from project_paths import LOCAL_SETTINGS_DIR, get_local_setting, save_local_setting
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
 log = logging.getLogger(__name__)
@@ -133,12 +135,21 @@ class _ClientBridge(QObject):
 
 
 class SatellitePopupDialog(QDialog):
-    """One relayed alert chart. Non-activating, like the main's popup."""
+    """One relayed alert chart. Non-activating, like the main's popup.
 
-    def __init__(self, restored: dict[str, Any], parent: QWidget | None = None) -> None:
+    ``intent_host`` (the SatelliteWindow) provides ``send_intent`` and the
+    current control state; the action row is live only while this satellite
+    holds the control lease.
+    """
+
+    def __init__(
+        self, restored: dict[str, Any], parent: QWidget | None = None, *, intent_host=None
+    ) -> None:
         super().__init__(parent)
+        self._intent_host = intent_host
         alert = restored["alert"]
         symbol = str(alert.get("symbol") or "").upper()
+        self._symbol = symbol
         side = str(alert.get("side") or "")
         trigger = str(alert.get("trigger") or "")
         self.setWindowTitle(f"{symbol} · {side} · {trigger}".strip(" ·"))
@@ -171,11 +182,51 @@ class SatellitePopupDialog(QDialog):
         snapshot = SymbolSnapshotWidget(self)
         snapshot.show_payload_snapshots(symbol, restored["d1"], restored["m5"])
 
+        self._action_buttons: list[QPushButton] = []
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(8)
+        for label, action, extra in (
+            ("Remove for day", "ignore_for_day", {}),
+            ("Focus long", "focus_add", {"side": "long"}),
+            ("Focus short", "focus_add", {"side": "short"}),
+            ("Unfocus", "focus_remove", {}),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked=False, a=action, e=extra: self._send_intent(a, e)
+            )
+            self._action_buttons.append(button)
+            actions_row.addWidget(button)
+        actions_row.addStretch(1)
+        self.action_hint = QLabel("")
+        self.action_hint.setObjectName("MutedLabel")
+        self.action_hint.setWordWrap(True)
+
         layout = QVBoxLayout(self)
         layout.addWidget(header)
         layout.addWidget(guidance)
         layout.addWidget(armed_label)
         layout.addWidget(snapshot, 1)
+        layout.addLayout(actions_row)
+        layout.addWidget(self.action_hint)
+        self.set_control_enabled(
+            bool(intent_host is not None and getattr(intent_host, "in_control", False))
+        )
+
+    def set_control_enabled(self, in_control: bool) -> None:
+        for button in self._action_buttons:
+            button.setEnabled(in_control)
+        self.action_hint.setText(
+            "" if in_control else "Take control (main window) to act on this alert from here."
+        )
+
+    def _send_intent(self, action: str, extra: dict[str, Any]) -> None:
+        if self._intent_host is None:
+            return
+        sent = self._intent_host.send_intent(action, self._symbol, **extra)
+        self.action_hint.setText(
+            f"Sent to main: {action} {self._symbol}" if sent else "Not in control — intent not sent."
+        )
 
 
 class SatelliteWindow(QMainWindow):
@@ -189,6 +240,11 @@ class SatelliteWindow(QMainWindow):
         self.status_label.setWordWrap(True)
         self.connect_button = QPushButton("Connect / change main desk…")
         self.connect_button.clicked.connect(self.open_connect_dialog)
+        self.control_button = QPushButton("Take control")
+        self.control_button.setEnabled(False)  # needs a live link first
+        self.control_button.clicked.connect(self._toggle_control)
+        self.in_control = False
+        self._outbox = IntentOutbox(Path(LOCAL_SETTINGS_DIR) / "desk_link_intent_journal.jsonl")
         self.snapshot_label = QLabel("")
         self.snapshot_label.setObjectName("MutedLabel")
         self.snapshot_label.setWordWrap(True)
@@ -198,6 +254,7 @@ class SatelliteWindow(QMainWindow):
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
         top_row.addWidget(self.status_label, 1)
+        top_row.addWidget(self.control_button)
         top_row.addWidget(self.connect_button)
 
         central = QWidget()
@@ -268,6 +325,35 @@ class SatelliteWindow(QMainWindow):
 
     # -- GUI-thread handlers -------------------------------------------------
 
+    # -- control lease (Tier 2) ----------------------------------------------
+
+    def _toggle_control(self) -> None:
+        client = self._client
+        if client is None:
+            return
+        if self.in_control:
+            client.send(protocol.TYPE_LEASE_RELEASE)
+            self._set_in_control(False, "Control released — main desk is primary again.")
+        else:
+            if not client.send(protocol.TYPE_LEASE_REQUEST):
+                self.status_label.setText("Not connected — cannot take control.")
+
+    def send_intent(self, action: str, symbol: str, **extra: Any) -> bool:
+        """Journal the decision, then send it. Unacked intents resend on regrant."""
+        if not self.in_control or self._client is None:
+            return False
+        intent = self._outbox.create(action, symbol, **extra)
+        self._client.send(protocol.TYPE_INTENT, intent)
+        return True
+
+    def _set_in_control(self, in_control: bool, status_text: str) -> None:
+        self.in_control = in_control
+        self.control_button.setText("Release control" if in_control else "Take control")
+        self.status_label.setText(status_text)
+        self._popups = [popup for popup in self._popups if popup.isVisible()]
+        for popup in self._popups:
+            popup.set_control_enabled(in_control)
+
     def _on_status(self, state: str, detail: str) -> None:
         labels = {
             "connecting": f"Connecting… ({detail})",
@@ -280,13 +366,42 @@ class SatelliteWindow(QMainWindow):
             "stopped": "Stopped.",
         }
         self.status_label.setText(labels.get(state, f"{state}: {detail}"))
+        self.control_button.setEnabled(state == "connected")
+        if state != "connected" and self.in_control:
+            # The lease dies with the connection (the main auto-reclaims);
+            # reflect that here instead of pretending to still hold control.
+            self._set_in_control(False, self.status_label.text() + " Control lost with the link.")
 
     def _on_message(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
+        payload = message.get("payload") or {}
         if kind == protocol.TYPE_ALERT_POPUP:
             self._show_alert(message)
         elif kind == protocol.TYPE_STATE_SNAPSHOT:
-            self._show_snapshot(message["payload"])
+            self._show_snapshot(payload)
+        elif kind == protocol.TYPE_LEASE_GRANT:
+            self._set_in_control(
+                True, "IN CONTROL — decisions here apply on the main desk. Main is relaying."
+            )
+            for intent in self._outbox.unacked():
+                # Replay decisions the wire lost; application is idempotent.
+                self._client.send(protocol.TYPE_INTENT, intent)
+        elif kind == protocol.TYPE_LEASE_DENIED:
+            self.status_label.setText(
+                f"Control denied — {payload.get('holder') or 'another satellite'} holds it."
+            )
+        elif kind == protocol.TYPE_LEASE_REVOKED:
+            self._set_in_control(False, "Main desk took back control.")
+        elif kind == protocol.TYPE_INTENT_RESULT:
+            self._on_intent_result(payload)
+
+    def _on_intent_result(self, payload: dict[str, Any]) -> None:
+        detail = str(payload.get("detail") or "")
+        if payload.get("ok"):
+            self._outbox.mark_acked(payload.get("seq"))
+            self.feed.insertItem(0, f"✓ main: {detail}")
+        else:
+            self.feed.insertItem(0, f"✗ main refused: {detail}")
 
     def _show_snapshot(self, payload: dict[str, Any]) -> None:
         watchlists = payload.get("watchlists") or {}
@@ -318,7 +433,7 @@ class SatelliteWindow(QMainWindow):
         self._popups = [popup for popup in self._popups if popup.isVisible()]
         while len(self._popups) >= _MAX_OPEN_POPUPS:
             self._popups.pop(0).close()
-        popup = SatellitePopupDialog(restored, self)
+        popup = SatellitePopupDialog(restored, self, intent_host=self)
         self._popups.append(popup)
         popup.show()
         popup.raise_()

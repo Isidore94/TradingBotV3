@@ -20,6 +20,12 @@ QFrame#InfoDrawer {
     border-radius: 10px;
 }
 
+QFrame#DeskLinkBanner {
+    background: @accent_soft@;
+    border: 1px solid @caution@;
+    border-radius: 8px;
+}
+
 QFrame#TopBar {
     border-radius: 0;
     border-left: 0;

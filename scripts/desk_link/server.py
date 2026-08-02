@@ -56,6 +56,7 @@ class DeskLinkServer:
         port: int = DEFAULT_PORT,
         on_client_connected: Callable[[str, tuple[str, int]], None] | None = None,
         on_client_disconnected: Callable[[str, tuple[str, int]], None] | None = None,
+        on_client_message: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         if not str(token or "").strip():
             raise ValueError("Desk Link refuses to serve without a link token")
@@ -65,6 +66,7 @@ class DeskLinkServer:
         self._port = int(port)
         self._on_client_connected = on_client_connected
         self._on_client_disconnected = on_client_disconnected
+        self._on_client_message = on_client_message
 
         self._listener: socket.socket | None = None
         self._accept_thread: threading.Thread | None = None
@@ -144,6 +146,23 @@ class DeskLinkServer:
 
     def send_alert_popup(self, payload: dict[str, Any]) -> None:
         self._broadcast(protocol.make_message(protocol.TYPE_ALERT_POPUP, payload))
+
+    def send_to_machine(self, machine: str, message_type: str, payload: dict[str, Any]) -> bool:
+        """Queue a message for one authenticated satellite; False if absent/slow."""
+        try:
+            raw = protocol.encode_message(protocol.make_message(message_type, payload))
+        except protocol.DeskLinkProtocolError:
+            log.exception("Desk Link refused to send an oversized message to %s.", machine)
+            return False
+        with self._clients_lock:
+            targets = [c for c in self._clients.values() if c.machine == machine]
+        for client in targets:
+            try:
+                client.outbound.put_nowait(raw)
+            except queue.Full:
+                self._drop_client(client, reason="outbound queue overflow")
+                return False
+        return bool(targets)
 
     def _broadcast(self, message: dict[str, Any]) -> None:
         try:
@@ -230,7 +249,6 @@ class DeskLinkServer:
                     log.exception("Desk Link on_client_connected callback failed.")
 
             client.sock.settimeout(_CLIENT_IDLE_TIMEOUT_SECONDS)
-            warned_unexpected = False
             while not self._closing.is_set() and not client.closed.is_set():
                 line = reader.read_line()
                 if line is None:
@@ -243,10 +261,16 @@ class DeskLinkServer:
                         )
                     except queue.Full:
                         return
-                elif not warned_unexpected:
-                    warned_unexpected = True
+                elif self._on_client_message is not None:
+                    # Delivered on this reader thread; the Qt service bridges
+                    # to the GUI thread via signal emission.
+                    try:
+                        self._on_client_message(client.machine, message)
+                    except Exception:
+                        log.exception("Desk Link on_client_message callback failed.")
+                else:
                     log.info(
-                        "Desk Link ignoring unexpected %r from view-only satellite %s.",
+                        "Desk Link ignoring %r from satellite %s (no message handler).",
                         message["type"],
                         client.machine,
                     )

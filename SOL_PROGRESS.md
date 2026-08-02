@@ -12,8 +12,13 @@ stamp; it must not duplicate the roadmap.
   launchers, `docs/MACOS_SETUP.md`) plus **Desk Link Tier 1** (plan.md sec 12
   item 7a): LAN relay server + view-only satellite with live alert chart
   popups (`scripts/desk_link/`, `ui/services/desk_link_service.py`,
-  `ui/satellite.py`, `--satellite` launch flag). Test baseline on that
-  branch: **1747 passed, 2 skipped, 5 subtests** (Linux, TZ=America/Vancouver);
+  `ui/satellite.py`, `--satellite` launch flag), Desk Link Tier 2 (exclusive
+  control lease + journaled idempotent intents: remove-for-day, focus
+  add/remove; main banner lock + take-back), Settings-page Desk Link
+  config, satellite connect dialog + one-click launchers, and the
+  cross-platform cleanup pass (legacy ~/AppData migration, single local-dir
+  convention, darwin PyQt5-Qt5 pin). Test baseline on that branch:
+  **1764 passed, 2 skipped, 5 subtests** (Linux, TZ=America/Vancouver);
   smoke 7/7. Live validation of the link is pending a real two-machine
   session.
 

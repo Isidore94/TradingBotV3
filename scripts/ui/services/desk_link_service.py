@@ -18,6 +18,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from desk_link import protocol
 from desk_link.protocol import generate_link_token
 from desk_link.server import DEFAULT_PORT, DeskLinkServer
 from project_paths import get_local_setting, save_local_setting
@@ -48,14 +49,26 @@ class DeskLinkService(QObject):
 
     satellitesChanged = Signal(list)  # sorted machine names, may be empty
     runningChanged = Signal(bool)
+    # Control lease (Tier 2): the machine name holding control, "" = main.
+    controlChanged = Signal(str)
+    # An intent from the CURRENT controller, to be applied by the desk and
+    # acked via send_intent_result. (machine, intent payload)
+    intentReceived = Signal(str, dict)
+
+    # Server-thread -> GUI-thread bridges (Qt queues cross-thread signals).
+    _clientMessage = Signal(str, dict)
+    _clientGone = Signal(str)
 
     def __init__(self, parent: QObject | None = None, *, machine_name: str = "main-desk") -> None:
         super().__init__(parent)
         self._server: DeskLinkServer | None = None
         self._machine_name = machine_name
+        self._controller = ""
         self._snapshot_timer = QTimer(self)
         self._snapshot_timer.setInterval(_SNAPSHOT_INTERVAL_MS)
         self._snapshot_timer.timeout.connect(self.publish_state_snapshot)
+        self._clientMessage.connect(self._handle_client_message)
+        self._clientGone.connect(self._handle_client_gone)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -76,7 +89,8 @@ class DeskLinkService(QObject):
             machine_name=self._machine_name,
             port=port,
             on_client_connected=self._on_client_change,
-            on_client_disconnected=self._on_client_change,
+            on_client_disconnected=self._on_client_disconnected,
+            on_client_message=lambda machine, message: self._clientMessage.emit(machine, message),
         )
         try:
             server.start()
@@ -97,6 +111,81 @@ class DeskLinkService(QObject):
             server.stop()
             self.satellitesChanged.emit([])
             self.runningChanged.emit(False)
+        if self._controller:
+            self._controller = ""
+            self.controlChanged.emit("")
+
+    # -- control lease (Tier 2) ----------------------------------------------
+
+    @property
+    def controller(self) -> str:
+        """Machine name currently holding control; "" when the main has it."""
+        return self._controller
+
+    def take_back_control(self) -> None:
+        """The main's override: immediate, always available (trader decision)."""
+        controller, self._controller = self._controller, ""
+        if not controller:
+            return
+        server = self._server
+        if server is not None:
+            server.send_to_machine(
+                controller, protocol.TYPE_LEASE_REVOKED, {"reason": "main took back control"}
+            )
+        log.info("Desk Link control taken back from %s.", controller)
+        self.controlChanged.emit("")
+
+    def send_intent_result(self, machine: str, seq, ok: bool, detail: str = "") -> None:
+        server = self._server
+        if server is not None:
+            server.send_to_machine(
+                machine, protocol.TYPE_INTENT_RESULT, {"seq": seq, "ok": bool(ok), "detail": detail}
+            )
+
+    def _handle_client_message(self, machine: str, message: dict) -> None:
+        kind = message.get("type")
+        payload = message.get("payload") or {}
+        if kind == protocol.TYPE_LEASE_REQUEST:
+            if self._controller and self._controller != machine:
+                self._send_to(machine, protocol.TYPE_LEASE_DENIED, {"holder": self._controller})
+                return
+            self._controller = machine
+            self._send_to(machine, protocol.TYPE_LEASE_GRANT, {})
+            log.info("Desk Link control granted to %s.", machine)
+            self.controlChanged.emit(machine)
+        elif kind == protocol.TYPE_LEASE_RELEASE:
+            if self._controller == machine:
+                self._controller = ""
+                log.info("Desk Link control released by %s.", machine)
+                self.controlChanged.emit("")
+        elif kind == protocol.TYPE_INTENT:
+            if self._controller == machine:
+                self.intentReceived.emit(machine, dict(payload))
+            else:
+                self.send_intent_result(machine, payload.get("seq"), False, "not in control")
+
+    def _handle_client_gone(self, machine: str) -> None:
+        """Lease auto-reclaim: control dies with the connection.
+
+        The server's idle timeout is the grace window - a satellite that
+        sleeps or drops off Wi-Fi is reaped there, and the desk resumes
+        primary on its own instead of sitting headless.
+        """
+        server = self._server
+        still_connected = server is not None and machine in server.connected_machines()
+        if self._controller == machine and not still_connected:
+            self._controller = ""
+            log.warning("Desk Link controller %s disconnected - main resumed control.", machine)
+            self.controlChanged.emit("")
+
+    def _send_to(self, machine: str, message_type: str, payload: dict) -> None:
+        server = self._server
+        if server is not None:
+            server.send_to_machine(machine, message_type, payload)
+
+    def _on_client_disconnected(self, machine: str, address) -> None:
+        self._on_client_change(machine, address)
+        self._clientGone.emit(machine)
 
     # -- settings-page controls ----------------------------------------------
 

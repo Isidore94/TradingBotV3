@@ -56,6 +56,7 @@ class DeskLinkClient:
         self._stopping = threading.Event()
         self._sock: socket.socket | None = None
         self._sock_lock = threading.Lock()
+        self._send_lock = threading.Lock()  # pings (reader thread) vs send() (GUI thread)
         self._state = STATE_STOPPED
 
     @property
@@ -76,6 +77,26 @@ class DeskLinkClient:
         if thread is not None:
             thread.join(timeout=5.0)
         self._set_state(STATE_STOPPED, "stopped")
+
+    def send(self, message_type: str, payload: dict[str, Any] | None = None) -> bool:
+        """Send one message to the main desk; False when not connected.
+
+        Callable from any thread (the GUI uses it for lease requests and
+        intents); serialized against the reader thread's keepalive pings.
+        """
+        if self._state != STATE_CONNECTED:
+            return False
+        with self._sock_lock:
+            sock = self._sock
+        if sock is None:
+            return False
+        try:
+            raw = protocol.encode_message(protocol.make_message(message_type, payload or {}))
+            with self._send_lock:
+                sock.sendall(raw)
+            return True
+        except (protocol.DeskLinkProtocolError, OSError):
+            return False
 
     # -- internals -----------------------------------------------------------
 
@@ -158,7 +179,8 @@ class DeskLinkClient:
                 line = reader.read_line()
             except TimeoutError:
                 # Quiet line: keepalive. (socket.timeout is TimeoutError.)
-                sock.sendall(protocol.encode_message(protocol.make_message(protocol.TYPE_PING)))
+                with self._send_lock:
+                    sock.sendall(protocol.encode_message(protocol.make_message(protocol.TYPE_PING)))
                 continue
             if line is None:
                 raise OSError("server closed the connection")

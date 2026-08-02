@@ -1559,8 +1559,11 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    server on the main + view-only satellite mode with live alert chart
    popups, per `docs/MULTI_MACHINE_DESK_PROPOSAL.md`. Decision surfaces,
    scanners, TWS, and all shared-state writing stay on the main; satellites
-   render payloads only, so no sec 5 invariant is touched. Control lease
-   (Tier 2) and live chart streaming (Tier 3) wait for Tier 1 live evidence.
+   render payloads only, so no sec 5 invariant is touched. Tier 2 (exclusive
+   control lease: satellite sign-in takes control, main locks to a relay
+   with an always-available take-back, intents journaled/acked/idempotent)
+   is also implemented at trader direction. Live two-machine validation is
+   pending; live chart streaming (Tier 3) waits on that evidence.
 
 ### Next — after initial live evidence
 
