@@ -35,7 +35,16 @@ def _enable_crash_log() -> None:
 
         log_dir = Path(LOCAL_LOG_DIR)
     except Exception:
-        log_dir = Path(os.environ.get("LOCALAPPDATA", str(ROOT_DIR))) / "TradingBotV3" / "logs"
+        # project_paths can legitimately fail here (e.g. shared drive not
+        # mounted raises at import). Mirror its per-platform local dir without
+        # importing it, so the crash log never lands inside the checkout.
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            log_dir = Path(local_appdata) / "TradingBotV3" / "logs"
+        elif sys.platform == "darwin":
+            log_dir = Path.home() / "Library" / "Application Support" / "TradingBotV3" / "logs"
+        else:
+            log_dir = Path.home() / ".local" / "share" / "TradingBotV3" / "logs"
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         _CRASH_LOG_HANDLE = open(

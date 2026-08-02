@@ -194,6 +194,14 @@ def _local_openai_api_key() -> str:
 
 
 def _local_settings_file() -> Path:
+    # project_paths owns the machine-local dir convention (and the legacy
+    # ~/AppData migration); the inline fallback is for standalone use only.
+    try:
+        from project_paths import LOCAL_SETTINGS_FILE
+
+        return Path(LOCAL_SETTINGS_FILE)
+    except ImportError:
+        pass
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "TradingBotV3" / "local_settings.json"

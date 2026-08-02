@@ -81,11 +81,14 @@ counterpart of Windows Credential Manager. `OPENAI_API_KEY` /
 ## Development on macOS
 
 ```bash
-.venv/bin/python -m pytest tests/ -q     # must be fully green before commit
-.venv/bin/python scripts/smoke_check.py  # 7/7, offline
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q  # fully green before commit
+.venv/bin/python scripts/smoke_check.py                          # 7/7, offline
 ```
 
 These mirror the Windows commands in CLAUDE.md (`.venv\Scripts\python.exe …`).
+`QT_QPA_PLATFORM=offscreen` keeps the Qt widget tests headless. Note the
+dependency pins: `constraints.txt` gives macOS its own `PyQt5-Qt5` pin
+(5.15.17 — the Windows 5.15.2 pin has no macOS wheel).
 
 ## Still Windows-only
 

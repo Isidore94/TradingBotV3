@@ -364,6 +364,15 @@ def _write_json_atomic(path: Path, payload: Any) -> None:
 
 
 def _local_market_prep_secret_file() -> Path:
+    # Single source of truth for the machine-local dir: project_paths (it
+    # also owns the legacy ~/AppData migration). The inline fallback exists
+    # only for standalone market_prep use without scripts/ on sys.path.
+    try:
+        from project_paths import LOCAL_SETTINGS_DIR
+
+        return Path(LOCAL_SETTINGS_DIR) / "market_prep_secrets.json"
+    except ImportError:
+        pass
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "TradingBotV3" / "market_prep_secrets.json"

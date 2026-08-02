@@ -1,16 +1,21 @@
 # TradingBotV3
 
 ## Prerequisites
-- Python 3.10+.
+- Python 3.12+.
 - [Interactive Brokers TWS or IB Gateway](https://www.interactivebrokers.com/en/trading/ib-api.php) running locally with API access enabled on `127.0.0.1:7496`.
-- A working Windows desktop session for the GUI. The new consumer UI is PySide6/Qt; the Tk UI remains available during migration.
+- A desktop session for the GUI — Windows is the primary platform; macOS is supported (`docs/MACOS_SETUP.md`). The new consumer UI is PySide6/Qt; the Tk UI remains available during migration.
 
-Install the normal desktop dependencies:
+Install the normal desktop dependencies (Windows):
 
 ```bash
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+macOS: run `./setup_macos.command` once (or `python3 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements-gui.txt -c constraints.txt`).
+Everywhere the docs show `.venv\Scripts\python.exe`, the macOS/Linux
+equivalent is `.venv/bin/python`.
 
 Dependency layers:
 - `requirements-core.txt` - headless/mini-PC engines and data services.

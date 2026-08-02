@@ -37,7 +37,7 @@ is permanently out of scope (plan.md sec 1).
 - Layered installs: `requirements-core.txt` (headless) ⊂ `-gui` ⊂ `-dev`, pinned by `constraints.txt` for reproducibility.
 
 ## Commands
-- Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `SOL_PROGRESS.md`. Check pytest's own exit code, not a piped tail's.
+- Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `SOL_PROGRESS.md`. Check pytest's own exit code, not a piped tail's. macOS/Linux: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q` (Qt tests need the offscreen platform when headless).
 - Smoke (offline, deterministic): `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7.
 - Run: `.\TradingBotV3_GUI.cmd` (Windows) or `./TradingBotV3_GUI.command` (macOS; `./setup_macos.command` once first) — both wrap `launch_gui.py`; IB TWS/Gateway must be connected for data. On POSIX the venv python is `.venv/bin/python`.
 - Audits: `scripts/operations_audit.py` (runtime), `scripts/review_capture_audit.py` (capture readiness) — both also render in System Health.
