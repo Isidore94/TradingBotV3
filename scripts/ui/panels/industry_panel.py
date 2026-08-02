@@ -333,4 +333,11 @@ class _SortableTableItem(QTableWidgetItem):
                 return True
             if self._sort_value is not None and other._sort_value is None:
                 return False
-        return super().__lt__(other)
+        # Text fallback: compare the display strings ourselves. NEVER call
+        # super().__lt__(other) here - PySide6 dispatches the base
+        # QTableWidgetItem::operator< straight back into this override, so the
+        # unbounded recursion overflows the C stack inside Qt's sort and kills
+        # the process (SIGSEGV on macOS / access violation in pythonNNN.dll on
+        # Windows) with no Python traceback.
+        other_text = other.text() if isinstance(other, QTableWidgetItem) else ""
+        return self.text().casefold() < other_text.casefold()

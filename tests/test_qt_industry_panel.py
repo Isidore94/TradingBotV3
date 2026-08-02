@@ -45,6 +45,46 @@ def test_industry_table_uses_numeric_sorting_for_strength():
     assert [table.item(row, name_column).text() for row in range(3)] == ["Negative", "Two", "Ten"]
 
 
+def test_industry_table_sorts_blank_strength_without_crashing():
+    """Blank cells must fall back to a text compare, never super().__lt__().
+
+    PySide6 routes the base QTableWidgetItem::operator< back into the Python
+    override, so a super() call recursed until the C stack overflowed and took
+    the whole process down mid-sort (SIGSEGV / access violation, no traceback).
+    A regression here kills the pytest worker, not just this test.
+    """
+    _qapp()
+    from PySide6.QtCore import Qt
+
+    from ui.panels.industry_panel import INDUSTRY_COLUMNS, _fill_table, _make_table
+
+    table = _make_table(INDUSTRY_COLUMNS)
+    _fill_table(
+        table,
+        INDUSTRY_COLUMNS,
+        [
+            {"industry": "Beta", "rs_score": ""},
+            {"industry": "Alpha", "rs_score": ""},
+            {"industry": "Gamma", "rs_score": "1.0"},
+        ],
+    )
+    rs_column = next(i for i, (key, _label) in enumerate(INDUSTRY_COLUMNS) if key == "rs_score")
+    name_column = next(i for i, (key, _label) in enumerate(INDUSTRY_COLUMNS) if key == "industry")
+
+    # Scored rows outrank blank ones (the blanks tie on their own empty cell
+    # text, so their relative order is Qt's, not ours).
+    table.sortItems(rs_column, Qt.SortOrder.DescendingOrder)
+    names = [table.item(row, name_column).text() for row in range(3)]
+    assert names[0] == "Gamma" and sorted(names[1:]) == ["Alpha", "Beta"]
+    table.sortItems(rs_column, Qt.SortOrder.AscendingOrder)
+    names = [table.item(row, name_column).text() for row in range(3)]
+    assert names[2] == "Gamma" and sorted(names[:2]) == ["Alpha", "Beta"]
+
+    # A text column sorts on the display strings via that same fallback.
+    table.sortItems(name_column, Qt.SortOrder.AscendingOrder)
+    assert [table.item(row, name_column).text() for row in range(3)] == ["Alpha", "Beta", "Gamma"]
+
+
 def test_sector_etf_click_opens_cached_snapshot(monkeypatch):
     _qapp()
     from ui.panels.industry_panel import (
