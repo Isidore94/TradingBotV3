@@ -144,6 +144,20 @@ gated by the alert-sound rule, not by the main's sound checkbox, so a
 muted main still pops the satellite. Alert relay activates only while a
 satellite is connected and never blocks the desk.
 
+Reliability details:
+
+- **Missed popups replay.** The main buffers recent popups (50, ≤15 min
+  old); a reconnecting satellite presents the last one it saw and gets
+  everything newer, marked "⟲ missed" (one beep per replay burst). A
+  Wi-Fi blip cannot silently swallow an alert. A fresh satellite session
+  starts from now — it is not sprayed with history.
+- **Instant mirror.** A satellite's own applied action republishes the
+  desk snapshot immediately instead of waiting out the 60 s timer.
+- **Phone push on auto-reclaim.** If the controlling satellite dies and
+  the main reclaims control on its own, a push goes out through the
+  existing ntfy channel (when configured) so the trader knows their
+  actions stopped applying. A deliberate take-back does not page.
+
 ## Using control (Tier 2, implemented)
 
 - Satellite: **Take control** (top of the window). On grant, the popups'

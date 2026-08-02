@@ -200,6 +200,61 @@ def test_intents_from_controller_only_and_acked(service):
         bystander.client.stop()
 
 
+def test_auto_reclaim_sends_phone_push(service, monkeypatch):
+    qapp, main = service
+    import ui.services.desk_link_service as service_module
+
+    pushes: list[tuple[str, str]] = []
+    monkeypatch.setattr(service_module.push_notify, "push_configured", lambda: True)
+    monkeypatch.setattr(
+        service_module.push_notify,
+        "send_push",
+        lambda title, message, **kwargs: pushes.append((title, message)),
+    )
+
+    satellite = _Sat(main._server.address[1], "sat-a")
+    try:
+        assert _pump_until(qapp, lambda: main.has_satellites)
+        satellite.client.send(protocol.TYPE_LEASE_REQUEST)
+        assert _pump_until(qapp, lambda: main.controller == "sat-a")
+
+        satellite.client.stop()  # unplanned drop -> auto-reclaim -> phone push
+        assert _pump_until(qapp, lambda: main.controller == "" and len(pushes) > 0)
+        assert "sat-a" in pushes[0][1]
+
+        # A deliberate take-back must NOT page the trader's phone.
+        pushes.clear()
+        main.take_back_control()
+        qapp.processEvents()
+        assert pushes == []
+    finally:
+        satellite.client.stop()
+
+
+def test_applied_intent_republishes_the_desk_snapshot_immediately(service):
+    qapp, main = service
+    main.intentReceived.connect(
+        lambda machine, intent: main.send_intent_result(machine, intent.get("seq"), True, "applied")
+    )
+    satellite = _Sat(main._server.address[1], "sat-a")
+    try:
+        assert _pump_until(qapp, lambda: main.has_satellites)
+        satellite.client.send(protocol.TYPE_LEASE_REQUEST)
+        assert _pump_until(qapp, lambda: satellite.got(protocol.TYPE_LEASE_GRANT))
+
+        def snapshots() -> int:
+            return sum(m["type"] == protocol.TYPE_STATE_SNAPSHOT for m in satellite.messages)
+
+        baseline = snapshots()  # the sticky snapshot from connect
+        satellite.client.send(
+            protocol.TYPE_INTENT, {"seq": 1, "action": "focus_add", "symbol": "AMD", "side": "long"}
+        )
+        # The mirror refresh must not wait out the 60s snapshot timer.
+        assert _pump_until(qapp, lambda: snapshots() > baseline)
+    finally:
+        satellite.client.stop()
+
+
 # -- intent application on the main ------------------------------------------
 
 

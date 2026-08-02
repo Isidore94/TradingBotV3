@@ -18,6 +18,8 @@ import logging
 import queue
 import socket
 import threading
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -32,6 +34,11 @@ _HANDSHAKE_TIMEOUT_SECONDS = 10.0
 # gone (sleep/Wi-Fi drop) and the connection should be reaped.
 _CLIENT_IDLE_TIMEOUT_SECONDS = 30.0
 _OUTBOUND_QUEUE_MESSAGES = 128
+# Missed-popup replay: how many recent alert popups the server retains and
+# how stale one may be before a reconnect no longer receives it. Popups are
+# trading-critical, but a half-hour-old alert is history, not an interrupt.
+_POPUP_BUFFER_SIZE = 50
+_POPUP_REPLAY_MAX_AGE_SECONDS = 15 * 60
 _SENTINEL = object()
 
 
@@ -75,6 +82,10 @@ class DeskLinkServer:
         self._closing = threading.Event()
         self._last_snapshot: dict[str, Any] | None = None
         self._snapshot_lock = threading.Lock()
+        self._popup_lock = threading.Lock()
+        self._popup_seq = 0
+        # (relay_seq, wall_ts, payload) of recent popups for reconnect replay.
+        self._popup_buffer: deque[tuple[int, float, dict[str, Any]]] = deque(maxlen=_POPUP_BUFFER_SIZE)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -145,7 +156,42 @@ class DeskLinkServer:
         self._broadcast(message)
 
     def send_alert_popup(self, payload: dict[str, Any]) -> None:
-        self._broadcast(protocol.make_message(protocol.TYPE_ALERT_POPUP, payload))
+        """Broadcast a popup, stamped with a relay sequence and buffered.
+
+        A satellite that reconnects presents the last relay_seq it saw in its
+        hello; anything newer (and fresh enough) is replayed so a Wi-Fi blip
+        cannot silently swallow a trading-critical popup.
+        """
+        with self._popup_lock:
+            self._popup_seq += 1
+            stamped = {**payload, "relay_seq": self._popup_seq}
+            self._popup_buffer.append((self._popup_seq, time.time(), stamped))
+        self._broadcast(protocol.make_message(protocol.TYPE_ALERT_POPUP, stamped))
+
+    def _replay_missed_popups(self, client: _ClientConnection, last_seen_seq: int) -> None:
+        if last_seen_seq <= 0:
+            return  # fresh session: mirror from now, do not spray history
+        cutoff = time.time() - _POPUP_REPLAY_MAX_AGE_SECONDS
+        with self._popup_lock:
+            missed = [
+                payload
+                for seq, stamp, payload in self._popup_buffer
+                if seq > last_seen_seq and stamp >= cutoff
+            ]
+        for payload in missed:
+            try:
+                client.outbound.put_nowait(
+                    protocol.encode_message(
+                        protocol.make_message(protocol.TYPE_ALERT_POPUP, {**payload, "replayed": True})
+                    )
+                )
+            except queue.Full:
+                self._drop_client(client, reason="outbound queue overflow")
+                return
+        if missed:
+            log.info(
+                "Desk Link replayed %d missed popup(s) to %s.", len(missed), client.machine
+            )
 
     def send_to_machine(self, machine: str, message_type: str, payload: dict[str, Any]) -> bool:
         """Queue a message for one authenticated satellite; False if absent/slow."""
@@ -241,6 +287,11 @@ class DeskLinkServer:
                 snapshot = self._last_snapshot
             if snapshot is not None:
                 client.outbound.put(protocol.encode_message(snapshot))
+            try:
+                last_seen_seq = int(hello["payload"].get("last_popup_seq") or 0)
+            except (TypeError, ValueError):
+                last_seen_seq = 0
+            self._replay_missed_popups(client, last_seen_seq)
             log.info("Desk Link satellite connected: %s from %s", client.machine, client.address)
             if self._on_client_connected is not None:
                 try:

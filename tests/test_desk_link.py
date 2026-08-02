@@ -83,9 +83,10 @@ def test_line_reader_caps_oversized_frames():
 class _Satellite:
     """Test double built on the real DeskLinkClient with event-based waits."""
 
-    def __init__(self, port: int, token: str, name: str = "sat") -> None:
+    def __init__(self, port: int, token: str, name: str = "sat", last_popup_seq: int = 0) -> None:
         self.messages: list[dict] = []
         self.statuses: list[tuple[str, str]] = []
+        self.last_popup_seq = last_popup_seq
         self._message_seen = threading.Condition()
         self._status_seen = threading.Condition()
         self.client = DeskLinkClient(
@@ -95,6 +96,7 @@ class _Satellite:
             machine_name=name,
             on_message=self._on_message,
             on_status=self._on_status,
+            hello_extra=lambda: {"last_popup_seq": self.last_popup_seq},
         )
 
     def _on_message(self, message: dict) -> None:
@@ -106,6 +108,10 @@ class _Satellite:
         with self._status_seen:
             self.statuses.append((state, detail))
             self._status_seen.notify_all()
+
+    def got_types(self, message_type: str) -> bool:
+        with self._message_seen:
+            return any(m["type"] == message_type for m in self.messages)
 
     def wait_for_message(self, message_type: str, timeout: float = WAIT) -> dict:
         with self._message_seen:
@@ -233,6 +239,68 @@ def test_multiple_satellites_all_receive_broadcasts(server):
     finally:
         first.client.stop()
         second.client.stop()
+
+
+def test_missed_popups_replay_on_reconnect_from_last_seen(server):
+    main = server()
+    first = _Satellite(main.address[1], "test-token", name="sat-a")
+    first.client.start()
+    try:
+        first.wait_for_state("connected")
+        main.send_alert_popup({"symbol": "A"})
+        seen = first.wait_for_message(protocol.TYPE_ALERT_POPUP)
+        assert seen["payload"]["relay_seq"] == 1
+        assert not seen["payload"].get("replayed")
+    finally:
+        first.client.stop()
+
+    # Popups fired while no satellite is connected must not be lost.
+    main.send_alert_popup({"symbol": "B"})
+    main.send_alert_popup({"symbol": "C"})
+
+    second = _Satellite(main.address[1], "test-token", name="sat-a", last_popup_seq=1)
+    second.client.start()
+    try:
+        second.wait_for_state("connected")
+        second.wait_for_message(protocol.TYPE_ALERT_POPUP)
+        deadline = threading.Event()
+        for _ in range(50):
+            if sum(m["type"] == protocol.TYPE_ALERT_POPUP for m in second.messages) >= 2:
+                break
+            deadline.wait(0.1)
+        replayed = [m["payload"] for m in second.messages if m["type"] == protocol.TYPE_ALERT_POPUP]
+        assert [p["symbol"] for p in replayed] == ["B", "C"]
+        assert all(p["replayed"] is True for p in replayed)
+        assert [p["relay_seq"] for p in replayed] == [2, 3]
+    finally:
+        second.client.stop()
+
+
+def test_fresh_session_and_stale_popups_do_not_replay(server):
+    main = server()
+    main.send_alert_popup({"symbol": "OLD"})
+    main.send_alert_popup({"symbol": "STALE"})
+    # Age out the second entry artificially: too old to interrupt with.
+    with main._popup_lock:
+        seq, stamp, payload = main._popup_buffer[-1]
+        main._popup_buffer[-1] = (seq, stamp - 3600.0, payload)
+
+    fresh = _Satellite(main.address[1], "test-token", name="fresh-sat")  # last_popup_seq=0
+    behind = _Satellite(main.address[1], "test-token", name="behind-sat", last_popup_seq=1)
+    fresh.client.start()
+    behind.client.start()
+    try:
+        fresh.wait_for_state("connected")
+        behind.wait_for_state("connected")
+        # `behind` would be owed seq 2, but it aged out; `fresh` gets nothing.
+        main.set_state_snapshot({"marker": True})  # ordered after any replay
+        fresh.wait_for_message(protocol.TYPE_STATE_SNAPSHOT)
+        behind.wait_for_message(protocol.TYPE_STATE_SNAPSHOT)
+        assert not fresh.got_types(protocol.TYPE_ALERT_POPUP)
+        assert not behind.got_types(protocol.TYPE_ALERT_POPUP)
+    finally:
+        fresh.client.stop()
+        behind.client.stop()
 
 
 def test_server_stop_is_clean_and_idempotent(server):

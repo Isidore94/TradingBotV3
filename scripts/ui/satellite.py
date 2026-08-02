@@ -143,7 +143,12 @@ class SatellitePopupDialog(QDialog):
     """
 
     def __init__(
-        self, restored: dict[str, Any], parent: QWidget | None = None, *, intent_host=None
+        self,
+        restored: dict[str, Any],
+        parent: QWidget | None = None,
+        *,
+        intent_host=None,
+        replayed: bool = False,
     ) -> None:
         super().__init__(parent)
         self._intent_host = intent_host
@@ -152,7 +157,8 @@ class SatellitePopupDialog(QDialog):
         self._symbol = symbol
         side = str(alert.get("side") or "")
         trigger = str(alert.get("trigger") or "")
-        self.setWindowTitle(f"{symbol} · {side} · {trigger}".strip(" ·"))
+        title = f"{symbol} · {side} · {trigger}".strip(" ·")
+        self.setWindowTitle(f"(missed) {title}" if replayed else title)
         # Same gentle-raise contract as the main desk's snapshot dialog: the
         # popup must never steal the keyboard from whatever the trader is on.
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
@@ -245,6 +251,10 @@ class SatelliteWindow(QMainWindow):
         self.control_button.clicked.connect(self._toggle_control)
         self.in_control = False
         self._outbox = IntentOutbox(Path(LOCAL_SETTINGS_DIR) / "desk_link_intent_journal.jsonl")
+        # Highest popup relay_seq seen this session; presented in the hello at
+        # each reconnect so the main replays anything a Wi-Fi blip swallowed.
+        self._last_popup_seq = 0
+        self._last_replay_beep = 0.0
         self.snapshot_label = QLabel("")
         self.snapshot_label.setObjectName("MutedLabel")
         self.snapshot_label.setWordWrap(True)
@@ -315,6 +325,7 @@ class SatelliteWindow(QMainWindow):
             machine_name=self._machine_name,
             on_message=self._bridge.messageReceived.emit,
             on_status=self._bridge.statusChanged.emit,
+            hello_extra=lambda: {"last_popup_seq": self._last_popup_seq},
         )
         self._client.start()
 
@@ -414,8 +425,15 @@ class SatelliteWindow(QMainWindow):
         self.snapshot_label.setText(text)
 
     def _show_alert(self, message: dict[str, Any]) -> None:
+        payload = message["payload"]
+        replayed = bool(payload.get("replayed"))
         try:
-            restored = restore_alert_popup_payload(message["payload"])
+            relay_seq = int(payload.get("relay_seq") or 0)
+        except (TypeError, ValueError):
+            relay_seq = 0
+        self._last_popup_seq = max(self._last_popup_seq, relay_seq)
+        try:
+            restored = restore_alert_popup_payload(payload)
         except ValueError as exc:
             self.feed.insertItem(0, f"⚠ Incompatible alert payload: {exc} (update this machine)")
             return
@@ -425,15 +443,26 @@ class SatelliteWindow(QMainWindow):
             for bit in (alert.get("time_text"), alert.get("symbol"), alert.get("side"), alert.get("trigger"))
             if bit
         )
+        if replayed:
+            row = f"⟲ missed: {row}"
         self.feed.insertItem(0, row)
         while self.feed.count() > _MAX_FEED_ROWS:
             self.feed.takeItem(self.feed.count() - 1)
-        QApplication.beep()
+        if replayed:
+            # A reconnect can replay several at once; one beep per burst.
+            import time as _time
+
+            now = _time.monotonic()
+            if now - self._last_replay_beep > 3.0:
+                self._last_replay_beep = now
+                QApplication.beep()
+        else:
+            QApplication.beep()
 
         self._popups = [popup for popup in self._popups if popup.isVisible()]
         while len(self._popups) >= _MAX_OPEN_POPUPS:
             self._popups.pop(0).close()
-        popup = SatellitePopupDialog(restored, self, intent_host=self)
+        popup = SatellitePopupDialog(restored, self, intent_host=self, replayed=replayed)
         self._popups.append(popup)
         popup.show()
         popup.raise_()

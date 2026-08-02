@@ -44,6 +44,7 @@ class DeskLinkClient:
         machine_name: str,
         on_message: Callable[[dict[str, Any]], None],
         on_status: Callable[[str, str], None] | None = None,
+        hello_extra: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._host = str(host)
         self._port = int(port)
@@ -51,6 +52,9 @@ class DeskLinkClient:
         self._machine_name = str(machine_name or "satellite")
         self._on_message = on_message
         self._on_status = on_status
+        # Called at each (re)connect; its dict merges into the hello payload
+        # (e.g. last_popup_seq so the server can replay missed popups).
+        self._hello_extra = hello_extra
 
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
@@ -162,7 +166,13 @@ class DeskLinkClient:
         sock.connect((self._host, self._port))
 
         reader = LineReader(sock)
-        sock.sendall(protocol.encode_message(protocol.make_hello(self._token, self._machine_name)))
+        hello = protocol.make_hello(self._token, self._machine_name)
+        if self._hello_extra is not None:
+            try:
+                hello["payload"].update(self._hello_extra() or {})
+            except Exception:
+                log.exception("Desk Link hello_extra callback failed; sending plain hello.")
+        sock.sendall(protocol.encode_message(hello))
         line = reader.read_line()
         if line is None:
             raise OSError("server closed during handshake")

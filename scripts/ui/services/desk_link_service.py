@@ -14,9 +14,12 @@ connect without thread care.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
+
+import push_notify
 
 from desk_link import protocol
 from desk_link.protocol import generate_link_token
@@ -161,6 +164,11 @@ class DeskLinkService(QObject):
         elif kind == protocol.TYPE_INTENT:
             if self._controller == machine:
                 self.intentReceived.emit(machine, dict(payload))
+                # Direct-connection slots have applied the intent by the time
+                # emit returns; republish desk state right away so the
+                # satellite's mirror reflects its own action without waiting
+                # out the 60s snapshot timer.
+                self.publish_state_snapshot()
             else:
                 self.send_intent_result(machine, payload.get("seq"), False, "not in control")
 
@@ -177,6 +185,30 @@ class DeskLinkService(QObject):
             self._controller = ""
             log.warning("Desk Link controller %s disconnected - main resumed control.", machine)
             self.controlChanged.emit("")
+            self._push_reclaim_notice(machine)
+
+    def _push_reclaim_notice(self, machine: str) -> None:
+        """Phone push when control auto-reclaims (design promise).
+
+        The trader may be away from both screens when the satellite dies;
+        without this, the only sign their actions stopped applying is a
+        banner that quietly disappeared on the main. Runs on a one-shot
+        daemon thread - a slow ntfy round-trip must not stall the GUI - and
+        never raises.
+        """
+
+        def _send() -> None:
+            try:
+                if push_notify.push_configured():
+                    push_notify.send_push(
+                        "Desk Link: main resumed control",
+                        f"Satellite '{machine}' dropped off - the main desk took back control.",
+                        tags="desk_link",
+                    )
+            except Exception:
+                log.exception("Desk Link reclaim push failed.")
+
+        threading.Thread(target=_send, name="desk-link-reclaim-push", daemon=True).start()
 
     def _send_to(self, machine: str, message_type: str, payload: dict) -> None:
         server = self._server
