@@ -568,11 +568,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--satellite",
+        nargs="?",
+        const="",
         metavar="HOST[:PORT]",
         default=None,
         help=(
             "Launch as a view-only Desk Link satellite mirroring the main desk "
-            "at HOST (docs/MULTI_MACHINE_DESK_PROPOSAL.md). No TWS, no scanners."
+            "(docs/MULTI_MACHINE_DESK_PROPOSAL.md). HOST is optional: without it the "
+            "window uses the saved connection or opens the connect dialog. No TWS, no scanners."
         ),
     )
     parser.add_argument(
@@ -597,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
     install_gui_thread_gc(app)
     apply_theme(app, state.theme_name, state.compact_density)
 
-    if args.satellite:
+    if args.satellite is not None:
         return _run_satellite(app, args.satellite, args.link_token)
 
     window = MainWindow(state)
@@ -606,39 +609,25 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_satellite(app: QApplication, target: str, cli_token: str | None) -> int:
+    """View-only satellite. CLI host/token are optional overrides — the
+    window's connect dialog handles pairing and remembers everything."""
     import socket as _socket
 
     from desk_link.server import DEFAULT_PORT
-    from project_paths import get_local_setting, save_local_setting
     from ui.satellite import SatelliteWindow
 
-    host, _, port_text = str(target).partition(":")
-    port = int(port_text) if port_text.strip() else DEFAULT_PORT
-
-    token = str(cli_token or "").strip()
-    if token:
-        save_local_setting("desk_link_token", token)
-    else:
-        token = str(get_local_setting("desk_link_token", "") or "").strip()
-    if not token:
-        from PySide6.QtWidgets import QInputDialog, QLineEdit
-
-        token, accepted = QInputDialog.getText(
-            None,
-            "Desk Link token",
-            "Paste the link token from the main desk\n(local settings key 'desk_link_token' on that machine):",
-            QLineEdit.EchoMode.Normal,
-        )
-        token = str(token or "").strip()
-        if not accepted or not token:
-            return 2
-        save_local_setting("desk_link_token", token)
-
-    if host:
-        save_local_setting("desk_link_host", f"{host}:{port}")
+    host, _, port_text = str(target or "").partition(":")
+    host = host.strip()
+    try:
+        port = int(port_text) if port_text.strip() else DEFAULT_PORT
+    except ValueError:
+        port = DEFAULT_PORT
 
     window = SatelliteWindow(
-        host=host, port=port, token=token, machine_name=_socket.gethostname() or "satellite"
+        machine_name=_socket.gethostname() or "satellite",
+        host=host,
+        port=port,
+        token=str(cli_token or "").strip(),
     )
     window.show()
     return app.exec()

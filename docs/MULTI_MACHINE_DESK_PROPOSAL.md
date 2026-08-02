@@ -128,12 +128,14 @@ satellites are connected. Allow the port through the OS firewall for your
 private network only. (Everything persists in the machine-local settings,
 so it survives relaunches; nothing Desk Link touches the shared store.)
 
-On the **satellite** (same repo, same setup, no TWS needed):
-
-    .venv/bin/python scripts/gui.py --ui qt --satellite <main-hostname-or-ip> --link-token <token>
-
-(`.venv\Scripts\python.exe` on Windows; the token is saved locally after
-the first run, so later launches only need `--satellite <host>`.)
+On the **satellite** (same repo, same setup, no TWS needed): double-click
+`TradingBotV3_Satellite.command` (macOS) or `TradingBotV3_Satellite.cmd`
+(Windows). The first launch opens a **connect dialog** — type the main
+PC's name/IP, keep the port, paste the token — and everything is
+remembered, so every later launch just connects. The
+"Connect / change main desk…" button reopens the dialog any time (new
+IP, regenerated token). CLI equivalents still work:
+`scripts/gui.py --ui qt --satellite [HOST[:PORT]] [--link-token T]`.
 
 The satellite shows link status, a desk mirror line (watchlists/Focus), a
 rolling alert feed, and pops the same chart popup the main renders —

@@ -128,12 +128,17 @@ class DeskLinkClient:
                 return
 
     def _connect_and_serve(self) -> None:
-        sock = socket.create_connection((self._host, self._port), timeout=_CONNECT_TIMEOUT_SECONDS)
+        # Register the socket BEFORE connecting so stop() can close it and
+        # interrupt an in-flight connect - otherwise closing the satellite
+        # window mid-attempt would hang for the whole connect timeout.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(_CONNECT_TIMEOUT_SECONDS)
         with self._sock_lock:
             if self._stopping.is_set():
                 sock.close()
                 return
             self._sock = sock
+        sock.connect((self._host, self._port))
 
         reader = LineReader(sock)
         sock.sendall(protocol.encode_message(protocol.make_hello(self._token, self._machine_name)))

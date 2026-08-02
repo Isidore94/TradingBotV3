@@ -204,6 +204,88 @@ def test_settings_page_toggle_controls_the_service(monkeypatch):
         service.stop()
 
 
+def _patched_satellite_settings(monkeypatch, settings: dict):
+    import ui.satellite as satellite_module
+
+    monkeypatch.setattr(
+        satellite_module, "get_local_setting", lambda key, default=None: settings.get(key, default)
+    )
+    monkeypatch.setattr(
+        satellite_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value)
+    )
+    return satellite_module
+
+
+def test_satellite_window_without_pairing_waits_instead_of_crashing(monkeypatch):
+    _qapp()
+    satellite_module = _patched_satellite_settings(monkeypatch, {})
+    window = satellite_module.SatelliteWindow(machine_name="test-sat")
+    try:
+        # Nothing saved and nothing passed: no client yet; the pairing dialog
+        # is queued for the event loop (not exec'd here) and the button is
+        # always available.
+        assert window._client is None
+        assert window.connect_button.isEnabled()
+    finally:
+        window.close()
+
+
+def test_satellite_window_autoconnects_from_saved_settings(monkeypatch):
+    _qapp()
+    settings = {"desk_link_host": "192.168.1.20:47601", "desk_link_token": "saved-token"}
+    satellite_module = _patched_satellite_settings(monkeypatch, settings)
+    window = satellite_module.SatelliteWindow(machine_name="test-sat")
+    try:
+        assert window._client is not None
+        assert window._client._host == "192.168.1.20"
+        assert window._client._port == 47601
+        assert window._client._token == "saved-token"
+        assert "192.168.1.20" in window.windowTitle()
+    finally:
+        window.close()
+
+
+def test_connect_dialog_applies_and_persists_new_connection(monkeypatch):
+    _qapp()
+    from PySide6.QtWidgets import QDialog
+
+    settings = {"desk_link_host": "old-host:47600", "desk_link_token": "old-token"}
+    satellite_module = _patched_satellite_settings(monkeypatch, settings)
+    window = satellite_module.SatelliteWindow(machine_name="test-sat")
+    try:
+        first_client = window._client
+
+        def fake_exec(dialog_self):
+            dialog_self.host_input.setText("10.0.0.5")
+            dialog_self.port_input.setValue(50000)
+            dialog_self.token_input.setText("new-token")
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(satellite_module.ConnectDialog, "exec", fake_exec)
+        window.open_connect_dialog()
+
+        assert settings["desk_link_host"] == "10.0.0.5:50000"
+        assert settings["desk_link_token"] == "new-token"
+        assert window._client is not first_client  # old client replaced live
+        assert window._client._host == "10.0.0.5"
+        assert window._client._port == 50000
+    finally:
+        window.close()
+
+
+def test_connect_dialog_prefills_from_saved_settings(monkeypatch):
+    _qapp()
+    settings = {"desk_link_host": "main-pc:48000", "desk_link_token": "tok"}
+    satellite_module = _patched_satellite_settings(monkeypatch, settings)
+    dialog = satellite_module.ConnectDialog()
+    try:
+        assert dialog.host_input.text() == "main-pc"
+        assert dialog.port_input.value() == 48000
+        assert dialog.token_input.text() == "tok"
+    finally:
+        dialog.close()
+
+
 def test_settings_page_regenerate_revokes_the_old_token(monkeypatch):
     _qapp()
     from ui.panels.settings_panel import SettingsPanel

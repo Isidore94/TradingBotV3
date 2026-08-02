@@ -15,13 +15,19 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QMainWindow,
+    QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -29,12 +35,96 @@ from PySide6.QtWidgets import (
 from desk_link import protocol
 from desk_link.client import DeskLinkClient
 from desk_link.popup_payload import restore_alert_popup_payload
+from desk_link.server import DEFAULT_PORT
+from project_paths import get_local_setting, save_local_setting
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
 log = logging.getLogger(__name__)
 
 _MAX_FEED_ROWS = 200
 _MAX_OPEN_POPUPS = 6
+
+HOST_SETTING = "desk_link_host"
+TOKEN_SETTING = "desk_link_token"
+
+
+def load_saved_connection() -> tuple[str, int, str]:
+    """(host, port, token) from local settings; host/token may be empty."""
+    saved = str(get_local_setting(HOST_SETTING, "") or "").strip()
+    host, _, port_text = saved.partition(":")
+    try:
+        port = int(port_text) if port_text.strip() else DEFAULT_PORT
+    except ValueError:
+        port = DEFAULT_PORT
+    token = str(get_local_setting(TOKEN_SETTING, "") or "").strip()
+    return host.strip(), port, token
+
+
+def save_connection(host: str, port: int, token: str) -> None:
+    save_local_setting(HOST_SETTING, f"{host.strip()}:{int(port)}")
+    save_local_setting(TOKEN_SETTING, token.strip())
+
+
+class ConnectDialog(QDialog):
+    """Main-desk address + token entry, prefilled from the saved values.
+
+    This is the whole satellite pairing UX: the trader reads the token off
+    the main's Settings page (Copy token) and types/pastes the main PC's
+    name or IP here once. Everything is remembered for next launch.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Connect to main desk")
+        host, port, token = load_saved_connection()
+
+        self.host_input = QLineEdit(host)
+        self.host_input.setPlaceholderText("Main PC name or IP, e.g. 192.168.1.20")
+        self.port_input = QSpinBox()
+        self.port_input.setRange(1024, 65535)
+        self.port_input.setValue(port)
+        self.token_input = QLineEdit(token)
+        self.token_input.setPlaceholderText("Link token — Settings → Desk Link → Copy token on the main PC")
+
+        form = QFormLayout()
+        form.setSpacing(8)
+        form.addRow("Main desk", self.host_input)
+        form.addRow("Port", self.port_input)
+        form.addRow("Link token", self.token_input)
+
+        hint = QLabel(
+            "Find these on the main PC: Settings page → Desk Link section. "
+            "The port there must match this one (default 47600)."
+        )
+        hint.setObjectName("MutedLabel")
+        hint.setWordWrap(True)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Connect")
+        buttons.accepted.connect(self._accept_if_complete)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(hint)
+        layout.addWidget(buttons)
+        self.resize(460, self.sizeHint().height())
+
+    def _accept_if_complete(self) -> None:
+        if not self.host_input.text().strip():
+            self.host_input.setFocus()
+            return
+        if not self.token_input.text().strip():
+            self.token_input.setFocus()
+            return
+        self.accept()
+
+    def connection(self) -> tuple[str, int, str]:
+        return (
+            self.host_input.text().strip(),
+            int(self.port_input.value()),
+            self.token_input.text().strip(),
+        )
 
 
 class _ClientBridge(QObject):
@@ -89,42 +179,91 @@ class SatellitePopupDialog(QDialog):
 
 
 class SatelliteWindow(QMainWindow):
-    def __init__(self, *, host: str, port: int, token: str, machine_name: str) -> None:
+    def __init__(self, *, machine_name: str, host: str = "", port: int = DEFAULT_PORT, token: str = "") -> None:
         super().__init__()
-        self.setWindowTitle(f"TradingBotV3 Satellite — {host}")
+        self._machine_name = machine_name
+        self.setWindowTitle("TradingBotV3 Satellite")
         self.resize(560, 640)
 
-        self.status_label = QLabel("Connecting…")
+        self.status_label = QLabel("Not connected.")
         self.status_label.setWordWrap(True)
+        self.connect_button = QPushButton("Connect / change main desk…")
+        self.connect_button.clicked.connect(self.open_connect_dialog)
         self.snapshot_label = QLabel("")
         self.snapshot_label.setObjectName("MutedLabel")
         self.snapshot_label.setWordWrap(True)
         self.feed = QListWidget()
         self.feed.setWordWrap(True)
 
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        top_row.addWidget(self.status_label, 1)
+        top_row.addWidget(self.connect_button)
+
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.addWidget(self.status_label)
+        layout.addLayout(top_row)
         layout.addWidget(self.snapshot_label)
         layout.addWidget(self.feed, 1)
         self.setCentralWidget(central)
 
         self._popups: list[SatellitePopupDialog] = []
+        self._client: DeskLinkClient | None = None
         self._bridge = _ClientBridge(self)
         self._bridge.messageReceived.connect(self._on_message)
         self._bridge.statusChanged.connect(self._on_status)
+
+        cli_host = host
+        saved_host, saved_port, saved_token = load_saved_connection()
+        host = host or saved_host
+        token = token or saved_token
+        if not cli_host:
+            port = saved_port  # a CLI host carries its own port; otherwise the saved one wins
+        self._pairing_prompted = False
+        if host and token:
+            # CLI-provided details are remembered too, so a first launch via
+            # flags makes every later bare launch just work.
+            save_connection(host, port, token)
+            self._start_client(host, port, token)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        # First run with nothing saved: go straight to the pairing dialog once
+        # the window is actually on screen, instead of a dead "not connected"
+        # screen. Deliberately tied to showEvent (not __init__): a modal
+        # queued from the constructor would fire in ANY later event loop,
+        # including headless test runs that never show the window.
+        if self._client is None and not self._pairing_prompted:
+            self._pairing_prompted = True
+            QTimer.singleShot(0, self.open_connect_dialog)
+
+    def open_connect_dialog(self) -> None:
+        dialog = ConnectDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        host, port, token = dialog.connection()
+        save_connection(host, port, token)
+        self._start_client(host, port, token)
+
+    def _start_client(self, host: str, port: int, token: str) -> None:
+        old_client, self._client = self._client, None
+        if old_client is not None:
+            old_client.stop()
+        self.setWindowTitle(f"TradingBotV3 Satellite — {host}")
+        self.status_label.setText(f"Connecting to {host}:{port}…")
         self._client = DeskLinkClient(
             host=host,
             port=port,
             token=token,
-            machine_name=machine_name,
+            machine_name=self._machine_name,
             on_message=self._bridge.messageReceived.emit,
             on_status=self._bridge.statusChanged.emit,
         )
         self._client.start()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self._client.stop()
+        if self._client is not None:
+            self._client.stop()
         super().closeEvent(event)
 
     # -- GUI-thread handlers -------------------------------------------------
@@ -134,7 +273,10 @@ class SatelliteWindow(QMainWindow):
             "connecting": f"Connecting… ({detail})",
             "connected": f"Connected to {detail} — view-only satellite. Alerts pop here live.",
             "disconnected": f"Link lost — {detail}.",
-            "rejected": f"Link REJECTED: {detail}. Fix desk_link_token in local settings and relaunch.",
+            "rejected": (
+                f"Link rejected: {detail}. Click \"Connect / change main desk…\" and paste the "
+                "current token from the main PC's Settings page."
+            ),
             "stopped": "Stopped.",
         }
         self.status_label.setText(labels.get(state, f"{state}: {detail}"))
