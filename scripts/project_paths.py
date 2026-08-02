@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import filecmp
 import logging.handlers
 import os
 import shutil
@@ -54,6 +56,65 @@ REPO_OUTPUT_DIR = ROOT_DIR / "output"
 REPO_LOG_DIR = ROOT_DIR / "logs"
 
 
+def _adopt_legacy_windows_shaped_dir(legacy: Path, preferred: Path) -> Path:
+    """Migrate a POSIX machine off the Windows-shaped ``~/AppData`` fallback.
+
+    Early macOS/Linux runs (before the platform-native branch existed) wrote
+    everything to ``~/AppData/Local/TradingBotV3`` — including user-authored
+    watchlists and the local_settings.json that names the shared home folder.
+    Losing either is a data-loss bug, so the move is deliberately cautious:
+
+    - copy → byte-verify EVERY file first; sources are deleted only after the
+      whole set verified, so a failure at any point leaves the legacy store
+      complete and authoritative;
+    - a file that exists on both sides with different bytes is preserved next
+      to the preferred copy as ``<name>.from-appdata`` — nothing is ever
+      overwritten;
+    - the emptied legacy directory is left in place (an empty husk), not
+      deleted;
+    - idempotent: leftovers verify as identical on the next launch and are
+      cleaned up then.
+
+    Returns the directory the app should use. Windows never reaches this
+    code — LOCALAPPDATA is set there and wins in the caller.
+    """
+    preferred_existed = preferred.exists()
+    fallback = preferred if preferred_existed else legacy  # the pre-migration selection rule
+    try:
+        files = sorted(path for path in legacy.rglob("*") if path.is_file())
+    except OSError:
+        return fallback
+    if not files:
+        return preferred
+
+    verified_sources: list[Path] = []
+    try:
+        for source in files:
+            destination = preferred / source.relative_to(legacy)
+            if destination.exists() and not filecmp.cmp(source, destination, shallow=False):
+                destination = destination.with_name(destination.name + ".from-appdata")
+                if destination.exists() and not filecmp.cmp(source, destination, shallow=False):
+                    return fallback  # even the conflict slot is taken by different bytes
+            if not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            if not filecmp.cmp(source, destination, shallow=False):
+                return fallback
+            verified_sources.append(source)
+    except OSError:
+        return fallback
+
+    # Every file has a verified copy under `preferred`: it is now the
+    # authoritative store regardless of how cleanup below fares.
+    for source in verified_sources:
+        with contextlib.suppress(OSError):
+            source.unlink()
+    for directory in sorted((path for path in legacy.rglob("*") if path.is_dir()), reverse=True):
+        with contextlib.suppress(OSError):
+            directory.rmdir()
+    return preferred
+
+
 def _default_local_settings_dir() -> Path:
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
@@ -65,8 +126,8 @@ def _default_local_settings_dir() -> Path:
         preferred = Path.home() / ".local" / "share" / "TradingBotV3"
 
     legacy = Path.home() / "AppData" / "Local" / "TradingBotV3"
-    if legacy.exists() and not preferred.exists():
-        return legacy
+    if legacy.exists():
+        return _adopt_legacy_windows_shaped_dir(legacy, preferred)
     return preferred
 
 

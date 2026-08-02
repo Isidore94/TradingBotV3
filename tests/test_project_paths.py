@@ -35,6 +35,90 @@ def test_default_persistent_dir_prefers_google_drive(monkeypatch, tmp_path):
     assert module.PERSISTENT_DATA_DIR_SOURCE == "google_drive_default"
 
 
+def _legacy_migration_fixture(tmp_path):
+    """A Windows-shaped ~/AppData store as an early macOS run left it."""
+    legacy = tmp_path / "home" / "AppData" / "Local" / "TradingBotV3"
+    (legacy / "machine_cache").mkdir(parents=True)
+    (legacy / "logs").mkdir()
+    (legacy / "local_settings.json").write_text(
+        json.dumps({"shared_data_dir": "/Users/trader/My Drive/Trading/TradingBot"}),
+        encoding="utf-8",
+    )
+    (legacy / "longs.txt").write_text("NVDA\nAMD\n", encoding="utf-8")  # user-authored
+    (legacy / "machine_cache" / "earnings_cache.json").write_text("{}", encoding="utf-8")
+    (legacy / "logs" / "trading_bot.log").write_text("old log line\n", encoding="utf-8")
+    preferred = tmp_path / "home" / "Library" / "Application Support" / "TradingBotV3"
+    return legacy, preferred
+
+
+def test_legacy_appdata_dir_migrates_to_native_settings_dir(monkeypatch, tmp_path):
+    module = _load_project_paths(monkeypatch, tmp_path, google_drive_root=tmp_path / "My Drive")
+    legacy, preferred = _legacy_migration_fixture(tmp_path)
+
+    chosen = module._adopt_legacy_windows_shaped_dir(legacy, preferred)
+
+    assert chosen == preferred
+    # User-authored data survives byte-for-byte in the native location.
+    assert (preferred / "longs.txt").read_text(encoding="utf-8") == "NVDA\nAMD\n"
+    assert "shared_data_dir" in (preferred / "local_settings.json").read_text(encoding="utf-8")
+    assert (preferred / "machine_cache" / "earnings_cache.json").exists()
+    assert (preferred / "logs" / "trading_bot.log").exists()
+    # The legacy dir is left as an empty husk, not deleted.
+    assert legacy.exists()
+    assert not any(legacy.rglob("*"))
+
+    # Idempotent: a second call with the husk is a no-op that still picks native.
+    assert module._adopt_legacy_windows_shaped_dir(legacy, preferred) == preferred
+
+
+def test_legacy_migration_preserves_both_sides_of_a_conflict(monkeypatch, tmp_path):
+    module = _load_project_paths(monkeypatch, tmp_path, google_drive_root=tmp_path / "My Drive")
+    legacy, preferred = _legacy_migration_fixture(tmp_path)
+    preferred.mkdir(parents=True)
+    (preferred / "longs.txt").write_text("TSLA\n", encoding="utf-8")  # both sides evolved
+
+    chosen = module._adopt_legacy_windows_shaped_dir(legacy, preferred)
+
+    assert chosen == preferred
+    # Neither version of the user-authored watchlist is lost or overwritten.
+    assert (preferred / "longs.txt").read_text(encoding="utf-8") == "TSLA\n"
+    assert (preferred / "longs.txt.from-appdata").read_text(encoding="utf-8") == "NVDA\nAMD\n"
+    assert not any(legacy.rglob("*"))
+
+
+def test_default_settings_dir_uses_native_after_migration(monkeypatch, tmp_path):
+    module = _load_project_paths(monkeypatch, tmp_path, google_drive_root=tmp_path / "My Drive")
+    legacy, preferred = _legacy_migration_fixture(tmp_path)
+
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    chosen = module._default_local_settings_dir()
+
+    if sys.platform == "darwin":
+        assert chosen == preferred
+    else:
+        # Non-darwin POSIX/Windows-without-LOCALAPPDATA migrates into
+        # ~/.local/share with the same machinery.
+        assert chosen == tmp_path / "home" / ".local" / "share" / "TradingBotV3"
+    assert not any(legacy.rglob("*"))
+    assert (chosen / "longs.txt").read_text(encoding="utf-8") == "NVDA\nAMD\n"
+
+
+def test_localappdata_env_still_wins_over_everything(monkeypatch, tmp_path):
+    module = _load_project_paths(monkeypatch, tmp_path, google_drive_root=tmp_path / "My Drive")
+    _legacy_migration_fixture(tmp_path)
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "winappdata"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    chosen = module._default_local_settings_dir()
+
+    assert chosen == tmp_path / "winappdata" / "TradingBotV3"
+    # Windows behavior is untouched: no migration ran, legacy files intact.
+    assert (tmp_path / "home" / "AppData" / "Local" / "TradingBotV3" / "longs.txt").exists()
+
+
 def test_default_persistent_dir_finds_macos_cloudstorage_mount(monkeypatch, tmp_path):
     home = tmp_path / "home"
     mount = home / "Library" / "CloudStorage" / "GoogleDrive-trader@example.com" / "My Drive"
