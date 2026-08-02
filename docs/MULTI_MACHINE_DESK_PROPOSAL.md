@@ -119,15 +119,14 @@ satellite has open. Forming bars remain preview-only everywhere.
 
 ## Running Tier 1 (implemented)
 
-On the **main PC**:
-
-1. Add `"desk_link_enabled": true` to `local_settings.json`
-   (`%LOCALAPPDATA%\TradingBotV3` on Windows, `~/Library/Application
-   Support/TradingBotV3` on macOS). Optional: `"desk_link_port"` (default
-   47600).
-2. Relaunch the desk. The first start generates `"desk_link_token"` in the
-   same file — copy it for the satellite. Allow the port through the OS
-   firewall for your private network only.
+On the **main PC**: Settings page → **Desk Link** section. Turn on "Serve
+satellites from this machine" (applies immediately, no relaunch), adjust
+the port if needed (default 47600), and hit **Copy token** for the
+satellite's first launch. **Regenerate token** revokes the old one and
+disconnects satellites. The section shows live serving status and which
+satellites are connected. Allow the port through the OS firewall for your
+private network only. (Everything persists in the machine-local settings,
+so it survives relaunches; nothing Desk Link touches the shared store.)
 
 On the **satellite** (same repo, same setup, no TWS needed):
 

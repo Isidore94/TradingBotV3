@@ -165,3 +165,60 @@ def test_service_stays_off_without_the_local_setting(monkeypatch):
 
     monkeypatch.setattr(service_module, "get_local_setting", lambda key, default=None: default)
     assert service_module.desk_link_enabled() is False
+
+
+def _patched_service(monkeypatch, settings: dict):
+    import ui.services.desk_link_service as service_module
+
+    monkeypatch.setattr(service_module, "get_local_setting", lambda key, default=None: settings.get(key, default))
+    monkeypatch.setattr(
+        service_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value)
+    )
+    return service_module.DeskLinkService(machine_name="main-under-test")
+
+
+def test_settings_page_toggle_controls_the_service(monkeypatch):
+    _qapp()
+    from ui.panels.settings_panel import SettingsPanel
+    from ui.state import UiState
+
+    settings: dict = {"desk_link_port": 0}  # ephemeral port for the test bind
+    service = _patched_service(monkeypatch, settings)
+    panel = SettingsPanel(UiState(), desk_link_service=service)
+    try:
+        assert not service.running
+        assert "Not serving" in panel.desk_link_status.text()
+
+        panel.desk_link_enable_input.setChecked(True)  # user flips the toggle
+        assert service.running
+        assert settings["desk_link_enabled"] is True
+        token = settings["desk_link_token"]
+        assert token and panel.desk_link_token_view.text() == token
+        assert "Serving on port" in panel.desk_link_status.text()
+
+        panel.desk_link_enable_input.setChecked(False)
+        assert not service.running
+        assert settings["desk_link_enabled"] is False
+        assert "Not serving" in panel.desk_link_status.text()
+    finally:
+        service.stop()
+
+
+def test_settings_page_regenerate_revokes_the_old_token(monkeypatch):
+    _qapp()
+    from ui.panels.settings_panel import SettingsPanel
+    from ui.state import UiState
+
+    settings: dict = {"desk_link_port": 0}
+    service = _patched_service(monkeypatch, settings)
+    panel = SettingsPanel(UiState(), desk_link_service=service)
+    try:
+        panel.desk_link_enable_input.setChecked(True)
+        first = settings["desk_link_token"]
+        panel._regenerate_desk_link_token()
+        second = settings["desk_link_token"]
+        assert second and second != first
+        assert panel.desk_link_token_view.text() == second
+        assert service.running  # regeneration restarts serving with the new token
+    finally:
+        service.stop()

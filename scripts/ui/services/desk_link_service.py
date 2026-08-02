@@ -47,6 +47,7 @@ class DeskLinkService(QObject):
     """Starts/stops the relay server and publishes desk state to satellites."""
 
     satellitesChanged = Signal(list)  # sorted machine names, may be empty
+    runningChanged = Signal(bool)
 
     def __init__(self, parent: QObject | None = None, *, machine_name: str = "main-desk") -> None:
         super().__init__(parent)
@@ -86,6 +87,7 @@ class DeskLinkService(QObject):
         self.publish_state_snapshot()
         self._snapshot_timer.start()
         log.info("Desk Link serving satellites on port %s.", port)
+        self.runningChanged.emit(True)
         return True
 
     def stop(self) -> None:
@@ -93,6 +95,51 @@ class DeskLinkService(QObject):
         server, self._server = self._server, None
         if server is not None:
             server.stop()
+            self.satellitesChanged.emit([])
+            self.runningChanged.emit(False)
+
+    # -- settings-page controls ----------------------------------------------
+
+    def set_enabled(self, enabled: bool) -> bool:
+        """Persist the toggle and apply it now. Returns False if serving failed."""
+        save_local_setting(ENABLED_SETTING, bool(enabled))
+        if enabled:
+            return self.start()
+        self.stop()
+        return True
+
+    def configured_port(self) -> int:
+        return int(get_local_setting(PORT_SETTING, DEFAULT_PORT) or DEFAULT_PORT)
+
+    def set_port(self, port: int) -> bool:
+        save_local_setting(PORT_SETTING, int(port))
+        if self.running:
+            self.stop()
+            return self.start()
+        return True
+
+    def current_token(self) -> str:
+        return str(get_local_setting(TOKEN_SETTING, "") or "").strip()
+
+    def ensure_token(self) -> str:
+        return ensure_link_token()
+
+    def regenerate_token(self) -> str:
+        """Mint a new link token; connected satellites must re-pair.
+
+        Restarting the server drops existing connections, so a leaked or
+        mistyped token is fully invalidated the moment this returns.
+        """
+        token = generate_link_token()
+        save_local_setting(TOKEN_SETTING, token)
+        if self.running:
+            self.stop()
+            self.start()
+        return token
+
+    def connected_machines(self) -> list[str]:
+        server = self._server
+        return server.connected_machines() if server is not None else []
 
     def _on_client_change(self, machine: str, address) -> None:
         server = self._server

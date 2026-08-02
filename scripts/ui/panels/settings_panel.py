@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -10,7 +11,9 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -29,11 +32,12 @@ THEME_LABELS = {
 class SettingsPanel(QFrame):
     stateChanged = Signal()
 
-    def __init__(self, state: UiState, bounce_service=None, parent=None) -> None:
+    def __init__(self, state: UiState, bounce_service=None, desk_link_service=None, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self.state = state
         self.bounce_service = bounce_service
+        self.desk_link_service = desk_link_service
 
         self.theme_input = QComboBox()
         self.theme_input.addItems(THEME_LABELS)
@@ -97,6 +101,8 @@ class SettingsPanel(QFrame):
         layout.addWidget(self.warm_status)
         if self.bounce_service is not None:
             layout.addWidget(self._build_bounce_section())
+        if self.desk_link_service is not None:
+            layout.addWidget(self._build_desk_link_section())
         layout.addStretch(1)
 
     def _build_bounce_section(self) -> QFrame:
@@ -178,6 +184,143 @@ class SettingsPanel(QFrame):
             grid.addWidget(checkbox, index // 4, index % 4)
         section_layout.addLayout(grid)
         return section
+
+    def _build_desk_link_section(self) -> QFrame:
+        """Desk Link relay controls (docs/MULTI_MACHINE_DESK_PROPOSAL.md).
+
+        Everything the trader needs to serve satellites without touching
+        local_settings.json: the enable toggle applies immediately, the token
+        is visible/copyable for the satellite's first launch, and regenerate
+        revokes a token by restarting the server.
+        """
+        service = self.desk_link_service
+        section = QFrame()
+        section.setObjectName("Panel")
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(12, 12, 12, 12)
+        section_layout.setSpacing(10)
+        section_layout.addWidget(
+            SectionHeader(
+                "Desk Link",
+                "Serve view-only satellites on your local network with live alert chart popups.",
+            )
+        )
+
+        self.desk_link_enable_input = QCheckBox("Serve satellites from this machine")
+        self.desk_link_enable_input.setChecked(service.running)
+        self.desk_link_enable_input.toggled.connect(self._on_desk_link_toggled)
+
+        self.desk_link_port_input = QSpinBox()
+        self.desk_link_port_input.setRange(1024, 65535)
+        self.desk_link_port_input.setValue(service.configured_port())
+        # Applied on editing finished (not per keystroke) so a half-typed
+        # port never triggers a server restart.
+        self.desk_link_port_input.editingFinished.connect(self._on_desk_link_port_changed)
+
+        self.desk_link_token_view = QLineEdit(service.current_token())
+        self.desk_link_token_view.setReadOnly(True)
+        self.desk_link_token_view.setPlaceholderText("Generated when serving is first enabled")
+
+        copy_button = QPushButton("Copy token")
+        copy_button.clicked.connect(self._copy_desk_link_token)
+        regenerate_button = QPushButton("Regenerate token")
+        regenerate_button.clicked.connect(self._regenerate_desk_link_token)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+        form.addRow("Serving", self.desk_link_enable_input)
+        form.addRow("Port", self.desk_link_port_input)
+        form.addRow("Link token", self.desk_link_token_view)
+        section_layout.addLayout(form)
+
+        token_row = QHBoxLayout()
+        token_row.setSpacing(8)
+        token_row.addWidget(copy_button)
+        token_row.addWidget(regenerate_button)
+        token_row.addStretch(1)
+        section_layout.addLayout(token_row)
+
+        self.desk_link_status = QLabel()
+        self.desk_link_status.setObjectName("MutedLabel")
+        self.desk_link_status.setWordWrap(True)
+        section_layout.addWidget(self.desk_link_status)
+
+        hint = QLabel(
+            "On the satellite machine (same repo, no TWS needed): "
+            "python scripts/gui.py --ui qt --satellite <this-machine> --link-token <token>. "
+            "The token is remembered there after the first launch."
+        )
+        hint.setObjectName("MutedLabel")
+        hint.setWordWrap(True)
+        section_layout.addWidget(hint)
+
+        service.runningChanged.connect(self._refresh_desk_link_status)
+        service.satellitesChanged.connect(lambda _machines: self._refresh_desk_link_status())
+        self._refresh_desk_link_status()
+        return section
+
+    def _on_desk_link_toggled(self, enabled: bool) -> None:
+        service = self.desk_link_service
+        ok = service.set_enabled(enabled)
+        if enabled and not ok:
+            # Port already in use (or bind failed): reflect reality, keep the
+            # saved setting off so the next launch does not fail silently.
+            service.set_enabled(False)
+            self.desk_link_enable_input.blockSignals(True)
+            self.desk_link_enable_input.setChecked(False)
+            self.desk_link_enable_input.blockSignals(False)
+            self.desk_link_status.setText(
+                f"Could not serve on port {service.configured_port()} - is another desk already "
+                "serving, or the port in use? Change the port and try again."
+            )
+            return
+        self.desk_link_token_view.setText(service.current_token())
+        self._refresh_desk_link_status()
+
+    def _on_desk_link_port_changed(self) -> None:
+        service = self.desk_link_service
+        port = int(self.desk_link_port_input.value())
+        if port == service.configured_port():
+            return
+        if not service.set_port(port):
+            self.desk_link_status.setText(f"Port {port} could not be bound; Desk Link is stopped.")
+            self.desk_link_enable_input.blockSignals(True)
+            self.desk_link_enable_input.setChecked(False)
+            self.desk_link_enable_input.blockSignals(False)
+            return
+        self._refresh_desk_link_status()
+
+    def _copy_desk_link_token(self) -> None:
+        token = self.desk_link_service.ensure_token()
+        self.desk_link_token_view.setText(token)
+        QApplication.clipboard().setText(token)
+        self.desk_link_status.setText("Token copied to clipboard - paste it into the satellite's first launch.")
+
+    def _regenerate_desk_link_token(self) -> None:
+        token = self.desk_link_service.regenerate_token()
+        self.desk_link_token_view.setText(token)
+        QApplication.clipboard().setText(token)
+        self.desk_link_status.setText(
+            "New token generated and copied. Connected satellites were disconnected and "
+            "need the new token."
+        )
+
+    def _refresh_desk_link_status(self) -> None:
+        service = self.desk_link_service
+        if service is None:
+            return
+        if not service.running:
+            self.desk_link_status.setText("Not serving. Satellites cannot connect.")
+            return
+        machines = service.connected_machines()
+        if machines:
+            self.desk_link_status.setText(
+                f"Serving on port {service.configured_port()} - connected: {', '.join(machines)}."
+            )
+        else:
+            self.desk_link_status.setText(
+                f"Serving on port {service.configured_port()} - no satellites connected yet."
+            )
 
     def _save(self) -> None:
         self.state.theme_name = THEME_LABELS.get(self.theme_input.currentText(), "dark")

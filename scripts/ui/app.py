@@ -59,22 +59,25 @@ class MainWindow(QMainWindow):
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
-        self.settings_panel = SettingsPanel(self.state, bounce_service=self.trading_panel.bounce_panel.service)
+        # Desk Link relay (docs/MULTI_MACHINE_DESK_PROPOSAL.md Tier 1). The
+        # service always exists so the Settings page can toggle it live; it
+        # only serves after Settings (or the saved setting) enables it, and a
+        # failed start (port in use) degrades to a normal single-machine desk.
+        from ui.services.desk_link_service import DeskLinkService, desk_link_enabled
+
+        self.desk_link_service = DeskLinkService(self)
+        self.trading_panel.alert_center.attach_desk_link(self.desk_link_service)
+        if desk_link_enabled():
+            self.desk_link_service.start()
+
+        self.settings_panel = SettingsPanel(
+            self.state,
+            bounce_service=self.trading_panel.bounce_panel.service,
+            desk_link_service=self.desk_link_service,
+        )
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
-
-        # Desk Link relay (docs/MULTI_MACHINE_DESK_PROPOSAL.md Tier 1): serve
-        # satellites only when the machine-local setting enables it. Failure
-        # to start (port in use) degrades to a normal single-machine desk.
-        self.desk_link_service = None
-        from ui.services.desk_link_service import DeskLinkService, desk_link_enabled
-
-        if desk_link_enabled():
-            service = DeskLinkService(self)
-            if service.start():
-                self.desk_link_service = service
-                self.trading_panel.alert_center.attach_desk_link(service)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)
@@ -461,11 +464,10 @@ class MainWindow(QMainWindow):
                 panel.shutdown()
             except Exception:
                 pass
-        if self.desk_link_service is not None:
-            try:
-                self.desk_link_service.stop()
-            except Exception:
-                pass
+        try:
+            self.desk_link_service.stop()
+        except Exception:
+            pass
         # Backstop for the shared writer lease: AutopilotService.shutdown
         # normally releases it, but a panel that failed to shut down must not
         # leave the lease held. Releasing twice is a no-op, and a lease this
