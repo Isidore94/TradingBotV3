@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from project_paths import get_tracker_storage_details, open_path_in_file_manager
+from ui import theme
 from ui.services.maintenance import WarmingService, format_warm_summary
 from ui.state import UiState
 from ui.widgets.section_header import SectionHeader
@@ -23,6 +25,20 @@ from ui.widgets.section_header import SectionHeader
 THEME_LABELS = {
     "Dark": "dark",
     "Light": "light",
+}
+
+# Scales the whole shell - type, padding, row height, and the panel minimum
+# widths that decide whether a column can shrink. Auto reads the screen, which
+# is the point: a 4K desktop and a 1680px laptop cannot share one layout.
+UI_SCALE_LABELS = {
+    "Auto (fit this screen)": "auto",
+    "80% - smallest": "0.80",
+    "85%": "0.85",
+    "90%": "0.90",
+    "95%": "0.95",
+    "100% - desktop": "1.00",
+    "110%": "1.10",
+    "125% - largest": "1.25",
 }
 
 
@@ -53,6 +69,15 @@ class SettingsPanel(QFrame):
         self.compact_input.setChecked(self.state.compact_density)
         self.compact_input.toggled.connect(self._save)
 
+        self.ui_scale_input = QComboBox()
+        self.ui_scale_input.addItems(UI_SCALE_LABELS)
+        self.ui_scale_input.setCurrentText(_ui_scale_label(self.state.ui_scale))
+        self.ui_scale_input.currentTextChanged.connect(self._save)
+        self.ui_scale_hint = QLabel()
+        self.ui_scale_hint.setObjectName("MutedLabel")
+        self.ui_scale_hint.setWordWrap(True)
+        self._sync_scale_hint()
+
         details = get_tracker_storage_details()
         self.data_dir_label = QLabel(details.get("data_dir", ""))
         self.data_dir_label.setWordWrap(True)
@@ -78,6 +103,8 @@ class SettingsPanel(QFrame):
         form.addRow("Trading Desk mode", self.mode_input)
         form.addRow("Explain mode", self.explain_input)
         form.addRow("Density", self.compact_input)
+        form.addRow("UI scale", self.ui_scale_input)
+        form.addRow("", self.ui_scale_hint)
         form.addRow("Data folder", self.data_dir_label)
         form.addRow("Storage source", self.source_label)
 
@@ -184,8 +211,27 @@ class SettingsPanel(QFrame):
         self.state.workspace_mode = self.mode_input.currentText()
         self.state.explain_mode = self.explain_input.isChecked()
         self.state.compact_density = self.compact_input.isChecked()
+        self.state.ui_scale = UI_SCALE_LABELS.get(
+            self.ui_scale_input.currentText(), "auto"
+        )
         self.state.save()
+        self._sync_scale_hint()
         self.stateChanged.emit()
+
+    def _sync_scale_hint(self) -> None:
+        """Say what the scale resolves to, and that panes keep their own splits.
+
+        Auto is a screen read, so the number it lands on is worth showing -
+        otherwise "Auto" is the one option whose effect the trader cannot see.
+        """
+        screen = _screen_size()
+        resolved = theme.resolve_scale(self.state.ui_scale, screen)
+        source = "auto" if self.state.ui_scale == "auto" else "set here"
+        self.ui_scale_hint.setText(
+            f"Scaling type, spacing, and panel minimum widths to {resolved:.0%} "
+            f"({source}; this screen offers {screen[0]}x{screen[1]}). Splits you have "
+            "dragged are remembered separately and are not reset by this."
+        )
 
     def _on_warm_started(self) -> None:
         self.warm_button.setEnabled(False)
@@ -209,3 +255,19 @@ def _theme_label(theme_name: str) -> str:
         if value == theme_name:
             return label
     return "Dark"
+
+
+def _ui_scale_label(value: str) -> str:
+    for label, stored in UI_SCALE_LABELS.items():
+        if stored == value:
+            return label
+    return "Auto (fit this screen)"
+
+
+def _screen_size() -> tuple[int, int]:
+    app = QApplication.instance()
+    screen = app.primaryScreen() if app is not None else None
+    if screen is None:
+        return (2560, 1440)
+    size = screen.availableGeometry()
+    return (size.width(), size.height())

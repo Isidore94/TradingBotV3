@@ -63,6 +63,7 @@ from project_paths import (
 )
 from review_events import record_review_event
 from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
+from ui import theme
 from ui.panels import desk_layout
 from ui.models.bounce import (
     AUTO_PICK_TAG,
@@ -568,7 +569,7 @@ class AlertCenterPanel(QFrame):
         # the split back to the preset (same fix the desk columns needed).
         # 170 + the board's 170 stays inside the alert column's 360px floor, so
         # adding the board cannot force the whole desk column wider.
-        self.tabs.setMinimumWidth(170)
+        self.tabs.setMinimumWidth(theme.px(170))
         desk_layout.apply_saved_sizes(
             self.tabs_row, ALERT_TABS_SPLIT_KEY, desk_layout.ALERT_TABS_ROW_WEIGHTS
         )
@@ -2323,6 +2324,12 @@ class AlertCenterPanel(QFrame):
         return any(watch.symbol == symbol for watch in self._d1_level_watches) or any(
             watch.symbol == symbol for watch in self._d1_event_watches
         )
+
+    def apply_scaled_metrics(self) -> None:
+        """Re-apply the column's scale-dependent floors after a scale change."""
+        self.tabs.setMinimumWidth(theme.px(170))
+        self.focus_strength.apply_scaled_metrics()
+        self.chart_review.arm_bar.apply_scaled_metrics()
 
     def set_embedded_detail_enabled(self, enabled: bool) -> None:
         """Workspace mode turns the embedded plan pane off so the setup is

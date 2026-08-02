@@ -8,6 +8,9 @@ from project_paths import get_local_setting, save_local_setting
 
 VALID_WORKSPACE_MODES = {"workspace", "tabs"}
 VALID_THEMES = {"dark", "light"}
+# "auto" reads the screen; the rest are explicit multipliers. Per-machine like
+# every other qt_* setting, so the 4K desk and the MacBook keep their own value.
+VALID_UI_SCALES = {"auto", "0.80", "0.85", "0.90", "0.95", "1.00", "1.10", "1.25"}
 
 
 @dataclass
@@ -17,6 +20,7 @@ class UiState:
     explain_mode: bool = True
     compact_density: bool = False
     nav_collapsed: bool = False
+    ui_scale: str = "auto"
 
     @classmethod
     def load(cls) -> "UiState":
@@ -28,6 +32,7 @@ class UiState:
             explain_mode=bool(get_local_setting("qt_explain_mode", True)),
             compact_density=bool(get_local_setting("qt_compact_density", False)),
             nav_collapsed=bool(get_local_setting("qt_nav_collapsed", False)),
+            ui_scale=_choice("qt_ui_scale", "auto", VALID_UI_SCALES),
         )
 
     def save(self) -> None:
@@ -36,6 +41,7 @@ class UiState:
         save_local_setting("qt_explain_mode", bool(self.explain_mode))
         save_local_setting("qt_compact_density", bool(self.compact_density))
         save_local_setting("qt_nav_collapsed", bool(self.nav_collapsed))
+        save_local_setting("qt_ui_scale", self.ui_scale)
 
 
 def _choice(key: str, default: str, valid: set[str]) -> str:

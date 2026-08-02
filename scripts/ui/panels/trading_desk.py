@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui import theme
 from ui.panels import desk_layout
 from ui.panels.alert_center_panel import AlertCenterPanel
 from ui.panels.bounce_panel import BouncePanel
@@ -156,8 +157,7 @@ class TradingDeskPanel(QWidget):
         # the split was decided by size hints, not by the preset. An explicit
         # minimum takes precedence over minimumSizeHint and hands the split
         # back to us; both columns stay usable well below these floors.
-        self.alert_center.setMinimumWidth(360)
-        self.master_workspace.setMinimumWidth(420)
+        self._apply_column_floors()
         self.desk_splitter = splitter
 
         body = QWidget()
@@ -217,6 +217,25 @@ class TradingDeskPanel(QWidget):
             except RuntimeError:
                 pass
         self.desk_splitter = None
+
+    def _apply_column_floors(self) -> None:
+        """Explicit minimum widths for the two desk columns, at the UI scale.
+
+        Both columns aggregate large minimumSizeHints from their children (the
+        setups workspace alone hinted 1372px wide). Their sum exceeded the desk,
+        so QSplitter had no freedom and ignored setSizes entirely - the split
+        was decided by size hints, not by the preset. An explicit minimum takes
+        precedence over minimumSizeHint and hands the split back to us; both
+        columns stay usable well below these floors. They scale because a
+        laptop-sized desk cannot afford desktop-sized floors.
+        """
+        self.alert_center.setMinimumWidth(theme.px(360))
+        self.master_workspace.setMinimumWidth(theme.px(420))
+
+    def apply_scaled_metrics(self) -> None:
+        """Re-apply scale-dependent pixel budgets after a UI scale change."""
+        self._apply_column_floors()
+        self.alert_center.apply_scaled_metrics()
 
     # ------------------------------------------------------------------
     def _apply_desk_split(self) -> None:

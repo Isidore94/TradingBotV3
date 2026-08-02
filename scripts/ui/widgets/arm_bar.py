@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
+from ui.widgets.flow_layout import FlowLayout
 
 
 def quick_fill_value(source: str, bars, overlays) -> float | None:
@@ -99,8 +100,6 @@ class ArmBar(QFrame):
 
         self.symbol_input = QLineEdit()
         self.symbol_input.setPlaceholderText("Symbol ⏎")
-        self.symbol_input.setMinimumWidth(96)
-        self.symbol_input.setMaximumWidth(140)
         self.symbol_input.setToolTip(
             "Type a ticker and press Enter to chart it immediately - it does not "
             "have to have alerted, or even be in the current scan set."
@@ -121,7 +120,6 @@ class ArmBar(QFrame):
         self.level_input.setDecimals(2)
         self.level_input.setRange(0.01, 1_000_000.0)
         self.level_input.setSingleStep(0.05)
-        self.level_input.setMaximumWidth(110)
         self.level_input.setToolTip("Price level for the break alert")
         # Any edit not made by apply_quick_fill/set_level is the trader typing
         # or nudging the spinner - that overrides the remembered fill source.
@@ -130,7 +128,6 @@ class ArmBar(QFrame):
         self.direction_input = QComboBox()
         self.direction_input.addItem("Above", "above")
         self.direction_input.addItem("Below", "below")
-        self.direction_input.setMaximumWidth(90)
 
         self.arm_level_button = QPushButton("Arm level")
         self.arm_level_button.setObjectName("PrimaryButton")
@@ -159,24 +156,25 @@ class ArmBar(QFrame):
         self.armed_layout.addWidget(self.armed_hint)
         self.armed_layout.addStretch(1)
 
+        self.apply_scaled_metrics()
         self._build_layout()
         self.set_enabled_for_symbol(False)
 
     def _build_layout(self) -> None:
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(6)
+        # Both control rows WRAP rather than compress. A QHBoxLayout hands every
+        # child an equal share of whatever width is left, so on a 1680px laptop
+        # desk the watch and D1 buttons squeezed down to unreadable stubs
+        # ("ew HC", "d hig") - the controls were all still there and none of
+        # them could be identified. Flowing onto a second line costs vertical
+        # space the alert column has and buys back every label.
+        top = FlowLayout(margin=0, spacing=theme.px(6))
         top.addWidget(self.symbol_input)
         for button in self.watch_buttons.values():
             top.addWidget(button)
-        top.addStretch(1)
         top.addWidget(self.level_input)
         top.addWidget(self.direction_input)
         top.addWidget(self.arm_level_button)
 
-        d1_row = QHBoxLayout()
-        d1_row.setContentsMargins(0, 0, 0, 0)
-        d1_row.setSpacing(4)
         d1_label = QLabel("D1:")
         d1_label.setObjectName("MutedLabel")
         d1_label.setToolTip(
@@ -184,17 +182,24 @@ class ArmBar(QFrame):
             "from the daily store every poll, so they track the moving "
             "average / rolling extreme instead of a frozen price."
         )
+        d1_row = FlowLayout(margin=0, spacing=theme.px(4))
         d1_row.addWidget(d1_label)
         for button in self.d1_event_buttons.values():
             d1_row.addWidget(button)
-        d1_row.addStretch(1)
         d1_row.addWidget(self.armed_row)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(theme.px(6), theme.px(4), theme.px(6), theme.px(4))
+        layout.setSpacing(theme.px(4))
         layout.addLayout(top)
         layout.addLayout(d1_row)
+
+    def apply_scaled_metrics(self) -> None:
+        """Re-apply the input widths that are pixel budgets, not stylesheet."""
+        self.symbol_input.setMinimumWidth(theme.px(96))
+        self.symbol_input.setMaximumWidth(theme.px(140))
+        self.level_input.setMaximumWidth(theme.px(110))
+        self.direction_input.setMaximumWidth(theme.px(90))
 
     # ------------------------------------------------------------------
     def set_quick_fill_source(self, resolver: Callable[[str], float | None]) -> None:
