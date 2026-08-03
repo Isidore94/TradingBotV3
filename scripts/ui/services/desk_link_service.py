@@ -77,6 +77,7 @@ class DeskLinkService(QObject):
         self._snapshot_timer.timeout.connect(self.publish_state_snapshot)
         self._bot_provider = None
         self._chart_symbols_provider = None
+        self._auto_mode_provider = None
         self._live_chart_timer = QTimer(self)
         self._live_chart_timer.setInterval(_LIVE_CHART_INTERVAL_MS)
         self._live_chart_timer.timeout.connect(self._publish_live_charts)
@@ -334,6 +335,11 @@ class DeskLinkService(QObject):
         except Exception:
             log.exception("Desk Link stream %r publish failed.", stream)
 
+    def set_auto_mode_source(self, provider) -> None:
+        """Getter for the main's Auto mode (OFF/DESK/AWAY/EVENING), included in
+        every state snapshot so satellites can mirror and change it."""
+        self._auto_mode_provider = provider
+
     def set_live_chart_source(self, bot_provider, symbols_provider) -> None:
         """Feed the 30s M5 stream: a live-bot getter and a symbols getter
         (the Alert Center's current review/feed names)."""
@@ -401,8 +407,16 @@ class DeskLinkService(QObject):
             except OSError:
                 return []
 
+        auto_mode = ""
+        if self._auto_mode_provider is not None:
+            try:
+                auto_mode = str(self._auto_mode_provider() or "")
+            except Exception:
+                log.exception("Desk Link auto-mode source failed.")
+
         return {
             "machine": self._machine_name,
+            "auto_mode": auto_mode,
             "watchlists": {
                 "longs": read_list(LONGS_FILE),
                 "shorts": read_list(SHORTS_FILE),

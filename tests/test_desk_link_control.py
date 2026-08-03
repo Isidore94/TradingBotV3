@@ -231,6 +231,56 @@ def test_auto_reclaim_sends_phone_push(service, monkeypatch):
         satellite.client.stop()
 
 
+def test_state_snapshot_carries_the_mains_auto_mode(service):
+    """Satellites mirror the Auto mode from the sticky state snapshot."""
+    qapp, main = service
+    main.set_auto_mode_source(lambda: "AWAY")
+    main.publish_state_snapshot()
+    satellite = _Sat(main._server.address[1], "sat-a")
+    try:
+        assert _pump_until(qapp, lambda: satellite.got(protocol.TYPE_STATE_SNAPSHOT))
+        assert satellite.last_payload(protocol.TYPE_STATE_SNAPSHOT)["auto_mode"] == "AWAY"
+    finally:
+        satellite.client.stop()
+
+
+def test_set_auto_mode_intent_round_trip_from_controller(service):
+    """The mode-change intent rides the same controller-gated path as every
+    other Tier 2 decision and republishes the snapshot with the new mode."""
+    qapp, main = service
+    mode = {"value": "DESK"}
+    main.set_auto_mode_source(lambda: mode["value"])
+
+    def apply_mode(machine: str, intent: dict) -> None:
+        if intent.get("action") == "set_auto_mode":
+            mode["value"] = str(intent.get("mode") or "").upper()
+            main.send_intent_result(machine, intent.get("seq"), True, f"Auto mode -> {mode['value']}")
+
+    main.intentReceived.connect(apply_mode)
+    satellite = _Sat(main._server.address[1], "sat-a")
+    try:
+        assert _pump_until(qapp, lambda: main.has_satellites)
+        satellite.client.send(protocol.TYPE_LEASE_REQUEST)
+        assert _pump_until(qapp, lambda: satellite.got(protocol.TYPE_LEASE_GRANT))
+
+        satellite.client.send(
+            protocol.TYPE_INTENT, {"seq": 1, "action": "set_auto_mode", "symbol": "", "mode": "AWAY"}
+        )
+        assert _pump_until(qapp, lambda: satellite.got(protocol.TYPE_INTENT_RESULT))
+        ack = satellite.last_payload(protocol.TYPE_INTENT_RESULT)
+        assert ack["ok"] is True and "AWAY" in ack["detail"]
+        # The post-intent snapshot republish reflects the new mode back.
+        assert _pump_until(
+            qapp,
+            lambda: any(
+                m["type"] == protocol.TYPE_STATE_SNAPSHOT and m["payload"].get("auto_mode") == "AWAY"
+                for m in satellite.messages
+            ),
+        )
+    finally:
+        satellite.client.stop()
+
+
 def test_applied_intent_republishes_the_desk_snapshot_immediately(service):
     qapp, main = service
     main.intentReceived.connect(

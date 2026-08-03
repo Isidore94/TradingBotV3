@@ -73,3 +73,46 @@ def test_button_text_reflects_mode():
     service.profile = "AWAY"
     MainWindow._sync_auto_mode_button(stub)
     assert stub.auto_mode_button.text() == "Auto: AWAY"
+
+
+def test_set_auto_mode_publishes_a_fresh_desk_link_snapshot():
+    stub, service = _shell_stub()
+    from types import SimpleNamespace
+
+    from ui.app import MainWindow
+
+    published = []
+    stub.desk_link_service = SimpleNamespace(
+        publish_state_snapshot=lambda: published.append(True)
+    )
+    MainWindow._set_auto_mode(stub, "AWAY")
+    assert service.auto_mode == "AWAY"
+    assert published  # satellites see the change now, not a snapshot-interval later
+    MainWindow._set_auto_mode(stub, "OFF")
+    assert service.auto_mode == "OFF" and ("enabled", False) in service.calls
+
+
+def test_desk_link_set_auto_mode_intent_applies_and_validates():
+    """A satellite in control can switch OFF/DESK/AWAY/EVENING; junk modes
+    are refused without touching the service."""
+    stub, service = _shell_stub()
+    from ui.app import MainWindow
+
+    ok, detail = MainWindow._apply_auto_mode_intent(
+        stub, "macbook", {"action": "set_auto_mode", "mode": "away"}
+    )
+    assert ok and "AWAY" in detail
+    assert service.auto_mode == "AWAY"
+
+    ok, detail = MainWindow._apply_auto_mode_intent(
+        stub, "macbook", {"action": "set_auto_mode", "mode": "OFF"}
+    )
+    assert ok
+    assert service.auto_mode == "OFF"
+
+    before = list(service.calls)
+    ok, detail = MainWindow._apply_auto_mode_intent(
+        stub, "macbook", {"action": "set_auto_mode", "mode": "WARP"}
+    )
+    assert not ok and "WARP" in detail
+    assert service.calls == before

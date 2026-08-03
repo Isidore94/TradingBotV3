@@ -1345,12 +1345,16 @@ class AutopilotService(QObject):
             picks = []
             for row in swing_rows[:60]:
                 expected = getattr(row, "expected_r", None)
+                raw = getattr(row, "raw", None)
+                family = str((raw or {}).get("setup_family") or "") if isinstance(raw, dict) else ""
                 picks.append(
                     {
                         "symbol": getattr(row, "symbol", ""),
                         "side": getattr(row, "side", ""),
                         "bucket": getattr(row, "bucket_label", "") or getattr(row, "bucket", ""),
                         "expected_r": expected,
+                        "family": family,
+                        "key_level": str(getattr(row, "key_level", "") or ""),
                     }
                 )
             picks = [pick for pick in picks if pick["symbol"]][:10]

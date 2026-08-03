@@ -164,7 +164,7 @@ def test_phone_digest_prioritizes_swings_before_intraday_candidates():
         )
     )
 
-    swing_at = text.index("== SWING OPPORTUNITIES ==")
+    swing_at = text.index("== BEST SWING TRADES ==")
     day_longs_at = text.index("== DAY TRADE LONGS")
     day_shorts_at = text.index("== DAY TRADE SHORTS")
     bot_longs_at = text.index("== BOT PICKS - LONGS")
@@ -203,6 +203,34 @@ def test_phone_digest_caps_near_favorite_rows():
     assert text.index("FAVE0 (LONG)") < text.index("NEAR0 (LONG)")
 
 
+def test_phone_digest_swing_list_is_numbered_with_setup_detail_and_tv_paste():
+    """The central Drive file leads with the ranked swing list: numbered rows,
+    setup family and key level when known, and a one-line TV paste."""
+    text = core.render_away_report(
+        _payload(
+            swing_data_current=True,
+            swing_picks=[
+                {
+                    "symbol": "BEST",
+                    "side": "LONG",
+                    "bucket": "High Conviction",
+                    "expected_r": 1.4,
+                    "family": "earnings 1st-dev retest",
+                    "key_level": "upper 1st dev",
+                },
+                {"symbol": "FAVE", "side": "SHORT", "bucket": "Favorite", "expected_r": 1.0},
+            ],
+        )
+    )
+
+    assert "1. BEST (LONG) | High Conviction | 1.40R | earnings 1st-dev retest @ upper 1st dev" in text
+    assert "2. FAVE (SHORT) | Favorite | 1.00R" in text
+    assert "TV paste: BEST,FAVE" in text
+    # Operational truth is still present, but after the trades.
+    assert "== OPERATIONS ==" in text
+    assert text.index("== BEST SWING TRADES ==") < text.index("== OPERATIONS ==")
+
+
 def test_phone_digest_distinguishes_no_current_swings_from_unscanned_data():
     current = core.render_away_report(
         _payload(swing_picks=[], swing_data_current=True)
@@ -217,7 +245,7 @@ def test_phone_digest_distinguishes_no_current_swings_from_unscanned_data():
 
     assert "No qualified current-session swing opportunity." in current
     assert "Awaiting today's first completed swing scan." in awaiting
-    assert awaiting.index("== SWING OPPORTUNITIES ==") < awaiting.index(
+    assert awaiting.index("== BEST SWING TRADES ==") < awaiting.index(
         "== DAY TRADE LONGS"
     )
 

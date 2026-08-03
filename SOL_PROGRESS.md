@@ -7,6 +7,20 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
+- Branch `claude/auto-away-mode-drive-output-bek3ks` (2026-08-03, not yet
+  merged): Away-mode Drive output consolidation + satellite Auto-mode control.
+  `autopilot_today.txt` is now the one phone-facing Drive file, leading with a
+  numbered **BEST SWING TRADES** list (bucket-ranked, expected R, setup family,
+  key level, TV-paste line); every operational/diagnostic line is condensed
+  into an `== OPERATIONS ==` tail section so the top of the report is trades.
+  Desk Link relay is independent of the Auto profile (unchanged in AWAY), the
+  state snapshot now carries the main's Auto mode, and a satellite holding the
+  Tier 2 control lease can switch OFF/DESK/AWAY/EVENING through the new
+  idempotent `set_auto_mode` intent (same `_set_auto_mode` path as the shell
+  button; junk modes are refused). Test baseline on this branch:
+  **1786 passed, 2 skipped, 5 subtests** (Linux, TZ=America/Los_Angeles);
+  smoke 7/7. Not yet live-validated on the desk/satellite pair.
+
 - Branch `claude/macos-gui-tws-compat-0nv0gs` (2026-08-02, not yet merged):
   macOS support (CloudStorage Drive detection, Keychain AI keys, `.command`
   launchers, `docs/MACOS_SETUP.md`) plus **Desk Link Tier 1** (plan.md sec 12

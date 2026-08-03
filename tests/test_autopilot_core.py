@@ -168,8 +168,10 @@ def test_industry_snapshot_identity_is_shared_and_mismatch_is_loud():
             "swing_data_current": True,
         }
     )
+    # Diagnostics live in the OPERATIONS tail now - the swing list leads.
     assert line in report
-    assert report.index(line) < report.index("== SWING OPPORTUNITIES ==")
+    assert report.index("== BEST SWING TRADES ==") < report.index(line)
+    assert report.index("== OPERATIONS ==") < report.index(line)
 
 
 def _fake_frame(rows, start):

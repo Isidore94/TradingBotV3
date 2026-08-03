@@ -95,6 +95,9 @@ class MainWindow(QMainWindow):
             self.trading_panel.alert_center._current_bot,
             self.trading_panel.alert_center.desk_link_stream_symbols,
         )
+        self.desk_link_service.set_auto_mode_source(
+            lambda: self.autopilot_panel.service.auto_mode
+        )
         self.desk_link_feed = None
         if satellite_desk:
             # Satellite desk (--satellite-desk): the FULL desk UI, fed by the
@@ -372,15 +375,28 @@ class MainWindow(QMainWindow):
         service = self.autopilot_panel.service
         mode = service.auto_mode
         if mode == "OFF":
-            service.set_profile("DESK")
-            service.set_enabled(True)
+            self._set_auto_mode("DESK")
         elif mode == "DESK":
-            service.set_profile("AWAY")
+            self._set_auto_mode("AWAY")
         elif mode == "AWAY":
-            service.set_profile("EVENING")
+            self._set_auto_mode("EVENING")
         else:
+            self._set_auto_mode("OFF")
+
+    def _set_auto_mode(self, mode: str) -> None:
+        """One entry point for every Auto mode change (button and Desk Link)."""
+        service = self.autopilot_panel.service
+        if mode == "OFF":
             service.set_enabled(False)
+        else:
+            service.set_profile(mode)
+            service.set_enabled(True)
         self._sync_auto_mode_button()
+        # Satellites mirror the mode from the state snapshot; push it now
+        # instead of leaving them a snapshot interval behind.
+        desk_link = getattr(self, "desk_link_service", None)
+        if desk_link is not None:
+            desk_link.publish_state_snapshot()
 
     def _sync_auto_mode_button(self) -> None:
         mode = self.autopilot_panel.service.auto_mode
@@ -580,11 +596,24 @@ class MainWindow(QMainWindow):
 
     def _on_desk_link_intent(self, machine: str, intent: dict) -> None:
         try:
-            ok, detail = self.trading_panel.alert_center.apply_desk_link_intent(machine, intent)
+            if str(intent.get("action") or "") == "set_auto_mode":
+                ok, detail = self._apply_auto_mode_intent(machine, intent)
+            else:
+                ok, detail = self.trading_panel.alert_center.apply_desk_link_intent(machine, intent)
         except Exception:
             logging.exception("Desk Link intent application failed.")
             ok, detail = False, "intent application raised; see the main desk log"
         self.desk_link_service.send_intent_result(machine, intent.get("seq"), ok, detail)
+
+    def _apply_auto_mode_intent(self, machine: str, intent: dict) -> tuple[bool, str]:
+        """Apply a satellite's Auto mode change through the same path as the
+        shell button. Idempotent, so at-least-once intent delivery is safe."""
+        mode = str(intent.get("mode") or "").strip().upper()
+        if mode not in ("OFF", "DESK", "AWAY", "EVENING"):
+            return False, f"set_auto_mode needs mode OFF|DESK|AWAY|EVENING, got {mode!r}"
+        self._set_auto_mode(mode)
+        logging.info("Auto mode set to %s by Desk Link satellite %s.", mode, machine)
+        return True, f"Auto mode -> {mode}"
 
     def closeEvent(self, event) -> None:
         for panel in (

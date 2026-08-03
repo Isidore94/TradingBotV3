@@ -19,6 +19,7 @@ from typing import Any
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -45,6 +46,8 @@ log = logging.getLogger(__name__)
 
 _MAX_FEED_ROWS = 200
 _MAX_OPEN_POPUPS = 6
+
+AUTO_MODES = ("OFF", "DESK", "AWAY", "EVENING")
 
 HOST_SETTING = "desk_link_host"
 TOKEN_SETTING = "desk_link_token"
@@ -255,6 +258,20 @@ class SatelliteWindow(QMainWindow):
         # each reconnect so the main replays anything a Wi-Fi blip swallowed.
         self._last_popup_seq = 0
         self._last_replay_beep = 0.0
+        # The main's Auto mode, mirrored from the state snapshot. Changing it
+        # is a Tier 2 intent, so the selector is live only while in control.
+        self.mode_label = QLabel("Main Auto mode: (waiting for snapshot)")
+        self.mode_label.setObjectName("MutedLabel")
+        self.mode_selector = QComboBox()
+        self.mode_selector.addItems(list(AUTO_MODES))
+        self.mode_selector.setEnabled(False)
+        self.mode_selector.setToolTip(
+            "Change the main desk's Auto mode (OFF / DESK / AWAY / EVENING). "
+            "Take control first; the change applies on the main immediately."
+        )
+        # `activated` fires only on a user pick, so mirroring the snapshot
+        # into the combo never echoes an intent back to the main.
+        self.mode_selector.activated.connect(self._on_mode_selected)
         self.snapshot_label = QLabel("")
         self.snapshot_label.setObjectName("MutedLabel")
         self.snapshot_label.setWordWrap(True)
@@ -267,9 +284,15 @@ class SatelliteWindow(QMainWindow):
         top_row.addWidget(self.control_button)
         top_row.addWidget(self.connect_button)
 
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        mode_row.addWidget(self.mode_label, 1)
+        mode_row.addWidget(self.mode_selector)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addLayout(top_row)
+        layout.addLayout(mode_row)
         layout.addWidget(self.snapshot_label)
         layout.addWidget(self.feed, 1)
         self.setCentralWidget(central)
@@ -357,9 +380,32 @@ class SatelliteWindow(QMainWindow):
         self._client.send(protocol.TYPE_INTENT, intent)
         return True
 
+    def _on_mode_selected(self, index: int) -> None:
+        mode = str(self.mode_selector.itemText(index) or "").strip().upper()
+        if not mode:
+            return
+        if self.send_intent("set_auto_mode", "", mode=mode):
+            self.feed.insertItem(0, f"→ main: set Auto mode {mode}")
+        else:
+            self.status_label.setText("Not in control — mode change not sent.")
+            self._reflect_main_mode()
+
+    def _reflect_main_mode(self, mode: str = "") -> None:
+        """Mirror the main's mode into the label and selector without firing
+        an intent (`activated` only fires on user picks)."""
+        if mode:
+            self._main_auto_mode = mode
+        known = getattr(self, "_main_auto_mode", "")
+        self.mode_label.setText(
+            f"Main Auto mode: {known}" if known else "Main Auto mode: (waiting for snapshot)"
+        )
+        if known in AUTO_MODES:
+            self.mode_selector.setCurrentIndex(AUTO_MODES.index(known))
+
     def _set_in_control(self, in_control: bool, status_text: str) -> None:
         self.in_control = in_control
         self.control_button.setText("Release control" if in_control else "Take control")
+        self.mode_selector.setEnabled(in_control)
         self.status_label.setText(status_text)
         self._popups = [popup for popup in self._popups if popup.isVisible()]
         for popup in self._popups:
@@ -415,6 +461,7 @@ class SatelliteWindow(QMainWindow):
             self.feed.insertItem(0, f"✗ main refused: {detail}")
 
     def _show_snapshot(self, payload: dict[str, Any]) -> None:
+        self._reflect_main_mode(str(payload.get("auto_mode") or "").strip().upper())
         watchlists = payload.get("watchlists") or {}
         focus = payload.get("focus") or {}
         bits = [f"{name} {len(symbols)}" for name, symbols in watchlists.items()]

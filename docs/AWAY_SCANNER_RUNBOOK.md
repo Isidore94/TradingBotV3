@@ -248,8 +248,9 @@ contents.)
    `DEGRADED` item can be expected when today's work has not started yet, but
    its explanation must match reality.
 5. Open the shared `autopilot_today.txt` once from the phone-facing Drive view.
-   Confirm its Updated time, runtime machine/PID, Health line, last-scan line,
-   tracker-write result, watchlists, and next scheduled slot.
+   Confirm its Updated time, the BEST SWING TRADES list up top, the watchlists,
+   the next scheduled slot, and the `== OPERATIONS ==` tail (runtime
+   machine/PID, Health line, last-scan line, tracker-write result).
 
 ## What the unattended path now protects
 

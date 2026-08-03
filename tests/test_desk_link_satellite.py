@@ -334,6 +334,46 @@ def test_connect_dialog_prefills_from_saved_settings(monkeypatch):
         dialog.close()
 
 
+def test_satellite_mode_selector_mirrors_and_gates_on_control(monkeypatch):
+    """The satellite shows the main's Auto mode from the snapshot and can only
+    change it while holding the control lease (Tier 2 rule)."""
+    _qapp()
+    satellite_module = _patched_satellite_settings(monkeypatch, {})
+    window = satellite_module.SatelliteWindow(machine_name="test-sat")
+    try:
+        # Snapshot mirroring never sends anything and never enables the combo.
+        window._show_snapshot({"auto_mode": "AWAY", "watchlists": {}, "focus": {}})
+        assert "AWAY" in window.mode_label.text()
+        assert window.mode_selector.currentText() == "AWAY"
+        assert not window.mode_selector.isEnabled()
+
+        sent: list[tuple[str, dict]] = []
+
+        class _FakeClient:
+            def send(self, message_type, payload=None):
+                sent.append((message_type, payload or {}))
+                return True
+
+            def stop(self):
+                pass
+
+        window._client = _FakeClient()
+
+        # Not in control: the pick is refused locally, nothing hits the wire.
+        window._on_mode_selected(list(satellite_module.AUTO_MODES).index("EVENING"))
+        assert not any(kind == protocol.TYPE_INTENT for kind, _ in sent)
+        assert window.mode_selector.currentText() == "AWAY"  # reverted to the main's truth
+
+        window._set_in_control(True, "in control")
+        assert window.mode_selector.isEnabled()
+        window._on_mode_selected(list(satellite_module.AUTO_MODES).index("EVENING"))
+        intents = [payload for kind, payload in sent if kind == protocol.TYPE_INTENT]
+        assert intents and intents[-1]["action"] == "set_auto_mode"
+        assert intents[-1]["mode"] == "EVENING"
+    finally:
+        window.close()
+
+
 def test_settings_page_regenerate_revokes_the_old_token(monkeypatch):
     _qapp()
     from ui.panels.settings_panel import SettingsPanel

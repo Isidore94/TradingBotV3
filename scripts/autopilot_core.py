@@ -2520,7 +2520,14 @@ AWAY_REPORT_MAX_NEAR_ROWS = 3
 
 
 def render_away_report(payload: Mapping[str, Any]) -> str:
-    """Phone-first digest: tickers up top, operations detail below."""
+    """Phone-first digest: ONE central Drive file, best swing trades on top.
+
+    The ranked swing list is the deliverable; day-trade watchlists and
+    alerts follow, and all operational/diagnostic truth is condensed into
+    a single OPERATIONS section at the tail so the phone view stays mostly
+    trades. The freshness warning stays in the header - a stale report must
+    say so before it says anything else.
+    """
 
     def _lines(items: Iterable[str]) -> str:
         items = [str(item) for item in items if str(item).strip()]
@@ -2547,6 +2554,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     indexed_picks.sort(key=lambda item: (_swing_bucket_priority(item[1]), item[0]))
 
     picks_lines = []
+    picks_symbols: list[str] = []
     near_rows_shown = 0
     near_rows_suppressed = 0
     for _index, pick in indexed_picks:
@@ -2564,12 +2572,21 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         expected_r = pick.get("expected_r")
         expected_text = f" | {float(expected_r):.2f}R" if expected_r is not None else ""
         bucket_text = f" | {bucket}" if bucket else ""
-        picks_lines.append(f"{symbol} ({side}){bucket_text}{expected_text}")
+        family = str(pick.get("family") or "").strip().replace("_", " ")
+        family_text = f" | {family}" if family else ""
+        key_level = str(pick.get("key_level") or "").strip()
+        level_text = f" @ {key_level}" if key_level else ""
+        picks_symbols.append(symbol)
+        picks_lines.append(
+            f"{len(picks_symbols)}. {symbol} ({side}){bucket_text}{expected_text}{family_text}{level_text}"
+        )
     if near_rows_suppressed:
         picks_lines.append(
             f"(+{near_rows_suppressed} more near-favorite rows hidden - bucket measured "
             "-0.18R avg vs favorites +1.01R, week of 2026-07-13)"
         )
+    if picks_symbols:
+        picks_lines.append("TV paste: " + ",".join(picks_symbols))
 
     swing_data_line = str(payload.get("swing_data_line") or "")
     if picks_lines:
@@ -2578,6 +2595,8 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         swing_lines = ["Awaiting today's first completed swing scan."]
     else:
         swing_lines = ["No qualified current-session swing opportunity."]
+    if swing_data_line:
+        swing_lines = [*swing_lines, swing_data_line]
 
     def _tv_line(items: Iterable[str]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
@@ -2598,22 +2617,23 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
             "Evening mode: picks stage for chart approval only (no self-applied trades); "
             "morning briefing finalizes after the 07:30 strength check."
         )
-    if payload.get("universe_line"):
-        header_bits.append(str(payload["universe_line"]))
-    if payload.get("scorecard_line"):
-        header_bits.append(str(payload["scorecard_line"]))
-    if payload.get("runtime_line"):
-        header_bits.append(str(payload["runtime_line"]))
-    if payload.get("operations_line"):
-        header_bits.append(str(payload["operations_line"]))
-    if payload.get("last_scan_line"):
-        header_bits.append(str(payload["last_scan_line"]))
-    if payload.get("industry_line"):
-        header_bits.append(str(payload["industry_line"]))
-    if payload.get("swing_data_line"):
-        header_bits.append(str(payload["swing_data_line"]))
-    if payload.get("tracker_line"):
-        header_bits.append(str(payload["tracker_line"]))
+
+    # Everything operational lands in one tail section so the top of the
+    # phone view is trades, not diagnostics. Order preserves the old
+    # header's reading order; absent lines simply drop out.
+    operations_lines = [
+        str(payload[key])
+        for key in (
+            "universe_line",
+            "scorecard_line",
+            "runtime_line",
+            "operations_line",
+            "last_scan_line",
+            "industry_line",
+            "tracker_line",
+        )
+        if payload.get(key)
+    ]
 
     briefing_sections: list[str] = []
     briefing_lines = [str(line) for line in (payload.get("evening_briefing_lines") or []) if str(line).strip()]
@@ -2628,7 +2648,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         *header_bits,
         "",
         *briefing_sections,
-        "== SWING OPPORTUNITIES ==",
+        "== BEST SWING TRADES ==",
         _lines(swing_lines),
         "",
         "== DAY TRADE LONGS (longs.txt) ==",
@@ -2653,6 +2673,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "== SCHEDULE ==",
         f"Swing slots done: {_tickers(payload.get('slots_done', []))}",
         f"Next swing slot: {payload.get('next_slot') or '(none left today)'}",
+        "",
+        "== OPERATIONS ==",
+        _lines(operations_lines),
         "",
         "== ACTIVITY LOG (latest first) ==",
         _lines(payload.get("log_lines", [])),
