@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -13,8 +13,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from project_paths import get_tracker_storage_details, open_path_in_file_manager
@@ -132,18 +135,37 @@ class SettingsPanel(QFrame):
         data_actions.addWidget(self.warm_button)
         data_actions.addStretch(1)
 
+        general_page = QFrame()
+        general_page.setObjectName("Panel")
+        general_layout = QVBoxLayout(general_page)
+        general_layout.setContentsMargins(12, 12, 12, 12)
+        general_layout.setSpacing(10)
+        general_layout.addWidget(
+            SectionHeader("General", "Per-machine presentation and durable storage.")
+        )
+        general_layout.addLayout(form)
+        general_layout.addLayout(data_actions)
+        general_layout.addWidget(self.warm_status)
+        general_layout.addStretch(1)
+
+        self.settings_tabs = QTabWidget()
+        self.settings_tabs.setDocumentMode(True)
+        self.settings_tabs.addTab(_scrollable_tab(general_page), "General")
+        if self.bounce_service is not None:
+            self.settings_tabs.addTab(_scrollable_tab(self._build_bounce_section()), "BounceBot")
+        if self.desk_link_service is not None:
+            self.settings_tabs.addTab(_scrollable_tab(self._build_desk_link_section()), "Desk Link")
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        layout.addWidget(SectionHeader("Settings", "Per-machine presentation, storage, and BounceBot configuration."))
-        layout.addLayout(form)
-        layout.addLayout(data_actions)
-        layout.addWidget(self.warm_status)
-        if self.bounce_service is not None:
-            layout.addWidget(self._build_bounce_section())
-        if self.desk_link_service is not None:
-            layout.addWidget(self._build_desk_link_section())
-        layout.addStretch(1)
+        layout.addWidget(
+            SectionHeader(
+                "Settings",
+                "Presentation, data, live-engine controls, and multi-machine Desk Link.",
+            )
+        )
+        layout.addWidget(self.settings_tabs, 1)
 
     def _build_bounce_section(self) -> QFrame:
         """Operational BounceBot controls, moved off the Trading Desk so the
@@ -628,6 +650,17 @@ def _satellite_machine_name() -> str:
     import socket
 
     return socket.gethostname() or "satellite-desk"
+
+
+def _scrollable_tab(content: QWidget) -> QScrollArea:
+    """Give each settings category its own viewport instead of compressing it."""
+    scroll = QScrollArea()
+    scroll.setObjectName("SettingsTabScroll")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setWidget(content)
+    return scroll
 
 
 def _screen_size() -> tuple[int, int]:

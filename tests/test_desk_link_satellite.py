@@ -529,6 +529,41 @@ def test_settings_page_switches_role_and_requests_safe_restart(monkeypatch):
         service.stop()
 
 
+def test_settings_categories_are_separate_scroll_safe_tabs(monkeypatch):
+    from ui.panels.settings_panel import SettingsPanel
+    from ui.services.bounce_service import BounceService
+    from ui.state import UiState
+
+    qapp = _qapp()
+    settings: dict = {"desk_link_token": "server-token"}
+    _patched_satellite_settings(monkeypatch, settings)
+    _patched_desk_role_settings(monkeypatch, settings)
+    desk_link = _patched_service(monkeypatch, {**settings, "desk_link_port": 0})
+    bounce = BounceService()
+    panel = SettingsPanel(
+        UiState(),
+        bounce_service=bounce,
+        desk_link_service=desk_link,
+    )
+    try:
+        assert [
+            panel.settings_tabs.tabText(index)
+            for index in range(panel.settings_tabs.count())
+        ] == ["General", "BounceBot", "Desk Link"]
+
+        panel.resize(1100, 480)
+        panel.show()
+        panel.settings_tabs.setCurrentIndex(2)
+        qapp.processEvents()
+        desk_scroll = panel.settings_tabs.currentWidget()
+        assert desk_scroll.widget().isAncestorOf(panel.main_desk_host_input)
+        assert desk_scroll.verticalScrollBar().maximum() > 0
+    finally:
+        panel.close()
+        bounce.shutdown()
+        desk_link.stop()
+
+
 def test_settings_page_recovers_terminal_feed_status_on_construction(monkeypatch):
     settings = {
         "desk_link_host": "main-pc:48000",
