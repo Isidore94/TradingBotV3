@@ -47,7 +47,12 @@ _MAX_FEED_ROWS = 200
 _MAX_OPEN_POPUPS = 6
 
 HOST_SETTING = "desk_link_host"
-TOKEN_SETTING = "desk_link_token"
+CLIENT_TOKEN_SETTING = "desk_link_client_token"
+# Before the desk could both serve and follow from the Settings page, the
+# satellite reused the relay server's token key.  Migrate an existing pairing
+# once, but all new client writes use their own key so pairing upstream can
+# never rotate this machine's server credential.
+LEGACY_TOKEN_SETTING = "desk_link_token"
 
 
 def load_saved_connection() -> tuple[str, int, str]:
@@ -58,13 +63,20 @@ def load_saved_connection() -> tuple[str, int, str]:
         port = int(port_text) if port_text.strip() else DEFAULT_PORT
     except ValueError:
         port = DEFAULT_PORT
-    token = str(get_local_setting(TOKEN_SETTING, "") or "").strip()
+    token = str(get_local_setting(CLIENT_TOKEN_SETTING, "") or "").strip()
+    if not token and host.strip():
+        token = str(get_local_setting(LEGACY_TOKEN_SETTING, "") or "").strip()
+        if token:
+            try:
+                save_local_setting(CLIENT_TOKEN_SETTING, token)
+            except OSError:
+                log.warning("Could not migrate the saved Desk Link client token.", exc_info=True)
     return host.strip(), port, token
 
 
 def save_connection(host: str, port: int, token: str) -> None:
     save_local_setting(HOST_SETTING, f"{host.strip()}:{int(port)}")
-    save_local_setting(TOKEN_SETTING, token.strip())
+    save_local_setting(CLIENT_TOKEN_SETTING, token.strip())
 
 
 class ConnectDialog(QDialog):

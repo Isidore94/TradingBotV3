@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import threading
 from datetime import datetime, timedelta
@@ -174,6 +175,22 @@ def test_send_test_popup_reaches_a_live_satellite(monkeypatch):
     try:
         assert service.send_test_popup() is False  # nobody listening yet
 
+        # A TCP accept is not a satellite until its authenticated hello has
+        # completed.  The old client_count gate returned a false success here
+        # even though broadcasts deliberately exclude unnamed connections.
+        raw_client = socket.create_connection(("127.0.0.1", service._server.address[1]))
+        try:
+            waiter = threading.Event()
+            for _ in range(50):
+                if service._server.client_count == 1:
+                    break
+                waiter.wait(0.01)
+            assert service._server.client_count == 1
+            assert service.connected_machines() == []
+            assert service.send_test_popup() is False
+        finally:
+            raw_client.close()
+
         received: list[dict] = []
         got_popup = threading.Event()
 
@@ -284,6 +301,7 @@ def test_satellite_window_autoconnects_from_saved_settings(monkeypatch):
     satellite_module = _patched_satellite_settings(monkeypatch, settings)
     window = satellite_module.SatelliteWindow(machine_name="test-sat")
     try:
+        assert settings["desk_link_client_token"] == "saved-token"
         assert window._client is not None
         assert window._client._host == "192.168.1.20"
         assert window._client._port == 47601
@@ -313,7 +331,8 @@ def test_connect_dialog_applies_and_persists_new_connection(monkeypatch):
         window.open_connect_dialog()
 
         assert settings["desk_link_host"] == "10.0.0.5:50000"
-        assert settings["desk_link_token"] == "new-token"
+        assert settings["desk_link_client_token"] == "new-token"
+        assert settings["desk_link_token"] == "old-token"  # legacy/server token is untouched
         assert window._client is not first_client  # old client replaced live
         assert window._client._host == "10.0.0.5"
         assert window._client._port == 50000
@@ -332,6 +351,146 @@ def test_connect_dialog_prefills_from_saved_settings(monkeypatch):
         assert dialog.token_input.text() == "tok"
     finally:
         dialog.close()
+
+
+class _StubFeed:
+    """Stands in for DeskLinkFeedService: records start/stop without a socket."""
+
+    def __init__(self) -> None:
+        from PySide6.QtCore import QObject, Signal
+
+        class _Signals(QObject):
+            linkStatusChanged = Signal(str, str)
+
+        self._signals = _Signals()
+        self.linkStatusChanged = self._signals.linkStatusChanged
+        self.running = False
+        self.link_status = ("stopped", "stopped")
+        self.started: list[dict] = []
+        self.stops = 0
+
+    def current_link_status(self) -> tuple[str, str]:
+        return self.link_status
+
+    def start(self, **kwargs) -> None:
+        self.started.append(kwargs)
+        self.running = True
+        self.link_status = ("connecting", f"connecting to {kwargs['host']}:{kwargs['port']}")
+
+    def stop(self) -> None:
+        self.stops += 1
+        self.running = False
+        self.link_status = ("stopped", "stopped")
+
+
+def _pairing_panel(monkeypatch, settings: dict, feed=None):
+    from ui.panels.settings_panel import SettingsPanel
+    from ui.state import UiState
+
+    _qapp()
+    _patched_satellite_settings(monkeypatch, settings)
+    settings.setdefault("desk_link_port", 0)
+    # Production server and satellite helpers share one local-settings file;
+    # keep one dict here so a credential-key collision cannot hide in tests.
+    service = _patched_service(monkeypatch, settings)
+    panel = SettingsPanel(UiState(), desk_link_service=service, desk_link_feed=feed)
+    return panel, service
+
+
+def test_settings_page_pairs_this_desk_with_a_main(monkeypatch):
+    """The connect dialog's job, done on the Settings page instead."""
+    settings: dict = {}
+    feed = _StubFeed()
+    panel, service = _pairing_panel(monkeypatch, settings, feed=feed)
+    try:
+        panel.main_desk_host_input.setText("192.168.0.223")
+        panel.main_desk_port_input.setValue(47600)
+        panel.main_desk_token_input.setText("relay-token")
+        panel._connect_to_main_desk()
+
+        assert settings["desk_link_host"] == "192.168.0.223:47600"
+        assert settings["desk_link_client_token"] == "relay-token"
+        assert feed.stops == 1  # old link dropped so the new one is not a no-op
+        assert feed.started[-1]["host"] == "192.168.0.223"
+        assert feed.started[-1]["port"] == 47600
+        assert feed.started[-1]["token"] == "relay-token"
+        assert "192.168.0.223" in panel.main_desk_link_status.text()
+
+        # Live status from the client thread lands in the same label.
+        feed.linkStatusChanged.emit("connected", "main-desk")
+        assert "Connected to main-desk" in panel.main_desk_link_status.text()
+        feed.linkStatusChanged.emit("rejected", "bad token")
+        assert "Token rejected" in panel.main_desk_link_status.text()
+    finally:
+        service.stop()
+
+
+def test_settings_page_prefills_pairing_and_refuses_half_filled(monkeypatch):
+    settings = {"desk_link_host": "main-pc:48000", "desk_link_token": "tok"}
+    feed = _StubFeed()
+    panel, service = _pairing_panel(monkeypatch, settings, feed=feed)
+    try:
+        assert panel.main_desk_host_input.text() == "main-pc"
+        assert panel.main_desk_port_input.value() == 48000
+        assert panel.main_desk_token_input.text() == "tok"
+
+        panel.main_desk_token_input.setText("   ")
+        panel._connect_to_main_desk()
+        assert not feed.started  # nothing sent, nothing overwritten
+        assert settings["desk_link_token"] == "tok"
+        assert settings["desk_link_client_token"] == "tok"  # migrated from the legacy pairing
+        assert "link token" in panel.main_desk_link_status.text()
+
+        panel.main_desk_token_input.setText("tok")
+        panel._forget_main_desk()
+        assert settings["desk_link_host"] == ":48000"
+        assert settings["desk_link_client_token"] == ""
+        assert settings["desk_link_token"] == "tok"
+        assert feed.stops == 1
+        assert panel.main_desk_host_input.text() == ""
+    finally:
+        service.stop()
+
+
+def test_settings_page_pairing_on_a_normal_desk_only_saves(monkeypatch):
+    """No feed (not launched with --satellite-desk): save, do not pretend to link."""
+    settings: dict = {"desk_link_token": "server-token"}
+    panel, service = _pairing_panel(monkeypatch, settings, feed=None)
+    try:
+        assert "Not paired" in panel.main_desk_link_status.text()
+        panel.main_desk_host_input.setText("10.0.0.5")
+        panel.main_desk_port_input.setValue(50000)
+        panel.main_desk_token_input.setText("later-token")
+        panel._connect_to_main_desk()
+
+        assert settings["desk_link_host"] == "10.0.0.5:50000"
+        assert settings["desk_link_client_token"] == "later-token"
+        assert settings["desk_link_token"] == "server-token"
+        assert service.current_token() == "server-token"
+        assert "satellite" in panel.main_desk_link_status.text().lower()
+
+        panel._forget_main_desk()
+        assert settings["desk_link_client_token"] == ""
+        assert settings["desk_link_token"] == "server-token"
+    finally:
+        service.stop()
+
+
+def test_settings_page_recovers_terminal_feed_status_on_construction(monkeypatch):
+    settings = {
+        "desk_link_host": "main-pc:48000",
+        "desk_link_client_token": "bad-token",
+    }
+    feed = _StubFeed()
+    feed.running = True  # a rejected DeskLinkClient object still exists
+    feed.link_status = ("rejected", "bad token")
+
+    panel, service = _pairing_panel(monkeypatch, settings, feed=feed)
+    try:
+        assert "Token rejected" in panel.main_desk_link_status.text()
+        assert "bad token" in panel.main_desk_link_status.text()
+    finally:
+        service.stop()
 
 
 def test_settings_page_regenerate_revokes_the_old_token(monkeypatch):

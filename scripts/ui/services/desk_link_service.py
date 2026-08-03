@@ -91,7 +91,7 @@ class DeskLinkService(QObject):
 
     @property
     def has_satellites(self) -> bool:
-        return self._server is not None and self._server.client_count > 0
+        return bool(self.connected_machines())
 
     def start(self) -> bool:
         if self._server is not None:
@@ -327,7 +327,7 @@ class DeskLinkService(QObject):
         No-op without connected satellites - zero cost on a lone desk.
         """
         server = self._server
-        if server is None or server.client_count == 0:
+        if server is None or not server.connected_machines():
             return
         try:
             server.send_desk_stream({"stream": str(stream), "data": data})
@@ -342,7 +342,7 @@ class DeskLinkService(QObject):
 
     def _publish_live_charts(self) -> None:
         server = self._server
-        if server is None or server.client_count == 0:
+        if server is None or not server.connected_machines():
             return
         if self._bot_provider is None or self._chart_symbols_provider is None:
             return

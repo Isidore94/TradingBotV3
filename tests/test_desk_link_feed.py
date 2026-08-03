@@ -78,7 +78,10 @@ def test_feed_rebuilds_alerts_and_backs_m5_charts_end_to_end():
     feed.alertReceived.connect(alerts.append)
     try:
         feed.start(host="127.0.0.1", port=server.address[1], token="tkn", machine_name="sat-desk")
-        assert _pump_until(qapp, lambda: server.client_count == 1)
+        # Wait for the hello, not just the accept: the server only broadcasts
+        # to connections whose machine name is known, so a popup sent in the
+        # accept window would be silently addressed to nobody.
+        assert _pump_until(qapp, lambda: server.connected_machines() == ["sat-desk"])
         server.send_alert_popup(_payload())
         assert _pump_until(qapp, lambda: len(alerts) == 1)
 
@@ -114,7 +117,7 @@ def test_desk_streams_relay_live_surfaces_end_to_end(monkeypatch):
     feed.autoRegimeChanged.connect(received["regime"].append)
     try:
         feed.start(host="127.0.0.1", port=main._server.address[1], token="tkn", machine_name="sat-desk")
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.connected_machines() == ["sat-desk"])
 
         main.publish_stream("rrs", {"leaders": ["NVDA"]})
         main.publish_stream("status", "connected")
@@ -157,7 +160,7 @@ def test_live_m5_stream_updates_the_satellite_chart_cache(monkeypatch):
     feed = DeskLinkFeedService()
     try:
         feed.start(host="127.0.0.1", port=main._server.address[1], token="tkn", machine_name="sat-desk")
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.connected_machines() == ["sat-desk"])
 
         main._publish_live_charts()  # what the 30s timer fires
         assert _pump_until(qapp, lambda: bool(feed.payload_bot().m5_chart_bars("NVDA")))

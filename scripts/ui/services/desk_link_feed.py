@@ -65,6 +65,7 @@ class DeskLinkFeedService(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._client: DeskLinkClient | None = None
+        self._link_status = ("stopped", "stopped")
         self._payload_bot = _PayloadBot()
         self._messageArrived.connect(self._handle_message)
 
@@ -75,16 +76,27 @@ class DeskLinkFeedService(QObject):
     def running(self) -> bool:
         return self._client is not None
 
+    def current_link_status(self) -> tuple[str, str]:
+        """Last client state, including terminal rejection/disconnection."""
+        return self._link_status
+
+    def _record_link_status(self, state: str, detail: str) -> None:
+        # Replacing one tuple is atomic under CPython, so the GUI thread never
+        # observes a state from one callback with detail from another.
+        self._link_status = (str(state), str(detail))
+        self.linkStatusChanged.emit(*self._link_status)
+
     def start(self, *, host: str, port: int, token: str, machine_name: str) -> None:
         if self._client is not None:
             return
+        self._record_link_status("connecting", f"connecting to {host}:{port}")
         self._client = DeskLinkClient(
             host=host,
             port=port,
             token=token,
             machine_name=machine_name,
             on_message=self._messageArrived.emit,
-            on_status=self.linkStatusChanged.emit,
+            on_status=self._record_link_status,
         )
         self._client.start()
 
@@ -92,6 +104,8 @@ class DeskLinkFeedService(QObject):
         client, self._client = self._client, None
         if client is not None:
             client.stop()
+        else:
+            self._record_link_status("stopped", "stopped")
 
     def _handle_message(self, message: dict) -> None:
         kind = message.get("type")

@@ -111,6 +111,9 @@ class MainWindow(QMainWindow):
             self.trading_panel.alert_center.attach_remote_feed(self.desk_link_feed)
             self.desk_link_feed.linkStatusChanged.connect(self._on_satellite_link_status)
             self.desk_link_feed.autoRegimeChanged.connect(self._set_auto_regime)
+            # Unpaired is a normal state, not a launch blocker: the desk opens
+            # and the trader pairs it in Settings -> Desk Link.
+            self._satellite_paired = bool(host and link_token)
             if host and link_token:
                 self.desk_link_feed.start(
                     host=host,
@@ -125,6 +128,7 @@ class MainWindow(QMainWindow):
             self.state,
             bounce_service=self.trading_panel.bounce_panel.service,
             desk_link_service=self.desk_link_service,
+            desk_link_feed=self.desk_link_feed,
         )
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
         self.health_panel = HealthPanel()
@@ -327,7 +331,11 @@ class MainWindow(QMainWindow):
         self.satellite_link_label = None
         if self._satellite_desk:
             self.setWindowTitle("TradingBotV3 Trading Desk — SATELLITE (fed by main)")
-            self.satellite_link_label = QLabel("LINK … connecting")
+            self.satellite_link_label = QLabel(
+                "LINK … connecting"
+                if getattr(self, "_satellite_paired", False)
+                else "LINK ✕ not paired — Settings ▸ Desk Link"
+            )
             status.addPermanentWidget(self.satellite_link_label)
 
     def _set_auto_regime(self, reading) -> None:
@@ -558,8 +566,8 @@ class MainWindow(QMainWindow):
             "connected": f"LINK ● {detail}",
             "connecting": "LINK … connecting",
             "disconnected": f"LINK ✕ {detail}",
-            "rejected": "LINK ✕ token rejected - launch the satellite window once to re-pair",
-            "stopped": "LINK ✕ stopped",
+            "rejected": "LINK ✕ token rejected - re-pair in Settings ▸ Desk Link",
+            "stopped": "LINK ✕ not paired - Settings ▸ Desk Link",
         }
         self.satellite_link_label.setText(texts.get(link_state, f"LINK {link_state}"))
 
@@ -788,21 +796,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.satellite is not None:
         return _run_satellite(app, args.satellite, args.link_token)
 
-    if args.satellite_desk:
-        from ui.satellite import ConnectDialog, load_saved_connection, save_connection
+    if args.satellite_desk and args.link_token:
+        # Optional CLI convenience; pairing normally happens in the desk's own
+        # Settings -> Desk Link -> "Connect to a main desk", so an unpaired
+        # satellite desk still launches instead of blocking on a dialog.
+        from ui.satellite import load_saved_connection, save_connection
 
-        if args.link_token:
-            host, port, _ = load_saved_connection()
-            if host:
-                save_connection(host, port, args.link_token)
-        host, _, link_token = load_saved_connection()
-        if not host or not link_token:
-            from PySide6.QtWidgets import QDialog
-
-            dialog = ConnectDialog()
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return 2
-            save_connection(*dialog.connection())
+        host, port, _ = load_saved_connection()
+        if host:
+            save_connection(host, port, args.link_token)
 
     window = MainWindow(state, satellite_desk=bool(args.satellite_desk))
     window.show()
