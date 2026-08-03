@@ -53,6 +53,12 @@ class DeskLinkFeedService(QObject):
 
     alertReceived = Signal(object)  # BounceAlert, same contract as BounceService
     linkStatusChanged = Signal(str, str)  # (state, detail)
+    # Tier 3 full relay: same names and payload shapes as BounceService, so
+    # the desk's surfaces connect to this feed exactly as they do to the bot.
+    rrsSnapshotChanged = Signal(object)
+    entryBoardChanged = Signal(object)
+    statusChanged = Signal(str)
+    autoRegimeChanged = Signal(object)
 
     _messageArrived = Signal(dict)  # client thread -> GUI thread bridge
 
@@ -88,7 +94,11 @@ class DeskLinkFeedService(QObject):
             client.stop()
 
     def _handle_message(self, message: dict) -> None:
-        if message.get("type") != protocol.TYPE_ALERT_POPUP:
+        kind = message.get("type")
+        if kind == protocol.TYPE_DESK_STREAM:
+            self._handle_stream(message.get("payload") or {})
+            return
+        if kind != protocol.TYPE_ALERT_POPUP:
             return
         payload = message.get("payload") or {}
         try:
@@ -101,6 +111,23 @@ class DeskLinkFeedService(QObject):
         m5_bars = (restored.get("m5") or {}).get("bars") or []
         self._payload_bot.store(symbol, m5_bars)
         self.alertReceived.emit(_rebuild_alert(restored["alert"]))
+
+    def _handle_stream(self, payload: dict) -> None:
+        stream = str(payload.get("stream") or "")
+        data = payload.get("data")
+        if stream == "m5_bars" and isinstance(data, dict):
+            from desk_link.popup_payload import bars_from_wire
+
+            self._payload_bot.store(str(data.get("symbol") or ""), bars_from_wire(data.get("bars") or []))
+        elif stream == "rrs":
+            self.rrsSnapshotChanged.emit(data)
+        elif stream == "entry_board":
+            self.entryBoardChanged.emit(data if isinstance(data, dict) else {})
+        elif stream == "status":
+            self.statusChanged.emit(str(data or ""))
+        elif stream == "auto_regime":
+            self.autoRegimeChanged.emit(data if isinstance(data, dict) else {})
+        # Unknown streams from a newer main are skipped, never an error.
 
 
 def _rebuild_alert(fields: dict[str, Any]) -> BounceAlert:

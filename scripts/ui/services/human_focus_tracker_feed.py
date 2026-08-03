@@ -7,7 +7,6 @@ from typing import Any
 from project_paths import (
     HUMAN_FOCUS_OUTCOMES_FILE,
     HUMAN_FOCUS_PERFORMANCE_FILE,
-    MASTER_AVWAP_TIER_PERFORMANCE_FILE,
 )
 
 

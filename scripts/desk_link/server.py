@@ -193,6 +193,10 @@ class DeskLinkServer:
                 "Desk Link replayed %d missed popup(s) to %s.", len(missed), client.machine
             )
 
+    def send_desk_stream(self, payload: dict[str, Any]) -> None:
+        """Broadcast one live desk-surface update (Tier 3 full relay)."""
+        self._broadcast(protocol.make_message(protocol.TYPE_DESK_STREAM, payload))
+
     def send_to_machine(self, machine: str, message_type: str, payload: dict[str, Any]) -> bool:
         """Queue a message for one authenticated satellite; False if absent/slow."""
         try:

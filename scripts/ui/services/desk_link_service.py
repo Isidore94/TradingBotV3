@@ -29,6 +29,11 @@ from project_paths import get_local_setting, save_local_setting
 log = logging.getLogger(__name__)
 
 _SNAPSHOT_INTERVAL_MS = 60_000
+# Live M5 stream cadence matches the desk's own 30s chart-refresh timers;
+# the symbol cap bounds a worst-case burst (40 symbols x ~5KB is trivial on
+# a LAN and invisible next to the scans themselves).
+_LIVE_CHART_INTERVAL_MS = 30_000
+_LIVE_CHART_MAX_SYMBOLS = 40
 
 ENABLED_SETTING = "desk_link_enabled"
 PORT_SETTING = "desk_link_port"
@@ -70,6 +75,11 @@ class DeskLinkService(QObject):
         self._snapshot_timer = QTimer(self)
         self._snapshot_timer.setInterval(_SNAPSHOT_INTERVAL_MS)
         self._snapshot_timer.timeout.connect(self.publish_state_snapshot)
+        self._bot_provider = None
+        self._chart_symbols_provider = None
+        self._live_chart_timer = QTimer(self)
+        self._live_chart_timer.setInterval(_LIVE_CHART_INTERVAL_MS)
+        self._live_chart_timer.timeout.connect(self._publish_live_charts)
         self._clientMessage.connect(self._handle_client_message)
         self._clientGone.connect(self._handle_client_gone)
 
@@ -103,12 +113,14 @@ class DeskLinkService(QObject):
         self._server = server
         self.publish_state_snapshot()
         self._snapshot_timer.start()
+        self._live_chart_timer.start()
         log.info("Desk Link serving satellites on port %s.", port)
         self.runningChanged.emit(True)
         return True
 
     def stop(self) -> None:
         self._snapshot_timer.stop()
+        self._live_chart_timer.stop()
         server, self._server = self._server, None
         if server is not None:
             server.stop()
@@ -306,6 +318,51 @@ class DeskLinkService(QObject):
         except Exception:
             log.exception("Desk Link test popup failed.")
             return False
+
+    def publish_stream(self, stream: str, data: Any) -> None:
+        """Relay one live desk surface (Tier 3 full relay).
+
+        Everything rides the generic desk_stream envelope, so wiring a new
+        surface is one signal connection here and one on the satellite.
+        No-op without connected satellites - zero cost on a lone desk.
+        """
+        server = self._server
+        if server is None or server.client_count == 0:
+            return
+        try:
+            server.send_desk_stream({"stream": str(stream), "data": data})
+        except Exception:
+            log.exception("Desk Link stream %r publish failed.", stream)
+
+    def set_live_chart_source(self, bot_provider, symbols_provider) -> None:
+        """Feed the 30s M5 stream: a live-bot getter and a symbols getter
+        (the Alert Center's current review/feed names)."""
+        self._bot_provider = bot_provider
+        self._chart_symbols_provider = symbols_provider
+
+    def _publish_live_charts(self) -> None:
+        server = self._server
+        if server is None or server.client_count == 0:
+            return
+        if self._bot_provider is None or self._chart_symbols_provider is None:
+            return
+        try:
+            bot = self._bot_provider()
+            symbols = list(self._chart_symbols_provider() or [])[:_LIVE_CHART_MAX_SYMBOLS]
+        except Exception:
+            log.exception("Desk Link live-chart source failed.")
+            return
+        if bot is None or not symbols:
+            return
+        from desk_link.popup_payload import bars_to_wire
+
+        for symbol in symbols:
+            try:
+                bars = bot.m5_chart_bars(symbol, max_sessions=2)
+            except Exception:
+                continue
+            if bars:
+                self.publish_stream("m5_bars", {"symbol": symbol, "bars": bars_to_wire(bars)})
 
     def publish_state_snapshot(self) -> None:
         server = self._server

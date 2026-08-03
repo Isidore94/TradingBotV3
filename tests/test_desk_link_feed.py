@@ -95,6 +95,82 @@ def test_feed_rebuilds_alerts_and_backs_m5_charts_end_to_end():
         server.stop()
 
 
+def test_desk_streams_relay_live_surfaces_end_to_end(monkeypatch):
+    qapp = _qapp()
+    import ui.services.desk_link_service as service_module
+    from ui.services.desk_link_feed import DeskLinkFeedService
+
+    settings: dict = {"desk_link_port": 0, "desk_link_token": "tkn"}
+    monkeypatch.setattr(service_module, "get_local_setting", lambda key, default=None: settings.get(key, default))
+    monkeypatch.setattr(service_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value))
+    main = service_module.DeskLinkService(machine_name="main")
+    assert main.start()
+
+    feed = DeskLinkFeedService()
+    received: dict[str, list] = {"rrs": [], "status": [], "board": [], "regime": []}
+    feed.rrsSnapshotChanged.connect(received["rrs"].append)
+    feed.statusChanged.connect(received["status"].append)
+    feed.entryBoardChanged.connect(received["board"].append)
+    feed.autoRegimeChanged.connect(received["regime"].append)
+    try:
+        feed.start(host="127.0.0.1", port=main._server.address[1], token="tkn", machine_name="sat-desk")
+        assert _pump_until(qapp, lambda: main.has_satellites)
+
+        main.publish_stream("rrs", {"leaders": ["NVDA"]})
+        main.publish_stream("status", "connected")
+        main.publish_stream("entry_board", {"rows": []})
+        main.publish_stream("auto_regime", {"env_key": "bullish_strong"})
+        main.publish_stream("stream_from_the_future", {"x": 1})  # skipped, not fatal
+
+        assert _pump_until(qapp, lambda: all(received[key] for key in received))
+        assert received["rrs"][0] == {"leaders": ["NVDA"]}
+        assert received["status"][0] == "connected"
+        assert received["regime"][0]["env_key"] == "bullish_strong"
+    finally:
+        feed.stop()
+        main.stop()
+
+
+def test_live_m5_stream_updates_the_satellite_chart_cache(monkeypatch):
+    qapp = _qapp()
+    import ui.services.desk_link_service as service_module
+    from ui.services.desk_link_feed import DeskLinkFeedService
+
+    settings: dict = {"desk_link_port": 0, "desk_link_token": "tkn"}
+    monkeypatch.setattr(service_module, "get_local_setting", lambda key, default=None: settings.get(key, default))
+    monkeypatch.setattr(service_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value))
+    main = service_module.DeskLinkService(machine_name="main")
+    assert main.start()
+
+    start = datetime(2026, 7, 30, 9, 30, tzinfo=EASTERN)
+    live_bars = [
+        {"dt": start + timedelta(minutes=5 * i), "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10}
+        for i in range(6)
+    ]
+
+    class _Bot:
+        def m5_chart_bars(self, symbol, max_sessions=2):
+            return live_bars if symbol == "NVDA" else []
+
+    main.set_live_chart_source(lambda: _Bot(), lambda: ["NVDA", "EMPTY"])
+
+    feed = DeskLinkFeedService()
+    try:
+        feed.start(host="127.0.0.1", port=main._server.address[1], token="tkn", machine_name="sat-desk")
+        assert _pump_until(qapp, lambda: main.has_satellites)
+
+        main._publish_live_charts()  # what the 30s timer fires
+        assert _pump_until(qapp, lambda: bool(feed.payload_bot().m5_chart_bars("NVDA")))
+        bars = feed.payload_bot().m5_chart_bars("NVDA")
+        assert len(bars) == 6
+        assert isinstance(bars[0]["dt"], datetime)
+        assert bars[0]["dt"] == live_bars[0]["dt"]
+        assert feed.payload_bot().m5_chart_bars("EMPTY") == []
+    finally:
+        feed.stop()
+        main.stop()
+
+
 def test_panel_remote_feed_lands_alerts_in_the_real_feed(tmp_path):
     _qapp()
     from ui.panels.alert_center_panel import AlertCenterPanel

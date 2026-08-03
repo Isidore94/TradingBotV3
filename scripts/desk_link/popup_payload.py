@@ -23,7 +23,7 @@ from typing import Any, Mapping
 PAYLOAD_SCHEMA = "desk_link.alert_popup.v1"
 
 
-def _bars_to_wire(bars: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def bars_to_wire(bars: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     wire: list[dict[str, Any]] = []
     for bar in bars or []:
         row = dict(bar)
@@ -34,7 +34,7 @@ def _bars_to_wire(bars: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return wire
 
 
-def _bars_from_wire(bars: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def bars_from_wire(bars: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     restored: list[dict[str, Any]] = []
     for bar in bars or []:
         row = dict(bar)
@@ -50,13 +50,13 @@ def _bars_from_wire(bars: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 def _snapshot_to_wire(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     wire = dict(snapshot)
-    wire["bars"] = _bars_to_wire(wire.get("bars") or [])
+    wire["bars"] = bars_to_wire(wire.get("bars") or [])
     return wire
 
 
 def _snapshot_from_wire(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     restored = dict(snapshot)
-    restored["bars"] = _bars_from_wire(restored.get("bars") or [])
+    restored["bars"] = bars_from_wire(restored.get("bars") or [])
     return restored
 
 

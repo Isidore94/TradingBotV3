@@ -80,6 +80,21 @@ class MainWindow(QMainWindow):
         self.trading_panel.alert_center.attach_desk_link(self.desk_link_service)
         self.desk_link_service.controlChanged.connect(self._on_desk_link_control_changed)
         self.desk_link_service.intentReceived.connect(self._on_desk_link_intent)
+        # Tier 3 full relay: every live surface the bot feeds locally also
+        # publishes to satellites. publish_stream no-ops with no satellite
+        # connected, so a lone desk pays nothing.
+        _bounce = self.trading_panel.bounce_panel.service
+        _publish = self.desk_link_service.publish_stream
+        _bounce.rrsSnapshotChanged.connect(lambda snap: _publish("rrs", snap))
+        _bounce.statusChanged.connect(lambda status: _publish("status", status))
+        _bounce.autoRegimeChanged.connect(lambda reading: _publish("auto_regime", reading))
+        _board_signal = getattr(_bounce, "entryBoardChanged", None)
+        if _board_signal is not None:
+            _board_signal.connect(lambda board: _publish("entry_board", board))
+        self.desk_link_service.set_live_chart_source(
+            self.trading_panel.alert_center._current_bot,
+            self.trading_panel.alert_center.desk_link_stream_symbols,
+        )
         self.desk_link_feed = None
         if satellite_desk:
             # Satellite desk (--satellite-desk): the FULL desk UI, fed by the
@@ -95,6 +110,7 @@ class MainWindow(QMainWindow):
             self.desk_link_feed = DeskLinkFeedService(self)
             self.trading_panel.alert_center.attach_remote_feed(self.desk_link_feed)
             self.desk_link_feed.linkStatusChanged.connect(self._on_satellite_link_status)
+            self.desk_link_feed.autoRegimeChanged.connect(self._set_auto_regime)
             if host and link_token:
                 self.desk_link_feed.start(
                     host=host,

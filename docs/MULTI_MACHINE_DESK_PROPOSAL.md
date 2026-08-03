@@ -1,8 +1,14 @@
 # Multi-machine desk — design proposal (for trader review)
 
-Status: **APPROVED 2026-08-02 — Tiers 1 and 2 implemented** (plan.md sec 12
-item 7a, "Desk Link"); live two-machine validation pending; Tier 3 (live
-chart streaming) not started. Trader decisions on the open questions:
+Status: **APPROVED 2026-08-02 — Tiers 1, 2, and 3 implemented** (plan.md
+sec 12 item 7a, "Desk Link"); live two-machine validation pending. Tier 3
+(full relay) streams every live desk surface over the generic
+``desk_stream`` channel: RRS snapshots, the entry-assist board, status
+alerts, the auto-regime chip, and a 30 s live M5 bar stream for the
+review-queue symbols — so a satellite desk's charts keep updating between
+alerts through the desk's own refresh timers. Adding a future surface is
+one signal connection on each end; unknown streams are skipped, never an
+error. Trader decisions on the open questions:
 
 - The main can **take back control at any time** — an immediate override,
   no grace period, always available while a satellite holds the lease.
@@ -177,6 +183,20 @@ Reliability details:
   main, and resent on the next grant if unacked. The three actions are
   idempotent, so at-least-once delivery is safe. A non-controller's
   intent is refused, never applied.
+
+## Remote access beyond the LAN (future)
+
+The trader wants this reachable away from home eventually. The link is
+deliberately LAN-grade (static token, no TLS), so the rule is: **never
+port-forward 47600 to the internet.** The right shape is a private
+overlay network — WireGuard or Tailscale on the main PC and the laptop —
+which makes the remote machine "on the LAN" from Desk Link's point of
+view: the satellite connects to the main's overlay IP with zero code
+changes, traffic is encrypted end-to-end by the tunnel, and nothing is
+exposed publicly. Bandwidth needs are tiny (alert payloads are tens of
+KB; the M5 stream is a few hundred KB/min worst case), so even poor
+hotel Wi-Fi is fine — the reconnect/replay machinery already covers the
+drops. If/when this is wanted, it is an ops task, not a code task.
 
 ## Rollout tiers (each independently shippable)
 

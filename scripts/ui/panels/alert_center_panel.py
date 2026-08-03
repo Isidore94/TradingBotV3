@@ -700,6 +700,23 @@ class AlertCenterPanel(QFrame):
         """
         self._remote_feed = feed
         feed.alertReceived.connect(self.add_alert)
+        # Tier 3 full relay: the remaining live surfaces, connected exactly
+        # as attach_service connects them to the live bot.
+        feed.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)
+        feed.rrsSnapshotChanged.connect(self.focus_strength.update_snapshot)
+        feed.statusChanged.connect(self._maybe_add_status_alert)
+        feed.entryBoardChanged.connect(self.entry_board.update_board)
+
+    def desk_link_stream_symbols(self) -> list[str]:
+        """Symbols whose M5 bars the live relay should stream: the chart on
+        review now, the queue behind it, and the freshest feed names."""
+        symbols: list[str] = []
+        if self._current_review_alert is not None and self._current_review_alert.symbol:
+            symbols.append(self._current_review_alert.symbol)
+        for alert in list(self._review_queue) + self._alerts[:20]:
+            if alert.symbol and alert.symbol not in symbols:
+                symbols.append(alert.symbol)
+        return symbols
 
     def apply_desk_link_intent(self, machine: str, intent: dict) -> tuple[bool, str]:
         """Apply one controller decision from a Desk Link satellite (Tier 2).

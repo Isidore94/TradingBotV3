@@ -50,6 +50,10 @@ TYPE_LEASE_DENIED = "lease_denied"     # main -> sat: someone else holds it
 TYPE_LEASE_REVOKED = "lease_revoked"   # main -> sat: control taken back
 TYPE_INTENT = "intent"                 # sat -> main: one decision to apply
 TYPE_INTENT_RESULT = "intent_result"   # main -> sat: ack {seq, ok, detail}
+# Tier 3 full relay: one generic envelope for every live desk surface.
+# payload = {"stream": "<name>", "data": {...}} - adding a stream never
+# needs a protocol change, and an unknown stream is skipped, not an error.
+TYPE_DESK_STREAM = "desk_stream"
 
 
 class DeskLinkProtocolError(ValueError):
