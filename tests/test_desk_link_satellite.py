@@ -281,6 +281,37 @@ def _patched_satellite_settings(monkeypatch, settings: dict):
     return satellite_module
 
 
+def _patched_desk_role_settings(monkeypatch, settings: dict):
+    import ui.desk_role as role_module
+
+    monkeypatch.setattr(
+        role_module, "get_local_setting", lambda key, default=None: settings.get(key, default)
+    )
+    monkeypatch.setattr(
+        role_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value)
+    )
+    return role_module
+
+
+def test_desk_role_is_machine_local_persistent_and_fail_safe(monkeypatch):
+    settings: dict = {}
+    role_module = _patched_desk_role_settings(monkeypatch, settings)
+
+    assert role_module.saved_desk_role() == "main"
+    assert role_module.save_desk_role("satellite") == "satellite"
+    assert settings["trading_desk_role"] == "satellite"
+    assert role_module.saved_desk_role() == "satellite"
+
+    settings["trading_desk_role"] = "unexpected-value"
+    assert role_module.saved_desk_role() == "main"
+
+    settings["trading_desk_role"] = "satellite"
+    assert role_module.startup_desk_role() == "satellite"
+    assert role_module.startup_desk_role(explicit="main") == "main"
+    assert settings["trading_desk_role"] == "main"
+    assert role_module.startup_desk_role(legacy_satellite=True) == "satellite"
+
+
 def test_satellite_window_without_pairing_waits_instead_of_crashing(monkeypatch):
     _qapp()
     satellite_module = _patched_satellite_settings(monkeypatch, {})
@@ -389,6 +420,7 @@ def _pairing_panel(monkeypatch, settings: dict, feed=None):
 
     _qapp()
     _patched_satellite_settings(monkeypatch, settings)
+    _patched_desk_role_settings(monkeypatch, settings)
     settings.setdefault("desk_link_port", 0)
     # Production server and satellite helpers share one local-settings file;
     # keep one dict here so a credential-key collision cannot hide in tests.
@@ -472,6 +504,27 @@ def test_settings_page_pairing_on_a_normal_desk_only_saves(monkeypatch):
         panel._forget_main_desk()
         assert settings["desk_link_client_token"] == ""
         assert settings["desk_link_token"] == "server-token"
+    finally:
+        service.stop()
+
+
+def test_settings_page_switches_role_and_requests_safe_restart(monkeypatch):
+    settings: dict = {"desk_link_token": "server-token"}
+    panel, service = _pairing_panel(monkeypatch, settings, feed=None)
+    requested: list[str] = []
+    panel.deskRoleRestartRequested.connect(requested.append)
+    try:
+        assert panel.desk_role_input.currentData() == "main"
+        assert not panel.desk_role_button.isEnabled()
+
+        panel.desk_role_input.setCurrentIndex(panel.desk_role_input.findData("satellite"))
+        assert panel.desk_role_button.isEnabled()
+        assert "Restart as satellite" in panel.desk_role_button.text()
+        panel._apply_desk_role()
+
+        assert settings["trading_desk_role"] == "satellite"
+        assert requested == ["satellite"]
+        assert "Restarting" in panel.desk_role_status.text()
     finally:
         service.stop()
 

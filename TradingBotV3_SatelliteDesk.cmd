@@ -1,8 +1,6 @@
 @echo off
-REM Windows launcher for the SATELLITE DESK: the full Trading Desk UI fed by the
-REM main PC's Desk Link relay instead of TWS. Alerts land in the real Alert
-REM Center as if this machine were connected to the API. Pair it (or re-point
-REM it) in Settings -> Desk Link -> "Connect to a main desk".
+REM Compatibility shortcut only. launch_gui.py is the one supported entrypoint;
+REM choose Main/Satellite inside Settings -> Desk Link.
 setlocal
 
 cd /d "%~dp0"
@@ -13,17 +11,17 @@ if exist "%~dp0.venv\Scripts\python.exe" (
 )
 
 if defined PYTHON_EXE (
-    "%PYTHON_EXE%" "%~dp0scripts\gui.py" --ui qt --satellite-desk %*
+    "%PYTHON_EXE%" "%~dp0launch_gui.py" --desk-role satellite %*
     goto done
 )
 
 where py >nul 2>nul
 if not errorlevel 1 (
-    py -3 "%~dp0scripts\gui.py" --ui qt --satellite-desk %*
+    py -3 "%~dp0launch_gui.py" --desk-role satellite %*
     goto done
 )
 
-python "%~dp0scripts\gui.py" --ui qt --satellite-desk %*
+python "%~dp0launch_gui.py" --desk-role satellite %*
 
 :done
 if errorlevel 1 (

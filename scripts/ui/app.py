@@ -5,11 +5,12 @@ import argparse
 import gc
 import logging
 import sys
+from pathlib import Path
 
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -129,8 +130,10 @@ class MainWindow(QMainWindow):
             bounce_service=self.trading_panel.bounce_panel.service,
             desk_link_service=self.desk_link_service,
             desk_link_feed=self.desk_link_feed,
+            desk_role="satellite" if self._satellite_desk else "main",
         )
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
+        self.settings_panel.deskRoleRestartRequested.connect(self._restart_for_desk_role)
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
 
@@ -571,6 +574,29 @@ class MainWindow(QMainWindow):
         }
         self.satellite_link_label.setText(texts.get(link_state, f"LINK {link_state}"))
 
+    def _restart_for_desk_role(self, _role: str) -> None:
+        """Shut down current owners, then relaunch through the one entrypoint."""
+        if getattr(self, "_desk_role_restart_pending", False):
+            return
+        self._desk_role_restart_pending = True
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.aboutToQuit.connect(self._launch_replacement_desk)
+        if self.close():
+            QTimer.singleShot(0, app.quit)
+
+    def _launch_replacement_desk(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        launcher = root / "launch_gui.py"
+        ok, _pid = QProcess.startDetached(sys.executable, [str(launcher)], str(root))
+        if not ok:
+            logging.error(
+                "Could not restart the Trading Desk automatically. Run %s manually; the saved "
+                "desk role will apply.",
+                launcher,
+            )
+
     def _on_desk_link_control_changed(self, machine: str) -> None:
         """Satellite in control -> this desk is a relay: decision surfaces
         lock, engines keep running, and only 'Take back control' stays live."""
@@ -753,9 +779,16 @@ def main(argv: list[str] | None = None) -> int:
         "--satellite-desk",
         action="store_true",
         help=(
-            "Launch the FULL Trading Desk fed by the main's Desk Link relay instead of "
-            "TWS: relayed alerts land in the real Alert Center as if this machine were "
-            "connected to the API. Uses the saved satellite pairing (or prompts for it)."
+            "Compatibility alias for --desk-role satellite. Settings normally owns this choice."
+        ),
+    )
+    parser.add_argument(
+        "--desk-role",
+        choices=("main", "satellite"),
+        default=None,
+        help=(
+            "Compatibility override for the full desk role. The Settings page normally owns "
+            "this choice and launch_gui.py remembers it."
         ),
     )
     parser.add_argument(
@@ -796,7 +829,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.satellite is not None:
         return _run_satellite(app, args.satellite, args.link_token)
 
-    if args.satellite_desk and args.link_token:
+    from ui.desk_role import ROLE_SATELLITE, startup_desk_role
+
+    desk_role = startup_desk_role(
+        explicit=args.desk_role,
+        legacy_satellite=bool(args.satellite_desk),
+    )
+    satellite_desk = desk_role == ROLE_SATELLITE
+
+    if satellite_desk and args.link_token:
         # Optional CLI convenience; pairing normally happens in the desk's own
         # Settings -> Desk Link -> "Connect to a main desk", so an unpaired
         # satellite desk still launches instead of blocking on a dialog.
@@ -806,7 +847,7 @@ def main(argv: list[str] | None = None) -> int:
         if host:
             save_connection(host, port, args.link_token)
 
-    window = MainWindow(state, satellite_desk=bool(args.satellite_desk))
+    window = MainWindow(state, satellite_desk=satellite_desk)
     window.show()
     return app.exec()
 

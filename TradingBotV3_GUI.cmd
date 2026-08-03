@@ -9,17 +9,17 @@ if exist "%~dp0.venv\Scripts\python.exe" (
 )
 
 if defined PYTHON_EXE (
-    "%PYTHON_EXE%" "%~dp0scripts\gui.py" --ui qt %*
+    "%PYTHON_EXE%" "%~dp0launch_gui.py" %*
     goto done
 )
 
 where py >nul 2>nul
 if not errorlevel 1 (
-    py -3 "%~dp0scripts\gui.py" --ui qt %*
+    py -3 "%~dp0launch_gui.py" %*
     goto done
 )
 
-python "%~dp0scripts\gui.py" --ui qt %*
+python "%~dp0launch_gui.py" %*
 
 :done
 if errorlevel 1 (

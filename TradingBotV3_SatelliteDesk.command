@@ -1,8 +1,6 @@
 #!/bin/bash
-# macOS launcher for the SATELLITE DESK: the full Trading Desk UI fed by the
-# main PC's Desk Link relay instead of TWS. Alerts land in the real Alert
-# Center as if this machine were connected to the API. Uses the pairing
-# saved by the satellite window / connect dialog (prompts if missing).
+# Compatibility shortcut only. launch_gui.py is the one supported entrypoint;
+# choose Main/Satellite inside Settings -> Desk Link.
 set -u
 cd "$(dirname "$0")" || exit 1
 
@@ -17,7 +15,7 @@ else
     exit 1
 fi
 
-"$PYTHON" scripts/gui.py --ui qt --satellite-desk "$@"
+"$PYTHON" launch_gui.py --desk-role satellite "$@"
 status=$?
 if [ "$status" -ne 0 ]; then
     echo

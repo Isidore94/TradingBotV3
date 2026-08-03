@@ -1564,6 +1564,9 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    with an always-available take-back, intents journaled/acked/idempotent)
    is also implemented at trader direction. Live two-machine validation is
    pending; live chart streaming (Tier 3) waits on that evidence.
+   `launch_gui.py` is the single operator entrypoint; Main/Satellite role is
+   selected in Settings and applied through a clean automatic restart so live
+   engine ownership is never hot-switched.
 7b. **Focus price alerts + phone push** (trader-directed insertion,
    2026-08-03; numbered 7b so the existing 8-22 references stay stable):
    basic cross-up/cross-down price levels entered on the Focus tab, pushed to

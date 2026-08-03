@@ -46,6 +46,7 @@ UI_SCALE_LABELS = {
 
 class SettingsPanel(QFrame):
     stateChanged = Signal()
+    deskRoleRestartRequested = Signal(str)
 
     def __init__(
         self,
@@ -53,6 +54,7 @@ class SettingsPanel(QFrame):
         bounce_service=None,
         desk_link_service=None,
         desk_link_feed=None,
+        desk_role: str = "main",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -60,10 +62,11 @@ class SettingsPanel(QFrame):
         self.state = state
         self.bounce_service = bounce_service
         self.desk_link_service = desk_link_service
-        # Present only on a satellite desk (--satellite-desk). The pairing rows
-        # below are shown either way: on a normal desk they save the connection
-        # that a later satellite launch picks up.
+        # Present only while this process is in the satellite role. Pairing
+        # rows stay visible in either role so the next UI-driven restart has
+        # everything it needs.
         self.desk_link_feed = desk_link_feed
+        self.desk_role = "satellite" if desk_role == "satellite" else "main"
 
         self.theme_input = QComboBox()
         self.theme_input.addItems(THEME_LABELS)
@@ -243,6 +246,30 @@ class SettingsPanel(QFrame):
             )
         )
 
+        self.desk_role_input = QComboBox()
+        self.desk_role_input.addItem("Main desk - TWS, scanners, and relay owner", "main")
+        self.desk_role_input.addItem("Satellite desk - fed by another main", "satellite")
+        self.desk_role_input.setCurrentIndex(
+            max(0, self.desk_role_input.findData(self.desk_role))
+        )
+        self.desk_role_input.currentIndexChanged.connect(self._sync_desk_role_controls)
+        self.desk_role_button = QPushButton()
+        self.desk_role_button.clicked.connect(self._apply_desk_role)
+        self.desk_role_status = QLabel()
+        self.desk_role_status.setObjectName("MutedLabel")
+        self.desk_role_status.setWordWrap(True)
+        role_form = QFormLayout()
+        role_form.setSpacing(8)
+        role_form.addRow("This machine runs as", self.desk_role_input)
+        section_layout.addLayout(role_form)
+        role_row = QHBoxLayout()
+        role_row.setSpacing(8)
+        role_row.addWidget(self.desk_role_button)
+        role_row.addStretch(1)
+        section_layout.addLayout(role_row)
+        section_layout.addWidget(self.desk_role_status)
+        self._sync_desk_role_controls()
+
         self.desk_link_enable_input = QCheckBox("Serve satellites from this machine")
         self.desk_link_enable_input.setChecked(service.running)
         self.desk_link_enable_input.toggled.connect(self._on_desk_link_toggled)
@@ -286,10 +313,9 @@ class SettingsPanel(QFrame):
         section_layout.addWidget(self.desk_link_status)
 
         hint = QLabel(
-            "On the satellite machine (same repo, no TWS needed): launch "
-            "TradingBotV3_SatelliteDesk.cmd and fill in \"Connect to a main desk\" below, "
-            "or run python scripts/gui.py --ui qt --satellite <this-machine> --link-token <token> "
-            "for the small mirror window. The pairing is remembered after the first connect."
+            "On the satellite machine (same repo, no TWS needed): run launch_gui.py, fill in "
+            "\"Connect to a main desk\" below, then choose Satellite desk above. Pairing and "
+            "role are remembered, so every later launch uses the same setup."
         )
         hint.setObjectName("MutedLabel")
         hint.setWordWrap(True)
@@ -367,6 +393,36 @@ class SettingsPanel(QFrame):
         self._refresh_main_desk_status()
         return block
 
+    def _sync_desk_role_controls(self) -> None:
+        wanted = str(self.desk_role_input.currentData() or "main")
+        if wanted == self.desk_role:
+            self.desk_role_button.setText("Current role")
+            self.desk_role_button.setEnabled(False)
+            role_text = "main desk" if wanted == "main" else "satellite desk"
+            self.desk_role_status.setText(
+                f"Running as the {role_text}. Role changes restart this app through launch_gui.py "
+                "so TWS, scanners, and relay ownership shut down cleanly first."
+            )
+            return
+        self.desk_role_button.setEnabled(True)
+        self.desk_role_button.setText(
+            "Restart as satellite desk" if wanted == "satellite" else "Restart as main desk"
+        )
+        self.desk_role_status.setText(
+            "Apply this role and restart now. Your pairing and all other settings are preserved."
+        )
+
+    def _apply_desk_role(self) -> None:
+        from ui.desk_role import save_desk_role
+
+        wanted = str(self.desk_role_input.currentData() or "main")
+        if wanted == self.desk_role:
+            return
+        saved = save_desk_role(wanted)
+        self.desk_role_status.setText(f"Restarting as the {saved} desk...")
+        self.desk_role_button.setEnabled(False)
+        self.deskRoleRestartRequested.emit(saved)
+
     def _connect_to_main_desk(self) -> None:
         from ui.satellite import save_connection
 
@@ -383,8 +439,8 @@ class SettingsPanel(QFrame):
         feed = self.desk_link_feed
         if feed is None:
             self.main_desk_link_status.setText(
-                f"Saved {host}:{port}. This desk runs on its own data - relaunch with "
-                "TradingBotV3_SatelliteDesk.cmd (--satellite-desk) to be fed by that main."
+                f"Saved {host}:{port}. Choose Satellite desk above and restart to be fed by "
+                "that main. Future starts use launch_gui.py and remember the selected role."
             )
             return
         # Replace the live link in place: stop() drops the old client so start()

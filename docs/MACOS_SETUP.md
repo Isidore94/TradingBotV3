@@ -31,7 +31,7 @@ specific interpreter.)
 Double-click `TradingBotV3_GUI.command` in Finder, or run:
 
 ```bash
-.venv/bin/python launch_gui.py --ui qt
+.venv/bin/python launch_gui.py
 ```
 
 This is the macOS counterpart of `TradingBotV3_GUI.cmd` and goes through

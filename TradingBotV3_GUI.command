@@ -16,7 +16,7 @@ else
     exit 1
 fi
 
-"$PYTHON" launch_gui.py --ui qt "$@"
+"$PYTHON" launch_gui.py "$@"
 status=$?
 if [ "$status" -ne 0 ]; then
     echo
