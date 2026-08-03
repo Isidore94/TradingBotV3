@@ -34,8 +34,6 @@ If you keep personal launcher files such as `run_python_script.ps1` or `run_mast
 ## Repository Layout
 - `launch_gui.py` - the single launcher for the PySide6 Trading Desk. Main versus
   satellite role is selected inside Settings and remembered per machine.
-- `TradingBotV3_GUI.cmd` / `.command` - optional compatibility wrappers around
-  `launch_gui.py`; they are not required.
 - `scripts/gui.py` - compatibility launcher. Defaults to the new PySide6 UI; use `--ui tk` for the legacy Tk UI.
 - `scripts/ui/` - new consumer desktop UI.
 - `scripts/master_avwap_lib/`, `scripts/bounce_bot_lib/` - trading engines and legacy compatibility modules.

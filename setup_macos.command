@@ -24,4 +24,4 @@ EOF
 .venv/bin/python -m pip install -r requirements-gui.txt -c constraints.txt
 
 echo
-echo "Setup complete. Launch the desk by double-clicking TradingBotV3_GUI.command."
+echo "Setup complete. Launch the desk with: .venv/bin/python launch_gui.py"

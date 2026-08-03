@@ -8,7 +8,7 @@ journal, and a controlled research/promotion program for new setups. Order execu
 is permanently out of scope (plan.md sec 1).
 
 ## Core loop / data flow
-- Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). Main versus satellite role is selected and persisted inside Settings; the `.cmd` / `.command` files are compatibility wrappers only. `scripts/gui.py --ui tk` is the legacy Tk UI kept during migration.
+- Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). Main versus satellite role is selected and persisted inside Settings. `scripts/gui.py --ui tk` is the legacy Tk UI kept during migration.
 - Market data: IBKR TWS/Gateway on `127.0.0.1:7496` (`ibapi`) primary, `yfinance` fallback; bar source is tracked per scan. See `docs/BROKER_ADAPTERS.md`.
 - Engines: `scripts/master_avwap.py` (+`master_avwap_lib/`) D1 AVWAP swing scanner; `scripts/bounce_bot.py` (+`bounce_bot_lib/`) intraday M5 bounce detector; `market_prep/` pre-session services.
 - Inputs: plain-text watchlists (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`) in the user-selected shared "home folder".
