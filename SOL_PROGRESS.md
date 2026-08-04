@@ -7,25 +7,28 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch `main` (2026-08-03): Focus price-alert delivery is integrated with
-  the latest Away-mode Drive output and
-  satellite Auto-mode control. Away's `autopilot_today.txt` remains the one
-  phone-facing Drive file, leading with a numbered **BEST SWING TRADES** list;
-  every operational/diagnostic line is condensed into an `== OPERATIONS ==`
-  tail section so the top of the report is trades.
-  Desk Link relay is independent of the Auto profile (unchanged in AWAY), the
-  state snapshot now carries the main's Auto mode, and a satellite holding the
-  Tier 2 control lease can switch OFF/DESK/AWAY/EVENING through the new
-  idempotent `set_auto_mode` intent (same `_set_auto_mode` path as the shell
-  button; junk modes are refused). Focus price-alert Phases A–D are
-  **IMPLEMENTED**: the Focus tab
-  edits the existing two-sided alert store; one explicit main-only service
-  owns polling and urgent ntfy push; triggers relay live and through the sticky
-  Desk Link snapshot; main, full satellite, and mirror satellite share a
-  persistent non-activating audible toast. Satellite editing remains read-only
-  until Phase E. Combined gate: **1806 passed, 5 subtests**; smoke **7/7**.
-  Phone/main/satellite ordering and reconnect recovery still require the live
-  two-machine check, so this is not `LIVE_VALIDATED`.
+- Branch `main`, merge commit `29435d1` (2026-08-03). Combined gate:
+  **1806 passed, 5 subtests**; smoke **7/7**. Working tree was clean and
+  `origin/main` matched after push.
+- `launch_gui.py` is now the only operator launcher. Obsolete GUI/satellite
+  `.cmd`/`.command` wrappers were removed. Main versus Satellite is selected
+  under Settings ▸ Desk Link and applied through a clean automatic restart;
+  pairing host/port/token lives on that same page. Settings is split into
+  scroll-safe General, BounceBot, and Desk Link tabs.
+- Away's `autopilot_today.txt` is the one phone-facing Drive digest: verified
+  safety/freshness first, numbered **BEST SWING TRADES** first among candidate
+  content, then intraday opportunities and an `== OPERATIONS ==` tail. The
+  atomic publish and last-good recovery code was not changed by the merge.
+- Desk Link remains active in every Auto profile. The sticky snapshot carries
+  the main Auto mode, and a satellite holding the Tier 2 lease can switch
+  OFF/DESK/AWAY/EVENING through idempotent `set_auto_mode`.
+- Focus price-alert Phases A–D are **IMPLEMENTED + GREEN**. Focus and Research
+  share one main-only poll/push service; every crossing pushes to ntfy at
+  urgent priority first, then produces persistent audible non-activating toasts
+  on the main, full satellite, and mirror satellite. Today's triggers are
+  sticky across reconnects. Satellite alert editing remains read-only until
+  Phase E. Phone/main/satellite ordering and reconnect recovery still require
+  the live two-machine check, so this is not `LIVE_VALIDATED`.
 
 ## Previous checkpoint (main)
 

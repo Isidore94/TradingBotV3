@@ -90,7 +90,7 @@ The system must never confuse a research observation with an executable setup, a
 | Day Trade Tracker | Segment tables, R statistics, and proven/muted state | No row-linked explanation and a segment can look like a standalone trade | Explain it as a condition modifier and link it to a valid setup/trigger |
 | Move Forensics | Pattern leaderboard and raw reports | No row-linked interpretation; correlations can be mistaken for executable strategies | Explain evidence, limitations, and the next validation step; only show execution rules when a documented setup exists |
 | Journal | Local journal storage, trade import, notes/tags, and basic analytics | Weak linkage from discovery through decision, execution, MFE/MAE, and outcome | Add stable opportunity and event linkage, reason codes, screenshots, and review metrics |
-| Auto/Away Drive report | A verified, hourly, phone-oriented autopilot_today.txt report | The first candidate sections are day-trade lists and bot picks; Top Swing Picks appears later | Keep the safety/freshness header first, then make swings the first and most prominent candidate section in every human-facing Auto/Away Drive report |
+| Auto/Away Drive report | **Implemented 2026-08-03:** one verified hourly `autopilot_today.txt` phone digest; safety/freshness first, numbered best swings first among candidates, then intraday and condensed operations | Live Away publication still needs an operational session check | Preserve this ordering and the verified atomic/last-good contract in every future human-facing Auto/Away Drive report |
 | AI | OpenAI-based Market Prep paths already exist | The implementations are duplicated, there is no provider-neutral report tab, no Anthropic path, and no common evidence manifest | Consolidate behind one provider interface and build AI Summary on normalized, user-selected evidence packages |
 | Health | A System Health page and runtime diagnostics already exist | New industry and AI jobs would not yet expose freshness, ownership, or last-result state | Extend the existing page; do not build a second health surface |
 
@@ -539,6 +539,11 @@ Important analysis rules:
 The AI Summary tab reads this lifecycle. It does not become the source of truth for it.
 
 ### 5.10 Auto/Away Google Drive reports: swing-first
+
+Status: **IMPLEMENTED + GREEN 2026-08-03**, merged to `main`; not yet
+live-validated in an Away session. `autopilot_today.txt` is the sole
+phone-facing Drive digest and the existing verified atomic publication path is
+unchanged.
 
 The hourly Auto/Away report is primarily consumed as a quick phone briefing. Its candidate hierarchy should match the user's priority: swings first, intraday opportunities second.
 

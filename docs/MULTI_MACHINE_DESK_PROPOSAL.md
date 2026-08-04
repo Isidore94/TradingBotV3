@@ -14,8 +14,10 @@ error. Trader decisions on the open questions:
   no grace period, always available while a satellite holds the lease.
 - **No first-connection confirmation** on the main (single-user system): a
   satellite that presents the stored link token connects directly.
-- **Tier 1 ships first** (relay + live alert popups, view-only satellite).
-  Tiers 2-3 wait for Tier 1 to prove out live.
+- Rollout was designed Tier 1 first, but at explicit trader direction all three
+  tiers are now implemented and deterministic-test green. They remain jointly
+  pending the physical two-machine validation; implementation is not a claim of
+  live validation.
 
 The design deliberately reuses the invariants and single-writer machinery the
 repo already has.
@@ -92,7 +94,8 @@ control, so every plan.md sec 5 invariant survives handoffs.
 | Direction | Message | Contents |
 |---|---|---|
 | main → sat | `alert_popup` | Self-contained chart payload: bars (M5/D1), AVWAP bands + σ levels, armed levels, annotations, review-policy context — everything `alert_chart_review` needs to render without TWS |
-| main → sat | `state_snapshot` / `state_delta` | Watchlists, Focus, review queue, tracker/report surfaces |
+| main → sat | `state_snapshot` / `state_delta` | Watchlists, Focus, main Auto mode, and today's fired price alerts; the latter are sticky across reconnects |
+| main → sat | `desk_stream` | Live RRS, entry board, status, Auto regime, M5 bars, and `price_alert` events; unknown future streams are skipped |
 | main → sat | `lease_grant` / `lease_revoke` | Control state changes |
 | sat → main | `intent` | One decision: {action, symbol, surface, client_seq, ts+tz} |
 | sat → main | `heartbeat` | Lease renewal |
@@ -158,6 +161,9 @@ Reliability details:
   starts from now — it is not sprayed with history.
 - **Instant mirror.** A satellite's own applied action republishes the
   desk snapshot immediately instead of waiting out the 60 s timer.
+- **Sticky price alerts.** A crossing is pushed to the phone first, then relayed
+  live. Today's trigger log also rides in every state snapshot, so a reconnect
+  recovers a missed price alert once without duplicating its toast/feed row.
 - **Phone push on auto-reclaim.** If the controlling satellite dies and
   the main reclaims control on its own, a push goes out through the
   existing ntfy channel (when configured) so the trader knows their
@@ -169,7 +175,9 @@ Reliability details:
   action buttons go live — *Remove for day*, *Focus long/short*,
   *Unfocus* — and every action applies on the main through the exact code
   path a local click takes (same review events, same focus feedback with
-  ``origin=desk_link``). **Release control** hands it back.
+  ``origin=desk_link``). The main Auto-mode selector also becomes live and can
+  set OFF/DESK/AWAY/EVENING through the same `_set_auto_mode` path as the main
+  status-bar button. **Release control** hands it back.
 - Main, while a satellite holds control: a banner appears
   ("CONTROLLED BY <machine> — this desk is relaying"), the page stack and
   status bar lock, engines/scans/TWS keep running, and **Take back
@@ -179,9 +187,14 @@ Reliability details:
   dead Wi-Fi returns control to the main automatically.
 - Delivery: every satellite decision is journaled locally
   (``desk_link_intent_journal.jsonl``) before it is sent, acked by the
-  main, and resent on the next grant if unacked. The three actions are
-  idempotent, so at-least-once delivery is safe. A non-controller's
+  main, and resent on the next grant if unacked. Supported actions, including
+  `set_auto_mode`, are idempotent, so at-least-once delivery is safe. A non-controller's
   intent is refused, never applied.
+
+Price-alert edits are a separate planned intent phase. Until that is
+live-validated, both the Focus alert board and the Research advanced alert table
+are read-only on a satellite; monitoring, shared writes, and ntfy push always
+remain on the main.
 
 ## Remote access beyond the LAN (future)
 
@@ -213,4 +226,6 @@ drops. If/when this is wanted, it is an ops task, not a code task.
 2. The main keeps a **"Take back control" button at all times** while a
    satellite holds the lease; it reclaims immediately.
 3. **No first-connection confirmation** — stored link token is enough.
-4. **Tier 1 ships first.**
+4. **Tier 1 was the intended first live-validation step.** Tiers 1–3 are now
+   implemented together at trader direction, but still await the same physical
+   two-machine validation.

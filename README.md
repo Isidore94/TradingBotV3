@@ -79,9 +79,35 @@ These files should live in the selected home folder root. The app creates any mi
   ```
 
   This is the target consumer UI. It includes the themed shell, Trading Desk,
-  Master AVWAP setup table, Focus Picks, BounceBot, Research, Journal, and
-  Settings panels. You can also switch between Dark and Light from the Settings
-  page.
+  Master AVWAP setup table, Focus Picks with phone price alerts, BounceBot,
+  Research, Journal, and tabbed Settings panels. You can also switch between
+  Dark and Light from Settings.
+
+### Phone price alerts and ntfy
+
+The easiest setup uses ntfy's hosted server; there is no home server, router
+port, or port-forwarding to configure.
+
+1. Install the **ntfy** app on the phone and subscribe to a long, randomly
+   generated topic name. Unprotected `ntfy.sh` topic names function as
+   passwords, so do not use a name that contains personal information or is
+   easy to guess.
+2. On the **main desk**, open **Research -> Price Alerts** and set:
+   **server** `https://ntfy.sh`, **topic** to the exact phone subscription, and
+   leave **token** blank unless the topic is protected.
+3. Click **Test Push** and confirm sound/notification delivery. On iPhone,
+   allow ntfy notifications and sounds, then allow ntfy through the Focus modes
+   you rely on (or enable Time Sensitive/Critical delivery when the installed
+   ntfy/iOS version offers it).
+4. Add actual ticker levels under **Focus Picks -> Phone Price Alerts**. Each
+   optional cross-up/cross-down side fires once, pushes at urgent priority, and
+   stays disarmed until manually re-armed.
+
+Only the main desk polls and pushes. Full and mirror satellites receive the
+desktop toast and beep but cannot edit alert rows yet. For protected topics,
+create an ntfy access token and enter it in the token field; for self-hosting,
+replace the server URL with the HTTPS URL of that instance. See
+`docs/EVENING_MODE_RUNBOOK.md` for the operator checklist.
 
 - Daily AVWAP/previous-AVWAP engine:
 
@@ -148,6 +174,9 @@ Ensure your IB session is connected before launching either bot so market data r
 
 ## Syncing Day-To-Day Data Across Devices
 - The app can use a per-machine home folder such as Google Drive or OneDrive for day-to-day mutable data.
+- In Auto/Away, `autopilot_today.txt` is the single verified phone-facing Drive
+  digest: safety/freshness first, then numbered best swing trades, intraday
+  opportunities, and a condensed operations tail.
 - In the GUI, open the `Master AVWAP` tab and use `Change Home Folder` to point this computer at your synced folder.
 - The home folder stores watchlists, runtime AVWAP data, reports, logs, and setup-tracker files.
 - Replaceable download caches now stay in a per-machine local cache directory so Google Drive or OneDrive stays lightweight.

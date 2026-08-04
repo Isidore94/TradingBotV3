@@ -4,7 +4,15 @@ Status: **PHASES A–D IMPLEMENTED + GREEN 2026-08-03**, trader-directed
 (plan.md sec 12 item 7b); not yet live-validated. Phase E remains gated on the
 live two-machine check. Nothing here changes a detector, a score, or a champion
 path — this is a presentation + relay packet on top of machinery that already
-ships.
+ships. Merged to `main` in `29435d1` together with the latest Auto/Away Drive
+packet; the combined gate is recorded below.
+
+Operator path: configure server/topic/token and run **Test Push** under
+Research ▸ Price Alerts, then add or re-arm ticker levels under Focus Picks ▸
+Phone Price Alerts. The normal hosted-server value is `https://ntfy.sh`; no
+home server or router port is required. An unprotected topic name functions as
+a password, so use a long random value. See `docs/EVENING_MODE_RUNBOOK.md` for
+the full phone-permission and protected-topic checklist.
 
 Trader requirements, as given:
 

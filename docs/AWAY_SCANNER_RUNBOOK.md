@@ -6,6 +6,15 @@ While `AUTO-AWAY` is active, the Google Drive report publishes once each clock
 hour from 07:00 local time through market close. Starting the app later catches
 up the current hour; completed scans and important events can add extra updates.
 
+Status (2026-08-03): the consolidated output is implemented on `main`.
+`autopilot_today.txt` is the single phone-facing Drive digest: its verified
+safety/freshness header stays first, a numbered **BEST SWING TRADES** section
+leads all candidate content, intraday opportunities follow, and operational
+detail is condensed under `== OPERATIONS ==`. The atomic publish, verification
+metadata, archive, and last-good recovery contract is unchanged. Combined gate
+with the launcher/Desk Link/price-alert work: **1806 passed + 5 subtests**;
+smoke **7/7**. Live Away publication is still an operational validation item.
+
 ## One-time setup: name the designated writer on every machine
 
 Publishing shared Drive output is gated on an explicit, machine-local

@@ -44,14 +44,18 @@ The push channel is [ntfy](https://ntfy.sh): outbound HTTPS only, so no
 router ports need opening and it works from any network. Self-hosting later
 is just pointing the *ntfy server* field at your own instance.
 
-1. Install the **ntfy** app on the iPhone (App Store, free).
-2. Pick a long private topic name (it is effectively a password), e.g.
-   `aaron-tbv3-x7k2m9`, and subscribe to it in the app.
+1. Install the **ntfy** app on the iPhone.
+2. Pick a long, randomly generated topic name (it is effectively a password
+   unless access control is enabled), e.g. `tbv3-k7q9x2m8-v4n6p1cz`, and
+   subscribe to it in the app. Do not put a name, account number, or other
+   personal information in the topic.
 3. Enter the same topic in Research -> Price Alerts. Server stays
    `https://ntfy.sh` unless self-hosting; token only if the topic is
    protected.
-4. In the ntfy app, open the topic's settings and enable **critical
-   alerting** so urgent alerts break through iOS Focus modes.
+4. In iPhone Settings, allow ntfy notifications and sounds. Allow ntfy through
+   the Focus modes you rely on, or enable Time Sensitive/Critical delivery when
+   that option is available in the installed ntfy/iOS version. Do not assume
+   the priority header alone overrides an iPhone Focus configuration.
 5. The Apple Watch mirrors iPhone notifications automatically - no extra
    setup.
 
@@ -64,6 +68,12 @@ briefing. Monitoring runs in every mode by default - untick "Monitor in every
 mode" to restrict it to EVENING. Only the main-desk alert engine monitors; the
 designated shared-store writer check remains a second guard, so satellites and
 the mini-PC never double-push one cross.
+
+Protected-topic option: create/reserve the topic and an access token in ntfy,
+enter that token in the TradingBot token field, and authenticate the phone's
+subscription to the same protected topic. TradingBot sends the token as a
+Bearer credential over HTTPS. Self-hosting is optional and requires the phone
+to subscribe to that server too; simply changing the desktop URL is not enough.
 
 ## Morning arrival
 

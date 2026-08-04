@@ -15,6 +15,8 @@ is permanently out of scope (plan.md sec 1).
 - Mutable state lives in that cloud-synced home folder (Drive/OneDrive): watchlists, reports, JSONL/CSV evidence logs. Per-machine caches + diagnostics live under `%LOCALAPPDATA%\TradingBotV3` (`scripts/project_paths.py`).
 - Shadow engines `scripts/market_state.py` (via `market_state_bridge`) and `greatness_monitor` (via `greatness_shadow`) run beside the legacy champions and emit JSONL promotion evidence only.
 - Review-learning loop: Alert Center decisions → `alert_review_events.jsonl` → `review_learning.py` scoreboard → AI-curated `review_policy.json` → chart annotations (queue ordering gated to FIFO). See `docs/REVIEW_LEARNING_LOOP.md`.
+- Price alerts: the Focus tab and Research advanced view share one `PriceAlertService`. Only the main desk polls and sends urgent ntfy pushes; fires relay to every satellite as persistent, audible, non-activating toasts. Satellite edits stay read-only until the planned price-alert intent phase. See `docs/FOCUS_PRICE_ALERTS_PROPOSAL.md` and `docs/EVENING_MODE_RUNBOOK.md`.
+- Auto/Away phone output: `autopilot_today.txt` is the single verified Drive digest, with the safety/freshness header first, then numbered best swing trades, then intraday and condensed operations. Satellite control may change OFF/DESK/AWAY/EVENING without moving engine or writer ownership.
 - Unattended: `scripts/master_avwap_mini_pc.py` runs scheduled scans on the mini-PC and publishes a phone status file. Keep Auto Pilot OFF there while the desktop scans (no cross-machine IB budget yet).
 
 ## Hard invariants (plan.md sec 5 — never violate)
@@ -58,6 +60,7 @@ is permanently out of scope (plan.md sec 1).
 - `docs/REVIEW_LEARNING_LOOP.md` — how the AI reads review artifacts and writes `review_policy.json`.
 - `docs/SETUPS_MAJOR.md` / `docs/SETUPS_TEST.md` — AI-stated understanding of the production setups and the study/research setups, under trader review; fold corrections back in.
 - `docs/FIRST_SESSION_CHECKLIST.md`, `docs/AWAY_SCANNER_RUNBOOK.md`, `docs/REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md` — operational runbooks for live sessions.
+- `docs/MULTI_MACHINE_DESK_PROPOSAL.md`, `docs/FOCUS_PRICE_ALERTS_PROPOSAL.md`, `docs/EVENING_MODE_RUNBOOK.md` — Desk Link roles/control, Focus price-alert delivery, and ntfy phone setup.
 - `docs/MACOS_SETUP.md` — running the desk on macOS (native TWS, CloudStorage Drive mount, Keychain keys).
 - `docs/SHIP_READINESS.md`, `docs/BROKER_ADAPTERS.md`, `packaging/README.md` — shipping direction and future multi-broker architecture.
 - Runtime facts: primary desktop i5-8600K/32GB; full scan ≈ 28.5 min, network-bound. Post-session artifacts under `%LOCALAPPDATA%\TradingBotV3\diagnostics\` (`run_manifests\`, `spy_state_shadow.jsonl`, `greatness_shadow.jsonl`, `job_ledger.jsonl`, `heartbeat.json`).

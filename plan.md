@@ -1562,8 +1562,12 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    render payloads only, so no sec 5 invariant is touched. Tier 2 (exclusive
    control lease: satellite sign-in takes control, main locks to a relay
    with an always-available take-back, intents journaled/acked/idempotent)
-   is also implemented at trader direction. Live two-machine validation is
-   pending; live chart streaming (Tier 3) waits on that evidence.
+   is also implemented at trader direction. Tier 3 full relay is implemented
+   too (RRS, entry board, status, Auto regime, live M5 bars, and the item 7b
+   price-alert stream); unknown future streams are skipped. The main Auto mode
+   now rides in the sticky snapshot and a controlling satellite can change
+   OFF/DESK/AWAY/EVENING through an idempotent intent. All tiers remain pending
+   physical two-machine validation.
    `launch_gui.py` is the single operator entrypoint; Main/Satellite role is
    selected in Settings and applied through a clean automatic restart so live
    engine ownership is never hot-switched.
@@ -1588,7 +1592,8 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    lease, and the phone push fires first, independent of the relay.
    At explicit trader direction on 2026-08-03, Phases A–D were implemented
    before item 7a's pending live two-machine pairing validation; deterministic
-   status is **GREEN** (1806 tests + 5 subtests on merged `main`, smoke 7/7), not
+   status is **GREEN** (1806 tests + 5 subtests on merged `main` commit
+   `29435d1`, smoke 7/7), not
    **LIVE_VALIDATED**. Phase E satellite-side edit intents remain gated until
    the two-machine alert-delivery check passes.
 
