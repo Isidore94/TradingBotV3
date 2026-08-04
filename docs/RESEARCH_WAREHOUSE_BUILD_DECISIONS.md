@@ -17,7 +17,7 @@ implementation gap, where two readings of the plan were both defensible, or
 where a choice binds future phases. Format: decision → why → what was rejected
 → reopen trigger → where it lives.
 
-Status of the build: Phases 0-7 landed; Phase 8 next. Test baseline and
+Status of the build: Phases 0-8 landed (code); the 20-session pilot is a live run that has not happened. Test baseline and
 branch live in [`SOL_PROGRESS.md`](../SOL_PROGRESS.md).
 
 ---
@@ -924,6 +924,70 @@ Worth recording because the symptom looks like a hung test and is not one.
 
 **Where.** `tests/test_qt_warehouse_readout.py`.
 
+## BD-49 — Backups are portable copies, not robocopy invocations
+
+**Decision.** `backup.py` implements the three classes with `shutil` copies
+(size-compared, skip-if-unchanged) rather than shelling out to `robocopy`.
+
+**Why.** The plan names robocopy because the desk is Windows, but the property
+that matters is *append-only incremental*: never propagate a deletion,
+never `/MIR`. A portable implementation states that property in code, keeps the
+restore check runnable in tests, and works on the macOS path the repo also
+supports. `deleted_from_target` is always 0 and is asserted.
+
+**Reopens if.** Copy throughput on the real lake makes a native tool worth it —
+then the same no-delete contract must hold, and the test stays.
+
+**Where.** `backup.py`; `tests/test_warehouse_restore.py` (a file deleted at
+the source stays in the backup).
+
+## BD-50 — A live lock refuses even inside the same process
+
+**Decision.** `single_flight` refuses whenever the recorded PID is alive,
+including when that PID is the current process. A lock whose holder is dead is
+reclaimed rather than obeyed.
+
+**Why.** The first cut allowed re-entry for the same PID, which would let a
+build nest inside a build and write the lake twice concurrently — the exact
+thing the single-flight rule exists to prevent. Reclaiming a dead holder's lock
+is the other half: a crashed build must not wedge every future run.
+
+**Where.** `cli.py::single_flight`; `tests/test_warehouse_restore.py`.
+
+## BD-51 — Policy absence is not a coverage defect
+
+**Decision.** The coverage Health tile counts `PARTIAL`/`MISSING` shortfalls but
+excludes `NOT_COLLECTED_BY_POLICY` rows from the defect count, reporting them in
+the tile's reason breakdown instead.
+
+**Why.** A symbol the capture policy never intended to collect intraday is a
+declared decision, not a hole. Colouring the tile amber for it would train the
+trader to ignore the tile — which is how a real gap gets missed.
+
+**Where.** `scripts/ui/services/warehouse_service.py::_coverage_tile`;
+`tests/test_warehouse_restore.py::test_policy_absence_is_not_a_coverage_defect`.
+
+## BD-52 — OPEN: the pilot is a live run, and the tee still has no caller
+
+**Not a decision — the honest state of Phase 8.**
+
+The Phase-8 *code* is done: three-class backup, the scripted restore check, the
+CLI build job with its single-flight lock and job-ledger registration, and the
+six Health tiles. Two things it cannot deliver from here:
+
+1. **The 20-session pilot** (sec 5.6) is 20 forward RTH sessions on the desk.
+   Its checklist items — measured req/min without error 162, the real line cap,
+   stream-vs-poll M5 parity, idempotent resume across the TWS restart, measured
+   bytes/row, DAS/backup health, the restore check — need live sessions.
+2. **BD-20 is still open.** `warehouse_service.py` now exists (tiles + job
+   descriptor), but nothing calls `capture_m5_tee` during a live session: the
+   GUI still needs to hand BounceBot's `latest_bars` to the tee each cycle, and
+   the Health page still needs to render these tiles. Until that lands, capture
+   only runs when the build job is invoked by hand — which means the pilot
+   cannot start.
+
+**Where.** `cli.py`, `backup.py`, `scripts/ui/services/warehouse_service.py`.
+
 ---
 
 ## Open items for Sol / Fable
@@ -933,7 +997,8 @@ Each is already stated in its own BD entry; this is the short list.
 
 | # | Item | Where | What is needed |
 |---|---|---|---|
-| 1 | **Nothing calls the tee yet** — `scripts/ui/services/warehouse_service.py` (GUI service, job-ledger registration, six Health tiles) is unbuilt, so capture only runs from a manual job. The 20-session pilot depends on it. | BD-20 | Build it, or confirm it lands at Phase 8 |
+| 1 | **Nothing calls the tee during a live session.** The service and tiles now exist; the remaining wiring is (a) the GUI handing BounceBot's `latest_bars` to `capture_m5_tee` each cycle and (b) the Health page rendering the six tiles. Capture otherwise runs only from a manual build job, so the pilot cannot start. | BD-20, BD-52 | Wire both, then start the 20-session pilot |
+| 1b | **The 20-session pilot has not run** — it is a live-desk activity, not code. | BD-52 | Run it once capture is live; log the sec 5.6 measurements |
 | 2 | **`ib_capture.build_ib_transport` is unverified** — the real ibapi client has no offline test and no broker-marked live run. | BD-25 | One live run on the desk before the pilot leans on it |
 | 3 | **`exploration_cohort.txt` is empty** — the fixed 30 symbols define part of the research denominator, so no agent invented them. | BD-12 | Trader supplies the list (confirmation register item 5) |
 | 4 | **Two favorite-zone definitions are the builder's** — `first_dev_touch_order` and `band1_rejection_strength`. | BD-32 | Confirm or amend; a change is a `feature_set_version` bump |

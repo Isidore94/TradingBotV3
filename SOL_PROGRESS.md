@@ -9,7 +9,7 @@ stamp; it must not duplicate the roadmap.
 
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
-  Phase 7: **+218 warehouse tests** on the 1814-test baseline (adds
+  Phase 8: **+237 warehouse tests** on the 1814-test baseline (adds
   `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
   `test_warehouse_quarantine.py`, `test_warehouse_retire.py`,
   `test_warehouse_import.py`, `test_warehouse_tee.py`,
@@ -17,10 +17,11 @@ stamp; it must not duplicate the roadmap.
   `test_warehouse_backfill.py`, `test_warehouse_aggregate.py`,
   `test_warehouse_avwap_parity.py`, `test_warehouse_features.py`,
   `test_warehouse_occurrence.py`, `test_warehouse_outcomes.py`,
-  `test_warehouse_queries.py`, `test_qt_warehouse_readout.py`); smoke **7/7**.
-  Measured on the Linux build agent: **2030 passed, 2 skipped, 5 subtests**
-  (that agent's own baseline was 1812 + the same 2 skips), so the desktop gate
-  should read **2032 passed, 5 subtests** — confirm on the next Windows run.
+  `test_warehouse_queries.py`, `test_qt_warehouse_readout.py`,
+  `test_warehouse_restore.py`); smoke **7/7**. Measured on the Linux build
+  agent: **2049 passed, 2 skipped, 5 subtests** (that agent's own baseline was
+  1812 + the same 2 skips), so the desktop gate should read **2051 passed, 5
+  subtests** — confirm on the next Windows run.
 - Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
   protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
   the frozen 13-table pyarrow schemas + deterministic occurrence/anchor keys
@@ -112,6 +113,22 @@ stamp; it must not duplicate the roadmap.
   wheel verified on PyPI) but strictly optional and read-only; pyarrow answers
   every slice query. The Research tab gains a read-only "Research Warehouse"
   panel that reads nothing until Refresh is pressed.
+- Warehouse **Phase 8 code landed** (backup + build job + Health tiles):
+  `backup.py` implements the 3-class policy (Class A mirrored to disk AND
+  Drive, Class B append-only so a deletion is never propagated, Class C never)
+  and the scripted restore check, which restores a partition to a NEW root,
+  re-verifies every file against the manifest's recorded hash, and runs a
+  canned query. `cli.py` adds `build` / `status` / `restore-check` with a
+  single-flight lock (a live holder refuses even in-process; a dead holder's
+  lock is reclaimed) and job-ledger registration.
+  `scripts/ui/services/warehouse_service.py` computes exactly the six sec-18
+  Health tiles from the ledger, with policy absence excluded from coverage
+  defects.
+- **Open (BD-52 / BD-20):** the 20-session pilot has NOT run — it is a live
+  desk activity — and nothing calls the tee during a live session yet: the GUI
+  must hand BounceBot's `latest_bars` to `capture_m5_tee` each cycle and the
+  Health page must render the six tiles. Until then capture runs only from a
+  manual build job.
 - **Open gap (BD-44):** no detector adapter yet — Phase 6 proves the logic
   against constructed detections; nothing reads the tracker output into
   detection dicts.
@@ -123,8 +140,8 @@ stamp; it must not duplicate the roadmap.
   registration + Health tiles) is still to be built, and the 20-session pilot
   depends on it.
 - Builder decision log: `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`
-  (BD-01..BD-48) records every implementation choice the locked plan left
-  open, and ends with an **Open items for Sol / Fable** table (10 items:
+  (BD-01..BD-52) records every implementation choice the locked plan left
+  open, and ends with an **Open items for Sol / Fable** table (11 items:
   the unbuilt GUI service, the unverified ibapi client, the empty exploration
   cohort, two builder-stated favorite-zone definitions, null production
   context until Phase 6, DYNAMIC/EOD VWAP, unscheduled closures).
@@ -143,8 +160,9 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 8 (backup/restore +
-  the six Health tiles + the 20-session pilot) per the plan's Section 19.2.
+  `research_spool` path). Phases 1-8 are code-complete on this branch; what
+  remains is live work: wire the tee + Health tiles into the running desk
+  (BD-20), then run the 20-session pilot (BD-52).
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 

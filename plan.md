@@ -1695,7 +1695,15 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    readout with episodes reported apart from rows; DuckDB is pinned but
    optional and read-only; the Research tab gains a read-only warehouse panel
    that reads only on Refresh. Tests: `test_warehouse_queries.py`,
-   `test_qt_warehouse_readout.py`.
+   `test_qt_warehouse_readout.py`. Phase 8 code landed 2026-08-04:
+   `backup.py` (3-class backup, append-only Class B, scripted restore check
+   that re-verifies manifest hashes and runs a canned query against a restored
+   copy), `cli.py` (`build`/`status`/`restore-check` with single-flight lock
+   and job-ledger registration), and `scripts/ui/services/warehouse_service.py`
+   (the six sec-18 Health tiles). Tests: `test_warehouse_restore.py`. STILL
+   OPEN: nothing calls the tee during a live session and the Health page does
+   not yet render the tiles (BD-20), so the 20-session pilot has not started
+   (BD-52).
 
 ### Then — after correctness and authoritative data paths
 
