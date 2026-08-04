@@ -116,6 +116,42 @@ coverage, gaps) → `silver/`, and the feature/setup/style/gold layers →
 | `scan_coverage` | silver | month | `scheduled_at` |
 | `collection_gap` | silver | month | `gap_start` |
 
+## Bronze wraps (Phase 2)
+
+Legacy artifacts are wrapped, never rewritten and never re-owned (Section 19.5).
+Each wrapped artifact gets its own dataset in the `bronze_*` namespace, sharing
+one record schema (`schemas.BRONZE_RECORD`), partitioned by month, and never a
+compaction input:
+
+| Column | Meaning |
+|---|---|
+| `source_artifact` / `source_path` | which legacy file this row came from |
+| `source_sha256` | hash of the source file as read (freeze-copy evidence) |
+| `source_offset` | line/row index; 0 for whole-file snapshots |
+| `record_hash` | idempotency key for this record inside its source |
+| `legacy_id` | the artifact's own ID where it has one |
+| `payload` / `payload_format` | the record preserved verbatim (`JSONL`/`JSON`/`CSV_ROW`) |
+| `quality` | `COMPLETE`, or `INVALID_DATA` for a record kept but unparseable |
+| `event_at` / `observed_at` / `partition_ts` / `capture_mode` | PIT columns; wrapped evidence is always `BACKFILL` |
+
+Ingest modes and their idempotency rule:
+
+- `APPEND_LOG` (JSONL) and `CSV_ROWS` — resume from the recorded offset
+  watermark; an unchanged source file hash short-circuits the read entirely.
+- `SNAPSHOT` (whole document, or a directory of immutable snapshot files) — one
+  row per content version; unchanged content ingests nothing.
+
+The watermark lives on the seal's own manifest line (`bronze_source_path`,
+`bronze_source_sha256`, `bronze_max_offset`), so the ledger remains the only
+state and no side-car file exists to drift.
+
+**Reuse-as-is sources** are wrapped reads, never copies: the HV level stores and
+`d1_level_feed` state project into `level_state_daily`, and the durable
+per-symbol D1 Parquet store projects into `bar_d1` — completed sessions only
+(the current session's forming bar is skipped until it closes) and with
+`provider = UNKNOWN`, because that store never persisted which provider produced
+a row.
+
 ## Point-in-time columns
 
 `event_at` (market fact), `observed_at` (when this installation received it),

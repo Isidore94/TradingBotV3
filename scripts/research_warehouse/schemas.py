@@ -446,6 +446,43 @@ COLLECTION_GAP = _schema(
 )
 
 
+# --- bronze wraps (plan sec 19.0/19.5) -------------------------------------
+# Legacy artifacts are wrapped, never rewritten and never re-owned: one row per
+# source record, payload preserved verbatim, hashed, with the source file's own
+# hash on the manifest line. Every wrapped artifact gets its own dataset name
+# (``bronze_<artifact>``) so the locked "one file per (dataset, month)"
+# partition rule applies unchanged. Bronze raw is never a compaction input.
+BRONZE_PREFIX = "bronze_"
+
+BRONZE_RECORD = _schema(
+    [
+        pa.field("source_artifact", pa.string()),
+        pa.field("source_path", pa.string()),
+        # SHA-256 of the whole source file as read (freeze-copy evidence).
+        pa.field("source_sha256", pa.string()),
+        # Line/row index for logs, 0 for whole-file snapshots.
+        pa.field("source_offset", pa.int64()),
+        # Idempotency key: content hash of this record within its source.
+        pa.field("record_hash", pa.string()),
+        pa.field("legacy_id", pa.string()),
+        pa.field("payload", pa.string()),
+        pa.field("payload_format", pa.string()),
+        pa.field("quality", pa.string()),
+        pa.field("event_at", _TS),
+        pa.field("observed_at", _TS),
+        # event_at when the record carries one, else observed_at; never null,
+        # because a partition key that cannot be computed is a quarantine.
+        pa.field("partition_ts", _TS),
+        pa.field("capture_mode", pa.string()),
+    ],
+    _provenance_columns(),
+)
+
+BRONZE_FORMAT_JSONL = "JSONL"
+BRONZE_FORMAT_JSON = "JSON"
+BRONZE_FORMAT_CSV_ROW = "CSV_ROW"
+
+
 @dataclass(frozen=True)
 class DatasetSpec:
     """Everything the store needs to place and summarize one dataset's files.
@@ -581,14 +618,43 @@ DATASETS: dict[str, DatasetSpec] = {
 }
 
 
+_BRONZE_SPECS: dict[str, DatasetSpec] = {}
+
+
+def bronze_dataset_name(artifact: str) -> str:
+    return artifact if str(artifact).startswith(BRONZE_PREFIX) else f"{BRONZE_PREFIX}{artifact}"
+
+
+def bronze_dataset_spec(name: str) -> DatasetSpec:
+    """One wrapped legacy artifact, shaped by the shared bronze record schema."""
+    name = bronze_dataset_name(name)
+    spec = _BRONZE_SPECS.get(name)
+    if spec is None:
+        spec = _spec(
+            name,
+            LAYER_BRONZE,
+            BRONZE_RECORD,
+            "partition_ts",
+            ("month",),
+            ("source_path", "source_offset", "record_hash"),
+            compactable=False,  # bronze raw is never a compaction input (sec 8.3)
+        )
+        _BRONZE_SPECS[name] = spec
+    return spec
+
+
 def dataset_spec(name: str) -> DatasetSpec:
     try:
         return DATASETS[name]
     except KeyError:
-        raise KeyError(
-            f"Unknown research dataset {name!r}. The slice datasets are frozen "
-            f"(plan sec 7.1): {', '.join(sorted(DATASETS))}."
-        ) from None
+        pass
+    if str(name).startswith(BRONZE_PREFIX):
+        return bronze_dataset_spec(name)
+    raise KeyError(
+        f"Unknown research dataset {name!r}. The slice datasets are frozen "
+        f"(plan sec 7.1): {', '.join(sorted(DATASETS))}; wrapped legacy "
+        f"artifacts use the {BRONZE_PREFIX}* namespace."
+    )
 
 
 def symbol_bucket(symbol: str, buckets: int = SYMBOL_HASH_BUCKETS) -> int:
@@ -616,6 +682,25 @@ def _identity_hash(*parts) -> str:
 def anchor_instance_id(symbol: str, anchor_type: str, anchor_bar_date, formula_version: str) -> str:
     """hash(symbol, anchor_type, anchor_bar_date, formula_version) - sec 7.1."""
     return _identity_hash(str(symbol).upper(), str(anchor_type).upper(), anchor_bar_date, formula_version)
+
+
+def level_id(symbol: str, source_store: str, level_family: str, subtype: str, price, extra=None) -> str:
+    """Stable level identity for stores that publish no ID of their own.
+
+    A level's identity is its geometry and provenance, never its as-of role:
+    support/resistance is an episode (sec 6.4), so it is deliberately not an
+    input here. Manual and model-originated levels keep separate identities
+    even when they cluster at the same price, because ``source_store`` differs.
+    """
+    rounded = "" if price is None else f"{float(price):.6f}"
+    return _identity_hash(
+        str(symbol).upper(),
+        str(source_store),
+        str(level_family).upper(),
+        str(subtype),
+        rounded,
+        extra,
+    )
 
 
 def occurrence_id(

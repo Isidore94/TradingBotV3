@@ -1640,7 +1640,14 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    `manifest.py` (`manifest_log.jsonl` read authority), `schemas.py` (the
    frozen 13-table pyarrow definitions + deterministic occurrence/anchor
    keys), `docs/RESEARCH_WAREHOUSE_ERD.md`, and the crash-matrix tests
-   (`test_warehouse_seal/manifest/quarantine/retire.py`).
+   (`test_warehouse_seal/manifest/quarantine/retire.py`). Phase 2 landed
+   2026-08-04 (bronze wraps + daily snapshots): `ingest_existing.py` wraps the
+   sec 19.0 inventory into `bronze_*` datasets with source hashes and offset
+   watermarks (re-run is a no-op), snapshots `universe_membership_daily` and
+   `level_state_daily` daily, and projects the durable per-symbol D1 store into
+   `bar_d1` as a wrapped read (completed sessions only); legacy writers are
+   untouched and `exploration_cohort.txt` stays empty pending trader
+   confirmation. Tests: `test_warehouse_import.py`.
 
 ### Then — after correctness and authoritative data paths
 

@@ -1,0 +1,24 @@
+# Fixed exploration cohort - research warehouse slice (plan sec 19.3, 13).
+#
+# Purpose: a small, FIXED set of symbols captured regardless of whether the
+# champions ever look at them. Without it every bar in the archive is one the
+# scanner already selected, and champion-conditioning bias is baked into the
+# denominator forever.
+#
+# Rules that are already locked and must not be re-litigated:
+# - BACKFILL-only acquisition (Section 5.2 / LD-21). These symbols are NEVER
+#   added to the champion scan cohort and never become a second live IB
+#   requester: they ride the tee when a symbol happens to be scanned anyway,
+#   otherwise the nightly backfill budget picks them up.
+# - Membership is point-in-time: each session's list is snapshotted into
+#   universe_membership_daily as list_name=exploration_fixed at first capture,
+#   never backfilled from a later edit (LD-05).
+# - Reported as "exploration cohort, unweighted" - it supports cohort-conditional
+#   claims only, never full-universe expectancy.
+#
+# Contents: 30 symbols, pending item 5 of the trader confirmation register
+# (Section 23). The list is deliberately EMPTY until Aaron confirms it - an
+# agent-invented list would silently become the research denominator. An empty
+# file is a clean no-op everywhere: no rows, no error, no capture.
+#
+# Format: one symbol per line; '#' starts a comment.

@@ -260,12 +260,14 @@ class ResearchStore:
         job_id: str = "",
         validate=None,
         git_commit: str | None = None,
+        extra: dict | None = None,
     ) -> PublishResult:
         """Seal ``rows`` into ``dataset``; quarantine only what is dirty.
 
         ``validate(row) -> reason|None`` lets a caller reject rows on domain
         grounds; schema/timezone/partition defects are detected here. Dirty
-        rows never abort the clean remainder (sec 8.3).
+        rows never abort the clean remainder (sec 8.3). ``extra`` adds caller
+        provenance (e.g. a bronze source path and hash) to the manifest line.
         """
         spec = dataset_spec(dataset)
         # Manifest corruption is the wholesale veto - check before any write.
@@ -320,6 +322,7 @@ class ResearchStore:
                 action=ACTION_PUBLISH,
                 job_id=job_id,
                 git_commit=commit,
+                extra=extra,
             )
             result.published.append(entry)
             result.rows_published += entry.row_count
@@ -377,6 +380,7 @@ class ResearchStore:
         job_id: str,
         git_commit: str,
         supersedes=None,
+        extra: dict | None = None,
     ) -> ManifestEntry:
         self.incoming_dir.mkdir(parents=True, exist_ok=True)
         staged = self.incoming_dir / f"part-{uuid.uuid4().hex}.parquet"
@@ -412,6 +416,7 @@ class ResearchStore:
             supersedes=supersedes or [],
             git_commit=git_commit,
             job_id=job_id,
+            **(extra or {}),
         )
 
     def _time_bounds(self, spec: DatasetSpec, table: pa.Table) -> tuple[str, str]:
@@ -694,12 +699,13 @@ class ResearchStore:
         paths = [str(path) for path in self.resolve_files(dataset, partition)]
         return pads.dataset(paths, schema=spec.schema, format="parquet")
 
-    def read_table(self, dataset: str, partition: str | None = None) -> pa.Table:
+    def read_table(self, dataset: str, partition: str | None = None, columns=None) -> pa.Table:
         spec = dataset_spec(dataset)
         paths = self.resolve_files(dataset, partition)
         if not paths:
-            return spec.schema.empty_table()
-        return self.open_dataset(dataset, partition).to_table()
+            empty = spec.schema.empty_table()
+            return empty.select(list(columns)) if columns else empty
+        return self.open_dataset(dataset, partition).to_table(columns=list(columns) if columns else None)
 
     # -- health -------------------------------------------------------------
     def health_counts(self) -> dict:

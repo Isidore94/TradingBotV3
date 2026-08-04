@@ -9,12 +9,13 @@ stamp; it must not duplicate the roadmap.
 
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
-  Phase 1: **+40 warehouse tests** on the 1814-test baseline (adds
+  Phase 2: **+59 warehouse tests** on the 1814-test baseline (adds
   `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
-  `test_warehouse_quarantine.py`, `test_warehouse_retire.py`); smoke **7/7**.
-  Measured on the Linux build agent: **1852 passed, 2 skipped, 5 subtests**
-  (that agent's own baseline was 1812 + the same 2 skips), so the desktop gate
-  should read **1854 passed, 5 subtests** — confirm on the next Windows run.
+  `test_warehouse_quarantine.py`, `test_warehouse_retire.py`,
+  `test_warehouse_import.py`); smoke **7/7**. Measured on the Linux build
+  agent: **1871 passed, 2 skipped, 5 subtests** (that agent's own baseline was
+  1812 + the same 2 skips), so the desktop gate should read **1873 passed, 5
+  subtests** — confirm on the next Windows run.
 - Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
   protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
   the frozen 13-table pyarrow schemas + deterministic occurrence/anchor keys
@@ -24,6 +25,20 @@ stamp; it must not duplicate the roadmap.
   crash artifacts, and the Phase-1 ERD (`docs/RESEARCH_WAREHOUSE_ERD.md`).
   Still shadow-only: no detector, score, ranking, or alert path imports it,
   and the store is a total no-op when `research_store_dir` is unset.
+- Warehouse **Phase 2 landed** (bronze wraps + daily snapshots):
+  `ingest_existing.py` wraps the sec 19.0 inventory into `bronze_*` datasets
+  (tracker + scenario CSVs, bounce ledgers, `alert_review_events`, shadow and
+  regime/RS artifacts, `technical_integrity_events`, job ledger/heartbeat/run
+  manifests, earnings anchors + calendar history, and the four trader
+  watch/level JSONs) with the source path, source file hash, and offset
+  watermark on each manifest line — a re-run with no source change writes
+  nothing. Daily snapshots populate `universe_membership_daily` (first capture
+  wins, never backfilled) and `level_state_daily` (HV level stores,
+  `d1_level_feed` SMA/trendline state, trader watch JSONs), and the durable
+  per-symbol D1 Parquet store projects into `bar_d1` as a wrapped read,
+  completed sessions only. Legacy writers are untouched;
+  `scripts/research_warehouse/exploration_cohort.txt` is deliberately empty
+  pending item 5 of the plan's trader confirmation register.
 - Previous `main` gate (2026-08-03 evening, merged from
   `ultimate-setup-database-plan`): **1814 passed, 5 subtests** (adds
   `tests/test_warehouse_config.py`); smoke **7/7**.
@@ -39,9 +54,8 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 2 (bronze wrap of the
-  sec 19.0 inventory + daily universe/geometry snapshots) per the plan's
-  Section 19.2.
+  `research_spool` path). Next builder starts at Phase 3 (M5 tee archive +
+  `scan_coverage`/`collection_gap`) per the plan's Section 19.2.
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 
