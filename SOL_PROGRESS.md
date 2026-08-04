@@ -74,7 +74,7 @@ stamp; it must not duplicate the roadmap.
   registration + Health tiles) is still to be built, and the 20-session pilot
   depends on it.
 - Builder decision log: `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`
-  (BD-01..BD-20) records every implementation choice the locked plan left
+  (BD-01..BD-25) records every implementation choice the locked plan left
   open, for Sol/Fable review.
 - Previous `main` gate (2026-08-03 evening, merged from
   `ultimate-setup-database-plan`): **1814 passed, 5 subtests** (adds
