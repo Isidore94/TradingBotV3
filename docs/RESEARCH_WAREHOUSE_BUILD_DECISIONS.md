@@ -1176,6 +1176,12 @@ constants change.
 
 ## BD-59 — The intraday EMA lookback is the session, because that is the champion's frame
 
+**Status: CONFIRMED by the trader (2026-08-04).** This entry contradicted the
+2026-08-04 review, so it was written as a builder disagreement pending
+adjudication. Aaron read the evidence and confirmed the champion reading and
+the session-scoped decision. It is settled, not contested — a later reader
+should treat the review's D5-intraday remedy as superseded by this entry.
+
 **Decision.** `ema8/15/21_m5` are computed on the **entry session's own RTH
 bars**, and are null until the session has at least `span` completed bars. The
 session bound is enforced inside `compute_intraday_features` (which now filters
@@ -1199,10 +1205,10 @@ structural instead of incidental.
 
 **Rejected.** Following the review's stated remedy (a "5 D" EMA seed) — it
 contradicts the champion and plan.md sec 5's "champion math is called, never
-re-derived"; the review is a fallible artifact and this entry records the
-disagreement with its evidence. Publishing a short-frame EMA with a
-`bars_used` qualifier — the frozen sec 7.1 schema has no such column, and a
-null the consumer must handle beats a number it will trust.
+re-derived"; the review is a fallible artifact and this entry recorded the
+disagreement with its evidence, which the trader then confirmed. Publishing a
+short-frame EMA with a `bars_used` qualifier — the frozen sec 7.1 schema has no
+such column, and a null the consumer must handle beats a number it will trust.
 
 **Reopens if.** BounceBot's own EMA frame changes (then this follows it, under
 a `feature_set_version` bump), or a registered study wants a multi-session

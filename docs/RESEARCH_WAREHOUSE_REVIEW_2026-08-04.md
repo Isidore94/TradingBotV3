@@ -30,7 +30,9 @@ fetch feeds the previous-day extremes and the dynamic/EOD VWAPs, while
 `len(today_df) >= span` (`bounce_bot_lib/legacy.py`, step 5, "Calculate short
 EMAs (today only)"). The warehouse's session scope was therefore already
 right; what was missing was the champion's minimum-bar guard, which is what
-BD-59 adds. The daily half of D5 is confirmed exactly as written and fixed by
+BD-59 adds. **The trader adjudicated this on 2026-08-04 and confirmed the
+correction**, so this paragraph — not section 2's D5 text — is the operative
+statement about the intraday EMAs. The daily half of D5 is confirmed exactly as written and fixed by
 BD-58. D6 and D7 are confirmed exactly as written and repaired in BD-60; D19
 likewise, in BD-61 (which also answers open item 11's "decide what the EOD
 build actually runs"). D14–D18 are repaired in BD-62; the D17 regression test
@@ -147,6 +149,13 @@ same-name-different-number failure BD-33 exists to prevent. The AVWAP block is
 unaffected (anchor-relative). Fix needs a windowing rule (e.g. always read
 `year` and `year−1`, and give intraday EMAs the same 5-day lookback the
 champion uses), stated as part of `tier1_v1`'s definition.
+
+> **CORRECTION (2026-08-04, trader-confirmed).** The claim that "production's
+> M5 EMAs run on the '5 D' frame" is **wrong** — see the repair addendum above
+> and BD-59. BounceBot computes `ema_8/15/21` on `today_df` alone. Do **not**
+> implement the 5-day intraday seed this paragraph asks for; it would create
+> the very defect the paragraph is complaining about. The daily half of this
+> defect stands as written.
 
 ### S2 — defeats a stated plan goal
 
