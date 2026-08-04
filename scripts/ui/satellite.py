@@ -41,6 +41,7 @@ from desk_link.popup_payload import restore_alert_popup_payload
 from desk_link.server import DEFAULT_PORT
 from project_paths import LOCAL_SETTINGS_DIR, get_local_setting, save_local_setting
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+from ui.widgets.price_alert_toast import PriceAlertToastManager
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,12 @@ _MAX_OPEN_POPUPS = 6
 AUTO_MODES = ("OFF", "DESK", "AWAY", "EVENING")
 
 HOST_SETTING = "desk_link_host"
-TOKEN_SETTING = "desk_link_token"
+CLIENT_TOKEN_SETTING = "desk_link_client_token"
+# Before the desk could both serve and follow from the Settings page, the
+# satellite reused the relay server's token key.  Migrate an existing pairing
+# once, but all new client writes use their own key so pairing upstream can
+# never rotate this machine's server credential.
+LEGACY_TOKEN_SETTING = "desk_link_token"
 
 
 def load_saved_connection() -> tuple[str, int, str]:
@@ -61,13 +67,20 @@ def load_saved_connection() -> tuple[str, int, str]:
         port = int(port_text) if port_text.strip() else DEFAULT_PORT
     except ValueError:
         port = DEFAULT_PORT
-    token = str(get_local_setting(TOKEN_SETTING, "") or "").strip()
+    token = str(get_local_setting(CLIENT_TOKEN_SETTING, "") or "").strip()
+    if not token and host.strip():
+        token = str(get_local_setting(LEGACY_TOKEN_SETTING, "") or "").strip()
+        if token:
+            try:
+                save_local_setting(CLIENT_TOKEN_SETTING, token)
+            except OSError:
+                log.warning("Could not migrate the saved Desk Link client token.", exc_info=True)
     return host.strip(), port, token
 
 
 def save_connection(host: str, port: int, token: str) -> None:
     save_local_setting(HOST_SETTING, f"{host.strip()}:{int(port)}")
-    save_local_setting(TOKEN_SETTING, token.strip())
+    save_local_setting(CLIENT_TOKEN_SETTING, token.strip())
 
 
 class ConnectDialog(QDialog):
@@ -272,6 +285,7 @@ class SatelliteWindow(QMainWindow):
         # `activated` fires only on a user pick, so mirroring the snapshot
         # into the combo never echoes an intent back to the main.
         self.mode_selector.activated.connect(self._on_mode_selected)
+        self.price_alert_toasts = PriceAlertToastManager(self)
         self.snapshot_label = QLabel("")
         self.snapshot_label.setObjectName("MutedLabel")
         self.snapshot_label.setWordWrap(True)
@@ -436,6 +450,9 @@ class SatelliteWindow(QMainWindow):
             self._show_alert(message)
         elif kind == protocol.TYPE_STATE_SNAPSHOT:
             self._show_snapshot(payload)
+        elif kind == protocol.TYPE_DESK_STREAM:
+            if payload.get("stream") == "price_alert" and isinstance(payload.get("data"), dict):
+                self._show_price_alert(payload["data"], replayed=False)
         elif kind == protocol.TYPE_LEASE_GRANT:
             self._set_in_control(
                 True, "IN CONTROL — decisions here apply on the main desk. Main is relaying."
@@ -470,6 +487,18 @@ class SatelliteWindow(QMainWindow):
         if focus_names:
             text += " · Focus: " + ", ".join(focus_names)
         self.snapshot_label.setText(text)
+        for alert in payload.get("price_alerts") or []:
+            if isinstance(alert, dict):
+                self._show_price_alert(alert, replayed=True)
+
+    def _show_price_alert(self, payload: dict[str, Any], *, replayed: bool) -> None:
+        if not self.price_alert_toasts.show_alert(payload, replayed=replayed):
+            return
+        message = str(payload.get("message") or "Price alert fired")
+        prefix = "⟳ missed price alert" if replayed else "PRICE ALERT"
+        self.feed.insertItem(0, f"{prefix}: {message}")
+        while self.feed.count() > _MAX_FEED_ROWS:
+            self.feed.takeItem(self.feed.count() - 1)
 
     def _show_alert(self, message: dict[str, Any]) -> None:
         payload = message["payload"]

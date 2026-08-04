@@ -8,7 +8,7 @@ journal, and a controlled research/promotion program for new setups. Order execu
 is permanently out of scope (plan.md sec 1).
 
 ## Core loop / data flow
-- Entry: `TradingBotV3_GUI.cmd` (Windows) / `TradingBotV3_GUI.command` (macOS) / `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). `scripts/gui.py --ui tk` is the legacy Tk UI kept during migration.
+- Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). Main versus satellite role is selected and persisted inside Settings. `scripts/gui.py --ui tk` is the legacy Tk UI kept during migration.
 - Market data: IBKR TWS/Gateway on `127.0.0.1:7496` (`ibapi`) primary, `yfinance` fallback; bar source is tracked per scan. See `docs/BROKER_ADAPTERS.md`.
 - Engines: `scripts/master_avwap.py` (+`master_avwap_lib/`) D1 AVWAP swing scanner; `scripts/bounce_bot.py` (+`bounce_bot_lib/`) intraday M5 bounce detector; `market_prep/` pre-session services.
 - Inputs: plain-text watchlists (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`) in the user-selected shared "home folder".
@@ -39,7 +39,7 @@ is permanently out of scope (plan.md sec 1).
 ## Commands
 - Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `SOL_PROGRESS.md`. Check pytest's own exit code, not a piped tail's. macOS/Linux: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q` (Qt tests need the offscreen platform when headless).
 - Smoke (offline, deterministic): `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7.
-- Run: `.\TradingBotV3_GUI.cmd` (Windows) or `./TradingBotV3_GUI.command` (macOS; `./setup_macos.command` once first) — both wrap `launch_gui.py`; IB TWS/Gateway must be connected for data. On POSIX the venv python is `.venv/bin/python`.
+- Run: `.venv\Scripts\python.exe launch_gui.py` (Windows) or `.venv/bin/python launch_gui.py` (macOS/Linux; `./setup_macos.command` once first). Choose Main/Satellite in Settings ▸ Desk Link; role changes restart through the same launcher. IB TWS/Gateway is required only on the main desk.
 - Audits: `scripts/operations_audit.py` (runtime), `scripts/review_capture_audit.py` (capture readiness) — both also render in System Health.
 - No deploy pipeline: the user runs the app from this repo on `main`. Never leave the working tree broken.
 

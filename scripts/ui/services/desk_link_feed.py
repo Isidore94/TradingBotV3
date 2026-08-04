@@ -23,6 +23,7 @@ from desk_link import protocol
 from desk_link.client import DeskLinkClient
 from desk_link.popup_payload import restore_alert_popup_payload
 from ui.models.bounce import BounceAlert
+from ui.widgets.price_alert_toast import price_alert_event_key
 
 log = logging.getLogger(__name__)
 
@@ -59,13 +60,16 @@ class DeskLinkFeedService(QObject):
     entryBoardChanged = Signal(object)
     statusChanged = Signal(str)
     autoRegimeChanged = Signal(object)
+    priceAlertReceived = Signal(dict)
 
     _messageArrived = Signal(dict)  # client thread -> GUI thread bridge
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._client: DeskLinkClient | None = None
+        self._link_status = ("stopped", "stopped")
         self._payload_bot = _PayloadBot()
+        self._seen_price_alerts: set[str] = set()
         self._messageArrived.connect(self._handle_message)
 
     def payload_bot(self) -> _PayloadBot:
@@ -75,16 +79,27 @@ class DeskLinkFeedService(QObject):
     def running(self) -> bool:
         return self._client is not None
 
+    def current_link_status(self) -> tuple[str, str]:
+        """Last client state, including terminal rejection/disconnection."""
+        return self._link_status
+
+    def _record_link_status(self, state: str, detail: str) -> None:
+        # Replacing one tuple is atomic under CPython, so the GUI thread never
+        # observes a state from one callback with detail from another.
+        self._link_status = (str(state), str(detail))
+        self.linkStatusChanged.emit(*self._link_status)
+
     def start(self, *, host: str, port: int, token: str, machine_name: str) -> None:
         if self._client is not None:
             return
+        self._record_link_status("connecting", f"connecting to {host}:{port}")
         self._client = DeskLinkClient(
             host=host,
             port=port,
             token=token,
             machine_name=machine_name,
             on_message=self._messageArrived.emit,
-            on_status=self.linkStatusChanged.emit,
+            on_status=self._record_link_status,
         )
         self._client.start()
 
@@ -92,11 +107,19 @@ class DeskLinkFeedService(QObject):
         client, self._client = self._client, None
         if client is not None:
             client.stop()
+        else:
+            self._record_link_status("stopped", "stopped")
 
     def _handle_message(self, message: dict) -> None:
         kind = message.get("type")
         if kind == protocol.TYPE_DESK_STREAM:
             self._handle_stream(message.get("payload") or {})
+            return
+        if kind == protocol.TYPE_STATE_SNAPSHOT:
+            payload = message.get("payload") or {}
+            for alert in payload.get("price_alerts") or []:
+                if isinstance(alert, dict):
+                    self._emit_price_alert(alert, replayed=True)
             return
         if kind != protocol.TYPE_ALERT_POPUP:
             return
@@ -127,7 +150,19 @@ class DeskLinkFeedService(QObject):
             self.statusChanged.emit(str(data or ""))
         elif stream == "auto_regime":
             self.autoRegimeChanged.emit(data if isinstance(data, dict) else {})
+        elif stream == "price_alert" and isinstance(data, dict):
+            self._emit_price_alert(data, replayed=False)
         # Unknown streams from a newer main are skipped, never an error.
+
+    def _emit_price_alert(self, payload: dict[str, Any], *, replayed: bool) -> None:
+        alert = dict(payload)
+        key = price_alert_event_key(alert)
+        if key.strip("|") and key in self._seen_price_alerts:
+            return
+        if key.strip("|"):
+            self._seen_price_alerts.add(key)
+        alert["replayed"] = bool(replayed)
+        self.priceAlertReceived.emit(alert)
 
 
 def _rebuild_alert(fields: dict[str, Any]) -> BounceAlert:

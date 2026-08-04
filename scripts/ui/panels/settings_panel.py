@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -13,8 +13,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from project_paths import get_tracker_storage_details, open_path_in_file_manager
@@ -46,13 +49,27 @@ UI_SCALE_LABELS = {
 
 class SettingsPanel(QFrame):
     stateChanged = Signal()
+    deskRoleRestartRequested = Signal(str)
 
-    def __init__(self, state: UiState, bounce_service=None, desk_link_service=None, parent=None) -> None:
+    def __init__(
+        self,
+        state: UiState,
+        bounce_service=None,
+        desk_link_service=None,
+        desk_link_feed=None,
+        desk_role: str = "main",
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self.state = state
         self.bounce_service = bounce_service
         self.desk_link_service = desk_link_service
+        # Present only while this process is in the satellite role. Pairing
+        # rows stay visible in either role so the next UI-driven restart has
+        # everything it needs.
+        self.desk_link_feed = desk_link_feed
+        self.desk_role = "satellite" if desk_role == "satellite" else "main"
 
         self.theme_input = QComboBox()
         self.theme_input.addItems(THEME_LABELS)
@@ -118,18 +135,37 @@ class SettingsPanel(QFrame):
         data_actions.addWidget(self.warm_button)
         data_actions.addStretch(1)
 
+        general_page = QFrame()
+        general_page.setObjectName("Panel")
+        general_layout = QVBoxLayout(general_page)
+        general_layout.setContentsMargins(12, 12, 12, 12)
+        general_layout.setSpacing(10)
+        general_layout.addWidget(
+            SectionHeader("General", "Per-machine presentation and durable storage.")
+        )
+        general_layout.addLayout(form)
+        general_layout.addLayout(data_actions)
+        general_layout.addWidget(self.warm_status)
+        general_layout.addStretch(1)
+
+        self.settings_tabs = QTabWidget()
+        self.settings_tabs.setDocumentMode(True)
+        self.settings_tabs.addTab(_scrollable_tab(general_page), "General")
+        if self.bounce_service is not None:
+            self.settings_tabs.addTab(_scrollable_tab(self._build_bounce_section()), "BounceBot")
+        if self.desk_link_service is not None:
+            self.settings_tabs.addTab(_scrollable_tab(self._build_desk_link_section()), "Desk Link")
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        layout.addWidget(SectionHeader("Settings", "Per-machine presentation, storage, and BounceBot configuration."))
-        layout.addLayout(form)
-        layout.addLayout(data_actions)
-        layout.addWidget(self.warm_status)
-        if self.bounce_service is not None:
-            layout.addWidget(self._build_bounce_section())
-        if self.desk_link_service is not None:
-            layout.addWidget(self._build_desk_link_section())
-        layout.addStretch(1)
+        layout.addWidget(
+            SectionHeader(
+                "Settings",
+                "Presentation, data, live-engine controls, and multi-machine Desk Link.",
+            )
+        )
+        layout.addWidget(self.settings_tabs, 1)
 
     def _build_bounce_section(self) -> QFrame:
         """Operational BounceBot controls, moved off the Trading Desk so the
@@ -232,6 +268,30 @@ class SettingsPanel(QFrame):
             )
         )
 
+        self.desk_role_input = QComboBox()
+        self.desk_role_input.addItem("Main desk - TWS, scanners, and relay owner", "main")
+        self.desk_role_input.addItem("Satellite desk - fed by another main", "satellite")
+        self.desk_role_input.setCurrentIndex(
+            max(0, self.desk_role_input.findData(self.desk_role))
+        )
+        self.desk_role_input.currentIndexChanged.connect(self._sync_desk_role_controls)
+        self.desk_role_button = QPushButton()
+        self.desk_role_button.clicked.connect(self._apply_desk_role)
+        self.desk_role_status = QLabel()
+        self.desk_role_status.setObjectName("MutedLabel")
+        self.desk_role_status.setWordWrap(True)
+        role_form = QFormLayout()
+        role_form.setSpacing(8)
+        role_form.addRow("This machine runs as", self.desk_role_input)
+        section_layout.addLayout(role_form)
+        role_row = QHBoxLayout()
+        role_row.setSpacing(8)
+        role_row.addWidget(self.desk_role_button)
+        role_row.addStretch(1)
+        section_layout.addLayout(role_row)
+        section_layout.addWidget(self.desk_role_status)
+        self._sync_desk_role_controls()
+
         self.desk_link_enable_input = QCheckBox("Serve satellites from this machine")
         self.desk_link_enable_input.setChecked(service.running)
         self.desk_link_enable_input.toggled.connect(self._on_desk_link_toggled)
@@ -275,18 +335,184 @@ class SettingsPanel(QFrame):
         section_layout.addWidget(self.desk_link_status)
 
         hint = QLabel(
-            "On the satellite machine (same repo, no TWS needed): "
-            "python scripts/gui.py --ui qt --satellite <this-machine> --link-token <token>. "
-            "The token is remembered there after the first launch."
+            "On the satellite machine (same repo, no TWS needed): run launch_gui.py, fill in "
+            "\"Connect to a main desk\" below, then choose Satellite desk above. Pairing and "
+            "role are remembered, so every later launch uses the same setup."
         )
         hint.setObjectName("MutedLabel")
         hint.setWordWrap(True)
         section_layout.addWidget(hint)
 
+        section_layout.addWidget(self._build_main_desk_pairing())
+
         service.runningChanged.connect(self._refresh_desk_link_status)
         service.satellitesChanged.connect(lambda _machines: self._refresh_desk_link_status())
         self._refresh_desk_link_status()
         return section
+
+    def _build_main_desk_pairing(self) -> QFrame:
+        """The satellite half of Desk Link: which main desk THIS machine follows.
+
+        Same host/port/token the satellite window's connect dialog writes, on
+        the Settings page instead — so a satellite desk is re-pointed in place
+        and never needs the separate popup window. Applies live when this desk
+        is running in satellite mode; otherwise it just saves the pairing for
+        the next satellite launch.
+        """
+        from desk_link.server import DEFAULT_PORT
+        from ui.satellite import load_saved_connection
+
+        host, port, token = load_saved_connection()
+
+        block = QFrame()
+        block.setObjectName("Panel")
+        block_layout = QVBoxLayout(block)
+        block_layout.setContentsMargins(12, 12, 12, 12)
+        block_layout.setSpacing(8)
+        block_layout.addWidget(
+            SectionHeader(
+                "Connect to a main desk",
+                "Follow another machine's Desk Link relay instead of TWS on this one.",
+            )
+        )
+
+        self.main_desk_host_input = QLineEdit(host)
+        self.main_desk_host_input.setPlaceholderText("Main desk name or IP, e.g. 192.168.0.223")
+        self.main_desk_port_input = QSpinBox()
+        self.main_desk_port_input.setRange(1024, 65535)
+        self.main_desk_port_input.setValue(port or DEFAULT_PORT)
+        self.main_desk_token_input = QLineEdit(token)
+        self.main_desk_token_input.setPlaceholderText("Link token - \"Copy token\" on the main desk")
+        # Enter in either field connects, the way the dialog's Connect button did.
+        self.main_desk_host_input.returnPressed.connect(self._connect_to_main_desk)
+        self.main_desk_token_input.returnPressed.connect(self._connect_to_main_desk)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+        form.addRow("Main desk", self.main_desk_host_input)
+        form.addRow("Port", self.main_desk_port_input)
+        form.addRow("Link token", self.main_desk_token_input)
+        block_layout.addLayout(form)
+
+        connect_button = QPushButton("Connect")
+        connect_button.clicked.connect(self._connect_to_main_desk)
+        forget_button = QPushButton("Forget this desk")
+        forget_button.clicked.connect(self._forget_main_desk)
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        button_row.addWidget(connect_button)
+        button_row.addWidget(forget_button)
+        button_row.addStretch(1)
+        block_layout.addLayout(button_row)
+
+        self.main_desk_link_status = QLabel()
+        self.main_desk_link_status.setObjectName("MutedLabel")
+        self.main_desk_link_status.setWordWrap(True)
+        block_layout.addWidget(self.main_desk_link_status)
+
+        if self.desk_link_feed is not None:
+            self.desk_link_feed.linkStatusChanged.connect(self._on_main_desk_link_status)
+        self._refresh_main_desk_status()
+        return block
+
+    def _sync_desk_role_controls(self) -> None:
+        wanted = str(self.desk_role_input.currentData() or "main")
+        if wanted == self.desk_role:
+            self.desk_role_button.setText("Current role")
+            self.desk_role_button.setEnabled(False)
+            role_text = "main desk" if wanted == "main" else "satellite desk"
+            self.desk_role_status.setText(
+                f"Running as the {role_text}. Role changes restart this app through launch_gui.py "
+                "so TWS, scanners, and relay ownership shut down cleanly first."
+            )
+            return
+        self.desk_role_button.setEnabled(True)
+        self.desk_role_button.setText(
+            "Restart as satellite desk" if wanted == "satellite" else "Restart as main desk"
+        )
+        self.desk_role_status.setText(
+            "Apply this role and restart now. Your pairing and all other settings are preserved."
+        )
+
+    def _apply_desk_role(self) -> None:
+        from ui.desk_role import save_desk_role
+
+        wanted = str(self.desk_role_input.currentData() or "main")
+        if wanted == self.desk_role:
+            return
+        saved = save_desk_role(wanted)
+        self.desk_role_status.setText(f"Restarting as the {saved} desk...")
+        self.desk_role_button.setEnabled(False)
+        self.deskRoleRestartRequested.emit(saved)
+
+    def _connect_to_main_desk(self) -> None:
+        from ui.satellite import save_connection
+
+        host = self.main_desk_host_input.text().strip()
+        token = self.main_desk_token_input.text().strip()
+        port = int(self.main_desk_port_input.value())
+        if not host or not token:
+            self.main_desk_link_status.setText(
+                "Enter the main desk's name/IP and its link token (Settings -> Desk Link -> "
+                "Copy token, over there)."
+            )
+            return
+        save_connection(host, port, token)
+        feed = self.desk_link_feed
+        if feed is None:
+            self.main_desk_link_status.setText(
+                f"Saved {host}:{port}. Choose Satellite desk above and restart to be fed by "
+                "that main. Future starts use launch_gui.py and remember the selected role."
+            )
+            return
+        # Replace the live link in place: stop() drops the old client so start()
+        # is not a no-op when re-pointing at a different main.
+        feed.stop()
+        feed.start(host=host, port=port, token=token, machine_name=_satellite_machine_name())
+        self.main_desk_link_status.setText(f"Connecting to {host}:{port}...")
+
+    def _forget_main_desk(self) -> None:
+        from ui.satellite import save_connection
+
+        if self.desk_link_feed is not None:
+            self.desk_link_feed.stop()
+        save_connection("", int(self.main_desk_port_input.value()), "")
+        self.main_desk_host_input.clear()
+        self.main_desk_token_input.clear()
+        self.main_desk_link_status.setText("Pairing cleared. This desk follows no main.")
+
+    def _on_main_desk_link_status(self, link_state: str, detail: str) -> None:
+        texts = {
+            "connecting": f"Connecting... ({detail})",
+            "connected": f"Connected to {detail} - this desk is fed by that main's relay.",
+            "disconnected": f"Link lost - {detail}. Retrying.",
+            "rejected": (
+                f"Token rejected: {detail}. Copy the current token from the main desk's "
+                "Desk Link section and connect again."
+            ),
+            "stopped": "Not following a main desk.",
+        }
+        self.main_desk_link_status.setText(texts.get(link_state, f"{link_state}: {detail}"))
+
+    def _refresh_main_desk_status(self) -> None:
+        host = self.main_desk_host_input.text().strip()
+        if self.desk_link_feed is None:
+            self.main_desk_link_status.setText(
+                f"Saved: {host}:{int(self.main_desk_port_input.value())}. Used when this machine "
+                "launches as a satellite desk; this desk is running on its own data."
+                if host
+                else "Not paired. Used only when this machine launches as a satellite desk."
+            )
+            return
+        current_status = getattr(self.desk_link_feed, "current_link_status", None)
+        if callable(current_status):
+            state, detail = current_status()
+            if state != "stopped" or host:
+                self._on_main_desk_link_status(state, detail)
+                return
+        self.main_desk_link_status.setText(
+            "Satellite desk with no pairing yet - enter the main desk and token, then Connect."
+        )
 
     def _on_desk_link_toggled(self, enabled: bool) -> None:
         service = self.desk_link_service
@@ -417,6 +643,24 @@ def _ui_scale_label(value: str) -> str:
         if stored == value:
             return label
     return "Auto (fit this screen)"
+
+
+def _satellite_machine_name() -> str:
+    """Name this machine announces to the main desk (matches app.py's)."""
+    import socket
+
+    return socket.gethostname() or "satellite-desk"
+
+
+def _scrollable_tab(content: QWidget) -> QScrollArea:
+    """Give each settings category its own viewport instead of compressing it."""
+    scroll = QScrollArea()
+    scroll.setObjectName("SettingsTabScroll")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setWidget(content)
+    return scroll
 
 
 def _screen_size() -> tuple[int, int]:

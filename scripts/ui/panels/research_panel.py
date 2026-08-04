@@ -9,11 +9,18 @@ from ui.panels.price_alerts_panel import PriceAlertsPanel
 from ui.panels.setup_docs_panel import SetupDocsPanel
 from ui.panels.setup_tracker_panel import SetupTrackerPanel
 from ui.panels.ticker_lookup_panel import TickerLookupPanel
+from ui.services.price_alert_service import PriceAlertService
 from ui.widgets.section_header import SectionHeader
 
 
 class ResearchPanel(QFrame):
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        price_alert_service: PriceAlertService | None = None,
+        *,
+        price_alert_read_only: bool = False,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         tabs = QTabWidget()
@@ -23,7 +30,10 @@ class ResearchPanel(QFrame):
         self.move_forensics_panel = MoveForensicsPanel()
         self.daytrade_tracker_panel = DaytradeTrackerPanel()
         self.ticker_lookup_panel = TickerLookupPanel()
-        self.price_alerts_panel = PriceAlertsPanel()
+        self.price_alerts_panel = PriceAlertsPanel(
+            price_alert_service,
+            read_only=price_alert_read_only,
+        )
         tabs.addTab(self.market_prep_panel, "Master AVWAP Market Prep")
         tabs.addTab(self.setup_tracker_panel, "Setup Tracker")
         tabs.addTab(self.setup_docs_panel, "Setup Playbook")

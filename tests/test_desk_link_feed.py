@@ -78,7 +78,10 @@ def test_feed_rebuilds_alerts_and_backs_m5_charts_end_to_end():
     feed.alertReceived.connect(alerts.append)
     try:
         feed.start(host="127.0.0.1", port=server.address[1], token="tkn", machine_name="sat-desk")
-        assert _pump_until(qapp, lambda: server.client_count == 1)
+        # Wait for the hello, not just the accept: the server only broadcasts
+        # to connections whose machine name is known, so a popup sent in the
+        # accept window would be silently addressed to nobody.
+        assert _pump_until(qapp, lambda: server.connected_machines() == ["sat-desk"])
         server.send_alert_popup(_payload())
         assert _pump_until(qapp, lambda: len(alerts) == 1)
 
@@ -107,25 +110,89 @@ def test_desk_streams_relay_live_surfaces_end_to_end(monkeypatch):
     assert main.start()
 
     feed = DeskLinkFeedService()
-    received: dict[str, list] = {"rrs": [], "status": [], "board": [], "regime": []}
+    received: dict[str, list] = {
+        "rrs": [],
+        "status": [],
+        "board": [],
+        "regime": [],
+        "price": [],
+    }
     feed.rrsSnapshotChanged.connect(received["rrs"].append)
     feed.statusChanged.connect(received["status"].append)
     feed.entryBoardChanged.connect(received["board"].append)
     feed.autoRegimeChanged.connect(received["regime"].append)
+    feed.priceAlertReceived.connect(received["price"].append)
     try:
         feed.start(host="127.0.0.1", port=main._server.address[1], token="tkn", machine_name="sat-desk")
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.connected_machines() == ["sat-desk"])
 
         main.publish_stream("rrs", {"leaders": ["NVDA"]})
         main.publish_stream("status", "connected")
         main.publish_stream("entry_board", {"rows": []})
         main.publish_stream("auto_regime", {"env_key": "bullish_strong"})
+        main.publish_stream(
+            "price_alert",
+            {
+                "date": "2026-08-03",
+                "at": "10:15:00",
+                "symbol": "NVDA",
+                "side": "above",
+                "level": 190.0,
+                "last": 190.2,
+                "message": "NVDA crossed above 190",
+                "priority": "urgent",
+            },
+        )
         main.publish_stream("stream_from_the_future", {"x": 1})  # skipped, not fatal
 
         assert _pump_until(qapp, lambda: all(received[key] for key in received))
         assert received["rrs"][0] == {"leaders": ["NVDA"]}
         assert received["status"][0] == "connected"
         assert received["regime"][0]["env_key"] == "bullish_strong"
+        assert received["price"][0]["symbol"] == "NVDA"
+        assert received["price"][0]["replayed"] is False
+    finally:
+        feed.stop()
+        main.stop()
+
+
+def test_sticky_snapshot_recovers_missed_price_alert_once(monkeypatch):
+    qapp = _qapp()
+    import price_alerts
+    import ui.services.desk_link_service as service_module
+    from ui.services.desk_link_feed import DeskLinkFeedService
+
+    trigger = {
+        "date": "2026-08-03",
+        "at": "10:20:00",
+        "symbol": "AMD",
+        "side": "below",
+        "level": "170.0",
+        "last": "169.8",
+        "note": "support",
+    }
+    monkeypatch.setattr(price_alerts, "todays_triggers", lambda: [trigger])
+    settings: dict = {"desk_link_port": 0, "desk_link_token": "tkn"}
+    monkeypatch.setattr(service_module, "get_local_setting", lambda key, default=None: settings.get(key, default))
+    monkeypatch.setattr(service_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value))
+    main = service_module.DeskLinkService(machine_name="main")
+    assert main.start()
+
+    feed = DeskLinkFeedService()
+    received: list[dict] = []
+    feed.priceAlertReceived.connect(received.append)
+    try:
+        feed.start(host="127.0.0.1", port=main._server.address[1], token="tkn", machine_name="sat-desk")
+        assert _pump_until(qapp, lambda: len(received) == 1)
+        assert received[0]["symbol"] == "AMD"
+        assert received[0]["replayed"] is True
+
+        # A delayed live copy of the same event cannot duplicate the toast/feed row.
+        main.publish_stream("price_alert", {**trigger, "message": "same event", "priority": "urgent"})
+        qapp.processEvents()
+        time.sleep(0.05)
+        qapp.processEvents()
+        assert len(received) == 1
     finally:
         feed.stop()
         main.stop()
@@ -157,7 +224,7 @@ def test_live_m5_stream_updates_the_satellite_chart_cache(monkeypatch):
     feed = DeskLinkFeedService()
     try:
         feed.start(host="127.0.0.1", port=main._server.address[1], token="tkn", machine_name="sat-desk")
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.connected_machines() == ["sat-desk"])
 
         main._publish_live_charts()  # what the 30s timer fires
         assert _pump_until(qapp, lambda: bool(feed.payload_bot().m5_chart_bars("NVDA")))

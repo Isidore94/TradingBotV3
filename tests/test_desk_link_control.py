@@ -85,6 +85,17 @@ class _Sat:
         )
         self.client.start()
 
+    def ready(self) -> bool:
+        """Handshake finished on BOTH ends.
+
+        The server registers a connection at accept time (so has_satellites /
+        client_count go true before the hello is read) while the client's
+        send() is a silent no-op until it has read the welcome. Waiting on the
+        server side alone raced: the lease request was dropped on the floor and
+        the test then waited out the timeout for a grant that never came.
+        """
+        return self.client.state == "connected"
+
     def got(self, message_type: str) -> bool:
         return any(m["type"] == message_type for m in self.messages)
 
@@ -114,7 +125,10 @@ def test_lease_grant_single_holder_release_and_handoff(service):
 
     first, second = _Sat(port, "sat-a"), _Sat(port, "sat-b")
     try:
-        assert _pump_until(qapp, lambda: main.has_satellites and len(main.connected_machines()) == 2)
+        assert _pump_until(
+            qapp,
+            lambda: len(main.connected_machines()) == 2 and first.ready() and second.ready(),
+        )
 
         first.client.send(protocol.TYPE_LEASE_REQUEST)
         assert _pump_until(qapp, lambda: first.got(protocol.TYPE_LEASE_GRANT))
@@ -142,7 +156,7 @@ def test_controller_disconnect_auto_reclaims_control(service):
     port = main._server.address[1]
     satellite = _Sat(port, "sat-a")
     try:
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.has_satellites and satellite.ready())
         satellite.client.send(protocol.TYPE_LEASE_REQUEST)
         assert _pump_until(qapp, lambda: main.controller == "sat-a")
 
@@ -156,7 +170,7 @@ def test_take_back_control_is_immediate_and_notifies_satellite(service):
     qapp, main = service
     satellite = _Sat(main._server.address[1], "sat-a")
     try:
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.has_satellites and satellite.ready())
         satellite.client.send(protocol.TYPE_LEASE_REQUEST)
         assert _pump_until(qapp, lambda: main.controller == "sat-a")
 
@@ -179,7 +193,10 @@ def test_intents_from_controller_only_and_acked(service):
     main.intentReceived.connect(apply_and_ack)
     holder, bystander = _Sat(port, "sat-a"), _Sat(port, "sat-b")
     try:
-        assert _pump_until(qapp, lambda: len(main.connected_machines()) == 2)
+        assert _pump_until(
+            qapp,
+            lambda: len(main.connected_machines()) == 2 and holder.ready() and bystander.ready(),
+        )
         holder.client.send(protocol.TYPE_LEASE_REQUEST)
         assert _pump_until(qapp, lambda: main.controller == "sat-a")
 
@@ -214,7 +231,7 @@ def test_auto_reclaim_sends_phone_push(service, monkeypatch):
 
     satellite = _Sat(main._server.address[1], "sat-a")
     try:
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.has_satellites and satellite.ready())
         satellite.client.send(protocol.TYPE_LEASE_REQUEST)
         assert _pump_until(qapp, lambda: main.controller == "sat-a")
 
@@ -288,7 +305,7 @@ def test_applied_intent_republishes_the_desk_snapshot_immediately(service):
     )
     satellite = _Sat(main._server.address[1], "sat-a")
     try:
-        assert _pump_until(qapp, lambda: main.has_satellites)
+        assert _pump_until(qapp, lambda: main.has_satellites and satellite.ready())
         satellite.client.send(protocol.TYPE_LEASE_REQUEST)
         assert _pump_until(qapp, lambda: satellite.got(protocol.TYPE_LEASE_GRANT))
 

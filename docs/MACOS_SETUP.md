@@ -28,14 +28,15 @@ specific interpreter.)
 
 ## Launching
 
-Double-click `TradingBotV3_GUI.command` in Finder, or run:
+Run:
 
 ```bash
-.venv/bin/python launch_gui.py --ui qt
+.venv/bin/python launch_gui.py
 ```
 
-This is the macOS counterpart of `TradingBotV3_GUI.cmd` and goes through
-`launch_gui.py`, so native-crash logging (`gui_crash.log`) works the same way.
+`launch_gui.py` is the single desktop entrypoint on every platform, including
+native-crash logging (`gui_crash.log`). Main versus satellite role is selected
+inside Settings -> Desk Link.
 
 ## IBKR TWS on macOS
 
@@ -92,7 +93,6 @@ dependency pins: `constraints.txt` gives macOS its own `PyQt5-Qt5` pin
 
 ## Still Windows-only
 
-- `TradingBotV3_GUI.cmd` (use the `.command` launcher instead).
 - The mini-PC Auto/Away scanner's auto-shutdown (`shutdown /s`) — it logs a
   warning and skips on other platforms; the unattended mini-PC runbook
   (`docs/AWAY_SCANNER_RUNBOOK.md`) assumes the Windows mini-PC.

@@ -271,7 +271,7 @@ class DeskLinkServer:
                 return
             hello = protocol.decode_message(line)
             try:
-                client.machine = protocol.validate_hello(hello, self._token)
+                machine = protocol.validate_hello(hello, self._token)
             except protocol.DeskLinkAuthError as exc:
                 log.warning("Desk Link rejected %s: %s", client.address, exc)
                 try:
@@ -296,6 +296,11 @@ class DeskLinkServer:
             except (TypeError, ValueError):
                 last_seen_seq = 0
             self._replay_missed_popups(client, last_seen_seq)
+            # Publish the authenticated identity only after the welcome and
+            # bootstrap payloads are queued.  Once connected_machines() names
+            # this client, any subsequent broadcast is guaranteed to follow
+            # the welcome rather than racing ahead of the handshake.
+            client.machine = machine
             log.info("Desk Link satellite connected: %s from %s", client.machine, client.address)
             if self._on_client_connected is not None:
                 try:

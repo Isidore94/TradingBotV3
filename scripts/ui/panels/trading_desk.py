@@ -22,6 +22,7 @@ from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
+from ui.services.price_alert_service import PriceAlertService
 from ui.widgets.group_tape_strip import GroupTapeStrip
 
 DESK_SPLIT_KEY = "qt_desk_split_sizes_v2"
@@ -32,15 +33,29 @@ class TradingDeskPanel(QWidget):
     rowsChanged = Signal(int, int, int)
     connectionChanged = Signal(str)
 
-    def __init__(self, workspace_mode: str = "workspace", parent=None) -> None:
+    def __init__(
+        self,
+        workspace_mode: str = "workspace",
+        parent=None,
+        *,
+        price_alert_engine_enabled: bool = True,
+        price_alert_read_only: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.workspace_mode = workspace_mode
         self.focus_service = FocusService()
+        self.price_alert_service = PriceAlertService(
+            self, engine_enabled=price_alert_engine_enabled
+        )
         self.master_panel = MasterAvwapPanel(self.focus_service)
         self.theta_panel = ThetaPanel()
         self.watchlists_panel = WatchlistsPanel()
         self.industry_panel = IndustryPanel()
-        self.focus_picks_panel = FocusPicksPanel(self.focus_service)
+        self.focus_picks_panel = FocusPicksPanel(
+            self.focus_service,
+            self.price_alert_service,
+            price_alert_read_only=price_alert_read_only,
+        )
         self.bounce_panel = BouncePanel(self.focus_service)
         self.rs_window_panel = RsWindowPanel(self.bounce_panel.service)
         self.master_workspace = MasterAvwapWorkspace(
@@ -181,11 +196,15 @@ class TradingDeskPanel(QWidget):
 
     def shutdown(self) -> None:
         """Release live resources (IB connection, worker threads) on app close."""
-        components = (
+        components = []
+        price_alert_service = getattr(self, "price_alert_service", None)
+        if price_alert_service is not None:
+            components.append(("price alerts", price_alert_service.shutdown))
+        components.extend((
             ("BounceBot", self.bounce_panel.on_close),
             ("industry board", self.industry_panel.shutdown),
             ("master scan service", self.master_panel.scan_service.shutdown),
-        )
+        ))
         for label, close in components:
             try:
                 close()

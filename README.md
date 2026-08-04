@@ -32,8 +32,8 @@ Run scripts from the repo-local virtual environment:
 If you keep personal launcher files such as `run_python_script.ps1` or `run_master_avwap_mini_pc.cmd`, keep them local to your machine. They are intentionally not tracked in git.
 
 ## Repository Layout
-- `TradingBotV3_GUI.cmd` - Windows launcher for the new PySide6 Trading Desk UI.
-- `launch_gui.py` - repo-root Python shim for the same Qt launcher.
+- `launch_gui.py` - the single launcher for the PySide6 Trading Desk. Main versus
+  satellite role is selected inside Settings and remembered per machine.
 - `scripts/gui.py` - compatibility launcher. Defaults to the new PySide6 UI; use `--ui tk` for the legacy Tk UI.
 - `scripts/ui/` - new consumer desktop UI.
 - `scripts/master_avwap_lib/`, `scripts/bounce_bot_lib/` - trading engines and legacy compatibility modules.
@@ -59,14 +59,12 @@ These files should live in the selected home folder root. The app creates any mi
 - New Qt Trading Desk UI:
 
   ```powershell
-  .\TradingBotV3_GUI.cmd
-  ```
-
-  Or launch through Python:
-
-  ```powershell
   .\.venv\Scripts\python.exe .\launch_gui.py
   ```
+
+  Use **Settings -> Desk Link -> This machine runs as** to switch between the
+  main desk and the full satellite desk. The app shuts down its current service
+  owners, restarts itself through `launch_gui.py`, and remembers the role.
 
   The older direct entrypoint also works:
 
@@ -77,7 +75,7 @@ These files should live in the selected home folder root. The app creates any mi
   To force and save dark mode from the launcher:
 
   ```powershell
-  .\TradingBotV3_GUI.cmd --theme dark
+  .\.venv\Scripts\python.exe .\launch_gui.py --theme dark
   ```
 
   This is the target consumer UI. It includes the themed shell, Trading Desk,

@@ -1564,6 +1564,33 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    with an always-available take-back, intents journaled/acked/idempotent)
    is also implemented at trader direction. Live two-machine validation is
    pending; live chart streaming (Tier 3) waits on that evidence.
+   `launch_gui.py` is the single operator entrypoint; Main/Satellite role is
+   selected in Settings and applied through a clean automatic restart so live
+   engine ownership is never hot-switched.
+7b. **Focus price alerts + phone push** (trader-directed insertion,
+   2026-08-03; numbered 7b so the existing 8-22 references stay stable):
+   basic cross-up/cross-down price levels entered on the Focus tab, pushed to
+   the phone over ntfy from the **main PC only**, and relayed so a fired alert
+   is unmissable on the main desk and on every satellite. Per
+   `docs/FOCUS_PRICE_ALERTS_PROPOSAL.md`. The engine already exists
+   (`push_notify.py`, `price_alerts.py`, `price_alert_service.py` from Evening
+   mode); this packet is surface + relay: Focus-tab entry, an explicit
+   engine-only origin rule alongside the existing shared-writer gate, a
+   `price_alert` desk stream over the existing generic `desk_stream` envelope,
+   and one shared non-activating toast on all three surfaces. A price alert is
+   a last-price crossing, never a bar-state transition, and must never feed a
+   detector, a score, or a state machine — so no sec 5 invariant is touched
+   and no golden fixtures are required. Satellite-side editing waits for the
+   Tier 2 intent channel (Phase E) rather than writing shared state. Trader
+   decisions (2026-08-03): a fired level stays disarmed until re-armed by
+   hand; every price alert pushes at ntfy `urgent` priority (dropping the
+   EVENING-vs-daytime split); every satellite beeps regardless of the control
+   lease, and the phone push fires first, independent of the relay.
+   At explicit trader direction on 2026-08-03, Phases A–D were implemented
+   before item 7a's pending live two-machine pairing validation; deterministic
+   status is **GREEN** (1806 tests + 5 subtests on merged `main`, smoke 7/7), not
+   **LIVE_VALIDATED**. Phase E satellite-side edit intents remain gated until
+   the two-machine alert-delivery check passes.
 
 ### Next — after initial live evidence
 

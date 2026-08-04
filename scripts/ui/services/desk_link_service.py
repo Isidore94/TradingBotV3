@@ -92,7 +92,7 @@ class DeskLinkService(QObject):
 
     @property
     def has_satellites(self) -> bool:
-        return self._server is not None and self._server.client_count > 0
+        return bool(self.connected_machines())
 
     def start(self) -> bool:
         if self._server is not None:
@@ -328,7 +328,7 @@ class DeskLinkService(QObject):
         No-op without connected satellites - zero cost on a lone desk.
         """
         server = self._server
-        if server is None or server.client_count == 0:
+        if server is None or not server.connected_machines():
             return
         try:
             server.send_desk_stream({"stream": str(stream), "data": data})
@@ -348,7 +348,7 @@ class DeskLinkService(QObject):
 
     def _publish_live_charts(self) -> None:
         server = self._server
-        if server is None or server.client_count == 0:
+        if server is None or not server.connected_machines():
             return
         if self._bot_provider is None or self._chart_symbols_provider is None:
             return
@@ -414,6 +414,18 @@ class DeskLinkService(QObject):
             except Exception:
                 log.exception("Desk Link auto-mode source failed.")
 
+        import price_alerts
+
+        fired_price_alerts = []
+        for trigger in price_alerts.todays_triggers():
+            payload = dict(trigger)
+            try:
+                payload["message"] = price_alerts.format_trigger_message(payload)
+            except (TypeError, ValueError):
+                payload["message"] = f"{payload.get('symbol') or 'Price'} alert fired"
+            payload["priority"] = "urgent"
+            fired_price_alerts.append(payload)
+
         return {
             "machine": self._machine_name,
             "auto_mode": auto_mode,
@@ -427,4 +439,5 @@ class DeskLinkService(QObject):
                 "longs": read_list(FOCUS_LONGS_FILE),
                 "shorts": read_list(FOCUS_SHORTS_FILE),
             },
+            "price_alerts": fired_price_alerts,
         }

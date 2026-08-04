@@ -5,11 +5,12 @@ import argparse
 import gc
 import logging
 import sys
+from pathlib import Path
 
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -43,6 +44,7 @@ from ui.panels.universe_panel import UniversePanel
 from ui import theme
 from ui.state import VALID_UI_SCALES, UiState
 from ui.theme import apply_theme
+from ui.widgets.price_alert_toast import PriceAlertToastManager
 from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
 
 
@@ -51,6 +53,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state
         self._satellite_desk = satellite_desk
+        self.price_alert_toasts = PriceAlertToastManager(self)
         self.setWindowTitle("TradingBotV3 Trading Desk")
         # Open at the desk's preferred size, but never larger than the screen
         # actually offers: a 1640x980 default on a 1680x954 laptop opened the
@@ -63,10 +66,17 @@ class MainWindow(QMainWindow):
             min(theme.px(1180), available[0]), min(theme.px(760), available[1])
         )
 
-        self.trading_panel = TradingDeskPanel(workspace_mode=self.state.workspace_mode)
+        self.trading_panel = TradingDeskPanel(
+            workspace_mode=self.state.workspace_mode,
+            price_alert_engine_enabled=not satellite_desk,
+            price_alert_read_only=satellite_desk,
+        )
         self.journal_panel = JournalPanel()
         self.universe_panel = UniversePanel()
-        self.research_panel = ResearchPanel()
+        self.research_panel = ResearchPanel(
+            self.trading_panel.price_alert_service,
+            price_alert_read_only=satellite_desk,
+        )
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
@@ -111,9 +121,13 @@ class MainWindow(QMainWindow):
 
             host, port, link_token = load_saved_connection()
             self.desk_link_feed = DeskLinkFeedService(self)
+            self.desk_link_feed.priceAlertReceived.connect(self._on_remote_price_alert)
             self.trading_panel.alert_center.attach_remote_feed(self.desk_link_feed)
             self.desk_link_feed.linkStatusChanged.connect(self._on_satellite_link_status)
             self.desk_link_feed.autoRegimeChanged.connect(self._set_auto_regime)
+            # Unpaired is a normal state, not a launch blocker: the desk opens
+            # and the trader pairs it in Settings -> Desk Link.
+            self._satellite_paired = bool(host and link_token)
             if host and link_token:
                 self.desk_link_feed.start(
                     host=host,
@@ -128,8 +142,11 @@ class MainWindow(QMainWindow):
             self.state,
             bounce_service=self.trading_panel.bounce_panel.service,
             desk_link_service=self.desk_link_service,
+            desk_link_feed=self.desk_link_feed,
+            desk_role="satellite" if self._satellite_desk else "main",
         )
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
+        self.settings_panel.deskRoleRestartRequested.connect(self._restart_for_desk_role)
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
 
@@ -171,7 +188,7 @@ class MainWindow(QMainWindow):
         self.trading_panel.bounce_panel.service.autoRegimeChanged.connect(self._set_auto_regime)
         # Price-level alert crossings land in the normal alert stream too, so
         # the Alert Center is the on-desk record of what buzzed the phone.
-        self.research_panel.price_alerts_panel.service.triggered.connect(self._on_price_alert)
+        self.trading_panel.price_alert_service.alertTriggered.connect(self._on_price_alert)
         self._set_auto_regime({})
         self._set_technical_integrity(load_technical_integrity_snapshot())
 
@@ -330,7 +347,11 @@ class MainWindow(QMainWindow):
         self.satellite_link_label = None
         if self._satellite_desk:
             self.setWindowTitle("TradingBotV3 Trading Desk — SATELLITE (fed by main)")
-            self.satellite_link_label = QLabel("LINK … connecting")
+            self.satellite_link_label = QLabel(
+                "LINK … connecting"
+                if getattr(self, "_satellite_paired", False)
+                else "LINK ✕ not paired — Settings ▸ Desk Link"
+            )
             status.addPermanentWidget(self.satellite_link_label)
 
     def _set_auto_regime(self, reading) -> None:
@@ -355,7 +376,19 @@ class MainWindow(QMainWindow):
             f"QPushButton#TechnicalIntegrityButton {{ color: {color}; font-weight: 600; padding: 1px 5px; }}"
         )
 
-    def _on_price_alert(self, message: str) -> None:
+    def _on_price_alert(self, payload: dict) -> None:
+        self._present_price_alert(payload)
+        if not self._satellite_desk:
+            self.desk_link_service.publish_stream("price_alert", payload)
+            # Also update the sticky snapshot after the trigger log is durable,
+            # so reconnecting satellites see alerts fired during a Wi-Fi gap.
+            self.desk_link_service.publish_state_snapshot()
+
+    def _on_remote_price_alert(self, payload: dict) -> None:
+        self._present_price_alert(payload, replayed=bool(payload.get("replayed")))
+
+    def _present_price_alert(self, payload: dict, *, replayed: bool = False) -> None:
+        message = str(payload.get("message") or "Price alert fired")
         try:
             from ui.models.bounce import BounceAlert
 
@@ -364,6 +397,7 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass  # the push already went out; the desk echo is best-effort
+        self.price_alert_toasts.show_alert(payload, replayed=replayed)
 
     def _show_technical_integrity_details(self) -> None:
         TechnicalIntegrityDialog(
@@ -574,10 +608,33 @@ class MainWindow(QMainWindow):
             "connected": f"LINK ● {detail}",
             "connecting": "LINK … connecting",
             "disconnected": f"LINK ✕ {detail}",
-            "rejected": "LINK ✕ token rejected - launch the satellite window once to re-pair",
-            "stopped": "LINK ✕ stopped",
+            "rejected": "LINK ✕ token rejected - re-pair in Settings ▸ Desk Link",
+            "stopped": "LINK ✕ not paired - Settings ▸ Desk Link",
         }
         self.satellite_link_label.setText(texts.get(link_state, f"LINK {link_state}"))
+
+    def _restart_for_desk_role(self, _role: str) -> None:
+        """Shut down current owners, then relaunch through the one entrypoint."""
+        if getattr(self, "_desk_role_restart_pending", False):
+            return
+        self._desk_role_restart_pending = True
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.aboutToQuit.connect(self._launch_replacement_desk)
+        if self.close():
+            QTimer.singleShot(0, app.quit)
+
+    def _launch_replacement_desk(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        launcher = root / "launch_gui.py"
+        ok, _pid = QProcess.startDetached(sys.executable, [str(launcher)], str(root))
+        if not ok:
+            logging.error(
+                "Could not restart the Trading Desk automatically. Run %s manually; the saved "
+                "desk role will apply.",
+                launcher,
+            )
 
     def _on_desk_link_control_changed(self, machine: str) -> None:
         """Satellite in control -> this desk is a relay: decision surfaces
@@ -774,9 +831,16 @@ def main(argv: list[str] | None = None) -> int:
         "--satellite-desk",
         action="store_true",
         help=(
-            "Launch the FULL Trading Desk fed by the main's Desk Link relay instead of "
-            "TWS: relayed alerts land in the real Alert Center as if this machine were "
-            "connected to the API. Uses the saved satellite pairing (or prompts for it)."
+            "Compatibility alias for --desk-role satellite. Settings normally owns this choice."
+        ),
+    )
+    parser.add_argument(
+        "--desk-role",
+        choices=("main", "satellite"),
+        default=None,
+        help=(
+            "Compatibility override for the full desk role. The Settings page normally owns "
+            "this choice and launch_gui.py remembers it."
         ),
     )
     parser.add_argument(
@@ -817,23 +881,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.satellite is not None:
         return _run_satellite(app, args.satellite, args.link_token)
 
-    if args.satellite_desk:
-        from ui.satellite import ConnectDialog, load_saved_connection, save_connection
+    from ui.desk_role import ROLE_SATELLITE, startup_desk_role
 
-        if args.link_token:
-            host, port, _ = load_saved_connection()
-            if host:
-                save_connection(host, port, args.link_token)
-        host, _, link_token = load_saved_connection()
-        if not host or not link_token:
-            from PySide6.QtWidgets import QDialog
+    desk_role = startup_desk_role(
+        explicit=args.desk_role,
+        legacy_satellite=bool(args.satellite_desk),
+    )
+    satellite_desk = desk_role == ROLE_SATELLITE
 
-            dialog = ConnectDialog()
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return 2
-            save_connection(*dialog.connection())
+    if satellite_desk and args.link_token:
+        # Optional CLI convenience; pairing normally happens in the desk's own
+        # Settings -> Desk Link -> "Connect to a main desk", so an unpaired
+        # satellite desk still launches instead of blocking on a dialog.
+        from ui.satellite import load_saved_connection, save_connection
 
-    window = MainWindow(state, satellite_desk=bool(args.satellite_desk))
+        host, port, _ = load_saved_connection()
+        if host:
+            save_connection(host, port, args.link_token)
+
+    window = MainWindow(state, satellite_desk=satellite_desk)
     window.show()
     return app.exec()
 

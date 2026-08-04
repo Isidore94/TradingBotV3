@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import runpy
 import sys
 from pathlib import Path
 
@@ -59,12 +58,14 @@ def _enable_crash_log() -> None:
         faulthandler.enable()
 
 
-def main() -> None:
+def main() -> int:
     _enable_crash_log()
-    target = SCRIPTS_DIR / "gui.py"
-    sys.argv[0] = str(target)
-    runpy.run_path(str(target), run_name="__main__")
+    # This is the Qt desk's real entrypoint, not a hop through scripts/gui.py.
+    # The latter remains only for legacy ``--ui tk`` compatibility.
+    from ui import app
+
+    return int(app.main(sys.argv[1:]) or 0)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

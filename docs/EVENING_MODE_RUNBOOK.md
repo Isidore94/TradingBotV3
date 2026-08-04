@@ -33,8 +33,9 @@ work.
 1. Leave the GUI running and IB/TWS logged in (same as an Away day).
 2. Click the Auto Mode button in the status bar until it reads
    `Auto: EVENING` (cycle: OFF -> DESK -> AWAY -> EVENING -> OFF).
-3. Research -> Price Alerts: enter each position (and SPY if you want an
-   index tripwire) with an *Alert Above* and/or *Alert Below* level, armed.
+3. Focus -> Phone Price Alerts (or Research -> Price Alerts for the advanced
+   view): enter each position, and SPY if you want an index tripwire, with an
+   *Alert Above* and/or *Alert Below* level armed.
 4. Hit **Test Push** and confirm the phone (and watch) buzz.
 
 ## Price alerts - one-time phone setup
@@ -50,19 +51,19 @@ is just pointing the *ntfy server* field at your own instance.
    `https://ntfy.sh` unless self-hosting; token only if the topic is
    protected.
 4. In the ntfy app, open the topic's settings and enable **critical
-   alerting** so EVENING-mode alerts break through iOS sleep focus.
+   alerting** so urgent alerts break through iOS Focus modes.
 5. The Apple Watch mirrors iPhone notifications automatically - no extra
    setup.
 
 Alert semantics: each side (above/below) fires **once per arm**, then
 disarms so a chopping price can't spam you; re-arm from the panel (or
 **Re-arm All** for the next night). Levels are checked about once a minute,
-pre/post market included (01:00-17:00 local). Triggered crossings push at
-urgent priority while EVENING is on (high priority otherwise), land in the
-Alert Center, and are listed in the morning briefing. Monitoring runs in
-every mode by default - untick "Monitor in every mode" to restrict it to
-EVENING. Only the designated shared-store writer machine monitors, so the
-desktop and mini-PC never double-push one cross.
+pre/post market included (01:00-17:00 local). Every triggered crossing pushes
+at urgent priority, lands in the Alert Center, and is listed in the morning
+briefing. Monitoring runs in every mode by default - untick "Monitor in every
+mode" to restrict it to EVENING. Only the main-desk alert engine monitors; the
+designated shared-store writer check remains a second guard, so satellites and
+the mini-PC never double-push one cross.
 
 ## Morning arrival
 

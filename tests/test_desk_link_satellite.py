@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import threading
 from datetime import datetime, timedelta
@@ -174,6 +175,22 @@ def test_send_test_popup_reaches_a_live_satellite(monkeypatch):
     try:
         assert service.send_test_popup() is False  # nobody listening yet
 
+        # A TCP accept is not a satellite until its authenticated hello has
+        # completed.  The old client_count gate returned a false success here
+        # even though broadcasts deliberately exclude unnamed connections.
+        raw_client = socket.create_connection(("127.0.0.1", service._server.address[1]))
+        try:
+            waiter = threading.Event()
+            for _ in range(50):
+                if service._server.client_count == 1:
+                    break
+                waiter.wait(0.01)
+            assert service._server.client_count == 1
+            assert service.connected_machines() == []
+            assert service.send_test_popup() is False
+        finally:
+            raw_client.close()
+
         received: list[dict] = []
         got_popup = threading.Event()
 
@@ -264,6 +281,37 @@ def _patched_satellite_settings(monkeypatch, settings: dict):
     return satellite_module
 
 
+def _patched_desk_role_settings(monkeypatch, settings: dict):
+    import ui.desk_role as role_module
+
+    monkeypatch.setattr(
+        role_module, "get_local_setting", lambda key, default=None: settings.get(key, default)
+    )
+    monkeypatch.setattr(
+        role_module, "save_local_setting", lambda key, value: settings.__setitem__(key, value)
+    )
+    return role_module
+
+
+def test_desk_role_is_machine_local_persistent_and_fail_safe(monkeypatch):
+    settings: dict = {}
+    role_module = _patched_desk_role_settings(monkeypatch, settings)
+
+    assert role_module.saved_desk_role() == "main"
+    assert role_module.save_desk_role("satellite") == "satellite"
+    assert settings["trading_desk_role"] == "satellite"
+    assert role_module.saved_desk_role() == "satellite"
+
+    settings["trading_desk_role"] = "unexpected-value"
+    assert role_module.saved_desk_role() == "main"
+
+    settings["trading_desk_role"] = "satellite"
+    assert role_module.startup_desk_role() == "satellite"
+    assert role_module.startup_desk_role(explicit="main") == "main"
+    assert settings["trading_desk_role"] == "main"
+    assert role_module.startup_desk_role(legacy_satellite=True) == "satellite"
+
+
 def test_satellite_window_without_pairing_waits_instead_of_crashing(monkeypatch):
     _qapp()
     satellite_module = _patched_satellite_settings(monkeypatch, {})
@@ -278,12 +326,45 @@ def test_satellite_window_without_pairing_waits_instead_of_crashing(monkeypatch)
         window.close()
 
 
+def test_mirror_window_renders_price_stream_and_dedupes_sticky_replay(monkeypatch):
+    _qapp()
+    satellite_module = _patched_satellite_settings(monkeypatch, {})
+    window = satellite_module.SatelliteWindow(machine_name="test-sat")
+    alert = {
+        "date": "2026-08-03",
+        "at": "10:30:00",
+        "symbol": "SPY",
+        "side": "above",
+        "level": 600.0,
+        "last": 600.1,
+        "message": "SPY crossed above 600",
+        "priority": "urgent",
+    }
+    try:
+        window._on_message(
+            protocol.make_message(
+                protocol.TYPE_DESK_STREAM,
+                {"stream": "price_alert", "data": alert},
+            )
+        )
+        assert window.feed.count() == 1
+        assert "PRICE ALERT" in window.feed.item(0).text()
+        assert len(window.price_alert_toasts.toasts) == 1
+
+        window._on_message(protocol.make_message(protocol.TYPE_STATE_SNAPSHOT, {"price_alerts": [alert]}))
+        assert window.feed.count() == 1
+        assert len(window.price_alert_toasts.toasts) == 1
+    finally:
+        window.close()
+
+
 def test_satellite_window_autoconnects_from_saved_settings(monkeypatch):
     _qapp()
     settings = {"desk_link_host": "192.168.1.20:47601", "desk_link_token": "saved-token"}
     satellite_module = _patched_satellite_settings(monkeypatch, settings)
     window = satellite_module.SatelliteWindow(machine_name="test-sat")
     try:
+        assert settings["desk_link_client_token"] == "saved-token"
         assert window._client is not None
         assert window._client._host == "192.168.1.20"
         assert window._client._port == 47601
@@ -313,7 +394,8 @@ def test_connect_dialog_applies_and_persists_new_connection(monkeypatch):
         window.open_connect_dialog()
 
         assert settings["desk_link_host"] == "10.0.0.5:50000"
-        assert settings["desk_link_token"] == "new-token"
+        assert settings["desk_link_client_token"] == "new-token"
+        assert settings["desk_link_token"] == "old-token"  # legacy/server token is untouched
         assert window._client is not first_client  # old client replaced live
         assert window._client._host == "10.0.0.5"
         assert window._client._port == 50000
@@ -372,6 +454,203 @@ def test_satellite_mode_selector_mirrors_and_gates_on_control(monkeypatch):
         assert intents[-1]["mode"] == "EVENING"
     finally:
         window.close()
+
+
+class _StubFeed:
+    """Stands in for DeskLinkFeedService: records start/stop without a socket."""
+
+    def __init__(self) -> None:
+        from PySide6.QtCore import QObject, Signal
+
+        class _Signals(QObject):
+            linkStatusChanged = Signal(str, str)
+
+        self._signals = _Signals()
+        self.linkStatusChanged = self._signals.linkStatusChanged
+        self.running = False
+        self.link_status = ("stopped", "stopped")
+        self.started: list[dict] = []
+        self.stops = 0
+
+    def current_link_status(self) -> tuple[str, str]:
+        return self.link_status
+
+    def start(self, **kwargs) -> None:
+        self.started.append(kwargs)
+        self.running = True
+        self.link_status = ("connecting", f"connecting to {kwargs['host']}:{kwargs['port']}")
+
+    def stop(self) -> None:
+        self.stops += 1
+        self.running = False
+        self.link_status = ("stopped", "stopped")
+
+
+def _pairing_panel(monkeypatch, settings: dict, feed=None):
+    from ui.panels.settings_panel import SettingsPanel
+    from ui.state import UiState
+
+    _qapp()
+    _patched_satellite_settings(monkeypatch, settings)
+    _patched_desk_role_settings(monkeypatch, settings)
+    settings.setdefault("desk_link_port", 0)
+    # Production server and satellite helpers share one local-settings file;
+    # keep one dict here so a credential-key collision cannot hide in tests.
+    service = _patched_service(monkeypatch, settings)
+    panel = SettingsPanel(UiState(), desk_link_service=service, desk_link_feed=feed)
+    return panel, service
+
+
+def test_settings_page_pairs_this_desk_with_a_main(monkeypatch):
+    """The connect dialog's job, done on the Settings page instead."""
+    settings: dict = {}
+    feed = _StubFeed()
+    panel, service = _pairing_panel(monkeypatch, settings, feed=feed)
+    try:
+        panel.main_desk_host_input.setText("192.168.0.223")
+        panel.main_desk_port_input.setValue(47600)
+        panel.main_desk_token_input.setText("relay-token")
+        panel._connect_to_main_desk()
+
+        assert settings["desk_link_host"] == "192.168.0.223:47600"
+        assert settings["desk_link_client_token"] == "relay-token"
+        assert feed.stops == 1  # old link dropped so the new one is not a no-op
+        assert feed.started[-1]["host"] == "192.168.0.223"
+        assert feed.started[-1]["port"] == 47600
+        assert feed.started[-1]["token"] == "relay-token"
+        assert "192.168.0.223" in panel.main_desk_link_status.text()
+
+        # Live status from the client thread lands in the same label.
+        feed.linkStatusChanged.emit("connected", "main-desk")
+        assert "Connected to main-desk" in panel.main_desk_link_status.text()
+        feed.linkStatusChanged.emit("rejected", "bad token")
+        assert "Token rejected" in panel.main_desk_link_status.text()
+    finally:
+        service.stop()
+
+
+def test_settings_page_prefills_pairing_and_refuses_half_filled(monkeypatch):
+    settings = {"desk_link_host": "main-pc:48000", "desk_link_token": "tok"}
+    feed = _StubFeed()
+    panel, service = _pairing_panel(monkeypatch, settings, feed=feed)
+    try:
+        assert panel.main_desk_host_input.text() == "main-pc"
+        assert panel.main_desk_port_input.value() == 48000
+        assert panel.main_desk_token_input.text() == "tok"
+
+        panel.main_desk_token_input.setText("   ")
+        panel._connect_to_main_desk()
+        assert not feed.started  # nothing sent, nothing overwritten
+        assert settings["desk_link_token"] == "tok"
+        assert settings["desk_link_client_token"] == "tok"  # migrated from the legacy pairing
+        assert "link token" in panel.main_desk_link_status.text()
+
+        panel.main_desk_token_input.setText("tok")
+        panel._forget_main_desk()
+        assert settings["desk_link_host"] == ":48000"
+        assert settings["desk_link_client_token"] == ""
+        assert settings["desk_link_token"] == "tok"
+        assert feed.stops == 1
+        assert panel.main_desk_host_input.text() == ""
+    finally:
+        service.stop()
+
+
+def test_settings_page_pairing_on_a_normal_desk_only_saves(monkeypatch):
+    """No feed (not launched with --satellite-desk): save, do not pretend to link."""
+    settings: dict = {"desk_link_token": "server-token"}
+    panel, service = _pairing_panel(monkeypatch, settings, feed=None)
+    try:
+        assert "Not paired" in panel.main_desk_link_status.text()
+        panel.main_desk_host_input.setText("10.0.0.5")
+        panel.main_desk_port_input.setValue(50000)
+        panel.main_desk_token_input.setText("later-token")
+        panel._connect_to_main_desk()
+
+        assert settings["desk_link_host"] == "10.0.0.5:50000"
+        assert settings["desk_link_client_token"] == "later-token"
+        assert settings["desk_link_token"] == "server-token"
+        assert service.current_token() == "server-token"
+        assert "satellite" in panel.main_desk_link_status.text().lower()
+
+        panel._forget_main_desk()
+        assert settings["desk_link_client_token"] == ""
+        assert settings["desk_link_token"] == "server-token"
+    finally:
+        service.stop()
+
+
+def test_settings_page_switches_role_and_requests_safe_restart(monkeypatch):
+    settings: dict = {"desk_link_token": "server-token"}
+    panel, service = _pairing_panel(monkeypatch, settings, feed=None)
+    requested: list[str] = []
+    panel.deskRoleRestartRequested.connect(requested.append)
+    try:
+        assert panel.desk_role_input.currentData() == "main"
+        assert not panel.desk_role_button.isEnabled()
+
+        panel.desk_role_input.setCurrentIndex(panel.desk_role_input.findData("satellite"))
+        assert panel.desk_role_button.isEnabled()
+        assert "Restart as satellite" in panel.desk_role_button.text()
+        panel._apply_desk_role()
+
+        assert settings["trading_desk_role"] == "satellite"
+        assert requested == ["satellite"]
+        assert "Restarting" in panel.desk_role_status.text()
+    finally:
+        service.stop()
+
+
+def test_settings_categories_are_separate_scroll_safe_tabs(monkeypatch):
+    from ui.panels.settings_panel import SettingsPanel
+    from ui.services.bounce_service import BounceService
+    from ui.state import UiState
+
+    qapp = _qapp()
+    settings: dict = {"desk_link_token": "server-token"}
+    _patched_satellite_settings(monkeypatch, settings)
+    _patched_desk_role_settings(monkeypatch, settings)
+    desk_link = _patched_service(monkeypatch, {**settings, "desk_link_port": 0})
+    bounce = BounceService()
+    panel = SettingsPanel(
+        UiState(),
+        bounce_service=bounce,
+        desk_link_service=desk_link,
+    )
+    try:
+        assert [
+            panel.settings_tabs.tabText(index)
+            for index in range(panel.settings_tabs.count())
+        ] == ["General", "BounceBot", "Desk Link"]
+
+        panel.resize(1100, 480)
+        panel.show()
+        panel.settings_tabs.setCurrentIndex(2)
+        qapp.processEvents()
+        desk_scroll = panel.settings_tabs.currentWidget()
+        assert desk_scroll.widget().isAncestorOf(panel.main_desk_host_input)
+        assert desk_scroll.verticalScrollBar().maximum() > 0
+    finally:
+        panel.close()
+        bounce.shutdown()
+        desk_link.stop()
+
+
+def test_settings_page_recovers_terminal_feed_status_on_construction(monkeypatch):
+    settings = {
+        "desk_link_host": "main-pc:48000",
+        "desk_link_client_token": "bad-token",
+    }
+    feed = _StubFeed()
+    feed.running = True  # a rejected DeskLinkClient object still exists
+    feed.link_status = ("rejected", "bad token")
+
+    panel, service = _pairing_panel(monkeypatch, settings, feed=feed)
+    try:
+        assert "Token rejected" in panel.main_desk_link_status.text()
+        assert "bad token" in panel.main_desk_link_status.text()
+    finally:
+        service.stop()
 
 
 def test_settings_page_regenerate_revokes_the_old_token(monkeypatch):
