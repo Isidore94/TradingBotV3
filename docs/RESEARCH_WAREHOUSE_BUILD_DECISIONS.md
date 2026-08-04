@@ -412,6 +412,108 @@ invoked manually. The 20-session pilot (Phase 8) depends on it, so it must land
 no later than Phase 8 — earlier if the trader wants forward capture to start
 sooner. Recorded here rather than silently deferred.
 
+## BD-21 — The pacer is its own module and never opens a socket
+
+**Decision.** The arbiter lives in `pacer.py` and only *decides*; the caller
+acts. The module map lists "IB pacer integration" under `bar_archive.py`, but
+`bar_archive.py` is the provider-free tee module (BD-15) and must stay that
+way, so Phase 3b split three ways: `pacer.py` (arbiter), `backfill.py` (job
+logic, provider-agnostic), `ib_capture.py` (the only socket).
+
+**Why.** A decision-only arbiter is fully testable offline — the champion
+pass-through property, the token bucket, the 162/366 yield, and the client-ID
+allocation are all proven without a broker. Folding it into the tee module
+would destroy the AST proof that the tee has no provider client.
+
+**Rejected.** One `bar_archive.py` holding tee + pacer + backfill + seed: it
+would put a provider client in the module whose whole guarantee is not having
+one.
+
+**Reopens if.** Never for the split; the responsibilities named in the module
+map are all present, just in three files instead of one.
+
+**Where.** `pacer.py`, `backfill.py`, `ib_capture.py`;
+`tests/test_warehouse_pacer.py`, `tests/test_warehouse_backfill.py`.
+
+## BD-22 — Capture isolation from the champion breaker is structural
+
+**Decision.** Capture errors are tagged `capture=True` at the pacer and handled
+there. Nothing in the warehouse imports, reads, or writes
+`_IBKR_HISTORICAL_FAILURE_COUNT`, and capture never calls a champion fetch
+function — so the champion's Yahoo-only circuit breaker cannot be tripped by
+capture, by construction rather than by discipline.
+
+**Why.** Risk R1 is the BF.B/LC blackout precedent: a silent downgrade of live
+scans to Yahoo. A structural guarantee survives refactors that a "remember not
+to" comment does not.
+
+**Rejected.** Adding a capture-aware branch to the champion's
+`_record_ibkr_historical_result` — that edits champion code to protect against
+a coupling that simply should not exist.
+
+**Reopens if.** Capture is ever routed through a champion fetch path (it must
+not be).
+
+**Where.** `pacer.py::note_error`;
+`tests/test_warehouse_pacer.py::test_capture_errors_never_touch_the_champion_circuit_breaker`
+(imports the champion module and asserts its counter is untouched after 15
+capture pacing errors).
+
+## BD-23 — A champion pacing error also backs capture off
+
+**Decision.** IB error 162/366 puts capture into cool-off whether the error was
+observed on capture traffic or on champion traffic. The champion is never
+slowed by it.
+
+**Why.** The pacing window is shared by the whole installation. A champion
+hitting 162 means the window is already under pressure; continuing to spend
+capture requests into it would make the champion's situation worse, which is
+the one thing capture must never do.
+
+**Reopens if.** Pilot measurement shows champion 162s that carry no capture
+implication (they would need to stay counted but stop triggering cool-off).
+
+**Where.** `pacer.py::note_error`;
+`tests/test_warehouse_pacer.py::test_a_champion_pacing_error_also_backs_capture_off_but_not_the_champion`.
+
+## BD-24 — Capture requests use `formatDate=2` (epoch UTC)
+
+**Decision.** The capture connection asks IB for epoch-second timestamps; the
+tee keeps reading the champion's `formatDate=1` naive local strings in the
+champion's own convention.
+
+**Why.** Capture is a separate connection with no legacy consumers, so there is
+no reason to inherit a timestamp format that needs a timezone guess. An
+unambiguous instant is exactly what the five-column PIT contract wants. The tee
+cannot change format — it reads bars the champion already parsed.
+
+**Rejected.** Matching `formatDate=1` for symmetry — symmetry with an ambiguity
+is not a benefit.
+
+**Reopens if.** A TWS version returns epochs the adapter cannot read (the
+parser already falls back to the string formats).
+
+**Where.** `ib_capture.py::historical_request` / `parse_bar`;
+`tests/test_warehouse_backfill.py`.
+
+## BD-25 — Backfill jobs take an injected fetcher
+
+**Decision.** `run_backfill` / `run_nightly_backfill` /
+`run_weekly_universe_sweep` / `run_yahoo_seed` receive a `fetcher` callable and
+drive it. The IB and Yahoo adapters are separate and injectable.
+
+**Why.** The parts that fail quietly — resume-without-duplicates across the TWS
+restart, pacer gating, gap recording, seed ledger resume — are all logic, and
+this makes every one of them provable offline with a fake. The socket layer
+stays small enough to review.
+
+**Caveat, stated plainly.** `ib_capture.build_ib_transport` (the real ibapi
+client) is **not verified**: no offline test can exercise it, and no broker-
+marked run has happened yet. Its live behaviour must be confirmed on the desk
+before the pilot depends on it.
+
+**Where.** `backfill.py`, `ib_capture.py`; `tests/test_warehouse_backfill.py`.
+
 ---
 
 ## Standing constraints this build re-checks every phase

@@ -1657,6 +1657,15 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    and fixed shedding order. Tests: `test_warehouse_tee.py`,
    `test_warehouse_spool.py`. Still unwired: the GUI service that feeds the
    tee each cycle (`docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` BD-20).
+   Phase 3b landed 2026-08-04 (pacer + backfill + seed): `pacer.py` meters
+   capture only — champions are counted, never delayed or queued — yields on
+   IB 162/366, asserts the client-ID allocation (1003 retired, 1010/1011), and
+   keeps capture errors away from `_IBKR_HISTORICAL_FAILURE_COUNT`;
+   `backfill.py` adds the ETH-inclusive nightly M5 job, weekly universe sweep,
+   and trickled 60-day yfinance seed, all resumable across the TWS restart;
+   `ib_capture.py` is the only socket module and its live path is still
+   unverified (BD-25). Tests: `test_warehouse_pacer.py`,
+   `test_warehouse_backfill.py`.
 
 ### Then — after correctness and authoritative data paths
 

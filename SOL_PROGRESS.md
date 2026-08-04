@@ -9,13 +9,14 @@ stamp; it must not duplicate the roadmap.
 
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
-  Phase 3: **+91 warehouse tests** on the 1814-test baseline (adds
+  Phase 3b: **+124 warehouse tests** on the 1814-test baseline (adds
   `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
   `test_warehouse_quarantine.py`, `test_warehouse_retire.py`,
   `test_warehouse_import.py`, `test_warehouse_tee.py`,
-  `test_warehouse_spool.py`); smoke **7/7**. Measured on the Linux build
-  agent: **1903 passed, 2 skipped, 5 subtests** (that agent's own baseline was
-  1812 + the same 2 skips), so the desktop gate should read **1905 passed, 5
+  `test_warehouse_spool.py`, `test_warehouse_pacer.py`,
+  `test_warehouse_backfill.py`); smoke **7/7**. Measured on the Linux build
+  agent: **1936 passed, 2 skipped, 5 subtests** (that agent's own baseline was
+  1812 + the same 2 skips), so the desktop gate should read **1938 passed, 5
   subtests** — confirm on the next Windows run.
 - Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
   protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
@@ -52,6 +53,22 @@ stamp; it must not duplicate the roadmap.
   segments, the CLI seals only `.closed` ones, with the 5 GB / 7-day cap, the
   fixed shedding order (D1/M5 never shed), and shed evidence surfacing as
   explicit gap rows.
+- Warehouse **Phase 3b landed** (pacer + backfill + seed): `pacer.py` is the
+  one process-wide arbiter — champion requests are counted, never delayed or
+  queued; capture runs in a token bucket of the published floor minus observed
+  champion consumption, yields instantly to champion activity and to IB error
+  162/366, and honours the 15-second identical-request cooldown. Client IDs are
+  asserted at connect (1003 retired, 1010 streamer, 1011 backfill, mini-PC
+  refused). Capture errors are tagged `capture=True` and never reach
+  `_IBKR_HISTORICAL_FAILURE_COUNT` — a test imports the champion module and
+  proves the counter is untouched. `backfill.py` runs the ETH-inclusive
+  (`useRTH=0`) nightly M5 job, the weekly universe sweep, and the trickled
+  60-day yfinance seed with a per-symbol resume ledger; all are idempotent
+  across the ~23:45 TWS restart and record paced-out/no-response work as gap
+  rows. `ib_capture.py` is the only socket module.
+- **Unverified (BD-25):** `ib_capture.build_ib_transport` — the real ibapi
+  client — has no offline test and no broker-marked live run yet. Its socket
+  behaviour must be confirmed on the desk before the pilot leans on it.
 - **Open gap (BD-20):** nothing in the running desk calls the tee yet —
   `scripts/ui/services/warehouse_service.py` (GUI service + job-ledger
   registration + Health tiles) is still to be built, and the 20-session pilot
@@ -74,9 +91,9 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 3b (shared IB pacer +
-  client-ID allocation, nightly ETH-inclusive M5/M1 backfill, weekly universe
-  sweep, yfinance 60-day seed) per the plan's Section 19.2.
+  `research_spool` path). Next builder starts at Phase 4 (`trading_session` +
+  M5→M15/M30/H1 aggregation into `bar_derived` + W1 from canonical D1) per the
+  plan's Section 19.2.
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 
