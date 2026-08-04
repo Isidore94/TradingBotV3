@@ -9,12 +9,13 @@ stamp; it must not duplicate the roadmap.
 
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
-  Phase 2: **+59 warehouse tests** on the 1814-test baseline (adds
+  Phase 3: **+91 warehouse tests** on the 1814-test baseline (adds
   `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
   `test_warehouse_quarantine.py`, `test_warehouse_retire.py`,
-  `test_warehouse_import.py`); smoke **7/7**. Measured on the Linux build
-  agent: **1871 passed, 2 skipped, 5 subtests** (that agent's own baseline was
-  1812 + the same 2 skips), so the desktop gate should read **1873 passed, 5
+  `test_warehouse_import.py`, `test_warehouse_tee.py`,
+  `test_warehouse_spool.py`); smoke **7/7**. Measured on the Linux build
+  agent: **1903 passed, 2 skipped, 5 subtests** (that agent's own baseline was
+  1812 + the same 2 skips), so the desktop gate should read **1905 passed, 5
   subtests** — confirm on the next Windows run.
 - Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
   protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
@@ -39,6 +40,25 @@ stamp; it must not duplicate the roadmap.
   completed sessions only. Legacy writers are untouched;
   `scripts/research_warehouse/exploration_cohort.txt` is deliberately empty
   pending item 5 of the plan's trader confirmation register.
+- Warehouse **Phase 3 landed** (M5 tee + coverage/gaps + spool):
+  `bar_archive.py` archives BounceBot's already-fetched
+  `latest_bars["<SYM>|5 D|5 mins"]` cache into `bar_m5` at zero provider cost
+  (the module has no provider client at all — asserted by an AST test),
+  completed bars only, idempotent per (symbol, interval_start); it also writes
+  `scan_coverage` keyed by the run manifest's `run_id` (so coverage reconciles
+  against run manifests by construction) and `collection_gap` rows that keep
+  `NOT_COLLECTED_BY_POLICY` distinct from `MISSING`/`PARTIAL`. `spool.py` adds
+  the sec-8.4 ownership split: the GUI-owned writer appends to `.open`
+  segments, the CLI seals only `.closed` ones, with the 5 GB / 7-day cap, the
+  fixed shedding order (D1/M5 never shed), and shed evidence surfacing as
+  explicit gap rows.
+- **Open gap (BD-20):** nothing in the running desk calls the tee yet —
+  `scripts/ui/services/warehouse_service.py` (GUI service + job-ledger
+  registration + Health tiles) is still to be built, and the 20-session pilot
+  depends on it.
+- Builder decision log: `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`
+  (BD-01..BD-20) records every implementation choice the locked plan left
+  open, for Sol/Fable review.
 - Previous `main` gate (2026-08-03 evening, merged from
   `ultimate-setup-database-plan`): **1814 passed, 5 subtests** (adds
   `tests/test_warehouse_config.py`); smoke **7/7**.
@@ -54,8 +74,9 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 3 (M5 tee archive +
-  `scan_coverage`/`collection_gap`) per the plan's Section 19.2.
+  `research_spool` path). Next builder starts at Phase 3b (shared IB pacer +
+  client-ID allocation, nightly ETH-inclusive M5/M1 backfill, weekly universe
+  sweep, yfinance 60-day seed) per the plan's Section 19.2.
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 

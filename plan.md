@@ -1647,7 +1647,16 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    `level_state_daily` daily, and projects the durable per-symbol D1 store into
    `bar_d1` as a wrapped read (completed sessions only); legacy writers are
    untouched and `exploration_cohort.txt` stays empty pending trader
-   confirmation. Tests: `test_warehouse_import.py`.
+   confirmation. Tests: `test_warehouse_import.py`. Phase 3 landed
+   2026-08-04 (M5 tee + coverage/gaps + spool): `bar_archive.py` archives
+   BounceBot's already-fetched in-memory M5 cache into `bar_m5` with zero
+   added provider requests (no provider client in the module), plus
+   `scan_coverage` keyed by the run manifest's `run_id` and `collection_gap`
+   rows that keep policy absence distinct from missing data; `spool.py`
+   implements the sec 8.4 GUI-writer/CLI-sealer split with the 5 GB/7-day cap
+   and fixed shedding order. Tests: `test_warehouse_tee.py`,
+   `test_warehouse_spool.py`. Still unwired: the GUI service that feeds the
+   tee each cycle (`docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` BD-20).
 
 ### Then — after correctness and authoritative data paths
 

@@ -297,6 +297,121 @@ note it here).
 
 **Where.** `tests/test_warehouse_*.py`.
 
+## BD-15 — The tee reads BounceBot's in-memory cache; it is not a hook
+
+**Decision.** The M5 tee takes the champion's existing
+`latest_bars["<SYM>|5 D|5 mins"]` mapping as an argument and archives what is
+already in it. `bar_archive.py` contains no provider client, no connection, no
+retry, and no call site inside any champion fetch path.
+
+**Why.** R3 requires the tee to observe in-memory responses only, and to add
+zero requests. Reading a dict the champion already populated cannot change
+champion timing, cannot fail a fetch, and cannot trip the Yahoo circuit
+breaker, because it never makes a request that could fail.
+
+**Rejected.** A callback the champion invokes after each fetch — even a
+non-blocking one is capture code inside the fetch path, which R3 names as the
+risk. A subclass or monkeypatch of the fetch method — worse, and invisible.
+
+**Reopens if.** A cohort is needed that the champions never fetch — that is
+what the Phase-3b nightly BACKFILL budget is for, not the tee.
+
+**Where.** `bar_archive.py::extract_tee_bars` / `capture_m5_tee`;
+`tests/test_warehouse_tee.py::test_tee_has_no_provider_client_at_all` (AST
+check: no provider import, no request call anywhere in the module).
+
+## BD-16 — Session identity in Phase 3 comes from `market_session`
+
+**Decision.** `bar_m5` rows get their `session_id` (`XNYS-<date>`), RTH
+boundaries, and PRE/RTH/POST phase from a wrapped read of the champion's
+`scripts/market_session.py`. Phase 4 creates the matching `trading_session`
+rows and owns the exchange-calendar version.
+
+**Why.** Bars cannot be archived without a session identity, and inventing a
+second session calendar beside the champion's would guarantee they disagree.
+The `XNYS-<date>` shape is the plan's own documented `session_id` format.
+
+**Reopens if.** Phase 4's calendar source differs from `market_session` (then
+`trading_session` is authoritative and this wrapped read follows it).
+
+**Where.** `bar_archive.py::session_context`; `tests/test_warehouse_tee.py`.
+
+## BD-17 — IB round-lot volume is stored as provided
+
+**Decision.** `bar_m5.volume` records exactly what the provider returned. IB
+historical TRADES volume is in round lots while Yahoo is in shares; the
+difference is disambiguated by the `provider` column and checked by the
+sentinel-parity job, never normalized at capture.
+
+**Why.** The plan says so for D1 ("the ×100 round-lot bug is a sentinel check,
+not a rewrite") and the same reasoning applies to M5: rewriting captured
+evidence to match an assumption is how the 2026-07-20 RVOL bug became
+invisible. The champion's own ×100 conversion stays where it is, in the
+champion.
+
+**Reopens if.** Never for stored evidence; a derived shares-normalized column
+would be a new, named feature.
+
+**Where.** `bar_archive.py::capture_m5_tee`;
+`tests/test_warehouse_tee.py::test_captured_rows_carry_session_phase_and_provenance`.
+
+## BD-18 — `spool.py` landed with Phase 3, and a segment sheds whole
+
+**Decision.** The spool (writer/sealer split, 5 GB / 7-day cap, fixed shedding
+order) was built in Phase 3 rather than left unassigned, because live capture
+needs a write target that is not the lake. Shedding operates on whole segments,
+and a segment sheds only when **every** record in it carries that shed class; a
+mixed segment is treated as PROTECTED.
+
+**Why.** Section 8.4 states the ownership contract (GUI writer spools, CLI
+build job seals) but Section 19.2 assigns `spool.py` no phase. Per-record
+shedding inside a segment would mean rewriting an append-only file; whole-
+segment shedding keeps the writer append-only, and the conservative treatment
+of mixed segments means protected evidence can never be dropped as collateral.
+
+**Rejected.** Writing the lake directly from the GUI session (breaks the stated
+ownership split); per-record shedding (rewrites append-only files).
+
+**Reopens if.** A measured DAS-outage day shows whole-segment granularity
+sheds materially more than needed (LD-12's reopen trigger already covers the
+cap itself).
+
+**Where.** `scripts/research_warehouse/spool.py`;
+`tests/test_warehouse_spool.py`.
+
+## BD-19 — Shed evidence becomes a `collection_gap` row
+
+**Decision.** Dropping a spool segment writes a shed-log record; the next seal
+converts those into `collection_gap` rows with
+`reason = NOT_COLLECTED_BY_POLICY`, `resolution = POLICY`.
+
+**Why.** Section 8.4 requires gaps to be recorded and evidence never silently
+deleted. Data the spool dropped under its declared cap policy is policy
+absence — which is exactly the state the plan insists must never be conflated
+with `MISSING`.
+
+**Reopens if.** A shed class is ever introduced that is not policy-driven (it
+would need its own reason code).
+
+**Where.** `spool.py::_shed_segment` / `_seal_shed_log`;
+`tests/test_warehouse_spool.py::test_shed_evidence_becomes_an_explicit_gap_row`.
+
+## BD-20 — OPEN: the tee has no live caller yet
+
+**Not a decision — a declared gap, so it cannot be mistaken for done.**
+
+Phase 3 delivers the capture mechanism (tee → spool → seal) and its tests, but
+nothing in the running desk calls it yet: `scripts/ui/services/warehouse_service.py`
+(the GUI-owned service that would hand BounceBot's `latest_bars` to the tee each
+production cycle, register the build job in the job ledger, and feed the six
+Health tiles) is listed in the plan's module map without a phase, and its Health
+tiles are Phase 8.
+
+Consequence: until that service exists, capture runs only when a build job is
+invoked manually. The 20-session pilot (Phase 8) depends on it, so it must land
+no later than Phase 8 — earlier if the trader wants forward capture to start
+sooner. Recorded here rather than silently deferred.
+
 ---
 
 ## Standing constraints this build re-checks every phase
