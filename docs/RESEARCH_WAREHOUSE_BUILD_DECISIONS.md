@@ -17,11 +17,17 @@ implementation gap, where two readings of the plan were both defensible, or
 where a choice binds future phases. Format: decision → why → what was rejected
 → reopen trigger → where it lives.
 
-Status of the build: Phases 0-8 landed (code); the 20-session pilot is a live run that has not happened. Test baseline and
-branch live in [`SOL_PROGRESS.md`](../SOL_PROGRESS.md). The 2026-08-04 review
+Status of the build: Phases 0-8 landed (code); the 20-session pilot is a live
+run that has not happened. Test baseline and branch live in
+[`SOL_PROGRESS.md`](../SOL_PROGRESS.md). The 2026-08-04 review
 (`docs/RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`) repaired the outcome engine
 (BD-53..BD-57) plus four mechanical defects (Windows lock probe, protected
-spool shedding, spool re-seal dedup, capture reconnect).
+spool shedding, spool re-seal dedup, capture reconnect). The follow-up defect
+pass closed every remaining defect in that review — feature windowing (BD-58,
+BD-59), backfill (BD-60), build-job coverage (BD-61), and the D14-D18 edge
+cases (BD-62) — and wired the live tee (BD-63). What is left before the pilot
+is not defect work: the Windows/3.14 test run, one broker-marked IB run
+(BD-25), and the trader's confirmation-register items.
 
 ---
 
@@ -1397,6 +1403,47 @@ D14's check needs a content hash per row), or per-interval gap detection lands
 `tests/test_warehouse_backfill.py::test_a_naive_ib_timestamp_is_dropped_not_rezoned`;
 `tests/test_warehouse_tee.py::test_policy_absence_is_never_recorded_as_missing`.
 
+## BD-63 — The live tee is a GUI-owned capture object on its own 60s timer
+
+**Decision.** `WarehouseTeeCapture` (in `ui/services/warehouse_service.py`) owns
+the live M5 tee. `BounceService` constructs it **lazily, only when a bot exists
+and `warehouse_enabled()` is true**, drives it from a service-owned 60-second
+`QTimer` armed on `started` and stopped with every other timer on shutdown, and
+calls it from the `capture_warehouse_tee` slot — on the GUI thread, which is the
+thread that owns `bot.latest_bars`. The object takes `dict(bot.latest_bars)`
+itself and calls `capture_m5_tee(None, snapshot, spool=writer, seen=session_set)`:
+`store=None` means **zero lake I/O on the GUI thread**, not even the read that
+normally seeds de-duplication — its own per-session `seen` set does that, which
+is exactly what the `seen` parameter exists for. Any exception is logged once
+and swallowed. Health renders `warehouse_health_tiles` as six check rows,
+computed on the page's existing audit worker thread; `OFF` maps to UNKNOWN, and
+a red tile can worsen the page's verdict but a green one never improves it.
+
+**Why.** BD-20/BD-52's open item: the tee, the spool, the seal and the tiles all
+existed and nothing called them, so the pilot could not start. The review's
+design ruling fixed the shape (service-layer, never inside `bounce_bot_lib`,
+snapshot on the owning thread, spool-only) and this implements it literally.
+60 seconds rather than the existing 3-second health cadence because M5 bars
+complete every five minutes — anything faster just re-scans the same dict — and
+rather than folding into `refresh_health` because a timer the service owns
+outright is easier to reason about and to stop.
+
+**Rejected.** Calling the tee from inside BounceBot's own cycle — it would put a
+warehouse import on a champion path and make a capture failure a champion
+failure. Passing a live `ResearchStore` and letting `capture_m5_tee` dedupe
+against the lake — correct offline, but that is a parquet read on the GUI
+thread every minute. Snapshotting inside `extract_tee_bars` — too late; the
+resize can already have happened.
+
+**Reopens if.** The post-slice Focus-streaming milestone lands (capture then
+issues real requests and the pacer's champion-observation question from the
+review's section 1 reopens with it).
+
+**Where.** `ui/services/warehouse_service.py::WarehouseTeeCapture`;
+`ui/services/bounce_service.py::capture_warehouse_tee` /
+`_start_warehouse_timer`; `ui/panels/health_panel.py::warehouse_checks` /
+`_with_warehouse_checks`; `tests/test_qt_warehouse_tee.py`.
+
 ---
 
 ## Open items for Sol / Fable
@@ -1406,7 +1453,7 @@ Each is already stated in its own BD entry; this is the short list.
 
 | # | Item | Where | What is needed |
 |---|---|---|---|
-| 1 | **Nothing calls the tee during a live session.** The service and tiles now exist; the remaining wiring is (a) the GUI handing BounceBot's `latest_bars` to `capture_m5_tee` each cycle and (b) the Health page rendering the six tiles. Capture otherwise runs only from a manual build job, so the pilot cannot start. | BD-20, BD-52 | Wire both, then start the 20-session pilot |
+| 1 | ~~Nothing calls the tee during a live session.~~ **Wired** (BD-63): `BounceService` drives a GUI-owned `WarehouseTeeCapture` on a 60s timer, spool-only, and the Health page renders the six tiles. Unverified on the desk — it has never run against a real BounceBot. | BD-20, BD-63 | Watch the tiles on the first live session, then start the pilot |
 | 1b | **The 20-session pilot has not run** — it is a live-desk activity, not code. | BD-52 | Run it once capture is live; log the sec 5.6 measurements |
 | 2 | **`ib_capture.build_ib_transport` is unverified** — the real ibapi client has no offline test and no broker-marked live run. | BD-25 | One live run on the desk before the pilot leans on it |
 | 3 | **`exploration_cohort.txt` is empty** — the fixed 30 symbols define part of the research denominator, so no agent invented them. | BD-12 | Trader supplies the list (confirmation register item 5) |

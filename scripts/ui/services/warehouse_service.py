@@ -18,6 +18,7 @@ worked; it never means a setup is predictive.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -217,10 +218,22 @@ def _coverage_tile(store, moment: datetime) -> HealthTile:
     """Expected vs observed bars for the current month, worst five symbols."""
     partition = f"month={moment:%Y-%m}"
     try:
-        gaps = store.read_table("collection_gap", partition, columns=["symbol", "reason", "expected_bars"]).to_pylist()
+        import sys
+
+        scripts_dir = str(Path(__file__).resolve().parents[2])
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from research_warehouse.backfill import open_gap_keys
+
+        # Only gaps still open: a gap a later backfill filled is closed by a
+        # superseding row (BD-60), and counting both would double it.
+        gaps = list(open_gap_keys(store, [partition]).values())
     except Exception as exc:
         return HealthTile(key="coverage", label="Bar coverage", value="unreadable", status=STATUS_WARN, detail=str(exc))
-    shortfall: dict[str, int] = {}
+    # Counted in *short sessions*, not bars: since D18, ``expected_bars`` holds
+    # the count expected across the gap interval rather than the shortfall, so
+    # summing it here would report the session size as if it were the loss.
+    short_sessions: dict[str, int] = {}
     by_reason: dict[str, int] = {}
     for row in gaps:
         reason = str(row.get("reason") or "")
@@ -228,16 +241,112 @@ def _coverage_tile(store, moment: datetime) -> HealthTile:
         # Policy absence is not a coverage defect - it is a declared decision.
         if reason == "NOT_COLLECTED_BY_POLICY":
             continue
-        shortfall[str(row.get("symbol"))] = shortfall.get(str(row.get("symbol")), 0) + int(row.get("expected_bars") or 0)
-    worst = sorted(shortfall.items(), key=lambda item: -item[1])[:5]
+        symbol = str(row.get("symbol"))
+        short_sessions[symbol] = short_sessions.get(symbol, 0) + 1
+    worst = sorted(short_sessions.items(), key=lambda item: -item[1])[:5]
     return HealthTile(
         key="coverage",
         label="Bar coverage (expected vs observed)",
-        value=f"{len(shortfall)} symbol(s) short" if shortfall else "complete",
-        status=STATUS_OK if not shortfall else (STATUS_WARN if len(shortfall) <= 5 else STATUS_RED),
-        detail=("worst: " + ", ".join(f"{symbol} -{count}" for symbol, count in worst)) if worst else "no gaps recorded",
+        value=f"{len(short_sessions)} symbol(s) short" if short_sessions else "complete",
+        status=STATUS_OK if not short_sessions else (STATUS_WARN if len(short_sessions) <= 5 else STATUS_RED),
+        detail=(
+            "worst: " + ", ".join(f"{symbol} {count} session(s)" for symbol, count in worst)
+        )
+        if worst
+        else "no open gaps recorded",
         metrics={"by_reason": by_reason, "worst_5": worst},
     )
+
+
+class WarehouseTeeCapture:
+    """The GUI-owned M5 tee (BD-20 wiring). Spool-only, zero provider cost.
+
+    The contract this class exists to keep, from the 2026-08-04 review's design
+    ruling and sec 8.4/LD-01:
+
+    * **Nothing in ``bounce_bot_lib`` knows it exists.** The champion populates
+      ``latest_bars`` for its own reasons; this reads that dict and nothing
+      else. No request is issued, so the tee cannot fail or delay a champion
+      fetch, and no champion module imports the warehouse.
+    * **The snapshot happens on the owning thread.** ``capture()`` is called
+      from a GUI-thread slot and takes ``dict(bot.latest_bars)`` immediately;
+      ``extract_tee_bars`` iterating a dict another thread is resizing would
+      raise, which is why the copy is here and not deeper.
+    * **Spool-only.** ``store`` is deliberately ``None``, so ``capture_m5_tee``
+      does no lake I/O at all on the GUI thread - not even the read that
+      normally seeds its de-duplication. This object's own ``seen`` set does
+      that instead, which is what ``capture_m5_tee(seen=...)`` is for, and the
+      EOD build job seals the segments.
+    * **Never fatal.** A capture failure is logged once per session and the
+      desk carries on. Research evidence must never be able to break trading.
+    """
+
+    def __init__(self, *, spool=None, provider: str = "IBKR"):
+        self._spool = spool
+        self._provider = provider
+        self._seen: set = set()
+        self._seen_date = None
+        self.last_report = None
+        self.last_error = ""
+        self.captures = 0
+        self.rows_spooled = 0
+
+    @property
+    def spool(self):
+        """The writer, created on first use so an unset lake stays a no-op."""
+        if self._spool is None:
+            _config, spool_module, _store_module = _warehouse()
+            self._spool = spool_module.ResearchSpoolWriter()
+        return self._spool
+
+    def _session_seen(self, moment: datetime) -> set:
+        """De-dup keys, reset per session so the set cannot grow unbounded."""
+        day = moment.date()
+        if day != self._seen_date:
+            self._seen = set()
+            self._seen_date = day
+        return self._seen
+
+    def capture(self, bot, *, now: datetime | None = None):
+        """Snapshot the champion's M5 cache and spool whatever is new."""
+        if bot is None:
+            return None
+        config, _spool_module, _store_module = _warehouse()
+        if not config.warehouse_enabled():
+            return None
+        cache = getattr(bot, "latest_bars", None)
+        if not cache:
+            return None
+        # The copy, on this (GUI) thread, before anything iterates it.
+        snapshot = dict(cache)
+        moment = now or datetime.now(timezone.utc)
+
+        import sys
+
+        scripts_dir = str(Path(__file__).resolve().parents[2])
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from research_warehouse.bar_archive import capture_m5_tee
+
+        try:
+            report = capture_m5_tee(
+                None,  # spool-only: no lake I/O on the GUI thread
+                snapshot,
+                now=moment,
+                provider=self._provider,
+                spool=self.spool,
+                seen=self._session_seen(moment),
+            )
+        except Exception as exc:  # research capture never breaks the desk
+            if str(exc) != self.last_error:
+                self.last_error = str(exc)
+                logging.exception("Warehouse M5 tee capture failed; the desk is unaffected.")
+            return None
+        self.last_error = ""
+        self.last_report = report
+        self.captures += 1
+        self.rows_spooled += int(getattr(report, "rows_published", 0) or 0)
+        return report
 
 
 def register_build_job(scheduler=None) -> dict:
@@ -267,6 +376,7 @@ __all__ = [
     "STATUS_RED",
     "STATUS_WARN",
     "HealthTile",
+    "WarehouseTeeCapture",
     "register_build_job",
     "warehouse_health_tiles",
 ]

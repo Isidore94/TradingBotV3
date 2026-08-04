@@ -7,6 +7,21 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
+- Branch `claude/das-warehouse-defects-2n9uql` (2026-08-04), the defect pass on
+  top of the Phases 1-8 review branch. Closes every S1/S2/S3 defect in
+  `docs/RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`: feature windowing D5
+  (BD-58/BD-59), backfill D6/D7 (BD-60), build-job coverage D19 (BD-61), the
+  D14-D18 edge cases (BD-62), and the BD-20 live-tee wiring (BD-63).
+  Linux build agent, `TZ=America/Vancouver QT_QPA_PLATFORM=offscreen`:
+  **2088 passed, 2 skipped, 5 subtests** (that agent's baseline on the
+  unmodified review branch was 2061 + the same 2 skips, so this adds 27 tests).
+  **Not yet run on Windows/3.14** — the review's test-gate caveat still stands
+  and that run must re-baseline this number. Also still owed before the pilot:
+  one broker-marked IB run (BD-25) and the trader's confirmation-register items.
+  NOTE for a Linux agent: the suite needs `TZ=America/Vancouver`. Naive bar
+  timestamps are localized with the *system* timezone, so a UTC container fails
+  7 desk-timezone tests (`test_vold_recorder`, `test_autopilot_core`,
+  `test_technical_integrity`) that are green on the desk.
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
   Phase 8: **+237 warehouse tests** on the 1814-test baseline (adds

@@ -243,6 +243,19 @@ class BounceService(QObject):
         self._board_timer.timeout.connect(self.refresh_entry_board)
         self.started.connect(self._start_board_timer)
 
+        # Research-warehouse M5 tee (BD-20). Shadow-only and strictly additive:
+        # it reads the bar cache the champion already populated, issues no
+        # provider request, and writes only to the GUI-owned spool. It exists
+        # only where a bot does - the main desk - and only when the trader has
+        # configured a research store; otherwise it is never constructed.
+        # 60s rather than the 3s health cadence: M5 bars complete every five
+        # minutes, so anything faster is pure re-scanning of the same dict.
+        self._warehouse_capture = None
+        self._warehouse_timer = QTimer(self)
+        self._warehouse_timer.setInterval(60_000)
+        self._warehouse_timer.timeout.connect(self.capture_warehouse_tee)
+        self.started.connect(self._start_warehouse_timer)
+
     # ------------------------------------------------------------------
     # Emission guards
     # ------------------------------------------------------------------
@@ -511,7 +524,13 @@ class BounceService(QObject):
         """
 
         error: RuntimeError | None = None
-        for timer in (self._health_timer, self._regime_timer, self._integrity_timer, self._board_timer):
+        for timer in (
+            self._health_timer,
+            self._regime_timer,
+            self._integrity_timer,
+            self._board_timer,
+            self._warehouse_timer,
+        ):
             try:
                 timer.stop()
             except RuntimeError as exc:
@@ -697,6 +716,46 @@ class BounceService(QObject):
             return
         self._board_timer.start()
         self.refresh_entry_board()
+
+    @Slot()
+    def _start_warehouse_timer(self) -> None:
+        if not self._may_arm_timers():
+            return
+        self._warehouse_timer.start()
+        self.capture_warehouse_tee()
+
+    @Slot()
+    def capture_warehouse_tee(self) -> None:
+        """Tee the champion's completed M5 bars into the research spool.
+
+        Runs on the GUI thread, which is the thread that owns the bot's bar
+        cache: the snapshot must be taken here, not inside the warehouse, or a
+        concurrent resize can raise mid-iteration. Everything downstream is
+        spool-only, so this costs no provider request and no lake I/O.
+        """
+        if not self._is_live():
+            return
+        bot = self._current_bot()
+        if bot is None:
+            return
+        capture = self._warehouse_capture
+        if capture is None:
+            try:
+                from ui.services.warehouse_service import WarehouseTeeCapture
+
+                from research_warehouse import config as warehouse_config
+
+                if not warehouse_config.warehouse_enabled():
+                    return
+                capture = WarehouseTeeCapture()
+            except Exception:
+                # No research store, or the package is unavailable: the desk
+                # simply has no warehouse. Never retried noisily, never fatal.
+                logging.debug("Research warehouse tee unavailable; capture stays off.", exc_info=True)
+                self._warehouse_timer.stop()
+                return
+            self._warehouse_capture = capture
+        capture.capture(bot)
 
     @Slot()
     def refresh_entry_board(self) -> None:

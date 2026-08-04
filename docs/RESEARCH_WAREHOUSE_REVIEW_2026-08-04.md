@@ -406,6 +406,10 @@ notably BD-01/02/04/05/06/07/08/09/10/11/12/13/14/15/16/17/19/21/22/24
    path ever imports the warehouse. **Do not start the pilot until D1, D3–D7,
    D11–D13 are repaired** — 20 sessions of capture through the current
    outcome/backfill code would be evidence that has to be thrown away.
+   **Done** — the wiring landed exactly as ruled here (BD-63), and every defect
+   named in that gate is repaired. The pilot's remaining preconditions are
+   operational, not code: the Windows/3.14 run, item 2's broker-marked run, and
+   the trader's confirmation-register items.
 2. **`build_ib_transport` (BD-25).** Do not defer. The nightly ETH backfill is
    inside the slice (LD-03), so the pilot leans on this path from night one.
    One broker-marked run on the desk (after the D10 fix), covering connect,
