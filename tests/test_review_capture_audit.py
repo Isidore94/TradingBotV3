@@ -330,9 +330,11 @@ def test_scoring_config_snapshot_hashes_and_separates_tuner_rules(tmp_path):
     assert check["details"]["auto_tuner_rules"] == 2
     assert check["details"]["rules_by_source"]["user_preference"] == 1
     assert check["details"]["signal_weight_entries"] == 2
-    # The characterization Phase 1 will act on: where the live tuner runs.
+    # Automatic scan/backfill sites are recommendation-only; the GUI apply
+    # action is the only live mutation path.
     assert any("auto_tune=True" in site for site in check["details"]["tuner_run_sites"])
-    assert "Characterized, unchanged" in check["details"]["tuner_status"]
+    assert "recommendation-only" in check["details"]["tuner_status"]
+    assert "explicit trader-operated GUI apply" in check["details"]["tuner_status"]
 
 
 def test_missing_scoring_config_is_degraded_not_invented(tmp_path):

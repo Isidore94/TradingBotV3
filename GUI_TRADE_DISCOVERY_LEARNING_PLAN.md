@@ -171,7 +171,7 @@ Every chart review should create an impression ID, and every advance should reso
 
 ### 4.5 Existing evidence must not silently auto-promote
 
-The historical setup/tracker program still has open point-in-time and setup-identity work in `plan.md` Milestone 5. The current tracker also has an `apply_changes=True` scoring-tuner path.
+The historical setup/tracker program still has open point-in-time and setup-identity work in `plan.md` Milestone 5. Under the trader-directed Section 12 item 7c packet, the automatic scan/backfill tuner sites are recommendation-only (`apply_changes=False`); only the explicit GUI Apply Scoring action can mutate the live configuration.
 
 Before new GUI learning is connected to live alerts:
 
@@ -967,7 +967,7 @@ Tasks:
 4. Show review-log, scoreboard, outcome-join, policy, writer, and snapshot health in System Health.
 5. Capture current screenshots, queue ordering, alert and sound counts, Focus size, duplicate rate, missed-winner review, latency, and decision time.
 6. After saving a fixed characterization replay of current queue behavior, force preference guidance to annotation-only/FIFO compatibility until the later policy gates pass.
-7. Snapshot the active setup-scoring configuration/hash and characterize exactly when the existing `apply_changes=True` tuner runs. Do not invoke, redirect, or promote a new tuner result before Phase 1 golden characterization.
+7. Snapshot the active setup-scoring configuration/hash and characterize tuner execution. **Completed for Section 12 item 7c:** the versioned golden fixture records champion and intentional promoted outputs, automatic scan/backfill sites are recommendation-only, and the explicit GUI Apply Scoring action remains manual. Do not connect new learned policy to live scoring before the later promotion gates.
 8. Label all pre-v2 evidence Exploratory / Non-Promotable.
 
 Exit gate:

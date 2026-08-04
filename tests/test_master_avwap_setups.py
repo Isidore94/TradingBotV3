@@ -1,4 +1,5 @@
 import json
+import inspect
 import sys
 import tempfile
 import unittest
@@ -4449,6 +4450,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 "context_signals": [],
                 "has_favorite_signal": True,
                 "trend_20d": "UP",
+                "breakout_5d": True,
             },
         ]
         ai_state = {"symbols": {"TSLA": {"trend_20d": "DOWN"}, "AAPL": {"trend_20d": "UP"}}}
@@ -4459,7 +4461,43 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[0]["score"], 184.0 + master_avwap.PRIORITY_SHORT_MID_EARNINGS_FIRST_DEV_SCORE_BONUS)
         self.assertIn("1st-dev confirmation", priority_rows[0]["tracker_guardrail_score_note"])
         self.assertEqual(priority_rows[1]["score"], 135.0 + master_avwap.PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS)
-        self.assertIn("EMA15 retest tracker bonus", priority_rows[1]["tracker_guardrail_score_note"])
+        self.assertIn("confirmed long mid-earnings EMA15 retest", priority_rows[1]["tracker_guardrail_score_note"])
+
+    def test_tracker_guardrails_do_not_double_boost_correlated_long_ema_signals(self):
+        priority_rows = [
+            {
+                "symbol": "AAPL",
+                "side": "LONG",
+                "score": 135.0,
+                "setup_family": "mid_earnings_ema21_retest",
+                "favorite_signals": [
+                    master_avwap.MID_EARNINGS_EMA15_RETEST_SIGNAL,
+                    master_avwap.MID_EARNINGS_EMA21_RETEST_SIGNAL,
+                ],
+                "has_favorite_signal": True,
+                "breakout_5d": True,
+            }
+        ]
+        ai_state = {"symbols": {"AAPL": {}}}
+        feature_rows_by_symbol = {"AAPL": {"priority_score": 135.0}}
+
+        apply_tracker_scoring_guardrails(priority_rows, ai_state, feature_rows_by_symbol)
+
+        self.assertEqual(
+            priority_rows[0]["score"],
+            135.0 + master_avwap.PRIORITY_LONG_MID_EARNINGS_EMA21_SCORE_BONUS,
+        )
+        self.assertIn("EMA21 evidence boost", priority_rows[0]["tracker_guardrail_score_note"])
+        self.assertNotIn("EMA15 retest", priority_rows[0]["tracker_guardrail_score_note"])
+
+    def test_automatic_scoring_tuner_sites_are_recommendation_only(self):
+        update_source = inspect.getsource(master_avwap.update_setup_tracker_from_scan)
+        backfill_source = inspect.getsource(master_avwap.backfill_setup_tracker_from_recent_sessions)
+
+        self.assertIn("apply_changes=False", update_source)
+        self.assertNotIn("apply_changes=True", update_source)
+        self.assertIn("apply_changes=False", backfill_source)
+        self.assertNotIn("apply_changes=True", backfill_source)
 
     def test_short_clean_first_zone_no_longer_gets_auto_favorite_bonus(self):
         priority_rows = [
@@ -5858,6 +5896,118 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(catch_summary["factor_winner_count"], 10)
         self.assertEqual(catch_summary["caught_winner_count"], 6)
         self.assertEqual(catch_summary["missed_winner_count"], 4)
+
+    def test_bot_tier_export_gates_s_a_and_keeps_factor_matches_in_quiet_watch(self):
+        history = pd.DataFrame(
+            [
+                {
+                    "run_id": "run-1",
+                    "run_timestamp": "2026-08-03T13:00:00-07:00",
+                    "run_date": "2026-08-03",
+                    "watchlist_label": "test",
+                    "symbol": "GOOD",
+                    "side": "LONG",
+                    "last_trade_date": "2026-08-03",
+                    "last_close": 100.0,
+                    "priority_bucket": "near_favorite_zone",
+                    "priority_score": 80.0,
+                    "expected_r": 0.10,
+                    "current_band_zone": "CLEAN",
+                },
+                {
+                    "run_id": "run-1",
+                    "run_timestamp": "2026-08-03T13:00:00-07:00",
+                    "run_date": "2026-08-03",
+                    "watchlist_label": "test",
+                    "symbol": "NEG",
+                    "side": "LONG",
+                    "last_trade_date": "2026-08-03",
+                    "last_close": 100.0,
+                    "priority_bucket": "near_favorite_zone",
+                    "priority_score": -20.0,
+                    "expected_r": 0.10,
+                    "current_band_zone": "CLEAN",
+                },
+                {
+                    "run_id": "run-1",
+                    "run_timestamp": "2026-08-03T13:00:00-07:00",
+                    "run_date": "2026-08-03",
+                    "watchlist_label": "test",
+                    "symbol": "BADEXP",
+                    "side": "LONG",
+                    "last_trade_date": "2026-08-03",
+                    "last_close": 100.0,
+                    "priority_bucket": "favorite_setup",
+                    "priority_score": 150.0,
+                    "expected_r": -0.20,
+                    "current_band_zone": "CLEAN",
+                },
+                {
+                    "run_id": "run-1",
+                    "run_timestamp": "2026-08-03T13:00:00-07:00",
+                    "run_date": "2026-08-03",
+                    "watchlist_label": "test",
+                    "symbol": "DISCOVER",
+                    "side": "LONG",
+                    "last_trade_date": "2026-08-03",
+                    "last_close": 100.0,
+                    "priority_bucket": "",
+                    "priority_score": 40.0,
+                    "expected_r": 0.05,
+                    "current_band_zone": "CLEAN",
+                },
+            ]
+        )
+        leaderboard = [
+            {
+                "horizon_sessions": 1,
+                "side": "LONG",
+                "factor_key": "current_band_zone",
+                "factor_label": "Current band zone",
+                "value_label": "CLEAN",
+                "success_score": 2.5,
+                "impact_score": 3.0,
+                "observation_count": 20,
+            }
+        ]
+
+        rows = build_bot_tier_pick_rows(history, leaderboard)
+        by_symbol = {row["symbol"]: row for row in rows}
+
+        self.assertEqual(by_symbol["GOOD"]["tier"], "A")
+        self.assertEqual(by_symbol["NEG"]["tier"], "WATCH")
+        self.assertEqual(by_symbol["BADEXP"]["tier"], "WATCH")
+        self.assertEqual(by_symbol["DISCOVER"]["tier"], "WATCH")
+        self.assertTrue(all(by_symbol[symbol]["scan_factor_match_count"] == 1 for symbol in by_symbol))
+
+    def test_bot_tier_outcomes_exclude_nonpositive_and_negative_expected_r(self):
+        rows = []
+        for run_id, run_date, closes in (
+            ("run-1", "2026-08-03", {"GOOD": 100.0, "NEG": 100.0, "BADEXP": 100.0}),
+            ("run-2", "2026-08-04", {"GOOD": 102.0, "NEG": 102.0, "BADEXP": 102.0}),
+        ):
+            for symbol, close in closes.items():
+                rows.append(
+                    {
+                        "run_id": run_id,
+                        "run_timestamp": f"{run_date}T13:00:00-07:00",
+                        "run_date": run_date,
+                        "watchlist_label": "test",
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "last_trade_date": run_date,
+                        "last_close": close,
+                        "priority_bucket": "near_favorite_zone",
+                        "priority_score": -10.0 if symbol == "NEG" else 80.0,
+                        "expected_r": -0.20 if symbol == "BADEXP" else 0.10,
+                    }
+                )
+        history = pd.DataFrame(rows)
+        observations = build_scan_factor_observation_rows(history, horizons=(1,))
+
+        outcomes = build_bot_tier_outcome_rows(history, observations, leaderboard_rows=[])
+
+        self.assertEqual({row["symbol"] for row in outcomes}, {"GOOD"})
 
     def test_export_bot_tier_tracker_views_writes_tier_csvs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

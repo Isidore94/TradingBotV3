@@ -7,9 +7,16 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch `main`, merge commit `29435d1` (2026-08-03). Combined gate:
-  **1806 passed, 5 subtests**; smoke **7/7**. Working tree was clean and
-  `origin/main` matched after push.
+- Branch `scoring-flagging-evidence-guardrails`, cut from `main` merge commit
+  `29435d1` (2026-08-03). Combined gate: **1812 passed, 5 subtests**; smoke
+  **7/7**.
+- Setup scoring/flagging item 7c is **IMPLEMENTED + GREEN**, not
+  **LIVE_VALIDATED**. Loud S/A flags now pass positive-score and Expected-R
+  eligibility gates; factor discoveries can remain quiet WATCH rows. Small
+  confirmation-gated boosts favor the measured promising families, while weak
+  unconfirmed EMA/post-earnings families stay capped watch-only. Automatic
+  tuner sites are recommendation-only. BounceBot scoring was not changed
+  because its learning ledger is below the evidence floor.
 - `launch_gui.py` is now the only operator launcher. Obsolete GUI/satellite
   `.cmd`/`.command` wrappers were removed. Main versus Satellite is selected
   under Settings ▸ Desk Link and applied through a clean automatic restart;

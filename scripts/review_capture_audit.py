@@ -9,8 +9,8 @@ inputs:
   are VISIBLE rather than silently swallowed (task 3);
 - the scoreboard, policy, outcome-join, writer, and snapshot state are all
   inspectable from System Health (task 4);
-- the champion setup-scoring configuration is snapshotted, with the existing
-  ``apply_changes=True`` tuner path characterized rather than changed (task 7);
+- the champion setup-scoring configuration is snapshotted, with automatic
+  tuner runs recommendation-only and the explicit trader action visible (task 7);
 - every pre-v2 artifact is labeled Exploratory / Non-Promotable, and the
   preference-ordering gate is actually holding (tasks 6 and 8).
 
@@ -646,14 +646,14 @@ def policy_gate_check(
 # ---------------------------------------------------------------------------
 # Task 7 - champion setup-scoring snapshot and tuner characterization
 # ---------------------------------------------------------------------------
-# Where the live `apply_changes=True` tuner actually runs today. Recorded, not
-# changed: Phase 1 routes future proposals to a shadow artifact only AFTER the
-# golden characterization exists.
+# Automatic tracker refresh/backfill sites now generate recommendations only.
+# The explicit GUI apply button remains the sole live mutation path and requires
+# a deliberate trader action.
 TUNER_RUN_SITES = (
-    "update_setup_tracker_from_scan(auto_tune=True) - the default, so every "
-    "scan that updates the setup tracker applies tuner output to the live "
-    "scoring config (scripts/master_avwap_lib/legacy.py).",
-    "backfill_setup_tracker_history() - once after the backfill loop "
+    "update_setup_tracker_from_scan(auto_tune=True) - generates recommendation "
+    "artifacts without applying them (scripts/master_avwap_lib/legacy.py).",
+    "backfill_setup_tracker_from_recent_sessions() - generates recommendations "
+    "once after the backfill loop without applying them "
     "(scripts/master_avwap_lib/legacy.py).",
     'Master AVWAP GUI "apply" tuner button '
     "(scripts/master_avwap_lib/gui.py), explicit trader action.",
@@ -699,8 +699,8 @@ def scoring_config_check(
         "modified_at": updated_at,
         "tuner_run_sites": list(TUNER_RUN_SITES),
         "tuner_status": (
-            "Characterized, unchanged. Phase 1 routes future tuner proposals to "
-            "a shadow artifact only after golden characterization exists."
+            "Automatic tuner runs are recommendation-only. Live config mutation "
+            "requires the explicit trader-operated GUI apply action."
         ),
     }
     return _check(

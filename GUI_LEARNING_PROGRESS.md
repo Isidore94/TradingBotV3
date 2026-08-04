@@ -13,11 +13,10 @@ outranks this file.
 
 - Phase: **0 — Capture readiness and baseline** (code work complete; the
   live-session tasks below are still open)
-- Branch: `milestone-1-observability`, cut from `main` at `ed89265`; Phase 0
-  audit base `41eabc4`
-- Date: 2026-07-30
-- Test baseline: **1249 passed, 5 subtests passed**
-  (`.venv\Scripts\python.exe -m pytest tests/ -q`, ~38s)
+- Branch: `scoring-flagging-evidence-guardrails`, cut from `main` at `29435d1`
+- Date: 2026-08-03
+- Test baseline: **1812 passed, 5 subtests passed**
+  (`.venv\Scripts\python.exe -m pytest tests/ -q`)
 - Smoke: **7/7** (`.venv\Scripts\python.exe scripts/smoke_check.py`)
 - Learning evidence status: **Exploratory / Non-Promotable**. The promotion
   clock has not started and cannot start before the Phase 3 identity/parity
@@ -58,11 +57,12 @@ is the current re-verified baseline, not that figure.
   `TRADINGBOT_REVIEW_QUEUE_ORDERING=preference`) with no code revert. An
   unrecognized value fails closed. Armed chart-watch hits still lead the
   queue: that is a trader instruction, not a preference signal.
-- **Task 7 — the scoring champion is snapshotted, not changed.** The audit
-  records the active config's SHA-256, its attribute rules split by source,
-  and the three sites where the existing `apply_changes=True` tuner runs
-  today. Nothing invokes, redirects, or promotes a tuner result; Phase 1 does
-  that only after golden characterization exists.
+- **Task 7 — the scoring champion and intentional differences are
+  characterized.** The audit records the active config's SHA-256 and mutation
+  sites. Section 12 item 7c adds a versioned golden fixture covering champion
+  and promoted tier/guardrail outputs. Automatic scan/backfill tuner sites are
+  now recommendation-only; live-config mutation still requires the explicit
+  GUI Apply Scoring action. The scoring packet is green but not live-validated.
 - **Task 8 — the promotability label ships with the evidence.** Every audit
   payload carries `Exploratory / Non-Promotable` plus the four reasons
   (episodes folded by `(trade_date, symbol)`, engagement counted as a take,

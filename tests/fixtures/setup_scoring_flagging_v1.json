@@ -1,0 +1,231 @@
+{
+  "schema": "setup_scoring_flagging_fixture_v1",
+  "feature_version": "setup_scoring_flagging_champion_v1",
+  "raw_input_keys": [
+    "tier_history",
+    "guardrail_rows"
+  ],
+  "raw_input_sha256": "356cdb62533a9d109b91e76d112db05ff592a558df041733025c3658c370ca8e",
+  "acquired_at": "2026-08-03T17:46:20-07:00",
+  "as_of": "2026-08-03T17:46:20-07:00",
+  "universe_version": "synthetic_setup_scoring_flagging_v1",
+  "provider_assumptions": "Synthetic point-in-time scan rows derived from the 2026-08-03 tracker review; no provider or broker calls.",
+  "intentional_difference": "The champion snapshot records bucket-only S/A export membership, the unconditional long EMA15 bonus, and no evidence-floor starter boosts. The promoted expectation deliberately requires positive score and acceptable Expected-R, makes unconfirmed EMA/post-earnings rows watch-only, and applies small confirmation-gated boosts to the three measured promising families.",
+  "expected_keys": [
+    "champion_expected",
+    "promoted_expected"
+  ],
+  "numeric_tolerance": 1e-09,
+  "tier_history": [
+    {
+      "run_id": "run-20260803",
+      "run_timestamp": "2026-08-03T13:00:00-07:00",
+      "run_date": "2026-08-03",
+      "watchlist_label": "fixture",
+      "symbol": "POSS",
+      "side": "LONG",
+      "last_trade_date": "2026-08-03",
+      "last_close": 101.0,
+      "priority_bucket": "favorite_setup",
+      "priority_score": 150.0,
+      "expected_r": 0.2,
+      "setup_family": "avwap_retest_followthrough"
+    },
+    {
+      "run_id": "run-20260803",
+      "run_timestamp": "2026-08-03T13:00:00-07:00",
+      "run_date": "2026-08-03",
+      "watchlist_label": "fixture",
+      "symbol": "POSA",
+      "side": "LONG",
+      "last_trade_date": "2026-08-03",
+      "last_close": 102.0,
+      "priority_bucket": "near_favorite_zone",
+      "priority_score": 90.0,
+      "expected_r": 0.1,
+      "setup_family": "previous_avwape_bounce"
+    },
+    {
+      "run_id": "run-20260803",
+      "run_timestamp": "2026-08-03T13:00:00-07:00",
+      "run_date": "2026-08-03",
+      "watchlist_label": "fixture",
+      "symbol": "NEGA",
+      "side": "SHORT",
+      "last_trade_date": "2026-08-03",
+      "last_close": 99.0,
+      "priority_bucket": "near_favorite_zone",
+      "priority_score": -20.0,
+      "expected_r": 0.2,
+      "setup_family": "post_earnings_avwap_bounce"
+    },
+    {
+      "run_id": "run-20260803",
+      "run_timestamp": "2026-08-03T13:00:00-07:00",
+      "run_date": "2026-08-03",
+      "watchlist_label": "fixture",
+      "symbol": "ZEROA",
+      "side": "LONG",
+      "last_trade_date": "2026-08-03",
+      "last_close": 100.0,
+      "priority_bucket": "near_favorite_zone",
+      "priority_score": 0.0,
+      "expected_r": 0.2,
+      "setup_family": "general"
+    },
+    {
+      "run_id": "run-20260803",
+      "run_timestamp": "2026-08-03T13:00:00-07:00",
+      "run_date": "2026-08-03",
+      "watchlist_label": "fixture",
+      "symbol": "BADEXP",
+      "side": "SHORT",
+      "last_trade_date": "2026-08-03",
+      "last_close": 98.0,
+      "priority_bucket": "near_favorite_zone",
+      "priority_score": 100.0,
+      "expected_r": -0.2,
+      "setup_family": "post_earnings_avwap_bounce"
+    },
+    {
+      "run_id": "run-20260803",
+      "run_timestamp": "2026-08-03T13:00:00-07:00",
+      "run_date": "2026-08-03",
+      "watchlist_label": "fixture",
+      "symbol": "NOEXPR",
+      "side": "LONG",
+      "last_trade_date": "2026-08-03",
+      "last_close": 103.0,
+      "priority_bucket": "near_favorite_zone",
+      "priority_score": 80.0,
+      "setup_family": "general"
+    },
+    {
+      "run_id": "run-20260803",
+      "run_timestamp": "2026-08-03T13:00:00-07:00",
+      "run_date": "2026-08-03",
+      "watchlist_label": "fixture",
+      "symbol": "OTHER",
+      "side": "LONG",
+      "last_trade_date": "2026-08-03",
+      "last_close": 104.0,
+      "priority_bucket": "",
+      "priority_score": 200.0,
+      "expected_r": 0.5,
+      "setup_family": "general"
+    }
+  ],
+  "guardrail_rows": [
+    {
+      "symbol": "EMA15U",
+      "side": "LONG",
+      "score": 100.0,
+      "setup_family": "mid_earnings_ema15_retest",
+      "favorite_signals": ["MID_EARNINGS_EMA15_RETEST"],
+      "has_favorite_signal": true,
+      "trend_20d": "SIDEWAYS"
+    },
+    {
+      "symbol": "EMA15C",
+      "side": "LONG",
+      "score": 100.0,
+      "setup_family": "mid_earnings_ema15_retest",
+      "favorite_signals": ["MID_EARNINGS_EMA15_RETEST"],
+      "has_favorite_signal": true,
+      "trend_20d": "UP",
+      "breakout_5d": true
+    },
+    {
+      "symbol": "EMA21U",
+      "side": "LONG",
+      "score": 100.0,
+      "setup_family": "mid_earnings_ema21_retest",
+      "favorite_signals": ["MID_EARNINGS_EMA21_RETEST"],
+      "has_favorite_signal": true,
+      "trend_20d": "UP"
+    },
+    {
+      "symbol": "EMA21C",
+      "side": "LONG",
+      "score": 100.0,
+      "setup_family": "mid_earnings_ema21_retest",
+      "favorite_signals": ["MID_EARNINGS_EMA21_RETEST"],
+      "has_favorite_signal": true,
+      "trend_20d": "UP",
+      "previous_day_range_break": true
+    },
+    {
+      "symbol": "RETEST",
+      "side": "LONG",
+      "score": 100.0,
+      "setup_family": "avwap_retest_followthrough",
+      "retest_followthrough": true,
+      "previous_day_range_break": true
+    },
+    {
+      "symbol": "PREV",
+      "side": "SHORT",
+      "score": 100.0,
+      "setup_family": "previous_avwape_bounce",
+      "previous_avwape_bounce": true,
+      "previous_day_range_break": true,
+      "trend_20d": "DOWN"
+    },
+    {
+      "symbol": "POSTU",
+      "side": "LONG",
+      "score": 120.0,
+      "setup_family": "post_earnings_avwap_bounce",
+      "favorite_signals": ["POST_EARNINGS_AVWAPE_BOUNCE"],
+      "has_favorite_signal": true,
+      "trend_20d": "UP"
+    },
+    {
+      "symbol": "POSTC",
+      "side": "SHORT",
+      "score": 120.0,
+      "setup_family": "post_earnings_avwap_bounce",
+      "favorite_signals": ["POST_EARNINGS_AVWAPE_BOUNCE"],
+      "has_favorite_signal": true,
+      "trend_20d": "DOWN",
+      "post_earnings_break_close": true
+    }
+  ],
+  "champion_expected": {
+    "tiers": [
+      ["POSS", "S", 150.0],
+      ["BADEXP", "A", 100.0],
+      ["POSA", "A", 90.0],
+      ["NOEXPR", "A", 80.0],
+      ["ZEROA", "A", 0.0],
+      ["NEGA", "A", -20.0]
+    ],
+    "guardrails": [
+      ["EMA15U", 108.0, false],
+      ["EMA15C", 108.0, false],
+      ["EMA21U", 100.0, false],
+      ["EMA21C", 100.0, false],
+      ["RETEST", 100.0, false],
+      ["PREV", 100.0, false],
+      ["POSTU", 120.0, false],
+      ["POSTC", 120.0, false]
+    ]
+  },
+  "promoted_expected": {
+    "tiers": [
+      ["POSS", "S", 150.0],
+      ["POSA", "A", 90.0],
+      ["NOEXPR", "A", 80.0]
+    ],
+    "guardrails": [
+      ["EMA15U", 95.0, true],
+      ["EMA15C", 104.0, false],
+      ["EMA21U", 95.0, true],
+      ["EMA21C", 104.0, false],
+      ["RETEST", 106.0, false],
+      ["PREV", 104.0, false],
+      ["POSTU", 85.0, true],
+      ["POSTC", 120.0, false]
+    ]
+  }
+}

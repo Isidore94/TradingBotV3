@@ -1434,7 +1434,10 @@ class MasterAvwapGUI:
         lines.append("-" * 80)
         lines.append(f"Updated: {payload.get('updated_at') or 'n/a'}")
         lines.append(f"Tracked setups: {len(tracker_setups)}")
-        lines.append("Auto scoring tuner: enabled after tracker updates/backfills")
+        lines.append(
+            "Auto scoring tuner: recommendation-only after tracker updates/backfills; "
+            "live apply requires the explicit Apply Scoring action"
+        )
         if daily_watchlists:
             latest_date = max(daily_watchlists.keys())
             latest_watchlist = daily_watchlists.get(latest_date, {})

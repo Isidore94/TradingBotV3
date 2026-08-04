@@ -181,6 +181,14 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   spell out entry/invalidation/management, and expose sample-size cautions.
 - Setup Tracker leads with a plain-English, evidence-floor-aware "What's
   Working" summary and leaves qualified lanes empty instead of backfilling them.
+- Setup scoring/flagging guardrails now require positive score and sufficiently
+  non-negative Expected-R for loud S/A tier flags, while scan-factor discoveries
+  that fail those gates remain in a quiet WATCH lane. A versioned golden fixture
+  records the champion and intentional promoted differences. Evidence-backed
+  boosts are deliberately small and confirmation-gated; weak unconfirmed
+  mid/post-earnings families are capped watch-only. Automatic tuner call sites
+  are recommendation-only; the explicit GUI Apply Scoring action remains the
+  sole live-config mutation path.
 - Journal schema v2 adds an append-only opportunity lifecycle ledger. Broker
   imports create idempotent Taken/Closed events, and the GUI records structured
   trade reviews alongside freeform notes for later daily/A.I. review.
@@ -1596,6 +1604,23 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    `29435d1`, smoke 7/7), not
    **LIVE_VALIDATED**. Phase E satellite-side edit intents remain gated until
    the two-machine alert-delivery check passes.
+7c. **Setup scoring and flagging evidence guardrails** (trader-directed
+   insertion, 2026-08-03): preserve the current scoring champion in
+   `setup_scoring_flagging_v1.json`, then apply only the fixture-declared
+   intentional differences. Loud S/A tier exports require a positive priority
+   score and Expected-R >= -0.05 when Expected-R is available; otherwise a
+   factor match may remain a quiet WATCH discovery. Outcome/catch-rate exports
+   use the same eligibility rule. Confirmed long EMA15/EMA21 retests receive
+   +4, confirmed long AVWAP retest followthrough receives +6, and structurally
+   confirmed short previous-AVWAPE bounce receives +4. Unconfirmed long
+   EMA15/EMA21 and post-earnings AVWAPE bounces are capped watch-only at 95 and
+   85 respectively. Correlated EMA signals resolve to one explicit family, so
+   boosts cannot stack. Automatic scan/backfill tuner sites now write
+   recommendations only (`apply_changes=False`); manual Apply Scoring remains
+   explicit. BounceBot behavior is unchanged because its candidate ledger is
+   below the learning floor. Deterministic status is **GREEN** (1812 tests + 5
+   subtests, smoke 7/7), not **LIVE_VALIDATED**; merge/promotion still follows
+   the Section 6 live-session check and rollback rules.
 
 ### Next — after initial live evidence
 

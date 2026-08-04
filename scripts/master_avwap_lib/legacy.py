@@ -743,7 +743,12 @@ TRACKER_AVWAPE_TO_FIRST_DEV_LEGACY_FAMILIES = {
     "general",
 }
 PRIORITY_CLEAN_FIRST_ZONE_SCORE_BONUS = 10
-PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS = 8
+PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS = 4
+PRIORITY_LONG_MID_EARNINGS_EMA21_SCORE_BONUS = 4
+PRIORITY_LONG_MID_EARNINGS_EMA_WATCH_ONLY_CAP = 95
+PRIORITY_PROMISING_LONG_AVWAP_RETEST_SCORE_BONUS = 6
+PRIORITY_PROMISING_SHORT_PREVIOUS_AVWAPE_SCORE_BONUS = 4
+PRIORITY_POST_EARNINGS_BOUNCE_UNCONFIRMED_CAP = 85
 PRIORITY_SHORT_MID_EARNINGS_FIRST_DEV_SCORE_BONUS = 8
 PRIORITY_SHORT_MID_EARNINGS_EMA_WATCH_ONLY_CAP = 95
 PRIORITY_SHORT_NEAR_FAVORITE_UNCONFIRMED_CAP = 85
@@ -8527,6 +8532,7 @@ TIER_LIST_COLUMNS = [
     "side",
     "priority_bucket",
     "priority_score",
+    "expected_r",
     "setup_family",
     "favorite_zone",
     "current_band_zone",
@@ -8550,6 +8556,7 @@ TIER_OUTCOME_COLUMNS = [
     "side",
     "priority_bucket",
     "priority_score",
+    "expected_r",
     "setup_family",
     "favorite_zone",
     "entry_close",
@@ -9268,8 +9275,23 @@ def _tier_for_priority_bucket(priority_bucket: str | None) -> str:
     return ""
 
 
+def _tier_source_row_is_eligible(source_row: dict | None) -> bool:
+    """Apply the same no-quota S/A floor used by the live priority report.
+
+    Historical rows written before Expected-R was exported fail open on that
+    field, but a missing or non-positive score never earns an S/A label.
+    """
+    if not isinstance(source_row, dict):
+        return False
+    score = _scan_factor_number(source_row.get("priority_score"))
+    if score is None or score <= 0:
+        return False
+    expected_r = _scan_factor_number(source_row.get("expected_r"))
+    return expected_r is None or expected_r >= TIER_S_DEMOTE_EXPECTED_R_BELOW
+
+
 def _tier_rank_value(tier: str | None) -> int:
-    return {"S": 0, "A": 1, "S/A": 2}.get(str(tier or "").strip().upper(), 9)
+    return {"S": 0, "A": 1, "S/A": 2, "WATCH": 3}.get(str(tier or "").strip().upper(), 9)
 
 
 def _positive_scan_factor_groups(
@@ -9377,13 +9399,19 @@ def build_bot_tier_pick_rows(
     generated_at = datetime.now().isoformat(timespec="seconds")
     rows = []
     for source_row in latest_frame.to_dict("records"):
-        tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
-        if not tier:
-            continue
         matches = _positive_scan_factor_matches_for_source_row(
             source_row,
             positive_factor_groups=positive_factor_groups,
         )
+        bucket_tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        if bucket_tier and _tier_source_row_is_eligible(source_row):
+            tier = bucket_tier
+        elif matches:
+            # Quiet discovery lane: retain a factor-backed candidate without
+            # mislabeling it S/A or admitting it to loud-alert baselines.
+            tier = "WATCH"
+        else:
+            continue
         rows.append(
             {
                 "generated_at": generated_at,
@@ -9395,6 +9423,7 @@ def build_bot_tier_pick_rows(
                 "side": normalize_side(source_row.get("_side") or source_row.get("side")),
                 "priority_bucket": _scan_factor_text(source_row.get("priority_bucket")),
                 "priority_score": _scan_factor_number(source_row.get("priority_score")),
+                "expected_r": _scan_factor_number(source_row.get("expected_r")),
                 "setup_family": _scan_factor_text(source_row.get("setup_family")),
                 "favorite_zone": _scan_factor_text(source_row.get("favorite_zone")),
                 "current_band_zone": _scan_factor_text(source_row.get("current_band_zone")),
@@ -9440,7 +9469,7 @@ def build_bot_tier_outcome_rows(
         if not source_row:
             continue
         tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
-        if not tier:
+        if not tier or not _tier_source_row_is_eligible(source_row):
             continue
         horizon = int(obs.get("horizon_sessions", 0) or 0)
         side = normalize_side(obs.get("side"))
@@ -9466,6 +9495,7 @@ def build_bot_tier_outcome_rows(
                 "side": side,
                 "priority_bucket": _scan_factor_text(source_row.get("priority_bucket")),
                 "priority_score": _scan_factor_number(source_row.get("priority_score")),
+                "expected_r": _scan_factor_number(source_row.get("expected_r")),
                 "setup_family": _scan_factor_text(source_row.get("setup_family")),
                 "favorite_zone": _scan_factor_text(source_row.get("favorite_zone")),
                 "entry_close": obs.get("entry_close"),
@@ -9671,11 +9701,11 @@ def _build_tier_catch_summary_row(
     top_factor_count: int,
 ) -> dict:
     winners = [row for row in opportunity_rows if (_scan_factor_number(row.get("side_return_pct")) or 0.0) > 0]
-    caught = [row for row in opportunity_rows if _tier_for_priority_bucket(row.get("priority_bucket"))]
-    caught_winners = [row for row in winners if _tier_for_priority_bucket(row.get("priority_bucket"))]
-    caught_s = [row for row in caught if _tier_for_priority_bucket(row.get("priority_bucket")) == "S"]
-    caught_a = [row for row in caught if _tier_for_priority_bucket(row.get("priority_bucket")) == "A"]
-    missed_winners = [row for row in winners if not _tier_for_priority_bucket(row.get("priority_bucket"))]
+    caught = [row for row in opportunity_rows if str(row.get("tier") or "") in {"S", "A"}]
+    caught_winners = [row for row in winners if str(row.get("tier") or "") in {"S", "A"}]
+    caught_s = [row for row in caught if str(row.get("tier") or "") == "S"]
+    caught_a = [row for row in caught if str(row.get("tier") or "") == "A"]
+    missed_winners = [row for row in winners if str(row.get("tier") or "") not in {"S", "A"}]
 
     def _sample(rows: list[dict]) -> str:
         ranked = sorted(
@@ -9693,7 +9723,7 @@ def _build_tier_catch_summary_row(
             text = f"{item.get('symbol')} {item.get('scan_date')}->{item.get('future_scan_date')}"
             if side_return is not None:
                 text += f" ({side_return:+.2f}%)"
-            tier = _tier_for_priority_bucket(item.get("priority_bucket"))
+            tier = str(item.get("tier") or "")
             if tier:
                 text += f" tier={tier}"
             samples.append(text)
@@ -9777,7 +9807,13 @@ def build_bot_tier_catch_rate_rows(
             continue
         item = dict(obs)
         item["priority_bucket"] = _scan_factor_text(source_row.get("priority_bucket"))
-        item["tier"] = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        item["priority_score"] = _scan_factor_number(source_row.get("priority_score"))
+        item["expected_r"] = _scan_factor_number(source_row.get("expected_r"))
+        item["tier"] = (
+            _tier_for_priority_bucket(source_row.get("priority_bucket"))
+            if _tier_source_row_is_eligible(source_row)
+            else ""
+        )
         item["positive_scan_factor_match_count"] = len(matches)
         item["positive_scan_factor_matches"] = _format_positive_scan_factor_matches(matches)
         opportunities.append(item)
@@ -10503,7 +10539,7 @@ def update_setup_tracker_from_scan(
     save_setup_tracker_payload(tracker)
     if auto_tune:
         tuner_output = run_priority_scoring_tuner(
-            apply_changes=True,
+            apply_changes=False,
             min_setups=8,
             suppress_failures=True,
         )
@@ -19002,6 +19038,65 @@ def _is_long_mid_earnings_ema15_retest(row: dict | None) -> bool:
     )
 
 
+def _is_long_mid_earnings_ema21_retest(row: dict | None) -> bool:
+    if not isinstance(row, dict) or normalize_side(row.get("side") or "") != "LONG":
+        return False
+    family = _priority_row_setup_family(row)
+    signals = {str(value or "").strip().upper() for value in row.get("favorite_signals") or []}
+    return bool(
+        family == MID_EARNINGS_EMA21_RETEST_FAMILY
+        or MID_EARNINGS_EMA21_RETEST_SIGNAL in signals
+        or bool(row.get("mid_earnings_ema21_trigger"))
+    )
+
+
+def _long_setup_confirmation_reasons(row: dict, symbol_entry: dict | None = None) -> list[str]:
+    """Completed/established evidence beyond the long trend itself."""
+    symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+    reasons = []
+    if bool(row.get("breakout_5d") or symbol_entry.get("breakout_5d")):
+        reasons.append("5d breakout")
+    if bool(row.get("previous_day_range_break") or symbol_entry.get("previous_day_range_break")):
+        reasons.append("previous-day range break")
+    if bool(row.get("trendline_break_recent") or symbol_entry.get("priority_trendline_break_recent")):
+        reasons.append("recent trendline break")
+    if bool(
+        row.get("post_earnings_break_close")
+        or row.get("post_earnings_candle_break_close")
+        or symbol_entry.get("post_earnings_break_close")
+        or symbol_entry.get("post_earnings_candle_break_close")
+    ):
+        reasons.append("post-earnings close break")
+    if bool(row.get("bouncebot_bullish_weak_long_seen_today") or symbol_entry.get("bouncebot_bullish_weak_long_seen_today")):
+        reasons.append("BounceBot bullish weak-long hit")
+    if bool(row.get("bouncebot_relevant_focus_hit_today") or symbol_entry.get("bouncebot_relevant_focus_hit_today")):
+        reasons.append("BounceBot relevant focus hit")
+    return reasons
+
+
+def _post_earnings_bounce_confirmation_reasons(
+    row: dict,
+    symbol_entry: dict | None = None,
+) -> list[str]:
+    """Confirmation allowed to lift an AVWAPE bounce out of watch-only."""
+    symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
+    reasons = []
+    if bool(row.get("post_earnings_break_close") or symbol_entry.get("post_earnings_break_close")):
+        reasons.append("post-earnings close break")
+    if bool(
+        row.get("post_earnings_candle_break_close")
+        or symbol_entry.get("post_earnings_candle_break_close")
+    ):
+        reasons.append("earnings-candle close break")
+    if bool(row.get("previous_day_range_break") or symbol_entry.get("previous_day_range_break")):
+        reasons.append("previous-day range break")
+    if bool(row.get("trendline_break_recent") or symbol_entry.get("priority_trendline_break_recent")):
+        reasons.append("recent trendline break")
+    if bool(row.get("bouncebot_relevant_focus_hit_today") or symbol_entry.get("bouncebot_relevant_focus_hit_today")):
+        reasons.append("BounceBot relevant focus hit")
+    return reasons
+
+
 def _short_setup_confirmation_reasons(row: dict, symbol_entry: dict | None = None) -> list[str]:
     symbol_entry = symbol_entry if isinstance(symbol_entry, dict) else {}
     reasons = []
@@ -19068,11 +19163,92 @@ def apply_tracker_scoring_guardrails(
         watch_only = False
         confirmation_reasons: list[str] = []
 
-        if _is_long_mid_earnings_ema15_retest(row):
-            score += PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS
-            notes.append(
-                f"long mid-earnings EMA15 retest tracker bonus +{PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS}"
-            )
+        is_long_ema15 = _is_long_mid_earnings_ema15_retest(row)
+        is_long_ema21 = _is_long_mid_earnings_ema21_retest(row)
+        if is_long_ema15 and is_long_ema21:
+            # A scan row can carry correlated EMA signals. Treat the explicit
+            # setup family as authoritative so one idea cannot receive both
+            # evidence boosts (or duplicate watch-only notes).
+            if _priority_row_setup_family(row) == MID_EARNINGS_EMA21_RETEST_FAMILY:
+                is_long_ema15 = False
+            else:
+                is_long_ema21 = False
+
+        if is_long_ema15:
+            confirmation_reasons = _long_setup_confirmation_reasons(row, symbol_entry)
+            if confirmation_reasons:
+                score += PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS
+                notes.append(
+                    f"confirmed long mid-earnings EMA15 retest +{PRIORITY_LONG_MID_EARNINGS_EMA15_SCORE_BONUS} "
+                    f"({', '.join(confirmation_reasons)})"
+                )
+            else:
+                score = min(score, float(PRIORITY_LONG_MID_EARNINGS_EMA_WATCH_ONLY_CAP))
+                watch_only = True
+                notes.append(
+                    f"long mid-earnings EMA15 retest capped at "
+                    f"{PRIORITY_LONG_MID_EARNINGS_EMA_WATCH_ONLY_CAP} until breakout/range/BounceBot confirms"
+                )
+
+        if is_long_ema21:
+            confirmation_reasons = _long_setup_confirmation_reasons(row, symbol_entry)
+            if confirmation_reasons:
+                score += PRIORITY_LONG_MID_EARNINGS_EMA21_SCORE_BONUS
+                notes.append(
+                    f"confirmed long mid-earnings EMA21 evidence boost +{PRIORITY_LONG_MID_EARNINGS_EMA21_SCORE_BONUS} "
+                    f"({', '.join(confirmation_reasons)})"
+                )
+            else:
+                score = min(score, float(PRIORITY_LONG_MID_EARNINGS_EMA_WATCH_ONLY_CAP))
+                watch_only = True
+                notes.append(
+                    f"long mid-earnings EMA21 retest capped at "
+                    f"{PRIORITY_LONG_MID_EARNINGS_EMA_WATCH_ONLY_CAP} until breakout/range/BounceBot confirms"
+                )
+
+        if (
+            normalize_side(row.get("side") or "") == "LONG"
+            and _priority_row_setup_family(row) == "avwap_retest_followthrough"
+            and bool(row.get("retest_followthrough"))
+        ):
+            long_retest_reasons = _long_setup_confirmation_reasons(row, symbol_entry)
+            if long_retest_reasons:
+                score += PRIORITY_PROMISING_LONG_AVWAP_RETEST_SCORE_BONUS
+                notes.append(
+                    f"long AVWAP retest evidence boost +{PRIORITY_PROMISING_LONG_AVWAP_RETEST_SCORE_BONUS} "
+                    f"({', '.join(long_retest_reasons)})"
+                )
+
+        if (
+            normalize_side(row.get("side") or "") == "SHORT"
+            and _priority_row_setup_family(row) == "previous_avwape_bounce"
+            and bool(row.get("previous_avwape_bounce"))
+        ):
+            short_previous_reasons = [
+                reason
+                for reason in _short_setup_confirmation_reasons(row, symbol_entry)
+                if reason != "20d trend DOWN"
+            ]
+            if short_previous_reasons:
+                score += PRIORITY_PROMISING_SHORT_PREVIOUS_AVWAPE_SCORE_BONUS
+                notes.append(
+                    f"short previous-AVWAPE evidence boost +{PRIORITY_PROMISING_SHORT_PREVIOUS_AVWAPE_SCORE_BONUS} "
+                    f"({', '.join(short_previous_reasons)})"
+                )
+
+        if _priority_row_setup_family(row) == "post_earnings_avwap_bounce":
+            post_earnings_reasons = _post_earnings_bounce_confirmation_reasons(row, symbol_entry)
+            if post_earnings_reasons:
+                notes.append(
+                    "post-earnings AVWAPE bounce confirmed by " + ", ".join(post_earnings_reasons)
+                )
+            else:
+                score = min(score, float(PRIORITY_POST_EARNINGS_BOUNCE_UNCONFIRMED_CAP))
+                watch_only = True
+                notes.append(
+                    f"post-earnings AVWAPE bounce capped at "
+                    f"{PRIORITY_POST_EARNINGS_BOUNCE_UNCONFIRMED_CAP} until a completed confirmation appears"
+                )
 
         if _is_short_mid_earnings_first_dev_retest(row):
             confirmation_reasons = _short_setup_confirmation_reasons(row, symbol_entry)
@@ -23012,7 +23188,7 @@ def backfill_setup_tracker_from_recent_sessions(
             )
 
         tuner_output = run_priority_scoring_tuner(
-            apply_changes=True,
+            apply_changes=False,
             min_setups=8,
             suppress_failures=True,
         )
