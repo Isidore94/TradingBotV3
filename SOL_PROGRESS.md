@@ -9,18 +9,18 @@ stamp; it must not duplicate the roadmap.
 
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
-  Phase 6: **+202 warehouse tests** on the 1814-test baseline (adds
+  Phase 7: **+218 warehouse tests** on the 1814-test baseline (adds
   `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
   `test_warehouse_quarantine.py`, `test_warehouse_retire.py`,
   `test_warehouse_import.py`, `test_warehouse_tee.py`,
   `test_warehouse_spool.py`, `test_warehouse_pacer.py`,
   `test_warehouse_backfill.py`, `test_warehouse_aggregate.py`,
   `test_warehouse_avwap_parity.py`, `test_warehouse_features.py`,
-  `test_warehouse_occurrence.py`, `test_warehouse_outcomes.py`); smoke
-  **7/7**. Measured on the Linux build agent: **2014 passed, 2 skipped, 5
-  subtests** (that agent's own baseline was 1812 + the same 2 skips), so the
-  desktop gate should read **2016 passed, 5 subtests** — confirm on the next
-  Windows run.
+  `test_warehouse_occurrence.py`, `test_warehouse_outcomes.py`,
+  `test_warehouse_queries.py`, `test_qt_warehouse_readout.py`); smoke **7/7**.
+  Measured on the Linux build agent: **2030 passed, 2 skipped, 5 subtests**
+  (that agent's own baseline was 1812 + the same 2 skips), so the desktop gate
+  should read **2032 passed, 5 subtests** — confirm on the next Windows run.
 - Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
   protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
   the frozen 13-table pyarrow schemas + deterministic occurrence/anchor keys
@@ -102,6 +102,16 @@ stamp; it must not duplicate the roadmap.
   (`swing_house_v1` with its band-2 partial / band-1 trail / band-3 runner
   simulated, two controls, the intraday bounce recipe, the ATR diagnostic).
   `intraday_bounce_v1` only ever runs from a linked bounce event.
+- Warehouse **Phase 7 landed** (read path + readout): `queries.py` resolves
+  every read from `manifest_log.jsonl` at query start — a query across a
+  compaction returns the pre- or post-compaction row set and never the union,
+  proven with a concurrent-compaction test — and publishes the slice readout
+  (counts, mean R, checkpoints for the two slice setups) reporting rows,
+  occurrences and **episodes** separately, matured apart from open, with the
+  capture-mode split shown. DuckDB is pinned (`duckdb==1.5.5`, cp314 win_amd64
+  wheel verified on PyPI) but strictly optional and read-only; pyarrow answers
+  every slice query. The Research tab gains a read-only "Research Warehouse"
+  panel that reads nothing until Refresh is pressed.
 - **Open gap (BD-44):** no detector adapter yet — Phase 6 proves the logic
   against constructed detections; nothing reads the tracker output into
   detection dicts.
@@ -113,8 +123,8 @@ stamp; it must not duplicate the roadmap.
   registration + Health tiles) is still to be built, and the 20-session pilot
   depends on it.
 - Builder decision log: `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`
-  (BD-01..BD-44) records every implementation choice the locked plan left
-  open, and ends with an **Open items for Sol / Fable** table (9 items:
+  (BD-01..BD-48) records every implementation choice the locked plan left
+  open, and ends with an **Open items for Sol / Fable** table (10 items:
   the unbuilt GUI service, the unverified ibapi client, the empty exploration
   cohort, two builder-stated favorite-zone definitions, null production
   context until Phase 6, DYNAMIC/EOD VWAP, unscheduled closures).
@@ -133,9 +143,8 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 7 (read path:
-  `pyarrow.dataset` canned queries, optional DuckDB, minimal Research-tab
-  readout) per the plan's Section 19.2.
+  `research_spool` path). Next builder starts at Phase 8 (backup/restore +
+  the six Health tiles + the 20-session pilot) per the plan's Section 19.2.
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 

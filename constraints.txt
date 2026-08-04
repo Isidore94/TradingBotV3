@@ -7,6 +7,7 @@ charset-normalizer==3.4.4
 colorama==0.4.6
 curl_cffi==0.13.0
 distro==1.9.0
+duckdb==1.5.5
 feedparser==6.0.12
 frozendict==2.4.7
 h11==0.16.0

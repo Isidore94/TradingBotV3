@@ -17,7 +17,7 @@ implementation gap, where two readings of the plan were both defensible, or
 where a choice binds future phases. Format: decision → why → what was rejected
 → reopen trigger → where it lives.
 
-Status of the build: Phases 0-6 landed; Phase 7 next. Test baseline and
+Status of the build: Phases 0-7 landed; Phase 8 next. Test baseline and
 branch live in [`SOL_PROGRESS.md`](../SOL_PROGRESS.md).
 
 ---
@@ -860,6 +860,70 @@ time-window join is replaced by the real key.
 `outcomes.py::build_outcomes`;
 `tests/test_warehouse_outcomes.py::test_no_linked_bounce_event_means_no_intraday_row`.
 
+## BD-45 — DuckDB is pinned but strictly optional
+
+**Decision.** `duckdb==1.5.5` is added to `requirements-dev.txt` and
+`constraints.txt`; the read path answers every slice query through
+`pyarrow.dataset`, and `query_sql` is a convenience that callers reach only
+after `duckdb_available()` returns True.
+
+**Why.** LD-04 defers DuckDB to Phase 7 behind "cp314 win_amd64 wheel verified
+first". That wheel exists (`duckdb-1.5.5-cp314-cp314-win_amd64.whl` on PyPI, checked
+2026-08-04), so the precondition is met — but the plan also says the fallback is
+to stay on pyarrow, so nothing may depend on duckdb being installed. Its
+connection is `:memory:` and disposable: no `.duckdb` file is ever created,
+shared, or treated as authoritative.
+
+**Not verified here.** The pin is declared; installing it on the Windows desk
+(Python 3.14) has not happened. If that install fails, remove the pin and stay
+on pyarrow — nothing else changes.
+
+**Where.** `queries.py::query_sql` / `duckdb_available`; `requirements-dev.txt`,
+`constraints.txt`; `tests/test_warehouse_queries.py` (the duckdb test skips
+cleanly when it is absent).
+
+## BD-46 — The readout reports rows, occurrences, and episodes separately
+
+**Decision.** Every readout row carries `n_rows`, `n_occurrences`, and
+`n_episodes`, plus `n_matured` / `n_open` / `n_no_trigger`, and means are
+computed **only** over matured, triggered outcomes. The capture-mode split is
+shown beside each row with an `as_observed_only` flag.
+
+**Why.** Three recipes on one move produce three rows and one episode; only the
+episode count is a sample size. An unresolved trade must not flatter a mean, and
+the slice's D1 history is BACKFILL by nature — so rather than filter silently,
+the readout shows the split and lets the reader see that these are not
+as-observed claims.
+
+**Where.** `queries.py::slice_readout`; `tests/test_warehouse_queries.py`.
+
+## BD-47 — The Research tab reads only on demand
+
+**Decision.** `WarehouseReadoutPanel` performs no lake read when constructed;
+Refresh is the only path that opens the store. A disabled or broken warehouse
+becomes a status message, never an exception.
+
+**Why.** Section 20: "No GUI render path performs provider or large warehouse
+reads." A panel that queried on construction would put a multi-GB lake read on
+the Trading Desk's startup path.
+
+**Where.** `scripts/ui/panels/warehouse_readout_panel.py`;
+`tests/test_qt_warehouse_readout.py`.
+
+## BD-48 — Qt tests live in `test_qt_*.py` with a module-level application
+
+**Decision.** The readout panel's tests moved out of
+`test_warehouse_queries.py` into `tests/test_qt_warehouse_readout.py`, using the
+repo's existing shape: `QApplication` created once at import.
+
+**Why.** With the panel test creating its application mid-test inside a non-Qt
+module, the full suite passed (2027 tests, 67s) but the pytest process then
+never exited — non-daemon `multitasking` pool threads from yfinance were left
+alive. Following the repo's Qt-test shape fixes it; the suite now exits cleanly.
+Worth recording because the symptom looks like a hung test and is not one.
+
+**Where.** `tests/test_qt_warehouse_readout.py`.
+
 ---
 
 ## Open items for Sol / Fable
@@ -877,6 +941,7 @@ Each is already stated in its own BD entry; this is the short list.
 | 6 | **DYNAMIC and EOD session VWAP are not yet captured** — only STANDARD. | BD-34 | Wrap the other two champion paths when their consumers need them |
 | 7 | **Unscheduled exchange closures** cannot come from calendar rules; they appear as sessions with no bars. | BD-26 | Add a dated override list if one ever occurs |
 | 8 | **No detector adapter yet** — `record_occurrences` takes a documented detection dict, but nothing reads the tracker/scan output and produces those dicts. Phase 6 proves the identity and outcome logic; the adapter is the remaining wiring. | BD-44 | Build the tracker→detection adapter (with Phase 2's bronze tracker wrap as the source) |
+| 10 | **DuckDB pin is unverified on Windows/3.14** — the wheel exists, the install has not been run on the desk. | BD-45 | Install once on the desktop, or drop the pin and stay on pyarrow |
 | 9 | **Bounce link is a time window** (symbol + session + ±60 min), not an explicit key. | BD-43 | Confirm the window, or add an occurrence link to the bounce ledger |
 
 ---

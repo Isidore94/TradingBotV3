@@ -1689,7 +1689,13 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    MATURED derived) across the five declared recipes, with
    `intraday_bounce_v1` gated on a linked bounce event. The tracker→detection
    adapter is still open (BD-44). Tests: `test_warehouse_occurrence.py`,
-   `test_warehouse_outcomes.py`.
+   `test_warehouse_outcomes.py`. Phase 7 landed 2026-08-04 (read path):
+   `queries.py` resolves every read from `manifest_log.jsonl` at query start
+   (concurrent-compaction consistency tested) and renders the raw slice
+   readout with episodes reported apart from rows; DuckDB is pinned but
+   optional and read-only; the Research tab gains a read-only warehouse panel
+   that reads only on Refresh. Tests: `test_warehouse_queries.py`,
+   `test_qt_warehouse_readout.py`.
 
 ### Then — after correctness and authoritative data paths
 
