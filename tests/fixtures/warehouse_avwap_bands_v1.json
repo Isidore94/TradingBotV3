@@ -1,0 +1,254 @@
+{
+  "schema": "warehouse_avwap_bands_fixture_v1",
+  "feature_version": "running_deviation_v1",
+  "raw_input_keys": [
+    "cases_input"
+  ],
+  "raw_input_sha256": "e6a7326b67e204bc48f96a366e9c16c8fd3ec2e74a107596f1466d68f683af95",
+  "acquired_at": "2026-08-04T00:00:00+00:00",
+  "as_of": "2026-08-04T00:00:00+00:00",
+  "universe_version": "synthetic_avwap_parity_v1",
+  "provider_assumptions": "Synthetic completed daily OHLCV bars; no provider, calendar, or network call. Values were produced by scripts/master_avwap_lib/legacy.py::calc_anchored_vwap_bands (the frozen running-deviation sigma of decision 0008) and characterize it: a mismatch means the champion formula changed and must be reviewed, not that this file should be regenerated.",
+  "expected_keys": [
+    "expected"
+  ],
+  "numeric_tolerance": 1e-09,
+  "intentional_difference": "",
+  "configuration": {
+    "price_basis": "ohlc4 typical price",
+    "sigma": "deviation from the RUNNING avwap, volume weighted",
+    "zero_volume_bars": "skipped by the champion"
+  },
+  "cases_input": [
+    {
+      "name": "trending_up",
+      "anchor_index": 0,
+      "bars": [
+        [
+          100.0,
+          102.0,
+          99.5,
+          101.5,
+          1000000
+        ],
+        [
+          101.5,
+          104.0,
+          101.0,
+          103.5,
+          1200000
+        ],
+        [
+          103.5,
+          106.0,
+          103.0,
+          105.5,
+          900000
+        ],
+        [
+          105.5,
+          108.0,
+          104.5,
+          107.0,
+          1500000
+        ],
+        [
+          107.0,
+          109.5,
+          106.0,
+          108.5,
+          1100000
+        ]
+      ]
+    },
+    {
+      "name": "trending_up_late_anchor",
+      "anchor_index": 2,
+      "bars": [
+        [
+          100.0,
+          102.0,
+          99.5,
+          101.5,
+          1000000
+        ],
+        [
+          101.5,
+          104.0,
+          101.0,
+          103.5,
+          1200000
+        ],
+        [
+          103.5,
+          106.0,
+          103.0,
+          105.5,
+          900000
+        ],
+        [
+          105.5,
+          108.0,
+          104.5,
+          107.0,
+          1500000
+        ],
+        [
+          107.0,
+          109.5,
+          106.0,
+          108.5,
+          1100000
+        ]
+      ]
+    },
+    {
+      "name": "choppy",
+      "anchor_index": 0,
+      "bars": [
+        [
+          50.0,
+          51.0,
+          49.0,
+          50.5,
+          400000
+        ],
+        [
+          50.5,
+          50.8,
+          48.5,
+          49.0,
+          650000
+        ],
+        [
+          49.0,
+          52.0,
+          48.9,
+          51.8,
+          720000
+        ],
+        [
+          51.8,
+          52.2,
+          50.1,
+          50.4,
+          310000
+        ]
+      ]
+    },
+    {
+      "name": "zero_volume_bars_skipped",
+      "anchor_index": 0,
+      "bars": [
+        [
+          10.0,
+          10.5,
+          9.5,
+          10.2,
+          0
+        ],
+        [
+          10.2,
+          11.0,
+          10.0,
+          10.8,
+          250000
+        ],
+        [
+          10.8,
+          11.4,
+          10.6,
+          11.2,
+          0
+        ],
+        [
+          11.2,
+          11.9,
+          11.0,
+          11.6,
+          480000
+        ]
+      ]
+    },
+    {
+      "name": "single_bar",
+      "anchor_index": 0,
+      "bars": [
+        [
+          7.0,
+          7.5,
+          6.8,
+          7.3,
+          100000
+        ]
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "name": "trending_up",
+      "vwap": 104.50877192982456,
+      "stdev": 2.1090974138017917,
+      "bands": {
+        "UPPER_1": 106.61786934362635,
+        "LOWER_1": 102.39967451602277,
+        "UPPER_2": 108.72696675742814,
+        "LOWER_2": 100.29057710222098,
+        "UPPER_3": 110.83606417122994,
+        "LOWER_3": 98.18147968841919
+      }
+    },
+    {
+      "name": "trending_up_late_anchor",
+      "vwap": 106.27142857142857,
+      "stdev": 0.9336238015812408,
+      "bands": {
+        "UPPER_1": 107.2050523730098,
+        "LOWER_1": 105.33780476984734,
+        "UPPER_2": 108.13867617459105,
+        "LOWER_2": 104.40418096826609,
+        "UPPER_3": 109.07229997617229,
+        "LOWER_3": 103.47055716668486
+      }
+    },
+    {
+      "name": "choppy",
+      "vwap": 50.245072115384616,
+      "stdev": 0.40275645577732067,
+      "bands": {
+        "UPPER_1": 50.64782857116194,
+        "LOWER_1": 49.842315659607294,
+        "UPPER_2": 51.05058502693926,
+        "LOWER_2": 49.43955920382997,
+        "UPPER_3": 51.45334148271658,
+        "LOWER_3": 49.03680274805265
+      }
+    },
+    {
+      "name": "zero_volume_bars_skipped",
+      "vwap": 11.108219178082193,
+      "stdev": 0.25687277055596885,
+      "bands": {
+        "UPPER_1": 11.365091948638161,
+        "LOWER_1": 10.851346407526224,
+        "UPPER_2": 11.62196471919413,
+        "LOWER_2": 10.594473636970255,
+        "UPPER_3": 11.878837489750099,
+        "LOWER_3": 10.337600866414286
+      }
+    },
+    {
+      "name": "single_bar",
+      "vwap": 7.15,
+      "stdev": 0.0,
+      "bands": {
+        "UPPER_1": 7.15,
+        "LOWER_1": 7.15,
+        "UPPER_2": 7.15,
+        "LOWER_2": 7.15,
+        "UPPER_3": 7.15,
+        "LOWER_3": 7.15
+      }
+    }
+  ]
+}

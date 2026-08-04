@@ -1672,7 +1672,15 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    `trading_session` plus derived M15/M30/H1 from canonical M5 and W1 from
    canonical D1 under explicit aggregation contracts, with stub durations,
    PARTIAL counts, and derived-vs-native H1 boundary parity. Tests:
-   `test_warehouse_aggregate.py`.
+   `test_warehouse_aggregate.py`. Phase 5 landed 2026-08-04 (tier-1 feature
+   snapshots): `features.py` publishes `feature_snapshot_daily`,
+   `feature_snapshot_intraday`, and `anchor_instance` with exactly the frozen
+   sec 7.1 columns, calling `calc_anchored_vwap_bands`,
+   `compute_indicator_frame`, and the champion intraday VWAP band math rather
+   than re-deriving any of them; parity is pinned to 1e-9 by a
+   contract-bearing golden fixture and snapshots are point-in-time and
+   deterministic. Tests: `test_warehouse_avwap_parity.py`,
+   `test_warehouse_features.py`.
 
 ### Then — after correctness and authoritative data paths
 

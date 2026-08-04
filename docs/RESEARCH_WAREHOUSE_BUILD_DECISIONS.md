@@ -594,6 +594,150 @@ a number in the store that no consumer can safely use.
 **Where.** `aggregate.py::build_weekly_bars`;
 `tests/test_warehouse_aggregate.py::test_a_short_week_is_flagged`.
 
+## BD-30 — Champion computations are called, not re-derived
+
+**Decision.** `features.py` contains no indicator math. It calls
+`calc_anchored_vwap_bands` (AVWAP + σ bands), `compute_indicator_frame` (D1
+EMA 8/15/21 and SMA 50/100/200), and `BounceBot._calculate_vwap_bands` for the
+intraday session VWAP ±1σ. The last one uses no instance state, so it is
+called **unbound** rather than by standing up the BounceBot application, which
+would drag the GUI and broker stack into a headless build job.
+
+**Why.** The plan requires it for AVWAP ("reused as the computation,
+parity-tested to 1e-9 — never reimplemented") and the same logic applies to
+every other champion quantity: a second implementation that agrees today is a
+trap tomorrow.
+
+**Rejected.** Reimplementing EMA/SMA/VWAP "because they're standard" — the
+champion's conventions (`adjust=False`, ohlc4 typical price, running-deviation
+σ) are what its history is calibrated to.
+
+**Where.** `features.py`; `tests/test_warehouse_avwap_parity.py` proves 1e-9
+parity *and* asserts by AST that the wrapper contains no loop, no power
+operator, and no `sqrt` anywhere in the module.
+
+## BD-31 — `atr14` is the house method at the schema's declared length
+
+**Decision.** `atr14` uses the champion's true-range definition and simple-mean
+method (`compute_atr_from_ohlc`) over 14 bars.
+
+**Why.** The frozen schema column is `atr14` while the scanner's own constant
+is `ATR_LENGTH = 20`. Changing the column name would edit a frozen schema;
+changing the method would introduce a second ATR convention. Same method, the
+schema's length, stated here so the difference from the scanner's 20 is on the
+record and not a surprise.
+
+**Reopens if.** A registered study needs ATR(20) as a research feature — that
+is an additive column, not a redefinition of this one.
+
+**Where.** `features.py::atr`;
+`tests/test_warehouse_features.py::test_atr14_matches_the_house_true_range_method`.
+
+## BD-32 — Favorite-zone definitions are stated and versioned (CONFIRM-OR-AMEND)
+
+**Decision.** The sec 6.2 block is frozen in the schema but the plan states only
+what each column measures. v1 definitions, under `feature_set_version =
+tier1_v1`:
+
+| Column | v1 definition | Source |
+|---|---|---|
+| `favorite_zone_coord` | `(close − AVWAPE) / (UPPER_1 − AVWAPE)`, long-oriented | stated verbatim in the plan |
+| `favorite_zone_residence_bars` | consecutive completed bars, ending at the snapshot, closing inside [AVWAPE, UPPER_1] | plan names the measure |
+| `second_band_streak` | consecutive completed bars closing at/above UPPER_2 | plan names the measure |
+| `first_dev_touch_order` | count of separate UPPER_1 touch episodes since the anchor (consecutive touching bars = one episode) | **builder's definition** |
+| `band1_rejection_strength` | on the most recent touching bar, `(high − close) / (high − low)`, clipped to [0, 1] | **builder's definition** |
+
+**Why.** The columns exist in a frozen schema and Phase 5's deliverable is
+"exactly the frozen columns". Leaving two of them permanently null would ship a
+schema that cannot be filled; inventing definitions silently would let a number
+nobody agreed on become cited evidence. Stating them under a feature-set version
+gives the trader something concrete to amend, and a later definition is a
+version bump plus additive rows — history is never rewritten.
+
+**Trader action.** `first_dev_touch_order` and `band1_rejection_strength` are
+confirm-or-amend items. Everything else in the block follows the plan's own
+wording.
+
+**Where.** `features.py::favorite_zone_block`;
+`tests/test_warehouse_features.py::test_favorite_zone_definitions`.
+
+## BD-33 — Production context is stored verbatim, never recomputed
+
+**Decision.** `rvol_tc2000`, `rvol_gate_pass`, `rs_rw_vs_spy`,
+`group_rs_debiased`, `market_internals_negative`, `session_structure_gate`, and
+`pullback_count_in_current_leg` are accepted as inputs from wrapped production
+evidence and written through unchanged. With no evidence they stay null.
+
+**Why.** Section 6.8 calls these six shipped systems tier-1 and says they are
+*migrated, not reinvented*. Recomputing an RVOL here would create a second
+number with the same name — precisely the failure mode behind the 2026-07-20
+round-lot bug.
+
+**Consequence, stated plainly.** Until Phase 6 wires the bounce-ledger join,
+these columns are null in practice. That is an honest gap, not a silent one.
+
+**Where.** `features.py::compute_intraday_features`;
+`tests/test_warehouse_features.py::test_production_context_is_stored_verbatim_never_recomputed`.
+
+## BD-34 — Session VWAP ships the STANDARD algorithm first
+
+**Decision.** Intraday snapshots carry `vwap_algorithm = "STANDARD"` with ±1σ.
+DYNAMIC and EOD arrive when their champion functions are wrapped.
+
+**Why.** Section 6.3 freezes tier-1 at the three production algorithms with ±1σ
+only. `_calculate_vwap_bands` covers the standard reset-based one cleanly; the
+dynamic and EOD variants live behind more champion state. `vwap_algorithm` is a
+column, so the other two are additive **rows** later — no schema change, no
+rewrite.
+
+**Where.** `features.py::session_vwap_bands`.
+
+## BD-35 — An intraday row keyed at bar S describes state through S's close
+
+**Decision.** `feature_snapshot_intraday` rows are keyed by a completed M5
+`interval_start`; bars up to and including that bar contribute, nothing later.
+
+**Why.** The dataset grain is `symbol × M5 interval_start`, and the row is
+computed once that bar completes. The first implementation keyed rows by a
+bar's `interval_end`, which silently pulled the *next* bar into the row — a
+real point-in-time leak, caught by the test that recomputes from truncated
+history and demands an identical row.
+
+**Where.** `features.py::compute_intraday_features`;
+`tests/test_warehouse_features.py::test_intraday_snapshot_never_sees_a_later_bar`.
+
+## BD-36 — The AVWAP golden fixture carries the Milestone-3 contract
+
+**Decision.** `tests/fixtures/warehouse_avwap_bands_v1.json` is a
+contract-bearing fixture (raw-input hash re-verified on load, declared 1e-9
+tolerance, provider assumptions, as-of). It characterizes the champion: a
+mismatch means the champion formula changed and must be reviewed, never that
+the fixture should be regenerated.
+
+**Why.** The repo already enforces that every shipped fixture bears the
+contract (`test_fixture_contract.py`), and the contract's own loader applies
+the declared tolerance — better than a hand-rolled comparison.
+
+**Where.** `tests/fixtures/warehouse_avwap_bands_v1.json`,
+`tests/test_warehouse_avwap_parity.py`.
+
+---
+
+## Open items for Sol / Fable
+
+Things this build deliberately left for a human decision or a live check.
+Each is already stated in its own BD entry; this is the short list.
+
+| # | Item | Where | What is needed |
+|---|---|---|---|
+| 1 | **Nothing calls the tee yet** — `scripts/ui/services/warehouse_service.py` (GUI service, job-ledger registration, six Health tiles) is unbuilt, so capture only runs from a manual job. The 20-session pilot depends on it. | BD-20 | Build it, or confirm it lands at Phase 8 |
+| 2 | **`ib_capture.build_ib_transport` is unverified** — the real ibapi client has no offline test and no broker-marked live run. | BD-25 | One live run on the desk before the pilot leans on it |
+| 3 | **`exploration_cohort.txt` is empty** — the fixed 30 symbols define part of the research denominator, so no agent invented them. | BD-12 | Trader supplies the list (confirmation register item 5) |
+| 4 | **Two favorite-zone definitions are the builder's** — `first_dev_touch_order` and `band1_rejection_strength`. | BD-32 | Confirm or amend; a change is a `feature_set_version` bump |
+| 5 | **Production context columns are null until Phase 6** wires the bounce-ledger join. | BD-33 | Nothing now; noted so the gap is not mistaken for "no signal" |
+| 6 | **DYNAMIC and EOD session VWAP are not yet captured** — only STANDARD. | BD-34 | Wrap the other two champion paths when their consumers need them |
+| 7 | **Unscheduled exchange closures** cannot come from calendar rules; they appear as sessions with no bars. | BD-26 | Add a dated override list if one ever occurs |
+
 ---
 
 ## Standing constraints this build re-checks every phase

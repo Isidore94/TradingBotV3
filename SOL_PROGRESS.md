@@ -9,15 +9,17 @@ stamp; it must not duplicate the roadmap.
 
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
-  Phase 4: **+145 warehouse tests** on the 1814-test baseline (adds
+  Phase 5: **+172 warehouse tests** on the 1814-test baseline (adds
   `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
   `test_warehouse_quarantine.py`, `test_warehouse_retire.py`,
   `test_warehouse_import.py`, `test_warehouse_tee.py`,
   `test_warehouse_spool.py`, `test_warehouse_pacer.py`,
-  `test_warehouse_backfill.py`, `test_warehouse_aggregate.py`); smoke **7/7**.
-  Measured on the Linux build agent: **1957 passed, 2 skipped, 5 subtests**
-  (that agent's own baseline was 1812 + the same 2 skips), so the desktop gate
-  should read **1959 passed, 5 subtests** — confirm on the next Windows run.
+  `test_warehouse_backfill.py`, `test_warehouse_aggregate.py`,
+  `test_warehouse_avwap_parity.py`, `test_warehouse_features.py`); smoke
+  **7/7**. Measured on the Linux build agent: **1984 passed, 2 skipped, 5
+  subtests** (that agent's own baseline was 1812 + the same 2 skips), so the
+  desktop gate should read **1986 passed, 5 subtests** — confirm on the next
+  Windows run.
 - Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
   protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
   the frozen 13-table pyarrow schemas + deterministic occurrence/anchor keys
@@ -77,6 +79,16 @@ stamp; it must not duplicate the roadmap.
   session closes and flags short weeks. Derived H1 boundaries match IB native
   `useRTH=1` bars, which is the sentinel parity check; forming buckets are
   never derived, and a bucket with no constituents produces no row.
+- Warehouse **Phase 5 landed** (tier-1 feature snapshots): `features.py`
+  publishes `feature_snapshot_daily`, `feature_snapshot_intraday` and
+  `anchor_instance` with exactly the frozen sec 7.1 columns. Every champion
+  quantity is CALLED, never re-derived — `calc_anchored_vwap_bands` (parity
+  1e-9 on a contract-bearing golden fixture, plus an AST assertion that the
+  module holds no sigma math), `compute_indicator_frame` for the D1 EMA/SMA
+  grid, and `BounceBot._calculate_vwap_bands` (called unbound) for the intraday
+  session VWAP ±1σ. Snapshots are point-in-time and deterministic: recomputing
+  from truncated history yields an identical row, and `input_manifest_hash` is
+  built from the manifest's own file hashes.
 - **Unverified (BD-25):** `ib_capture.build_ib_transport` — the real ibapi
   client — has no offline test and no broker-marked live run yet. Its socket
   behaviour must be confirmed on the desk before the pilot leans on it.
@@ -85,8 +97,11 @@ stamp; it must not duplicate the roadmap.
   registration + Health tiles) is still to be built, and the 20-session pilot
   depends on it.
 - Builder decision log: `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`
-  (BD-01..BD-29) records every implementation choice the locked plan left
-  open, for Sol/Fable review.
+  (BD-01..BD-36) records every implementation choice the locked plan left
+  open, and now ends with an **Open items for Sol / Fable** table (7 items:
+  the unbuilt GUI service, the unverified ibapi client, the empty exploration
+  cohort, two builder-stated favorite-zone definitions, null production
+  context until Phase 6, DYNAMIC/EOD VWAP, unscheduled closures).
 - Previous `main` gate (2026-08-03 evening, merged from
   `ultimate-setup-database-plan`): **1814 passed, 5 subtests** (adds
   `tests/test_warehouse_config.py`); smoke **7/7**.
@@ -102,9 +117,9 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 5 (tier-1 feature
-  snapshots: the frozen sec 7.1 columns, with `calc_anchored_vwap_bands`
-  wrapped and parity-tested to 1e-9) per the plan's Section 19.2.
+  `research_spool` path). Next builder starts at Phase 6 (occurrences +
+  outcomes for the two slice setups under the sec 19.3 recipe mapping) per the
+  plan's Section 19.2.
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 
