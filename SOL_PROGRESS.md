@@ -7,8 +7,25 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch `main` (2026-08-03 evening, merged from
-  `ultimate-setup-database-plan`). Gate: **1814 passed, 5 subtests** (adds
+- Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
+  research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
+  Phase 1: **+40 warehouse tests** on the 1814-test baseline (adds
+  `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
+  `test_warehouse_quarantine.py`, `test_warehouse_retire.py`); smoke **7/7**.
+  Measured on the Linux build agent: **1852 passed, 2 skipped, 5 subtests**
+  (that agent's own baseline was 1812 + the same 2 skips), so the desktop gate
+  should read **1854 passed, 5 subtests** — confirm on the next Windows run.
+- Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
+  protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
+  the frozen 13-table pyarrow schemas + deterministic occurrence/anchor keys
+  (`schemas.py`), per-symbol/per-partition quarantine with clean-remainder
+  publish (the tracker-blackout regression), compaction as one atomic manifest
+  line, `_retired/` GC that skips files in use, startup reconciliation of
+  crash artifacts, and the Phase-1 ERD (`docs/RESEARCH_WAREHOUSE_ERD.md`).
+  Still shadow-only: no detector, score, ranking, or alert path imports it,
+  and the store is a total no-op when `research_store_dir` is unset.
+- Previous `main` gate (2026-08-03 evening, merged from
+  `ultimate-setup-database-plan`): **1814 passed, 5 subtests** (adds
   `tests/test_warehouse_config.py`); smoke **7/7**.
 - `docs/ULTIMATE_SETUP_DATABASE_PLAN.md` is now the LOCKED implementation plan
   for the DAS research warehouse (Fabel ultracode review of the 2026-08-03
@@ -22,8 +39,9 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 1 (store core: seal
-  protocol + manifest) per the plan's Section 19.2.
+  `research_spool` path). Next builder starts at Phase 2 (bronze wrap of the
+  sec 19.0 inventory + daily universe/geometry snapshots) per the plan's
+  Section 19.2.
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 

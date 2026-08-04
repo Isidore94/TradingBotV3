@@ -1633,7 +1633,14 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    ladder. Phase 0 landed 2026-08-03: decision record 0014 (DAS lake storage
    class), `scripts/research_warehouse/config.py` (`research_store_dir` +
    `TRADINGBOTV3_RESEARCH_DIR`, Drive-path refusal, lake layout bootstrap),
-   `tests/test_warehouse_config.py`.
+   `tests/test_warehouse_config.py`. Phase 1 landed 2026-08-04 (store core):
+   `store.py` (4-step seal, per-symbol/per-partition quarantine with
+   clean-remainder publish, compaction behind one atomic manifest line,
+   `_retired/` GC that skips files in use, startup reconciliation),
+   `manifest.py` (`manifest_log.jsonl` read authority), `schemas.py` (the
+   frozen 13-table pyarrow definitions + deterministic occurrence/anchor
+   keys), `docs/RESEARCH_WAREHOUSE_ERD.md`, and the crash-matrix tests
+   (`test_warehouse_seal/manifest/quarantine/retire.py`).
 
 ### Then — after correctness and authoritative data paths
 
