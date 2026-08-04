@@ -514,6 +514,86 @@ before the pilot depends on it.
 
 **Where.** `backfill.py`, `ib_capture.py`; `tests/test_warehouse_backfill.py`.
 
+## BD-26 — The warehouse owns a versioned exchange calendar
+
+**Decision.** `exchange_calendar.py` states NYSE sessions as **rules** (full
+closures with the Saturday→Friday / Sunday→Monday observance, plus the three
+13:00 ET early closes) under an explicit `calendar_version` recorded on every
+`trading_session` row. Boundaries are computed in `America/New_York` and stored
+in UTC.
+
+**Why.** `trading_session` requires real sessions, and nothing in the repo
+modelled holidays: `scripts/market_session.py` returns 09:30-16:00 for whatever
+date it is given, Christmas included. That is correct for the live desk (it only
+asks about today, while trading) and wrong for an archive, where "no bars on
+Thanksgiving" must be distinguishable from missing data. Rules + a version means
+a later correction bumps the version instead of silently re-dating history.
+
+**Rejected.** (a) Adding `pandas_market_calendars` — a new dependency needs the
+decision-0012 pinning path and an approval this phase does not have. (b) Teaching
+`market_session.py` about holidays — that is champion code serving a different
+purpose, and changing it would alter live behaviour for a research need.
+
+**Verification.** Generated 2025-2027 and checked every date against the
+published NYSE calendars, including the awkward ones: 2026 Independence Day
+falls on a Saturday, so 3 July is the *observed closure* and there is no early
+close; 2027 Christmas falls on a Saturday, so 24 December is the closure and
+there is no Christmas Eve half day.
+
+**Reopens if.** An unscheduled closure occurs (weather, a day of mourning) —
+rules cannot know it, so it appears as a session with no bars, i.e. an honest
+gap. Adding such a day means a dated override list and a version bump.
+
+**Where.** `scripts/research_warehouse/exchange_calendar.py`;
+`tests/test_warehouse_aggregate.py`.
+
+## BD-27 — A bucket with no constituents is absent, not a zero bar
+
+**Decision.** Aggregation emits a `bar_derived` row only when at least one M5
+constituent exists. A short bucket is published with its real
+`constituent_count` / `constituent_expected` and `quality = PARTIAL`; a bucket
+with nothing in it produces no row.
+
+**Why.** A synthesized zero-volume bar is a claim that the market was quiet.
+Absence of data is uncertainty (plan.md sec 5), and the honest record of it is
+the `collection_gap` row that Phase 3 already writes — not a fabricated bar
+that later joins as if it were an observation.
+
+**Reopens if.** A consumer needs a dense bar grid; it would build one from the
+session calendar plus the gap rows, without inventing evidence in the store.
+
+**Where.** `aggregate.py::derive_session_bars`;
+`tests/test_warehouse_aggregate.py::test_missing_constituents_are_partial_never_averaged_away`.
+
+## BD-28 — A complete stub is COMPLETE; the flag carries the difference
+
+**Decision.** The 15:30-16:00 H1 stub with all six M5 constituents is
+`is_complete=True`, `quality=COMPLETE`, `is_stub=True`,
+`stub_duration_min=30`. Completeness answers "did every expected constituent
+arrive"; the stub flag and its true duration answer "is this comparable with a
+full hour".
+
+**Why.** Conflating the two would either mark every session's last hourly bar
+as defective (it is not — it is exactly what the exchange traded) or hide that
+it is half the length of the others. The plan wants both facts, separately.
+
+**Where.** `aggregate.py`;
+`tests/test_warehouse_aggregate.py::test_the_h1_stub_keeps_its_true_duration`.
+
+## BD-29 — A short week is flagged through `is_stub`, with no fake duration
+
+**Decision.** W1 bars for holiday-shortened weeks set `is_stub=True` and leave
+`stub_duration_min` null; the real signal is `constituent_expected` (sessions
+the calendar says existed) beside `constituent_count`.
+
+**Why.** `stub_duration_min` means minutes, and a "week duration in minutes" is
+a fiction — a four-session week is not 1,560 minutes of anything meaningful.
+The session counts say precisely what happened; inventing a duration would put
+a number in the store that no consumer can safely use.
+
+**Where.** `aggregate.py::build_weekly_bars`;
+`tests/test_warehouse_aggregate.py::test_a_short_week_is_flagged`.
+
 ---
 
 ## Standing constraints this build re-checks every phase

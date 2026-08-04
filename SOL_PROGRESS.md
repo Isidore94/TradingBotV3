@@ -9,15 +9,15 @@ stamp; it must not duplicate the roadmap.
 
 - Branch `claude/das-warehouse-phase-1-0gis7e` (2026-08-04), building the
   research warehouse Phases 1-8 on top of the merged Phase 0. Gate after
-  Phase 3b: **+124 warehouse tests** on the 1814-test baseline (adds
+  Phase 4: **+145 warehouse tests** on the 1814-test baseline (adds
   `test_warehouse_seal.py`, `test_warehouse_manifest.py`,
   `test_warehouse_quarantine.py`, `test_warehouse_retire.py`,
   `test_warehouse_import.py`, `test_warehouse_tee.py`,
   `test_warehouse_spool.py`, `test_warehouse_pacer.py`,
-  `test_warehouse_backfill.py`); smoke **7/7**. Measured on the Linux build
-  agent: **1936 passed, 2 skipped, 5 subtests** (that agent's own baseline was
-  1812 + the same 2 skips), so the desktop gate should read **1938 passed, 5
-  subtests** — confirm on the next Windows run.
+  `test_warehouse_backfill.py`, `test_warehouse_aggregate.py`); smoke **7/7**.
+  Measured on the Linux build agent: **1957 passed, 2 skipped, 5 subtests**
+  (that agent's own baseline was 1812 + the same 2 skips), so the desktop gate
+  should read **1959 passed, 5 subtests** — confirm on the next Windows run.
 - Warehouse **Phase 1 landed** (store core, plan sec 19.2): the 4-step seal
   protocol (`store.py`), `manifest_log.jsonl` read authority (`manifest.py`),
   the frozen 13-table pyarrow schemas + deterministic occurrence/anchor keys
@@ -66,6 +66,17 @@ stamp; it must not duplicate the roadmap.
   60-day yfinance seed with a per-symbol resume ledger; all are idempotent
   across the ~23:45 TWS restart and record paced-out/no-response work as gap
   rows. `ib_capture.py` is the only socket module.
+- Warehouse **Phase 4 landed** (sessions + aggregation): `exchange_calendar.py`
+  states the NYSE calendar as versioned rules (holidays with the NYSE
+  observance rule, the three 13:00 ET early closes, DST handled by the zone),
+  verified against the published 2025-2027 calendars; `aggregate.py` publishes
+  `trading_session` rows and derives `bar_derived` — session-anchored M15 (26),
+  M30 (13) and H1 (6 full + a 30-minute 15:30-16:00 stub) from canonical M5
+  under explicit `aggregation_contract_id`s (half days use the half-day
+  variant), plus W1 from canonical D1 that publishes only once the week's final
+  session closes and flags short weeks. Derived H1 boundaries match IB native
+  `useRTH=1` bars, which is the sentinel parity check; forming buckets are
+  never derived, and a bucket with no constituents produces no row.
 - **Unverified (BD-25):** `ib_capture.build_ib_transport` — the real ibapi
   client — has no offline test and no broker-marked live run yet. Its socket
   behaviour must be confirmed on the desk before the pilot leans on it.
@@ -74,7 +85,7 @@ stamp; it must not duplicate the roadmap.
   registration + Health tiles) is still to be built, and the 20-session pilot
   depends on it.
 - Builder decision log: `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`
-  (BD-01..BD-25) records every implementation choice the locked plan left
+  (BD-01..BD-29) records every implementation choice the locked plan left
   open, for Sol/Fable review.
 - Previous `main` gate (2026-08-03 evening, merged from
   `ultimate-setup-database-plan`): **1814 passed, 5 subtests** (adds
@@ -91,9 +102,9 @@ stamp; it must not duplicate the roadmap.
   `scripts/research_warehouse/config.py` (`research_store_dir` setting +
   `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
   `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
-  `research_spool` path). Next builder starts at Phase 4 (`trading_session` +
-  M5→M15/M30/H1 aggregation into `bar_derived` + W1 from canonical D1) per the
-  plan's Section 19.2.
+  `research_spool` path). Next builder starts at Phase 5 (tier-1 feature
+  snapshots: the frozen sec 7.1 columns, with `calc_anchored_vwap_bands`
+  wrapped and parity-tested to 1e-9) per the plan's Section 19.2.
 
 ## Previous checkpoint (main, 2026-08-03 midday)
 

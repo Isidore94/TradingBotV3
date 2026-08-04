@@ -1665,7 +1665,14 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    and trickled 60-day yfinance seed, all resumable across the TWS restart;
    `ib_capture.py` is the only socket module and its live path is still
    unverified (BD-25). Tests: `test_warehouse_pacer.py`,
-   `test_warehouse_backfill.py`.
+   `test_warehouse_backfill.py`. Phase 4 landed 2026-08-04 (sessions +
+   aggregation): `exchange_calendar.py` adds a versioned XNYS rules calendar
+   (holidays, observance, 13:00 ET early closes, DST by zone) checked against
+   the published 2025-2027 calendars, and `aggregate.py` publishes
+   `trading_session` plus derived M15/M30/H1 from canonical M5 and W1 from
+   canonical D1 under explicit aggregation contracts, with stub durations,
+   PARTIAL counts, and derived-vs-native H1 boundary parity. Tests:
+   `test_warehouse_aggregate.py`.
 
 ### Then — after correctness and authoritative data paths
 
