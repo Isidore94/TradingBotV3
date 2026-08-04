@@ -17,7 +17,7 @@ implementation gap, where two readings of the plan were both defensible, or
 where a choice binds future phases. Format: decision → why → what was rejected
 → reopen trigger → where it lives.
 
-Status of the build: Phase 0-2 landed; Phase 3 in progress. Test baseline and
+Status of the build: Phases 0-6 landed; Phase 7 next. Test baseline and
 branch live in [`SOL_PROGRESS.md`](../SOL_PROGRESS.md).
 
 ---
