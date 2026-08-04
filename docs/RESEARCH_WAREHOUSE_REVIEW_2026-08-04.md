@@ -19,8 +19,19 @@ D4 (partial discarded on a stop), D11 (maturity not `min()`), D12 (missing
 entry slippage + gap-through stops), D13 (unbounded intraday walk, no OPEN
 state) — are now repaired in `outcomes.py`/`queries.py`, with the repair
 decisions logged as BD-53..BD-57 and regression tests for each. Still open
-from this review: D5 (feature windowing), D6/D7 (backfill), D14–D19, and the
-minor notes.
+from this review: D6/D7 (backfill), D14–D19, and the minor notes.
+
+**Defect-repair addendum 2 (2026-08-04, branch
+`claude/das-warehouse-defects-2n9uql`).** D5 is repaired (BD-58, BD-59). One
+correction to this report's own finding: the intraday half of D5 asserted that
+"production's M5 EMAs run on BounceBot's '5 D' frame". They do not — the "5 D"
+fetch feeds the previous-day extremes and the dynamic/EOD VWAPs, while
+`ema_8/15/21` are computed on `today_df` alone and only once
+`len(today_df) >= span` (`bounce_bot_lib/legacy.py`, step 5, "Calculate short
+EMAs (today only)"). The warehouse's session scope was therefore already
+right; what was missing was the champion's minimum-bar guard, which is what
+BD-59 adds. The daily half of D5 is confirmed exactly as written and fixed by
+BD-58.
 
 **Overall verdict.** The store core (seal, manifest, quarantine, retirement,
 read path) is well built and matches the plan; champion isolation of the tee

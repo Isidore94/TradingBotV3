@@ -354,9 +354,32 @@ def test_m15_and_m30_emas_come_from_completed_derived_bars():
     row = features.compute_intraday_features(
         "AAPL", bars, interval_start=boundary, session=session, derived_by_timeframe=derived, computed_at=NOW
     )
-    # Only the three M15 bars that had closed by 10:15 contribute.
-    assert row["ema8_m15"] == pytest.approx(features.ema_series([300.0, 301.0, 302.0], 8), abs=1e-12)
+    # Only the three M15 bars that had closed by 10:15 contribute - and three
+    # bars cannot seed an 8-period EMA under the stated lookback rule (D5).
+    assert row["ema8_m15"] is None
     assert row["ema8_m30"] is None  # no M30 bars supplied
+
+    # With eight completed M15 bars the EMA publishes, on those bars alone.
+    derived["M15"] = [
+        {
+            "symbol": "AAPL",
+            "interval_start": session.rth_open_at + timedelta(minutes=15 * index),
+            "interval_end": session.rth_open_at + timedelta(minutes=15 * (index + 1)),
+            "close": 300.0 + index,
+        }
+        for index in range(8)
+    ]
+    later = features.compute_intraday_features(
+        "AAPL",
+        bars,
+        interval_start=session.rth_open_at + timedelta(minutes=120),
+        session=session,
+        derived_by_timeframe=derived,
+        computed_at=NOW,
+    )
+    assert later["ema8_m15"] == pytest.approx(
+        features.ema_series([300.0 + index for index in range(8)], 8), abs=1e-12
+    )
 
 
 def test_intraday_job_is_idempotent(store):
@@ -369,6 +392,121 @@ def test_intraday_job_is_idempotent(store):
     again = features.build_intraday_snapshots(store, session.session_date, symbols=["AAPL"], now=NOW)
     assert again.status == "NOTHING_TO_COMPUTE" and again.skipped["ALREADY_COMPUTED"] == 6
     assert store.read_table("feature_snapshot_intraday").num_rows == 6
+
+
+# --- D5: the windowing rule ------------------------------------------------
+def _two_years_to(session_date: date, symbol="AAPL"):
+    """Completed D1 bars for the two calendar years ending at ``session_date``."""
+    rows = []
+    day = date(session_date.year - 1, 1, 1)
+    index = 0
+    while day <= session_date:
+        if xcal.is_trading_day(day):
+            rows.append(_d1_row(day, index, symbol=symbol))
+            index += 1
+        day += timedelta(days=1)
+    return rows
+
+
+def test_a_midyear_daily_snapshot_matches_the_champions_full_history_frame(store):
+    """D5: sma100/sma200 and the D1 EMAs must be the champion's numbers.
+
+    August is the worst case for the old year-partition window: the session's
+    own year holds ~150 sessions, so sma200 was null and the EMAs were seeded
+    on 1 January instead of on the real history.
+    """
+    session_date = date(2026, 8, 3)
+    history = _two_years_to(session_date)
+    assert len(history) > features.DAILY_HISTORY_MIN_SESSIONS
+    store.publish("bar_d1", history, job_id="d1")
+
+    report = features.build_daily_snapshots(store, session_date, symbols=["AAPL"], now=NOW)
+    assert report.rows == 1
+    row = store.read_table("feature_snapshot_daily").to_pylist()[0]
+
+    # The champion's own frame over the same full history is the reference.
+    grid = features.indicator_grid(history)
+    for column, source in (
+        ("sma50", "sma_50"),
+        ("sma100", "sma_100"),
+        ("sma200", "sma_200"),
+        ("ema8", "ema_8"),
+        ("ema15", "ema_15"),
+        ("ema21", "ema_21"),
+    ):
+        expected = float(grid[source].iloc[-1])
+        assert row[column] == pytest.approx(expected, abs=1e-9), column
+
+    # The long SMAs are genuinely populated, not null-and-equal.
+    assert row["sma200"] is not None and row["sma100"] is not None
+
+
+def test_the_daily_window_always_reads_year_and_the_prior_year(store):
+    """D5: the floor is year + year-1, whatever the month."""
+    session_date = date(2026, 8, 3)
+    store.publish("bar_d1", _two_years_to(session_date), job_id="d1")
+
+    partitions, rows_by_symbol = features.daily_history_window(store, session_date)
+    assert ("bar_d1", "year=2026") in partitions
+    assert ("bar_d1", "year=2025") in partitions
+    # Deep enough to stop walking, and no bar after the session date leaks in.
+    assert len(rows_by_symbol["AAPL"]) >= features.DAILY_HISTORY_MIN_SESSIONS
+    assert max(_as_day(row["session_date"]) for row in rows_by_symbol["AAPL"]) <= session_date
+    assert len(partitions) <= features.DAILY_HISTORY_MAX_YEARS
+
+
+def _as_day(value):
+    return value.date() if isinstance(value, datetime) else value
+
+
+def test_the_intraday_ema_lookback_is_the_session_and_needs_span_bars():
+    """D5: the M5 EMA frame is the champion's ``today_df``, guarded by span.
+
+    BounceBot fetches "5 D" for prev-day extremes and the dynamic/EOD VWAPs but
+    computes ema_8/15/21 on today's bars only, and only once the session has at
+    least ``span`` of them. The warehouse column must be that same number.
+    """
+    session = xcal.trading_session(date(2026, 8, 3))
+    prior = xcal.trading_session(date(2026, 7, 31))
+    bars = [_m5_row(session, index) for index in range(12)]
+    # Prior-session bars are offered to the snapshot and must not be seen.
+    intruders = [_m5_row(prior, index) for index in range(12)]
+
+    boundary = bars[-1]["interval_start"]
+    row = features.compute_intraday_features(
+        "AAPL", intruders + bars, interval_start=boundary, session=session, computed_at=NOW
+    )
+    session_only = features.compute_intraday_features(
+        "AAPL", bars, interval_start=boundary, session=session, computed_at=NOW
+    )
+    assert row == session_only
+
+    closes = [bar["close"] for bar in bars]
+    assert row["ema8_m5"] == pytest.approx(features.ema_series(closes, 8), abs=1e-12)
+    # 12 completed bars: 8 seeds, 15 and 21 do not - exactly as the champion.
+    assert row["ema15_m5"] is None and row["ema21_m5"] is None
+
+    # Before the eighth bar even ema8 is null rather than a mostly-seed number.
+    early = features.compute_intraday_features(
+        "AAPL", bars, interval_start=bars[4]["interval_start"], session=session, computed_at=NOW
+    )
+    assert early["ema8_m5"] is None
+
+
+def test_the_intraday_ema_matches_the_champions_own_computation():
+    """The stored ema8_m5 equals BounceBot's ``today_df`` EMA, bar for bar."""
+    import pandas as pd
+
+    session = xcal.trading_session(date(2026, 8, 3))
+    bars = [_m5_row(session, index) for index in range(30)]
+    boundary = bars[-1]["interval_start"]
+    row = features.compute_intraday_features(
+        "AAPL", bars, interval_start=boundary, session=session, computed_at=NOW
+    )
+    today_df = pd.DataFrame([{"close": bar["close"]} for bar in bars])
+    for column, span in (("ema8_m5", 8), ("ema15_m5", 15), ("ema21_m5", 21)):
+        champion = today_df["close"].ewm(span=span, adjust=False).mean().iloc[-1]
+        assert row[column] == pytest.approx(float(champion), abs=1e-12), column
 
 
 def test_features_are_disabled_without_a_store():

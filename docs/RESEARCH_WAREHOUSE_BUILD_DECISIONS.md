@@ -1124,6 +1124,89 @@ set `r_at_eod` from the final provided bar, and labelled a live trade
 `tests/test_warehouse_outcomes.py::test_intraday_bounce_never_walks_past_the_entry_session`
 / `test_intraday_bounce_mid_session_is_open_and_a_short_archive_is_truncated`.
 
+## BD-58 — The D1 feature window is history-deep, and `tier1_v1` is corrected in place
+
+**Decision.** `build_daily_snapshots` no longer reads a calendar partition. The
+stated `tier1_v1` window rule is: **always** read `bar_d1` for `year` and
+`year-1`, then keep walking back one year at a time until the deepest symbol in
+the frame holds `DAILY_HISTORY_MIN_SESSIONS = 250` completed sessions on or
+before the snapshot's `session_date` — stopping early when the lake runs out of
+years, and never reading more than `DAILY_HISTORY_MAX_YEARS = 5`. The partitions
+actually read are returned alongside the rows so `input_manifest_hash` covers
+exactly the files the snapshot was computed from. Because no capture has ever
+run — the lake holds zero `feature_snapshot_daily` rows — this is a correction
+to `tier1_v1` **in place**, not a version bump.
+
+**Why.** The old rule added the prior year only in January, but a 200-session
+window spans roughly 9.5 calendar months. From February to mid-October the
+frame was truncated, and the champion `compute_indicator_frame` uses
+`rolling(period)` with pandas' default `min_periods`: `sma200` was silently
+null for most of the year and `sma100` until about May. Worse, that function's
+EMAs use `adjust=False` and are seeded at the frame's *first* bar, so `ema8/15/
+21` were different numbers from the champion's under the champion's own column
+names — the exact BD-33 failure (review defect D5). 250 sessions covers
+`sma200` with margin and drives the EMA-21 seed error below float tolerance
+(`(1 - 2/22) ** 250` is about 5e-11); it also exceeds the champion's own
+deepest D1 fetch (`PRIORITY_SMA_LOOKBACK_DAYS = 320` calendar days, about 220
+sessions), so the warehouse never sees less history than the scanner does.
+
+**Rejected.** Bumping to `tier1_v2` — a version bump exists to protect an
+existing corpus, and there is none; it would imply a `tier1_v1` body of
+evidence worth comparing against and would permanently carry a version whose
+only content is a bug. Reading a fixed two years unconditionally — cheap in the
+common case but wrong for a partially seeded lake, where the honest answer is
+"walk until deep enough or the lake ends". Passing `min_periods=1` to the
+champion's rolling call — that re-derives champion math with different
+semantics, which plan.md sec 5 forbids.
+
+**Reopens if.** A tier-2 feature needs a window deeper than 250 sessions (raise
+the constant; it is a floor, not a definition), or the champion's own lookback
+constants change.
+
+**Where.** `features.py::daily_history_window` / `build_daily_snapshots` /
+`DAILY_HISTORY_MIN_SESSIONS`;
+`tests/test_warehouse_features.py::test_a_midyear_daily_snapshot_matches_the_champions_full_history_frame`
+/ `test_the_daily_window_always_reads_year_and_the_prior_year`.
+
+## BD-59 — The intraday EMA lookback is the session, because that is the champion's frame
+
+**Decision.** `ema8/15/21_m5` are computed on the **entry session's own RTH
+bars**, and are null until the session has at least `span` completed bars. The
+session bound is enforced inside `compute_intraday_features` (which now filters
+to `session.rth_open_at <= interval_start < session.rth_close_at`) rather than
+trusted to the caller. M15/M30 have no champion — they are LD-23's new ground —
+and follow the same stated convention.
+
+**Why.** The 2026-08-04 review recorded D5's intraday half as "production's M5
+EMAs run on BounceBot's '5 D' frame" and asked for a multi-session seed. Read
+against the champion, that premise is wrong: `bounce_bot_lib/legacy.py` fetches
+`durationStr="5 D"`/`useRTH=1` for the *previous-day extremes and the
+dynamic/EOD VWAPs*, but computes the EMA levels the detector actually uses on
+`today_df` alone — the code is commented "5. Calculate short EMAs (today
+only)" — and leaves each level `None` unless `len(today_df) >= span`. Seeding
+the warehouse column on a five-day frame would therefore have *introduced* the
+same-name-different-number defect D5 exists to prevent, in the opposite
+direction. What was genuinely missing is the champion's minimum-bar guard: the
+warehouse published an EMA-21 built from four bars of mostly seed under the
+champion's name. That guard is the real repair, and the session bound is now
+structural instead of incidental.
+
+**Rejected.** Following the review's stated remedy (a "5 D" EMA seed) — it
+contradicts the champion and plan.md sec 5's "champion math is called, never
+re-derived"; the review is a fallible artifact and this entry records the
+disagreement with its evidence. Publishing a short-frame EMA with a
+`bars_used` qualifier — the frozen sec 7.1 schema has no such column, and a
+null the consumer must handle beats a number it will trust.
+
+**Reopens if.** BounceBot's own EMA frame changes (then this follows it, under
+a `feature_set_version` bump), or a registered study wants a multi-session
+intraday EMA — which would be a **new, differently named** column, never a
+redefinition of these three.
+
+**Where.** `features.py::compute_intraday_features` / `ema_series(min_bars=)`;
+`tests/test_warehouse_features.py::test_the_intraday_ema_lookback_is_the_session_and_needs_span_bars`
+/ `test_the_intraday_ema_matches_the_champions_own_computation`.
+
 ---
 
 ## Open items for Sol / Fable

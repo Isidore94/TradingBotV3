@@ -48,6 +48,21 @@ AVWAP_FORMULA_VERSION = "running_deviation_v1"
 ATR_LENGTH = 14  # the schema's declared atr14 column
 VWAP_ALGORITHM_STANDARD = "STANDARD"
 
+#: D1 history a tier-1 snapshot must see before it may be computed.
+#:
+#: The champion `compute_indicator_frame` uses `rolling(period)` with pandas'
+#: default ``min_periods``, so ``sma100``/``sma200`` are silently null unless
+#: the frame carries 100/200 completed sessions, and its EMAs (``adjust=False``)
+#: are seeded at the frame's *first* bar - a truncated frame therefore produces
+#: different numbers under the same column names (BD-33's failure mode).
+#: 250 sessions covers ``sma200`` with margin and drives the EMA-21 seed error
+#: below float tolerance (``(1 - 2/22) ** 250`` is about 5e-11); it also exceeds
+#: the champion's own deepest D1 fetch (``PRIORITY_SMA_LOOKBACK_DAYS`` = 320
+#: calendar days, about 220 sessions).
+DAILY_HISTORY_MIN_SESSIONS = 250
+#: Hard stop on the year walk, so a sparse lake cannot read the whole store.
+DAILY_HISTORY_MAX_YEARS = 5
+
 ANCHOR_TYPE_CURRENT = "EARNINGS_CURRENT"
 ANCHOR_TYPE_PREVIOUS = "EARNINGS_PREVIOUS"
 
@@ -187,12 +202,21 @@ def atr(bars, length: int = ATR_LENGTH):
     return sum(ranges) / len(ranges) if ranges else None
 
 
-def ema_series(values, span: int):
-    """EMA with the champion's convention (``adjust=False``)."""
+def ema_series(values, span: int, *, min_bars: int | None = None):
+    """EMA with the champion's convention (``adjust=False``).
+
+    ``min_bars`` reproduces the champion's own refusal to publish a barely
+    seeded EMA: BounceBot computes ``ema_8/15/21`` only ``if len(today_df) >=
+    span`` (`bounce_bot_lib/legacy.py`, "Calculate short EMAs (today only)")
+    and leaves the level ``None`` otherwise. Without the guard the warehouse
+    would store a mostly-seed number under the champion's column name.
+    """
     import pandas as pd
 
     numbers = [value for value in values if value is not None]
     if not numbers:
+        return None
+    if min_bars is not None and len(numbers) < int(min_bars):
         return None
     return float(pd.Series(numbers).ewm(span=int(span), adjust=False).mean().iloc[-1])
 
@@ -522,6 +546,49 @@ def anchor_index_for(d1_rows, anchor_bar_date: date) -> int | None:
     return None
 
 
+def daily_history_window(
+    store: ResearchStore,
+    session_date: date,
+    *,
+    min_sessions: int = DAILY_HISTORY_MIN_SESSIONS,
+    max_years: int = DAILY_HISTORY_MAX_YEARS,
+):
+    """The ``bar_d1`` partitions a tier-1 daily snapshot must read, and their rows.
+
+    The stated ``tier1_v1`` rule: **always** read ``year`` and ``year-1`` - a
+    200-session window spans roughly 9.5 calendar months, so a single year
+    partition truncates the frame for every session from February onward - then
+    keep walking back one year at a time until the deepest symbol in the frame
+    holds ``min_sessions`` completed sessions on or before ``session_date``, or
+    the lake runs out of years, or ``max_years`` partitions have been read.
+
+    Returning the partitions alongside the rows keeps ``input_manifest_hash``
+    honest: the hash covers exactly the files the snapshot was computed from.
+    """
+    partitions: set[tuple[str, str]] = set()
+    rows_by_symbol: dict[str, list[dict]] = {}
+    depth = 0
+
+    for offset in range(int(max_years)):
+        year = session_date.year - offset
+        partition = ("bar_d1", f"year={year}")
+        partitions.add(partition)
+        found = 0
+        for row in store.read_table(*partition).to_pylist():
+            day = _as_date(row.get("session_date"))
+            if day is None or day > session_date:
+                continue
+            rows_by_symbol.setdefault(str(row.get("symbol") or ""), []).append(row)
+            found += 1
+        depth = max((len(rows) for rows in rows_by_symbol.values()), default=0)
+        # year and year-1 are the floor; past that, stop as soon as the window
+        # is deep enough or the lake stops answering.
+        if offset >= 1 and (depth >= int(min_sessions) or found == 0):
+            break
+
+    return partitions, rows_by_symbol
+
+
 def build_daily_snapshots(
     store: ResearchStore | None,
     session_date: date,
@@ -540,16 +607,8 @@ def build_daily_snapshots(
         report.status = "DISABLED"
         return report
     stamp = now or utc_now()
-    partitions = {("bar_d1", f"year={session_date.year}")}
-    if session_date.month == 1:  # a 200-day window reaches into last year
-        partitions.add(("bar_d1", f"year={session_date.year - 1}"))
+    partitions, rows_by_symbol = daily_history_window(store, session_date)
     manifest_hash = input_manifest_hash(store, partitions)
-
-    rows_by_symbol: dict[str, list[dict]] = {}
-    for dataset, partition in sorted(partitions):
-        for row in store.read_table(dataset, partition).to_pylist():
-            symbol = str(row.get("symbol") or "")
-            rows_by_symbol.setdefault(symbol, []).append(row)
 
     wanted = {str(symbol).strip().upper() for symbol in (symbols or [])} or set(rows_by_symbol)
     published = store.read_table(
@@ -633,6 +692,17 @@ def compute_intraday_features(
     nothing later can leak in. Production context values arrive through
     ``context`` and are stored verbatim - this module never recomputes an RVOL,
     an RS/RW, or a chop-veto state.
+
+    **Intraday EMA lookback rule** (``tier1_v1``): the M5 EMA frame is the
+    *entry session's own RTH bars*, because that is the champion's frame -
+    BounceBot fetches "5 D"/``useRTH=1`` for the previous-day extremes and the
+    dynamic/EOD VWAPs, but computes ``ema_8/15/21`` on ``today_df`` alone and
+    only once ``len(today_df) >= span`` (`bounce_bot_lib/legacy.py`, step 5,
+    "Calculate short EMAs (today only)"). Seeding these EMAs on a multi-session
+    frame would store a different number under the champion's column name -
+    exactly the BD-33 failure the rule exists to prevent. The session bound is
+    enforced here rather than trusted to the caller. M15/M30 have no champion
+    (they are LD-23's new ground) and follow the same stated convention.
     """
     stamp = computed_at or utc_now()
     usable = [
@@ -640,6 +710,7 @@ def compute_intraday_features(
         for row in m5_rows
         if row.get("interval_start") is not None
         and row["interval_start"] <= interval_start
+        and session.rth_open_at <= row["interval_start"] < session.rth_close_at
         and row.get("is_complete", True)
     ]
     usable.sort(key=lambda row: row["interval_start"])
@@ -659,9 +730,9 @@ def compute_intraday_features(
         "session_vwap_upper_1": _number(upper),
         "session_vwap_lower_1": _number(lower),
         "vwap_algorithm": VWAP_ALGORITHM_STANDARD,
-        "ema8_m5": ema_series(closes, 8),
-        "ema15_m5": ema_series(closes, 15),
-        "ema21_m5": ema_series(closes, 21),
+        "ema8_m5": ema_series(closes, 8, min_bars=8),
+        "ema15_m5": ema_series(closes, 15, min_bars=15),
+        "ema21_m5": ema_series(closes, 21, min_bars=21),
         "ema8_m15": None,
         "ema15_m15": None,
         "ema21_m15": None,
@@ -695,7 +766,7 @@ def compute_intraday_features(
         if derived:
             values = [_number(bar.get("close")) for bar in derived]
             for span in (8, 15, 21):
-                row[f"ema{span}_{prefix}"] = ema_series(values, span)
+                row[f"ema{span}_{prefix}"] = ema_series(values, span, min_bars=span)
 
     last_close = closes[-1] if closes else None
     if prior_session and atr_value and last_close is not None:
@@ -796,6 +867,8 @@ def build_intraday_snapshots(
 __all__ = [
     "ATR_LENGTH",
     "AVWAP_FORMULA_VERSION",
+    "DAILY_HISTORY_MAX_YEARS",
+    "DAILY_HISTORY_MIN_SESSIONS",
     "FEATURE_SET_VERSION",
     "FavoriteZone",
     "SnapshotReport",
@@ -808,6 +881,7 @@ __all__ = [
     "build_intraday_snapshots",
     "compute_daily_features",
     "compute_intraday_features",
+    "daily_history_window",
     "ema_series",
     "favorite_zone_block",
     "indicator_grid",
