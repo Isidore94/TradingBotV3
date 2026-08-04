@@ -1270,6 +1270,16 @@ Personalization may reorder equally qualified candidates. It must not rewrite hi
 
 New setups enter only through research and shadow stages.
 
+The review draft for the long-term, DAS-hosted, point-in-time setup research
+warehouse is [`docs/ULTIMATE_SETUP_DATABASE_PLAN.md`](docs/ULTIMATE_SETUP_DATABASE_PLAN.md).
+It covers M5/M15/M30/H1/H2/H4/D1/W1 bars; versioned moving averages, AVWAP
+anchors and frozen running-deviation bands; horizontal levels and trendlines;
+complete opportunity denominators; trade-style recipes; outcome paths;
+conditional expectancy; and a "best trade style now" advisory engine. It is
+subordinate to this roadmap and does not authorize implementation or promotion
+before the earlier storage, golden-fixture, point-in-time, identity, and
+canonical opportunity milestones pass.
+
 Priority families:
 
 - compression-to-expansion near meaningful levels;
