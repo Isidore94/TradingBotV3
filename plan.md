@@ -1270,15 +1270,19 @@ Personalization may reorder equally qualified candidates. It must not rewrite hi
 
 New setups enter only through research and shadow stages.
 
-The review draft for the long-term, DAS-hosted, point-in-time setup research
-warehouse is [`docs/ULTIMATE_SETUP_DATABASE_PLAN.md`](docs/ULTIMATE_SETUP_DATABASE_PLAN.md).
-It covers M5/M15/M30/H1/H2/H4/D1/W1 bars; versioned moving averages, AVWAP
-anchors and frozen running-deviation bands; horizontal levels and trendlines;
-complete opportunity denominators; trade-style recipes; outcome paths;
-conditional expectancy; and a "best trade style now" advisory engine. It is
-subordinate to this roadmap and does not authorize implementation or promotion
-before the earlier storage, golden-fixture, point-in-time, identity, and
-canonical opportunity milestones pass.
+The locked implementation plan for the long-term, DAS-hosted, point-in-time
+setup research warehouse is
+[`docs/ULTIMATE_SETUP_DATABASE_PLAN.md`](docs/ULTIMATE_SETUP_DATABASE_PLAN.md)
+(Fabel-reviewed revision of the 2026-08-03 draft; all decisions locked in its
+Section 23). It covers M5/M15/M30/H1/H4/D1/W1 bars; a tiered moving-average
+grid, AVWAP anchors and frozen running-deviation bands with the 1σ favorite
+zone primary; horizontal levels and trendlines; capture/pacing budgets and a
+Phase 0-8 build order; complete opportunity denominators; trade-style recipes;
+outcome paths; conditional expectancy; and a "best trade style now" advisory
+engine. Its capture phases are shadow-only additive evidence with read-only
+consumers (proposed sec 12 item 13a; insertion text in its Appendix E). It is
+subordinate to this roadmap and does not authorize ranking surfaces or
+promotion before the canonical opportunity milestones and sec 7 gates pass.
 
 Priority families:
 
