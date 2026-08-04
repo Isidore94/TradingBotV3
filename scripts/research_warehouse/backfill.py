@@ -580,12 +580,21 @@ def resolve_gaps(
     use_rth: bool = False,
     interval: timedelta = timedelta(minutes=5),
 ) -> int:
-    """Close the open gaps that this run actually filled.
+    """Close every open gap this run's fetch actually covered.
 
     An immutable lake cannot edit the original row, so the closure is a
     superseding row at the same grain carrying ``resolved_at``/``resolution``;
     readers take the latest ``detected_at`` per key. Nothing set these columns
     before, so a gap once recorded stayed open forever (review defect D7).
+
+    Matching is by **interval containment**, not by an exact ``gap_start``.
+    Different jobs record a session's absence at different scopes - the tee
+    writes an RTH-scoped gap at ``rth_open_at`` while the nightly job works the
+    ETH window - so an exact-key match left every tee-recorded gap permanently
+    open even after the backfill that filled it, and the coverage tile went on
+    reporting a session short that was not (BD-67). ETH contains RTH, so a run
+    closes any open gap for the same (symbol, timeframe) whose interval lies
+    inside the window it just fetched.
     """
     if not captured:
         return 0
@@ -594,22 +603,25 @@ def resolve_gaps(
     rows = []
     closed = set()
     for symbol, day in captured:
-        start, _end, _expected = _gap_window(day, use_rth=use_rth, interval=interval)
-        key = (symbol, timeframe, start)
-        row = open_gaps.get(key)
-        if row is None or key in closed:
-            continue
-        closed.add(key)
-        superseding = dict(row)
-        superseding.update(
-            {
-                "detected_at": resolved_at,
-                "resolved_at": resolved_at,
-                "resolution": resolution,
-                "run_id": run_id,
-            }
-        )
-        rows.append(superseding)
+        covered_start, covered_end, _expected = _gap_window(day, use_rth=use_rth, interval=interval)
+        for key, row in open_gaps.items():
+            if key in closed or key[0] != symbol or key[1] != timeframe:
+                continue
+            start = _stamp_of(row, "gap_start")
+            end = _stamp_of(row, "gap_end")
+            if not (covered_start <= start and end <= covered_end):
+                continue
+            closed.add(key)
+            superseding = dict(row)
+            superseding.update(
+                {
+                    "detected_at": resolved_at,
+                    "resolved_at": resolved_at,
+                    "resolution": resolution,
+                    "run_id": run_id,
+                }
+            )
+            rows.append(superseding)
     if not rows:
         return 0
     return store.publish("collection_gap", rows, job_id=run_id).rows_published

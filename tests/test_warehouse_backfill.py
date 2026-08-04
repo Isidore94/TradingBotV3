@@ -820,3 +820,52 @@ def test_a_month_crossing_eth_tail_is_not_republished(store, pacer):
     )
     assert report.rows_duplicate == 1 and report.rows_published == 0
     assert store.read_table("bar_m5").num_rows == 1
+
+
+def test_a_backfill_closes_the_tee_recorded_gap_it_filled(store, pacer):
+    """BD-67: gaps are resolved by interval containment, not an exact key.
+
+    The tee records a session's shortfall at rth_open_at; the nightly ETH job
+    works the eth_open_at..eth_close_at window. Matching gap_start exactly meant
+    a tee gap stayed open forever after the backfill that filled it, so the
+    Health coverage tile kept reporting a session short that was not.
+    """
+    from scripts.research_warehouse import bar_archive
+
+    session = bar_archive.session_context(datetime(2026, 8, 3, 14, 0, tzinfo=UTC))
+    bar_archive.record_collection_gaps(
+        store, session=session, captured_counts={"AAPL": 0}, detected_at=session.rth_close_at
+    )
+    partition = f"month={SESSION:%Y-%m}"
+    open_gaps = backfill.open_gap_keys(store, [partition])
+    assert len(open_gaps) == 1
+    assert next(iter(open_gaps))[2] == session.rth_open_at, "the tee keys at the RTH open"
+
+    resolved = backfill.resolve_gaps(
+        store, [("AAPL", SESSION)], timeframe="M5", resolved_at=NOW, run_id="nightly"
+    )
+    assert resolved == 1
+    assert backfill.open_gap_keys(store, [partition]) == {}
+
+    closed = max(store.read_table("collection_gap").to_pylist(), key=lambda row: row["detected_at"])
+    assert closed["resolution"] == backfill.RESOLUTION_BACKFILLED
+    # The original row is preserved verbatim beside its closure.
+    assert store.read_table("collection_gap").num_rows == 2
+
+
+def test_an_rth_only_run_does_not_close_a_wider_eth_gap(store, pacer):
+    """Containment is directional: RTH does not cover the ETH window."""
+    backfill.run_backfill(
+        store, ["AAPL"], fetcher=_fetcher([], bars=[]), job="nightly_backfill",
+        days=[SESSION], pacer=pacer, now=NOW,
+    )  # an ETH-scoped gap
+    partition = f"month={SESSION:%Y-%m}"
+    assert len(backfill.open_gap_keys(store, [partition])) == 1
+
+    # An RTH-scoped run covers less than the recorded gap, so it closes nothing.
+    resolved = backfill.resolve_gaps(
+        store, [("AAPL", SESSION)], timeframe="M5", resolved_at=NOW,
+        run_id="rth", use_rth=True,
+    )
+    assert resolved == 0
+    assert len(backfill.open_gap_keys(store, [partition])) == 1

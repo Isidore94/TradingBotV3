@@ -85,6 +85,17 @@ QUARANTINE_ORPHAN_DUPLICATE = "ORPHAN_DUPLICATE_CONTENT"
 #: An orphan whose rows are already live in its partition - the signature of a
 #: compaction that crashed between its os.replace and its manifest append.
 QUARANTINE_ORPHAN_OVERLAPS_LIVE = "ORPHAN_OVERLAPS_LIVE_ROWS"
+
+#: Datasets whose current view is "the latest row per grain, by a time column"
+#: rather than by a revision column *inside* the grain: ``outcome_path``
+#: supersedes by ``computed_at`` (BD-53) and ``collection_gap`` by
+#: ``detected_at`` (BD-60/BD-67). Their grain is therefore *expected* to repeat,
+#: so an orphan sharing a grain key with a live row is a legitimate
+#: supersession, not the double-count D14 guards against - refusing it would
+#: quarantine a recomputed outcome or a gap resolution instead of adopting it.
+#: Datasets that carry their revision in the grain (``setup_occurrence``'s
+#: ``revision_id``, ``anchor_instance``'s ``system_from``) need no exemption.
+SUPERSEDING_DATASETS = frozenset({"collection_gap", "outcome_path"})
 QUARANTINE_ORPHAN_UNREADABLE = "ORPHAN_UNREADABLE_FILE"
 QUARANTINE_INCOMPLETE_WRITE = "INCOMPLETE_STAGED_WRITE"
 
@@ -585,7 +596,15 @@ class ResearchStore:
         Compared at the dataset's declared grain rather than by file hash: the
         compaction-crash case produces a file that is byte-different from every
         registered one while containing exactly their rows.
+
+        Cost: only the grain columns are read, and only when an unregistered
+        file is actually present - reconciliation is not a hot path.
         """
+        if dataset in SUPERSEDING_DATASETS:
+            # A repeated grain key is this dataset's normal shape, so overlap
+            # carries no information about duplication. Deciding on it would
+            # quarantine legitimate supersessions.
+            return False
         try:
             spec = dataset_spec(dataset)
         except KeyError:

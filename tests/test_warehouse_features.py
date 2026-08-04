@@ -513,3 +513,54 @@ def test_features_are_disabled_without_a_store():
     assert features.build_daily_snapshots(None, date(2026, 8, 3)).status == "DISABLED"
     assert features.build_intraday_snapshots(None, date(2026, 8, 3)).status == "DISABLED"
     assert features.build_anchor_instances(None, []).status == "DISABLED"
+
+
+def test_the_january_edge_still_reaches_the_stated_window(store):
+    """The year+year-1 floor is *just* enough at the start of January.
+
+    2 January 2026 has 1 session in its own year and 251 in the prior one: 252
+    against a 250 floor. The margin is two sessions, so the walk - not the
+    floor - is what makes the rule safe, and DAILY_HISTORY_MIN_SESSIONS cannot
+    be raised much above 250 without year-2 becoming load-bearing every January.
+    """
+    session_date = date(2026, 1, 2)
+    history = _two_years_to(session_date)
+    store.publish("bar_d1", history, job_id="d1")
+
+    partitions, rows = features.daily_history_window(store, session_date)
+    assert ("bar_d1", "year=2025") in partitions
+    assert len(rows["AAPL"]) >= features.DAILY_HISTORY_MIN_SESSIONS
+    assert len(partitions) == 2, "no third year is needed when the lake is complete"
+
+
+def test_a_sparse_lake_terminates_instead_of_reading_every_year(store):
+    """Termination is intentional: the walk stops when the lake runs out."""
+    session_date = date(2026, 8, 3)
+    # Only 30 sessions exist anywhere - far short of the 250-session floor.
+    store.publish("bar_d1", _history(30), job_id="d1")
+
+    partitions, rows = features.daily_history_window(store, session_date)
+    assert len(rows["AAPL"]) < features.DAILY_HISTORY_MIN_SESSIONS
+    # It stopped at the empty prior year rather than walking to the cap.
+    assert len(partitions) == 2 <= features.DAILY_HISTORY_MAX_YEARS
+
+    # And the snapshot still computes, from the history that does exist.
+    report = features.build_daily_snapshots(store, session_date, symbols=["AAPL"], now=NOW)
+    assert report.rows == 1
+    row = store.read_table("feature_snapshot_daily").to_pylist()[0]
+    assert row["sma50"] is None, "a 30-session frame cannot fill sma50, and says so"
+
+
+def test_the_input_manifest_hash_covers_exactly_the_partitions_read(store):
+    """Reproducibility: same sealed inputs -> same hash; a new input changes it."""
+    session_date = date(2026, 8, 3)
+    store.publish("bar_d1", _two_years_to(session_date), job_id="d1")
+
+    partitions, _rows = features.daily_history_window(store, session_date)
+    first = features.input_manifest_hash(store, partitions)
+    assert first == features.input_manifest_hash(store, partitions)
+
+    # Sealing another file into a partition the window reads changes the hash.
+    store.publish("bar_d1", [_d1_row(date(2026, 8, 4), 999, symbol="MSFT")], job_id="d1")
+    again, _rows = features.daily_history_window(store, session_date)
+    assert features.input_manifest_hash(store, again) != first

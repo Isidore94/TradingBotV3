@@ -1575,6 +1575,109 @@ month's partition joins the read), or a writer is added that does not populate
 `tests/test_warehouse_backfill.py::test_a_winter_eth_tail_marks_its_own_session_not_the_next_one`
 / `test_a_month_crossing_eth_tail_is_not_republished`.
 
+## BD-67 — A gap is closed by any run whose fetch covered its interval
+
+**Decision.** `resolve_gaps` matches by **interval containment** rather than by
+an exact `gap_start` key: a run closes every open gap for the same
+(symbol, timeframe) whose `[gap_start, gap_end]` lies inside the window it just
+fetched. Containment is directional, so an RTH-scoped run does not close a
+wider ETH gap.
+
+**Why.** Found while re-checking gap supersession for BD-64. Different jobs
+record the same session's absence at different scopes: `record_collection_gaps`
+(the tee's session audit) writes at `rth_open_at`, while the nightly backfill
+works the ETH window. Exact-key matching meant a tee-recorded gap could
+**never** be closed by the backfill that actually filled its bars — it stayed
+open forever and the Health coverage tile went on reporting a session short
+that was not. This predates BD-64 (the old midnight-UTC key matched
+`rth_open_at` no better), but BD-64 is where the two intervals became
+explicit enough to see it.
+
+**Rejected.** Keying every writer at the same instant so exact matching works —
+it would force the tee to describe an ETH interval it never inspected, which
+is the D18 defect in a new place. Closing every open gap for the session
+regardless of interval — an RTH-only run would then silently claim the ETH
+window it never fetched.
+
+**Reopens if.** A capture scope appears that is neither contained in nor
+containing the others (then containment needs a scope lattice rather than a
+comparison).
+
+**Where.** `backfill.py::resolve_gaps`;
+`tests/test_warehouse_backfill.py::test_a_backfill_closes_the_tee_recorded_gap_it_filled`
+/ `test_an_rth_only_run_does_not_close_a_wider_eth_gap`.
+
+## BD-68 — The compaction-orphan guard exempts datasets that supersede by time
+
+**Decision.** `store.SUPERSEDING_DATASETS` = `{collection_gap, outcome_path}`
+is exempt from BD-62/D14's overlap refusal: for those two, an orphan sharing a
+grain key with a live row is adopted normally.
+
+**Why.** Found while re-checking `_overlaps_live_rows` against the registry.
+The D14 guard assumes a repeated grain key means duplication, which holds only
+where the writer publishes one row per grain. `outcome_path`
+(`occurrence_id, recipe_id, outcome_definition_id`) supersedes by `computed_at`
+under BD-53 and `collection_gap` (`symbol, timeframe, gap_start`) by
+`detected_at` under BD-60/BD-67 — neither carries a revision column *inside*
+its grain, so a recomputed outcome or a gap resolution shares its predecessor's
+key **by design**. Without the exemption, a publish that crashed between its
+`os.replace` and its manifest append would have had that legitimate row
+quarantined instead of adopted. Self-healing (the next build recomputes, and
+quarantine preserves the row), so S3 — but it silently discards a night's
+recomputation and inflates the quarantine count the Health tile watches.
+
+Datasets that *do* discriminate revisions in the grain — `setup_occurrence`
+(`revision_id`), `anchor_instance` (`system_from`), `bar_m5`/`bar_d1`
+(`revision_id`) — need no exemption and stay guarded. So do the several
+datasets whose grain lacks a discriminator but whose builders publish one row
+per grain and skip what exists (`bar_derived`, `trading_session`,
+`scan_coverage`, `universe_membership_daily`, both feature snapshots).
+
+**Rejected.** Deriving the exemption from the schema — it is not derivable:
+whether a repeated grain means duplication is a property of the *writer*, and
+guarded and exempt datasets look identical in the registry. Comparing full row
+content instead of the grain — precise, but it reads every column of a live
+partition where the grain projection reads four, and the compaction-crash case
+it must catch is exactly the one where content is identical.
+
+**Reopens if.** A new dataset supersedes by time without a revision column in
+its grain — it must be added to the set by hand. The pinning test states this.
+
+**Where.** `store.py::SUPERSEDING_DATASETS` / `_overlaps_live_rows`;
+`tests/test_warehouse_seal.py::test_a_superseding_orphan_is_adopted_not_quarantined`
+/ `test_the_supersession_exemption_is_a_deliberate_hand_maintained_pin`.
+
+## BD-69 — Outcome simulation reads each occurrence's own month, not the build day's
+
+**Decision.** `_m5_partitions_for` builds the M5 read set from the *trigger
+month of every occurrence being simulated* (plus the following month for the
+BD-66 ETH tail, plus the build day's own month), instead of the build day's
+month alone.
+
+**Why.** Found while re-reading `_run_outcomes` as if BD-44 had landed, per the
+review's instruction. `known` spans two years of occurrences and BD-53
+re-simulates every **non-terminal** one on every build — but the M5 read was
+`month={build day}`. An intraday occurrence triggered in any earlier month was
+therefore handed an empty bar list every night and drew its conclusion from
+that absence: it would churn an `OPEN` row to `TRUNCATED`, or write a
+superseding row asserting a truncation that never happened. Silent, nightly,
+and exactly the "missing data is uncertainty, never confirmation" invariant
+(plan.md sec 5) inverted.
+
+**Rejected.** Reading every month in range — unbounded as the corpus grows,
+for no gain, since terminal outcomes are skipped inside `build_outcomes`
+anyway. Filtering to non-terminal occurrences before choosing partitions — it
+duplicates `build_outcomes`' own terminality rule outside it, which is how the
+two drift.
+
+**Reopens if.** The occurrence corpus grows large enough that reading a
+partition per trigger month costs real build time — the narrowing is then to
+occurrences whose latest outcome is non-terminal, done *inside*
+`build_outcomes` where that rule already lives.
+
+**Where.** `cli.py::_m5_partitions_for` / `_run_outcomes`;
+`tests/test_warehouse_restore.py::test_outcome_simulation_reads_each_occurrences_own_month`.
+
 ---
 
 ## Open items for Sol / Fable

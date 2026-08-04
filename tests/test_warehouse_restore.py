@@ -329,3 +329,29 @@ def test_the_build_job_adds_no_process_of_its_own():
     assert descriptor["single_flight"] is True and descriptor["owner"] == "main_desktop"
     assert descriptor["entry_point"].startswith("python -m scripts.research_warehouse.cli")
     assert registered == [descriptor]
+
+
+def test_outcome_simulation_reads_each_occurrences_own_month(store):
+    """BD-69: M5 bars came from the build day's month alone.
+
+    `known` spans two years of occurrences and BD-53 re-simulates every
+    non-terminal one on every build, so an intraday occurrence from an earlier
+    month was fed an empty archive each night and concluded from that absence.
+    """
+    build_day = date(2026, 8, 3)
+    known = {
+        "occ-old": {"symbol": "AAPL", "trigger_at": datetime(2026, 5, 12, 14, 0, tzinfo=UTC)},
+        "occ-new": {"symbol": "MSFT", "trigger_at": datetime(2026, 8, 3, 14, 0, tzinfo=UTC)},
+        # A winter trigger whose ETH tail lives in the following month (BD-66).
+        "occ-dec": {"symbol": "NVDA", "trigger_at": datetime(2026, 12, 31, 23, 0, tzinfo=UTC)},
+        "occ-none": {"symbol": "TSLA", "trigger_at": None},
+    }
+    partitions = cli._m5_partitions_for(known, build_day)
+
+    assert "month=2026-05" in partitions, "the old occurrence's own month is read"
+    assert "month=2026-08" in partitions
+    assert "month=2026-12" in partitions
+    assert "month=2027-01" in partitions, "the ETH tail month is read too"
+    # Bounded: only months an occurrence can actually need, no full-range sweep.
+    assert "month=2026-06" not in partitions
+    assert partitions == sorted(set(partitions))

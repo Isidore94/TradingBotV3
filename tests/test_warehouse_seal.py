@@ -366,3 +366,83 @@ def test_sealed_files_are_zstd_parquet(store):
 
 def _boom(*args, **kwargs):
     raise OSError("simulated power loss after the staged write")
+
+
+
+def _gap_row(*, detected_at, resolution=None, **overrides):
+    row = {
+        "symbol": "AAPL",
+        "timeframe": "M5",
+        "gap_start": datetime(2026, 8, 3, 13, 30, tzinfo=UTC),
+        "gap_end": datetime(2026, 8, 3, 20, 0, tzinfo=UTC),
+        "expected_bars": 78,
+        "reason": "NO_RESPONSE",
+        "detected_at": detected_at,
+        "resolved_at": detected_at if resolution else None,
+        "resolution": resolution,
+        "schema_version": schemas.SCHEMA_VERSION,
+        "run_id": "gap",
+    }
+    row.update(overrides)
+    return row
+
+def test_a_superseding_orphan_is_adopted_not_quarantined(store, monkeypatch):
+    """BD-68: the D14 guard must not refuse a legitimate supersession.
+
+    `outcome_path` and `collection_gap` carry no revision column in their grain
+    - they supersede by `computed_at`/`detected_at` (BD-53, BD-60) - so a
+    recomputed row shares its predecessor's grain by design. Refusing on grain
+    overlap would quarantine the recomputation instead of adopting it.
+    """
+    from scripts.research_warehouse.store import SUPERSEDING_DATASETS
+
+    assert SUPERSEDING_DATASETS == {"collection_gap", "outcome_path"}
+
+    first = _gap_row(detected_at=datetime(2026, 8, 4, 2, 0, tzinfo=UTC))
+    store.publish("collection_gap", [first])
+
+    # The resolution row: same grain, later detected_at, crashed before its
+    # manifest line landed.
+    original_append = ManifestLog.append
+    monkeypatch.setattr(
+        ManifestLog, "append", lambda self, **kwargs: (_ for _ in ()).throw(OSError("crash"))
+    )
+    with pytest.raises(OSError):
+        store.publish(
+            "collection_gap",
+            [_gap_row(detected_at=datetime(2026, 8, 5, 2, 0, tzinfo=UTC), resolution="BACKFILLED")],
+        )
+    monkeypatch.setattr(ManifestLog, "append", original_append)
+
+    result = store.reconcile(job_id="startup")
+    assert len(result.adopted) == 1, "a supersession must be adopted, not quarantined"
+    assert not result.quarantined
+    rows = store.read_table("collection_gap").to_pylist()
+    assert len(rows) == 2
+    assert {row["resolution"] for row in rows} == {None, "BACKFILLED"}
+
+
+def test_the_supersession_exemption_is_a_deliberate_hand_maintained_pin(store):
+    """Guard on the exemption list.
+
+    Whether a repeated grain key means duplication is a property of the
+    dataset's *writer*, not of its schema: several guarded datasets also lack a
+    revision column in their grain (``bar_derived``, ``trading_session``,
+    ``scan_coverage``, both feature snapshots...) and are safe only because
+    their builders publish one row per grain and skip what exists. So this
+    cannot be derived - it is pinned, and a new supersede-by-time dataset has to
+    be added by hand (BD-68's reopen trigger).
+    """
+    from scripts.research_warehouse.schemas import DATASETS
+    from scripts.research_warehouse.store import SUPERSEDING_DATASETS
+
+    assert SUPERSEDING_DATASETS <= set(DATASETS)
+    # Neither exempt dataset can discriminate revisions inside its own grain -
+    # that is precisely why each needs the exemption.
+    revision_columns = {"revision_id", "system_from"}
+    for name in SUPERSEDING_DATASETS:
+        assert not (set(DATASETS[name].grain) & revision_columns), name
+    # And the datasets that *do* carry one are correctly not exempt.
+    for name in ("setup_occurrence", "anchor_instance", "bar_m5", "bar_d1"):
+        assert set(DATASETS[name].grain) & revision_columns
+        assert name not in SUPERSEDING_DATASETS

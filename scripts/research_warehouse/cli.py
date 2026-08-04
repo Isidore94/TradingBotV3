@@ -23,7 +23,7 @@ import os
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 try:  # package import
@@ -281,6 +281,28 @@ def _run_backups(store: ResearchStore, stamp: datetime) -> dict:
     return steps
 
 
+def _m5_partitions_for(known: dict, day: date) -> list[str]:
+    """Month partitions holding the M5 bars these occurrences can be simulated on.
+
+    ``known`` spans two years of occurrences and BD-53 re-simulates every
+    non-terminal one on every build, but the M5 read was the *build day's*
+    month alone. An intraday occurrence triggered in any earlier month was
+    therefore re-simulated against an empty archive every night, and drew
+    conclusions from that absence rather than from its own session (BD-69).
+    The trigger's own month is read, plus the following one, because a winter
+    session's ETH tail lives there (BD-66).
+    """
+    months = {f"month={day:%Y-%m}"}
+    for row in known.values():
+        trigger = row.get("trigger_at")
+        if not isinstance(trigger, datetime):
+            continue
+        entry = trigger.date()
+        months.add(f"month={entry:%Y-%m}")
+        months.add(f"month={entry + timedelta(days=1):%Y-%m}")
+    return sorted(months)
+
+
 def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str) -> dict:
     """Simulate outcomes for occurrences already in the lake.
 
@@ -297,15 +319,16 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
             "message": "no setup_occurrence rows yet; the detector adapter is BD-44.",
         }
 
-    symbols = sorted({str(row.get("symbol") or "") for row in known.values()})
+    symbols = {str(row.get("symbol") or "") for row in known.values()}
     _partitions, d1_by_symbol = features.daily_history_window(store, day)
-    d1_by_symbol = {symbol: rows for symbol, rows in d1_by_symbol.items() if symbol in set(symbols)}
+    d1_by_symbol = {symbol: rows for symbol, rows in d1_by_symbol.items() if symbol in symbols}
 
     m5_by_symbol: dict[str, list] = {}
-    for row in store.read_table("bar_m5", f"month={day:%Y-%m}").to_pylist():
-        symbol = str(row.get("symbol") or "")
-        if symbol in set(symbols):
-            m5_by_symbol.setdefault(symbol, []).append(row)
+    for partition in _m5_partitions_for(known, day):
+        for row in store.read_table("bar_m5", partition).to_pylist():
+            symbol = str(row.get("symbol") or "")
+            if symbol in symbols:
+                m5_by_symbol.setdefault(symbol, []).append(row)
 
     return vars(
         outcomes.build_outcomes(
