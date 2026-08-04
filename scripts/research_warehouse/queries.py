@@ -221,8 +221,15 @@ def coverage_readout(store: ResearchStore | None, *, month: str | None = None) -
     for row in store.read_table("scan_coverage", partition).to_pylist():
         statuses[str(row.get("scan_status"))] = statuses.get(str(row.get("scan_status")), 0) + 1
         risk_sets.add(str(row.get("risk_set_id")))
+    # Gaps supersede by time (BD-60): a filled gap is closed by a later row at
+    # the same grain, so the raw row set double-counts every resolved gap.
+    try:
+        from .backfill import open_gap_keys
+    except ImportError:  # pragma: no cover - scripts/ on sys.path
+        from backfill import open_gap_keys  # type: ignore
+
     reasons: dict[str, int] = {}
-    for row in store.read_table("collection_gap", partition).to_pylist():
+    for row in open_gap_keys(store, [partition]).values():
         reasons[str(row.get("reason"))] = reasons.get(str(row.get("reason")), 0) + 1
 
     snapshot.rows = [

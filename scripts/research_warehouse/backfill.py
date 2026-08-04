@@ -54,7 +54,21 @@ PROVIDER_IBKR = "IBKR"
 PROVIDER_YAHOO = "YAHOO"
 
 QUALITY_COMPLETE = "COMPLETE"
+#: Reserved for work the capture policy never intended to collect. A pacing
+#: shortfall is *intended-but-not-collected* and must never borrow this reason
+#: (sec 5.4: policy absence is distinct from MISSING/NO_RESPONSE/TIMED_OUT).
 NOT_COLLECTED_BY_POLICY = "NOT_COLLECTED_BY_POLICY"
+#: Intended work the pacer or the run's own budget could not get to in time.
+REASON_TIMED_OUT = "TIMED_OUT"
+REASON_NO_RESPONSE = "NO_RESPONSE"
+#: Written into ``collection_gap.resolution`` when a later run fills the gap.
+RESOLUTION_BACKFILLED = "BACKFILLED"
+
+#: Longest a single request may block waiting for a capture slot. ``None``
+#: resolves to the pacer's own window: an exhausted token bucket refills after
+#: at most one window, so any shorter cap turns a normal refill wait into a
+#: spurious denial and a false gap row.
+DEFAULT_MAX_WAIT_SECONDS = None
 
 # Job outcomes per symbol, recorded rather than inferred.
 SYMBOL_OK = "OK"
@@ -76,7 +90,10 @@ class BackfillReport:
     requested: int = 0
     rows_published: int = 0
     rows_quarantined: int = 0
+    rows_duplicate: int = 0
     gaps_recorded: int = 0
+    gaps_resolved: int = 0
+    seconds_waited: float = 0.0
     by_outcome: dict = field(default_factory=dict)
     stopped_reason: str = ""
 
@@ -199,15 +216,48 @@ def _session_helpers():
 
 
 def already_captured(store: ResearchStore, dataset: str, symbol: str, day: date) -> bool:
-    """Has this (symbol, session day) already been archived?"""
-    table = store.read_table(dataset, f"month={day:%Y-%m}", columns=["symbol", "interval_start"])
-    for name, start in zip(table.column("symbol").to_pylist(), table.column("interval_start").to_pylist()):
-        if str(name) != symbol or start is None:
-            continue
-        stamp = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
-        if stamp.date() == day:
-            return True
-    return False
+    """Has this (symbol, session day) already been archived by a *backfill*?
+
+    Deliberately not "has any bar": the RTH-scoped tee archives the whole
+    watchlist cohort every session as ``capture_mode=LIVE``/``DELAYED``, and
+    treating those rows as "already have" would make the ETH-inclusive nightly
+    job skip exactly the symbols it exists to extend (LD-03, review defect D6).
+    Only a prior ``BACKFILL`` row for the day means this job already ran.
+    """
+    known, backfilled = archive_state(store, dataset, [symbol], [day])
+    del known
+    return (symbol, day) in backfilled
+
+
+def archive_state(store: ResearchStore, dataset: str, symbols, days):
+    """One pass over the relevant month partitions.
+
+    Returns ``(known_bar_keys, backfilled_days)``: the per-bar
+    ``(symbol, interval_start)`` set that makes ETH rows publishable alongside
+    the tee's RTH rows without duplicating them (the ``bar_archive`` pattern),
+    and the ``(symbol, day)`` set that says a backfill already covered the day.
+    """
+    wanted = {str(symbol).strip().upper() for symbol in (symbols or [])}
+    known: set[tuple[str, datetime]] = set()
+    backfilled: set[tuple[str, date]] = set()
+    partitions = {f"month={day:%Y-%m}" for day in (days or [])}
+    for partition in sorted(partitions):
+        table = store.read_table(
+            dataset, partition, columns=["symbol", "interval_start", "capture_mode"]
+        )
+        for name, start, mode in zip(
+            table.column("symbol").to_pylist(),
+            table.column("interval_start").to_pylist(),
+            table.column("capture_mode").to_pylist(),
+        ):
+            symbol = str(name)
+            if start is None or (wanted and symbol not in wanted):
+                continue
+            stamp = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+            known.add((symbol, stamp))
+            if str(mode or "") == CAPTURE_MODE_BACKFILL:
+                backfilled.add((symbol, stamp.date()))
+    return known, backfilled
 
 
 def run_backfill(
@@ -225,6 +275,10 @@ def run_backfill(
     pacer=None,
     is_connected=None,
     now: datetime | None = None,
+    clock=None,
+    sleep=None,
+    time_budget_seconds: float = 0.0,
+    max_wait_seconds: float | None = DEFAULT_MAX_WAIT_SECONDS,
     run_id: str = "",
     job_id: str = "",
     max_requests: int | None = None,
@@ -235,6 +289,15 @@ def run_backfill(
     :class:`FetchResult`. Every call is gated by the pacer, so capture can
     never crowd a champion; a pacing error backs capture off and the remaining
     work is left for the next run rather than hammered.
+
+    Time is read from ``clock`` (default: the real UTC clock) on **every** pacer
+    interaction. Freezing one stamp for a whole run would freeze the token
+    bucket's 10-minute window with it, capping any single invocation at roughly
+    one window's allowance (review defect D7). ``time_budget_seconds`` is how
+    long the run as a whole may *block* waiting for slots - 0 keeps the old
+    non-blocking behaviour, and a nightly job passes a real budget so it can
+    work through its cohort while still yielding instantly to champions and to
+    error 162/366.
     """
     report = BackfillReport(job=job)
     if store is None:
@@ -246,65 +309,83 @@ def run_backfill(
         return report
 
     arbiter = pacer or pacer_mod.get_pacer()
-    stamp = now or utc_now()
+    tick = clock or utc_now
+    stamp = now or tick()  # the run stamp: gap detected_at, seed provenance
     session_id_for, phase_for = _session_helpers()
     session_days = list(days or [])
     requests_left = max_requests if max_requests is not None else len(symbols) * max(1, len(session_days))
+    budget_left = max(0.0, float(time_budget_seconds or 0.0))
+    wait_cap = (
+        float(max_wait_seconds)
+        if max_wait_seconds is not None
+        else getattr(arbiter, "window", timedelta(seconds=600)).total_seconds()
+    )
     missed: list[tuple[str, date, str]] = []
+    captured: list[tuple[str, date]] = []
+
+    known, backfilled = archive_state(store, dataset, symbols, session_days)
 
     for symbol in symbols:
         for day in session_days:
             if requests_left <= 0:
-                missed.append((symbol, day, NOT_COLLECTED_BY_POLICY))
+                # Our own cap stopped intended work: that is a timeout, not
+                # policy absence (sec 5.4).
+                missed.append((symbol, day, REASON_TIMED_OUT))
                 continue
             if is_connected is not None and not is_connected():
                 # A TWS restart is a pause, not a failure: stop cleanly, record
                 # what was not collected, and resume on the next run.
                 report.note(SYMBOL_DISCONNECTED)
-                missed.append((symbol, day, "NO_RESPONSE"))
+                missed.append((symbol, day, REASON_NO_RESPONSE))
                 report.status = "STOPPED"
                 report.stopped_reason = "provider disconnected"
                 continue
-            if already_captured(store, dataset, symbol, day):
+            if (symbol, day) in backfilled:
                 report.note(SYMBOL_ALREADY_HAVE)
                 continue
 
             key = f"{symbol}|{timeframe}|{day.isoformat()}|{int(use_rth)}"
-            decision = arbiter.try_acquire(key=key, now=stamp)
+            wait = min(wait_cap, budget_left) if budget_left > 0 else 0.0
+            started = tick()
+            decision = arbiter.acquire(key=key, timeout=wait, sleep=sleep, now=tick)
+            waited = max(0.0, (tick() - started).total_seconds())
+            report.seconds_waited += waited
+            budget_left = max(0.0, budget_left - waited)
             if not decision.granted:
                 report.note(SYMBOL_PACED_OUT)
-                missed.append((symbol, day, NOT_COLLECTED_BY_POLICY))
+                missed.append((symbol, day, REASON_TIMED_OUT))
                 continue
             requests_left -= 1
             report.requested += 1
+            observed_at = tick()
             try:
                 result = fetcher(symbol, day, timeframe=timeframe, use_rth=use_rth)
             except Exception as exc:  # a provider adapter blowing up is data, not a crash
-                arbiter.note_error(0, str(exc), capture=True, now=stamp)
+                arbiter.note_error(0, str(exc), capture=True, now=tick())
                 report.note(SYMBOL_ERROR)
-                missed.append((symbol, day, "NO_RESPONSE"))
+                missed.append((symbol, day, REASON_NO_RESPONSE))
                 continue
             if result is None:
                 result = FetchResult()
             if result.error_code or result.error_message:
                 # Tagged capture=True: this error is handled by the pacer and
                 # never reaches the champion's Yahoo-only circuit breaker (R1).
-                arbiter.note_error(result.error_code, result.error_message, capture=True, now=stamp)
+                arbiter.note_error(result.error_code, result.error_message, capture=True, now=tick())
                 report.note(SYMBOL_PACED_OUT if pacer_mod.is_pacing_error(result.error_code, result.error_message) else SYMBOL_ERROR)
-                missed.append((symbol, day, "NO_RESPONSE"))
+                missed.append((symbol, day, REASON_NO_RESPONSE))
                 continue
             if not result.bars:
                 report.note(SYMBOL_NO_RESPONSE)
-                missed.append((symbol, day, "NO_RESPONSE"))
+                missed.append((symbol, day, REASON_NO_RESPONSE))
                 continue
 
-            arbiter.note_capture_success(now=stamp)
+            arbiter.note_capture_success(now=tick())
             rows = _bar_rows(
                 symbol,
                 result.bars,
                 timeframe=timeframe,
                 provider=provider,
-                observed_at=stamp,
+                observed_at=observed_at,
                 run_id=run_id or job,
                 session_id_for=session_id_for,
                 phase_for=phase_for,
@@ -312,29 +393,92 @@ def run_backfill(
             )
             if not rows:
                 report.note(SYMBOL_NO_RESPONSE)
-                missed.append((symbol, day, "NO_RESPONSE"))
+                missed.append((symbol, day, REASON_NO_RESPONSE))
                 continue
-            published = store.publish(dataset, rows, job_id=job_id or job)
+
+            # Per-bar dedupe: the tee's RTH rows must neither block this
+            # request nor be duplicated by its ETH-inclusive answer (D6).
+            fresh = []
+            for row in rows:
+                bar_key = (row["symbol"], row["interval_start"])
+                if bar_key in known:
+                    report.rows_duplicate += 1
+                    continue
+                known.add(bar_key)
+                fresh.append(row)
+            backfilled.add((symbol, day))
+            captured.append((symbol, day))
+            report.note(SYMBOL_OK)
+            if not fresh:
+                continue
+            published = store.publish(dataset, fresh, job_id=job_id or job)
             report.rows_published += published.rows_published
             report.rows_quarantined += published.rows_quarantined
-            report.note(SYMBOL_OK)
 
-    report.gaps_recorded = _record_missed(store, missed, timeframe=timeframe, detected_at=stamp, run_id=run_id or job)
+    report.gaps_recorded = _record_missed(
+        store, missed, timeframe=timeframe, detected_at=stamp, run_id=run_id or job
+    )
+    report.gaps_resolved = resolve_gaps(
+        store, captured, timeframe=timeframe, resolved_at=stamp, run_id=run_id or job
+    )
     return report
 
 
+def open_gap_keys(store: ResearchStore, partitions) -> dict:
+    """Unresolved ``collection_gap`` rows, keyed by (symbol, timeframe, gap_start).
+
+    The lake is append-only, so a gap is "closed" by a superseding row carrying
+    ``resolved_at``; the current state of a gap is its latest ``detected_at``
+    row, exactly as ``latest_outcomes`` does for the outcome path (BD-53).
+    """
+    latest: dict[tuple[str, str, datetime], dict] = {}
+    for partition in sorted(set(partitions)):
+        for row in store.read_table("collection_gap", partition).to_pylist():
+            start = row.get("gap_start")
+            if start is not None and start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            key = (str(row.get("symbol")), str(row.get("timeframe")), start)
+            current = latest.get(key)
+            if current is None or _stamp_of(row, "detected_at") >= _stamp_of(current, "detected_at"):
+                latest[key] = row
+    return {key: row for key, row in latest.items() if row.get("resolved_at") is None}
+
+
+def _stamp_of(row, column) -> datetime:
+    value = row.get(column)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _gap_window(day: date):
+    start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    return start, start + timedelta(days=1)
+
+
 def _record_missed(store: ResearchStore, missed, *, timeframe: str, detected_at: datetime, run_id: str) -> int:
+    """Append a gap row per miss, skipping ones already open.
+
+    Without the dedupe every re-run inflated ``collection_gap`` with a second
+    copy of a gap that was already recorded and still open (review defect D7).
+    """
     if not missed:
         return 0
+    partitions = {f"month={day:%Y-%m}" for _symbol, day, _reason in missed}
+    already = set(open_gap_keys(store, partitions))
     rows = []
     for symbol, day, reason in missed:
-        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        start, end = _gap_window(day)
+        key = (symbol, timeframe, start)
+        if key in already:
+            continue
+        already.add(key)
         rows.append(
             {
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "gap_start": start,
-                "gap_end": start + timedelta(days=1),
+                "gap_end": end,
                 "expected_bars": 0,
                 "reason": reason,
                 "detected_at": detected_at,
@@ -344,6 +488,52 @@ def _record_missed(store: ResearchStore, missed, *, timeframe: str, detected_at:
                 "run_id": run_id,
             }
         )
+    if not rows:
+        return 0
+    return store.publish("collection_gap", rows, job_id=run_id).rows_published
+
+
+def resolve_gaps(
+    store: ResearchStore,
+    captured,
+    *,
+    timeframe: str,
+    resolved_at: datetime,
+    run_id: str,
+    resolution: str = RESOLUTION_BACKFILLED,
+) -> int:
+    """Close the open gaps that this run actually filled.
+
+    An immutable lake cannot edit the original row, so the closure is a
+    superseding row at the same grain carrying ``resolved_at``/``resolution``;
+    readers take the latest ``detected_at`` per key. Nothing set these columns
+    before, so a gap once recorded stayed open forever (review defect D7).
+    """
+    if not captured:
+        return 0
+    partitions = {f"month={day:%Y-%m}" for _symbol, day in captured}
+    open_gaps = open_gap_keys(store, partitions)
+    rows = []
+    closed = set()
+    for symbol, day in captured:
+        start, _end = _gap_window(day)
+        key = (symbol, timeframe, start)
+        row = open_gaps.get(key)
+        if row is None or key in closed:
+            continue
+        closed.add(key)
+        superseding = dict(row)
+        superseding.update(
+            {
+                "detected_at": resolved_at,
+                "resolved_at": resolved_at,
+                "resolution": resolution,
+                "run_id": run_id,
+            }
+        )
+        rows.append(superseding)
+    if not rows:
+        return 0
     return store.publish("collection_gap", rows, job_id=run_id).rows_published
 
 
@@ -531,7 +721,11 @@ def run_yahoo_seed(
 __all__ = [
     "BackfillReport",
     "CAPTURE_MODE_BACKFILL",
+    "DEFAULT_MAX_WAIT_SECONDS",
     "FetchResult",
+    "REASON_NO_RESPONSE",
+    "REASON_TIMED_OUT",
+    "RESOLUTION_BACKFILLED",
     "PROVIDER_IBKR",
     "PROVIDER_YAHOO",
     "SEED_LEDGER_NAME",
@@ -544,7 +738,10 @@ __all__ = [
     "SeedReport",
     "YAHOO_M5_WINDOW_DAYS",
     "already_captured",
+    "archive_state",
     "load_seed_ledger",
+    "open_gap_keys",
+    "resolve_gaps",
     "run_backfill",
     "run_nightly_backfill",
     "run_weekly_universe_sweep",

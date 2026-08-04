@@ -1207,6 +1207,70 @@ redefinition of these three.
 `tests/test_warehouse_features.py::test_the_intraday_ema_lookback_is_the_session_and_needs_span_bars`
 / `test_the_intraday_ema_matches_the_champions_own_computation`.
 
+## BD-60 — Backfill dedupes per bar, waits on a real clock, and closes the gaps it fills
+
+**Decision.** Four changes to `run_backfill`, which together make the nightly
+ETH job the thing LD-03 describes:
+
+1. **"Already have" means a prior *backfill*, and dedupe is per bar.**
+   `archive_state` reads each month partition once and returns both the
+   `(symbol, interval_start)` key set (the `bar_archive._known_bar_keys`
+   pattern) and the `(symbol, day)` set that carries a `capture_mode=BACKFILL`
+   row. A day is skipped only when a backfill already covered it; the tee's
+   `LIVE`/`DELAYED` RTH rows never suppress the request, and the ETH answer's
+   overlapping RTH bars are dropped at publish instead of duplicated.
+2. **Time comes from a `clock` callable, consulted on every pacer
+   interaction.** The run stamp (`now`) still provides gap `detected_at`, but
+   the token bucket now sees time advance.
+3. **`time_budget_seconds` + the pacer's blocking `acquire`.** A run may be
+   given a wall-clock budget to wait for slots; a single wait is capped at the
+   pacer's own window, because an exhausted bucket refills after at most one
+   window. The default is 0 (never block), so every existing caller keeps its
+   behaviour and only a job that opts in waits.
+4. **Honest gap reasons, deduped, and resolvable.** Pacer denials and run-cap
+   exhaustion record `TIMED_OUT`; `NOT_COLLECTED_BY_POLICY` is reserved for
+   genuine policy absence. `_record_missed` skips a miss whose gap is already
+   open, and `resolve_gaps` closes a filled gap by appending a superseding row
+   carrying `resolved_at`/`resolution=BACKFILLED`. `open_gap_keys` is the
+   reader's view (latest `detected_at` per `(symbol, timeframe, gap_start)`,
+   unresolved only) and `coverage_readout` now uses it.
+
+**Why.** `already_captured` treated *any* bar for `(symbol, day)` as "already
+have". The tee archives RTH bars for the whole watchlist cohort every session,
+so the ETH-inclusive nightly job skipped exactly the symbols it exists to
+extend, and premarket/postmarket bars for the tee cohort were never captured at
+all — LD-03 defeated in full (review defect D6). Separately, `run_backfill`
+computed one `stamp` and passed it as `now` to every pacer call, freezing the
+10-minute window: after roughly 15 grants every remaining pair was denied and
+marked missed, so one invocation could never approach sec 5.1's ~350-request
+nightly plan, and `pacer.acquire` — which exists precisely to wait — had no
+caller (review defect D7). Recording those denials as
+`NOT_COLLECTED_BY_POLICY` conflated a pacing shortfall with intended absence,
+which sec 5.4 forbids in as many words. And with no dedupe and no resolution
+path, `collection_gap` grew by a row per run per miss and never recorded that
+anything had been fixed.
+
+**Rejected.** Keeping the day-level skip and adding a separate ETH-only dataset
+— it splits one timeframe's bars across two datasets and breaks every reader.
+Per-bar dedupe *without* the backfill-day marker — correct but it re-requests
+every covered day forever, spending IB budget to learn nothing. Sleeping inside
+`try_acquire` — the pacer must stay a pure arbiter; the job owns its own time
+budget. Mutating the original gap row — impossible in an immutable lake; hence
+supersession by `detected_at`, matching BD-53.
+
+**Reopens if.** Pilot measurement shows the nightly budget wants a per-symbol
+rather than per-run time budget, or a second writer makes the single-pass
+`archive_state` snapshot stale within a run (it is refreshed per run today
+because there is exactly one writer, LD-01).
+
+**Where.** `backfill.py::run_backfill` / `archive_state` / `open_gap_keys` /
+`resolve_gaps` / `_record_missed`; `queries.py::coverage_readout`;
+`tests/test_warehouse_backfill.py::test_the_eth_job_still_runs_for_symbols_the_tee_already_captured`
+/ `test_one_run_gets_far_past_a_single_pacer_window`
+/ `test_a_frozen_run_stamp_would_have_capped_the_run`
+/ `test_a_repeated_miss_does_not_inflate_the_gap_table`
+/ `test_a_later_run_that_fills_a_gap_resolves_it`.
+
 ---
 
 ## Open items for Sol / Fable

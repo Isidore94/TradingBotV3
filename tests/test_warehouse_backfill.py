@@ -145,8 +145,11 @@ def test_capture_requests_are_gated_by_the_pacer(store):
     assert len(calls) == 2  # the budget, not the cohort, decided
     assert report.by_outcome["OK"] == 2 and report.by_outcome["PACED_OUT"] == 2
     paced = store.read_table("collection_gap").to_pylist()
-    # Budget-limited work is policy absence, not missing data.
-    assert {gap["reason"] for gap in paced} == {"NOT_COLLECTED_BY_POLICY"}
+    # A pacing shortfall is intended-but-not-collected. Sec 5.4 keeps
+    # NOT_COLLECTED_BY_POLICY for genuine policy absence, so it must never
+    # absorb a real gap (review defect D7).
+    assert {gap["reason"] for gap in paced} == {backfill.REASON_TIMED_OUT}
+    assert backfill.NOT_COLLECTED_BY_POLICY not in {gap["reason"] for gap in paced}
 
 
 def test_a_pacing_error_backs_capture_off_and_is_tagged_capture(store, pacer):
@@ -227,6 +230,224 @@ def test_weekly_sweep_covers_the_weeks_sessions(store, pacer):
     days = sorted({call["day"] for call in calls})
     assert days == [date(2026, 8, 3), date(2026, 8, 4), date(2026, 8, 5), date(2026, 8, 6), date(2026, 8, 7)]
     assert report.by_outcome["OK"] == 5  # weekends are not sessions
+
+
+# --- D6: the tee must not block the ETH job -------------------------------
+def _tee_rows(day: date, count: int = 3):
+    """RTH bars as the tee archives them: capture_mode=LIVE, not BACKFILL."""
+    rows = []
+    first = datetime(day.year, day.month, day.day, 13, 30, tzinfo=UTC)
+    for index in range(count):
+        start = first + timedelta(minutes=5 * index)
+        rows.append(
+            {
+                "symbol": "AAPL",
+                "interval_start": start,
+                "interval_end": start + timedelta(minutes=5),
+                "session_id": f"XNYS:{day.isoformat()}",
+                "session_phase": "RTH",
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "volume": 100,
+                "vwap": None,
+                "trade_count": None,
+                "provider": "IBKR",
+                "is_complete": True,
+                "quality": "COMPLETE",
+                "source_hash": "",
+                "event_at": start + timedelta(minutes=5),
+                "observed_at": NOW,
+                "capture_mode": "LIVE",
+                "revision_id": "",
+                "supersedes_revision_id": "",
+                "schema_version": backfill.SCHEMA_VERSION,
+                "run_id": "tee",
+            }
+        )
+    return rows
+
+
+def test_the_eth_job_still_runs_for_symbols_the_tee_already_captured(store, pacer):
+    """D6: day-level "already have" defeated LD-03 entirely.
+
+    The tee archives RTH bars for the whole cohort every session, so a
+    day-level check made the ETH-inclusive nightly job skip exactly the
+    symbols it exists to extend. Premarket bars must publish, and the tee's
+    RTH bars must not be duplicated.
+    """
+    store.publish("bar_m5", _tee_rows(SESSION), job_id="tee")
+    assert store.read_table("bar_m5").num_rows == 3
+
+    calls = []
+    # The ETH answer repeats the RTH bars the tee already has and adds premarket.
+    eth = _bars(SESSION, count=2, premarket=True) + [
+        {
+            "interval_start": datetime(2026, 8, 3, 13, 30, tzinfo=UTC),
+            "interval_end": datetime(2026, 8, 3, 13, 35, tzinfo=UTC),
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.5,
+            "volume": 100,
+        }
+    ]
+    report = backfill.run_nightly_backfill(
+        store, ["AAPL"], fetcher=_fetcher(calls, bars=eth), session_date=SESSION, pacer=pacer, now=NOW
+    )
+
+    assert len(calls) == 1, "the tee's RTH rows must not suppress the ETH request"
+    assert report.by_outcome == {"OK": 1}
+    assert report.rows_published == 2  # the two premarket bars
+    assert report.rows_duplicate == 1  # the repeated RTH bar, not written twice
+
+    rows = store.read_table("bar_m5").to_pylist()
+    assert len(rows) == 5  # 3 tee + 2 premarket, no loss and no duplicate
+    starts = [row["interval_start"] for row in rows]
+    assert len(starts) == len(set(starts))
+    assert {row["session_phase"] for row in rows} == {"RTH", "PRE"}
+    # The tee's own rows keep their LIVE capture_mode; only new rows are BACKFILL.
+    by_phase = {row["session_phase"]: row["capture_mode"] for row in rows}
+    assert by_phase["RTH"] == "LIVE" and by_phase["PRE"] == "BACKFILL"
+
+    # And the ETH job is still idempotent: a re-run requests nothing.
+    again = backfill.run_nightly_backfill(
+        store, ["AAPL"], fetcher=_fetcher(calls, bars=eth), session_date=SESSION, pacer=pacer, now=NOW
+    )
+    assert again.by_outcome == {"ALREADY_HAVE": 1} and len(calls) == 1
+    assert store.read_table("bar_m5").num_rows == 5
+
+
+# --- D7: the pacer clock must advance -------------------------------------
+class _AdvancingClock:
+    """A fake wall clock the run advances as it works."""
+
+    def __init__(self, start: datetime, step_seconds: float = 30.0):
+        self.at = start
+        self.step = timedelta(seconds=step_seconds)
+
+    def __call__(self) -> datetime:
+        return self.at
+
+    def sleep(self, seconds: float) -> None:
+        self.at += timedelta(seconds=max(float(seconds), 0.0))
+
+    def work(self) -> None:
+        self.at += self.step
+
+
+def test_one_run_gets_far_past_a_single_pacer_window(store, pacer):
+    """D7: a frozen stamp capped any invocation at one window's allowance.
+
+    With the real clock the 10-minute window advances as the run works, so
+    the token bucket refills and a nightly pass can clear its cohort.
+    """
+    # 5s per request means 15 grants fit well inside one 10-minute window, so
+    # the 16th genuinely has to wait for the bucket to refill.
+    clock = _AdvancingClock(NOW, step_seconds=5.0)
+    metered = pacer_mod.IbPacer(clock=clock, capture_allowance=15)
+    cohort = [f"SYM{index:03d}" for index in range(40)]
+
+    calls = []
+
+    def fetch(symbol, day, *, timeframe, use_rth):
+        calls.append(symbol)
+        clock.work()  # the request itself takes time
+        return FetchResult(bars=list(_bars(day, count=1)))
+
+    report = backfill.run_backfill(
+        store,
+        cohort,
+        fetcher=fetch,
+        job="nightly_backfill",
+        days=[SESSION],
+        pacer=metered,
+        clock=clock,
+        sleep=clock.sleep,
+        time_budget_seconds=3600.0,
+        now=NOW,
+    )
+
+    assert report.requested == 40, "the whole cohort, not one window's worth"
+    assert report.by_outcome == {"OK": 40}
+    assert len(calls) == 40
+    assert report.gaps_recorded == 0
+    # The pacer was genuinely consulted and did make the run wait.
+    assert report.seconds_waited > 0
+
+
+def test_a_frozen_run_stamp_would_have_capped_the_run(store):
+    """The same cohort against a frozen clock: the old behaviour, pinned."""
+    frozen = pacer_mod.IbPacer(clock=lambda: NOW, capture_allowance=15)
+    calls = []
+    report = backfill.run_backfill(
+        store,
+        [f"SYM{index:03d}" for index in range(40)],
+        fetcher=_fetcher(calls),
+        job="nightly_backfill",
+        days=[SESSION],
+        pacer=frozen,
+        clock=lambda: NOW,
+        now=NOW,
+    )
+    assert report.requested == 15 and len(calls) == 15
+    assert report.by_outcome["PACED_OUT"] == 25
+    assert {gap["reason"] for gap in store.read_table("collection_gap").to_pylist()} == {
+        backfill.REASON_TIMED_OUT
+    }
+
+
+# --- D7: gap dedupe and resolution ----------------------------------------
+def test_a_repeated_miss_does_not_inflate_the_gap_table(store, pacer):
+    """D7: _record_missed appended blindly, so re-runs multiplied gap rows."""
+    empty = _fetcher([], bars=[])
+    for _ in range(3):
+        backfill.run_backfill(
+            store, ["AAPL"], fetcher=empty, job="nightly_backfill", days=[SESSION], pacer=pacer, now=NOW
+        )
+    gaps = store.read_table("collection_gap").to_pylist()
+    assert len(gaps) == 1, "one open gap, however many runs observed it"
+    assert gaps[0]["reason"] == backfill.REASON_NO_RESPONSE
+    assert gaps[0]["resolved_at"] is None
+
+
+def test_a_later_run_that_fills_a_gap_resolves_it(store, pacer):
+    """D7: nothing ever set resolved_at/BACKFILLED on a filled gap."""
+    backfill.run_backfill(
+        store,
+        ["AAPL"],
+        fetcher=_fetcher([], bars=[]),
+        job="nightly_backfill",
+        days=[SESSION],
+        pacer=pacer,
+        now=NOW,
+    )
+    partition = f"month={SESSION:%Y-%m}"
+    assert len(backfill.open_gap_keys(store, [partition])) == 1
+
+    later = NOW + timedelta(days=1)
+    # The next night is a new run: a fresh pacer, past the identical-request
+    # cooldown that correctly suppressed an immediate retry.
+    report = backfill.run_backfill(
+        store,
+        ["AAPL"],
+        fetcher=_fetcher([], bars=_bars(SESSION)),
+        job="nightly_backfill",
+        days=[SESSION],
+        pacer=pacer_mod.IbPacer(clock=lambda: later, capture_allowance=100),
+        clock=lambda: later,
+        now=later,
+    )
+    assert report.rows_published == 3 and report.gaps_resolved == 1
+
+    # The original row is preserved; the superseding row closes it.
+    rows = store.read_table("collection_gap").to_pylist()
+    assert len(rows) == 2
+    assert backfill.open_gap_keys(store, [partition]) == {}
+    closed = max(rows, key=lambda row: row["detected_at"])
+    assert closed["resolution"] == backfill.RESOLUTION_BACKFILLED
+    assert closed["resolved_at"] == later
 
 
 def test_backfill_is_a_no_op_when_the_warehouse_is_disabled():
