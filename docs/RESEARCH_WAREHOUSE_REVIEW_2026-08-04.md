@@ -19,7 +19,7 @@ D4 (partial discarded on a stop), D11 (maturity not `min()`), D12 (missing
 entry slippage + gap-through stops), D13 (unbounded intraday walk, no OPEN
 state) — are now repaired in `outcomes.py`/`queries.py`, with the repair
 decisions logged as BD-53..BD-57 and regression tests for each. Still open
-from this review: D14–D19 and the minor notes.
+from this review: D14–D18 and the minor notes.
 
 **Defect-repair addendum 2 (2026-08-04, branch
 `claude/das-warehouse-defects-2n9uql`).** D5 is repaired (BD-58, BD-59). One
@@ -31,7 +31,9 @@ fetch feeds the previous-day extremes and the dynamic/EOD VWAPs, while
 EMAs (today only)"). The warehouse's session scope was therefore already
 right; what was missing was the champion's minimum-bar guard, which is what
 BD-59 adds. The daily half of D5 is confirmed exactly as written and fixed by
-BD-58. D6 and D7 are confirmed exactly as written and repaired in BD-60.
+BD-58. D6 and D7 are confirmed exactly as written and repaired in BD-60; D19
+likewise, in BD-61 (which also answers open item 11's "decide what the EOD
+build actually runs").
 
 **Overall verdict.** The store core (seal, manifest, quarantine, retirement,
 read path) is well built and matches the plan; champion isolation of the tee

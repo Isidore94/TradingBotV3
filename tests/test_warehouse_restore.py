@@ -157,6 +157,98 @@ def test_the_build_job_is_idempotent(store, tmp_path):
     assert store.read_table("bar_derived").num_rows == rows_after_first
 
 
+def test_the_build_job_runs_the_whole_step_list(store, tmp_path, monkeypatch):
+    """D19: the EOD build never ran the D1 wrap, features, outcomes or backups.
+
+    As shipped it stopped at derived/weekly, so a night of capture produced no
+    ``bar_d1``, no feature snapshots, no outcomes and no backup at all -- an
+    undeclared gap, unlike the tee (BD-20) and the adapter (BD-44).
+    """
+    lock = tmp_path / "build.lock"
+    day = date(2026, 8, 3)
+    class_a = tmp_path / "backup_a"
+    class_b = tmp_path / "backup_b"
+    monkeypatch.setattr(cli.config, "backup_class_a_dirs", lambda: [class_a])
+    monkeypatch.setattr(cli.config, "backup_class_b_dir", lambda: class_b)
+
+    report = cli.run_build(store, session_date=day, now=NOW, lock_path=lock)
+    assert report.status == "OK"
+
+    expected = [
+        "reconcile", "spool", "bronze", "snapshots", "bar_d1", "sessions",
+        "derived", "weekly", "anchors", "features_daily", "features_intraday",
+        "outcomes", "backups", "retired",
+    ]
+    assert list(report.steps) == expected, "the step list is a dependency order"
+
+    # Each new step actually ran rather than being silently absent.
+    # NO_SOURCE here: the durable D1 store is a desk artifact, absent in tests.
+    assert report.steps["bar_d1"]["status"] in {"OK", "NOTHING_TO_COMPUTE", "NO_SOURCE"}
+    assert report.steps["bar_d1"]["dataset"] == "bar_d1"
+    assert report.steps["anchors"]["dataset"] == "anchor_instance"
+    assert report.steps["features_daily"]["dataset"] == "feature_snapshot_daily"
+    assert report.steps["features_intraday"]["dataset"] == "feature_snapshot_intraday"
+    # Occurrence ingestion stays blocked on BD-44 -- skipped cleanly, and said so.
+    assert report.steps["outcomes"]["status"] == "NO_OCCURRENCES"
+    assert "BD-44" in report.steps["outcomes"]["message"]
+    # Backups ran against the configured targets.
+    assert report.steps["backups"]["class_a"]["status"] == "OK"
+    assert report.steps["backups"]["class_b"]["status"] == "OK"
+    assert class_b.exists()
+
+    # And the whole enlarged list is still a no-op on a re-run.
+    before = {name: store.read_table(name).num_rows for name in ("bar_derived", "bar_d1", "anchor_instance")}
+    again = cli.run_build(store, session_date=day, now=NOW, lock_path=lock)
+    assert again.status == "OK"
+    assert {name: store.read_table(name).num_rows for name in before} == before
+
+
+def test_backups_no_op_with_a_clear_message_when_unconfigured(store, tmp_path, monkeypatch):
+    """A backup written somewhere nobody chose is not a backup."""
+    monkeypatch.setattr(cli.config, "backup_class_a_dirs", lambda: [])
+    monkeypatch.setattr(cli.config, "backup_class_b_dir", lambda: None)
+
+    report = cli.run_build(store, session_date=date(2026, 8, 3), now=NOW, lock_path=tmp_path / "lock")
+    assert report.status == "OK"
+    for cls in ("class_a", "class_b"):
+        step = report.steps["backups"][cls]
+        assert step["status"] == "NO_TARGET"
+        assert "local_settings.json" in step["message"]
+
+
+def test_the_anchor_step_reads_current_and_previous_from_bronze(store):
+    """LD-09 scopes the slice to current + previous earnings anchors."""
+    rows = []
+    for offset, anchor_day in enumerate(("2026-01-28", "2026-04-29", "2026-07-30")):
+        rows.append(
+            {
+                "source_artifact": "earnings_avwap_anchors",
+                "source_path": "earnings_avwap_anchors.csv",
+                "source_sha256": f"sha{offset}",
+                "source_offset": offset,
+                "record_hash": f"rec{offset}",
+                "legacy_id": f"AAPL|{anchor_day}",
+                "payload": json.dumps({"ticker": "AAPL", "anchor_date": anchor_day, "side": "LONG"}),
+                # A CSV row is wrapped as CSV_ROW with a JSON payload text.
+                "payload_format": schemas.BRONZE_FORMAT_CSV_ROW,
+                "quality": "COMPLETE",
+                "event_at": NOW,
+                "observed_at": NOW,
+                "partition_ts": NOW,
+                "capture_mode": "RECONSTRUCTED",
+                "schema_version": schemas.SCHEMA_VERSION,
+                "run_id": "bronze",
+            }
+        )
+    store.publish("bronze_earnings_avwap_anchors", rows, job_id="bronze")
+
+    anchors = cli.anchors_from_bronze(store)
+    assert [(item["anchor_type"], item["anchor_bar_date"].isoformat()) for item in anchors] == [
+        ("EARNINGS_CURRENT", "2026-07-30"),
+        ("EARNINGS_PREVIOUS", "2026-04-29"),
+    ]
+
+
 def test_the_build_job_is_a_no_op_when_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.ResearchStore, "open", classmethod(lambda cls, root=None: None))
     report = cli.run_build(lock_path=tmp_path / "lock")

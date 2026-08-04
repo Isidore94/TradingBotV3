@@ -1271,6 +1271,70 @@ because there is exactly one writer, LD-01).
 / `test_a_repeated_miss_does_not_inflate_the_gap_table`
 / `test_a_later_run_that_fills_a_gap_resolves_it`.
 
+## BD-61 — The EOD build's step list, in dependency order
+
+**Decision.** `run_build` runs fourteen steps, in this order and for these
+reasons: **reconcile** and **spool seal** first, so the lake is consistent and
+the session's spooled M5 bars are in it before anything reads bars;
+**bronze**, because the D1 wrap, the universe snapshots and the anchors all
+read wrapped artifacts; **daily snapshots** (universe membership + level
+geometry), which fix the session's point-in-time cohort; **`bar_d1`**
+(`ingest_daily_bars`) over that cohort, because sessions, aggregates and every
+feature snapshot read it; **sessions**, **derived** and **weekly**;
+**`anchor_instance`** from the bronze earnings anchors, because a daily
+snapshot's AVWAP block needs an anchor to key on; **daily** then **intraday
+feature snapshots**; **outcomes**; **backups**; and **retirement** last, so
+nothing is swept before it has been copied.
+
+Three sub-decisions inside that list:
+
+* **Cohort provenance.** The D1 wrap's symbol list comes from the session's own
+  `universe_membership_daily` rows, not from today's watchlist files - LD-05
+  makes that snapshot the point-in-time truth, so a rebuild months later sees
+  the same cohort.
+* **Anchor scope.** `anchors_from_bronze` groups every version of
+  `earnings_avwap_anchors.csv` bronze has seen by ticker; the newest distinct
+  `anchor_date` is `EARNINGS_CURRENT` and the one before it
+  `EARNINGS_PREVIOUS` (LD-09's slice scope). Older dates are history, not slice
+  anchors, and a ticker seen once simply has no previous anchor.
+* **Backups are opt-in by path.** `research_backup_class_a_dirs` and
+  `research_backup_class_b_dir` (env: `TRADINGBOTV3_RESEARCH_BACKUP_A`/`_B`)
+  gate the two backup steps. Unset, each step reports `NO_TARGET` and names the
+  setting to fill in. A backup written to a guessed destination is not a
+  backup, and Class B must be a second physical disk, never Drive (sec 8.5).
+
+Occurrence *ingestion* stays blocked on the BD-44 detector adapter, so the
+outcomes step reads whatever `setup_occurrence` rows exist and reports
+`NO_OCCURRENCES` — naming BD-44 — when there are none. Its
+`bands_by_occurrence` is pinned to each occurrence's own trigger-session
+`feature_snapshot_daily` row, which is the review's point-in-time requirement:
+bands computed later than the trigger would be look-ahead.
+
+**Why.** `run_build` stopped at derived/weekly. It never called
+`ingest_daily_bars`, the anchors, either feature snapshot, the outcome engine
+or `backup_class_a/b` — so as shipped, a night of capture produced no
+`bar_d1`, no features, no outcomes and no backup at all, and the pilot would
+have accumulated 20 sessions of raw bars with nothing built on them. BD-20 and
+BD-44 declare their gaps; this one was undeclared (review defect D19).
+
+**Rejected.** Running the nightly/weekly *backfill* jobs from this build too —
+they are net-new provider traffic on a different schedule (overnight, after
+the TWS restart) and belong to their own invocation with its own time budget
+(BD-60); folding them in would make one job both a fast EOD build and a
+multi-hour fetch. Guessing backup destinations from the Drive home folder —
+Class B explicitly must not live there.
+
+**Reopens if.** The detector adapter lands (occurrence ingestion joins the list
+before outcomes), or the pilot shows the EOD build's wall time needs the
+feature pass split from the seal.
+
+**Where.** `cli.py::run_build` / `cohort_for` / `anchors_from_bronze` /
+`anchor_dates_by_symbol` / `_run_outcomes` / `_bands_by_occurrence` /
+`_run_backups`; `config.py::backup_class_a_dirs` / `backup_class_b_dir`;
+`tests/test_warehouse_restore.py::test_the_build_job_runs_the_whole_step_list`
+/ `test_backups_no_op_with_a_clear_message_when_unconfigured`
+/ `test_the_anchor_step_reads_current_and_previous_from_bronze`.
+
 ---
 
 ## Open items for Sol / Fable

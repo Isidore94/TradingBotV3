@@ -27,18 +27,22 @@ from datetime import date, datetime
 from pathlib import Path
 
 try:  # package import
-    from . import backup as backup_mod, config, queries
+    from . import backup as backup_mod, config, features, occurrences, outcomes, queries, schemas
     from .aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars
-    from .ingest_existing import run_bronze_ingest, run_daily_snapshots
+    from .ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots
     from .manifest import utc_now
     from .spool import seal_spool
     from .store import ResearchStore
 except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     import backup as backup_mod  # type: ignore
     import config  # type: ignore
+    import features  # type: ignore
+    import occurrences  # type: ignore
+    import outcomes  # type: ignore
     import queries  # type: ignore
+    import schemas  # type: ignore
     from aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars  # type: ignore
-    from ingest_existing import run_bronze_ingest, run_daily_snapshots  # type: ignore
+    from ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots  # type: ignore
     from manifest import utc_now  # type: ignore
     from spool import seal_spool  # type: ignore
     from store import ResearchStore  # type: ignore
@@ -138,6 +142,222 @@ class BuildReport:
     message: str = ""
 
 
+#: Bronze payloads that are JSON *text*, whatever the source file was. A CSV
+#: row is wrapped as ``CSV_ROW`` but its payload is a JSON object of the
+#: header-to-value mapping, so it decodes the same way.
+_JSON_PAYLOAD_FORMATS = {
+    schemas.BRONZE_FORMAT_JSON,
+    schemas.BRONZE_FORMAT_JSONL,
+    schemas.BRONZE_FORMAT_CSV_ROW,
+}
+
+
+def _bronze_payloads(store: ResearchStore, dataset: str) -> list[dict]:
+    """Decode a bronze wrap's verbatim payloads back into dicts."""
+    rows = []
+    try:
+        table = store.read_table(dataset, columns=["payload", "payload_format"])
+    except Exception:
+        return rows
+    for payload, fmt in zip(
+        table.column("payload").to_pylist(), table.column("payload_format").to_pylist()
+    ):
+        if str(fmt or "").upper() not in _JSON_PAYLOAD_FORMATS:
+            continue
+        try:
+            decoded = json.loads(payload)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(decoded, dict):
+            rows.append(decoded)
+    return rows
+
+
+def anchors_from_bronze(store: ResearchStore) -> list[dict]:
+    """Earnings anchors for ``anchor_instance``, from the bronze CSV wrap.
+
+    The trader's ``earnings_avwap_anchors.csv`` carries one current anchor per
+    ticker (`ticker`, `anchor_date`, ...), and bronze keeps every version of
+    that file it has ever seen. LD-09 scopes the slice to *current and
+    previous* earnings, so per ticker the newest distinct ``anchor_date``
+    becomes ``EARNINGS_CURRENT`` and the one before it ``EARNINGS_PREVIOUS``;
+    older ones are history, not slice anchors. Nothing is invented - a ticker
+    bronze has only ever seen once simply has no previous anchor.
+    """
+    by_symbol: dict[str, set] = {}
+    for payload in _bronze_payloads(store, "bronze_earnings_avwap_anchors"):
+        symbol = str(payload.get("ticker") or payload.get("symbol") or "").strip().upper()
+        raw = str(payload.get("anchor_date") or "").strip()
+        if not symbol or not raw:
+            continue
+        try:
+            day = date.fromisoformat(raw[:10])
+        except ValueError:
+            continue
+        by_symbol.setdefault(symbol, set()).add(day)
+
+    anchors = []
+    for symbol, days in sorted(by_symbol.items()):
+        ordered = sorted(days, reverse=True)
+        for anchor_type, day in zip(
+            (features.ANCHOR_TYPE_CURRENT, features.ANCHOR_TYPE_PREVIOUS), ordered
+        ):
+            anchors.append(
+                {
+                    "symbol": symbol,
+                    "anchor_type": anchor_type,
+                    "anchor_bar_date": day,
+                    "source": "earnings_avwap_anchors.csv",
+                }
+            )
+    return anchors
+
+
+def cohort_for(store: ResearchStore, day: date) -> list[str]:
+    """The session's captured cohort, from its own membership snapshot.
+
+    Read from ``universe_membership_daily`` rather than from today's watchlist
+    files: LD-05 makes that snapshot the point-in-time truth about who was a
+    member, and a rebuild months later must see the same cohort.
+    """
+    symbols = set()
+    for row in store.read_table(
+        "universe_membership_daily", f"year={day.year}", columns=["session_date", "symbol"]
+    ).to_pylist():
+        session_day = row.get("session_date")
+        if isinstance(session_day, datetime):
+            session_day = session_day.date()
+        if session_day == day:
+            value = str(row.get("symbol") or "").strip().upper()
+            if value:
+                symbols.add(value)
+    return sorted(symbols)
+
+
+def anchor_dates_by_symbol(store: ResearchStore, day: date) -> dict:
+    """Current-earnings anchor bar date per symbol, for the daily AVWAP block."""
+    dates: dict[str, date] = {}
+    for year in (day.year, day.year - 1):
+        for row in store.read_table("anchor_instance", f"year={year}").to_pylist():
+            if str(row.get("anchor_type") or "") != features.ANCHOR_TYPE_CURRENT:
+                continue
+            bar_date = row.get("anchor_bar_date")
+            if isinstance(bar_date, datetime):
+                bar_date = bar_date.date()
+            if bar_date is None or bar_date > day:
+                continue  # an anchor that had not happened yet is not knowable
+            symbol = str(row.get("symbol") or "")
+            if symbol and (symbol not in dates or bar_date > dates[symbol]):
+                dates[symbol] = bar_date
+    return dates
+
+
+def _run_backups(store: ResearchStore, stamp: datetime) -> dict:
+    """Class A/B copies, but only to destinations the trader configured."""
+    steps: dict = {}
+    class_a = config.backup_class_a_dirs()
+    if class_a:
+        steps["class_a"] = vars(backup_mod.backup_class_a(store, class_a, now=stamp))
+    else:
+        steps["class_a"] = {
+            "status": "NO_TARGET",
+            "message": (
+                f"no Class-A backup target: set {config.BACKUP_CLASS_A_SETTING} in "
+                f"local_settings.json (or {config.BACKUP_CLASS_A_ENV})."
+            ),
+        }
+    class_b = config.backup_class_b_dir()
+    if class_b is not None:
+        steps["class_b"] = vars(backup_mod.backup_class_b(store, class_b, now=stamp))
+    else:
+        steps["class_b"] = {
+            "status": "NO_TARGET",
+            "message": (
+                f"no Class-B backup target: set {config.BACKUP_CLASS_B_SETTING} in "
+                f"local_settings.json (or {config.BACKUP_CLASS_B_ENV}). It must be a "
+                "second physical disk, never the Drive folder."
+            ),
+        }
+    return steps
+
+
+def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str) -> dict:
+    """Simulate outcomes for occurrences already in the lake.
+
+    Occurrence *ingestion* is still blocked on the BD-44 detector adapter, so
+    this step is a clean no-op until something writes ``setup_occurrence``.
+    That is a declared gap, not a silent one.
+    """
+    known = {}
+    for year in (day.year, day.year - 1):
+        known.update(occurrences.latest_occurrences(store, year))
+    if not known:
+        return {
+            "status": "NO_OCCURRENCES",
+            "message": "no setup_occurrence rows yet; the detector adapter is BD-44.",
+        }
+
+    symbols = sorted({str(row.get("symbol") or "") for row in known.values()})
+    _partitions, d1_by_symbol = features.daily_history_window(store, day)
+    d1_by_symbol = {symbol: rows for symbol, rows in d1_by_symbol.items() if symbol in set(symbols)}
+
+    m5_by_symbol: dict[str, list] = {}
+    for row in store.read_table("bar_m5", f"month={day:%Y-%m}").to_pylist():
+        symbol = str(row.get("symbol") or "")
+        if symbol in set(symbols):
+            m5_by_symbol.setdefault(symbol, []).append(row)
+
+    return vars(
+        outcomes.build_outcomes(
+            store,
+            list(known.values()),
+            d1_by_symbol=d1_by_symbol,
+            m5_by_symbol=m5_by_symbol,
+            bands_by_occurrence=_bands_by_occurrence(store, known),
+            as_of=stamp,
+            now=stamp,
+            run_id=run_id,
+        )
+    )
+
+
+def _bands_by_occurrence(store: ResearchStore, known: dict) -> dict:
+    """AVWAP bands pinned to each occurrence's own trigger session.
+
+    The review's point-in-time note: bands computed later than the trigger
+    would be look-ahead, so they are read from the ``feature_snapshot_daily``
+    row for the trigger session, never from today's.
+    """
+    wanted = {}
+    for identity, row in known.items():
+        trigger = row.get("trigger_at")
+        if isinstance(trigger, datetime):
+            wanted[identity] = (str(row.get("symbol") or ""), trigger.date())
+
+    if not wanted:
+        return {}
+    snapshots: dict[tuple[str, date], dict] = {}
+    for year in {day.year for _symbol, day in wanted.values()}:
+        for row in store.read_table("feature_snapshot_daily", f"year={year}").to_pylist():
+            session_day = row.get("session_date")
+            if isinstance(session_day, datetime):
+                session_day = session_day.date()
+            snapshots[(str(row.get("symbol") or ""), session_day)] = row
+
+    bands = {}
+    for identity, key in wanted.items():
+        snapshot = snapshots.get(key)
+        if snapshot is None:
+            continue
+        resolved = {
+            band.upper(): snapshot.get(f"avwape_{band}")
+            for band in ("upper_1", "upper_2", "upper_3", "lower_1", "lower_2", "lower_3")
+        }
+        if any(value is not None for value in resolved.values()):
+            bands[identity] = resolved
+    return bands
+
+
 def run_build(
     store: ResearchStore | None = None,
     *,
@@ -146,7 +366,19 @@ def run_build(
     run_id: str = "",
     lock_path: Path | None = None,
 ) -> BuildReport:
-    """Seal the spool, wrap bronze, snapshot, then derive. Idempotent throughout."""
+    """Run the full EOD step list. Every step is idempotent; a re-run is a no-op.
+
+    The order is a dependency order, not a preference (BD-61): reconcile and
+    seal first so the lake is consistent and the session's spooled M5 bars are
+    in it; bronze next because the D1 wrap, the universe snapshots and the
+    anchors all read wrapped artifacts; then ``bar_d1``, because sessions,
+    aggregates and every feature snapshot read it; then sessions and the
+    derived/weekly frames the intraday features join to; then anchors, because
+    a daily snapshot's AVWAP block needs its ``anchor_instance``; then the
+    feature snapshots; then outcomes; then backups, which should copy the
+    night's work rather than yesterday's; then retirement last, so nothing is
+    swept before it has been backed up.
+    """
     report = BuildReport()
     target = store if store is not None else ResearchStore.open()
     if target is None:
@@ -164,9 +396,32 @@ def run_build(
             report.steps["snapshots"] = [
                 vars(item) for item in run_daily_snapshots(target, session_date=day, run_id=run_id, now=stamp)
             ]
+            cohort = cohort_for(target, day)
+            report.steps["bar_d1"] = vars(
+                ingest_daily_bars(target, cohort, as_of=day, run_id=run_id, now=stamp)
+            )
             report.steps["sessions"] = vars(build_trading_sessions(target, day, day, now=stamp, run_id=run_id))
             report.steps["derived"] = vars(build_derived_bars(target, [day], as_of=stamp, now=stamp, run_id=run_id))
             report.steps["weekly"] = vars(build_weekly_bars(target, [day], as_of=stamp, now=stamp, run_id=run_id))
+            report.steps["anchors"] = vars(
+                features.build_anchor_instances(
+                    target, anchors_from_bronze(target), now=stamp, run_id=run_id
+                )
+            )
+            report.steps["features_daily"] = vars(
+                features.build_daily_snapshots(
+                    target,
+                    day,
+                    anchors_by_symbol=anchor_dates_by_symbol(target, day),
+                    now=stamp,
+                    run_id=run_id,
+                )
+            )
+            report.steps["features_intraday"] = vars(
+                features.build_intraday_snapshots(target, day, now=stamp, run_id=run_id)
+            )
+            report.steps["outcomes"] = _run_outcomes(target, day, stamp, run_id)
+            report.steps["backups"] = _run_backups(target, stamp)
             report.steps["retired"] = vars(target.collect_retired(now=stamp))
             _record_job("COMPLETED", {"run_id": run_id})
     except SingleFlightError as exc:
