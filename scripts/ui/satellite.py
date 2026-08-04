@@ -40,6 +40,7 @@ from desk_link.popup_payload import restore_alert_popup_payload
 from desk_link.server import DEFAULT_PORT
 from project_paths import LOCAL_SETTINGS_DIR, get_local_setting, save_local_setting
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+from ui.widgets.price_alert_toast import PriceAlertToastManager
 
 log = logging.getLogger(__name__)
 
@@ -267,6 +268,7 @@ class SatelliteWindow(QMainWindow):
         # each reconnect so the main replays anything a Wi-Fi blip swallowed.
         self._last_popup_seq = 0
         self._last_replay_beep = 0.0
+        self.price_alert_toasts = PriceAlertToastManager(self)
         self.snapshot_label = QLabel("")
         self.snapshot_label.setObjectName("MutedLabel")
         self.snapshot_label.setWordWrap(True)
@@ -402,6 +404,9 @@ class SatelliteWindow(QMainWindow):
             self._show_alert(message)
         elif kind == protocol.TYPE_STATE_SNAPSHOT:
             self._show_snapshot(payload)
+        elif kind == protocol.TYPE_DESK_STREAM:
+            if payload.get("stream") == "price_alert" and isinstance(payload.get("data"), dict):
+                self._show_price_alert(payload["data"], replayed=False)
         elif kind == protocol.TYPE_LEASE_GRANT:
             self._set_in_control(
                 True, "IN CONTROL — decisions here apply on the main desk. Main is relaying."
@@ -435,6 +440,18 @@ class SatelliteWindow(QMainWindow):
         if focus_names:
             text += " · Focus: " + ", ".join(focus_names)
         self.snapshot_label.setText(text)
+        for alert in payload.get("price_alerts") or []:
+            if isinstance(alert, dict):
+                self._show_price_alert(alert, replayed=True)
+
+    def _show_price_alert(self, payload: dict[str, Any], *, replayed: bool) -> None:
+        if not self.price_alert_toasts.show_alert(payload, replayed=replayed):
+            return
+        message = str(payload.get("message") or "Price alert fired")
+        prefix = "⟳ missed price alert" if replayed else "PRICE ALERT"
+        self.feed.insertItem(0, f"{prefix}: {message}")
+        while self.feed.count() > _MAX_FEED_ROWS:
+            self.feed.takeItem(self.feed.count() - 1)
 
     def _show_alert(self, message: dict[str, Any]) -> None:
         payload = message["payload"]

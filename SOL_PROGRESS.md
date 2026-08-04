@@ -7,20 +7,16 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch `claude/macos-gui-tws-compat-0nv0gs` (2026-08-02, not yet merged):
-  macOS support (CloudStorage Drive detection, Keychain AI keys, `.command`
-  launchers, `docs/MACOS_SETUP.md`) plus **Desk Link Tier 1** (plan.md sec 12
-  item 7a): LAN relay server + view-only satellite with live alert chart
-  popups (`scripts/desk_link/`, `ui/services/desk_link_service.py`,
-  `ui/satellite.py`, `--satellite` launch flag), Desk Link Tier 2 (exclusive
-  control lease + journaled idempotent intents: remove-for-day, focus
-  add/remove; main banner lock + take-back), Settings-page Desk Link
-  config, satellite connect dialog + one-click launchers, and the
-  cross-platform cleanup pass (legacy ~/AppData migration, single local-dir
-  convention, darwin PyQt5-Qt5 pin). Test baseline on that branch:
-  **1764 passed, 2 skipped, 5 subtests** (Linux, TZ=America/Vancouver);
-  smoke 7/7. Live validation of the link is pending a real two-machine
-  session.
+- Branch `feature/focus-price-alerts` (2026-08-03, not yet merged), stacked on
+  the unified launcher, pairing-in-Settings, and scroll-safe Settings tabs:
+  plan.md item 7b Phases A–D are **IMPLEMENTED + GREEN**. The Focus tab now
+  edits the existing two-sided alert store; one explicit main-only service
+  owns polling and urgent ntfy push; triggers relay live and through the sticky
+  Desk Link snapshot; main, full satellite, and mirror satellite share a
+  persistent non-activating audible toast. Satellite editing remains read-only
+  until Phase E. Test baseline: **1800 passed, 5 subtests**; smoke **7/7**.
+  Phone/main/satellite ordering and reconnect recovery still require the live
+  two-machine check, so this is not `LIVE_VALIDATED`.
 
 ## Previous checkpoint (main)
 
@@ -59,12 +55,12 @@ stamp; it must not duplicate the roadmap.
   briefing (environment + best D1s by expected R + held picks + overnight
   alerts) written to `evening_briefing.txt`, folded into the hourly phone
   report (EVENING publishes hourly like AWAY), and announced via push.
-- Price-level alert watchlist (Research -> Price Alerts): trader-entered
+- Price-level alert watchlist (Focus and Research -> Price Alerts): trader-entered
   tickers with above/below levels, polled every minute from 1m bars including
   pre/post market, pushed to phone + watch over ntfy (outbound HTTPS only; no
   ports). Each side fires once per arm then disarms; entries are never
-  auto-removed; only the designated writer machine monitors. Urgent priority
-  while EVENING is active. New modules: `evening_mode.py`, `price_alerts.py`,
+  auto-removed; only the explicit main-desk engine monitors, with the shared
+  writer gate retained as defense in depth. Every crossing is urgent. New modules: `evening_mode.py`, `price_alerts.py`,
   `push_notify.py`, `ui/services/price_alert_service.py`,
   `ui/panels/price_alerts_panel.py`; runbook at `docs/EVENING_MODE_RUNBOOK.md`.
 - Not live-validated: needs one real sleep-in session (arm the night before,

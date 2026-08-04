@@ -401,6 +401,18 @@ class DeskLinkService(QObject):
             except OSError:
                 return []
 
+        import price_alerts
+
+        fired_price_alerts = []
+        for trigger in price_alerts.todays_triggers():
+            payload = dict(trigger)
+            try:
+                payload["message"] = price_alerts.format_trigger_message(payload)
+            except (TypeError, ValueError):
+                payload["message"] = f"{payload.get('symbol') or 'Price'} alert fired"
+            payload["priority"] = "urgent"
+            fired_price_alerts.append(payload)
+
         return {
             "machine": self._machine_name,
             "watchlists": {
@@ -413,4 +425,5 @@ class DeskLinkService(QObject):
                 "longs": read_list(FOCUS_LONGS_FILE),
                 "shorts": read_list(FOCUS_SHORTS_FILE),
             },
+            "price_alerts": fired_price_alerts,
         }

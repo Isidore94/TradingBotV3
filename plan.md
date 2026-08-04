@@ -1586,8 +1586,11 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    hand; every price alert pushes at ntfy `urgent` priority (dropping the
    EVENING-vs-daytime split); every satellite beeps regardless of the control
    lease, and the phone push fires first, independent of the relay.
-   Phase A starts only after item 7a's pending live two-machine pairing
-   validation is complete.
+   At explicit trader direction on 2026-08-03, Phases A–D were implemented
+   before item 7a's pending live two-machine pairing validation; deterministic
+   status is **GREEN** (1800 tests + 5 subtests, smoke 7/7), not
+   **LIVE_VALIDATED**. Phase E satellite-side edit intents remain gated until
+   the two-machine alert-delivery check passes.
 
 ### Next — after initial live evidence
 

@@ -326,6 +326,38 @@ def test_satellite_window_without_pairing_waits_instead_of_crashing(monkeypatch)
         window.close()
 
 
+def test_mirror_window_renders_price_stream_and_dedupes_sticky_replay(monkeypatch):
+    _qapp()
+    satellite_module = _patched_satellite_settings(monkeypatch, {})
+    window = satellite_module.SatelliteWindow(machine_name="test-sat")
+    alert = {
+        "date": "2026-08-03",
+        "at": "10:30:00",
+        "symbol": "SPY",
+        "side": "above",
+        "level": 600.0,
+        "last": 600.1,
+        "message": "SPY crossed above 600",
+        "priority": "urgent",
+    }
+    try:
+        window._on_message(
+            protocol.make_message(
+                protocol.TYPE_DESK_STREAM,
+                {"stream": "price_alert", "data": alert},
+            )
+        )
+        assert window.feed.count() == 1
+        assert "PRICE ALERT" in window.feed.item(0).text()
+        assert len(window.price_alert_toasts.toasts) == 1
+
+        window._on_message(protocol.make_message(protocol.TYPE_STATE_SNAPSHOT, {"price_alerts": [alert]}))
+        assert window.feed.count() == 1
+        assert len(window.price_alert_toasts.toasts) == 1
+    finally:
+        window.close()
+
+
 def test_satellite_window_autoconnects_from_saved_settings(monkeypatch):
     _qapp()
     settings = {"desk_link_host": "192.168.1.20:47601", "desk_link_token": "saved-token"}

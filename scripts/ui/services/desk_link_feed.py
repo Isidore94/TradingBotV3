@@ -23,6 +23,7 @@ from desk_link import protocol
 from desk_link.client import DeskLinkClient
 from desk_link.popup_payload import restore_alert_popup_payload
 from ui.models.bounce import BounceAlert
+from ui.widgets.price_alert_toast import price_alert_event_key
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class DeskLinkFeedService(QObject):
     entryBoardChanged = Signal(object)
     statusChanged = Signal(str)
     autoRegimeChanged = Signal(object)
+    priceAlertReceived = Signal(dict)
 
     _messageArrived = Signal(dict)  # client thread -> GUI thread bridge
 
@@ -67,6 +69,7 @@ class DeskLinkFeedService(QObject):
         self._client: DeskLinkClient | None = None
         self._link_status = ("stopped", "stopped")
         self._payload_bot = _PayloadBot()
+        self._seen_price_alerts: set[str] = set()
         self._messageArrived.connect(self._handle_message)
 
     def payload_bot(self) -> _PayloadBot:
@@ -112,6 +115,12 @@ class DeskLinkFeedService(QObject):
         if kind == protocol.TYPE_DESK_STREAM:
             self._handle_stream(message.get("payload") or {})
             return
+        if kind == protocol.TYPE_STATE_SNAPSHOT:
+            payload = message.get("payload") or {}
+            for alert in payload.get("price_alerts") or []:
+                if isinstance(alert, dict):
+                    self._emit_price_alert(alert, replayed=True)
+            return
         if kind != protocol.TYPE_ALERT_POPUP:
             return
         payload = message.get("payload") or {}
@@ -141,7 +150,19 @@ class DeskLinkFeedService(QObject):
             self.statusChanged.emit(str(data or ""))
         elif stream == "auto_regime":
             self.autoRegimeChanged.emit(data if isinstance(data, dict) else {})
+        elif stream == "price_alert" and isinstance(data, dict):
+            self._emit_price_alert(data, replayed=False)
         # Unknown streams from a newer main are skipped, never an error.
+
+    def _emit_price_alert(self, payload: dict[str, Any], *, replayed: bool) -> None:
+        alert = dict(payload)
+        key = price_alert_event_key(alert)
+        if key.strip("|") and key in self._seen_price_alerts:
+            return
+        if key.strip("|"):
+            self._seen_price_alerts.add(key)
+        alert["replayed"] = bool(replayed)
+        self.priceAlertReceived.emit(alert)
 
 
 def _rebuild_alert(fields: dict[str, Any]) -> BounceAlert:

@@ -1,9 +1,10 @@
-# Focus price alerts + phone push — design proposal (for trader review)
+# Focus price alerts + phone push
 
-Status: **PROPOSED 2026-08-03**, trader-directed (plan.md sec 12 item 7b);
-trader decisions recorded 2026-08-03 (see "Trader decisions" below). Not yet
-implemented. Nothing here changes a detector, a score, or a champion path —
-this is a presentation + relay packet on top of machinery that already ships.
+Status: **PHASES A–D IMPLEMENTED + GREEN 2026-08-03**, trader-directed
+(plan.md sec 12 item 7b); not yet live-validated. Phase E remains gated on the
+live two-machine check. Nothing here changes a detector, a score, or a champion
+path — this is a presentation + relay packet on top of machinery that already
+ships.
 
 Trader requirements, as given:
 
@@ -24,7 +25,7 @@ Evening mode and Desk Link:
 | --- | --- | --- |
 | ntfy channel (topic/server/token, priorities, fail-quiet POST) | `scripts/push_notify.py` | Done |
 | Alert store + cross evaluation + trigger log | `scripts/price_alerts.py` | Done |
-| Background poller (60 s, extended hours, urgent-in-EVENING) | `scripts/ui/services/price_alert_service.py` | Done |
+| Background poller (60 s, extended hours, always urgent) | `scripts/ui/services/price_alert_service.py` | Done |
 | Entry table + ntfy settings UI | `scripts/ui/panels/price_alerts_panel.py` (Research ▸ Price Alerts) | Done |
 | Generic relay envelope for new surfaces | `desk_link` `TYPE_DESK_STREAM` + `publish_stream` | Done |
 
@@ -82,6 +83,8 @@ cannot spam the phone. No schema change is needed.
 
 ### Phase A — Focus tab entry section (main PC)
 
+Status: **IMPLEMENTED + GREEN**.
+
 - New `scripts/ui/widgets/price_alert_board.py`, embedded in
   `FocusPicksPanel` beneath the Swing and M5 sections.
 - Columns: Symbol · Cross up · Cross down · ▲ armed · ▼ armed · Last trigger.
@@ -94,6 +97,8 @@ cannot spam the phone. No schema change is needed.
 
 ### Phase B — enforce main-PC origin
 
+Status: **IMPLEMENTED + GREEN**.
+
 - `PriceAlertService` takes an explicit engine flag from `MainWindow`
   (`not satellite_desk`). A non-engine process never polls, never fetches, and
   never pushes — the panel's status line says so in words.
@@ -103,6 +108,8 @@ cannot spam the phone. No schema change is needed.
   reports "not the engine machine" and no quote fetch is attempted.
 
 ### Phase C — relay the fire
+
+Status: **IMPLEMENTED + GREEN**.
 
 - On trigger the main calls
   `desk_link_service.publish_stream("price_alert", payload)`; payload is the
@@ -122,6 +129,8 @@ cannot spam the phone. No schema change is needed.
 
 ### Phase D — unmissable presentation
 
+Status: **IMPLEMENTED + GREEN**.
+
 - A shared `PriceAlertToast`: persistent until dismissed, red accent, audible,
   stacking up to a small cap. Same gentle-raise contract as the alert popup
   (`WA_ShowWithoutActivating` + `WindowDoesNotAcceptFocus`) — an alert must
@@ -138,11 +147,13 @@ cannot spam the phone. No schema change is needed.
 
 ### Phase E — satellite-initiated edits (only after A–D prove out live)
 
+Status: **PLANNED; intentionally not implemented**.
+
 - New intent actions `price_alert_set` / `price_alert_rearm` over the Tier 2
   channel: journaled, acked, idempotent, applied on the main, which then
   re-publishes the snapshot.
-- Until then the Focus board is **read-only on satellites**, with a hint
-  pointing at the take-control button (G5).
+- Until then the Focus board is **read-only on satellites**, with a direct
+  instruction to edit or re-arm the row on the main desk (G5).
 
 ## Invariants respected (plan.md sec 5)
 
@@ -164,6 +175,10 @@ Live check (one session, per plan.md sec 6 discipline): set a level a few
 cents away on a liquid name, confirm in order — phone buzzes, main desk shows
 the toast, connected satellite shows the toast — then confirm the level
 disarms and does not re-fire on the next poll.
+
+Automated gate (2026-08-03): `pytest tests/ -q` → **1800 passed + 5
+subtests**; `scripts/smoke_check.py` → **7/7**. The live check above remains
+outstanding.
 
 ## Trader decisions (2026-08-03)
 

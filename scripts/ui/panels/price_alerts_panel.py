@@ -2,9 +2,9 @@
 
 Enter current positions (or SPY itself) as tickers with alert levels above
 and/or below price. While the GUI runs, PriceAlertService watches last prices
-(pre/post market included) and pushes a phone + Apple Watch notification the
-moment a level crosses - urgent priority in Auto EVENING mode so it breaks
-through sleep focus. Each side fires once per arm, then needs re-arming.
+(pre/post market included) and pushes an urgent phone + Apple Watch
+notification the moment a level crosses. Each side fires once per arm, then
+needs re-arming.
 """
 
 from __future__ import annotations
@@ -37,10 +37,18 @@ _COLUMNS = ("Symbol", "Alert Above", "Alert Below", "Armed ^", "Armed v", "Note"
 
 
 class PriceAlertsPanel(QFrame):
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        service: PriceAlertService | None = None,
+        *,
+        read_only: bool = False,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
-        self.service = PriceAlertService(self)
+        self._owns_service = service is None
+        self.service = service or PriceAlertService(self)
+        self.read_only = bool(read_only)
         self._loading = False
 
         self._save_timer = QTimer(self)
@@ -55,6 +63,8 @@ class PriceAlertsPanel(QFrame):
         header.setSectionResizeMode(_COLUMNS.index("Note"), QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(_COLUMNS.index("Last Trigger"), QHeaderView.ResizeMode.Stretch)
         self.table.cellChanged.connect(self._on_cell_changed)
+        if self.read_only:
+            self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
         add_button = QPushButton("Add Row")
         remove_button = QPushButton("Remove Selected")
@@ -66,6 +76,9 @@ class PriceAlertsPanel(QFrame):
         rearm_button.clicked.connect(self._rearm_all)
         check_button.clicked.connect(self.service.check_now)
         test_button.clicked.connect(self._test_push)
+        if self.read_only:
+            for button in (add_button, remove_button, rearm_button, check_button, test_button):
+                button.setEnabled(False)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
@@ -84,6 +97,14 @@ class PriceAlertsPanel(QFrame):
         for widget in (self.server_input, self.topic_input, self.token_input):
             widget.editingFinished.connect(self._save_push_settings)
         self.always_on_check.toggled.connect(self._save_push_settings)
+        if self.read_only:
+            for widget in (
+                self.server_input,
+                self.topic_input,
+                self.token_input,
+                self.always_on_check,
+            ):
+                widget.setEnabled(False)
 
         push_row = QHBoxLayout()
         push_row.setSpacing(6)
@@ -99,12 +120,13 @@ class PriceAlertsPanel(QFrame):
         self.status_label.setObjectName("MutedLabel")
         self.service.statusChanged.connect(lambda _snapshot: self._refresh_status())
         self.service.triggered.connect(self._on_triggered)
+        self.service.entriesChanged.connect(self._load_table)
 
         help_label = QLabel(
             "Phone/watch setup: install the ntfy app on the iPhone, subscribe it to the topic above "
             "(Apple Watch mirrors iPhone notifications automatically), then hit Test Push. "
-            "In the ntfy app, enable critical alerting for the topic so EVENING-mode alerts break "
-            "through sleep focus. Each side fires once, then shows here until you re-arm it."
+            "In the ntfy app, enable critical alerting for the topic so urgent alerts break "
+            "through phone Focus modes. Each side fires once, then shows here until you re-arm it."
         )
         help_label.setObjectName("MutedLabel")
         help_label.setWordWrap(True)
@@ -195,12 +217,12 @@ class PriceAlertsPanel(QFrame):
         return entries
 
     def _on_cell_changed(self, _row: int, _column: int) -> None:
-        if self._loading:
+        if self._loading or self.read_only:
             return
         self._save_timer.start()
 
     def _save_table(self) -> None:
-        if self._loading:
+        if self._loading or self.read_only:
             return
         self.service.save_entries(self._table_entries())
         self._load_table()
@@ -210,6 +232,8 @@ class PriceAlertsPanel(QFrame):
     # Actions
     # ------------------------------------------------------------------
     def _add_row(self) -> None:
+        if self.read_only:
+            return
         self._loading = True
         try:
             row = self.table.rowCount()
@@ -222,6 +246,8 @@ class PriceAlertsPanel(QFrame):
             self._loading = False
 
     def _remove_selected(self) -> None:
+        if self.read_only:
+            return
         rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
         if not rows:
             return
@@ -234,6 +260,8 @@ class PriceAlertsPanel(QFrame):
         self._save_table()
 
     def _rearm_all(self) -> None:
+        if self.read_only:
+            return
         entries = self._table_entries()
         for entry in entries:
             entry["armed_above"] = entry.get("above") is not None
@@ -243,6 +271,8 @@ class PriceAlertsPanel(QFrame):
         self._refresh_status()
 
     def _test_push(self) -> None:
+        if self.read_only:
+            return
         self._save_push_settings()
         result = self.service.test_push()
         if result.get("ok"):
@@ -251,6 +281,8 @@ class PriceAlertsPanel(QFrame):
             self.status_label.setText(f"Test push FAILED: {result.get('error') or 'unknown'}")
 
     def _save_push_settings(self) -> None:
+        if self.read_only:
+            return
         save_local_setting(PUSH_SERVER_SETTING, self.server_input.text().strip() or DEFAULT_NTFY_SERVER)
         save_local_setting(PUSH_TOPIC_SETTING, self.topic_input.text().strip())
         save_local_setting(PUSH_TOKEN_SETTING, self.token_input.text().strip())
@@ -263,6 +295,11 @@ class PriceAlertsPanel(QFrame):
 
     def _refresh_status(self) -> None:
         snapshot = self.service.status_snapshot()
+        if self.read_only:
+            self.status_label.setText(
+                "Read-only on this satellite. Monitoring, edits, and phone pushes run on the main desk."
+            )
+            return
         push_state = "configured" if snapshot.get("push_configured") else "NOT configured (set a topic)"
         checked = snapshot.get("last_check_at") or "never"
         note = snapshot.get("note") or ""
@@ -271,7 +308,8 @@ class PriceAlertsPanel(QFrame):
         self.status_label.setText(f"Push: {push_state} | last check: {checked} | {note}{error_text}")
 
     def shutdown(self) -> None:
-        self.service.shutdown()
+        if self._owns_service:
+            self.service.shutdown()
 
 
 def _cell_text(item: QTableWidgetItem | None) -> str:

@@ -44,6 +44,7 @@ from ui.panels.universe_panel import UniversePanel
 from ui import theme
 from ui.state import VALID_UI_SCALES, UiState
 from ui.theme import apply_theme
+from ui.widgets.price_alert_toast import PriceAlertToastManager
 from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
 
 
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state
         self._satellite_desk = satellite_desk
+        self.price_alert_toasts = PriceAlertToastManager(self)
         self.setWindowTitle("TradingBotV3 Trading Desk")
         # Open at the desk's preferred size, but never larger than the screen
         # actually offers: a 1640x980 default on a 1680x954 laptop opened the
@@ -64,10 +66,17 @@ class MainWindow(QMainWindow):
             min(theme.px(1180), available[0]), min(theme.px(760), available[1])
         )
 
-        self.trading_panel = TradingDeskPanel(workspace_mode=self.state.workspace_mode)
+        self.trading_panel = TradingDeskPanel(
+            workspace_mode=self.state.workspace_mode,
+            price_alert_engine_enabled=not satellite_desk,
+            price_alert_read_only=satellite_desk,
+        )
         self.journal_panel = JournalPanel()
         self.universe_panel = UniversePanel()
-        self.research_panel = ResearchPanel()
+        self.research_panel = ResearchPanel(
+            self.trading_panel.price_alert_service,
+            price_alert_read_only=satellite_desk,
+        )
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
@@ -109,6 +118,7 @@ class MainWindow(QMainWindow):
 
             host, port, link_token = load_saved_connection()
             self.desk_link_feed = DeskLinkFeedService(self)
+            self.desk_link_feed.priceAlertReceived.connect(self._on_remote_price_alert)
             self.trading_panel.alert_center.attach_remote_feed(self.desk_link_feed)
             self.desk_link_feed.linkStatusChanged.connect(self._on_satellite_link_status)
             self.desk_link_feed.autoRegimeChanged.connect(self._set_auto_regime)
@@ -175,7 +185,7 @@ class MainWindow(QMainWindow):
         self.trading_panel.bounce_panel.service.autoRegimeChanged.connect(self._set_auto_regime)
         # Price-level alert crossings land in the normal alert stream too, so
         # the Alert Center is the on-desk record of what buzzed the phone.
-        self.research_panel.price_alerts_panel.service.triggered.connect(self._on_price_alert)
+        self.trading_panel.price_alert_service.alertTriggered.connect(self._on_price_alert)
         self._set_auto_regime({})
         self._set_technical_integrity(load_technical_integrity_snapshot())
 
@@ -363,7 +373,19 @@ class MainWindow(QMainWindow):
             f"QPushButton#TechnicalIntegrityButton {{ color: {color}; font-weight: 600; padding: 1px 5px; }}"
         )
 
-    def _on_price_alert(self, message: str) -> None:
+    def _on_price_alert(self, payload: dict) -> None:
+        self._present_price_alert(payload)
+        if not self._satellite_desk:
+            self.desk_link_service.publish_stream("price_alert", payload)
+            # Also update the sticky snapshot after the trigger log is durable,
+            # so reconnecting satellites see alerts fired during a Wi-Fi gap.
+            self.desk_link_service.publish_state_snapshot()
+
+    def _on_remote_price_alert(self, payload: dict) -> None:
+        self._present_price_alert(payload, replayed=bool(payload.get("replayed")))
+
+    def _present_price_alert(self, payload: dict, *, replayed: bool = False) -> None:
+        message = str(payload.get("message") or "Price alert fired")
         try:
             from ui.models.bounce import BounceAlert
 
@@ -372,6 +394,7 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass  # the push already went out; the desk echo is best-effort
+        self.price_alert_toasts.show_alert(payload, replayed=replayed)
 
     def _show_technical_integrity_details(self) -> None:
         TechnicalIntegrityDialog(

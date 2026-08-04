@@ -23,7 +23,9 @@ from ui import theme
 from ui.models.bounce import BounceAlert
 from ui.models.rrs import rrs_rows
 from ui.services.focus_service import FocusService
+from ui.services.price_alert_service import PriceAlertService
 from ui.widgets.flow_layout import FlowLayout
+from ui.widgets.price_alert_board import PriceAlertBoard
 from ui.widgets.section_header import SectionHeader
 
 
@@ -39,10 +41,18 @@ class FocusPicksPanel(QFrame):
 
     statusChanged = Signal(str)
 
-    def __init__(self, focus_service: FocusService, parent=None) -> None:
+    def __init__(
+        self,
+        focus_service: FocusService,
+        price_alert_service: PriceAlertService | None = None,
+        *,
+        price_alert_read_only: bool = False,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self.service = focus_service
+        self.price_alert_service = price_alert_service or PriceAlertService(self)
         self._bounce_state: dict[str, dict[str, str]] = {}
         self._rrs_state: dict[str, dict[str, str]] = {}
 
@@ -67,6 +77,17 @@ class FocusPicksPanel(QFrame):
         category_splitter.addWidget(m5_section)
         category_splitter.setSizes([550, 450])
 
+        self.price_alert_board = PriceAlertBoard(
+            self.price_alert_service,
+            self.service,
+            read_only=price_alert_read_only,
+        )
+        content_splitter = QSplitter(Qt.Orientation.Vertical)
+        content_splitter.addWidget(category_splitter)
+        content_splitter.addWidget(self.price_alert_board)
+        content_splitter.setChildrenCollapsible(False)
+        content_splitter.setSizes([620, 300])
+
         header = SectionHeader(
             "Focus Picks",
             "Handpicked names in two buckets: Swing (multi-day, tracker-graded) and M5 (day-trade). "
@@ -81,7 +102,7 @@ class FocusPicksPanel(QFrame):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addWidget(self.snapshot_status_label)
-        layout.addWidget(category_splitter, 1)
+        layout.addWidget(content_splitter, 1)
 
         # One signal rebuilds all editors (covers edits from anywhere, incl. the
         # like buttons on the Alert Center / setups table), and force-merges the

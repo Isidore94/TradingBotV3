@@ -38,19 +38,27 @@ class PriceAlertService(QObject):
     """
 
     triggered = Signal(str)
+    alertTriggered = Signal(dict)
+    entriesChanged = Signal()
     statusChanged = Signal(dict)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, engine_enabled: bool = True) -> None:
         super().__init__(parent)
+        self.engine_enabled = bool(engine_enabled)
         self._checking = False
         self._last_check_at: datetime | None = None
-        self._last_check_note = "not checked yet"
+        self._last_check_note = (
+            "not checked yet"
+            if self.engine_enabled
+            else "not the engine machine - monitoring and phone push are off here"
+        )
         self._last_push_error = ""
         self._writer_refusal_logged = False
         self._timer = QTimer(self)
         self._timer.setInterval(_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
-        self._timer.start()
+        if self.engine_enabled:
+            self._timer.start()
 
     # ------------------------------------------------------------------
     # Store passthrough for the panel
@@ -59,11 +67,19 @@ class PriceAlertService(QObject):
         return price_alerts.load_price_alerts()
 
     def save_entries(self, entries: list[dict[str, Any]]) -> bool:
-        return price_alerts.save_price_alerts(entries)
+        if not self.engine_enabled:
+            self._last_check_note = "read-only here - price alerts are edited on the main desk"
+            self.statusChanged.emit(self.status_snapshot())
+            return False
+        saved = price_alerts.save_price_alerts(entries)
+        if saved:
+            self.entriesChanged.emit()
+        return saved
 
     def status_snapshot(self) -> dict[str, Any]:
         return {
             "checking": self._checking,
+            "engine_enabled": self.engine_enabled,
             "last_check_at": (
                 self._last_check_at.strftime("%H:%M:%S") if self._last_check_at else ""
             ),
@@ -74,6 +90,11 @@ class PriceAlertService(QObject):
 
     def test_push(self) -> dict[str, Any]:
         """Panel button: verify the phone actually buzzes before relying on it."""
+        if not self.engine_enabled:
+            result = {"ok": False, "error": "Phone pushes originate from the main desk only."}
+            self._last_push_error = str(result["error"])
+            self.statusChanged.emit(self.status_snapshot())
+            return result
         result = push_notify.send_push(
             "TradingBotV3 test",
             "Price alert channel is working. Sleep well.",
@@ -111,6 +132,10 @@ class PriceAlertService(QObject):
         return True, ""
 
     def check_now(self) -> None:
+        if not self.engine_enabled:
+            self._last_check_note = "not the engine machine - monitoring and phone push are off here"
+            self.statusChanged.emit(self.status_snapshot())
+            return
         if self._checking:
             return
         now = datetime.now()
@@ -165,6 +190,7 @@ class PriceAlertService(QObject):
         if triggers:
             price_alerts.save_price_alerts(updated)
             price_alerts.append_trigger_log(triggers)
+            self.entriesChanged.emit()
             self._notify(triggers)
         self._last_check_note = (
             f"checked {len(quotes)}/{len(symbols)} symbols"
@@ -173,11 +199,9 @@ class PriceAlertService(QObject):
         self.statusChanged.emit(self.status_snapshot())
 
     def _notify(self, triggers: list[dict[str, Any]]) -> None:
-        import autopilot_core as core
-
-        # Evening mode is the wake-the-trader case: urgent breaks through the
-        # iPhone's sleep focus (with critical alerting enabled on the topic).
-        priority = "urgent" if core.read_auto_pilot_mode() == "EVENING" else "high"
+        # Trader decision: every price crossing is urgent, including rows made
+        # from the advanced Research view. The store has no origin marker.
+        priority = "urgent"
         for trigger in triggers:
             message = price_alerts.format_trigger_message(trigger)
             tags = "chart_with_upwards_trend" if trigger.get("side") == "above" else "chart_with_downwards_trend"
@@ -190,4 +214,16 @@ class PriceAlertService(QObject):
                 message,
                 "sent" if result.get("ok") else (self._last_push_error or "not configured"),
             )
+            payload = dict(trigger)
+            payload.update(
+                {
+                    "message": message,
+                    "priority": priority,
+                    "push_ok": bool(result.get("ok")),
+                    "push_error": self._last_push_error,
+                }
+            )
+            # Push deliberately happens before either local presentation or
+            # Desk Link relay. A broken display path cannot suppress the phone.
             self.triggered.emit(message)
+            self.alertTriggered.emit(payload)
