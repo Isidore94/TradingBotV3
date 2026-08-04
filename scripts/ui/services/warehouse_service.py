@@ -451,15 +451,27 @@ class WarehouseTeeCapture:
 
 
 def register_build_job(scheduler=None) -> dict:
-    """Declare the build job for the existing scheduler/job ledger.
+    """Describe how the warehouse's jobs are actually invoked.
 
-    Returns the registration descriptor rather than starting anything: the
-    warehouse adds no process, daemon, or timer of its own (sec 8.4).
+    A *description*, not a registration. There is no scheduler object in this
+    repository to register with - the earlier version of this function probed
+    for a ``register_job`` method that exists nowhere, which made the build look
+    scheduled when nothing ran it. The real invocations are:
+
+    * **build** - in-process after every scan
+      (``ScanService.start_warehouse_build``), and by hand at EOD via the CLI;
+    * **backfill** - overnight, by the CLI, because it is net-new provider
+      traffic that must run when champions are idle (sec 5.1-5.3).
+
+    ``scheduler`` is still accepted so a future scheduler can be handed the
+    descriptor, but nothing is inferred from its absence.
     """
     descriptor = {
         "job_type": "research_warehouse_build",
         "entry_point": "python -m scripts.research_warehouse.cli build",
-        "cadence": "post_scan_and_eod",
+        "backfill_entry_point": "python -m scripts.research_warehouse.cli backfill --job nightly",
+        "cadence": "post_scan_in_process_and_eod_cli",
+        "invoked_by": "ui.services.scan_service.ScanService.start_warehouse_build",
         "single_flight": True,
         "owner": "main_desktop",
     }

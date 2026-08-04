@@ -423,3 +423,100 @@ def test_a_disabled_warehouse_stops_the_service_timer(monkeypatch):
     finally:
         service._bot = None
         service.shutdown()
+
+
+# --- the post-scan build hook ---------------------------------------------
+def test_a_finished_scan_starts_the_warehouse_build(enabled, monkeypatch):
+    """LD-01's 'post-scan build job' had no invoker at all.
+
+    Without it the tee spools M5 bars every minute and nothing seals them - and
+    M5 segments are PROTECTED, so the backlog grows until Health goes red.
+    """
+    from ui.services.scan_service import ScanService
+
+    calls = []
+    import research_warehouse.cli as warehouse_cli
+
+    monkeypatch.setattr(
+        warehouse_cli,
+        "run_build",
+        lambda *args, **kwargs: calls.append(kwargs.get("run_id")) or _BuildOk(),
+    )
+
+    service = ScanService()
+    try:
+        assert service.start_warehouse_build("run-42") is True
+        service.wait_for_warehouse_build(10.0)
+        assert calls == ["run-42"]
+    finally:
+        service.wait_for_warehouse_build(10.0)
+
+
+class _BuildOk:
+    status = "OK"
+    message = ""
+
+
+def test_the_build_runs_off_the_gui_thread_and_never_breaks_the_scan(enabled, monkeypatch):
+    """It must not run inline, and an exploding build must not escape."""
+    from ui.services.scan_service import ScanService
+    import research_warehouse.cli as warehouse_cli
+
+    ran_on = []
+
+    def explode(*args, **kwargs):
+        ran_on.append(threading.current_thread())
+        raise RuntimeError("DAS unplugged mid-build")
+
+    monkeypatch.setattr(warehouse_cli, "run_build", explode)
+
+    service = ScanService()
+    try:
+        service.start_warehouse_build("run-1")  # returns immediately
+        service.wait_for_warehouse_build(10.0)
+        assert ran_on and ran_on[0] is not threading.current_thread()
+    finally:
+        service.wait_for_warehouse_build(10.0)  # no exception escapes
+
+
+def test_only_one_warehouse_build_runs_at_a_time(enabled, monkeypatch):
+    """A second scan finishing mid-build is skipped, not stacked."""
+    from ui.services.scan_service import ScanService
+    import research_warehouse.cli as warehouse_cli
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def blocking(*args, **kwargs):
+        started.set()
+        release.wait(5.0)
+        return _BuildOk()
+
+    monkeypatch.setattr(warehouse_cli, "run_build", blocking)
+
+    service = ScanService()
+    try:
+        assert service.start_warehouse_build("first") is True
+        assert started.wait(5.0)
+        assert service.start_warehouse_build("second") is False, "not stacked"
+    finally:
+        release.set()
+        service.wait_for_warehouse_build(10.0)
+
+
+def test_a_disabled_warehouse_builds_nothing_after_a_scan(monkeypatch):
+    import research_warehouse.config as config
+    import research_warehouse.cli as warehouse_cli
+    from ui.services.scan_service import ScanService
+
+    monkeypatch.setattr(config, "warehouse_enabled", lambda: False)
+    calls = []
+    monkeypatch.setattr(warehouse_cli, "run_build", lambda *a, **k: calls.append(1))
+
+    service = ScanService()
+    try:
+        service.start_warehouse_build("run-1")
+        service.wait_for_warehouse_build(10.0)
+        assert calls == []
+    finally:
+        service.wait_for_warehouse_build(10.0)

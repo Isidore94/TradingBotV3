@@ -2,11 +2,30 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+@pytest.fixture(autouse=True)
+def _clear_owned_scan_processes():
+    """Don't leak fake children into the process-wide reap registry.
+
+    ``_run_master_scan_subprocess`` registers every child it spawns in a module
+    global so shutdown can reap them. The fakes below report ``poll() is None``
+    (still alive), so without this they stay registered after the test and the
+    next test that calls ``ScanService.shutdown()`` tries to reap them - and
+    dies on the fake's ``wait()`` signature. Ordering-dependent, so it only
+    surfaces in a full-suite run.
+    """
+    yield
+    from ui.services import scan_service
+
+    with scan_service._owned_processes_lock:
+        scan_service._owned_processes.clear()
 
 
 def test_master_scan_subprocess_uses_child_python(monkeypatch):

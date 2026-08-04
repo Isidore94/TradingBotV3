@@ -156,8 +156,17 @@ def test_shed_evidence_becomes_an_explicit_gap_row(tmp_path, store):
     assert result.gaps_recorded == 1
     gap = store.read_table("collection_gap").to_pylist()[0]
     assert gap["symbol"] == "NVDA"
-    # Shed-by-policy is policy absence, never MISSING.
-    assert gap["reason"] == "NOT_COLLECTED_BY_POLICY" and gap["resolution"] == "POLICY"
+    # Shed-by-policy is policy absence, never MISSING - and it is an *open*
+    # gap: the shed window is a real hole a later backfill can still fill, so
+    # it carries no resolution until one does. Claiming resolution="POLICY"
+    # beside a null resolved_at said resolved and unresolved at once, and would
+    # have kept the row out of any future closure.
+    assert gap["reason"] == "NOT_COLLECTED_BY_POLICY"
+    assert gap["resolution"] is None and gap["resolved_at"] is None
+
+    from scripts.research_warehouse import backfill
+
+    assert len(backfill.open_gap_keys(store, [f"month={NOW:%Y-%m}"])) == 1
     assert not (writer.dir / spool_mod.SHED_LOG_NAME).exists()
 
 

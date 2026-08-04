@@ -1678,6 +1678,74 @@ occurrences whose latest outcome is non-terminal, done *inside*
 **Where.** `cli.py::_m5_partitions_for` / `_run_outcomes`;
 `tests/test_warehouse_restore.py::test_outcome_simulation_reads_each_occurrences_own_month`.
 
+## BD-70 — Every warehouse job now has a real invoker
+
+**Decision.** Three seams closed, so the warehouse runs rather than merely
+existing:
+
+1. **The build is invoked post-scan, in process.**
+   `ScanService.start_warehouse_build` runs `run_build` on its own thread when a
+   scan finishes — LD-01's "post-scan/EOD CLI build job" without a daemon. One
+   at a time (a second is skipped; `run_build`'s single-flight lock refuses a
+   concurrent one from any other process). Gated on `warehouse_enabled()`
+   *inside* the worker, never raising into the scan, and joined on shutdown so a
+   build mid-seal finishes its manifest line.
+2. **The backfill jobs have a CLI entry point.**
+   `cli backfill --job nightly|weekly|seed` drives `run_nightly_backfill` /
+   `run_weekly_universe_sweep` / `run_yahoo_seed`, which previously had **no
+   caller anywhere**. It takes the **same single-flight lock as the build** —
+   both write the lake and LD-01 allows exactly one writer — sources its cohort
+   from `universe_membership_daily` (LD-05 point-in-time membership, the same
+   source the D1 wrap uses), and defaults the nightly wait budget to 4 h of the
+   ~5.5 h overnight window (sec 5.1). A missing cohort or an unavailable
+   transport is a reported *status*, never a crash.
+3. **`register_build_job` describes reality.** It previously probed for a
+   `scheduler.register_job` method that exists nowhere in the repository, which
+   made the build look scheduled while nothing ran it. It is now a descriptor
+   naming its real invoker, and a test asserts that invoker exists.
+
+**Why.** Capture, sealing, features and outcomes were all implemented and
+individually tested, and *none of them ran*. The tee spools M5 bars every
+minute and only the build seals them; because M5 segments are `PROTECTED` and
+never shed (LD-12/BD-18), an unsealed spool does not self-limit — it grows until
+Health goes red. So the missing invoker was not a convenience gap, it was the
+difference between the pilot capturing evidence and the pilot filling a disk.
+The nightly ETH backfill is inside the slice by LD-03, so it needed an entry
+point on the same footing.
+
+**Rejected.** A daemon or a timer of the warehouse's own — LD-01 is explicit
+that there is none, and the scan-completion point already exists. Running the
+build inside `run_build`'s caller on the GUI thread — it seals, wraps bronze and
+computes features; that is exactly the D21 mistake one level up. Giving backfill
+its own lock — two lake writers, which LD-01 forbids.
+
+**Reopens if.** A real scheduler is added to the repository (the descriptor is
+then handed to it), or measurement shows the post-scan build overruns the gap
+between scans (it would move to EOD-only).
+
+**Where.** `ui/services/scan_service.py::start_warehouse_build` /
+`_run_warehouse_build` / `wait_for_warehouse_build`;
+`cli.py::run_backfill_job` / `_run_ib_backfill` / `_run_seed` /
+`_backfill_cohort` / `main`; `ui/services/warehouse_service.py::register_build_job`;
+`tests/test_qt_warehouse_tee.py` (post-scan block),
+`tests/test_warehouse_restore.py` (backfill entry-point block).
+
+## BD-71 — A shed spool segment is an open gap with no resolution
+
+**Decision.** `_seal_shed_log` writes `resolution=None` alongside its null
+`resolved_at`, instead of `resolution="POLICY"`.
+
+**Why.** The row asserted both states at once: a `resolution` says the gap was
+settled, a null `resolved_at` says it is still open. Since BD-60 the open-gap
+view keys on `resolved_at is None`, so these rows *are* open — and a shed M5
+window is genuinely still recoverable from the provider, so leaving it open is
+the honest reading. Carrying a resolution string it never earned would also have
+excluded it from `resolve_gaps`' containment closure (BD-67) if a later
+backfill did refill that window.
+
+**Where.** `spool.py::_seal_shed_log`;
+`tests/test_warehouse_spool.py::test_shed_evidence_becomes_an_explicit_gap_row`.
+
 ---
 
 ## Open items for Sol / Fable
@@ -1687,7 +1755,7 @@ Each is already stated in its own BD entry; this is the short list.
 
 | # | Item | Where | What is needed |
 |---|---|---|---|
-| 1 | ~~Nothing calls the tee during a live session.~~ **Wired** (BD-63): `BounceService` drives a GUI-owned `WarehouseTeeCapture` on a 60s timer, spool-only, and the Health page renders the six tiles. Unverified on the desk — it has never run against a real BounceBot. | BD-20, BD-63 | Watch the tiles on the first live session, then start the pilot |
+| 1 | ~~Nothing calls the tee during a live session.~~ **Wired** (BD-63, BD-70): the tee runs on a 60s timer, the build runs post-scan, and the backfill has a CLI entry point. All three are unverified on the desk — none has run against a real BounceBot or TWS. | BD-20, BD-63, BD-70 | Watch the tiles on the first live session, then start the pilot |
 | 1b | **The 20-session pilot has not run** — it is a live-desk activity, not code. | BD-52 | Run it once capture is live; log the sec 5.6 measurements |
 | 2 | **`ib_capture.build_ib_transport` is unverified** — the real ibapi client has no offline test and no broker-marked live run. | BD-25 | One live run on the desk before the pilot leans on it |
 | 3 | **`exploration_cohort.txt` is empty** — the fixed 30 symbols define part of the research denominator, so no agent invented them. | BD-12 | Trader supplies the list (confirmation register item 5) |

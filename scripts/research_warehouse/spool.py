@@ -395,8 +395,14 @@ def _seal_shed_log(store: ResearchStore, shed_log: Path, *, job_id: str) -> int:
                 # is policy absence, not missing data.
                 "reason": "NOT_COLLECTED_BY_POLICY",
                 "detected_at": record.get("shed_at"),
+                # Open, with no resolution: the shed window is a real hole that
+                # a later backfill can still fill (M5 is recoverable from the
+                # provider), and `resolve_gaps` will close it by containment
+                # when one does. Claiming resolution="POLICY" against a null
+                # resolved_at said "resolved" and "unresolved" at once, and
+                # would have kept the row out of any future closure.
                 "resolved_at": None,
-                "resolution": "POLICY",
+                "resolution": None,
                 "schema_version": SCHEMA_VERSION,
                 "run_id": job_id,
             }

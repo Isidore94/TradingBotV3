@@ -355,3 +355,105 @@ def test_outcome_simulation_reads_each_occurrences_own_month(store):
     # Bounded: only months an occurrence can actually need, no full-range sweep.
     assert "month=2026-06" not in partitions
     assert partitions == sorted(set(partitions))
+
+
+# --- the backfill entry point ---------------------------------------------
+def test_the_backfill_job_shares_the_builds_single_flight_lock(store, tmp_path):
+    """Both write the lake, and LD-01 allows exactly one writer."""
+    lock = tmp_path / "build.lock"
+    with cli.single_flight(lock):
+        report = cli.run_backfill_job(store, session_date=date(2026, 8, 3), lock_path=lock)
+    assert report["status"] == "REFUSED" and "already running" in report["message"]
+
+
+def test_the_backfill_job_uses_the_sessions_point_in_time_cohort(store, tmp_path, monkeypatch):
+    """The cohort is universe_membership_daily, the same source the D1 wrap uses."""
+    day = date(2026, 8, 3)
+    store.publish(
+        "universe_membership_daily",
+        [
+            {
+                "session_date": day,
+                "list_name": "longs",
+                "symbol": symbol,
+                "rank_in_list": index,
+                "inclusion_reason": "watchlist_file",
+                "snapshot_at": NOW,
+                "schema_version": schemas.SCHEMA_VERSION,
+                "run_id": "universe",
+            }
+            for index, symbol in enumerate(("AAPL", "MSFT"))
+        ],
+        job_id="universe",
+    )
+
+    seen = {}
+
+    def fetcher(symbol, fetch_day, *, timeframe, use_rth):
+        seen.setdefault("calls", []).append((symbol, fetch_day, use_rth))
+        from scripts.research_warehouse.backfill import FetchResult
+
+        return FetchResult(bars=[])
+
+    report = cli.run_backfill_job(
+        store,
+        session_date=day,
+        fetcher=fetcher,
+        time_budget_seconds=0,
+        now=NOW,
+        lock_path=tmp_path / "lock",
+    )
+    assert report["cohort"] == 2
+    assert sorted({call[0] for call in seen["calls"]}) == ["AAPL", "MSFT"]
+    # ETH-inclusive, per LD-03.
+    assert {call[2] for call in seen["calls"]} == {False}
+
+
+def test_the_backfill_job_says_so_when_there_is_no_cohort(store, tmp_path):
+    report = cli.run_backfill_job(
+        store, session_date=date(2026, 8, 3), fetcher=lambda *a, **k: None,
+        lock_path=tmp_path / "lock",
+    )
+    assert report["status"] == "NO_COHORT"
+    assert "universe_membership_daily" in report["message"]
+
+
+def test_the_backfill_job_reports_a_missing_provider_rather_than_raising(store, tmp_path, monkeypatch):
+    """The BD-25 transport has no offline coverage; its absence is a status."""
+    day = date(2026, 8, 3)
+    monkeypatch.setattr(cli, "_backfill_cohort", lambda *a, **k: ["AAPL"])
+    monkeypatch.setattr(
+        cli, "_capture_fetcher", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no TWS"))
+    )
+    report = cli.run_backfill_job(store, session_date=day, lock_path=tmp_path / "lock")
+    assert report["status"] == "NO_PROVIDER" and "no TWS" in report["message"]
+
+
+def test_the_backfill_job_is_a_no_op_when_disabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli.ResearchStore, "open", classmethod(lambda cls, root=None: None))
+    report = cli.run_backfill_job(lock_path=tmp_path / "lock")
+    assert report["status"] == "DISABLED"
+
+
+def test_the_cli_exposes_build_backfill_status_and_restore_check(monkeypatch, capsys):
+    """The entry points a scheduled desk actually calls."""
+    monkeypatch.setattr(cli.ResearchStore, "open", classmethod(lambda cls, root=None: None))
+    assert cli.main(["backfill", "--job", "nightly"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "DISABLED"
+
+    assert cli.main(["build"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "DISABLED"
+
+
+def test_the_job_descriptor_names_a_real_invoker():
+    """The old descriptor probed a `register_job` API that exists nowhere."""
+    from ui.services.warehouse_service import register_build_job
+
+    descriptor = register_build_job()
+    assert descriptor["invoked_by"].endswith("ScanService.start_warehouse_build")
+    assert "backfill" in descriptor["backfill_entry_point"]
+    # And that invoker really exists, with that name.
+    from ui.services.scan_service import ScanService
+
+    assert callable(ScanService.start_warehouse_build)

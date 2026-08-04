@@ -454,6 +454,208 @@ def run_build(
     return report
 
 
+# ---------------------------------------------------------------------------
+# The backfill jobs (plan sec 5.1-5.2, LD-02/LD-03)
+# ---------------------------------------------------------------------------
+#: Overnight window: 20:00-02:00 ET minus the ~23:45 TWS restart is ~5.5 usable
+#: hours (sec 5.1). The default budget is the part of it a single invocation may
+#: spend *waiting* on the pacer; the job stops cleanly when it runs out and the
+#: next night resumes from the gaps it recorded.
+NIGHTLY_TIME_BUDGET_SECONDS = 4 * 3600
+#: The Saturday full-universe sweep is ~4.3 h at the published floor (sec 5.2).
+WEEKLY_TIME_BUDGET_SECONDS = 5 * 3600
+
+JOB_NIGHTLY = "nightly"
+JOB_WEEKLY = "weekly"
+JOB_SEED = "seed"
+
+
+def _capture_fetcher(pacer=None):
+    """The real IB capture fetcher, or ``None`` with a reason.
+
+    Built here rather than inside :mod:`backfill` so the job logic stays
+    provider-agnostic and offline-testable (BD-15): the socket lives in exactly
+    one adapter. This is the BD-25 path - it has no offline coverage by
+    construction, so a failure to build it is reported, never raised.
+    """
+    try:
+        from . import ib_capture
+    except ImportError:  # pragma: no cover - scripts/ on sys.path
+        import ib_capture  # type: ignore
+    spec = ib_capture.backfill_connection_spec()
+    transport = ib_capture.build_ib_transport(spec)
+    return ib_capture.IbCaptureFetcher(transport, spec=spec, pacer=pacer)
+
+
+def run_backfill_job(
+    store: ResearchStore | None = None,
+    *,
+    job: str = JOB_NIGHTLY,
+    session_date: date | None = None,
+    cohort=None,
+    fetcher=None,
+    time_budget_seconds: float | None = None,
+    max_requests: int | None = None,
+    now: datetime | None = None,
+    run_id: str = "",
+    lock_path: Path | None = None,
+) -> dict:
+    """Run one nightly / weekly / seed backfill pass.
+
+    Holds the **same** single-flight lock as the EOD build: both write the lake,
+    and LD-01 allows exactly one writer. A backfill that lands while a build is
+    running refuses with a clear message instead of racing it.
+
+    The cohort is the session's own ``universe_membership_daily`` snapshot for
+    the nightly job (LD-05 point-in-time membership, the same source the D1 wrap
+    uses) and the full captured universe for the weekly sweep.
+    """
+    target = store if store is not None else ResearchStore.open()
+    if target is None:
+        return {
+            "status": "DISABLED",
+            "message": "research_store_dir is not configured; the warehouse is a no-op.",
+        }
+    stamp = now or utc_now()
+    day = session_date or (stamp.date() - timedelta(days=1))
+
+    try:
+        with single_flight(lock_path):
+            _record_job("RUNNING", {"run_id": run_id, "job": f"backfill_{job}"})
+            if job == JOB_SEED:
+                report = _run_seed(target, cohort, fetcher=fetcher, now=stamp, run_id=run_id)
+            else:
+                report = _run_ib_backfill(
+                    target,
+                    job=job,
+                    day=day,
+                    cohort=cohort,
+                    fetcher=fetcher,
+                    time_budget_seconds=time_budget_seconds,
+                    max_requests=max_requests,
+                    stamp=stamp,
+                    run_id=run_id,
+                )
+            _record_job("COMPLETED", {"run_id": run_id, "job": f"backfill_{job}"})
+            return report
+    except SingleFlightError as exc:
+        _record_job("SKIPPED", {"reason": "single_flight", "job": f"backfill_{job}"})
+        return {"status": "REFUSED", "message": str(exc)}
+
+
+def _run_ib_backfill(
+    store: ResearchStore,
+    *,
+    job: str,
+    day: date,
+    cohort,
+    fetcher,
+    time_budget_seconds: float | None,
+    max_requests: int | None,
+    stamp: datetime,
+    run_id: str,
+) -> dict:
+    try:
+        from . import backfill as backfill_mod
+    except ImportError:  # pragma: no cover - scripts/ on sys.path
+        import backfill as backfill_mod  # type: ignore
+
+    symbols = list(cohort) if cohort is not None else _backfill_cohort(store, job, day)
+    if not symbols:
+        return {
+            "status": "NO_COHORT",
+            "message": (
+                "no cohort for this session: universe_membership_daily has no rows for "
+                f"{day.isoformat()}. Run the EOD build for that session first."
+            ),
+        }
+
+    if fetcher is None:
+        try:
+            fetcher = _capture_fetcher()
+        except Exception as exc:  # no TWS, no ibapi, bad client id
+            return {
+                "status": "NO_PROVIDER",
+                "message": f"capture transport unavailable: {exc}",
+            }
+
+    if job == JOB_WEEKLY:
+        report = backfill_mod.run_weekly_universe_sweep(
+            store,
+            symbols,
+            fetcher=fetcher,
+            week_ending=day,
+            time_budget_seconds=(
+                WEEKLY_TIME_BUDGET_SECONDS if time_budget_seconds is None else time_budget_seconds
+            ),
+            max_requests=max_requests,
+            now=stamp,
+            run_id=run_id or "weekly_universe_sweep",
+        )
+    else:
+        report = backfill_mod.run_nightly_backfill(
+            store,
+            symbols,
+            fetcher=fetcher,
+            session_date=day,
+            time_budget_seconds=(
+                NIGHTLY_TIME_BUDGET_SECONDS if time_budget_seconds is None else time_budget_seconds
+            ),
+            max_requests=max_requests,
+            now=stamp,
+            run_id=run_id or "nightly_backfill",
+        )
+    payload = vars(report)
+    payload["cohort"] = len(symbols)
+    payload["session_date"] = day.isoformat()
+    return payload
+
+
+def _run_seed(store: ResearchStore, cohort, *, fetcher, now: datetime, run_id: str) -> dict:
+    try:
+        from . import backfill as backfill_mod
+    except ImportError:  # pragma: no cover - scripts/ on sys.path
+        import backfill as backfill_mod  # type: ignore
+
+    symbols = list(cohort) if cohort is not None else _captured_universe(store)
+    if not symbols:
+        return {"status": "NO_COHORT", "message": "no universe to seed."}
+    if fetcher is None:
+        return {
+            "status": "NO_PROVIDER",
+            "message": (
+                "the yfinance seed needs an explicit fetcher; it is a one-time "
+                "trickle and is never started implicitly (R11)."
+            ),
+        }
+    report = backfill_mod.run_yahoo_seed(
+        store,
+        symbols,
+        fetcher=fetcher,
+        spool_dir=config.research_spool_dir(),
+        now=now,
+        run_id=run_id or "yahoo_m5_seed",
+    )
+    return vars(report)
+
+
+def _backfill_cohort(store: ResearchStore, job: str, day: date) -> list[str]:
+    """Who this job covers: the session's cohort, or everything already captured."""
+    if job == JOB_WEEKLY:
+        return _captured_universe(store)
+    return cohort_for(store, day)
+
+
+def _captured_universe(store: ResearchStore) -> list[str]:
+    """Every symbol the lake has ever recorded membership for (sec 5.2)."""
+    symbols = set()
+    for row in store.read_table("universe_membership_daily", columns=["symbol"]).to_pylist():
+        value = str(row.get("symbol") or "").strip().upper()
+        if value:
+            symbols.add(value)
+    return sorted(symbols)
+
+
 def run_status(store: ResearchStore | None = None) -> dict:
     """What the lake holds, straight from the ledger. Reads no bar data."""
     target = store if store is not None else ResearchStore.open()
@@ -473,6 +675,19 @@ def main(argv=None) -> int:
     build = sub.add_parser("build", help="seal the spool, wrap bronze, snapshot, derive")
     build.add_argument("--session-date", default="")
     build.add_argument("--run-id", default="")
+    backfill_cmd = sub.add_parser(
+        "backfill", help="net-new provider capture: nightly ETH, weekly sweep, or the one-time seed"
+    )
+    backfill_cmd.add_argument("--job", choices=(JOB_NIGHTLY, JOB_WEEKLY, JOB_SEED), default=JOB_NIGHTLY)
+    backfill_cmd.add_argument("--session-date", default="", help="defaults to yesterday")
+    backfill_cmd.add_argument("--run-id", default="")
+    backfill_cmd.add_argument(
+        "--time-budget-seconds",
+        type=float,
+        default=None,
+        help="wall clock this run may spend waiting on the pacer (0 never waits)",
+    )
+    backfill_cmd.add_argument("--max-requests", type=int, default=None)
     sub.add_parser("status", help="lake inventory and health counters")
     restore = sub.add_parser("restore-check", help="restore one partition to a new root and verify it")
     restore.add_argument("--target", required=True)
@@ -489,6 +704,20 @@ def main(argv=None) -> int:
         report = run_build(store, session_date=day, run_id=args.run_id)
         print(json.dumps({"status": report.status, "message": report.message, "steps": report.steps}, indent=2, default=str))
         return 0 if report.status in {"OK", "DISABLED"} else 1
+    if args.command == "backfill":
+        day = date.fromisoformat(args.session_date) if args.session_date else None
+        report = run_backfill_job(
+            store,
+            job=args.job,
+            session_date=day,
+            time_budget_seconds=args.time_budget_seconds,
+            max_requests=args.max_requests,
+            run_id=args.run_id,
+        )
+        print(json.dumps(report, indent=2, default=str))
+        # A missing cohort or provider is a condition to report, not a crash;
+        # only a refused (racing) run is a non-zero exit.
+        return 1 if report.get("status") == "REFUSED" else 0
     report = backup_mod.restore_check(
         store, args.target, dataset=args.dataset, partition=args.partition or None
     )
