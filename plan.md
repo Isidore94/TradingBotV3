@@ -1680,7 +1680,16 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    than re-deriving any of them; parity is pinned to 1e-9 by a
    contract-bearing golden fixture and snapshots are point-in-time and
    deterministic. Tests: `test_warehouse_avwap_parity.py`,
-   `test_warehouse_features.py`.
+   `test_warehouse_features.py`. Phase 6 landed 2026-08-04 (occurrences +
+   outcomes): `occurrences.py` records detector output under the deterministic
+   occurrence key with revision-based rescan updates (100 rescans = 1 episode)
+   and `dependency_cluster_id` as the episode unit; `outcomes.py` implements
+   `house_default_v1` (net_r cost formula, STOP_FIRST primary with the
+   TARGET_FIRST bound retained, 18-session time stop, checkpoint grids,
+   MATURED derived) across the five declared recipes, with
+   `intraday_bounce_v1` gated on a linked bounce event. The tracker→detection
+   adapter is still open (BD-44). Tests: `test_warehouse_occurrence.py`,
+   `test_warehouse_outcomes.py`.
 
 ### Then — after correctness and authoritative data paths
 

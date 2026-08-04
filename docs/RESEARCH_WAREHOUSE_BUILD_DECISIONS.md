@@ -721,6 +721,145 @@ the declared tolerance — better than a hand-rolled comparison.
 **Where.** `tests/fixtures/warehouse_avwap_bands_v1.json`,
 `tests/test_warehouse_avwap_parity.py`.
 
+## BD-37 — "Rescan updates" means a new revision, not a mutated row
+
+**Decision.** A rescan of a live thesis recomputes the same `occurrence_id`. If
+nothing in the snapshot fields changed, **nothing is written at all**. If
+something changed, a new row is appended with `revision_id = rev-N+1` and
+`supersedes_revision_id` pointing at the previous one; readers take the highest
+revision (`latest_occurrences`). `first_detected_run_id` and the original
+`event_at` are carried forward.
+
+**Why.** The lake is append-only and immutable — a row cannot be edited in
+place — while sec 7.3 requires that a rescan "updates a snapshot and never
+creates an extra occurrence". Revisions satisfy both: the row count grows with
+knowledge, the *occurrence* and *episode* counts do not. `episode_counts()`
+reports rows, occurrences, and episodes separately so nobody can quote the
+first as a sample size.
+
+**Rejected.** Overwriting the row (impossible in an immutable lake, and it
+would destroy the knowledge trail); appending an unlinked row per scan (that is
+exactly the episode inflation of risk R9).
+
+**Where.** `occurrences.py::record_occurrences`;
+`tests/test_warehouse_occurrence.py` — 100 rescans leave 1 row, 1 occurrence,
+1 episode.
+
+## BD-38 — `dependency_cluster_id` excludes the setup family, includes the side
+
+**Decision.** The episode key is `hash(symbol, side, structural_timeframe,
+anchor-or-episode-start)`. Setup family is deliberately not an input; side is.
+
+**Why.** Sec 7.3 says simultaneous AVWAP/band/MA/level variants attached to one
+underlying move are several hypotheses about **one** episode, so family must not
+split them. A long thesis and a short thesis on the same symbol are not the same
+move, so side must not merge them.
+
+**Reopens if.** A registered study needs long/short pairs treated as one episode
+(e.g. a hedged construct) — that would be a second, named cluster definition,
+not a redefinition of this one.
+
+**Where.** `occurrences.py::dependency_cluster_id`;
+`tests/test_warehouse_occurrence.py::test_variants_of_one_move_share_a_dependency_cluster`.
+
+## BD-39 — The signal-close entry is a declared precommitted MOC
+
+**Decision.** `swing_house_v1` and the two controls fill at the signal bar's
+close, recorded as `entry = signal_close_precommitted_moc`, with
+`signal_known_at == entry_eligible_at`.
+
+**Why.** Sec 19.3 defines the house recipe as signal-close entry, while sec 12.1
+forbids *assuming* a same-close fill "unless the recipe explicitly models a
+precommitted market-on-close order". The recipe therefore declares one, in its
+own `entry` field, so the assumption is visible on every row rather than buried
+in the simulator.
+
+**Reopens if.** The trader wants a next-open variant — that is a new
+`recipe_id`, not a change to this one.
+
+**Where.** `outcomes.py::SWING_HOUSE_V1`.
+
+## BD-40 — Ambiguous bars: primary = STOP_FIRST, optimistic read kept as a bound
+
+**Decision.** When one session's range contains both the stop and the target,
+the row is `result_state = AMBIGUOUS_BAR`, `path_resolution = AMBIGUOUS`,
+`first_hit = STOP`, `r_lower_bound` = the stop reading, `r_upper_bound` = the
+target reading, and `gross_r` equals the lower bound.
+
+**Why.** Sec 14.2 names STOP_FIRST the primary and requires the TARGET_FIRST
+reading be retained as `r_upper_bound`. Averaging the two, or silently picking
+the better one, would put an unearned number in the evidence base.
+
+**Where.** `outcomes.py::simulate_swing`;
+`tests/test_warehouse_outcomes.py::test_same_bar_ambiguity_is_stop_first_with_the_target_bound_kept`.
+
+## BD-41 — Maturity is a calendar fact; missing path is TRUNCATED
+
+**Decision.** `maturity_at` is projected on the exchange calendar even when the
+lake holds fewer bars than the time stop. If the clock says an outcome should
+have resolved but the bars ran out, the state is `TRUNCATED`, never `EXPIRED`
+and never a silent `OPEN`.
+
+**Why.** Maturity answers "should this have resolved by now", which is a
+property of the clock, not of how much data arrived. Reporting a data shortfall
+as a finished trade is how an incomplete archive turns into a fake result.
+
+**Where.** `outcomes.py::_swing_maturity`;
+`tests/test_warehouse_outcomes.py::test_maturity_is_a_calendar_fact_not_a_data_artifact`.
+
+## BD-42 — House management is simulated, not just declared
+
+**Decision.** `partial_at_band2_trail_band1_run_band3` is executed: 50% exits at
+band 2, the remainder runs to band 3 or exits on a close back through band 1,
+and `gross_r` is the weighted result. Without band levels the recipe falls back
+to its stop/target path rather than silently claiming the managed result.
+
+**Why.** Declaring a management policy in a recipe name while simulating a
+plain stop/target would make every reported R wrong in the same direction. The
+plan states the policy concretely enough to implement, so it is implemented.
+
+**Caveat.** Partial fills are modelled at the band price with no slippage beyond
+the `house_default_v1` cost model; band levels come from the Phase-5 AVWAP
+block and are absent when the occurrence has no anchor.
+
+**Where.** `outcomes.py::_house_management_r`; two arithmetic tests
+(run-to-band-3 and trail-to-band-1).
+
+## BD-44 — OPEN: no detector adapter yet
+
+**Not a decision — a declared gap.**
+
+`record_occurrences` accepts a documented detection dict (symbol, canonical
+setup id, side, timeframes, status, trigger, geometry, detector version).
+Nothing yet reads the champion's tracker or scan output and produces those
+dicts, so Phase 6 proves the identity rules, the recipes, and the outcome
+arithmetic against constructed detections rather than live detector output.
+
+Phase 2 already wraps the setup tracker into bronze, which is the intended
+source. The adapter is deliberately not guessed at here: mapping tracker fields
+onto detection fields is a decision about what the champion *means*, and
+getting it wrong would silently mislabel every occurrence.
+
+**Where.** `occurrences.py` (input contract in the module docstring and
+`build_occurrence_row`).
+
+## BD-43 — `intraday_bounce_v1` requires a linked bounce event
+
+**Decision.** No linked BounceBot M5 event ⇒ no `intraday_bounce_v1` row, and
+the report records `NO_LINKED_BOUNCE_EVENT`. The link is symbol + session +
+a ±60-minute window around the trigger; the event supplies the bounce bar and
+the production stop.
+
+**Why.** Sec 19.3 is normative here, and the deeper rule is that the warehouse
+never re-detects: manufacturing a bounce to fill a row would invent evidence.
+
+**Reopens if.** The bounce ledger gains an explicit occurrence link — then the
+time-window join is replaced by the real key.
+
+**Where.** `occurrences.py::link_bounce_events`,
+`outcomes.py::build_outcomes`;
+`tests/test_warehouse_outcomes.py::test_no_linked_bounce_event_means_no_intraday_row`.
+
 ---
 
 ## Open items for Sol / Fable
@@ -737,6 +876,8 @@ Each is already stated in its own BD entry; this is the short list.
 | 5 | **Production context columns are null until Phase 6** wires the bounce-ledger join. | BD-33 | Nothing now; noted so the gap is not mistaken for "no signal" |
 | 6 | **DYNAMIC and EOD session VWAP are not yet captured** — only STANDARD. | BD-34 | Wrap the other two champion paths when their consumers need them |
 | 7 | **Unscheduled exchange closures** cannot come from calendar rules; they appear as sessions with no bars. | BD-26 | Add a dated override list if one ever occurs |
+| 8 | **No detector adapter yet** — `record_occurrences` takes a documented detection dict, but nothing reads the tracker/scan output and produces those dicts. Phase 6 proves the identity and outcome logic; the adapter is the remaining wiring. | BD-44 | Build the tracker→detection adapter (with Phase 2's bronze tracker wrap as the source) |
+| 9 | **Bounce link is a time window** (symbol + session + ±60 min), not an explicit key. | BD-43 | Confirm the window, or add an occurrence link to the bounce ledger |
 
 ---
 
