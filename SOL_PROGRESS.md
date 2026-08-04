@@ -7,6 +7,26 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
+- Branch `main` (2026-08-03 evening, merged from
+  `ultimate-setup-database-plan`). Gate: **1814 passed, 5 subtests** (adds
+  `tests/test_warehouse_config.py`); smoke **7/7**.
+- `docs/ULTIMATE_SETUP_DATABASE_PLAN.md` is now the LOCKED implementation plan
+  for the DAS research warehouse (Fabel ultracode review of the 2026-08-03
+  draft: capture policy with IB pacing budgets, 13-table frozen schemas,
+  Phases 0-8 build order, 28 locked decisions + a 6-item trader confirmation
+  register). plan.md sec 12 gained trader-directed item **13a** scoping
+  Phases 0-8 as shadow-only additive evidence capture.
+- Warehouse **Phase 0 landed**: decision record
+  `docs/decisions/0014-das-research-lake.md` (DAS lake = new append-only
+  storage class; Drive stays operational-only) and
+  `scripts/research_warehouse/config.py` (`research_store_dir` setting +
+  `TRADINGBOTV3_RESEARCH_DIR` override, refusal of Drive-folder paths,
+  `warehouse_enabled()` no-op guard, lake layout bootstrap, machine-local
+  `research_spool` path). Next builder starts at Phase 1 (store core: seal
+  protocol + manifest) per the plan's Section 19.2.
+
+## Previous checkpoint (main, 2026-08-03 midday)
+
 - Branch `main`, merge commit `29435d1` (2026-08-03). Combined gate:
   **1806 passed, 5 subtests**; smoke **7/7**. Working tree was clean and
   `origin/main` matched after push.
