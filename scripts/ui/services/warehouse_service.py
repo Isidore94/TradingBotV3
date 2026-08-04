@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -268,18 +269,32 @@ class WarehouseTeeCapture:
       ``latest_bars`` for its own reasons; this reads that dict and nothing
       else. No request is issued, so the tee cannot fail or delay a champion
       fetch, and no champion module imports the warehouse.
-    * **The snapshot happens on the owning thread.** ``capture()`` is called
-      from a GUI-thread slot and takes ``dict(bot.latest_bars)`` immediately;
-      ``extract_tee_bars`` iterating a dict another thread is resizing would
-      raise, which is why the copy is here and not deeper.
+    * **The snapshot happens on the owning thread, and nothing else does.**
+      ``submit()`` is what the GUI-thread slot calls, and all it does is
+      ``dict(bot.latest_bars)`` into a one-slot mailbox. The copy must be on
+      that thread - ``extract_tee_bars`` iterating a dict the champion is
+      resizing would raise - but every byte of filesystem work happens on this
+      object's own worker thread (review defect D21). That matters because the
+      spool is not free: ``ResearchSpoolWriter.__init__`` creates its directory
+      and adopts every stale ``.open`` segment it finds, and each ``write``
+      runs ``enforce_cap`` (which globs, stats and may *read* segments) and
+      ``fsync``. None of that belongs on a 60-second GUI timer.
+    * **Latest-wins, never a queue.** The mailbox holds one snapshot; a tick
+      that lands while the worker is busy replaces it. Nothing is lost, because
+      the champion's cache is a rolling five-day window and the next tick
+      re-offers the same bars - so the mailbox cannot grow and a slow disk can
+      never build a backlog.
     * **Spool-only.** ``store`` is deliberately ``None``, so ``capture_m5_tee``
-      does no lake I/O at all on the GUI thread - not even the read that
-      normally seeds its de-duplication. This object's own ``seen`` set does
-      that instead, which is what ``capture_m5_tee(seen=...)`` is for, and the
-      EOD build job seals the segments.
+      does no lake I/O at all - not even the read that normally seeds its
+      de-duplication. This object's own ``seen`` set does that instead, which is
+      what ``capture_m5_tee(seen=...)`` is for, and the EOD build job seals the
+      segments.
     * **Never fatal.** A capture failure is logged once per session and the
       desk carries on. Research evidence must never be able to break trading.
     """
+
+    #: How long ``close()`` waits for an in-flight capture before giving up.
+    CLOSE_TIMEOUT = 2.0
 
     def __init__(self, *, spool=None, provider: str = "IBKR"):
         self._spool = spool
@@ -290,14 +305,95 @@ class WarehouseTeeCapture:
         self.last_error = ""
         self.captures = 0
         self.rows_spooled = 0
+        #: Set once the worker finds no research store; the caller stops its
+        #: timer rather than waking a thread that will never do anything.
+        self.disabled = False
+        self._pending: tuple | None = None
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._idle = threading.Event()
+        self._idle.set()
+        self._closing = threading.Event()
+        self._worker: threading.Thread | None = None
 
     @property
     def spool(self):
-        """The writer, created on first use so an unset lake stays a no-op."""
+        """The writer, created on first use so an unset lake stays a no-op.
+
+        Only ever touched from the worker thread - see ``submit``.
+        """
         if self._spool is None:
             _config, spool_module, _store_module = _warehouse()
             self._spool = spool_module.ResearchSpoolWriter()
         return self._spool
+
+    # -- the GUI-thread half ------------------------------------------------
+    def submit(self, bot, *, now: datetime | None = None) -> bool:
+        """Hand the champion's bar cache to the worker. GUI-thread safe.
+
+        Pure memory: a dict copy, a lock, an event. No filesystem, no config
+        read, no import of the warehouse package - the worker owns all of it.
+        """
+        if bot is None or self.disabled:
+            return False
+        cache = getattr(bot, "latest_bars", None)
+        if not cache:
+            return False
+        snapshot = dict(cache)  # on this (GUI) thread, before anything iterates
+        moment = now or datetime.now(timezone.utc)
+        with self._lock:
+            self._pending = (snapshot, moment)
+            self._idle.clear()
+            # A Stop/Start inside one session resumes this same object rather
+            # than building a new one: the lake's ``publish`` does not dedupe -
+            # that is the caller's job - so a fresh ``seen`` set would re-spool
+            # the whole session and seal duplicate ``bar_m5`` rows.
+            self._closing.clear()
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(
+                    target=self._run, name="warehouse-m5-tee", daemon=True
+                )
+                self._worker.start()
+        self._wake.set()
+        return True
+
+    def close(self, timeout: float | None = None) -> None:
+        """Idle the worker and wait briefly for an in-flight capture.
+
+        Reversible on purpose: a later :meth:`submit` resumes this same object,
+        keeping the session's de-duplication set (see ``submit``).
+        """
+        self._closing.set()
+        self._wake.set()
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(self.CLOSE_TIMEOUT if timeout is None else float(timeout))
+
+    def wait_idle(self, timeout: float = 5.0) -> bool:
+        """Test/shutdown helper: block until the mailbox has been drained."""
+        return self._idle.wait(timeout)
+
+    # -- the worker-thread half ---------------------------------------------
+    def _run(self) -> None:
+        config, _spool_module, _store_module = _warehouse()
+        if not config.warehouse_enabled():
+            # No research store: mark it and retire. Nothing was created.
+            self.disabled = True
+            with self._lock:
+                self._pending = None
+            self._idle.set()
+            return
+        while not self._closing.is_set():
+            with self._lock:
+                pending, self._pending = self._pending, None
+            if pending is None:
+                self._idle.set()
+                self._wake.wait(1.0)
+                self._wake.clear()
+                continue
+            snapshot, moment = pending
+            self._capture_snapshot(snapshot, moment)
+        self._idle.set()
 
     def _session_seen(self, moment: datetime) -> set:
         """De-dup keys, reset per session so the set cannot grow unbounded."""
@@ -307,20 +403,8 @@ class WarehouseTeeCapture:
             self._seen_date = day
         return self._seen
 
-    def capture(self, bot, *, now: datetime | None = None):
-        """Snapshot the champion's M5 cache and spool whatever is new."""
-        if bot is None:
-            return None
-        config, _spool_module, _store_module = _warehouse()
-        if not config.warehouse_enabled():
-            return None
-        cache = getattr(bot, "latest_bars", None)
-        if not cache:
-            return None
-        # The copy, on this (GUI) thread, before anything iterates it.
-        snapshot = dict(cache)
-        moment = now or datetime.now(timezone.utc)
-
+    def _capture_snapshot(self, snapshot: dict, moment: datetime):
+        """Spool one already-taken snapshot. Worker thread only."""
         import sys
 
         scripts_dir = str(Path(__file__).resolve().parents[2])
@@ -330,7 +414,7 @@ class WarehouseTeeCapture:
 
         try:
             report = capture_m5_tee(
-                None,  # spool-only: no lake I/O on the GUI thread
+                None,  # spool-only: this path never reads or writes the lake
                 snapshot,
                 now=moment,
                 provider=self._provider,
@@ -347,6 +431,23 @@ class WarehouseTeeCapture:
         self.captures += 1
         self.rows_spooled += int(getattr(report, "rows_published", 0) or 0)
         return report
+
+    def capture(self, bot, *, now: datetime | None = None):
+        """Snapshot and spool synchronously.
+
+        The off-GUI entry point: used by the worker's own path in tests and by
+        any headless caller. The live desk calls :meth:`submit` instead, which
+        keeps every filesystem touch off the GUI thread.
+        """
+        if bot is None:
+            return None
+        config, _spool_module, _store_module = _warehouse()
+        if not config.warehouse_enabled():
+            return None
+        cache = getattr(bot, "latest_bars", None)
+        if not cache:
+            return None
+        return self._capture_snapshot(dict(cache), now or datetime.now(timezone.utc))
 
 
 def register_build_job(scheduler=None) -> dict:

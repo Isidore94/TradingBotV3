@@ -1450,6 +1450,131 @@ review's section 1 reopens with it).
 `_start_warehouse_timer`; `ui/panels/health_panel.py::warehouse_checks` /
 `_with_warehouse_checks`; `tests/test_qt_warehouse_tee.py`.
 
+## BD-64 — A gap's interval is the session's own window, and `expected_bars` counts it
+
+**Decision.** `_gap_window(day, use_rth=, interval=)` returns the exchange
+session's boundaries for the scope the job actually requested — ETH
+(`useRTH=0`, LD-03) for the nightly M5/M1 capture, RTH otherwise — together
+with the bar count expected across that interval. `collection_gap.gap_start`/
+`gap_end`/`expected_bars` are written from it, and `_record_missed` and
+`resolve_gaps` both key on it so the dedupe and resolution keys stay in step.
+A day the exchange was closed has no interval to name and expects nothing: it
+keeps the calendar day and a count of **0**, because a holiday is an honest
+absence, not a shortfall.
+
+The count has exactly one definition, and it is the calendar's:
+`TradingSession.window(extended=)` and `TradingSession.expected_bars(minutes,
+extended=)` derive from the session's own boundaries, and the existing
+`expected_m5_bars_rth`/`expected_m1_bars_rth` properties are now expressed
+through them. No constant is duplicated and no schema column is added.
+
+**Why.** BD-62/D18 moved `expected_bars` to mean "the count expected across the
+gap interval", but `backfill._record_missed` still wrote a hard-coded `0` while
+`gap_start`/`gap_end` spanned a whole UTC calendar day — an interval that is
+neither RTH nor ETH and a count that contradicted the column's stated meaning
+(review defect D20). The Health coverage tile reads these rows, so a
+permanently-zero expectation makes "expected vs observed" unanswerable for
+exactly the job LD-03 puts inside the slice.
+
+**Rejected.** A `TIMEFRAME_EXPECTED_BARS` lookup table — a second definition of
+"expected", which is how the two numbers with one name start disagreeing;
+the job already carries its `interval`, so the count is derivable. Keeping the
+calendar-day interval and computing an ETH count for it — the interval and the
+count would still disagree, which is the defect.
+
+**Reopens if.** A capture scope other than RTH/ETH is added (the `extended`
+flag becomes a scope enum), or half-day sessions need a distinct contract —
+they already work, because the boundaries come from the session.
+
+**Where.** `exchange_calendar.py::TradingSession.window` / `expected_bars`;
+`backfill.py::_gap_window` / `_record_missed` / `resolve_gaps` / `run_backfill`;
+`tests/test_warehouse_backfill.py::test_gap_rows_carry_the_intervals_expected_bar_count`
+/ `test_an_rth_scoped_job_expects_the_sessions_rth_bars`
+/ `test_a_paced_out_gap_is_timed_out_and_still_counts_its_interval`
+/ `test_a_closed_exchange_day_expects_no_bars`
+/ `test_supersession_still_resolves_after_the_interval_change`.
+
+## BD-65 — The GUI tee submits a snapshot; a worker thread does every byte of I/O
+
+**Decision.** `WarehouseTeeCapture` splits in two. `submit(bot)` is what the
+Qt slot calls and is **pure memory**: `dict(bot.latest_bars)` into a one-slot
+mailbox, a lock, an event — no filesystem, no config read, no warehouse import.
+A worker thread owned by the capture object does everything else: it checks
+`warehouse_enabled()` once, builds the `ResearchSpoolWriter`, and drains the
+mailbox. The mailbox is **latest-wins, never a queue** — a tick landing while
+the worker is busy replaces the pending snapshot, which cannot backlog and
+loses nothing, because the champion's cache is a rolling five-day window and
+the next tick re-offers the same bars. `close()` idles the worker and is
+**reversible**: a later `submit` resumes the same object.
+
+**Why.** The BD-63 wiring correctly avoided provider requests and lake I/O but
+still did local filesystem work on the 60-second GUI timer (review defect D21).
+`ResearchSpoolWriter.__init__` creates its directory and adopts *every* stale
+`.open` segment it finds, renaming each — unbounded in the number of segments a
+crashed session left behind. And it is not only construction: every `write`
+runs `enforce_cap`, which globs the spool, stats each segment and may *read*
+segment contents to classify them, and then `fsync`s. On a DAS hiccup or a
+slow disk that is a GUI stall, on the desk's own trading surface, for research
+evidence.
+
+The restart semantics are load-bearing, not cosmetic: `ResearchStore.publish`
+does **not** dedupe on grain — that is the caller's job, which is what
+`capture_m5_tee(seen=...)` exists for — so a Stop/Start that built a fresh
+capture object would re-spool the whole session and seal duplicate `bar_m5`
+rows. Hence one object with one `seen` set across the restart.
+
+**Rejected.** Bounded init plus deferred adoption (the review's option 2) —
+it fixes construction and leaves `enforce_cap` and `fsync` on the GUI thread,
+which is the same defect at a smaller size. A `QThread`/`QThreadPool` — the
+capture holds no Qt object and must survive independently of the widget tree.
+An unbounded queue — a stalled disk would grow it without limit, and every
+queued snapshot is stale by construction anyway.
+
+**Reopens if.** The tee ever needs to write something the champion's cache does
+not already hold (then the mailbox's latest-wins assumption no longer holds and
+it becomes a real queue with a stated bound).
+
+**Where.** `ui/services/warehouse_service.py::WarehouseTeeCapture.submit` /
+`close` / `wait_idle` / `_run` / `_capture_snapshot`;
+`ui/services/bounce_service.py::capture_warehouse_tee` /
+`_close_warehouse_capture`; `tests/test_qt_warehouse_tee.py` (the D21 block).
+
+## BD-66 — A bar belongs to its exchange session, never to its UTC date
+
+**Decision.** `archive_state` buckets the "already backfilled" marker by the
+row's `session_id` — a frozen sec-7.1 column the writers already populate
+correctly — falling back to `session_context(stamp).session_date` only if a row
+somehow lacks one. It also reads the **following month's** partition for every
+requested day, because a session's own ETH tail can live there.
+
+**Why.** ETH runs to 20:00 ET, which is 01:00 UTC the next day under EST, so
+the final hour of every winter session is stored under tomorrow's UTC date.
+Bucketing by `interval_start.date()` was wrong in both directions at once
+(review defect D22, reproduced on 2026-01-14): the session that *was*
+backfilled went unmarked, so the nightly job re-requested it forever and never
+converged; and the *following* session was marked covered although nothing had
+collected it, so its request was skipped outright and its ETH bars were never
+captured. LD-03 says uncaptured ETH history is permanently lost, which makes
+that second half data loss, not inefficiency — S2, not the S3 it was filed as.
+The month-partition half is the same crossing one level up: 31 December's
+19:30 ET bars are 1 January in UTC, so the per-bar dedupe could not see them
+and republished them.
+
+**Rejected.** Deriving the session date from the timestamp everywhere and
+ignoring `session_id` — it re-derives a fact the row already carries, which is
+how a second answer to one question appears. Widening the partition scan
+unconditionally — the next day's month is enough, because ETH opens at 04:00 ET
+(09:00 UTC) and never reaches back into the previous day.
+
+**Reopens if.** A capture scope opens earlier than 04:00 ET (then the previous
+month's partition joins the read), or a writer is added that does not populate
+`session_id`.
+
+**Where.** `backfill.py::_session_date_of` / `_bar_partitions` /
+`archive_state`;
+`tests/test_warehouse_backfill.py::test_a_winter_eth_tail_marks_its_own_session_not_the_next_one`
+/ `test_a_month_crossing_eth_tail_is_not_republished`.
+
 ---
 
 ## Open items for Sol / Fable

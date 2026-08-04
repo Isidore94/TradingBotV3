@@ -39,11 +39,13 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 try:  # package import
+    from . import exchange_calendar as xcal
     from . import pacer as pacer_mod
     from .manifest import utc_now
     from .schemas import SCHEMA_VERSION
     from .store import ResearchStore
 except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+    import exchange_calendar as xcal  # type: ignore
     import pacer as pacer_mod  # type: ignore
     from manifest import utc_now  # type: ignore
     from schemas import SCHEMA_VERSION  # type: ignore
@@ -229,26 +231,65 @@ def already_captured(store: ResearchStore, dataset: str, symbol: str, day: date)
     return (symbol, day) in backfilled
 
 
+def _session_date_of(session_id, stamp: datetime) -> date:
+    """The exchange session a bar belongs to - never its UTC calendar date.
+
+    ETH runs to 20:00 ET, which is 01:00 UTC the *next* day under EST, so the
+    final hour of a winter session is stored under tomorrow's UTC date. Bucketing
+    by ``interval_start.date()`` therefore both failed to mark the session that
+    was backfilled and marked the *following* session as covered, which skipped
+    its request outright and lost its ETH bars permanently (review defect D22).
+    ``bar_m5.session_id`` is a frozen sec-7.1 column that already carries the
+    right answer; it is only re-derived when a row somehow lacks one.
+    """
+    text = str(session_id or "")
+    if len(text) >= 10:
+        try:
+            return date.fromisoformat(text[-10:])
+        except ValueError:
+            pass
+    try:
+        from .bar_archive import session_context
+    except ImportError:  # pragma: no cover - scripts/ on sys.path
+        from bar_archive import session_context  # type: ignore
+    return session_context(stamp).session_date
+
+
+def _bar_partitions(days) -> set[str]:
+    """Month partitions that can hold bars for these sessions.
+
+    A session's own ETH tail can land in the next month (31 January's 19:00 ET
+    bars are 1 February in UTC), so the following day's partition is read too -
+    without it the per-bar dedupe cannot see those rows and republishes them.
+    """
+    partitions: set[str] = set()
+    for day in days or []:
+        partitions.add(f"month={day:%Y-%m}")
+        partitions.add(f"month={day + timedelta(days=1):%Y-%m}")
+    return partitions
+
+
 def archive_state(store: ResearchStore, dataset: str, symbols, days):
     """One pass over the relevant month partitions.
 
-    Returns ``(known_bar_keys, backfilled_days)``: the per-bar
+    Returns ``(known_bar_keys, backfilled_sessions)``: the per-bar
     ``(symbol, interval_start)`` set that makes ETH rows publishable alongside
     the tee's RTH rows without duplicating them (the ``bar_archive`` pattern),
-    and the ``(symbol, day)`` set that says a backfill already covered the day.
+    and the ``(symbol, session_date)`` set that says a backfill already covered
+    the session.
     """
     wanted = {str(symbol).strip().upper() for symbol in (symbols or [])}
     known: set[tuple[str, datetime]] = set()
     backfilled: set[tuple[str, date]] = set()
-    partitions = {f"month={day:%Y-%m}" for day in (days or [])}
-    for partition in sorted(partitions):
+    for partition in sorted(_bar_partitions(days)):
         table = store.read_table(
-            dataset, partition, columns=["symbol", "interval_start", "capture_mode"]
+            dataset, partition, columns=["symbol", "interval_start", "capture_mode", "session_id"]
         )
-        for name, start, mode in zip(
+        for name, start, mode, session_id in zip(
             table.column("symbol").to_pylist(),
             table.column("interval_start").to_pylist(),
             table.column("capture_mode").to_pylist(),
+            table.column("session_id").to_pylist(),
         ):
             symbol = str(name)
             if start is None or (wanted and symbol not in wanted):
@@ -256,7 +297,7 @@ def archive_state(store: ResearchStore, dataset: str, symbols, days):
             stamp = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
             known.add((symbol, stamp))
             if str(mode or "") == CAPTURE_MODE_BACKFILL:
-                backfilled.add((symbol, stamp.date()))
+                backfilled.add((symbol, _session_date_of(session_id, stamp)))
     return known, backfilled
 
 
@@ -416,10 +457,22 @@ def run_backfill(
             report.rows_quarantined += published.rows_quarantined
 
     report.gaps_recorded = _record_missed(
-        store, missed, timeframe=timeframe, detected_at=stamp, run_id=run_id or job
+        store,
+        missed,
+        timeframe=timeframe,
+        detected_at=stamp,
+        run_id=run_id or job,
+        use_rth=use_rth,
+        interval=interval,
     )
     report.gaps_resolved = resolve_gaps(
-        store, captured, timeframe=timeframe, resolved_at=stamp, run_id=run_id or job
+        store,
+        captured,
+        timeframe=timeframe,
+        resolved_at=stamp,
+        run_id=run_id or job,
+        use_rth=use_rth,
+        interval=interval,
     )
     return report
 
@@ -451,12 +504,35 @@ def _stamp_of(row, column) -> datetime:
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
-def _gap_window(day: date):
-    start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
-    return start, start + timedelta(days=1)
+def _gap_window(day: date, *, use_rth: bool = False, interval: timedelta = timedelta(minutes=5)):
+    """The collection interval for one (session, scope), and its bar count.
+
+    ``gap_start``/``gap_end`` are the session's own boundaries for the scope the
+    job actually requested - ETH for ``useRTH=0`` capture, RTH otherwise - so
+    ``expected_bars`` is the count expected *across that interval*, which is what
+    the column means (BD-62/D18). A non-session day has no interval to name and
+    expects no bars, so it keeps the calendar day and a count of zero: a holiday
+    is an honest absence, not a shortfall.
+    """
+    session = xcal.trading_session(day)
+    if session is None:
+        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        return start, start + timedelta(days=1), 0
+    start, end = session.window(extended=not use_rth)
+    minutes = int(interval.total_seconds() // 60)
+    return start, end, session.expected_bars(minutes, extended=not use_rth)
 
 
-def _record_missed(store: ResearchStore, missed, *, timeframe: str, detected_at: datetime, run_id: str) -> int:
+def _record_missed(
+    store: ResearchStore,
+    missed,
+    *,
+    timeframe: str,
+    detected_at: datetime,
+    run_id: str,
+    use_rth: bool = False,
+    interval: timedelta = timedelta(minutes=5),
+) -> int:
     """Append a gap row per miss, skipping ones already open.
 
     Without the dedupe every re-run inflated ``collection_gap`` with a second
@@ -468,7 +544,7 @@ def _record_missed(store: ResearchStore, missed, *, timeframe: str, detected_at:
     already = set(open_gap_keys(store, partitions))
     rows = []
     for symbol, day, reason in missed:
-        start, end = _gap_window(day)
+        start, end, expected = _gap_window(day, use_rth=use_rth, interval=interval)
         key = (symbol, timeframe, start)
         if key in already:
             continue
@@ -479,7 +555,7 @@ def _record_missed(store: ResearchStore, missed, *, timeframe: str, detected_at:
                 "timeframe": timeframe,
                 "gap_start": start,
                 "gap_end": end,
-                "expected_bars": 0,
+                "expected_bars": int(expected),
                 "reason": reason,
                 "detected_at": detected_at,
                 "resolved_at": None,
@@ -501,6 +577,8 @@ def resolve_gaps(
     resolved_at: datetime,
     run_id: str,
     resolution: str = RESOLUTION_BACKFILLED,
+    use_rth: bool = False,
+    interval: timedelta = timedelta(minutes=5),
 ) -> int:
     """Close the open gaps that this run actually filled.
 
@@ -516,7 +594,7 @@ def resolve_gaps(
     rows = []
     closed = set()
     for symbol, day in captured:
-        start, _end = _gap_window(day)
+        start, _end, _expected = _gap_window(day, use_rth=use_rth, interval=interval)
         key = (symbol, timeframe, start)
         row = open_gaps.get(key)
         if row is None or key in closed:

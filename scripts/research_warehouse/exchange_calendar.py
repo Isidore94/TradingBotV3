@@ -66,17 +66,41 @@ class TradingSession:
     eth_close_at: datetime
     is_half_day: bool
 
+    def window(self, *, extended: bool = False) -> tuple[datetime, datetime]:
+        """The session's collection interval for one capture scope.
+
+        ``extended`` is the ``useRTH=0`` scope of raw M1/M5 capture (LD-03);
+        the derived aggregates are RTH-only in v1 (sec 5.4).
+        """
+        if extended:
+            return self.eth_open_at, self.eth_close_at
+        return self.rth_open_at, self.rth_close_at
+
+    def expected_bars(self, interval_minutes: int, *, extended: bool = False) -> int:
+        """Bars a complete session holds at ``interval_minutes``.
+
+        The single definition of "expected" for this session: every consumer -
+        the RTH properties below, ``trading_session`` rows, and
+        ``collection_gap.expected_bars`` - derives from the session's own
+        boundaries rather than from a second hard-coded constant.
+        """
+        minutes = int(interval_minutes or 0)
+        if minutes <= 0:
+            return 0
+        start, end = self.window(extended=extended)
+        return int((end - start).total_seconds() // 60) // minutes
+
     @property
     def rth_minutes(self) -> int:
         return int((self.rth_close_at - self.rth_open_at).total_seconds() // 60)
 
     @property
     def expected_m5_bars_rth(self) -> int:
-        return self.rth_minutes // M5_MINUTES
+        return self.expected_bars(M5_MINUTES)
 
     @property
     def expected_m1_bars_rth(self) -> int:
-        return self.rth_minutes // M1_MINUTES
+        return self.expected_bars(M1_MINUTES)
 
     def phase_of(self, moment: datetime) -> str:
         if moment < self.rth_open_at:

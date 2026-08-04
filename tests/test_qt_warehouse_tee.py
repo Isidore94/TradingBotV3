@@ -15,6 +15,7 @@ What must hold, and what this file pins:
 
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -250,3 +251,175 @@ def test_an_unconfigured_warehouse_reads_as_unknown_not_healthy(monkeypatch):
     monkeypatch.setattr(config, "get_research_store_dir", lambda: None)
     rows = health_panel.warehouse_checks()
     assert rows and {row["status"] for row in rows} == {"unknown"}
+
+
+# --- D21: no filesystem work on the GUI timer path ------------------------
+class _ThreadRecordingSpool(_RecordingSpool):
+    """A spool writer that records which thread constructed and wrote it."""
+
+    constructed_on: list = []
+    wrote_on: list = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        type(self).constructed_on.append(threading.current_thread())
+
+    def write(self, dataset, rows, **kwargs):
+        type(self).wrote_on.append(threading.current_thread())
+        return super().write(dataset, rows, **kwargs)
+
+
+@pytest.fixture()
+def recording_writer(monkeypatch):
+    import research_warehouse.spool as spool_module
+
+    _ThreadRecordingSpool.constructed_on = []
+    _ThreadRecordingSpool.wrote_on = []
+    monkeypatch.setattr(spool_module, "ResearchSpoolWriter", _ThreadRecordingSpool)
+    return _ThreadRecordingSpool
+
+
+def test_submit_touches_no_filesystem_on_the_gui_thread(enabled, recording_writer):
+    """D21: writer construction adopts stale segments and renames files.
+
+    `ResearchSpoolWriter.__init__` mkdirs and adopts every stale `.open`
+    segment, and each `write` runs `enforce_cap` (glob + stat + read) and
+    fsyncs. None of that may happen on the 60s GUI timer.
+    """
+    capture = WarehouseTeeCapture()
+    main = threading.current_thread()
+
+    assert capture.submit(_FakeBot(_cache())) is True
+    # Nothing was built on this thread, then or ever.
+    assert main not in recording_writer.constructed_on
+
+    assert capture.wait_idle(5.0)
+    capture.close()
+    assert len(recording_writer.constructed_on) == 1
+    assert recording_writer.constructed_on[0] is not main
+    assert recording_writer.wrote_on and all(t is not main for t in recording_writer.wrote_on)
+
+
+def test_submit_still_spools_through_the_spool_only_path(enabled, recording_writer, monkeypatch):
+    """The work still happens - just not here. And still no lake I/O."""
+    import research_warehouse.store as store_module
+
+    opened = []
+    monkeypatch.setattr(
+        store_module.ResearchStore, "open", classmethod(lambda cls, root=None: opened.append(1))
+    )
+
+    capture = WarehouseTeeCapture()
+    capture.submit(_FakeBot(_cache()), now=OPEN_UTC + timedelta(minutes=20))
+    assert capture.wait_idle(5.0)
+    capture.close()
+
+    assert opened == [], "no ResearchStore is opened on any tee thread"
+    assert capture.last_report is not None and capture.last_report.status == "SPOOLED"
+    assert capture.rows_spooled > 0
+    # The rows went through the spool writer the worker built, as bar_m5.
+    writer = capture._spool
+    assert isinstance(writer, recording_writer)
+    assert [dataset for dataset, _rows in writer.writes] == ["bar_m5"]
+
+
+def test_submit_is_memory_only_when_the_warehouse_is_disabled(monkeypatch, recording_writer):
+    """Disabled: the worker looks once, builds nothing, and retires."""
+    import research_warehouse.config as config
+
+    monkeypatch.setattr(config, "warehouse_enabled", lambda: False)
+    capture = WarehouseTeeCapture()
+
+    assert capture.submit(_FakeBot(_cache())) is True  # accepted, then discarded
+    assert capture.wait_idle(5.0)
+    assert capture.disabled is True
+    assert recording_writer.constructed_on == []
+    assert capture.rows_spooled == 0
+    # Once disabled, further submits are refused outright.
+    assert capture.submit(_FakeBot(_cache())) is False
+    capture.close()
+
+
+def test_the_mailbox_is_latest_wins_and_cannot_backlog(enabled, recording_writer):
+    """A slow disk must not build a queue; the next tick re-offers the bars."""
+    capture = WarehouseTeeCapture()
+    for index in range(50):
+        capture.submit(_FakeBot(_cache()), now=OPEN_UTC + timedelta(minutes=20 + index))
+    assert capture.wait_idle(5.0)
+    capture.close()
+    # 50 submits, one mailbox: far fewer captures than submits, and no growth.
+    assert capture.captures <= 50
+    assert capture._pending is None
+
+
+def test_a_stop_start_resumes_the_same_capture_and_keeps_its_dedupe(enabled):
+    """The lake's publish does not dedupe, so `seen` must survive a restart."""
+    spool = _RecordingSpool()
+    capture = WarehouseTeeCapture(spool=spool)
+    cache = _cache()
+
+    capture.submit(_FakeBot(cache), now=OPEN_UTC + timedelta(minutes=20))
+    assert capture.wait_idle(5.0)
+    first_rows = capture.rows_spooled
+    assert first_rows > 0
+
+    capture.close()  # Stop
+
+    capture.submit(_FakeBot(cache), now=OPEN_UTC + timedelta(minutes=21))  # Start
+    assert capture.wait_idle(5.0)
+    capture.close()
+    assert capture.rows_spooled == first_rows, "the same bars must not be re-spooled"
+
+
+# --- D21: the service-layer lifecycle -------------------------------------
+def test_the_service_slot_submits_without_building_a_writer(enabled, recording_writer):
+    from ui.services.bounce_service import BounceService
+
+    service = BounceService()
+    try:
+        service._bot = _FakeBot(_cache())
+        service.capture_warehouse_tee()
+        # The GUI slot returned with nothing constructed on this thread.
+        assert threading.current_thread() not in recording_writer.constructed_on
+        capture = service._warehouse_capture
+        assert capture is not None
+        assert capture.wait_idle(5.0)
+        assert capture.rows_spooled > 0
+    finally:
+        service._bot = None
+        service.shutdown()
+
+
+def test_shutdown_closes_the_tee_worker(enabled, recording_writer):
+    from ui.services.bounce_service import BounceService
+
+    service = BounceService()
+    service._bot = _FakeBot(_cache())
+    service.capture_warehouse_tee()
+    capture = service._warehouse_capture
+    assert capture.wait_idle(5.0)
+
+    service._bot = None
+    service.shutdown()
+    worker = capture._worker
+    assert worker is None or not worker.is_alive(), "the worker is retired on shutdown"
+
+
+def test_a_disabled_warehouse_stops_the_service_timer(monkeypatch):
+    import research_warehouse.config as config
+    from ui.services.bounce_service import BounceService
+
+    monkeypatch.setattr(config, "warehouse_enabled", lambda: False)
+    service = BounceService()
+    try:
+        service._bot = _FakeBot(_cache())
+        service.capture_warehouse_tee()
+        capture = service._warehouse_capture
+        assert capture.wait_idle(5.0)
+        # Second tick sees `disabled` and stops the timer rather than spinning.
+        service.capture_warehouse_tee()
+        assert capture.disabled is True
+        assert not service._warehouse_timer.isActive()
+    finally:
+        service._bot = None
+        service.shutdown()

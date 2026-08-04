@@ -627,3 +627,196 @@ def test_capture_connection_specs_use_the_allocated_client_ids():
     bad = ib_capture.CaptureConnectionSpec(role=pacer_mod.ROLE_NIGHTLY_BACKFILL, client_id=1003)
     with pytest.raises(pacer_mod.ClientIdError, match="retired"):
         bad.validate()
+
+
+# --- D20: expected_bars is the interval's expected count -------------------
+def test_gap_rows_carry_the_intervals_expected_bar_count(store, pacer):
+    """D20: `_record_missed` hard-coded 0, contradicting BD-62/D18.
+
+    gap_start/gap_end are the session's own boundaries for the scope the job
+    requested, so expected_bars must be the count expected *across that
+    interval* - which is the calendar's number, not a literal typed here.
+    """
+    from scripts.research_warehouse import exchange_calendar as xcal
+
+    report = backfill.run_backfill(
+        store,
+        ["AAPL"],
+        fetcher=_fetcher([], bars=[]),  # answers nothing -> NO_RESPONSE gap
+        job="nightly_backfill",
+        days=[SESSION],
+        pacer=pacer,
+        now=NOW,
+    )
+    assert report.gaps_recorded == 1
+    gap = store.read_table("collection_gap").to_pylist()[0]
+
+    session = xcal.trading_session(SESSION)
+    # The ETH scope, because the nightly job is useRTH=0 (LD-03).
+    assert (gap["gap_start"], gap["gap_end"]) == session.window(extended=True)
+    assert gap["expected_bars"] == session.expected_bars(5, extended=True)
+    assert gap["expected_bars"] > 0
+    # Independent of the helper: 04:00-20:00 ET is 16h, so 192 five-minute bars.
+    assert gap["expected_bars"] == 192
+    assert gap["reason"] == backfill.REASON_NO_RESPONSE
+
+
+def test_an_rth_scoped_job_expects_the_sessions_rth_bars(store, pacer):
+    """The same contract at the other scope: 09:30-16:00 is 78 M5 bars."""
+    from scripts.research_warehouse import exchange_calendar as xcal
+
+    backfill.run_backfill(
+        store,
+        ["AAPL"],
+        fetcher=_fetcher([], bars=[]),
+        job="rth_backfill",
+        days=[SESSION],
+        use_rth=True,
+        pacer=pacer,
+        now=NOW,
+    )
+    gap = store.read_table("collection_gap").to_pylist()[0]
+    session = xcal.trading_session(SESSION)
+    assert (gap["gap_start"], gap["gap_end"]) == session.window(extended=False)
+    assert gap["expected_bars"] == session.expected_m5_bars_rth == 78
+
+
+def test_a_paced_out_gap_is_timed_out_and_still_counts_its_interval(store):
+    """Reasons stay correct after the change, and TIMED_OUT is not POLICY."""
+    tight = pacer_mod.IbPacer(clock=lambda: NOW, capture_allowance=0)
+    report = backfill.run_backfill(
+        store,
+        ["AAPL"],
+        fetcher=_fetcher([]),
+        job="nightly_backfill",
+        days=[SESSION],
+        pacer=tight,
+        clock=lambda: NOW,
+        now=NOW,
+    )
+    assert report.by_outcome == {"PACED_OUT": 1}
+    gap = store.read_table("collection_gap").to_pylist()[0]
+    assert gap["reason"] == backfill.REASON_TIMED_OUT
+    assert gap["reason"] != backfill.NOT_COLLECTED_BY_POLICY
+    assert gap["expected_bars"] == 192  # a pacing shortfall still expected bars
+
+
+def test_a_closed_exchange_day_expects_no_bars(store, pacer):
+    """A holiday has no interval to name and expects nothing - 0 is correct."""
+    christmas = date(2026, 12, 25)
+    backfill.run_backfill(
+        store,
+        ["AAPL"],
+        fetcher=_fetcher([], bars=[]),
+        job="nightly_backfill",
+        days=[christmas],
+        pacer=pacer,
+        now=NOW,
+    )
+    gap = store.read_table("collection_gap").to_pylist()[0]
+    assert gap["expected_bars"] == 0
+    assert gap["gap_end"] - gap["gap_start"] == timedelta(days=1)
+
+
+def test_supersession_still_resolves_after_the_interval_change(store, pacer):
+    """D20 moved gap_start; the dedupe and resolution keys must move with it."""
+    partition = f"month={SESSION:%Y-%m}"
+    backfill.run_backfill(
+        store, ["AAPL"], fetcher=_fetcher([], bars=[]), job="nightly_backfill",
+        days=[SESSION], pacer=pacer, now=NOW,
+    )
+    assert len(backfill.open_gap_keys(store, [partition])) == 1
+
+    # A repeat miss must not add a second open row at the new key.
+    backfill.run_backfill(
+        store, ["AAPL"], fetcher=_fetcher([], bars=[]), job="nightly_backfill",
+        days=[SESSION], pacer=pacer, now=NOW,
+    )
+    assert store.read_table("collection_gap").num_rows == 1
+
+    later = NOW + timedelta(days=1)
+    report = backfill.run_backfill(
+        store, ["AAPL"], fetcher=_fetcher([], bars=_bars(SESSION)), job="nightly_backfill",
+        days=[SESSION],
+        pacer=pacer_mod.IbPacer(clock=lambda: later, capture_allowance=100),
+        clock=lambda: later, now=later,
+    )
+    assert report.gaps_resolved == 1
+    assert backfill.open_gap_keys(store, [partition]) == {}
+
+
+# --- D22: ETH bars that cross the UTC date --------------------------------
+def _eth_tail_row(session_day: date, start: datetime, mode="BACKFILL"):
+    """A late-ETH bar whose UTC date is the day after its exchange session."""
+    return {
+        "symbol": "AAPL",
+        "interval_start": start,
+        "interval_end": start + timedelta(minutes=5),
+        "session_id": f"XNYS-{session_day.isoformat()}",
+        "session_phase": "POST",
+        "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5, "volume": 100,
+        "vwap": None, "trade_count": None, "provider": "IBKR", "is_complete": True,
+        "quality": "COMPLETE", "source_hash": "",
+        "event_at": start + timedelta(minutes=5), "observed_at": start,
+        "capture_mode": mode, "revision_id": "", "supersedes_revision_id": "",
+        "schema_version": backfill.SCHEMA_VERSION, "run_id": "nightly",
+    }
+
+
+def test_a_winter_eth_tail_marks_its_own_session_not_the_next_one(store):
+    """D22: bucketing by UTC date both missed and invented a covered session.
+
+    Under EST the 19:30 ET bar of 14 January is 00:30 UTC on the 15th. The old
+    UTC-date bucket left the 14th unmarked (re-requested every night) and marked
+    the 15th as covered, so that session was never requested and its ETH bars
+    were lost permanently - which LD-03 says is unrecoverable.
+    """
+    winter = date(2026, 1, 14)
+    tail = datetime(2026, 1, 15, 0, 30, tzinfo=UTC)  # 19:30 ET on the 14th
+    assert tail.date() != winter, "the fixture must actually cross the UTC date"
+    store.publish("bar_m5", [_eth_tail_row(winter, tail)], job_id="nightly")
+
+    _known, backfilled = backfill.archive_state(store, "bar_m5", ["AAPL"], [winter])
+    assert ("AAPL", winter) in backfilled, "the session that was backfilled is marked"
+
+    _known, next_day = backfill.archive_state(
+        store, "bar_m5", ["AAPL"], [date(2026, 1, 15)]
+    )
+    assert ("AAPL", date(2026, 1, 15)) not in next_day, (
+        "the following session was never backfilled and must still be requested"
+    )
+    assert backfill.already_captured(store, "bar_m5", "AAPL", winter) is True
+    assert backfill.already_captured(store, "bar_m5", "AAPL", date(2026, 1, 15)) is False
+
+
+def test_a_month_crossing_eth_tail_is_not_republished(store, pacer):
+    """The same crossing at a month boundary: dedupe must read the next partition.
+
+    31 December 2026 is a Thursday session in EST, so its 19:30 ET bar is 00:30
+    UTC on 1 January 2027 - a different month *and* year partition. Reading only
+    the session's own month left that bar unknown, so the next ETH run
+    republished it as a duplicate.
+    """
+    december = date(2026, 12, 31)
+    tail = datetime(2027, 1, 1, 0, 30, tzinfo=UTC)  # 19:30 ET on 31 December
+    assert f"{tail:%Y-%m}" != f"{december:%Y-%m}", "the fixture must cross the month"
+    store.publish("bar_m5", [_eth_tail_row(december, tail, mode="LIVE")], job_id="tee")
+
+    known, _backfilled = backfill.archive_state(store, "bar_m5", ["AAPL"], [december])
+    assert ("AAPL", tail) in known, "a bar in the next month's partition is still known"
+
+    # And the ETH job re-offering that bar publishes nothing new for it.
+    report = backfill.run_backfill(
+        store,
+        ["AAPL"],
+        fetcher=_fetcher([], bars=[{
+            "interval_start": tail, "open": 10.0, "high": 11.0, "low": 9.0,
+            "close": 10.5, "volume": 100,
+        }]),
+        job="nightly_backfill",
+        days=[december],
+        pacer=pacer,
+        now=NOW,
+    )
+    assert report.rows_duplicate == 1 and report.rows_published == 0
+    assert store.read_table("bar_m5").num_rows == 1

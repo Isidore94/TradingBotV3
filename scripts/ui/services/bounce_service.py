@@ -524,6 +524,9 @@ class BounceService(QObject):
         """
 
         error: RuntimeError | None = None
+        # The tee's worker is this service's to retire, like every other thread
+        # it owns; it holds no Qt object, so it is stopped before the timers.
+        self._close_warehouse_capture()
         for timer in (
             self._health_timer,
             self._regime_timer,
@@ -726,12 +729,15 @@ class BounceService(QObject):
 
     @Slot()
     def capture_warehouse_tee(self) -> None:
-        """Tee the champion's completed M5 bars into the research spool.
+        """Hand the champion's completed M5 bars to the research tee.
 
-        Runs on the GUI thread, which is the thread that owns the bot's bar
-        cache: the snapshot must be taken here, not inside the warehouse, or a
-        concurrent resize can raise mid-iteration. Everything downstream is
-        spool-only, so this costs no provider request and no lake I/O.
+        Everything this slot does is memory: constructing the capture object
+        (which touches no disk) and copying ``bot.latest_bars``. The copy must
+        happen on this thread - it owns that dict, and iterating one the
+        champion is resizing would raise - but the spool writer's construction,
+        its stale-segment adoption, its cap enforcement and its fsync all run on
+        the capture object's own worker thread (review defect D21). No provider
+        request, no lake I/O, on any thread.
         """
         if not self._is_live():
             return
@@ -743,19 +749,28 @@ class BounceService(QObject):
             try:
                 from ui.services.warehouse_service import WarehouseTeeCapture
 
-                from research_warehouse import config as warehouse_config
-
-                if not warehouse_config.warehouse_enabled():
-                    return
                 capture = WarehouseTeeCapture()
             except Exception:
-                # No research store, or the package is unavailable: the desk
-                # simply has no warehouse. Never retried noisily, never fatal.
+                # The package is unavailable: the desk simply has no warehouse.
+                # Never retried noisily, never fatal.
                 logging.debug("Research warehouse tee unavailable; capture stays off.", exc_info=True)
                 self._warehouse_timer.stop()
                 return
             self._warehouse_capture = capture
-        capture.capture(bot)
+        capture.submit(bot)
+        if capture.disabled:
+            # The worker looked and found no research store configured. Stop
+            # waking a thread that will never have anything to do.
+            self._warehouse_timer.stop()
+
+    def _close_warehouse_capture(self) -> None:
+        capture = self._warehouse_capture
+        if capture is None:
+            return
+        try:
+            capture.close()
+        except Exception:
+            logging.debug("Research warehouse tee failed to close cleanly.", exc_info=True)
 
     @Slot()
     def refresh_entry_board(self) -> None:
