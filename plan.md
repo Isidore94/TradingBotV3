@@ -1619,6 +1619,21 @@ The product should celebrate a correct thesis without mislabeling a late entry a
 11. Complete CandidateRegistry live-writer adoption.
 12. Integrate canonical SPY/RS evidence in advisory/shadow mode.
 13. Decouple Greatness into its dedicated priority lane.
+13a. **Research warehouse Phases 0-8** (trader-directed insertion, 2026-08-03;
+   numbered 13a so the existing 14-18 references stay stable):
+   `docs/ULTIMATE_SETUP_DATABASE_PLAN.md`. Shadow-only additive evidence
+   capture with read-only consumers: DAS Parquet lake, M5 tee archive, derived
+   M15/M30/H1/W1 bars, tier-1 feature snapshots, two-setup occurrence/outcome
+   slice, and the 20-session pilot. Zero detector/score/ranking/alert
+   influence, hence no golden fixtures required (no champion behavior
+   changes). Main desktop is the sole lake writer; the mini-PC is excluded
+   until the client-ID/dual-scheduler reconciliation (M1) lands. The plan's
+   Sections 16-17 (best-style engine and research UI) and post-slice
+   milestones remain gated behind items 14-18 and the Section 7 promotion
+   ladder. Phase 0 landed 2026-08-03: decision record 0014 (DAS lake storage
+   class), `scripts/research_warehouse/config.py` (`research_store_dir` +
+   `TRADINGBOTV3_RESEARCH_DIR`, Drive-path refusal, lake layout bootstrap),
+   `tests/test_warehouse_config.py`.
 
 ### Then — after correctness and authoritative data paths
 
