@@ -215,7 +215,11 @@ class IbCaptureFetcher:
         """Reconnect after the ~23:45 ET TWS restart; never raise for it."""
         if self.is_connected():
             return True
-        connect = getattr(self.transport, "connect", None)
+        # The real client exposes connect_spec(spec); ibapi's inherited
+        # EClient.connect takes (host, port, clientId) and must not be handed a
+        # spec object - preferring connect_spec is what makes the post-restart
+        # reconnect actually work against the real transport.
+        connect = getattr(self.transport, "connect_spec", None) or getattr(self.transport, "connect", None)
         if not callable(connect):
             return False
         try:

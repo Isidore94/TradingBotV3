@@ -175,6 +175,35 @@ def test_age_cap_sheds_segments_older_than_seven_days(tmp_path):
     assert spool_mod.closed_segments(writer.dir) == []
 
 
+def test_age_cap_never_sheds_a_protected_segment(tmp_path):
+    import os
+
+    writer = ResearchSpoolWriter(tmp_path / "spool")
+    writer.write("bar_m5", [_bar_row()], now=NOW, shed_class=spool_mod.SHED_PROTECTED)
+    stale = writer.roll()
+    old = (NOW - timedelta(days=8)).timestamp()
+    os.utime(stale, (old, old))
+
+    # D1/M5 capture is never shed (sec 8.4, LD-12) - not even past 7 days.
+    assert writer.enforce_cap(now=NOW) == []
+    assert len(spool_mod.closed_segments(writer.dir)) == 1
+
+
+def test_an_interrupted_seal_reseals_without_double_publishing(writer, store):
+    writer.write("bar_m5", [_bar_row(minute=0)], now=NOW)
+    writer.roll()
+    # Crash between store.publish and the segment unlink: rows are in the lake
+    # but the segment survives, so the next build sees it again.
+    seal_spool(store, writer.dir, delete_after_seal=False)
+    assert store.read_table("bar_m5").num_rows == 1
+    assert len(spool_mod.closed_segments(writer.dir)) == 1
+
+    result = seal_spool(store, writer.dir)
+    assert result.segments_sealed == 1
+    assert store.read_table("bar_m5").num_rows == 1  # never a double count
+    assert spool_mod.closed_segments(writer.dir) == []
+
+
 def test_a_mixed_segment_is_treated_as_protected(tmp_path):
     writer = ResearchSpoolWriter(tmp_path / "spool", cap_bytes=1)
     writer.write("bar_m1", [_bar_row()], now=NOW, shed_class=spool_mod.SHED_M1_EXPLORATION)

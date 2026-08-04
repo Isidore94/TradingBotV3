@@ -201,6 +201,11 @@ class ResearchSpoolWriter:
         cutoff = stamp - timedelta(days=self.max_age_days)
         for path in sorted(self.dir.glob(f"*{CLOSED_SUFFIX}")):
             if datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc) < cutoff:
+                if self._segment_shed_class(path) == SHED_PROTECTED:
+                    # D1/M5 capture and operational champions are never shed
+                    # (sec 8.4, LD-12) - not even past the 7-day age cap. A
+                    # protected backlog grows and turns Health red instead.
+                    continue
                 shed.extend(self._shed_segment(path, reason="AGE_CAP", now=stamp))
         for shed_class in SHED_ORDER:
             if self.stats(now=stamp).bytes <= self.cap_bytes:
@@ -313,6 +318,16 @@ def seal_spool(
         result.status = "NOTHING_TO_SEAL"
         return result
 
+    # (dataset, segment) pairs whose rows already reached the lake: a crash
+    # between store.publish and the segment unlink must re-seal the remainder,
+    # never publish the same rows twice. The manifest line already records the
+    # segment name, so the ledger is the dedup state - no side-car file.
+    sealed_before: set[tuple[str, str]] = set()
+    for entry in store.manifest.read_entries():
+        segment_name = entry.extra.get("spool_segment")
+        if segment_name:
+            sealed_before.add((entry.dataset, str(segment_name)))
+
     for segment in segments:
         grouped: dict[str, list[dict]] = {}
         try:
@@ -333,6 +348,8 @@ def seal_spool(
             continue
         sealed_ok = True
         for dataset, rows in sorted(grouped.items()):
+            if (dataset, segment.name) in sealed_before:
+                continue  # already in the lake; a crash only prevented the unlink
             try:
                 published = store.publish(dataset, rows, job_id=job_id, extra={"spool_segment": segment.name})
             except Exception:

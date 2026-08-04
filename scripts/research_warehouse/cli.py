@@ -56,6 +56,28 @@ def _lock_path() -> Path:
 
 
 def _process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill(pid, 0) on Windows is TerminateProcess, not a liveness probe:
+        # probing the lock holder would kill the running build. Query instead.
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        ERROR_ACCESS_DENIED = 5
+        STILL_ACTIVE = 259
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            # Access denied means the pid exists but is not ours: treat as alive.
+            return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except (OSError, ValueError):
