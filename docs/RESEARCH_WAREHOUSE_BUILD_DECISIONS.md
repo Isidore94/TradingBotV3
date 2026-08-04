@@ -18,7 +18,10 @@ where a choice binds future phases. Format: decision → why → what was reject
 → reopen trigger → where it lives.
 
 Status of the build: Phases 0-8 landed (code); the 20-session pilot is a live run that has not happened. Test baseline and
-branch live in [`SOL_PROGRESS.md`](../SOL_PROGRESS.md).
+branch live in [`SOL_PROGRESS.md`](../SOL_PROGRESS.md). The 2026-08-04 review
+(`docs/RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`) repaired the outcome engine
+(BD-53..BD-57) plus four mechanical defects (Windows lock probe, protected
+spool shedding, spool re-seal dedup, capture reconnect).
 
 ---
 
@@ -987,6 +990,139 @@ six Health tiles. Two things it cannot deliver from here:
    cannot start.
 
 **Where.** `cli.py`, `backup.py`, `scripts/ui/services/warehouse_service.py`.
+
+## BD-53 — Non-terminal outcomes are recomputed and superseded by `computed_at`
+
+**Decision.** `outcome_path` rows in a terminal state (`STOPPED`, `TARGETED`,
+`EXPIRED`, `AMBIGUOUS_BAR`, `CENSORED` — `TERMINAL_RESULT_STATES`) are final
+evidence and are never recomputed. Non-terminal rows (`OPEN`, `TRUNCATED`,
+`NO_TRIGGER`) are re-simulated on every build against the bars now available;
+a changed result is appended as a superseding row and an unchanged one writes
+nothing. Because the frozen sec 7.1 schema gives `outcome_path` no revision
+columns, supersession is by time: every reader takes the latest `computed_at`
+per (occurrence, recipe, outcome_definition) via `latest_outcomes()`, across
+**all** year partitions (the dataset partitions on `computed_at`, so a
+recomputed row can live in a later year than its predecessor). Additionally,
+an unresolved row carries **no realized R**: `gross_r`/`net_r` are null on
+`OPEN` and `TRUNCATED` rows — checkpoints and MFE/MAE remain as path facts.
+
+**Why.** The first implementation skipped any existing (occurrence, recipe,
+definition) key outright, freezing every outcome at its first simulation: a
+row computed two sessions after trigger kept its interim R forever, and once
+`maturity_at` passed, the readout counted that interim number as matured
+evidence (review defect D1, reproduced at +1.0R interim vs −0.8R actual).
+Sec 14.2's own maturity discipline ("an unresolved label cannot enter
+training … until matured") is unimplementable if the stored label can never
+change.
+
+**Rejected.** Simulating only after maturity — it would blind the readout to
+open positions and still mislabel truncated archives; mutating rows in place —
+impossible in an immutable lake; adding revision columns — edits a frozen
+schema when `computed_at` already orders knowledge.
+
+**Reopens if.** A registered study needs the interim path readings themselves
+(they would become explicit checkpoint columns, never `gross_r`).
+
+**Where.** `outcomes.py::build_outcomes` / `latest_outcomes` /
+`TERMINAL_RESULT_STATES`; `queries.py::slice_readout` (reads the latest view;
+`n_truncated` reported; `n_open` counts pending trades, not `NO_TRIGGER`);
+`tests/test_warehouse_outcomes.py::test_an_open_outcome_is_resimulated_and_superseded`,
+`tests/test_warehouse_queries.py::test_a_recomputed_outcome_supersedes_its_interim_reading`.
+
+## BD-54 — House management is one bounded walk, and a stop after the partial keeps the partial
+
+**Decision.** `partial_at_band2_trail_band1_run_band3` is simulated as a
+single walk over the recipe's own window (`forward[:18]`) — bars past the
+time stop contribute nothing, not even a band touch. Within the walk:
+intra-bar favourable fills (band-2 partial; band-3 runner exit, which implies
+band 2 was crossed first) precede close events (the structural close-failure
+stop; after the partial, the band-1 trail). A stop or trail that fires after
+the partial exits only the remaining half at that close and the partial stays
+credited — `gross_r = 0.5·partial + 0.5·exit`. Result states map: band-3
+completion → `TARGETED`; trail or stop exit → `STOPPED`; time stop →
+`EXPIRED`; `first_hit` records the first fill-or-exit event. Same-bar
+conservatism keeps the LD-07/BD-40 doctrine where it genuinely applies: a bar
+that offers a NEW favourable fill, ends the position on its close, **and
+touched the stop level intra-bar** is `AMBIGUOUS_BAR` — the primary reading
+takes the exit without that bar's fills and the fill-credited reading is kept
+in `r_upper_bound`. A pure band-1 trail with no stop touch is *not*
+ambiguous: an intra-bar band fill definitionally precedes the bar's close.
+
+**Why.** The Phase-6 implementation ran management over all forward bars
+(crediting a band-2 touch on session 25 of an 18-session recipe, review
+defect D3) and skipped management entirely when the main loop said `STOPPED`
+(reporting a full-size stop after a 50% partial at +2R — review defect D4,
+reproduced at −1.4R against the policy's +0.45R). BD-42's claim required the
+declared policy to actually be executed.
+
+**Reopens if.** The trader amends the management description (a new
+`recipe_id`, per BD-39's pattern), or sec 12.2's "band-bounce stop one band
+beyond" is wired in (it still comes from the detector's declared geometry).
+
+**Where.** `outcomes.py::_walk_managed` / `_walk_plain` / `simulate_swing`;
+`tests/test_warehouse_outcomes.py::test_management_credits_the_partial_when_the_runner_stops_out`
+/ `test_management_never_looks_past_the_time_stop`.
+
+## BD-55 — Maturity is `min(resolution, time stop)`, for swing and intraday alike
+
+**Decision.** `maturity_at` on a resolved row is the resolution time (the
+session close that completed the stop/trail/target, or the time-stop close
+for `EXPIRED`); the projected 18-session date is used only while the path is
+unresolved (`OPEN`/`TRUNCATED`). Intraday: a stopped bounce matures at the
+stop bar's `interval_end`, else at the session close.
+
+**Why.** Sec 14.2 says maturity is `min(+18 sessions, stop/target/expiry)`;
+the first implementation always projected the full time stop, so a trade that
+stopped on session 2 was excluded from every matured mean for weeks (review
+defect D11).
+
+**Where.** `outcomes.py::simulate_swing` / `simulate_intraday_bounce`;
+`tests/test_warehouse_outcomes.py::test_maturity_is_min_of_resolution_and_the_time_stop`.
+
+## BD-56 — Entry slippage and gap-through stops are modelled, not waived
+
+**Decision.** Sec 14.2's "+1 half_spread slippage on stop/market entries" is
+implemented as `net_r`'s `entry_slippage_half_spreads` term
+(`ENTRY_SLIPPAGE_HALF_SPREADS = 1.0`), paid by every slice recipe because
+every slice entry is a declared market-type order (the precommitted MOC,
+BD-39; the completed-bounce-bar close). A future limit-entry recipe passes 0.
+Intraday, a bar that opens beyond the stop fills at its **open**, not at the
+level the market never traded (sec 14.3 gap-through-stop behaviour); swing
+stops are close-based, so their exit close already carries the gap.
+
+**Why.** The cost formula alone omitted the contract's separate slippage
+bullet, and the intraday stop always filled at exactly −1.0R — both
+systematically optimistic under a contract that says every deviation is a new
+`outcome_definition_id` (review defect D12).
+
+**Reopens if.** The trader's fills show the one-half-spread assumption is
+materially wrong in either direction (that is a measured revision to
+`house_default_v1`'s successor, never a silent retune).
+
+**Where.** `outcomes.py::net_r` / `simulate_intraday_bounce`;
+`tests/test_warehouse_outcomes.py::test_net_r_includes_the_market_entry_slippage_bullet`
+/ `test_intraday_gap_through_the_stop_fills_at_the_open`.
+
+## BD-57 — The intraday walk is bounded to the entry session and knows it is unresolved
+
+**Decision.** `simulate_intraday_bounce` filters its bars to the entry
+session's RTH window before walking — a bar from any later session is not
+part of an EOD recipe's outcome, and `r_at_eod` (≡ `entry_r`) means the entry
+session's close, never the last bar the caller happened to pass
+(`_fill_intraday_checkpoints` takes a `session_close` bound; under a
+signal-close MOC swing entry the intraday checkpoints are therefore null,
+which is the honest value). A simulation run mid-session reports `OPEN`; a
+session that closed but whose archived bars stop early reports `TRUNCATED`;
+both carry no realized R and are recomputed later under BD-53.
+
+**Why.** The first implementation walked every provided bar across sessions,
+set `r_at_eod` from the final provided bar, and labelled a live trade
+`EXPIRED` at whatever bar came last when run intraday (review defect D13).
+
+**Where.** `outcomes.py::simulate_intraday_bounce` /
+`_fill_intraday_checkpoints`;
+`tests/test_warehouse_outcomes.py::test_intraday_bounce_never_walks_past_the_entry_session`
+/ `test_intraday_bounce_mid_session_is_open_and_a_short_archive_is_truncated`.
 
 ---
 

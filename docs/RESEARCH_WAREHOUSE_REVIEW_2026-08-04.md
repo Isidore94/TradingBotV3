@@ -13,6 +13,15 @@ fixes are mechanical and unambiguous. Everything else is reported only, because
 the correct fix requires a design decision the outcome engine or the wiring
 must make deliberately.
 
+**Repair addendum (same day, this branch).** The outcome-engine defects — D1
+(frozen outcomes / stale matured means), D3 (management past the time stop),
+D4 (partial discarded on a stop), D11 (maturity not `min()`), D12 (missing
+entry slippage + gap-through stops), D13 (unbounded intraday walk, no OPEN
+state) — are now repaired in `outcomes.py`/`queries.py`, with the repair
+decisions logged as BD-53..BD-57 and regression tests for each. Still open
+from this review: D5 (feature windowing), D6/D7 (backfill), D14–D19, and the
+minor notes.
+
 **Overall verdict.** The store core (seal, manifest, quarantine, retirement,
 read path) is well built and matches the plan; champion isolation of the tee
 and pacer is genuinely structural. The outcome engine and the feature windowing

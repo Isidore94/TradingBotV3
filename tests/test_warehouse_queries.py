@@ -221,6 +221,31 @@ def test_open_outcomes_are_counted_but_never_averaged_in(store):
     assert row["mean_net_r"] is None and row["mean_r_at_s18"] is None
 
 
+def test_a_recomputed_outcome_supersedes_its_interim_reading(store):
+    occurrences.record_occurrences(store, [_detected()], run_id="scan", now=TRIGGER_AT)
+    latest = list(occurrences.latest_occurrences(store, 2026).values())
+
+    # Night 1: only three sessions of path exist, price is UP interim. The
+    # clock says these should have resolved (as_of is past maturity), so the
+    # rows are TRUNCATED - and truncated evidence carries no realized R.
+    outcomes.build_outcomes(store, latest, d1_by_symbol={"AAPL": _d1([100.0, 103.0, 105.0])}, as_of=NOW, now=NOW)
+    stale = queries.slice_readout(store, year=2026, as_of=NOW)
+    row = next(item for item in stale.rows if item["recipe_id"] == "control_time_only_v1")
+    assert row["n_truncated"] == 1 and row["n_matured"] == 1
+    assert row["mean_gross_r"] is None  # an interim +1R can never flatter a mean
+
+    # A later build with the full path: the trade actually finished at -0.8R.
+    outcomes.build_outcomes(
+        store, latest, d1_by_symbol={"AAPL": _d1([100.0] + [96.0] * 20)}, as_of=NOW, now=NOW + timedelta(days=1)
+    )
+    fresh = queries.slice_readout(store, year=2026, as_of=NOW + timedelta(days=1))
+    row = next(item for item in fresh.rows if item["recipe_id"] == "control_time_only_v1")
+    # The superseded interim row is history, never a second sample.
+    assert row["n_rows"] == 1 and row["n_episodes"] == 1
+    assert row["n_truncated"] == 0
+    assert row["mean_gross_r"] == pytest.approx((96.0 - 100.0) / 5.0)
+
+
 def test_only_the_slice_setups_appear(store):
     occurrences.record_occurrences(
         store, [_detected(), _detected(setup="AVWAP_BAND_BOUNCE", anchor="anchor-2")], run_id="scan", now=TRIGGER_AT

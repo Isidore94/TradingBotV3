@@ -94,6 +94,20 @@ def test_net_r_arithmetic_is_the_declared_formula():
     assert outcomes.COMMISSION_PER_SHARE == 0.0035
 
 
+def test_net_r_includes_the_market_entry_slippage_bullet():
+    # Sec 14.2's separate bullet: +1 half_spread slippage on stop/market
+    # entries. Every slice recipe enters via a declared market-type order
+    # (precommitted MOC or completed-bar close), so every simulated row pays it.
+    spread = 0.02  # fallback half-spread at $100
+    assert outcomes.ENTRY_SLIPPAGE_HALF_SPREADS == 1.0
+    assert outcomes.net_r(2.0, 5.0, 100.0, entry_slippage_half_spreads=1.0) == pytest.approx(
+        2.0 - (2 * (0.0035 + spread) + spread) / 5.0
+    )
+    bars = _d1([100.0, 97.0, 94.0, 93.0, 99.0])
+    row = outcomes.simulate_swing(_occurrence(), bars, outcomes.SWING_HOUSE_V1, as_of=NOW)
+    assert row["net_r"] == pytest.approx(row["gross_r"] - (2 * (0.0035 + spread) + spread) / 5.0)
+
+
 def test_matured_is_derived_never_stored():
     assert "MATURED" not in schemas.RESULT_STATES
     row = {"maturity_at": datetime(2026, 8, 20, 20, 0, tzinfo=UTC)}
@@ -184,6 +198,21 @@ def test_maturity_is_a_calendar_fact_not_a_data_artifact():
     # Only two sessions of path exist, but maturity is still 18 sessions out.
     assert row["maturity_at"] is not None
     assert row["maturity_at"] > TRIGGER_AT + timedelta(days=20)
+    # And an unresolved path carries no realized R - checkpoints and MFE/MAE
+    # are path facts, but an interim reading must never enter a mean.
+    assert row["result_state"] == "TRUNCATED"
+    assert row["gross_r"] is None and row["net_r"] is None
+
+
+def test_maturity_is_min_of_resolution_and_the_time_stop():
+    # sec 14.2: min(+18 sessions, stop/target/expiry). A trade that stopped on
+    # session 3 matured on session 3, not weeks later.
+    bars = _d1([100.0, 97.0, 94.0, 93.0, 99.0])
+    row = outcomes.simulate_swing(_occurrence(), bars, outcomes.SWING_HOUSE_V1, as_of=NOW)
+    assert row["result_state"] == "STOPPED"
+    assert row["maturity_at"] == row["first_hit_at"]
+    assert row["maturity_at"] < TRIGGER_AT + timedelta(days=10)
+    assert outcomes.is_matured(row, TRIGGER_AT + timedelta(days=10)) is True
 
 
 def test_house_management_takes_a_partial_at_band2_and_runs_to_band3():
@@ -204,6 +233,39 @@ def test_house_management_trails_to_band1_after_the_partial():
     partial_r = (110.0 - 100.0) / 5.0
     trail_r = (104.0 - 100.0) / 5.0  # closed back under band 1
     assert row["gross_r"] == pytest.approx(0.5 * partial_r + 0.5 * trail_r)
+
+
+def test_management_credits_the_partial_when_the_runner_stops_out():
+    # 50% off at band 2 on session 1, then the runner trails out at the close
+    # back through band 1. The partial is policy arithmetic and stays credited;
+    # reporting a full-size stop here was the D4 defect.
+    bands = {"UPPER_1": 105.0, "UPPER_2": 110.0, "UPPER_3": 130.0}
+    bars = _d1(
+        [100.0, 108.0, 94.5, 93.0],
+        highs=[101.0, 111.0, 109.0, 95.0],
+        lows=[99.0, 107.0, 94.0, 92.0],
+    )
+    row = outcomes.simulate_swing(_occurrence(), bars, outcomes.SWING_HOUSE_V1, bands=bands, as_of=NOW)
+
+    partial_r = (110.0 - 100.0) / 5.0
+    runner_r = (94.5 - 100.0) / 5.0  # the trail exit at that bar's close
+    assert row["result_state"] == "STOPPED"
+    assert row["gross_r"] == pytest.approx(0.5 * partial_r + 0.5 * runner_r)
+    assert row["first_hit"] == "TARGET"  # the band-2 partial filled first
+    # min(): the position matured when its last piece exited, on the trail bar.
+    assert row["maturity_at"] > row["first_hit_at"]
+
+
+def test_management_never_looks_past_the_time_stop():
+    # A band touch on forward session 24 is outside the 18-session window and
+    # must contribute nothing - crediting it was the D3 defect.
+    bands = {"UPPER_1": 105.0, "UPPER_2": 110.0, "UPPER_3": 120.0}
+    highs = [101.0] * 25
+    highs[24] = 121.0
+    bars = _d1([100.0] * 25, highs=highs, lows=[99.0] * 25)
+    row = outcomes.simulate_swing(_occurrence(), bars, outcomes.SWING_HOUSE_V1, bands=bands, as_of=NOW)
+    assert row["result_state"] == "EXPIRED"
+    assert row["gross_r"] == pytest.approx(0.0)
 
 
 def test_a_setup_that_never_triggered_is_recorded_as_evidence():
@@ -262,6 +324,62 @@ def test_intraday_bounce_uses_the_linked_event_and_the_production_stop():
     assert row["result_state"] in schemas.RESULT_STATES
 
 
+def test_intraday_bounce_never_walks_past_the_entry_session():
+    session = xcal.trading_session(TRIGGER_DAY)
+    bars = _m5(session, 78)  # the full RTH session, rising
+    next_session = xcal.trading_session(TRIGGER_DAY + timedelta(days=1))
+    # A next-day collapse through the stop must be invisible to an EOD recipe.
+    bars += _m5(next_session, 10, base=50.0)
+    bounce_bar = bars[2]
+    event = {"symbol": "AAPL", "bounce_at": bounce_bar["interval_start"], "stop_price": bounce_bar["close"] - 1.0}
+    row = outcomes.simulate_intraday_bounce(
+        _occurrence(), event, bars, outcomes.INTRADAY_BOUNCE_V1, as_of=NOW, session=session
+    )
+    assert row["result_state"] == "EXPIRED"
+    assert row["maturity_at"] == session.rth_close_at
+    # r_at_eod means the ENTRY session's close, never the last bar provided.
+    assert row["r_at_eod"] == pytest.approx((bars[77]["close"] - bounce_bar["close"]) / 1.0)
+
+
+def test_intraday_bounce_mid_session_is_open_and_a_short_archive_is_truncated():
+    session = xcal.trading_session(TRIGGER_DAY)
+    bars = _m5(session, 20)
+    bounce_bar = bars[2]
+    event = {"symbol": "AAPL", "bounce_at": bounce_bar["interval_start"], "stop_price": bounce_bar["close"] - 1.0}
+
+    # Simulated while the session is still trading: the trade is simply OPEN.
+    mid_session = session.rth_open_at + timedelta(minutes=110)
+    open_row = outcomes.simulate_intraday_bounce(
+        _occurrence(), event, bars, outcomes.INTRADAY_BOUNCE_V1, as_of=mid_session, session=session
+    )
+    assert open_row["result_state"] == "OPEN"
+    assert open_row["gross_r"] is None and open_row["net_r"] is None
+
+    # Same bars after the close: the archive stops early, so the evidence is
+    # truncated - never a finished trade at whatever bar happened to be last.
+    late_row = outcomes.simulate_intraday_bounce(
+        _occurrence(), event, bars, outcomes.INTRADAY_BOUNCE_V1, as_of=NOW, session=session
+    )
+    assert late_row["result_state"] == "TRUNCATED"
+    assert late_row["gross_r"] is None and late_row["net_r"] is None
+
+
+def test_intraday_gap_through_the_stop_fills_at_the_open():
+    session = xcal.trading_session(TRIGGER_DAY)
+    bars = _m5(session, 6)
+    bounce_bar = bars[2]
+    bars[3] = dict(bars[3], open=95.0, high=95.5, low=94.0, close=94.5)
+    event = {"symbol": "AAPL", "bounce_at": bounce_bar["interval_start"], "stop_price": bounce_bar["close"] - 1.0}
+    row = outcomes.simulate_intraday_bounce(
+        _occurrence(), event, bars, outcomes.INTRADAY_BOUNCE_V1, as_of=NOW, session=session
+    )
+    assert row["result_state"] == "STOPPED"
+    # The market never traded at the stop: the fill is the gap open (sec 14.3).
+    assert row["gross_r"] == pytest.approx((95.0 - bounce_bar["close"]) / 1.0)
+    assert row["gross_r"] < -1.0
+    assert row["maturity_at"] == row["first_hit_at"]  # min(EOD, stop)
+
+
 def test_no_linked_bounce_event_means_no_intraday_row(store):
     report = outcomes.build_outcomes(
         store,
@@ -295,6 +413,78 @@ def test_alternative_recipes_share_one_occurrence_and_one_episode(store):
     again = outcomes.build_outcomes(store, [occurrence], d1_by_symbol={"AAPL": _d1([100.0])}, as_of=NOW)
     assert again.status == "NOTHING_TO_SIMULATE" and again.skipped["ALREADY_SIMULATED"] == 3
     assert store.read_table("outcome_path").num_rows == 3
+
+
+def test_an_open_outcome_is_resimulated_and_superseded(store):
+    occurrence = _occurrence()
+    early_as_of = TRIGGER_AT + timedelta(days=3)
+    first = outcomes.build_outcomes(
+        store,
+        [occurrence],
+        d1_by_symbol={"AAPL": _d1([100.0, 105.0, 105.0])},
+        recipes=[outcomes.CONTROL_TIME_ONLY_V1],
+        as_of=early_as_of,
+        now=early_as_of,
+    )
+    assert first.rows == 1
+    interim = next(iter(outcomes.latest_outcomes(store).values()))
+    assert interim["result_state"] == "OPEN"
+    assert interim["gross_r"] is None  # +1R interim must never be quotable
+
+    # Weeks later the full path exists: the trade actually finished at -0.8R.
+    full_path = _d1([100.0] + [96.0] * 20)
+    second = outcomes.build_outcomes(
+        store,
+        [occurrence],
+        d1_by_symbol={"AAPL": full_path},
+        recipes=[outcomes.CONTROL_TIME_ONLY_V1],
+        as_of=NOW,
+        now=NOW,
+    )
+    assert second.rows == 1
+    # Append-only: the interim row stays as history, the reader takes latest.
+    assert store.read_table("outcome_path").num_rows == 2
+    final = outcomes.latest_outcomes(store)[outcomes.outcome_key(interim)]
+    assert final["result_state"] == "EXPIRED"
+    assert final["gross_r"] == pytest.approx((96.0 - 100.0) / 5.0)
+
+    # Terminal evidence is immutable: a third build writes nothing.
+    third = outcomes.build_outcomes(
+        store,
+        [occurrence],
+        d1_by_symbol={"AAPL": full_path},
+        recipes=[outcomes.CONTROL_TIME_ONLY_V1],
+        as_of=NOW,
+        now=NOW + timedelta(days=1),
+    )
+    assert third.status == "NOTHING_TO_SIMULATE" and third.skipped == {"ALREADY_SIMULATED": 1}
+    assert store.read_table("outcome_path").num_rows == 2
+
+
+def test_a_rebuild_that_learned_nothing_writes_nothing(store):
+    occurrence = _occurrence()
+    short_path = _d1([100.0, 105.0, 105.0])
+    early_as_of = TRIGGER_AT + timedelta(days=3)
+    outcomes.build_outcomes(
+        store,
+        [occurrence],
+        d1_by_symbol={"AAPL": short_path},
+        recipes=[outcomes.CONTROL_TIME_ONLY_V1],
+        as_of=early_as_of,
+        now=early_as_of,
+    )
+    again = outcomes.build_outcomes(
+        store,
+        [occurrence],
+        d1_by_symbol={"AAPL": short_path},
+        recipes=[outcomes.CONTROL_TIME_ONLY_V1],
+        as_of=early_as_of,
+        now=early_as_of + timedelta(hours=1),
+    )
+    # The OPEN row is recompute-eligible, but identical knowledge is not a
+    # new revision - re-running with the same inputs is a no-op.
+    assert again.status == "NOTHING_TO_SIMULATE" and again.skipped == {"UNCHANGED": 1}
+    assert store.read_table("outcome_path").num_rows == 1
 
 
 def test_only_the_slice_result_states_are_emitted(store):

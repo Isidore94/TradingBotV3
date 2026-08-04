@@ -28,12 +28,12 @@ from datetime import datetime
 try:  # package import
     from .manifest import utc_now
     from .occurrences import SLICE_SETUPS, latest_occurrences
-    from .outcomes import OUTCOME_DEFINITION_ID, is_matured
+    from .outcomes import OUTCOME_DEFINITION_ID, is_matured, latest_outcomes
     from .store import ResearchStore
 except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     from manifest import utc_now  # type: ignore
     from occurrences import SLICE_SETUPS, latest_occurrences  # type: ignore
-    from outcomes import OUTCOME_DEFINITION_ID, is_matured  # type: ignore
+    from outcomes import OUTCOME_DEFINITION_ID, is_matured, latest_outcomes  # type: ignore
     from store import ResearchStore  # type: ignore
 
 #: Every Phase-7 result carries this tier. Raw counts are not evidence.
@@ -118,10 +118,13 @@ def slice_readout(
     target_year = year or snapshot.as_of.year
 
     occurrences_by_id = latest_occurrences(store, target_year)
-    resolved = store.manifest.resolve(dataset="outcome_path", partition=f"year={target_year}")
+    # Every partition, then the latest computed_at per (occurrence, recipe,
+    # definition): a recomputed outcome supersedes its interim reading, and a
+    # row recomputed in a later year lives in a later partition.
+    resolved = store.manifest.resolve(dataset="outcome_path")
     snapshot.manifest_seq = resolved.manifest_seq
     snapshot.files = len(resolved.entries)
-    outcome_rows = store.read_table("outcome_path", f"year={target_year}").to_pylist()
+    outcome_rows = list(latest_outcomes(store).values())
 
     grouped: dict[tuple[str, str, str], dict] = {}
     for outcome in outcome_rows:
@@ -163,6 +166,15 @@ def slice_readout(
         outcomes_list = bucket["_outcomes"]
         matured = [row for row in outcomes_list if is_matured(row, snapshot.as_of)]
         triggered = [row for row in matured if row.get("result_state") != "NO_TRIGGER"]
+        # OPEN/TRUNCATED rows carry no gross_r/net_r by construction, so the
+        # means below can only ever see realized results; TRUNCATED is still
+        # counted so a data shortfall is visible rather than silently dropped.
+        truncated = [row for row in matured if row.get("result_state") == "TRUNCATED"]
+        pending = [
+            row
+            for row in outcomes_list
+            if row.get("result_state") != "NO_TRIGGER" and not is_matured(row, snapshot.as_of)
+        ]
         row = {
             "canonical_setup_id": bucket["canonical_setup_id"],
             "side": bucket["side"],
@@ -175,7 +187,9 @@ def slice_readout(
             "n_symbols": len(bucket["_symbols"] - {None}),
             "n_sessions": len(bucket["_sessions"]),
             "n_matured": len(matured),
-            "n_open": len(outcomes_list) - len(matured),
+            # Pending trades only: a NO_TRIGGER row is not an open position.
+            "n_open": len(pending),
+            "n_truncated": len(truncated),
             "n_no_trigger": len([row for row in outcomes_list if row.get("result_state") == "NO_TRIGGER"]),
             "mean_gross_r": _mean(row.get("gross_r") for row in triggered),
             "mean_net_r": _mean(row.get("net_r") for row in triggered),
