@@ -109,6 +109,13 @@ def build_occurrence_row(detected: dict, *, run_id: str = "", now: datetime | No
         return None
     stamp = now or utc_now()
     episode = _episode_key(detected)
+    if episode in (None, ""):
+        # Neither an anchor instance nor a declared episode window. Hashing the
+        # empty token would give a March thesis and a November thesis on the
+        # same (symbol, setup, side, timeframe) one occurrence_id and one
+        # episode, forever (review defect D16). The detector adapter (BD-44)
+        # must supply one of the two; absence is rejected, never guessed.
+        return None
     identity = occurrence_id(symbol, setup_id, side, structural, episode)
     return {
         "occurrence_id": identity,
@@ -156,11 +163,19 @@ def _revision_number(revision_id: str) -> int:
     return 0
 
 
-def latest_occurrences(store: ResearchStore, year: int, occurrence_ids=None) -> dict:
-    """The current view: the highest revision of each occurrence."""
+def latest_occurrences(store: ResearchStore, year: int, occurrence_ids=None, *, span_years: int = 1) -> dict:
+    """The current view: the highest revision of each occurrence.
+
+    Reads ``year`` and the ``span_years`` partitions on either side of it. The
+    dataset partitions on ``event_at``, so a December occurrence rescanned in
+    January resolves against a *different* partition than the one holding its
+    rev-1: looking at one year appended a second rev-1 and inflated the episode
+    count at every year boundary (review defect D15).
+    """
     wanted = set(occurrence_ids or [])
     latest: dict[str, dict] = {}
-    for row in store.read_table("setup_occurrence", f"year={year}").to_pylist():
+    years = range(int(year) - int(span_years), int(year) + int(span_years) + 1)
+    for row in _rows_across_years(store, years):
         identity = str(row.get("occurrence_id") or "")
         if wanted and identity not in wanted:
             continue
@@ -168,6 +183,11 @@ def latest_occurrences(store: ResearchStore, year: int, occurrence_ids=None) -> 
         if current is None or _revision_number(row.get("revision_id")) > _revision_number(current.get("revision_id")):
             latest[identity] = row
     return latest
+
+
+def _rows_across_years(store: ResearchStore, years):
+    for value in years:
+        yield from store.read_table("setup_occurrence", f"year={int(value)}").to_pylist()
 
 
 def record_occurrences(

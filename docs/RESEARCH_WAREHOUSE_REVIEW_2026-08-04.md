@@ -19,7 +19,7 @@ D4 (partial discarded on a stop), D11 (maturity not `min()`), D12 (missing
 entry slippage + gap-through stops), D13 (unbounded intraday walk, no OPEN
 state) — are now repaired in `outcomes.py`/`queries.py`, with the repair
 decisions logged as BD-53..BD-57 and regression tests for each. Still open
-from this review: D14–D18 and the minor notes.
+from this review: the minor notes only.
 
 **Defect-repair addendum 2 (2026-08-04, branch
 `claude/das-warehouse-defects-2n9uql`).** D5 is repaired (BD-58, BD-59). One
@@ -33,7 +33,14 @@ right; what was missing was the champion's minimum-bar guard, which is what
 BD-59 adds. The daily half of D5 is confirmed exactly as written and fixed by
 BD-58. D6 and D7 are confirmed exactly as written and repaired in BD-60; D19
 likewise, in BD-61 (which also answers open item 11's "decide what the EOD
-build actually runs").
+build actually runs"). D14–D18 are repaired in BD-62; the D17 regression test
+additionally turned up a bug this report missed — a bare `"YYYYMMDD"` string
+is all digits, so `_epoch_to_utc` read it as epoch seconds and dated the bar
+1970-08-23.
+
+Every S1/S2/S3 defect in this report is now closed. What remains before the
+pilot is not defect work: the BD-20 live wiring, the BD-25 broker-marked IB
+run, the Windows/3.14 test run, and the trader's confirmation-register items.
 
 **Overall verdict.** The store core (seal, manifest, quarantine, retirement,
 read path) is well built and matches the plan; champion isolation of the tee

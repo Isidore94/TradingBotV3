@@ -148,6 +148,10 @@ class GapReport:
     status: str = "OK"
     rows: int = 0
     by_reason: dict = field(default_factory=dict)
+    #: Bars actually short, per reason. The stored ``expected_bars`` column is
+    #: the count expected across the gap interval (D18); the shortfall is a
+    #: property of this run's observation and lives here.
+    missing_bars_by_reason: dict = field(default_factory=dict)
 
 
 def extract_tee_bars(latest_bars) -> dict:
@@ -555,13 +559,21 @@ def record_collection_gaps(
             return
         already.add(key)
         report.by_reason[reason] = report.by_reason.get(reason, 0) + 1
+        report.missing_bars_by_reason[reason] = (
+            report.missing_bars_by_reason.get(reason, 0) + int(missing)
+        )
         rows.append(
             {
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "gap_start": session.rth_open_at,
                 "gap_end": session.rth_close_at,
-                "expected_bars": int(missing),
+                # The count expected across [gap_start, gap_end] - which is the
+                # whole session - not this run's shortfall. Storing the
+                # shortfall under a column documented as the expected count
+                # made the Health coverage tile sum an ambiguous number
+                # (review defect D18); the shortfall is in the report instead.
+                "expected_bars": int(expected_bars),
                 "reason": reason,
                 "detected_at": stamp,
                 "resolved_at": None,

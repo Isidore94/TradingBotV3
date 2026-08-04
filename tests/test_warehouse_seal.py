@@ -18,7 +18,12 @@ import pytest
 
 from scripts.research_warehouse import config, schemas
 from scripts.research_warehouse.manifest import ManifestLog
-from scripts.research_warehouse.store import LakeIntegrityError, ResearchStore
+from scripts.research_warehouse.store import (
+    QUARANTINE_ORPHAN_OVERLAPS_LIVE,
+    LakeIntegrityError,
+    ResearchStore,
+    lake_relative,
+)
 
 UTC = timezone.utc
 
@@ -221,6 +226,73 @@ def test_reconcile_quarantines_a_duplicate_of_already_published_content(store):
     assert not result.adopted and len(result.quarantined) == 1
     assert not twin.exists()  # moved into _quarantine, never deleted
     assert store.read_table("trading_session").num_rows == 1
+
+
+def test_a_crashed_compaction_is_quarantined_not_adopted(store, monkeypatch):
+    """D14: adopting a crashed compaction's merged file double-counts everything.
+
+    A compaction that dies between its ``os.replace`` and its manifest append
+    leaves a merged file whose hash matches nothing registered -- so BD-03's
+    hash guard waves it through -- while its source parts are all still live.
+    Adopting it as a fresh PUBLISH counts every row in the partition twice, and
+    the next compaction balances, because both sides doubled.
+    """
+    first = store.publish("trading_session", [_session_row(day=3)]).published[0]
+    second = store.publish("trading_session", [_session_row(day=4)]).published[0]
+    partition = first.partition
+    assert store.read_table("trading_session").num_rows == 2
+
+    original_append = ManifestLog.append
+
+    def fail_append(self, **kwargs):
+        raise OSError("simulated crash after os.replace, before the COMPACT line")
+
+    monkeypatch.setattr(ManifestLog, "append", fail_append)
+    with pytest.raises(OSError):
+        store.compact("trading_session", partition, job_id="compaction")
+    monkeypatch.setattr(ManifestLog, "append", original_append)
+
+    # The merged file is on disk, unregistered, and its parts are still live.
+    live = {entry.file_path for entry in store.manifest.resolve().entries}
+    assert {first.file_path, second.file_path} <= live
+    orphans = [
+        path
+        for path in (store.root / "silver").rglob("*.parquet")
+        if lake_relative(store.root, path) not in live
+    ]
+    assert len(orphans) == 1, "the crashed compaction left exactly one merged file"
+
+    result = store.reconcile(job_id="startup")
+    assert not result.adopted, "a crashed compaction must never be adopted"
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0].extra.get("reasons") == [QUARANTINE_ORPHAN_OVERLAPS_LIVE]
+    assert not orphans[0].exists()  # moved to _quarantine, never deleted
+
+    # The partition still holds its two rows, each exactly once.
+    assert store.read_table("trading_session").num_rows == 2
+    sessions = store.read_table("trading_session").column("session_id").to_pylist()
+    assert sorted(sessions) == ["XNYS-2026-08-03", "XNYS-2026-08-04"]
+
+    # And compaction still works afterwards.
+    assert store.compact("trading_session", partition, job_id="compaction") is not None
+    assert store.read_table("trading_session").num_rows == 2
+
+
+def test_a_genuinely_new_orphan_is_still_adopted(store, monkeypatch):
+    """The D14 guard must not break BD-03: new content is adopted, not lost."""
+    store.publish("trading_session", [_session_row(day=3)])
+
+    original_append = ManifestLog.append
+    monkeypatch.setattr(
+        ManifestLog, "append", lambda self, **kwargs: (_ for _ in ()).throw(OSError("crash"))
+    )
+    with pytest.raises(OSError):
+        store.publish("trading_session", [_session_row(day=5)])
+    monkeypatch.setattr(ManifestLog, "append", original_append)
+
+    result = store.reconcile(job_id="startup")
+    assert len(result.adopted) == 1 and not result.quarantined
+    assert store.read_table("trading_session").num_rows == 2
 
 
 def test_reconcile_reports_a_manifest_live_file_that_vanished(store):

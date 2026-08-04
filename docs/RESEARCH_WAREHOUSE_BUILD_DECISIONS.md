@@ -1335,6 +1335,68 @@ feature pass split from the seal.
 / `test_backups_no_op_with_a_clear_message_when_unconfigured`
 / `test_the_anchor_step_reads_current_and_previous_from_bronze`.
 
+## BD-62 — Five edge-case repairs: orphan adoption, year boundaries, empty episodes, naive IB strings, gap counts
+
+**Decision.** Five independent hardening choices, grouped because each is small
+and none changes an interface:
+
+1. **Reconcile refuses an orphan that overlaps live rows (D14).**
+   `_overlaps_live_rows` compares the orphan's rows against the partition's
+   live rows at the **dataset's declared grain**, not by file hash, and
+   quarantines under `ORPHAN_OVERLAPS_LIVE_ROWS` when they intersect.
+   Unreadable live state also refuses. BD-03's adopt-don't-discard survives
+   intact for the publish-retry case it was written for.
+2. **`latest_occurrences` reads adjacent years (D15).** It now spans
+   `year ± span_years` (default 1). `setup_occurrence` partitions on
+   `event_at`, and a revision carries the original `event_at` forward, so the
+   rescan's own year is not where its predecessor lives.
+3. **`build_occurrence_row` rejects a detection with no episode identity
+   (D16).** Neither `anchor_instance_id` nor `episode_start` means no row, and
+   the caller counts it as `INCOMPLETE_DETECTION`.
+4. **`_epoch_to_utc` accepts only epoch seconds and already-aware datetimes
+   (D17).** The naive-string fallback is gone rather than re-zoned, and a naive
+   `datetime` returns `None` too. Additionally the epoch parse now range-checks
+   its result: `"20260803"` is all digits and was being read as epoch seconds,
+   landing the bar in **1970-08-23** — found by the regression test for this
+   entry, not by the review.
+5. **`collection_gap.expected_bars` holds the expected count (D18).** Because
+   `gap_start`/`gap_end` span the whole session, the honest value for that
+   interval is the session's expected bar count; the per-run shortfall moved to
+   `GapReport.missing_bars_by_reason`.
+
+**Why.** (1) A compaction crashing between its `os.replace` and its manifest
+append leaves a merged file whose hash matches nothing registered — so the
+hash guard waved it through — while its source parts stay live; adopting it
+double-counted every row in the partition, and the next compaction balanced
+because both sides doubled. (2)/(3) Episode counts are the denominator of every
+evidence floor, so a year-boundary duplicate or a permanent two-theses-one-id
+collapse corrupts the arithmetic silently. (4) Reading exchange-local strings
+as UTC shifts bars 4-5 hours with no signal. (5) The Health coverage tile summed
+a column whose name and content disagreed.
+
+**Rejected.** For D14, a pre-intent marker in `_incoming/` before compaction —
+also valid (the review offered both) but it adds a fifth step to a locked
+4-step seal and only protects compaction, whereas the row-overlap test
+protects any future writer that can produce an overlapping orphan. For D18,
+narrowing `gap_start`/`gap_end` to the missing bars — that needs per-interval
+gap detection this build does not do, and inventing an interval is worse than
+an honest session-wide one.
+
+**Reopens if.** A dataset appears whose grain does not identify a row (then
+D14's check needs a content hash per row), or per-interval gap detection lands
+(then D18's interval narrows and `expected_bars` follows it).
+
+**Where.** `store.py::_overlaps_live_rows` / `_grain_keys` /
+`QUARANTINE_ORPHAN_OVERLAPS_LIVE`; `occurrences.py::latest_occurrences` /
+`build_occurrence_row`; `ib_capture.py::_epoch_to_utc`;
+`bar_archive.py::record_collection_gaps` / `GapReport.missing_bars_by_reason`;
+`tests/test_warehouse_seal.py::test_a_crashed_compaction_is_quarantined_not_adopted`
+/ `test_a_genuinely_new_orphan_is_still_adopted`;
+`tests/test_warehouse_occurrence.py::test_a_december_occurrence_rescanned_in_january_revises_not_duplicates`
+/ `test_a_detection_with_no_episode_anchor_is_rejected_not_collapsed`;
+`tests/test_warehouse_backfill.py::test_a_naive_ib_timestamp_is_dropped_not_rezoned`;
+`tests/test_warehouse_tee.py::test_policy_absence_is_never_recorded_as_missing`.
+
 ---
 
 ## Open items for Sol / Fable

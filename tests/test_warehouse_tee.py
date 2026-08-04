@@ -348,12 +348,20 @@ def test_policy_absence_is_never_recorded_as_missing(store, session):
     rows = {row["symbol"]: row for row in store.read_table("collection_gap").to_pylist()}
 
     assert "AAPL" not in rows  # complete coverage: no gap row at all
-    assert rows["MSFT"]["reason"] == "PARTIAL" and rows["MSFT"]["expected_bars"] == 38
-    assert rows["NVDA"]["reason"] == "MISSING" and rows["NVDA"]["expected_bars"] == 78
+    assert rows["MSFT"]["reason"] == "PARTIAL"
+    assert rows["NVDA"]["reason"] == "MISSING"
     for symbol in ("TSLA", "AMD"):
         assert rows[symbol]["reason"] == "NOT_COLLECTED_BY_POLICY"
-        assert rows[symbol]["expected_bars"] == 78
+    # D18: gap_start/gap_end span the session, so expected_bars is the count
+    # expected across that interval - the same 78 for every row - and the
+    # per-run shortfall lives in the report, not in a column named "expected".
+    assert {row["expected_bars"] for row in rows.values()} == {78}
     assert report.by_reason == {"PARTIAL": 1, "MISSING": 1, "NOT_COLLECTED_BY_POLICY": 2}
+    assert report.missing_bars_by_reason == {
+        "PARTIAL": 38,
+        "MISSING": 78,
+        "NOT_COLLECTED_BY_POLICY": 156,
+    }
     # Gaps span the session, and are unresolved until a backfill closes them.
     assert {row["gap_start"] for row in rows.values()} == {session.rth_open_at}
     assert {row["resolution"] for row in rows.values()} == {None}

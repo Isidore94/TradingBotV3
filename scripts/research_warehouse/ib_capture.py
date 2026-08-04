@@ -120,21 +120,31 @@ def parse_bar(raw, *, interval: timedelta = timedelta(minutes=5)) -> dict | None
 
 
 def _epoch_to_utc(value):
+    """Epoch seconds (``formatDate=2``) or an already-aware datetime. Nothing else.
+
+    A naive value is dropped rather than re-zoned. IB's naive strings are
+    *exchange-local*, so reading one as UTC shifts the bar 4-5 hours and does
+    it silently; if a TWS build ever answers ``formatDate=1``-style to this
+    connection, losing those bars (and recording the gap) is the honest
+    outcome. BD-06's own rule: naive is uncertainty, never localized
+    (review defect D17).
+    """
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else None
     text = str(value or "").strip()
     if not text:
         return None
     try:  # formatDate=2 gives epoch seconds
-        return datetime.fromtimestamp(int(text), tz=timezone.utc)
-    except (TypeError, ValueError):
-        pass
-    for fmt in ("%Y%m%d  %H:%M:%S", "%Y%m%d %H:%M:%S", "%Y%m%d"):
-        try:
-            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    return None
+        stamp = datetime.fromtimestamp(int(text), tz=timezone.utc)
+    except (TypeError, OverflowError, OSError, ValueError):
+        return None
+    # A bare "YYYYMMDD" date string is all digits too, and reading it as epoch
+    # seconds silently lands the bar in 1970 (20260803 -> 1970-08-23). Real
+    # capture epochs are 10 digits; anything outside a plausible range is a
+    # misread token, not a timestamp.
+    if not 2000 <= stamp.year <= 2100:
+        return None
+    return stamp
 
 
 def _safe_float(value):

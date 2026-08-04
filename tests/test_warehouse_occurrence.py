@@ -173,5 +173,54 @@ def test_bounce_events_link_only_inside_the_window():
     assert occurrences.link_bounce_events(rows, other_day) == {}
 
 
+def test_a_detection_with_no_episode_anchor_is_rejected_not_collapsed():
+    """D16: an empty episode token hashed two unrelated theses into one id.
+
+    ``_identity_token(None)`` is "", so a March thesis and a November thesis on
+    the same (symbol, setup, side, timeframe) collapsed into one occurrence_id
+    and one episode, permanently.
+    """
+    march = _detected(
+        anchor_instance_id=None,
+        episode_start=None,
+        trigger_at=datetime(2026, 3, 10, 20, 0, tzinfo=UTC),
+        event_at=datetime(2026, 3, 10, 20, 0, tzinfo=UTC),
+    )
+    november = dict(march, trigger_at=datetime(2026, 11, 10, 21, 0, tzinfo=UTC))
+    assert occurrences.build_occurrence_row(march, now=NOW) is None
+    assert occurrences.build_occurrence_row(november, now=NOW) is None
+
+    # Either identity source is enough; neither is invented.
+    by_anchor = occurrences.build_occurrence_row(dict(march, anchor_instance_id="anchor-9"), now=NOW)
+    by_episode = occurrences.build_occurrence_row(
+        dict(march, episode_start=datetime(2026, 3, 2, tzinfo=UTC)), now=NOW
+    )
+    assert by_anchor is not None and by_episode is not None
+    assert by_anchor["occurrence_id"] != by_episode["occurrence_id"]
+
+
+def test_a_december_occurrence_rescanned_in_january_revises_not_duplicates(store):
+    """D15: resolving from one year partition inflated episodes at the boundary."""
+    december = datetime(2026, 12, 29, 21, 0, tzinfo=UTC)
+    detection = _detected(trigger_at=december, event_at=december, observed_at=december)
+
+    first = occurrences.record_occurrences(store, [detection], now=december, run_id="dec")
+    assert first.created == 1
+
+    # January rescan: same episode, a moved stop. Partitioned on event_at, the
+    # existing rev-1 lives in year=2026 while the rescan runs in 2027.
+    january = datetime(2027, 1, 5, 21, 0, tzinfo=UTC)
+    rescan = dict(detection, stop_price_ref=207.5, run_id="jan")
+    second = occurrences.record_occurrences(store, [rescan], year=2027, now=january, run_id="jan")
+    assert second.created == 0 and second.revised == 1
+
+    rows = store.read_table("setup_occurrence").to_pylist()
+    assert len({row["occurrence_id"] for row in rows}) == 1, "one episode, not two"
+    assert sorted(row["revision_id"] for row in rows) == ["rev-1", "rev-2"]
+    current = occurrences.latest_occurrences(store, 2027)
+    assert len(current) == 1
+    assert next(iter(current.values()))["stop_price_ref"] == 207.5
+
+
 def test_occurrences_are_disabled_without_a_store():
     assert occurrences.record_occurrences(None, [_detected()]).status == "DISABLED"

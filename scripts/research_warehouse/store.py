@@ -82,6 +82,9 @@ QUARANTINE_PARTITION_KEY = "PARTITION_KEY_UNRESOLVED"
 QUARANTINE_SCHEMA_CAST = "SCHEMA_CAST_FAILED"
 QUARANTINE_VALIDATOR = "VALIDATOR_REJECTED"
 QUARANTINE_ORPHAN_DUPLICATE = "ORPHAN_DUPLICATE_CONTENT"
+#: An orphan whose rows are already live in its partition - the signature of a
+#: compaction that crashed between its os.replace and its manifest append.
+QUARANTINE_ORPHAN_OVERLAPS_LIVE = "ORPHAN_OVERLAPS_LIVE_ROWS"
 QUARANTINE_ORPHAN_UNREADABLE = "ORPHAN_UNREADABLE_FILE"
 QUARANTINE_INCOMPLETE_WRITE = "INCOMPLETE_STAGED_WRITE"
 
@@ -568,6 +571,35 @@ class ResearchStore:
             for path in sorted(spec.rglob("*.parquet")):
                 yield path
 
+    def _grain_keys(self, spec, table) -> set:
+        """The dataset's identity tuples for every row of ``table``."""
+        columns = [name for name in spec.grain if name in table.column_names]
+        if not columns:
+            return set()
+        values = [table.column(name).to_pylist() for name in columns]
+        return set(zip(*values))
+
+    def _overlaps_live_rows(self, dataset: str, partition: str, table) -> bool:
+        """Would adopting ``table`` duplicate rows already live in the partition?
+
+        Compared at the dataset's declared grain rather than by file hash: the
+        compaction-crash case produces a file that is byte-different from every
+        registered one while containing exactly their rows.
+        """
+        try:
+            spec = dataset_spec(dataset)
+        except KeyError:
+            return False
+        candidate = self._grain_keys(spec, table)
+        if not candidate:
+            return False
+        try:
+            live = self.read_table(dataset, partition or None, columns=list(spec.grain))
+        except (OSError, pa.ArrowInvalid, KeyError):
+            # Unreadable live state is uncertainty: refuse to adopt.
+            return True
+        return bool(candidate & self._grain_keys(spec, live))
+
     def reconcile(self, *, job_id: str = "", incoming_grace_seconds: int = INCOMING_STALE_SECONDS) -> ReconcileResult:
         """Repair what a crash can leave behind. Safe to run at every startup."""
         result = ReconcileResult()
@@ -600,6 +632,15 @@ class ResearchStore:
                         # A completed retry already published this content;
                         # adopting it a second time would double-count rows.
                         reason = QUARANTINE_ORPHAN_DUPLICATE
+                    elif self._overlaps_live_rows(dataset, partition, table):
+                        # BD-03's adopt-don't-discard is right for a publish
+                        # retry, whose file is *new* content. A compaction that
+                        # crashed between its os.replace and its manifest
+                        # append leaves a merged file whose hash matches
+                        # nothing registered but whose rows are all still live
+                        # in the source parts - adopting it would double-count
+                        # every row in the partition, silently (D14).
+                        reason = QUARANTINE_ORPHAN_OVERLAPS_LIVE
                     else:
                         spec = dataset_spec(dataset)
                         min_ts, max_ts = self._time_bounds(spec, table)

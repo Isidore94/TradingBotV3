@@ -558,6 +558,25 @@ def test_capture_bars_parse_from_epoch_seconds():
     assert ib_capture.parse_bar({"date": "1786109400", "open": "n/a"}) is None
 
 
+def test_a_naive_ib_timestamp_is_dropped_not_rezoned():
+    """D17: the fallback read IB's naive strings as UTC.
+
+    IB's naive strings are exchange-local, so a TWS build answering
+    formatDate=1-style to this connection would have shifted every bar 4-5
+    hours, silently. BD-06's rule: naive is uncertainty, never localized.
+    """
+    from scripts.research_warehouse import ib_capture
+
+    for naive in ("20260803  13:30:00", "20260803 13:30:00", "20260803"):
+        assert ib_capture.parse_bar(
+            {"date": naive, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 9}
+        ) is None
+    assert ib_capture._epoch_to_utc(datetime(2026, 8, 3, 13, 30)) is None
+    # An already-aware datetime is still accepted unchanged.
+    aware = datetime(2026, 8, 3, 13, 30, tzinfo=UTC)
+    assert ib_capture._epoch_to_utc(aware) == aware
+
+
 def test_capture_fetcher_tags_errors_as_capture_and_reconnects(store):
     from scripts.research_warehouse import ib_capture
 
