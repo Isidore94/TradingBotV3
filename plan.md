@@ -176,6 +176,18 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   armed/level-cross triggers are labeled and logged as research-only evidence
   and stay out of Alert Center plus Auto/Away alert summaries. The generic
   champion D1 flag path remains unchanged.
+- A Focus pick earns its Focus PRIVILEGES - the automatic D1 interest flags,
+  the tier-gate bypass, the always-sound - only while it trades beyond the
+  previous session's extreme in its own direction: a long above yesterday's
+  high, a short below yesterday's low (trader rule 2026-08-05, the same break
+  Auto Pilot's auto-populate has required since 2026-07-31, shared through
+  `prev_day_gate.py`). Inside yesterday's range the name is not blacked out -
+  it simply competes on tier like any other, so an S-tier/PROVEN/banger bounce
+  still surfaces. The D1 event window opens at the M5 bar that breaks the
+  level, never at the session start, so the morning's events on a name still
+  inside the range are never replayed when it later breaks out. An
+  unmeasurable price or missing prior session reads as uncertainty and grants
+  nothing (sec 5).
 - Setup Tracker, Day Trade Tracker, and Move Forensics rows share deterministic
   novice explanations that separate executable triggers from aggregate research,
   spell out entry/invalidation/management, and expose sample-size cautions.

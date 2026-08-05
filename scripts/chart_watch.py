@@ -137,6 +137,35 @@ def _bar_end(bar: Mapping[str, Any]) -> datetime:
     return _naive(bar["dt"]) + M5_BAR_SPAN
 
 
+def completed_session_bars(
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Today's M5 bars that have finished printing, oldest first.
+
+    The forming bar is a preview (plan.md sec 5), so a caller deciding a live
+    state - "is this name trading above yesterday's high yet" - reads only
+    what the tape actually printed.
+    """
+    moment = _naive(now or datetime.now())
+    return [bar for bar in _session_bars(m5_bars, moment) if _bar_end(bar) <= moment]
+
+
+def last_completed_session_close(
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Close of today's last COMPLETED M5 bar, or None before the first one."""
+    for bar in reversed(completed_session_bars(m5_bars, now=now)):
+        try:
+            return float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
 def arm_chart_watch(
     kind: str,
     symbol: str,

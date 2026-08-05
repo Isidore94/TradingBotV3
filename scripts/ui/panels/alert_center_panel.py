@@ -42,6 +42,7 @@ from chart_watch import (
     evaluate_chart_watch,
     evaluate_d1_event_watch,
     evaluate_d1_level_watch,
+    completed_session_bars,
     load_chart_watches,
     load_d1_event_watches,
     load_d1_level_watches,
@@ -50,6 +51,7 @@ from chart_watch import (
     save_d1_level_watches,
     watch_is_stale,
 )
+from prev_day_gate import OPEN as PREV_DAY_BREAK_OPEN, prev_day_break_state, prev_session_extremes
 from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
     ALERT_CHART_WATCHES_FILE,
@@ -128,6 +130,13 @@ _D1_DEVELOPING_PREFIXES = {
     "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
     "MASTER_AVWAP_D1_UPGRADE_WATCH",
 }
+
+
+def _bar_close(bar: object) -> float | None:
+    try:
+        return float(bar["close"])  # type: ignore[index]
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _d1_alert_prefix(alert: BounceAlert) -> str:
@@ -439,6 +448,21 @@ class AlertCenterPanel(QFrame):
             if self._focus_d1_flags_path is not None
             else set()
         )
+        # Previous-day extreme gate on Focus flagging (trader rule 2026-08-05:
+        # "I don't want focus picks to flag if they are below the previous day
+        # high for longs, or above the previous day low for shorts - otherwise
+        # it's just noise"). A Focus name earns its Focus PRIVILEGES - the
+        # automatic D1 interest flags, the tier-gate bypass, the always-sound -
+        # only once it trades beyond yesterday's extreme in its own direction.
+        # Below that it is not silenced: it simply falls back to the ordinary
+        # tier gate, so a genuinely strong bounce (S/A, PROVEN, banger) still
+        # comes through. "SYM|long" -> prev_day_gate state; the companion map
+        # stamps when the break was first seen so the D1 event window opens
+        # THERE and never replays what the name did while still inside
+        # yesterday's range. Both are day-scoped.
+        self._focus_break_state: dict[str, str] = {}
+        self._focus_break_open_at: dict[str, datetime] = {}
+        self._focus_gate_held = 0
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
         # chart annotations (review_guidance.py). Advisory only; with no
         # documents on disk every score is 0 and the queue stays FIFO.
@@ -799,7 +823,7 @@ class AlertCenterPanel(QFrame):
             return
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
-        is_focus = self._alert_is_focus(alert)
+        is_focus = self._alert_has_focus_privilege(alert)
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
             self._enqueue_review_alert(alert)
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
@@ -818,9 +842,11 @@ class AlertCenterPanel(QFrame):
         if alert.tag != "d1_focus_pin" and not self._d1_tab_is_current():
             self._d1_unread += 1
             self._refresh_d1_tab_label()
-        if self.sound_input.isChecked() and (is_ready_d1_alert(alert) or self._alert_is_focus(alert)):
+        if self.sound_input.isChecked() and (
+            is_ready_d1_alert(alert) or self._alert_has_focus_privilege(alert)
+        ):
             QApplication.beep()
-        self._relay_alert_popup(alert, is_focus=self._alert_is_focus(alert))
+        self._relay_alert_popup(alert, is_focus=self._alert_has_focus_privilege(alert))
         self._emit_feed_status()
 
     def _d1_tab_is_current(self) -> bool:
@@ -836,10 +862,21 @@ class AlertCenterPanel(QFrame):
         self.tabs.setTabText(self._d1_tab_index, label)
 
     def _emit_feed_status(self) -> None:
-        loud = sum(1 for item in self._alerts if alert_should_sound(item, is_focus=self._alert_is_focus(item)))
+        loud = sum(
+            1
+            for item in self._alerts
+            if alert_should_sound(item, is_focus=self._alert_has_focus_privilege(item))
+        )
+        # The held count makes the prev-day gate visible: silence should never
+        # be indistinguishable from a dead feed.
+        held = (
+            f" {self._focus_gate_held} Focus name(s) waiting on yesterday's high/low."
+            if self._focus_gate_held
+            else ""
+        )
         self.statusChanged.emit(
             f"Alert center: {len(self._alerts)} live alert(s), {loud} loud; "
-            f"{len(self._d1_alerts)} favorite-bucket transition(s) in D1 Focus."
+            f"{len(self._d1_alerts)} favorite-bucket transition(s) in D1 Focus.{held}"
         )
 
     def clear_feed(self) -> None:
@@ -866,7 +903,82 @@ class AlertCenterPanel(QFrame):
         self._rebuild_feed()
 
     def _alert_is_focus(self, alert: BounceAlert) -> bool:
+        """Membership only: is this symbol one of the trader's Focus picks."""
         return bool(self.focus_service and alert.symbol and self.focus_service.is_focus(alert.symbol))
+
+    # ------------------------------------------------------ prev-day gate
+    @staticmethod
+    def _focus_gate_key(symbol: str, side: str) -> str:
+        return f"{str(symbol or '').strip().upper()}|{side}"
+
+    def focus_break_state(self, symbol: str, side: str) -> str:
+        """Cached prev-day-extreme state for one Focus name/side.
+
+        Refreshed by the 60s D1 poll, which is the only place that already
+        holds both bar sets. A symbol the poll has not reached yet reads
+        UNKNOWN, which does not grant Focus privileges - missing data is
+        uncertainty, never confirmation (plan.md sec 5).
+        """
+        return self._focus_break_state.get(self._focus_gate_key(symbol, side), "unknown")
+
+    def _update_focus_break_state(
+        self,
+        symbol: str,
+        side: str,
+        m5_bars: list,
+        d1_bars: list,
+        moment: datetime,
+    ) -> datetime | None:
+        """Re-measure one Focus name against yesterday's range.
+
+        Returns the START of the M5 bar that FIRST broke the level today (the
+        D1 event window's opening edge), or None while the latest completed
+        close is not beyond it. Anchoring to the bar rather than to the poll
+        tick matters twice: the breakout bar's own D1 events count, and a
+        60s poll that arrives late - or a desk started at 11:00 - opens the
+        same window as one watching from the first print. The first stamp is
+        kept even if price dips back inside the range, so an event that
+        printed while the name was genuinely beyond yesterday's extreme stays
+        eligible and a re-break does not restart the clock.
+        """
+        key = self._focus_gate_key(symbol, side)
+        prev_high, prev_low = prev_session_extremes(d1_bars, session=moment.date())
+        completed = completed_session_bars(m5_bars, now=moment)
+        state = prev_day_break_state(
+            side, _bar_close(completed[-1]) if completed else None, prev_high, prev_low
+        )
+        self._focus_break_state[key] = state
+        if state != PREV_DAY_BREAK_OPEN:
+            return None
+        stamped = self._focus_break_open_at.get(key)
+        if stamped is None:
+            stamped = moment
+            for bar in completed:
+                if (
+                    prev_day_break_state(side, _bar_close(bar), prev_high, prev_low)
+                    == PREV_DAY_BREAK_OPEN
+                ):
+                    stamp = bar.get("dt")
+                    stamped = stamp if isinstance(stamp, datetime) else moment
+                    break
+            self._focus_break_open_at[key] = stamped
+        return stamped
+
+    def _alert_has_focus_privilege(self, alert: BounceAlert) -> bool:
+        """Focus membership AND the prev-day break on the alert's own side.
+
+        This is what the feed gate, the beep, and the satellite relay ask -
+        NOT plain membership. A Focus long still inside yesterday's range is
+        ordinary: it competes on tier like any other name.
+        """
+        if not self._alert_is_focus(alert):
+            return False
+        side = str(alert.side or "").strip().lower()
+        sides = (side,) if side in ("long", "short") else ("long", "short")
+        return any(
+            self.focus_break_state(alert.symbol, item) == PREV_DAY_BREAK_OPEN
+            for item in sides
+        )
 
     def _toggle_favorite(self, alert: BounceAlert) -> None:
         """The ★ on a feed item: favorite the pick, or unfavorite a lit one."""
@@ -970,7 +1082,7 @@ class AlertCenterPanel(QFrame):
                 a
                 for a in self._alerts
                 if a.symbol not in self._ignored_symbols
-                and alert_passes_feed_gate(a, mode, is_focus=self._alert_is_focus(a))
+                and alert_passes_feed_gate(a, mode, is_focus=self._alert_has_focus_privilege(a))
             ][:MAX_FEED_ITEMS]
         ):
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
@@ -1409,13 +1521,21 @@ class AlertCenterPanel(QFrame):
             self.statusChanged.emit("Focus review: no Focus picks to show.")
 
     def _poll_focus_d1_interest(self, now=None) -> None:
-        """Flag Focus picks on ANYTHING remotely interesting on the D1.
+        """Flag Focus picks on ANYTHING remotely interesting on the D1 - once
+        they have taken out yesterday's extreme in their own direction.
 
         Every Focus name is implicitly watched for the whole D1 event set
         (15EMA reject, 5d/20d extremes, SMA50/100/200 breaks, AVWAPE line/1σ
         bounces and breaks) - no arming needed. Each (symbol, event) flags at
         most once per session; hits land in the D1 Focus feed and the chart
         queue.
+
+        The prev-day gate (trader rule 2026-08-05) is what keeps that set from
+        emptying itself into the open: a long inside yesterday's range flags
+        nothing, and when it does break out the event window starts THERE, so
+        the 09:35 15EMA reject it printed while still below yesterday's high
+        never fires. Held names keep their pending kinds - nothing is consumed
+        while the gate is shut.
         """
         if self.focus_service is None or self._focus_d1_flags_path is None:
             return
@@ -1427,22 +1547,30 @@ class AlertCenterPanel(QFrame):
         moment = now or datetime.now()
         day_start = datetime(moment.year, moment.month, moment.day)
         hits: list[tuple[str, str, str, object]] = []
+        held = 0
         for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
             for symbol in focus.get(side_key) or []:
                 symbol = str(symbol or "").strip().upper()
                 if not symbol or symbol in self._ignored_symbols:
+                    continue
+                d1_bars = self._d1_bars_for(symbol)
+                m5_bars = self._m5_bars_for(symbol)
+                # Measured every tick even when nothing is pending: the feed
+                # gate and the beep read this state for every alert on the
+                # name, not just the automatic D1 flags.
+                break_open_at = self._update_focus_break_state(
+                    symbol, side_key, m5_bars, d1_bars, moment
+                )
+                if break_open_at is None:
+                    held += 1
                     continue
                 pending_kinds = [
                     kind
                     for kind in D1_EVENT_KINDS
                     if f"{symbol}|{kind}" not in self._focus_d1_flags
                 ]
-                if not pending_kinds:
+                if not pending_kinds or not d1_bars:
                     continue
-                d1_bars = self._d1_bars_for(symbol)
-                if not d1_bars:
-                    continue
-                m5_bars = self._m5_bars_for(symbol)
                 avwape_anchor = None
                 if any(kind.startswith("avwape_") for kind in pending_kinds):
                     try:
@@ -1451,8 +1579,11 @@ class AlertCenterPanel(QFrame):
                         avwape_anchor = chart_snapshot.earnings_anchor_date(symbol)
                     except Exception:
                         avwape_anchor = None
+                # The window opens at the break, not at midnight: everything
+                # the name did while inside yesterday's range stays unflagged.
+                armed_at = max(day_start, break_open_at)
                 for kind in pending_kinds:
-                    watch = D1EventWatch(symbol=symbol, kind=kind, armed_at=day_start)
+                    watch = D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
                     try:
                         hit = evaluate_d1_event_watch(
                             watch,
@@ -1467,7 +1598,9 @@ class AlertCenterPanel(QFrame):
                         continue
                     self._focus_d1_flags.add(f"{symbol}|{kind}")
                     hits.append((symbol, side_label, kind, hit))
+        self._focus_gate_held = held
         if not hits:
+            self._emit_feed_status()
             return
         self._save_focus_d1_flags()
         for symbol, side_label, kind, hit in hits:
@@ -2387,6 +2520,12 @@ class AlertCenterPanel(QFrame):
             if self._focus_d1_flags_path is not None
             else set()
         )
+        # So must the previous-day extreme gate: yesterday's breakout says
+        # nothing about today's range, and a stale open stamp would let the
+        # first poll of a new session replay the whole morning.
+        self._focus_break_state.clear()
+        self._focus_break_open_at.clear()
+        self._focus_gate_held = 0
         self._refresh_ignored_button()
 
     def _park_review_symbol(self, symbol: str) -> None:
