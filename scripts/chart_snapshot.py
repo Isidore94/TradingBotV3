@@ -375,8 +375,30 @@ def d1_store_is_stale(
     return last < latest_completed_session_date(now)
 
 
+def session_has_opened(now: datetime | None = None) -> bool:
+    """True once today's regular session has started (market-local clock).
+
+    Weekends answer False. Holidays are not modelled (no exchange calendar in
+    the repo), so a holiday answers True and callers merely look for a
+    forming candle that will not arrive - never a claim that one traded.
+    """
+    from market_session import get_market_session_window, normalize_market_local_datetime
+
+    moment = normalize_market_local_datetime(now)
+    if moment.weekday() >= 5:
+        return False
+    try:
+        window = get_market_session_window(moment.date())
+        return moment >= window.open_local
+    except Exception:
+        return moment.hour >= 6  # market-local fallback (06:30 open)
+
+
 def forming_d1_bar(
-    d1_bars: list[Mapping[str, Any]], intraday_bars: list[Mapping[str, Any]]
+    d1_bars: list[Mapping[str, Any]],
+    intraday_bars: list[Mapping[str, Any]],
+    *,
+    session_complete_through: date | None = None,
 ) -> dict[str, Any] | None:
     """Synthesize today's forming daily candle from cached intraday bars.
 
@@ -388,8 +410,14 @@ def forming_d1_bar(
     it distinctly. Display-only by design: nothing here feeds a detector, so
     the completed-bars-only invariant (plan.md sec 5) is untouched.
 
-    Returns None when there are no intraday bars or the store already holds
-    that session (after the close the real bar wins).
+    Returns None when there are no intraday bars, or when the store already
+    holds that session AND the session is over. ``session_complete_through``
+    (the last session whose daily bar is final) is what makes that second
+    test honest: a scan running at 11:00 writes today's PARTIAL daily bar
+    into the durable store, and treating that frozen bar as authoritative is
+    what made the chart's "latest" candle hours old. During the session the
+    live aggregate wins; after the close the real bar does. Omit the argument
+    for the historical behavior (the store always wins).
     """
     if not intraday_bars:
         return None
@@ -401,7 +429,8 @@ def forming_d1_bar(
         stored_stamp = (d1_bars[-1] or {}).get("dt")
         stored_date = stored_stamp.date() if hasattr(stored_stamp, "date") else None
         if stored_date is not None and stored_date >= session:
-            return None
+            if session_complete_through is None or session <= session_complete_through:
+                return None
     session_bars = [
         bar
         for bar in intraday_bars
@@ -430,24 +459,61 @@ def build_d1_snapshot(
     loader: Callable[[str], list[dict[str, Any]]] | None = None,
     intraday_bars: list[Mapping[str, Any]] | None = None,
     anchor_resolver: Callable[[str], Any] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Daily candles + SMA50/100/200 + EMA8/15/21 + AVWAPE ±1/2/3σ bands,
     indicators computed on the full history so the displayed tail carries
     correct long-lookback values.
 
-    ``intraday_bars`` (the bot's cached M5 series) appends today's forming
-    candle as a preview when the store has not caught up yet. The moving
-    averages stay computed on completed sessions only - each overlay gets a
-    trailing None, so the lines honestly stop at the last stored bar instead
-    of previewing an indicator off a partial day. ``anchor_resolver``
-    overrides the earnings-anchor lookup (tests); it may return either a
-    (current, previous) tuple or a bare current anchor date.
+    The chart ALWAYS ends at the current session while one is running, and
+    that last candle is always a preview (trader rule 2026-08-05: "I want to
+    always see the latest D1 candle as it's forming intraday"). Two things
+    can supply it, freshest first: ``intraday_bars`` (the bot's cached M5
+    series, or any today-dated bar a host fetched for this purpose)
+    aggregated into a candle, else a partial daily bar the store itself
+    picked up from a scan earlier today.
+
+    Everything the indicators touch is COMPLETED sessions only - today's
+    partial bar is excluded from the SMA/EMA/AVWAPE math and each overlay
+    gets a trailing None, so the lines honestly stop at the last completed
+    session instead of hanging off half a day. ``anchor_resolver`` overrides
+    the earnings-anchor lookup (tests); it may return either a (current,
+    previous) tuple or a bare current anchor date.
     """
-    bars = (loader or load_d1_bars)(symbol)
-    if not bars:
+    stored = (loader or load_d1_bars)(symbol)
+    if not stored:
         return {"symbol": symbol, "timeframe": "D1", "bars": [], "overlays": [], "note": "no daily store"}
+    # A scan running mid-session writes today's PARTIAL daily bar to the
+    # durable store. It is a preview candle wearing a stored bar's clothes:
+    # never let it into the indicator math, and prefer a live aggregate over
+    # it for display.
+    complete_through = latest_completed_session_date(now)
+    # Exactly one bar can be the forming one: today's, and only while today's
+    # session is still running. Anything else - including a future-dated bar
+    # from a synthetic/repaired store - is left alone as stored history.
+    from market_session import normalize_market_local_datetime
+
+    today = normalize_market_local_datetime(now).date()
+    forming_session = None if complete_through >= today else today
+
+    def _is_partial(bar: Mapping[str, Any]) -> bool:
+        stamp = bar.get("dt")
+        return (
+            forming_session is not None
+            and hasattr(stamp, "date")
+            and stamp.date() == forming_session
+        )
+
+    bars = [bar for bar in stored if not _is_partial(bar)]
+    partial = [bar for bar in stored if _is_partial(bar)]
+    if not bars:  # a brand-new symbol whose only bar is today's partial
+        bars, partial = stored, []
     closes = [bar["close"] for bar in bars]
-    preview = forming_d1_bar(bars, intraday_bars or [])
+    preview = forming_d1_bar(
+        bars, intraday_bars or [], session_complete_through=complete_through
+    )
+    if preview is None and partial:
+        preview = dict(partial[-1]) | {"preview": True}
     shown = _tail(bars, sessions)
     if preview is not None:
         shown = shown + [preview]

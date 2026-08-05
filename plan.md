@@ -176,6 +176,15 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   armed/level-cross triggers are labeled and logged as research-only evidence
   and stay out of Alert Center plus Auto/Away alert summaries. The generic
   champion D1 flag path remains unchanged.
+- The D1 snapshot chart always ends at the session in progress, and that last
+  candle is always a preview (trader rule 2026-08-05: "I want to always see
+  the latest D1 candle as it's forming intraday"). Freshest source wins:
+  BounceBot's cached M5 aggregated into a candle, else a display-only daily
+  bar the host fetched for an unscanned symbol, else today's partial bar the
+  durable store picked up from a mid-session scan. Indicators (SMA/EMA/AVWAPE)
+  stay on completed sessions only and end in a trailing None. The fetched
+  forming bar is NEVER persisted - a half-finished session is display
+  material, never stored evidence.
 - A Focus pick earns its Focus PRIVILEGES - the automatic D1 interest flags,
   the tier-gate bypass, the always-sound - only while it trades beyond the
   previous session's extreme in its own direction: a long above yesterday's
