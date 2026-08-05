@@ -176,6 +176,16 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   armed/level-cross triggers are labeled and logged as research-only evidence
   and stay out of Alert Center plus Auto/Away alert summaries. The generic
   champion D1 flag path remains unchanged.
+- DESK-mode auto-populate picks are adopted straight into the M5 Focus list
+  for the day rather than queued for one-at-a-time chart approval (trader rule
+  2026-08-05, superseding the 2026-07-31 approval queue: "quicker than adding
+  them in and then seeing their alerts"). The picks are already gated (PDH/PDL
+  break, daily trend, score >= 1.25), so the cheap direction is take-then-cull.
+  M5 Focus carries them because it is already day-scoped - the next day's first
+  store load clears the list and un-injects it from longs/shorts.txt. Focus
+  owns the watchlist line it injects, so pruning a pick stops its alerts
+  entirely; auto-populate membership deliberately does not also claim it. With
+  no Focus store present (satellite) the approval queue remains the fallback.
 - The D1 snapshot chart always ends at the session in progress, and that last
   candle is always a preview (trader rule 2026-08-05: "I want to always see
   the latest D1 candle as it's forming intraday"). Freshest source wins:

@@ -1368,7 +1368,25 @@ class AlertCenterPanel(QFrame):
     # ------------------------------------------------------------------
     # DESK-mode auto-populate picks: chart first, watchlist only on approval.
     def _poll_auto_pick_pending(self) -> None:
-        """Turn newly staged auto-populate picks into review-queue charts."""
+        """Land newly staged auto-populate picks straight in M5 Focus for today.
+
+        Trader rule 2026-08-05, replacing the 2026-07-31 chart-approval queue:
+        "just add the auto picks into the M5 focus for today and then I will
+        prune them out manually - it's quicker than adding them in and then
+        seeing their alerts." Approving one at a time meant a pick produced no
+        alerts until it had been reviewed, which is backwards: the picks are
+        already gated (PDH/PDL break, daily trend, score >= 1.25), so the
+        cheaper direction is to take them all and cull.
+
+        M5 Focus is the right home rather than the bare watchlist because it
+        is already day-scoped - tomorrow's first store load clears the list AND
+        un-injects it from longs/shorts.txt, so "for today" needs no new
+        expiry. Pruning a name from Focus removes the watchlist line with it,
+        so a pruned pick stops alerting entirely.
+
+        With no Focus service (satellite, tests) this falls back to the old
+        approval queue - the picks must not silently vanish.
+        """
         if self._auto_pick_pending_path is None:
             return
         try:
@@ -1378,6 +1396,7 @@ class AlertCenterPanel(QFrame):
         except Exception:
             return
         day = str(payload.get("date") or "")
+        adopted: list[str] = []
         for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
             entries = payload.get("pending", {}).get(side_key) or {}
             for symbol, entry in entries.items():
@@ -1391,6 +1410,9 @@ class AlertCenterPanel(QFrame):
                 entry = entry if isinstance(entry, dict) else {}
                 reason = str(entry.get("reason") or "auto-populate pick")
                 score = entry.get("score")
+                if self._adopt_auto_pick_into_focus(symbol, side_key, entry, reason):
+                    adopted.append(symbol)
+                    continue
                 trigger = f"Auto pick ({side_label.lower()}): {reason}"
                 if score:
                     trigger += f" · score {float(score):.2f}"
@@ -1407,6 +1429,59 @@ class AlertCenterPanel(QFrame):
                         payload={"auto_pick": dict(entry), "auto_pick_side": side_key},
                     )
                 )
+        if adopted:
+            self.statusChanged.emit(
+                f"{len(adopted)} auto pick(s) added to M5 Focus for today "
+                f"({', '.join(adopted[:8])}{'...' if len(adopted) > 8 else ''}) - "
+                "prune with Review ▶ on the Focus board."
+            )
+
+    def _adopt_auto_pick_into_focus(
+        self, symbol: str, side: str, entry: dict, reason: str
+    ) -> bool:
+        """Add one staged pick to M5 Focus and retire its proposal. True on adopt.
+
+        Writes through the STORE, not `FocusService.add`: the service logs every
+        add to the trader-verdict feedback JSONL as a "like", and a machine
+        adding 30 names is not the trader liking 30 names. The store's listener
+        still fires focusChanged, so every surface refreshes, and the action is
+        logged to the review-decision ledger instead.
+        """
+        store = getattr(self.focus_service, "store", None)
+        if store is None:
+            return False
+        try:
+            store.add(symbol, side, "m5")
+        except Exception:
+            logging.warning("Auto pick %s could not be added to Focus.", symbol, exc_info=True)
+            return False
+        if self._auto_pick_pending_path is not None:
+            try:
+                from autopilot_core import resolve_auto_populate_pick
+
+                # Accepted, but Focus owns the watchlist line it just injected -
+                # a second owner here would let one side delete the other's entry.
+                resolve_auto_populate_pick(
+                    symbol,
+                    side,
+                    True,
+                    decision_label="auto_focus",
+                    write_watchlist=False,
+                    pending_path=self._auto_pick_pending_path,
+                )
+            except Exception:
+                logging.warning(
+                    "Auto pick %s adopted into Focus but its proposal was not retired.",
+                    symbol,
+                    exc_info=True,
+                )
+        self._record_review_event(
+            "auto_pick_auto_focus",
+            symbol=symbol,
+            side=side.upper(),
+            detail={"auto_pick": dict(entry), "reason": reason},
+        )
+        return True
 
     def _resolve_auto_pick(self, alert: BounceAlert, approved: bool) -> None:
         if (

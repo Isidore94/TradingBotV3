@@ -1661,10 +1661,93 @@ def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
     dialog.close()
 
 
-def test_desk_auto_picks_chart_for_approval(tmp_path, monkeypatch):
-    """DESK-mode staged auto-populate picks occupy the review chart with
-    Approve/Pass verbs; the verdict routes through resolve_auto_populate_pick
-    and advances the queue (2026-07-31 directive)."""
+def test_desk_auto_picks_land_in_m5_focus_for_today(tmp_path, monkeypatch):
+    """2026-08-05: staged auto picks are ADOPTED into M5 Focus, not queued for
+    one-at-a-time approval - "quicker than adding them in and then seeing
+    their alerts". Focus owns the watchlist line, so pruning one removes it."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        import autopilot_core as core
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+    import json
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+    pending_path = tmp_path / "auto_populate_pending.json"
+    membership_path = tmp_path / "membership.json"
+    core.stage_auto_populate_candidates(
+        {
+            "longs": [{"symbol": "NVDA", "score": 2.1, "reason": "PDH break"}],
+            "shorts": [{"symbol": "TSLA", "score": 1.6, "reason": "PDL break"}],
+        },
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=tmp_path / "longs.txt",
+        shorts_path=tmp_path / "shorts.txt",
+    )
+
+    service = _service(tmp_path)
+    liked = []
+    monkeypatch.setattr(
+        service, "record_feedback", lambda *a, **k: liked.append((a, k))
+    )
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "ignored.txt",
+        review_events_path=tmp_path / "review_events.jsonl",
+        auto_pick_pending_path=pending_path,
+    )
+    panel._poll_auto_pick_pending()
+
+    # Both picks are M5 Focus names for today, on the correct sides.
+    assert service.is_focus("NVDA", "long", "m5")
+    assert service.is_focus("TSLA", "short", "m5")
+    assert service.focus_symbols("long", "swing") == []  # day-trade list only
+    # ...which means BounceBot's intraday watchlists carry them.
+    assert "NVDA" in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+    assert "TSLA" in (tmp_path / "shorts.txt").read_text(encoding="utf-8")
+    # No approval chart: that is the entire point of the change.
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
+    # A machine adding names is not the trader liking them.
+    assert liked == []
+    # The proposal is retired as adopted - never re-proposed today - and
+    # auto-populate did NOT also claim the watchlist line it does not own.
+    decided = json.loads(pending_path.read_text(encoding="utf-8"))["decided"]
+    assert decided["long"]["NVDA"]["decision"] == "auto_focus"
+    assert decided["short"]["TSLA"]["decision"] == "auto_focus"
+    assert not membership_path.exists() or "NVDA" not in membership_path.read_text(
+        encoding="utf-8"
+    )
+
+    # A second tick adopts nothing new.
+    panel._poll_auto_pick_pending()
+    assert service.focus_symbols("long", "m5") == ["NVDA"]
+
+    # Pruning is the trader's half of the deal: it takes the watchlist line
+    # with it, so a pruned pick stops alerting instead of just losing its star.
+    service.remove("NVDA", "long", "m5")
+    assert not service.is_focus("NVDA", "long", "m5")
+    assert "NVDA" not in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+
+
+def test_desk_auto_picks_chart_for_approval_without_a_focus_service(tmp_path, monkeypatch):
+    """Fallback path only (satellite / no Focus store): staged picks still
+    occupy the review chart with Approve/Pass verbs and route through
+    resolve_auto_populate_pick, rather than vanishing silently."""
     try:
         import os
 
