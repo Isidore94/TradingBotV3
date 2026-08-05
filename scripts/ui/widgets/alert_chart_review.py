@@ -174,6 +174,7 @@ class AlertChartReview(QWidget):
         armed_levels: Iterable = (),
         armed_d1_events: Iterable[str] = (),
         guidance_text: str = "",
+        in_focus: bool = False,
     ) -> None:
         self.alert = alert
         guidance_text = str(guidance_text or "").strip()
@@ -232,6 +233,25 @@ class AlertChartReview(QWidget):
                 "Delete this pick from Focus Picks (every bucket and side; "
                 "its focus-injected watchlist entries go with it). The "
                 "symbol itself is not muted - alerts still show."
+            )
+        elif in_focus:
+            # The name is ALREADY the trader's, so "Add to ... Focus" is a
+            # no-op wearing a verb's clothes. The useful action on a Focus
+            # pick's own chart is dropping it - and the only removal here used
+            # to be the checked-looking cross toggle, which reads as a status
+            # badge, so a pick that had done its move looked unremovable
+            # (trader, 2026-08-05: "there's no way of removing this pick").
+            self.focus_button.setText("✕ Remove from Focus")
+            self.focus_button.setToolTip(
+                "Delete this pick from Focus Picks (every bucket and side; "
+                "its focus-injected watchlist entries go with it). The symbol "
+                "itself is not muted - ordinary alerts still show."
+            )
+            self.remove_today_button.setText("✕ Not today")
+            self.remove_today_button.setToolTip(
+                "Done with this name for the day: removed from today's Alert "
+                "Center feed and chart queue. Focus membership, the BounceBot "
+                "scanner and the watchlists are untouched."
             )
         else:
             self.focus_button.setToolTip(

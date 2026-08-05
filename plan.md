@@ -195,6 +195,19 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   stay on completed sessions only and end in a trailing None. The fetched
   forming bar is NEVER persisted - a half-finished session is display
   material, never stored evidence.
+- A Focus pick flags ONE extension event per day (trader rule 2026-08-05, on a
+  pick that printed a new 20-day high and then simply stayed extended). The
+  first "the move is going" event - new 5d/20d high or low, or a close through
+  an SMA / AVWAPE / 1σ line - spends the whole extension set for that name;
+  everything after it is the same news about a name that is now extended. The
+  pullback set (15EMA reject, AVWAPE bounce, 1σ bounce) stays live, so the
+  pick can still speak when it comes back to a level. The split lives in
+  `chart_watch.D1_EXTENSION_KINDS` / `D1_PULLBACK_KINDS`.
+- On a review chart for a name the trader ALREADY holds in Focus, the primary
+  verb is "✕ Remove from Focus" (drops every bucket and side, taking the
+  focus-injected watchlist lines with it) rather than a no-op "add". Removal
+  previously existed only behind the checked-looking cross toggle, which reads
+  as a status badge, so a pick could look unremovable from its own chart.
 - A Focus pick earns its Focus PRIVILEGES - the automatic D1 interest flags,
   the tier-gate bypass, the always-sound - only while it trades beyond the
   previous session's extreme in its own direction: a long above yesterday's

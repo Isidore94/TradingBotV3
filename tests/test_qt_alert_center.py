@@ -494,6 +494,168 @@ def test_focus_privilege_waits_for_the_previous_day_extreme(tmp_path, monkeypatc
     assert not panel._alert_has_focus_privilege(quiet)
 
 
+def test_one_extension_flag_per_pick_then_only_pullbacks(tmp_path, monkeypatch):
+    """FRPT's case (2026-08-05): it printed a new 20-day high and then simply
+    stayed extended. The first extension event spends the whole extension set
+    for the day; the pullback set stays live so the pick can still speak when
+    it comes back to a level."""
+    try:
+        import os
+        from datetime import datetime
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from chart_watch import D1_EXTENSION_KINDS, D1_PULLBACK_KINDS
+        from ui.panels import alert_center_panel as panel_mod
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+
+    class _FocusService:
+        def is_focus(self, symbol, side=None, category=None):
+            return symbol == "FRPT"
+
+        def focus_category(self, symbol):
+            return "m5" if symbol == "FRPT" else None
+
+        def focus_side(self, symbol, category=None):
+            return "long"
+
+        def all_focus(self, category=None):
+            return {"long": ["FRPT"], "short": []}
+
+    d1_bars = [
+        {
+            "dt": datetime(2026, 8, day, 0, 0),
+            "high": 63.59 if day == 4 else 62.0,
+            "low": 60.0,
+            "close": 61.5,
+        }
+        for day in (3, 4)
+    ]
+    m5_bars = [
+        {"dt": datetime(2026, 8, 5, 6, 30), "high": 68.68, "low": 62.0, "close": 68.0},
+    ]
+
+    fires: set[str] = set()
+    evaluated: list[str] = []
+
+    class _Hit:
+        message = "event"
+
+    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None):
+        evaluated.append(watch.kind)
+        return _Hit() if watch.kind in fires else None
+
+    monkeypatch.setattr(panel_mod, "evaluate_d1_event_watch", _fake_evaluate)
+
+    panel = AlertCenterPanel(
+        parked_symbols_path=tmp_path / "parked.json",
+        focus_d1_flags_path=tmp_path / "focus_flags.json",
+    )
+    panel.focus_service = _FocusService()
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol: list(d1_bars))
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol: list(m5_bars))
+
+    # 06:40 - the breakout prints a new 20-day high.
+    fires.add("new_20d_high")
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 6, 40))
+    assert [a.trigger for a in panel._d1_alerts] == ["Focus D1 · event"]
+    assert panel._focus_extension_spent("FRPT")
+
+    # Later: EVERY kind would hit. Only the pullback set is even measured -
+    # no second "still breaking out" flag on a name that is now extended.
+    evaluated.clear()
+    fires.update(D1_EXTENSION_KINDS | D1_PULLBACK_KINDS)
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 9, 40))
+    assert set(evaluated) <= D1_PULLBACK_KINDS
+    assert not (set(evaluated) & D1_EXTENSION_KINDS)
+    assert evaluated, "the pullback events must still be live"
+    fired_kinds = {
+        flag.split("|", 1)[1] for flag in panel._focus_d1_flags if flag.startswith("FRPT|")
+    }
+    assert fired_kinds & D1_PULLBACK_KINDS  # it can still speak on a bounce
+    assert fired_kinds & D1_EXTENSION_KINDS == {"new_20d_high"}
+
+
+def test_a_focus_picks_own_chart_can_remove_it(tmp_path, monkeypatch):
+    """2026-08-05: "there's no way of removing this pick from the focus picks".
+    On a chart for a name already in Focus the primary verb IS the removal,
+    and it takes the focus-injected watchlist line with it."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import FOCUS_D1_EVENT_TAG, BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+    service = _service(tmp_path)
+    service.add("FRPT", "long", "m5", origin="test", context="")
+    assert "FRPT" in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+
+    panel = AlertCenterPanel(
+        service,
+        parked_symbols_path=tmp_path / "parked.json",
+        review_events_path=tmp_path / "review_events.jsonl",
+    )
+    panel.add_alert(
+        BounceAlert(
+            time_text="06:30:00",
+            symbol="FRPT",
+            side="LONG",
+            trigger="Focus D1 · New 20-day high: 68.68 > 63.59",
+            timeframe="D1",
+            tag=FOCUS_D1_EVENT_TAG,
+            raw_text="FOCUS D1 FRPT (LONG): New 20-day high",
+            is_d1=True,
+        )
+    )
+    assert panel._current_review_alert is not None
+    # The verb that used to read "Add to Swing Focus" on a name the trader
+    # already owns is now the removal.
+    assert panel.chart_review.focus_button.text() == "✕ Remove from Focus"
+
+    panel.chart_review.focus_button.click()
+    assert not service.is_focus("FRPT")
+    assert "FRPT" not in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+    # Removing the pick is not the same as muting the symbol for the day.
+    assert "FRPT" not in panel._ignored_symbols
+
+    # A name that is NOT a Focus pick keeps the add verb.
+    panel.add_alert(
+        BounceAlert(
+            time_text="09:35:00",
+            symbol="AMD",
+            side="LONG",
+            trigger="[S-TIER] VWAP reclaim",
+            timeframe="5m",
+            raw_text="[S-TIER] AMD: VWAP reclaim",
+        )
+    )
+    assert panel.chart_review.focus_button.text() == "Add to M5 Focus"
+
+
 def _feed_alerts(panel) -> list:
     """The alerts actually rendered in the live feed (not merely recorded)."""
     layout = panel.feed_layout

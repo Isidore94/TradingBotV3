@@ -36,7 +36,9 @@ from chart_watch import (
     D1EventWatch,
     D1LevelWatch,
     D1_EVENT_KINDS,
+    D1_EXTENSION_KINDS,
     D1_LEVEL_KINDS,
+    D1_PULLBACK_KINDS,
     WATCH_KINDS,
     arm_chart_watch,
     evaluate_chart_watch,
@@ -1287,6 +1289,7 @@ class AlertCenterPanel(QFrame):
             armed_levels=self.armed_levels_for(alert.symbol),
             armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
             guidance_text=guidance.summary_text(),
+            in_focus=self._alert_is_focus(alert),
         )
 
     def _skip_review_alert(self, alert: BounceAlert) -> None:
@@ -1340,6 +1343,12 @@ class AlertCenterPanel(QFrame):
             return
         if self.focus_service is None or not alert.symbol:
             return
+        # On a pick that is already the trader's, the primary slot is the
+        # removal verb (see AlertChartReview.set_alert): drop it everywhere,
+        # exactly as the Focus walkthrough's dismiss does.
+        if self._alert_is_focus(alert):
+            self._remove_alert_from_focus(alert, origin="d1_focus_chart")
+            return
         category = favorite_category_for_alert(alert)
         side = "short" if alert.side == "SHORT" else "long"
         added = self.focus_service.add(
@@ -1363,6 +1372,34 @@ class AlertCenterPanel(QFrame):
             else f"★ {alert.symbol}: already in Focus Picks."
         )
         self.statusChanged.emit(message)
+        self._advance_review_queue()
+
+    def _remove_alert_from_focus(self, alert: BounceAlert, *, origin: str) -> None:
+        """Delete the charted name from Focus Picks and walk on."""
+        removed = 0
+        if self.focus_service is not None:
+            try:
+                removed = int(
+                    self.focus_service.remove_everywhere(
+                        alert.symbol, origin=origin, context=alert.raw_text
+                    )
+                )
+            except Exception:
+                removed = 0
+        self._record_review_event(
+            "focus_remove",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+            detail={"entries_removed": removed, "origin": origin},
+        )
+        self.statusChanged.emit(
+            f"✕ {alert.symbol}: removed from Focus Picks "
+            f"({removed} entr{'y' if removed == 1 else 'ies'}; "
+            "focus-injected watchlist lines went with it)."
+            if removed
+            else f"{alert.symbol}: was not in Focus Picks anymore."
+        )
         self._advance_review_queue()
 
     # ------------------------------------------------------------------
@@ -1605,6 +1642,14 @@ class AlertCenterPanel(QFrame):
         most once per session; hits land in the D1 Focus feed and the chart
         queue.
 
+        On top of that, ONE extension event per name per day (trader rule
+        2026-08-05): the first "the move is going" flag - new range high/low,
+        or a close through a major line - spends the whole extension set for
+        that pick. Everything after it would be the same news about a name
+        that is now extended. The pullback set stays live, so the pick can
+        still speak when it comes back to something: a 15EMA reject, an AVWAPE
+        or 1σ bounce.
+
         The prev-day gate (trader rule 2026-08-05) is what keeps that set from
         emptying itself into the open: a long inside yesterday's range flags
         nothing, and when it does break out the event window starts THERE, so
@@ -1644,6 +1689,15 @@ class AlertCenterPanel(QFrame):
                     for kind in D1_EVENT_KINDS
                     if f"{symbol}|{kind}" not in self._focus_d1_flags
                 ]
+                # One extension event per name per day. Once a pick has told
+                # you it is breaking out, every further "still breaking out"
+                # event is the same information about a name that is now
+                # extended; only the pullback events (15EMA reject, AVWAPE /
+                # 1σ bounce) still say something new.
+                if self._focus_extension_spent(symbol):
+                    pending_kinds = [
+                        kind for kind in pending_kinds if kind in D1_PULLBACK_KINDS
+                    ]
                 if not pending_kinds or not d1_bars:
                     continue
                 avwape_anchor = None
@@ -1657,7 +1711,14 @@ class AlertCenterPanel(QFrame):
                 # The window opens at the break, not at midnight: everything
                 # the name did while inside yesterday's range stays unflagged.
                 armed_at = max(day_start, break_open_at)
+                extension_spent = False
                 for kind in pending_kinds:
+                    # Spent within this pass too: two extension kinds routinely
+                    # hit the same bar (a new 5d high IS often a new 20d high),
+                    # and the rule is one extension event, not one per kind.
+                    # Pullback kinds keep evaluating either way.
+                    if extension_spent and kind in D1_EXTENSION_KINDS:
+                        continue
                     watch = D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
                     try:
                         hit = evaluate_d1_event_watch(
@@ -1673,6 +1734,7 @@ class AlertCenterPanel(QFrame):
                         continue
                     self._focus_d1_flags.add(f"{symbol}|{kind}")
                     hits.append((symbol, side_label, kind, hit))
+                    extension_spent = extension_spent or kind in D1_EXTENSION_KINDS
         self._focus_gate_held = held
         if not hits:
             self._emit_feed_status()
@@ -1698,6 +1760,18 @@ class AlertCenterPanel(QFrame):
                     payload={"focus_d1_kind": kind},
                 )
             )
+
+    def _focus_extension_spent(self, symbol: str) -> bool:
+        """Has this Focus pick already flagged an extension event today?
+
+        Reads the same day-scoped registry the once-per-kind rule uses, so it
+        survives a GUI restart mid-session: a name that printed its new 20-day
+        high at 06:30 does not get to announce the same breakout again after
+        lunch just because the desk was restarted.
+        """
+        return any(
+            f"{symbol}|{kind}" in self._focus_d1_flags for kind in D1_EXTENSION_KINDS
+        )
 
     def _save_focus_d1_flags(self) -> None:
         if self._focus_d1_flags_path is None:

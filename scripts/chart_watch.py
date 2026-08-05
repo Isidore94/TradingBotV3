@@ -77,6 +77,28 @@ D1_EVENT_KINDS = {
     "avwape_dev1_break": "1σ break",
 }
 
+# EXTENSION events say "the move is going": a new range high/low, or a close
+# THROUGH a major line. PULLBACK events say "it came back to something": a
+# bounce off a level, or a rejection at one. The split drives the Focus
+# auto-watch's one-extension-per-day rule (trader rule 2026-08-05, on FRPT
+# printing a new 20-day high and then simply staying extended: "it comes up as
+# a new 20 day high alert but now it's extended and I'd only want to see it on
+# an SMA bounce or something"). Coarse on purpose - an SMA break DOWN on a long
+# is really invalidation, not extension - but "break = the move continues,
+# bounce/reject = it came back" is the distinction the trader reads.
+D1_EXTENSION_KINDS = frozenset(
+    {
+        "new_5d_high",
+        "new_5d_low",
+        "new_20d_high",
+        "new_20d_low",
+        "sma_break",
+        "avwape_break",
+        "avwape_dev1_break",
+    }
+)
+D1_PULLBACK_KINDS = frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS
+
 # Which of the derived AVWAPE levels each kind watches ("" = the line).
 _AVWAPE_KIND_BANDS = {
     "avwape_bounce": ("",),
