@@ -36,12 +36,15 @@ from chart_watch import (
     D1EventWatch,
     D1LevelWatch,
     D1_EVENT_KINDS,
+    D1_EXTENSION_KINDS,
     D1_LEVEL_KINDS,
+    D1_PULLBACK_KINDS,
     WATCH_KINDS,
     arm_chart_watch,
     evaluate_chart_watch,
     evaluate_d1_event_watch,
     evaluate_d1_level_watch,
+    completed_session_bars,
     load_chart_watches,
     load_d1_event_watches,
     load_d1_level_watches,
@@ -50,6 +53,7 @@ from chart_watch import (
     save_d1_level_watches,
     watch_is_stale,
 )
+from prev_day_gate import OPEN as PREV_DAY_BREAK_OPEN, prev_day_break_state, prev_session_extremes
 from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
     ALERT_CHART_WATCHES_FILE,
@@ -128,6 +132,13 @@ _D1_DEVELOPING_PREFIXES = {
     "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
     "MASTER_AVWAP_D1_UPGRADE_WATCH",
 }
+
+
+def _bar_close(bar: object) -> float | None:
+    try:
+        return float(bar["close"])  # type: ignore[index]
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _d1_alert_prefix(alert: BounceAlert) -> str:
@@ -439,6 +450,21 @@ class AlertCenterPanel(QFrame):
             if self._focus_d1_flags_path is not None
             else set()
         )
+        # Previous-day extreme gate on Focus flagging (trader rule 2026-08-05:
+        # "I don't want focus picks to flag if they are below the previous day
+        # high for longs, or above the previous day low for shorts - otherwise
+        # it's just noise"). A Focus name earns its Focus PRIVILEGES - the
+        # automatic D1 interest flags, the tier-gate bypass, the always-sound -
+        # only once it trades beyond yesterday's extreme in its own direction.
+        # Below that it is not silenced: it simply falls back to the ordinary
+        # tier gate, so a genuinely strong bounce (S/A, PROVEN, banger) still
+        # comes through. "SYM|long" -> prev_day_gate state; the companion map
+        # stamps when the break was first seen so the D1 event window opens
+        # THERE and never replays what the name did while still inside
+        # yesterday's range. Both are day-scoped.
+        self._focus_break_state: dict[str, str] = {}
+        self._focus_break_open_at: dict[str, datetime] = {}
+        self._focus_gate_held = 0
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
         # chart annotations (review_guidance.py). Advisory only; with no
         # documents on disk every score is 0 and the queue stays FIFO.
@@ -799,7 +825,7 @@ class AlertCenterPanel(QFrame):
             return
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
-        is_focus = self._alert_is_focus(alert)
+        is_focus = self._alert_has_focus_privilege(alert)
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
             self._enqueue_review_alert(alert)
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
@@ -818,9 +844,11 @@ class AlertCenterPanel(QFrame):
         if alert.tag != "d1_focus_pin" and not self._d1_tab_is_current():
             self._d1_unread += 1
             self._refresh_d1_tab_label()
-        if self.sound_input.isChecked() and (is_ready_d1_alert(alert) or self._alert_is_focus(alert)):
+        if self.sound_input.isChecked() and (
+            is_ready_d1_alert(alert) or self._alert_has_focus_privilege(alert)
+        ):
             QApplication.beep()
-        self._relay_alert_popup(alert, is_focus=self._alert_is_focus(alert))
+        self._relay_alert_popup(alert, is_focus=self._alert_has_focus_privilege(alert))
         self._emit_feed_status()
 
     def _d1_tab_is_current(self) -> bool:
@@ -836,10 +864,21 @@ class AlertCenterPanel(QFrame):
         self.tabs.setTabText(self._d1_tab_index, label)
 
     def _emit_feed_status(self) -> None:
-        loud = sum(1 for item in self._alerts if alert_should_sound(item, is_focus=self._alert_is_focus(item)))
+        loud = sum(
+            1
+            for item in self._alerts
+            if alert_should_sound(item, is_focus=self._alert_has_focus_privilege(item))
+        )
+        # The held count makes the prev-day gate visible: silence should never
+        # be indistinguishable from a dead feed.
+        held = (
+            f" {self._focus_gate_held} Focus name(s) waiting on yesterday's high/low."
+            if self._focus_gate_held
+            else ""
+        )
         self.statusChanged.emit(
             f"Alert center: {len(self._alerts)} live alert(s), {loud} loud; "
-            f"{len(self._d1_alerts)} favorite-bucket transition(s) in D1 Focus."
+            f"{len(self._d1_alerts)} favorite-bucket transition(s) in D1 Focus.{held}"
         )
 
     def clear_feed(self) -> None:
@@ -866,7 +905,82 @@ class AlertCenterPanel(QFrame):
         self._rebuild_feed()
 
     def _alert_is_focus(self, alert: BounceAlert) -> bool:
+        """Membership only: is this symbol one of the trader's Focus picks."""
         return bool(self.focus_service and alert.symbol and self.focus_service.is_focus(alert.symbol))
+
+    # ------------------------------------------------------ prev-day gate
+    @staticmethod
+    def _focus_gate_key(symbol: str, side: str) -> str:
+        return f"{str(symbol or '').strip().upper()}|{side}"
+
+    def focus_break_state(self, symbol: str, side: str) -> str:
+        """Cached prev-day-extreme state for one Focus name/side.
+
+        Refreshed by the 60s D1 poll, which is the only place that already
+        holds both bar sets. A symbol the poll has not reached yet reads
+        UNKNOWN, which does not grant Focus privileges - missing data is
+        uncertainty, never confirmation (plan.md sec 5).
+        """
+        return self._focus_break_state.get(self._focus_gate_key(symbol, side), "unknown")
+
+    def _update_focus_break_state(
+        self,
+        symbol: str,
+        side: str,
+        m5_bars: list,
+        d1_bars: list,
+        moment: datetime,
+    ) -> datetime | None:
+        """Re-measure one Focus name against yesterday's range.
+
+        Returns the START of the M5 bar that FIRST broke the level today (the
+        D1 event window's opening edge), or None while the latest completed
+        close is not beyond it. Anchoring to the bar rather than to the poll
+        tick matters twice: the breakout bar's own D1 events count, and a
+        60s poll that arrives late - or a desk started at 11:00 - opens the
+        same window as one watching from the first print. The first stamp is
+        kept even if price dips back inside the range, so an event that
+        printed while the name was genuinely beyond yesterday's extreme stays
+        eligible and a re-break does not restart the clock.
+        """
+        key = self._focus_gate_key(symbol, side)
+        prev_high, prev_low = prev_session_extremes(d1_bars, session=moment.date())
+        completed = completed_session_bars(m5_bars, now=moment)
+        state = prev_day_break_state(
+            side, _bar_close(completed[-1]) if completed else None, prev_high, prev_low
+        )
+        self._focus_break_state[key] = state
+        if state != PREV_DAY_BREAK_OPEN:
+            return None
+        stamped = self._focus_break_open_at.get(key)
+        if stamped is None:
+            stamped = moment
+            for bar in completed:
+                if (
+                    prev_day_break_state(side, _bar_close(bar), prev_high, prev_low)
+                    == PREV_DAY_BREAK_OPEN
+                ):
+                    stamp = bar.get("dt")
+                    stamped = stamp if isinstance(stamp, datetime) else moment
+                    break
+            self._focus_break_open_at[key] = stamped
+        return stamped
+
+    def _alert_has_focus_privilege(self, alert: BounceAlert) -> bool:
+        """Focus membership AND the prev-day break on the alert's own side.
+
+        This is what the feed gate, the beep, and the satellite relay ask -
+        NOT plain membership. A Focus long still inside yesterday's range is
+        ordinary: it competes on tier like any other name.
+        """
+        if not self._alert_is_focus(alert):
+            return False
+        side = str(alert.side or "").strip().lower()
+        sides = (side,) if side in ("long", "short") else ("long", "short")
+        return any(
+            self.focus_break_state(alert.symbol, item) == PREV_DAY_BREAK_OPEN
+            for item in sides
+        )
 
     def _toggle_favorite(self, alert: BounceAlert) -> None:
         """The ★ on a feed item: favorite the pick, or unfavorite a lit one."""
@@ -970,7 +1084,7 @@ class AlertCenterPanel(QFrame):
                 a
                 for a in self._alerts
                 if a.symbol not in self._ignored_symbols
-                and alert_passes_feed_gate(a, mode, is_focus=self._alert_is_focus(a))
+                and alert_passes_feed_gate(a, mode, is_focus=self._alert_has_focus_privilege(a))
             ][:MAX_FEED_ITEMS]
         ):
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
@@ -1175,6 +1289,7 @@ class AlertCenterPanel(QFrame):
             armed_levels=self.armed_levels_for(alert.symbol),
             armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
             guidance_text=guidance.summary_text(),
+            in_focus=self._alert_is_focus(alert),
         )
 
     def _skip_review_alert(self, alert: BounceAlert) -> None:
@@ -1228,6 +1343,12 @@ class AlertCenterPanel(QFrame):
             return
         if self.focus_service is None or not alert.symbol:
             return
+        # On a pick that is already the trader's, the primary slot is the
+        # removal verb (see AlertChartReview.set_alert): drop it everywhere,
+        # exactly as the Focus walkthrough's dismiss does.
+        if self._alert_is_focus(alert):
+            self._remove_alert_from_focus(alert, origin="d1_focus_chart")
+            return
         category = favorite_category_for_alert(alert)
         side = "short" if alert.side == "SHORT" else "long"
         added = self.focus_service.add(
@@ -1253,10 +1374,56 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(message)
         self._advance_review_queue()
 
+    def _remove_alert_from_focus(self, alert: BounceAlert, *, origin: str) -> None:
+        """Delete the charted name from Focus Picks and walk on."""
+        removed = 0
+        if self.focus_service is not None:
+            try:
+                removed = int(
+                    self.focus_service.remove_everywhere(
+                        alert.symbol, origin=origin, context=alert.raw_text
+                    )
+                )
+            except Exception:
+                removed = 0
+        self._record_review_event(
+            "focus_remove",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+            detail={"entries_removed": removed, "origin": origin},
+        )
+        self.statusChanged.emit(
+            f"✕ {alert.symbol}: removed from Focus Picks "
+            f"({removed} entr{'y' if removed == 1 else 'ies'}; "
+            "focus-injected watchlist lines went with it)."
+            if removed
+            else f"{alert.symbol}: was not in Focus Picks anymore."
+        )
+        self._advance_review_queue()
+
     # ------------------------------------------------------------------
     # DESK-mode auto-populate picks: chart first, watchlist only on approval.
     def _poll_auto_pick_pending(self) -> None:
-        """Turn newly staged auto-populate picks into review-queue charts."""
+        """Land newly staged auto-populate picks straight in M5 Focus for today.
+
+        Trader rule 2026-08-05, replacing the 2026-07-31 chart-approval queue:
+        "just add the auto picks into the M5 focus for today and then I will
+        prune them out manually - it's quicker than adding them in and then
+        seeing their alerts." Approving one at a time meant a pick produced no
+        alerts until it had been reviewed, which is backwards: the picks are
+        already gated (PDH/PDL break, daily trend, score >= 1.25), so the
+        cheaper direction is to take them all and cull.
+
+        M5 Focus is the right home rather than the bare watchlist because it
+        is already day-scoped - tomorrow's first store load clears the list AND
+        un-injects it from longs/shorts.txt, so "for today" needs no new
+        expiry. Pruning a name from Focus removes the watchlist line with it,
+        so a pruned pick stops alerting entirely.
+
+        With no Focus service (satellite, tests) this falls back to the old
+        approval queue - the picks must not silently vanish.
+        """
         if self._auto_pick_pending_path is None:
             return
         try:
@@ -1266,6 +1433,7 @@ class AlertCenterPanel(QFrame):
         except Exception:
             return
         day = str(payload.get("date") or "")
+        adopted: list[str] = []
         for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
             entries = payload.get("pending", {}).get(side_key) or {}
             for symbol, entry in entries.items():
@@ -1279,6 +1447,9 @@ class AlertCenterPanel(QFrame):
                 entry = entry if isinstance(entry, dict) else {}
                 reason = str(entry.get("reason") or "auto-populate pick")
                 score = entry.get("score")
+                if self._adopt_auto_pick_into_focus(symbol, side_key, entry, reason):
+                    adopted.append(symbol)
+                    continue
                 trigger = f"Auto pick ({side_label.lower()}): {reason}"
                 if score:
                     trigger += f" · score {float(score):.2f}"
@@ -1295,6 +1466,59 @@ class AlertCenterPanel(QFrame):
                         payload={"auto_pick": dict(entry), "auto_pick_side": side_key},
                     )
                 )
+        if adopted:
+            self.statusChanged.emit(
+                f"{len(adopted)} auto pick(s) added to M5 Focus for today "
+                f"({', '.join(adopted[:8])}{'...' if len(adopted) > 8 else ''}) - "
+                "prune with Review ▶ on the Focus board."
+            )
+
+    def _adopt_auto_pick_into_focus(
+        self, symbol: str, side: str, entry: dict, reason: str
+    ) -> bool:
+        """Add one staged pick to M5 Focus and retire its proposal. True on adopt.
+
+        Writes through the STORE, not `FocusService.add`: the service logs every
+        add to the trader-verdict feedback JSONL as a "like", and a machine
+        adding 30 names is not the trader liking 30 names. The store's listener
+        still fires focusChanged, so every surface refreshes, and the action is
+        logged to the review-decision ledger instead.
+        """
+        store = getattr(self.focus_service, "store", None)
+        if store is None:
+            return False
+        try:
+            store.add(symbol, side, "m5")
+        except Exception:
+            logging.warning("Auto pick %s could not be added to Focus.", symbol, exc_info=True)
+            return False
+        if self._auto_pick_pending_path is not None:
+            try:
+                from autopilot_core import resolve_auto_populate_pick
+
+                # Accepted, but Focus owns the watchlist line it just injected -
+                # a second owner here would let one side delete the other's entry.
+                resolve_auto_populate_pick(
+                    symbol,
+                    side,
+                    True,
+                    decision_label="auto_focus",
+                    write_watchlist=False,
+                    pending_path=self._auto_pick_pending_path,
+                )
+            except Exception:
+                logging.warning(
+                    "Auto pick %s adopted into Focus but its proposal was not retired.",
+                    symbol,
+                    exc_info=True,
+                )
+        self._record_review_event(
+            "auto_pick_auto_focus",
+            symbol=symbol,
+            side=side.upper(),
+            detail={"auto_pick": dict(entry), "reason": reason},
+        )
+        return True
 
     def _resolve_auto_pick(self, alert: BounceAlert, approved: bool) -> None:
         if (
@@ -1409,13 +1633,29 @@ class AlertCenterPanel(QFrame):
             self.statusChanged.emit("Focus review: no Focus picks to show.")
 
     def _poll_focus_d1_interest(self, now=None) -> None:
-        """Flag Focus picks on ANYTHING remotely interesting on the D1.
+        """Flag Focus picks on ANYTHING remotely interesting on the D1 - once
+        they have taken out yesterday's extreme in their own direction.
 
         Every Focus name is implicitly watched for the whole D1 event set
         (15EMA reject, 5d/20d extremes, SMA50/100/200 breaks, AVWAPE line/1σ
         bounces and breaks) - no arming needed. Each (symbol, event) flags at
         most once per session; hits land in the D1 Focus feed and the chart
         queue.
+
+        On top of that, ONE extension event per name per day (trader rule
+        2026-08-05): the first "the move is going" flag - new range high/low,
+        or a close through a major line - spends the whole extension set for
+        that pick. Everything after it would be the same news about a name
+        that is now extended. The pullback set stays live, so the pick can
+        still speak when it comes back to something: a 15EMA reject, an AVWAPE
+        or 1σ bounce.
+
+        The prev-day gate (trader rule 2026-08-05) is what keeps that set from
+        emptying itself into the open: a long inside yesterday's range flags
+        nothing, and when it does break out the event window starts THERE, so
+        the 09:35 15EMA reject it printed while still below yesterday's high
+        never fires. Held names keep their pending kinds - nothing is consumed
+        while the gate is shut.
         """
         if self.focus_service is None or self._focus_d1_flags_path is None:
             return
@@ -1427,22 +1667,39 @@ class AlertCenterPanel(QFrame):
         moment = now or datetime.now()
         day_start = datetime(moment.year, moment.month, moment.day)
         hits: list[tuple[str, str, str, object]] = []
+        held = 0
         for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
             for symbol in focus.get(side_key) or []:
                 symbol = str(symbol or "").strip().upper()
                 if not symbol or symbol in self._ignored_symbols:
+                    continue
+                d1_bars = self._d1_bars_for(symbol)
+                m5_bars = self._m5_bars_for(symbol)
+                # Measured every tick even when nothing is pending: the feed
+                # gate and the beep read this state for every alert on the
+                # name, not just the automatic D1 flags.
+                break_open_at = self._update_focus_break_state(
+                    symbol, side_key, m5_bars, d1_bars, moment
+                )
+                if break_open_at is None:
+                    held += 1
                     continue
                 pending_kinds = [
                     kind
                     for kind in D1_EVENT_KINDS
                     if f"{symbol}|{kind}" not in self._focus_d1_flags
                 ]
-                if not pending_kinds:
+                # One extension event per name per day. Once a pick has told
+                # you it is breaking out, every further "still breaking out"
+                # event is the same information about a name that is now
+                # extended; only the pullback events (15EMA reject, AVWAPE /
+                # 1σ bounce) still say something new.
+                if self._focus_extension_spent(symbol):
+                    pending_kinds = [
+                        kind for kind in pending_kinds if kind in D1_PULLBACK_KINDS
+                    ]
+                if not pending_kinds or not d1_bars:
                     continue
-                d1_bars = self._d1_bars_for(symbol)
-                if not d1_bars:
-                    continue
-                m5_bars = self._m5_bars_for(symbol)
                 avwape_anchor = None
                 if any(kind.startswith("avwape_") for kind in pending_kinds):
                     try:
@@ -1451,8 +1708,18 @@ class AlertCenterPanel(QFrame):
                         avwape_anchor = chart_snapshot.earnings_anchor_date(symbol)
                     except Exception:
                         avwape_anchor = None
+                # The window opens at the break, not at midnight: everything
+                # the name did while inside yesterday's range stays unflagged.
+                armed_at = max(day_start, break_open_at)
+                extension_spent = False
                 for kind in pending_kinds:
-                    watch = D1EventWatch(symbol=symbol, kind=kind, armed_at=day_start)
+                    # Spent within this pass too: two extension kinds routinely
+                    # hit the same bar (a new 5d high IS often a new 20d high),
+                    # and the rule is one extension event, not one per kind.
+                    # Pullback kinds keep evaluating either way.
+                    if extension_spent and kind in D1_EXTENSION_KINDS:
+                        continue
+                    watch = D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
                     try:
                         hit = evaluate_d1_event_watch(
                             watch,
@@ -1467,7 +1734,10 @@ class AlertCenterPanel(QFrame):
                         continue
                     self._focus_d1_flags.add(f"{symbol}|{kind}")
                     hits.append((symbol, side_label, kind, hit))
+                    extension_spent = extension_spent or kind in D1_EXTENSION_KINDS
+        self._focus_gate_held = held
         if not hits:
+            self._emit_feed_status()
             return
         self._save_focus_d1_flags()
         for symbol, side_label, kind, hit in hits:
@@ -1490,6 +1760,18 @@ class AlertCenterPanel(QFrame):
                     payload={"focus_d1_kind": kind},
                 )
             )
+
+    def _focus_extension_spent(self, symbol: str) -> bool:
+        """Has this Focus pick already flagged an extension event today?
+
+        Reads the same day-scoped registry the once-per-kind rule uses, so it
+        survives a GUI restart mid-session: a name that printed its new 20-day
+        high at 06:30 does not get to announce the same breakout again after
+        lunch just because the desk was restarted.
+        """
+        return any(
+            f"{symbol}|{kind}" in self._focus_d1_flags for kind in D1_EXTENSION_KINDS
+        )
 
     def _save_focus_d1_flags(self) -> None:
         if self._focus_d1_flags_path is None:
@@ -2387,6 +2669,12 @@ class AlertCenterPanel(QFrame):
             if self._focus_d1_flags_path is not None
             else set()
         )
+        # So must the previous-day extreme gate: yesterday's breakout says
+        # nothing about today's range, and a stale open stamp would let the
+        # first poll of a new session replay the whole morning.
+        self._focus_break_state.clear()
+        self._focus_break_open_at.clear()
+        self._focus_gate_held = 0
         self._refresh_ignored_button()
 
     def _park_review_symbol(self, symbol: str) -> None:

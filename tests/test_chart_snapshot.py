@@ -124,7 +124,12 @@ def test_build_d1_snapshot_overlays_and_tail():
         }
         for index in range(260)
     ]
-    snapshot = chart_snapshot.build_d1_snapshot("TEST", sessions=90, loader=lambda _s: bars)
+    # `now` is pinned past the whole series so this stays a pure tail/overlay
+    # test: with a live clock, whichever bar happened to be dated today would
+    # be split off as the forming candle and the tail would read 90 + preview.
+    snapshot = chart_snapshot.build_d1_snapshot(
+        "TEST", sessions=90, loader=lambda _s: bars, now=datetime(2026, 12, 31, 15, 0)
+    )
     assert snapshot["timeframe"] == "D1"
     assert len(snapshot["bars"]) == 90
     labels = [overlay["label"] for overlay in snapshot["overlays"]]
@@ -909,6 +914,173 @@ def test_d1_store_is_stale_notices_a_missing_latest_bar(monkeypatch):
     assert chart_snapshot.d1_store_is_stale([mon, tue, preview], now=after) is True
     # An empty store is the out-of-universe case, not staleness.
     assert chart_snapshot.d1_store_is_stale([], now=after) is False
+
+
+# ---------------------------------------------------------------------------
+# "It doesn't ALWAYS show me the latest D1 candle" (live complaint, 2026-08-05,
+# RY: a big green day rendered as a tail of little red ones). Two holes, both
+# invisible to the staleness probe because the store WAS current through the
+# last close: an unscanned symbol has no M5 cache to preview from, and a
+# symbol whose store picked up today's PARTIAL bar from a mid-session scan
+# froze that bar as if it were final.
+# ---------------------------------------------------------------------------
+def test_session_has_opened_tracks_the_market_clock(monkeypatch):
+    from datetime import timezone
+
+    monkeypatch.setenv("TRADINGBOT_MARKET_TIMEZONE", "America/Los_Angeles")
+    tz = timezone(timedelta(hours=-7))
+    f = chart_snapshot.session_has_opened
+
+    assert f(datetime(2026, 7, 29, 5, 0, tzinfo=tz)) is False   # Wed pre-open
+    assert f(datetime(2026, 7, 29, 7, 0, tzinfo=tz)) is True    # Wed RTH
+    assert f(datetime(2026, 7, 29, 15, 0, tzinfo=tz)) is True   # Wed post-close
+    assert f(datetime(2026, 8, 1, 11, 0, tzinfo=tz)) is False   # Saturday
+
+
+def test_live_aggregate_beats_a_stored_partial_bar_during_the_session():
+    """A scan at 11:00 writes today's partial daily bar. Until the close, the
+    live intraday aggregate is the better picture of the same session."""
+    from datetime import date as _date
+
+    stored_partial = _daily_bars(4)  # 07/01..07/04, so 07/04 is "today"
+    m5 = _m5_bars(6, datetime(2026, 7, 4, 9, 30))
+    m5[-1]["close"] = 999.0  # the live tape moved well past the frozen bar
+
+    # Session still running: the aggregate wins.
+    live = chart_snapshot.forming_d1_bar(
+        stored_partial, m5, session_complete_through=_date(2026, 7, 3)
+    )
+    assert live is not None and live["close"] == 999.0 and live["preview"] is True
+    # Session over: the stored bar is final and nothing overrides it.
+    assert (
+        chart_snapshot.forming_d1_bar(
+            stored_partial, m5, session_complete_through=_date(2026, 7, 4)
+        )
+        is None
+    )
+    # Omitted argument keeps the historical behavior (the store always wins).
+    assert chart_snapshot.forming_d1_bar(stored_partial, m5) is None
+
+
+def test_todays_stored_partial_bar_draws_as_forming_and_leaves_the_mas_alone():
+    """With no live source at all, today's stored bar is still shown - as a
+    preview - and the moving averages stop at the last COMPLETED session."""
+    bars = _daily_bars(60, start=datetime(2026, 6, 1))  # 06/01 .. 07/30
+    during = datetime(2026, 7, 30, 10, 0)  # last bar is today, mid-session
+
+    snapshot = chart_snapshot.build_d1_snapshot(
+        "TEST", sessions=90, loader=lambda _s: bars, now=during
+    )
+    last = snapshot["bars"][-1]
+    assert last["dt"].date() == during.date()
+    assert last["preview"] is True, "a half-finished session must not draw as final"
+    # The overlay tail ends on the last completed session, not on half a day.
+    sma50 = next(o for o in snapshot["overlays"] if o["label"] == "SMA50")
+    assert len(sma50["values"]) == len(snapshot["bars"])
+    assert sma50["values"][-1] is None
+    completed_closes = [bar["close"] for bar in bars[:-1]]
+    assert abs(sma50["values"][-2] - sum(completed_closes[-50:]) / 50.0) < 1e-9
+
+    # After the close the very same store draws that bar as a normal candle.
+    after = chart_snapshot.build_d1_snapshot(
+        "TEST", sessions=90, loader=lambda _s: bars, now=datetime(2026, 7, 30, 15, 0)
+    )
+    assert not after["bars"][-1].get("preview")
+
+
+def test_unscanned_symbol_fetches_todays_candle_without_persisting_it(monkeypatch):
+    """RY's case: store current through yesterday's close, no M5 cache. One
+    off-paint fetch fills the forming candle, a second render inside the
+    refresh window reuses it, and the PERSISTING wrapper is never called."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+
+    import pandas as pd
+    import master_avwap_lib.legacy as legacy
+    import ui.widgets.symbol_snapshot_dialog as snap_mod
+
+    yahoo_calls: list[tuple] = []
+    persisted: list[tuple] = []
+
+    def fake_yahoo(symbol, days):
+        yahoo_calls.append((symbol, days))
+        return pd.DataFrame(
+            [
+                {
+                    "datetime": pd.Timestamp(datetime.now().date()),
+                    "open": 208.49,
+                    "high": 212.23,
+                    "low": 208.41,
+                    "close": 211.78,
+                    "volume": 231_925.0,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(legacy, "fetch_daily_bars_from_yahoo", fake_yahoo)
+    monkeypatch.setattr(
+        legacy, "fetch_daily_bars", lambda *a, **k: persisted.append(a) or pd.DataFrame()
+    )
+    monkeypatch.setattr(chart_snapshot, "session_has_opened", lambda now=None: True)
+    monkeypatch.setattr(snap_mod, "_FORMING_BARS", {})
+    monkeypatch.setattr(snap_mod, "_FORMING_ATTEMPTS", {})
+
+    # A store that is honestly current: it ends exactly at the last completed
+    # session, which is what makes the staleness probe (correctly) say healthy
+    # while today's candle is still missing.
+    #
+    # The session clock is PINNED to "the last session before today" rather
+    # than read live: this scenario only exists while a session is running.
+    # Run after the close (or on a weekend) the real helper names today as
+    # complete, so the store would already hold today's bar and there would be
+    # no forming candle to fetch - the assertions below would then be checking
+    # a completed candle for a preview flag it is right not to carry.
+    today = datetime.now().date()
+    last_complete = chart_snapshot.latest_completed_session_date(
+        datetime(today.year, today.month, today.day, 10, 0)
+    )
+    monkeypatch.setattr(
+        chart_snapshot, "latest_completed_session_date", lambda now=None: last_complete
+    )
+    stored = _daily_bars(
+        40, start=datetime(last_complete.year, last_complete.month, last_complete.day)
+        - timedelta(days=39)
+    )
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: list(stored))
+
+    widget = snap_mod.SymbolSnapshotWidget()
+    try:
+        widget.set_symbol("RY")
+        assert not chart_snapshot.d1_store_is_stale(
+            widget._d1.get("bars") or []
+        ), "the staleness probe must still call this store healthy"
+        thread = widget._forming_thread
+        assert thread is not None, "a missing forming candle must start a fetch"
+        thread.join(5.0)
+        app.processEvents()
+        assert yahoo_calls == [("RY", 5)]
+        assert persisted == [], "the partial bar must never reach the durable store"
+
+        # The fetched candle is now the chart's last bar, drawn as forming.
+        last = widget._d1["bars"][-1]
+        assert last["dt"].date() == datetime.now().date()
+        assert last["preview"] is True and last["close"] == 211.78
+        assert "forming" in widget.d1_legend.text() or widget.d1_chart.bar_count() > 0
+
+        # Inside the refresh window a re-render reuses the cached candle.
+        widget.refresh()
+        thread = widget._forming_thread
+        if thread is not None:
+            thread.join(5.0)
+        app.processEvents()
+        assert len(yahoo_calls) == 1, "the cooldown must prevent a fetch loop"
+    finally:
+        widget.deleteLater()
+        app.processEvents()
 
 
 def test_stale_d1_tail_triggers_one_backfill_with_cooldown(monkeypatch):

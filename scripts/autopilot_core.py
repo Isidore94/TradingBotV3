@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+import prev_day_gate
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import (
     AUTO_LONGS_FILE,
@@ -903,15 +904,17 @@ def passes_prev_day_extreme_gate(
 ) -> bool:
     """PDH/PDL break gate for one auto pick (trader rule 2026-07-31): a long
     must trade ABOVE the previous day's high, a short BELOW the previous
-    day's low. Missing price or level -> fails (cannot verify the break)."""
-    price = _finite_float(last)
-    if price is None or not isinstance(ctx, Mapping):
+    day's low. Missing price or level -> fails (cannot verify the break).
+
+    The break itself lives in `prev_day_gate` so the Alert Center's Focus
+    gate and this one can never drift apart; this wrapper only unpacks the
+    daily-context mapping.
+    """
+    if not isinstance(ctx, Mapping):
         return False
-    if str(side or "").strip().lower().startswith("short"):
-        prev_low = _finite_float(ctx.get("prev_low"))
-        return prev_low is not None and price < prev_low
-    prev_high = _finite_float(ctx.get("prev_high"))
-    return prev_high is not None and price > prev_high
+    return prev_day_gate.passes_prev_day_extreme_gate(
+        side, last, ctx.get("prev_high"), ctx.get("prev_low")
+    )
 
 
 def filter_candidates_by_prev_day_extremes(
@@ -2041,6 +2044,8 @@ def resolve_auto_populate_pick(
     side: str,
     approved: bool,
     *,
+    decision_label: str = "",
+    write_watchlist: bool = True,
     pending_path: Path = AUTO_POPULATE_PENDING_FILE,
     membership_path: Path = AUTO_POPULATE_MEMBERSHIP_FILE,
     longs_path: Path = LONGS_FILE,
@@ -2053,6 +2058,12 @@ def resolve_auto_populate_pick(
     auto-populate membership (so the ordinary VWAP-cut path still owns it);
     Pass just retires the proposal for the day. Either way the symbol never
     re-proposes today.
+
+    ``write_watchlist=False`` accepts the pick without claiming the watchlist
+    entry - used when Focus Picks takes the symbol instead, since two owners
+    for one watchlist line means one of them deletes what the other thinks it
+    holds. ``decision_label`` names that outcome in the ledger rather than
+    filing a machine action under the trader's "approved"/"passed".
     """
     sym = str(symbol or "").strip().upper()
     side = "short" if str(side or "").lower().startswith("short") else "long"
@@ -2073,11 +2084,11 @@ def resolve_auto_populate_pick(
         entry = pending["pending"][side].pop(sym, None)
         result["was_pending"] = entry is not None
         pending["decided"][side][sym] = {
-            "decision": "approved" if approved else "passed",
+            "decision": decision_label or ("approved" if approved else "passed"),
             "at": moment.strftime("%H:%M:%S"),
         }
         _save_auto_populate_pending(pending_path, pending)
-        if approved:
+        if approved and write_watchlist:
             target = Path(longs_path if side == "long" else shorts_path)
             listed = {
                 str(s).strip().upper()

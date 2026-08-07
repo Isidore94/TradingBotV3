@@ -77,6 +77,28 @@ D1_EVENT_KINDS = {
     "avwape_dev1_break": "1σ break",
 }
 
+# EXTENSION events say "the move is going": a new range high/low, or a close
+# THROUGH a major line. PULLBACK events say "it came back to something": a
+# bounce off a level, or a rejection at one. The split drives the Focus
+# auto-watch's one-extension-per-day rule (trader rule 2026-08-05, on FRPT
+# printing a new 20-day high and then simply staying extended: "it comes up as
+# a new 20 day high alert but now it's extended and I'd only want to see it on
+# an SMA bounce or something"). Coarse on purpose - an SMA break DOWN on a long
+# is really invalidation, not extension - but "break = the move continues,
+# bounce/reject = it came back" is the distinction the trader reads.
+D1_EXTENSION_KINDS = frozenset(
+    {
+        "new_5d_high",
+        "new_5d_low",
+        "new_20d_high",
+        "new_20d_low",
+        "sma_break",
+        "avwape_break",
+        "avwape_dev1_break",
+    }
+)
+D1_PULLBACK_KINDS = frozenset(D1_EVENT_KINDS) - D1_EXTENSION_KINDS
+
 # Which of the derived AVWAPE levels each kind watches ("" = the line).
 _AVWAPE_KIND_BANDS = {
     "avwape_bounce": ("",),
@@ -135,6 +157,35 @@ def _session_bars(bars: Iterable[Mapping[str, Any]] | None, moment: datetime) ->
 
 def _bar_end(bar: Mapping[str, Any]) -> datetime:
     return _naive(bar["dt"]) + M5_BAR_SPAN
+
+
+def completed_session_bars(
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Today's M5 bars that have finished printing, oldest first.
+
+    The forming bar is a preview (plan.md sec 5), so a caller deciding a live
+    state - "is this name trading above yesterday's high yet" - reads only
+    what the tape actually printed.
+    """
+    moment = _naive(now or datetime.now())
+    return [bar for bar in _session_bars(m5_bars, moment) if _bar_end(bar) <= moment]
+
+
+def last_completed_session_close(
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Close of today's last COMPLETED M5 bar, or None before the first one."""
+    for bar in reversed(completed_session_bars(m5_bars, now=now)):
+        try:
+            return float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
 
 
 def arm_chart_watch(

@@ -176,6 +176,50 @@ The registry has initial shadow adoption, but all legacy live writers have not y
   armed/level-cross triggers are labeled and logged as research-only evidence
   and stay out of Alert Center plus Auto/Away alert summaries. The generic
   champion D1 flag path remains unchanged.
+- DESK-mode auto-populate picks are adopted straight into the M5 Focus list
+  for the day rather than queued for one-at-a-time chart approval (trader rule
+  2026-08-05, superseding the 2026-07-31 approval queue: "quicker than adding
+  them in and then seeing their alerts"). The picks are already gated (PDH/PDL
+  break, daily trend, score >= 1.25), so the cheap direction is take-then-cull.
+  M5 Focus carries them because it is already day-scoped - the next day's first
+  store load clears the list and un-injects it from longs/shorts.txt. Focus
+  owns the watchlist line it injects, so pruning a pick stops its alerts
+  entirely; auto-populate membership deliberately does not also claim it. With
+  no Focus store present (satellite) the approval queue remains the fallback.
+- The D1 snapshot chart always ends at the session in progress, and that last
+  candle is always a preview (trader rule 2026-08-05: "I want to always see
+  the latest D1 candle as it's forming intraday"). Freshest source wins:
+  BounceBot's cached M5 aggregated into a candle, else a display-only daily
+  bar the host fetched for an unscanned symbol, else today's partial bar the
+  durable store picked up from a mid-session scan. Indicators (SMA/EMA/AVWAPE)
+  stay on completed sessions only and end in a trailing None. The fetched
+  forming bar is NEVER persisted - a half-finished session is display
+  material, never stored evidence.
+- A Focus pick flags ONE extension event per day (trader rule 2026-08-05, on a
+  pick that printed a new 20-day high and then simply stayed extended). The
+  first "the move is going" event - new 5d/20d high or low, or a close through
+  an SMA / AVWAPE / 1σ line - spends the whole extension set for that name;
+  everything after it is the same news about a name that is now extended. The
+  pullback set (15EMA reject, AVWAPE bounce, 1σ bounce) stays live, so the
+  pick can still speak when it comes back to a level. The split lives in
+  `chart_watch.D1_EXTENSION_KINDS` / `D1_PULLBACK_KINDS`.
+- On a review chart for a name the trader ALREADY holds in Focus, the primary
+  verb is "✕ Remove from Focus" (drops every bucket and side, taking the
+  focus-injected watchlist lines with it) rather than a no-op "add". Removal
+  previously existed only behind the checked-looking cross toggle, which reads
+  as a status badge, so a pick could look unremovable from its own chart.
+- A Focus pick earns its Focus PRIVILEGES - the automatic D1 interest flags,
+  the tier-gate bypass, the always-sound - only while it trades beyond the
+  previous session's extreme in its own direction: a long above yesterday's
+  high, a short below yesterday's low (trader rule 2026-08-05, the same break
+  Auto Pilot's auto-populate has required since 2026-07-31, shared through
+  `prev_day_gate.py`). Inside yesterday's range the name is not blacked out -
+  it simply competes on tier like any other, so an S-tier/PROVEN/banger bounce
+  still surfaces. The D1 event window opens at the M5 bar that breaks the
+  level, never at the session start, so the morning's events on a name still
+  inside the range are never replayed when it later breaks out. An
+  unmeasurable price or missing prior session reads as uncertainty and grants
+  nothing (sec 5).
 - Setup Tracker, Day Trade Tracker, and Move Forensics rows share deterministic
   novice explanations that separate executable triggers from aggregate research,
   spell out entry/invalidation/management, and expose sample-size cautions.

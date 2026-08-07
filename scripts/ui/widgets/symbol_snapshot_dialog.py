@@ -36,6 +36,46 @@ from ui.widgets.candle_chart import CandleChart
 _D1_BACKFILL_ATTEMPTS: dict[str, datetime] = {}
 _D1_BACKFILL_COOLDOWN = timedelta(minutes=10)
 
+#: Today's forming daily candle for symbols the bot is not scanning (trader
+#: rule 2026-08-05: "I want to ALWAYS see the latest D1 candle as it's
+#: forming intraday"). The durable store only gains a session's bar when a
+#: scan touches the symbol, so a name typed into the chart box - RY, say -
+#: showed a tail that stopped at yesterday with no hint that today's big
+#: candle existed. This is a display-only fetch: the bar is cached in memory,
+#: marked as a preview, and NEVER written to the durable store, so no partial
+#: session can leak into research or detector history. Yahoo-sourced, so the
+#: IB budget is untouched; it can lag the tape by a few minutes.
+_FORMING_BARS: dict[str, tuple[datetime, dict]] = {}
+_FORMING_ATTEMPTS: dict[str, datetime] = {}
+_FORMING_REFRESH = timedelta(minutes=2)
+
+
+def _last_row_as_bar(frame) -> dict | None:
+    """Newest row of a daily-bar frame as a chart bar dict, or None.
+
+    Deliberately tolerant: a provider hiccup returns an empty or short frame
+    rather than raising, and a missing forming candle must degrade to "no
+    preview", never to a broken chart.
+    """
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    try:
+        row = frame.iloc[-1]
+        stamp = row["datetime"]
+        stamp = stamp.to_pydatetime() if hasattr(stamp, "to_pydatetime") else stamp
+        if not isinstance(stamp, datetime):
+            return None
+        return {
+            "dt": stamp,
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row.get("volume", 0.0) or 0.0),
+        }
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+        return None
+
 
 def _legend_html(
     title: str,
@@ -116,6 +156,7 @@ class SymbolSnapshotWidget(QWidget):
         self._bot = None
         self._compact = bool(compact)
         self._d1_backfill_thread: threading.Thread | None = None
+        self._forming_thread: threading.Thread | None = None
         self._d1BackfillDone.connect(self._on_d1_backfill_done)
         # Latest snapshot dicts, retained so callers can quick-fill a price from
         # a drawn overlay (VWAP, +/-1 sigma). set_data plots overlays and drops
@@ -238,8 +279,14 @@ class SymbolSnapshotWidget(QWidget):
                 m5_bars = []
         # The M5 cache feeds the D1 build too: it synthesizes today's forming
         # daily candle (hollow preview) while the durable store still ends at
-        # the previous close.
-        d1 = chart_snapshot.build_d1_snapshot(self._symbol, intraday_bars=m5_bars)
+        # the previous close. A symbol the bot is not scanning has no such
+        # cache, so a separately fetched today-bar stands in - it is a daily
+        # bar, not an M5 series, so it feeds ONLY the D1 build and never the
+        # M5 pane below.
+        forming = self._forming_bar(self._symbol)
+        d1 = chart_snapshot.build_d1_snapshot(
+            self._symbol, intraday_bars=m5_bars or ([forming] if forming else [])
+        )
         m5 = chart_snapshot.build_m5_snapshot(self._symbol, m5_bars)
         # "Sometimes the latest D1 bar isn't loaded in": a symbol outside the
         # current scan set has nothing refreshing its durable store and no M5
@@ -249,9 +296,73 @@ class SymbolSnapshotWidget(QWidget):
         try:
             if chart_snapshot.d1_store_is_stale(d1.get("bars") or []):
                 self._start_d1_backfill(self._symbol)
+            elif (
+                not m5_bars
+                and d1.get("bars")
+                and chart_snapshot.session_has_opened()
+            ):
+                # Store is current through the last CLOSE, which is exactly
+                # the case the staleness probe calls healthy and the trader
+                # calls broken: today's candle is simply absent. Nothing else
+                # will ever fetch it for an unscanned symbol.
+                self._start_forming_fetch(self._symbol)
         except Exception:
-            logging.debug("D1 staleness probe failed.", exc_info=True)
+            logging.debug("D1 freshness probe failed.", exc_info=True)
         return d1, m5
+
+    @staticmethod
+    def _forming_bar(symbol: str) -> dict | None:
+        """The cached forming daily bar for ``symbol``, if it is still today's."""
+        entry = _FORMING_BARS.get(symbol)
+        if entry is None:
+            return None
+        _fetched_at, bar = entry
+        stamp = bar.get("dt")
+        if not hasattr(stamp, "date") or stamp.date() != datetime.now().date():
+            _FORMING_BARS.pop(symbol, None)  # yesterday's preview is not today's
+            return None
+        return bar
+
+    def _start_forming_fetch(self, symbol: str) -> None:
+        """Fetch today's forming daily bar off the GUI thread.
+
+        Yahoo only (`fetch_daily_bars_from_yahoo`, not the caching
+        `fetch_daily_bars` wrapper): the wrapper would merge and PERSIST the
+        partial bar into the durable store, which is precisely what must not
+        happen - a half-finished session is display material, never stored
+        evidence. Painting stays fetch-free (plan.md Milestone 8); the same
+        per-symbol cooldown pattern as the stale-store backfill keeps a dead
+        provider from becoming a fetch loop.
+        """
+        if self._forming_thread is not None and self._forming_thread.is_alive():
+            return
+        now = datetime.now()
+        attempted_at = _FORMING_ATTEMPTS.get(symbol)
+        if attempted_at is not None and (now - attempted_at) < _FORMING_REFRESH:
+            return
+        _FORMING_ATTEMPTS[symbol] = now
+
+        def worker() -> None:
+            try:
+                from master_avwap_lib import legacy
+
+                frame = legacy.fetch_daily_bars_from_yahoo(symbol, 5)
+                bar = _last_row_as_bar(frame)
+                if bar is not None and bar["dt"].date() == datetime.now().date():
+                    _FORMING_BARS[symbol] = (datetime.now(), bar)
+            except Exception:
+                logging.warning(
+                    "Forming D1 candle fetch failed for %s.", symbol, exc_info=True
+                )
+            try:
+                self._d1BackfillDone.emit(symbol)
+            except RuntimeError:
+                pass  # widget deleted while the fetch ran
+
+        self._forming_thread = threading.Thread(
+            target=worker, name=f"d1-forming-{symbol}", daemon=True
+        )
+        self._forming_thread.start()
 
     def _start_d1_backfill(self, symbol: str) -> None:
         """Refresh the durable daily store for ``symbol`` off the GUI thread.

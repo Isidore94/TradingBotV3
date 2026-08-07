@@ -399,9 +399,375 @@ def test_liked_focus_picks_skip_tier_gate_and_always_sound():
     assert not alert_passes_feed_gate(quiet_b, "A", is_focus=False)
     assert not alert_should_sound(quiet_b, is_focus=False)
     # Liked (focus) picks surface through every gate, even S-only, and sound.
+    # Since 2026-08-05 `is_focus` means "a Focus pick that has broken
+    # yesterday's extreme in its direction" - see the panel's
+    # _alert_has_focus_privilege and test_focus_privilege_waits_for_the_
+    # previous_day_extreme below. The policy these two functions encode is
+    # unchanged.
     assert alert_passes_feed_gate(quiet_b, "A", is_focus=True)
     assert alert_passes_feed_gate(quiet_b, "S", is_focus=True)
     assert alert_should_sound(quiet_b, is_focus=True)
+
+
+def test_focus_privilege_waits_for_the_previous_day_extreme(tmp_path, monkeypatch):
+    """Trader rule 2026-08-05: a Focus long inside yesterday's range is noise.
+
+    It loses the Focus privileges (tier-gate bypass, always-sound) until it
+    trades above the previous day's high - but it is not blacked out: an
+    S-tier bounce on it still reaches the feed on its own merit.
+    """
+    try:
+        import os
+        from datetime import datetime
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    class _FocusService:
+        def is_focus(self, symbol, side=None, category=None):
+            return symbol == "NVDA"
+
+        def focus_category(self, symbol):
+            return "m5" if symbol == "NVDA" else None
+
+        def focus_side(self, symbol, category=None):
+            return "long" if symbol == "NVDA" else None
+
+        def all_focus(self, category=None):
+            return {"long": ["NVDA"], "short": []}
+
+    def alert_for(trigger):
+        return BounceAlert(
+            time_text="09:35:00",
+            symbol="NVDA",
+            side="LONG",
+            trigger=trigger,
+            timeframe="5m",
+            tag="green",
+            raw_text=f"{trigger} NVDA",
+        )
+
+    panel = AlertCenterPanel(parked_symbols_path=tmp_path / "parked.json")
+    panel.focus_service = _FocusService()
+    # S tier / bangers only. Set directly rather than through the combo box:
+    # the widget persists the choice to machine-local settings, which would
+    # leak this filter into every panel a later test builds.
+    monkeypatch.setattr(panel, "_min_tier_mode", lambda: "S")
+
+    quiet = alert_for("[B-TIER] Bounce confirmed")
+    loud = alert_for("[S-TIER] Bounce confirmed")
+
+    # Unmeasured (the poll has not reached it): membership yes, privilege no.
+    assert panel._alert_is_focus(quiet)
+    assert not panel._alert_has_focus_privilege(quiet)
+    panel.add_alert(quiet)
+    assert quiet not in _feed_alerts(panel)
+
+    # Measured and still inside yesterday's range: same answer.
+    panel._focus_break_state["NVDA|long"] = "closed"
+    assert not panel._alert_has_focus_privilege(quiet)
+    # ...but the strong bounce is never swallowed - it passes on tier.
+    panel.add_alert(loud)
+    assert loud in _feed_alerts(panel)
+
+    # Above yesterday's high: the Focus privilege is back and the quiet
+    # B-tier surfaces through the S-only gate again.
+    panel._focus_break_state["NVDA|long"] = "open"
+    panel._focus_break_open_at["NVDA|long"] = datetime(2026, 8, 5, 11, 4)
+    assert panel._alert_has_focus_privilege(quiet)
+    again = alert_for("[B-TIER] Bounce confirmed again")
+    panel.add_alert(again)
+    assert again in _feed_alerts(panel)
+
+    # A long that only broke yesterday's LOW earns nothing: the gate is
+    # directional, and the state is keyed per side.
+    panel._focus_break_state["NVDA|long"] = "closed"
+    panel._focus_break_state["NVDA|short"] = "open"
+    assert not panel._alert_has_focus_privilege(quiet)
+
+
+def test_one_extension_flag_per_pick_then_only_pullbacks(tmp_path, monkeypatch):
+    """FRPT's case (2026-08-05): it printed a new 20-day high and then simply
+    stayed extended. The first extension event spends the whole extension set
+    for the day; the pullback set stays live so the pick can still speak when
+    it comes back to a level."""
+    try:
+        import os
+        from datetime import datetime
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from chart_watch import D1_EXTENSION_KINDS, D1_PULLBACK_KINDS
+        from ui.panels import alert_center_panel as panel_mod
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+
+    class _FocusService:
+        def is_focus(self, symbol, side=None, category=None):
+            return symbol == "FRPT"
+
+        def focus_category(self, symbol):
+            return "m5" if symbol == "FRPT" else None
+
+        def focus_side(self, symbol, category=None):
+            return "long"
+
+        def all_focus(self, category=None):
+            return {"long": ["FRPT"], "short": []}
+
+    d1_bars = [
+        {
+            "dt": datetime(2026, 8, day, 0, 0),
+            "high": 63.59 if day == 4 else 62.0,
+            "low": 60.0,
+            "close": 61.5,
+        }
+        for day in (3, 4)
+    ]
+    m5_bars = [
+        {"dt": datetime(2026, 8, 5, 6, 30), "high": 68.68, "low": 62.0, "close": 68.0},
+    ]
+
+    fires: set[str] = set()
+    evaluated: list[str] = []
+
+    class _Hit:
+        message = "event"
+
+    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None):
+        evaluated.append(watch.kind)
+        return _Hit() if watch.kind in fires else None
+
+    monkeypatch.setattr(panel_mod, "evaluate_d1_event_watch", _fake_evaluate)
+
+    panel = AlertCenterPanel(
+        parked_symbols_path=tmp_path / "parked.json",
+        focus_d1_flags_path=tmp_path / "focus_flags.json",
+    )
+    panel.focus_service = _FocusService()
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol: list(d1_bars))
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol: list(m5_bars))
+
+    # 06:40 - the breakout prints a new 20-day high.
+    fires.add("new_20d_high")
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 6, 40))
+    assert [a.trigger for a in panel._d1_alerts] == ["Focus D1 · event"]
+    assert panel._focus_extension_spent("FRPT")
+
+    # Later: EVERY kind would hit. Only the pullback set is even measured -
+    # no second "still breaking out" flag on a name that is now extended.
+    evaluated.clear()
+    fires.update(D1_EXTENSION_KINDS | D1_PULLBACK_KINDS)
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 9, 40))
+    assert set(evaluated) <= D1_PULLBACK_KINDS
+    assert not (set(evaluated) & D1_EXTENSION_KINDS)
+    assert evaluated, "the pullback events must still be live"
+    fired_kinds = {
+        flag.split("|", 1)[1] for flag in panel._focus_d1_flags if flag.startswith("FRPT|")
+    }
+    assert fired_kinds & D1_PULLBACK_KINDS  # it can still speak on a bounce
+    assert fired_kinds & D1_EXTENSION_KINDS == {"new_20d_high"}
+
+
+def test_a_focus_picks_own_chart_can_remove_it(tmp_path, monkeypatch):
+    """2026-08-05: "there's no way of removing this pick from the focus picks".
+    On a chart for a name already in Focus the primary verb IS the removal,
+    and it takes the focus-injected watchlist line with it."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import FOCUS_D1_EVENT_TAG, BounceAlert
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+    service = _service(tmp_path)
+    service.add("FRPT", "long", "m5", origin="test", context="")
+    assert "FRPT" in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+
+    panel = AlertCenterPanel(
+        service,
+        parked_symbols_path=tmp_path / "parked.json",
+        review_events_path=tmp_path / "review_events.jsonl",
+    )
+    panel.add_alert(
+        BounceAlert(
+            time_text="06:30:00",
+            symbol="FRPT",
+            side="LONG",
+            trigger="Focus D1 · New 20-day high: 68.68 > 63.59",
+            timeframe="D1",
+            tag=FOCUS_D1_EVENT_TAG,
+            raw_text="FOCUS D1 FRPT (LONG): New 20-day high",
+            is_d1=True,
+        )
+    )
+    assert panel._current_review_alert is not None
+    # The verb that used to read "Add to Swing Focus" on a name the trader
+    # already owns is now the removal.
+    assert panel.chart_review.focus_button.text() == "✕ Remove from Focus"
+
+    panel.chart_review.focus_button.click()
+    assert not service.is_focus("FRPT")
+    assert "FRPT" not in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+    # Removing the pick is not the same as muting the symbol for the day.
+    assert "FRPT" not in panel._ignored_symbols
+
+    # A name that is NOT a Focus pick keeps the add verb.
+    panel.add_alert(
+        BounceAlert(
+            time_text="09:35:00",
+            symbol="AMD",
+            side="LONG",
+            trigger="[S-TIER] VWAP reclaim",
+            timeframe="5m",
+            raw_text="[S-TIER] AMD: VWAP reclaim",
+        )
+    )
+    assert panel.chart_review.focus_button.text() == "Add to M5 Focus"
+
+
+def _feed_alerts(panel) -> list:
+    """The alerts actually rendered in the live feed (not merely recorded)."""
+    layout = panel.feed_layout
+    items = []
+    for index in range(layout.count()):
+        widget = layout.itemAt(index).widget()
+        alert = getattr(widget, "alert", None)
+        if alert is not None:
+            items.append(alert)
+    return items
+
+
+def test_focus_d1_flags_hold_until_the_break_and_then_start_there(tmp_path, monkeypatch):
+    """The open-time flood fix: no automatic D1 flag while the name is inside
+    yesterday's range, and when it breaks out the event window starts AT the
+    break - the 09:35 reject it printed while still below never fires."""
+    try:
+        import os
+        from datetime import datetime
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels import alert_center_panel as panel_mod
+        from ui.panels.alert_center_panel import AlertCenterPanel
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    class _FocusService:
+        def is_focus(self, symbol, side=None, category=None):
+            return symbol == "NVDA"
+
+        def focus_category(self, symbol):
+            return "m5" if symbol == "NVDA" else None
+
+        def focus_side(self, symbol, category=None):
+            return "long" if symbol == "NVDA" else None
+
+        def all_focus(self, category=None):
+            return {"long": ["NVDA"], "short": []}
+
+    # Yesterday: high 100.00, low 95.00.
+    d1_bars = [
+        {
+            "dt": datetime(2026, 8, day, 0, 0),
+            "high": 100.0 if day == 4 else 99.0,
+            "low": 95.0 if day == 4 else 94.0,
+            "close": 98.0,
+        }
+        for day in (3, 4)
+    ]
+    # Today: still under yesterday's high through 09:40, breaks it at 11:00.
+    m5_bars = [
+        {"dt": datetime(2026, 8, 5, 9, 35), "high": 99.5, "low": 98.0, "close": 99.0},
+        {"dt": datetime(2026, 8, 5, 9, 40), "high": 99.8, "low": 98.5, "close": 99.4},
+        {"dt": datetime(2026, 8, 5, 11, 0), "high": 101.5, "low": 99.5, "close": 101.2},
+    ]
+
+    evaluated = []  # (kind, armed_at) per D1 event actually measured
+
+    class _Hit:
+        message = "5d high"
+
+    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None):
+        evaluated.append((watch.kind, watch.armed_at))
+        return _Hit() if watch.kind == "new_5d_high" else None
+
+    monkeypatch.setattr(panel_mod, "evaluate_d1_event_watch", _fake_evaluate)
+
+    panel = AlertCenterPanel(
+        parked_symbols_path=tmp_path / "parked.json",
+        focus_d1_flags_path=tmp_path / "focus_flags.json",
+    )
+    panel.focus_service = _FocusService()
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol: list(d1_bars))
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol: list(m5_bars))
+
+    # 09:45, price 99.40 vs yesterday's 100.00 high: nothing is even evaluated,
+    # nothing is consumed, and the trader can see WHY the feed is quiet.
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 9, 45))
+    assert evaluated == []
+    assert panel._focus_d1_flags == set()
+    assert not panel._d1_alerts
+    assert panel._focus_gate_held == 1
+    assert panel.focus_break_state("NVDA", "long") == "closed"
+
+    # 11:06, the 11:00 bar has completed above 100.00: the window opens HERE,
+    # not at midnight, so the morning's events stay unflagged.
+    moment = datetime(2026, 8, 5, 11, 6)
+    breakout_bar = datetime(2026, 8, 5, 11, 0)
+    panel._poll_focus_d1_interest(now=moment)
+    # The window opens at the breaking BAR, not at the poll tick - so the
+    # breakout bar's own events count, while 09:35/09:40 (which end at 09:40
+    # and 09:45, before 11:00) stay outside it.
+    assert evaluated and {armed_at for _kind, armed_at in evaluated} == {breakout_bar}
+    assert ("new_5d_high", breakout_bar) in evaluated
+    assert panel.focus_break_state("NVDA", "long") == "open"
+    assert panel._focus_gate_held == 0
+    assert "NVDA|new_5d_high" in panel._focus_d1_flags
+    assert [alert.symbol for alert in panel._d1_alerts] == ["NVDA"]
+    assert panel._d1_alerts[0].tag == panel_mod.FOCUS_D1_EVENT_TAG
+
+    # The flag is once-per-session: the fired kind is no longer even measured,
+    # and the window keeps its original 11:00 open stamp.
+    evaluated.clear()
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 11, 30))
+    assert "new_5d_high" not in {kind for kind, _armed_at in evaluated}
+    assert {armed_at for _kind, armed_at in evaluated} == {breakout_bar}
+    assert len(panel._d1_alerts) == 1
 
 
 def test_visual_alert_review_queues_skips_and_adds_focus(tmp_path, monkeypatch):
@@ -1457,10 +1823,93 @@ def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
     dialog.close()
 
 
-def test_desk_auto_picks_chart_for_approval(tmp_path, monkeypatch):
-    """DESK-mode staged auto-populate picks occupy the review chart with
-    Approve/Pass verbs; the verdict routes through resolve_auto_populate_pick
-    and advances the queue (2026-07-31 directive)."""
+def test_desk_auto_picks_land_in_m5_focus_for_today(tmp_path, monkeypatch):
+    """2026-08-05: staged auto picks are ADOPTED into M5 Focus, not queued for
+    one-at-a-time approval - "quicker than adding them in and then seeing
+    their alerts". Focus owns the watchlist line, so pruning one removes it."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        import autopilot_core as core
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+        from test_qt_focus_panel import _service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+    import json
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+    pending_path = tmp_path / "auto_populate_pending.json"
+    membership_path = tmp_path / "membership.json"
+    core.stage_auto_populate_candidates(
+        {
+            "longs": [{"symbol": "NVDA", "score": 2.1, "reason": "PDH break"}],
+            "shorts": [{"symbol": "TSLA", "score": 1.6, "reason": "PDL break"}],
+        },
+        "neutral_chop",
+        pending_path=pending_path,
+        membership_path=membership_path,
+        longs_path=tmp_path / "longs.txt",
+        shorts_path=tmp_path / "shorts.txt",
+    )
+
+    service = _service(tmp_path)
+    liked = []
+    monkeypatch.setattr(
+        service, "record_feedback", lambda *a, **k: liked.append((a, k))
+    )
+    panel = AlertCenterPanel(
+        service,
+        ignored_symbols_path=tmp_path / "ignored.txt",
+        review_events_path=tmp_path / "review_events.jsonl",
+        auto_pick_pending_path=pending_path,
+    )
+    panel._poll_auto_pick_pending()
+
+    # Both picks are M5 Focus names for today, on the correct sides.
+    assert service.is_focus("NVDA", "long", "m5")
+    assert service.is_focus("TSLA", "short", "m5")
+    assert service.focus_symbols("long", "swing") == []  # day-trade list only
+    # ...which means BounceBot's intraday watchlists carry them.
+    assert "NVDA" in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+    assert "TSLA" in (tmp_path / "shorts.txt").read_text(encoding="utf-8")
+    # No approval chart: that is the entire point of the change.
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
+    # A machine adding names is not the trader liking them.
+    assert liked == []
+    # The proposal is retired as adopted - never re-proposed today - and
+    # auto-populate did NOT also claim the watchlist line it does not own.
+    decided = json.loads(pending_path.read_text(encoding="utf-8"))["decided"]
+    assert decided["long"]["NVDA"]["decision"] == "auto_focus"
+    assert decided["short"]["TSLA"]["decision"] == "auto_focus"
+    assert not membership_path.exists() or "NVDA" not in membership_path.read_text(
+        encoding="utf-8"
+    )
+
+    # A second tick adopts nothing new.
+    panel._poll_auto_pick_pending()
+    assert service.focus_symbols("long", "m5") == ["NVDA"]
+
+    # Pruning is the trader's half of the deal: it takes the watchlist line
+    # with it, so a pruned pick stops alerting instead of just losing its star.
+    service.remove("NVDA", "long", "m5")
+    assert not service.is_focus("NVDA", "long", "m5")
+    assert "NVDA" not in (tmp_path / "longs.txt").read_text(encoding="utf-8")
+
+
+def test_desk_auto_picks_chart_for_approval_without_a_focus_service(tmp_path, monkeypatch):
+    """Fallback path only (satellite / no Focus store): staged picks still
+    occupy the review chart with Approve/Pass verbs and route through
+    resolve_auto_populate_pick, rather than vanishing silently."""
     try:
         import os
 
