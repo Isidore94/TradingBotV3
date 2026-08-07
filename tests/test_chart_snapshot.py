@@ -1032,7 +1032,20 @@ def test_unscanned_symbol_fetches_todays_candle_without_persisting_it(monkeypatc
     # A store that is honestly current: it ends exactly at the last completed
     # session, which is what makes the staleness probe (correctly) say healthy
     # while today's candle is still missing.
-    last_complete = chart_snapshot.latest_completed_session_date()
+    #
+    # The session clock is PINNED to "the last session before today" rather
+    # than read live: this scenario only exists while a session is running.
+    # Run after the close (or on a weekend) the real helper names today as
+    # complete, so the store would already hold today's bar and there would be
+    # no forming candle to fetch - the assertions below would then be checking
+    # a completed candle for a preview flag it is right not to carry.
+    today = datetime.now().date()
+    last_complete = chart_snapshot.latest_completed_session_date(
+        datetime(today.year, today.month, today.day, 10, 0)
+    )
+    monkeypatch.setattr(
+        chart_snapshot, "latest_completed_session_date", lambda now=None: last_complete
+    )
     stored = _daily_bars(
         40, start=datetime(last_complete.year, last_complete.month, last_complete.day)
         - timedelta(days=39)
