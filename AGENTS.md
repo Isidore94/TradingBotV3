@@ -76,6 +76,8 @@ rebuilding is verification only, and skipping it can never leave the tree broken
 - `main` is the trunk; branch per milestone/packet, merge back after a live-session validation day passes (plan.md sec 6).
 - Commit small and green; push after each commit. If a task will exceed usage limits, commit and push so another agent can take over from a green state.
 - First live session on any new build: run plan.md sec 6 checklist; do NOT tune thresholds from one session.
+- **File-scoped ask-first rule** (checkpoint review 2026-08-08): any edit to a file housing detector/scoring/alert code is asked about BEFORE it is made — even for capture-side or evidence-only changes in that file. Ambiguity is the trigger to ask, not a license to judge.
+- While unmerged branch code runs in production via a scheduled task (see `docs/CHECKPOINT_REVIEW_2026-08-08.md`): never switch branches on the desk without disarming that task first.
 
 ## Where to read more
 - `plan.md` — master roadmap and single source of truth. Sec 5 invariants, sec 6 live validation, sec 7 promotion ladder, sec 12 ordered work queue. Read before any feature work.

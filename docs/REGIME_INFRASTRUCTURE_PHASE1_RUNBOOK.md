@@ -59,3 +59,19 @@ The audit must show:
 
 An `UNHEALTHY` result blocks the live-validation exit gate. A `HEALTHY` result
 validates collection mechanics only; it does not make any signal promotable.
+
+## Evidence-floor counting declaration (checkpoint review 2026-08-08)
+
+Ruled at review so the in-flight collection is never relitigated
+(`docs/CHECKPOINT_REVIEW_2026-08-08.md`):
+
+- A session counts toward the 40-session evidence floor **iff** its
+  collection audit is HEALTHY **and** all prediction-side events (level
+  tests started / resolved) were captured live.
+- `capture_mode: "backfill"` on measurement rows — follow-up windows,
+  breadth bars — disqualifies nothing; those rows are deterministic
+  functions of completed bars (durability plan Tier B).
+- Prediction-side events are never reconstructed (Tier C), so a backfilled
+  prediction row cannot exist; if one ever appears, that is a defect, not
+  evidence.
+- Rows predating the `capture_mode` field are live.
