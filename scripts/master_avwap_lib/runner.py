@@ -114,6 +114,89 @@ def run_master_with_shared_watchlists():
     return run_master(use_shared_watchlists=True)
 
 
+def _maybe_run_setup_tracker_catchup(
+    *,
+    update_setup_tracker: bool | None,
+    longs_path=None,
+    shorts_path=None,
+    use_shared_watchlists: bool = False,
+    now=None,
+) -> dict:
+    """Refresh a stale setup tracker before the scan runs (durability 2.1).
+
+    The tracker gate is wall-clock only, so a missed after-close refresh leaves
+    the desk on two-session-old setups until 15:00 the next day. When this run
+    is not itself allowed to refresh the tracker and the stored tracker is a
+    completed session (or more) behind, re-run the existing backfill over the
+    missed sessions first.
+
+    Ordering is the serialization: this runs before the scan opens its own
+    IB daily-bar client (1003), and the ScanService active-scan claim already
+    guarantees no other scan is in flight, so backfill's client 1004 is never
+    concurrent with a live scan.
+
+    Never raises - a failed catch-up degrades to "scan on the stale tracker",
+    exactly today's behaviour, and never fails the scan.
+    """
+    outcome = {"ran": False, "reason": "", "sessions": [], "lookback_sessions": 0}
+    try:
+        if not tracker_staleness_catchup_enabled():
+            outcome["reason"] = "disabled by tracker_staleness_catchup setting"
+            return outcome
+        tracker_allowed_this_run = (
+            bool(update_setup_tracker)
+            if update_setup_tracker is not None
+            else should_update_setup_tracker_now(now=now)
+        )
+        if tracker_allowed_this_run:
+            outcome["reason"] = "this run already refreshes the tracker"
+            return outcome
+
+        plan = compute_setup_tracker_catchup_plan(now=now)
+        if not plan.get("stale"):
+            outcome["reason"] = str(plan.get("reason") or "tracker is current")
+            return outcome
+
+        lookback = int(plan.get("lookback_sessions") or 0)
+        end_date = plan.get("last_completed_session")
+        if lookback <= 0 or end_date is None:
+            outcome["reason"] = "no completed sessions to catch up on"
+            return outcome
+
+        logging.warning(
+            "Setup tracker catch-up: %s. Refreshing from the last %s completed session(s) "
+            "through %s before this scan.",
+            plan.get("reason"),
+            lookback,
+            end_date.isoformat(),
+        )
+        result = backfill_setup_tracker_from_recent_sessions(
+            lookback_sessions=lookback,
+            longs_path=longs_path,
+            shorts_path=shorts_path,
+            use_shared_watchlists=use_shared_watchlists,
+            end_date=end_date,
+        )
+        sessions = list((result or {}).get("dates") or [])
+        outcome["ran"] = bool(sessions)
+        outcome["sessions"] = sessions
+        outcome["lookback_sessions"] = lookback
+        outcome["reason"] = (
+            f"caught up {len(sessions)} completed session(s) through {end_date.isoformat()}"
+            if sessions
+            else "catch-up produced no evaluable sessions"
+        )
+        logging.info("Setup tracker catch-up finished: %s.", outcome["reason"])
+    except Exception as exc:
+        outcome["ran"] = False
+        outcome["reason"] = f"catch-up failed: {exc!r}"
+        logging.warning(
+            "Setup tracker staleness catch-up failed; continuing with the stored tracker.",
+            exc_info=True,
+        )
+    return outcome
+
+
 _theta_enrichment_state_lock = threading.Lock()
 _latest_theta_enrichment_run_id = ""
 
@@ -450,6 +533,18 @@ def _run_master_impl(
     logging.info(
         f"Earnings anchors refreshed (current: {refreshed_curr}, previous: {refreshed_prev})."
     )
+
+    # Before this scan opens its own IB client: if the desk missed the last
+    # after-close refresh, rebuild the tracker from the completed sessions it
+    # missed so this scan's tracker-aware scoring reads the same history it
+    # would have read had the desk been up (durability packet 2.1).
+    tracker_catchup = _maybe_run_setup_tracker_catchup(
+        update_setup_tracker=update_setup_tracker,
+        longs_path=longs_path,
+        shorts_path=shorts_path,
+        use_shared_watchlists=use_shared_watchlists,
+    )
+    _phase_t = _log_phase_duration("setup tracker staleness catch-up", _phase_t)
 
     ib = connect_daily_data_client(client_id=1003, startup_wait=1.5)
 
@@ -1918,6 +2013,9 @@ def _run_master_impl(
         "study_setups_tracked": 0,
         "setup_tracker_allowed": False,
         "setup_tracker_skip_reason": "",
+        "tracker_catchup": bool(tracker_catchup.get("ran")),
+        "tracker_catchup_reason": str(tracker_catchup.get("reason") or ""),
+        "tracker_catchup_sessions": list(tracker_catchup.get("sessions") or []),
         "theta_enrichment_pending": False,
         "theta_enrichment_mode": "deferred",
         "d1_upgrade_alert_count": len(d1_upgrade_alert_payload.get("alerts", [])),
@@ -2533,6 +2631,13 @@ def run_master(
             )
             recorder.outputs["setup_tracker_skip_reason"] = str(
                 result.get("setup_tracker_skip_reason") or ""
+            )
+            recorder.set_counter("tracker_catchup", bool(result.get("tracker_catchup")))
+            recorder.outputs["tracker_catchup_reason"] = str(
+                result.get("tracker_catchup_reason") or ""
+            )
+            recorder.outputs["tracker_catchup_sessions"] = list(
+                result.get("tracker_catchup_sessions") or []
             )
         provider_counters.flush_to_manifest(recorder)
         recorder.finalize(status="ok")

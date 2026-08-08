@@ -125,6 +125,7 @@ from project_paths import (
     MASTER_AVWAP_LOG_FILE,
     APP_LOG_BACKUP_COUNT,
     SafeRotatingFileHandler,
+    get_local_setting,
     get_shared_watchlist_paths,
     get_tracker_storage_details,
     open_path_in_file_manager,
@@ -1789,6 +1790,107 @@ def should_update_favorite_zone_watchlists_now(
         window_start=window_start or default_start,
         window_end=window_end or default_end,
     )
+
+
+# --- setup-tracker staleness catch-up (durability packet 2.1) --------------
+#
+# The window gate above is wall-clock only. Miss one after-close refresh and
+# every scan the next day is blocked from refreshing until 15:00, so the desk
+# spends the whole session on setups computed two sessions ago (observed
+# 2026-08-03). The helpers below detect that state; the runner acts on it by
+# re-running backfill_setup_tracker_from_recent_sessions over the missed
+# sessions, from completed D1 bars only -- never today's forming bar. Timing
+# is all that changes: the same data vintage yields the same tracker, which
+# tests/test_tracker_staleness_catchup.py pins byte-for-byte.
+
+TRACKER_CATCHUP_SETTING_KEY = "tracker_staleness_catchup"
+# Deep enough to recover a long weekend or a week away; shallow enough that a
+# recovery path can never turn into an open-ended rebuild.
+TRACKER_CATCHUP_MAX_LOOKBACK_SESSIONS = 5
+# get_recent_market_session_dates counts back from the newest bar it can see,
+# which intraday is today's forming session. Probe a few sessions deeper so
+# dropping the uncompleted ones still leaves the sessions we actually want.
+TRACKER_CATCHUP_SESSION_PROBE_MARGIN = 3
+
+
+def tracker_staleness_catchup_enabled() -> bool:
+    """Default-on: this is a recovery path with explicit labelling, not a
+    behaviour change (docs/DURABILITY_CATCHUP_PLAN.md sec 3)."""
+    return bool(get_local_setting(TRACKER_CATCHUP_SETTING_KEY, True))
+
+
+def get_setup_tracker_last_update_session(tracker_payload: dict | None = None) -> date | None:
+    """Session date the stored tracker reflects, or None when unknowable.
+
+    The tracker is only ever written from the final market hour onward, so the
+    calendar date of ``updated_at`` is the session it reflects.
+    """
+    payload = load_setup_tracker_payload() if tracker_payload is None else tracker_payload
+    if not isinstance(payload, dict):
+        return None
+    raw = str(payload.get("updated_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(raw[:10])
+        except ValueError:
+            logging.debug("Unparseable setup tracker updated_at stamp: %r", raw)
+            return None
+
+
+def compute_setup_tracker_catchup_plan(
+    now: datetime | None = None,
+    tracker_payload: dict | None = None,
+    max_lookback_sessions: int = TRACKER_CATCHUP_MAX_LOOKBACK_SESSIONS,
+) -> dict:
+    """Decide whether the stored tracker is a session (or more) behind.
+
+    Only sessions strictly before today count as completed: the catch-up path
+    exists for runs *outside* the after-close window, where today's D1 bar is
+    still forming and is therefore preview, never evidence.
+    """
+    reference = now or datetime.now()
+    today = reference.date()
+    plan = {
+        "stale": False,
+        "reason": "",
+        "last_update_session": None,
+        "last_completed_session": None,
+        "lookback_sessions": 0,
+    }
+
+    last_update = get_setup_tracker_last_update_session(tracker_payload)
+    if last_update is None:
+        # Missing data is uncertainty, never confirmation: an unstamped tracker
+        # does not get an automatic IB-spending rebuild. The manual GUI backfill
+        # stays available for that case.
+        plan["reason"] = "tracker has no usable updated_at stamp"
+        return plan
+    plan["last_update_session"] = last_update
+
+    probe = max(1, int(max_lookback_sessions)) + TRACKER_CATCHUP_SESSION_PROBE_MARGIN
+    completed = [value for value in get_recent_market_session_dates(probe) if value < today]
+    if not completed:
+        plan["reason"] = "no completed market session dates available"
+        return plan
+    last_completed = completed[0]
+    plan["last_completed_session"] = last_completed
+
+    if last_update >= last_completed:
+        plan["reason"] = "tracker already reflects the last completed session"
+        return plan
+
+    missed = [value for value in completed if value > last_update]
+    plan["lookback_sessions"] = min(len(missed), max(1, int(max_lookback_sessions)))
+    plan["stale"] = True
+    plan["reason"] = (
+        f"tracker last updated for {last_update.isoformat()}; "
+        f"last completed session is {last_completed.isoformat()}"
+    )
+    return plan
 
 
 def connect_daily_data_client(client_id: int, startup_wait: float = 1.0) -> IBApi | None:
@@ -22839,7 +22941,15 @@ def backfill_setup_tracker_from_recent_sessions(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
     use_shared_watchlists: bool = False,
+    end_date: date | None = None,
 ) -> dict:
+    """Rebuild the setup tracker from the most recent completed sessions.
+
+    ``end_date`` caps the newest session evaluated. The manual GUI action leaves
+    it unset (unchanged behaviour); the staleness catch-up passes the last
+    *completed* session so an intraday run can never evaluate today's forming
+    D1 bar (plan.md sec 5: completed bars only, a forming bar is preview).
+    """
     lookback_sessions = max(1, int(lookback_sessions))
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
@@ -22860,7 +22970,21 @@ def backfill_setup_tracker_from_recent_sessions(
         logging.warning(f"No symbols found in {watchlist_label}; historical tracker backfill skipped.")
         return {"dates": [], "watchlists": {}}
 
-    evaluation_dates = list(reversed(get_recent_market_session_dates(lookback_sessions)))
+    if end_date is None:
+        evaluation_dates = list(reversed(get_recent_market_session_dates(lookback_sessions)))
+    else:
+        # get_recent_market_session_dates counts back from the newest bar it can
+        # see, which intraday is today's forming session. Ask for a few extra
+        # sessions so dropping the uncompleted ones still leaves the requested
+        # number of completed ones.
+        completed = [
+            value
+            for value in get_recent_market_session_dates(
+                lookback_sessions + TRACKER_CATCHUP_SESSION_PROBE_MARGIN
+            )
+            if value <= end_date
+        ]
+        evaluation_dates = list(reversed(completed[:lookback_sessions]))
     if not evaluation_dates:
         logging.warning("Could not determine recent market sessions for tracker backfill.")
         return {"dates": [], "watchlists": {}}
