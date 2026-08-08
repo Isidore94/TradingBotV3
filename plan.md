@@ -1711,6 +1711,15 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    complement); heavy models run in the off-hours window only. Any
    synthesis finding that would change live behavior routes through the
    sec 7 ladder like everything else.
+   **Status 2026-08-08: Phase 0 code IMPLEMENTED + GREEN**
+   (`local-ai-phase-0`; 1856 passed, 7 subtests; smoke 7/7): the `local`
+   provider in `ai_summary.py`, `base_url` support in
+   `market_prep/services/ai_service.py`, both config-gated and default-off,
+   with tests asserting the cloud request payloads are byte-identical when the
+   new settings are unset. The Phase 0 exit gate is **not** met: it needs
+   operator steps code cannot perform (install Ollama on the main desk, pull
+   one model per tier, set `ai_local_endpoint_url`) plus the on-box benchmark.
+   Phases 1+ not started.
 
 13c. **Durability & catch-up packet** (trader-directed insertion, 2026-08-08;
    numbered 13c so the existing 14-18 references stay stable):

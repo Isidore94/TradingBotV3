@@ -23,10 +23,11 @@ from PySide6.QtWidgets import (
 
 from ai_credentials import AiCredentialVault
 from ai_summary import (
-    DEFAULT_MODELS,
     SCOPE_LABELS,
     build_evidence_package,
+    default_model_for,
     export_ai_summary,
+    local_provider_enabled,
     render_ai_summary_markdown,
     request_ai_summary,
 )
@@ -71,6 +72,10 @@ class AiSummaryPanel(QFrame):
         self.provider_input = QComboBox()
         self.provider_input.addItem("ChatGPT / OpenAI", "openai")
         self.provider_input.addItem("Claude / Anthropic", "anthropic")
+        if local_provider_enabled():
+            # Offered only once ai_local_endpoint_url is set, so an unconfigured
+            # desk sees exactly the two providers it has always seen.
+            self.provider_input.addItem("Local (on this desk)", "local")
         saved_provider = str(get_local_setting("qt_ai_summary_provider", "openai") or "openai")
         self.provider_input.setCurrentIndex(max(0, self.provider_input.findData(saved_provider)))
 
@@ -213,10 +218,10 @@ class AiSummaryPanel(QFrame):
 
     def _load_model_for_provider(self) -> None:
         provider = self._provider()
-        model = str(
-            get_local_setting(f"qt_ai_summary_model_{provider}", DEFAULT_MODELS[provider])
-            or DEFAULT_MODELS[provider]
-        )
+        # default_model_for resolves the local tier through settings; the two
+        # cloud providers keep their DEFAULT_MODELS constants.
+        fallback = default_model_for(provider)
+        model = str(get_local_setting(f"qt_ai_summary_model_{provider}", fallback) or fallback)
         self.model_input.setText(model)
 
     def _save_nonsecret_settings(self, *_args) -> None:
@@ -308,7 +313,9 @@ class AiSummaryPanel(QFrame):
             self._set_status(f"Credential lookup failed: {exc}")
             return
         api_key = typed_key or saved_key
-        if not api_key:
+        if not api_key and self._provider() != "local":
+            # The local endpoint is on this machine and has no credential;
+            # request_ai_summary supplies its placeholder key.
             self._set_status("No API key. Paste one for this run, save it securely, or set the provider environment variable.")
             return
         try:
@@ -318,7 +325,7 @@ class AiSummaryPanel(QFrame):
             return
         self._last_evidence = evidence
         provider = self._provider()
-        model = self.model_input.text().strip() or DEFAULT_MODELS[provider]
+        model = self.model_input.text().strip() or default_model_for(provider)
         self._save_nonsecret_settings()
         self.generate_button.setEnabled(False)
         self.preview_button.setEnabled(False)

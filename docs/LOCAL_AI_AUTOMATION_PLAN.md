@@ -1,7 +1,9 @@
 # Local AI & Automation Plan
 
 Status: ACCEPTED into plan.md sec 12 as item 13b (trader-directed,
-2026-08-08); implementation not started. Subordinate to `plan.md` — this
+2026-08-08). **Phase 0 code landed on branch `local-ai-phase-0` (2026-08-08);
+its exit gate is blocked on operator steps — see Phase 0 below. Phases 1+ not
+started.** Subordinate to `plan.md` — this
 document never overrides plan.md sections 5-7 or the section 12 execution
 order. Section 6 is the binding implementation spec; phases execute in order,
 each on its own branch.
@@ -174,6 +176,42 @@ foundation 4-6 stand on.
   provider selection.
 - Exit gate: existing AI summary produces sane output against the local
   medium model; no test regressions; cloud path unchanged.
+
+**Status 2026-08-08 — code half DONE, operator half PENDING** (branch
+`local-ai-phase-0`; 1856 passed, 7 subtests; smoke 7/7):
+
+- `scripts/ai_summary.py` gained the `local` provider
+  (`local_endpoint_url` / `local_provider_enabled` / `local_model` /
+  `default_model_for`), posting the OpenAI **chat-completions** shape to
+  `{ai_local_endpoint_url}/chat/completions` with the placeholder key, one
+  retry on invalid JSON, and the same `validate_ai_summary` evidence checking
+  the cloud providers get.
+- `market_prep/services/ai_service.py` gained `base_url` support. One setting
+  (`ai_local_endpoint_url`) flips both call sites; either can be pinned back to
+  a cloud URL through its own `market_prep_ai.base_url`. **Deviation from sec
+  6.2, deliberate:** a base-URL deployment also switches from
+  `client.responses.create` to `client.chat.completions.create`, because Ollama
+  and llama.cpp implement chat-completions and not the Responses API — passing
+  `base_url` alone would have produced a 404 on every call. The cloud path
+  still uses the Responses API unchanged.
+- The A.I. workspace panel lists "Local (on this desk)" only when
+  `ai_local_endpoint_url` is set, so an unconfigured desk sees exactly the two
+  providers it always saw.
+- `tests/test_local_ai_provider.py` asserts the negative case that matters:
+  with the new settings unset, both cloud providers receive a byte-identical
+  URL, JSON payload and headers.
+
+**Operator steps still required before the exit gate can be checked** (code
+cannot do these): install Ollama on the main desk, `ollama pull` one model per
+tier, confirm the server answers on `http://127.0.0.1:11434/v1`, then set
+`ai_local_endpoint_url` in `local_settings.json`. The benchmark table below
+stays empty until it is measured on the 8845HS.
+
+| Tier | Model tag | tok/s | RAM | Measured |
+|---|---|---|---|---|
+| Small | `gemma3:4b` | — | — | not yet |
+| Medium | `gemma3:12b` | — | — | not yet |
+| Large | `gemma3:27b` | — | — | not yet |
 
 ### Phase 1 — Automated AI summary (trader priority #1)
 
