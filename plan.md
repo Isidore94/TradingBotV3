@@ -1721,9 +1721,11 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    `request_ai_summary` run produced a schema-valid, evidence-grounded summary
    (65.3 s on `gemma3:12b`). Two measured findings are recorded in the plan
    doc: the 780M runs through Ollama's **Vulkan** backend and needs
-   `OLLAMA_IGPU_ENABLE=1` (ROCm has no gfx1103 rocblas), and `gemma3:27b` does
-   **not** fit the 17.4 GiB iGPU heap, so the large tier needs a trader pick
-   (smaller quant, 14B-class, or CPU). Nothing before Phase 4 depends on it.
+   `OLLAMA_IGPU_ENABLE=1` (ROCm has no gfx1103 rocblas), and stock
+   `gemma3:27b` does **not** fit the 17.4 GiB iGPU heap. All three tiers are
+   now chosen and verified — small `gemma3:4b`, medium `gemma3:12b`, large
+   `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — with the large tier's
+   revisit triggers recorded against Phase 4's existing two-week gate.
    Phases 1+ not started.
 
 13c. **Durability & catch-up packet** (trader-directed insertion, 2026-08-08;

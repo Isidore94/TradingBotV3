@@ -2,10 +2,9 @@
 
 Status: ACCEPTED into plan.md sec 12 as item 13b (trader-directed,
 2026-08-08). **Phase 0 COMPLETE on branch `local-ai-phase-0` (2026-08-08):
-code landed, Ollama installed and benchmarked on the main desk, and the exit
-gate verified end to end against `gemma3:12b`. The large tier does not fit the
-780M and needs a trader decision — see Phase 0. Phases 1+ not started.**
-Subordinate to `plan.md` — this
+code landed, Ollama installed and benchmarked on the main desk, all three
+tiers chosen and verified, and the exit gate verified end to end. Phases 1+
+not started.** Subordinate to `plan.md` — this
 document never overrides plan.md sections 5-7 or the section 12 execution
 order. Section 6 is the binding implementation spec; phases execute in order,
 each on its own branch.
@@ -216,12 +215,20 @@ cleanly (65.3 s end to end on `gemma3:12b`).
 |---|---|---|---|---|---|---|
 | Small | `gemma3:4b` | 100% iGPU | 2.9 GB | 24.4 | 144.5 | 12.5 s |
 | Medium | `gemma3:12b` | 100% iGPU | 8.1 GB | 8.8 | 94.5 | 16.9 s |
-| Large | `gemma3:27b` | — | 17 GB | **does not load** | — | — |
+| Large | `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` | 100% iGPU | 14 GB | 4.1 | 26.9 | 184.5 s |
+| *(rejected)* | `gemma3:27b` (Q4_K_M, 17 GB) | — | — | **does not load** | — | — |
 
 Method: Ollama's own `eval_count` / `eval_duration` counters (exact token
 counts, nanosecond durations) over a digest-shaped prompt, not wall-clock
 guessing; footprint from `ollama ps`. Reference point for the iGPU's value:
 `gemma3:12b` on CPU only managed 6.6 gen / 37.0 prompt tok/s.
+
+Projected job runtimes from the measured large-tier rates, worst case:
+nightly policy draft (20k in / 3k out) ≈ 12.4 min prefill + 12.2 min
+generation + 3.1 min cold load ≈ **28 min**; weekly retro (30k in / 4k out)
+≈ 18.6 + 16.3 + 3.1 ≈ **38 min**. Against the 13.5-hour off-hours window that
+is ~3.5% utilisation on the worst night, so the window is not a constraint on
+any tier.
 
 #### Two hardware findings that change the sec 2 assumptions
 
@@ -234,18 +241,44 @@ guessing; footprint from `ollama ps`. Reference point for the iGPU's value:
    `HSA_OVERRIDE_GFX_VERSION` hint in Ollama's own log was **not** used: it
    maps gfx1103 onto kernels built for another target, and silently-wrong
    numerics are a bad trade for an evidence pipeline.
-2. **The large tier does not fit.** The Vulkan iGPU heap is 17.4 GiB total /
-   16.5 GiB available. `gemma3:27b` (~15.8 GiB of weights) loads its weights
-   but then fails allocating its ~210 MB compute buffers:
+2. **The stock 27B does not fit; a Q3 quant of it does — RESOLVED.** The
+   Vulkan iGPU heap is 17.4 GiB total / 16.5 GiB available. `gemma3:27b`
+   (Q4_K_M, ~15.8 GiB of weights) loads its weights and then fails allocating
+   its ~210 MB compute buffers:
    `ggml_gallocr_reserve_n_impl: failed to allocate Vulkan0 buffer`. Reducing
-   the context to 2048 did not rescue it. This is marginal, not hopeless.
-   **Open for the trader** (sec 7 register item 3 says model picks are
-   settings, so this is a choice, not a code change): (a) a smaller quant such
-   as `gemma3:27b-it-q3_K_M` (~13 GB) fits the heap; (b) a 14B-class model on
-   GPU; (c) run the large tier on CPU — ~3 tok/s extrapolated, which the
-   plan's own "tokens/sec is irrelevant at 2am" arguably tolerates for a
-   weekly retro. Nothing before Phase 4 needs the large tier, and Phase 4 has
-   its own two-week validation gate.
+   the context to 2048 did not rescue it — a ~210 MB miss.
+
+   Decision (frontier-model review, 2026-08-08): enter Phase 4's two-week gate
+   with **the highest-ceiling candidate that actually loads**, since a model
+   swap is a free settings change and the gate — not speculation about
+   quantization damage — is the real quality arbiter. Parameter count tends to
+   matter more than a modest quant step for judgment-heavy prose, and speed is
+   irrelevant at 2am, so the 14B option's only advantage evaporates.
+
+   Ollama's own library has **no** Q3 build of gemma3:27b (its 27b tags are
+   Q4_K_M 17 GB, QAT 18 GB, Q8_0 30 GB, FP16 55 GB — all too large), so the
+   model is sourced through Ollama's supported Hugging Face route:
+   **`hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M`**, a 12.51 GiB file
+   that leaves ~4 GiB of heap for compute buffers and KV cache. Verified: it
+   loads 100% on the iGPU and produced a schema-valid, fully-cited summary
+   through the real `request_ai_summary` path (6/6 sections, 20 evidence
+   citations, 218.9 s wall including cold load).
+
+   Not chosen, and why: `Q4_K_S` (14.60 GiB) also exists and is a higher
+   quant, but leaves only ~1.9 GiB of margin — below the comfort the Q4_K_M
+   failure argues for. It is the obvious step up if Q3 disappoints in the gate.
+
+   **Revisit triggers:** if the Q3-27B drafts materially lose Phase 4's
+   two-week side-by-side against the cloud model, switch the setting to a
+   14B-class model and rerun the gate; if that loses too, stay on cloud, which
+   the plan already blesses. Independently, retest `gemma3:27b` Q4_K_M if a
+   future Ollama/llama.cpp release improves Vulkan compute-buffer allocation
+   or ROCm gains gfx1103 — it missed by ~210 MB.
+
+   **Operational note for Phase 4:** the large tier's cold load is 184.5 s
+   against an `OLLAMA_KEEP_ALIVE` of 60 s, so a job whose calls are more than
+   a minute apart pays three minutes of reload each time. Large-tier jobs must
+   either batch their calls or pass a longer per-request `keep_alive`.
 
 #### Server configuration applied (sec 2: never hold memory idle)
 
@@ -512,12 +545,12 @@ Additionally:
    open as an ops question: confirm `research_warehouse/config.py` accepts a
    UNC/mapped file-server path for `research_store_dir`, and whether the
    trader wants the DAS lake moved to the file server.
-3. **Model picks — small/medium CONFIRMED, large REOPENED by measurement**
-   (sec 6.1): `gemma3:4b` and `gemma3:12b` both run 100% on the 780M and are
-   confirmed as the small/medium tiers. `gemma3:27b` **does not fit** the
-   17.4 GiB Vulkan heap (Phase 0 finding 2). The large tier needs a trader
-   pick between a smaller quant, a 14B-class model, or CPU execution; it is a
-   settings change either way and nothing before Phase 4 depends on it.
+3. **Model picks — RESOLVED BY MEASUREMENT 2026-08-08** (sec 6.1):
+   `gemma3:4b` (small) and `gemma3:12b` (medium) both run 100% on the 780M.
+   Stock `gemma3:27b` does not fit the 17.4 GiB Vulkan heap, so the large tier
+   is `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — verified loading
+   and producing schema-valid output. All three are settings, and Phase 0
+   finding 2 records the revisit triggers.
 4. **Off-hours window edges — RESOLVED BY DEFAULT** (sec 6.1): 18:30–08:00
    ET, weekends open, holidays treated as weekdays; trader-adjustable
    settings, not code.
