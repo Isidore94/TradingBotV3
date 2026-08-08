@@ -196,3 +196,27 @@ evidence floor are both downstream of uptime.
   `tests/test_ti_chain_backfill.py`, `tests/test_breadth_backfill.py`, plus
   the 2.1 characterization test proving catch-up output ≡ after-close output
   for the same data vintage.
+
+## 7. Post-review amendments (checkpoint review 2026-08-08 — binding before merge)
+
+Steps 1-4 are built on branch `durability-catchup` (see
+`docs/CHECKPOINT_REVIEW_2026-08-08.md` for the full ruling). Two amendments
+are required on the branch before it merges:
+
+1. **Task start time (amends 2.2):** the desk is US Pacific and the open is
+   06:30 PT, so a 07:00 *local* start misses the first 30 minutes of every
+   session and idles ~4 hours past the close. Start ≈ 06:00 PT and end the
+   repetition span near the close. Re-register once after merge.
+2. **Guard hardening (amends 2.2):** the single-instance guard matches
+   python processes running `launch_gui.py` and is now load-bearing ~40×/day.
+   A desk launched any other way (frozen exe, rename) would not match, and
+   the repetition would start a second live desk — double IB connections,
+   duplicate writers. Run the fire-while-running drill (task fires while the
+   desk is up → "nothing to do"), and harden the guard onto the existing
+   writer-lock machinery rather than a process-name regex.
+
+Also confirmed at review: the sweeps (2.3/2.4) issue historical requests on
+the shared IB client at close/startup — the restart drill must observe a
+sweep coinciding with a scan without tripping IB pacing. The 40-session
+floor counting declaration ruled at review now lives in
+`docs/REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md`.

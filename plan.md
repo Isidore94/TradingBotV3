@@ -1758,6 +1758,18 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    sessions lost their HEALTHY regime audit to uptime, not code. Should
    land before or alongside 13b Phases 1+ — the digest ledger and the
    40-session evidence floor are both downstream of uptime.
+   **Checkpoint review 2026-08-08** (`docs/CHECKPOINT_REVIEW_2026-08-08.md`):
+   13c steps 1-4 and 13b Phases 0-1(partial) are built on branches A
+   (`durability-catchup`), B (`local-ai-phase-0`), C (`local-ai-phase-1`) —
+   all unmerged. Verdict PROCEED WITH CONDITIONS; merge order A → B → C with
+   per-branch evidence conditions, two required Branch A amendments (06:00 PT
+   task start — 07:00 local misses the first 30 min of the session on a
+   Pacific desk; single-instance guard hardening onto the writer lock), the
+   40-session floor counting declaration (now recorded in the Regime Phase 1
+   runbook), and a file-scoped ask-first rule for detector-hosting files (now
+   in CLAUDE.md). Phase 2 digests, Phase 4 policy drafting, and journal
+   enrichment must NOT start until A-C are merged and the scheduler has a
+   quiet unattended week.
 
 ### Then — after correctness and authoritative data paths
 
