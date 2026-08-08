@@ -8118,6 +8118,50 @@ class BounceBot(EWrapper, EClient):
         self._vold_recorder.observe(bars, now=get_market_local_now())
         return True
 
+    def _backfill_breadth_bars_if_due(self, now):
+        """Repair a session's missing completed breadth bars (durability 2.4).
+
+        Runs at the close and, when the close was missed, on the next startup -
+        inside the recorder's own thread, so no new timer or owner appears. It
+        reuses the same qualified-contract historical path the live poll uses;
+        this is a handful of requests, not a scan.
+        """
+        trigger = self._vold_recorder.backfill_trigger(now=now)
+        if not trigger:
+            return
+        if self._vold_contract is None and not self._qualify_vold_contract():
+            # No qualified contract means nothing to fetch; record_unavailable
+            # has already written the honest marker.
+            return
+        session_date = self._vold_recorder.session_date
+        current_session = get_market_session_window(now).market_date.isoformat()
+        # A "1 D" request ends at this moment, so an earlier session needs a
+        # wider window; the recorder then keeps only that session's bars.
+        duration = "1 D" if session_date == current_session else "2 D"
+        try:
+            bars = self._request_historical_contract_bars(
+                self._vold_contract,
+                duration=duration,
+            )
+        except Exception as exc:
+            logging.warning("$VOLD gap fill could not fetch %s bars: %s", duration, exc)
+            bars = []
+        summary = self._vold_recorder.backfill_session_bars(
+            bars,
+            session_date=session_date,
+            now=now,
+            trigger=trigger,
+        )
+        if summary.get("ran"):
+            logging.info(
+                "$VOLD gap fill (%s) for %s: +%s bar(s), %s gap row(s), %s slot(s) still missing.",
+                trigger,
+                summary.get("session_date"),
+                summary.get("bars_added"),
+                summary.get("gap_rows_added"),
+                summary.get("still_missing"),
+            )
+
     def _run_vold_recorder(self):
         """Own the point-in-time breadth feed independently of scan cadence."""
         retry_seconds = 10.0
@@ -8127,6 +8171,12 @@ class BounceBot(EWrapper, EClient):
                 continue
             now = get_market_local_now()
             session = get_market_session_window(now)
+            try:
+                self._backfill_breadth_bars_if_due(now)
+            except Exception:
+                logging.exception(
+                    "$VOLD gap fill failed; the session's missing bars stay missing."
+                )
             try:
                 self._poll_vold_once()
             except Exception:

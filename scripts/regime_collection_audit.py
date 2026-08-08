@@ -298,6 +298,9 @@ def audit_regime_collection(
             "completed_bar_count": len(breadth_bars),
             "expected_completed_bar_count": expected_breadth_bars,
             "explicit_missing_bar_count": explicit_missing_bars,
+            "backfilled_bar_count": sum(
+                row_capture_mode(row) == CAPTURE_MODE_BACKFILL for row in breadth_bars
+            ),
             "data_gap_count": len(breadth_gaps),
             "unavailable_count": len(unavailable),
             "duplicate_bar_ends": duplicate_breadth_bars,
@@ -340,7 +343,8 @@ def format_audit(report: Mapping[str, Any]) -> str:
         (
             "Breadth: "
             f"{breadth['semantic_status']}, bars={breadth['completed_bar_count']}/"
-            f"{breadth['expected_completed_bar_count']}, gaps={breadth['data_gap_count']}"
+            f"{breadth['expected_completed_bar_count']}, gaps={breadth['data_gap_count']}, "
+            f"backfilled={breadth['backfilled_bar_count']}"
         ),
     ]
     if report["blockers"]:

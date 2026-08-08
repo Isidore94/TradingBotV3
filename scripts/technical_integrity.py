@@ -24,6 +24,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from diagnostics.artifact_io import (
+    CAPTURE_MODE_BACKFILL,
+    CAPTURE_MODE_LIVE,
+    row_capture_mode,
+)
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import get_diagnostics_dir, get_local_setting
 
@@ -43,22 +48,15 @@ FROZEN_SNAPSHOT_GRACE_MINUTES = 5
 # Provenance for Tier B recovery (docs/DURABILITY_CATCHUP_PLAN.md sec 2.3).
 # A follow-up window is a pure function of completed M5 bars, so it may be
 # recomputed after an outage -- but research must be able to separate what the
-# live process observed from what was reconstructed afterwards, forever.
-# ``capture_mode`` is an *additive* field: rows written before this change
-# carry none, and every consumer must read its absence as "live".
-CAPTURE_MODE_LIVE = "live"
-CAPTURE_MODE_BACKFILL = "backfill"
+# live process observed from what was reconstructed afterwards, forever. The
+# ``capture_mode`` vocabulary is shared with every other evidence ledger, so it
+# lives in artifact_io; these names are re-exported for this module's readers.
 TI_CHAIN_BACKFILL_SETTING_KEY = "ti_chain_backfill"
 
 
 #: Stamped by ``_append_event`` when a row is written, so they describe that
 #: append and never the state a later event should inherit.
 _APPEND_TIME_PROVENANCE_FIELDS = frozenset({"as_of", "written_at"})
-
-
-def row_capture_mode(row: Mapping[str, Any]) -> str:
-    """Capture mode of one ledger row; absent means the row is live."""
-    return str(row.get("capture_mode") or CAPTURE_MODE_LIVE)
 
 
 def ti_chain_backfill_enabled() -> bool:
