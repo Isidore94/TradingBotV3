@@ -307,6 +307,59 @@ unattended overnight jobs.
 - Exit gate: a week of mornings where the summary and briefs are waiting
   before pre-market prep with zero manual action.
 
+**Status 2026-08-08 — scheduled summary LANDED, per-ticker briefs NOT BUILT**
+(branch `local-ai-phase-1`; 1889 passed, 7 subtests; smoke 7/7). The exit gate
+is **not** met: it needs a week of unattended mornings, which is elapsed time.
+
+Built:
+
+- `scripts/ai_jobs/` — headless package (core requirements only, no Qt):
+  `store.py` (location, refusal, availability probe), `window.py` (the two
+  gates), `ledger.py` (append-only rows + idempotency authority),
+  `runner.py` (named slots, skip-don't-pile-up), `briefs.py` (the summary job).
+- `scripts/run_ai_jobs.py` — the standalone program Task Scheduler boots and
+  that exits. Exit codes: 0 nothing-to-do-or-succeeded, 1 a job failed, 2 the
+  store was unreachable so nothing ran. `--status`, `--slot`, `--force`.
+- `scripts/register_ai_jobs_task.ps1` — registers **TradingBotV3 AI Jobs**.
+
+Verified end to end on the real desk: 18 live evidence sources, 90.4 s on
+`gemma3:12b`, four files published to the NAS, exit 0, one `ok` ledger row.
+
+Still to build for Phase 1: per-ticker briefs for the Focus list/watchlists,
+and the small morning file published to the Drive home folder.
+
+#### Architecture decision: separate process, not GUI-hosted
+
+The batch layer is its own program rather than a thread inside the Trading
+Desk. Four reasons, and the first is decisive:
+
+1. **The lifecycles are opposed.** The GUI is meant to be up during market
+   hours; this layer must not run during market hours.
+2. **The durability packet actively fights GUI hosting.** The 07:00 task
+   relaunches the GUI every 15 minutes through the session, which would orphan
+   a long job living inside it.
+3. **Crash isolation.** A 14 GB model load that goes wrong must not be able to
+   take down the window the trader watches charts in.
+4. **It makes the sec 2 hard rule a scheduler fact**, not only a code check.
+
+The GUI's role is a read-only view over `ai_job_ledger.jsonl` — visibility,
+never ownership, so "one component owns each timer/job" still holds: the AI
+runner owns AI jobs, the desk owns trading jobs, the trees are separate, and
+the AI layer touches no IB client at all.
+
+#### Scheduling shape: repeat, don't fire once
+
+The task repeats every 30 minutes across the window rather than firing once,
+and the runner asks the ledger whether each job already completed for the
+session date. A healthy night no-ops on every repeat; a night where the NAS
+was asleep or the endpoint was down at 01:00 self-heals at 01:30. This is the
+durability packet's Tier A lesson applied to the batch layer.
+`MultipleInstances IgnoreNew` is skip-don't-pile-up in scheduler form — two
+runners would race the same ledger and the same endpoint.
+
+The task runs **as the logged-on user, not SYSTEM**: SYSTEM has no network
+credentials and could not reach the UNC store at all.
+
 ### Phase 2 — Daily Digest Ledger (foundation)
 
 - Deterministic extraction layer (code, no LLM): pull the day's facts from
@@ -551,9 +604,30 @@ Additionally:
    is `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — verified loading
    and producing schema-valid output. All three are settings, and Phase 0
    finding 2 records the revisit triggers.
-4. **Off-hours window edges — RESOLVED BY DEFAULT** (sec 6.1): 18:30–08:00
-   ET, weekends open, holidays treated as weekdays; trader-adjustable
-   settings, not code.
+4. **Off-hours window edges — SET BY THE TRADER 2026-08-08**: **01:00–09:00
+   ET**, which is the 22:00–06:00 the trader asked for on this Pacific desk
+   (Pacific is ET−3 in both DST and standard time, so the mapping is stable
+   year-round). Weekends open, holidays treated as weekdays. The defaults in
+   sec 6.1 remain 18:30–08:00 for an unconfigured machine.
+
+   Noted and accepted: 09:00 ET is 30 minutes before the opening bell. The
+   trader was shown this and reaffirmed the choice. It is bounded rather than
+   argued: the market-session block refuses the session itself regardless of
+   the window, `launch_allowed(reserve_minutes=...)` refuses to *start* a job
+   that cannot finish (the summary slot reserves 20 minutes), and the worst
+   measured single model call is ~4 minutes, so the residual exposure is one
+   in-flight call finishing gracefully well before 09:30.
+
+4b. **AI store location — SET BY THE TRADER 2026-08-08**:
+   `\\MINI-PC\Trading Bot Data\ai_store` on the NAS. Verified reachable and
+   writable, layout bootstrapped, atomic publish (temp → `os.replace`) proven
+   on the share. Measured: **19.8 s first write** while the NAS spins up, then
+   ~40 ms per fsync'd append and 55 MiB/s write / 78 MiB/s read. Placed in a
+   dedicated `ai_store` subfolder rather than the share root, which already
+   holds `data/`, `logs/` and `output/` — the AI store's own `logs/` would
+   otherwise have collided with an existing directory. The live operational
+   home folder is `C:\TradingBotData`, so the sec 3.3 "never inside the synced
+   home folder" rule is satisfied.
 5. **Digest schema v1 — DRAFTED** (sec 6.4); trader sign-off on the field
    list is still required before the first ledger write (append-only from
    then on; later fields extend, never mutate).
