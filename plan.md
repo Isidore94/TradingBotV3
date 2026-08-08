@@ -1716,9 +1716,14 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    provider in `ai_summary.py`, `base_url` support in
    `market_prep/services/ai_service.py`, both config-gated and default-off,
    with tests asserting the cloud request payloads are byte-identical when the
-   new settings are unset. The Phase 0 exit gate is **not** met: it needs
-   operator steps code cannot perform (install Ollama on the main desk, pull
-   one model per tier, set `ai_local_endpoint_url`) plus the on-box benchmark.
+   new settings are unset. **Phase 0 exit gate MET 2026-08-08**: Ollama 0.32.6
+   installed on the main desk, all three tiers pulled, and a real local
+   `request_ai_summary` run produced a schema-valid, evidence-grounded summary
+   (65.3 s on `gemma3:12b`). Two measured findings are recorded in the plan
+   doc: the 780M runs through Ollama's **Vulkan** backend and needs
+   `OLLAMA_IGPU_ENABLE=1` (ROCm has no gfx1103 rocblas), and `gemma3:27b` does
+   **not** fit the 17.4 GiB iGPU heap, so the large tier needs a trader pick
+   (smaller quant, 14B-class, or CPU). Nothing before Phase 4 depends on it.
    Phases 1+ not started.
 
 13c. **Durability & catch-up packet** (trader-directed insertion, 2026-08-08;

@@ -224,6 +224,48 @@ class LocalRequestTests(unittest.TestCase):
         # No credential exists for a localhost server; the placeholder is not a secret.
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer local")
 
+    def test_local_request_states_the_required_shape_in_the_prompt(self):
+        """Regression: gemma3:12b answered with a bare {"summary": ...} object
+        until the schema was spelled out. The cloud providers learn the shape
+        from their structured-output contracts; a local server that ignores
+        response_format has nothing else to go on."""
+        import ai_summary
+
+        calls = []
+
+        with _settings(ai_local_endpoint_url=ENDPOINT):
+            ai_summary.request_ai_summary(
+                provider="local",
+                model="gemma3:12b",
+                api_key="",
+                evidence=self.evidence,
+                post=lambda url, **kwargs: (
+                    calls.append(kwargs) or _chat_response(self.summary_text)
+                ),
+            )
+
+        user_message = calls[0]["json"]["messages"][1]["content"]
+        for key in ("executive_summary", *ai_summary.AI_SUMMARY_SECTIONS):
+            self.assertIn(key, user_message)
+        self.assertIn("statement", user_message)
+        self.assertIn("evidence_refs", user_message)
+        # Best-effort structured output on top of the prompt, never relied on.
+        response_format = calls[0]["json"]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertEqual(
+            response_format["json_schema"]["schema"], ai_summary.AI_SUMMARY_JSON_SCHEMA
+        )
+
+    def test_the_shape_hint_is_local_only(self):
+        """The shared prompt the cloud providers get must not have grown one."""
+        import ai_summary
+
+        shared = ai_summary._user_prompt(self.evidence)
+        local = ai_summary._local_user_prompt(self.evidence)
+        self.assertTrue(local.startswith(shared))
+        self.assertNotIn("REQUIRED OUTPUT SHAPE", shared)
+        self.assertIn("REQUIRED OUTPUT SHAPE", local)
+
     def test_local_output_is_validated_against_the_same_schema(self):
         import ai_summary
 

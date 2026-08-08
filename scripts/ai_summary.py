@@ -477,6 +477,30 @@ def _extract_openai_text(payload: Mapping[str, Any]) -> str:
     return "".join(chunks).strip()
 
 
+def _local_user_prompt(evidence: Mapping[str, Any]) -> str:
+    """The shared prompt plus an explicit statement of the required shape.
+
+    The cloud providers learn the schema from their structured-output contracts
+    (``text.format`` / ``output_config.format``), so the shared prompt never had
+    to describe it. A local server that ignores ``response_format`` has nothing
+    else to go on -- gemma3:12b answered with a bare ``{"summary": ...}`` object
+    until the shape was spelled out here. Local-branch only, so the cloud
+    request payloads stay byte-identical.
+    """
+    return (
+        _user_prompt(evidence)
+        + "\n\nREQUIRED OUTPUT SHAPE — return exactly this JSON object and nothing else "
+        "(no prose, no markdown fence):\n"
+        + json.dumps(AI_SUMMARY_JSON_SCHEMA, sort_keys=True)
+        + "\n\nEvery one of these keys must be present: "
+        + ", ".join(["executive_summary", *AI_SUMMARY_SECTIONS])
+        + ". Each section is an array (possibly empty) of objects with exactly "
+        "the keys statement, evidence_refs, confidence. confidence is one of "
+        "high, medium, low. Each evidence_refs entry must be a source_id copied "
+        "verbatim from the evidence package above."
+    )
+
+
 def _extract_chat_completion_text(payload: Mapping[str, Any]) -> str:
     """Text from an OpenAI-compatible chat-completions body."""
     choices = payload.get("choices")
@@ -590,13 +614,25 @@ def _request_local_summary(
         "model": model,
         "messages": [
             {"role": "system", "content": _system_instruction()},
-            {"role": "user", "content": _user_prompt(evidence)},
+            {"role": "user", "content": _local_user_prompt(evidence)},
         ],
         "max_tokens": 3500,
         # Advisory output that gets re-read and audited should not wander
         # between runs over the same evidence.
         "temperature": 0,
         "stream": False,
+        # Best effort: Ollama and llama.cpp honour this, but the plan is
+        # explicit that we must not *rely* on it -- the returned text is
+        # validated locally either way, which is what actually enforces the
+        # schema.
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "tradingbot_ai_summary",
+                "strict": True,
+                "schema": AI_SUMMARY_JSON_SCHEMA,
+            },
+        },
     }
     last_error: Exception | None = None
     for attempt in range(LOCAL_JSON_RETRIES + 1):
