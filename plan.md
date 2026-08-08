@@ -1732,6 +1732,12 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    sessions lost their HEALTHY regime audit to uptime, not code. Should
    land before or alongside 13b Phases 1+ — the digest ledger and the
    40-session evidence floor are both downstream of uptime.
+   **Status 2026-08-08: build-order steps 1-4 IMPLEMENTED + GREEN**
+   (`durability-catchup`; 1876 passed, 5 subtests; smoke 7/7). Step 5, the
+   flagged intraday preview lane, is deliberately not built — it ships only on
+   trader request. Not `LIVE_VALIDATED`: the sec 5 exit gate's mid-session
+   restart drill (audit HEALTHY with a nonzero backfill count) still needs a
+   live session, and the 07:00 task must be re-registered once by the operator.
 
 ### Then — after correctness and authoritative data paths
 
