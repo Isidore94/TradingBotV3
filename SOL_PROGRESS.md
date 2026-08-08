@@ -7,6 +7,28 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
+- Branch `main` (2026-08-08, merged from `durability-catchup`). Gate:
+  **1876 passed, 5 subtests** (adds `tests/test_tracker_staleness_catchup.py`,
+  `tests/test_ti_chain_backfill.py`, `tests/test_breadth_backfill.py`); smoke
+  **7/7**.
+- plan.md item **13c (durability & catch-up)** build-order steps 1-4 landed:
+  15-minute repetition on the 07:00 launch task; the Master AVWAP tracker
+  staleness override (reuses `backfill_setup_tracker_from_recent_sessions`,
+  capped at the last *completed* session, pinned by a byte-identical
+  characterization test); the Technical Integrity follow-up chain sweeper; and
+  the breadth-ledger bar gap fill. Tier B rows carry
+  `capture_mode: "backfill"` (absence means live) and
+  `regime_collection_audit.py` reports live vs backfilled counts separately.
+  Tier C (frozen snapshots, opening-range baselines, never-started
+  predictions) is untouched. Step 5, the flagged preview lane, was not built.
+- **Outstanding for 13c:** (1) operator re-runs
+  `scripts/register_0700_autostart.ps1` once — the task was not registered on
+  this desk at all; (2) the mid-session restart drill (audit HEALTHY with a
+  nonzero backfill count) is the remaining half of the exit gate, so 13c is
+  not `LIVE_VALIDATED`.
+
+## Previous checkpoint (main, 2026-08-03 evening)
+
 - Branch `main` (2026-08-03 evening, merged from
   `ultimate-setup-database-plan`). Gate: **1814 passed, 5 subtests** (adds
   `tests/test_warehouse_config.py`); smoke **7/7**.

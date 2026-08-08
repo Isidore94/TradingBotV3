@@ -1,11 +1,14 @@
 # Durability & Catch-up Plan
 
 Status: ACCEPTED into plan.md sec 12 as item 13c (trader-directed,
-2026-08-08); implementation not started. Subordinate to plan.md — never
-overrides secs 5-7 or the sec 12 order. Motivating evidence: the week of
-2026-08-03 — desk never ran Monday, mid-session outage Thursday, late start
-Friday — cost 3 of 4 regime-collection sessions their HEALTHY audit and left
-Master AVWAP setups stale for a full day (see sec 2.1).
+2026-08-08). **Steps 1-4 of sec 5 IMPLEMENTED + GREEN on branch
+`durability-catchup` (2026-08-08); step 5 (preview lane) deliberately not
+built.** Not yet `LIVE_VALIDATED`: the mid-session restart drill in the sec 5
+exit gate still needs a live session. Subordinate to plan.md — never overrides
+secs 5-7 or the sec 12 order. Motivating evidence: the week of 2026-08-03 —
+desk never ran Monday, mid-session outage Thursday, late start Friday — cost
+3 of 4 regime-collection sessions their HEALTHY audit and left Master AVWAP
+setups stale for a full day (see sec 2.1).
 
 ## 1. Design principle: three tiers of durability
 
@@ -131,6 +134,12 @@ the only case where a missed scan has next-day consequences.
 Defaults are on because these are recovery paths with explicit provenance,
 not behavior changes; the preview lane is the only opt-in.
 
+As built (2026-08-08), all three shipped keys read through
+`get_local_setting` and are honoured at the entry point of their own recovery
+path, so setting any of them to `false` in `local_settings.json` restores the
+pre-packet behaviour exactly. `tracker_intraday_preview` has no code yet
+because step 5 was not built.
+
 ## 4. Invariant compliance
 
 | Invariant | Compliance |
@@ -146,16 +155,34 @@ not behavior changes; the preview lane is the only opt-in.
 ## 5. Build order (one branch, `durability-catchup`, small commits)
 
 1. **Task repetition** (2.2) — script change + re-register; biggest
-   evidence-per-effort win, zero invariant surface.
+   evidence-per-effort win, zero invariant surface. **DONE** —
+   `scripts/register_0700_autostart.ps1` (weekly trigger + grafted
+   `.Repetition`, 15 min / 10 h). Operator step: re-run the script once to
+   re-register; it was not registered on this desk at all as of 2026-08-08.
 2. **Staleness override** (2.1) — the reported defect; characterization test
-   first, then the gate change.
-3. **Chain sweeper + audit column** (2.3).
-4. **Breadth backfill** (2.4).
-5. **Preview lane** (2.1, flagged off) — only on trader request.
+   first, then the gate change. **DONE** — `compute_setup_tracker_catchup_plan`
+   + `_maybe_run_setup_tracker_catchup` invoking the existing
+   `backfill_setup_tracker_from_recent_sessions(..., end_date=)`;
+   `tests/test_tracker_staleness_catchup.py`.
+3. **Chain sweeper + audit column** (2.3). **DONE** —
+   `TechnicalIntegrityMonitor.sweep_incomplete_followups`, driven from the
+   existing technical-evidence clock; `capture_mode` on every follow-up row;
+   live/backfilled counts in `regime_collection_audit.py`;
+   `tests/test_ti_chain_backfill.py`. The restart characterization test also
+   uncovered and fixed a real defect: a pending level test recovered from the
+   ledger inherited the *started* row's `as_of`, so a restart between touch and
+   resolution stamped the resolution with the touch time.
+4. **Breadth backfill** (2.4). **DONE** —
+   `VoldSessionRecorder.backfill_session_bars` through the qualified-contract
+   historical path, driven from the recorder's own thread;
+   `tests/test_breadth_backfill.py`.
+5. **Preview lane** (2.1, flagged off) — only on trader request. **NOT BUILT.**
 
 Exit gate per step: full suite green + smoke 7/7; for 2.3/2.4 additionally a
 session where `regime_collection_audit.py` reports HEALTHY with a nonzero
-backfill count after a deliberate mid-session restart drill. Relationship to
+backfill count after a deliberate mid-session restart drill. Steps 1-4 met the
+suite/smoke half on 2026-08-08 (**1876 passed, 5 subtests; smoke 7/7**); the
+restart drill is the outstanding live half. Relationship to
 item 13b (Local AI): independent code paths, but this packet should land
 **before or alongside** 13b Phases 1+ — the digest ledger and the 40-session
 evidence floor are both downstream of uptime.
@@ -190,6 +217,10 @@ evidence floor are both downstream of uptime.
   map in `technical_integrity_state.json`); audit changes go in
   `scripts/regime_collection_audit.py`. `capture_mode` is an **additive**
   schema field — existing consumers must treat its absence as `"live"`.
+  As built, the vocabulary (`CAPTURE_MODE_LIVE`, `CAPTURE_MODE_BACKFILL`,
+  `row_capture_mode`) lives in `scripts/diagnostics/artifact_io.py` beside the
+  other shared evidence-writing primitives, because two ledgers now use it;
+  `technical_integrity` re-exports the names.
 - **Breadth backfill (2.4):** `scripts/vold_recorder.py` already qualifies
   the proxy contract via historical M5 fetch; reuse that path for gap fill.
 - Tests: `tests/test_tracker_staleness_catchup.py`,

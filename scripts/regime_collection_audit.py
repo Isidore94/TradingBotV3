@@ -17,8 +17,10 @@ from typing import Any, Iterable, Mapping
 from diagnostics.artifact_io import read_jsonl
 from market_session import get_market_session_window, normalize_market_local_datetime
 from technical_integrity import (
+    CAPTURE_MODE_BACKFILL,
     COLLECTION_CODE_VERSION,
     FOLLOWUP_HORIZONS_MINUTES,
+    row_capture_mode,
     technical_integrity_events_path,
 )
 from vold_recorder import vold_ledger_path
@@ -104,6 +106,9 @@ def audit_regime_collection(
     start_by_source = {
         str(row.get("source_resolution_id") or ""): row for row in starts
     }
+    backfilled_followups = sum(
+        row_capture_mode(row) == CAPTURE_MODE_BACKFILL for row in followups
+    )
     horizons_by_source: dict[str, set[int]] = {}
     for row in followups:
         source = str(row.get("source_resolution_id") or "")
@@ -263,6 +268,12 @@ def audit_regime_collection(
             },
             "truncated_count": sum(bool(row.get("truncated")) for row in followups),
             "data_gap_count": sum(bool(row.get("data_gap")) for row in followups),
+            # A HEALTHY-with-backfill session is not the same evidence as a
+            # fully-live one. What the promotion study is willing to count
+            # toward its 40-session floor is declared in the study, not here;
+            # the audit's job is only to keep the two distinguishable.
+            "backfilled_count": backfilled_followups,
+            "live_count": len(followups) - backfilled_followups,
             "missing_tracking_starts": missing_starts,
             "incomplete_chains": incomplete_followups,
             "duplicate_event_ids": duplicate_followup_ids,
@@ -287,6 +298,9 @@ def audit_regime_collection(
             "completed_bar_count": len(breadth_bars),
             "expected_completed_bar_count": expected_breadth_bars,
             "explicit_missing_bar_count": explicit_missing_bars,
+            "backfilled_bar_count": sum(
+                row_capture_mode(row) == CAPTURE_MODE_BACKFILL for row in breadth_bars
+            ),
             "data_gap_count": len(breadth_gaps),
             "unavailable_count": len(unavailable),
             "duplicate_bar_ends": duplicate_breadth_bars,
@@ -318,7 +332,8 @@ def format_audit(report: Mapping[str, Any]) -> str:
             f"{followups['tracking_start_count']} started, "
             f"{followups['followup_event_count']} windows, "
             f"horizons={followups['horizon_counts']}, "
-            f"truncated={followups['truncated_count']}, gaps={followups['data_gap_count']}"
+            f"truncated={followups['truncated_count']}, gaps={followups['data_gap_count']}, "
+            f"live={followups['live_count']}, backfilled={followups['backfilled_count']}"
         ),
         (
             "Snapshots: "
@@ -328,7 +343,8 @@ def format_audit(report: Mapping[str, Any]) -> str:
         (
             "Breadth: "
             f"{breadth['semantic_status']}, bars={breadth['completed_bar_count']}/"
-            f"{breadth['expected_completed_bar_count']}, gaps={breadth['data_gap_count']}"
+            f"{breadth['expected_completed_bar_count']}, gaps={breadth['data_gap_count']}, "
+            f"backfilled={breadth['backfilled_bar_count']}"
         ),
     ]
     if report["blockers"]:

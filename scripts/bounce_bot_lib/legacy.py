@@ -8118,6 +8118,50 @@ class BounceBot(EWrapper, EClient):
         self._vold_recorder.observe(bars, now=get_market_local_now())
         return True
 
+    def _backfill_breadth_bars_if_due(self, now):
+        """Repair a session's missing completed breadth bars (durability 2.4).
+
+        Runs at the close and, when the close was missed, on the next startup -
+        inside the recorder's own thread, so no new timer or owner appears. It
+        reuses the same qualified-contract historical path the live poll uses;
+        this is a handful of requests, not a scan.
+        """
+        trigger = self._vold_recorder.backfill_trigger(now=now)
+        if not trigger:
+            return
+        if self._vold_contract is None and not self._qualify_vold_contract():
+            # No qualified contract means nothing to fetch; record_unavailable
+            # has already written the honest marker.
+            return
+        session_date = self._vold_recorder.session_date
+        current_session = get_market_session_window(now).market_date.isoformat()
+        # A "1 D" request ends at this moment, so an earlier session needs a
+        # wider window; the recorder then keeps only that session's bars.
+        duration = "1 D" if session_date == current_session else "2 D"
+        try:
+            bars = self._request_historical_contract_bars(
+                self._vold_contract,
+                duration=duration,
+            )
+        except Exception as exc:
+            logging.warning("$VOLD gap fill could not fetch %s bars: %s", duration, exc)
+            bars = []
+        summary = self._vold_recorder.backfill_session_bars(
+            bars,
+            session_date=session_date,
+            now=now,
+            trigger=trigger,
+        )
+        if summary.get("ran"):
+            logging.info(
+                "$VOLD gap fill (%s) for %s: +%s bar(s), %s gap row(s), %s slot(s) still missing.",
+                trigger,
+                summary.get("session_date"),
+                summary.get("bars_added"),
+                summary.get("gap_rows_added"),
+                summary.get("still_missing"),
+            )
+
     def _run_vold_recorder(self):
         """Own the point-in-time breadth feed independently of scan cadence."""
         retry_seconds = 10.0
@@ -8127,6 +8171,12 @@ class BounceBot(EWrapper, EClient):
                 continue
             now = get_market_local_now()
             session = get_market_session_window(now)
+            try:
+                self._backfill_breadth_bars_if_due(now)
+            except Exception:
+                logging.exception(
+                    "$VOLD gap fill failed; the session's missing bars stay missing."
+                )
             try:
                 self._poll_vold_once()
             except Exception:
@@ -8198,9 +8248,58 @@ class BounceBot(EWrapper, EClient):
                 logging.exception(
                     "Technical frozen-snapshot clock failed; this capture window is unhealthy."
                 )
+            try:
+                self._sweep_technical_followup_chains(monitor, now)
+            except Exception:
+                logging.exception(
+                    "Technical follow-up chain sweep failed; chains stay incomplete."
+                )
             session = get_market_session_window(now)
             wait_seconds = 15.0 if session.open_local <= now <= session.close_local else 60.0
             self._stop_event.wait(wait_seconds)
+
+    def _sweep_technical_followup_chains(self, monitor, now):
+        """Complete +30/60/90 windows an outage left hanging (durability 2.3).
+
+        Runs at the close and, when the close was missed entirely, on the next
+        startup - the evidence clock is the component that already owns this
+        capture, so no new timer or thread appears. Recomputed rows are marked
+        ``capture_mode: "backfill"``; symbols whose bars cannot be fetched keep
+        the existing explicit ``data_gap`` rows.
+        """
+        trigger = monitor.followup_sweep_trigger(now=now)
+        if not trigger:
+            return
+        if not self.connection_status:
+            # Without IB there is nothing to fetch, and finalizing every chain
+            # as a data gap would destroy recoverable evidence. Wait for the
+            # connection instead: the marker is only set once a sweep runs.
+            logging.debug("Follow-up chain sweep deferred: IB is not connected.")
+            return
+        current_session = get_market_session_window(now).market_date.isoformat()
+
+        def _fetch(symbol, target_session):
+            # A "1 D" request ends at this moment, so an earlier session needs
+            # a wider window; the monitor then keeps only that session's bars.
+            duration = "1 D" if target_session == current_session else "2 D"
+            return self.request_historical_bars(symbol, duration, "5 mins", timeout=12.0)
+
+        summary = monitor.sweep_incomplete_followups(
+            _fetch,
+            now=now,
+            trigger=trigger,
+            reason=f"follow-up chain sweep ({trigger})",
+        )
+        if summary.get("ran"):
+            logging.info(
+                "Follow-up chain sweep (%s) for %s: %s row(s) backfilled across %s symbol(s); "
+                "no completed bars for %s.",
+                trigger,
+                summary.get("session_date"),
+                summary.get("events"),
+                len(summary.get("symbols") or []),
+                ", ".join(summary.get("data_gap_symbols") or []) or "none",
+            )
 
     def _refresh_orphaned_technical_followups(self, active_symbols):
         """Complete windows for names no longer owned by the scan universe."""
