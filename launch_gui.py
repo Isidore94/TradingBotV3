@@ -7,7 +7,15 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
+# Frozen builds must NOT do this. ROOT_DIR is sys._MEIPASS there, and
+# PyInstaller's importer claims any path under _MEIPASS — including a
+# subdirectory that does not exist. Inserting <_MEIPASS>/scripts makes it
+# resolve the first-party packages to that phantom location, so `bounce_bot_lib`
+# imports with __path__ pointing at <_MEIPASS>/scripts/bounce_bot_lib and every
+# submodule (learning, legacy, tier_flip, ...) then fails to import. The bundle
+# already exposes scripts/ contents as top-level modules, so the path is only
+# ever needed when running from a source checkout.
+if not getattr(sys, "frozen", False) and str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 # faulthandler keeps a borrowed reference to this handle; a module global
