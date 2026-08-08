@@ -8198,9 +8198,58 @@ class BounceBot(EWrapper, EClient):
                 logging.exception(
                     "Technical frozen-snapshot clock failed; this capture window is unhealthy."
                 )
+            try:
+                self._sweep_technical_followup_chains(monitor, now)
+            except Exception:
+                logging.exception(
+                    "Technical follow-up chain sweep failed; chains stay incomplete."
+                )
             session = get_market_session_window(now)
             wait_seconds = 15.0 if session.open_local <= now <= session.close_local else 60.0
             self._stop_event.wait(wait_seconds)
+
+    def _sweep_technical_followup_chains(self, monitor, now):
+        """Complete +30/60/90 windows an outage left hanging (durability 2.3).
+
+        Runs at the close and, when the close was missed entirely, on the next
+        startup - the evidence clock is the component that already owns this
+        capture, so no new timer or thread appears. Recomputed rows are marked
+        ``capture_mode: "backfill"``; symbols whose bars cannot be fetched keep
+        the existing explicit ``data_gap`` rows.
+        """
+        trigger = monitor.followup_sweep_trigger(now=now)
+        if not trigger:
+            return
+        if not self.connection_status:
+            # Without IB there is nothing to fetch, and finalizing every chain
+            # as a data gap would destroy recoverable evidence. Wait for the
+            # connection instead: the marker is only set once a sweep runs.
+            logging.debug("Follow-up chain sweep deferred: IB is not connected.")
+            return
+        current_session = get_market_session_window(now).market_date.isoformat()
+
+        def _fetch(symbol, target_session):
+            # A "1 D" request ends at this moment, so an earlier session needs
+            # a wider window; the monitor then keeps only that session's bars.
+            duration = "1 D" if target_session == current_session else "2 D"
+            return self.request_historical_bars(symbol, duration, "5 mins", timeout=12.0)
+
+        summary = monitor.sweep_incomplete_followups(
+            _fetch,
+            now=now,
+            trigger=trigger,
+            reason=f"follow-up chain sweep ({trigger})",
+        )
+        if summary.get("ran"):
+            logging.info(
+                "Follow-up chain sweep (%s) for %s: %s row(s) backfilled across %s symbol(s); "
+                "no completed bars for %s.",
+                trigger,
+                summary.get("session_date"),
+                summary.get("events"),
+                len(summary.get("symbols") or []),
+                ", ".join(summary.get("data_gap_symbols") or []) or "none",
+            )
 
     def _refresh_orphaned_technical_followups(self, active_symbols):
         """Complete windows for names no longer owned by the scan universe."""
