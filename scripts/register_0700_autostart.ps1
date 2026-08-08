@@ -1,11 +1,17 @@
-# Register (or refresh) the 07:00 weekday auto-launch task for TradingBotV3.
+# Register (or refresh) the 06:00 weekday auto-launch task for TradingBotV3.
 #
 # Run this once per machine: it creates a Windows scheduled task that starts
-# the GUI at 07:00 local every weekday in the logged-on user's session.
-# StartWhenAvailable means a PC that boots at 07:40 still launches it.
-# Together with the in-app 07:00 Auto Pilot self-arm this makes the whole
+# the GUI at 06:00 local every weekday in the logged-on user's session.
+# StartWhenAvailable means a PC that boots at 06:40 still launches it.
+# Together with the in-app Auto Pilot self-arm this makes the whole
 # chain hands-off: boot the machine -> GUI launches -> Auto Pilot arms ->
 # BounceBot connects + scans -> scheduler runs the swing slots.
+#
+# 06:00 LOCAL, not 07:00 (checkpoint review 2026-08-08, amendment 3.1): this
+# desk is US Pacific, the NYSE open is 06:30 local, and the old 07:00 start
+# meant the launcher -- and its self-heal repetition -- missed the first 30
+# minutes of every session while idling four hours past the close. 06:00
+# gives a 30-minute pre-open margin.
 #
 # The trigger also repeats every 15 minutes through the close (Tier A of
 # docs/DURABILITY_CATCHUP_PLAN.md): a crash at 11:00 used to stay down until
@@ -14,7 +20,7 @@
 # idempotent -- when the GUI is already up the run exits immediately, so the
 # only observable effect is that an outage self-heals within 15 minutes.
 #
-# Re-run this script once to pick the repetition up on an already-registered
+# Re-run this script once to pick the new time up on an already-registered
 # task (it unregisters and re-creates).
 #
 # Remove with: Unregister-ScheduledTask -TaskName 'TradingBotV3 0700 Launch' -Confirm:$false
@@ -26,21 +32,22 @@ $script = Join-Path $root "scripts\launch_gui_auto.ps1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`"" `
     -WorkingDirectory $root
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 07:00
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 06:00
 # Anchor the start boundary a week in the past: with the boundary equal to the
 # first occurrence, the scheduler treats it as strictly-after and silently
 # skips registration day (observed 2026-07-10: Friday-morning registration
 # computed Monday as the first run).
-$trigger.StartBoundary = (Get-Date).AddDays(-7).Date.AddHours(7).ToString("yyyy-MM-dd'T'HH:mm:ss")
+$trigger.StartBoundary = (Get-Date).AddDays(-7).Date.AddHours(6).ToString("yyyy-MM-dd'T'HH:mm:ss")
 
-# Repeat every 15 minutes for 10 hours (07:00 -> 17:00 local), so any crash or
-# missed boot self-heals for the whole session. Windows PowerShell 5.1 rejects
+# Repeat every 15 minutes for 7.5 hours (06:00 -> 13:30 local = 30 min past the
+# 13:00 close), so any crash or missed boot self-heals for the whole session
+# without idling into the evening. Windows PowerShell 5.1 rejects
 # -RepetitionInterval/-RepetitionDuration on a -Weekly trigger, so build a
 # throwaway -Once trigger that accepts them and graft its .Repetition onto the
 # weekly one before registration.
-$repetition = (New-ScheduledTaskTrigger -Once -At 07:00 `
+$repetition = (New-ScheduledTaskTrigger -Once -At 06:00 `
     -RepetitionInterval (New-TimeSpan -Minutes 15) `
-    -RepetitionDuration (New-TimeSpan -Hours 10)).Repetition
+    -RepetitionDuration (New-TimeSpan -Hours 7 -Minutes 30)).Repetition
 $trigger.Repetition = $repetition
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
@@ -51,4 +58,4 @@ if ($existing) {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings | Out-Null
-Write-Output "Registered '$taskName': weekdays 07:00, repeating every 15 min for 10h (catch-up on late boot and mid-session crashes), launching $script"
+Write-Output "Registered '$taskName': weekdays 06:00 local (Pacific; 30 min before the open), repeating every 15 min for 7.5h (self-heal through 30 min past the close), launching $script"
