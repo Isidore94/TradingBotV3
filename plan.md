@@ -1629,6 +1629,13 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    `launch_gui.py` is the single operator entrypoint; Main/Satellite role is
    selected in Settings and applied through a clean automatic restart so live
    engine ownership is never hot-switched.
+   **RETIRED 2026-08-08 (trader decision):** the desk is now a single
+   always-on machine (see item 13b topology) and the satellite system is no
+   longer needed — all Desk Link tiers, the satellite role, relay streams,
+   and the pending two-machine validation are retired. The phone over ntfy
+   is the only remote surface. The implemented code stays in-repo for now;
+   removal is a future cleanup packet, and until then the satellite role
+   simply goes unused.
 7b. **Focus price alerts + phone push** (trader-directed insertion,
    2026-08-03; numbered 7b so the existing 8-22 references stay stable):
    basic cross-up/cross-down price levels entered on the Focus tab, pushed to
@@ -1654,6 +1661,11 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    `29435d1`, smoke 7/7), not
    **LIVE_VALIDATED**. Phase E satellite-side edit intents remain gated until
    the two-machine alert-delivery check passes.
+   **Retirement note 2026-08-08:** with Desk Link retired (see 7a), the
+   satellite relay/toast surfaces and the gated Phase E satellite edit
+   intents are cancelled. The product is the ntfy phone push plus the main
+   desk's own alert surfaces; the engine-only origin rule and the
+   last-price-crossing invariants stand unchanged.
 
 ### Next — after initial live evidence
 
@@ -1678,6 +1690,27 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    class), `scripts/research_warehouse/config.py` (`research_store_dir` +
    `TRADINGBOTV3_RESEARCH_DIR`, Drive-path refusal, lake layout bootstrap),
    `tests/test_warehouse_config.py`.
+
+13b. **Local AI & automation program** (trader-directed insertion, 2026-08-08;
+   numbered 13b so the existing 14-18 references stay stable):
+   `docs/LOCAL_AI_AUTOMATION_PLAN.md`. The always-on Ryzen 8845HS main desk
+   becomes a local, off-hours LLM batch layer (Ollama, OpenAI-compatible
+   endpoint) behind the existing provider-neutral AI call sites
+   (`ai_summary.py`, `market_prep/services/ai_service.py`). Phased:
+   endpoint plumbing → automated AI summary + per-ticker briefs → daily
+   digest ledger (deterministic facts, LLM narration, evidence pointers,
+   append-only) → journal enrichment/scaffolding → local review-policy
+   curation behind a draft-comparison gate → periodic frontier-model
+   synthesis over digests. Everything is one-way advisory documents: zero
+   detector/score/alert/state-machine influence, so no sec 5 invariant is
+   touched and no golden fixtures are required. New `ai_store` on the file
+   server with the main desk as sole writer; Drive home folder gets only
+   small atomically-published human-facing copies; `autopilot_today.txt`
+   and the DAS lake writer lease are untouched. Hard resource rule: no
+   local inference during market hours (the box runs the full trading
+   complement); heavy models run in the off-hours window only. Any
+   synthesis finding that would change live behavior routes through the
+   sec 7 ladder like everything else.
 
 ### Then — after correctness and authoritative data paths
 
