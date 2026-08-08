@@ -1712,6 +1712,27 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    synthesis finding that would change live behavior routes through the
    sec 7 ladder like everything else.
 
+13c. **Durability & catch-up packet** (trader-directed insertion, 2026-08-08;
+   numbered 13c so the existing 14-18 references stay stable):
+   `docs/DURABILITY_CATCHUP_PLAN.md`. Three-tier recovery design: Tier A
+   process uptime (07:00 scheduled task gains 15-minute repetition against
+   the existing single-instance guard — crashes self-heal mid-session);
+   Tier B deterministic backfill from completed bars with explicit
+   `capture_mode: "backfill"` provenance (TI follow-up chain sweeper,
+   breadth-bar backfill; appends only, never rewrites live rows); Tier C
+   never-reconstruct (frozen snapshots, opening-range baselines, and
+   never-started live predictions stay honestly missed per the Regime
+   Phase 1 runbook). Also fixes the reported Master AVWAP staleness defect:
+   the final-hour tracker gate checks wall-clock only, so a missed
+   after-close scan leaves setups stale all next day — a staleness override
+   permits catch-up refresh from **completed prior-session D1 bars only**,
+   pinned by a characterization test proving byte-identical tracker output
+   for identical data vintage (timing changes, scoring never does). Slot
+   skip-don't-pile-up stays. Motivated by the 2026-08-03 week: 3 of 4
+   sessions lost their HEALTHY regime audit to uptime, not code. Should
+   land before or alongside 13b Phases 1+ — the digest ledger and the
+   40-session evidence floor are both downstream of uptime.
+
 ### Then — after correctness and authoritative data paths
 
 14. Build the canonical Opportunity and ranking pipeline.
