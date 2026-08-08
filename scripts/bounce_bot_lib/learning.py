@@ -583,7 +583,14 @@ def compact_bounce_candidates_csv(
         temp_name = None
     finally:
         if temp_name and os.path.exists(temp_name):
-            os.unlink(temp_name)
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                # A locked staging file (cloud sync, AV scanner) must not mask the
+                # real failure from the try block, and must not abort a successful
+                # compaction either. project_paths.sweep_stale_atomic_write_temps
+                # reclaims whatever is left behind on the next startup.
+                logging.warning("Could not remove staging file %s; left for the startup sweep.", temp_name)
 
     size_after = csv_path.stat().st_size
     logging.info(

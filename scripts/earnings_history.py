@@ -196,7 +196,14 @@ def save_history(history: dict[str, Any], path: Path | None = None) -> Path:
         _replace_with_retries(temp_path, target)
     finally:
         if temp_path is not None and temp_path.exists():
-            temp_path.unlink(missing_ok=True)
+            try:
+                temp_path.unlink()
+            except OSError:
+                # missing_ok= only covers FileNotFoundError; a locked staging file
+                # raises PermissionError here and would mask the real failure from
+                # the try block. project_paths.sweep_stale_atomic_write_temps
+                # reclaims the orphan on the next startup.
+                logging.warning("Could not remove staging file %s; left for the startup sweep.", temp_path)
     return target
 
 
