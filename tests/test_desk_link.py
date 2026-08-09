@@ -10,6 +10,7 @@ from __future__ import annotations
 import socket
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,16 @@ def test_server_stop_is_clean_and_idempotent(server):
         satellite.wait_for_state("connected")
         main.stop()
         main.stop()  # second stop must be a no-op, not an error
+        # stop() snapshots _clients, drops them, then joins the accept thread.
+        # An accept that is mid-registration when the snapshot is taken lands in
+        # _clients *after* the drop, so under load the count settles a moment
+        # later. That ordering is a real (small) race in DeskLinkServer.stop,
+        # but Desk Link is retired (plan.md 7a note, 2026-08-08) and its code is
+        # frozen pending the cleanup packet -- so this waits for the count to
+        # settle rather than changing a server that must stay unused.
+        deadline = time.monotonic() + 5.0
+        while main.client_count and time.monotonic() < deadline:
+            time.sleep(0.02)
         assert main.client_count == 0
     finally:
         satellite.client.stop()

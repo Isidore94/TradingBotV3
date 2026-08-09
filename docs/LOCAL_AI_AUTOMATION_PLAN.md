@@ -307,6 +307,135 @@ unattended overnight jobs.
 - Exit gate: a week of mornings where the summary and briefs are waiting
   before pre-market prep with zero manual action.
 
+**Status 2026-08-08 — scheduled summary LANDED, per-ticker briefs NOT BUILT**
+(branch `local-ai-phase-1`; 1889 passed, 7 subtests; smoke 7/7). The exit gate
+is **not** met: it needs a week of unattended mornings, which is elapsed time.
+
+Built:
+
+- `scripts/ai_jobs/` — headless package (core requirements only, no Qt):
+  `store.py` (location, refusal, availability probe), `window.py` (the two
+  gates), `ledger.py` (append-only rows + idempotency authority),
+  `runner.py` (named slots, skip-don't-pile-up), `briefs.py` (the summary job).
+- `scripts/run_ai_jobs.py` — the standalone program Task Scheduler boots and
+  that exits. Exit codes: 0 nothing-to-do-or-succeeded, 1 a job failed, 2 the
+  store was unreachable so nothing ran. `--status`, `--slot`, `--force`.
+- `scripts/register_ai_jobs_task.ps1` — registers **TradingBotV3 AI Jobs**.
+
+Verified end to end on the real desk: 18 live evidence sources, 90.4 s on
+`gemma3:12b`, four files published to the NAS, exit 0, one `ok` ledger row.
+
+Still to build for Phase 1: the small morning file published to the Drive home
+folder. **Per-ticker briefs are DEFERRED (trader decision 2026-08-08)** — they
+are not part of Phase 1's exit gate and no work on them is scheduled. The
+economics that motivated them (free locally) have not changed; the priority
+has. Do not start them without a fresh trader instruction.
+
+#### Amended 2026-08-08 — evidence packaging, as built
+
+The checkpoint review's second review found that the summary job was honest
+about what it *had* and silent about what it did not, which for an unattended
+nightly read is the more dangerous half. Repaired on this branch:
+
+- **Semantic source statuses.** `available` used to mean only "the file
+  exists". A source is now `available`, `empty`, `missing`, `invalid`,
+  `unavailable` or `unfunded`, decided by *content*: whitespace-only text, a
+  CSV with a header and no data rows, JSONL with no valid records, and JSON
+  whose containers are all empty are **empty**; an unparseable document is
+  **invalid**, never empty; one that cannot be read is **unavailable**.
+- **A fair, priority-aware budget.** The 80,000-char package budget was
+  first-come — sources were encoded in scope order and each took whatever was
+  left, so one large `daily_report` could silently zero every later scope,
+  including `setup_trackers` and `journal_review`, the two scopes this job
+  exists to read. A zeroed source arrived with empty content and status
+  `available`, indistinguishable from a genuinely empty one, and when the
+  remainder hit exactly zero it did not even carry the `[package budget
+  reached]` marker. The budget is now split per scope by priority weight
+  (`setup_trackers` and `journal_review` 3, `daily_report` and
+  `market_conditions` 2, the rest 1), a scope needing less returns its surplus
+  to whoever is short, and each source that has to be shortened carries an
+  in-band banner (`[showing most recent N of M rows]`, most-recent kept for
+  tabular). A source that cannot be funded is **excluded and declared
+  `unfunded`**, stating its real size. **A source with real bytes on disk is
+  never presented as empty.**
+- **The model package carries only usable sources.** Empty, missing, invalid,
+  unavailable and unfunded sources go to a machine-owned `coverage` block
+  (id, label, scope, status, reason) that is *not* sent to the model. The
+  prompt gains one line: sources not listed were empty, missing, invalid or
+  unfunded; a system data-quality note already records each one; do not
+  speculate about them and do not cite them.
+- **Session scoping.** `briefs.run_daily_summary` passes its `session_date`
+  into packaging. Every source records the session it represents, and one
+  whose artifact is from a different session is flagged stale **in band** (a
+  notice the model sees) and in coverage. The 2026-07-30 `auto_report`
+  incident now reads as staleness rather than silence.
+- **Validator, one for every provider.** `evidence_refs` must resolve to a
+  *usable* source; the rejection names the id and why it is not citable. Every
+  section but `executive_summary` may be an empty array — a thin night is a
+  correct answer, not a malformed one.
+- **Deterministic coverage.** After validation, *code* merges provenance rows
+  into `data_quality` with exact counts, prefixed `[system]`. Asking the model
+  to report its own coverage produces a paraphrase of counts it cannot verify,
+  and a data-quality section is the last place that belongs.
+- **Failure policy.** A citation of a non-usable source fails validation; the
+  retry carries the exact rejection back to the model; a second failure
+  publishes a templated, model-free **DEGRADED** document stating what
+  happened plus the coverage section. Zero usable sources skips the model
+  entirely. The ledger gains `degraded_no_narrative`, distinct from `ok` and
+  deliberately not counted as completed, so the next 30-minute firing retries
+  it. Publishing nothing would have left yesterday's brief in place looking
+  like a healthy night.
+
+#### Amended 2026-08-08 — three hard-rule gaps closed
+
+"No local inference during market hours" (sec 2) had three ways around it:
+
+1. `window._session_bounds` returned `None` when `market_session` could not be
+   imported or the calendar raised, and the block read `None` as "not a session
+   day" — so a broken calendar unlocked inference for a whole trading day. It
+   now raises and the block **fails closed**, treating an unanswerable day as a
+   session. Weekends still short-circuit before the calendar.
+2. `--force` short-circuited past the session block. It is now a *window*
+   convenience only — it skips window timing and the already-done check, and
+   never the session block, at either the pre-launch check or the between-jobs
+   re-read.
+3. `--status` called `store_available()`, which creates the store skeleton and
+   writes a probe file. "Print state, run nothing" now writes nothing:
+   `store_available(read_only=True)` plus `create=False` on the store
+   subdirectory helpers and `ledger_path`.
+
+#### Architecture decision: separate process, not GUI-hosted
+
+The batch layer is its own program rather than a thread inside the Trading
+Desk. Four reasons, and the first is decisive:
+
+1. **The lifecycles are opposed.** The GUI is meant to be up during market
+   hours; this layer must not run during market hours.
+2. **The durability packet actively fights GUI hosting.** The 07:00 task
+   relaunches the GUI every 15 minutes through the session, which would orphan
+   a long job living inside it.
+3. **Crash isolation.** A 14 GB model load that goes wrong must not be able to
+   take down the window the trader watches charts in.
+4. **It makes the sec 2 hard rule a scheduler fact**, not only a code check.
+
+The GUI's role is a read-only view over `ai_job_ledger.jsonl` — visibility,
+never ownership, so "one component owns each timer/job" still holds: the AI
+runner owns AI jobs, the desk owns trading jobs, the trees are separate, and
+the AI layer touches no IB client at all.
+
+#### Scheduling shape: repeat, don't fire once
+
+The task repeats every 30 minutes across the window rather than firing once,
+and the runner asks the ledger whether each job already completed for the
+session date. A healthy night no-ops on every repeat; a night where the NAS
+was asleep or the endpoint was down at 01:00 self-heals at 01:30. This is the
+durability packet's Tier A lesson applied to the batch layer.
+`MultipleInstances IgnoreNew` is skip-don't-pile-up in scheduler form — two
+runners would race the same ledger and the same endpoint.
+
+The task runs **as the logged-on user, not SYSTEM**: SYSTEM has no network
+credentials and could not reach the UNC store at all.
+
 ### Phase 2 — Daily Digest Ledger (foundation)
 
 - Deterministic extraction layer (code, no LLM): pull the day's facts from
@@ -317,6 +446,26 @@ unattended overnight jobs.
 - Exit gate: 10 consecutive session days of digests; trader spot-audits ≥3
   against raw evidence and finds no fabricated facts (numbers all traceable
   to the deterministic layer).
+
+**Status 2026-08-08 — TO BE REDESIGNED, DESIGN PENDING. Do not build.**
+
+Phase 1's repairs changed what Phase 2 should be. The load-bearing lesson is
+that everything trustworthy in the nightly output came from *code* — the
+coverage block, the exact counts, the status of every source — and everything
+that needed guarding came from the model. So Phase 2 will be redesigned around
+**deterministic fact packs**: the extraction layer becomes the product rather
+than the input to a narrator, and any narration sits on top of facts that are
+already complete, counted and citable.
+
+That redesign has **not been done**. Concretely, for the next agent:
+
+- The draft digest schema in sec 6.4 is **not** the schema to build. It was
+  drafted before the fact-pack direction and has never had trader sign-off.
+- **Do not build or freeze any digest schema in this session or the next one
+  without a design packet first** (trader decision 2026-08-08). A schema
+  written into an append-only store is expensive to take back.
+- The digest-sufficiency benchmark named in the confirmation register is part
+  of that pending design, not a separate task to start early.
 
 ### Phase 3 — Journal enrichment (trader priority #2)
 
@@ -476,7 +625,13 @@ row (job name, model, duration, token counts if reported, exit status) whether
 it succeeds or not; a failed job leaves prior artifacts untouched
 (write-temp-verify-rename, the atomic-publish pattern).
 
-### 6.4 Digest schema v1 (draft — trader sign-off required before the first ledger write)
+### 6.4 Digest schema v1 (SUPERSEDED DRAFT — do not build)
+
+> **2026-08-08: this draft is not the schema to build.** Phase 2 is being
+> redesigned around deterministic fact packs (see the Phase 2 status note) and
+> that design is pending. Trader decision: do not build or freeze any digest
+> schema without a design packet first. Kept below only as the record of what
+> was drafted, never signed off, and never written.
 
 One JSON object per session day, ≤32KB hard cap, written to
 `ai_store/digests/YYYY/YYYY-MM-DD.json`:
@@ -551,9 +706,30 @@ Additionally:
    is `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — verified loading
    and producing schema-valid output. All three are settings, and Phase 0
    finding 2 records the revisit triggers.
-4. **Off-hours window edges — RESOLVED BY DEFAULT** (sec 6.1): 18:30–08:00
-   ET, weekends open, holidays treated as weekdays; trader-adjustable
-   settings, not code.
+4. **Off-hours window edges — SET BY THE TRADER 2026-08-08**: **01:00–09:00
+   ET**, which is the 22:00–06:00 the trader asked for on this Pacific desk
+   (Pacific is ET−3 in both DST and standard time, so the mapping is stable
+   year-round). Weekends open, holidays treated as weekdays. The defaults in
+   sec 6.1 remain 18:30–08:00 for an unconfigured machine.
+
+   Noted and accepted: 09:00 ET is 30 minutes before the opening bell. The
+   trader was shown this and reaffirmed the choice. It is bounded rather than
+   argued: the market-session block refuses the session itself regardless of
+   the window, `launch_allowed(reserve_minutes=...)` refuses to *start* a job
+   that cannot finish (the summary slot reserves 20 minutes), and the worst
+   measured single model call is ~4 minutes, so the residual exposure is one
+   in-flight call finishing gracefully well before 09:30.
+
+4b. **AI store location — SET BY THE TRADER 2026-08-08**:
+   `\\MINI-PC\Trading Bot Data\ai_store` on the NAS. Verified reachable and
+   writable, layout bootstrapped, atomic publish (temp → `os.replace`) proven
+   on the share. Measured: **19.8 s first write** while the NAS spins up, then
+   ~40 ms per fsync'd append and 55 MiB/s write / 78 MiB/s read. Placed in a
+   dedicated `ai_store` subfolder rather than the share root, which already
+   holds `data/`, `logs/` and `output/` — the AI store's own `logs/` would
+   otherwise have collided with an existing directory. The live operational
+   home folder is `C:\TradingBotData`, so the sec 3.3 "never inside the synced
+   home folder" rule is satisfied.
 5. **Digest schema v1 — DRAFTED** (sec 6.4); trader sign-off on the field
    list is still required before the first ledger write (append-only from
    then on; later fields extend, never mutate).

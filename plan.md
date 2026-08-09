@@ -1726,7 +1726,17 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    now chosen and verified — small `gemma3:4b`, medium `gemma3:12b`, large
    `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — with the large tier's
    revisit triggers recorded against Phase 4's existing two-week gate.
-   Phases 1+ not started.
+   **Phase 1 partially landed 2026-08-08** (`local-ai-phase-1`; 1889 passed,
+   7 subtests; smoke 7/7): the new headless `scripts/ai_jobs/` package, the
+   standalone `scripts/run_ai_jobs.py` that Task Scheduler boots and that
+   exits, and the registered **TradingBotV3 AI Jobs** task (22:00–06:00 desk
+   local = 01:00–09:00 ET, repeating every 30 min, idempotent via the job
+   ledger). The scheduled advisory summary is verified end to end against
+   live evidence and publishes to the NAS `ai_store`. Deliberately a separate
+   process, not GUI-hosted: the lifecycles are opposed, and it makes the
+   no-inference-during-market-hours rule a scheduler fact. Still to build for
+   Phase 1: per-ticker briefs and the Drive morning file; its exit gate needs
+   a week of unattended mornings. Phases 2+ not started.
 
 13c. **Durability & catch-up packet** (trader-directed insertion, 2026-08-08;
    numbered 13c so the existing 14-18 references stay stable):
