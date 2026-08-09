@@ -36,6 +36,22 @@ HORIZONS = (1, 3, 5, 10)
 # also grades as its own sub-cohort.
 FOCUS_SOURCE_BY_CATEGORY = {"swing": "focus_swing", "m5": "focus_m5"}
 CATEGORY_BY_SOURCE_PREFIX = (("focus_swing", "swing"), ("focus_m5", "m5"))
+# Chart Review vetoes are graded by this same outcome math, from their own
+# files (project_paths.VETO_COHORT_*), with source "veto_<reason_code>". They
+# are named here only so they aggregate as their own cohort family instead of
+# falling into the legacy "human_focus_pick" catch-all - a veto is the
+# opposite of a pick, and averaging the two would make both unreadable.
+# Vetoes never appear in the human-focus picks file, so this changes nothing
+# about the existing cohorts (pinned by tests/test_veto_cohort.py).
+VETO_SOURCE_PREFIX = "veto"
+#: (base cohort name, source prefix), most specific first. The trailing entry
+#: is the catch-all that legacy untagged rows resolve to.
+COHORT_BASE_BY_SOURCE_PREFIX = (
+    ("human_focus_swing", "focus_swing"),
+    ("human_focus_m5", "focus_m5"),
+    ("human_focus_veto", VETO_SOURCE_PREFIX),
+    ("human_focus_pick", "focus_pick"),
+)
 HUMAN_FOCUS_DAILY_PICK_COLUMNS = [
     "trade_date",
     "symbol",
@@ -519,9 +535,9 @@ def _outcome_source(row: dict[str, Any]) -> str:
 
 def _outcome_base_cohort(row: dict[str, Any]) -> str:
     source = _outcome_source(row)
-    for prefix, _category in CATEGORY_BY_SOURCE_PREFIX:
+    for base, prefix in COHORT_BASE_BY_SOURCE_PREFIX:
         if source == prefix or source.startswith(prefix + "_"):
-            return f"human_focus_{prefix[len('focus_'):]}"
+            return base
     return "human_focus_pick"
 
 
@@ -531,15 +547,20 @@ def build_human_focus_performance_rows(
     updated_at: str | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate stats per cohort: the swing/m5/legacy base cohorts first, then
-    one sub-cohort per like origin present (e.g. human_focus_swing_h1)."""
+    one sub-cohort per like origin present (e.g. human_focus_swing_h1).
+
+    Veto rows (source ``veto_<reason_code>``, graded from their own files) form
+    the ``human_focus_veto`` family with one sub-cohort per reason. They are
+    absent from the human-focus picks file, so a caller passing focus outcomes
+    gets byte-identical rows to before this family existed.
+    """
     timestamp = updated_at or _now_text()
     groups: list[tuple[str, list[dict[str, Any]]]] = []
-    for base in ("human_focus_swing", "human_focus_m5", "human_focus_pick"):
+    for base, base_source in COHORT_BASE_BY_SOURCE_PREFIX:
         base_rows = [row for row in outcome_rows if _outcome_base_cohort(row) == base]
         if not base_rows:
             continue
         groups.append((base, base_rows))
-        base_source = "focus_" + base[len("human_focus_"):]
         suffixed = sorted(
             {
                 source
@@ -549,7 +570,7 @@ def build_human_focus_performance_rows(
         )
         for source in suffixed:
             groups.append(
-                (f"human_focus_{source[len('focus_'):]}", [row for row in base_rows if _outcome_source(row) == source])
+                (f"{base}_{source[len(base_source) + 1:]}", [row for row in base_rows if _outcome_source(row) == source])
             )
 
     rows: list[dict[str, Any]] = []

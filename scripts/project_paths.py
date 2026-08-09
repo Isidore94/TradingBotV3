@@ -361,6 +361,13 @@ PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
 # readers merge the directory with the legacy file.
 ALERT_REVIEW_EVENTS_FILE = PERSISTENT_DATA_DIR / "alert_review_events.jsonl"
 ALERT_REVIEW_EVENTS_DIR = PERSISTENT_DATA_DIR / "alert_review_events"
+# Append-only JSONL of the trader's Chart Review decisions: vetoes with a
+# reason from the versioned picklist, likes with a claimed setup, hypothetical
+# stops, and freeform notes. Same storage class as the two logs above - small,
+# human-relevant, shared home so it syncs and can be read by an AI - and the
+# desk GUI is its sole writer. Analysis-only evidence: nothing in the running
+# system reads this file to mute, score, gate, or alert (plan.md sec 5).
+TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
 # Aggregated revealed-preference state derived from the review-events log by
 # scripts/review_learning.py: per-segment take rates, taken-vs-passed
 # outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.
@@ -402,6 +409,15 @@ HUMAN_FOCUS_SNAPSHOT_STATE_FILE = RUNTIME_DATA_DIR / "human_focus_snapshot_state
 HUMAN_FOCUS_DAILY_PICKS_FILE = RUNTIME_DATA_DIR / "human_focus_daily_picks.csv"
 HUMAN_FOCUS_OUTCOMES_FILE = RUNTIME_DATA_DIR / "human_focus_outcomes.csv"
 HUMAN_FOCUS_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "human_focus_performance.csv"
+# Forward tracking for vetoed names, in the human-focus column schema but in
+# its OWN files. Deliberately not the human-focus picks CSV: that file is keyed
+# (trade_date, symbol, side) with no source, so a veto row for a name that is
+# also a focus pick that day would collide with - and suppress - the focus row.
+# Separate files let the same outcome machinery grade both without either
+# cohort touching the other. Written only by ui.annotations.veto_cohort.
+VETO_COHORT_PICKS_FILE = RUNTIME_DATA_DIR / "veto_cohort_picks.csv"
+VETO_COHORT_OUTCOMES_FILE = RUNTIME_DATA_DIR / "veto_cohort_outcomes.csv"
+VETO_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "veto_cohort_performance.csv"
 MASTER_AVWAP_BUCKET_STATE_FILE = RUNTIME_DATA_DIR / "master_avwap_bucket_state.json"
 
 SECTOR_ETF_MAP_FILE = DATA_DIR / "sector_etf_map.json"

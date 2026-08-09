@@ -1789,6 +1789,42 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    the time a desk is up, so it cannot answer "is a desk running?" — the
    reasoning is recorded in `scripts/launch_gui_auto.ps1`).
 
+13d. **Chart Review workspace + trader decision capture** (trader-directed
+   insertion, 2026-08-08; numbered 13d so the existing 14-18 references stay
+   stable): `docs/CHART_REVIEW_WORKSPACE_PLAN.md`. A workspace the trader
+   lives in daily — maximised chart, thin capture rail, lookup box that opens
+   ANY symbol, Setups drawer hidden by default — whose purpose is the
+   **decision stream**: vetoes with a reason from a versioned picklist, likes
+   with a claimed setup, hypothetical stops, notes. Everything else in the
+   program measures outcomes; this is the only artifact that records
+   judgement, and it cannot be reconstructed after the fact. TV/TC2000 stay
+   open for deep TA — the chart only has to be good enough to keep the trader
+   in the chair, and the design constraint is capture speed: every action
+   under five seconds, keyboard-first.
+   Storage is append-only `trader_annotations.jsonl` (schema v1, extensible,
+   fields never renamed) in the shared home, desk GUI sole writer, atomic
+   bounded rows. **Analysis-only evidence: it must never mute, suppress,
+   score, gate, or alert** — the same discipline as `review_policy.json`
+   having no suppression field. The one forward hook is capture-side: vetoed
+   names accrue forward returns as cohort `human_focus_veto_<reason>` so veto
+   calibration becomes computable later.
+   **Status 2026-08-08: capture layer + workspace shell IMPLEMENTED + GREEN**
+   on `chart-review-workspace` (2158 passed, 7 subtests; smoke 7/7). Not
+   merged, not `LIVE_VALIDATED` — needs the sec 6 checklist on a live session.
+   Charts, the paint-lines toggle, and click-to-set alerts are **deliberately
+   deferred**: the chart data path is being rebuilt off the GUI thread
+   (`ui/services/chart_data_service.py`, `bar_cache.py`), and building against
+   the old synchronous loader would have created a second owner of the chart
+   data path (sec 5) and a guaranteed conflict. The annotation schema already
+   carries `ref_level_id` / `ref_level_family`, so painted-level references
+   need no schema change when that work lands.
+   Veto cohorts live in their own `veto_cohort_*` files, NOT the human-focus
+   picks CSV: that file is keyed `(trade_date, symbol, side)` with no source
+   column, so a veto row for a name that was also a focus pick that day would
+   have taken the focus row's slot and suppressed it. The single edit to
+   `human_focus_tracking.py` is additive and pinned by a characterization test
+   proving byte-identical aggregation for existing cohorts.
+
 ### Then — after correctness and authoritative data paths
 
 14. Build the canonical Opportunity and ranking pipeline.

@@ -150,8 +150,18 @@ class MainWindow(QMainWindow):
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
 
+        # Chart Review (plan.md 13d). Shares the one focus service so a like
+        # captured here goes through the existing focus/pick_feedback path
+        # instead of a parallel likes store.
+        from ui.panels.chart_review_panel import ChartReviewPanel
+
+        self.chart_review_panel = ChartReviewPanel(
+            focus_service=self.trading_panel.focus_picks_panel.service
+        )
+
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)
+        self.pages.addWidget(self.chart_review_panel)
         self.pages.addWidget(self.trading_panel.focus_picks_panel)
         self.pages.addWidget(self.journal_panel)
         self.pages.addWidget(self.universe_panel)
@@ -239,6 +249,7 @@ class MainWindow(QMainWindow):
 
         nav_items = (
             ("Trading Desk", "mdi.chart-timeline-variant"),
+            ("Chart Review", "mdi.chart-line"),
             ("Focus Picks", "mdi.star-outline"),
             ("Journal", "mdi.notebook-outline"),
             ("Universe", "mdi.earth"),
@@ -479,6 +490,7 @@ class MainWindow(QMainWindow):
     def _select_page(self, index: int) -> None:
         titles = (
             "Trading Desk",
+            "Chart Review",
             "Focus Picks",
             "Journal",
             "Universe",
