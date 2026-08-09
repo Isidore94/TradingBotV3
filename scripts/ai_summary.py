@@ -132,8 +132,11 @@ SCOPE_BUDGET_WEIGHTS = {
 }
 
 #: Below this a grant cannot carry anything a reader could use, so the source
-#: is excluded and declared unfunded rather than included as a stub.
-MIN_SOURCE_BUDGET_CHARS = 600
+#: is excluded and declared unfunded rather than included as a stub. Raised
+#: from 600 alongside the within-scope fair share: 600 characters of a
+#: performance CSV is about three rows, which is noise wearing the costume of
+#: evidence.
+MIN_SOURCE_BUDGET_CHARS = 2_000
 
 #: Sections the model writes. ``data_quality`` is deliberately absent: it is
 #: machine-owned (Sol 5.6 verification review, item 4). Coverage is a set of
@@ -1021,13 +1024,54 @@ def _apply_evidence_budget(
     allocation = _allocate_scope_budgets(needs, total=total)
 
     for scope, sources in sources_by_scope.items():
-        remaining = allocation.get(scope, 0)
+        scope_budget = allocation.get(scope, 0)
+        fundable = [
+            source for source in sources if source.get("status") == SOURCE_STATUS_AVAILABLE
+        ]
+        # Within a scope, give every source a share before letting any source
+        # take more than one. Scope order was applied first-come, so the first
+        # analytic source consumed the whole scope and the other five arrived
+        # unfunded -- the same defect the per-scope split fixed, one level
+        # down. Observed on 2026-08-08: setups.type_stats alone took all of
+        # setup_trackers. The share is a floor, not a cap; whatever the small
+        # sources leave unspent is handed back out in list order below, which
+        # is where the "analytics before the raw tracker" ordering still
+        # decides who benefits.
+        sizes = {id(source): _encoded_size(source.get("content")) for source in fundable}
+        if sum(sizes.values()) <= scope_budget:
+            continue  # everything fits; no rationing to do, nothing to mark
+
+        # If the scope cannot give everyone a *useful* slice, it funds fewer
+        # sources rather than handing everyone an unreadable sliver. The ones
+        # dropped are the trailing entries, which is where list order earns
+        # its keep: the raw tracker is last, so it is the first to give way.
+        while len(fundable) > 1 and scope_budget // len(fundable) < MIN_SOURCE_BUDGET_CHARS:
+            fundable.pop()
+        share = scope_budget // max(1, len(fundable))
+        spare = scope_budget
+        granted: dict[int, int] = {}
+        for source in fundable:
+            size = _encoded_size(source.get("content"))
+            take = min(size, share)
+            granted[id(source)] = take
+            spare -= take
+        for source in fundable:
+            if spare <= 0:
+                break
+            size = _encoded_size(source.get("content"))
+            short = size - granted[id(source)]
+            if short <= 0:
+                continue
+            extra = min(short, spare)
+            granted[id(source)] += extra
+            spare -= extra
+
         for source in sources:
             if source.get("status") != SOURCE_STATUS_AVAILABLE:
                 continue  # nothing to fund; it is already declared non-usable
             size = _encoded_size(source.get("content"))
+            remaining = granted.get(id(source), 0)
             if size <= remaining:
-                remaining -= size
                 continue
             if remaining < MIN_SOURCE_BUDGET_CHARS:
                 # The distinction the old code lost: this source has real bytes
@@ -1037,7 +1081,8 @@ def _apply_evidence_budget(
                 source["status"] = SOURCE_STATUS_UNFUNDED
                 source["status_reason"] = (
                     f"{size} chars of real content, but only {remaining} chars of the "
-                    f"{scope} evidence budget remained; excluded rather than blanked"
+                    f"{scope} evidence budget could be allotted to it; excluded "
+                    "rather than blanked"
                 )
                 source["content"] = None
                 continue
@@ -1047,7 +1092,6 @@ def _apply_evidence_budget(
             if banner:
                 source["notices"].append(banner)
             source["budget_truncated"] = True
-            remaining = 0
 
 
 def build_evidence_package(
@@ -1058,6 +1102,7 @@ def build_evidence_package(
     journal_store=None,
     now: datetime | None = None,
     session_date: str | date | None = None,
+    budget_chars: int = MAX_TOTAL_EVIDENCE_CHARS,
 ) -> dict[str, Any]:
     """Build the exact, bounded evidence that the user elected to send.
 
@@ -1070,6 +1115,11 @@ def build_evidence_package(
 
     ``session_date`` is the session being reviewed. Sources whose artifact is
     from a different session are flagged stale, in-band and in coverage.
+
+    ``budget_chars`` is the total character budget. It is a parameter rather
+    than a constant because the ceiling was tuned when every token was metered
+    and is undersized for a local model -- raising it is a trader decision,
+    and this is where that decision would land.
     """
 
     selected = list(dict.fromkeys(str(scope or "").strip() for scope in scopes if str(scope or "").strip()))
@@ -1146,7 +1196,7 @@ def build_evidence_package(
                 )
                 source["content"] = None
 
-    _apply_evidence_budget(sources_by_scope)
+    _apply_evidence_budget(sources_by_scope, total=max(0, int(budget_chars)))
 
     all_sources = [source for scope in selected for source in sources_by_scope[scope]]
     usable = [source for source in all_sources if source["status"] in USABLE_SOURCE_STATUSES]

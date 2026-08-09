@@ -265,21 +265,38 @@ def test_a_starved_source_is_declared_unfunded_never_empty(tmp_path):
     """
     from ai_summary import build_evidence_package
 
+    # Nine sources at 20,000 chars each against an 80,000-char budget: every
+    # one gets a share, none is silently zeroed, and each shortened source
+    # says so. (The old first-come budget gave the first two everything and
+    # blanked the rest with status "available" and no marker.)
     evidence = build_evidence_package(
         ["setup_trackers"],
         source_overrides=_oversized_trackers(tmp_path),
         session_date=SESSION,
     )
 
-    excluded = _coverage_by_id(evidence)
-    starved = [row for row in excluded.values() if row["status"] == "unfunded"]
-    assert starved, "nine oversized sources must not all fit in the budget"
+    assert len(evidence["sources"]) == 9, "a fair share funds all of them, in part"
+    for source in evidence["sources"]:
+        assert source["content"] not in (None, "", [], {}), source["source_id"]
+        assert source["truncated"] is True
+        assert source["notices"], "a shortened source must say it was shortened"
+
+    # Rationing so severe that a share would be unreadable funds fewer
+    # sources instead, and says which ones it dropped and why.
+    evidence = build_evidence_package(
+        ["setup_trackers"],
+        source_overrides=_oversized_trackers(tmp_path),
+        session_date=SESSION,
+        budget_chars=6_000,
+    )
+    starved = [
+        row for row in _coverage_by_id(evidence).values() if row["status"] == "unfunded"
+    ]
+    assert starved, "a scope this oversubscribed cannot fund everything"
     for row in starved:
         assert row["status"] != "empty"
         assert "real content" in row["reason"]
         assert "budget" in row["reason"]
-    # And nothing was left in the model package holding nothing -- the exact
-    # shape the old first-come budget produced when remaining hit zero.
     for source in evidence["sources"]:
         assert source["content"] not in (None, "", [], {}), source["source_id"]
 
@@ -550,6 +567,7 @@ def test_a_citation_of_an_unfunded_source_is_rejected_too(tmp_path):
         ["setup_trackers"],
         source_overrides=_oversized_trackers(tmp_path),
         session_date=SESSION,
+        budget_chars=6_000,
     )
 
     unfunded = [
@@ -1318,16 +1336,43 @@ def test_the_analytic_sub_sources_are_funded_before_the_raw_tracker(tmp_path, mo
     overrides["setups.current_tracker"] = _huge_tracker(tmp_path)
 
     evidence = ai_summary.build_evidence_package(
-        ["setup_trackers"], source_overrides=overrides, session_date=SESSION
+        ["setup_trackers"],
+        source_overrides=overrides,
+        session_date=SESSION,
+        budget_chars=6_000,
     )
 
     funded = set(_by_id(evidence))
     excluded = _coverage_by_id(evidence)
-    assert "setups.type_stats" in funded, "the distilled analysis must be funded first"
-    assert "setups.recent_type_stats" in funded
-    assert excluded.get("setups.current_tracker", {}).get("status") == "unfunded", (
-        "the rawest, largest source is the one that gives way"
+    # Every named analytic sub-source is funded...
+    for source_id in ("setups.type_stats", "setups.recent_type_stats", "setups.short_horizon"):
+        assert source_id in funded, f"{source_id} must be funded before the raw tracker"
+    # ...and when the scope cannot carry everything, the rawest and largest
+    # source is the one that gives way, because it is last in the order.
+    assert excluded.get("setups.current_tracker", {}).get("status") == "unfunded"
+
+
+def test_no_single_source_can_consume_its_whole_scope(tmp_path):
+    """Scope order was applied first-come, one level down from the defect it
+    fixed: the first analytic source took the entire scope and the other five
+    arrived unfunded. Observed on the real desk 2026-08-08, where
+    setups.type_stats alone consumed all of setup_trackers."""
+    from ai_summary import build_evidence_package
+
+    overrides = _oversized_trackers(tmp_path)
+    # One source far larger than the whole scope budget.
+    overrides["setups.type_stats"] = _touch(
+        tmp_path / "type_stats_huge.txt", "q" * 500_000
     )
+
+    evidence = build_evidence_package(
+        ["setup_trackers"], source_overrides=overrides, session_date=SESSION
+    )
+
+    funded = set(_by_id(evidence))
+    assert len(funded) > 1, "one source must not be able to take the whole scope"
+    assert "setups.recent_type_stats" in funded
+    assert "setups.short_horizon" in funded
 
 
 def test_the_spec_order_puts_the_raw_tracker_last_in_its_scope():

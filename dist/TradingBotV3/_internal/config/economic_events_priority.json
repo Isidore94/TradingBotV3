@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "high_priority": [
+    "FOMC Rate Decision",
+    "FOMC Minutes",
+    "Fed Chair Speech",
+    "CPI",
+    "Core CPI",
+    "PPI",
+    "Core PPI",
+    "PCE",
+    "Core PCE",
+    "Nonfarm Payrolls",
+    "Unemployment Rate",
+    "Average Hourly Earnings",
+    "Jobless Claims",
+    "ADP Employment",
+    "ISM Manufacturing",
+    "ISM Services",
+    "Retail Sales",
+    "GDP",
+    "JOLTS",
+    "Consumer Sentiment",
+    "10Y Treasury Auction",
+    "30Y Treasury Auction"
+  ],
+  "medium_priority": [],
+  "low_priority": []
+}
