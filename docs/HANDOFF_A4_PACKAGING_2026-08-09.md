@@ -245,3 +245,156 @@ description and that I left completely alone:
 edit `autopilot_service.py` or `autopilot_core.py`. Note that
 `tests/test_autopilot_core.py` is in the pre-existing failure list in §6 —
 that predates me and is unrelated to that packet.
+
+---
+
+## 10. Orchestration session (2026-08-09, follow-up): Phase 1 answers
+
+Branch note first: this session worked on
+`claude/a4-verify-a3-orchestrate-9c8kop`, fast-forwarded onto the A4 tip
+`acf70e0` (main is an ancestor of testing; nothing discarded). Everything
+below is committed there; it still fast-forwards into `testing` after the A4
+branch.
+
+### 1. Where the coding agent runs
+
+A fresh Linux container. No Drive mount, no ai_state, no local_settings.json,
+no TWS, no Windows. Worse than the previous session's container: system
+Python is 3.11 (project floor is 3.12) and tkinter is absent, which kills 6
+test files at collection. **Phase 1 items 2-5 are desk-only.** The desk
+checklist in §12 is the deliverable for them.
+
+### 2. Desk test baseline — NOT obtainable here; and a warning
+
+The §6 baseline (16 failed / 2234 passed) is itself container-specific: this
+session's container shows 56 failed / 1996 passed / 5 skipped / 27 errors on
+the reduced suite (6 tkinter-blocked files ignored) — all environmental.
+Verified by differential: the same reduced suite on a pristine A4-tip
+worktree produces a byte-identical failed-ID list. **Absolute container
+counts must never be used as a merge gate; only a desk run or a
+same-container differential is evidence.**
+
+Diagnosis of the §6 "hanging test": it is an **at-exit** hang — after the
+summary prints, ~100 non-daemon threads from `multitasking` (a yfinance
+dependency) block the interpreter's exit (the 25 min wall / 28 s CPU
+signature). `pytest-timeout` (now a dev dependency) bounds *in-test* hangs
+on demand but does not fix this one; runners should wrap the suite in an
+outer `timeout` and judge by the printed summary. The honest fix
+(daemonizing/joining yfinance workers or quarantining the import) is future
+work, noted rather than patched blind.
+
+### 3. Trendline coverage — desk checklist step 3
+
+Tool already on the branch (`scripts/d1_trendline_survey.py`). If PAINTABLE
+TODAY is near zero, the trendline group defaults to off — a design change to
+escalate, not a docs edit.
+
+### 4. Real level store — desk checklist step 4, plus a structural finding
+
+New this session: `scripts/d1_level_store_survey.py` (commit `8a72f5c`),
+read-only, reports per-symbol store census, every filter stage, and pre/post
+clutter-budget counts so the guessed 10/6/4 can be checked in one command.
+
+**Structural finding (needs desk confirmation, then a trader decision):** a
+red-bucket `hv_horizontal`'s strength is bucket weight 0.35 + touch term
+capped at 0.40 = **max 0.75, always below `MIN_HORIZONTAL_STRENGTH = 1.0`**
+(`master_avwap_lib/levels.py` `_level_strength`). If that holds on the real
+store, **no red level is ever drawn**, `MAX_RED_HORIZONTALS = 6` never
+binds, and A4's red styling is dead code in practice. The options are (a)
+accept that A4 draws green + cloud only and delete the red path, or (b) give
+red levels their own draw threshold in `chart_levels.py` (chart-only file,
+but a change to what the trader sees ⇒ ask first). Do not touch
+`MIN_HORIZONTAL_STRENGTH` itself — it mirrors detector-input gating.
+
+### 5. Frozen Windows build — desk checklist step 5
+
+Impossible on Linux. Unchanged expectation: exit 0 +
+`selftest OK: 30/30 checks passed (frozen)` retires the click-through.
+
+### 6. Trader decisions — escalated, not decided
+
+a. **A5 ownership** (gates A5): may a chart widget write
+   `price_alerts.json`, or must arming route through the owning panel (one
+   fenced connect line in `alert_center_panel.py`)? §4 above has both diffs.
+b. **d1_level_feed shared cached ai_state loader** (ask-first file): approve
+   or keep the duplicated parse (one extra mtime-cached parse of the 38 MB
+   file per ai_state write, on a worker).
+c. **A3 scope**: moot for this session — desk facts (items 2-5) were
+   unobtainable in-container, so this session was verification + tooling.
+   The A3 packet is drafted in §13, ready to dispatch once 6c is answered
+   and the desk numbers exist.
+d. *(new)* **Red-level drawing** — see §10.4 above.
+
+## 11. What this session dispatched and what came back
+
+| Packet | Result |
+|---|---|
+| pytest-timeout dependency | `ec33194`, pushed. Pin 2.4.0, no resolver movement. |
+| d1_level_store_survey tool | `8a72f5c`, pushed. Fixture-verified, exit-2 failure paths clean, spec-drift test green (9 passed). |
+| Regression gate for both | Differential vs pristine A4-tip worktree: failed-ID lists byte-identical ⇒ no regression. Smoke 7/7. |
+| Lines-button measurement (read-only) | Themed, offscreen, 2560w and 1280w, both densities: header row 22 px with the button vs 17 px without ⇒ **5 px of chart height lost in the embedded pane; the docstring's zero-cost claim was false.** Label growth ("Lines (2 off)") costs width only — safe. |
+| Lines-button height-neutral fix | `1c79d0b`, pushed. Cap = themed font line height (16 px) + `rowChrome` QSS exemption for legibility; header delta **0** at all four themed configurations; new 4-param regression test (fails 4/4 with the exemption reverted); differential suite byte-identical; smoke 7/7. |
+
+No fence file was touched by anyone. `tests/test_packaging_spec_drift.py`
+unweakened. Nothing was merged to `main` or `testing`.
+
+## 12. Desk checklist (trader or a desk agent; ~15 min + one 4-min build)
+
+**SAFETY FIRST:** a scheduled task runs unmerged branch code in production on
+the desk (docs/CHECKPOINT_REVIEW_2026-08-08.md). **Disarm it before
+switching branches; re-arm after restoring the production branch.**
+
+```powershell
+# 1. fetch + checkout + refresh dev deps (pytest-timeout is new)
+git fetch origin claude/a4-verify-a3-orchestrate-9c8kop
+git checkout claude/a4-verify-a3-orchestrate-9c8kop
+.venv\Scripts\pip.exe install -r requirements-dev.txt -c constraints.txt
+
+# 2. desk test baseline (Phase 1 item 2) — record counts AND $LASTEXITCODE
+.venv\Scripts\python.exe -m pytest tests\ -q ; echo $LASTEXITCODE
+# expected: fully green. Any failure list changes the merge gate — report it.
+
+# 3. trendline coverage (item 3) — record all five numbers + the list
+.venv\Scripts\python.exe scripts\d1_trendline_survey.py --list 20
+
+# 4. real level store (item 4) — pick a liquid symbol from step 3's list
+.venv\Scripts\python.exe scripts\d1_level_store_survey.py --symbol XXXX
+# record: census, green/red split, cloud flats, range survivors, pre/post
+# budget, and whether ANY red level clears strength >= 1.0 (see §10.4).
+
+# 5. frozen Windows build (item 5) — unattended, no click-through
+.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm
+dist\TradingBotV3\TradingBotV3.exe --selftest ; echo $LASTEXITCODE
+# expected: exit 0, "selftest OK: 30/30 checks passed (frozen)"
+```
+
+6. Eyeball (2A): launch the GUI, open a symbol from step 3's paintable list,
+   and check the purple D1 trendline sits on the two pivots it claims —
+   against TC2000. Wrong-but-plausible is the failure mode; report, don't
+   tune. Also glance at the "Lines" button in the embedded review pane at
+   2560x1440: after `1c79d0b` the header row must be no taller than it was
+   without the button.
+
+## 13. A3 packet, drafted (dispatch only after 6c + desk numbers)
+
+- Replace the placeholder in `chart_review_panel.py::_chart_area()`
+  (lines ~155-180) by embedding the existing `SymbolSnapshotWidget`
+  (`symbol_snapshot_dialog.py`) — the same widget the popup and the embedded
+  review pane already use. **One data path**: `ChartDataService` +
+  `CandleChart` via `snapshotReady`. If an agent starts writing a second
+  loader, kill the packet.
+- A4 levels ride `d1["levels"]` on the snapshot — free.
+- Crosshair + OHLC readout: **new work in `candle_chart.py`** (none exists
+  today); shared widget, so it lands for every chart consumer — keep it
+  paint-only, zero I/O.
+- Wire the panel's permanent provenance strip from the snapshot's
+  `meta["source"]` tier; IBKR streaming while focused with a loud yfinance
+  fallback banner (degraded data must look degraded, plan.md sec 5).
+- Fences, branch discipline, differential test gate: as in §11's packets.
+
+## 14. Least confident
+
+The at-exit-hang diagnosis is from one container. If the desk suite also
+hangs after its summary, the multitasking/yfinance thread leak is confirmed
+desk-side and deserves its own small packet; if the desk exits cleanly, the
+hang was container-only and the note above is merely operational.
