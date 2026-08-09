@@ -377,3 +377,59 @@ def test_store_subdirs_can_resolve_without_creating(tmp_path):
     assert logs == root / "logs"
     assert path == root / "logs" / ledger.LEDGER_NAME
     assert not logs.exists(), "resolving a path must not create it"
+
+
+def test_the_preopen_reserve_is_part_of_the_session_block(monkeypatch):
+    """A 14 GB model load must not start 60 seconds before the bell.
+
+    The guard defaulted to 0, on the reasoning that the session block already
+    protects the session. It does not protect the run-up: the desk's own
+    launch task fires at 06:00 Pacific and pre-market prep is competing for
+    the box well before the open (Sol 5.6 verification review, item 9).
+    """
+    from ai_jobs import window
+
+    assert window.DEFAULT_PREOPEN_GUARD_MINUTES == 15
+
+    open_local = datetime(2026, 8, 12, 9, 30, tzinfo=ET)
+    close_local = datetime(2026, 8, 12, 16, 0, tzinfo=ET)
+    monkeypatch.setattr(window, "_session_bounds", lambda day: (open_local, close_local))
+
+    with _settings():  # no explicit setting: the default reserve applies
+        # 09:20 is outside the session but inside the reserve.
+        blocked = window.market_session_block(datetime(2026, 8, 12, 9, 20, tzinfo=ET))
+        assert blocked
+        assert "pre-open guard" in blocked
+        # 09:10 is clear of both.
+        assert window.market_session_block(datetime(2026, 8, 12, 9, 10, tzinfo=ET)) == ""
+
+
+def test_force_cannot_spend_the_preopen_reserve(tmp_path):
+    # --force skips window *timing*. The reserve lives inside the session
+    # block, which force never reaches, so this holds by construction -- and
+    # that construction is what this test pins.
+    from ai_jobs import runner, store
+
+    led = tmp_path / "ledger.jsonl"
+    ran = []
+
+    open_local = datetime(2026, 8, 12, 9, 30, tzinfo=ET)
+    close_local = datetime(2026, 8, 12, 16, 0, tzinfo=ET)
+
+    from ai_jobs import window as window_module
+
+    with (
+        mock.patch.object(store, "store_available", return_value=(True, "ready")),
+        mock.patch.object(window_module, "_session_bounds", lambda day: (open_local, close_local)),
+        _settings(),
+    ):
+        report = runner.run_slots(
+            [runner.JobSlot(name="ai_summary", run=lambda **k: ran.append(True))],
+            now=datetime(2026, 8, 12, 9, 20, tzinfo=ET),
+            force=True,
+            ledger_path=led,
+        )
+
+    assert ran == []
+    assert report.skipped == 1
+    assert "pre-open guard" in report.results[0]["reason"]

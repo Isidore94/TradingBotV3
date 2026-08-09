@@ -34,10 +34,15 @@ PREOPEN_GUARD_SETTING = "ai_preopen_guard_minutes"
 DEFAULT_OFFHOURS_START = "18:30"
 DEFAULT_OFFHOURS_END = "08:00"
 #: Extra minutes before the opening bell during which no job may launch.
-#: Default 0: the configured window is the trader's control, and the session
-#: block below already protects the session itself. Raise it if pre-market prep
-#: starts competing for the box.
-DEFAULT_PREOPEN_GUARD_MINUTES = 0
+#:
+#: Was 0, on the reasoning that the session block already protects the session
+#: itself. It does not protect the run-up to it: the desk's own launch task
+#: fires at 06:00 Pacific and pre-market prep is competing for the box well
+#: before the bell, so a job started at 09:29 ET with a 14 GB model still to
+#: load lands squarely on top of it. 15 minutes is the reserve (Sol 5.6
+#: verification review, item 9). It is part of the session block, so --force
+#: does not spend it either.
+DEFAULT_PREOPEN_GUARD_MINUTES = 15
 
 
 def _paths():

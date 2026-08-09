@@ -759,10 +759,17 @@ def test_the_runner_records_a_degraded_job_as_degraded(tmp_path):
     assert row["status"] == "degraded_no_narrative"
 
 
-def test_an_unknown_status_from_a_job_is_not_trusted_into_the_ledger(tmp_path):
+def test_an_unknown_status_from_a_job_fails_closed(tmp_path):
+    """"I do not know what happened" must never be filed as success.
+
+    An unrecognised status used to coerce to ``ok``, so a typo, a status added
+    by a later phase, or a half-written return value was recorded as a
+    trustworthy completion -- and, because completed_jobs counts ok rows, was
+    never retried (Sol 5.6 verification review, item 7).
+    """
     from unittest import mock
 
-    from ai_jobs import runner, store, window
+    from ai_jobs import ledger, runner, store, window
 
     led = tmp_path / "ledger.jsonl"
 
@@ -771,14 +778,39 @@ def test_an_unknown_status_from_a_job_is_not_trusted_into_the_ledger(tmp_path):
         mock.patch.object(window, "launch_allowed", return_value=(True, "open")),
         mock.patch.object(window, "market_session_block", return_value=""),
     ):
-        runner.run_slots(
+        report = runner.run_slots(
             [runner.JobSlot(name="ai_summary", run=lambda **k: {"status": "wonderful"})],
             now=datetime.fromisoformat("2026-08-08T02:00:00+00:00"),
             ledger_path=led,
         )
 
     row = json.loads(led.read_text(encoding="utf-8").splitlines()[0])
-    assert row["status"] == "ok"
+    assert row["status"] == "failed"
+    assert "wonderful" in row["reason"], "the unrecognised status is named, not swallowed"
+    assert report.failed == 1 and report.ran == 0
+    # And it is therefore retried by the next firing.
+    assert ledger.completed_jobs(row["session_date"], path=led) == set()
+
+
+def test_every_status_a_job_may_report_is_honoured(tmp_path):
+    from unittest import mock
+
+    from ai_jobs import ledger, runner, store, window
+
+    for status in (ledger.STATUS_OK, ledger.STATUS_DEGRADED, ledger.STATUS_MANUAL):
+        led = tmp_path / f"ledger_{status}.jsonl"
+        with (
+            mock.patch.object(store, "store_available", return_value=(True, "ready")),
+            mock.patch.object(window, "launch_allowed", return_value=(True, "open")),
+            mock.patch.object(window, "market_session_block", return_value=""),
+        ):
+            runner.run_slots(
+                [runner.JobSlot(name="ai_summary", run=lambda **k: {"status": status})],
+                now=datetime.fromisoformat("2026-08-08T02:00:00+00:00"),
+                ledger_path=led,
+            )
+        row = json.loads(led.read_text(encoding="utf-8").splitlines()[0])
+        assert row["status"] == status
 
 
 def test_the_degraded_document_states_coverage_without_a_model(tmp_path):

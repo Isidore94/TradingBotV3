@@ -29,6 +29,27 @@ STATUS_SKIPPED = "skipped"
 #: deliberately NOT counted as completed, so the next firing in the window
 #: retries it (checkpoint review 2026-08-08 second review).
 STATUS_DEGRADED = "degraded_no_narrative"
+#: A deliberate operator/manual run. It publishes real artifacts, but it is
+#: NEVER canonical evidence that a session was covered -- a Saturday-afternoon
+#: test run is not that session's nightly brief, and three such rows were
+#: sitting in the ledger looking like coverage (Sol 5.6 verification review).
+STATUS_MANUAL = "manual_test"
+#: A correction. The ledger is append-only, so a row that turns out to have
+#: been mis-attributed is annotated by appending one of these, never by
+#: rewriting the original.
+STATUS_CORRECTION = "correction"
+
+#: Statuses a job may report and the runner will honour. Anything else is
+#: recorded as STATUS_FAILED: "I do not know what happened" must never be
+#: filed as success.
+RECOGNISED_JOB_STATUSES = frozenset(
+    {STATUS_OK, STATUS_DEGRADED, STATUS_MANUAL, STATUS_FAILED, STATUS_SKIPPED}
+)
+
+#: What counts as "this session is covered". ``manual_test`` is deliberately
+#: absent, so a manual run never satisfies the canonical-completion check and
+#: the scheduled run still happens.
+CANONICAL_COMPLETION_STATUSES = frozenset({STATUS_OK})
 
 
 def ledger_path(*, create: bool = True) -> Path:
@@ -69,8 +90,13 @@ def record(
     tokens: Mapping[str, Any] | None = None,
     error: str = "",
     path: Path | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Write one ledger row and return it."""
+    """Write one ledger row and return it.
+
+    ``extra`` adds fields to the row. Fields are only ever added -- the schema
+    is append-only, so nothing here renames or drops an existing key.
+    """
     started = started_at or datetime.now().astimezone()
     finished = finished_at or datetime.now().astimezone()
     row = {
@@ -87,6 +113,8 @@ def record(
         "tokens": dict(tokens or {}),
         "error": str(error or ""),
     }
+    for key, value in dict(extra or {}).items():
+        row.setdefault(str(key), value)
     append_row(row, path=path)
     return row
 
@@ -98,13 +126,49 @@ def completed_jobs(session_date: str, *, path: Path | None = None) -> set[str]:
     a second launch sees the completed job and skips it instead of redoing it.
     """
     target = Path(path) if path is not None else ledger_path(create=False)
-    return {
-        str(row.get("job") or "")
-        for row in _read_rows(target)
-        if str(row.get("session_date") or "") == str(session_date)
-        and str(row.get("status") or "") == STATUS_OK
-        and str(row.get("job") or "")
-    }
+    completed: set[str] = set()
+    for row in _read_rows(target):
+        if str(row.get("session_date") or "") != str(session_date):
+            continue
+        job = str(row.get("job") or "")
+        if not job:
+            continue
+        status = str(row.get("status") or "")
+        if status in CANONICAL_COMPLETION_STATUSES:
+            completed.add(job)
+        elif status == STATUS_CORRECTION and row.get("noncanonical"):
+            # Rows are replayed in write order, so a correction retracts the
+            # coverage claimed before it and a genuine run after it restores
+            # the claim. This is how the append-only ledger annotates a
+            # mis-attributed row without rewriting history.
+            completed.discard(job)
+    return completed
+
+
+def mark_noncanonical(
+    *,
+    job: str,
+    session_date: str,
+    reason: str,
+    corrects: Iterable[str] = (),
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Append a correction retracting a session's coverage claim for ``job``.
+
+    Used when rows were keyed to a date that was never a session, or were
+    written by a manual run before ``manual_test`` existed. ``corrects``
+    carries the ``finished_at`` stamps of the rows being annotated, so the
+    original rows stay exactly as written and the correction says which ones
+    it speaks about.
+    """
+    return record(
+        job=job,
+        status=STATUS_CORRECTION,
+        session_date=session_date,
+        reason=reason,
+        path=path,
+        extra={"noncanonical": True, "corrects": [str(value) for value in corrects]},
+    )
 
 
 def recent_rows(limit: int = 50, *, path: Path | None = None) -> list[dict[str, Any]]:

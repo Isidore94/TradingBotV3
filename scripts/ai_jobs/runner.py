@@ -159,9 +159,27 @@ def run_slots(
             # A job may report that it published an honestly degraded document
             # rather than a trustworthy one. That is not "ok", and because
             # completed_jobs counts only STATUS_OK, the next firing retries it.
+            #
+            # An unrecognised status fails CLOSED. It used to coerce to
+            # STATUS_OK, so a job reporting a status this runner did not
+            # understand -- a typo, a status added by a later phase, a
+            # half-written return value -- was recorded as a trustworthy
+            # completion and never retried (Sol 5.6 verification review, item
+            # 7). "I do not know what happened" is the one thing that must
+            # never be filed as success.
             status = str(outcome.get("status") or ledger.STATUS_OK)
-            if status not in {ledger.STATUS_OK, ledger.STATUS_DEGRADED}:
-                status = ledger.STATUS_OK
+            if status not in ledger.RECOGNISED_JOB_STATUSES:
+                logging.error(
+                    "AI job %s reported an unrecognised status %r; recording it as "
+                    "failed rather than assuming success.",
+                    slot.name,
+                    status,
+                )
+                outcome = {
+                    **outcome,
+                    "reason": f"unrecognised job status {status!r}: {outcome.get('reason') or ''}".strip(),
+                }
+                status = ledger.STATUS_FAILED
             row = ledger.record(
                 job=slot.name,
                 status=status,
