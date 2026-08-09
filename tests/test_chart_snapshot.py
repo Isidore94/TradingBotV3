@@ -413,6 +413,66 @@ def test_candle_chart_renders_bars_and_overlays():
     assert chart.bar_count() == 0
 
 
+def test_chart_reuses_its_items_across_symbol_switches():
+    """Part C rule C5: update items in place, never rebuild them per switch.
+
+    Rebuilding 14 curve items was measured at 10.6ms of a 13ms set_data - the
+    largest single cost on the chart path - so item identity across switches
+    is the thing worth pinning down, not just the pixels.
+    """
+    if _qt_app() is None:
+        return
+    from ui.widgets.candle_chart import CandleChart
+
+    chart = CandleChart()
+    first = chart_snapshot.build_m5_snapshot("A", _m5_bars(20))
+    chart.set_data(first["bars"], first["overlays"], timeframe="m5")
+    plot = chart.getPlotItem()
+    items = plot.listDataItems()
+    assert len(items) == len(first["overlays"])
+    identities = [id(item) for item in items]
+    candles = chart._candles
+
+    second = chart_snapshot.build_m5_snapshot("B", _m5_bars(35, base=250.0))
+    for _ in range(5):
+        chart.set_data(second["bars"], second["overlays"], timeframe="m5")
+        chart.set_data(first["bars"], first["overlays"], timeframe="m5")
+    assert [id(item) for item in plot.listDataItems()] == identities
+    assert chart._candles is candles, "the candle item must survive a switch"
+
+    # A snapshot with fewer overlays hides the spares rather than destroying
+    # them, so the next symbol needing them pays nothing.
+    chart.set_data(first["bars"], first["overlays"][:2], timeframe="m5")
+    assert [id(item) for item in plot.listDataItems()] == identities
+    assert sum(1 for item in plot.listDataItems() if item.isVisible()) == 2
+
+    # Emptying the chart must not leave a stale curve painted over nothing.
+    chart.set_data([], [])
+    assert chart.bar_count() == 0
+    assert not any(item.isVisible() for item in plot.listDataItems())
+
+
+def test_chart_drops_antialiasing_while_the_view_is_dragged():
+    """C5: antialiasing off during interaction, restored once it settles."""
+    app = _qt_app()
+    if app is None:
+        return
+    from ui.widgets.candle_chart import CandleChart
+
+    chart = CandleChart()
+    snapshot = chart_snapshot.build_m5_snapshot("A", _m5_bars(20))
+    chart.set_data(snapshot["bars"], snapshot["overlays"], timeframe="m5")
+    curves = [item.curve for item in chart.getPlotItem().listDataItems()]
+    assert all(curve.opts["antialias"] for curve in curves)
+
+    chart._on_manual_range_change()
+    assert not any(curve.opts["antialias"] for curve in curves)
+    # set_data's own range calls must NOT count as interaction.
+    chart._set_overlay_antialias(True)
+    chart.set_data(snapshot["bars"], snapshot["overlays"], timeframe="m5")
+    assert all(item.curve.opts["antialias"] for item in chart.getPlotItem().listDataItems())
+
+
 def test_price_axis_labels_log_positions_with_round_prices():
     from ui.widgets.candle_chart import _nice_price_ticks, _to_log_price
 
