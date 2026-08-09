@@ -22,6 +22,13 @@ LEDGER_NAME = "ai_job_ledger.jsonl"
 STATUS_OK = "ok"
 STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
+#: The job ran, published a real document, and that document deliberately
+#: carries no narrative -- because there was nothing usable to narrate, or
+#: because the model twice cited evidence that does not exist. Distinct from
+#: ``ok`` (a trustworthy brief) and from ``failed`` (nothing was published), and
+#: deliberately NOT counted as completed, so the next firing in the window
+#: retries it (checkpoint review 2026-08-08 second review).
+STATUS_DEGRADED = "degraded_no_narrative"
 
 
 def ledger_path(*, create: bool = True) -> Path:

@@ -66,7 +66,7 @@ def test_evidence_package_is_explicit_bounded_and_source_addressable(tmp_path):
         now=datetime(2026, 7, 14, 17, 0, tzinfo=timezone.utc),
     )
 
-    assert evidence["schema_version"] == "ai_evidence_package_v1"
+    assert evidence["schema_version"] == "ai_evidence_package_v2"
     assert evidence["selected_scopes"] == ["daily_report"]
     assert evidence["source_count"] == 3
     assert {row["source_id"] for row in evidence["sources"]} == {
@@ -93,7 +93,10 @@ def test_market_condition_evidence_includes_advisory_industry_m5_snapshot(tmp_pa
                 "schema": "industry_intraday_rs_snapshot_v1",
                 "advisory_only": True,
                 "production_score_effect": "none",
-                "industries": [],
+                # A real snapshot: an empty industries list would (correctly)
+                # classify the document as carrying no records at all, which
+                # tests/test_ai_evidence_coverage.py covers separately.
+                "industries": [{"industry": "Semiconductors", "rs": 1.4}],
             }
         ),
         encoding="utf-8",
@@ -116,7 +119,7 @@ def test_validation_rejects_hallucinated_evidence_reference(tmp_path):
     assert valid["what_is_working"][0]["confidence"] == "high"
 
     bad = _valid_summary("not.a.real.source")
-    with pytest.raises(ValueError, match="unknown evidence"):
+    with pytest.raises(ValueError, match="unusable evidence"):
         validate_ai_summary(bad, evidence)
 
 

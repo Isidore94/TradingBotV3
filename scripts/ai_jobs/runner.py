@@ -60,12 +60,17 @@ class RunReport:
     def skipped(self) -> int:
         return sum(1 for row in self.results if row.get("status") == ledger.STATUS_SKIPPED)
 
+    @property
+    def degraded(self) -> int:
+        return sum(1 for row in self.results if row.get("status") == ledger.STATUS_DEGRADED)
+
     def summary(self) -> str:
         if not self.store_ok:
             return f"AI jobs did not run: {self.store_reason}"
         return (
             f"AI jobs for {self.session_date}: "
-            f"{self.ran} ok, {self.failed} failed, {self.skipped} skipped"
+            f"{self.ran} ok, {self.degraded} degraded, {self.failed} failed, "
+            f"{self.skipped} skipped"
         )
 
 
@@ -151,9 +156,15 @@ def run_slots(
         clock = time.perf_counter()
         try:
             outcome = slot.run(session_date=session_date, now=moment) or {}
+            # A job may report that it published an honestly degraded document
+            # rather than a trustworthy one. That is not "ok", and because
+            # completed_jobs counts only STATUS_OK, the next firing retries it.
+            status = str(outcome.get("status") or ledger.STATUS_OK)
+            if status not in {ledger.STATUS_OK, ledger.STATUS_DEGRADED}:
+                status = ledger.STATUS_OK
             row = ledger.record(
                 job=slot.name,
-                status=ledger.STATUS_OK,
+                status=status,
                 session_date=session_date,
                 started_at=started,
                 model=str(outcome.get("model") or ""),

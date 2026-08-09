@@ -95,6 +95,40 @@ SCOPE_LABELS = {
     "pick_feedback": "Likes/dislikes feedback",
 }
 
+# --- source status vocabulary ---------------------------------------------
+#
+# "available" used to mean "the file exists", which conflated four different
+# situations the reader has to tell apart (checkpoint review 2026-08-08 second
+# review). A header-only CSV and a 40 KB tracker were both "available"; a file
+# the budget had zeroed was also "available", with no content and no marker.
+# The distinctions below are what let the coverage block state the truth.
+SOURCE_STATUS_AVAILABLE = "available"   # real content, usable as evidence
+SOURCE_STATUS_EMPTY = "empty"           # exists, but holds no records
+SOURCE_STATUS_MISSING = "missing"       # not on disk at all
+SOURCE_STATUS_INVALID = "invalid"       # on disk, but unparseable
+SOURCE_STATUS_UNAVAILABLE = "unavailable"  # could not be produced (read/query error)
+SOURCE_STATUS_UNFUNDED = "unfunded"     # real content, no budget left to carry it
+
+#: Only these reach the model. Everything else goes to the coverage block.
+USABLE_SOURCE_STATUSES = frozenset({SOURCE_STATUS_AVAILABLE})
+
+#: Budget priority, highest first. The trader's stated priorities -- what the
+#: setups are doing and what the journal says about them -- are funded before
+#: the daily narrative artifacts, because a package that spends its whole
+#: budget on the first report it happens to read is not a review.
+SCOPE_BUDGET_WEIGHTS = {
+    "setup_trackers": 3,
+    "journal_review": 3,
+    "daily_report": 2,
+    "market_conditions": 2,
+    "move_forensics": 1,
+    "pick_feedback": 1,
+}
+
+#: Below this a grant cannot carry anything a reader could use, so the source
+#: is excluded and declared unfunded rather than included as a stub.
+MIN_SOURCE_BUDGET_CHARS = 600
+
 AI_SUMMARY_SECTIONS = (
     "what_is_working",
     "what_is_not_working",
@@ -248,22 +282,54 @@ def _bounded(value: Any, *, depth: int = 0) -> Any:
     return str(value)
 
 
-def _read_jsonl(path: Path) -> list[Any]:
+def _read_jsonl(path: Path) -> tuple[list[Any], int]:
+    """Bounded tail of a JSONL file, plus the count of *valid* records seen.
+
+    The count is what separates "this ledger holds nothing" from "this ledger
+    holds a thousand rows we only kept the last 200 of".
+    """
     rows: deque[Any] = deque(maxlen=MAX_ROWS)
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    value = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                rows.append(_bounded(value))
-    except OSError:
-        return []
-    return list(rows)
+    valid = 0
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            valid += 1
+            rows.append(_bounded(value))
+    return list(rows), valid
 
 
-def _read_path_content(path: Path) -> tuple[Any, bool]:
+def _json_payload_is_empty(value: Any) -> bool:
+    """True when a parsed JSON document carries no records.
+
+    A payload container is any list or mapping value. A document is empty when
+    it is falsy outright (``{}``, ``[]``, ``null``) or when every container it
+    holds is empty and it carries no other substantive value -- the shape a
+    freshly-initialised tracker has: ``{"schema_version": 2, "setups": {},
+    "stats": []}``. Schema/version scalars alone are not evidence.
+    """
+    if value is None or value == {} or value == [] or value == "":
+        return True
+    if isinstance(value, Mapping):
+        containers = [item for item in value.values() if isinstance(item, (list, dict))]
+        if not containers:
+            return False
+        return all(not item for item in containers)
+    return False
+
+
+def _read_path_content(path: Path) -> tuple[Any, bool, str, str]:
+    """``(content, truncated, status, detail)`` for one artifact on disk.
+
+    ``status`` distinguishes real content from an artifact that exists but
+    holds nothing (``empty``), one that cannot be parsed (``invalid``), and one
+    that cannot be read at all (``unavailable``). Conflating those under
+    "available" is what let a header-only CSV look like evidence.
+    """
     suffix = path.suffix.lower()
     if suffix == ".csv":
         try:
@@ -271,55 +337,142 @@ def _read_path_content(path: Path) -> tuple[Any, bool]:
                 reader = csv.DictReader(handle)
                 rows = [_bounded(dict(row)) for _, row in zip(range(MAX_ROWS), reader)]
                 truncated = next(reader, None) is not None
-                return rows, truncated
-        except OSError:
-            return [], False
+        except OSError as exc:
+            return None, False, SOURCE_STATUS_UNAVAILABLE, f"could not be read: {exc}"
+        except csv.Error as exc:
+            return None, False, SOURCE_STATUS_INVALID, f"malformed CSV: {exc}"
+        if not rows:
+            # A header row with no data rows is the classic false positive: a
+            # non-zero file size that carries no records at all.
+            return [], False, SOURCE_STATUS_EMPTY, "CSV has a header but no data rows"
+        return rows, truncated, SOURCE_STATUS_AVAILABLE, ""
     if suffix == ".jsonl":
-        rows = _read_jsonl(path)
-        return rows, False
+        try:
+            rows, valid = _read_jsonl(path)
+        except OSError as exc:
+            return None, False, SOURCE_STATUS_UNAVAILABLE, f"could not be read: {exc}"
+        if not valid:
+            return [], False, SOURCE_STATUS_EMPTY, "JSONL holds no valid records"
+        return rows, valid > len(rows), SOURCE_STATUS_AVAILABLE, ""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return "", False
+    except OSError as exc:
+        return None, False, SOURCE_STATUS_UNAVAILABLE, f"could not be read: {exc}"
+    if not text.strip():
+        return "", False, SOURCE_STATUS_EMPTY, "file is empty or whitespace only"
     truncated = len(text) > MAX_SOURCE_CHARS
     visible = text[:MAX_SOURCE_CHARS]
-    if suffix == ".json" and not truncated:
+    if suffix == ".json":
+        if truncated:
+            # Too large to parse from the visible slice; the text is still
+            # real evidence, just cut short. Not invalid.
+            return (
+                visible + f"\n[showing the first {MAX_SOURCE_CHARS} of {len(text)} characters]",
+                True,
+                SOURCE_STATUS_AVAILABLE,
+                "",
+            )
         try:
-            return _bounded(json.loads(visible)), False
-        except json.JSONDecodeError:
-            pass
-    return visible + ("\n[content truncated]" if truncated else ""), truncated
+            parsed = json.loads(visible)
+        except json.JSONDecodeError as exc:
+            return None, False, SOURCE_STATUS_INVALID, f"malformed JSON: {exc}"
+        if _json_payload_is_empty(parsed):
+            return (
+                _bounded(parsed),
+                False,
+                SOURCE_STATUS_EMPTY,
+                "JSON document contains no records",
+            )
+        return _bounded(parsed), False, SOURCE_STATUS_AVAILABLE, ""
+    if truncated:
+        visible += f"\n[showing the first {MAX_SOURCE_CHARS} of {len(text)} characters]"
+    return visible, truncated, SOURCE_STATUS_AVAILABLE, ""
 
 
-def _path_source(source_id: str, label: str, path: Path) -> dict[str, Any]:
+def _path_source(
+    source_id: str,
+    label: str,
+    path: Path,
+    *,
+    session_date: str = "",
+) -> dict[str, Any]:
     target = Path(path)
     if not target.exists():
-        return {
-            "source_id": source_id,
-            "label": label,
-            "status": "missing",
-            "as_of": "",
-            "sha256": "",
-            "truncated": False,
-            "content": None,
-        }
+        return _source_record(
+            source_id,
+            label,
+            status=SOURCE_STATUS_MISSING,
+            reason=f"{target.name} does not exist",
+            session_date=session_date,
+        )
     try:
-        as_of = datetime.fromtimestamp(target.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+        modified = datetime.fromtimestamp(target.stat().st_mtime).astimezone()
+        as_of = modified.isoformat(timespec="seconds")
+        source_session = modified.date().isoformat()
     except OSError:
         as_of = ""
-    content, truncated = _read_path_content(target)
+        source_session = ""
+    content, truncated, status, detail = _read_path_content(target)
+    return _source_record(
+        source_id,
+        label,
+        status=status,
+        reason=detail,
+        as_of=as_of,
+        source_session=source_session,
+        session_date=session_date,
+        sha256=_sha256_file(target) if status != SOURCE_STATUS_UNAVAILABLE else "",
+        truncated=bool(truncated),
+        content=content,
+    )
+
+
+def _source_record(
+    source_id: str,
+    label: str,
+    *,
+    status: str,
+    reason: str = "",
+    as_of: str = "",
+    source_session: str = "",
+    session_date: str = "",
+    sha256: str = "",
+    truncated: bool = False,
+    content: Any = None,
+) -> dict[str, Any]:
+    """One uniform source record, with its own provenance and notices.
+
+    ``source_session`` is the session the artifact actually represents;
+    ``session_date`` is the session that was asked for. When they disagree the
+    source is flagged stale here and again in the coverage block -- on
+    2026-07-30 an auto_report from an earlier session was packaged as if it
+    were the requested day's, and nothing in the package said so (checkpoint
+    review 2026-08-08 second review).
+    """
+    notices: list[str] = []
+    stale = bool(session_date and source_session and source_session != session_date)
+    if stale:
+        notices.append(
+            f"STALE: this artifact is from session {source_session}, but the "
+            f"review is for {session_date}. Do not describe it as {session_date} data."
+        )
     return {
         "source_id": source_id,
         "label": label,
-        "status": "available",
+        "status": status,
+        "status_reason": reason,
         "as_of": as_of,
-        "sha256": _sha256_file(target),
-        "truncated": bool(truncated),
+        "source_session": source_session,
+        "requested_session": session_date,
+        "stale": stale,
+        "sha256": sha256,
+        "truncated": truncated,
+        "notices": notices,
         "content": content,
     }
 
 
-def _journal_source(journal_store=None) -> dict[str, Any]:
+def _journal_source(journal_store=None, *, session_date: str = "") -> dict[str, Any]:
     try:
         if journal_store is None:
             from journal_store import JournalStore
@@ -328,15 +481,14 @@ def _journal_source(journal_store=None) -> dict[str, Any]:
         trades = journal_store.list_trades()[:500]
         events = journal_store.list_opportunity_events(limit=1000)
     except Exception as exc:
-        return {
-            "source_id": "journal.trades_and_reviews",
-            "label": "Trade journal and lifecycle reviews",
-            "status": "unavailable",
-            "as_of": "",
-            "sha256": "",
-            "truncated": False,
-            "content": {"error": str(exc)},
-        }
+        return _source_record(
+            "journal.trades_and_reviews",
+            "Trade journal and lifecycle reviews",
+            status=SOURCE_STATUS_UNAVAILABLE,
+            reason=f"journal store could not be queried: {exc}",
+            session_date=session_date,
+            content={"error": str(exc)},
+        )
     trade_keys = (
         "trade_id", "trade_date", "symbol", "direction", "status", "opened_at", "closed_at",
         "quantity_opened", "quantity_closed", "average_entry_price", "average_exit_price", "net_pnl",
@@ -357,15 +509,142 @@ def _journal_source(journal_store=None) -> dict[str, Any]:
     ]
     content = {"trades": _bounded(public_trades), "lifecycle_events": _bounded(public_events)}
     encoded = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
-    return {
-        "source_id": "journal.trades_and_reviews",
-        "label": "Trade journal and lifecycle reviews",
-        "status": "available",
-        "as_of": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "sha256": hashlib.sha256(encoded).hexdigest(),
-        "truncated": len(trades) >= 500 or len(events) >= 1000,
-        "content": content,
+    now = datetime.now().astimezone()
+    return _source_record(
+        "journal.trades_and_reviews",
+        "Trade journal and lifecycle reviews",
+        status=(
+            SOURCE_STATUS_AVAILABLE
+            if (public_trades or public_events)
+            else SOURCE_STATUS_EMPTY
+        ),
+        reason="" if (public_trades or public_events) else "journal holds no trades or lifecycle events",
+        as_of=now.isoformat(timespec="seconds"),
+        # Queried live, so it is by construction the requested session's view
+        # of the journal; it is never stale against the session being reviewed.
+        source_session=session_date or now.date().isoformat(),
+        session_date=session_date,
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        truncated=len(trades) >= 500 or len(events) >= 1000,
+        content=content,
+    )
+
+
+def _encoded_size(content: Any) -> int:
+    return len(json.dumps(content, sort_keys=True, default=str))
+
+
+def _allocate_scope_budgets(
+    needs: Mapping[str, int],
+    *,
+    total: int = MAX_TOTAL_EVIDENCE_CHARS,
+) -> dict[str, int]:
+    """Split ``total`` chars across scopes by priority weight, then reallocate.
+
+    The old budget was first-come: sources were encoded in scope order and each
+    took whatever was left, so a large ``daily_report`` could consume the whole
+    80,000 chars and every later scope -- including ``setup_trackers`` and
+    ``journal_review``, the two the trader actually asked the nightly review to
+    read -- was silently reduced to nothing (checkpoint review 2026-08-08
+    second review).
+
+    Each scope gets a weighted share; a scope that needs less than its share
+    gives the surplus back, and the pool is then handed out in priority order
+    to the scopes that are still short. Nothing here decides what to *drop* --
+    that is per-source, and it is always declared.
+    """
+    weights = {scope: SCOPE_BUDGET_WEIGHTS.get(scope, 1) for scope in needs}
+    weight_total = sum(weights.values()) or 1
+    allocation = {
+        scope: int(total * weight / weight_total) for scope, weight in weights.items()
     }
+
+    surplus = 0
+    for scope, granted in list(allocation.items()):
+        need = max(0, int(needs.get(scope, 0)))
+        if granted > need:
+            surplus += granted - need
+            allocation[scope] = need
+
+    if surplus:
+        ordered = sorted(
+            allocation,
+            key=lambda scope: (-SCOPE_BUDGET_WEIGHTS.get(scope, 1), scope),
+        )
+        for scope in ordered:
+            short = max(0, int(needs.get(scope, 0)) - allocation[scope])
+            if short <= 0 or surplus <= 0:
+                continue
+            grant = min(short, surplus)
+            allocation[scope] += grant
+            surplus -= grant
+    return allocation
+
+
+def _truncate_to_budget(content: Any, budget: int) -> tuple[Any, str]:
+    """Fit ``content`` into ``budget`` chars, returning it plus a banner.
+
+    Tabular content keeps its **most recent** rows, because that is the end a
+    trading review reads from; text keeps its head. Either way the reader is
+    told what it is looking at instead of being handed a silently shortened
+    artifact.
+    """
+    if isinstance(content, list):
+        total = len(content)
+        kept = list(content)
+        while kept and _encoded_size(kept) > budget:
+            kept = kept[1:]  # drop oldest first
+        if len(kept) == total:
+            return content, ""
+        banner = f"[showing most recent {len(kept)} of {total} rows]"
+        return [banner, *kept], banner
+    encoded = json.dumps(content, sort_keys=True, default=str) if not isinstance(content, str) else content
+    if len(encoded) <= budget:
+        return content, ""
+    banner = f"[showing the first {budget} of {len(encoded)} characters of this source]"
+    return encoded[: max(0, budget)] + "\n" + banner, banner
+
+
+def _apply_evidence_budget(
+    sources_by_scope: Mapping[str, list[dict[str, Any]]],
+    *,
+    total: int = MAX_TOTAL_EVIDENCE_CHARS,
+) -> None:
+    """Fund sources scope by scope, in place. Never silently zeroes anything."""
+    needs = {
+        scope: sum(_encoded_size(source.get("content")) for source in sources)
+        for scope, sources in sources_by_scope.items()
+    }
+    allocation = _allocate_scope_budgets(needs, total=total)
+
+    for scope, sources in sources_by_scope.items():
+        remaining = allocation.get(scope, 0)
+        for source in sources:
+            if source.get("status") != SOURCE_STATUS_AVAILABLE:
+                continue  # nothing to fund; it is already declared non-usable
+            size = _encoded_size(source.get("content"))
+            if size <= remaining:
+                remaining -= size
+                continue
+            if remaining < MIN_SOURCE_BUDGET_CHARS:
+                # The distinction the old code lost: this source has real bytes
+                # on disk. Calling it empty would be a lie, and handing over an
+                # empty content field with status "available" was worse. It is
+                # excluded and declared unfunded.
+                source["status"] = SOURCE_STATUS_UNFUNDED
+                source["status_reason"] = (
+                    f"{size} chars of real content, but only {remaining} chars of the "
+                    f"{scope} evidence budget remained; excluded rather than blanked"
+                )
+                source["content"] = None
+                continue
+            trimmed, banner = _truncate_to_budget(source.get("content"), remaining)
+            source["content"] = trimmed
+            source["truncated"] = True
+            if banner:
+                source["notices"].append(banner)
+            source["budget_truncated"] = True
+            remaining = 0
 
 
 def build_evidence_package(
@@ -375,8 +654,20 @@ def build_evidence_package(
     source_overrides: Mapping[str, Path] | None = None,
     journal_store=None,
     now: datetime | None = None,
+    session_date: str | date | None = None,
 ) -> dict[str, Any]:
-    """Build the exact, bounded evidence that the user elected to send."""
+    """Build the exact, bounded evidence that the user elected to send.
+
+    The package the model sees carries **only usable sources**. Everything else
+    -- missing, empty, invalid, unavailable, or squeezed out by the budget --
+    is listed in the machine-owned ``coverage`` block with a status and a
+    reason. Handing a model an "available" source whose content is ``null`` and
+    expecting it to infer why was how a starved package looked exactly like an
+    empty one (checkpoint review 2026-08-08 second review).
+
+    ``session_date`` is the session being reviewed. Sources whose artifact is
+    from a different session are flagged stale, in-band and in coverage.
+    """
 
     selected = list(dict.fromkeys(str(scope or "").strip() for scope in scopes if str(scope or "").strip()))
     unknown = [scope for scope in selected if scope not in SCOPE_LABELS]
@@ -384,51 +675,116 @@ def build_evidence_package(
         raise ValueError(f"unknown AI summary scope(s): {', '.join(unknown)}")
     if not selected:
         raise ValueError("select at least one evidence scope")
+    generated = now or datetime.now().astimezone()
+    if isinstance(session_date, date):
+        session_text = session_date.isoformat()
+    else:
+        session_text = str(session_date or "").strip()
+
     overrides = {str(key): Path(value) for key, value in (source_overrides or {}).items()}
     specs = _source_specs()
-    sources: list[dict[str, Any]] = []
+    sources_by_scope: dict[str, list[dict[str, Any]]] = {}
+    scope_of: dict[str, str] = {}
     for scope in selected:
+        collected: list[dict[str, Any]] = []
         if scope == "journal_review":
-            sources.append(_journal_source(journal_store))
-            continue
-        for source_id, label, path in specs.get(scope, []):
-            sources.append(_path_source(source_id, label, overrides.get(source_id, path)))
-        if scope == "market_conditions" and live_context:
-            content = _bounded(dict(live_context))
-            encoded = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
-            sources.append(
-                {
-                    "source_id": "market.live_read",
-                    "label": "Live read-only BounceBot market context",
-                    "status": "available",
-                    "as_of": (now or datetime.now().astimezone()).isoformat(timespec="seconds"),
-                    "sha256": hashlib.sha256(encoded).hexdigest(),
-                    "truncated": False,
-                    "content": content,
-                }
-            )
-
-    # Enforce a total prompt budget without silently dropping source metadata.
-    used = 0
-    for source in sources:
-        encoded = json.dumps(source.get("content"), sort_keys=True, default=str)
-        remaining = max(0, MAX_TOTAL_EVIDENCE_CHARS - used)
-        if len(encoded) > remaining:
-            source["content"] = encoded[:remaining] + ("\n[package budget reached]" if remaining else "")
-            source["truncated"] = True
-            used = MAX_TOTAL_EVIDENCE_CHARS
+            collected.append(_journal_source(journal_store, session_date=session_text))
         else:
-            used += len(encoded)
+            for source_id, label, path in specs.get(scope, []):
+                collected.append(
+                    _path_source(
+                        source_id,
+                        label,
+                        overrides.get(source_id, path),
+                        session_date=session_text,
+                    )
+                )
+            if scope == "market_conditions" and live_context:
+                content = _bounded(dict(live_context))
+                encoded = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
+                collected.append(
+                    _source_record(
+                        "market.live_read",
+                        "Live read-only BounceBot market context",
+                        status=SOURCE_STATUS_AVAILABLE,
+                        as_of=generated.isoformat(timespec="seconds"),
+                        source_session=session_text or generated.date().isoformat(),
+                        session_date=session_text,
+                        sha256=hashlib.sha256(encoded).hexdigest(),
+                        content=content,
+                    )
+                )
+        sources_by_scope[scope] = collected
+        for source in collected:
+            scope_of[str(source["source_id"])] = scope
 
-    generated = now or datetime.now().astimezone()
+    _apply_evidence_budget(sources_by_scope)
+
+    all_sources = [source for scope in selected for source in sources_by_scope[scope]]
+    usable = [source for source in all_sources if source["status"] in USABLE_SOURCE_STATUSES]
+    excluded = [source for source in all_sources if source["status"] not in USABLE_SOURCE_STATUSES]
+
+    coverage = {
+        "schema_version": "ai_evidence_coverage_v1",
+        "requested_session": session_text,
+        "usable_source_ids": [str(source["source_id"]) for source in usable],
+        "excluded": [
+            {
+                "source_id": str(source["source_id"]),
+                "label": str(source["label"]),
+                "scope": scope_of.get(str(source["source_id"]), ""),
+                "status": str(source["status"]),
+                "reason": str(source.get("status_reason") or ""),
+            }
+            for source in excluded
+        ],
+        "stale": [
+            {
+                "source_id": str(source["source_id"]),
+                "label": str(source["label"]),
+                "source_session": str(source.get("source_session") or ""),
+            }
+            for source in usable
+            if source.get("stale")
+        ],
+        "truncated": [
+            {
+                "source_id": str(source["source_id"]),
+                "label": str(source["label"]),
+                "notices": list(source.get("notices") or []),
+            }
+            for source in usable
+            if source.get("truncated")
+        ],
+    }
+    coverage["counts"] = {
+        "requested": len(all_sources),
+        "usable": len(usable),
+        "stale": len(coverage["stale"]),
+        "truncated": len(coverage["truncated"]),
+        **{
+            status: sum(1 for source in excluded if source["status"] == status)
+            for status in (
+                SOURCE_STATUS_EMPTY,
+                SOURCE_STATUS_MISSING,
+                SOURCE_STATUS_INVALID,
+                SOURCE_STATUS_UNAVAILABLE,
+                SOURCE_STATUS_UNFUNDED,
+            )
+        },
+    }
+
     package = {
-        "schema_version": "ai_evidence_package_v1",
+        "schema_version": "ai_evidence_package_v2",
         "generated_at": generated.isoformat(timespec="seconds"),
         "trade_date": generated.date().isoformat(),
+        "session_date": session_text,
         "selected_scopes": selected,
         "scope_labels": [SCOPE_LABELS[scope] for scope in selected],
-        "source_count": len(sources),
-        "sources": sources,
+        "source_count": len(usable),
+        # Only usable sources reach the model.
+        "sources": usable,
+        "coverage": coverage,
         "safety_contract": {
             "purpose": "advisory summary and retrospective learning only",
             "forbidden_effects": ["scanner scores", "watchlists", "alerts", "bot state", "orders"],
@@ -438,6 +794,21 @@ def build_evidence_package(
     package["evidence_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     package["package_id"] = package["evidence_hash"][:16]
     return package
+
+
+def usable_source_ids(evidence: Mapping[str, Any]) -> set[str]:
+    """Source IDs a summary is allowed to cite."""
+    return {
+        str(source.get("source_id"))
+        for source in evidence.get("sources") or []
+        if isinstance(source, Mapping)
+        and source.get("source_id")
+        and str(source.get("status") or SOURCE_STATUS_AVAILABLE) in USABLE_SOURCE_STATUSES
+    }
+
+
+def has_usable_sources(evidence: Mapping[str, Any]) -> bool:
+    return bool(usable_source_ids(evidence))
 
 
 def _system_instruction() -> str:
@@ -451,13 +822,38 @@ def _system_instruction() -> str:
     )
 
 
+#: The one line the package split requires. The model no longer sees the
+#: missing/empty/unfunded sources at all, so it must be told that their absence
+#: is accounted for -- otherwise the predictable failure is a model inventing a
+#: reason, or worse, citing a source_id it half-remembers from a heading.
+COVERAGE_PROMPT_LINE = (
+    "Sources not listed in this package were empty, missing, invalid, or could not be "
+    "funded within the evidence budget; a system-generated data-quality note already "
+    "records each one with its exact reason, so do not speculate about them and do not "
+    "cite any source_id that is not listed here."
+)
+
+
 def _user_prompt(evidence: Mapping[str, Any]) -> str:
     return (
         "Review the selected scopes. Summarize what is working, what is failing, the strongest already-qualified "
         "candidates (if any), lessons for tomorrow, data-quality gaps, and risks. Separate measured outcomes from "
-        "hypotheses. Return only the required JSON object.\n\nEVIDENCE PACKAGE:\n"
-        + json.dumps(evidence, sort_keys=True, default=str)
+        "hypotheses. Return only the required JSON object.\n"
+        + COVERAGE_PROMPT_LINE
+        + "\n\nEVIDENCE PACKAGE:\n"
+        + json.dumps(_model_visible_package(evidence), sort_keys=True, default=str)
     )
+
+
+def _model_visible_package(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """The package minus the machine-owned coverage block.
+
+    Coverage is provenance the *code* owns and merges into the finished
+    document deterministically (see :func:`merge_coverage_into_summary`).
+    Showing it to the model would invite it to paraphrase counts it cannot
+    verify, which is the opposite of the point.
+    """
+    return {key: value for key, value in evidence.items() if key != "coverage"}
 
 
 def _extract_openai_text(payload: Mapping[str, Any]) -> str:
@@ -477,7 +873,20 @@ def _extract_openai_text(payload: Mapping[str, Any]) -> str:
     return "".join(chunks).strip()
 
 
-def _local_user_prompt(evidence: Mapping[str, Any]) -> str:
+def _correction_note(previous_error: str) -> str:
+    """The retry's feedback: the exact rejection, not a generic scolding."""
+    if not str(previous_error or "").strip():
+        return ""
+    return (
+        "\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY LOCAL VALIDATION:\n"
+        f"{previous_error}\n"
+        "Fix exactly that problem. Cite only source_id values that appear in the "
+        "evidence package above; if you cannot support a statement with one of "
+        "them, drop the statement rather than inventing a reference."
+    )
+
+
+def _local_user_prompt(evidence: Mapping[str, Any], previous_error: str = "") -> str:
     """The shared prompt plus an explicit statement of the required shape.
 
     The cloud providers learn the schema from their structured-output contracts
@@ -498,6 +907,7 @@ def _local_user_prompt(evidence: Mapping[str, Any]) -> str:
         "the keys statement, evidence_refs, confidence. confidence is one of "
         "high, medium, low. Each evidence_refs entry must be a source_id copied "
         "verbatim from the evidence package above."
+        + _correction_note(previous_error)
     )
 
 
@@ -543,7 +953,19 @@ def _parse_json_text(text: str) -> dict[str, Any]:
 
 
 def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate shape and reject unsupported/hallucinated source references."""
+    """Validate shape and reject unsupported/hallucinated source references.
+
+    One validator, every provider. ``evidence_refs`` must resolve to a source
+    that is actually **usable** -- present in the package *and* carrying
+    content. The model package already contains only usable sources, so this is
+    defence in depth: a coverage entry, a scope label, or a source_id the model
+    recalls from a previous night must not pass as evidence just because the
+    string looks familiar (checkpoint review 2026-08-08 second review).
+
+    Every section other than ``executive_summary`` may legitimately be an empty
+    array -- a thin evidence night with nothing to say about candidates is a
+    correct answer, not a malformed one.
+    """
 
     if not isinstance(payload, Mapping):
         raise ValueError("AI summary must be an object")
@@ -555,10 +977,13 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
     executive = str(payload.get("executive_summary") or "").strip()
     if not executive:
         raise ValueError("executive_summary cannot be blank")
-    valid_refs = {
-        str(source.get("source_id"))
-        for source in evidence.get("sources") or []
-        if isinstance(source, Mapping) and source.get("source_id")
+    valid_refs = usable_source_ids(evidence)
+    # Named so the rejection can say *why* a plausible-looking id is not
+    # citable, rather than only that it is unknown.
+    excluded_refs = {
+        str(row.get("source_id")): str(row.get("status") or "excluded")
+        for row in ((evidence.get("coverage") or {}).get("excluded") or [])
+        if isinstance(row, Mapping) and row.get("source_id")
     }
     normalized: dict[str, Any] = {"executive_summary": executive}
     for section in AI_SUMMARY_SECTIONS:
@@ -577,7 +1002,13 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
             clean_refs = list(dict.fromkeys(str(ref).strip() for ref in refs if str(ref).strip()))
             invalid = sorted(set(clean_refs) - valid_refs)
             if invalid:
-                raise ValueError(f"{section}[{index}] cites unknown evidence: {', '.join(invalid)}")
+                detail = ", ".join(
+                    f"{ref} ({excluded_refs[ref]}, not in this package)"
+                    if ref in excluded_refs
+                    else ref
+                    for ref in invalid
+                )
+                raise ValueError(f"{section}[{index}] cites unusable evidence: {detail}")
             if section not in {"data_quality", "risk_notes"} and not clean_refs:
                 raise ValueError(f"{section}[{index}] must cite evidence")
             normalized_rows.append(
@@ -587,6 +1018,163 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
     return normalized
 
 
+#: Marks a data_quality row the *code* wrote. A reader (and a later pass over
+#: the artifact) can tell provenance apart from narrative without guessing.
+COVERAGE_STATEMENT_PREFIX = "[system]"
+
+
+def _coverage_statements(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Exact, code-generated data-quality rows from the coverage block."""
+    coverage = evidence.get("coverage")
+    if not isinstance(coverage, Mapping):
+        return []
+    counts = coverage.get("counts") or {}
+    rows: list[dict[str, Any]] = []
+
+    def _row(text: str) -> dict[str, Any]:
+        return {
+            "statement": f"{COVERAGE_STATEMENT_PREFIX} {text}",
+            "evidence_refs": [],
+            "confidence": "high",
+        }
+
+    usable = int(counts.get("usable") or 0)
+    requested = int(counts.get("requested") or 0)
+    rows.append(
+        _row(
+            f"Evidence coverage: {usable} of {requested} requested source(s) were usable"
+            + (f" for session {coverage.get('requested_session')}" if coverage.get("requested_session") else "")
+            + "."
+        )
+    )
+    by_status: dict[str, list[str]] = {}
+    for entry in coverage.get("excluded") or []:
+        if isinstance(entry, Mapping):
+            by_status.setdefault(str(entry.get("status") or "excluded"), []).append(
+                str(entry.get("source_id") or "")
+            )
+    for status in (
+        SOURCE_STATUS_EMPTY,
+        SOURCE_STATUS_MISSING,
+        SOURCE_STATUS_INVALID,
+        SOURCE_STATUS_UNAVAILABLE,
+        SOURCE_STATUS_UNFUNDED,
+    ):
+        ids = sorted(value for value in by_status.get(status, []) if value)
+        if ids:
+            rows.append(_row(f"{len(ids)} source(s) {status}: {', '.join(ids)}."))
+    stale = coverage.get("stale") or []
+    if stale:
+        detail = ", ".join(
+            f"{entry.get('source_id')} (session {entry.get('source_session') or 'unknown'})"
+            for entry in stale
+            if isinstance(entry, Mapping)
+        )
+        rows.append(
+            _row(
+                f"{len(stale)} source(s) are from a different session than the one "
+                f"reviewed: {detail}. Statements resting on them describe that "
+                "earlier session."
+            )
+        )
+    truncated = coverage.get("truncated") or []
+    if truncated:
+        detail = "; ".join(
+            f"{entry.get('source_id')}: {' '.join(entry.get('notices') or []) or 'shortened'}"
+            for entry in truncated
+            if isinstance(entry, Mapping)
+        )
+        rows.append(_row(f"{len(truncated)} source(s) were shown in part only -- {detail}"))
+    return rows
+
+
+def merge_coverage_into_summary(
+    summary: Mapping[str, Any], evidence: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Append code-owned provenance rows to ``data_quality``.
+
+    Deterministic on purpose. Asking the model to report its own coverage
+    produces a paraphrase of counts it cannot verify -- and the one thing a
+    data-quality section must never do is guess. The model's own observations
+    are kept; these are added after them, prefixed so provenance is legible.
+    """
+    merged = {key: value for key, value in summary.items()}
+    model_rows = list(merged.get("data_quality") or [])
+    existing = {
+        str(row.get("statement") or "") for row in model_rows if isinstance(row, Mapping)
+    }
+    merged["data_quality"] = model_rows + [
+        row for row in _coverage_statements(evidence) if row["statement"] not in existing
+    ]
+    return merged
+
+
+def build_degraded_summary(
+    evidence: Mapping[str, Any], *, reason: str
+) -> dict[str, Any]:
+    """A templated, model-free document for when no narrative can be trusted.
+
+    Published instead of silence when there are no usable sources at all, or
+    when the model twice cited evidence that does not exist. Yesterday's brief
+    left in place with nothing said would look like a healthy night; a document
+    that states plainly what happened cannot (checkpoint review 2026-08-08
+    second review).
+    """
+    coverage = evidence.get("coverage") if isinstance(evidence.get("coverage"), Mapping) else {}
+    counts = coverage.get("counts") or {}
+    session = str(coverage.get("requested_session") or evidence.get("session_date") or "")
+    executive = (
+        "DEGRADED — no narrative was produced"
+        + (f" for session {session}" if session else "")
+        + f". {reason} "
+        + f"{int(counts.get('usable') or 0)} of {int(counts.get('requested') or 0)} "
+        "requested source(s) were usable. The coverage section below is generated "
+        "by the system from the evidence package itself and is complete; nothing "
+        "in this document is model-written."
+    )
+    summary = {"executive_summary": executive}
+    for section in AI_SUMMARY_SECTIONS:
+        summary[section] = []
+    summary["data_quality"] = _coverage_statements(evidence) or [
+        {
+            "statement": f"{COVERAGE_STATEMENT_PREFIX} No evidence coverage was recorded.",
+            "evidence_refs": [],
+            "confidence": "high",
+        }
+    ]
+    summary["risk_notes"] = [
+        {
+            "statement": (
+                f"{COVERAGE_STATEMENT_PREFIX} This document carries no analysis. "
+                "Do not read the absence of findings as an absence of problems."
+            ),
+            "evidence_refs": [],
+            "confidence": "high",
+        }
+    ]
+    return summary
+
+
+def degraded_result(
+    evidence: Mapping[str, Any], *, reason: str, model: str = "", provider: str = "local"
+) -> dict[str, Any]:
+    """A result envelope around :func:`build_degraded_summary`."""
+    now = datetime.now().astimezone()
+    return {
+        "schema_version": "ai_summary_result_v1",
+        "status": "degraded_no_narrative",
+        "degraded_reason": str(reason),
+        "provider": provider,
+        "model": str(model or ""),
+        "response_id": "",
+        "generated_at": now.isoformat(timespec="seconds"),
+        "duration_seconds": 0.0,
+        "evidence_package_id": evidence.get("package_id"),
+        "evidence_hash": evidence.get("evidence_hash"),
+        "summary": build_degraded_summary(evidence, reason=reason),
+    }
+
+
 def _request_local_summary(
     *,
     model: str,
@@ -594,6 +1182,7 @@ def _request_local_summary(
     evidence: Mapping[str, Any],
     timeout_seconds: int,
     post,
+    previous_error: str = "",
 ) -> tuple[Mapping[str, Any], dict[str, Any]]:
     """One local chat-completions call, validated the same way as the cloud.
 
@@ -614,7 +1203,7 @@ def _request_local_summary(
         "model": model,
         "messages": [
             {"role": "system", "content": _system_instruction()},
-            {"role": "user", "content": _local_user_prompt(evidence)},
+            {"role": "user", "content": _local_user_prompt(evidence, previous_error)},
         ],
         "max_tokens": 3500,
         # Advisory output that gets re-read and audited should not wander
@@ -661,10 +1250,13 @@ def _request_local_summary(
         try:
             return body, validate_ai_summary(_parse_json_text(text), evidence)
         except (ValueError, json.JSONDecodeError) as exc:
-            # Only malformed output is worth retrying, and only once.
+            # Only malformed output is worth retrying, and only once -- and the
+            # retry now carries the exact rejection back to the model rather
+            # than re-asking the identical question and hoping.
             last_error = exc
             if attempt >= LOCAL_JSON_RETRIES:
                 break
+            payload["messages"][1]["content"] = _local_user_prompt(evidence, str(exc))
     raise RuntimeError(
         f"local provider returned invalid summary JSON after "
         f"{LOCAL_JSON_RETRIES + 1} attempt(s): {last_error}"
@@ -679,8 +1271,13 @@ def request_ai_summary(
     evidence: Mapping[str, Any],
     timeout_seconds: int = 90,
     post=requests.post,
+    previous_error: str = "",
 ) -> dict[str, Any]:
-    """Call one provider and return validated output plus non-secret metadata."""
+    """Call one provider and return validated output plus non-secret metadata.
+
+    ``previous_error`` is the rejection from an earlier attempt, fed back to
+    the model verbatim so the retry is told what to fix.
+    """
 
     normalized_provider = normalize_provider(provider)
     selected_model = str(model or default_model_for(normalized_provider)).strip()
@@ -697,6 +1294,7 @@ def request_ai_summary(
             evidence=evidence,
             timeout_seconds=timeout_seconds,
             post=post,
+            previous_error=previous_error,
         )
         finished = datetime.now().astimezone()
         return {
@@ -718,7 +1316,7 @@ def request_ai_summary(
             json={
                 "model": selected_model,
                 "instructions": _system_instruction(),
-                "input": _user_prompt(evidence),
+                "input": _user_prompt(evidence) + _correction_note(previous_error),
                 "max_output_tokens": 3500,
                 "store": False,
                 "text": {
@@ -746,7 +1344,12 @@ def request_ai_summary(
                 "model": selected_model,
                 "max_tokens": 3500,
                 "system": _system_instruction(),
-                "messages": [{"role": "user", "content": _user_prompt(evidence)}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": _user_prompt(evidence) + _correction_note(previous_error),
+                    }
+                ],
                 "output_config": {
                     "format": {"type": "json_schema", "schema": AI_SUMMARY_JSON_SCHEMA}
                 },
@@ -788,16 +1391,23 @@ def render_ai_summary_markdown(result: Mapping[str, Any], evidence: Mapping[str,
         "data_quality": "Data quality",
         "risk_notes": "Risk notes",
     }
+    degraded = str(result.get("status") or "") == "degraded_no_narrative"
     lines = [
-        "# A.I. Summary (advisory only)",
+        "# A.I. Summary — DEGRADED (no narrative)" if degraded else "# A.I. Summary (advisory only)",
         "",
         str(summary.get("executive_summary") or ""),
         "",
-        f"Provider/model: {result.get('provider')} / {result.get('model')}",
+        f"Provider/model: {result.get('provider')} / {result.get('model') or 'none (no model was called)'}",
         f"Evidence package: {evidence.get('package_id')} · {evidence.get('generated_at')}",
-        "",
-        "> This output cannot change scanner scores, watchlists, alerts, bot state, or place orders.",
     ]
+    if evidence.get("session_date"):
+        lines.append(f"Session reviewed: {evidence.get('session_date')}")
+    lines.extend(
+        [
+            "",
+            "> This output cannot change scanner scores, watchlists, alerts, bot state, or place orders.",
+        ]
+    )
     for section in AI_SUMMARY_SECTIONS:
         lines.extend(["", f"## {labels[section]}"])
         rows = summary.get(section) if isinstance(summary.get(section), list) else []
@@ -810,9 +1420,27 @@ def render_ai_summary_markdown(result: Mapping[str, Any], evidence: Mapping[str,
     lines.extend(["", "## Evidence inventory"])
     for source in evidence.get("sources") or []:
         if isinstance(source, Mapping):
+            flags = []
+            if source.get("stale"):
+                flags.append(f"STALE (session {source.get('source_session') or 'unknown'})")
+            if source.get("truncated"):
+                flags.append("shown in part")
+            suffix = f" · {'; '.join(flags)}" if flags else ""
             lines.append(
                 f"- `{source.get('source_id')}` — {source.get('label')} · {source.get('status')} · "
-                f"as of {source.get('as_of') or 'unknown'}"
+                f"as of {source.get('as_of') or 'unknown'}{suffix}"
+            )
+    coverage = evidence.get("coverage") if isinstance(evidence.get("coverage"), Mapping) else {}
+    excluded = coverage.get("excluded") or []
+    lines.extend(["", "## Sources not in this package"])
+    if not excluded:
+        lines.append("- None: every requested source was usable.")
+    for entry in excluded:
+        if isinstance(entry, Mapping):
+            reason = str(entry.get("reason") or "").strip()
+            lines.append(
+                f"- `{entry.get('source_id')}` — {entry.get('label')} · **{entry.get('status')}**"
+                + (f" · {reason}" if reason else "")
             )
     return "\n".join(lines).strip() + "\n"
 
