@@ -455,3 +455,35 @@ ownership fix vs 9037c5f's original on this side — theirs supersedes),
 paint lines, A5, the shared loader, both survey tools, the selftest —
 auto-merges. Awaiting the trader's word on folding this branch into the
 testing week.
+
+## 16. Final state for the 2026-08-10 testing week (verified 2026-08-09)
+
+`origin/testing-week-2026-08-10` = 2b6db0c: the A4/A5 reconciliation merge
+(06d8429, parents 2c218db + a126550) + stamp + the multitasking-inert
+conftest fix. Independently re-verified in a fresh worktree/venv (py3.12):
+2582 passed / 5 skipped / 7 subtests, junit failures=0 errors=0, exit 0 in
+96s with no post-summary hang (hang reproduces with the conftest line
+removed — causally confirmed); smoke 7/7; `launch_gui.py --selftest` 30/30;
+spec-drift 16/16 with the research_warehouse negative control failing 5/16.
+All seven fence files byte-clean. `main` (7d85a27) is an ancestor — the
+branch is one merge step from main, to be taken only after the plan.md sec 6
+validation days pass.
+
+Desk checklist correction: §12 step 1 should check out
+`testing-week-2026-08-10` (not this branch) — everything here is contained
+in it.
+
+Branch audit (2026-08-09): 25 remote branches are fully contained in
+2b6db0c and safe to delete; agent sessions cannot delete refs (403 +
+permission layer), so the trader runs the deletions. Keep: `main`,
+`testing-week-2026-08-10`. Three branches carry unmerged work and need a
+decision: `claude/testing-production-blockers-oek3aj` (6 defect-fix commits
+hardening the capture stream — torn-annotation write safety, chart-cache
+scanner-publish staleness, an alert-privilege invariant guard, its own sweep
+fix now superseded by b7615b7; recommend reconciling before Thursday's live
+days), `scoring-flagging-evidence-guardrails` (scoring change — golden-
+fixture rule applies, do not merge into the testing week),
+`claude/trading-system-review-e0p8ll` (one doc commit, the consolidation
+plan record). SHA recovery record for all deleted branches: this section's
+audit ran against the ls-remote snapshot in the session scratchpad; every
+contained branch's content is reachable from 2b6db0c regardless.
