@@ -325,6 +325,22 @@ c. **A3 scope**: moot for this session — desk facts (items 2-5) were
    and the desk numbers exist.
 d. *(new)* **Red-level drawing** — see §10.4 above.
 
+**ANSWERED by the trader (2026-08-09, in-session):**
+
+a. **Route through the owning panel.** The §4 diff is approved as recorded —
+   including the one connect line plus `_arm_price_alert_from_level` in the
+   otherwise-fenced `alert_center_panel.py`. The chart never writes
+   `price_alerts.json`; `PriceAlertService` keeps a single writer. That
+   specific diff is the entire fence exception; nothing else in the file is
+   unfenced by it.
+b. **Approved.** `d1_level_feed.py` gains a shared cached raw ai_state
+   loader both consumers use; the chart path's duplicate parse goes away.
+   Refactor only — detector-facing outputs must be provably unchanged.
+c. **Desk checklist first.** A3 dispatches only after the §12 numbers come
+   back.
+d. **Confirm on desk first**, then decide red-level drawing with the real
+   store numbers in hand.
+
 ## 11. What this session dispatched and what came back
 
 | Packet | Result |
