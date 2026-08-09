@@ -35,12 +35,21 @@ def master_avwap_legacy():
 def warm() -> None:
     """Force the heavy imports now, so later concurrent users cannot race.
 
-    Called at the top of every worker task on the chart path. After the first
-    call this is a dict lookup.
+    Called at the top of every blocking entry point on the chart path, not
+    just the snapshot build: two pool threads importing pandas and
+    master_avwap_lib at the same time is an access violation inside the
+    import machinery, not a Python-level error. pandas and
+    setup_playbook_study are on the list because they are the large C
+    extension chains the workers actually pull in first.
+
+    After the first call this is four dict lookups.
     """
     with _LOCK:
         try:
+            import pandas  # noqa: F401
+
             import chart_snapshot  # noqa: F401
+            import setup_playbook_study  # noqa: F401
             from master_avwap_lib import legacy  # noqa: F401
         except Exception:
             # A failed warm is not fatal here - the real call site will raise

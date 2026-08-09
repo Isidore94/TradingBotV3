@@ -113,6 +113,22 @@ class ChartDataService(QObject):
         max_threads: int = DEFAULT_MAX_THREADS,
     ) -> None:
         super().__init__(parent)
+        # Do the heavy first-imports HERE, on the thread that builds the
+        # service, before a single worker exists.
+        #
+        # A lock inside the workers is not enough: it can only serialize the
+        # threads that go through it, and the main thread imports modules of
+        # its own throughout a session. Importing pandas and the engine
+        # modules from a pool thread while any other thread is in the import
+        # machinery faults below the interpreter - an access violation, not
+        # an ImportError. Once these are in sys.modules no worker performs a
+        # first-import at all, so the race has nothing left to lose.
+        #
+        # This costs nothing in the desk (the app has long since imported
+        # pandas by the time a chart exists) and is a one-off in tests.
+        from ui.services import safe_import
+
+        safe_import.warm()
         self.store = store if store is not None else shared_store()
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(max(1, int(max_threads)))

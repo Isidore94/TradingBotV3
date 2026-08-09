@@ -222,6 +222,13 @@ class D1BarStore:
         with self._lock:
             self._misses += 1
 
+        # Before any of the function-level imports below. Two pool threads
+        # (a snapshot build and a prefetch batch) reaching an un-imported
+        # pandas at the same moment faults inside the import machinery.
+        from ui.services import safe_import
+
+        safe_import.warm()
+
         stem, shared = self._shared_path(symbol)
         if not stem:
             return None
@@ -250,6 +257,9 @@ class D1BarStore:
 
     def prefetch(self, symbols: Iterable[str]) -> int:
         """Warm the cache for ``symbols``. BLOCKING - worker threads only."""
+        from ui.services import safe_import
+
+        safe_import.warm()
         warmed = 0
         for symbol in symbols:
             symbol = _normalize(symbol)
@@ -350,8 +360,11 @@ class D1BarStore:
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             # Write beside, then replace: a torn feather file read by the next
-            # launch would look like a corrupt store.
-            tmp = path.with_suffix(".feather.tmp")
+            # launch would look like a corrupt store. The temp name carries
+            # the thread id because a snapshot build and a prefetch batch can
+            # be resolving the SAME symbol at the same moment, and a shared
+            # temp path would have them writing over each other.
+            tmp = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
             series.to_frame().to_feather(tmp)
             tmp.replace(path)
         except Exception:
