@@ -163,14 +163,23 @@ class SymbolSnapshotWidget(QWidget):
         self._d1_backfill_thread: threading.Thread | None = None
         self._forming_thread: threading.Thread | None = None
         self._d1BackfillDone.connect(self._on_d1_backfill_done)
-        # Every chart build runs on this service's workers (C3: the GUI
-        # thread does no I/O). One service is shared desk-wide, so each
-        # widget filters deliveries down to the symbol it is showing.
-        from ui.services.chart_data_service import shared_service
+        # Every chart build runs off the GUI thread (C3: no I/O here). The
+        # worker pool is shared desk-wide, but this widget owns its delivery
+        # object: a single global signal would offer every result to every
+        # chart widget ever constructed, including ones already destroyed,
+        # and a queued delivery into a dead receiver is an access violation.
+        from ui.services.chart_data_service import ChartDataService, shared_pool
 
-        self._data = shared_service()
+        self._data = ChartDataService(pool=shared_pool())
         self._data.snapshotReady.connect(self._on_snapshot_ready)
         self._data.snapshotFailed.connect(self._on_snapshot_failed)
+        # Stop the service the moment this widget goes away, so a build still
+        # in flight drops its result instead of emitting into the teardown.
+        # The lambda captures the service only - capturing self here would
+        # keep the widget alive past its own destruction.
+        self.destroyed.connect(
+            lambda _obj=None, service=self._data: service.shutdown()
+        )
         # Latest snapshot dicts, retained so callers can quick-fill a price from
         # a drawn overlay (VWAP, +/-1 sigma). set_data plots overlays and drops
         # them, so without this the values are unrecoverable after rendering.

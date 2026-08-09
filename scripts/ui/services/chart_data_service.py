@@ -17,6 +17,14 @@ Ordering: a fast sequence of symbol switches can complete out of order, so
 each request carries a sequence number and a task whose number is no longer
 the newest for its symbol drops its result instead of painting over a newer
 chart.
+
+Delivery is per-owner, not broadcast. The worker POOL is process-wide (two
+threads, shared by every chart), but each chart holds its own service object
+and therefore its own ``snapshotReady``. A single global signal that every
+chart widget ever built connects to means a result is offered to widgets
+that have since been destroyed, and delivering a queued signal into a dead
+receiver is an access violation. Sharing the pool keeps that cheap: the
+per-chart object is a bare QObject.
 """
 
 import atexit
@@ -110,6 +118,7 @@ class ChartDataService(QObject):
         *,
         store: D1BarStore | None = None,
         parent: QObject | None = None,
+        pool: QThreadPool | None = None,
         max_threads: int = DEFAULT_MAX_THREADS,
     ) -> None:
         super().__init__(parent)
@@ -130,8 +139,13 @@ class ChartDataService(QObject):
 
         safe_import.warm()
         self.store = store if store is not None else shared_store()
-        self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(max(1, int(max_threads)))
+        # An owned pool is torn down by shutdown(); the shared one is not,
+        # because other charts are still using it.
+        self._owns_pool = pool is None
+        if pool is None:
+            pool = QThreadPool(self)
+            pool.setMaxThreadCount(max(1, int(max_threads)))
+        self._pool = pool
         self._counter = itertools.count(1)
         self._lock = threading.Lock()
         self._newest: dict[str, int] = {}
@@ -305,8 +319,46 @@ class ChartDataService(QObject):
         symptom was a segfault at the end of an otherwise green test run.
         """
         self._closing = True
-        self._pool.clear()
-        self._pool.waitForDone(5000)
+        if self._owns_pool:
+            self._pool.clear()
+            self._pool.waitForDone(5000)
+
+
+_POOL: QThreadPool | None = None
+_POOL_LOCK = threading.Lock()
+
+
+def shared_pool() -> QThreadPool:
+    """The process-wide chart worker pool.
+
+    Charts each own their delivery object but share these threads: two is
+    enough to serve the visible chart while draining prefetch behind it, and
+    more would only contend for the same disk.
+    """
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = QThreadPool()
+            _POOL.setMaxThreadCount(DEFAULT_MAX_THREADS)
+            atexit.register(_drain_shared_pool)
+        return _POOL
+
+
+def _drain_shared_pool() -> None:
+    """Finish the workers before the interpreter starts finalizing.
+
+    A task part-way through build_snapshots re-enters modules through
+    function-level imports; if sys.modules is being torn down underneath it,
+    that is an access violation rather than an exception.
+    """
+    pool = _POOL
+    if pool is None:
+        return
+    try:
+        pool.clear()
+        pool.waitForDone(5000)
+    except Exception:
+        pass
 
 
 _SERVICE: ChartDataService | None = None
