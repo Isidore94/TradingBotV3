@@ -7,6 +7,27 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
+- Branch `claude/testing-production-blockers-oek3aj` (2026-08-09, cut from
+  `testing` @ 59128c5): repairs for the Sol 5.6 verification review's four
+  production blockers plus the weak characterization fence and the annotation
+  durability contract. Chart Review's LIKE no longer writes Focus/watchlists
+  (analysis-only boundary restored); the Setups drawer reads the compact
+  scoring snapshot off-thread and bounded, never the 762MB raw tracker; the
+  chart bar cache re-stats the durable store on memory hits so a scanner
+  publish is noticed without restart; the startup temp sweep deletes only
+  staging files whose canonical owner `project_paths` itself names; the
+  veto-cohort characterization now pins every field of every row against the
+  pre-change (`main`) output; annotation appends heal torn tails and fsync.
+  Gate: **2186 passed, 5 skipped, 7 subtests** (Linux, offscreen Qt,
+  `TZ=America/Los_Angeles` — 16 session-window tests are UTC-sensitive and
+  fail without it; identical failures reproduce on unmodified 59128c5, so
+  they are environmental, not branch regressions). Known pre-existing,
+  unfixed here: after a green summary the pytest process can fail to exit
+  while non-daemon `multitasking` (yfinance) pool threads and unstopped
+  `run_strategy` threads linger — the same unbounded-quiescence class the
+  review flagged; the leaking tests should get `network` markers or explicit
+  teardown in a follow-up packet.
+
 - Branch `main` (2026-08-08 evening, merged from `durability-catchup`,
   `local-ai-phase-0`, `local-ai-phase-1`). Gate: **2002 passed, 7 subtests**
   (adds `tests/test_durability_retry.py`, `tests/test_launch_guard.py`,

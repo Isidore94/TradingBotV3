@@ -93,10 +93,15 @@ carry it.
 - **Append-only.** Every write opens the file in append mode. Nothing
   truncates, rewrites, reorders, or deletes a row. A mistaken capture is
   corrected by a later row, never by editing an earlier one.
-- **Atomic per row.** One row is one line, written inside the machine-local
-  writer lock, bounded to 4096 bytes so it can never be torn or interleaved
-  with another process's row. Notes are capped at 2000 characters, which is
-  what keeps the row inside that bound.
+- **One row, one line, one fsynced write.** A row is written inside the
+  machine-local writer lock as a single bounded (4096-byte) write and fsynced
+  before `SAVED` is shown, so cooperating writers never interleave and
+  "saved" survives a power cut. Notes are capped at 2000 characters, which is
+  what keeps the row inside that bound. This is confinement, not atomicity: a
+  crash mid-write can still tear that row's tail, but the appender heals a
+  torn tail with a newline before the next write, so a torn fragment can only
+  ever cost its own row — never the row after it — and the reader skips
+  exactly the torn line.
 - **One writer.** The desk GUI owns the file.
 - **Failures are visible.** A write that does not reach disk returns false and
   the rail turns red and says `NOT SAVED`. A trader who believes a decision was
@@ -202,16 +207,25 @@ when to run it is a separate change.
 
 ---
 
-## 7. Like + setup claim — extending, not duplicating
+## 7. Like + setup claim — a recorded judgement, nothing more
 
-A like goes through the **existing** `FocusService.add()`, which already writes
-`pick_feedback.jsonl` and is what the human-focus snapshot reads. Origin
-`chart_review` is added to the documented `PICK_ORIGINS`, which makes the
-resulting cohort suffix `focus_swing_chart_review` self-describing.
+A like writes **one annotation row** carrying the claimed setup id, and that
+is all. There is deliberately no second likes store.
 
-The **only** thing this packet stores separately is the claimed setup id,
-because `pick_feedback` has no field for it. There is deliberately no second
-likes store.
+An earlier draft of this section routed likes through `FocusService.add()` to
+reuse the existing `pick_feedback` machinery. That was wrong by this
+document's own rules: `FocusPickStore.add` writes Focus state AND injects the
+symbol into a swing watchlist, and Focus membership bypasses alert feed gates
+in the Alert Center — a capture surface silently changing live scanning and
+alerting (§2's boundary, and §5's "adding a looked-up name to a watchlist or
+focus list stays an explicit, separate trader action"). The trader clicking
+LIKE is judging a chart, not asking for alert privileges; if they want the
+name in Focus, the Focus surfaces that own those files are one click away.
+The `chart_review` entry in `PICK_ORIGINS` remains documented but dormant.
+
+If likes ever need forward-return grading, they get it the way vetoes do
+(§6): a capture-side cohort file graded by the existing outcome math, with
+zero influence on live lists.
 
 Claims are read from `setup_docs.all_setup_docs_by_group()` — the same families
 the rest of the system names — including the study/measured-only group, since a
@@ -281,5 +295,6 @@ edit was needed or made by this packet.
 | **Cohort isolation characterization + sensitivity control** | `tests/test_veto_cohort.py` |
 | Focus picks file provably untouched by a veto merge | `tests/test_veto_cohort.py` |
 | Lookup never writes watchlists (3 angles), symbol normalization | `tests/test_chart_review_workspace.py` |
-| Rail wiring, like-through-FocusService, failure surfaced, drawer default hidden | `tests/test_chart_review_workspace.py` |
+| Rail wiring, like-writes-one-annotation-row-and-nothing-else, no focus writer importable, failure surfaced, drawer default hidden | `tests/test_chart_review_workspace.py` |
+| Setups drawer: off-GUI-thread bounded snapshot read, setup-id keys rendered as symbols, byte ceiling refused | `tests/test_chart_review_workspace.py` |
 | Page/nav registration alignment | `tests/test_chart_review_workspace.py`, `tests/test_qt_focus_panel.py` |
