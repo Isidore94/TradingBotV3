@@ -98,6 +98,25 @@ QToolButton:checked {
     color: @text_primary@;
 }
 
+/* A button that rides an existing text row (the embedded snapshot pane's
+   "Lines" control sits on the D1 legend line) must not make that row taller
+   than the text already makes it. The general button chrome above - vertical
+   padding plus a 1px border - costs the height-starved chart pane 5px, so a
+   row-chrome button drops both and pays for its hit area with the row's own
+   line height instead. Horizontal padding stays: it costs the chart nothing. */
+QPushButton[rowChrome="true"],
+QToolButton[rowChrome="true"] {
+    background: transparent;
+    border: none;
+    padding: 0px @pad_small@;
+}
+
+QPushButton[rowChrome="true"]:hover,
+QToolButton[rowChrome="true"]:hover {
+    background: @bg_hover@;
+    color: @accent@;
+}
+
 QPushButton#PrimaryButton {
     background: @accent@;
     border-color: @accent@;

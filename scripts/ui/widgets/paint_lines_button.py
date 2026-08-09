@@ -14,7 +14,8 @@ file crossing Drive to a machine with a different screen.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEvent, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QMenu, QToolButton, QWidget
 
 from chart_levels import LEVEL_GROUPS
@@ -36,13 +37,18 @@ class PaintLinesButton(QToolButton):
     ) -> None:
         super().__init__(parent)
         self._prefs = prefs if prefs is not None else PaintLinesPrefs()
-        if compact:
+        self._compact = bool(compact)
+        if self._compact:
             # The desk's embedded snapshot pane is height-starved - its legends
             # were already put on one line to win back pixels for the candles.
             # A flat, short button rides the legend row without taking any of
-            # them back.
+            # them back: the rowChrome property drops the theme's button
+            # padding and border, and the height cap below is the row's own
+            # line height rather than a guessed constant, so the header row
+            # measures exactly what the legend label alone would measure.
             self.setAutoRaise(True)
-            self.setMaximumHeight(22)
+            self.setProperty("rowChrome", True)
+            self._sync_row_height()
         self.setText("Lines")
         self.setToolTip(
             "Show or hide groups of chart lines. Saved on this machine only."
@@ -60,6 +66,29 @@ class PaintLinesButton(QToolButton):
             self._actions[group] = action
         self.setMenu(self._menu)
         self._update_text()
+
+    def _sync_row_height(self) -> None:
+        """Cap the compact button at one line of text, in the current font.
+
+        The neighbouring legend is a plain QLabel with no margins, so its
+        height is exactly one line of the themed font. Measuring the same
+        metric here keeps the pair equal through a font-size change (the UI
+        scale setting) instead of pinning a number that was only right at
+        scale 1.0.
+        """
+        self.setMaximumHeight(QFontMetrics(self.font()).height())
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        # The stylesheet's font arrives at polish time, after __init__, and the
+        # scale setting can change it again while the desk is running. Both
+        # land here, so the cap tracks the row instead of freezing at whatever
+        # font happened to be active when the button was built.
+        if self._compact and event.type() in (
+            QEvent.Type.FontChange,
+            QEvent.Type.StyleChange,
+        ):
+            self._sync_row_height()
 
     def hidden_groups(self) -> list[str]:
         return self._prefs.hidden_groups()

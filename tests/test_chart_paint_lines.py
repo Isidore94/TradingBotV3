@@ -321,6 +321,58 @@ def test_paint_lines_button_reports_and_persists_the_hidden_set(tmp_path):
     assert PaintLinesPrefs(path).hidden_groups() == [chart_levels.GROUP_HORIZONTAL]
 
 
+@pytest.mark.parametrize("compact_density", [False, True])
+@pytest.mark.parametrize("width", [2560, 1280])
+def test_the_compact_lines_button_costs_the_header_row_no_height(
+    tmp_path, compact_density, width
+):
+    """The whole reason the compact button is flat: pixels for the candles.
+
+    Measured under the real stylesheet, because the default style has no
+    button padding and would hide the very chrome that used to cost the
+    embedded pane 5px of chart.
+    """
+    from ui import theme
+    from ui.services.paint_lines_prefs import PaintLinesPrefs
+    from ui.widgets.paint_lines_button import PaintLinesButton
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    def _measure(with_button: bool) -> tuple[tuple[int, int], int]:
+        widget = SymbolSnapshotWidget(compact=True)
+        widget.paint_lines_button.setParent(None)
+        if with_button:
+            widget.paint_lines_button = PaintLinesButton(
+                compact=True, prefs=PaintLinesPrefs(tmp_path / "p.json")
+            )
+            widget.d1_header.layout().addWidget(widget.paint_lines_button, 0)
+        widget.resize(width, 1200)
+        widget.show()
+        _app.processEvents()
+        sizes = (widget.d1_header.height(), widget.d1_chart.height())
+        button = widget.paint_lines_button
+        # How tall the button wants to be, above one line of its own text.
+        chrome = button.minimumSizeHint().height() - button.fontMetrics().height()
+        widget.hide()
+        widget.deleteLater()
+        return sizes, chrome
+
+    previous_sheet = _app.styleSheet()
+    try:
+        theme.apply_theme(_app, "dark", compact_density, 1.0)
+        with_button, chrome = _measure(True)
+        without_button, _ = _measure(False)
+    finally:
+        _app.setStyleSheet(previous_sheet)
+        _app.processEvents()
+
+    assert with_button == without_button
+    # Capping the height alone is not enough. A button still wearing the
+    # theme's button padding and border gets squeezed into the row and paints
+    # a sliver of "Lines" instead of the word, so the chrome it asks for must
+    # stay inside the style's own few pixels of trim.
+    assert chrome <= 6
+
+
 # --------------------------------------------------------------------------
 # the host: one snapshot, filtered on the way to the chart
 # --------------------------------------------------------------------------
