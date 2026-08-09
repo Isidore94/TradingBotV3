@@ -23,7 +23,16 @@ from desk_link import protocol
 from desk_link.client import DeskLinkClient
 from desk_link.outbox import IntentOutbox
 
-WAIT = 5.0
+#: Ceiling on how long a pump waits for a Qt/socket round trip.
+#:
+#: 5.0 s was enough in isolation and occasionally not enough under full-suite
+#: load on a desk that also hosts local inference -- the intent round trip
+#: crosses two threads, a socket, and the Qt event loop, so a scheduling
+#: hiccup lands on the timeout rather than on any real defect. Desk Link is
+#: retired (plan.md 7a note, 2026-08-08) and its code is frozen pending the
+#: cleanup packet, so this widens the tolerance rather than reshaping a
+#: server that must stay unused.
+WAIT = 20.0
 
 
 def _qapp():

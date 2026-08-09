@@ -304,8 +304,47 @@ unattended overnight jobs.
 - Extend to **per-ticker briefs** for the Focus list / watchlists (previously
   uneconomical against metered APIs; free locally). Published to
   `ai_store/briefs/` + small morning file to Drive.
-- Exit gate: a week of mornings where the summary and briefs are waiting
-  before pre-market prep with zero manual action.
+- Exit gate: **superseded 2026-08-09 — see "Phase 1 exit gate" below.** The
+  original wording ("a week of mornings where the summary and briefs are
+  waiting before pre-market prep with zero manual action") defined neither a
+  session nor "clean", and set no reset condition — which is how three
+  Saturday artifacts came to look like coverage.
+
+#### Phase 1 exit gate (Sol 5.6 verification review, 2026-08-09)
+
+> Five consecutive clean NYSE sessions.
+
+A session counts toward the five only if **all** of the following hold:
+
+1. The day is a **regular NYSE trading session** by `market_calendar`.
+   Weekends and holidays are not sessions and never count — neither toward
+   the five nor as a break in them. The run is over *sessions*, not over
+   calendar days.
+2. The ledger carries a **canonical `ok` row keyed to that session date**,
+   written by the scheduled task. `manual_test` never counts: an operator run
+   publishes real artifacts but is not that session's nightly brief.
+   `degraded_no_narrative` never counts. `failed` never counts.
+3. **Session attribution is correct** — artifacts and ledger row are keyed to
+   the session whose evidence was read, not to the wall-clock date of the run.
+4. **Coverage reconciles**: the usable and excluded counts in the published
+   document match the evidence package, and every excluded source carries a
+   status and a reason.
+5. No `correction` row retracts that session's coverage.
+
+**Reset conditions.** The count returns to **zero**, not to four, on any of:
+
+- a session in the run that produced `failed`, `degraded_no_narrative`, or no
+  row at all;
+- a session covered only by a `manual_test` row;
+- a session whose attribution or coverage is later found wrong — that is, any
+  `correction` row appended against it;
+- any change to session identity, evidence packaging, the validator, or the
+  failure policy. Changing the thing being observed restarts the observation.
+
+**The manual Saturday artifacts are noncanonical.** The three 2026-08-08 `ok`
+rows were written by manual runs on a day the exchange never opened. They have
+been retracted by an appended `correction` row and count for nothing. The
+five-session clock had not started as of 2026-08-09.
 
 **Status 2026-08-08 — scheduled summary LANDED, per-ticker briefs NOT BUILT**
 (branch `local-ai-phase-1`; 1889 passed, 7 subtests; smoke 7/7). The exit gate
@@ -733,3 +772,40 @@ Additionally:
 5. **Digest schema v1 — DRAFTED** (sec 6.4); trader sign-off on the field
    list is still required before the first ledger write (append-only from
    then on; later fields extend, never mutate).
+
+---
+
+## Amended 2026-08-09 — repair packet 2 (Sol 5.6 verification review)
+
+Verifying the 2026-08-08 repairs found that several of them were warnings
+rather than controls, and one had never reached production at all. What
+changed, in this layer:
+
+- **Session identity** now comes from a real NYSE calendar
+  (`scripts/market_calendar.py`) and **fails closed**. A run resolves the most
+  recent session whose close is at or before run time; a weekend or holiday
+  firing works on the last completed session, or records one no-session skip
+  row if that session is already covered. Nothing is ever keyed to a date the
+  exchange did not open.
+- **`manual_test`** is a distinct ledger status for `--force` and operator
+  runs. It publishes real artifacts and never satisfies the
+  canonical-completion check, so the scheduled run still happens.
+- **`correction`** is a distinct ledger status for retracting a coverage claim
+  by appending, never by rewriting. The ledger stays append-only.
+- **The journal is session-scoped and import-aware.** Filtered to the session
+  by SQL; a stalled import makes it stale and hides its old rows; import
+  health (last import, newest execution, lag days, session row count) is
+  reported as a `[system]` data-quality row.
+- **`data_quality` is machine-owned** — out of the model's schema, out of the
+  prompt, rejected by the validator if returned. The model keeps `risk_notes`.
+- **Stale sources leave the package** rather than carrying a warning into it.
+- **Unknown job statuses fail closed** to `failed`.
+- **The pre-open reserve is 15 minutes**, inside the session block, so
+  `--force` cannot spend it.
+- **Reads are bounded** and the raw setup tracker is packaged as a
+  most-recent extract rather than a head slice of March watchlists; within
+  `setup_trackers`, analytic sub-sources are funded before the raw tracker.
+
+Unchanged and still open: the 80,000-character evidence budget is undersized
+for a local model (a trader decision, not a repair), and the tracker file
+itself is still 762 MB.

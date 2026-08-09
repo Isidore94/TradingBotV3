@@ -219,3 +219,114 @@ of the evidence it claimed. That is now visible instead of implied.
   prompt which session the journal rows should be read against, would.
 - The original review's open inspection item (UNC path handling in
   `ai_jobs/store.py`) is untouched and still open.
+
+---
+
+## SECOND ADDENDUM — Sol 5.6 verification review (2026-08-09 record)
+
+The first addendum recorded repairs. This one records what happened when
+those repairs were *verified*: one of them had never reached production, and
+several of the controls written into the first packet turned out to be
+warnings rather than controls. Repair packet 2 is the response.
+
+### Verdict
+
+The 2026-08-08 repairs were real but incompletely landed. The load-bearing
+finding is that a fix can pass its own test and do nothing, and that the way
+to catch that is to make the test go through the production path rather than
+the shape the fix happens to produce.
+
+### Surviving P0 — the vintage never reached the loader
+
+`save_setup_tracker_payload` wrote `data_session`; `load_setup_tracker_payload`
+dropped it. The loader rebuilds the payload field by field from a fixed
+default rather than copying the stored dict, so anything it does not list is
+discarded on read — and **every** caller that resolves the vintage, including
+`compute_setup_tracker_catchup_plan`'s no-argument path, goes through it. The
+catch-up therefore kept falling back to the `updated_at` write clock, exactly
+the behaviour the repair was meant to end.
+
+The tests were the other half of the defect: they asserted on `json.loads` of
+the file, so they passed while production did nothing. They now round-trip
+through the loader. With the loader line reverted, three of them fail:
+
+```
+FAILED test_the_loader_carries_the_vintage_it_was_saved_with
+  AssertionError: None != '2026-08-06' : the loader dropped the vintage,
+  so the fix never reached production
+FAILED test_morning_catchup_from_thursday_does_not_mark_friday_reflected
+FAILED test_the_default_catchup_path_reads_the_vintage_off_disk
+3 failed, 22 passed
+```
+
+`tracker_staleness_catchup` was set to `False` in `local_settings.json` for
+the duration and re-enabled only after this packet merged.
+
+### The other nine findings
+
+1. **Session identity had no calendar.** `session_date_for` did weekday
+   arithmetic, so a Saturday run filed its work under Saturday — three `ok`
+   rows claimed coverage of 2026-08-08, a date the exchange never opened.
+   Now: `scripts/market_calendar.py` (weekends plus the ten scheduled NYSE
+   closures with observance rules, Good Friday from the Gregorian Easter
+   algorithm, Juneteenth from 2022; tested against the exchange's published
+   closures for 2024–2027; no new dependency, no network). A run resolves the
+   most recent session whose close is at or before run time and **fails
+   closed** if the calendar cannot answer. `--force` writes `manual_test`,
+   which is outside `CANONICAL_COMPLETION_STATUSES` and so never satisfies the
+   completion check. The three Saturday rows were annotated with an appended
+   `correction` row (`2026-08-08T19:07:10-07:00`); the ledger is append-only,
+   so the originals stand and the artifacts they produced are kept — only
+   their claim to cover a session is retracted.
+2. **The journal was not session-scoped.** Flagged as an open item in the
+   first addendum; now closed. Records are filtered to the session by the
+   store's own SQL, an empty result is an honest empty source, and the journal
+   is treated as what it is — a database that is current only through its last
+   successful import. A stalled import makes it stale and hides its old rows,
+   and a `[system]` import-health row reports last import, newest execution,
+   lag in days and the session's row count.
+3. **`observed_at` and `content_through` are now separate.** One is when the
+   process read the source; the other is the newest record inside it, derived
+   from content where the format allows and from mtime only when it does not.
+   Staleness is judged on `content_through` alone, so a file rewritten nightly
+   with unchanged data no longer reads as current.
+4. **`data_quality` is machine-owned.** Out of the model's schema, out of the
+   prompt, rejected by the validator if returned anyway. The model keeps
+   `risk_notes`.
+5. **Stale sources leave the model package.** They used to stay in with a
+   warning notice; the model narrated them as the session's data regardless.
+   A warning the model may disregard is not a control.
+6. **Retry semantics.** Partial responses now retry like failures — the
+   completeness check compares bars received against bars the matured windows
+   owe. Retry entitlement is **per symbol and spans sweeps**; the old shared
+   wall-clock budget rationed the wrong thing, letting the first few failures
+   consume it so every symbol after them got one attempt and a permanent gap.
+   A symbol with entitlement left is **deferred** (still pending, no gap row),
+   and the sweep marker is written only when nothing is deferred.
+7. **Unknown job status failed open.** It coerced to `ok`, so an unrecognised
+   status was filed as a trustworthy completion and never retried. It records
+   `failed` and names the status it did not recognise.
+8. **Unbounded reads and the wrong funding order.** The 762 MB tracker was
+   read whole to keep 16,000 characters, and those characters were a list of
+   *March* watchlists because the file leads with `daily_watchlists`. Reads
+   stream to a byte cap; oversized files are identified by size, mtime and a
+   digest of the capped content; the tracker is packaged as a bounded
+   most-recent extract from the compact scoring snapshot, or declared
+   unavailable — never head-sliced. Within `setup_trackers` the analytic
+   sub-sources fund first and the raw tracker last.
+9. **The pre-open reserve was zero.** The session block protected the session
+   but not the run-up to it. `ai_preopen_guard_minutes` defaults to 15, and
+   because the reserve lives inside the session block, `--force` cannot spend
+   it.
+
+### What this addendum does not close
+
+- The evidence budget is still 80,000 characters, still undersized for a local
+  model, and still a trader decision rather than a repair.
+- `setups.current_tracker` is still 762 MB on disk. The packaging no longer
+  chokes on it, but nothing has been done about the file itself.
+- The unscheduled-closure limit of a rules-based calendar stands and is stated
+  in `market_calendar`: a day the exchange shut unexpectedly reads as a
+  session. Nothing derivable from rules can fix that.
+- The original review's UNC-path inspection item in `ai_jobs/store.py` is
+  still open.
