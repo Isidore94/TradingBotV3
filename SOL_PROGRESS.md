@@ -58,14 +58,18 @@ stamp; it must not duplicate the roadmap.
      Three files conflicted (`scripts/project_paths.py`,
      `tests/test_project_paths.py`, `SOL_PROGRESS.md`); everything else
      auto-merged.
-- **Gate on this branch: 2582 passed, 5 skipped, 7 subtests; junit
-  `failures=0 errors=0`; smoke 7/7; `launch_gui.py --selftest` 30/30 exit 0.**
-  Linux container, Python **3.12.3**, `TZ=America/Vancouver
-  QT_QPA_PLATFORM=offscreen`. The desk runs 3.14 on Windows, so **this number
-  is not the desk gate** — see the owed list. The spec-drift negative control
-  was re-run after the merge: pulling `research_warehouse` from the spec fails
-  5 of the merged file's 16 tests (both suites' package censuses and both asset
-  sweeps), green again restored.
+- **Gate on this branch, re-taken after packet 6: 2591 passed, 5 skipped, 7
+  subtests; junit `failures=0 errors=0` (2603 cases); plain `pytest tests/ -q`
+  exit 0 in 92s test time / 95s wall, so the inert-pool fix survived the
+  conftest reconciliation and there is still no post-summary hang; smoke 7/7;
+  `launch_gui.py --selftest` 30/30 exit 0.** Linux container, Python
+  **3.12.3**, `TZ=America/Vancouver QT_QPA_PLATFORM=offscreen`. The desk runs
+  3.14 on Windows, so **this number is not the desk gate** — see the owed list.
+  The +9 over the pre-packet-6 2582 is oek3aj's net new coverage. The
+  spec-drift negative control was re-run after both merges: pulling
+  `research_warehouse` from the spec fails exactly 5 of the file's 16 tests
+  (both suites' package censuses and both asset sweeps), 16/16 green again
+  after restoring.
 - Three fixes were made on this branch, each its own commit:
   - **Warehouse parquet reads** (`store.py`): `pq.read_table` builds a dataset
     around the file, so every part under `year=NNNN/` came back with a synthetic
