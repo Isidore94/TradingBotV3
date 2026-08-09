@@ -1711,6 +1711,22 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    complement); heavy models run in the off-hours window only. Any
    synthesis finding that would change live behavior routes through the
    sec 7 ladder like everything else.
+   **Status 2026-08-08: Phase 0 code IMPLEMENTED + GREEN**
+   (`local-ai-phase-0`; 1856 passed, 7 subtests; smoke 7/7): the `local`
+   provider in `ai_summary.py`, `base_url` support in
+   `market_prep/services/ai_service.py`, both config-gated and default-off,
+   with tests asserting the cloud request payloads are byte-identical when the
+   new settings are unset. **Phase 0 exit gate MET 2026-08-08**: Ollama 0.32.6
+   installed on the main desk, all three tiers pulled, and a real local
+   `request_ai_summary` run produced a schema-valid, evidence-grounded summary
+   (65.3 s on `gemma3:12b`). Two measured findings are recorded in the plan
+   doc: the 780M runs through Ollama's **Vulkan** backend and needs
+   `OLLAMA_IGPU_ENABLE=1` (ROCm has no gfx1103 rocblas), and stock
+   `gemma3:27b` does **not** fit the 17.4 GiB iGPU heap. All three tiers are
+   now chosen and verified — small `gemma3:4b`, medium `gemma3:12b`, large
+   `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — with the large tier's
+   revisit triggers recorded against Phase 4's existing two-week gate.
+   Phases 1+ not started.
 
 13c. **Durability & catch-up packet** (trader-directed insertion, 2026-08-08;
    numbered 13c so the existing 14-18 references stay stable):

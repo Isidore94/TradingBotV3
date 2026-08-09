@@ -1,7 +1,10 @@
 # Local AI & Automation Plan
 
 Status: ACCEPTED into plan.md sec 12 as item 13b (trader-directed,
-2026-08-08); implementation not started. Subordinate to `plan.md` — this
+2026-08-08). **Phase 0 COMPLETE on branch `local-ai-phase-0` (2026-08-08):
+code landed, Ollama installed and benchmarked on the main desk, all three
+tiers chosen and verified, and the exit gate verified end to end. Phases 1+
+not started.** Subordinate to `plan.md` — this
 document never overrides plan.md sections 5-7 or the section 12 execution
 order. Section 6 is the binding implementation spec; phases execute in order,
 each on its own branch.
@@ -30,7 +33,7 @@ summarizable, taggable, or draftable happens automatically off-hours.
 
 | Asset | Facts | Role |
 |---|---|---|
-| Ryzen 7 8845HS mini-PC | 32GB DDR5, Radeon 780M iGPU (RDNA3/gfx1103, UMA shared memory), always-on | **Main Trading Desk** + LLM inference host + automation scheduler |
+| Ryzen 7 8845HS mini-PC | 32GB DDR5 (28.8 GiB usable), Radeon 780M iGPU (RDNA3/gfx1103, UMA — measured 17.4 GiB Vulkan heap; **Vulkan backend, not ROCm** — see Phase 0 finding 1), always-on | **Main Trading Desk** + LLM inference host + automation scheduler |
 | Former desk (i5-8600K/32GB, RTX 3080 Ti) | Powered down most days — power draw, office heat, and workstation/gaming tax separation | Discord/chat box; possible ad-hoc alternative scanner. Holds **no always-on or writer role** in this plan |
 | File server | 10TB now, expandable to 100TB+ | AI store (digests, model files, bulk outputs) + candidate `research_store_dir` home |
 | Cloud frontier model | Fable 5 / current best, metered | Periodic synthesis passes only — reads digests, never raw bulk data |
@@ -174,6 +177,125 @@ foundation 4-6 stand on.
   provider selection.
 - Exit gate: existing AI summary produces sane output against the local
   medium model; no test regressions; cloud path unchanged.
+
+**Status 2026-08-08 — code half DONE, operator half PENDING** (branch
+`local-ai-phase-0`; 1856 passed, 7 subtests; smoke 7/7):
+
+- `scripts/ai_summary.py` gained the `local` provider
+  (`local_endpoint_url` / `local_provider_enabled` / `local_model` /
+  `default_model_for`), posting the OpenAI **chat-completions** shape to
+  `{ai_local_endpoint_url}/chat/completions` with the placeholder key, one
+  retry on invalid JSON, and the same `validate_ai_summary` evidence checking
+  the cloud providers get.
+- `market_prep/services/ai_service.py` gained `base_url` support. One setting
+  (`ai_local_endpoint_url`) flips both call sites; either can be pinned back to
+  a cloud URL through its own `market_prep_ai.base_url`. **Deviation from sec
+  6.2, deliberate:** a base-URL deployment also switches from
+  `client.responses.create` to `client.chat.completions.create`, because Ollama
+  and llama.cpp implement chat-completions and not the Responses API — passing
+  `base_url` alone would have produced a 404 on every call. The cloud path
+  still uses the Responses API unchanged.
+- The A.I. workspace panel lists "Local (on this desk)" only when
+  `ai_local_endpoint_url` is set, so an unconfigured desk sees exactly the two
+  providers it always saw.
+- `tests/test_local_ai_provider.py` asserts the negative case that matters:
+  with the new settings unset, both cloud providers receive a byte-identical
+  URL, JSON payload and headers.
+
+**Exit gate MET for the small and medium tiers (2026-08-08).** Ollama 0.32.6
+installed on the main desk via winget, all three tiers pulled, endpoint
+verified, `ai_local_endpoint_url` set to `http://127.0.0.1:11434/v1`, and a
+real `request_ai_summary(provider="local")` run produced a schema-valid,
+evidence-grounded summary that passed `validate_ai_summary` and exported
+cleanly (65.3 s end to end on `gemma3:12b`).
+
+#### Benchmark, measured on this 8845HS (28.8 GiB usable RAM)
+
+| Tier | Model tag | Device | Footprint | Gen tok/s | Prompt tok/s | Cold load |
+|---|---|---|---|---|---|---|
+| Small | `gemma3:4b` | 100% iGPU | 2.9 GB | 24.4 | 144.5 | 12.5 s |
+| Medium | `gemma3:12b` | 100% iGPU | 8.1 GB | 8.8 | 94.5 | 16.9 s |
+| Large | `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` | 100% iGPU | 14 GB | 4.1 | 26.9 | 184.5 s |
+| *(rejected)* | `gemma3:27b` (Q4_K_M, 17 GB) | — | — | **does not load** | — | — |
+
+Method: Ollama's own `eval_count` / `eval_duration` counters (exact token
+counts, nanosecond durations) over a digest-shaped prompt, not wall-clock
+guessing; footprint from `ollama ps`. Reference point for the iGPU's value:
+`gemma3:12b` on CPU only managed 6.6 gen / 37.0 prompt tok/s.
+
+Projected job runtimes from the measured large-tier rates, worst case:
+nightly policy draft (20k in / 3k out) ≈ 12.4 min prefill + 12.2 min
+generation + 3.1 min cold load ≈ **28 min**; weekly retro (30k in / 4k out)
+≈ 18.6 + 16.3 + 3.1 ≈ **38 min**. Against the 13.5-hour off-hours window that
+is ~3.5% utilisation on the worst night, so the window is not a constraint on
+any tier.
+
+#### Two hardware findings that change the sec 2 assumptions
+
+1. **The 780M needs `OLLAMA_IGPU_ENABLE=1`, and does *not* go through ROCm.**
+   Ollama drops the ROCm device outright — `no rocblas support for gfx target
+   gfx1103` (its bundled rocblas covers gfx1030/1100/1101/1102/1150/1151/
+   1200/1201/906, not the 780M's gfx1103). The working path is Ollama's
+   **Vulkan** backend, which detects the 780M but skips it by default because
+   it is integrated. With the flag set, both shipped tiers run 100% GPU. The
+   `HSA_OVERRIDE_GFX_VERSION` hint in Ollama's own log was **not** used: it
+   maps gfx1103 onto kernels built for another target, and silently-wrong
+   numerics are a bad trade for an evidence pipeline.
+2. **The stock 27B does not fit; a Q3 quant of it does — RESOLVED.** The
+   Vulkan iGPU heap is 17.4 GiB total / 16.5 GiB available. `gemma3:27b`
+   (Q4_K_M, ~15.8 GiB of weights) loads its weights and then fails allocating
+   its ~210 MB compute buffers:
+   `ggml_gallocr_reserve_n_impl: failed to allocate Vulkan0 buffer`. Reducing
+   the context to 2048 did not rescue it — a ~210 MB miss.
+
+   Decision (frontier-model review, 2026-08-08): enter Phase 4's two-week gate
+   with **the highest-ceiling candidate that actually loads**, since a model
+   swap is a free settings change and the gate — not speculation about
+   quantization damage — is the real quality arbiter. Parameter count tends to
+   matter more than a modest quant step for judgment-heavy prose, and speed is
+   irrelevant at 2am, so the 14B option's only advantage evaporates.
+
+   Ollama's own library has **no** Q3 build of gemma3:27b (its 27b tags are
+   Q4_K_M 17 GB, QAT 18 GB, Q8_0 30 GB, FP16 55 GB — all too large), so the
+   model is sourced through Ollama's supported Hugging Face route:
+   **`hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M`**, a 12.51 GiB file
+   that leaves ~4 GiB of heap for compute buffers and KV cache. Verified: it
+   loads 100% on the iGPU and produced a schema-valid, fully-cited summary
+   through the real `request_ai_summary` path (6/6 sections, 20 evidence
+   citations, 218.9 s wall including cold load).
+
+   Not chosen, and why: `Q4_K_S` (14.60 GiB) also exists and is a higher
+   quant, but leaves only ~1.9 GiB of margin — below the comfort the Q4_K_M
+   failure argues for. It is the obvious step up if Q3 disappoints in the gate.
+
+   **Revisit triggers:** if the Q3-27B drafts materially lose Phase 4's
+   two-week side-by-side against the cloud model, switch the setting to a
+   14B-class model and rerun the gate; if that loses too, stay on cloud, which
+   the plan already blesses. Independently, retest `gemma3:27b` Q4_K_M if a
+   future Ollama/llama.cpp release improves Vulkan compute-buffer allocation
+   or ROCm gains gfx1103 — it missed by ~210 MB.
+
+   **Operational note for Phase 4:** the large tier's cold load is 184.5 s
+   against an `OLLAMA_KEEP_ALIVE` of 60 s, so a job whose calls are more than
+   a minute apart pays three minutes of reload each time. Large-tier jobs must
+   either batch their calls or pass a longer per-request `keep_alive`.
+
+#### Server configuration applied (sec 2: never hold memory idle)
+
+Set as **user-level environment variables** on the main desk, so the tray app
+picks them up at login:
+
+| Variable | Value | Why |
+|---|---|---|
+| `OLLAMA_IGPU_ENABLE` | `1` | finding 1 — without it everything runs on CPU |
+| `OLLAMA_MAX_LOADED_MODELS` | `1` | sec 2: one model loaded at a time |
+| `OLLAMA_NUM_PARALLEL` | `1` | sec 2 |
+| `OLLAMA_KEEP_ALIVE` | `60s` | sec 2 aggressive unload, while still letting one job's burst of calls reuse a loaded model |
+
+Ollama autostarts from a **Startup-folder shortcut**, i.e. at user login rather
+than at boot — the same assumption the 07:00 launch task already makes (it also
+runs in the logged-on session). Worth knowing before Phase 1 schedules
+unattended overnight jobs.
 
 ### Phase 1 — Automated AI summary (trader priority #1)
 
@@ -423,8 +545,12 @@ Additionally:
    open as an ops question: confirm `research_warehouse/config.py` accepts a
    UNC/mapped file-server path for `research_store_dir`, and whether the
    trader wants the DAS lake moved to the file server.
-3. **Model picks — RESOLVED BY DEFAULT** (sec 6.1): `gemma3:4b/12b/27b` as
-   starting settings; the Phase 0 benchmark refines them via settings only.
+3. **Model picks — RESOLVED BY MEASUREMENT 2026-08-08** (sec 6.1):
+   `gemma3:4b` (small) and `gemma3:12b` (medium) both run 100% on the 780M.
+   Stock `gemma3:27b` does not fit the 17.4 GiB Vulkan heap, so the large tier
+   is `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — verified loading
+   and producing schema-valid output. All three are settings, and Phase 0
+   finding 2 records the revisit triggers.
 4. **Off-hours window edges — RESOLVED BY DEFAULT** (sec 6.1): 18:30–08:00
    ET, weekends open, holidays treated as weekdays; trader-adjustable
    settings, not code.

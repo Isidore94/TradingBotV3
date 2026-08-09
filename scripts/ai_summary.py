@@ -8,6 +8,12 @@ this module can write scanner state, scores, watchlists, alerts, or orders.
 Provider request shapes follow the official OpenAI Responses API structured
 ``text.format`` contract and Anthropic Messages ``output_config.format``
 contract (verified 2026-07-14).
+
+A third ``local`` provider (docs/LOCAL_AI_AUTOMATION_PLAN.md Phase 0) speaks
+the OpenAI-compatible **chat-completions** shape against a localhost inference
+server. It is entirely config-gated: with ``ai_local_endpoint_url`` unset the
+provider cannot be selected and every cloud request is byte-identical to what
+this module sent before the provider existed.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import requests
 
 from project_paths import (
+    get_local_setting,
     AI_SUMMARY_EXPORT_DIR,
     AUTOPILOT_REPORT_FILE,
     AUTOPILOT_STATE_FILE,
@@ -45,7 +52,36 @@ from project_paths import (
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_API_VERSION = "2023-06-01"
-DEFAULT_MODELS = {"openai": "gpt-5.6", "anthropic": "claude-sonnet-5"}
+
+# --- local provider (docs/LOCAL_AI_AUTOMATION_PLAN.md sec 6.1/6.2) ---------
+#
+# The endpoint setting is the on switch: unset means the local provider does
+# not exist as far as the rest of the app is concerned. Model tags are starting
+# picks that the Phase 0 benchmark refines *through settings*, never by editing
+# code.
+LOCAL_ENDPOINT_SETTING_KEY = "ai_local_endpoint_url"
+LOCAL_MODEL_SETTING_KEYS = {
+    "small": "ai_local_model_small",
+    "medium": "ai_local_model_medium",
+    "large": "ai_local_model_large",
+}
+DEFAULT_LOCAL_MODELS = {"small": "gemma3:4b", "medium": "gemma3:12b", "large": "gemma3:27b"}
+LOCAL_CHAT_COMPLETIONS_PATH = "/chat/completions"
+#: A localhost server has no credential. The OpenAI-compatible Authorization
+#: header still has to be well-formed, so send a fixed non-secret placeholder
+#: rather than raising the missing-key error the cloud providers need.
+LOCAL_PLACEHOLDER_API_KEY = "local"
+#: Small models drop out of strict JSON now and then. One retry costs a few
+#: free seconds; a second would just be a slower way to fail.
+LOCAL_JSON_RETRIES = 1
+
+DEFAULT_MODELS = {
+    "openai": "gpt-5.6",
+    "anthropic": "claude-sonnet-5",
+    # Static fallback only: the effective default is the medium-tier setting,
+    # resolved per call by default_model_for().
+    "local": DEFAULT_LOCAL_MODELS["medium"],
+}
 MAX_SOURCE_CHARS = 16_000
 MAX_TOTAL_EVIDENCE_CHARS = 80_000
 MAX_ROWS = 200
@@ -98,6 +134,31 @@ def normalize_provider(provider: str) -> str:
     if value not in DEFAULT_MODELS:
         raise ValueError(f"unsupported AI provider: {provider}")
     return value
+
+
+def local_endpoint_url() -> str:
+    """Configured local inference base URL, or "" when the provider is off."""
+    return str(get_local_setting(LOCAL_ENDPOINT_SETTING_KEY, "") or "").strip().rstrip("/")
+
+
+def local_provider_enabled() -> bool:
+    """Default-off: the local provider exists only once an endpoint is set."""
+    return bool(local_endpoint_url())
+
+
+def local_model(tier: str = "medium") -> str:
+    """Configured model tag for one local tier (settings, never hardcoded)."""
+    key = LOCAL_MODEL_SETTING_KEYS.get(tier, LOCAL_MODEL_SETTING_KEYS["medium"])
+    fallback = DEFAULT_LOCAL_MODELS.get(tier, DEFAULT_LOCAL_MODELS["medium"])
+    return str(get_local_setting(key, fallback) or fallback).strip()
+
+
+def default_model_for(provider: str) -> str:
+    """Model used when the caller does not name one."""
+    normalized = normalize_provider(provider)
+    if normalized == "local":
+        return local_model("medium")
+    return DEFAULT_MODELS[normalized]
 
 
 def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
@@ -416,6 +477,45 @@ def _extract_openai_text(payload: Mapping[str, Any]) -> str:
     return "".join(chunks).strip()
 
 
+def _local_user_prompt(evidence: Mapping[str, Any]) -> str:
+    """The shared prompt plus an explicit statement of the required shape.
+
+    The cloud providers learn the schema from their structured-output contracts
+    (``text.format`` / ``output_config.format``), so the shared prompt never had
+    to describe it. A local server that ignores ``response_format`` has nothing
+    else to go on -- gemma3:12b answered with a bare ``{"summary": ...}`` object
+    until the shape was spelled out here. Local-branch only, so the cloud
+    request payloads stay byte-identical.
+    """
+    return (
+        _user_prompt(evidence)
+        + "\n\nREQUIRED OUTPUT SHAPE — return exactly this JSON object and nothing else "
+        "(no prose, no markdown fence):\n"
+        + json.dumps(AI_SUMMARY_JSON_SCHEMA, sort_keys=True)
+        + "\n\nEvery one of these keys must be present: "
+        + ", ".join(["executive_summary", *AI_SUMMARY_SECTIONS])
+        + ". Each section is an array (possibly empty) of objects with exactly "
+        "the keys statement, evidence_refs, confidence. confidence is one of "
+        "high, medium, low. Each evidence_refs entry must be a source_id copied "
+        "verbatim from the evidence package above."
+    )
+
+
+def _extract_chat_completion_text(payload: Mapping[str, Any]) -> str:
+    """Text from an OpenAI-compatible chat-completions body."""
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return ""
+    chunks: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, Mapping):
+            continue
+        message = choice.get("message")
+        if isinstance(message, Mapping):
+            chunks.append(str(message.get("content") or ""))
+    return "".join(chunks).strip()
+
+
 def _extract_anthropic_text(payload: Mapping[str, Any]) -> str:
     content = payload.get("content")
     if not isinstance(content, list):
@@ -487,6 +587,90 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
     return normalized
 
 
+def _request_local_summary(
+    *,
+    model: str,
+    api_key: str,
+    evidence: Mapping[str, Any],
+    timeout_seconds: int,
+    post,
+) -> tuple[Mapping[str, Any], dict[str, Any]]:
+    """One local chat-completions call, validated the same way as the cloud.
+
+    A local server is not assumed to honour ``response_format`` json-schema, so
+    the schema is enforced here the only way that is actually trustworthy
+    anywhere: by validating the returned text against ``AI_SUMMARY_JSON_SCHEMA``
+    through the shared ``validate_ai_summary``. Evidence references are checked
+    identically, so a local model can no more invent a source than a cloud one.
+    """
+    base_url = local_endpoint_url()
+    if not base_url:
+        raise RuntimeError(
+            "local AI provider selected but no endpoint is configured "
+            f"({LOCAL_ENDPOINT_SETTING_KEY} is unset)"
+        )
+    url = f"{base_url}{LOCAL_CHAT_COMPLETIONS_PATH}"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _system_instruction()},
+            {"role": "user", "content": _local_user_prompt(evidence)},
+        ],
+        "max_tokens": 3500,
+        # Advisory output that gets re-read and audited should not wander
+        # between runs over the same evidence.
+        "temperature": 0,
+        "stream": False,
+        # Best effort: Ollama and llama.cpp honour this, but the plan is
+        # explicit that we must not *rely* on it -- the returned text is
+        # validated locally either way, which is what actually enforces the
+        # schema.
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "tradingbot_ai_summary",
+                "strict": True,
+                "schema": AI_SUMMARY_JSON_SCHEMA,
+            },
+        },
+    }
+    last_error: Exception | None = None
+    for attempt in range(LOCAL_JSON_RETRIES + 1):
+        try:
+            response = post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=max(10, min(300, int(timeout_seconds))),
+            )
+        except Exception as exc:  # unreachable endpoint is a clean error
+            raise RuntimeError(f"local AI endpoint at {url} is unreachable: {exc}") from exc
+        body = response.json() if hasattr(response, "json") else {}
+        if not isinstance(body, Mapping):
+            body = {}
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        if status_code >= 400:
+            detail = str(getattr(response, "text", "") or body)[:1000]
+            raise RuntimeError(f"local request failed ({status_code}): {detail}")
+        text = _extract_chat_completion_text(body)
+        if not text:
+            raise RuntimeError("local provider returned no text content")
+        try:
+            return body, validate_ai_summary(_parse_json_text(text), evidence)
+        except (ValueError, json.JSONDecodeError) as exc:
+            # Only malformed output is worth retrying, and only once.
+            last_error = exc
+            if attempt >= LOCAL_JSON_RETRIES:
+                break
+    raise RuntimeError(
+        f"local provider returned invalid summary JSON after "
+        f"{LOCAL_JSON_RETRIES + 1} attempt(s): {last_error}"
+    )
+
+
 def request_ai_summary(
     *,
     provider: str,
@@ -499,11 +683,34 @@ def request_ai_summary(
     """Call one provider and return validated output plus non-secret metadata."""
 
     normalized_provider = normalize_provider(provider)
-    selected_model = str(model or DEFAULT_MODELS[normalized_provider]).strip()
+    selected_model = str(model or default_model_for(normalized_provider)).strip()
     key = str(api_key or "").strip()
+    if not key and normalized_provider == "local":
+        key = LOCAL_PLACEHOLDER_API_KEY
     if not key:
         raise ValueError("provider API key is missing")
     started = datetime.now().astimezone()
+    if normalized_provider == "local":
+        body, summary = _request_local_summary(
+            model=selected_model,
+            api_key=key,
+            evidence=evidence,
+            timeout_seconds=timeout_seconds,
+            post=post,
+        )
+        finished = datetime.now().astimezone()
+        return {
+            "schema_version": "ai_summary_result_v1",
+            "status": "validated",
+            "provider": normalized_provider,
+            "model": selected_model,
+            "response_id": str(body.get("id") or ""),
+            "generated_at": finished.isoformat(timespec="seconds"),
+            "duration_seconds": round((finished - started).total_seconds(), 3),
+            "evidence_package_id": evidence.get("package_id"),
+            "evidence_hash": evidence.get("evidence_hash"),
+            "summary": summary,
+        }
     if normalized_provider == "openai":
         response = post(
             OPENAI_RESPONSES_URL,

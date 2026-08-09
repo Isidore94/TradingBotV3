@@ -15,8 +15,20 @@ DEFAULT_AI_SETTINGS = {
     "model": "gpt-5.2",
     "timeout_seconds": 30,
     "max_context_chars": 12000,
+    # Empty = the cloud path, byte-identical to before the local provider
+    # existed (docs/LOCAL_AI_AUTOMATION_PLAN.md Phase 0).
+    "base_url": "",
 }
 OPENAI_LOCAL_SETTING_KEY = "market_prep_openai_api_key"
+
+# Shared with scripts/ai_summary.py: one endpoint setting flips every AI call
+# site onto the local server, and either site can still be pinned to the cloud
+# by setting its own ``base_url`` override to a cloud URL.
+LOCAL_ENDPOINT_SETTING_KEY = "ai_local_endpoint_url"
+LOCAL_MEDIUM_MODEL_SETTING_KEY = "ai_local_model_medium"
+DEFAULT_LOCAL_MEDIUM_MODEL = "gemma3:12b"
+#: A localhost server has no credential; the SDK still requires a non-empty key.
+LOCAL_PLACEHOLDER_API_KEY = "local"
 
 
 def build_market_prep_ai_brief(
@@ -30,32 +42,31 @@ def build_market_prep_ai_brief(
     if not bool(settings.get("enabled", True)):
         return _fallback_payload("disabled", "Market Prep AI disabled in config.", prompt, generated_at)
 
-    api_key = resolve_openai_api_key(config)
+    api_key = _resolve_brief_api_key(config, settings)
     if not api_key:
         return _fallback_payload("missing_key", "No OpenAI API key configured.", prompt, generated_at)
 
     try:
-        from openai import OpenAI
+        client = _build_openai_client(settings, api_key)
     except Exception as exc:
         return _fallback_payload("missing_sdk", f"OpenAI SDK unavailable: {exc}", prompt, generated_at)
 
     try:
-        client = OpenAI(api_key=api_key, timeout=_safe_int(settings.get("timeout_seconds"), 30))
-        response = client.responses.create(
-            model=str(settings.get("model") or "gpt-5.2"),
+        text = _generate_brief_text(
+            client,
+            settings,
             instructions=(
                 "You are a trading preparation assistant. Produce concise checklist-style market prep. "
                 "Do not provide financial advice or tell the user to buy/sell. Separate confirmed scheduled "
                 "catalysts from speculative thesis ideas."
             ),
-            input=prompt,
+            prompt=prompt,
         )
-        text = str(getattr(response, "output_text", "") or "").strip()
         if not text:
             text = "AI returned no text. Use the deterministic checklist below."
         return {
             "generated_at": generated_at,
-            "source": "openai",
+            "source": _brief_source(settings),
             "status": "ok",
             "status_label": "Ready",
             "model": str(settings.get("model") or "gpt-5.2"),
@@ -78,32 +89,31 @@ def build_ticker_lookup_ai_brief(
     if not bool(settings.get("enabled", True)):
         return _fallback_payload("disabled", "Ticker Lookup AI disabled in config.", prompt, generated_at)
 
-    api_key = resolve_openai_api_key(config)
+    api_key = _resolve_brief_api_key(config, settings)
     if not api_key:
         return _fallback_payload("missing_key", "No OpenAI API key configured.", prompt, generated_at)
 
     try:
-        from openai import OpenAI
+        client = _build_openai_client(settings, api_key)
     except Exception as exc:
         return _fallback_payload("missing_sdk", f"OpenAI SDK unavailable: {exc}", prompt, generated_at)
 
     try:
-        client = OpenAI(api_key=api_key, timeout=_safe_int(settings.get("timeout_seconds"), 30))
-        response = client.responses.create(
-            model=str(settings.get("model") or "gpt-5.2"),
+        text = _generate_brief_text(
+            client,
+            settings,
             instructions=(
                 "You are a trading risk-research assistant. Identify ticker-specific landmines, hidden exposure, "
                 "scheduled catalysts, and context worth checking before a swing trade. Do not provide buy/sell "
                 "instructions. Separate confirmed source-backed items from speculation or missing-information checks."
             ),
-            input=prompt,
+            prompt=prompt,
         )
-        text = str(getattr(response, "output_text", "") or "").strip()
         if not text:
             text = "AI returned no text. Review the deterministic lookup sections below."
         return {
             "generated_at": generated_at,
-            "source": "openai",
+            "source": _brief_source(settings),
             "status": "ok",
             "status_label": "Ready",
             "model": str(settings.get("model") or "gpt-5.2"),
@@ -167,9 +177,89 @@ def build_ticker_lookup_ai_prompt(payload: dict[str, Any], *, max_chars: int = 1
 
 def get_market_prep_ai_settings(config: MarketPrepConfig | None) -> dict[str, Any]:
     settings = dict(DEFAULT_AI_SETTINGS)
+    overrides = {}
     if config is not None and isinstance(getattr(config, "market_prep_ai", None), dict):
-        settings.update(config.market_prep_ai)
+        overrides = config.market_prep_ai
+        settings.update(overrides)
+    base_url = str(overrides.get("base_url") or _local_endpoint_setting()).strip()
+    settings["base_url"] = base_url.rstrip("/")
+    if settings["base_url"] and "model" not in overrides:
+        # Pointing at a local server while still asking for a cloud model name
+        # would only ever produce a confusing 404, so the tier setting supplies
+        # the default. An explicit config model still wins.
+        settings["model"] = _local_medium_model()
     return settings
+
+
+def _read_local_setting(key: str, default: str = "") -> str:
+    try:
+        payload = json.loads(_local_settings_file().read_text(encoding="utf-8"))
+    except Exception:
+        return default
+    if not isinstance(payload, dict):
+        return default
+    return str(payload.get(key) or default).strip()
+
+
+def _local_endpoint_setting() -> str:
+    return _read_local_setting(LOCAL_ENDPOINT_SETTING_KEY)
+
+
+def _local_medium_model() -> str:
+    return _read_local_setting(LOCAL_MEDIUM_MODEL_SETTING_KEY, DEFAULT_LOCAL_MEDIUM_MODEL)
+
+
+def _build_openai_client(settings: dict[str, Any], api_key: str):
+    """OpenAI SDK client, pointed at a local server when one is configured."""
+    from openai import OpenAI
+
+    kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "timeout": _safe_int(settings.get("timeout_seconds"), 30),
+    }
+    if settings.get("base_url"):
+        kwargs["base_url"] = settings["base_url"]
+    return OpenAI(**kwargs)
+
+
+def _generate_brief_text(client, settings: dict[str, Any], *, instructions: str, prompt: str) -> str:
+    """One advisory completion, on whichever API the target server speaks.
+
+    Local OpenAI-compatible servers (Ollama, llama.cpp) implement
+    ``/chat/completions`` and not the Responses API, so a base-URL deployment
+    uses the chat shape. The cloud path is untouched.
+    """
+    if settings.get("base_url"):
+        response = client.chat.completions.create(
+            model=str(settings.get("model") or DEFAULT_LOCAL_MEDIUM_MODEL),
+            messages=[
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return ""
+        message = getattr(choices[0], "message", None)
+        return str(getattr(message, "content", "") or "").strip()
+    response = client.responses.create(
+        model=str(settings.get("model") or "gpt-5.2"),
+        instructions=instructions,
+        input=prompt,
+    )
+    return str(getattr(response, "output_text", "") or "").strip()
+
+
+def _brief_source(settings: dict[str, Any]) -> str:
+    """Where the text came from, so a reader is never misled about provenance."""
+    return "local" if settings.get("base_url") else "openai"
+
+
+def _resolve_brief_api_key(config: MarketPrepConfig | None, settings: dict[str, Any]) -> str:
+    key = resolve_openai_api_key(config)
+    if not key and settings.get("base_url"):
+        return LOCAL_PLACEHOLDER_API_KEY
+    return key
 
 
 def resolve_openai_api_key(config: MarketPrepConfig | None) -> str:
