@@ -427,6 +427,11 @@ EARNINGS_CALENDAR_CACHE_FILE = CACHE_DIR / "earnings_calendar_rows.json"
 YAHOO_SYMBOL_META_CACHE_FILE = CACHE_DIR / "yahoo_symbol_metadata.json"
 DAILY_BARS_CACHE_DIR = CACHE_DIR / "daily_bars"
 INTRADAY_BARS_CACHE_DIR = CACHE_DIR / "intraday_bars"
+# Chart-only feather mirror of the Drive-backed daily store, owned solely by
+# ui.services.bar_cache. Deliberately NOT the scanner's DAILY_BARS_CACHE_DIR
+# (CSV, different owner): the chart must be able to warm from local disk
+# without a shared mutable export gaining a second writer.
+CHART_BAR_CACHE_DIR = CACHE_DIR / "chart_bars"
 
 AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "avwap_signals.csv"
 D1_FEATURES_FILE = RUNTIME_DATA_DIR / "d1_features.csv"

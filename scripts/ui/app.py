@@ -901,6 +901,12 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(state, satellite_desk=satellite_desk)
     window.show()
+    # Off unless this machine asked for it. When on, every GUI-thread block
+    # over the threshold is logged with the stack that caused it, which is
+    # the only honest way to pick what to optimize next (Part C rule C1).
+    from ui.stall_watchdog import install as install_stall_watchdog
+
+    window.stall_watchdog = install_stall_watchdog(window)
     return app.exec()
 
 

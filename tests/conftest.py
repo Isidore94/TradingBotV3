@@ -37,12 +37,15 @@ import math
 import os
 import shutil
 import socket
+import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 
 _TEST_SHARED_DIR = tempfile.mkdtemp(prefix="tradingbotv3-pytest-shared-")
@@ -346,3 +349,26 @@ def load_fixture_contract(fixture: str | Path) -> FixtureContract:
         raise  # pragma: no cover - _fail always raises
     contract = validate_fixture_contract(payload, name)
     return FixtureContract(name=name, path=path, data=contract.data)
+
+
+@pytest.fixture(autouse=True)
+def _drain_chart_workers():
+    """Let no chart worker outlive the test that queued it.
+
+    Chart snapshots and prefetch batches run on a process-wide pool, and a
+    test that queues work without waiting for it leaves those threads reading
+    parquet during whatever test runs next. That is invisible until it lands
+    on a timing-sensitive one - a Desk Link socket handshake failed once this
+    way - and an intermittent failure in an unrelated file is far more
+    expensive to chase than this wait, which is a no-op when the pool is idle.
+    """
+    yield
+    pool = sys.modules.get("ui.services.chart_data_service")
+    if pool is None:
+        return
+    try:
+        existing = pool._POOL
+        if existing is not None:
+            existing.waitForDone(5000)
+    except Exception:
+        pass

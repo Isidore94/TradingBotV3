@@ -87,6 +87,11 @@ class AlertChartReview(QWidget):
         # Candle clicks on the embedded D1 chart arm persistent level alerts
         # through the hosting panel.
         self.snapshot.d1LevelAlertRequested.connect(self.d1LevelAlertRequested)
+        # Charts build off-thread now, so anything that depends on the bars
+        # they hold has to wait for them to land rather than reading straight
+        # after set_symbol returns.
+        self.snapshot.snapshotRendered.connect(self._on_snapshot_rendered)
+        self._seed_quick_fill = False
 
         # The unified verb row: add | skip | not-today. Labels adapt to what
         # occupies the chart (scanner alert vs DESK auto pick) but every
@@ -272,14 +277,10 @@ class AlertChartReview(QWidget):
         self.set_armed_levels(armed_levels)
         self.set_armed_d1_events(armed_d1_events)
         self.set_cross_active(cross_active)
-        # Seed the price box with the last traded price so the trader adjusts
-        # from something real instead of typing a level from scratch.
-        self.arm_bar.apply_quick_fill("last")
-        # A session watch can only ever fire off cached M5 bars. Say so on the
-        # buttons rather than letting the trader wait on a watch that has
-        # nothing to evaluate against.
-        has_m5 = bool((self.snapshot._m5 or {}).get("bars"))
-        self.arm_bar.set_watch_availability(has_m5, _NO_M5_WATCH_REASON)
+        # The price box seed and the watch-button availability both read the
+        # drawn M5 series, which does not exist yet - _on_snapshot_rendered
+        # applies them when the bars arrive.
+        self._seed_quick_fill = True
 
     def refresh_chart(self, *, bot=None) -> None:
         """Re-pull the visible D1/M5 charts from the local caches.
@@ -292,11 +293,24 @@ class AlertChartReview(QWidget):
         """
         if self.alert is None:
             return
-        if self.snapshot.refresh(bot=bot):
-            # M5 bars can appear after the alert landed (e.g. the scan loop
-            # reached the symbol) - the watch buttons unlock with them.
-            has_m5 = bool((self.snapshot._m5 or {}).get("bars"))
-            self.arm_bar.set_watch_availability(has_m5, _NO_M5_WATCH_REASON)
+        self.snapshot.refresh(bot=bot)
+
+    def _on_snapshot_rendered(self, _symbol: str) -> None:
+        """Apply everything that needed the bars, once the bars exist."""
+        if self.alert is None:
+            return
+        if self._seed_quick_fill:
+            # Seed the price box with the last traded price so the trader
+            # adjusts from something real instead of typing from scratch.
+            # Once only: a 30s refresh must not overwrite a typed level.
+            self._seed_quick_fill = False
+            self.arm_bar.apply_quick_fill("last")
+        # A session watch can only ever fire off cached M5 bars. Say so on the
+        # buttons rather than letting the trader wait on a watch that has
+        # nothing to evaluate against. M5 bars can also appear after the alert
+        # landed (the scan loop reached the symbol), unlocking the buttons.
+        has_m5 = bool((self.snapshot._m5 or {}).get("bars"))
+        self.arm_bar.set_watch_availability(has_m5, _NO_M5_WATCH_REASON)
 
     def _set_setup_text_live(self, live: bool) -> None:
         """Flip the alertLive QSS property (red setup text) with a repolish."""
