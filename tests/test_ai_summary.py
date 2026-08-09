@@ -16,6 +16,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 def _valid_summary(ref: str) -> dict:
+    # Model sections only: data_quality is machine-owned and a model that
+    # returns it is rejected (Sol 5.6 verification review, item 4).
     sections = {
         name: []
         for name in (
@@ -23,7 +25,6 @@ def _valid_summary(ref: str) -> dict:
             "what_is_not_working",
             "best_candidates",
             "lessons_for_tomorrow",
-            "data_quality",
             "risk_notes",
         )
     }

@@ -29,12 +29,7 @@ from diagnostics.artifact_io import (
     CAPTURE_MODE_LIVE,
     row_capture_mode,
 )
-from durability_retry import (
-    DEFAULT_RETRIES,
-    DEFAULT_RETRY_BUDGET_SECONDS,
-    fetch_with_bounded_retry,
-    retry_deadline,
-)
+from durability_retry import fetch_with_bounded_retry
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import get_diagnostics_dir, get_local_setting
 
@@ -58,6 +53,19 @@ FROZEN_SNAPSHOT_GRACE_MINUTES = 5
 # ``capture_mode`` vocabulary is shared with every other evidence ledger, so it
 # lives in artifact_io; these names are re-exported for this module's readers.
 TI_CHAIN_BACKFILL_SETTING_KEY = "ti_chain_backfill"
+
+#: Attempts one symbol is entitled to for one session, **across all sweeps**.
+#: Spent a couple at a time so no single sweep holds the monitor lock through
+#: a long backoff, and carried in the monitor's persisted state so a symbol
+#: that ran out of luck at the close still has attempts left the next morning.
+#: Six is three sweeps' worth: enough to outlast a provider having a bad
+#: evening, few enough that a genuinely absent symbol is settled within a day.
+FOLLOWUP_SYMBOL_ATTEMPT_ENTITLEMENT = 6
+
+#: Extra attempts within a single sweep. One retry keeps the in-lock backoff
+#: to roughly half a second per failing symbol; the rest of the entitlement is
+#: spent by later sweeps.
+FOLLOWUP_SWEEP_RETRIES = 1
 
 
 #: Stamped by ``_append_event`` when a row is written, so they describe that
@@ -1114,6 +1122,10 @@ class TechnicalIntegrityMonitor:
         self.followup_event_ids: set[str] = set()
         self.frozen_snapshot_markers: set[str] = set()
         self.followup_sweep_markers: set[str] = set()
+        #: "{session}|{symbol}" -> attempts already spent this session.
+        #: Persisted, because the entitlement spans sweeps: a symbol that
+        #: ran out of luck at the close still has attempts the next morning.
+        self.followup_symbol_attempts: dict[str, int] = {}
         self.latest_completed_bar_end = ""
         self._load_state()
 
@@ -1164,6 +1176,11 @@ class TechnicalIntegrityMonitor:
             str(value)
             for value in payload.get("followup_sweep_markers") or []
             if str(value)
+        }
+        self.followup_symbol_attempts = {
+            str(key): int(value)
+            for key, value in (payload.get("followup_symbol_attempts") or {}).items()
+            if str(key) and str(value).lstrip("-").isdigit()
         }
         self.latest_completed_bar_end = str(payload.get("latest_completed_bar_end") or "")
         self._load_resolved_events()
@@ -1328,6 +1345,7 @@ class TechnicalIntegrityMonitor:
                 "followup_event_ids": sorted(self.followup_event_ids),
                 "frozen_snapshot_markers": sorted(self.frozen_snapshot_markers),
                 "followup_sweep_markers": sorted(self.followup_sweep_markers),
+                "followup_symbol_attempts": dict(sorted(self.followup_symbol_attempts.items())),
                 "latest_completed_bar_end": self.latest_completed_bar_end,
                 "code_version": COLLECTION_CODE_VERSION,
                 "updated_at": normalize_market_local_datetime().isoformat(timespec="seconds"),
@@ -1474,6 +1492,48 @@ class TechnicalIntegrityMonitor:
             return ""
         return trigger
 
+    def _expected_followup_bars(self, symbol: str, *, now: datetime | None = None) -> int:
+        """How many completed M5 bars this symbol's pending chains still need.
+
+        This is the completeness check the sweep hands to the retry helper.
+        Without it, a provider returning half a window looked exactly like a
+        provider returning everything there was, and the short window was
+        recorded as fact (Sol 5.6 verification review, item 6).
+
+        Deliberately a *lower bound*: the longest matured window still owed for
+        this symbol, clamped to the session close. Demanding more than a window
+        can hold would make every fetch look incomplete and burn the symbol's
+        entitlement on nothing.
+        """
+        target = str(symbol or "").upper()
+        moment = normalize_market_local_datetime(now)
+        needed = 0
+        for tracking in self.pending_followups.values():
+            if str(tracking.get("symbol") or "").upper() != target:
+                continue
+            resolution_raw = _parse_datetime(tracking.get("resolution_bar_close"))
+            if resolution_raw is None:
+                continue
+            resolution_at = normalize_market_local_datetime(resolution_raw)
+            session = get_market_session_window(resolution_at)
+            completed = {
+                int(value)
+                for value in tracking.get("completed_horizons") or []
+                if str(value).isdigit()
+            }
+            for horizon in FOLLOWUP_HORIZONS_MINUTES:
+                if horizon in completed:
+                    continue
+                window_end = min(
+                    resolution_at + timedelta(minutes=horizon), session.close_local
+                )
+                if moment < window_end:
+                    continue  # not matured yet, so nothing is owed for it
+                needed = max(
+                    needed, int((window_end - resolution_at).total_seconds() // (5 * 60))
+                )
+        return max(0, needed)
+
     def sweep_incomplete_followups(
         self,
         fetch_bars: Callable[[str, str], Any],
@@ -1481,8 +1541,8 @@ class TechnicalIntegrityMonitor:
         now: datetime | None = None,
         reason: str = "chain sweeper",
         trigger: str = "",
-        retries: int = DEFAULT_RETRIES,
-        retry_budget_seconds: float = DEFAULT_RETRY_BUDGET_SECONDS,
+        retries: int = FOLLOWUP_SWEEP_RETRIES,
+        entitlement: int = FOLLOWUP_SYMBOL_ATTEMPT_ENTITLEMENT,
         sleep: Callable[[float], None] | None = None,
     ) -> dict[str, Any]:
         """Complete every due follow-up horizon left hanging by an outage.
@@ -1499,14 +1559,29 @@ class TechnicalIntegrityMonitor:
         nothing; the sweeper never raises, because a failed sweep must leave
         the ledger exactly as it found it.
 
-        A failed fetch is retried a bounded number of times before its gap is
-        written. The gap row *and* the per-session sweep marker are permanent -
-        the marker stops this session from ever being swept again - so
-        finalising both off a single transient hiccup turned a momentary
-        disconnect into permanently missing evidence (checkpoint review
-        2026-08-08 second review). ``retry_budget_seconds`` caps the total time
-        spent sleeping across all symbols, since this loop holds the monitor
-        lock: once spent, remaining symbols still get their one attempt.
+        A failed fetch is retried before its gap is written, and the retry
+        entitlement is **per symbol and spans sweeps** (Sol 5.6 verification
+        review, item 6). The earlier design spent a single wall-clock sleep
+        budget shared across all symbols, so on a bad night the first few
+        symbols consumed it and every symbol after them got one attempt and a
+        permanent gap -- the shared budget rationed the wrong thing.
+
+        Each symbol now has :data:`FOLLOWUP_SYMBOL_ATTEMPT_ENTITLEMENT`
+        attempts for the session, spent a couple at a time per sweep and
+        carried in the monitor's own state. A symbol whose entitlement is not
+        yet spent is **deferred**: it stays pending, no gap row is written, and
+        the next sweep tries again. Only an exhausted entitlement produces the
+        permanent gap.
+
+        Consequently the per-session sweep marker is written **only when no
+        symbol is deferred**. The marker is what stops a session from ever
+        being swept again, and writing it while work remains is what made a
+        transient outage permanent in the first place.
+
+        Partial responses count as failures too: the completeness check below
+        compares bars received against bars the window should hold, so a
+        provider under load returning half a window is retried rather than
+        recorded as a short window nobody can distinguish from a real one.
 
         This is deliberately *not* ``observe_followups``: that call rolls the
         monitor onto the session of the bars it is handed, which on a next-day
@@ -1520,7 +1595,9 @@ class TechnicalIntegrityMonitor:
             "chains": 0,
             "events": 0,
             "data_gap_symbols": [],
+            "deferred_symbols": [],
             "retry_attempts": {},
+            "marker_written": False,
             "reason": "",
         }
         if not ti_chain_backfill_enabled():
@@ -1543,27 +1620,52 @@ class TechnicalIntegrityMonitor:
 
             appended = 0
             data_gap_symbols: list[str] = []
+            deferred_symbols: list[str] = []
             retry_attempts: dict[str, int] = {}
-            deadline = retry_deadline(retry_budget_seconds)
             retry_kwargs: dict[str, Any] = {}
             if sleep is not None:
                 retry_kwargs["sleep"] = sleep
             for symbol in symbols:
-                outcome = fetch_with_bounded_retry(
-                    lambda symbol=symbol: fetch_bars(symbol, session_date),
-                    label=f"Follow-up chain sweep fetch for {symbol} on {session_date}",
-                    retries=retries,
-                    deadline=deadline,
-                    **retry_kwargs,
-                )
-                if outcome.attempts > 1:
-                    retry_attempts[symbol] = outcome.attempts
-                rows = outcome.value
-                bars = (
-                    completed_m5_bars(rows, now=now, session_date=target_session)
-                    if rows
-                    else []
-                )
+                spent = int(self.followup_symbol_attempts.get(f"{session_date}|{symbol}", 0))
+                remaining = max(0, entitlement - spent)
+                if remaining <= 0:
+                    # Entitlement spent across earlier sweeps: this is the
+                    # point at which absence becomes a finding rather than a
+                    # failure to look.
+                    outcome = None
+                    attempts = 0
+                    bars: list[dict[str, Any]] = []
+                else:
+                    expected = self._expected_followup_bars(symbol, now=now)
+                    outcome = fetch_with_bounded_retry(
+                        lambda symbol=symbol: fetch_bars(symbol, session_date),
+                        label=f"Follow-up chain sweep fetch for {symbol} on {session_date}",
+                        retries=max(0, min(retries, remaining - 1)),
+                        is_complete=(
+                            (
+                                lambda rows, expected=expected, symbol=symbol: len(
+                                    completed_m5_bars(
+                                        rows, now=now, session_date=target_session
+                                    )
+                                )
+                                >= expected
+                            )
+                            if expected
+                            else None
+                        ),
+                        **retry_kwargs,
+                    )
+                    attempts = outcome.attempts
+                    self.followup_symbol_attempts[f"{session_date}|{symbol}"] = spent + attempts
+                    remaining -= attempts
+                    if attempts > 1:
+                        retry_attempts[symbol] = attempts
+                    bars = (
+                        completed_m5_bars(outcome.value, now=now, session_date=target_session)
+                        if outcome.value
+                        else []
+                    )
+
                 if bars:
                     appended += self._process_followups(
                         symbol,
@@ -1571,8 +1673,22 @@ class TechnicalIntegrityMonitor:
                         now=now,
                         capture_mode=CAPTURE_MODE_BACKFILL,
                     )
+                elif remaining > 0:
+                    # Deferred, not gapped: the chain stays pending and the
+                    # next sweep spends the rest of this symbol's entitlement.
+                    deferred_symbols.append(symbol)
+                    logging.info(
+                        "Follow-up chain sweep deferring %s on %s: %d attempt(s) of its "
+                        "entitlement remain, so no permanent gap is written yet.",
+                        symbol,
+                        session_date,
+                        remaining,
+                    )
                 else:
                     data_gap_symbols.append(symbol)
+                    total_attempts = int(
+                        self.followup_symbol_attempts.get(f"{session_date}|{symbol}", attempts)
+                    )
                     appended += self._process_followups(
                         symbol,
                         [],
@@ -1580,22 +1696,33 @@ class TechnicalIntegrityMonitor:
                         force_data_gap_reason=(
                             f"{reason}: no completed M5 bars available for "
                             f"{symbol} on {session_date} after "
-                            f"{outcome.attempts} attempt(s)"
+                            f"{total_attempts} attempt(s) across sweeps"
                         ),
                         capture_mode=CAPTURE_MODE_BACKFILL,
                     )
-            if trigger:
+
+            # The marker is permanent, so it may only be written once there is
+            # genuinely nothing left to come back for.
+            marker_written = bool(trigger) and not deferred_symbols
+            if marker_written:
                 self.followup_sweep_markers.add(f"{session_date}|{trigger}")
             self._save_state()
             summary["ran"] = True
             summary["trigger"] = str(trigger or "")
             summary["events"] = appended
             summary["data_gap_symbols"] = data_gap_symbols
+            summary["deferred_symbols"] = deferred_symbols
             summary["retry_attempts"] = retry_attempts
+            summary["marker_written"] = marker_written
             retried = f"; retried {len(retry_attempts)} symbol(s)" if retry_attempts else ""
+            deferred_note = (
+                f"; deferred {len(deferred_symbols)} symbol(s) for a later sweep"
+                if deferred_symbols
+                else ""
+            )
             summary["reason"] = (
                 f"appended {appended} backfilled follow-up row(s) across "
-                f"{len(symbols)} symbol(s) for {session_date}{retried}"
+                f"{len(symbols)} symbol(s) for {session_date}{retried}{deferred_note}"
             )
             return summary
 

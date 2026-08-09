@@ -29,7 +29,9 @@ ENDPOINT = "http://127.0.0.1:11434/v1"
 def _valid_summary(ref: str) -> dict:
     import ai_summary
 
-    sections = {name: [] for name in ai_summary.AI_SUMMARY_SECTIONS}
+    # Model sections only: data_quality is machine-owned and a model that
+    # returns it is rejected (Sol 5.6 verification review, item 4).
+    sections = {name: [] for name in ai_summary.MODEL_SUMMARY_SECTIONS}
     sections["what_is_working"] = [
         {"statement": "Swing rows are shown first.", "evidence_refs": [ref], "confidence": "high"}
     ]
@@ -245,8 +247,10 @@ class LocalRequestTests(unittest.TestCase):
             )
 
         user_message = calls[0]["json"]["messages"][1]["content"]
-        for key in ("executive_summary", *ai_summary.AI_SUMMARY_SECTIONS):
+        for key in ("executive_summary", *ai_summary.MODEL_SUMMARY_SECTIONS):
             self.assertIn(key, user_message)
+        # ...and the machine-owned section is explicitly forbidden.
+        self.assertIn("Do NOT return a data_quality section", user_message)
         self.assertIn("statement", user_message)
         self.assertIn("evidence_refs", user_message)
         # Best-effort structured output on top of the prompt, never relied on.
