@@ -250,22 +250,28 @@ def test_sweep_never_deletes_a_staging_file_it_cannot_name_an_owner_for(monkeypa
     Matching the dotted shape anywhere in that directory meant a stale temp this
     project never wrote was deleted on someone else's behalf. Ownership is the
     gate now: a target this module does not name is not a candidate, whatever
-    its age or shape.
+    its age or shape. The stranger survives in the same call that reclaims our
+    own orphan, so selectivity is what is pinned here, not inertness.
     """
     module = _load_project_paths(monkeypatch, tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     ours = home / "review_policy.json"
     stranger = home / ".thirdparty.sqlite.a1b2c3d4.tmp"
+    another_stranger = home / ".thirdparty.json.abcd1234.tmp"
     our_orphan = home / ".review_policy.json.zz99yy88.tmp"
-    for path in (stranger, our_orphan):
+    for path in (stranger, another_stranger, our_orphan):
         path.write_text("x", encoding="utf-8")
         _aged(path, seconds_old=7 * 3600)
 
-    removed = module.sweep_stale_atomic_write_temps(dotted_for=(ours,))
+    removed = module.sweep_stale_atomic_write_temps(
+        dotted_for=(ours,),
+        staged_for=(home / "intraday_bounce_candidates.csv",),
+    )
 
     assert [path.name for path in removed] == [".review_policy.json.zz99yy88.tmp"]
     assert stranger.exists(), "a staging file this project never wrote must survive the sweep"
+    assert another_stranger.exists(), "age is not ownership; an unnamed target is never a candidate"
 
 
 def test_the_import_time_sweep_only_targets_paths_this_module_defines(monkeypatch, tmp_path):
@@ -286,9 +292,34 @@ def test_the_import_time_sweep_only_targets_paths_this_module_defines(monkeypatc
     assert set(owned) <= named
 
 
+def test_import_time_sweep_covers_only_files_this_module_names(monkeypatch, tmp_path):
+    """What migrate_legacy_layout actually passes: every owned target comes
+    from the module's own constants, lives directly in a swept directory, and
+    is a file - so the deletion surface is exactly the project's own files.
+
+    The suffix assertion is load-bearing: ``DATA_DIR``, ``LOG_DIR`` and the bar
+    stores are Path constants sitting directly in the swept directories too, and
+    admitting them would build a delete pattern for ``.daily_bars.<token>.tmp``
+    — a name no writer here stages and therefore one we cannot claim to own.
+    """
+    module = _load_project_paths(monkeypatch, tmp_path)
+    swept_dirs = (module.SHARED_HOME_DIR, module.DATA_DIR, module.RUNTIME_DATA_DIR)
+    targets = module._owned_staging_targets(swept_dirs)
+    assert module.EARNINGS_CALENDAR_HISTORY_FILE in targets
+    assert module.LONGS_FILE in targets
+    assert module.SWING_LONGS_FILE in targets
+    # Both leaks that motivated the sweep stay swept.
+    assert module.INTRADAY_BOUNCE_CANDIDATES_FILE.parent in set(swept_dirs)
+    for target in targets:
+        assert target.parent in set(swept_dirs), target
+        assert target.suffix, target
+    assert module.MASTER_AVWAP_DAILY_BARS_DIR not in targets
+    assert module.DATA_DIR not in targets
+
+
 def test_sweep_does_not_recurse_into_bar_stores(monkeypatch, tmp_path):
-    """The bar directories hold thousands of parquet files; scanning them on
-    every startup would be pure cost, and nothing stages temps there."""
+    """The bar directories hold thousands of parquet files; no owned target
+    lives there, so nothing is scanned - let alone deleted - below them."""
     module = _load_project_paths(monkeypatch, tmp_path)
     data = tmp_path / "data"
     nested = data / "daily_bars"
@@ -297,8 +328,15 @@ def test_sweep_does_not_recurse_into_bar_stores(monkeypatch, tmp_path):
     buried.write_text("x", encoding="utf-8")
     _aged(buried, seconds_old=24 * 3600)
 
-    assert module.sweep_stale_atomic_write_temps(dotted_for=(data / "something.json",)) == []
+    removed = module.sweep_stale_atomic_write_temps(
+        dotted_for=(data / "earnings_calendar_history.json", data / "something.json")
+    )
+    assert removed == []
     assert buried.exists()
+    swept_dirs = (module.SHARED_HOME_DIR, module.DATA_DIR, module.RUNTIME_DATA_DIR)
+    for target in module._owned_staging_targets(swept_dirs):
+        assert "daily_bars" not in str(target.parent)
+        assert "intraday_bars" not in str(target.parent)
 
 
 def test_sweep_survives_missing_dirs_and_locked_files(monkeypatch, tmp_path):
@@ -317,6 +355,10 @@ def test_sweep_survives_missing_dirs_and_locked_files(monkeypatch, tmp_path):
     # A missing directory and an unlinkable file are both non-fatal: the sweep
     # reports nothing removed and startup continues.
     removed = module.sweep_stale_atomic_write_temps(
-        dotted_for=(runtime / "locked.json", tmp_path / "does_not_exist" / "gone.json")
+        dotted_for=(
+            runtime / "locked.json",
+            tmp_path / "does_not_exist" / "gone.json",
+            tmp_path / "does_not_exist" / "ghost.json",
+        )
     )
     assert removed == []

@@ -389,20 +389,35 @@ def load_fixture_contract(fixture: str | Path) -> FixtureContract:
 def _drain_chart_workers():
     """Let no chart worker outlive the test that queued it.
 
-    Chart snapshots and prefetch batches run on a process-wide pool, and a
-    test that queues work without waiting for it leaves those threads reading
+    Chart snapshots and prefetch batches run on pooled threads, and a test
+    that queues work without waiting for it leaves those threads reading
     parquet during whatever test runs next. That is invisible until it lands
     on a timing-sensitive one - a Desk Link socket handshake failed once this
     way - and an intermittent failure in an unrelated file is far more
-    expensive to chase than this wait, which is a no-op when the pool is idle.
+    expensive to chase than this wait, which is a no-op when the pools are
+    idle.
+
+    Two pools matter, not one: the module-level shared pool (_POOL) AND the
+    shared service's own pool - a default-constructed ChartDataService owns a
+    private QThreadPool, so draining _POOL alone missed every worker the
+    Alert Center's prefetch queued through shared_service(). And a drain that
+    times out FAILS the leaking test by name instead of passing silently -
+    a fixture that swallows the timeout cannot prove the quiescence it
+    exists to provide.
     """
     yield
-    pool = sys.modules.get("ui.services.chart_data_service")
-    if pool is None:
+    module = sys.modules.get("ui.services.chart_data_service")
+    if module is None:
         return
-    try:
-        existing = pool._POOL
-        if existing is not None:
-            existing.waitForDone(5000)
-    except Exception:
-        pass
+    stalled: list[str] = []
+    pool = module._POOL
+    if pool is not None and not pool.waitForDone(5000):
+        stalled.append("shared pool (_POOL)")
+    service = module._SERVICE
+    if service is not None and not service.wait_for_idle(5000):
+        stalled.append("shared service pool (_SERVICE._pool)")
+    if stalled:
+        raise AssertionError(
+            "chart workers queued by this test were still running at teardown: "
+            + ", ".join(stalled)
+        )

@@ -17,9 +17,15 @@ Storage rules:
 * **Append-only.** Every write opens the file in append mode. Nothing in this
   module truncates, rewrites, reorders, or deletes a row - a mistaken capture
   is corrected by a later row, never by editing an earlier one.
-* **Atomic per row.** One row is one line, written inside the machine-local
-  writer lock and bounded to :data:`MAX_ROW_BYTES` so a row can never be
-  interleaved with another process's row or torn across a flush.
+* **One row, one line, one write.** A row is written inside the machine-local
+  writer lock as a single bounded (:data:`MAX_ROW_BYTES`) buffered write and
+  fsynced before the append reports success, so cooperating writers never
+  interleave and "saved" means on-disk, not in a page cache. This is NOT
+  all-or-nothing persistence: a crash mid-write can still leave a torn
+  half-row at the tail. What the store guarantees instead is CONFINEMENT -
+  before appending, a tail that does not end in a newline is healed with one,
+  so an earlier torn row can never absorb the next good row; the reader
+  skips exactly the torn line and nothing else.
 * **One writer.** The desk GUI owns this file. Nothing else appends to it.
 * **Extensible, never renamed.** Later schema versions add fields. A field
   that exists at v1 keeps its name and meaning forever, because rows already
@@ -31,6 +37,7 @@ Import-light (no Qt, no pandas): the capture rail calls this on every click.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -50,11 +57,13 @@ EVENT_NOTE = "note"
 EVENT_TYPES = (EVENT_VETO, EVENT_LIKE_CLAIM, EVENT_HYPO_STOP, EVENT_NOTE)
 
 #: Notes are a capture surface, not a journal - the journal already exists.
-#: The cap is what keeps a row inside :data:`MAX_ROW_BYTES`, which is what
-#: makes the append atomic.
+#: The cap is what keeps a row inside :data:`MAX_ROW_BYTES`, so every row is
+#: one small buffered write.
 MAX_NOTE_CHARS = 2000
-#: A single write below the pipe/file buffer size is not split by the OS. Rows
-#: are ~300 bytes; the cap only ever trips on a pathological note.
+#: One buffered write per row keeps cooperating writers from interleaving
+#: (they also hold the lock); it does not make a crash mid-write impossible,
+#: which is why the appender heals torn tails instead of claiming atomicity.
+#: Rows are ~300 bytes; the cap only ever trips on a pathological note.
 MAX_ROW_BYTES = 4096
 
 _SIDES = ("LONG", "SHORT")
@@ -243,24 +252,48 @@ def append_annotation_row(
     silently vanished is worse than one that visibly failed - so the transient
     cases (a cloud-synced folder briefly locking the file, the lock timing
     out) are reported rather than raised or swallowed.
+
+    True means fsynced: for a decision stream that can never be reconstructed,
+    "saved" has to survive a power cut, not just a process exit. And before
+    writing, a tail left torn by an earlier crashed write is healed with a
+    newline, so that torn fragment can only ever cost its own row - it can
+    never fuse with this one and take two decisions down together.
     """
     line = json.dumps(row, sort_keys=True, default=str) + "\n"
     encoded = line.encode("utf-8")
     if len(encoded) > MAX_ROW_BYTES:
         raise AnnotationError(
-            f"row is {len(encoded)} bytes; the atomic-append cap is {MAX_ROW_BYTES}"
+            f"row is {len(encoded)} bytes; the single-write cap is {MAX_ROW_BYTES}"
         )
     target = Path(path)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         with local_writer_lock(lock_key_for_path(target), timeout_seconds=1.0):
+            if _tail_is_torn(target):
+                encoded = b"\n" + encoded
             # Append mode only: this module never truncates or rewrites.
             with target.open("ab") as handle:
                 handle.write(encoded)
                 handle.flush()
+                os.fsync(handle.fileno())
     except (OSError, LocalLockUnavailable):
         return False
     return True
+
+
+def _tail_is_torn(target: Path) -> bool:
+    """Whether the file ends mid-line (a write died before its newline).
+
+    Called under the writer lock. A missing or empty file is a clean tail.
+    """
+    try:
+        if target.stat().st_size == 0:
+            return False
+    except FileNotFoundError:
+        return False
+    with target.open("rb") as probe:
+        probe.seek(-1, os.SEEK_END)
+        return probe.read(1) != b"\n"
 
 
 def record_annotation(

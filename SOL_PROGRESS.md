@@ -37,6 +37,27 @@ stamp; it must not duplicate the roadmap.
      last two are the trader-approved fence exceptions recorded in
      `docs/HANDOFF_A4_PACKAGING_2026-08-09.md` §10.6). Six files conflicted —
      see that merge commit for the per-file resolution. 2582 passed.
+  6. `claude/testing-production-blockers-oek3aj` (2026-08-09, cut from
+     `testing` @ 59128c5) — the capture-stream hardening packet from the Sol
+     5.6 verification review, folded in here after the trader's call. Six
+     commits, one line each:
+     - `98414ce` Chart Review captures a judgement and must never grant alert
+       privileges: the capture rail's LIKE writes an annotation only, never a
+       watchlist, a Focus list or a price alert.
+     - `f1a7019` a torn annotation write may cost its own row, never the one
+       after it: `annotations/store.py` heals a torn tail before appending and
+       fsyncs, so a half-written last line cannot corrupt the next append.
+     - `53ab6dd` the chart bar cache re-stats the durable store on a memory
+       hit, so a scanner publish is noticed without a desk restart.
+     - `c11008a` a characterization fence that only reads the name tags is not
+       a fence: the veto-cohort test now pins every field of every row against
+       the pre-change `main` output.
+     - `1327a17` its own fix of the same 9037c5f sweep defect packet 3 fixed —
+       reconciled against `b7615b7` below rather than kept alongside it.
+     - `210affa` the branch's checkpoint stamp.
+     Three files conflicted (`scripts/project_paths.py`,
+     `tests/test_project_paths.py`, `SOL_PROGRESS.md`); everything else
+     auto-merged.
 - **Gate on this branch: 2582 passed, 5 skipped, 7 subtests; junit
   `failures=0 errors=0`; smoke 7/7; `launch_gui.py --selftest` 30/30 exit 0.**
   Linux container, Python **3.12.3**, `TZ=America/Vancouver
@@ -62,6 +83,31 @@ stamp; it must not duplicate the roadmap.
     canonical targets, not directories, and the import-time call derives them
     from this module's own path constants, so a file it cannot name is never a
     candidate. Both original leaks are still swept.
+    **Reconciled with `oek3aj`'s independent fix of the same defect
+    (`1327a17`) when packet 6 merged.** Both branches converged on the same
+    design — `dotted_for` naming canonical targets instead of directories, and
+    an `_owned_staging_targets()` derived from the module's own UPPER_CASE
+    `Path` constants. `b7615b7`'s shape was kept (the parameterized
+    `_owned_staging_targets(directories)`, so the swept set is stated at the
+    call site rather than hardcoded twice), with **one thing ported in from
+    `1327a17`: the `value.suffix` filter.** That is not cosmetic. Nine
+    suffixless `Path` constants sit directly in the three swept directories —
+    `DATA_DIR`, `OUTPUT_DIR`, `LOG_DIR`, `RUNTIME_DATA_DIR`,
+    `LOCAL_MACHINE_CACHE_DIR`, `ALERT_REVIEW_EVENTS_DIR`,
+    `MASTER_AVWAP_LEVELS_DIR` and the two bar stores — and they are
+    directories, not staging targets. Admitting them built delete patterns for
+    names like `.daily_bars.<token>.tmp` and `.logs.<token>.tmp`: shapes no
+    writer here ever stages, so files the project could not claim to own. With
+    the filter the owned set is 90 real file targets and those nine are
+    excluded. The invariant now holds in both directions: a file the module
+    cannot name as its own *staging target* is never a deletion candidate, and
+    both original leaks (the bounce-candidates CSV via `staged_for`, the
+    earnings-history temps via `dotted_for`) are still swept. The merged test
+    file is the union of both sides' cases (14 tests): `b7615b7`'s stricter
+    selectivity test was kept over `1327a17`'s inertness-only version and
+    extended with its stranger case, and `1327a17`'s derivation test was kept
+    alongside for its named-constant and `suffix` assertions, which are what
+    pin the ported fix.
   - **Spec drift** (`packaging/`): the warehouse merge trips three frozen-exe
     rebuild triggers at once. The spec now derives its asset mirror from
     `FIRST_PARTY_PACKAGES` (so `research_warehouse/exploration_cohort.txt` ships
@@ -92,12 +138,21 @@ stamp; it must not duplicate the roadmap.
      count). Until it runs, 13c is not `LIVE_VALIDATED`.
   6. **Phase 1 unattended week** — the exit gate still needs its real week.
 - Still unmerged and needing a trader decision:
-  `claude/testing-production-blockers-oek3aj` (+6, incl. its own
-  sweep-ownership fix and an alert-privilege guard) and
-  `scoring-flagging-evidence-guardrails` (+1, scoring code). The A4 stream is
-  no longer on that list — `claude/a4-verify-a3-orchestrate-9c8kop` is the
-  superset of `claude/a4-paint-lines-packaging-nug5km` and both are now in via
-  `06d8429`.
+  `scoring-flagging-evidence-guardrails` (+1, scoring code). Neither the A4
+  stream nor the production-blockers packet is on that list any more —
+  `claude/a4-verify-a3-orchestrate-9c8kop` is the superset of
+  `claude/a4-paint-lines-packaging-nug5km` and came in via `06d8429`, and
+  `claude/testing-production-blockers-oek3aj` is packet 6 above.
+- **Carried over from `oek3aj`'s own stamp, since nothing else records it:**
+  that branch independently measured the same timezone sensitivity this ledger
+  notes, counting **16** UTC-sensitive session-window tests against
+  `TZ=America/Los_Angeles` and confirming the identical failures reproduce on
+  unmodified `59128c5` — environmental, not a branch regression. Its stamp also
+  filed the post-summary `multitasking`/`run_strategy` non-exit as known,
+  pre-existing and unfixed, recommending `network` markers or explicit teardown
+  in a follow-up packet; **that recommendation is superseded** by this branch's
+  `tests/conftest.py` `_make_multitasking_inert()` fix, which removes the
+  worker threads at the source rather than marking the tests that leak them.
 - **Correction to this ledger's shutdown note (verified 2026-08-09).** The
   dead-port proxy workaround printed above is a placebo: yfinance rides
   `curl_cffi`, which ignores `HTTP_PROXY` / `HTTPS_PROXY` entirely, so a

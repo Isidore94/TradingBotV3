@@ -366,6 +366,40 @@ class AnnotationStorageTests(unittest.TestCase):
         directory.write_text("not a directory", encoding="utf-8")
         self.assertFalse(append_annotation_row(row, path=directory / "x.jsonl"))
 
+    def test_a_torn_tail_costs_only_its_own_row_never_the_next_one(self) -> None:
+        """Crash confinement: this is the reviewer's exact failure scenario.
+
+        A writer that dies mid-row leaves an unterminated prefix. Without the
+        tail heal, the NEXT good append joins that prefix on the same line
+        and the reader drops both decisions - the torn one and an innocent
+        one. With it, the torn fragment costs exactly itself.
+        """
+        record_annotation(EVENT_NOTE, symbol="GOOD1", note="n", path=self.path)
+        with self.path.open("ab") as handle:
+            handle.write(b'{"schema_version": 1, "symbol": "TORN", "no')  # no newline
+        record_annotation(EVENT_NOTE, symbol="GOOD2", note="n", path=self.path)
+        self.assertEqual(
+            [row["symbol"] for row in load_annotations(self.path)], ["GOOD1", "GOOD2"]
+        )
+
+    def test_a_successful_append_is_fsynced_not_just_buffered(self) -> None:
+        """For a non-reconstructable stream, "saved" must survive a power cut."""
+        synced: list[int] = []
+        original = store.os.fsync
+
+        def _spy(fd: int) -> None:
+            synced.append(fd)
+            original(fd)
+
+        store.os.fsync = _spy
+        try:
+            self.assertIsNotNone(
+                record_annotation(EVENT_NOTE, symbol="NVDA", note="n", path=self.path)
+            )
+        finally:
+            store.os.fsync = original
+        self.assertEqual(len(synced), 1)
+
     def test_corrupt_lines_are_skipped_not_fatal(self) -> None:
         record_annotation(EVENT_NOTE, symbol="GOOD1", note="n", path=self.path)
         with self.path.open("a", encoding="utf-8") as handle:

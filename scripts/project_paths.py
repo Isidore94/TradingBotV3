@@ -754,10 +754,13 @@ def _consolidate_legacy_logs() -> None:
 # error, and this sweep reclaims whatever still leaks, so the growth is
 # self-healing regardless of cause.
 #
+# OWNERSHIP RULE (plan.md sec 5: one component owns each mutable export).
 # The sweep deletes only files it can name an owner for. SHARED_HOME_DIR is a
 # cloud-synced folder that other programs also write into, so "any old file of
 # roughly this shape" is not a licence to delete — every candidate has to be the
-# staging file of a canonical target this module itself defines.
+# staging file of a canonical target this module itself defines. An earlier
+# draft that swept every ``.<anything>.<8>.tmp`` in that directory was deleting
+# files this project could not prove it owned.
 
 # tempfile's random component: exactly 8 chars from ascii_letters + digits + "_".
 _TEMP_TOKEN = "[A-Za-z0-9_]{8}"
@@ -767,17 +770,27 @@ STALE_TEMP_MIN_AGE_SECONDS = 6 * 3600
 
 
 def _owned_staging_targets(directories: Iterable[Path]) -> list[Path]:
-    """Every file constant this module defines directly inside ``directories``.
+    """Every *file* constant this module defines directly inside ``directories``.
 
     Deriving the list from the module's own globals means a new path constant is
     covered the day it is added, and a file this module cannot name is never a
     sweep candidate at all.
+
+    Suffixless constants are excluded because they are directories, not staging
+    targets: ``DATA_DIR``, ``LOG_DIR``, ``ALERT_REVIEW_EVENTS_DIR`` and the bar
+    stores all sit directly inside the swept directories, and no writer ever
+    stages ``.daily_bars.<token>.tmp``. Including them would hand the sweep a
+    pattern matching a temp file this project could not have written — the very
+    thing the ownership rule above exists to prevent.
     """
     parents = {Path(directory) for directory in directories}
     owned = {
         value
         for name, value in globals().items()
-        if name.isupper() and isinstance(value, Path) and value.parent in parents
+        if name.isupper()
+        and isinstance(value, Path)
+        and value.suffix
+        and value.parent in parents
     }
     return sorted(owned)
 
@@ -789,18 +802,21 @@ def sweep_stale_atomic_write_temps(
     min_age_seconds: float = STALE_TEMP_MIN_AGE_SECONDS,
     now: float | None = None,
 ) -> list[Path]:
-    """Delete orphaned atomic-write staging files; return what was removed.
+    """Delete orphaned staging files of OWNED targets; return what was removed.
 
     Both arguments name *canonical targets*, never directories, and both match
     by that target's exact name — nothing is deleted on shape alone.
 
     ``dotted_for`` covers writers that stage as ``.<target.name>.<token>.tmp``
-    beside the target (``review_learning``, ``review_policy``,
+    beside the target (tempfile with ``prefix=f".{target.name}."``,
+    ``suffix=".tmp"``: ``review_learning``, ``review_policy``,
     ``earnings_history``, the industry writers). ``staged_for`` covers those
     that stage as ``<stem><token><suffix>`` (the bounce candidate CSV
-    compaction). In both shapes the token is mandatory, so a real file can never
-    match: ``foo.csv`` is not ``foo<8 chars>.csv``, and ``.foo.csv.tmp`` is not
-    ``.foo.csv.<8 chars>.tmp``.
+    compaction). In both shapes the 8-char token is mandatory, so a real file
+    can never match: ``foo.csv`` is not ``foo<8 chars>.csv``, and
+    ``.foo.csv.tmp`` is not ``.foo.csv.<8 chars>.tmp``. A temp file whose owner
+    this module cannot name is never touched, regardless of age. Only the owned
+    targets' own directories are scanned, non-recursively.
 
     Never raises: housekeeping must not break startup.
     """
@@ -1004,10 +1020,12 @@ def migrate_legacy_layout() -> None:
             # Only this module's own file constants sitting directly in the
             # three shallow directories that carry staging files: the shared
             # home (watchlists, review artifacts), DATA_DIR (earnings history)
-            # and RUNTIME_DATA_DIR (the big candidate-CSV compaction). Nothing
-            # descends into the bar stores under DATA_DIR, and nothing this
+            # and RUNTIME_DATA_DIR (the big candidate-CSV compaction). A new
+            # file constant is covered the day it is added, and nothing this
             # module cannot name is a candidate — the shared home is a
-            # cloud-synced folder other programs write into too.
+            # cloud-synced folder other programs write into too. Only those
+            # files' own directories are scanned; the bar stores under
+            # DATA_DIR are never descended into.
             dotted_for=_owned_staging_targets((SHARED_HOME_DIR, DATA_DIR, RUNTIME_DATA_DIR)),
             staged_for=(INTRADAY_BOUNCE_CANDIDATES_FILE,),
         )

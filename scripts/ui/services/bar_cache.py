@@ -154,6 +154,13 @@ class D1BarStore:
     ) -> None:
         self._lock = threading.RLock()
         self._series: "OrderedDict[str, BarSeries]" = OrderedDict()
+        #: Durable-store mtime (ns) each disk-loaded series was read from.
+        #: load() re-stats the store on every memory hit and reloads when the
+        #: file has changed - without this, a series read before the scanner
+        #: publishes a new session would be served (yesterday's chart)
+        #: until process restart. Symbols put() directly have no entry and
+        #: are served as-is: memory is authoritative for them.
+        self._source_mtime_ns: dict[str, int] = {}
         self._max_symbols = max(1, int(max_symbols))
         self._cache_dir = Path(cache_dir) if cache_dir is not None else None
         self._hits = 0
@@ -212,10 +219,16 @@ class D1BarStore:
         BLOCKING - worker threads only. Returns None when the symbol has no
         daily store at all (out-of-universe), which callers must render as
         "no data", never as an empty chart that looks like a flat market.
+
+        A memory hit is only served after re-checking the durable store's
+        mtime against the one the resident series was loaded from. The stat
+        is cheap and off the GUI thread; without it, the cache would keep
+        serving the bars it read before the scanner published a new session,
+        for as long as the process lives.
         """
         symbol = _normalize(symbol)
         hit = self.cached(symbol)
-        if hit is not None:
+        if hit is not None and self._memory_hit_is_fresh(symbol):
             with self._lock:
                 self._hits += 1
             return hit
@@ -253,7 +266,32 @@ class D1BarStore:
             series = self._read_newest_mirror(symbol, stem)
         if series is not None:
             self.put(series)
+            with self._lock:
+                # After put(), which clears it: this entry came from disk, so
+                # record which store version it represents (0 = unknown, which
+                # keeps it re-checked on every subsequent load).
+                self._source_mtime_ns[symbol] = source_mtime_ns
         return series
+
+    def _memory_hit_is_fresh(self, symbol: str) -> bool:
+        """Whether the resident series still matches the durable store.
+
+        Direct put() entries (live streaming, tests) have no recorded mtime
+        and are always fresh: memory is authoritative for them. A stat
+        failure keeps the resident series - stale but honest beats a blank
+        chart, exactly like the mirror fallback below.
+        """
+        with self._lock:
+            recorded = self._source_mtime_ns.get(symbol)
+        if recorded is None:
+            return True
+        _, shared = self._shared_path(symbol)
+        if shared is None:
+            return True
+        try:
+            return shared.stat().st_mtime_ns == recorded
+        except OSError:
+            return True
 
     def prefetch(self, symbols: Iterable[str]) -> int:
         """Warm the cache for ``symbols``. BLOCKING - worker threads only."""
@@ -277,8 +315,11 @@ class D1BarStore:
         with self._lock:
             self._series[series.symbol] = series
             self._series.move_to_end(series.symbol)
+            # A direct put is authoritative until a disk load records anew.
+            self._source_mtime_ns.pop(series.symbol, None)
             while len(self._series) > self._max_symbols:
-                self._series.popitem(last=False)
+                evicted, _ = self._series.popitem(last=False)
+                self._source_mtime_ns.pop(evicted, None)
 
     def append_live_bar(self, symbol: str, bar: Mapping[str, Any]) -> BarSeries | None:
         """Fold one completed/forming bar into a resident series, in place.
@@ -300,11 +341,14 @@ class D1BarStore:
 
     def invalidate(self, symbol: str) -> None:
         with self._lock:
-            self._series.pop(_normalize(symbol), None)
+            symbol = _normalize(symbol)
+            self._series.pop(symbol, None)
+            self._source_mtime_ns.pop(symbol, None)
 
     def clear(self) -> None:
         with self._lock:
             self._series.clear()
+            self._source_mtime_ns.clear()
 
     # -- tiers -----------------------------------------------------------
     def _read_mirror(self, symbol: str, stem: str, source_mtime_ns: int) -> BarSeries | None:
