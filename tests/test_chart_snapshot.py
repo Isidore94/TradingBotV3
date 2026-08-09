@@ -403,6 +403,37 @@ def test_build_m5_snapshot_overlays():
     assert empty["bars"] == [] and empty["note"] == "no cached M5 bars"
 
 
+def test_crosshair_readout_uses_the_nearest_drawn_bar_without_dataframe_work():
+    from ui.widgets.candle_chart import hover_readout
+
+    bars = [
+        {
+            "dt": datetime(2026, 8, 7, 9, 30),
+            "open": 100.0,
+            "high": 103.25,
+            "low": 99.5,
+            "close": 102.75,
+            "volume": 123456,
+        },
+        {
+            "dt": datetime(2026, 8, 7, 9, 35),
+            "open": 102.75,
+            "high": 104.0,
+            "low": 102.25,
+            "close": 103.5,
+            "volume": 654321,
+        },
+    ]
+    index, text = hover_readout(bars, 0.6, "m5")
+    assert index == 1
+    assert text == (
+        "2026-08-07 09:35   O 102.75   H 104.00   "
+        "L 102.25   C 103.50   V 654,321"
+    )
+    assert hover_readout(bars, -0.6, "m5") is None
+    assert hover_readout([], 0, "d1") is None
+
+
 def test_zero_volume_m5_legend_explains_missing_vwap():
     if _qt_app() is None:
         return

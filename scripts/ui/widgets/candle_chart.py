@@ -61,6 +61,49 @@ LEVEL_HIT_TOLERANCE_PX = 6.0
 _LEVEL_SELECTED_EXTRA_WIDTH = 1.6
 
 
+def hover_readout(
+    bars: list[dict], x_position: float, timeframe: str
+) -> tuple[int, str] | None:
+    """Return the nearest bar index and its display-only OHLCV readout.
+
+    This is deliberately plain Python. Mouse movement must never trigger a
+    frame conversion, file read, provider call, or any other work beyond one
+    indexed lookup and formatting the already-drawn bar.
+    """
+    if not bars:
+        return None
+    try:
+        position = float(x_position)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(position) or position < -0.5 or position > len(bars) - 0.5:
+        return None
+    index = int(round(position))
+    if not 0 <= index < len(bars):
+        return None
+    bar = bars[index]
+    stamp = bar.get("dt")
+    if not hasattr(stamp, "strftime"):
+        return None
+    stamp_text = stamp.strftime(
+        "%Y-%m-%d" if str(timeframe).lower().startswith("d") else "%Y-%m-%d %H:%M"
+    )
+
+    def price(name: str) -> str:
+        value = float(bar[name])
+        return f"{value:,.4f}" if 0 < abs(value) < 1 else f"{value:,.2f}"
+
+    try:
+        volume = float(bar.get("volume") or 0.0)
+        text = (
+            f"{stamp_text}   O {price('open')}   H {price('high')}   "
+            f"L {price('low')}   C {price('close')}   V {volume:,.0f}"
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    return index, text
+
+
 def _to_log_price(value: float) -> float:
     """Price -> log10 chart space, clamped so non-positive input cannot raise."""
     return math.log10(max(float(value), _LOG_PRICE_FLOOR))
@@ -321,6 +364,24 @@ class CandleChart(pg.PlotWidget):
         plot = self.getPlotItem()
         self._candles = CandleItem()
         plot.addItem(self._candles)
+        # Crosshair/readout items are created once and moved by mouse events.
+        # They consume only the in-memory ``_bars`` list; no dataframe or I/O
+        # work is permitted on this paint-adjacent path.
+        crosshair_pen = pg.mkPen(theme.color("text_muted"), width=1, style=Qt.PenStyle.DotLine)
+        self._crosshair_v = pg.InfiniteLine(angle=90, movable=False, pen=crosshair_pen)
+        self._crosshair_h = pg.InfiniteLine(angle=0, movable=False, pen=crosshair_pen)
+        plot.addItem(self._crosshair_v, ignoreBounds=True)
+        plot.addItem(self._crosshair_h, ignoreBounds=True)
+        self._hover_label = pg.TextItem(
+            color=theme.color("text_primary"),
+            fill=pg.mkBrush(theme.color("bg_elevated")),
+            border=pg.mkPen(theme.color("border")),
+            anchor=(0, 1),
+        )
+        self._hover_label.setZValue(100)
+        plot.addItem(self._hover_label, ignoreBounds=True)
+        self._set_crosshair_visible(False)
+        self.scene().sigMouseMoved.connect(self._on_mouse_moved)
         self._overlay_items: list[pg.PlotDataItem] = []
         # Paint-line pools, kept apart from the overlay pool: they hold
         # different primitives and a symbol switch changes their counts
@@ -356,6 +417,7 @@ class CandleChart(pg.PlotWidget):
 
     def set_data(self, bars: list[dict], overlays: list[dict] = (), *, timeframe: str = "m5") -> None:
         self._bars = [dict(bar) for bar in bars or []]
+        self._set_crosshair_visible(False)
         # Retained so a log/linear toggle can re-render without the caller
         # having to re-fetch the snapshot.
         self._overlays = [dict(overlay) for overlay in overlays or []]
@@ -677,6 +739,37 @@ class CandleChart(pg.PlotWidget):
     def _set_ticks(self, timeframe: str) -> None:
         axis = self.getPlotItem().getAxis("bottom")
         axis.setTicks([_time_ticks(self._bars, timeframe)])
+
+    def _set_crosshair_visible(self, visible: bool) -> None:
+        for item in (self._crosshair_v, self._crosshair_h, self._hover_label):
+            item.setVisible(bool(visible))
+
+    def _on_mouse_moved(self, scene_position) -> None:
+        """Move the pure-Qt crosshair and show the nearest drawn bar."""
+        plot = self.getPlotItem()
+        try:
+            if not self._bars or not plot.sceneBoundingRect().contains(scene_position):
+                self._set_crosshair_visible(False)
+                return
+            view = plot.vb.mapSceneToView(scene_position)
+            payload = hover_readout(self._bars, view.x(), self._timeframe)
+            if payload is None:
+                self._set_crosshair_visible(False)
+                return
+            index, text = payload
+            self._crosshair_v.setPos(index)
+            self._crosshair_h.setPos(view.y())
+            (x_low, x_high), (y_low, y_high) = plot.vb.viewRange()
+            self._hover_label.setText(text)
+            self._hover_label.setPos(
+                x_low + (x_high - x_low) * 0.01,
+                y_high - (y_high - y_low) * 0.02,
+            )
+            self._set_crosshair_visible(True)
+        except Exception:
+            # A transient scene teardown or invalid cached row hides the
+            # decoration; mouse movement must never take down a chart.
+            self._set_crosshair_visible(False)
 
     def bar_count(self) -> int:
         return len(self._bars)

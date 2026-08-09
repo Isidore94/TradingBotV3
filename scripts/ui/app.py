@@ -150,14 +150,15 @@ class MainWindow(QMainWindow):
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
 
-        # Chart Review (plan.md 13d). Shares the one focus service so a like
-        # captured here goes through the existing focus/pick_feedback path
-        # instead of a parallel likes store.
+        # Chart Review (plan.md 13d). Its annotation rail is analysis-only;
+        # it receives the live bot solely for the shared in-memory M5 chart.
         from ui.panels.chart_review_panel import ChartReviewPanel
 
         # No focus_service here, deliberately: Chart Review is analysis-only.
         # Its captures must never add a symbol to Focus or any watchlist.
-        self.chart_review_panel = ChartReviewPanel()
+        self.chart_review_panel = ChartReviewPanel(
+            bot_provider=self.trading_panel.bounce_panel.service.current_bot
+        )
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)

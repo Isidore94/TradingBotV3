@@ -24,6 +24,7 @@ import json
 import sys
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -361,6 +362,93 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertFalse(panel.capture_rail.veto_button.isEnabled())
         panel.open_symbol("NVDA")
         self.assertTrue(panel.capture_rail.veto_button.isEnabled())
+
+    def test_chart_area_hosts_shared_snapshot_on_the_one_data_path(self) -> None:
+        from ui.panels.chart_review_panel import CHART_REVIEW_D1_SESSIONS
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+        panel = _panel(self.tmp)
+        self.assertIsInstance(panel.snapshot, SymbolSnapshotWidget)
+        self.assertTrue(panel.snapshot._compact)
+        self.assertEqual(panel.snapshot._d1_sessions, CHART_REVIEW_D1_SESSIONS)
+        self.assertGreaterEqual(CHART_REVIEW_D1_SESSIONS, 520)
+
+        source = (
+            SCRIPTS_DIR / "ui" / "panels" / "chart_review_panel.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            node.module or ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        }
+        self.assertIn("ui.widgets.symbol_snapshot_dialog", imports)
+        self.assertNotIn("chart_snapshot", imports)
+        self.assertNotIn("ui.services.bar_cache", imports)
+        self.assertNotIn("ui.services.chart_data_service", imports)
+
+    def test_painted_level_flows_to_the_next_capture_fields(self) -> None:
+        panel = _panel(self.tmp)
+        panel.open_symbol("NVDA")
+        panel._on_d1_level_selected("NVDA", "hv:NVDA:42", "hv_horizontal", 101.5)
+        panel.capture_rail.setup_input.setCurrentIndex(0)
+        row = panel.capture_rail.commit_like()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["ref_level_id"], "hv:NVDA:42")
+        self.assertEqual(row["ref_level_family"], "hv_horizontal")
+        self.assertEqual(row["timeframe"], "D1")
+
+    def test_provenance_strip_makes_yfinance_fallback_loud(self) -> None:
+        from ui.panels.chart_review_panel import provenance_state
+
+        panel = _panel(self.tmp)
+        panel._symbol = "NVDA"
+        meta = {
+            "source": "yfinance-fallback",
+            "storage_tier": "local",
+            "bar_timestamp": datetime(2026, 8, 9, 9, 30),
+            "bar_timeframe": "M5",
+        }
+        text, degraded = provenance_state(meta, now=datetime(2026, 8, 9, 10, 0))
+        self.assertTrue(degraded)
+        self.assertIn("YFINANCE FALLBACK", text)
+        self.assertIn("M5 age 30m", text)
+        panel._on_snapshot_meta("NVDA", meta)
+        self.assertTrue(panel.provenance_label.property("degraded"))
+        self.assertIn("font-weight: 800", panel.provenance_label.styleSheet())
+
+        healthy, degraded = provenance_state(
+            meta | {"source": "ibkr-cache"}, now=datetime(2026, 8, 9, 10, 0)
+        )
+        self.assertFalse(degraded)
+        self.assertIn("IBKR live cache", healthy)
+
+    def test_workspace_snapshot_exposes_no_alert_arming_affordance(self) -> None:
+        panel = _panel(self.tmp)
+        self.assertFalse(panel.snapshot._allow_alerts)
+        emitted: list[tuple] = []
+        panel.snapshot.d1LevelAlertRequested.connect(lambda *args: emitted.append(args))
+        panel.snapshot._symbol = "NVDA"
+        panel.snapshot.d1_chart.set_data(
+            [
+                {
+                    "dt": datetime(2026, 8, 8),
+                    "open": 100.0,
+                    "high": 102.0,
+                    "low": 99.0,
+                    "close": 101.0,
+                    "volume": 10_000,
+                }
+            ],
+            timeframe="d1",
+        )
+        panel.snapshot.request_d1_level_alert("above", 0)
+        self.assertEqual(emitted, [])
+        button_text = [
+            button.text().lower()
+            for button in panel.snapshot.findChildren(_QT.QPushButton)
+        ]
+        self.assertFalse(any("alert" in text or "arm" in text for text in button_text))
 
 
 class CaptureRailTests(unittest.TestCase):

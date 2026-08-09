@@ -57,14 +57,18 @@ class _SnapshotTask(QRunnable):
         request_id: int,
         symbol: str,
         m5_bars: Sequence[Mapping[str, Any]],
+        d1_preview_bars: Sequence[Mapping[str, Any]],
         sessions: int | None,
+        source: str | None,
     ) -> None:
         super().__init__()
         self._service = service
         self._request_id = request_id
         self._symbol = symbol
         self._m5_bars = list(m5_bars or [])
+        self._d1_preview_bars = list(d1_preview_bars or [])
         self._sessions = sessions
+        self._source = source
 
     def run(self) -> None:  # noqa: D401 (Qt override)
         service = self._service
@@ -72,7 +76,11 @@ class _SnapshotTask(QRunnable):
             return
         try:
             d1, m5, meta = service.build_snapshots(
-                self._symbol, self._m5_bars, self._sessions
+                self._symbol,
+                self._m5_bars,
+                self._sessions,
+                d1_preview_bars=self._d1_preview_bars,
+                source=self._source,
             )
         except Exception:
             _log.warning(
@@ -161,12 +169,16 @@ class ChartDataService(QObject):
         m5_bars: Sequence[Mapping[str, Any]] = (),
         *,
         sessions: int | None = None,
+        d1_preview_bars: Sequence[Mapping[str, Any]] = (),
+        source: str | None = None,
     ) -> int:
         """Queue a snapshot build. Returns immediately; never blocks.
 
         ``m5_bars`` must already be in hand - the bot's ``m5_chart_bars`` is
         an in-memory read the caller does on the GUI thread, so this service
-        never reaches into the bot from a worker.
+        never reaches into the bot from a worker. ``d1_preview_bars`` is the
+        same shape but feeds only D1 aggregation; a Yahoo daily preview must
+        never masquerade as a five-minute candle.
         """
         symbol = str(symbol or "").strip().upper()
         if not symbol:
@@ -174,7 +186,17 @@ class ChartDataService(QObject):
         request_id = next(self._counter)
         with self._lock:
             self._newest[symbol] = request_id
-        self._pool.start(_SnapshotTask(self, request_id, symbol, m5_bars, sessions))
+        self._pool.start(
+            _SnapshotTask(
+                self,
+                request_id,
+                symbol,
+                m5_bars,
+                d1_preview_bars,
+                sessions,
+                source,
+            )
+        )
         return request_id
 
     def prefetch(self, symbols: Iterable[str]) -> int:
@@ -201,6 +223,9 @@ class ChartDataService(QObject):
         symbol: str,
         m5_bars: Sequence[Mapping[str, Any]],
         sessions: int | None = None,
+        *,
+        d1_preview_bars: Sequence[Mapping[str, Any]] = (),
+        source: str | None = None,
     ) -> tuple[dict, dict, dict]:
         """The blocking build. Public so tests can exercise it directly.
 
@@ -228,16 +253,28 @@ class ChartDataService(QObject):
             tier = series.source
             return series.as_bar_dicts()
 
-        kwargs: dict[str, Any] = {"loader": loader, "intraday_bars": list(m5_bars or [])}
+        d1_inputs = list(m5_bars or []) or list(d1_preview_bars or [])
+        kwargs: dict[str, Any] = {"loader": loader, "intraday_bars": d1_inputs}
         if sessions is not None:
             kwargs["sessions"] = sessions
         d1 = chart_snapshot.build_d1_snapshot(symbol, **kwargs)
         m5 = chart_snapshot.build_m5_snapshot(symbol, list(m5_bars or []))
         d1["levels"] = self._build_levels(symbol, d1.get("bars") or [])
 
-        meta: dict[str, Any] = {"source": tier, "stale_store": False, "want_forming": False}
+        meta: dict[str, Any] = {
+            "source": str(source or tier),
+            "storage_tier": tier,
+            "stale_store": False,
+            "want_forming": False,
+        }
+        d1_bars = d1.get("bars") or []
+        m5_snapshot_bars = m5.get("bars") or []
+        latest_bars = m5_snapshot_bars or d1_bars
+        if latest_bars and latest_bars[-1].get("dt") is not None:
+            meta["bar_timestamp"] = latest_bars[-1]["dt"]
+            meta["bar_timeframe"] = "M5" if m5_snapshot_bars else "D1"
         try:
-            bars = d1.get("bars") or []
+            bars = d1_bars
             if chart_snapshot.d1_store_is_stale(bars):
                 meta["stale_store"] = True
             elif not m5_bars and bars and chart_snapshot.session_has_opened():

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 import logging
+import math
 import threading
 from datetime import datetime, timedelta
 
@@ -167,8 +168,18 @@ class SymbolSnapshotWidget(QWidget):
     # on this instead of on a return value: the build is off-thread now, so
     # set_symbol/refresh have already returned by the time bars exist.
     snapshotRendered = Signal(str)
+    # (symbol, worker meta). Hosts use this for provenance/freshness chrome;
+    # it is emitted even when unchanged bars intentionally skip repainting.
+    snapshotMetaChanged = Signal(str, object)
 
-    def __init__(self, parent=None, *, compact: bool = False) -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        compact: bool = False,
+        d1_sessions: int | None = None,
+        allow_alerts: bool = True,
+    ) -> None:
         """``compact`` trades legend wrapping for chart height.
 
         The standalone popup is 1180px wide with height to spare, so its
@@ -181,6 +192,13 @@ class SymbolSnapshotWidget(QWidget):
         self._symbol = ""
         self._bot = None
         self._compact = bool(compact)
+        self._d1_sessions = (
+            max(1, int(d1_sessions)) if d1_sessions is not None else None
+        )
+        # Chart Review is a judgement-capture surface and passes False. The
+        # shared charts and painted-level selection remain identical; only
+        # candle-click alert menus and alert emission are disabled there.
+        self._allow_alerts = bool(allow_alerts)
         self._d1_backfill_thread: threading.Thread | None = None
         self._forming_thread: threading.Thread | None = None
         self._d1BackfillDone.connect(self._on_d1_backfill_done)
@@ -229,7 +247,8 @@ class SymbolSnapshotWidget(QWidget):
         header_layout.addWidget(self.paint_lines_button, 0)
 
         self.d1_chart = CandleChart()
-        self.d1_chart.barClicked.connect(self._on_d1_bar_clicked)
+        if self._allow_alerts:
+            self.d1_chart.barClicked.connect(self._on_d1_bar_clicked)
         self.d1_chart.levelSelected.connect(self._on_d1_level_selected)
         self.d1_chart.setMinimumHeight(120)
         self.d1_note = QLabel()
@@ -245,7 +264,8 @@ class SymbolSnapshotWidget(QWidget):
         # M5 candle clicks used to be inert: only the D1 chart was wired, so an
         # opening-range high, a premarket high, or any intraday level could not
         # be armed by clicking the bar that shows it.
-        self.m5_chart.barClicked.connect(self._on_m5_bar_clicked)
+        if self._allow_alerts:
+            self.m5_chart.barClicked.connect(self._on_m5_bar_clicked)
         self.m5_chart.setMinimumHeight(120)
         for chart in (self.d1_chart, self.m5_chart):
             chart.priceClicked.connect(
@@ -310,9 +330,19 @@ class SymbolSnapshotWidget(QWidget):
         # daily candle from; a separately fetched today-bar stands in. It is a
         # daily bar, so it feeds ONLY the D1 build, never the M5 pane.
         forming = self._forming_bar(self._symbol)
+        source = (
+            "ibkr-cache"
+            if m5_bars
+            else "yfinance-fallback"
+            if forming
+            else "durable-store"
+        )
         self._data.request(
             self._symbol,
-            m5_bars or ([forming] if forming else []),
+            m5_bars,
+            sessions=self._d1_sessions,
+            d1_preview_bars=[forming] if forming else [],
+            source=source,
         )
         return True
 
@@ -330,6 +360,9 @@ class SymbolSnapshotWidget(QWidget):
     def _on_snapshot_ready(self, symbol: str, d1: dict, m5: dict, meta: dict) -> None:
         if symbol != self._symbol:
             return  # a stale delivery, or another widget's symbol
+        meta = dict(meta or {})
+        self.snapshotMetaChanged.emit(symbol, meta)
+        self._apply_freshness(symbol, meta)
         # Unchanged bars must not re-render: a repaint resets the trader's
         # pan/zoom, and the 30s tick would otherwise do that on every pass.
         if self._d1 and self._m5 and _bars_fingerprint(
@@ -341,7 +374,6 @@ class SymbolSnapshotWidget(QWidget):
         ) == _levels_fingerprint(self._d1.get("levels") or []):
             return
         self._render_snapshots(d1, m5)
-        self._apply_freshness(symbol, meta or {})
 
     def _on_snapshot_failed(self, symbol: str) -> None:
         if symbol != self._symbol:
@@ -483,7 +515,14 @@ class SymbolSnapshotWidget(QWidget):
             try:
                 from ui.services.safe_import import master_avwap_legacy
 
-                master_avwap_legacy().fetch_daily_bars(None, symbol, 260)
+                calendar_days = (
+                    260
+                    if self._d1_sessions is None
+                    else int(math.ceil(self._d1_sessions * 365 / 252))
+                )
+                master_avwap_legacy().fetch_daily_bars(
+                    None, symbol, max(260, calendar_days)
+                )
             except Exception:
                 logging.warning("D1 store backfill failed for %s.", symbol, exc_info=True)
             try:
@@ -659,6 +698,8 @@ class SymbolSnapshotWidget(QWidget):
         self._emit_level_alert(self.m5_chart, direction, index)
 
     def _emit_level_alert(self, chart, direction: str, index: int) -> None:
+        if not self._allow_alerts:
+            return
         bar = chart.bar_at(index)
         if bar is None or not self._symbol or direction not in ("above", "below"):
             return

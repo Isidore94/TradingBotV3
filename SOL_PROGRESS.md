@@ -58,14 +58,23 @@ stamp; it must not duplicate the roadmap.
      Three files conflicted (`scripts/project_paths.py`,
      `tests/test_project_paths.py`, `SOL_PROGRESS.md`); everything else
      auto-merged.
-- **Gate on this branch, re-taken after packet 6: 2591 passed, 5 skipped, 7
-  subtests; junit `failures=0 errors=0` (2603 cases); plain `pytest tests/ -q`
-  exit 0 in 92s test time / 95s wall, so the inert-pool fix survived the
-  conftest reconciliation and there is still no post-summary hang; smoke 7/7;
-  `launch_gui.py --selftest` 30/30 exit 0.** Linux container, Python
-  **3.12.3**, `TZ=America/Vancouver QT_QPA_PLATFORM=offscreen`. The desk runs
-  3.14 on Windows, so **this number is not the desk gate** — see the owed list.
-  The +9 over the pre-packet-6 2582 is oek3aj's net new coverage. The
+  7. Sol A3 Chart Review packet — the placeholder is now the shared compact
+     `SymbolSnapshotWidget` on the existing worker path (520-session D1 + M5),
+     painted-level ids flow only into annotation provenance, both shared
+     candles have a paint-only crosshair/OHLCV readout, and the permanent
+     source/age strip turns loud red for a yfinance fallback. Chart Review
+     disables the shared widget's candle-alert menus and alert emission, so
+     the 98414ce no-alert-privilege boundary remains intact.
+- **Gate on this branch after packet 7: 2600 passed, 1 skipped, 7 subtests;
+  junit `failures=0 errors=0` (2608 cases); pytest exit 0 in 109.52s test time /
+  111.4s wall, so there was no post-summary hang; smoke 7/7;
+  `launch_gui.py --selftest` 30/30 exit 0.** Windows Python **3.12**, 174
+  collected `test_*.py` files and no test file deleted. `QT_QPA_PLATFORM` was
+  `offscreen`; the machine is configured Pacific, but Windows Python cannot
+  consume the packet's IANA `TZ=America/Vancouver` override (that override
+  alone makes one pre-existing explicit-time calendar test fail), so the gate
+  used the host's equivalent Pacific timezone. The prior Linux gate remains
+  2591 passed / 5 skipped / 2603 junit cases. The
   spec-drift negative control was re-run after both merges: pulling
   `research_warehouse` from the spec fails exactly 5 of the file's 16 tests
   (both suites' package censuses and both asset sweeps), 16/16 green again

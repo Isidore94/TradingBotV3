@@ -21,20 +21,20 @@ Looking up a symbol never writes a watchlist (see ui.services.symbol_lookup).
 Nothing on this page mutes, suppresses, scores, gates, or alerts (plan.md
 sec 5); the rail records, and that is all.
 
-CHART AREA: not yet wired. The chart data path is being rebuilt off the GUI
-thread (ui.services.chart_data_service / bar_cache), and drawing here against
-the old synchronous path would have meant a second chart loader and a
-guaranteed conflict. The placeholder states that plainly rather than showing
-an empty frame that looks broken. Everything else on this page is live.
+The chart area embeds the same SymbolSnapshotWidget used elsewhere: one
+ChartDataService worker path, one CandleChart implementation, and no file or
+provider reads on the paint path. This workspace disables the shared widget's
+alert menus; painted-level clicks feed annotation provenance only.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
@@ -52,6 +52,7 @@ from ui import theme
 from ui.services.symbol_lookup import RecentLookups, normalize_symbol
 from ui.widgets.capture_rail import CaptureRail
 from ui.widgets.flow_layout import FlowLayout
+from ui.widgets.symbol_snapshot_dialog import REFRESH_INTERVAL_MS, SymbolSnapshotWidget
 
 #: The snapshot was measured at 11.5MB; this refuses one that has grown into
 #: the raw tracker's problem instead of parsing it anyway (same ceiling as
@@ -59,6 +60,61 @@ from ui.widgets.flow_layout import FlowLayout
 MAX_SETUPS_SNAPSHOT_BYTES = 64 * 1024 * 1024
 #: Rows shown in the drawer, newest scan date first.
 SETUPS_DRAWER_ROWS = 40
+# Two NYSE years are about 504 sessions. Keep a little more than that so the
+# requested D1 view is genuinely 2y+ rather than a calendar approximation.
+CHART_REVIEW_D1_SESSIONS = 520
+
+
+def provenance_state(
+    meta: dict[str, Any], *, now: datetime | None = None
+) -> tuple[str, bool]:
+    """Human-readable feed/bar-age strip and whether it is degraded.
+
+    The source and timestamp were assembled on the chart worker. This helper
+    formats only those values; it performs no probing or I/O on the GUI path.
+    """
+    source = str((meta or {}).get("source") or "none").strip().lower()
+    labels = {
+        "ibkr-cache": "IBKR live cache",
+        "yfinance-fallback": "YFINANCE FALLBACK",
+        "durable-store": "durable D1 store",
+        "memory": "memory cache",
+        "local": "local mirror",
+        "shared": "shared store",
+    }
+    degraded = source in {"yahoo", "yfinance", "yfinance-fallback"}
+    label = labels.get(source, source or "none")
+    text = f"Feed: {label}"
+    tier = str((meta or {}).get("storage_tier") or "").strip()
+    if tier and tier != source:
+        text += f" · storage {tier}"
+
+    stamp = (meta or {}).get("bar_timestamp")
+    if isinstance(stamp, str):
+        try:
+            stamp = datetime.fromisoformat(stamp)
+        except ValueError:
+            stamp = None
+    if isinstance(stamp, datetime):
+        moment = now
+        if moment is None:
+            moment = datetime.now(tz=stamp.tzinfo) if stamp.tzinfo else datetime.now()
+        if stamp.tzinfo is None and moment.tzinfo is not None:
+            moment = moment.replace(tzinfo=None)
+        elif stamp.tzinfo is not None and moment.tzinfo is None:
+            moment = moment.replace(tzinfo=stamp.tzinfo)
+        seconds = max(0, int((moment - stamp).total_seconds()))
+        if seconds < 3600:
+            age = f"{seconds // 60}m"
+        elif seconds < 48 * 3600:
+            age = f"{seconds // 3600}h"
+        else:
+            age = f"{seconds // 86400}d"
+        timeframe = str((meta or {}).get("bar_timeframe") or "bar")
+        text += f" · {timeframe} age {age}"
+    else:
+        text += " · bar age unknown"
+    return text, degraded
 
 
 def read_setups_summary(
@@ -160,6 +216,7 @@ class ChartReviewPanel(QFrame):
         recent_lookups: RecentLookups | None = None,
         annotations_path: Any = None,
         setups_snapshot_path: Any = None,
+        bot_provider: Callable[[], object | None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -169,6 +226,7 @@ class ChartReviewPanel(QFrame):
             setups_snapshot_path or MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
         )
         self._symbol = ""
+        self._bot_provider = bot_provider
         self._setups_request = 0
         self._setups_bridge = _SetupsSummaryBridge()
         self._setups_bridge.ready.connect(self._on_setups_summary)
@@ -177,6 +235,12 @@ class ChartReviewPanel(QFrame):
         self._build()
         self._bind_shortcuts()
         self._render_recents()
+        # Same cadence and same refresh method as the existing snapshot popup.
+        # This panel owns this timer and runs it only while its page is visible.
+        self._chart_refresh_timer = QTimer(self)
+        self._chart_refresh_timer.setInterval(REFRESH_INTERVAL_MS)
+        self._chart_refresh_timer.timeout.connect(self._refresh_visible_chart)
+        self._chart_refresh_timer.start()
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
@@ -263,21 +327,20 @@ class ChartReviewPanel(QFrame):
         self.chart_symbol_label.setObjectName("TitleLabel")
         layout.addWidget(self.chart_symbol_label)
 
-        # Provenance is a permanent fixture of this area, not a chart detail:
-        # the workspace must always be able to say where its numbers came from
-        # and how old they are. It reads "no feed" until the chart lands.
-        self.provenance_label = QLabel("Feed: none - chart not yet wired")
+        # Provenance is a permanent fixture of this area, not a chart detail.
+        self.provenance_label = QLabel("Feed: none · bar age unknown")
         self.provenance_label.setObjectName("FeedProvenance")
         layout.addWidget(self.provenance_label)
 
-        placeholder = QLabel(
-            "Charts arrive with the off-GUI-thread chart data path.\n\n"
-            "The capture rail on the right is live now: look up a symbol and "
-            "the veto / like / stop / note actions all record."
+        self.snapshot = SymbolSnapshotWidget(
+            area,
+            compact=True,
+            d1_sessions=CHART_REVIEW_D1_SESSIONS,
+            allow_alerts=False,
         )
-        placeholder.setWordWrap(True)
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(placeholder, 1)
+        self.snapshot.d1LevelSelected.connect(self._on_d1_level_selected)
+        self.snapshot.snapshotMetaChanged.connect(self._on_snapshot_meta)
+        layout.addWidget(self.snapshot, 1)
         return area
 
     def _bind_shortcuts(self) -> None:
@@ -317,8 +380,51 @@ class ChartReviewPanel(QFrame):
         self._recents.remember(symbol)
         self._render_recents()
         self.capture_rail.set_context(symbol=symbol)
+        self.snapshot.set_symbol(symbol, bot=self._current_bot())
         self.symbolChanged.emit(symbol)
         return symbol
+
+    def _current_bot(self):
+        if self._bot_provider is None:
+            return None
+        try:
+            return self._bot_provider()
+        except Exception:
+            return None
+
+    def _refresh_visible_chart(self) -> None:
+        if not self._symbol or not self.isVisible():
+            return
+        try:
+            self.snapshot.refresh(bot=self._current_bot())
+        except Exception:
+            pass  # display-only refresh; the next owned tick retries
+
+    def _on_d1_level_selected(
+        self, symbol: str, level_id: str, family: str, _price: float
+    ) -> None:
+        if symbol != self._symbol:
+            return
+        self.capture_rail.set_context(
+            symbol=symbol,
+            timeframe="D1",
+            ref_level_id=level_id,
+            ref_level_family=family,
+        )
+
+    def _on_snapshot_meta(self, symbol: str, meta: object) -> None:
+        if symbol != self._symbol:
+            return
+        text, degraded = provenance_state(meta if isinstance(meta, dict) else {})
+        self.provenance_label.setText(text)
+        self.provenance_label.setProperty("degraded", degraded)
+        if degraded:
+            self.provenance_label.setStyleSheet(
+                f"background: {theme.color('short')}; color: {theme.color('bg_app')}; "
+                "font-weight: 800; padding: 6px;"
+            )
+        else:
+            self.provenance_label.setStyleSheet("")
 
     @property
     def symbol(self) -> str:
