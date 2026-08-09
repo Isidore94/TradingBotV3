@@ -44,6 +44,8 @@ from enum import Enum
 from pathlib import Path
 
 __all__ = [
+    "CAPTURE_MODE_BACKFILL",
+    "CAPTURE_MODE_LIVE",
     "TEMP_SUFFIX",
     "append_jsonl",
     "append_jsonl_rows",
@@ -56,8 +58,26 @@ __all__ = [
     "prune_by_age",
     "prune_by_size",
     "read_jsonl",
+    "row_capture_mode",
     "sweep_stale_temp_files",
 ]
+
+# Capture provenance for Tier B recovery (docs/DURABILITY_CATCHUP_PLAN.md).
+# Anything that is a pure function of completed bars may be recomputed after an
+# outage, but a recomputed row must stay distinguishable from one the live
+# process observed - forever, in every evidence ledger that adopts this.
+#
+# The field is deliberately *additive*: every row written before it existed
+# carries none, so its absence means "live" and always will. Never infer
+# backfill from a missing field.
+CAPTURE_MODE_LIVE = "live"
+CAPTURE_MODE_BACKFILL = "backfill"
+
+
+def row_capture_mode(row) -> str:
+    """Capture mode of one ledger row; an absent field means the row is live."""
+    getter = row.get if hasattr(row, "get") else (lambda key, default=None: default)
+    return str(getter("capture_mode", "") or CAPTURE_MODE_LIVE)
 
 # Every temp file this module creates ends in TEMP_SUFFIX, so a stale-temp sweep
 # can be scoped precisely. It matches the legacy ``tempfile.mkstemp(suffix=".tmp")``
