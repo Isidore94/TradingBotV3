@@ -4476,6 +4476,10 @@ def _default_setup_tracker_payload() -> dict:
     return {
         "schema_version": SETUP_TRACKER_SCHEMA_VERSION,
         "updated_at": None,
+        # The data vintage: the completed session whose bars produced this
+        # payload. None means "unknown", which is exactly what a legacy
+        # payload is; it must never silently read as "today".
+        "data_session": None,
         "daily_watchlists": {},
         "setups": {},
         "control_setups": {},
@@ -4558,6 +4562,14 @@ def load_setup_tracker_payload() -> dict:
     tracker = _default_setup_tracker_payload()
     tracker["schema_version"] = int(payload.get("schema_version", SETUP_TRACKER_SCHEMA_VERSION) or SETUP_TRACKER_SCHEMA_VERSION)
     tracker["updated_at"] = payload.get("updated_at")
+    # This loader rebuilds the payload field by field from a fixed default
+    # rather than copying the stored dict, so anything not listed here is
+    # dropped on read. data_session was written by save_setup_tracker_payload
+    # and then dropped right back out here, which made the whole vintage fix
+    # inert in production: every caller that resolves the vintage goes through
+    # this function, so the catch-up kept falling back to the updated_at write
+    # clock exactly as before (Sol 5.6 verification review, surviving P0).
+    tracker["data_session"] = _normalized_tracker_data_session(payload.get("data_session")) or None
     tracker["setups"] = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
     tracker["control_setups"] = payload.get("control_setups", {}) if isinstance(payload.get("control_setups"), dict) else {}
     tracker["study_setups"] = payload.get("study_setups", {}) if isinstance(payload.get("study_setups"), dict) else {}

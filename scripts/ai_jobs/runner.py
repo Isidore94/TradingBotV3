@@ -64,31 +64,68 @@ class RunReport:
     def degraded(self) -> int:
         return sum(1 for row in self.results if row.get("status") == ledger.STATUS_DEGRADED)
 
+    @property
+    def manual(self) -> int:
+        return sum(1 for row in self.results if row.get("status") == ledger.STATUS_MANUAL)
+
     def summary(self) -> str:
         if not self.store_ok:
             return f"AI jobs did not run: {self.store_reason}"
         return (
-            f"AI jobs for {self.session_date}: "
-            f"{self.ran} ok, {self.degraded} degraded, {self.failed} failed, "
-            f"{self.skipped} skipped"
+            f"AI jobs for session {self.session_date}: "
+            f"{self.ran} ok, {self.manual} manual, {self.degraded} degraded, "
+            f"{self.failed} failed, {self.skipped} skipped"
         )
 
 
 def session_date_for(now: datetime | None = None) -> str:
-    """The session this overnight run belongs to.
+    """The NYSE session this overnight run belongs to.
 
-    A run at 01:00 ET Wednesday is processing *Tuesday's* session, so the
-    ledger and every artifact are keyed to the day whose evidence is being
-    read, not to the wall-clock date of the run.
+    The most recent session whose close is at or before the run time. A run at
+    01:00 ET Wednesday is processing *Tuesday*; a run at 21:00 ET Saturday is
+    still processing *Friday*, because Saturday was never a session.
+
+    This used to be weekday arithmetic -- subtract a day before 17:00, and
+    otherwise take today -- with no calendar involved at all. On a Saturday it
+    therefore returned Saturday, and three ledger rows claimed `ok` coverage of
+    2026-08-08, a date on which the exchange never opened (Sol 5.6
+    verification review, item 2).
+
+    Raises :class:`market_calendar.SessionCalendarError` when the calendar
+    cannot answer. Callers must fail closed: keying an artifact or an `ok` row
+    to a guessed date is exactly the defect being repaired.
     """
-    moment = window.market_now(now)
-    hour_cutoff = 17  # anything before the evening belongs to the previous day
-    day = moment.date()
-    if moment.hour < hour_cutoff:
-        from datetime import timedelta
+    from market_calendar import last_completed_session
 
-        day = day - timedelta(days=1)
-    return day.isoformat()
+    return last_completed_session(window.market_now(now)).isoformat()
+
+
+def is_session_day(now: datetime | None = None) -> bool:
+    """Is the run's own ET date a trading session? Raises if unanswerable."""
+    from market_calendar import is_session
+
+    return is_session(window.market_now(now).date())
+
+
+def market_calendar_describe(now: datetime | None = None) -> str:
+    from market_calendar import describe
+
+    return describe(window.market_now(now).date())
+
+
+def _already_recorded_no_session(job: str, session_date: str, *, path=None) -> bool:
+    """Has this job already logged a no-session skip for this session?"""
+    target = path if path is not None else ledger.ledger_path(create=False)
+    try:
+        rows = ledger._read_rows(target)
+    except (OSError, ValueError):
+        return False
+    return any(
+        str(row.get("job") or "") == job
+        and str(row.get("session_date") or "") == session_date
+        and row.get("no_session")
+        for row in rows
+    )
 
 
 def run_slots(
@@ -100,8 +137,25 @@ def run_slots(
     ledger_path=None,
 ) -> RunReport:
     """Run every due slot once. Never raises: a crash here is a lost night."""
+    from market_calendar import SessionCalendarError
+
     moment = window.market_now(now)
-    session_date = session_date_for(moment)
+    # Session identity comes first and fails closed. Without it there is no
+    # honest key for an artifact or a ledger row, and writing one anyway is
+    # how three `ok` rows came to claim coverage of a Saturday.
+    try:
+        session_date = session_date_for(moment)
+        session_today = is_session_day(moment)
+    except SessionCalendarError as exc:
+        report = RunReport(session_date="", started_at=moment)
+        report.store_ok = False
+        report.store_reason = f"session calendar cannot answer: {exc}"
+        logging.error(
+            "AI job runner: %s. Refusing to run rather than key artifacts to a "
+            "guessed session date.",
+            report.store_reason,
+        )
+        return report
     report = RunReport(session_date=session_date, started_at=moment)
 
     store_ok, store_reason = store.store_available()
@@ -112,6 +166,10 @@ def run_slots(
         logging.error("AI job runner: %s", store_reason)
         return report
 
+    # A manual or forced run publishes real artifacts but never claims the
+    # session is covered, so it cannot stand in for the scheduled run -- and,
+    # being deliberate, it runs even when the session is already covered.
+    manual = bool(force)
     already = set() if force else ledger.completed_jobs(session_date, path=ledger_path)
 
     for slot in slots:
@@ -120,7 +178,34 @@ def run_slots(
         if not slot.enabled:
             continue
         if slot.name in already:
-            logging.info("AI job %s already completed for %s; skipping.", slot.name, session_date)
+            if session_today:
+                logging.info(
+                    "AI job %s already completed for %s; skipping.", slot.name, session_date
+                )
+                continue
+            # A weekend or holiday firing whose last completed session is
+            # already covered has nothing to do. It gets one ledger row saying
+            # so -- once, not once per 30-minute repeat, which would bury the
+            # ledger under ~27 rows a night.
+            reason = (
+                f"no session: {market_calendar_describe(moment)}; "
+                f"{session_date} is already covered"
+            )
+            if _already_recorded_no_session(
+                slot.name, session_date, path=ledger_path
+            ):
+                logging.debug("AI job %s: %s (already recorded).", slot.name, reason)
+                continue
+            row = ledger.record(
+                job=slot.name,
+                status=ledger.STATUS_SKIPPED,
+                session_date=session_date,
+                reason=reason,
+                path=ledger_path,
+                extra={"no_session": True},
+            )
+            report.results.append(row)
+            logging.info("AI job %s skipped: %s", slot.name, reason)
             continue
 
         # --force is an operator convenience for the *window* -- "run it now,
@@ -159,9 +244,32 @@ def run_slots(
             # A job may report that it published an honestly degraded document
             # rather than a trustworthy one. That is not "ok", and because
             # completed_jobs counts only STATUS_OK, the next firing retries it.
+            #
+            # An unrecognised status fails CLOSED. It used to coerce to
+            # STATUS_OK, so a job reporting a status this runner did not
+            # understand -- a typo, a status added by a later phase, a
+            # half-written return value -- was recorded as a trustworthy
+            # completion and never retried (Sol 5.6 verification review, item
+            # 7). "I do not know what happened" is the one thing that must
+            # never be filed as success.
             status = str(outcome.get("status") or ledger.STATUS_OK)
-            if status not in {ledger.STATUS_OK, ledger.STATUS_DEGRADED}:
-                status = ledger.STATUS_OK
+            if status not in ledger.RECOGNISED_JOB_STATUSES:
+                logging.error(
+                    "AI job %s reported an unrecognised status %r; recording it as "
+                    "failed rather than assuming success.",
+                    slot.name,
+                    status,
+                )
+                outcome = {
+                    **outcome,
+                    "reason": f"unrecognised job status {status!r}: {outcome.get('reason') or ''}".strip(),
+                }
+                status = ledger.STATUS_FAILED
+            elif manual and status == ledger.STATUS_OK:
+                # A deliberate operator run produced real artifacts, but it is
+                # not the session's nightly brief and must not be counted as
+                # coverage. Degraded and failed keep their own meaning.
+                status = ledger.STATUS_MANUAL
             row = ledger.record(
                 job=slot.name,
                 status=status,

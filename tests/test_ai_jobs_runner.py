@@ -328,8 +328,13 @@ def test_force_skips_the_window_checks(tmp_path):
         )
 
     assert ran, "--force must still get past a shut window"
-    assert report.ran == 1
-    assert _rows(led)[0]["status"] == "ok"
+    # ...but it publishes as a manual test, never as session coverage.
+    assert report.manual == 1
+    assert report.ran == 0
+    assert _rows(led)[0]["status"] == "manual_test"
+    from ai_jobs import ledger
+
+    assert ledger.completed_jobs("2026-08-11", path=led) == set()
 
 
 def test_force_does_not_get_past_the_market_session_block(tmp_path):
@@ -392,3 +397,170 @@ def test_force_does_not_get_past_the_post_job_session_break(tmp_path):
         )
 
     assert ran == ["one"]
+
+
+# ---------------------------------------------------------------------------
+# session identity (Sol 5.6 verification review, item 2)
+# ---------------------------------------------------------------------------
+def test_a_weekend_run_is_attributed_to_fridays_session():
+    """The defect, directly: a Saturday run filed its work under Saturday."""
+    from ai_jobs import runner
+
+    saturday_evening = datetime(2026, 8, 8, 21, 0, tzinfo=ET)
+    assert saturday_evening.weekday() == 5
+    assert runner.session_date_for(saturday_evening) == "2026-08-07"
+    assert runner.is_session_day(saturday_evening) is False
+
+
+def test_a_weekday_overnight_run_is_attributed_to_the_prior_session():
+    from ai_jobs import runner
+
+    assert runner.session_date_for(datetime(2026, 8, 12, 2, 0, tzinfo=ET)) == "2026-08-11"
+    assert runner.is_session_day(datetime(2026, 8, 12, 2, 0, tzinfo=ET)) is True
+
+
+def test_a_holiday_evening_run_walks_back_past_the_holiday():
+    from ai_jobs import runner
+
+    thanksgiving_evening = datetime(2026, 11, 26, 21, 0, tzinfo=ET)
+    assert runner.session_date_for(thanksgiving_evening) == "2026-11-25"
+    assert runner.is_session_day(thanksgiving_evening) is False
+
+
+def test_an_unanswerable_calendar_stops_the_run_rather_than_guessing(tmp_path):
+    from market_calendar import SessionCalendarError
+
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    ran = []
+
+    with mock.patch.object(
+        runner, "session_date_for", side_effect=SessionCalendarError("no calendar")
+    ):
+        report = runner.run_slots(
+            [_slot("ai_summary", lambda **k: ran.append(True))],
+            now=OVERNIGHT,
+            ledger_path=led,
+        )
+
+    assert ran == []
+    assert report.store_ok is False
+    assert "session calendar cannot answer" in report.store_reason
+    assert report.session_date == ""
+    assert not led.exists(), "no row may be keyed to a session we could not resolve"
+
+
+def test_a_weekend_firing_produces_the_missing_friday_brief(tmp_path):
+    # Friday's session has no canonical artifact, so the Saturday firing does
+    # the work -- keyed to Friday.
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    seen = []
+
+    def job(*, session_date, now):
+        seen.append(session_date)
+        return {}
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        report = runner.run_slots(
+            [_slot("ai_summary", job)],
+            now=datetime(2026, 8, 8, 21, 0, tzinfo=ET),
+            ledger_path=led,
+        )
+
+    assert seen == ["2026-08-07"]
+    assert report.ran == 1
+    assert _rows(led)[0]["session_date"] == "2026-08-07"
+
+
+def test_a_weekend_firing_over_a_covered_session_records_no_session_once(tmp_path):
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    runs = []
+
+    def job(*, session_date, now):
+        runs.append(session_date)
+        return {}
+
+    saturday = datetime(2026, 8, 8, 21, 0, tzinfo=ET)
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        runner.run_slots([_slot("ai_summary", job)], now=saturday, ledger_path=led)
+        # Two more firings of the every-30-minutes task.
+        second = runner.run_slots([_slot("ai_summary", job)], now=saturday, ledger_path=led)
+        runner.run_slots([_slot("ai_summary", job)], now=saturday, ledger_path=led)
+
+    assert runs == ["2026-08-07"], "the covered session is not redone"
+    statuses = [row["status"] for row in _rows(led)]
+    assert statuses == ["ok", "skipped"], "one no-session row, not one per repeat"
+    skip = _rows(led)[1]
+    assert skip["session_date"] == "2026-08-07"
+    assert "no session" in skip["reason"]
+    assert "weekend" in skip["reason"]
+    assert skip["no_session"] is True
+    assert second.skipped == 1
+
+
+def test_a_weekday_repeat_over_a_covered_session_stays_silent(tmp_path):
+    # The ~27 firings of a healthy weeknight must not each leave a row.
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        runner.run_slots([_slot("ai_summary", lambda **k: {})], now=OVERNIGHT, ledger_path=led)
+        runner.run_slots([_slot("ai_summary", lambda **k: {})], now=OVERNIGHT, ledger_path=led)
+
+    assert [row["status"] for row in _rows(led)] == ["ok"]
+
+
+def test_a_manual_run_never_satisfies_the_canonical_completion_check(tmp_path):
+    from ai_jobs import ledger, runner
+
+    led = tmp_path / "ledger.jsonl"
+    runs = []
+
+    def job(*, session_date, now):
+        runs.append(session_date)
+        return {}
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        runner.run_slots([_slot("ai_summary", job)], now=OVERNIGHT, force=True, ledger_path=led)
+        # The scheduled run afterwards still has work to do.
+        runner.run_slots([_slot("ai_summary", job)], now=OVERNIGHT, ledger_path=led)
+
+    assert runs == ["2026-08-11", "2026-08-11"]
+    assert [row["status"] for row in _rows(led)] == ["manual_test", "ok"]
+    assert ledger.completed_jobs("2026-08-11", path=led) == {"ai_summary"}
+
+
+def test_a_correction_retracts_a_coverage_claim_without_rewriting_it(tmp_path):
+    from ai_jobs import ledger
+
+    led = tmp_path / "ledger.jsonl"
+    original = ledger.record(
+        job="ai_summary", status=ledger.STATUS_OK, session_date="2026-08-08",
+        reason="summary for 2026-08-08", path=led,
+    )
+    assert ledger.completed_jobs("2026-08-08", path=led) == {"ai_summary"}
+
+    ledger.mark_noncanonical(
+        job="ai_summary",
+        session_date="2026-08-08",
+        reason="2026-08-08 was a Saturday; the exchange never opened",
+        corrects=[original["finished_at"]],
+        path=led,
+    )
+
+    assert ledger.completed_jobs("2026-08-08", path=led) == set()
+    rows = _rows(led)
+    assert len(rows) == 2, "the ledger is append-only: the original row stays"
+    assert rows[0] == original
+    assert rows[1]["status"] == "correction"
+    assert rows[1]["noncanonical"] is True
+    assert rows[1]["corrects"] == [original["finished_at"]]
+
+    # A genuine run afterwards re-establishes the claim.
+    ledger.record(job="ai_summary", status=ledger.STATUS_OK, session_date="2026-08-08", path=led)
+    assert ledger.completed_jobs("2026-08-08", path=led) == {"ai_summary"}

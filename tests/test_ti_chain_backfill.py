@@ -183,13 +183,20 @@ def test_unfetchable_bars_stay_an_explicit_data_gap(tmp_path):
 
     monitor, paths = _monitor_with_pending_chain(tmp_path)
 
-    summary = monitor.sweep_incomplete_followups(
-        lambda symbol, session_date: [],
-        now=AFTER_CLOSE,
-        trigger="close_of_day",
-    )
+    # The gap is written only once the symbol's whole entitlement is spent.
+    # Sweeping repeatedly is what an unreachable provider actually looks like.
+    summaries = [
+        monitor.sweep_incomplete_followups(
+            lambda symbol, session_date: [],
+            now=AFTER_CLOSE,
+            trigger="close_of_day",
+            sleep=lambda seconds: None,
+        )
+        for _ in range(6)
+    ]
 
-    assert summary["data_gap_symbols"] == ["MU"]
+    gapped = next(row for row in summaries if row["data_gap_symbols"])
+    assert gapped["data_gap_symbols"] == ["MU"]
     followups = [row for row in _rows(paths["events_path"]) if row["event_type"] == "post_resolution_followup"]
     assert len(followups) == 3
     assert all(row["data_gap"] is True for row in followups)
@@ -204,10 +211,16 @@ def test_a_broker_error_is_a_data_gap_not_a_crash(tmp_path):
     def _boom(symbol, session_date):
         raise RuntimeError("IB pacing violation")
 
-    summary = monitor.sweep_incomplete_followups(_boom, now=AFTER_CLOSE, trigger="close_of_day")
+    summaries = [
+        monitor.sweep_incomplete_followups(
+            _boom, now=AFTER_CLOSE, trigger="close_of_day", sleep=lambda seconds: None
+        )
+        for _ in range(6)
+    ]
 
-    assert summary["ran"] is True
-    assert summary["data_gap_symbols"] == ["MU"]
+    gapped = next(row for row in summaries if row["data_gap_symbols"])
+    assert gapped["ran"] is True
+    assert gapped["data_gap_symbols"] == ["MU"]
 
 
 def test_sweeper_is_disabled_by_setting(tmp_path, monkeypatch):
@@ -234,11 +247,11 @@ def test_sweep_is_due_at_the_close_and_only_once_per_session(tmp_path):
     assert monitor.followup_sweep_trigger(now=AFTER_CLOSE) == "close_of_day"
 
     monitor.sweep_incomplete_followups(
-        lambda symbol, session_date: [],
+        lambda symbol, session_date: _followup_bars(RESOLUTION_AT, 20),
         now=AFTER_CLOSE,
         trigger="close_of_day",
     )
-    # Chains that could not complete must not re-spend IB requests every loop.
+    # A finished sweep must not re-spend IB requests every loop.
     assert monitor.followup_sweep_trigger(now=AFTER_CLOSE + timedelta(minutes=30)) == ""
 
 
@@ -247,7 +260,7 @@ def test_sweep_marker_survives_a_restart(tmp_path):
 
     monitor, paths = _monitor_with_pending_chain(tmp_path)
     monitor.sweep_incomplete_followups(
-        lambda symbol, session_date: [],
+        lambda symbol, session_date: _followup_bars(RESOLUTION_AT, 20),
         now=AFTER_CLOSE,
         trigger="close_of_day",
     )
@@ -486,6 +499,14 @@ def test_a_transient_fetch_failure_is_retried_and_the_chain_completes(tmp_path):
 
 
 def test_retries_are_bounded_and_exhaustion_still_writes_the_honest_gap(tmp_path):
+    """The entitlement is per symbol and spans sweeps.
+
+    A shared wall-clock sleep budget rationed the wrong thing: on a bad night
+    the first symbols consumed it and everything after them got one attempt
+    and a permanent gap (Sol 5.6 verification review, item 6).
+    """
+    from technical_integrity import FOLLOWUP_SYMBOL_ATTEMPT_ENTITLEMENT
+
     monitor, paths = _monitor_with_pending_chain(tmp_path)
     attempts = {"n": 0}
     sleeps = _Sleeps()
@@ -494,23 +515,38 @@ def test_retries_are_bounded_and_exhaustion_still_writes_the_honest_gap(tmp_path
         attempts["n"] += 1
         raise RuntimeError("IBKR disconnected")
 
-    summary = monitor.sweep_incomplete_followups(
-        _broken, now=AFTER_CLOSE, trigger="close_of_day", retries=2, sleep=sleeps
-    )
+    summaries = []
+    for _ in range(FOLLOWUP_SYMBOL_ATTEMPT_ENTITLEMENT):
+        summaries.append(
+            monitor.sweep_incomplete_followups(
+                _broken, now=AFTER_CLOSE, trigger="close_of_day", sleep=sleeps
+            )
+        )
 
-    assert attempts["n"] == 3, "retries must be bounded, never an open loop"
-    assert len(sleeps.pauses) == 2, "no backoff after the final attempt"
-    assert summary["data_gap_symbols"] == ["MU"]
+    # Bounded: the entitlement is spent exactly once, never in an open loop.
+    assert attempts["n"] == FOLLOWUP_SYMBOL_ATTEMPT_ENTITLEMENT
+    # Deferred while attempts remained; gapped only at the end.
+    assert summaries[0]["deferred_symbols"] == ["MU"]
+    assert summaries[0]["data_gap_symbols"] == []
+    assert summaries[0]["marker_written"] is False
+    gapped = next(row for row in summaries if row["data_gap_symbols"])
+    assert gapped["data_gap_symbols"] == ["MU"]
+    assert gapped["deferred_symbols"] == []
 
     followups = [
         row for row in _rows(paths["events_path"])
         if row["event_type"] == "post_resolution_followup"
     ]
-    assert len(followups) == 3
+    assert len(followups) == 3, "the gap is written once, not once per sweep"
     assert all(row["data_gap"] is True for row in followups)
-    # The gap is still explicit, and now says how hard the sweep tried.
-    assert all("3 attempt(s)" in row["data_gap_reason"] for row in followups)
-    # And the session is still marked, because the retries really are spent.
+    # The gap is still explicit, and now says how hard the sweeps tried.
+    assert all(
+        f"{FOLLOWUP_SYMBOL_ATTEMPT_ENTITLEMENT} attempt(s) across sweeps"
+        in row["data_gap_reason"]
+        for row in followups
+    )
+    # Only now is the session marked, because only now is there nothing to
+    # come back for.
     assert f"{SESSION}|close_of_day" in monitor.followup_sweep_markers
 
 
@@ -528,11 +564,18 @@ def test_a_persistently_empty_response_is_retried_too(tmp_path):
         _empty, now=AFTER_CLOSE, trigger="close_of_day", sleep=_Sleeps()
     )
 
-    assert attempts["n"] == 3
-    assert summary["data_gap_symbols"] == ["MU"]
+    assert attempts["n"] == 2, "one retry inside a sweep; the rest is entitlement"
+    assert summary["deferred_symbols"] == ["MU"]
+    assert summary["data_gap_symbols"] == []
 
 
-def test_a_spent_retry_budget_does_not_stall_the_sweep(tmp_path):
+def test_one_sweep_holds_the_lock_for_at_most_one_backoff_per_symbol(tmp_path):
+    """What the shared sleep budget was really protecting.
+
+    That budget rationed retries across symbols, which is the wrong thing to
+    ration. Capping the *per-sweep* attempts achieves the same bounded lock
+    hold without taking a later symbol's entitlement away.
+    """
     monitor, _paths = _monitor_with_pending_chain(tmp_path)
     sleeps = _Sleeps()
 
@@ -540,14 +583,12 @@ def test_a_spent_retry_budget_does_not_stall_the_sweep(tmp_path):
         lambda symbol, session_date: [],
         now=AFTER_CLOSE,
         trigger="close_of_day",
-        retry_budget_seconds=0.0,
         sleep=sleeps,
     )
 
-    # This loop holds the monitor lock, so a provider that is down for every
-    # symbol must not cost symbol-count x backoff seconds under it.
-    assert sleeps.pauses == []
-    assert summary["data_gap_symbols"] == ["MU"]
+    assert len(sleeps.pauses) == 1, "one backoff per symbol per sweep, no more"
+    assert sum(sleeps.pauses) <= 1.0
+    assert summary["deferred_symbols"] == ["MU"]
 
 
 # --- point-in-time as_of on an empty follow-up window ----------------------
@@ -592,3 +633,171 @@ def test_a_truncated_horizon_is_stamped_at_the_close_it_actually_ended_at():
         assert datetime.fromisoformat(row["as_of"]) < datetime.fromisoformat(
             row["window_target_at"]
         )
+
+
+# --- completeness, entitlement, deferral (Sol 5.6 review, item 6) ----------
+
+
+def test_a_partial_response_is_retried_like_a_failure(tmp_path):
+    """A provider under load returns half a window.
+
+    Truthy, so it used to sail through as success -- and the short window was
+    recorded as though the sweep had asked and been told that was all there
+    was. Indistinguishable, afterwards, from a real one.
+    """
+    monitor, paths = _monitor_with_pending_chain(tmp_path)
+    calls = []
+
+    def _partial_then_full(symbol, session_date):
+        calls.append(1)
+        # Two bars is nowhere near the +90 window this chain still owes.
+        return _followup_bars(RESOLUTION_AT, 2 if len(calls) == 1 else 20)
+
+    summary = monitor.sweep_incomplete_followups(
+        _partial_then_full,
+        now=AFTER_CLOSE,
+        trigger="close_of_day",
+        sleep=lambda seconds: None,
+    )
+
+    assert len(calls) == 2, "the partial response must be retried, not accepted"
+    assert summary["data_gap_symbols"] == []
+    assert summary["deferred_symbols"] == []
+    followups = [
+        row for row in _rows(paths["events_path"])
+        if row["event_type"] == "post_resolution_followup"
+    ]
+    assert len(followups) == 3
+    assert all(row["data_gap"] is False for row in followups)
+
+
+def test_a_complete_response_is_accepted_first_time(tmp_path):
+    # The completeness check must not make every fetch look incomplete and
+    # burn the entitlement on nothing.
+    monitor, _paths = _monitor_with_pending_chain(tmp_path)
+    calls = []
+
+    def _full(symbol, session_date):
+        calls.append(1)
+        return _followup_bars(RESOLUTION_AT, 20)
+
+    summary = monitor.sweep_incomplete_followups(
+        _full, now=AFTER_CLOSE, trigger="close_of_day"
+    )
+
+    assert len(calls) == 1
+    assert summary["marker_written"] is True
+
+
+def test_expected_bar_count_is_a_lower_bound_on_the_matured_window(tmp_path):
+    monitor, _paths = _monitor_with_pending_chain(tmp_path)
+
+    # Nothing has matured 10 minutes after resolution, so nothing is demanded.
+    assert monitor._expected_followup_bars("MU", now=RESOLUTION_AT + timedelta(minutes=10)) == 0
+    # By +31 the 30-minute window is owed: six 5-minute bars.
+    assert monitor._expected_followup_bars("MU", now=RESOLUTION_AT + timedelta(minutes=31)) == 6
+    # After the close every horizon is owed; +90 is eighteen bars.
+    assert monitor._expected_followup_bars("MU", now=AFTER_CLOSE) == 18
+    # A symbol with no pending chains demands nothing.
+    assert monitor._expected_followup_bars("ZZZ", now=AFTER_CLOSE) == 0
+
+
+def test_a_deferred_symbol_blocks_the_sweep_marker(tmp_path):
+    """The marker is permanent; writing it while work remains is the defect."""
+    monitor, _paths = _monitor_with_pending_chain(tmp_path)
+
+    summary = monitor.sweep_incomplete_followups(
+        lambda symbol, session_date: [],
+        now=AFTER_CLOSE,
+        trigger="close_of_day",
+        sleep=lambda seconds: None,
+    )
+
+    assert summary["deferred_symbols"] == ["MU"]
+    assert summary["marker_written"] is False
+    assert f"{SESSION}|close_of_day" not in monitor.followup_sweep_markers
+    # ...so the sweep is still due, and the chain is still pending.
+    assert monitor.followup_sweep_trigger(now=AFTER_CLOSE + timedelta(minutes=30)) == "close_of_day"
+    assert monitor.pending_followups
+
+
+def test_a_deferred_symbol_recovers_on_a_later_sweep(tmp_path):
+    # The whole point of deferring: the outage ends and the evidence arrives,
+    # instead of a permanent gap written during the outage.
+    monitor, paths = _monitor_with_pending_chain(tmp_path)
+
+    first = monitor.sweep_incomplete_followups(
+        lambda symbol, session_date: [],
+        now=AFTER_CLOSE,
+        trigger="close_of_day",
+        sleep=lambda seconds: None,
+    )
+    assert first["deferred_symbols"] == ["MU"]
+
+    second = monitor.sweep_incomplete_followups(
+        lambda symbol, session_date: _followup_bars(RESOLUTION_AT, 20),
+        now=AFTER_CLOSE + timedelta(minutes=30),
+        trigger="close_of_day",
+    )
+
+    assert second["data_gap_symbols"] == []
+    assert second["deferred_symbols"] == []
+    assert second["marker_written"] is True
+    followups = [
+        row for row in _rows(paths["events_path"])
+        if row["event_type"] == "post_resolution_followup"
+    ]
+    assert all(row["data_gap"] is False for row in followups), "no gap was ever written"
+
+
+def test_the_entitlement_survives_a_restart(tmp_path):
+    """A symbol that ran out of luck at the close keeps its remaining attempts."""
+    from technical_integrity import TechnicalIntegrityMonitor
+
+    monitor, paths = _monitor_with_pending_chain(tmp_path)
+    monitor.sweep_incomplete_followups(
+        lambda symbol, session_date: [],
+        now=AFTER_CLOSE,
+        trigger="close_of_day",
+        sleep=lambda seconds: None,
+    )
+    spent = dict(monitor.followup_symbol_attempts)
+    assert spent == {f"{SESSION}|MU": 2}
+
+    restarted = TechnicalIntegrityMonitor(**paths)
+    assert restarted.followup_symbol_attempts == spent
+    assert f"{SESSION}|close_of_day" not in restarted.followup_sweep_markers
+
+
+def test_one_symbol_cannot_spend_another_symbols_entitlement(tmp_path):
+    """The shared budget's real defect, stated as a property.
+
+    With a wall-clock budget shared across symbols, the first few failures
+    consumed it and every symbol after them got one attempt and a permanent
+    gap. Entitlement is per symbol now, so a hopeless symbol costs its
+    neighbours nothing.
+    """
+    from technical_integrity import _followup_tracking_event
+
+    monitor, _paths = _monitor_with_pending_chain(tmp_path)
+    second = _resolution(event_id="resolved-2")
+    second["symbol"] = "NVDA"
+    assert monitor._start_followup(second)
+
+    calls = []
+
+    def _only_mu_is_broken(symbol, session_date):
+        calls.append(symbol)
+        return [] if symbol == "MU" else _followup_bars(RESOLUTION_AT, 20)
+
+    summary = monitor.sweep_incomplete_followups(
+        _only_mu_is_broken,
+        now=AFTER_CLOSE,
+        trigger="close_of_day",
+        sleep=lambda seconds: None,
+    )
+
+    assert summary["deferred_symbols"] == ["MU"]
+    assert calls.count("NVDA") == 1, "the healthy symbol was not made to retry"
+    assert monitor.followup_symbol_attempts[f"{SESSION}|NVDA"] == 1
+    assert monitor.followup_symbol_attempts[f"{SESSION}|MU"] == 2

@@ -95,22 +95,34 @@ def fetch_with_bounded_retry(
     retries: int = DEFAULT_RETRIES,
     backoff_seconds: Sequence[float] = DEFAULT_BACKOFF_SECONDS,
     empty_is_failure: bool = True,
+    is_complete: Callable[[Any], bool] | None = None,
     deadline: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> RetryOutcome:
-    """Call ``fetch`` until it yields data, up to ``retries`` extra attempts.
+    """Call ``fetch`` until it yields **complete** data, up to ``retries`` more.
 
-    An exception and (when ``empty_is_failure``) a falsy result are both
-    treated as transient: a provider that answers "nothing" while it is still
-    catching up is the same class of failure as one that raises, and both used
-    to finalise a permanent gap on the spot.
+    Three things count as a failure worth retrying:
 
-    Never raises. The exhausted outcome carries the last error so the caller
-    can put it in the gap row's reason, exactly as it did before.
+    * an exception -- a broker hiccup;
+    * (when ``empty_is_failure``) a falsy result -- a provider answering
+      "nothing" while it is still catching up;
+    * a result ``is_complete`` rejects.
+
+    That third one closes a real gap. A provider under load returns *some* of
+    the bars, and a truthy partial response sailed through as success -- so the
+    caller recorded a permanently short window as if it had asked and been told
+    that was all there was (Sol 5.6 verification review, item 6). Completeness
+    is the caller's to define, because only the caller knows how many bars the
+    window should hold.
+
+    Never raises. The exhausted outcome carries the last error, and the last
+    partial value too, so a caller that would rather keep an incomplete
+    response than nothing can still see it.
     """
     attempts = 0
     last_error = ""
+    last_value: Any = None
     total = max(0, int(retries)) + 1
     for index in range(total):
         attempts = index + 1
@@ -121,10 +133,14 @@ def fetch_with_bounded_retry(
             value = None
         else:
             if value or not empty_is_failure:
-                if index:
-                    logging.info("%s recovered on attempt %d.", label, attempts)
-                return RetryOutcome(value=value, attempts=attempts, exhausted=False)
-            last_error = ""
+                if is_complete is None or is_complete(value):
+                    if index:
+                        logging.info("%s recovered on attempt %d.", label, attempts)
+                    return RetryOutcome(value=value, attempts=attempts, exhausted=False)
+                last_value = value
+                last_error = "incomplete response"
+            else:
+                last_error = ""
 
         if index >= total - 1:
             break
@@ -150,9 +166,11 @@ def fetch_with_bounded_retry(
             sleep(pause)
 
     logging.warning(
-        "%s exhausted after %d attempt(s) (%s); recording an explicit data gap.",
+        "%s exhausted after %d attempt(s) (%s).",
         label,
         attempts,
         last_error or "no data returned",
     )
-    return RetryOutcome(value=None, attempts=attempts, exhausted=True, error=last_error)
+    return RetryOutcome(
+        value=last_value, attempts=attempts, exhausted=True, error=last_error
+    )

@@ -151,3 +151,54 @@ def test_the_helper_never_raises_out_of_a_broken_fetch():
         sleep=_Sleeps(),
     )
     assert outcome.exhausted and "bad rows" in outcome.error
+
+
+# --- completeness (Sol 5.6 verification review, item 6) -------------------
+
+
+def test_an_incomplete_response_is_retried_like_a_failure():
+    sleeps = _Sleeps()
+    responses = [["a", "b"], ["a", "b", "c", "d"]]
+
+    outcome = fetch_with_bounded_retry(
+        lambda: responses.pop(0),
+        label="t",
+        is_complete=lambda rows: len(rows) >= 4,
+        sleep=sleeps,
+    )
+
+    assert outcome.attempts == 2
+    assert not outcome.exhausted
+    assert outcome.value == ["a", "b", "c", "d"]
+
+
+def test_a_complete_response_is_accepted_immediately():
+    sleeps = _Sleeps()
+    calls = {"n": 0}
+
+    def _fetch():
+        calls["n"] += 1
+        return ["a", "b", "c", "d"]
+
+    outcome = fetch_with_bounded_retry(
+        _fetch, label="t", is_complete=lambda rows: len(rows) >= 4, sleep=sleeps
+    )
+
+    assert calls["n"] == 1
+    assert sleeps.pauses == []
+    assert not outcome.exhausted
+
+
+def test_a_persistently_incomplete_response_exhausts_but_keeps_what_it_got():
+    # A caller that would rather record a short window than nothing must still
+    # be able to see the partial data, and must know it is partial.
+    outcome = fetch_with_bounded_retry(
+        lambda: ["a", "b"],
+        label="t",
+        is_complete=lambda rows: len(rows) >= 4,
+        sleep=_Sleeps(),
+    )
+
+    assert outcome.exhausted
+    assert outcome.value == ["a", "b"]
+    assert outcome.error == "incomplete response"
