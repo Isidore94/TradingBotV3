@@ -228,6 +228,34 @@ def test_reconcile_quarantines_a_duplicate_of_already_published_content(store):
     assert store.read_table("trading_session").num_rows == 1
 
 
+def test_compaction_does_not_bake_the_partition_key_into_the_merged_file(store):
+    """A compacted file must hold exactly the columns its siblings hold.
+
+    The parts are stored under ``.../year=2026/`` and the frozen schema does not
+    carry ``year`` -- the directory name is the whole record of it. Reading a
+    part with ``pq.read_table`` builds a dataset around it and hands back a
+    synthetic dictionary-typed ``year`` column from that directory name, which
+    compaction then concatenated and sealed into the merged file. The partition
+    read still worked (the read path projects onto the frozen schema), so the
+    drift only surfaced later, when reconcile tried to read the merged file back
+    and the path key and the baked-in column disagreed on type.
+    """
+    published = store.publish("trading_session", [_session_row(day=3)]).published[0]
+    store.publish("trading_session", [_session_row(day=4)])
+    part_schema = pq.ParquetFile(store.root / published.file_path).schema_arrow
+
+    merged = store.compact("trading_session", published.partition, job_id="compaction")
+    assert merged is not None
+    merged_path = store.root / merged.file_path
+    assert pq.ParquetFile(merged_path).schema_arrow == part_schema
+    assert "year" not in part_schema.names, "the partition key is the directory, not a column"
+
+    # And the merged file is readable on its own terms, which is what reconcile
+    # and the restore check both need.
+    assert pq.ParquetFile(merged_path).read().num_rows == 2
+    assert store.read_table("trading_session").num_rows == 2
+
+
 def test_a_crashed_compaction_is_quarantined_not_adopted(store, monkeypatch):
     """D14: adopting a crashed compaction's merged file double-counts everything.
 

@@ -151,6 +151,24 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _read_parquet_file(path: Path) -> pa.Table:
+    """Read exactly one file's own columns - never a dataset around it.
+
+    ``pq.read_table`` builds a ParquetDataset, which applies hive partitioning
+    by default. A part inside ``.../year=2026/`` therefore comes back with a
+    synthetic dictionary-typed ``year`` column taken from the directory name,
+    on top of whatever the file actually holds. Two things break on that: a
+    compaction concatenates the synthetic column and seals it into the merged
+    file, so the merged file no longer matches the frozen schema its siblings
+    were written to; and reading that merged file back raises
+    ``ArrowTypeError`` when the path key and the now-real column disagree on
+    type, which took the startup reconcile down with it.
+
+    Every call site here means "this one file", so read the file.
+    """
+    return pq.ParquetFile(path).read()
+
+
 def _as_datetime(value):
     if isinstance(value, datetime):
         return value
@@ -404,7 +422,7 @@ class ResearchStore:
 
         # Step 2: hash + validate by reading the staged file back.
         digest = _sha256_file(staged)
-        verify = pq.read_table(staged)
+        verify = _read_parquet_file(staged)
         if verify.num_rows != table.num_rows:
             raise LakeIntegrityError(
                 f"{spec.name}/{partition}: staged file has {verify.num_rows} rows, expected {table.num_rows}"
@@ -499,7 +517,7 @@ class ResearchStore:
         missing = [str(path) for path in paths if not path.exists()]
         if missing:
             raise LakeIntegrityError(f"{dataset}/{partition}: manifest-live files are missing: {missing}")
-        table = pa.concat_tables([pq.read_table(path) for path in paths]).combine_chunks()
+        table = pa.concat_tables([_read_parquet_file(path) for path in paths]).combine_chunks()
         expected = snapshot.row_count
         if table.num_rows != expected:
             # Logical reconciliation runs for compaction only (sec 8.3); a
@@ -642,9 +660,13 @@ class ResearchStore:
             reason = QUARANTINE_ORPHAN_UNREADABLE
             if dataset:
                 try:
-                    table = pq.read_table(path)
+                    table = _read_parquet_file(path)
                     digest = _sha256_file(path)
-                except (OSError, pa.ArrowInvalid):
+                except (OSError, pa.ArrowException):
+                    # Any unreadable orphan is quarantined, never raised:
+                    # reconcile runs at startup, so a single bad file must not
+                    # be able to stop the desk. ArrowException is the base of
+                    # ArrowInvalid and ArrowTypeError alike.
                     adopted = None
                 else:
                     if digest in registered_hashes.get((dataset, partition), set()):
