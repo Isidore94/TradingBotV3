@@ -171,6 +171,146 @@ def test_market_hours_direct_invocation_refuses_before_any_endpoint_call(
     assert not (tmp_path / "morning.txt").exists()
 
 
+def _offhours(monkeypatch):
+    from ai_jobs import window
+
+    monkeypatch.setattr(window, "market_session_block", lambda now=None: "")
+    monkeypatch.setattr(window, "in_offhours_window", lambda now=None: True)
+
+
+def test_unreadable_watchlists_refuse_to_publish_and_keep_the_last_morning_file(
+    tmp_path, monkeypatch
+):
+    """plan.md sec 5: missing data is uncertainty, never confirmation.
+
+    A Drive folder that did not mount makes every watchlist unreadable. That
+    must not become a published morning file claiming the trader watches
+    nothing, and it must not destroy the last verified brief.
+    """
+    import ai_summary
+    from ai_jobs import briefs
+
+    _offhours(monkeypatch)
+    called: list[bool] = []
+    monkeypatch.setattr(ai_summary, "request_ai_summary", lambda **kwargs: called.append(True))
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+
+    morning = tmp_path / "drive" / briefs.MORNING_BRIEF_FILENAME
+    morning.parent.mkdir(parents=True, exist_ok=True)
+    morning.write_text("LAST VERIFIED BRIEF\n", encoding="utf-8")
+    before = morning.read_bytes()
+
+    missing = tmp_path / "gone"  # never created: the mount is not there
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION,
+        now=OVERNIGHT,
+        watchlist_paths={
+            "focus_longs": missing / "focus_longs.txt",
+            "longs": missing / "longs.txt",
+        },
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=morning,
+    )
+
+    assert outcome["status"] == "skipped"
+    assert outcome["outputs"] == []
+    assert "refused to publish" in outcome["reason"]
+    assert "focus_longs" in outcome["reason"] and "longs" in outcome["reason"]
+    assert called == []
+    assert morning.read_bytes() == before
+    assert list(morning.parent.glob(".*.tmp")) == []
+
+
+def test_one_unreadable_source_still_refuses_an_empty_morning_file(tmp_path, monkeypatch):
+    """A partial read cannot certify emptiness - the missing list is exactly
+    where the names would have been."""
+    import ai_summary
+    from ai_jobs import briefs
+
+    _offhours(monkeypatch)
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+
+    readable = tmp_path / "longs.txt"
+    readable.write_text("# nothing today\n", encoding="utf-8")
+    morning = tmp_path / "ai_morning_brief.txt"
+    morning.write_text("LAST VERIFIED BRIEF\n", encoding="utf-8")
+
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION,
+        now=OVERNIGHT,
+        watchlist_paths={"longs": readable, "focus_longs": tmp_path / "gone.txt"},
+        output_root=tmp_path / "briefs",
+        morning_path=morning,
+    )
+
+    assert outcome["status"] == "skipped"
+    assert morning.read_text(encoding="utf-8") == "LAST VERIFIED BRIEF\n"
+
+
+def test_readable_but_empty_watchlists_publish_an_honest_empty_morning_file(
+    tmp_path, monkeypatch
+):
+    """Every source read fine and held no ticker. That IS a finding, so the
+    morning file says so rather than leaving yesterday's brief in place."""
+    import ai_summary
+    from ai_jobs import briefs
+
+    _offhours(monkeypatch)
+    called: list[bool] = []
+    monkeypatch.setattr(ai_summary, "request_ai_summary", lambda **kwargs: called.append(True))
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+
+    focus = tmp_path / "focus_longs.txt"
+    longs = tmp_path / "longs.txt"
+    focus.write_text("", encoding="utf-8")
+    longs.write_text("# cleared out after the close\n\n", encoding="utf-8")
+    morning = tmp_path / "drive" / briefs.MORNING_BRIEF_FILENAME
+    morning.parent.mkdir(parents=True, exist_ok=True)
+    morning.write_text("YESTERDAY\n", encoding="utf-8")
+
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION,
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus, "longs": longs},
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=morning,
+    )
+
+    assert outcome["status"] == "ok"
+    assert outcome["reason"] == f"no Focus/watchlist tickers for {SESSION}"
+    assert outcome["outputs"] == [str(morning)]
+    assert called == []
+    text = morning.read_text(encoding="utf-8")
+    assert "ADVISORY ONLY" in text
+    assert f"Session reviewed: {SESSION}" in text
+    assert "YESTERDAY" not in text
+
+
+def test_load_brief_symbols_separates_read_sources_from_unreadable_ones(tmp_path):
+    from ai_jobs import briefs
+
+    good = tmp_path / "longs.txt"
+    good.write_text("NVDA\n$msft\n", encoding="utf-8")
+    result = briefs.load_brief_symbols(
+        {"longs": good, "swing_longs": tmp_path / "absent.txt"}
+    )
+
+    assert result.symbols == ["NVDA", "MSFT"]
+    assert result.read == ["longs"]
+    assert result.unreadable == ["swing_longs"]
+    assert result.is_trustworthy_empty is False
+    assert result.memberships["NVDA"] == [{"list": "longs", "path": str(good)}]
+
+    empty = tmp_path / "shorts.txt"
+    empty.write_text("\n", encoding="utf-8")
+    clean = briefs.load_brief_symbols({"shorts": empty})
+    assert clean.symbols == [] and clean.unreadable == []
+    assert clean.is_trustworthy_empty is True
+
+    # No source at all is not evidence of emptiness either.
+    assert briefs.load_brief_symbols({}).is_trustworthy_empty is False
+
+
 def test_morning_atomic_publish_failure_keeps_the_previous_verified_file(tmp_path):
     from ai_jobs.briefs import atomic_publish_morning_file
 

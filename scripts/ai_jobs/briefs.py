@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -187,26 +188,58 @@ def default_watchlist_paths() -> dict[str, Path]:
     }
 
 
-def load_brief_symbols(
-    paths: Mapping[str, Path] | None = None,
-) -> tuple[list[str], dict[str, list[dict[str, str]]]]:
+@dataclass(frozen=True)
+class WatchlistRead:
+    """What the watchlist sources said, and which of them actually spoke.
+
+    ``symbols`` alone cannot answer the only question the morning file needs
+    answered: is an empty result a fact about the trader's lists, or a fact
+    about a Drive folder that did not mount? ``read`` and ``unreadable`` keep
+    those two apart, so no caller has to guess.
+    """
+
+    #: Tickers in first-seen order (Focus first by the default mapping).
+    symbols: list[str]
+    #: Per-ticker, code-owned pointers naming every list that contained it.
+    memberships: dict[str, list[dict[str, str]]]
+    #: Names of the sources that were opened and parsed successfully.
+    read: list[str]
+    #: Names of the sources that could not be opened at all.
+    unreadable: list[str]
+
+    @property
+    def is_trustworthy_empty(self) -> bool:
+        """True only when every configured source was read and all were empty.
+
+        An unreadable source anywhere makes an empty result uncertainty rather
+        than a finding, no matter how many of its siblings read cleanly - the
+        missing one is exactly where the names could have been.
+        """
+        return not self.symbols and bool(self.read) and not self.unreadable
+
+
+def load_brief_symbols(paths: Mapping[str, Path] | None = None) -> WatchlistRead:
     """Read ticker membership without ever changing a list.
 
-    Returns symbols in first-seen order (Focus first by the default mapping)
-    plus code-owned evidence pointers naming every list that contained each
-    ticker. An unreadable list is uncertainty: it contributes no names and is
-    never rewritten, repaired, or treated as evidence that a name was removed.
+    An unreadable list is uncertainty: it contributes no names and is never
+    rewritten, repaired, or treated as evidence that a name was removed. It is
+    also *reported*, because silently folding it into "no tickers" is how a
+    missing Drive turns into a published claim that the trader watches nothing.
     """
-    selected = paths or default_watchlist_paths()
+    selected = paths if paths is not None else default_watchlist_paths()
     ordered: list[str] = []
     memberships: dict[str, list[dict[str, str]]] = {}
+    read: list[str] = []
+    unreadable: list[str] = []
     for list_name, raw_path in selected.items():
         path = Path(raw_path)
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             logging.warning("Ticker briefs: watchlist %s is unreadable at %s", list_name, path)
+            unreadable.append(str(list_name))
             continue
+        read.append(str(list_name))
         for line in lines:
             token = str(line or "").split("#", 1)[0].strip().lstrip("$").upper()
             if not _SYMBOL_TOKEN.fullmatch(token):
@@ -215,7 +248,9 @@ def load_brief_symbols(
                 memberships[token] = []
                 ordered.append(token)
             memberships[token].append({"list": str(list_name), "path": str(path)})
-    return ordered, memberships
+    return WatchlistRead(
+        symbols=ordered, memberships=memberships, read=read, unreadable=unreadable
+    )
 
 
 def _extract_ticker_content(content: Any, symbol: str) -> Any | None:
@@ -453,14 +488,46 @@ def run_ticker_briefs(
     The runner is the sole caller/writer. The gate is repeated here, including
     before every model call, so a direct invocation or a long ticker batch can
     never infer during RTH even if it started legitimately overnight.
+
+    Publishing is refused outright (``skipped``, nothing written) when no
+    ticker was read and the watchlist sources cannot be trusted to be empty.
+    ``skipped`` is not a canonical completion, so the next firing in the window
+    retries once the sources are back.
     """
     import ai_summary
     from ai_jobs import ledger, store
 
     _ensure_inference_window(now)
-    symbols, membership_by_symbol = load_brief_symbols(watchlist_paths)
+    watchlists = load_brief_symbols(watchlist_paths)
+    symbols = watchlists.symbols
+    membership_by_symbol = watchlists.memberships
     root = Path(output_root) if output_root is not None else store.briefs_dir()
     if not symbols:
+        # "No tickers" is a real, publishable finding only when every source
+        # was actually read. If any source was unreadable - or there was no
+        # source to read - the emptiness came from missing data, and plan.md
+        # sec 5 is explicit that missing data is uncertainty, never
+        # confirmation. Publishing here would overwrite the last verified
+        # morning file with a claim derived from a folder that did not mount,
+        # so this refuses instead and leaves that file exactly where it is.
+        if not watchlists.is_trustworthy_empty:
+            detail = (
+                "unreadable: " + ", ".join(watchlists.unreadable)
+                if watchlists.unreadable
+                else "no watchlist source was configured"
+            )
+            reason = (
+                f"refused to publish the morning file for {session_date}: no ticker "
+                f"was read and the sources cannot be trusted to be empty ({detail}); "
+                "the last verified morning file is left untouched"
+            )
+            logging.warning("Ticker briefs: %s", reason)
+            return {
+                "status": ledger.STATUS_SKIPPED,
+                "model": "",
+                "reason": reason,
+                "outputs": [],
+            }
         content = render_morning_file(session_date, [], generated_at=now)
         published = atomic_publish_morning_file(content, path=morning_path)
         return {
