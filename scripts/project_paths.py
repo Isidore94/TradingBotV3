@@ -753,18 +753,37 @@ def _consolidate_legacy_logs() -> None:
 # The writers now swallow that unlink failure instead of masking the real
 # error, and this sweep reclaims whatever still leaks, so the growth is
 # self-healing regardless of cause.
+#
+# The sweep deletes only files it can name an owner for. SHARED_HOME_DIR is a
+# cloud-synced folder that other programs also write into, so "any old file of
+# roughly this shape" is not a licence to delete — every candidate has to be the
+# staging file of a canonical target this module itself defines.
 
 # tempfile's random component: exactly 8 chars from ascii_letters + digits + "_".
 _TEMP_TOKEN = "[A-Za-z0-9_]{8}"
-# Shape produced by prefix=f".{target.name}.", suffix=".tmp".
-_DOTTED_TEMP_RE = re.compile(rf"^\..+\.{_TEMP_TOKEN}\.tmp$")
 # A staging file younger than this may belong to a write that is still running,
 # so it is never touched. Compaction of a 300MB CSV takes seconds.
 STALE_TEMP_MIN_AGE_SECONDS = 6 * 3600
 
 
+def _owned_staging_targets(directories: Iterable[Path]) -> list[Path]:
+    """Every file constant this module defines directly inside ``directories``.
+
+    Deriving the list from the module's own globals means a new path constant is
+    covered the day it is added, and a file this module cannot name is never a
+    sweep candidate at all.
+    """
+    parents = {Path(directory) for directory in directories}
+    owned = {
+        value
+        for name, value in globals().items()
+        if name.isupper() and isinstance(value, Path) and value.parent in parents
+    }
+    return sorted(owned)
+
+
 def sweep_stale_atomic_write_temps(
-    directories: Iterable[Path] = (),
+    dotted_for: Iterable[Path] = (),
     *,
     staged_for: Iterable[Path] = (),
     min_age_seconds: float = STALE_TEMP_MIN_AGE_SECONDS,
@@ -772,12 +791,16 @@ def sweep_stale_atomic_write_temps(
 ) -> list[Path]:
     """Delete orphaned atomic-write staging files; return what was removed.
 
-    ``directories`` are scanned (non-recursively) for the dotted
-    ``.<name>.<token>.tmp`` shape. ``staged_for`` names canonical targets whose
-    writers stage as ``<stem><token><suffix>`` in the same directory — that
-    shape is matched only against the stem/suffix actually given, so a real
-    file can never match: the token is mandatory, and ``foo.csv`` is not
-    ``foo<8 chars>.csv``.
+    Both arguments name *canonical targets*, never directories, and both match
+    by that target's exact name — nothing is deleted on shape alone.
+
+    ``dotted_for`` covers writers that stage as ``.<target.name>.<token>.tmp``
+    beside the target (``review_learning``, ``review_policy``,
+    ``earnings_history``, the industry writers). ``staged_for`` covers those
+    that stage as ``<stem><token><suffix>`` (the bounce candidate CSV
+    compaction). In both shapes the token is mandatory, so a real file can never
+    match: ``foo.csv`` is not ``foo<8 chars>.csv``, and ``.foo.csv.tmp`` is not
+    ``.foo.csv.<8 chars>.tmp``.
 
     Never raises: housekeeping must not break startup.
     """
@@ -785,8 +808,10 @@ def sweep_stale_atomic_write_temps(
     removed: list[Path] = []
 
     targeted: dict[Path, list[re.Pattern[str]]] = {}
-    for directory in directories:
-        targeted.setdefault(Path(directory), []).append(_DOTTED_TEMP_RE)
+    for target in dotted_for:
+        target = Path(target)
+        pattern = re.compile(rf"^\.{re.escape(target.name)}\.{_TEMP_TOKEN}\.tmp$")
+        targeted.setdefault(target.parent, []).append(pattern)
     for target in staged_for:
         target = Path(target)
         pattern = re.compile(rf"^{re.escape(target.stem)}{_TEMP_TOKEN}{re.escape(target.suffix)}$")
@@ -976,11 +1001,14 @@ def migrate_legacy_layout() -> None:
     _consolidate_legacy_logs()
     try:
         sweep_stale_atomic_write_temps(
-            # SHARED_HOME_DIR carries the watchlist writers' staging files;
-            # DATA_DIR the earnings history's; RUNTIME_DATA_DIR the big
-            # candidate-CSV compaction's. All three are shallow directories —
-            # the bar stores underneath DATA_DIR are never descended into.
-            directories=(SHARED_HOME_DIR, DATA_DIR, RUNTIME_DATA_DIR),
+            # Only this module's own file constants sitting directly in the
+            # three shallow directories that carry staging files: the shared
+            # home (watchlists, review artifacts), DATA_DIR (earnings history)
+            # and RUNTIME_DATA_DIR (the big candidate-CSV compaction). Nothing
+            # descends into the bar stores under DATA_DIR, and nothing this
+            # module cannot name is a candidate — the shared home is a
+            # cloud-synced folder other programs write into too.
+            dotted_for=_owned_staging_targets((SHARED_HOME_DIR, DATA_DIR, RUNTIME_DATA_DIR)),
             staged_for=(INTRADAY_BOUNCE_CANDIDATES_FILE,),
         )
     except Exception:  # housekeeping must never break startup

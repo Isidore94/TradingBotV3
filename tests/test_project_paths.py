@@ -206,6 +206,7 @@ def test_sweep_removes_stale_staging_files_but_spares_real_ones(monkeypatch, tmp
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     canonical = runtime / "intraday_bounce_candidates.csv"
+    earnings = runtime / "earnings_calendar_history.json"
 
     old = 24 * 3600
     for name in (
@@ -232,7 +233,7 @@ def test_sweep_removes_stale_staging_files_but_spares_real_ones(monkeypatch, tmp
     survivors.append(fresh)
 
     removed = module.sweep_stale_atomic_write_temps(
-        directories=(runtime,), staged_for=(canonical,)
+        dotted_for=(earnings,), staged_for=(canonical,)
     )
 
     assert sorted(path.name for path in removed) == [
@@ -241,6 +242,48 @@ def test_sweep_removes_stale_staging_files_but_spares_real_ones(monkeypatch, tmp
     ]
     for path in survivors:
         assert path.exists(), f"sweep deleted {path.name}, which it must never touch"
+
+
+def test_sweep_never_deletes_a_staging_file_it_cannot_name_an_owner_for(monkeypatch, tmp_path):
+    """The shared home is a cloud-synced folder other programs write into.
+
+    Matching the dotted shape anywhere in that directory meant a stale temp this
+    project never wrote was deleted on someone else's behalf. Ownership is the
+    gate now: a target this module does not name is not a candidate, whatever
+    its age or shape.
+    """
+    module = _load_project_paths(monkeypatch, tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    ours = home / "review_policy.json"
+    stranger = home / ".thirdparty.sqlite.a1b2c3d4.tmp"
+    our_orphan = home / ".review_policy.json.zz99yy88.tmp"
+    for path in (stranger, our_orphan):
+        path.write_text("x", encoding="utf-8")
+        _aged(path, seconds_old=7 * 3600)
+
+    removed = module.sweep_stale_atomic_write_temps(dotted_for=(ours,))
+
+    assert [path.name for path in removed] == [".review_policy.json.zz99yy88.tmp"]
+    assert stranger.exists(), "a staging file this project never wrote must survive the sweep"
+
+
+def test_the_import_time_sweep_only_targets_paths_this_module_defines(monkeypatch, tmp_path):
+    """`_owned_staging_targets` is what keeps the call site honest: it derives
+    the target list from the module's own constants, so a new path constant is
+    covered automatically and nothing else can ever be."""
+    module = _load_project_paths(monkeypatch, tmp_path)
+    directories = (module.SHARED_HOME_DIR, module.DATA_DIR, module.RUNTIME_DATA_DIR)
+    owned = module._owned_staging_targets(directories)
+
+    assert owned, "the sweep would be a no-op if no constants resolved into these directories"
+    assert all(path.parent in set(directories) for path in owned)
+    named = {
+        value
+        for name, value in vars(module).items()
+        if name.isupper() and isinstance(value, Path)
+    }
+    assert set(owned) <= named
 
 
 def test_sweep_does_not_recurse_into_bar_stores(monkeypatch, tmp_path):
@@ -254,7 +297,7 @@ def test_sweep_does_not_recurse_into_bar_stores(monkeypatch, tmp_path):
     buried.write_text("x", encoding="utf-8")
     _aged(buried, seconds_old=24 * 3600)
 
-    assert module.sweep_stale_atomic_write_temps(directories=(data,)) == []
+    assert module.sweep_stale_atomic_write_temps(dotted_for=(data / "something.json",)) == []
     assert buried.exists()
 
 
@@ -274,6 +317,6 @@ def test_sweep_survives_missing_dirs_and_locked_files(monkeypatch, tmp_path):
     # A missing directory and an unlinkable file are both non-fatal: the sweep
     # reports nothing removed and startup continues.
     removed = module.sweep_stale_atomic_write_temps(
-        directories=(runtime, tmp_path / "does_not_exist")
+        dotted_for=(runtime / "locked.json", tmp_path / "does_not_exist" / "gone.json")
     )
     assert removed == []
