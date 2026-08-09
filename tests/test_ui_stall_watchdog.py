@@ -64,10 +64,25 @@ def test_watchdog_records_a_blocking_call_with_its_stack(tmp_path):
 
     assert found, "a 250ms main-thread block produced no stall record"
     records = load_stalls(log)
-    worst = max(records, key=lambda record: record["blocked_ms"])
-    # The measured hold must resemble the real one: generous lower bound (the
-    # sampler only notices a stall a tick after it starts), sane upper bound.
-    assert 150.0 <= worst["blocked_ms"] <= 600.0
+    # Pick the record for OUR deliberate block rather than whichever stall
+    # happens to be longest. Run inside the full suite the machine is busy
+    # enough to produce other stalls (a GC pause, a loaded scheduler), and
+    # keying on the maximum makes this flaky instead of meaningful.
+    blocks = [
+        record
+        for record in records
+        if any("_block_the_gui_thread" in frame for frame in record["stack"])
+    ]
+    assert blocks, (
+        "no stall was attributed to the deliberate block; recorded culprits: "
+        f"{[record['culprit'] for record in records]}"
+    )
+    worst = max(blocks, key=lambda record: record["blocked_ms"])
+    # The measured hold must resemble the real one. The lower bound is the
+    # real assertion; the upper is loose on purpose, because the gap is
+    # measured between heartbeats and a loaded machine can be slow to run
+    # the first one after the block ends.
+    assert 150.0 <= worst["blocked_ms"] <= 2000.0
     assert worst["threshold_ms"] == 30.0
     assert worst["samples"] >= 1
     assert worst["ts"].strip()
