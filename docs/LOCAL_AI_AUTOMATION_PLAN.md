@@ -325,8 +325,84 @@ Built:
 Verified end to end on the real desk: 18 live evidence sources, 90.4 s on
 `gemma3:12b`, four files published to the NAS, exit 0, one `ok` ledger row.
 
-Still to build for Phase 1: per-ticker briefs for the Focus list/watchlists,
-and the small morning file published to the Drive home folder.
+Still to build for Phase 1: the small morning file published to the Drive home
+folder. **Per-ticker briefs are DEFERRED (trader decision 2026-08-08)** — they
+are not part of Phase 1's exit gate and no work on them is scheduled. The
+economics that motivated them (free locally) have not changed; the priority
+has. Do not start them without a fresh trader instruction.
+
+#### Amended 2026-08-08 — evidence packaging, as built
+
+The checkpoint review's second review found that the summary job was honest
+about what it *had* and silent about what it did not, which for an unattended
+nightly read is the more dangerous half. Repaired on this branch:
+
+- **Semantic source statuses.** `available` used to mean only "the file
+  exists". A source is now `available`, `empty`, `missing`, `invalid`,
+  `unavailable` or `unfunded`, decided by *content*: whitespace-only text, a
+  CSV with a header and no data rows, JSONL with no valid records, and JSON
+  whose containers are all empty are **empty**; an unparseable document is
+  **invalid**, never empty; one that cannot be read is **unavailable**.
+- **A fair, priority-aware budget.** The 80,000-char package budget was
+  first-come — sources were encoded in scope order and each took whatever was
+  left, so one large `daily_report` could silently zero every later scope,
+  including `setup_trackers` and `journal_review`, the two scopes this job
+  exists to read. A zeroed source arrived with empty content and status
+  `available`, indistinguishable from a genuinely empty one, and when the
+  remainder hit exactly zero it did not even carry the `[package budget
+  reached]` marker. The budget is now split per scope by priority weight
+  (`setup_trackers` and `journal_review` 3, `daily_report` and
+  `market_conditions` 2, the rest 1), a scope needing less returns its surplus
+  to whoever is short, and each source that has to be shortened carries an
+  in-band banner (`[showing most recent N of M rows]`, most-recent kept for
+  tabular). A source that cannot be funded is **excluded and declared
+  `unfunded`**, stating its real size. **A source with real bytes on disk is
+  never presented as empty.**
+- **The model package carries only usable sources.** Empty, missing, invalid,
+  unavailable and unfunded sources go to a machine-owned `coverage` block
+  (id, label, scope, status, reason) that is *not* sent to the model. The
+  prompt gains one line: sources not listed were empty, missing, invalid or
+  unfunded; a system data-quality note already records each one; do not
+  speculate about them and do not cite them.
+- **Session scoping.** `briefs.run_daily_summary` passes its `session_date`
+  into packaging. Every source records the session it represents, and one
+  whose artifact is from a different session is flagged stale **in band** (a
+  notice the model sees) and in coverage. The 2026-07-30 `auto_report`
+  incident now reads as staleness rather than silence.
+- **Validator, one for every provider.** `evidence_refs` must resolve to a
+  *usable* source; the rejection names the id and why it is not citable. Every
+  section but `executive_summary` may be an empty array — a thin night is a
+  correct answer, not a malformed one.
+- **Deterministic coverage.** After validation, *code* merges provenance rows
+  into `data_quality` with exact counts, prefixed `[system]`. Asking the model
+  to report its own coverage produces a paraphrase of counts it cannot verify,
+  and a data-quality section is the last place that belongs.
+- **Failure policy.** A citation of a non-usable source fails validation; the
+  retry carries the exact rejection back to the model; a second failure
+  publishes a templated, model-free **DEGRADED** document stating what
+  happened plus the coverage section. Zero usable sources skips the model
+  entirely. The ledger gains `degraded_no_narrative`, distinct from `ok` and
+  deliberately not counted as completed, so the next 30-minute firing retries
+  it. Publishing nothing would have left yesterday's brief in place looking
+  like a healthy night.
+
+#### Amended 2026-08-08 — three hard-rule gaps closed
+
+"No local inference during market hours" (sec 2) had three ways around it:
+
+1. `window._session_bounds` returned `None` when `market_session` could not be
+   imported or the calendar raised, and the block read `None` as "not a session
+   day" — so a broken calendar unlocked inference for a whole trading day. It
+   now raises and the block **fails closed**, treating an unanswerable day as a
+   session. Weekends still short-circuit before the calendar.
+2. `--force` short-circuited past the session block. It is now a *window*
+   convenience only — it skips window timing and the already-done check, and
+   never the session block, at either the pre-launch check or the between-jobs
+   re-read.
+3. `--status` called `store_available()`, which creates the store skeleton and
+   writes a probe file. "Print state, run nothing" now writes nothing:
+   `store_available(read_only=True)` plus `create=False` on the store
+   subdirectory helpers and `ledger_path`.
 
 #### Architecture decision: separate process, not GUI-hosted
 
@@ -370,6 +446,26 @@ credentials and could not reach the UNC store at all.
 - Exit gate: 10 consecutive session days of digests; trader spot-audits ≥3
   against raw evidence and finds no fabricated facts (numbers all traceable
   to the deterministic layer).
+
+**Status 2026-08-08 — TO BE REDESIGNED, DESIGN PENDING. Do not build.**
+
+Phase 1's repairs changed what Phase 2 should be. The load-bearing lesson is
+that everything trustworthy in the nightly output came from *code* — the
+coverage block, the exact counts, the status of every source — and everything
+that needed guarding came from the model. So Phase 2 will be redesigned around
+**deterministic fact packs**: the extraction layer becomes the product rather
+than the input to a narrator, and any narration sits on top of facts that are
+already complete, counted and citable.
+
+That redesign has **not been done**. Concretely, for the next agent:
+
+- The draft digest schema in sec 6.4 is **not** the schema to build. It was
+  drafted before the fact-pack direction and has never had trader sign-off.
+- **Do not build or freeze any digest schema in this session or the next one
+  without a design packet first** (trader decision 2026-08-08). A schema
+  written into an append-only store is expensive to take back.
+- The digest-sufficiency benchmark named in the confirmation register is part
+  of that pending design, not a separate task to start early.
 
 ### Phase 3 — Journal enrichment (trader priority #2)
 
@@ -529,7 +625,13 @@ row (job name, model, duration, token counts if reported, exit status) whether
 it succeeds or not; a failed job leaves prior artifacts untouched
 (write-temp-verify-rename, the atomic-publish pattern).
 
-### 6.4 Digest schema v1 (draft — trader sign-off required before the first ledger write)
+### 6.4 Digest schema v1 (SUPERSEDED DRAFT — do not build)
+
+> **2026-08-08: this draft is not the schema to build.** Phase 2 is being
+> redesigned around deterministic fact packs (see the Phase 2 status note) and
+> that design is pending. Trader decision: do not build or freeze any digest
+> schema without a design packet first. Kept below only as the record of what
+> was drafted, never signed off, and never written.
 
 One JSON object per session day, ≤32KB hard cap, written to
 `ai_store/digests/YYYY/YYYY-MM-DD.json`:
