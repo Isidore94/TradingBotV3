@@ -25,10 +25,26 @@ stamp; it must not duplicate the roadmap.
      passes. Only SOL_PROGRESS.md conflicted; resolved by hand keeping both
      narratives (the warehouse block is under its own subheading below).
      2487 passed.
-- **Gate on this branch: 2496 passed, 5 skipped, 7 subtests; smoke 7/7.**
+  5. `claude/a4-verify-a3-orchestrate-9c8kop` (2026-08-09, merge `06d8429`) —
+     the A4/A5 stream, folded in on the trader's call after this branch had
+     shipped without it. Brings A4 D1 paint lines (`scripts/chart_levels.py`,
+     the Lines button and its machine-local prefs, levels on the chart
+     snapshot), the packaging guards and `launch_gui.py --selftest`,
+     pytest-timeout, the `d1_trendline_survey` / `d1_level_store_survey`
+     read-only tools, the Lines-button height-neutrality fix, A5 click-to-arm
+     routed through `AlertCenterPanel` so `PriceAlertService` keeps its single
+     writer, and `d1_level_feed`'s shared mtime-cached ai_state loader (the
+     last two are the trader-approved fence exceptions recorded in
+     `docs/HANDOFF_A4_PACKAGING_2026-08-09.md` §10.6). Six files conflicted —
+     see that merge commit for the per-file resolution. 2582 passed.
+- **Gate on this branch: 2582 passed, 5 skipped, 7 subtests; junit
+  `failures=0 errors=0`; smoke 7/7; `launch_gui.py --selftest` 30/30 exit 0.**
   Linux container, Python **3.12.3**, `TZ=America/Vancouver
-  QT_QPA_PLATFORM=offscreen`, pytest's own exit code 0. The desk runs 3.14 on
-  Windows, so **this number is not the desk gate** — see the owed list.
+  QT_QPA_PLATFORM=offscreen`. The desk runs 3.14 on Windows, so **this number
+  is not the desk gate** — see the owed list. The spec-drift negative control
+  was re-run after the merge: pulling `research_warehouse` from the spec fails
+  5 of the merged file's 16 tests (both suites' package censuses and both asset
+  sweeps), green again restored.
 - Three fixes were made on this branch, each its own commit:
   - **Warehouse parquet reads** (`store.py`): `pq.read_table` builds a dataset
     around the file, so every part under `year=NNNN/` came back with a synthetic
@@ -62,7 +78,11 @@ stamp; it must not duplicate the roadmap.
   2. **Frozen exe rebuild + engine exercise.** No PyInstaller build was
      attempted here. The spec changed and duckdb is new, so triggers 1, 2 and 3
      all fired: rebuild, launch, and exercise the engines — "it launched" is not
-     evidence, the failure mode is a lazy import weeks later.
+     evidence, the failure mode is a lazy import weeks later. Cheaper now that
+     the A4 stream is in: `dist\TradingBotV3\TradingBotV3.exe --selftest`
+     should print `selftest OK: 30/30 checks passed (frozen)` and exit 0, which
+     is what retires the click-through. The unfrozen run passes here (30/30);
+     only the frozen Windows one is still owed.
   3. **Broker-marked IB run (BD-25).** `ib_capture.build_ib_transport` still has
      no offline test and no live run; its socket behaviour is unconfirmed.
   4. **Warehouse confirmation-register answers** — the trader items in
@@ -71,19 +91,33 @@ stamp; it must not duplicate the roadmap.
   5. **13c mid-session restart drill** (audit HEALTHY with a nonzero backfill
      count). Until it runs, 13c is not `LIVE_VALIDATED`.
   6. **Phase 1 unattended week** — the exit gate still needs its real week.
-- Three branches carry work dated 2026-08-09 that is **deliberately not on this
-  branch** and needs a trader decision: `claude/testing-production-blockers-oek3aj`
-  (+6, incl. its own sweep-ownership fix and an alert-privilege guard),
-  `claude/a4-paint-lines-packaging-nug5km` (+3, incl. its own spec-drift test and
-  a `launch_gui --selftest`), and `claude/a4-verify-a3-orchestrate-9c8kop` (+5,
-  superset, incl. pytest-timeout). They overlap the two fixes above, so merging
-  them will conflict there. Also unmerged: `scoring-flagging-evidence-guardrails`
-  (+1, scoring code).
-- Container-only note for the next Linux agent: a Qt test constructs the desk,
-  whose universe self-heal thread reaches live yfinance, and `multitasking`'s
-  non-daemon workers then block interpreter shutdown for many minutes *after*
-  the session has passed. Point the proxy at a dead port for the pytest run and
-  it exits 0 immediately. Nothing in the tree is at fault.
+- Still unmerged and needing a trader decision:
+  `claude/testing-production-blockers-oek3aj` (+6, incl. its own
+  sweep-ownership fix and an alert-privilege guard) and
+  `scoring-flagging-evidence-guardrails` (+1, scoring code). The A4 stream is
+  no longer on that list — `claude/a4-verify-a3-orchestrate-9c8kop` is the
+  superset of `claude/a4-paint-lines-packaging-nug5km` and both are now in via
+  `06d8429`.
+- **Correction to this ledger's shutdown note (verified 2026-08-09).** The
+  dead-port proxy workaround printed above is a placebo: yfinance rides
+  `curl_cffi`, which ignores `HTTP_PROXY` / `HTTPS_PROXY` entirely, so a
+  request still reaches the live internet with the proxy pointed at a dead
+  port. The hang itself is real — a Qt test constructs the desk, whose
+  universe-self-heal and industry-board threads make live calls, and ~300
+  non-daemon `multitasking` workers then park in `threading._shutdown` for
+  ~20 min *after* the summary prints. **Verdict protocol instead:** always run
+  with `--junitxml=report.xml` and treat the printed summary plus junit
+  (`failures=0 errors=0`) as the verdict, then reap the process — or wrap it as
+  `python -c "import pytest,os,sys; os._exit(pytest.main(sys.argv[1:]))" tests/ -q --junitxml=report.xml`,
+  which is how this checkpoint's gate was taken and which exits immediately.
+  A post-summary hang, or a reaped 124/137, is never a test failure.
+- **The suite is not hermetic**, and that is now recorded rather than fixed:
+  constructing the desk in a Qt test spins threads that make live outbound
+  yfinance calls mid-run. Results are unaffected here, but on a blackholed
+  network the suite looks hung for ~20 min after printing success. Suppressing
+  those threads under pytest is **post-testing-week work** — it was left alone
+  deliberately on the eve of the testing week, since a wrong fix there is worse
+  than the hang.
 
 ### Merged into this branch: research warehouse Phases 1-8
 
