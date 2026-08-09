@@ -141,6 +141,11 @@ class SymbolSnapshotWidget(QWidget):
     pricePicked = Signal(float)
     # A background D1 backfill finished for this symbol; re-read the store.
     _d1BackfillDone = Signal(str)
+    # (symbol) - charts just repainted. Hosts that gate controls on what the
+    # charts hold (e.g. the arm dock's watch buttons, which need M5 bars) wait
+    # on this instead of on a return value: the build is off-thread now, so
+    # set_symbol/refresh have already returned by the time bars exist.
+    snapshotRendered = Signal(str)
 
     def __init__(self, parent=None, *, compact: bool = False) -> None:
         """``compact`` trades legend wrapping for chart height.
@@ -158,6 +163,14 @@ class SymbolSnapshotWidget(QWidget):
         self._d1_backfill_thread: threading.Thread | None = None
         self._forming_thread: threading.Thread | None = None
         self._d1BackfillDone.connect(self._on_d1_backfill_done)
+        # Every chart build runs on this service's workers (C3: the GUI
+        # thread does no I/O). One service is shared desk-wide, so each
+        # widget filters deliveries down to the symbol it is showing.
+        from ui.services.chart_data_service import shared_service
+
+        self._data = shared_service()
+        self._data.snapshotReady.connect(self._on_snapshot_ready)
+        self._data.snapshotFailed.connect(self._on_snapshot_failed)
         # Latest snapshot dicts, retained so callers can quick-fill a price from
         # a drawn overlay (VWAP, +/-1 sigma). set_data plots overlays and drops
         # them, so without this the values are unrecoverable after rendering.
@@ -211,16 +224,105 @@ class SymbolSnapshotWidget(QWidget):
         layout.addWidget(self.m5_note)
 
     def set_symbol(self, symbol: str, *, bot=None) -> None:
+        """Show ``symbol``, painting whatever is already known immediately.
+
+        Nothing here blocks (C3). If this symbol was charted before, its last
+        build repaints at once and the worker's fresh one lands on top; if it
+        was not, the charts say so until the bars arrive. Either way the GUI
+        thread does no reading.
+        """
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
+        switched = symbol != self._symbol
         self._symbol = symbol
         # Retained so refresh() can re-pull the M5 cache on a timer tick. The
         # hosting panel passes a fresh bot on its own ticks; this reference
         # only carries the popup between clicks.
         self._bot = bot
-        d1, m5 = self._build_snapshots()
+        known = self._data.last_snapshot(symbol)
+        if known is not None:
+            self._render_snapshots(known[0], known[1])
+        elif switched:
+            self._show_pending(symbol)
+        self._request_snapshots()
+
+    def _request_snapshots(self) -> bool:
+        """Queue an off-thread rebuild of both charts for the current symbol.
+
+        The M5 bars are read here, on the GUI thread, on purpose:
+        ``m5_chart_bars`` is documented as an in-memory read of the bot's
+        cache that never triggers a fetch, and passing them in keeps the
+        worker from reaching into the bot across threads.
+        """
+        if not self._symbol:
+            return False
+        m5_bars = []
+        if self._bot is not None:
+            try:
+                m5_bars = self._bot.m5_chart_bars(self._symbol, max_sessions=2)
+            except Exception:
+                m5_bars = []
+        # A symbol the bot is not scanning has no M5 cache to preview today's
+        # daily candle from; a separately fetched today-bar stands in. It is a
+        # daily bar, so it feeds ONLY the D1 build, never the M5 pane.
+        forming = self._forming_bar(self._symbol)
+        self._data.request(
+            self._symbol,
+            m5_bars or ([forming] if forming else []),
+        )
+        return True
+
+    def _show_pending(self, symbol: str) -> None:
+        """Skeleton state for a symbol with nothing cached to show yet."""
+        self.d1_chart.setVisible(False)
+        self.m5_chart.setVisible(False)
+        self.d1_legend.setText(f"<b>{symbol} · D1</b>")
+        self.m5_legend.setText(f"<b>{symbol} · M5</b>")
+        self.d1_note.setText(f"Loading {symbol} daily bars…")
+        self.d1_note.setVisible(True)
+        self.m5_note.setText(f"Loading {symbol} intraday bars…")
+        self.m5_note.setVisible(True)
+
+    def _on_snapshot_ready(self, symbol: str, d1: dict, m5: dict, meta: dict) -> None:
+        if symbol != self._symbol:
+            return  # a stale delivery, or another widget's symbol
+        # Unchanged bars must not re-render: a repaint resets the trader's
+        # pan/zoom, and the 30s tick would otherwise do that on every pass.
+        if self._d1 and self._m5 and _bars_fingerprint(
+            d1.get("bars") or []
+        ) == _bars_fingerprint(self._d1.get("bars") or []) and _bars_fingerprint(
+            m5.get("bars") or []
+        ) == _bars_fingerprint(self._m5.get("bars") or []):
+            return
         self._render_snapshots(d1, m5)
+        self._apply_freshness(symbol, meta or {})
+
+    def _on_snapshot_failed(self, symbol: str) -> None:
+        if symbol != self._symbol:
+            return
+        self.d1_note.setText(
+            f"Could not build the {symbol} chart - see the log. "
+            "The daily store may be unreachable."
+        )
+        self.d1_note.setVisible(True)
+        self.d1_chart.setVisible(False)
+
+    def _apply_freshness(self, symbol: str, meta: dict) -> None:
+        """Act on the worker's freshness verdict.
+
+        The probes themselves ran off-thread (they resolve the market session,
+        which reads settings). All that is left here is starting the same
+        background fetches as before - painting stays fetch-free, plan.md
+        Milestone 8.
+        """
+        try:
+            if meta.get("stale_store"):
+                self._start_d1_backfill(symbol)
+            elif meta.get("want_forming"):
+                self._start_forming_fetch(symbol)
+        except Exception:
+            logging.debug("D1 freshness follow-up failed.", exc_info=True)
 
     def show_payload_snapshots(self, symbol: str, d1: dict, m5: dict) -> None:
         """Render prebuilt snapshots (Desk Link satellite path).
@@ -246,69 +348,18 @@ class SymbolSnapshotWidget(QWidget):
         self._render_snapshots(normalized(d1), normalized(m5))
 
     def refresh(self, *, bot=None) -> bool:
-        """Re-pull both charts from the local stores/caches; render on change.
+        """Queue a re-pull of both charts; render later, only on change.
 
-        Everything here is the same synchronous local read as set_symbol (the
-        daily parquet is mtime-cached; M5 is the bot's in-memory cache), so a
-        30s timer can call it safely from the GUI thread. Returns whether a
-        re-render happened - unchanged data leaves the widgets (and any
-        pan/zoom) untouched.
+        Returns whether a rebuild was REQUESTED, not whether one rendered -
+        the build is off-thread now. Hosts that need to react to what the
+        charts hold connect to ``snapshotRendered`` instead. Unchanged bars
+        still skip the repaint, so a 30s tick never disturbs pan/zoom.
         """
         if not self._symbol:
             return False
         if bot is not None:
             self._bot = bot
-        d1, m5 = self._build_snapshots()
-        if _bars_fingerprint(d1["bars"]) == _bars_fingerprint(
-            self._d1.get("bars") or []
-        ) and _bars_fingerprint(m5["bars"]) == _bars_fingerprint(
-            self._m5.get("bars") or []
-        ):
-            return False
-        self._render_snapshots(d1, m5)
-        return True
-
-    def _build_snapshots(self) -> tuple[dict, dict]:
-        import chart_snapshot
-
-        m5_bars = []
-        if self._bot is not None:
-            try:
-                m5_bars = self._bot.m5_chart_bars(self._symbol, max_sessions=2)
-            except Exception:
-                m5_bars = []
-        # The M5 cache feeds the D1 build too: it synthesizes today's forming
-        # daily candle (hollow preview) while the durable store still ends at
-        # the previous close. A symbol the bot is not scanning has no such
-        # cache, so a separately fetched today-bar stands in - it is a daily
-        # bar, not an M5 series, so it feeds ONLY the D1 build and never the
-        # M5 pane below.
-        forming = self._forming_bar(self._symbol)
-        d1 = chart_snapshot.build_d1_snapshot(
-            self._symbol, intraday_bars=m5_bars or ([forming] if forming else [])
-        )
-        m5 = chart_snapshot.build_m5_snapshot(self._symbol, m5_bars)
-        # "Sometimes the latest D1 bar isn't loaded in": a symbol outside the
-        # current scan set has nothing refreshing its durable store and no M5
-        # cache to preview from, so its tail silently goes stale. Painting
-        # stays fetch-free (plan.md Milestone 8); the backfill runs on a
-        # worker thread and the chart re-reads the store when it lands.
-        try:
-            if chart_snapshot.d1_store_is_stale(d1.get("bars") or []):
-                self._start_d1_backfill(self._symbol)
-            elif (
-                not m5_bars
-                and d1.get("bars")
-                and chart_snapshot.session_has_opened()
-            ):
-                # Store is current through the last CLOSE, which is exactly
-                # the case the staleness probe calls healthy and the trader
-                # calls broken: today's candle is simply absent. Nothing else
-                # will ever fetch it for an unscanned symbol.
-                self._start_forming_fetch(self._symbol)
-        except Exception:
-            logging.debug("D1 freshness probe failed.", exc_info=True)
-        return d1, m5
+        return self._request_snapshots()
 
     @staticmethod
     def _forming_bar(symbol: str) -> dict | None:
@@ -344,8 +395,9 @@ class SymbolSnapshotWidget(QWidget):
 
         def worker() -> None:
             try:
-                from master_avwap_lib import legacy
+                from ui.services.safe_import import master_avwap_legacy
 
+                legacy = master_avwap_legacy()
                 frame = legacy.fetch_daily_bars_from_yahoo(symbol, 5)
                 bar = _last_row_as_bar(frame)
                 if bar is not None and bar["dt"].date() == datetime.now().date():
@@ -384,9 +436,9 @@ class SymbolSnapshotWidget(QWidget):
 
         def worker() -> None:
             try:
-                from master_avwap_lib import legacy
+                from ui.services.safe_import import master_avwap_legacy
 
-                legacy.fetch_daily_bars(None, symbol, 260)
+                master_avwap_legacy().fetch_daily_bars(None, symbol, 260)
             except Exception:
                 logging.warning("D1 store backfill failed for %s.", symbol, exc_info=True)
             try:
@@ -458,6 +510,7 @@ class SymbolSnapshotWidget(QWidget):
                 + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
                 + f"last bar {last.strftime('%m/%d %H:%M')}</span>"
             )
+        self.snapshotRendered.emit(symbol)
 
     def quick_fill(self, source: str) -> float | None:
         """Resolve a quick-fill source against the M5 chart's drawn series.

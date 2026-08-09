@@ -11,6 +11,53 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import chart_snapshot
 
 
+def _seed_d1_store(symbol, bars):
+    """Preload the chart bar cache so no test touches the real daily store.
+
+    The chart builds snapshots through ``ui.services.bar_cache`` now, so
+    patching ``chart_snapshot.load_d1_bars`` no longer intercepts anything -
+    the loader seam the service passes in wins. Seeding the store is the
+    equivalent hook, and it exercises the real path end to end.
+    """
+    import numpy as np
+    from ui.services.bar_cache import BarSeries, shared_store
+
+    def column(key):
+        return np.array([float(bar[key]) for bar in bars], dtype="float64")
+
+    shared_store().put(
+        BarSeries(
+            symbol=str(symbol).strip().upper(),
+            dt=np.array([bar["dt"] for bar in bars], dtype="datetime64[ns]"),
+            open=column("open"),
+            high=column("high"),
+            low=column("low"),
+            close=column("close"),
+            volume=np.array(
+                [float(bar.get("volume") or 0.0) for bar in bars], dtype="float64"
+            ),
+            source="memory",
+        )
+    )
+
+
+def _pump_until(predicate, timeout=10.0):
+    """Spin the event loop until ``predicate`` holds; chart builds are async."""
+    import time
+
+    app = _qt_app()
+    if app is None:
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.005)
+    app.processEvents()
+    return bool(predicate())
+
+
 def _m5_bars(count=30, start=None, *, base=100.0, volume=1000.0):
     start = start or datetime(2026, 7, 8, 9, 30)
     bars = []
@@ -534,7 +581,7 @@ def test_snapshot_dialog_populates_both_charts(monkeypatch):
         }
         for index in range(40)
     ]
-    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: daily)
+    _seed_d1_store("NVDA", daily)
 
     class StubBot:
         def m5_chart_bars(self, symbol, max_sessions=2):
@@ -544,19 +591,22 @@ def test_snapshot_dialog_populates_both_charts(monkeypatch):
     assert dialog.width() >= 1180
     assert dialog.d1_legend.wordWrap() and dialog.m5_legend.wordWrap()
     dialog.show_symbol("NVDA", bot=StubBot(), side="LONG")
+    # The build is off-thread: the charts fill when the worker delivers, and
+    # the GUI thread never blocked waiting for it.
+    assert _pump_until(lambda: dialog.d1_chart.bar_count() == 41)
     # 40 stored sessions + today's forming candle synthesized from the M5
     # cache (the store itself only catches up after the close).
-    assert dialog.d1_chart.bar_count() == 41
     assert dialog.d1_chart.bar_at(40)["preview"] is True
     assert "forming" in dialog.d1_legend.text()
     assert dialog.m5_chart.bar_count() == 15
     assert "NVDA" in dialog.windowTitle()
     dialog.close()
 
-    # No bot and no daily store: both notes, no crash.
-    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: [])
+    # No bot and no daily store: both notes, no crash. Wait for the empty
+    # payload itself - the loading skeleton also shows the notes, so keying
+    # on note visibility would pass before the real answer arrived.
     dialog.show_symbol("XXXX", bot=None)
-    assert dialog.d1_chart.bar_count() == 0
+    assert _pump_until(lambda: dialog.d1_chart.bar_count() == 0)
     assert dialog.m5_chart.bar_count() == 0
     assert dialog.d1_note.isVisibleTo(dialog) and dialog.m5_note.isVisibleTo(dialog)
     dialog.close()
@@ -581,7 +631,7 @@ def test_snapshot_widget_refresh_renders_only_on_change(monkeypatch):
         }
         for index in range(40)
     ]
-    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: daily)
+    _seed_d1_store("NVDA", daily)
 
     class StubBot:
         def __init__(self):
@@ -592,15 +642,24 @@ def test_snapshot_widget_refresh_renders_only_on_change(monkeypatch):
 
     bot = StubBot()
     widget = SymbolSnapshotWidget()
+    renders: list[str] = []
+    widget.snapshotRendered.connect(renders.append)
     widget.set_symbol("NVDA", bot=bot)
-    assert widget.m5_chart.bar_count() == 10
+    assert _pump_until(lambda: widget.m5_chart.bar_count() == 10)
     assert widget.d1_chart.bar_count() == 41  # 40 stored + forming preview
 
-    assert widget.refresh() is False  # nothing changed: no re-render
+    # Unchanged caches must not repaint - a repaint would throw away the
+    # trader's pan/zoom on every 30s tick. The rebuild still runs; what must
+    # not happen is a second render.
+    before = len(renders)
+    widget.refresh()
+    _pump_until(lambda: False, timeout=0.4)
+    assert len(renders) == before
 
     bot.bars = _m5_bars(11)
-    assert widget.refresh() is True
-    assert widget.m5_chart.bar_count() == 11
+    widget.refresh()
+    assert _pump_until(lambda: widget.m5_chart.bar_count() == 11)
+    assert len(renders) == before + 1
     assert widget.d1_chart.bar_count() == 41
     preview = widget.d1_chart.bar_at(40)
     assert preview["preview"] is True
@@ -1110,22 +1169,29 @@ def test_unscanned_symbol_fetches_todays_candle_without_persisting_it(monkeypatc
         40, start=datetime(last_complete.year, last_complete.month, last_complete.day)
         - timedelta(days=39)
     )
-    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: list(stored))
+    _seed_d1_store("RY", stored)
 
     widget = snap_mod.SymbolSnapshotWidget()
     try:
         widget.set_symbol("RY")
+        # The freshness probe runs on the worker, so wait for the first
+        # delivery before asking what it decided.
+        assert _pump_until(lambda: bool(widget._d1.get("bars")))
         assert not chart_snapshot.d1_store_is_stale(
             widget._d1.get("bars") or []
         ), "the staleness probe must still call this store healthy"
-        thread = widget._forming_thread
-        assert thread is not None, "a missing forming candle must start a fetch"
-        thread.join(5.0)
-        app.processEvents()
-        assert yahoo_calls == [("RY", 5)]
+        assert _pump_until(
+            lambda: widget._forming_thread is not None
+        ), "a missing forming candle must start a fetch"
+        widget._forming_thread.join(5.0)
+        assert _pump_until(lambda: yahoo_calls == [("RY", 5)])
         assert persisted == [], "the partial bar must never reach the durable store"
 
         # The fetched candle is now the chart's last bar, drawn as forming.
+        assert _pump_until(
+            lambda: bool(widget._d1.get("bars"))
+            and widget._d1["bars"][-1].get("preview") is True
+        )
         last = widget._d1["bars"][-1]
         assert last["dt"].date() == datetime.now().date()
         assert last["preview"] is True and last["close"] == 211.78
@@ -1133,6 +1199,7 @@ def test_unscanned_symbol_fetches_todays_candle_without_persisting_it(monkeypatc
 
         # Inside the refresh window a re-render reuses the cached candle.
         widget.refresh()
+        _pump_until(lambda: False, timeout=0.4)
         thread = widget._forming_thread
         if thread is not None:
             thread.join(5.0)
@@ -1182,16 +1249,16 @@ def test_stale_d1_tail_triggers_one_backfill_with_cooldown(monkeypatch):
     widget = snap_mod.SymbolSnapshotWidget()
     try:
         widget.set_symbol("STAL")
-        thread = widget._d1_backfill_thread
-        assert thread is not None, "a stale tail must start a backfill worker"
-        thread.join(5.0)
-        assert calls == [(None, "STAL", 260)]
-
-        # Completion queued a refresh through the signal; deliver it.
-        app.processEvents()
+        # The staleness verdict rides back from the worker with the snapshot.
+        assert _pump_until(
+            lambda: widget._d1_backfill_thread is not None
+        ), "a stale tail must start a backfill worker"
+        widget._d1_backfill_thread.join(5.0)
+        assert _pump_until(lambda: calls == [(None, "STAL", 260)])
 
         # Same symbol inside the cooldown window: no second fetch.
         widget.refresh()
+        _pump_until(lambda: False, timeout=0.4)
         thread = widget._d1_backfill_thread
         if thread is not None:
             thread.join(5.0)

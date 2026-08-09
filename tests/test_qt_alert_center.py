@@ -13,6 +13,30 @@ def _alert(text, tag="green"):
     return BounceAlert.from_callback(text, tag)
 
 
+def _pump_until(predicate, timeout=10.0):
+    """Spin the event loop until ``predicate`` holds.
+
+    Chart snapshots are built on worker threads (Part C rule C3), so the
+    bars a panel shows arrive on a later turn of the loop, not inside the
+    call that asked for them.
+    """
+    import os
+    import time
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.005)
+    app.processEvents()
+    return bool(predicate())
+
+
 def test_tier_extraction_and_banger_detection():
     try:
         from ui.panels.alert_center_panel import extract_alert_tier, is_banger_alert
@@ -1137,16 +1161,21 @@ def test_review_chart_auto_refresh_pulls_new_bars(monkeypatch):
         )
     )
     review = panel.chart_review
-    assert review.snapshot.m5_chart.bar_count() == 2
+    # Charts build off the GUI thread, so the bars land on a later turn of
+    # the event loop rather than inside add_alert.
+    assert _pump_until(lambda: review.snapshot.m5_chart.bar_count() == 2)
 
     # Two more bars completed while the alert sat unreviewed.
     bot.bars += [bar(30, 102.0), bar(35, 103.0)]
     panel._refresh_review_chart()
-    assert review.snapshot.m5_chart.bar_count() == 4
+    assert _pump_until(lambda: review.snapshot.m5_chart.bar_count() == 4)
 
     # Unchanged cache: the next tick re-renders nothing.
+    renders: list[str] = []
+    review.snapshot.snapshotRendered.connect(renders.append)
     panel._refresh_review_chart()
-    assert review.snapshot.refresh() is False
+    _pump_until(lambda: False, timeout=0.4)
+    assert renders == []
 
     # No current review alert: the tick is a no-op, never a crash.
     panel._current_review_alert = None
