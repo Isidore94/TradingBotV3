@@ -67,6 +67,12 @@ class TradingDeskPanel(QWidget):
         )
         self.alert_center = AlertCenterPanel(self.focus_service)
         self.alert_center.attach_service(self.bounce_panel.service)
+        # A5: the Alert Center arms phone price alerts off painted D1 levels.
+        # It borrows the desk's ONE PriceAlertService rather than building a
+        # second one, so price_alerts.json keeps a single writer and a single
+        # poller (plan.md sec 5). Injected rather than constructed there on
+        # purpose: the panel uses the store, the desk owns it.
+        self.alert_center.price_alert_service = self.price_alert_service
         self.watchlists_panel.set_bounce_service(self.bounce_panel.service)
         self.master_panel.set_bounce_service(self.bounce_panel.service)
         self.industry_panel.set_bounce_service(self.bounce_panel.service)

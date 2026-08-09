@@ -87,11 +87,21 @@ class ArmBar(QFrame):
     d1EventToggled = Signal(str)  # D1 event watch kind
     levelArmRequested = Signal(str, float)  # direction, level
     levelDisarmRequested = Signal(str, float)  # direction, level
+    # direction - a PHONE price alert off the painted D1 level the trader
+    # picked. No price rides along: the host owns the selection (the chart
+    # knows which line is highlighted), this bar only supplies the direction
+    # the trader chose, exactly as it does for levelArmRequested.
+    levelAlertRequested = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self._quick_fill: Callable[[str], float | None] | None = None
+        # The phone-alert button needs BOTH a charted symbol and a picked
+        # painted level, so its enabled state is tracked separately from the
+        # rest of the row.
+        self._has_symbol = False
+        self._level_alert_available = False
         # Which source produced the price in the level box ("vwap", "upper_1",
         # "chart_click", "manual", ...). Logged with each armed level so the
         # review-events learner can see e.g. "always arms off +1σ on shorts".
@@ -137,6 +147,21 @@ class ArmBar(QFrame):
         )
         self.arm_level_button.clicked.connect(self._emit_level)
 
+        # Same control shape as "Arm level" - same direction combo, one click -
+        # but it arms the PHONE price alert instead of the D1 level watch, at
+        # the painted line the trader clicked rather than at the level box.
+        self.phone_alert_button = QPushButton("Phone alert")
+        self.phone_alert_button.setToolTip(
+            "Click a painted level on the D1 chart, then arm a phone price "
+            "alert at exactly that line. It fires once, pushes to your phone, "
+            "and then stays off until it is re-armed on the Focus tab."
+        )
+        self.phone_alert_button.clicked.connect(
+            lambda: self.levelAlertRequested.emit(
+                str(self.direction_input.currentData() or "above")
+            )
+        )
+
         self.d1_event_buttons: dict[str, QPushButton] = {}
         for kind, label in D1_EVENT_KINDS.items():
             button = QPushButton(label)
@@ -174,6 +199,7 @@ class ArmBar(QFrame):
         top.addWidget(self.level_input)
         top.addWidget(self.direction_input)
         top.addWidget(self.arm_level_button)
+        top.addWidget(self.phone_alert_button)
 
         d1_label = QLabel("D1:")
         d1_label.setObjectName("MutedLabel")
@@ -246,6 +272,23 @@ class ArmBar(QFrame):
             self.arm_level_button,
         ):
             widget.setEnabled(bool(has_symbol))
+        self._has_symbol = bool(has_symbol)
+        self._sync_level_alert_button()
+
+    def set_level_alert_available(self, available: bool) -> None:
+        """Offer the phone-alert button only while a painted level is picked.
+
+        Unlike the watch toggles (which stay permissive because a watch with
+        no bars still works), this one has nothing to arm AT without a chosen
+        line, so a click would be a silent no-op. Disabled says so honestly.
+        """
+        self._level_alert_available = bool(available)
+        self._sync_level_alert_button()
+
+    def _sync_level_alert_button(self) -> None:
+        self.phone_alert_button.setEnabled(
+            self._has_symbol and self._level_alert_available
+        )
 
     def set_watch_availability(self, available: bool, reason: str = "") -> None:
         """Warn when a session watch has no bars to evaluate against.
