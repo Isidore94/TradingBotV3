@@ -11,7 +11,7 @@ window must not be able to put a 14GB model load in front of the open.
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
@@ -141,10 +141,15 @@ def test_available_store_round_trips_a_write_probe(tmp_path):
 # window
 # ---------------------------------------------------------------------------
 def _no_session(monkeypatch):
-    """Neutralize the market block so window logic can be tested alone."""
+    """Neutralize the market block so window logic can be tested alone.
+
+    Patches the block itself, not the calendar lookup: an unanswerable
+    calendar now *blocks* rather than waving the job through, so stubbing
+    ``_session_bounds`` to a failure no longer means "no session today".
+    """
     from ai_jobs import window
 
-    monkeypatch.setattr(window, "_session_bounds", lambda day: None)
+    monkeypatch.setattr(window, "market_session_block", lambda now=None: "")
 
 
 def test_configured_window_converts_the_desk_clock_correctly(monkeypatch):
@@ -265,3 +270,110 @@ def test_describe_window_reports_both_clocks(monkeypatch):
     assert described["window_et"] == "01:00-09:00"
     assert ":" in described["window_desk_local"]
     assert described["launch_allowed"] in {"yes", "no"}
+
+
+# ---------------------------------------------------------------------------
+# hard-rule gaps (checkpoint review 2026-08-08 second review)
+# ---------------------------------------------------------------------------
+def test_an_unanswerable_calendar_blocks_instead_of_unlocking_the_day():
+    """"No local inference during market hours" is a plan sec 2 hard rule.
+
+    The lookup used to return None on a failed import or a raising calendar,
+    and the caller read None as "not a session day" -- so a broken calendar
+    silently unlocked inference for the whole trading day. Missing data is
+    uncertainty, never confirmation.
+    """
+    from ai_jobs import window
+
+    def _broken(day):
+        raise window.SessionLookupFailed("calendar unavailable")
+
+    with mock.patch.object(window, "_session_bounds", _broken):
+        weekday_midnight = datetime(2026, 8, 12, 0, 30, tzinfo=ET)
+        blocked = window.market_session_block(weekday_midnight)
+        assert blocked, "an unanswerable calendar must block, not wave the job through"
+        assert "cannot determine" in blocked
+        allowed, reason = window.launch_allowed(weekday_midnight)
+        assert allowed is False
+        assert "cannot determine" in reason
+
+
+def test_a_raising_calendar_becomes_a_lookup_failure_not_a_free_day():
+    from ai_jobs import window
+
+    with mock.patch(
+        "market_session.get_market_session_window", side_effect=RuntimeError("boom")
+    ):
+        try:
+            window._session_bounds(date(2026, 8, 12))
+        except window.SessionLookupFailed as exc:
+            assert "boom" in str(exc)
+        else:  # pragma: no cover - the failure path is the whole point
+            raise AssertionError("_session_bounds must fail closed, not return None")
+
+
+def test_weekends_still_short_circuit_without_consulting_the_calendar():
+    # The fail-closed rule must not turn every weekend into a refusal.
+    from ai_jobs import window
+
+    def _explode(day):  # pragma: no cover - must never be reached
+        raise AssertionError("weekend must not need the calendar")
+
+    with mock.patch.object(window, "_session_bounds", _explode):
+        saturday = datetime(2026, 8, 8, 12, 0, tzinfo=ET)
+        assert saturday.weekday() == 5
+        assert window.market_session_block(saturday) == ""
+
+
+def test_read_only_availability_never_creates_or_probes_the_store(tmp_path):
+    """--status says "print state, run nothing"; that includes writing nothing."""
+    from ai_jobs import store
+
+    root = tmp_path / "ai_store"
+    root.mkdir()
+    with _settings(ai_store_dir=str(root)):
+        ok, reason = store.store_available(read_only=True)
+
+    assert ok is True
+    assert "not write-probed" in reason
+    # No skeleton, no probe file: the directory is exactly as it was found.
+    assert sorted(p.name for p in root.iterdir()) == []
+
+
+def test_read_only_availability_still_reports_an_absent_store(tmp_path):
+    from ai_jobs import store
+
+    missing = tmp_path / "nope"
+    with _settings(ai_store_dir=str(missing)):
+        ok, reason = store.store_available(read_only=True)
+
+    assert ok is False
+    assert "does not exist" in reason
+    assert not missing.exists()
+
+
+def test_the_writable_check_still_creates_and_probes(tmp_path):
+    # The job path must keep proving writability before anything is written.
+    from ai_jobs import store
+
+    root = tmp_path / "ai_store"
+    with _settings(ai_store_dir=str(root)):
+        ok, reason = store.store_available()
+
+    assert ok is True and "ready" in reason
+    assert sorted(p.name for p in root.iterdir()) == ["briefs", "digests", "logs", "models", "retros"]
+    assert not (root / ".write_probe").exists()
+
+
+def test_store_subdirs_can_resolve_without_creating(tmp_path):
+    from ai_jobs import ledger, store
+
+    root = tmp_path / "ai_store"
+    root.mkdir()
+    with _settings(ai_store_dir=str(root)):
+        logs = store.store_logs_dir(create=False)
+        path = ledger.ledger_path(create=False)
+
+    assert logs == root / "logs"
+    assert path == root / "logs" / ledger.LEDGER_NAME
+    assert not logs.exists(), "resolving a path must not create it"

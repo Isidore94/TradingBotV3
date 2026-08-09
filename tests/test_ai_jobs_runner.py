@@ -204,8 +204,12 @@ def test_reaching_market_hours_stops_the_remaining_jobs(tmp_path):
         ran.append("two")
         return {}
 
+    # The open arrives *while* job one runs: clear on the pre-launch check,
+    # blocking on the post-job re-read.
     with _store_ok(tmp_path), _window_open(), mock.patch.object(
-        window, "market_session_block", return_value="market session is live"
+        window,
+        "market_session_block",
+        side_effect=["", "market session is live", "market session is live"],
     ):
         runner.run_slots(
             [_slot("one", job_one), _slot("two", job_two)], now=OVERNIGHT, ledger_path=led
@@ -300,3 +304,91 @@ def test_entry_point_success_is_exit_0(tmp_path):
         runner, "default_slots", return_value=[_slot("ai_summary", lambda **k: {})]
     ), mock.patch.object(runner.ledger, "ledger_path", return_value=tmp_path / "l.jsonl"):
         assert run_ai_jobs.main([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# --force is a window convenience, never a hard-rule override
+# (checkpoint review 2026-08-08 second review)
+# ---------------------------------------------------------------------------
+def test_force_skips_the_window_checks(tmp_path):
+    from ai_jobs import runner, window
+
+    led = tmp_path / "ledger.jsonl"
+    ran = []
+
+    def job(*, session_date, now):
+        ran.append(session_date)
+        return {}
+
+    with _store_ok(tmp_path), _no_session_block(), mock.patch.object(
+        window, "launch_allowed", return_value=(False, "outside the off-hours window")
+    ):
+        report = runner.run_slots(
+            [_slot("ai_summary", job)], now=OVERNIGHT, force=True, ledger_path=led
+        )
+
+    assert ran, "--force must still get past a shut window"
+    assert report.ran == 1
+    assert _rows(led)[0]["status"] == "ok"
+
+
+def test_force_does_not_get_past_the_market_session_block(tmp_path):
+    """Plan sec 2 is a hard rule; a CLI flag that switches it off is not one.
+
+    --force used to short-circuit straight to (True, "forced"), so an operator
+    running the job at 11:00 on a Tuesday would load a 14GB model onto the desk
+    mid-session, competing with the trading complement it is forbidden to
+    compete with.
+    """
+    from ai_jobs import runner, window
+
+    led = tmp_path / "ledger.jsonl"
+    ran = []
+
+    def job(*, session_date, now):  # pragma: no cover - must never run
+        ran.append(session_date)
+        return {}
+
+    with _store_ok(tmp_path), _window_open(), mock.patch.object(
+        window, "market_session_block", return_value="market session is live (09:30-16:00 ET)"
+    ):
+        report = runner.run_slots(
+            [_slot("ai_summary", job)], now=OVERNIGHT, force=True, ledger_path=led
+        )
+
+    assert ran == [], "--force must not run a job during market hours"
+    assert report.skipped == 1
+    row = _rows(led)[0]
+    assert row["status"] == "skipped"
+    assert "market session is live" in row["reason"]
+
+
+def test_force_does_not_get_past_the_post_job_session_break(tmp_path):
+    # The open arriving mid-run is exactly when stopping matters most, so
+    # --force does not exempt the between-jobs re-read either.
+    from ai_jobs import runner, window
+
+    led = tmp_path / "ledger.jsonl"
+    ran = []
+
+    def job_one(*, session_date, now):
+        ran.append("one")
+        return {}
+
+    def job_two(*, session_date, now):  # pragma: no cover - must never run
+        ran.append("two")
+        return {}
+
+    with _store_ok(tmp_path), _window_open(), mock.patch.object(
+        window,
+        "market_session_block",
+        side_effect=["", "market session is live", "market session is live"],
+    ):
+        runner.run_slots(
+            [_slot("one", job_one), _slot("two", job_two)],
+            now=OVERNIGHT,
+            force=True,
+            ledger_path=led,
+        )
+
+    assert ran == ["one"]

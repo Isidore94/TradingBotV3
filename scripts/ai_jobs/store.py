@@ -137,12 +137,21 @@ def ensure_ai_store_layout(root: Path | None = None) -> Path:
     return store
 
 
-def store_available(root: Path | None = None) -> tuple[bool, str]:
+def store_available(root: Path | None = None, *, read_only: bool = False) -> tuple[bool, str]:
     """Can the store actually be written right now?
 
     Returns ``(ok, reason)``. A network share that is asleep, offline or
     credential-blocked fails here, before any job starts writing -- which is
     the difference between "no digest tonight" and a half-written artifact.
+
+    ``read_only=True`` reports what can be observed without touching the store:
+    no directory creation, no write probe. ``run_ai_jobs.py --status`` uses it.
+    A status command that says "print state, run nothing" must not mkdir a
+    five-directory skeleton on a NAS and write a probe file -- during market
+    hours that is a write the hard rule never authorised, and on a sleeping
+    share it is a ~20 s spin-up for a read (checkpoint review 2026-08-08
+    second review). The trade-off is stated honestly in the reason: read-only
+    availability cannot prove writability, so it never claims to.
     """
     try:
         store = root if root is not None else get_ai_store_dir()
@@ -150,6 +159,18 @@ def store_available(root: Path | None = None) -> tuple[bool, str]:
         return False, str(exc)
     if store is None:
         return False, f"{AI_STORE_DIR_SETTING} is unset; the AI batch layer is disabled"
+    if read_only:
+        try:
+            reachable = store.is_dir()
+        except OSError as exc:
+            return False, f"AI store {store} is unreachable: {exc}"
+        if not reachable:
+            return False, (
+                f"AI store {store} does not exist yet; a job run will create it"
+                if not store.exists()
+                else f"AI store {store} is not a directory"
+            )
+        return True, f"AI store present at {store} (not write-probed: status is read-only)"
     try:
         ensure_ai_store_layout(store)
     except OSError as exc:
@@ -163,20 +184,36 @@ def store_available(root: Path | None = None) -> tuple[bool, str]:
     return True, f"AI store ready at {store}"
 
 
-def digests_dir() -> Path:
-    return ensure_ai_store_layout() / "digests"
+def _subdir(name: str, *, create: bool) -> Path:
+    """One store subdirectory.
+
+    ``create=False`` resolves the path without creating anything, for readers
+    that must not write (``run_ai_jobs.py --status``); it raises the same
+    ValueError when no store is configured, because "where would it be?" has no
+    answer either way.
+    """
+    if create:
+        return ensure_ai_store_layout() / name
+    store = get_ai_store_dir()
+    if store is None:
+        raise ValueError("No AI store configured; nothing to initialize.")
+    return store / name
 
 
-def briefs_dir() -> Path:
-    return ensure_ai_store_layout() / "briefs"
+def digests_dir(*, create: bool = True) -> Path:
+    return _subdir("digests", create=create)
 
 
-def retros_dir() -> Path:
-    return ensure_ai_store_layout() / "retros"
+def briefs_dir(*, create: bool = True) -> Path:
+    return _subdir("briefs", create=create)
 
 
-def store_logs_dir() -> Path:
-    return ensure_ai_store_layout() / "logs"
+def retros_dir(*, create: bool = True) -> Path:
+    return _subdir("retros", create=create)
+
+
+def store_logs_dir(*, create: bool = True) -> Path:
+    return _subdir("logs", create=create)
 
 
 def get_ai_store_details() -> dict[str, str]:

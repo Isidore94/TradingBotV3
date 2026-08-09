@@ -134,17 +134,35 @@ def minutes_until_window_close(now: datetime | None = None) -> float | None:
     return (close - market_now(now)).total_seconds() / 60.0
 
 
-def _session_bounds(session_day: date) -> tuple[datetime, datetime] | None:
-    """Regular-hours open/close for one ET date, or None on a non-session day."""
+class SessionLookupFailed(RuntimeError):
+    """The calendar could not answer whether this day is a session."""
+
+
+def _session_bounds(session_day: date) -> tuple[datetime, datetime]:
+    """Regular-hours open/close for one ET date.
+
+    Raises :class:`SessionLookupFailed` when the calendar cannot answer.
+
+    This **fails closed** (checkpoint review 2026-08-08 second review). It used
+    to return ``None`` on an unavailable calendar or a failed lookup, and the
+    caller read ``None`` as "not a session day" -- so a broken import or a
+    raising calendar silently unlocked local inference for the whole trading
+    day. "No local inference during market hours" is a plan sec 2 hard rule;
+    a rule that evaporates when its input fails is not a rule. Missing data is
+    uncertainty, never confirmation, so an unanswerable day is treated as a
+    market session and the launch is refused.
+    """
     try:
         from market_session import get_market_session_window, normalize_market_local_datetime
-    except ImportError:
-        return None
+    except ImportError as exc:
+        raise SessionLookupFailed(f"market_session is unavailable: {exc}") from exc
     probe = datetime(session_day.year, session_day.month, session_day.day, 12, 0, tzinfo=MARKET_TZ)
     try:
         window = get_market_session_window(normalize_market_local_datetime(probe))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise SessionLookupFailed(
+            f"market session lookup for {session_day.isoformat()} failed: {exc}"
+        ) from exc
     return window.open_local, window.close_local
 
 
@@ -152,14 +170,20 @@ def market_session_block(now: datetime | None = None) -> str:
     """"" when inference is allowed, else why the market blocks it.
 
     This is the sec 2 hard rule and it ignores the configured window entirely.
+    An unanswerable calendar blocks too -- see :func:`_session_bounds`.
     """
     moment = market_now(now)
     if is_weekend(moment):
         return ""
-    bounds = _session_bounds(moment.date())
-    if bounds is None:
-        return ""
-    open_local, close_local = bounds
+    try:
+        open_local, close_local = _session_bounds(moment.date())
+    except SessionLookupFailed as exc:
+        return (
+            f"cannot determine whether {moment.date().isoformat()} is a market "
+            f"session ({exc}); treating it as one. Plan sec 2 forbids local "
+            "inference during market hours, so an unanswerable calendar "
+            "refuses the launch rather than assuming the day is free."
+        )
     guard = timedelta(minutes=preopen_guard_minutes())
     if open_local - guard <= moment <= close_local:
         return (

@@ -118,11 +118,23 @@ def run_slots(
             logging.info("AI job %s already completed for %s; skipping.", slot.name, session_date)
             continue
 
-        allowed, reason = (
-            (True, "forced")
-            if force
-            else window.launch_allowed(moment, reserve_minutes=slot.reserve_minutes)
-        )
+        # --force is an operator convenience for the *window* -- "run it now,
+        # I know it is 09:00 ET on a Sunday" -- and nothing more. It never
+        # reaches the market-session block, which is a plan sec 2 hard rule:
+        # during the session the desk runs the full trading complement and a
+        # 14GB model load competes with it. A flag that could switch a hard
+        # rule off is not a hard rule (checkpoint review 2026-08-08 second
+        # review, which found --force bypassing it here and at the post-job
+        # break below).
+        session_block = window.market_session_block(moment)
+        if session_block:
+            allowed, reason = False, session_block
+        elif force:
+            allowed, reason = True, "forced (window checks skipped; session block still enforced)"
+        else:
+            allowed, reason = window.launch_allowed(
+                moment, reserve_minutes=slot.reserve_minutes
+            )
         if not allowed:
             row = ledger.record(
                 job=slot.name,
@@ -169,9 +181,11 @@ def run_slots(
         report.results.append(row)
 
         # Re-read the clock: a long job may have crossed the window end, and
-        # sec 6.1 says finish the current call then stop gracefully.
+        # sec 6.1 says finish the current call then stop gracefully. --force
+        # does not exempt a run from this either: the open arriving mid-run is
+        # exactly when stopping matters most.
         moment = window.market_now()
-        if not force and window.market_session_block(moment):
+        if window.market_session_block(moment):
             logging.warning("Market session reached; stopping the remaining AI jobs.")
             break
 

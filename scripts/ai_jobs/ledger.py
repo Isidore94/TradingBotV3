@@ -24,10 +24,11 @@ STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
 
 
-def ledger_path() -> Path:
+def ledger_path(*, create: bool = True) -> Path:
+    """Where the ledger lives. ``create=False`` for read-only callers."""
     from ai_jobs.store import store_logs_dir
 
-    return store_logs_dir() / LEDGER_NAME
+    return store_logs_dir(create=create) / LEDGER_NAME
 
 
 def _read_rows(path: Path) -> list[dict[str, Any]]:
@@ -89,7 +90,7 @@ def completed_jobs(session_date: str, *, path: Path | None = None) -> set[str]:
     This is what makes the runner safe to fire repeatedly through the window:
     a second launch sees the completed job and skips it instead of redoing it.
     """
-    target = Path(path) if path is not None else ledger_path()
+    target = Path(path) if path is not None else ledger_path(create=False)
     return {
         str(row.get("job") or "")
         for row in _read_rows(target)

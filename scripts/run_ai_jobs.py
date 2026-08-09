@@ -48,10 +48,22 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def _print_status() -> int:
+    """Print state and run nothing -- including writing nothing.
+
+    --status used to call store_available(), which creates the five-directory
+    skeleton and writes a .write_probe file. "Print state, run nothing" that
+    mkdirs on a NAS is a contradiction: during market hours it is a write the
+    plan sec 2 hard rule never authorised, and on a sleeping share it turns a
+    read into a ~20 s spin-up (checkpoint review 2026-08-08 second review).
+    """
     from ai_jobs import ledger, runner, store, window
 
     details = store.get_ai_store_details()
-    available, reason = store.store_available() if details["enabled"] == "yes" else (False, details["error"] or "unset")
+    available, reason = (
+        store.store_available(read_only=True)
+        if details["enabled"] == "yes"
+        else (False, details["error"] or "unset")
+    )
     payload = {
         "session_date": runner.session_date_for(),
         "store": details,
@@ -66,11 +78,15 @@ def _print_status() -> int:
     }
     if available:
         session = payload["session_date"]
-        payload["completed_today"] = sorted(ledger.completed_jobs(session))
-        payload["recent"] = [
-            {k: row.get(k) for k in ("job", "status", "session_date", "finished_at", "reason", "error")}
-            for row in ledger.recent_rows(10)
-        ]
+        try:
+            path = ledger.ledger_path(create=False)
+            payload["completed_today"] = sorted(ledger.completed_jobs(session, path=path))
+            payload["recent"] = [
+                {k: row.get(k) for k in ("job", "status", "session_date", "finished_at", "reason", "error")}
+                for row in ledger.recent_rows(10, path=path)
+            ]
+        except (OSError, ValueError) as exc:
+            payload["ledger_error"] = str(exc)
     print(json.dumps(payload, indent=2, default=str))
     return 0
 
