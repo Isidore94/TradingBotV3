@@ -109,15 +109,32 @@ stamp; it must not duplicate the roadmap.
   with `--junitxml=report.xml` and treat the printed summary plus junit
   (`failures=0 errors=0`) as the verdict, then reap the process — or wrap it as
   `python -c "import pytest,os,sys; os._exit(pytest.main(sys.argv[1:]))" tests/ -q --junitxml=report.xml`,
-  which is how this checkpoint's gate was taken and which exits immediately.
-  A post-summary hang, or a reaped 124/137, is never a test failure.
-- **The suite is not hermetic**, and that is now recorded rather than fixed:
-  constructing the desk in a Qt test spins threads that make live outbound
-  yfinance calls mid-run. Results are unaffected here, but on a blackholed
-  network the suite looks hung for ~20 min after printing success. Suppressing
-  those threads under pytest is **post-testing-week work** — it was left alone
-  deliberately on the eve of the testing week, since a wrong fix there is worse
-  than the hang.
+  which is how this checkpoint's gate was first taken. A post-summary hang, or
+  a reaped 124/137, is never a test failure. **The hang itself is now fixed**
+  (below), so plain `pytest tests/ -q` exits on its own again; keep the junit
+  habit anyway, since it is what makes a verdict readable after a reap.
+- **Shutdown hang fixed in `tests/conftest.py` only.** The blocker was never
+  the desk's own threads — universe-self-heal and industry-board refresh are
+  both daemon threads. It was `multitasking`, yfinance's fan-out helper, which
+  creates its workers `daemon=False`; a few hundred of them parked in
+  `threading._shutdown`. conftest now creates a `threads=0` multitasking pool
+  at import, which makes `@multitasking.task` run inline and create no worker
+  at all. yfinance's own `set_max_threads()` call cannot undo it — that only
+  writes MAX_THREADS for *future* pools, verified against multitasking's
+  source. Differential proof: identical 2582/5/7 both ways, but plain pytest
+  exits 0 in **91s wall** with it and was still hung at **420s** with the one
+  call commented out. No project file touched and no project function
+  monkeypatched.
+- **The suite is still not hermetic**, and that part is deliberately left for
+  after the testing week: constructing the desk in a Qt test fires timers that
+  make live outbound yfinance calls mid-run. Results are unaffected and the
+  hang is gone, but the calls do still go out — now serially, on the calling
+  thread. The real fix is making desk construction inert under pytest
+  (`app.py`'s 2500ms `_self_heal_universe` single-shot plus its 30-min timer,
+  and `IndustryBoardService.start`'s startup timer). That was **not** attempted
+  on the eve of the testing week: every candidate seam either needs an autouse
+  patch of functions that other tests legitimately assert on, or a
+  test-awareness check inside production startup code.
 
 ### Merged into this branch: research warehouse Phases 1-8
 

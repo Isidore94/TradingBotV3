@@ -69,6 +69,40 @@ atexit.register(shutil.rmtree, _TEST_DIAGNOSTICS_DIR, ignore_errors=True)
 atexit.register(shutil.rmtree, _TEST_LOCAL_APPDATA, ignore_errors=True)
 
 
+def _make_multitasking_inert() -> None:
+    """Stop yfinance's worker pool from outliving the test session.
+
+    Symptom this fixes: the suite prints a green summary and the interpreter
+    then sits for ~20 minutes. A Qt test constructs the desk, whose
+    universe-self-heal and industry-board timers fire during the run and reach
+    yfinance; yfinance farms its per-ticker downloads out through
+    ``multitasking``, which creates its workers with ``daemon=False``, and a few
+    hundred of them then park in ``threading._shutdown``. The desk's own threads
+    are daemon threads and were never the blocker.
+
+    A pool with ``threads=0`` makes ``@multitasking.task`` call its function
+    inline and return None, so no worker is ever created. yfinance calls
+    ``set_max_threads()`` at download time, but that only writes MAX_THREADS for
+    *future* pools and cannot resurrect this one - verified against
+    multitasking's own source, not assumed.
+
+    This does not make the suite hermetic: those calls still go out, just
+    serially on the calling thread. Making desk construction inert under pytest
+    is the real fix and is deliberately left for after the 2026-08-10 testing
+    week (SOL_PROGRESS.md). Import failure is ignored on purpose - multitasking
+    arrives as a yfinance dependency, and a headless install without it needs no
+    fixing.
+    """
+    try:
+        import multitasking
+    except Exception:
+        return
+    multitasking.createPool(name="pytest-inert", threads=0)
+
+
+_make_multitasking_inert()
+
+
 # ---------------------------------------------------------------------------
 # Fixture contract (plan.md Milestone 3)
 # ---------------------------------------------------------------------------
