@@ -18,7 +18,7 @@ one set of data.
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 SPEC_DIR = Path(SPECPATH).resolve()
 ROOT = SPEC_DIR.parent
@@ -38,29 +38,65 @@ for _root in (str(ROOT), str(SCRIPTS)):
 # `bounce_bot_lib`, ... as top-level names alongside `market_prep`.
 PATHEX = [str(ROOT), str(SCRIPTS)]
 
+# The first-party trees the frozen desk can reach. tests/test_packaging_spec_drift.py
+# reads this tuple back and fails when a package appears under scripts/ that is
+# neither listed here nor allowlisted there with a reason, so growing the tree
+# can no longer silently shrink the bundle.
+#
+# `desk_link` is here because ui.services.desk_link_feed/_service still import it
+# at module scope; the role is retired (CLAUDE.md) but the code is not yet gone.
+FIRST_PARTY_PACKAGES = (
+    "ui",
+    "bounce_bot_lib",
+    "master_avwap_lib",
+    "market_prep",
+    "diagnostics",
+    "research_warehouse",
+    "desk_link",
+)
+
+
+def _package_dir(name):
+    """market_prep lives at the repo root; everything else under scripts/."""
+    candidate = SCRIPTS / name
+    return candidate if candidate.is_dir() else ROOT / name
+
+
 datas = [
     # market_prep/config_loader.py resolves CONFIG_DIR as
     # Path(__file__).parents[1] / "config", which lands at the bundle root.
     (str(ROOT / "config"), "config"),
 ]
 
-# PyInstaller bundles .py only. ui/theme.py reads its Qt stylesheet with
-# Path(__file__).with_name("theme.qss"), so every non-Python asset under
-# scripts/ui has to be mirrored into the bundle at the same relative location.
-_UI_DIR = SCRIPTS / "ui"
-_ui_assets = [p for p in _UI_DIR.rglob("*") if p.is_file() and p.suffix.lower() not in (".py", ".pyc")]
-for _asset in _ui_assets:
-    _rel = _asset.parent.relative_to(_UI_DIR)
-    datas.append((str(_asset), str(Path("ui") / _rel) if _rel.parts else "ui"))
+# PyInstaller bundles .py only. Modules reach their own assets through
+# __file__-relative paths — ui/theme.py loads theme.qss with
+# Path(__file__).with_name(), ui/annotations reads its veto vocabulary, and
+# research_warehouse reads exploration_cohort.txt — so every non-Python file in
+# a bundled package is mirrored at the same relative location. Doing this for
+# every package rather than for ui alone is the point: an asset added to a new
+# package is covered the day it lands, instead of going missing until the first
+# frozen run that needs it.
+_assets = []
+for _package in FIRST_PARTY_PACKAGES:
+    _pkg_dir = _package_dir(_package)
+    for _asset in sorted(_pkg_dir.rglob("*")):
+        if not _asset.is_file() or _asset.suffix.lower() in (".py", ".pyc"):
+            continue
+        if "__pycache__" in _asset.parts:
+            continue
+        _rel = _asset.parent.relative_to(_pkg_dir)
+        datas.append((str(_asset), str(Path(_package) / _rel) if _rel.parts else _package))
+        _assets.append(_asset)
 # The desk renders unstyled without the stylesheet and dies on the missing file,
 # so treat its absence as a build failure rather than shipping a broken exe.
-if not any(a.name == "theme.qss" for a in _ui_assets):
+if not any(a.name == "theme.qss" for a in _assets):
     raise SystemExit("spec error: ui/theme.qss not found — the desk cannot start without it")
-print(f"[spec] ui assets bundled: {[a.name for a in _ui_assets]}")
+print(f"[spec] package assets bundled: {[a.name for a in _assets]}")
 datas += collect_data_files("qtawesome")   # bundled icon fonts
 datas += collect_data_files("pyqtgraph")
 datas += collect_data_files("certifi")
 
+binaries = []
 hiddenimports = []
 # The UI loads panels/services by name in places, and the engines import each
 # other lazily inside functions; collecting the first-party trees outright is
@@ -69,12 +105,29 @@ hiddenimports = []
 # Deliberately NOT wrapped in try/except: a package that fails to collect here
 # is a bundle that starts and then dies at the first lazy import. Fail the
 # build loudly instead.
-for package in ("ui", "bounce_bot_lib", "master_avwap_lib", "market_prep", "diagnostics", "research_warehouse"):
+for package in FIRST_PARTY_PACKAGES:
     found = collect_submodules(package)
     if not found:
         raise SystemExit(f"spec error: collect_submodules({package!r}) found nothing — check sys.path above")
     print(f"[spec] {package}: {len(found)} submodules")
     hiddenimports += found
+
+# DuckDB is the warehouse's optional read-only query engine (LD-04): every slice
+# query is answerable through pyarrow, and research_warehouse.queries imports
+# duckdb inside the two functions that need it, behind duckdb_available().
+# It carries a compiled extension, so collect_all picks up the shared library
+# that a bare hiddenimport would leave behind. Absence is not a build error —
+# the frozen desk simply reports duckdb_available() False and uses pyarrow.
+try:
+    import duckdb  # noqa: F401
+except ImportError:
+    print("[spec] duckdb not installed — the bundle will answer slice queries through pyarrow (LD-04)")
+else:
+    _dd_datas, _dd_binaries, _dd_hidden = collect_all("duckdb")
+    datas += _dd_datas
+    binaries += _dd_binaries
+    hiddenimports += _dd_hidden
+    print(f"[spec] duckdb: {len(_dd_binaries)} binaries, {len(_dd_hidden)} submodules")
 # scikit-learn and scipy reach for submodules dynamically at predict time.
 hiddenimports += collect_submodules("sklearn")
 hiddenimports += ["scipy._lib.array_api_compat.numpy.fft", "scipy.special._special_ufuncs"]
@@ -82,7 +135,7 @@ hiddenimports += ["scipy._lib.array_api_compat.numpy.fft", "scipy.special._speci
 a = Analysis(
     [str(ROOT / "launch_gui.py")],
     pathex=PATHEX,
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
