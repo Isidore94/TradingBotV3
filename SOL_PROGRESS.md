@@ -7,54 +7,83 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch `main` (2026-08-08 evening, merged from `durability-catchup`,
-  `local-ai-phase-0`, `local-ai-phase-1`). Gate: **2002 passed, 7 subtests**
-  (adds `tests/test_durability_retry.py`, `tests/test_launch_guard.py`,
-  `tests/test_ai_evidence_coverage.py`, `tests/test_ai_jobs_runner.py`,
-  `tests/test_ai_jobs_store_window.py`, `tests/test_local_ai_provider.py`);
-  smoke **7/7**.
-- **Repair-and-merge program executed** against the checkpoint review's second
-  review (`docs/CHECKPOINT_REVIEW_2026-08-08.md`, ADDENDUM). Two P0s in the
-  tracker catch-up confirmed and repaired — the automatic path no longer runs
-  the scoring tuner or the Expected-R prior refit (the manual GUI backfill
-  still does), and the tracker stamps an explicit `data_session` vintage
-  instead of inferring one from its write clock. Plus: bounded retries before
-  either Tier B recovery path writes a permanent data gap, an honest `as_of`
-  on an empty follow-up window, follow-up gap and outcome-coverage lines in
-  the collection audit, a single-instance guard that sees the frozen build,
-  three hard-rule gaps closed in the overnight AI runner, and an evidence
-  packager that states what is missing rather than implying it.
-- Merge strategy **amended to merge-early** per Sol: A `5d835ab`, B `b40cad7`,
-  C `13f6e7b`, each green. `9037c5f` (WIP packaging) was not merged and stays
-  on `integration-test`.
-- **TradingBotV3 AI Jobs** was disabled during the repairs and re-enabled after
-  a controlled proof on the real desk: 7 of 18 sources usable, 10 unfunded,
-  1 missing, 5 stale, all stated in the published brief; ledger row `ok`.
-- **Outstanding:** 13c is still not `LIVE_VALIDATED` — the mid-session restart
-  drill (audit HEALTHY with a nonzero backfill count) needs a real session.
-  Phase 1's exit gate needs its unattended week. The AI evidence budget
-  (`MAX_TOTAL_EVIDENCE_CHARS` = 80,000) cannot fund ten real sources and is a
-  trader decision, not a repair. The frozen-exe variant of the launch-guard
-  drill is operator work. Phase 2 is stopped pending its fact-pack redesign.
-- plan.md item **13c (durability & catch-up)** build-order steps 1-4 landed:
-  15-minute repetition on the 07:00 launch task; the Master AVWAP tracker
-  staleness override (reuses `backfill_setup_tracker_from_recent_sessions`,
-  capped at the last *completed* session, pinned by a byte-identical
-  characterization test); the Technical Integrity follow-up chain sweeper; and
-  the breadth-ledger bar gap fill. Tier B rows carry
-  `capture_mode: "backfill"` (absence means live) and
-  `regime_collection_audit.py` reports live vs backfilled counts separately.
-  Tier C (frozen snapshots, opening-range baselines, never-started
-  predictions) is untouched. Step 5, the flagged preview lane, was not built.
-- **Outstanding for 13c:** the mid-session restart drill (audit HEALTHY with a
-  nonzero backfill count) is the remaining half of the exit gate, so 13c is
-  not `LIVE_VALIDATED`. The task registration is **done** —
-  `scripts/register_0700_autostart.ps1` was re-run on 2026-08-08 (06:00 PT,
-  Mon-Fri, repeating every 15 min for 7.5h, launching from
-  `C:\Users\Aaron\TradingBotV3`), and the fire-while-running drill passed:
-  with a real python-launched desk up, both the task and the hardened guard
-  reported "already running - nothing to do" and no second desk started.
-
+- Branch **`testing-week-2026-08-10`** (2026-08-09), built off `main` `7d85a27`
+  for the 2026-08-10 testing week: Mon-Wed Auto/Away + baseline testing with no
+  trading, Thu-Fri live-session tests per plan.md sec 6. **Not merged to main,
+  and no PR opened.** Four packets, merged one at a time with the full suite
+  green after each:
+  1. `chart-perf-c` — chart background loading, bar cache, stall watchdog, Drive
+     reads off the paint paths. 2071 passed.
+  2. `chart-review-workspace` — two-keystroke trader decision capture under
+     `scripts/ui/annotations/`, the Chart Review panel, veto cohort grading.
+     Conflict-free. 2172 passed.
+  3. `9037c5f` cherry-picked from `integration-test` — the previously
+     UNREVIEWED packaging WIP (PyInstaller spec, Qt runtime hook, the
+     `launch_gui.py` frozen `sys.path` guard, the atomic-write temp sweep).
+     Reviewed here; see the two fixes below. 2176 passed.
+  4. `claude/das-warehouse-defects-2n9uql` — warehouse Phases 1-8 + both defect
+     passes. Only SOL_PROGRESS.md conflicted; resolved by hand keeping both
+     narratives (the warehouse block is under its own subheading below).
+     2487 passed.
+- **Gate on this branch: 2496 passed, 5 skipped, 7 subtests; smoke 7/7.**
+  Linux container, Python **3.12.3**, `TZ=America/Vancouver
+  QT_QPA_PLATFORM=offscreen`, pytest's own exit code 0. The desk runs 3.14 on
+  Windows, so **this number is not the desk gate** — see the owed list.
+- Three fixes were made on this branch, each its own commit:
+  - **Warehouse parquet reads** (`store.py`): `pq.read_table` builds a dataset
+    around the file, so every part under `year=NNNN/` came back with a synthetic
+    dictionary-typed `year` column from the directory name. Compaction sealed
+    that column into the merged file, and the startup reconcile then died on
+    `ArrowTypeError` — which its `except (OSError, pa.ArrowInvalid)` does not
+    catch, so a crashed compaction took the next startup down. All three sites
+    now read the file itself; the catch widened to `pa.ArrowException`. **This
+    reproduces on `claude/das-warehouse-defects-2n9uql` unchanged** under the
+    pinned pyarrow 22.0.0 — the merge did not introduce it, and that branch's
+    reported 2088-passed gate must have run against a different pyarrow.
+  - **Startup sweep ownership** (`project_paths.py`): 9037c5f's sweep deleted
+    any six-hour-old `.<anything>.<8>.tmp` in whole directories, one of which is
+    the cloud-synced shared home that other programs write into. It now takes
+    canonical targets, not directories, and the import-time call derives them
+    from this module's own path constants, so a file it cannot name is never a
+    candidate. Both original leaks are still swept.
+  - **Spec drift** (`packaging/`): the warehouse merge trips three frozen-exe
+    rebuild triggers at once. The spec now derives its asset mirror from
+    `FIRST_PARTY_PACKAGES` (so `research_warehouse/exploration_cohort.txt` ships
+    instead of silently going missing), collects `duckdb` when installed and
+    says so when not, and adds `desk_link` — which `ui.services` still imports.
+    `tests/test_packaging_spec_drift.py` executes the spec with the collectors
+    stubbed and fails on any package or asset that is in neither the spec nor a
+    reasoned allowlist. 0.08s; it converts CLAUDE.md rebuild triggers 2-4 into a
+    commit-time failure.
+- **Still owed before Thursday** (none of it is doable from a Linux container):
+  1. **Windows/3.14 re-baseline.** Re-run the suite and smoke on the desk and
+     replace the 2496 figure above. The warehouse review's test-gate caveat
+     still stands.
+  2. **Frozen exe rebuild + engine exercise.** No PyInstaller build was
+     attempted here. The spec changed and duckdb is new, so triggers 1, 2 and 3
+     all fired: rebuild, launch, and exercise the engines — "it launched" is not
+     evidence, the failure mode is a lazy import weeks later.
+  3. **Broker-marked IB run (BD-25).** `ib_capture.build_ib_transport` still has
+     no offline test and no live run; its socket behaviour is unconfirmed.
+  4. **Warehouse confirmation-register answers** — the trader items in
+     `docs/ULTIMATE_SETUP_DATABASE_PLAN.md`, including the deliberately empty
+     `exploration_cohort.txt`.
+  5. **13c mid-session restart drill** (audit HEALTHY with a nonzero backfill
+     count). Until it runs, 13c is not `LIVE_VALIDATED`.
+  6. **Phase 1 unattended week** — the exit gate still needs its real week.
+- Three branches carry work dated 2026-08-09 that is **deliberately not on this
+  branch** and needs a trader decision: `claude/testing-production-blockers-oek3aj`
+  (+6, incl. its own sweep-ownership fix and an alert-privilege guard),
+  `claude/a4-paint-lines-packaging-nug5km` (+3, incl. its own spec-drift test and
+  a `launch_gui --selftest`), and `claude/a4-verify-a3-orchestrate-9c8kop` (+5,
+  superset, incl. pytest-timeout). They overlap the two fixes above, so merging
+  them will conflict there. Also unmerged: `scoring-flagging-evidence-guardrails`
+  (+1, scoring code).
+- Container-only note for the next Linux agent: a Qt test constructs the desk,
+  whose universe self-heal thread reaches live yfinance, and `multitasking`'s
+  non-daemon workers then block interpreter shutdown for many minutes *after*
+  the session has passed. Point the proxy at a dead port for the pytest run and
+  it exits 0 immediately. Nothing in the tree is at fault.
 
 ### Merged into this branch: research warehouse Phases 1-8
 
@@ -215,6 +244,57 @@ that branch's own checkpoint, unchanged. They describe warehouse state, not
   the unbuilt GUI service, the unverified ibapi client, the empty exploration
   cohort, two builder-stated favorite-zone definitions, null production
   context until Phase 6, DYNAMIC/EOD VWAP, unscheduled closures).
+
+## Previous checkpoint (main, 2026-08-08 evening)
+
+- Branch `main` (2026-08-08 evening, merged from `durability-catchup`,
+  `local-ai-phase-0`, `local-ai-phase-1`). Gate: **2002 passed, 7 subtests**
+  (adds `tests/test_durability_retry.py`, `tests/test_launch_guard.py`,
+  `tests/test_ai_evidence_coverage.py`, `tests/test_ai_jobs_runner.py`,
+  `tests/test_ai_jobs_store_window.py`, `tests/test_local_ai_provider.py`);
+  smoke **7/7**.
+- **Repair-and-merge program executed** against the checkpoint review's second
+  review (`docs/CHECKPOINT_REVIEW_2026-08-08.md`, ADDENDUM). Two P0s in the
+  tracker catch-up confirmed and repaired — the automatic path no longer runs
+  the scoring tuner or the Expected-R prior refit (the manual GUI backfill
+  still does), and the tracker stamps an explicit `data_session` vintage
+  instead of inferring one from its write clock. Plus: bounded retries before
+  either Tier B recovery path writes a permanent data gap, an honest `as_of`
+  on an empty follow-up window, follow-up gap and outcome-coverage lines in
+  the collection audit, a single-instance guard that sees the frozen build,
+  three hard-rule gaps closed in the overnight AI runner, and an evidence
+  packager that states what is missing rather than implying it.
+- Merge strategy **amended to merge-early** per Sol: A `5d835ab`, B `b40cad7`,
+  C `13f6e7b`, each green. `9037c5f` (WIP packaging) was not merged and stays
+  on `integration-test`.
+- **TradingBotV3 AI Jobs** was disabled during the repairs and re-enabled after
+  a controlled proof on the real desk: 7 of 18 sources usable, 10 unfunded,
+  1 missing, 5 stale, all stated in the published brief; ledger row `ok`.
+- **Outstanding:** 13c is still not `LIVE_VALIDATED` — the mid-session restart
+  drill (audit HEALTHY with a nonzero backfill count) needs a real session.
+  Phase 1's exit gate needs its unattended week. The AI evidence budget
+  (`MAX_TOTAL_EVIDENCE_CHARS` = 80,000) cannot fund ten real sources and is a
+  trader decision, not a repair. The frozen-exe variant of the launch-guard
+  drill is operator work. Phase 2 is stopped pending its fact-pack redesign.
+- plan.md item **13c (durability & catch-up)** build-order steps 1-4 landed:
+  15-minute repetition on the 07:00 launch task; the Master AVWAP tracker
+  staleness override (reuses `backfill_setup_tracker_from_recent_sessions`,
+  capped at the last *completed* session, pinned by a byte-identical
+  characterization test); the Technical Integrity follow-up chain sweeper; and
+  the breadth-ledger bar gap fill. Tier B rows carry
+  `capture_mode: "backfill"` (absence means live) and
+  `regime_collection_audit.py` reports live vs backfilled counts separately.
+  Tier C (frozen snapshots, opening-range baselines, never-started
+  predictions) is untouched. Step 5, the flagged preview lane, was not built.
+- **Outstanding for 13c:** the mid-session restart drill (audit HEALTHY with a
+  nonzero backfill count) is the remaining half of the exit gate, so 13c is
+  not `LIVE_VALIDATED`. The task registration is **done** —
+  `scripts/register_0700_autostart.ps1` was re-run on 2026-08-08 (06:00 PT,
+  Mon-Fri, repeating every 15 min for 7.5h, launching from
+  `C:\Users\Aaron\TradingBotV3`), and the fire-while-running drill passed:
+  with a real python-launched desk up, both the task and the hardened guard
+  reported "already running - nothing to do" and no second desk started.
+
 
 ## Previous checkpoint (main, 2026-08-03 evening)
 
