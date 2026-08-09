@@ -1152,6 +1152,7 @@ class AlertCenterPanel(QFrame):
             self._advance_review_queue()
         else:
             self.chart_review.set_queued_count(len(self._review_queue))
+            self._prefetch_review_queue()
 
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
         """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""
@@ -1195,6 +1196,26 @@ class AlertCenterPanel(QFrame):
             self._review_queue.pop(0) if self._review_queue else None
         )
         self._render_current_review()
+        self._prefetch_review_queue()
+
+    def _prefetch_review_queue(self, limit: int = 24) -> None:
+        """Warm the bar cache for the charts coming up next (Part C rule D4).
+
+        Read-only and off-thread: this only populates the chart's bar cache,
+        so the NEXT advance paints from memory instead of parsing parquet out
+        of the Drive-backed store. It touches no alert, score, or watchlist,
+        and a failure here costs nothing but a slower first paint.
+        """
+        try:
+            from ui.services.chart_data_service import shared_service
+
+            symbols = [
+                queued.symbol for queued in self._review_queue[:limit] if queued.symbol
+            ]
+            if symbols:
+                shared_service().prefetch(symbols)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Decision logging: the training data for learning the trader's revealed
