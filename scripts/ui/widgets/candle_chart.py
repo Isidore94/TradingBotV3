@@ -19,17 +19,13 @@ boundary stays a real price.
 import math
 
 import pyqtgraph as pg
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPicture, QPen
 
 from ui import theme
 
 
 _CANDLE_HALF_WIDTH = 0.27
-# How long after the last pan/zoom event antialiasing comes back. Long enough
-# that a continuous drag never re-enables it mid-gesture, short enough that
-# the lines look right again as soon as the trader lets go.
-_AA_RESTORE_MS = 150
 # A log axis is undefined at or below zero. Prices are positive in practice
 # (CandleChart falls back to linear if they are not), so this floor only keeps
 # a bad cache row from raising mid-render.
@@ -152,42 +148,17 @@ class CandleItem(pg.GraphicsObject):
     plain linear callers (the SPY M5 selection chart) are unaffected.
     """
 
-    def __init__(self, bars: list[dict] = (), *, log_y: bool = False) -> None:
+    def __init__(self, bars: list[dict], *, log_y: bool = False) -> None:
         super().__init__()
-        self._bars = list(bars or [])
+        self._bars = bars
         self._log_y = bool(log_y)
         self._picture = QPicture()
-        self._bounds = QRectF()
         self._render()
-
-    def set_bars(self, bars: list[dict], *, log_y: bool | None = None) -> None:
-        """Re-record this item's candles in place (C5: never rebuild items).
-
-        One CandleItem lives for the chart's lifetime; a symbol switch
-        re-records its picture instead of destroying a scene item and adding
-        a fresh one. Rebuilding was measured at 10.6ms of a 13ms set_data.
-        """
-        self._bars = list(bars or [])
-        if log_y is not None:
-            self._log_y = bool(log_y)
-        # The bar count and price span both move, so the cached geometry Qt
-        # holds for this item is stale until _render recomputes it.
-        self.prepareGeometryChange()
-        self._render()
-        self.informViewBoundsChanged()
-        self.update()
 
     def _y(self, value: float) -> float:
         return _to_log_price(value) if self._log_y else float(value)
 
     def _render(self) -> None:
-        # A fresh QPicture per render: re-opening a painter on a recorded
-        # picture is not a documented reset, and allocation is negligible
-        # next to the drawing loop (~7us/bar).
-        self._picture = QPicture()
-        self._bounds = self._compute_bounds()
-        if not self._bars:
-            return
         up = QColor(theme.color("long"))
         down = QColor(theme.color("short"))
         painter = QPainter(self._picture)
@@ -233,18 +204,12 @@ class CandleItem(pg.GraphicsObject):
     def paint(self, painter, *_args) -> None:
         painter.drawPicture(0, 0, self._picture)
 
-    def _compute_bounds(self) -> QRectF:
+    def boundingRect(self) -> QRectF:
         if not self._bars:
             return QRectF()
         low = self._y(min(bar["low"] for bar in self._bars))
         high = self._y(max(bar["high"] for bar in self._bars))
         return QRectF(-1, low, len(self._bars) + 1, high - low)
-
-    def boundingRect(self) -> QRectF:
-        # Cached, not recomputed: Qt calls this on every paint and on every
-        # view-range change, and an O(bars) min/max per call is exactly the
-        # kind of work that shows up as a pan/zoom stall.
-        return self._bounds
 
 
 class CandleChart(pg.PlotWidget):
@@ -275,37 +240,10 @@ class CandleChart(pg.PlotWidget):
         # Requested scaling vs. what the current bars actually allow.
         self._log_y = bool(log_y)
         self._log_active = False
-        self._antialias = True
         self.showGrid(x=False, y=True, alpha=0.15)
         self.setMouseEnabled(x=True, y=False)
         self.getPlotItem().setMenuEnabled(False)
         self.getPlotItem().hideButtons()
-
-        # --- C5 render discipline -------------------------------------
-        # One candle item and a reused pool of curve items live for the
-        # widget's lifetime. set_data pushes new numbers into them; it never
-        # calls plot.clear() and never constructs scene items, because
-        # rebuilding 14 curves per symbol switch measured 10.6ms of a 13ms
-        # set_data - the single largest cost on the chart path.
-        plot = self.getPlotItem()
-        self._candles = CandleItem()
-        plot.addItem(self._candles)
-        self._overlay_items: list[pg.PlotDataItem] = []
-        # Clip to the visible range and let pyqtgraph decimate when a series
-        # is denser than the pixels available. At today's 90-500 bars auto
-        # downsampling resolves to 1 (a no-op); both settings earn their keep
-        # when a longer history is zoomed into.
-        plot.setClipToView(True)
-        plot.setDownsampling(auto=True, mode="peak")
-        # Antialiasing off while the trader is dragging, restored shortly
-        # after they stop. Only manual range changes count as interaction -
-        # set_data's own setXRange/setYRange must not trip it.
-        self._aa_restore_timer = QTimer(self)
-        self._aa_restore_timer.setSingleShot(True)
-        self._aa_restore_timer.setInterval(_AA_RESTORE_MS)
-        self._aa_restore_timer.timeout.connect(lambda: self._set_overlay_antialias(True))
-        plot.vb.sigRangeChangedManually.connect(self._on_manual_range_change)
-
         axis_font = QFont()
         axis_font.setPointSizeF(9.5)
         for name in ("bottom", "left"):
@@ -322,10 +260,9 @@ class CandleChart(pg.PlotWidget):
         self._overlays = [dict(overlay) for overlay in overlays or []]
         self._timeframe = timeframe
         plot = self.getPlotItem()
+        plot.clear()
         if not self._bars:
             self._apply_log_active(False)
-            self._candles.set_bars([], log_y=False)
-            self._sync_overlays(0)
             return
         lows = [bar["low"] for bar in self._bars]
         highs = [bar["high"] for bar in self._bars]
@@ -333,16 +270,7 @@ class CandleChart(pg.PlotWidget):
         # a bad cache row, and a silently clamped candle would misdraw the
         # whole chart - fall back to linear and stay honest instead.
         self._apply_log_active(self._log_y and min(lows) > 0)
-        self._candles.set_bars(self._bars, log_y=self._log_active)
-        self._sync_overlays(self._push_overlays())
-        self._set_ticks(timeframe)
-        plot.setXRange(-1, len(self._bars), padding=0.01)
-        plot.setYRange(self._y(min(lows)), self._y(max(highs)), padding=0.05)
-
-    def _push_overlays(self) -> int:
-        """Feed the overlay series into pooled curves; return how many drew."""
-        x_values = list(range(len(self._bars)))
-        used = 0
+        plot.addItem(CandleItem(self._bars, log_y=self._log_active))
         for overlay in self._overlays:
             values = [
                 float(value) if value is not None else math.nan
@@ -371,55 +299,16 @@ class CandleChart(pg.PlotWidget):
                 width=float(overlay.get("width") or 1.0),
                 style=style,
             )
-            self._overlay_item(used).setData(
-                x_values,
+            plot.plot(
+                list(range(len(values))),
                 values,
                 pen=pen,
                 connect="finite",
-                antialias=self._antialias,
+                antialias=True,
             )
-            used += 1
-        return used
-
-    def _overlay_item(self, index: int) -> pg.PlotDataItem:
-        """The pooled curve at ``index``, created once and reused thereafter."""
-        while len(self._overlay_items) <= index:
-            item = pg.PlotDataItem()
-            item.setClipToView(True)
-            self.getPlotItem().addItem(item)
-            self._overlay_items.append(item)
-        item = self._overlay_items[index]
-        item.setVisible(True)
-        return item
-
-    def _sync_overlays(self, used: int) -> None:
-        """Hide pooled curves the current snapshot did not fill.
-
-        Hidden rather than removed: the next symbol almost always needs the
-        same count back, and keeping them costs one idle item each.
-        """
-        for item in self._overlay_items[used:]:
-            item.setVisible(False)
-
-    def _on_manual_range_change(self, *_args) -> None:
-        """User-driven pan/zoom: drop antialiasing until they settle."""
-        self._set_overlay_antialias(False)
-        self._aa_restore_timer.start()
-
-    def _set_overlay_antialias(self, enabled: bool) -> None:
-        enabled = bool(enabled)
-        if enabled == self._antialias:
-            return
-        self._antialias = enabled
-        for item in self._overlay_items:
-            # Poke the underlying curve's option directly: PlotDataItem only
-            # reads opts["antialias"] when it rebuilds, and a full setData
-            # here would re-process the samples on every drag event.
-            curve = getattr(item, "curve", None)
-            if curve is None:
-                continue
-            curve.opts["antialias"] = enabled
-            curve.update()
+        self._set_ticks(timeframe)
+        plot.setXRange(-1, len(self._bars), padding=0.01)
+        plot.setYRange(self._y(min(lows)), self._y(max(highs)), padding=0.05)
 
     def _apply_log_active(self, active: bool) -> None:
         self._log_active = bool(active)
