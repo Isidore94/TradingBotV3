@@ -26,9 +26,11 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
+import chart_levels
 from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
 from ui.widgets.candle_chart import CandleChart
+from ui.widgets.paint_lines_button import PaintLinesButton
 
 #: Per-symbol backfill cooldown, shared across every snapshot widget so two
 #: open charts of one stale symbol cannot double-fetch, and a holiday (which
@@ -127,6 +129,19 @@ def _bars_fingerprint(bars: list) -> tuple | None:
     return (len(bars), last.get("dt"), last.get("close"))
 
 
+def _levels_fingerprint(levels: list) -> tuple:
+    """Change detector for the painted levels.
+
+    Needed alongside the bar fingerprint: a scan rewriting the level store
+    changes which lines belong on the chart without moving a single candle,
+    and the refresh guard would otherwise hold yesterday's lines all session.
+    """
+    return tuple(
+        (str(level.get("id") or ""), level.get("price"))
+        for level in levels or ()
+    )
+
+
 class SymbolSnapshotWidget(QWidget):
     """Reusable embedded D1-over-M5 snapshot view.
 
@@ -139,6 +154,12 @@ class SymbolSnapshotWidget(QWidget):
     d1LevelAlertRequested = Signal(str, str, float, str)
     # Click-to-price from either chart, for hosts with a level box to fill.
     pricePicked = Signal(float)
+    # (symbol, level_id, family, price) - the trader clicked a PAINTED level
+    # on the D1 chart. Forwarded, not acted on: A4's obligation is that the
+    # identity of the line is available to whatever wants to record it (the
+    # capture rail's ref_level_id / ref_level_family). Nothing here arms,
+    # scores, or suppresses anything.
+    d1LevelSelected = Signal(str, str, str, float)
     # A background D1 backfill finished for this symbol; re-read the store.
     _d1BackfillDone = Signal(str)
     # (symbol) - charts just repainted. Hosts that gate controls on what the
@@ -195,8 +216,21 @@ class SymbolSnapshotWidget(QWidget):
         self.d1_legend.setTextFormat(Qt.TextFormat.RichText)
         self.d1_legend.setWordWrap(not self._compact)
         self.d1_legend.setSizePolicy(QSizePolicy.Policy.Expanding, legend_v)
+        # One control for every line group on the chart, machine-local and
+        # defaulting to all-on (A4). It sits on the D1 legend row because the
+        # groups it governs are the ones the D1 legend names.
+        self.paint_lines_button = PaintLinesButton()
+        self.paint_lines_button.groupsChanged.connect(self._on_paint_lines_changed)
+        self.d1_header = QWidget()
+        header_layout = QHBoxLayout(self.d1_header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        header_layout.addWidget(self.d1_legend, 1)
+        header_layout.addWidget(self.paint_lines_button, 0)
+
         self.d1_chart = CandleChart()
         self.d1_chart.barClicked.connect(self._on_d1_bar_clicked)
+        self.d1_chart.levelSelected.connect(self._on_d1_level_selected)
         self.d1_chart.setMinimumHeight(120)
         self.d1_note = QLabel()
         self.d1_note.setObjectName("MutedLabel")
@@ -225,7 +259,7 @@ class SymbolSnapshotWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
-        layout.addWidget(self.d1_legend)
+        layout.addWidget(self.d1_header)
         layout.addWidget(self.d1_chart, 1)
         layout.addWidget(self.d1_note)
         layout.addWidget(self.m5_legend)
@@ -302,7 +336,9 @@ class SymbolSnapshotWidget(QWidget):
             d1.get("bars") or []
         ) == _bars_fingerprint(self._d1.get("bars") or []) and _bars_fingerprint(
             m5.get("bars") or []
-        ) == _bars_fingerprint(self._m5.get("bars") or []):
+        ) == _bars_fingerprint(self._m5.get("bars") or []) and _levels_fingerprint(
+            d1.get("levels") or []
+        ) == _levels_fingerprint(self._d1.get("levels") or []):
             return
         self._render_snapshots(d1, m5)
         self._apply_freshness(symbol, meta or {})
@@ -464,36 +500,66 @@ class SymbolSnapshotWidget(QWidget):
         if symbol == self._symbol:
             self.refresh()
 
+    def _on_paint_lines_changed(self, _hidden_groups: list) -> None:
+        """Re-apply the line filter without rebuilding or re-ranging anything.
+
+        The snapshot already in hand holds every line, so hiding a group is a
+        pure display decision: no worker round-trip, and - because it goes
+        through set_overlays/set_levels rather than set_data - no reset of the
+        pan and zoom the trader had set up before reaching for the control.
+        """
+        if not self._d1:
+            return
+        self._paint_d1_lines(self._d1)
+
+    def _visible_d1_lines(self, d1: dict) -> tuple[list, list]:
+        hidden = self.paint_lines_button.hidden_groups()
+        return (
+            chart_levels.visible_overlays(d1.get("overlays") or [], hidden),
+            chart_levels.visible_levels(d1.get("levels") or [], hidden),
+        )
+
+    def _paint_d1_lines(self, d1: dict) -> None:
+        """Push overlays + levels only, leaving the candles and view alone."""
+        overlays, levels = self._visible_d1_lines(d1)
+        self.d1_chart.set_overlays(overlays)
+        self.d1_chart.set_levels(levels)
+        self._set_d1_legend(d1, overlays)
+
+    def _set_d1_legend(self, d1: dict, overlays: list) -> None:
+        self.d1_legend.setText(_legend_html(f"{self._symbol} · D1", overlays))
+        if not d1.get("bars"):
+            return
+        last_bar = d1["bars"][-1]
+        stamp = last_bar["dt"].strftime("%m/%d")
+        reach = f"{stamp} forming" if last_bar.get("preview") else f"through {stamp}"
+        anchor_iso = str(d1.get("avwape_anchor") or "")
+        if anchor_iso:
+            # Which earnings the AVWAPE lines hang from - without it the
+            # bands are just unexplained curves.
+            reach += f" · AVWAPE from {anchor_iso[5:7]}/{anchor_iso[8:10]}"
+        prev_iso = str(d1.get("avwape_prev_anchor") or "")
+        if prev_iso:
+            reach += f" · prev {prev_iso[5:7]}/{prev_iso[8:10]}"
+        self.d1_legend.setText(
+            self.d1_legend.text()
+            + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
+            + f"{reach}</span>"
+        )
+
     def _render_snapshots(self, d1: dict, m5: dict) -> None:
         symbol = self._symbol
         self._d1 = d1
-        self.d1_legend.setText(_legend_html(f"{symbol} · D1", d1["overlays"]))
-        self.d1_chart.set_data(d1["bars"], d1["overlays"], timeframe="d1")
+        overlays, levels = self._visible_d1_lines(d1)
+        self.d1_chart.set_data(d1["bars"], overlays, timeframe="d1")
+        self.d1_chart.set_levels(levels)
         self.d1_chart.setVisible(bool(d1["bars"]))
+        self._set_d1_legend(d1, overlays)
         self.d1_note.setVisible(not d1["bars"])
         if not d1["bars"]:
             self.d1_note.setText(
                 f"No daily store for {symbol} - it is outside the built universe "
                 "(Universe tab rebuilds fill the store)."
-            )
-        else:
-            last_bar = d1["bars"][-1]
-            stamp = last_bar["dt"].strftime("%m/%d")
-            reach = (
-                f"{stamp} forming" if last_bar.get("preview") else f"through {stamp}"
-            )
-            anchor_iso = str(d1.get("avwape_anchor") or "")
-            if anchor_iso:
-                # Which earnings the AVWAPE lines hang from - without it the
-                # bands are just unexplained curves.
-                reach += f" · AVWAPE from {anchor_iso[5:7]}/{anchor_iso[8:10]}"
-            prev_iso = str(d1.get("avwape_prev_anchor") or "")
-            if prev_iso:
-                reach += f" · prev {prev_iso[5:7]}/{prev_iso[8:10]}"
-            self.d1_legend.setText(
-                self.d1_legend.text()
-                + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
-                + f"{reach}</span>"
             )
 
         self._m5 = m5
@@ -537,6 +603,27 @@ class SymbolSnapshotWidget(QWidget):
 
     def _on_d1_bar_clicked(self, index: int) -> None:
         self._popup_level_menu(self.d1_chart, index, "%m/%d")
+
+    def _on_d1_level_selected(self, level_id: str, family: str, price: float) -> None:
+        """Re-emit a painted-level click with the symbol attached."""
+        if not self._symbol:
+            return
+        self.d1LevelSelected.emit(self._symbol, level_id, family, float(price))
+
+    def selected_d1_level(self) -> dict | None:
+        """The painted D1 level currently highlighted, if any.
+
+        A pull-side companion to ``d1LevelSelected``: a capture rail that
+        fills ``ref_level_id`` at write time reads it here rather than
+        having to have been listening when the click happened.
+        """
+        chosen = self.d1_chart.selected_level_id()
+        if not chosen:
+            return None
+        for level in self.d1_chart.drawn_levels():
+            if str(level.get("id") or "") == chosen:
+                return level
+        return None
 
     def _on_m5_bar_clicked(self, index: int) -> None:
         self._popup_level_menu(self.m5_chart, index, "%m/%d %H:%M")
@@ -620,6 +707,7 @@ class SymbolSnapshotDialog(QDialog):
             "m5_legend",
             "m5_chart",
             "m5_note",
+            "paint_lines_button",
         ):
             setattr(self, name, getattr(self.snapshot, name))
 
