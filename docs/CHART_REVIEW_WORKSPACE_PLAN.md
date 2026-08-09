@@ -250,10 +250,41 @@ chart data path** (sec 5) and a guaranteed conflict in `candle_chart.py`.
 Deferred until that lands:
 
 - **A3** D1 (2y+) and M5 charts, crosshair/OHLC readout, IBKR-streaming-while-
-  focused with a loud yfinance fallback banner.
+  focused with a loud yfinance fallback banner. **Still deferred.**
 - **A4** the paint-lines toggle (daily SMAs, D1 horizontals, D1 trendlines,
   prev-day H/L, AVWAP bands) with stable level ids and click-to-select.
+  **LANDED 2026-08-09** — see below.
 - **A5** click-to-set price alert through the existing `PriceAlertService` API.
+
+### A4 as built (2026-08-09)
+
+The chart data path landed, so A4 followed it. Three new pieces and one rule:
+
+- `scripts/chart_levels.py` builds the `levels` payload — D1 horizontal S/R
+  (`hv_horizontal` + `cloud_flat` from the Drive-backed level store),
+  prev-day H/L (computed from the snapshot's own bars, so nothing imports
+  `bounce_bot_lib`), and the projected D1 trendline.
+- `CandleChart.set_levels` draws them: an infinite horizontal line per level,
+  a curve for a sloped one, both added with `ignoreBounds=True` so a level can
+  never stretch the y-range to reach itself. Clicks hit-test in **screen
+  pixels** and emit `levelSelected(id, family, price)`.
+- `ui/widgets/paint_lines_button.py` + `ui/services/paint_lines_prefs.py` are
+  the toggle: six groups (SMAs, EMAs, AVWAP bands, D1 S/R, prev-day, trendline),
+  machine-local under `%LOCALAPPDATA%`, every group defaulting ON. It governs
+  the pre-existing SMA/AVWAP overlays too, by label.
+- **The rule**: every level read happens on the `ChartDataService` worker and
+  rides `snapshotReady`. Nothing on the paint path opens a file. That is why
+  the build lives in the service rather than in a widget.
+
+Since `ref_level_id` / `ref_level_family` were already in the schema (§3), the
+capture rail needs no schema change to reference a painted level:
+`SymbolSnapshotWidget.d1LevelSelected` and `.selected_d1_level()` are the push
+and pull sides. **A4 wires the signal, not the rail** — connecting it into the
+capture write would mean editing `alert_center_panel.py`, which is fenced.
+
+Trendline caveat: the record only exists for symbols that reached
+priority-candidate status in the last scan, so a looked-up name usually has
+none. Full findings and a measurement tool: `docs/D1_TRENDLINE_SURVEY.md`.
 
 The schema already carries `ref_level_id` / `ref_level_family`, so painted-level
 references need no schema change when A4 arrives. The chart area shows a stated

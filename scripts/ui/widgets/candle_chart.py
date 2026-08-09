@@ -14,6 +14,21 @@ trendline drawn across months keeps its meaning. The chart's view coordinates
 are therefore log10(price) - ``_to_log_price`` maps into that space and the
 left axis / click handling map back out, so every price crossing the widget
 boundary stays a real price.
+
+PAINT LINES (A4) are a second, separate layer: the D1 S/R the scan stores,
+prev-day extremes, and the projected D1 trendline. They are NOT overlays -
+an overlay is a per-bar series, and forcing a horizontal level through that
+contract would mean inventing an array of one repeated number per bar and
+then having nothing to click. ``set_levels`` takes the snapshot's ``levels``
+payload (see :mod:`chart_levels`) and draws each entry with the primitive it
+actually is: an infinite horizontal line for a level, a curve for a sloped
+one. Every level carries a stable id, so a click can name the line it hit
+and ``levelSelected`` can hand that id to a capture rail.
+
+Levels never influence the view range. They are added with
+``ignoreBounds=True`` and the y-range is set from the candles alone, so a
+level far above the visible prices simply is not seen - it never stretches
+the chart to reach itself.
 """
 
 import math
@@ -36,6 +51,14 @@ _AA_RESTORE_MS = 150
 _LOG_PRICE_FLOOR = 1e-6
 # Round steps traders actually read off a price axis, in units of 10^k.
 _TICK_STEP_MULTIPLES = (1.0, 2.0, 2.5, 5.0, 10.0)
+# How close a click has to land, in screen pixels, to count as hitting a
+# painted level. Generous enough to hit a 1px line with a trackpad, tight
+# enough that two levels a few cents apart stay separately selectable.
+LEVEL_HIT_TOLERANCE_PX = 6.0
+# What selection does to a level's pen. Deliberately weight and opacity only:
+# recoloring would break the one thing the level palette is for, which is
+# telling green-bucket S/R from red at a glance.
+_LEVEL_SELECTED_EXTRA_WIDTH = 1.6
 
 
 def _to_log_price(value: float) -> float:
@@ -261,6 +284,12 @@ class CandleChart(pg.PlotWidget):
     # it turns "the level I can see" into "the level I armed" without the
     # trader reading it off the axis and retyping it.
     priceClicked = Signal(int, float)
+    # (id, family, price) for a painted level the click landed on. The id is
+    # the stable one chart_levels derived, so a capture rail can record WHICH
+    # line the trader was looking at, not just a number that happened to be
+    # nearby. Emitted in addition to barClicked/priceClicked, never instead:
+    # a click on a level is still a click on the chart.
+    levelSelected = Signal(str, str, float)
 
     def __init__(self, parent=None, *, log_y: bool = True) -> None:
         self._price_axis = PriceAxis(orientation="left")
@@ -271,6 +300,8 @@ class CandleChart(pg.PlotWidget):
         )
         self._bars: list[dict] = []
         self._overlays: list[dict] = []
+        self._levels: list[dict] = []
+        self._selected_level_id = ""
         self._timeframe = "m5"
         # Requested scaling vs. what the current bars actually allow.
         self._log_y = bool(log_y)
@@ -291,6 +322,14 @@ class CandleChart(pg.PlotWidget):
         self._candles = CandleItem()
         plot.addItem(self._candles)
         self._overlay_items: list[pg.PlotDataItem] = []
+        # Paint-line pools, kept apart from the overlay pool: they hold
+        # different primitives and a symbol switch changes their counts
+        # independently. Same reuse discipline - hidden, never destroyed.
+        self._level_line_items: list[pg.InfiniteLine] = []
+        self._level_curve_items: list[pg.PlotDataItem] = []
+        #: What each drawn item is currently showing, so a click can name it.
+        #: [(level dict, "line"|"curve", pooled item)]
+        self._drawn_levels: list[tuple[dict, str, object]] = []
         # Clip to the visible range and let pyqtgraph decimate when a series
         # is denser than the pixels available. At today's 90-500 bars auto
         # downsampling resolves to 1 (a no-op); both settings earn their keep
@@ -326,6 +365,7 @@ class CandleChart(pg.PlotWidget):
             self._apply_log_active(False)
             self._candles.set_bars([], log_y=False)
             self._sync_overlays(0)
+            self._push_levels()  # nothing to hang a level on; hide them all
             return
         lows = [bar["low"] for bar in self._bars]
         highs = [bar["high"] for bar in self._bars]
@@ -337,7 +377,196 @@ class CandleChart(pg.PlotWidget):
         self._sync_overlays(self._push_overlays())
         self._set_ticks(timeframe)
         plot.setXRange(-1, len(self._bars), padding=0.01)
+        # The y-range comes from the candles and nothing else. Every level and
+        # overlay is drawn inside whatever range this produces; none of them
+        # gets a vote in what it is.
         plot.setYRange(self._y(min(lows)), self._y(max(highs)), padding=0.05)
+        # Levels last: a log/linear flip or a bar change moves where they sit.
+        self._push_levels()
+
+    def set_overlays(self, overlays: list[dict] = ()) -> None:
+        """Replace the overlay series without touching the candles or the view.
+
+        The paint-lines toggle changes only WHICH lines are drawn, and routing
+        that through set_data would re-range the plot and throw away the pan
+        and zoom the trader had set up.
+        """
+        self._overlays = [dict(overlay) for overlay in overlays or ()]
+        self._sync_overlays(self._push_overlays() if self._bars else 0)
+
+    def set_levels(self, levels: list[dict] = ()) -> None:
+        """Draw the snapshot's paint-lines (chart_levels' ``levels`` payload).
+
+        Independent of :meth:`set_data` on purpose: the toggle shows and hides
+        level groups many times between symbol switches, and re-pushing a
+        handful of lines must not mean re-rendering the candles.
+        """
+        self._levels = [dict(level) for level in levels or ()]
+        known = {str(level.get("id") or "") for level in self._levels}
+        if self._selected_level_id not in known:
+            # The selected line is not on this chart any more (symbol switch,
+            # or the group holding it was switched off).
+            self._selected_level_id = ""
+        self._push_levels()
+
+    def _push_levels(self) -> None:
+        """Feed the retained levels into the pooled line/curve items."""
+        self._drawn_levels = []
+        lines = curves = 0
+        if self._bars:
+            x_values = list(range(len(self._bars)))
+            for level in self._levels:
+                selected = str(level.get("id") or "") == self._selected_level_id
+                pen = self._level_pen(level, selected)
+                values = level.get("values")
+                if values is None:
+                    price = level.get("price")
+                    try:
+                        price = float(price)
+                    except (TypeError, ValueError):
+                        continue
+                    if price <= 0:
+                        continue
+                    item = self._level_line_item(lines)
+                    item.setPen(pen)
+                    item.setPos(self._y(price))
+                    self._drawn_levels.append((level, "line", item))
+                    lines += 1
+                    continue
+                if len(values) != len(self._bars):
+                    continue  # a series that does not align is not drawable
+                plotted = [
+                    self._y(float(value))
+                    if value is not None and float(value) > 0
+                    else math.nan
+                    for value in values
+                ]
+                if all(math.isnan(value) for value in plotted):
+                    continue
+                item = self._level_curve_item(curves)
+                item.setData(
+                    x_values,
+                    plotted,
+                    pen=pen,
+                    connect="finite",
+                    antialias=self._antialias,
+                )
+                self._drawn_levels.append((level, "curve", item))
+                curves += 1
+        for item in self._level_line_items[lines:]:
+            item.setVisible(False)
+        for item in self._level_curve_items[curves:]:
+            item.setVisible(False)
+
+    def _level_pen(self, level: dict, selected: bool):
+        dash = level.get("dash")
+        if dash == "dot":
+            style = Qt.PenStyle.DotLine
+        elif dash:
+            style = Qt.PenStyle.DashLine
+        else:
+            style = Qt.PenStyle.SolidLine
+        width = float(level.get("width") or 1.0)
+        if selected:
+            width += _LEVEL_SELECTED_EXTRA_WIDTH
+            style = Qt.PenStyle.SolidLine
+        return pg.mkPen(
+            QColor(theme.color(str(level.get("color") or "neutral"))),
+            width=width,
+            style=style,
+        )
+
+    def _level_line_item(self, index: int) -> pg.InfiniteLine:
+        while len(self._level_line_items) <= index:
+            item = pg.InfiniteLine(angle=0, movable=False)
+            # ignoreBounds: a level must never be able to stretch the view to
+            # bring itself into it. Off-screen means off-screen.
+            self.getPlotItem().addItem(item, ignoreBounds=True)
+            self._level_line_items.append(item)
+        item = self._level_line_items[index]
+        item.setVisible(True)
+        return item
+
+    def _level_curve_item(self, index: int) -> pg.PlotDataItem:
+        while len(self._level_curve_items) <= index:
+            item = pg.PlotDataItem()
+            item.setClipToView(True)
+            self.getPlotItem().addItem(item, ignoreBounds=True)
+            self._level_curve_items.append(item)
+        item = self._level_curve_items[index]
+        item.setVisible(True)
+        return item
+
+    # -- level selection ---------------------------------------------------
+    def drawn_levels(self) -> list[dict]:
+        """The levels currently on screen, in draw order."""
+        return [dict(level) for level, _kind, _item in self._drawn_levels]
+
+    def selected_level_id(self) -> str:
+        return self._selected_level_id
+
+    def select_level(self, level_id: str) -> bool:
+        """Highlight a level by id. "" clears. Returns whether it is drawn."""
+        level_id = str(level_id or "")
+        if level_id == self._selected_level_id:
+            return bool(level_id)
+        self._selected_level_id = level_id
+        self._push_levels()
+        return any(
+            str(level.get("id") or "") == level_id
+            for level, _kind, _item in self._drawn_levels
+        )
+
+    def _level_y(self, level: dict, index: int) -> float | None:
+        """A level's chart-space y at bar ``index``, or None if undefined there."""
+        values = level.get("values")
+        if values is None:
+            try:
+                price = float(level.get("price"))
+            except (TypeError, ValueError):
+                return None
+            return self._y(price) if price > 0 else None
+        if not 0 <= index < len(values):
+            return None
+        value = values[index]
+        if value is None:
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return self._y(value) if value > 0 else None
+
+    def level_at(
+        self, index: int, view_y: float, *, tolerance_px: float = LEVEL_HIT_TOLERANCE_PX
+    ) -> dict | None:
+        """The drawn level nearest ``view_y`` at bar ``index``, within tolerance.
+
+        Tolerance is in SCREEN pixels, converted through the viewbox: on a log
+        price axis a fixed price tolerance would be several times looser at
+        the bottom of the chart than at the top, and the trader is aiming with
+        a cursor, not with a price.
+        """
+        if not self._drawn_levels:
+            return None
+        try:
+            pixel_height = float(self.getPlotItem().vb.viewPixelSize()[1])
+        except Exception:
+            pixel_height = 0.0
+        if not math.isfinite(pixel_height) or pixel_height <= 0:
+            return None
+        limit = float(tolerance_px) * pixel_height
+        best = None
+        best_distance = limit
+        for level, _kind, _item in self._drawn_levels:
+            y = self._level_y(level, index)
+            if y is None:
+                continue
+            distance = abs(y - float(view_y))
+            if distance <= best_distance:
+                best_distance = distance
+                best = level
+        return dict(best) if best is not None else None
 
     def _push_overlays(self) -> int:
         """Feed the overlay series into pooled curves; return how many drew."""
@@ -411,7 +640,7 @@ class CandleChart(pg.PlotWidget):
         if enabled == self._antialias:
             return
         self._antialias = enabled
-        for item in self._overlay_items:
+        for item in (*self._overlay_items, *self._level_curve_items):
             # Poke the underlying curve's option directly: PlotDataItem only
             # reads opts["antialias"] when it rebuilds, and a full setData
             # here would re-process the samples on every drag event.
@@ -464,17 +693,41 @@ class CandleChart(pg.PlotWidget):
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self._bars:
             price = None
+            view_y = None
             try:
                 scene_pos = self.mapToScene(event.position().toPoint())
                 view_pos = self.getPlotItem().vb.mapSceneToView(scene_pos)
                 index = int(round(view_pos.x()))
+                view_y = view_pos.y()
                 # The view is in log space when log scaling is on, and this
                 # price arms a real level - map it back before it escapes.
-                price = self.price_at(view_pos.y())
+                price = self.price_at(view_y)
             except Exception:
                 index = -1
             if 0 <= index < len(self._bars):
                 self.barClicked.emit(index)
                 if price is not None and price > 0:
                     self.priceClicked.emit(index, price)
+                if view_y is not None:
+                    self._select_level_at(index, view_y)
         super().mousePressEvent(event)
+
+    def _select_level_at(self, index: int, view_y: float) -> None:
+        """Select the painted level the click hit; a miss clears the selection.
+
+        A miss clearing is deliberate: the highlight says "this is the line
+        the next capture will reference", so it has to stop saying that the
+        moment the trader clicks somewhere else.
+        """
+        hit = self.level_at(index, view_y)
+        if hit is None:
+            self.select_level("")
+            return
+        self.select_level(str(hit.get("id") or ""))
+        try:
+            price = float(hit.get("price"))
+        except (TypeError, ValueError):
+            price = 0.0
+        self.levelSelected.emit(
+            str(hit.get("id") or ""), str(hit.get("family") or ""), price
+        )

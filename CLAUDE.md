@@ -16,6 +16,7 @@ is permanently out of scope (plan.md sec 1).
 - Research warehouse (in build, plan.md sec 12 item 13a): very large research files (bar archives, feature/outcome Parquet) go to the DAS research lake at `research_store_dir` (`local_settings.json`; env `TRADINGBOTV3_RESEARCH_DIR`) — a separate append-only storage class (decision 0014) that is NEVER inside the Drive home folder (`scripts/research_warehouse/config.py` refuses such paths; unset = warehouse fully disabled). Locked build plan: `docs/ULTIMATE_SETUP_DATABASE_PLAN.md` (Phases 0-8; Phase 0 on `main`, Phases 1-8 on `testing-week-2026-08-10` pending its testing week). Builder-level implementation decisions are logged in `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`; dataset keys/identities in `docs/RESEARCH_WAREHOUSE_ERD.md`. Shadow-only additive evidence — zero detector/score/alert influence.
 - Shadow engines `scripts/market_state.py` (via `market_state_bridge`) and `greatness_monitor` (via `greatness_shadow`) run beside the legacy champions and emit JSONL promotion evidence only.
 - Review-learning loop: Alert Center decisions → `alert_review_events.jsonl` → `review_learning.py` scoreboard → AI-curated `review_policy.json` → chart annotations (queue ordering gated to FIFO). See `docs/REVIEW_LEARNING_LOOP.md`.
+- Chart paint lines (A4, landed on `testing` 2026-08-09): `scripts/chart_levels.py` builds the D1 S/R stores, prev-day H/L and the projected D1 trendline into a `levels` payload on the ChartDataService **worker** — never the paint path — and `CandleChart.set_levels` draws them with stable ids and click-to-select (`levelSelected`). One paint-lines control (`ui/widgets/paint_lines_button.py`) shows/hides groups, machine-local, defaults all-on. Trendline availability is surveyed in `docs/D1_TRENDLINE_SURVEY.md`; measure it on the desk with `scripts/d1_trendline_survey.py`.
 - Price alerts: the Focus tab and Research advanced view share one `PriceAlertService`; the main desk polls and pushes fired alerts to the phone at ntfy `urgent`. The satellite relay/toast layer and the planned satellite edit intents are retired with Desk Link. See `docs/FOCUS_PRICE_ALERTS_PROPOSAL.md` and `docs/EVENING_MODE_RUNBOOK.md`.
 - Auto/Away phone output: `autopilot_today.txt` is the single verified Drive digest, with the safety/freshness header first, then numbered best swing trades, then intraday and condensed operations. Mode changes (OFF/DESK/AWAY/EVENING) are made on the main desk.
 - Unattended: the separate mini-PC scanner role is retired (2026-08-08) — the 8845HS main desk is the only always-on machine and the only scan host, so no cross-machine IB budget question exists. `scripts/master_avwap_mini_pc.py` stays in-repo as the slot/state scheduling template for plan.md 13b jobs.
@@ -57,19 +58,29 @@ rebuilding is verification only, and skipping it can never leave the tree broken
 - **Rebuild before each merge to `main`** (same point as the plan.md sec 6 live-validation day), and
   immediately when a change hits a trigger below. Ask the user before spending their time on the
   click-through; the build itself is unattended.
-- **Triggers — a change of these kinds can break the bundle, so rebuild and launch the exe:**
-  1. New third-party dependency (`requirements-*.txt` / `constraints.txt`) — may need hiddenimports or `collect_data_files`.
-  2. New non-`.py` runtime asset. The spec mirrors `scripts/ui/**` and `config/` only; anything elsewhere silently goes missing.
-  3. New top-level package under `scripts/` that is imported lazily — the spec's `collect_submodules` list is hardcoded.
-  4. New dynamic import by string name (`importlib`, name-keyed panel/service lookup) in an uncollected package.
-  5. Any change touching `__file__` / `ROOT_DIR` / `sys.path` — `ROOT_DIR` is `sys._MEIPASS` when frozen.
+- **Both guards are now BUILT** (2026-08-09, branch `claude/a4-paint-lines-packaging-nug5km`):
+  - `tests/test_packaging_spec_drift.py` executes the spec with the PyInstaller API stubbed and
+    asserts every top-level `scripts/` package is in its `collect_submodules` list and every
+    non-`.py` runtime asset is covered by a `datas` rule. It found the spec five packages behind
+    the tree (`ai_jobs`, `desk_link`, `gui_app`, `indicators`, `market_prep_gui`); `desk_link` is
+    now bundled, and the other four are documented allowlist entries — each unreachable from
+    `launch_gui.py`, the frozen entry point.
+    **Fix the spec, never the test** — deliberate omissions go in its documented allowlists.
+  - `launch_gui.py --selftest` (`scripts/selftest.py`) imports every lazily-loaded engine and loads
+    every `__file__`-relative asset (theme.qss, the veto vocabulary), no window and no network,
+    exiting non-zero with every failure named. Run it against the FROZEN exe:
+    `dist\TradingBotV3\TradingBotV3.exe --selftest`. A passing frozen selftest is what replaces
+    the trader's click-through.
+  - Between them, triggers 2-4 below are now caught by the normal test run.
+- **Triggers — a change of these kinds can break the bundle, so rebuild and run the frozen selftest:**
+  1. New third-party dependency (`requirements-*.txt` / `constraints.txt`) — may need hiddenimports or `collect_data_files`. **Not** covered by the guards.
+  2. New non-`.py` runtime asset. The spec mirrors every `FIRST_PARTY_PACKAGES` tree plus `config/`; an asset outside those silently goes missing. *(spec-drift test catches it)*
+  3. New top-level package under `scripts/` that is imported lazily — the spec's `collect_submodules` list is hardcoded. *(spec-drift test catches it)*
+  4. New dynamic import by string name (`importlib`, name-keyed panel/service lookup) in an uncollected package. *(add the module to `selftest.LAZY_ENGINE_MODULES`)*
+  5. Any change touching `__file__` / `ROOT_DIR` / `sys.path` — `ROOT_DIR` is `sys._MEIPASS` when frozen. **Not** fully covered; the selftest checks the phantom-root assumption only.
 - Read `packaging/README.md` "Things that will bite you" before touching the spec or any of the above.
   The signature failure is a bundle that starts fine and dies at the first lazy import, so "it launched"
-  is not proof; exercise the engines.
-- Two cheap guards are proposed but not built — a spec-drift pytest (asserts every `scripts/` package and
-  non-`.py` asset is covered) and a `launch_gui.py --selftest` flag (imports every lazily-loaded engine,
-  exits non-zero on failure). Building them would move triggers 2-4 into the normal test run and replace
-  the click-through with a ~30s automated check. Propose them if packaging work comes up again.
+  is not proof; the selftest is what exercises the engines.
 
 ## Working agreement for agents
 - `plan.md` outranks everything; work its Section 12 queue top to bottom. Do not re-implement anything marked implemented; do not promote anything marked shadow without Section 7 evidence.

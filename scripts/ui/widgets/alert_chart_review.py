@@ -56,6 +56,12 @@ class AlertChartReview(QWidget):
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
     levelArmRequested = Signal(str, str, float)  # symbol, direction, level
     levelDisarmRequested = Signal(str, str, float)  # symbol, direction, level
+    # (symbol, direction, level) - arm a PHONE price alert at the painted D1
+    # level the trader picked. A request, never a write: price_alerts.json has
+    # exactly one writer, the hosting panel that owns PriceAlertService
+    # (plan.md sec 5; trader decision 2026-08-09). Nothing on this path mutes,
+    # suppresses, scores, gates or reorders anything - it arms an alert.
+    levelAlertRequested = Signal(str, str, float)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -87,6 +93,10 @@ class AlertChartReview(QWidget):
         # Candle clicks on the embedded D1 chart arm persistent level alerts
         # through the hosting panel.
         self.snapshot.d1LevelAlertRequested.connect(self.d1LevelAlertRequested)
+        # A4's painted D1 levels are clickable; remember which line was picked
+        # so the phone-alert affordance has something to arm at.
+        self._selected_level: tuple[str, str, str, float] | None = None
+        self.snapshot.d1LevelSelected.connect(self._on_level_selected)
         # Charts build off-thread now, so anything that depends on the bars
         # they hold has to wait for them to land rather than reading straight
         # after set_symbol returns.
@@ -136,6 +146,7 @@ class AlertChartReview(QWidget):
         self.arm_bar.symbolRequested.connect(self.symbolRequested)
         self.arm_bar.levelArmRequested.connect(self._emit_level_arm)
         self.arm_bar.levelDisarmRequested.connect(self._emit_level_disarm)
+        self.arm_bar.levelAlertRequested.connect(self._emit_level_alert)
         self.snapshot.pricePicked.connect(self.arm_bar.set_level)
         # Kept for callers and tests that poke the toggles directly.
         self.watch_buttons = self.arm_bar.watch_buttons
@@ -166,6 +177,49 @@ class AlertChartReview(QWidget):
     def _emit_level_disarm(self, direction: str, level: float) -> None:
         if self.alert is not None and self.alert.symbol:
             self.levelDisarmRequested.emit(self.alert.symbol, direction, float(level))
+
+    def _on_level_selected(
+        self, symbol: str, level_id: str, family: str, price: float
+    ) -> None:
+        """Record the painted D1 level the trader just clicked."""
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            return
+        self._selected_level = (
+            str(symbol or ""),
+            str(level_id or ""),
+            str(family or ""),
+            price,
+        )
+        self.arm_bar.set_level_alert_available(price > 0)
+
+    def selected_level(self) -> tuple[str, str, str, float] | None:
+        """The painted level this pane last saw clicked, for capture rails."""
+        return self._selected_level
+
+    def _clear_selected_level(self) -> None:
+        self._selected_level = None
+        self.arm_bar.set_level_alert_available(False)
+
+    def _emit_level_alert(self, direction: str) -> None:
+        """Ask the hosting panel to arm a phone alert at the selected line.
+
+        The CHART is the authority on which line is picked - clicking away
+        from every line clears the highlight without emitting anything, so the
+        recorded push-side tuple can be stale while ``selected_d1_level()``
+        cannot. Nothing is written here; the panel that owns the store writes.
+        """
+        chosen = self.snapshot.selected_d1_level()
+        if chosen is None or self.alert is None or not self.alert.symbol:
+            return
+        try:
+            level = float(chosen.get("price"))
+        except (TypeError, ValueError):
+            return
+        if not level > 0:
+            return
+        self.levelAlertRequested.emit(self.alert.symbol, direction, level)
 
     def set_alert(
         self,
@@ -269,6 +323,9 @@ class AlertChartReview(QWidget):
                 "Center feed and chart queue. The BounceBot scanner and "
                 "watchlists are untouched."
             )
+        # A different symbol's lines are about to be drawn: whatever was
+        # picked on the old chart is not on this one.
+        self._clear_selected_level()
         self.snapshot.set_symbol(alert.symbol, bot=bot)
         self.snapshot.setVisible(True)
         self.queue_label.setText(f"{queued} waiting" if queued else "queue clear")
@@ -331,6 +388,7 @@ class AlertChartReview(QWidget):
         self.guidance_label.setVisible(False)
         self.snapshot.setVisible(False)
         self.queue_label.setText("")
+        self._clear_selected_level()
         self._set_actions_enabled(False)
         self.set_armed_kinds(())
         self.set_armed_d1_events(())

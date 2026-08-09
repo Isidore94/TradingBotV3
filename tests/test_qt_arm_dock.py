@@ -260,3 +260,220 @@ def test_m5_candle_clicks_can_arm_a_level():
     widget.request_m5_level_alert("above", 3)
     assert captured == [("NVDA", "above", bars[3]["high"])]
     widget.close()
+
+
+# ------------------------------------------------- phone alerts off a D1 line
+# A5: clicking a painted D1 level and arming a PHONE price alert at exactly
+# that line. The chart never writes price_alerts.json - it asks, and the
+# Alert Center panel (which borrows the desk's single PriceAlertService) does
+# the caller-only merge. Arming only: nothing here mutes, suppresses, scores,
+# gates or reorders anything.
+
+
+def _d1_bars(count=20, base=100.0):
+    first = datetime(2026, 6, 1)
+    return [
+        {
+            "dt": first + timedelta(days=index),
+            "open": base + index * 0.1 - 0.2,
+            "high": base + index * 0.1 + 0.4,
+            "low": base + index * 0.1 - 0.4,
+            "close": base + index * 0.1,
+            "volume": 1000.0,
+        }
+        for index in range(count)
+    ]
+
+
+def _painted_level(level_id, price):
+    import chart_levels
+
+    return {
+        "id": level_id,
+        "family": "d1_horizontal",
+        "group": chart_levels.GROUP_HORIZONTAL,
+        "price": price,
+        "values": None,
+        "label": f"L {price:.2f}",
+        "color": "chart_green",
+        "width": 1.2,
+        "dash": False,
+        "conviction": 1.0,
+    }
+
+
+def _price_alert_service(monkeypatch, tmp_path, *, engine_enabled=True):
+    import price_alerts
+    from ui.services.price_alert_service import PriceAlertService
+
+    path = tmp_path / "price_alerts.json"
+    original_load = price_alerts.load_price_alerts
+    original_save = price_alerts.save_price_alerts
+    monkeypatch.setattr(price_alerts, "load_price_alerts", lambda: original_load(path))
+    monkeypatch.setattr(
+        price_alerts, "save_price_alerts", lambda entries: original_save(entries, path)
+    )
+    return PriceAlertService(engine_enabled=engine_enabled), path
+
+
+def _charted_panel_with_a_picked_level(monkeypatch, tmp_path, symbol="NVDA"):
+    """Chart a symbol, paint one D1 level, and click it. Returns everything."""
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    service, path = _price_alert_service(monkeypatch, tmp_path)
+    panel = AlertCenterPanel(d1_level_watches_path=tmp_path / "levels.json")
+    # Exactly how TradingDeskPanel wires it: the desk owns the one service,
+    # the panel borrows it.
+    panel.price_alert_service = service
+    panel.chart_symbol(symbol)
+
+    review = panel.chart_review
+    bars = _d1_bars()
+    price = bars[5]["close"]
+    review.snapshot._render_snapshots(
+        {
+            "symbol": symbol,
+            "timeframe": "D1",
+            "bars": bars,
+            "overlays": [],
+            "levels": [_painted_level("sr", price)],
+            "note": "",
+        },
+        {"bars": [], "overlays": [], "note": ""},
+    )
+    chart = review.snapshot.d1_chart
+    chart.resize(600, 400)
+    chart._select_level_at(5, chart._y(price))
+    return panel, service, path, price
+
+
+def test_clicking_a_painted_level_arms_a_phone_alert_through_the_panel(
+    monkeypatch, tmp_path
+):
+    panel, service, _path, price = _charted_panel_with_a_picked_level(
+        monkeypatch, tmp_path
+    )
+    review = panel.chart_review
+    try:
+        # The click was recorded, and the affordance only lights up once a
+        # line is actually picked.
+        assert review.selected_level()[0] == "NVDA"
+        assert review.selected_level()[1] == "sr"
+        assert review.arm_bar.phone_alert_button.isEnabled()
+
+        review.arm_bar.direction_input.setCurrentIndex(0)  # Above
+        review.arm_bar.phone_alert_button.click()
+
+        entries = service.entries()
+        assert len(entries) == 1
+        assert entries[0]["symbol"] == "NVDA"
+        assert entries[0]["above"] == price
+        assert entries[0]["armed_above"] is True
+        # The other side is left alone, not zeroed.
+        assert entries[0]["below"] is None
+        assert entries[0]["armed_below"] is False
+    finally:
+        service.shutdown()
+        panel.close()
+
+
+def test_the_direction_box_picks_which_side_the_line_arms(monkeypatch, tmp_path):
+    panel, service, _path, price = _charted_panel_with_a_picked_level(
+        monkeypatch, tmp_path
+    )
+    try:
+        panel.chart_review.arm_bar.direction_input.setCurrentIndex(1)  # Below
+        panel.chart_review.arm_bar.phone_alert_button.click()
+
+        entries = service.entries()
+        assert entries[0]["below"] == price and entries[0]["armed_below"] is True
+        assert entries[0]["above"] is None and entries[0]["armed_above"] is False
+    finally:
+        service.shutdown()
+        panel.close()
+
+
+def test_arming_from_a_line_preserves_the_other_side_and_the_history(
+    monkeypatch, tmp_path
+):
+    """The merge is the Focus board's, key for key - it never rewrites a row."""
+    panel, service, _path, price = _charted_panel_with_a_picked_level(
+        monkeypatch, tmp_path
+    )
+    history = [{"date": "2026-08-01", "side": "below", "level": 90.0, "last": 89.5}]
+    service.save_entries(
+        [
+            {
+                "symbol": "NVDA",
+                "above": None,
+                "below": 90.0,
+                "armed_above": False,
+                "armed_below": False,
+                "note": "keep me",
+                "history": history,
+            }
+        ]
+    )
+    try:
+        panel.chart_review.arm_bar.direction_input.setCurrentIndex(0)  # Above
+        panel.chart_review.arm_bar.phone_alert_button.click()
+
+        entry = service.entries()[0]
+        assert entry["above"] == price and entry["armed_above"] is True
+        # Untouched: the fired-and-disarmed cross-down, the note, the log.
+        assert entry["below"] == 90.0 and entry["armed_below"] is False
+        assert entry["note"] == "keep me"
+        assert entry["history"] == history
+    finally:
+        service.shutdown()
+        panel.close()
+
+
+def test_no_line_picked_means_nothing_is_written(monkeypatch, tmp_path):
+    """Clicking away clears the highlight, so there is nothing to arm at."""
+    panel, service, _path, price = _charted_panel_with_a_picked_level(
+        monkeypatch, tmp_path
+    )
+    chart = panel.chart_review.snapshot.d1_chart
+    try:
+        pixel = float(chart.getPlotItem().vb.viewPixelSize()[1])
+        chart._select_level_at(5, chart._y(price) + pixel * 60)
+        assert chart.selected_level_id() == ""
+
+        panel.chart_review.arm_bar.phone_alert_button.click()
+        assert service.entries() == []
+    finally:
+        service.shutdown()
+        panel.close()
+
+
+def test_the_chart_widgets_never_hold_a_price_alert_service(monkeypatch, tmp_path):
+    """Single-writer invariant (plan.md sec 5): only the panel writes the store."""
+    from ui.services.price_alert_service import PriceAlertService
+    from ui.widgets.alert_chart_review import AlertChartReview
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    review = AlertChartReview()
+    try:
+        for widget in (review, review.snapshot, review.arm_bar):
+            assert not any(
+                isinstance(value, PriceAlertService)
+                for value in vars(widget).values()
+            ), f"{type(widget).__name__} holds a PriceAlertService"
+            assert not any(
+                isinstance(child, PriceAlertService)
+                for child in widget.findChildren(PriceAlertService)
+            )
+        # And neither module even imports it - a handle cannot appear later
+        # without this test's file changing too.
+        import ui.widgets.alert_chart_review as review_module
+        import ui.widgets.symbol_snapshot_dialog as snapshot_module
+
+        for module in (review_module, snapshot_module):
+            assert not any(
+                isinstance(value, type) and issubclass(value, PriceAlertService)
+                for value in vars(module).values()
+            )
+        assert SymbolSnapshotWidget is snapshot_module.SymbolSnapshotWidget
+    finally:
+        review.close()

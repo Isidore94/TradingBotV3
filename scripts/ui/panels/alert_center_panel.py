@@ -622,6 +622,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
         self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
+        self.chart_review.levelAlertRequested.connect(self._arm_price_alert_from_level)
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -2290,6 +2291,71 @@ class AlertCenterPanel(QFrame):
 
     def _disarm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
         self.disarm_d1_level_watch(symbol, direction, level)
+
+    def _arm_price_alert_from_level(
+        self, symbol: str, direction: str, level: float
+    ) -> None:
+        """Arm a PHONE price alert at a painted D1 level the trader clicked.
+
+        Trader decision, 2026-08-09: arming always routes through the panel
+        that owns the store. The chart requests; this panel performs the
+        caller-only merge against the desk's single ``PriceAlertService``
+        (injected by TradingDeskPanel), so ``price_alerts.json`` keeps exactly
+        one writer (plan.md sec 5). The merge is the Focus tab board's, key
+        for key - including its deliberate rule that an unchanged level does
+        NOT re-arm a side that has already fired; re-arming stays explicit.
+        The opposite side, the note and the history are never touched.
+        """
+        symbol = str(symbol or "").strip().upper()
+        try:
+            level = float(level)
+        except (TypeError, ValueError):
+            return
+        if not symbol or direction not in ("above", "below") or not level > 0:
+            return
+        service = getattr(self, "price_alert_service", None)
+        if service is None:
+            self.statusChanged.emit(
+                f"{symbol}: no price-alert service on this desk - arm the "
+                "cross on the Focus tab instead."
+            )
+            return
+        entries = service.entries()
+        entry = next((row for row in entries if row.get("symbol") == symbol), None)
+        if entry is None:
+            entry = {
+                "symbol": symbol,
+                "above": level if direction == "above" else None,
+                "below": level if direction == "below" else None,
+                "armed_above": direction == "above",
+                "armed_below": direction == "below",
+                "note": "",
+                "history": [],
+            }
+            entries.append(entry)
+        else:
+            old_level = entry.get(direction)
+            entry[direction] = level
+            if old_level != level:
+                entry[f"armed_{direction}"] = True
+        if not service.save_entries(entries):
+            self.statusChanged.emit(
+                f"{symbol}: phone price alert NOT saved - the price-alert "
+                "store refused the write on this machine."
+            )
+            return
+        if entry.get(f"armed_{direction}"):
+            self.statusChanged.emit(
+                f"{symbol}: phone price alert armed - cross {direction} "
+                f"{level:.2f}. It fires once, pushes to your phone, then "
+                "stays off until you re-arm it."
+            )
+        else:
+            self.statusChanged.emit(
+                f"{symbol}: cross {direction} {level:.2f} kept, still "
+                "disarmed - it already fired at this level. Re-arm it on the "
+                "Focus tab."
+            )
 
     def armed_levels_for(self, symbol: str) -> list:
         symbol = str(symbol or "").strip().upper()

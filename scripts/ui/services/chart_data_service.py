@@ -233,6 +233,7 @@ class ChartDataService(QObject):
             kwargs["sessions"] = sessions
         d1 = chart_snapshot.build_d1_snapshot(symbol, **kwargs)
         m5 = chart_snapshot.build_m5_snapshot(symbol, list(m5_bars or []))
+        d1["levels"] = self._build_levels(symbol, d1.get("bars") or [])
 
         meta: dict[str, Any] = {"source": tier, "stale_store": False, "want_forming": False}
         try:
@@ -247,6 +248,27 @@ class ChartDataService(QObject):
         except Exception:
             _log.debug("D1 freshness probe failed for %s.", symbol, exc_info=True)
         return d1, m5, meta
+
+    @staticmethod
+    def _build_levels(symbol: str, bars: Sequence[Mapping[str, Any]]) -> list[dict]:
+        """The D1 paint-lines, built HERE because this is the worker (A4).
+
+        The level store lives in the Drive-backed home folder and the ai_state
+        file is ~38MB. Loading either where the chart paints is the very
+        defect this service exists to remove, so the levels ride the snapshot
+        that is already crossing the thread boundary rather than being fetched
+        by whatever widget draws them.
+
+        A level-loading failure costs the lines, never the chart: the bars and
+        overlays are already built by the time this runs.
+        """
+        try:
+            import chart_levels
+
+            return chart_levels.build_d1_levels(symbol, bars)
+        except Exception:
+            _log.debug("D1 level build failed for %s.", symbol, exc_info=True)
+            return []
 
     def cached_series(self, symbol: str) -> BarSeries | None:
         """Memory-only peek, safe on the GUI thread (for skeleton decisions)."""

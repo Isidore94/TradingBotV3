@@ -67,12 +67,23 @@ def _enable_crash_log() -> None:
 
 
 def main() -> int:
+    argv = sys.argv[1:]
+    # --selftest before anything else, including the crash log: it must be
+    # runnable against a frozen bundle on a machine with no display and no
+    # network, and it must not touch the desk's own log files on the way.
+    # This is what replaces the trader's post-build click-through - see
+    # scripts/selftest.py and packaging/README.md.
+    if "--selftest" in argv:
+        from selftest import run_selftest
+
+        return run_selftest(verbose="--verbose" in argv or "-v" in argv)
+
     _enable_crash_log()
     # This is the Qt desk's real entrypoint, not a hop through scripts/gui.py.
     # The latter remains only for legacy ``--ui tk`` compatibility.
     from ui import app
 
-    return int(app.main(sys.argv[1:]) or 0)
+    return int(app.main(argv) or 0)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 -r requirements-gui.txt
 pytest
+pytest-timeout
 # Read-only research-lake query engine (warehouse Phase 7, LD-04). Optional:
 # the read path answers every slice query through pyarrow without it.
 duckdb
