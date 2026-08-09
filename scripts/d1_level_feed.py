@@ -18,7 +18,7 @@ import logging
 import math
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from master_avwap_lib.levels import level_is_effective_on, level_store_path
 from project_paths import MASTER_AVWAP_AI_STATE_FILE, MASTER_AVWAP_LEVELS_DIR
@@ -49,7 +49,13 @@ MAX_DISTANCE_ATR = 3.5
 SMA_MAX_AGE_DAYS = 10
 TRENDLINE_MAX_AGE_DAYS = 5
 
+#: Name of this module's own ai_state projection (see ``load_ai_state_projection``).
+AI_STATE_SYMBOL_PROJECTION = "d1_level_feed.symbol_entry"
+
+# One parse of ai_state serves every consumer. {path: {"mtime", "feeds"}},
+# where "feeds" is {projection key: {symbol: sliver}}.
 _ai_state_cache: dict[str, dict[str, Any]] = {}
+_ai_state_projections: dict[str, Callable[[Mapping[str, Any]], Any]] = {}
 _store_cache: dict[str, dict[str, Any]] = {}
 
 
@@ -93,28 +99,84 @@ def _extract_symbol_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _load_ai_state_feed(path: Path) -> dict[str, dict[str, Any]]:
-    key = str(path)
+def load_ai_state_projection(
+    key: str,
+    project: Callable[[Mapping[str, Any]], Any],
+    path: Path,
+) -> dict[str, Any]:
+    """``{symbol: project(record)}`` for every symbol in ``path``, mtime-cached.
+
+    The shared raw-parse point for the ai_state file. That file is ~38MB and
+    more than one consumer wants a different sliver of it - this module's
+    SMA/trendline prices for the Technical Integrity monitor, and
+    ``chart_levels``' trendline record for drawing. Parsing it once per
+    consumer was pure duplicated cost, so the parse lives here and every
+    projection seen so far is recomputed on the one read: whichever consumer
+    asks first pays, and the rest of them are free until the file changes.
+
+    ``project(record)`` runs once per symbol record and returns that symbol's
+    sliver, or ``None`` to leave the symbol out. Only the slivers are
+    retained - never the payload, which is the whole point of projecting.
+
+    A projection registers itself on its first call, so the very first read in
+    a process can still cost a second parse if one consumer starts before the
+    other has ever asked. Every rewrite of the file after that is a single
+    read shared by both.
+
+    A read failure is uncertainty, not emptiness: the last good result stands
+    and the cache is left alone, so a torn write does not blank a detector's
+    view of its levels.
+    """
+    key = str(key)
+    _ai_state_projections[key] = project
+    cache_key = str(path)
     try:
-        mtime = path.stat().st_mtime
+        mtime = path.stat().st_mtime_ns
     except OSError:
         return {}
-    cached = _ai_state_cache.get(key)
-    if cached and cached.get("mtime") == mtime:
-        return cached["feed"]
+    cached = _ai_state_cache.get(cache_key)
+    if cached and cached.get("mtime") == mtime and key in cached["feeds"]:
+        return cached["feeds"][key]
     try:
         with open(path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, ValueError) as exc:
         logging.warning("D1 level feed could not read ai_state: %s", exc)
-        return cached["feed"] if cached else {}
-    feed: dict[str, dict[str, Any]] = {}
+        return cached["feeds"].get(key, {}) if cached else {}
+    feeds: dict[str, dict[str, Any]] = {name: {} for name in _ai_state_projections}
     symbols = payload.get("symbols") if isinstance(payload, Mapping) else {}
     for symbol, entry in (symbols or {}).items():
-        if isinstance(entry, Mapping):
-            feed[str(symbol).strip().upper()] = _extract_symbol_entry(entry)
-    _ai_state_cache[key] = {"mtime": mtime, "feed": feed}
-    return feed
+        if not isinstance(entry, Mapping):
+            continue
+        name = str(symbol).strip().upper()
+        for projection_key, projection in _ai_state_projections.items():
+            try:
+                sliver = projection(entry)
+            except Exception:
+                # One consumer's shaping bug must not take the other consumer's
+                # levels down with it: the sliver is simply absent, which every
+                # caller already treats as "nothing known here".
+                logging.debug(
+                    "ai_state projection %s failed for %s", projection_key, name,
+                    exc_info=True,
+                )
+                continue
+            if sliver is not None:
+                feeds[projection_key][name] = sliver
+    _ai_state_cache[cache_key] = {"mtime": mtime, "feeds": feeds}
+    return feeds.get(key, {})
+
+
+def reset_ai_state_cache() -> None:
+    """Drop the shared ai_state parse cache. Tests only."""
+    _ai_state_cache.clear()
+
+
+def _load_ai_state_feed(path: Path) -> dict[str, dict[str, Any]]:
+    """This module's sliver: per-symbol SMA and trendline prices."""
+    return load_ai_state_projection(
+        AI_STATE_SYMBOL_PROJECTION, _extract_symbol_entry, path
+    )
 
 
 def _load_store_levels(symbol: str, levels_dir: Path) -> list[dict[str, Any]]:

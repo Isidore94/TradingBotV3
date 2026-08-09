@@ -137,3 +137,109 @@ def test_feed_unknown_symbol_and_missing_files_are_empty(tmp_path):
         )
         == []
     )
+
+
+# ------------------------------------------------------- the shared raw parse
+# ai_state is ~38MB and two modules want different slivers of it. The parse
+# lives in d1_level_feed and chart_levels borrows it, so a scan's rewrite of
+# the file costs ONE read rather than one per consumer. Shaping, thresholds
+# and filtering stay each module's own - only the bytes are shared.
+
+
+def _count_json_load(monkeypatch):
+    import json as json_module
+
+    counter = {"parses": 0}
+    real_load = json_module.load
+
+    def counting_load(handle, *args, **kwargs):
+        counter["parses"] += 1
+        return real_load(handle, *args, **kwargs)
+
+    monkeypatch.setattr(json_module, "load", counting_load)
+    return counter
+
+
+def test_both_consumers_share_one_ai_state_parse(tmp_path, monkeypatch):
+    import chart_levels
+    import d1_level_feed
+
+    ai_state = tmp_path / "ai_state.json"
+    _write_ai_state(ai_state)
+    # Both projections have to be known before a single read can serve both;
+    # each one registers itself on its first call.
+    d1_level_feed._load_ai_state_feed(ai_state)
+    chart_levels._ai_state_trendlines(ai_state)
+    d1_level_feed.reset_ai_state_cache()
+
+    counter = _count_json_load(monkeypatch)
+    feed = d1_level_feed._load_ai_state_feed(ai_state)
+    trendlines = chart_levels._ai_state_trendlines(ai_state)
+
+    # One read, and each consumer still gets exactly its own sliver.
+    assert counter["parses"] == 1
+    assert feed["MU"]["smas"]["SMA_50"] == 102.5
+    assert feed["MU"]["trendlines"] == [104.2]
+    assert trendlines["MU"]["candidate"]["current_line_price"] == 104.2
+    assert trendlines["MU"]["last_trade_date"] == "2026-07-15"
+
+    # Unchanged file: neither pays again.
+    d1_level_feed._load_ai_state_feed(ai_state)
+    chart_levels._ai_state_trendlines(ai_state)
+    assert counter["parses"] == 1
+
+    # A rewrite is one more read, shared again - and both slivers move.
+    _write_ai_state(ai_state, trendline=105.5)
+    os.utime(ai_state, (NOW.timestamp(), NOW.timestamp() + 60))
+    assert chart_levels._ai_state_trendlines(ai_state)["MU"]["candidate"][
+        "current_line_price"
+    ] == 105.5
+    assert d1_level_feed._load_ai_state_feed(ai_state)["MU"]["trendlines"] == [105.5]
+    assert counter["parses"] == 2
+
+
+def test_a_symbol_with_no_trendline_still_reaches_this_modules_feed(tmp_path):
+    """The projections are independent: one skipping a symbol never hides it
+    from the other."""
+    import chart_levels
+    import d1_level_feed
+
+    ai_state = tmp_path / "ai_state.json"
+    ai_state.write_text(
+        json.dumps(
+            {
+                "symbols": {
+                    "MU": {
+                        "last_trade_date": "2026-07-15",
+                        "priority_sma_levels": {"SMA_50": 102.5},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    d1_level_feed.reset_ai_state_cache()
+
+    assert chart_levels._ai_state_trendlines(ai_state) == {}
+    feed = d1_level_feed._load_ai_state_feed(ai_state)
+    assert feed["MU"]["smas"] == {"SMA_50": 102.5}
+    assert feed["MU"]["trendlines"] == []
+
+
+def test_a_torn_ai_state_keeps_the_last_good_slivers(tmp_path):
+    """Uncertainty is not emptiness - a bad read must not blank the levels."""
+    import chart_levels
+    import d1_level_feed
+
+    ai_state = tmp_path / "ai_state.json"
+    _write_ai_state(ai_state)
+    d1_level_feed.reset_ai_state_cache()
+    assert d1_level_feed._load_ai_state_feed(ai_state)["MU"]["trendlines"] == [104.2]
+    assert chart_levels._ai_state_trendlines(ai_state)["MU"]["last_trade_date"]
+
+    ai_state.write_text("{not json", encoding="utf-8")
+    os.utime(ai_state, (NOW.timestamp(), NOW.timestamp() + 60))
+    assert d1_level_feed._load_ai_state_feed(ai_state)["MU"]["trendlines"] == [104.2]
+    assert chart_levels._ai_state_trendlines(ai_state)["MU"][
+        "candidate"
+    ]["current_line_price"] == 104.2

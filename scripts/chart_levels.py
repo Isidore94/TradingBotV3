@@ -17,7 +17,9 @@ on the GUI thread is the exact defect chart-perf-c existed to remove. The
 only caller is :meth:`ui.services.chart_data_service.ChartDataService.
 build_snapshots`, which runs on the chart pool, and the result rides the
 existing ``snapshotReady`` delivery. Both loaders are mtime-cached, so a
-session pays for each file once per scan that rewrites it.
+session pays for each file once per scan that rewrites it - and the ai_state
+parse is :mod:`d1_level_feed`'s single shared one, so a session pays for that
+38MB read once in total rather than once per consumer of it.
 
 Decision-support only: nothing here writes state, scores, or influences an
 alert. It draws what the scan already decided.
@@ -26,7 +28,10 @@ Why this is a separate module and not part of ``chart_snapshot``: the ai_state
 trendline record is also detector input (``d1_level_feed`` feeds the Technical
 Integrity monitor), and the file-scoped ask-first rule puts any edit to those
 files behind a question. Keeping the drawing path in its own module means the
-paint-lines work touches no detector, scoring, or alert file at all.
+drawing decisions - which lines, what colour, how many - are made where no
+detector can read them. The one thing this module takes from the detector
+side is the raw ai_state parse itself (``load_ai_state_projection``, approved
+by the trader 2026-08-09): the same bytes, read once, shaped separately.
 
 Contract - each level is::
 
@@ -77,8 +82,9 @@ GROUP_NAMES: dict[str, str] = dict(LEVEL_GROUPS)
 
 #: A trendline projects along its slope and goes wrong fast, so the scan's
 #: view of it is only honest for a few sessions. Same budget ``d1_level_feed``
-#: applies to the same record (TRENDLINE_MAX_AGE_DAYS); duplicated rather than
-#: imported so the drawing path does not depend on a detector-input module.
+#: applies to the same record (TRENDLINE_MAX_AGE_DAYS); still duplicated
+#: rather than imported, so that re-tuning a detector's freshness budget can
+#: never silently change what the trader sees drawn.
 TRENDLINE_MAX_AGE_DAYS = 5
 
 #: Store levels below this strength never earned green-bucket-quality respect.
@@ -102,7 +108,9 @@ _PREV_DAY_COLOR = "chart_white"
 #: Not chart_yellow: "AVWAPE prev" already owns yellow on this chart.
 _TRENDLINE_COLOR = "chart_purple"
 
-_ai_state_trendline_cache: dict[str, tuple[int, dict[str, dict[str, Any]]]] = {}
+#: This module's key into ``d1_level_feed``'s shared ai_state parse.
+_TRENDLINE_PROJECTION = "chart_levels.trendline"
+
 _level_store_cache: dict[str, tuple[int, list[dict[str, Any]]]] = {}
 
 
@@ -272,51 +280,47 @@ def _store_levels(symbol: str, levels_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _ai_state_trendlines(path: Path) -> dict[str, dict[str, Any]]:
-    """{symbol: {candidate, last_trade_date}} from ai_state, mtime-cached.
+def _trendline_record(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    """One symbol's ai_state record -> its trendline sliver, or None.
 
     Only the trendline record and the symbol's scan date survive the parse:
     the source file is ~38MB and holding a second copy of it in memory for
     the sake of one nested dict per symbol would be its own defect.
     """
-    key = str(path)
-    try:
-        mtime_ns = path.stat().st_mtime_ns
-    except OSError:
-        return {}
-    cached = _ai_state_trendline_cache.get(key)
-    if cached is not None and cached[0] == mtime_ns:
-        return cached[1]
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, ValueError) as exc:
-        _log.warning("Chart levels could not read ai_state: %s", exc)
-        return cached[1] if cached is not None else {}
-    feed: dict[str, dict[str, Any]] = {}
-    symbols = payload.get("symbols") if isinstance(payload, Mapping) else {}
-    for symbol, entry in (symbols or {}).items():
-        if not isinstance(entry, Mapping):
-            continue
-        candidate = entry.get("priority_trendline_candidate")
-        if not isinstance(candidate, Mapping):
-            # The break candidate is the same geometry after the line gave
-            # way; it is still the line the trader is looking at.
-            candidate = entry.get("priority_trendline_break_candidate")
-        if not isinstance(candidate, Mapping):
-            continue
-        feed[str(symbol).strip().upper()] = {
-            "candidate": dict(candidate),
-            "last_trade_date": str(entry.get("last_trade_date") or ""),
-        }
-    _ai_state_trendline_cache[key] = (mtime_ns, feed)
-    return feed
+    candidate = entry.get("priority_trendline_candidate")
+    if not isinstance(candidate, Mapping):
+        # The break candidate is the same geometry after the line gave way;
+        # it is still the line the trader is looking at.
+        candidate = entry.get("priority_trendline_break_candidate")
+    if not isinstance(candidate, Mapping):
+        return None
+    return {
+        "candidate": dict(candidate),
+        "last_trade_date": str(entry.get("last_trade_date") or ""),
+    }
+
+
+def _ai_state_trendlines(path: Path) -> dict[str, dict[str, Any]]:
+    """{symbol: {candidate, last_trade_date}} from ai_state, mtime-cached.
+
+    The 38MB parse itself belongs to :func:`d1_level_feed.
+    load_ai_state_projection`, which both consumers of that file share: this
+    module used to run an identical second read of the same bytes for the
+    sake of a different sliver. Only the shaping below is ours; the caching
+    and the read-failure rule (last good result stands) are the shared
+    loader's.
+    """
+    from d1_level_feed import load_ai_state_projection
+
+    return load_ai_state_projection(_TRENDLINE_PROJECTION, _trendline_record, path)
 
 
 def reset_caches() -> None:
-    """Drop both mtime caches. Tests only."""
-    _ai_state_trendline_cache.clear()
+    """Drop the store cache and the shared ai_state parse. Tests only."""
     _level_store_cache.clear()
+    from d1_level_feed import reset_ai_state_cache
+
+    reset_ai_state_cache()
 
 
 # --------------------------------------------------------------------------
