@@ -65,10 +65,18 @@ stamp; it must not duplicate the roadmap.
      source/age strip turns loud red for a yfinance fallback. Chart Review
      disables the shared widget's candle-alert menus and alert emission, so
      the 98414ce no-alert-privilege boundary remains intact.
-- **Gate on this branch after packet 7: 2600 passed, 1 skipped, 7 subtests;
-  junit `failures=0 errors=0` (2608 cases); pytest exit 0 in 109.52s test time /
-  111.4s wall, so there was no post-summary hang; smoke 7/7;
-  `launch_gui.py --selftest` 30/30 exit 0.** Windows Python **3.12**, 174
+  8. Sol Local-AI Phase 1 completion packet — the existing separate-process
+     runner now schedules medium-tier per-ticker briefs after the daily
+     summary, rechecking the hard no-market-hours gate before every inference.
+     It projects the existing evidence package and provider-neutral request
+     path, keeps full artifacts in `ai_store`, and atomically publishes only a
+     bounded advisory `ai_morning_brief.txt` to the Drive home folder. No live
+     decision module imports `ai_jobs`; Phase 2 and the live exit-gate clock
+     remain untouched.
+- **Gate on this branch after packet 8: 2604 passed, 1 skipped, 7 subtests;
+  junit `failures=0 errors=0` (2612 cases); pytest exit 0 in 103.64s test time /
+  105.6s wall, so there was no post-summary hang; smoke 7/7;
+  `launch_gui.py --selftest` 30/30 exit 0.** Windows Python **3.12**, 175
   collected `test_*.py` files and no test file deleted. `QT_QPA_PLATFORM` was
   `offscreen`; the machine is configured Pacific, but Windows Python cannot
   consume the packet's IANA `TZ=America/Vancouver` override (that override

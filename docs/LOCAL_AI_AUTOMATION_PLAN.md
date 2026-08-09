@@ -3,8 +3,10 @@
 Status: ACCEPTED into plan.md sec 12 as item 13b (trader-directed,
 2026-08-08). **Phase 0 COMPLETE on branch `local-ai-phase-0` (2026-08-08):
 code landed, Ollama installed and benchmarked on the main desk, all three
-tiers chosen and verified, and the exit gate verified end to end. Phases 1+
-not started.** Subordinate to `plan.md` — this
+tiers chosen and verified, and the exit gate verified end to end. Phase 1 is
+implementation-complete on `testing-week-2026-08-10` (2026-08-09); its live
+five-session exit gate has not started. Phase 2 remains stopped for redesign.**
+Subordinate to `plan.md` — this
 document never overrides plan.md sections 5-7 or the section 12 execution
 order. Section 6 is the binding implementation spec; phases execute in order,
 each on its own branch.
@@ -389,9 +391,12 @@ rows were written by manual runs on a day the exchange never opened. They have
 been retracted by an appended `correction` row and count for nothing. The
 five-session clock had not started as of 2026-08-09.
 
-**Status 2026-08-08 — scheduled summary LANDED, per-ticker briefs NOT BUILT**
-(branch `local-ai-phase-1`; 1889 passed, 7 subtests; smoke 7/7). The exit gate
-is **not** met: it needs a week of unattended mornings, which is elapsed time.
+**Status 2026-08-09 — Phase 1 implementation COMPLETE; live exit gate NOT
+STARTED.** The original scheduled-summary slice landed on branch
+`local-ai-phase-1` (1889 passed, 7 subtests; smoke 7/7). The per-ticker and
+small-morning-file completion slice landed on `testing-week-2026-08-10`. The
+exit gate is **not** met: it needs five unattended session mornings, which is
+elapsed desk evidence and is deliberately not started by code.
 
 Built:
 
@@ -407,11 +412,22 @@ Built:
 Verified end to end on the real desk: 18 live evidence sources, 90.4 s on
 `gemma3:12b`, four files published to the NAS, exit 0, one `ok` ledger row.
 
-Still to build for Phase 1: the small morning file published to the Drive home
-folder. **Per-ticker briefs are DEFERRED (trader decision 2026-08-08)** — they
-are not part of Phase 1's exit gate and no work on them is scheduled. The
-economics that motivated them (free locally) have not changed; the priority
-has. Do not start them without a fresh trader instruction.
+Completed by the fresh trader instruction dated 2026-08-09, which supersedes
+the 2026-08-08 deferral:
+
+- `ticker_briefs` is the second named Phase 1 runner slot. It reads Focus and
+  watchlist membership without modifying those files, projects the existing
+  evidence package per symbol, and calls the existing provider-neutral local
+  endpoint at the medium tier. The hard off-hours gate is repeated inside the
+  job before every inference call.
+- Full validated result/evidence/manifest packages publish below
+  `ai_store/briefs/<year>/<session>/tickers/<symbol>/`. Only the bounded,
+  advisory `ai_morning_brief.txt` crosses into the Drive home folder. That
+  single-writer publication is staged, byte-verified, and atomically replaced;
+  a failed publication leaves the prior verified file intact.
+- Neither output is imported by detector, scoring, alert, or state-machine
+  modules. This completion does not implement Phase 2 and does not advance or
+  initialize the Phase 1 exit-gate count.
 
 #### Amended 2026-08-08 — evidence packaging, as built
 

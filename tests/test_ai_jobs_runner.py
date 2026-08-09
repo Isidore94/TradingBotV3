@@ -267,11 +267,11 @@ def test_force_overrides_the_window_and_the_completed_check(tmp_path):
     assert len(ran) == 2, "--force is the manual override for exactly this"
 
 
-def test_default_slate_is_the_phase_1_summary_only():
+def test_default_slate_registers_both_phase_1_jobs():
     from ai_jobs import runner
 
     slots = runner.default_slots()
-    assert [slot.name for slot in slots] == ["ai_summary"]
+    assert [slot.name for slot in slots] == ["ai_summary", "ticker_briefs"]
     assert all(slot.enabled for slot in slots)
 
 

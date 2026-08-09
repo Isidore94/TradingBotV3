@@ -22,6 +22,7 @@ Usage:
     python scripts/run_ai_jobs.py              # run every due slot, then exit
     python scripts/run_ai_jobs.py --status     # print state, run nothing
     python scripts/run_ai_jobs.py --slot ai_summary
+    python scripts/run_ai_jobs.py --slot ticker_briefs
     python scripts/run_ai_jobs.py --force      # ignore window + already-done
 """
 

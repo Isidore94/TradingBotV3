@@ -322,4 +322,10 @@ def default_slots() -> list[JobSlot]:
             reserve_minutes=20.0,
             description="Advisory evidence summary over the day's artifacts",
         ),
+        JobSlot(
+            name="ticker_briefs",
+            run=briefs.run_ticker_briefs,
+            reserve_minutes=120.0,
+            description="Medium-tier advisory briefs for Focus/watchlist tickers",
+        ),
     ]
