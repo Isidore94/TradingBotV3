@@ -8,8 +8,12 @@ the capture rail is always reachable:
 
 The Master AVWAP setups panel is **not** shown here by default. The trader's
 reason: AVWAP setups matter less early in the day, and the chart matters more.
-The "Setups" button slides a read-only summary in and out. That drawer reads
-the setup tracker file on open and nothing else - no service, no timer, no
+The "Setups" button slides a read-only summary in and out. The drawer reads
+the compact tracker SCORING SNAPSHOT (~11.5MB, refused past a ceiling), never
+the raw setup tracker - that file was measured at 762MB on the live desk and
+must never be read unbounded (ai_summary learned this the hard way). The read
+happens on a pool thread and lands by signal, so opening the drawer cannot
+stall the GUI; it runs on open and nothing else - no service, no timer, no
 second owner of anything - so showing or hiding it cannot change what the
 scanners find or what the alerting does.
 
@@ -27,9 +31,10 @@ an empty frame that looks broken. Everything else on this page is live.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
@@ -42,11 +47,104 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from project_paths import MASTER_AVWAP_SETUP_TRACKER_FILE
+from project_paths import MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
 from ui import theme
 from ui.services.symbol_lookup import RecentLookups, normalize_symbol
 from ui.widgets.capture_rail import CaptureRail
 from ui.widgets.flow_layout import FlowLayout
+
+#: The snapshot was measured at 11.5MB; this refuses one that has grown into
+#: the raw tracker's problem instead of parsing it anyway (same ceiling as
+#: ai_summary's tracker extract).
+MAX_SETUPS_SNAPSHOT_BYTES = 64 * 1024 * 1024
+#: Rows shown in the drawer, newest scan date first.
+SETUPS_DRAWER_ROWS = 40
+
+
+def read_setups_summary(
+    path: Path | str,
+    *,
+    max_bytes: int = MAX_SETUPS_SNAPSHOT_BYTES,
+    max_rows: int = SETUPS_DRAWER_ROWS,
+) -> str:
+    """The drawer's text, from the compact tracker scoring snapshot.
+
+    BLOCKING - worker threads (or tests) only. The snapshot's ``setups`` keys
+    are stable setup ids (``date:symbol:side:anchor:bucket``), not symbols;
+    each row carries its own ``symbol``/``setup_family``/``scan_date``, and
+    the drawer shows the newest rows rather than the alphabetically-first
+    ids. Never raises: the drawer must degrade to a message, not an error.
+    """
+    target = Path(path)
+    try:
+        size = target.stat().st_size
+    except OSError:
+        return "Setups snapshot not readable from here."
+    if size > max_bytes:
+        return (
+            f"Setups snapshot is {size:,} bytes - past the {max_bytes:,} byte "
+            "ceiling; refusing to parse it. The scan that writes it may be "
+            "misbehaving."
+        )
+    try:
+        with target.open("r", encoding="utf-8", errors="replace") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return "Setups snapshot not readable from here."
+    setups = payload.get("setups") if isinstance(payload, dict) else None
+    if not isinstance(setups, dict) or not setups:
+        return "No tracked setups."
+    updated = str(
+        payload.get("source_updated_at") or payload.get("generated_at") or "unknown"
+    )
+
+    def _row_line(setup_id: str, row: Any) -> tuple[str, str]:
+        """(sort_key, display_line); the setup id is only a fallback."""
+        if not isinstance(row, dict):
+            row = {}
+        parts = str(setup_id).split(":")
+        symbol = str(row.get("symbol") or (parts[1] if len(parts) >= 2 else setup_id))
+        family = str(row.get("setup_family") or row.get("tracker_setup_family") or "")
+        scan_date = str(row.get("scan_date") or (parts[0] if parts else ""))
+        return scan_date, f"{symbol}  {family}  {scan_date}".rstrip()
+
+    lines = sorted(
+        (_row_line(setup_id, row) for setup_id, row in setups.items()),
+        key=lambda pair: (pair[0], pair[1]),
+        reverse=True,
+    )
+    body = [f"as of {updated}", ""]
+    body.extend(line for _, line in lines[:max_rows])
+    if len(lines) > max_rows:
+        body.append(f"... and {len(lines) - max_rows} more")
+    return "\n".join(body)
+
+
+class _SetupsSummaryBridge(QObject):
+    """Carries a worker's summary back to the GUI thread by queued signal.
+
+    Deliberately unparented: a worker may emit after the panel is destroyed,
+    and emitting on a dead QObject is an access violation. The panel-side
+    connection is severed automatically when the panel goes away; the bridge
+    itself stays alive until the task releases it.
+    """
+
+    ready = Signal(int, str)
+
+
+class _SetupsSummaryTask(QRunnable):
+    def __init__(self, bridge: _SetupsSummaryBridge, request_id: int, path: Path) -> None:
+        super().__init__()
+        self._bridge = bridge
+        self._request_id = request_id
+        self._path = path
+
+    def run(self) -> None:  # noqa: D401 (Qt override)
+        text = read_setups_summary(self._path)
+        try:
+            self._bridge.ready.emit(self._request_id, text)
+        except RuntimeError:
+            pass
 
 
 class ChartReviewPanel(QFrame):
@@ -59,21 +157,23 @@ class ChartReviewPanel(QFrame):
     def __init__(
         self,
         *,
-        focus_service: Any = None,
         recent_lookups: RecentLookups | None = None,
         annotations_path: Any = None,
-        setup_tracker_path: Any = None,
+        setups_snapshot_path: Any = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("ChartReviewPanel")
         self._recents = recent_lookups if recent_lookups is not None else RecentLookups()
-        self._setup_tracker_path = setup_tracker_path or MASTER_AVWAP_SETUP_TRACKER_FILE
-        self._symbol = ""
-
-        self.capture_rail = CaptureRail(
-            focus_service=focus_service, annotations_path=annotations_path
+        self._setups_snapshot_path = Path(
+            setups_snapshot_path or MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
         )
+        self._symbol = ""
+        self._setups_request = 0
+        self._setups_bridge = _SetupsSummaryBridge()
+        self._setups_bridge.ready.connect(self._on_setups_summary)
+
+        self.capture_rail = CaptureRail(annotations_path=annotations_path)
         self._build()
         self._bind_shortcuts()
         self._render_recents()
@@ -255,7 +355,7 @@ class ChartReviewPanel(QFrame):
             self.setups_button.setChecked(visible)
             self.setups_button.blockSignals(False)
         if visible:
-            self.setups_body.setText(self._setups_summary())
+            self._refresh_setups_summary()
 
     def setups_visible(self) -> bool:
         # isHidden(), not isVisible(): a child of a window that has not been
@@ -263,27 +363,18 @@ class ChartReviewPanel(QFrame):
         # isVisible() would answer a question about the window, not the drawer.
         return not self.setups_drawer.isHidden()
 
-    def _setups_summary(self) -> str:
-        """A read of the tracker file, on open. No service, no timer."""
-        try:
-            payload = json.loads(
-                self._setup_tracker_path.read_text(encoding="utf-8")
-                if hasattr(self._setup_tracker_path, "read_text")
-                else open(self._setup_tracker_path, encoding="utf-8").read()
+    def _refresh_setups_summary(self) -> None:
+        """Queue the snapshot read on a pool thread. Never reads on the GUI
+        thread: the snapshot lives in the Drive-backed home folder, and a
+        cloud-synced read can stall for seconds."""
+        self._setups_request += 1
+        self.setups_body.setText("Reading setups snapshot...")
+        QThreadPool.globalInstance().start(
+            _SetupsSummaryTask(
+                self._setups_bridge, self._setups_request, self._setups_snapshot_path
             )
-        except (OSError, json.JSONDecodeError, TypeError):
-            return "Setup tracker not readable from here."
-        setups = payload.get("setups") if isinstance(payload, dict) else None
-        if not isinstance(setups, dict) or not setups:
-            return "No tracked setups."
-        updated = str(payload.get("updated_at") or "unknown")
-        lines = [f"as of {updated}", ""]
-        for symbol in sorted(setups)[:40]:
-            entry = setups.get(symbol)
-            family = ""
-            if isinstance(entry, dict):
-                family = str(entry.get("setup_family") or entry.get("family") or "")
-            lines.append(f"{symbol}  {family}".rstrip())
-        if len(setups) > 40:
-            lines.append(f"... and {len(setups) - 40} more")
-        return "\n".join(lines)
+        )
+
+    def _on_setups_summary(self, request_id: int, text: str) -> None:
+        if request_id == self._setups_request:
+            self.setups_body.setText(text)

@@ -2,16 +2,19 @@
 
 The invariant under test here is the mirror of plan.md sec 5's "user-entered
 watchlist names are never auto-removed": looking at a symbol must never *add*
-one either. A lookup that quietly wrote to longs.txt or the CandidateRegistry
-would put names into the scan universe that the trader never chose, so the
-tests below check it three ways - the module imports no writer, a full lookup
-cycle touches nothing but its own machine-local recents file, and the recents
-file is not in the shared home where the watchlists live.
+one either - and neither may CAPTURING a judgement about it. A lookup or a
+like that quietly wrote to longs.txt, the CandidateRegistry, or a Focus list
+would put names into the scan universe (and give them alert privileges) that
+the trader never explicitly granted, so the tests below check it several
+ways - the modules import no writer, a full lookup cycle touches nothing but
+its own machine-local recents file, a like writes exactly one annotation row
+and nothing else, and the recents file is not in the shared home where the
+watchlists live.
 
 The rest covers the rail's contract: each action writes exactly one annotation
-row, a like goes through the EXISTING focus machinery rather than a second
-likes store, and a capture that fails to reach disk says so instead of looking
-like it worked.
+row, and a capture that fails to reach disk says so instead of looking like it
+worked. The Setups drawer reads the compact scoring snapshot off the GUI
+thread, bounded by a byte ceiling - never the raw 762MB tracker.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -49,25 +53,33 @@ def _qapp():
     yield app
 
 
-class _SpyFocusService:
-    """Stands in for FocusService and records what the rail asked of it."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def add(self, symbol, side, category="m5", *, origin="", context="") -> bool:
-        self.calls.append((symbol, side, category, origin, context))
-        return True
-
-
-def _panel(tmp: Path, *, focus_service=None):
+def _panel(tmp: Path):
     from ui.panels.chart_review_panel import ChartReviewPanel
 
     return ChartReviewPanel(
-        focus_service=focus_service,
         recent_lookups=RecentLookups(tmp / "recents.json"),
         annotations_path=tmp / "trader_annotations.jsonl",
-        setup_tracker_path=tmp / "setup_tracker.json",
+        setups_snapshot_path=tmp / "setups_snapshot.json",
+    )
+
+
+def _pump_until(predicate, timeout=10.0):
+    """Drive the event loop until ``predicate`` holds (drawer reads are async)."""
+    app = _QT.QApplication.instance()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.005)
+    app.processEvents()
+    return bool(predicate())
+
+
+def _drawer_settled(panel) -> bool:
+    return bool(
+        panel.setups_body.text()
+        and "Reading setups snapshot" not in panel.setups_body.text()
     )
 
 
@@ -186,13 +198,32 @@ class LookupNeverWritesWatchlistsTests(unittest.TestCase):
             written = {path.name for path in tmp.iterdir()}
             self.assertEqual(written, {"recents.json"})
 
-    def test_a_lookup_does_not_touch_the_focus_service(self) -> None:
-        with TemporaryDirectory() as name:
-            spy = _SpyFocusService()
-            panel = _panel(Path(name), focus_service=spy)
-            panel.open_symbol("NVDA")
-            panel.open_symbol("AMD")
-            self.assertEqual(spy.calls, [])
+    def test_the_workspace_modules_import_no_focus_writer(self) -> None:
+        """The panel and the rail can not write a Focus list they never import.
+
+        An earlier draft handed the rail a FocusService and a like wrote a
+        swing watchlist entry with Focus alert privileges - a capture surface
+        crossing into live behavior. This pins the repair at the import level.
+        """
+        for relative in (
+            Path("ui") / "panels" / "chart_review_panel.py",
+            Path("ui") / "widgets" / "capture_rail.py",
+        ):
+            source = (SCRIPTS_DIR / relative).read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            imported: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    imported.add(node.module or "")
+                    imported.update(f"{node.module}.{alias.name}" for alias in node.names)
+                elif isinstance(node, ast.Import):
+                    imported.update(alias.name for alias in node.names)
+            for forbidden in ("focus_picks", "focus_service", "candidate_registry", "watchlist"):
+                self.assertFalse(
+                    any(forbidden in entry for entry in imported),
+                    f"{relative} must not import {forbidden}: {sorted(imported)}",
+                )
+            self.assertNotIn("focus_service", source, f"{relative} still names a focus service")
 
 
 class WorkspaceLayoutTests(unittest.TestCase):
@@ -214,22 +245,108 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertFalse(panel.toggle_setups())
         self.assertFalse(panel.setups_visible())
 
-    def test_drawer_survives_an_unreadable_tracker(self) -> None:
+    def test_drawer_survives_an_unreadable_snapshot(self) -> None:
         panel = _panel(self.tmp)
         panel.set_setups_visible(True)
+        self.assertTrue(_pump_until(lambda: _drawer_settled(panel)))
         self.assertIn("not readable", panel.setups_body.text().lower())
 
-    def test_drawer_renders_tracked_setups(self) -> None:
-        (self.tmp / "setup_tracker.json").write_text(
+    def test_drawer_renders_symbols_from_production_shaped_snapshot(self) -> None:
+        """The snapshot's ``setups`` keys are setup ids, NOT symbols.
+
+        Production ids look like ``date:symbol:side:anchor:bucket`` (built in
+        master_avwap_lib). A drawer that printed sorted keys would show ids in
+        historical order; it must show each row's symbol, newest scan first.
+        """
+        (self.tmp / "setups_snapshot.json").write_text(
             json.dumps(
-                {"updated_at": "2026-08-07T16:00:00", "setups": {"NVDA": {"setup_family": "avwape_to_1stdev"}}}
+                {
+                    "schema_version": 1,
+                    "generated_at": "2026-08-07T16:05:00",
+                    "source_updated_at": "2026-08-07T16:00:00",
+                    "setups": {
+                        "2026-03-02:AAA:LONG:2026-02-20:tracked": {
+                            "symbol": "AAA",
+                            "setup_family": "old_family",
+                            "scan_date": "2026-03-02",
+                        },
+                        "2026-08-07:NVDA:LONG:2026-07-30:favorite_setup": {
+                            "symbol": "NVDA",
+                            "setup_family": "avwape_to_1stdev",
+                            "scan_date": "2026-08-07",
+                        },
+                    },
+                }
             ),
             encoding="utf-8",
         )
         panel = _panel(self.tmp)
         panel.set_setups_visible(True)
-        self.assertIn("NVDA", panel.setups_body.text())
-        self.assertIn("avwape_to_1stdev", panel.setups_body.text())
+        self.assertTrue(_pump_until(lambda: _drawer_settled(panel)))
+        text = panel.setups_body.text()
+        self.assertIn("NVDA", text)
+        self.assertIn("avwape_to_1stdev", text)
+        self.assertIn("as of 2026-08-07T16:00:00", text)
+        self.assertNotIn("2026-08-07:NVDA", text, "the drawer must not print raw setup ids")
+        self.assertLess(text.index("NVDA"), text.index("AAA"), "newest scan date first")
+
+    def test_drawer_never_reads_the_raw_tracker_and_never_reads_on_the_gui_thread(self) -> None:
+        """Two pins in one: the panel's source names only the compact scoring
+        snapshot (the raw tracker was measured at 762MB), and the read runs
+        via the pool-thread task, not inline in set_setups_visible."""
+        source = (SCRIPTS_DIR / "ui" / "panels" / "chart_review_panel.py").read_text(encoding="utf-8")
+        self.assertNotIn("MASTER_AVWAP_SETUP_TRACKER_FILE", source)
+        self.assertIn("MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE", source)
+
+        from ui.panels import chart_review_panel as module
+
+        reads: list[str] = []
+        original = module.read_setups_summary
+
+        def _spy(path, **kwargs):
+            import threading
+
+            reads.append(threading.current_thread().name)
+            return original(path, **kwargs)
+
+        module.read_setups_summary = _spy
+        try:
+            panel = _panel(self.tmp)
+            panel.set_setups_visible(True)
+            self.assertTrue(_pump_until(lambda: _drawer_settled(panel)))
+        finally:
+            module.read_setups_summary = original
+        self.assertTrue(reads)
+        self.assertNotIn("MainThread", reads)
+
+    def test_snapshot_past_the_byte_ceiling_is_refused_not_parsed(self) -> None:
+        from ui.panels.chart_review_panel import read_setups_summary
+
+        big = self.tmp / "setups_snapshot.json"
+        big.write_text('{"setups": {"x": {}}}', encoding="utf-8")
+        text = read_setups_summary(big, max_bytes=4)
+        self.assertIn("refusing to parse", text)
+
+    def test_summary_row_cap_is_reported(self) -> None:
+        from ui.panels.chart_review_panel import read_setups_summary
+
+        path = self.tmp / "setups_snapshot.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "setups": {
+                        f"2026-08-0{1 + index % 7}:SYM{index}:LONG:a:tracked": {
+                            "symbol": f"SYM{index}",
+                            "scan_date": f"2026-08-0{1 + index % 7}",
+                        }
+                        for index in range(5)
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        text = read_setups_summary(path, max_rows=2)
+        self.assertIn("... and 3 more", text)
 
     def test_recent_chips_reopen_a_symbol(self) -> None:
         panel = _panel(self.tmp)
@@ -252,8 +369,7 @@ class CaptureRailTests(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self.log = self.tmp / "trader_annotations.jsonl"
         self.addCleanup(self._tmp.cleanup)
-        self.spy = _SpyFocusService()
-        self.panel = _panel(self.tmp, focus_service=self.spy)
+        self.panel = _panel(self.tmp)
         self.panel.open_symbol("NVDA")
         self.rail = self.panel.capture_rail
 
@@ -293,26 +409,25 @@ class CaptureRailTests(unittest.TestCase):
         self.rail.select_reason("too_extended_from_base")
         self.assertEqual(self._rows()[0]["side"], "SHORT")
 
-    def test_like_goes_through_the_existing_focus_machinery(self) -> None:
-        """Extend, do not build a parallel likes system."""
+    def test_like_records_the_claim_and_writes_nothing_else(self) -> None:
+        """A like is a recorded judgement - one annotation row, no side effects.
+
+        The earlier draft routed likes through FocusService.add, which put the
+        symbol into a swing watchlist and gave it Focus alert privileges - a
+        capture surface crossing the analysis-only boundary. This pins the
+        repair behaviorally: after a like, the working directory holds only
+        the annotation log and the lookup's own recents file.
+        """
         self.rail.setup_input.setCurrentIndex(0)
         claimed = self.rail.setup_input.currentData()
         self.rail.commit_like()
-        self.assertEqual(len(self.spy.calls), 1)
-        symbol, side, category, origin, context = self.spy.calls[0]
-        self.assertEqual(symbol, "NVDA")
-        self.assertEqual(side, "LONG")
-        self.assertEqual(category, "swing")
-        self.assertEqual(origin, "chart_review")
-        self.assertIn(claimed, context)
         rows = self._rows()
+        self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["event_type"], "like_claim")
         self.assertEqual(rows[0]["claimed_setup_id"], claimed)
-
-    def test_chart_review_is_a_documented_pick_origin(self) -> None:
-        from pick_feedback import PICK_ORIGINS
-
-        self.assertIn("chart_review", PICK_ORIGINS)
+        self.assertEqual(rows[0]["symbol"], "NVDA")
+        written = {path.name for path in self.tmp.iterdir()}
+        self.assertEqual(written, {"trader_annotations.jsonl", "recents.json"})
 
     def test_hypothetical_stop_records_a_price_and_no_order(self) -> None:
         self.rail.stop_input.setValue(101.25)

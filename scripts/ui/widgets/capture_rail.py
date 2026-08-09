@@ -11,16 +11,20 @@ What it writes:
 
 * VETO      -> ui.annotations.store, plus a veto cohort row so forward returns
                accrue against the reason (ui.annotations.veto_cohort).
-* LIKE      -> the EXISTING focus machinery (FocusService.add, which records
-               pick_feedback with origin "chart_review"), plus one annotation
-               carrying the claimed setup, which pick_feedback has no field
-               for. There is deliberately no second likes store.
+* LIKE      -> ui.annotations.store, one row carrying the claimed setup id.
 * HYPO STOP -> ui.annotations.store. A price the trader would have used. No
                order is placed, ever; nothing downstream reads it.
 * NOTE      -> ui.annotations.store.
 
 What it never does: mute, suppress, score, gate, rank, or alert (plan.md
-sec 5). The rail is a recorder.
+sec 5) - and it never writes a Focus list or watchlist either. An earlier
+draft routed likes through FocusService.add, which put the symbol into a
+swing watchlist and gave it Focus alert privileges; that crossed the
+workspace plan's own boundary (a capture surface must stay analysis-only,
+and adding a name to a list stays an explicit action on the surfaces that
+own those lists), so it was removed. If likes ever need forward-return
+grading, they get it the way vetoes do: a capture-side cohort file, not a
+live list. The rail is a recorder.
 
 Failures are shown, not swallowed. A capture that did not reach disk turns the
 status line red and says so - the alternative is a trader who believes the
@@ -71,14 +75,12 @@ class CaptureRail(QFrame):
     def __init__(
         self,
         *,
-        focus_service: Any = None,
         annotations_path: Any = None,
         veto_cohort_merge: Callable[..., dict] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("CaptureRail")
-        self._focus_service = focus_service
         self._annotations_path = annotations_path
         self._symbol = ""
         self._side = "LONG"
@@ -430,23 +432,12 @@ class CaptureRail(QFrame):
         )
         if row is None:
             return None
-        # The like itself goes through the EXISTING focus machinery, which is
-        # what writes pick_feedback and what the human-focus snapshot reads.
-        # This widget deliberately owns no second likes store.
-        focus_note = ""
-        if self._focus_service is not None:
-            try:
-                self._focus_service.add(
-                    self._symbol,
-                    self._side,
-                    "swing",
-                    origin="chart_review",
-                    context=f"claimed_setup={setup_id}",
-                )
-            except Exception:
-                focus_note = "  (focus list unchanged)"
+        # The like is a recorded judgement, nothing more. It must not add the
+        # symbol to Focus or any watchlist: Focus membership changes live
+        # alerting, and this rail is analysis-only. Adding a name to a list
+        # stays an explicit action on the Focus surfaces that own those files.
         self.like_note_input.clear()
-        self._set_status(f"LIKE {row['symbol']} - {setup_id}{focus_note}")
+        self._set_status(f"LIKE {row['symbol']} - {setup_id}")
         return row
 
     def commit_hypo_stop(self) -> dict | None:

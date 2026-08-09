@@ -155,9 +155,9 @@ class MainWindow(QMainWindow):
         # instead of a parallel likes store.
         from ui.panels.chart_review_panel import ChartReviewPanel
 
-        self.chart_review_panel = ChartReviewPanel(
-            focus_service=self.trading_panel.focus_picks_panel.service
-        )
+        # No focus_service here, deliberately: Chart Review is analysis-only.
+        # Its captures must never add a symbol to Focus or any watchlist.
+        self.chart_review_panel = ChartReviewPanel()
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self.trading_panel)
