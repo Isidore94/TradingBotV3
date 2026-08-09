@@ -20,6 +20,16 @@ from pathlib import Path
 RESEARCH_DIR_ENV = "TRADINGBOTV3_RESEARCH_DIR"
 RESEARCH_DIR_SETTING = "research_store_dir"
 
+# Backup targets (sec 8.5 / LD-11). Class A is the irreplaceable-small set,
+# mirrored to the Drive home folder AND a backup disk; Class B is the
+# append-only lake copy on a SECOND PHYSICAL DISK - never in Drive. Both are
+# unset by default and the build job simply says so rather than guessing a
+# destination: a backup written somewhere nobody chose is not a backup.
+BACKUP_CLASS_A_ENV = "TRADINGBOTV3_RESEARCH_BACKUP_A"
+BACKUP_CLASS_A_SETTING = "research_backup_class_a_dirs"
+BACKUP_CLASS_B_ENV = "TRADINGBOTV3_RESEARCH_BACKUP_B"
+BACKUP_CLASS_B_SETTING = "research_backup_class_b_dir"
+
 # Directory contract from the plan (sec 8.2). ``manifest_log.jsonl`` is the
 # append-only read authority; Phase 1 owns its semantics - here it is only
 # created empty so a freshly pointed lake is recognizably a lake.
@@ -87,6 +97,35 @@ def warehouse_enabled() -> bool:
 def research_spool_dir() -> Path:
     """Machine-local write spool (plan sec 8.4); never on the DAS or Drive."""
     return Path(_paths().LOCAL_SETTINGS_DIR) / SPOOL_DIR_NAME
+
+
+def backup_class_a_dirs() -> list[Path]:
+    """Class-A backup destinations; empty means the build job skips the step.
+
+    Accepts a list in ``local_settings.json`` or an ``os.pathsep``-separated
+    string in the environment override.
+    """
+    raw = str(os.environ.get(BACKUP_CLASS_A_ENV) or "").strip()
+    if raw:
+        values = [part for part in raw.split(os.pathsep) if part.strip()]
+    else:
+        setting = _paths().get_local_setting(BACKUP_CLASS_A_SETTING)
+        if isinstance(setting, str):
+            values = [setting] if setting.strip() else []
+        elif isinstance(setting, (list, tuple)):
+            values = [str(item) for item in setting if str(item).strip()]
+        else:
+            values = []
+    return [Path(value).expanduser() for value in values]
+
+
+def backup_class_b_dir() -> Path | None:
+    """Class-B lake copy destination, or None when unset."""
+    raw = str(os.environ.get(BACKUP_CLASS_B_ENV) or "").strip()
+    if not raw:
+        value = _paths().get_local_setting(BACKUP_CLASS_B_SETTING)
+        raw = value.strip() if isinstance(value, str) else ""
+    return Path(raw).expanduser() if raw else None
 
 
 def save_research_store_dir(path: str) -> Path:

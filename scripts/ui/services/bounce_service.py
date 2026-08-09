@@ -243,6 +243,19 @@ class BounceService(QObject):
         self._board_timer.timeout.connect(self.refresh_entry_board)
         self.started.connect(self._start_board_timer)
 
+        # Research-warehouse M5 tee (BD-20). Shadow-only and strictly additive:
+        # it reads the bar cache the champion already populated, issues no
+        # provider request, and writes only to the GUI-owned spool. It exists
+        # only where a bot does - the main desk - and only when the trader has
+        # configured a research store; otherwise it is never constructed.
+        # 60s rather than the 3s health cadence: M5 bars complete every five
+        # minutes, so anything faster is pure re-scanning of the same dict.
+        self._warehouse_capture = None
+        self._warehouse_timer = QTimer(self)
+        self._warehouse_timer.setInterval(60_000)
+        self._warehouse_timer.timeout.connect(self.capture_warehouse_tee)
+        self.started.connect(self._start_warehouse_timer)
+
     # ------------------------------------------------------------------
     # Emission guards
     # ------------------------------------------------------------------
@@ -511,7 +524,16 @@ class BounceService(QObject):
         """
 
         error: RuntimeError | None = None
-        for timer in (self._health_timer, self._regime_timer, self._integrity_timer, self._board_timer):
+        # The tee's worker is this service's to retire, like every other thread
+        # it owns; it holds no Qt object, so it is stopped before the timers.
+        self._close_warehouse_capture()
+        for timer in (
+            self._health_timer,
+            self._regime_timer,
+            self._integrity_timer,
+            self._board_timer,
+            self._warehouse_timer,
+        ):
             try:
                 timer.stop()
             except RuntimeError as exc:
@@ -697,6 +719,58 @@ class BounceService(QObject):
             return
         self._board_timer.start()
         self.refresh_entry_board()
+
+    @Slot()
+    def _start_warehouse_timer(self) -> None:
+        if not self._may_arm_timers():
+            return
+        self._warehouse_timer.start()
+        self.capture_warehouse_tee()
+
+    @Slot()
+    def capture_warehouse_tee(self) -> None:
+        """Hand the champion's completed M5 bars to the research tee.
+
+        Everything this slot does is memory: constructing the capture object
+        (which touches no disk) and copying ``bot.latest_bars``. The copy must
+        happen on this thread - it owns that dict, and iterating one the
+        champion is resizing would raise - but the spool writer's construction,
+        its stale-segment adoption, its cap enforcement and its fsync all run on
+        the capture object's own worker thread (review defect D21). No provider
+        request, no lake I/O, on any thread.
+        """
+        if not self._is_live():
+            return
+        bot = self._current_bot()
+        if bot is None:
+            return
+        capture = self._warehouse_capture
+        if capture is None:
+            try:
+                from ui.services.warehouse_service import WarehouseTeeCapture
+
+                capture = WarehouseTeeCapture()
+            except Exception:
+                # The package is unavailable: the desk simply has no warehouse.
+                # Never retried noisily, never fatal.
+                logging.debug("Research warehouse tee unavailable; capture stays off.", exc_info=True)
+                self._warehouse_timer.stop()
+                return
+            self._warehouse_capture = capture
+        capture.submit(bot)
+        if capture.disabled:
+            # The worker looked and found no research store configured. Stop
+            # waking a thread that will never have anything to do.
+            self._warehouse_timer.stop()
+
+    def _close_warehouse_capture(self) -> None:
+        capture = self._warehouse_capture
+        if capture is None:
+            return
+        try:
+            capture.close()
+        except Exception:
+            logging.debug("Research warehouse tee failed to close cleanly.", exc_info=True)
 
     @Slot()
     def refresh_entry_board(self) -> None:

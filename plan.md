@@ -1689,7 +1689,77 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    ladder. Phase 0 landed 2026-08-03: decision record 0014 (DAS lake storage
    class), `scripts/research_warehouse/config.py` (`research_store_dir` +
    `TRADINGBOTV3_RESEARCH_DIR`, Drive-path refusal, lake layout bootstrap),
-   `tests/test_warehouse_config.py`.
+   `tests/test_warehouse_config.py`. Phase 1 landed 2026-08-04 (store core):
+   `store.py` (4-step seal, per-symbol/per-partition quarantine with
+   clean-remainder publish, compaction behind one atomic manifest line,
+   `_retired/` GC that skips files in use, startup reconciliation),
+   `manifest.py` (`manifest_log.jsonl` read authority), `schemas.py` (the
+   frozen 13-table pyarrow definitions + deterministic occurrence/anchor
+   keys), `docs/RESEARCH_WAREHOUSE_ERD.md`, and the crash-matrix tests
+   (`test_warehouse_seal/manifest/quarantine/retire.py`). Phase 2 landed
+   2026-08-04 (bronze wraps + daily snapshots): `ingest_existing.py` wraps the
+   sec 19.0 inventory into `bronze_*` datasets with source hashes and offset
+   watermarks (re-run is a no-op), snapshots `universe_membership_daily` and
+   `level_state_daily` daily, and projects the durable per-symbol D1 store into
+   `bar_d1` as a wrapped read (completed sessions only); legacy writers are
+   untouched and `exploration_cohort.txt` stays empty pending trader
+   confirmation. Tests: `test_warehouse_import.py`. Phase 3 landed
+   2026-08-04 (M5 tee + coverage/gaps + spool): `bar_archive.py` archives
+   BounceBot's already-fetched in-memory M5 cache into `bar_m5` with zero
+   added provider requests (no provider client in the module), plus
+   `scan_coverage` keyed by the run manifest's `run_id` and `collection_gap`
+   rows that keep policy absence distinct from missing data; `spool.py`
+   implements the sec 8.4 GUI-writer/CLI-sealer split with the 5 GB/7-day cap
+   and fixed shedding order. Tests: `test_warehouse_tee.py`,
+   `test_warehouse_spool.py`. Still unwired: the GUI service that feeds the
+   tee each cycle (`docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` BD-20).
+   Phase 3b landed 2026-08-04 (pacer + backfill + seed): `pacer.py` meters
+   capture only — champions are counted, never delayed or queued — yields on
+   IB 162/366, asserts the client-ID allocation (1003 retired, 1010/1011), and
+   keeps capture errors away from `_IBKR_HISTORICAL_FAILURE_COUNT`;
+   `backfill.py` adds the ETH-inclusive nightly M5 job, weekly universe sweep,
+   and trickled 60-day yfinance seed, all resumable across the TWS restart;
+   `ib_capture.py` is the only socket module and its live path is still
+   unverified (BD-25). Tests: `test_warehouse_pacer.py`,
+   `test_warehouse_backfill.py`. Phase 4 landed 2026-08-04 (sessions +
+   aggregation): `exchange_calendar.py` adds a versioned XNYS rules calendar
+   (holidays, observance, 13:00 ET early closes, DST by zone) checked against
+   the published 2025-2027 calendars, and `aggregate.py` publishes
+   `trading_session` plus derived M15/M30/H1 from canonical M5 and W1 from
+   canonical D1 under explicit aggregation contracts, with stub durations,
+   PARTIAL counts, and derived-vs-native H1 boundary parity. Tests:
+   `test_warehouse_aggregate.py`. Phase 5 landed 2026-08-04 (tier-1 feature
+   snapshots): `features.py` publishes `feature_snapshot_daily`,
+   `feature_snapshot_intraday`, and `anchor_instance` with exactly the frozen
+   sec 7.1 columns, calling `calc_anchored_vwap_bands`,
+   `compute_indicator_frame`, and the champion intraday VWAP band math rather
+   than re-deriving any of them; parity is pinned to 1e-9 by a
+   contract-bearing golden fixture and snapshots are point-in-time and
+   deterministic. Tests: `test_warehouse_avwap_parity.py`,
+   `test_warehouse_features.py`. Phase 6 landed 2026-08-04 (occurrences +
+   outcomes): `occurrences.py` records detector output under the deterministic
+   occurrence key with revision-based rescan updates (100 rescans = 1 episode)
+   and `dependency_cluster_id` as the episode unit; `outcomes.py` implements
+   `house_default_v1` (net_r cost formula, STOP_FIRST primary with the
+   TARGET_FIRST bound retained, 18-session time stop, checkpoint grids,
+   MATURED derived) across the five declared recipes, with
+   `intraday_bounce_v1` gated on a linked bounce event. The tracker→detection
+   adapter is still open (BD-44). Tests: `test_warehouse_occurrence.py`,
+   `test_warehouse_outcomes.py`. Phase 7 landed 2026-08-04 (read path):
+   `queries.py` resolves every read from `manifest_log.jsonl` at query start
+   (concurrent-compaction consistency tested) and renders the raw slice
+   readout with episodes reported apart from rows; DuckDB is pinned but
+   optional and read-only; the Research tab gains a read-only warehouse panel
+   that reads only on Refresh. Tests: `test_warehouse_queries.py`,
+   `test_qt_warehouse_readout.py`. Phase 8 code landed 2026-08-04:
+   `backup.py` (3-class backup, append-only Class B, scripted restore check
+   that re-verifies manifest hashes and runs a canned query against a restored
+   copy), `cli.py` (`build`/`status`/`restore-check` with single-flight lock
+   and job-ledger registration), and `scripts/ui/services/warehouse_service.py`
+   (the six sec-18 Health tiles). Tests: `test_warehouse_restore.py`. STILL
+   OPEN: nothing calls the tee during a live session and the Health page does
+   not yet render the tiles (BD-20), so the 20-session pilot has not started
+   (BD-52).
 
 13b. **Local AI & automation program** (trader-directed insertion, 2026-08-08;
    numbered 13b so the existing 14-18 references stay stable):

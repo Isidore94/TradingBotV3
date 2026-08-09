@@ -9,6 +9,7 @@ from ui.panels.price_alerts_panel import PriceAlertsPanel
 from ui.panels.setup_docs_panel import SetupDocsPanel
 from ui.panels.setup_tracker_panel import SetupTrackerPanel
 from ui.panels.ticker_lookup_panel import TickerLookupPanel
+from ui.panels.warehouse_readout_panel import WarehouseReadoutPanel
 from ui.services.price_alert_service import PriceAlertService
 from ui.widgets.section_header import SectionHeader
 
@@ -30,6 +31,7 @@ class ResearchPanel(QFrame):
         self.move_forensics_panel = MoveForensicsPanel()
         self.daytrade_tracker_panel = DaytradeTrackerPanel()
         self.ticker_lookup_panel = TickerLookupPanel()
+        self.warehouse_readout_panel = WarehouseReadoutPanel()
         self.price_alerts_panel = PriceAlertsPanel(
             price_alert_service,
             read_only=price_alert_read_only,
@@ -41,6 +43,7 @@ class ResearchPanel(QFrame):
         tabs.addTab(self.daytrade_tracker_panel, "Day Trade Tracker")
         tabs.addTab(self.ticker_lookup_panel, "Ticker Lookup")
         tabs.addTab(self.price_alerts_panel, "Price Alerts")
+        tabs.addTab(self.warehouse_readout_panel, "Research Warehouse")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)

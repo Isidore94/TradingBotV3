@@ -95,6 +95,11 @@ class ScanService(QObject):
         self._active_worker_pid: int | None = None
         self._active_job_started = False
         self._last_rejection_reason = ""
+        # The research warehouse's post-scan build (plan sec 8.4, LD-01: one
+        # post-scan/EOD CLI build job, no daemon). Owned here because this is
+        # where a scan finishes; it runs on its own thread and can never affect
+        # the scan that triggered it.
+        self._warehouse_thread: threading.Thread | None = None
         try:
             from job_ledger import get_default_ledger
 
@@ -284,6 +289,8 @@ class ScanService(QObject):
         if thread is not None and thread.isRunning():
             thread.quit()
             thread.wait(3000)
+        # A build mid-seal must finish its manifest line rather than be cut off.
+        self.wait_for_warehouse_build(timeout=5.0)
         summary = terminate_owned_scan_processes()
         if summary["finished"] or summary["terminated"]:
             import logging
@@ -301,6 +308,57 @@ class ScanService(QObject):
         payload.setdefault("run_id", self._active_run_id)
         payload.setdefault("worker_pid", self._active_worker_pid)
         self.finished.emit(payload, rows, stamp)
+        self.start_warehouse_build(str(payload.get("run_id") or ""))
+
+    def start_warehouse_build(self, run_id: str = "") -> bool:
+        """Seal the spool and run the EOD build after a scan. Shadow-only.
+
+        This is the "post-scan" half of LD-01's *post-scan/EOD CLI build job*:
+        the same `run_build` the CLI exposes, invoked in-process on its own
+        thread rather than by a daemon. Without it the GUI tee spools M5 bars
+        every minute and nothing ever seals them - and because M5 segments are
+        PROTECTED and never shed (LD-12/BD-18), the backlog would simply grow
+        until Health went red.
+
+        Never blocks, never raises, and never touches the scan: one build at a
+        time (a second is skipped, and `run_build`'s own single-flight lock
+        refuses a concurrent one from any other process anyway).
+        """
+        thread = self._warehouse_thread
+        if thread is not None and thread.is_alive():
+            return False  # the next scan picks up whatever this one misses
+        self._warehouse_thread = threading.Thread(
+            target=self._run_warehouse_build,
+            args=(str(run_id or ""),),
+            name="qt-warehouse-build",
+            daemon=True,
+        )
+        self._warehouse_thread.start()
+        return True
+
+    def _run_warehouse_build(self, run_id: str) -> None:
+        import logging
+
+        try:
+            if str(SCRIPTS_DIR) not in sys.path:
+                sys.path.insert(0, str(SCRIPTS_DIR))
+            from research_warehouse import config as warehouse_config
+            from research_warehouse.cli import run_build
+
+            if not warehouse_config.warehouse_enabled():
+                return  # no research store: the warehouse is a total no-op
+            report = run_build(run_id=run_id)
+            if report.status not in {"OK", "DISABLED"}:
+                logging.info("Research warehouse build %s: %s", report.status, report.message)
+        except Exception:
+            # Research evidence must never be able to break a scan.
+            logging.exception("Research warehouse post-scan build failed; the scan is unaffected.")
+
+    def wait_for_warehouse_build(self, timeout: float = 30.0) -> None:
+        """Test/shutdown helper: join the in-flight build thread, if any."""
+        thread = self._warehouse_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
 
     @Slot(str)
     def _handle_failed(self, message: str) -> None:

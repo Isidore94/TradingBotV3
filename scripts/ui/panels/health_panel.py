@@ -26,6 +26,75 @@ from ui import theme
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
 
+#: Warehouse tile status -> this page's four-status vocabulary. OFF is UNKNOWN,
+#: not green: "no research store configured" is an unmeasured dimension, and
+#: this page's whole discipline is that absent evidence never reads as healthy.
+_WAREHOUSE_TONES = {"OK": "healthy", "WARN": "degraded", "RED": "unhealthy", "OFF": "unknown"}
+
+
+def warehouse_checks(now=None) -> list[dict[str, Any]]:
+    """The six warehouse tiles as Health check rows (plan sec 18, BD-20).
+
+    Computed on the audit worker thread, never on the GUI thread: the tiles
+    stat the DAS and read the gap ledger, and this page's own history is that
+    synchronous evidence work here stutters the desk.
+    """
+    try:
+        from ui.services.warehouse_service import warehouse_health_tiles
+
+        tiles = warehouse_health_tiles(now=now)
+    except Exception as exc:
+        return [
+            {
+                "id": "warehouse_error",
+                "label": "Research warehouse",
+                "status": "unknown",
+                "summary": f"tiles unavailable: {exc}",
+                "updated_at": "",
+                "source": "ui/services/warehouse_service.py",
+                "details": {},
+            }
+        ]
+    return [  # noqa: RET504 - the comprehension is the return value
+        {
+            "id": f"warehouse_{tile.key}",
+            "label": f"Warehouse: {tile.label}",
+            "status": _WAREHOUSE_TONES.get(str(tile.status).upper(), "unknown"),
+            "summary": f"{tile.value} - {tile.detail}" if tile.detail else str(tile.value),
+            "updated_at": "",
+            "source": "ui/services/warehouse_service.py",
+            "details": dict(tile.metrics or {}),
+        }
+        for tile in tiles
+    ]
+
+
+def _with_warehouse_checks(payload: dict[str, Any]) -> dict[str, Any]:
+    """Append the warehouse rows and keep the summary counters consistent."""
+    if not isinstance(payload, dict):
+        return payload
+    rows = warehouse_checks()
+    if not rows:
+        return payload
+    merged = dict(payload)
+    checks = [item for item in merged.get("checks", []) if isinstance(item, dict)]
+    merged["checks"] = checks + rows
+    summary = dict(merged.get("summary") or {})
+    for row in rows:
+        key = str(row.get("status") or _UNKNOWN)
+        summary[key] = int(summary.get(key, 0) or 0) + 1
+    summary["total"] = int(summary.get("total", 0) or 0) + len(rows)
+    merged["summary"] = summary
+    # A red warehouse tile must be able to move the page's overall verdict; a
+    # green one must never improve it.
+    statuses = {str(row.get("status")) for row in rows}
+    current = str(merged.get("status") or _UNKNOWN).lower()
+    if "unhealthy" in statuses:
+        merged["status"] = "unhealthy"
+    elif "degraded" in statuses and current == "healthy":
+        merged["status"] = "degraded"
+    return merged
+
 
 # UNKNOWN is its own tone on purpose: "we never measured this" must not look
 # like "we measured this and it is bad" (plan.md sec 6.3 - the page must show
@@ -198,6 +267,7 @@ class HealthPanel(QFrame):
     def _build_audit_payload(self) -> None:
         try:
             payload = build_operations_audit()
+            payload = _with_warehouse_checks(payload)
         except Exception as exc:
             payload = {
                 "status": "unhealthy",
