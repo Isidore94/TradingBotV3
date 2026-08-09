@@ -406,6 +406,49 @@ def test_compact_candidates_csv_noops_below_threshold(tmp_path):
     assert result["compacted"] is False
 
 
+def test_compact_candidates_csv_locked_staging_file_does_not_mask_real_error(tmp_path, monkeypatch):
+    """A staging file the OS refuses to unlink must not replace the real error.
+
+    Cloud-sync clients hold staged files open on Windows, so the cleanup unlink
+    raised PermissionError and buried whatever actually went wrong -- while still
+    leaking the staging file. That is how ~2.3GB of
+    intraday_bounce_candidates<token>.csv piled up in the runtime dir.
+    """
+    import os as _os
+
+    import pytest
+
+    path = tmp_path / "candidates.csv"
+    path.write_text("event_id,event_type,trade_date\nx,confirmed,2026-01-01\n", encoding="utf-8")
+
+    real_unlink = _os.unlink
+
+    # Scoped to this test's own staging files so patching os.* cannot disturb
+    # anything else running during the test.
+    def _boom(source, target):
+        raise RuntimeError("the real failure")
+
+    def _locked(name):
+        if Path(name).parent == tmp_path:
+            raise PermissionError(32, "in use by another process")
+        return real_unlink(name)
+
+    monkeypatch.setattr(_os, "replace", _boom)
+    monkeypatch.setattr(_os, "unlink", _locked)
+
+    with pytest.raises(RuntimeError, match="the real failure"):
+        learning.compact_bounce_candidates_csv(path, min_bytes_to_bother=1)
+
+    monkeypatch.undo()
+
+    # The orphan is deliberately left behind: reclaiming it is the startup
+    # sweep's job (project_paths.sweep_stale_atomic_write_temps). This function's
+    # obligation is only to surface the original error rather than the unlink's.
+    staged = [p.name for p in tmp_path.iterdir() if p.name != "candidates.csv"]
+    assert len(staged) == 1, f"expected exactly one leaked staging file, got {staged}"
+    assert staged[0].startswith("candidates") and staged[0].endswith(".csv")
+
+
 def test_priority_watchlist_emphasis_cycle_logic():
     from types import SimpleNamespace
 

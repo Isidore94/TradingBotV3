@@ -4,11 +4,13 @@ import contextlib
 import filecmp
 import logging.handlers
 import os
+import re
 import shutil
 import json
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -741,6 +743,81 @@ def _consolidate_legacy_logs() -> None:
     _consolidate_log_variants(APP_LOG_FILE, APP_LOG_FILE.name, LOG_DIR, keep_backups=APP_LOG_BACKUP_COUNT)
 
 
+# --- orphaned atomic-write staging files ----------------------------------
+# Every atomic writer here stages through tempfile in the target's own
+# directory and unlinks the staging file in a ``finally``. That cleanup cannot
+# run when the process is killed mid-write, and it used to fail outright on
+# Windows when a cloud-sync client held the staging file open (WinError 32) —
+# which is how ~2.3GB of ``intraday_bounce_candidates<8>.csv`` accumulated in
+# the runtime dir alongside 19MB of ``.earnings_calendar_history.json.<8>.tmp``.
+# The writers now swallow that unlink failure instead of masking the real
+# error, and this sweep reclaims whatever still leaks, so the growth is
+# self-healing regardless of cause.
+
+# tempfile's random component: exactly 8 chars from ascii_letters + digits + "_".
+_TEMP_TOKEN = "[A-Za-z0-9_]{8}"
+# Shape produced by prefix=f".{target.name}.", suffix=".tmp".
+_DOTTED_TEMP_RE = re.compile(rf"^\..+\.{_TEMP_TOKEN}\.tmp$")
+# A staging file younger than this may belong to a write that is still running,
+# so it is never touched. Compaction of a 300MB CSV takes seconds.
+STALE_TEMP_MIN_AGE_SECONDS = 6 * 3600
+
+
+def sweep_stale_atomic_write_temps(
+    directories: Iterable[Path] = (),
+    *,
+    staged_for: Iterable[Path] = (),
+    min_age_seconds: float = STALE_TEMP_MIN_AGE_SECONDS,
+    now: float | None = None,
+) -> list[Path]:
+    """Delete orphaned atomic-write staging files; return what was removed.
+
+    ``directories`` are scanned (non-recursively) for the dotted
+    ``.<name>.<token>.tmp`` shape. ``staged_for`` names canonical targets whose
+    writers stage as ``<stem><token><suffix>`` in the same directory — that
+    shape is matched only against the stem/suffix actually given, so a real
+    file can never match: the token is mandatory, and ``foo.csv`` is not
+    ``foo<8 chars>.csv``.
+
+    Never raises: housekeeping must not break startup.
+    """
+    cutoff = (time.time() if now is None else now) - max(0.0, float(min_age_seconds))
+    removed: list[Path] = []
+
+    targeted: dict[Path, list[re.Pattern[str]]] = {}
+    for directory in directories:
+        targeted.setdefault(Path(directory), []).append(_DOTTED_TEMP_RE)
+    for target in staged_for:
+        target = Path(target)
+        pattern = re.compile(rf"^{re.escape(target.stem)}{_TEMP_TOKEN}{re.escape(target.suffix)}$")
+        targeted.setdefault(target.parent, []).append(pattern)
+
+    for directory, patterns in targeted.items():
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not any(pattern.match(entry.name) for pattern in patterns):
+                continue
+            try:
+                if not entry.is_file() or entry.stat().st_mtime > cutoff:
+                    continue
+                entry.unlink()
+            except OSError:
+                # Still locked, or already gone. Next startup tries again.
+                continue
+            removed.append(entry)
+
+    if removed:
+        logging.info(
+            "Removed %d orphaned atomic-write staging file(s): %s",
+            len(removed),
+            ", ".join(sorted(path.name for path in removed)[:5]),
+        )
+    return removed
+
+
 def migrate_legacy_layout() -> None:
     _ensure_directories()
 
@@ -897,6 +974,17 @@ def migrate_legacy_layout() -> None:
     for legacy_path, new_path in legacy_moves:
         _migrate_legacy_file(legacy_path, new_path)
     _consolidate_legacy_logs()
+    try:
+        sweep_stale_atomic_write_temps(
+            # SHARED_HOME_DIR carries the watchlist writers' staging files;
+            # DATA_DIR the earnings history's; RUNTIME_DATA_DIR the big
+            # candidate-CSV compaction's. All three are shallow directories —
+            # the bar stores underneath DATA_DIR are never descended into.
+            directories=(SHARED_HOME_DIR, DATA_DIR, RUNTIME_DATA_DIR),
+            staged_for=(INTRADAY_BOUNCE_CANDIDATES_FILE,),
+        )
+    except Exception:  # housekeeping must never break startup
+        logging.debug("Stale atomic-write temp sweep failed.", exc_info=True)
 
 
 migrate_legacy_layout()

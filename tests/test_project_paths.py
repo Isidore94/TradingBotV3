@@ -1,6 +1,8 @@
 import json
 import importlib.util
+import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -184,3 +186,94 @@ def test_wait_for_shared_drive_fails_clearly_when_drive_missing(monkeypatch, tmp
     assert "not mounted" in message
     assert "Google Drive" in message
     assert "local fallback is refused" in message
+
+
+# --- orphaned atomic-write staging files ----------------------------------
+# Regression cover for the ~2.3GB of `intraday_bounce_candidates<8>.csv` and
+# 19MB of `.earnings_calendar_history.json.<8>.tmp` that accumulated when the
+# writers' cleanup unlink failed against a cloud-sync lock.
+
+
+def _aged(path: Path, *, seconds_old: float) -> Path:
+    """Backdate a file's mtime so the sweep considers it stale."""
+    stamp = time.time() - seconds_old
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_sweep_removes_stale_staging_files_but_spares_real_ones(monkeypatch, tmp_path):
+    module = _load_project_paths(monkeypatch, tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    canonical = runtime / "intraday_bounce_candidates.csv"
+
+    old = 24 * 3600
+    for name in (
+        "intraday_bounce_candidates2s7hbyub.csv",
+        ".earnings_calendar_history.json.toj_fmkw.tmp",
+    ):
+        path = runtime / name
+        path.write_text("x", encoding="utf-8")
+        _aged(path, seconds_old=old)
+
+    # Must all survive: the canonical target, a sibling with a different stem,
+    # a token of the wrong length, and a staging file young enough to belong to
+    # a write that is still running.
+    survivors = [
+        canonical,
+        runtime / "intraday_bounce_outcomes.csv",
+        runtime / "intraday_bounce_candidatesTOOLONG12.csv",
+    ]
+    for path in survivors:
+        path.write_text("keep", encoding="utf-8")
+        _aged(path, seconds_old=old)
+    fresh = runtime / "intraday_bounce_candidatesab12cd34.csv"
+    fresh.write_text("in flight", encoding="utf-8")
+    survivors.append(fresh)
+
+    removed = module.sweep_stale_atomic_write_temps(
+        directories=(runtime,), staged_for=(canonical,)
+    )
+
+    assert sorted(path.name for path in removed) == [
+        ".earnings_calendar_history.json.toj_fmkw.tmp",
+        "intraday_bounce_candidates2s7hbyub.csv",
+    ]
+    for path in survivors:
+        assert path.exists(), f"sweep deleted {path.name}, which it must never touch"
+
+
+def test_sweep_does_not_recurse_into_bar_stores(monkeypatch, tmp_path):
+    """The bar directories hold thousands of parquet files; scanning them on
+    every startup would be pure cost, and nothing stages temps there."""
+    module = _load_project_paths(monkeypatch, tmp_path)
+    data = tmp_path / "data"
+    nested = data / "daily_bars"
+    nested.mkdir(parents=True)
+    buried = nested / ".something.json.abcd1234.tmp"
+    buried.write_text("x", encoding="utf-8")
+    _aged(buried, seconds_old=24 * 3600)
+
+    assert module.sweep_stale_atomic_write_temps(directories=(data,)) == []
+    assert buried.exists()
+
+
+def test_sweep_survives_missing_dirs_and_locked_files(monkeypatch, tmp_path):
+    module = _load_project_paths(monkeypatch, tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    locked = runtime / ".locked.json.abcd1234.tmp"
+    locked.write_text("x", encoding="utf-8")
+    _aged(locked, seconds_old=24 * 3600)
+
+    def _refuse(self):
+        raise PermissionError(32, "in use by another process")
+
+    monkeypatch.setattr(Path, "unlink", _refuse)
+
+    # A missing directory and an unlinkable file are both non-fatal: the sweep
+    # reports nothing removed and startup continues.
+    removed = module.sweep_stale_atomic_write_temps(
+        directories=(runtime, tmp_path / "does_not_exist")
+    )
+    assert removed == []

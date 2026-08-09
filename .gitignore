@@ -2,6 +2,9 @@
 .venv-mac/
 .tmp.driveupload/
 .pytest_cache/
+# PyInstaller output (packaging/tradingbotv3.spec): ~400MB bundle + work dir.
+dist/
+build/
 .vscode/
 .claude/
 __pycache__/
