@@ -416,3 +416,42 @@ The at-exit-hang diagnosis is from one container. If the desk suite also
 hangs after its summary, the multitasking/yfinance thread leak is confirmed
 desk-side and deserves its own small packet; if the desk exits cleanly, the
 hang was container-only and the note above is merely operational.
+
+## 15. Verification of `testing-week-2026-08-10` (same day, this session)
+
+An independent rebuild (fresh worktree at `2c218db`, fresh venv, Python
+3.12.3 from apt, tkinter + Qt libs installed) **reproduced that branch's gate
+exactly**: 2496 passed / 5 skipped / 7 subtests, junit failures=0 errors=0,
+pytest exit 0 (via `os._exit` after summary — see below), smoke 7/7,
+spec-drift 7/7 with the negative control confirmed (removing
+`research_warehouse` from the spec fails exactly 3 of its tests). The three
+fix commits (`b7615b7` sweep ownership, `e5c9365` parquet partition column,
+`40ce104` spec derive) were reviewed and are sound.
+
+Two corrections to that branch's ledger for the next agent:
+
+- **The dead-port proxy workaround is a placebo.** yfinance's transport is
+  `curl_cffi`, which ignores `HTTP(S)_PROXY`; with the proxy pointed at a
+  dead port a yfinance request still reached the live internet in 0.5s. The
+  post-summary shutdown hang is real (~300 non-daemon `multitasking` workers
+  plus the desk's universe-self-heal and industry-board threads parked in
+  `threading._shutdown`) but that env override does not prevent it. What
+  works: run pytest in-process and `os._exit(rc)` after the summary, or just
+  reap the process after the summary prints — the printed counts and junit
+  are the verdict either way.
+- **The suite is not hermetic**: constructing the desk in a Qt test spins
+  threads that make live outbound calls during the run. Results were
+  unaffected, but on a blackholed network this suite will look hung for
+  ~20 min after printing success.
+
+Reconciliation status: `testing-week-2026-08-10` deliberately excludes this
+branch (its stamp says so). A trial `git merge-tree` of this branch into it
+conflicts in only six files, all one cluster: `packaging/tradingbotv3.spec`
+and `tests/test_packaging_spec_drift.py` (two independent guard
+implementations — reconcile, keeping the stricter of each check),
+`scripts/project_paths.py` + `tests/test_project_paths.py` (their sweep
+ownership fix vs 9037c5f's original on this side — theirs supersedes),
+`packaging/README.md`, `requirements-dev.txt` (union). Everything else —
+paint lines, A5, the shared loader, both survey tools, the selftest —
+auto-merges. Awaiting the trader's word on folding this branch into the
+testing week.
