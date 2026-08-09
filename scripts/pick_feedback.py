@@ -31,7 +31,12 @@ from project_paths import PICK_FEEDBACK_FILE
 
 
 PICK_VERDICTS = ("like", "dislike", "unfavorite")
-PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual")
+# "chart_review" is the Chart Review workspace's capture rail. Like every
+# other origin it is descriptive only - `record_pick_feedback` accepts any
+# string - but the human-focus snapshot turns it into the cohort suffix
+# `focus_swing_chart_review`, so the list is the documentation of what those
+# cohort names mean.
+PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual", "chart_review")
 
 
 def _trade_date_text() -> str:

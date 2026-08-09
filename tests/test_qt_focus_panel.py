@@ -139,6 +139,7 @@ def test_focus_picks_is_top_level_app_page():
 
     assert labels == [
         "Trading Desk",
+        "Chart Review",
         "Focus Picks",
         "Journal",
         "Universe",
@@ -148,7 +149,12 @@ def test_focus_picks_is_top_level_app_page():
         "System Health",
         "Settings",
     ]
-    assert window.pages.widget(1) is window.trading_panel.focus_picks_panel
+    # Chart Review (plan.md 13d) was inserted after Trading Desk, so Focus
+    # Picks is page 2. Trading Desk stays page 0 - F9's setups expand and
+    # _select_page(0) both depend on that.
+    assert window.pages.widget(0) is window.trading_panel
+    assert window.pages.widget(1) is window.chart_review_panel
+    assert window.pages.widget(2) is window.trading_panel.focus_picks_panel
     assert window.market_regime_status.text().startswith("Auto regime:")
     assert window.technical_integrity_status.text().startswith("Technicals:")
     window._set_auto_regime({"env_key": "bearish_strong", "label": "Bearish Strong"})
