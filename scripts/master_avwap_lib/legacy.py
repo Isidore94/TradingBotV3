@@ -1799,9 +1799,17 @@ def should_update_favorite_zone_watchlists_now(
 # spends the whole session on setups computed two sessions ago (observed
 # 2026-08-03). The helpers below detect that state; the runner acts on it by
 # re-running backfill_setup_tracker_from_recent_sessions over the missed
-# sessions, from completed D1 bars only -- never today's forming bar. Timing
-# is all that changes: the same data vintage yields the same tracker, which
+# sessions, from completed D1 bars only -- never today's forming bar. The same
+# data vintage yields the same tracker, which
 # tests/test_tracker_staleness_catchup.py pins byte-for-byte.
+#
+# "Timing is all that changes" was true of the *replay* and false of the call
+# as a whole (checkpoint review 2026-08-08 addendum, P0-1): the backfill also
+# ran the priority-scoring tuner with apply_changes=True and refit the
+# Expected-R prior anchors, so an unattended recovery rewrote live scoring
+# inputs. The automatic path now passes run_scoring_side_effects=False; only
+# the manual GUI backfill, which the trader asked for and is watching, still
+# performs those global refits.
 
 TRACKER_CATCHUP_SETTING_KEY = "tracker_staleness_catchup"
 # Deep enough to recover a long weekend or a week away; shallow enough that a
@@ -1819,15 +1827,45 @@ def tracker_staleness_catchup_enabled() -> bool:
     return bool(get_local_setting(TRACKER_CATCHUP_SETTING_KEY, True))
 
 
-def get_setup_tracker_last_update_session(tracker_payload: dict | None = None) -> date | None:
-    """Session date the stored tracker reflects, or None when unknowable.
+def _normalized_tracker_data_session(value: str | date | datetime | None) -> str:
+    """ISO date string for a tracker data-vintage stamp, or "" when unusable."""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    try:
+        return date.fromisoformat(raw[:10]).isoformat()
+    except ValueError:
+        logging.debug("Unparseable tracker data_session stamp: %r", value)
+        return ""
 
-    The tracker is only ever written from the final market hour onward, so the
-    calendar date of ``updated_at`` is the session it reflects.
+
+def get_setup_tracker_last_update_session(tracker_payload: dict | None = None) -> date | None:
+    """Session date the stored tracker's data reflects, or None when unknowable.
+
+    ``data_session`` is authoritative when present: it is the completed session
+    whose bars produced the payload, written explicitly by the code that knew
+    it (see ``save_setup_tracker_payload``).
+
+    ``updated_at`` is only a fallback for payloads written before that field
+    existed. It is a *write clock*, not a data vintage, and the two diverge on
+    exactly the path this function feeds: a Friday-morning catch-up rebuilds
+    Thursday's tracker, and the old heuristic would read Friday off the write
+    clock and then declare Friday already reflected -- suppressing the real
+    Friday refresh for the whole next session. Legacy payloads keep the
+    heuristic because for them it is the only signal there is.
     """
     payload = load_setup_tracker_payload() if tracker_payload is None else tracker_payload
     if not isinstance(payload, dict):
         return None
+    stamped = _normalized_tracker_data_session(payload.get("data_session"))
+    if stamped:
+        return date.fromisoformat(stamped)
     raw = str(payload.get("updated_at") or "").strip()
     if not raw:
         return None
@@ -4641,9 +4679,28 @@ def load_setup_tracker_scoring_payload(
         return build_setup_tracker_scoring_payload(tracker)
 
 
-def save_setup_tracker_payload(payload: dict, *, allow_empty: bool = False) -> None:
+def save_setup_tracker_payload(
+    payload: dict,
+    *,
+    allow_empty: bool = False,
+    data_session: str | date | None = None,
+) -> None:
+    """Persist the tracker.
+
+    ``data_session`` is the *data vintage*: the session whose completed bars
+    this payload reflects. It is deliberately separate from ``updated_at``,
+    which is only the wall clock at write time. The two diverge whenever a
+    catch-up runs (durability packet 2.1): a Friday-morning catch-up writes
+    Thursday's tracker, and reading the vintage off ``updated_at`` would claim
+    Friday was already reflected and suppress the real Friday refresh. Callers
+    that know the vintage pass it; when omitted, any vintage already on the
+    payload is preserved (legacy payloads simply carry none).
+    """
     payload["schema_version"] = SETUP_TRACKER_SCHEMA_VERSION
     payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    resolved_session = _normalized_tracker_data_session(data_session)
+    if resolved_session:
+        payload["data_session"] = resolved_session
     payload["daily_watchlists"] = _normalize_setup_tracker_daily_watchlists(
         payload.get("daily_watchlists"),
         payload.get("setups"),
@@ -10602,7 +10659,9 @@ def update_setup_tracker_from_scan(
         write_master_avwap_study_report(MASTER_AVWAP_STUDY_FILE, tracker)
     except Exception as exc:
         logging.warning("Could not write study report (%s).", exc)
-    save_setup_tracker_payload(tracker)
+    # The scan date this pass evaluated *is* the data vintage: every record
+    # written above came from that session's completed bars.
+    save_setup_tracker_payload(tracker, data_session=target_scan_date)
     if auto_tune:
         tuner_output = run_priority_scoring_tuner(
             apply_changes=True,
@@ -22942,6 +23001,7 @@ def backfill_setup_tracker_from_recent_sessions(
     shorts_path: Path | None = None,
     use_shared_watchlists: bool = False,
     end_date: date | None = None,
+    run_scoring_side_effects: bool = True,
 ) -> dict:
     """Rebuild the setup tracker from the most recent completed sessions.
 
@@ -22949,6 +23009,18 @@ def backfill_setup_tracker_from_recent_sessions(
     it unset (unchanged behaviour); the staleness catch-up passes the last
     *completed* session so an intraday run can never evaluate today's forming
     D1 bar (plan.md sec 5: completed bars only, a forming bar is preview).
+
+    ``run_scoring_side_effects`` gates the two *global* refits this function
+    performs after the replay: the priority-scoring tuner (which rewrites live
+    scoring weights) and the Expected-R prior-anchor calibration (which
+    rewrites live ranking priors). Both are appropriate for the manual GUI
+    backfill, where the trader deliberately asked for a rebuild and is watching
+    the result. Neither is appropriate for the *automatic* staleness catch-up
+    (durability packet 2.1), which is a recovery path that fires unattended,
+    minutes before a scan: a catch-up is supposed to restore the tracker to the
+    vintage a missed after-close run would have produced, not to retune the
+    live scoring model on the way past. The caller decides; the default keeps
+    the manual path unchanged.
     """
     lookback_sessions = max(1, int(lookback_sessions))
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
@@ -23135,17 +23207,24 @@ def backfill_setup_tracker_from_recent_sessions(
                 f"across {len(tracked_symbols)} symbol(s)."
             )
 
-        tuner_output = run_priority_scoring_tuner(
-            apply_changes=True,
-            min_setups=8,
-            suppress_failures=True,
-        )
-        if tuner_output:
-            logging.info("Priority scoring tuner after backfill: %s", tuner_output.splitlines()[0])
+        if run_scoring_side_effects:
+            tuner_output = run_priority_scoring_tuner(
+                apply_changes=True,
+                min_setups=8,
+                suppress_failures=True,
+            )
+            if tuner_output:
+                logging.info("Priority scoring tuner after backfill: %s", tuner_output.splitlines()[0])
 
-        # Backfill produces a batch of closed outcomes; refit the Expected-R
-        # prior anchors so they reflect the rebuilt history.
-        calibrate_expected_r_prior_anchors(persist=True)
+            # Backfill produces a batch of closed outcomes; refit the Expected-R
+            # prior anchors so they reflect the rebuilt history.
+            calibrate_expected_r_prior_anchors(persist=True)
+        else:
+            logging.info(
+                "Tracker backfill skipped the scoring tuner and Expected-R prior calibration "
+                "(run_scoring_side_effects=False): a recovery replay restores the tracker, "
+                "it does not retune live scoring."
+            )
 
         return {
             "dates": [value.isoformat() for value in evaluation_dates],

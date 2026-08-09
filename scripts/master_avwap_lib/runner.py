@@ -176,6 +176,11 @@ def _maybe_run_setup_tracker_catchup(
             shorts_path=shorts_path,
             use_shared_watchlists=use_shared_watchlists,
             end_date=end_date,
+            # Recovery only: restore the tracker vintage a missed after-close
+            # run would have produced. An unattended catch-up minutes before a
+            # scan must not also retune live scoring weights or refit the
+            # Expected-R priors (checkpoint review 2026-08-08 addendum, P0-1).
+            run_scoring_side_effects=False,
         )
         sessions = list((result or {}).get("dates") or [])
         outcome["ran"] = bool(sessions)

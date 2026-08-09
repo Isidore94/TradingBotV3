@@ -187,8 +187,8 @@ def _normalize_write_clock(payload_text: str) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-class CatchupCharacterizationTests(unittest.TestCase):
-    """Catch-up output == after-close output for the same data vintage."""
+class _BackfillHarness(unittest.TestCase):
+    """Shared fixture: a seeded tracker plus a fully stubbed backfill run."""
 
     def setUp(self):
         self.frame_completed = _daily_frame(SESSION_D)
@@ -247,8 +247,9 @@ class CatchupCharacterizationTests(unittest.TestCase):
         m.SETUP_TRACKER_FILE.parent.mkdir(parents=True, exist_ok=True)
         m.SETUP_TRACKER_FILE.write_text(json.dumps(payload), encoding="utf-8")
 
-    def _run_backfill(self, *, sessions, bars, end_date) -> str:
+    def _run_backfill(self, *, sessions, bars, end_date, run_scoring_side_effects=False) -> str:
         self._seed_tracker()
+        self._tuner_calls, self._prior_calls = [], []
         with (
             mock.patch.object(m, "connect_daily_data_client", return_value=None),
             mock.patch.object(m, "disconnect_daily_data_client", lambda *a, **k: None),
@@ -258,16 +259,32 @@ class CatchupCharacterizationTests(unittest.TestCase):
             mock.patch.object(
                 m, "append_master_avwap_d1_watchlist_symbols", lambda lo, sh: (lo, sh, 0)
             ),
-            mock.patch.object(m, "run_priority_scoring_tuner", lambda **k: ""),
-            mock.patch.object(m, "calibrate_expected_r_prior_anchors", lambda **k: None),
+            # These two are the scoring side effects under test. They are still
+            # stubbed -- letting a test refit the live scoring weights would be
+            # the very defect being fixed -- but the stubs now *record*, so the
+            # tests below assert which path invoked them instead of silently
+            # hiding the difference.
+            mock.patch.object(
+                m, "run_priority_scoring_tuner", lambda **k: self._tuner_calls.append(k) or ""
+            ),
+            mock.patch.object(
+                m,
+                "calibrate_expected_r_prior_anchors",
+                lambda **k: self._prior_calls.append(k),
+            ),
         ):
             m.backfill_setup_tracker_from_recent_sessions(
                 lookback_sessions=1,
                 longs_path=self.longs,
                 shorts_path=self.shorts,
                 end_date=end_date,
+                run_scoring_side_effects=run_scoring_side_effects,
             )
         return m.SETUP_TRACKER_FILE.read_text(encoding="utf-8")
+
+
+class CatchupCharacterizationTests(_BackfillHarness):
+    """Catch-up output == after-close output for the same data vintage."""
 
     def test_catchup_tracker_is_byte_identical_to_the_after_close_tracker(self):
         after_close = self._run_backfill(
@@ -310,6 +327,119 @@ class CatchupCharacterizationTests(unittest.TestCase):
             _normalize_write_clock(after_close),
             "comparison is vacuous: it cannot tell two data vintages apart",
         )
+
+
+class CatchupScoringSideEffectTests(_BackfillHarness):
+    """The replay is shared; the global refits are not.
+
+    ``backfill_setup_tracker_from_recent_sessions`` ends by running the
+    priority-scoring tuner with ``apply_changes=True`` and refitting the
+    Expected-R prior anchors -- both of which rewrite *live* scoring inputs.
+    That is the trader's call to make on the manual GUI backfill. It is not
+    something an unattended recovery path should do minutes before a scan
+    (checkpoint review 2026-08-08 addendum, P0-1).
+    """
+
+    def test_manual_backfill_still_retunes_scoring(self):
+        self._run_backfill(
+            sessions=[SESSION_D, date(2026, 8, 5)],
+            bars=self.frame_completed,
+            end_date=SESSION_D,
+            run_scoring_side_effects=True,
+        )
+        self.assertEqual(len(self._tuner_calls), 1)
+        self.assertTrue(self._tuner_calls[0].get("apply_changes"))
+        self.assertEqual(len(self._prior_calls), 1)
+        self.assertTrue(self._prior_calls[0].get("persist"))
+
+    def test_automatic_catchup_never_retunes_scoring(self):
+        self._run_backfill(
+            sessions=[SESSION_NEXT, SESSION_D, date(2026, 8, 5)],
+            bars=self.frame_with_forming,
+            end_date=SESSION_D,
+            run_scoring_side_effects=False,
+        )
+        self.assertEqual(self._tuner_calls, [])
+        self.assertEqual(self._prior_calls, [])
+
+    def test_the_manual_gui_path_keeps_the_side_effects_by_default(self):
+        # scripts/master_avwap_lib/gui.py passes only lookback_sessions, so the
+        # default is what preserves the trader-initiated behaviour.
+        import inspect
+
+        default = inspect.signature(
+            m.backfill_setup_tracker_from_recent_sessions
+        ).parameters["run_scoring_side_effects"].default
+        self.assertIs(default, True)
+
+
+class TrackerDataSessionProvenanceTests(unittest.TestCase):
+    """The vintage the tracker reflects is recorded, not inferred from a clock.
+
+    ``updated_at`` is the wall clock at write time. Reading the data vintage
+    off it works only while every write happens after its own session's close.
+    The catch-up breaks exactly that assumption: a Friday-morning run rebuilds
+    *Thursday's* tracker, and the old heuristic then reported Friday as
+    reflected -- which suppresses the genuine Friday refresh all the next
+    session (checkpoint review 2026-08-08 addendum, P0-2).
+    """
+
+    def test_data_session_is_authoritative_over_the_write_clock(self):
+        payload = {
+            "updated_at": "2026-08-07T09:12:00",  # Friday morning catch-up run
+            "data_session": "2026-08-06",  # Thursday bars are what it holds
+        }
+        self.assertEqual(
+            m.get_setup_tracker_last_update_session(payload), date(2026, 8, 6)
+        )
+
+    def test_legacy_payloads_still_fall_back_to_the_write_clock(self):
+        payload = {"updated_at": "2026-08-06T15:30:12"}
+        self.assertEqual(
+            m.get_setup_tracker_last_update_session(payload), SESSION_D
+        )
+
+    def test_unparseable_data_session_falls_back_rather_than_crashing(self):
+        payload = {"updated_at": "2026-08-06T15:30:12", "data_session": "not-a-date"}
+        self.assertEqual(
+            m.get_setup_tracker_last_update_session(payload), SESSION_D
+        )
+
+    def test_morning_catchup_from_thursday_does_not_mark_friday_reflected(self):
+        # The end-to-end regression: catch-up runs Friday morning over
+        # Thursday's completed bars, and the plan computed afterwards must
+        # still see Friday as an outstanding session, not an already-done one.
+        thursday, friday = date(2026, 8, 6), date(2026, 8, 7)
+        payload = {"schema_version": 2, "setups": {}}
+        with mock.patch.object(m, "SETUP_TRACKER_FILE", Path(m.DATA_DIR) / "provenance_tracker.json"):
+            m.SETUP_TRACKER_FILE.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with mock.patch.object(m, "save_setup_tracker_scoring_payload", lambda p: None):
+                    m.save_setup_tracker_payload(
+                        payload, allow_empty=True, data_session=thursday.isoformat()
+                    )
+                stored = json.loads(m.SETUP_TRACKER_FILE.read_text(encoding="utf-8"))
+            finally:
+                m.SETUP_TRACKER_FILE.unlink(missing_ok=True)
+                m.SETUP_TRACKER_FILE.with_suffix(".json.bak").unlink(missing_ok=True)
+
+        self.assertEqual(stored["data_session"], "2026-08-06")
+        # The write clock is "now", i.e. well after Thursday -- that is the
+        # exact confusion the field exists to prevent.
+        self.assertNotEqual(stored["updated_at"][:10], "2026-08-06")
+
+        # Saturday morning, with Friday now a completed session: still stale.
+        with mock.patch.object(
+            m,
+            "get_recent_market_session_dates",
+            lambda n=1: [friday, thursday, date(2026, 8, 5)][:n],
+        ):
+            plan = m.compute_setup_tracker_catchup_plan(
+                now=datetime(2026, 8, 8, 9, 0), tracker_payload=stored
+            )
+        self.assertTrue(plan["stale"], "Friday was silently marked reflected by the write clock")
+        self.assertEqual(plan["last_update_session"], thursday)
+        self.assertEqual(plan["last_completed_session"], friday)
 
 
 class RunnerCatchupInvocationTests(unittest.TestCase):
@@ -364,6 +494,8 @@ class RunnerCatchupInvocationTests(unittest.TestCase):
         # The cap is what keeps the recovery on completed bars only.
         self.assertEqual(call["end_date"], SESSION_D)
         self.assertTrue(call["use_shared_watchlists"])
+        # Recovery restores a vintage; it never retunes live scoring.
+        self.assertIs(call["run_scoring_side_effects"], False)
 
     def test_current_tracker_is_left_alone(self):
         outcome = self._invoke(plan={"stale": False})
