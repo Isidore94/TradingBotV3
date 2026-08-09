@@ -7,10 +7,35 @@ stamp; it must not duplicate the roadmap.
 
 ## Current checkpoint
 
-- Branch `main` (2026-08-08, merged from `durability-catchup`). Gate:
-  **1876 passed, 5 subtests** (adds `tests/test_tracker_staleness_catchup.py`,
-  `tests/test_ti_chain_backfill.py`, `tests/test_breadth_backfill.py`); smoke
-  **7/7**.
+- Branch `main` (2026-08-08 evening, merged from `durability-catchup`,
+  `local-ai-phase-0`, `local-ai-phase-1`). Gate: **2002 passed, 7 subtests**
+  (adds `tests/test_durability_retry.py`, `tests/test_launch_guard.py`,
+  `tests/test_ai_evidence_coverage.py`, `tests/test_ai_jobs_runner.py`,
+  `tests/test_ai_jobs_store_window.py`, `tests/test_local_ai_provider.py`);
+  smoke **7/7**.
+- **Repair-and-merge program executed** against the checkpoint review's second
+  review (`docs/CHECKPOINT_REVIEW_2026-08-08.md`, ADDENDUM). Two P0s in the
+  tracker catch-up confirmed and repaired — the automatic path no longer runs
+  the scoring tuner or the Expected-R prior refit (the manual GUI backfill
+  still does), and the tracker stamps an explicit `data_session` vintage
+  instead of inferring one from its write clock. Plus: bounded retries before
+  either Tier B recovery path writes a permanent data gap, an honest `as_of`
+  on an empty follow-up window, follow-up gap and outcome-coverage lines in
+  the collection audit, a single-instance guard that sees the frozen build,
+  three hard-rule gaps closed in the overnight AI runner, and an evidence
+  packager that states what is missing rather than implying it.
+- Merge strategy **amended to merge-early** per Sol: A `5d835ab`, B `b40cad7`,
+  C `13f6e7b`, each green. `9037c5f` (WIP packaging) was not merged and stays
+  on `integration-test`.
+- **TradingBotV3 AI Jobs** was disabled during the repairs and re-enabled after
+  a controlled proof on the real desk: 7 of 18 sources usable, 10 unfunded,
+  1 missing, 5 stale, all stated in the published brief; ledger row `ok`.
+- **Outstanding:** 13c is still not `LIVE_VALIDATED` — the mid-session restart
+  drill (audit HEALTHY with a nonzero backfill count) needs a real session.
+  Phase 1's exit gate needs its unattended week. The AI evidence budget
+  (`MAX_TOTAL_EVIDENCE_CHARS` = 80,000) cannot fund ten real sources and is a
+  trader decision, not a repair. The frozen-exe variant of the launch-guard
+  drill is operator work. Phase 2 is stopped pending its fact-pack redesign.
 - plan.md item **13c (durability & catch-up)** build-order steps 1-4 landed:
   15-minute repetition on the 07:00 launch task; the Master AVWAP tracker
   staleness override (reuses `backfill_setup_tracker_from_recent_sessions`,
@@ -21,11 +46,14 @@ stamp; it must not duplicate the roadmap.
   `regime_collection_audit.py` reports live vs backfilled counts separately.
   Tier C (frozen snapshots, opening-range baselines, never-started
   predictions) is untouched. Step 5, the flagged preview lane, was not built.
-- **Outstanding for 13c:** (1) operator re-runs
-  `scripts/register_0700_autostart.ps1` once — the task was not registered on
-  this desk at all; (2) the mid-session restart drill (audit HEALTHY with a
+- **Outstanding for 13c:** the mid-session restart drill (audit HEALTHY with a
   nonzero backfill count) is the remaining half of the exit gate, so 13c is
-  not `LIVE_VALIDATED`.
+  not `LIVE_VALIDATED`. The task registration is **done** —
+  `scripts/register_0700_autostart.ps1` was re-run on 2026-08-08 (06:00 PT,
+  Mon-Fri, repeating every 15 min for 7.5h, launching from
+  `C:\Users\Aaron\TradingBotV3`), and the fire-while-running drill passed:
+  with a real python-launched desk up, both the task and the hardened guard
+  reported "already running - nothing to do" and no second desk started.
 
 ## Previous checkpoint (main, 2026-08-03 evening)
 

@@ -114,3 +114,108 @@ publish path in `ai_jobs/store.py` — confirm the twice-observed UNC
 path-mangling failure mode is structurally prevented (temp-write-verify-
 rename on the share, no shell path assembly), since it now runs ~27×/night
 unwatched.
+
+---
+
+## ADDENDUM — Sol 5.6 second review, and the repair-and-merge program
+
+Recorded 2026-08-08, after the program below was executed. This section is
+the record of what the second review found and what was done about it; the
+sections above are unchanged and remain the original review's verdict.
+
+### What the second review confirmed
+
+Two **P0s**, both in Branch A's setup-tracker staleness catch-up, both
+verified against the source and both now repaired and merged:
+
+1. **Scoring side effects in an unattended recovery path.**
+   `backfill_setup_tracker_from_recent_sessions` ended by running
+   `run_priority_scoring_tuner(apply_changes=True)` and
+   `calibrate_expected_r_prior_anchors(persist=True)` — both of which rewrite
+   *live* scoring inputs. The automatic catch-up fires unattended, minutes
+   before a scan, so a recovery path was retuning the scoring model on its way
+   past. The packet's claim that the catch-up was "timing-only" was true of the
+   replay and false of the call, and the characterization test could not see
+   the difference because it mocked both refits into silence.
+   **Repaired:** `run_scoring_side_effects` parameter, default `True` so the
+   manual GUI backfill is unchanged; the runner's automatic catch-up passes
+   `False`. The tests no longer mock the refits away — the stubs record, and
+   the tests assert which path invokes them.
+
+2. **Data vintage read off a write clock.**
+   `get_setup_tracker_last_update_session` derived the reflected session from
+   `updated_at`, which is only the wall clock at write time. The catch-up
+   breaks exactly that assumption: a Friday-morning run rebuilds *Thursday's*
+   tracker, the heuristic reports Friday as reflected, and the genuine Friday
+   refresh is suppressed for the whole next session.
+   **Repaired:** `save_setup_tracker_payload` takes an explicit
+   `data_session` — the completed session whose bars produced the payload —
+   and `update_setup_tracker_from_scan` passes the scan date it evaluated.
+   `updated_at` remains the fallback for legacy payloads only.
+
+Four further findings, all repaired: single-attempt permanent data gaps in
+both Tier B recovery paths; a follow-up row for an empty window stamped up to
+90 minutes before the absence could be known; follow-up gaps and outcome
+coverage invisible inside a HEALTHY verdict; and the single-instance guard
+blind to the frozen build. On Branch C: three ways around the "no local
+inference during market hours" hard rule, and an evidence packager that was
+honest about what it had and silent about what it did not.
+
+### Merge strategy, amended
+
+The original review sequenced merges behind a live-validation session and a
+quiet unattended week (sec 5 above). **Amended per Sol: merge early.** The
+repairs are the thing that makes the branches safe to run, and leaving them on
+unmerged branches while production ran from an unmerged checkout was itself a
+risk — the working tree had to stay off `main` and could not be switched
+without disarming a scheduled task. Merged in the reviewed order, each with
+the full suite green and smoke 7/7:
+
+| Branch | Merge | Suite at merge |
+|---|---|---|
+| A `durability-catchup` | `5d835ab` | 1901 passed |
+| B `local-ai-phase-0` | `b40cad7` | 1927 passed |
+| C `local-ai-phase-1` | `13f6e7b` | 2002 passed |
+
+What the original sequencing bought is **not** waived, only re-ordered: 13c is
+still **not `LIVE_VALIDATED`**. The mid-session restart drill (audit HEALTHY
+with a nonzero backfill count, on a real session) remains the outstanding half
+of its exit gate, and Phase 1's exit gate still needs its unattended week.
+Commit `9037c5f` (WIP packaging) was **not** merged and stays on
+`integration-test` only.
+
+### The AI task during the repairs
+
+**TradingBotV3 AI Jobs** was disabled for the duration and re-enabled only
+after a controlled proof run on the real desk (2026-08-08 18:07 and 18:10 PT,
+inside the open weekend window, run manually rather than by the scheduler).
+The proof is the reason the packaging repair matters:
+
+> package `fa65dceda419d37d`, session 2026-08-08 —
+> **7 of 18 sources usable**, 10 unfunded, 1 missing, 5 stale, 5 truncated.
+> Ledger row `ok`. Published brief states every one of those, by source id,
+> in a `[system]`-prefixed data-quality section the model did not write.
+
+Under the pre-repair code the same package reported "18 source(s)". The ten
+unfunded ones were already carrying nothing — the first-come budget had zeroed
+them — but they were labelled `available`, so the brief was built on a seventh
+of the evidence it claimed. That is now visible instead of implied.
+
+### Open items this addendum does not close
+
+- **The evidence budget is undersized for a local model.**
+  `MAX_TOTAL_EVIDENCE_CHARS` is 80,000, tuned when every token was metered.
+  Ten real sources — including `setups.playbooks` (404 KB),
+  `setups.type_stats` (298 KB) and `setups.scan_factors` (259 KB) — cannot be
+  funded at that ceiling. Raising it is a trader decision, not a repair, so it
+  was left alone and is stated here instead.
+- **`setups.current_tracker` is 762 MB on disk.** Observed while reading the
+  proof's coverage block. Whatever else that implies, it means the tracker
+  reaches the AI package only as its first 16,000 characters.
+- **The journal source is not session-scoped.** It is queried live and spans
+  all history, so it is correctly never "stale" — but in the proof run the
+  model narrated a 2026-06-18 trade in a summary headed 2026-08-08. Staleness
+  detection cannot catch this; scoping the journal query, or telling the
+  prompt which session the journal rows should be read against, would.
+- The original review's open inspection item (UNC path handling in
+  `ai_jobs/store.py`) is untouched and still open.
