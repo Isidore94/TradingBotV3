@@ -206,6 +206,7 @@ def test_sweep_removes_stale_staging_files_but_spares_real_ones(monkeypatch, tmp
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     canonical = runtime / "intraday_bounce_candidates.csv"
+    history = runtime / "earnings_calendar_history.json"
 
     old = 24 * 3600
     for name in (
@@ -232,7 +233,7 @@ def test_sweep_removes_stale_staging_files_but_spares_real_ones(monkeypatch, tmp
     survivors.append(fresh)
 
     removed = module.sweep_stale_atomic_write_temps(
-        directories=(runtime,), staged_for=(canonical,)
+        dotted_for=(history,), staged_for=(canonical,)
     )
 
     assert sorted(path.name for path in removed) == [
@@ -243,9 +244,44 @@ def test_sweep_removes_stale_staging_files_but_spares_real_ones(monkeypatch, tmp
         assert path.exists(), f"sweep deleted {path.name}, which it must never touch"
 
 
-def test_sweep_does_not_recurse_into_bar_stores(monkeypatch, tmp_path):
-    """The bar directories hold thousands of parquet files; scanning them on
-    every startup would be pure cost, and nothing stages temps there."""
+def test_sweep_never_deletes_a_temp_it_cannot_name_an_owner_for(monkeypatch, tmp_path):
+    """The repaired boundary: the shared home is a cloud-synced folder other
+    programs also live in. A dotted temp whose canonical target this project
+    does not own survives no matter how old it is - an earlier draft swept
+    every ``.<anything>.<8>.tmp`` in the directory and would have deleted it."""
+    module = _load_project_paths(monkeypatch, tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    stranger = runtime / ".thirdparty.json.abcd1234.tmp"
+    stranger.write_text("not ours", encoding="utf-8")
+    _aged(stranger, seconds_old=7 * 3600)
+
+    removed = module.sweep_stale_atomic_write_temps(
+        dotted_for=(runtime / "earnings_calendar_history.json",),
+        staged_for=(runtime / "intraday_bounce_candidates.csv",),
+    )
+    assert removed == []
+    assert stranger.exists()
+
+
+def test_import_time_sweep_covers_only_files_this_module_names(monkeypatch, tmp_path):
+    """What migrate_legacy_layout actually passes: every owned target comes
+    from the module's own constants, lives directly in a swept directory, and
+    is a file - so the deletion surface is exactly the project's own files."""
+    module = _load_project_paths(monkeypatch, tmp_path)
+    targets = module._owned_staging_targets()
+    assert module.EARNINGS_CALENDAR_HISTORY_FILE in targets
+    assert module.LONGS_FILE in targets
+    assert module.SWING_LONGS_FILE in targets
+    swept_dirs = {module.SHARED_HOME_DIR, module.DATA_DIR, module.RUNTIME_DATA_DIR}
+    for target in targets:
+        assert target.parent in swept_dirs, target
+        assert target.suffix, target
+
+
+def test_sweep_scans_only_the_owned_targets_directories(monkeypatch, tmp_path):
+    """The bar directories hold thousands of parquet files; no owned target
+    lives there, so nothing is scanned - let alone deleted - below them."""
     module = _load_project_paths(monkeypatch, tmp_path)
     data = tmp_path / "data"
     nested = data / "daily_bars"
@@ -254,8 +290,13 @@ def test_sweep_does_not_recurse_into_bar_stores(monkeypatch, tmp_path):
     buried.write_text("x", encoding="utf-8")
     _aged(buried, seconds_old=24 * 3600)
 
-    assert module.sweep_stale_atomic_write_temps(directories=(data,)) == []
+    removed = module.sweep_stale_atomic_write_temps(
+        dotted_for=(data / "earnings_calendar_history.json",)
+    )
+    assert removed == []
     assert buried.exists()
+    for target in module._owned_staging_targets():
+        assert "daily_bars" not in str(target.parent)
 
 
 def test_sweep_survives_missing_dirs_and_locked_files(monkeypatch, tmp_path):
@@ -274,6 +315,9 @@ def test_sweep_survives_missing_dirs_and_locked_files(monkeypatch, tmp_path):
     # A missing directory and an unlinkable file are both non-fatal: the sweep
     # reports nothing removed and startup continues.
     removed = module.sweep_stale_atomic_write_temps(
-        directories=(runtime, tmp_path / "does_not_exist")
+        dotted_for=(
+            runtime / "locked.json",
+            tmp_path / "does_not_exist" / "ghost.json",
+        )
     )
     assert removed == []
