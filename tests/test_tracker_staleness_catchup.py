@@ -405,28 +405,76 @@ class TrackerDataSessionProvenanceTests(unittest.TestCase):
             m.get_setup_tracker_last_update_session(payload), SESSION_D
         )
 
-    def test_morning_catchup_from_thursday_does_not_mark_friday_reflected(self):
-        # The end-to-end regression: catch-up runs Friday morning over
-        # Thursday's completed bars, and the plan computed afterwards must
-        # still see Friday as an outstanding session, not an already-done one.
-        thursday, friday = date(2026, 8, 6), date(2026, 8, 7)
-        payload = {"schema_version": 2, "setups": {}}
-        with mock.patch.object(m, "SETUP_TRACKER_FILE", Path(m.DATA_DIR) / "provenance_tracker.json"):
-            m.SETUP_TRACKER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    def _round_trip(self, payload: dict, *, data_session: str | None) -> dict:
+        """Save, then load back through the PRODUCTION loader.
+
+        Reading the file with json.loads is what let the first repair pass its
+        own test while doing nothing in production: every caller that resolves
+        the vintage goes through ``load_setup_tracker_payload``, and that
+        function rebuilds the payload field by field from a fixed default, so
+        it dropped ``data_session`` straight back out (Sol 5.6 verification
+        review, surviving P0). These tests go through the loader for that
+        reason -- do not shortcut them back to a raw file read.
+        """
+        target = Path(m.DATA_DIR) / "provenance_tracker.json"
+        with mock.patch.object(m, "SETUP_TRACKER_FILE", target):
+            target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with mock.patch.object(m, "save_setup_tracker_scoring_payload", lambda p: None):
                     m.save_setup_tracker_payload(
-                        payload, allow_empty=True, data_session=thursday.isoformat()
+                        payload, allow_empty=True, data_session=data_session
                     )
-                stored = json.loads(m.SETUP_TRACKER_FILE.read_text(encoding="utf-8"))
+                on_disk = json.loads(target.read_text(encoding="utf-8"))
+                loaded = m.load_setup_tracker_payload()
             finally:
-                m.SETUP_TRACKER_FILE.unlink(missing_ok=True)
-                m.SETUP_TRACKER_FILE.with_suffix(".json.bak").unlink(missing_ok=True)
+                target.unlink(missing_ok=True)
+                target.with_suffix(".json.bak").unlink(missing_ok=True)
+        return {"on_disk": on_disk, "loaded": loaded}
+
+    def test_the_loader_carries_the_vintage_it_was_saved_with(self):
+        result = self._round_trip({"schema_version": 2, "setups": {}}, data_session="2026-08-06")
+
+        self.assertEqual(result["on_disk"]["data_session"], "2026-08-06")
+        self.assertEqual(
+            result["loaded"].get("data_session"),
+            "2026-08-06",
+            "the loader dropped the vintage, so the fix never reached production",
+        )
+
+    def test_a_legacy_payload_loads_with_no_vintage_rather_than_a_guess(self):
+        # An unknown vintage must stay unknown; inventing one from the write
+        # clock is the defect, and so is inventing one from today.
+        target = Path(m.DATA_DIR) / "provenance_tracker.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps({"schema_version": 2, "updated_at": "2026-08-06T15:30:12", "setups": {}}),
+            encoding="utf-8",
+        )
+        try:
+            with mock.patch.object(m, "SETUP_TRACKER_FILE", target):
+                loaded = m.load_setup_tracker_payload()
+        finally:
+            target.unlink(missing_ok=True)
+
+        self.assertIsNone(loaded.get("data_session"))
+        # ...and the heuristic still answers for it, which is the whole point
+        # of keeping the fallback.
+        self.assertEqual(m.get_setup_tracker_last_update_session(loaded), SESSION_D)
+
+    def test_morning_catchup_from_thursday_does_not_mark_friday_reflected(self):
+        # The end-to-end regression, through the production loader: catch-up
+        # runs Friday morning over Thursday's completed bars, and the plan
+        # computed afterwards must still see Friday as outstanding.
+        thursday, friday = date(2026, 8, 6), date(2026, 8, 7)
+        result = self._round_trip(
+            {"schema_version": 2, "setups": {}}, data_session=thursday.isoformat()
+        )
+        stored = result["loaded"]
 
         self.assertEqual(stored["data_session"], "2026-08-06")
         # The write clock is "now", i.e. well after Thursday -- that is the
         # exact confusion the field exists to prevent.
-        self.assertNotEqual(stored["updated_at"][:10], "2026-08-06")
+        self.assertNotEqual(str(stored["updated_at"])[:10], "2026-08-06")
 
         # Saturday morning, with Friday now a completed session: still stale.
         with mock.patch.object(
@@ -440,6 +488,40 @@ class TrackerDataSessionProvenanceTests(unittest.TestCase):
         self.assertTrue(plan["stale"], "Friday was silently marked reflected by the write clock")
         self.assertEqual(plan["last_update_session"], thursday)
         self.assertEqual(plan["last_completed_session"], friday)
+
+    def test_the_default_catchup_path_reads_the_vintage_off_disk(self):
+        # compute_setup_tracker_catchup_plan(now=...) with no payload argument
+        # is what the runner actually calls, so it must reach the loader.
+        thursday, friday = date(2026, 8, 6), date(2026, 8, 7)
+        target = Path(m.DATA_DIR) / "provenance_tracker.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    # Written Friday morning by a catch-up over Thursday bars.
+                    "updated_at": "2026-08-07T09:12:00",
+                    "data_session": thursday.isoformat(),
+                    "setups": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            with (
+                mock.patch.object(m, "SETUP_TRACKER_FILE", target),
+                mock.patch.object(
+                    m,
+                    "get_recent_market_session_dates",
+                    lambda n=1: [friday, thursday, date(2026, 8, 5)][:n],
+                ),
+            ):
+                plan = m.compute_setup_tracker_catchup_plan(now=datetime(2026, 8, 8, 9, 0))
+        finally:
+            target.unlink(missing_ok=True)
+
+        self.assertEqual(plan["last_update_session"], thursday)
+        self.assertTrue(plan["stale"])
 
 
 class RunnerCatchupInvocationTests(unittest.TestCase):
