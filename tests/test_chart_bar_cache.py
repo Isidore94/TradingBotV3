@@ -152,7 +152,11 @@ def test_shared_store_read_is_mirrored_then_served_from_memory(tmp_path, monkeyp
     assert reads == ["AAA"], "the mirror must satisfy a cold start on its own"
 
 
-def test_mirror_is_invalidated_when_the_shared_store_changes(tmp_path, monkeypatch):
+def test_a_scanner_update_is_noticed_without_any_manual_invalidation(tmp_path, monkeypatch):
+    """The load path itself must notice a changed store - both the memory
+    tier and the mirror tier. Nothing in production calls invalidate() when
+    the scanner publishes a new session, so a cache that only honors a manual
+    invalidate would serve yesterday's bars until process restart."""
     import chart_snapshot
     import setup_playbook_study
 
@@ -175,15 +179,56 @@ def test_mirror_is_invalidated_when_the_shared_store_changes(tmp_path, monkeypat
     mirror_dir = tmp_path / "mirror"
     store = D1BarStore(cache_dir=mirror_dir)
     assert len(store.load("BBB")) == 10
+    assert store.cached("BBB") is not None, "the ten-row series is resident in memory"
 
-    # The scanner appends a session; the mirror keyed to the old mtime must
-    # not be served, or the chart shows yesterday forever.
+    # The scanner appends a session. NO invalidate() call: the next load must
+    # see the new mtime past the resident series AND the old-mtime mirror.
     _frame(11).to_parquet(path, index=False)
     os.utime(path, (time.time() + 5, time.time() + 5))
-    store.invalidate("BBB")
     assert len(store.load("BBB")) == 11
     # Superseded mirrors are pruned, not accumulated.
     assert len(list(mirror_dir.glob("BBB-*.feather"))) == 1
+
+    # And the freshly-loaded series is itself served from memory afterwards.
+    assert len(store.load("BBB")) == 11
+
+
+def test_manual_invalidate_still_drops_a_resident_symbol(tmp_path, monkeypatch):
+    import chart_snapshot
+    import setup_playbook_study
+
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    _frame(10).to_parquet(shared / "CCC.parquet", index=False)
+    monkeypatch.setattr(
+        chart_snapshot,
+        "_daily_store_candidates",
+        lambda symbol: [(symbol, shared / f"{symbol}.parquet")],
+    )
+    monkeypatch.setattr(
+        setup_playbook_study,
+        "_load_daily_frame",
+        lambda stem: __import__("pandas").read_parquet(shared / f"{stem}.parquet"),
+    )
+    store = D1BarStore(cache_dir=tmp_path / "mirror")
+    assert store.load("CCC") is not None
+    store.invalidate("CCC")
+    assert store.cached("CCC") is None
+
+
+def test_a_directly_put_series_is_authoritative_memory(tmp_path, monkeypatch):
+    """Live streaming appends and test fixtures put() series straight into
+    memory. Those have no durable-store mtime on record and must be served
+    as-is, not re-statted against a store that may not exist."""
+    import chart_snapshot
+
+    def _boom(symbol):
+        raise AssertionError("a direct put must not trigger store stats")
+
+    monkeypatch.setattr(chart_snapshot, "_daily_store_candidates", _boom)
+    store = D1BarStore(cache_dir=tmp_path / "mirror")
+    store.put(_series("MEM", rows=7))
+    assert len(store.load("MEM")) == 7
 
 
 def test_lru_evicts_the_least_recently_used_symbol():
@@ -285,6 +330,31 @@ def test_last_snapshot_lets_a_revisit_repaint_before_the_rebuild():
     assert _pump_until(lambda: service.last_snapshot("MSFT") is not None)
     d1, m5 = service.last_snapshot("MSFT")
     assert d1["bars"] and m5 is not None
+    service.shutdown()
+
+
+def test_a_task_finishing_during_shutdown_delivers_nothing():
+    """The shutdown race the reviewer called out: a task can pass run()'s
+    _closing check, build its snapshot, and only then lose the race with
+    shutdown(). Delivery must honor the flag too - emitting into a service
+    whose owner is being torn down is the crash shutdown() exists to stop."""
+    if _qt_app() is None:
+        pytest.skip("PySide6 unavailable")
+    from ui.services.bar_cache import D1BarStore
+    from ui.services.chart_data_service import ChartDataService
+
+    store = D1BarStore()
+    store.put(_series("RACE", rows=10))
+    service = ChartDataService(store=store)
+    delivered: list[str] = []
+    service.snapshotReady.connect(lambda symbol, *_: delivered.append(symbol))
+    service.snapshotFailed.connect(lambda symbol: delivered.append(f"failed:{symbol}"))
+
+    d1, m5, meta = service.build_snapshots("RACE", [])
+    service._closing = True  # shutdown() won the race after the build finished
+    service._finish(1, "RACE", d1, m5, meta)
+    _pump_until(lambda: False, timeout=0.2)
+    assert delivered == []
     service.shutdown()
 
 

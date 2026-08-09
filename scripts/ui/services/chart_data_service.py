@@ -261,6 +261,12 @@ class ChartDataService(QObject):
         m5: dict | None,
         meta: dict,
     ) -> None:
+        # A task that passed run()'s _closing check and then lost the race
+        # with shutdown() lands here mid-teardown. Emitting into a service
+        # whose owner is going away is exactly what shutdown() promises to
+        # prevent, so the flag is honored at delivery time too.
+        if self._closing:
+            return
         with self._lock:
             newest = self._newest.get(symbol)
         if newest is not None and request_id != newest:
