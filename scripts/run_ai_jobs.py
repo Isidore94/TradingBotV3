@@ -64,8 +64,20 @@ def _print_status() -> int:
         if details["enabled"] == "yes"
         else (False, details["error"] or "unset")
     )
+    from market_calendar import SessionCalendarError
+
+    # Session identity can refuse to answer, and --status must report that
+    # rather than crash or guess.
+    try:
+        session_date = runner.session_date_for()
+        session_note = runner.market_calendar_describe()
+    except SessionCalendarError as exc:
+        session_date = ""
+        session_note = f"session calendar cannot answer: {exc}"
+
     payload = {
-        "session_date": runner.session_date_for(),
+        "session_date": session_date,
+        "session_note": session_note,
         "store": details,
         "store_available": available,
         "store_reason": reason,
@@ -76,8 +88,8 @@ def _print_status() -> int:
             for slot in runner.default_slots()
         ],
     }
-    if available:
-        session = payload["session_date"]
+    if available and session_date:
+        session = session_date
         try:
             path = ledger.ledger_path(create=False)
             payload["completed_today"] = sorted(ledger.completed_jobs(session, path=path))
@@ -96,7 +108,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--status", action="store_true", help="print state and exit without running anything")
     parser.add_argument("--slot", default="", help="run only this named slot")
     parser.add_argument("--force", action="store_true",
-                        help="ignore the off-hours window and the already-completed check")
+                        help="manual run: skip the off-hours window timing and the "
+                             "already-completed check. Never skips the market-session "
+                             "block or its pre-open reserve, and its ledger row is "
+                             "manual_test, which never counts as session coverage")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
