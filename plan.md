@@ -1758,6 +1758,36 @@ The product should celebrate a correct thesis without mislabeling a late entry a
    sessions lost their HEALTHY regime audit to uptime, not code. Should
    land before or alongside 13b Phases 1+ — the digest ledger and the
    40-session evidence floor are both downstream of uptime.
+   **Status 2026-08-08: build-order steps 1-4 IMPLEMENTED + GREEN and MERGED
+   to `main`** (1901 passed, 5 subtests; smoke 7/7). Step 5, the flagged
+   intraday preview lane, is deliberately not built — it ships only on trader
+   request. Merged with the second review's repairs applied: the automatic
+   catch-up no longer runs the scoring tuner or the Expected-R prior refit
+   (the manual GUI backfill still does), the tracker stamps an explicit
+   `data_session` vintage instead of inferring one from its write clock, both
+   Tier B fetches retry a bounded number of times before their gap becomes
+   permanent, an empty follow-up window is stamped when the absence became
+   knowable, the audit reports follow-up gaps and outcome coverage on their own
+   lines, and the single-instance guard now sees the frozen build. Not
+   `LIVE_VALIDATED`: the sec 5 exit gate's mid-session restart drill (audit
+   HEALTHY with a nonzero backfill count) still needs a live session.
+
+   **Checkpoint review 2026-08-08** (`docs/CHECKPOINT_REVIEW_2026-08-08.md`):
+   13c steps 1-4 and 13b Phases 0-1(partial) are built on branches A
+   (`durability-catchup`), B (`local-ai-phase-0`), C (`local-ai-phase-1`) —
+   all unmerged. Verdict PROCEED WITH CONDITIONS; merge order A → B → C with
+   per-branch evidence conditions, two required Branch A amendments (06:00 PT
+   task start — 07:00 local misses the first 30 min of the session on a
+   Pacific desk; single-instance guard hardening onto the writer lock), the
+   40-session floor counting declaration (now recorded in the Regime Phase 1
+   runbook), and a file-scoped ask-first rule for detector-hosting files (now
+   in CLAUDE.md). Phase 2 digests, Phase 4 policy drafting, and journal
+   enrichment must NOT start until A-C are merged and the scheduler has a
+   quiet unattended week. Both required Branch A amendments are now built:
+   the task starts at 06:00 Pacific, and the guard covers the frozen build
+   (the writer lock turned out to be a per-publish lock, unheld almost all of
+   the time a desk is up, so it cannot answer "is a desk running?" — the
+   reasoning is recorded in `scripts/launch_gui_auto.ps1`).
 
 ### Then — after correctness and authoritative data paths
 

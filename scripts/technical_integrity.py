@@ -14,17 +14,29 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
+from diagnostics.artifact_io import (
+    CAPTURE_MODE_BACKFILL,
+    CAPTURE_MODE_LIVE,
+    row_capture_mode,
+)
+from durability_retry import (
+    DEFAULT_RETRIES,
+    DEFAULT_RETRY_BUDGET_SECONDS,
+    fetch_with_bounded_retry,
+    retry_deadline,
+)
 from market_session import get_market_session_window, normalize_market_local_datetime
-from project_paths import get_diagnostics_dir
+from project_paths import get_diagnostics_dir, get_local_setting
 
 
 FEATURE_VERSION = "technical_integrity_v1"
@@ -38,6 +50,24 @@ FROZEN_SNAPSHOT_SCHEMA = "technical_integrity_frozen_snapshot_v1"
 OPENING_RANGE_SCHEMA = "technical_integrity_opening_range_v1"
 FOLLOWUP_HORIZONS_MINUTES = (30, 60, 90)
 FROZEN_SNAPSHOT_GRACE_MINUTES = 5
+
+# Provenance for Tier B recovery (docs/DURABILITY_CATCHUP_PLAN.md sec 2.3).
+# A follow-up window is a pure function of completed M5 bars, so it may be
+# recomputed after an outage -- but research must be able to separate what the
+# live process observed from what was reconstructed afterwards, forever. The
+# ``capture_mode`` vocabulary is shared with every other evidence ledger, so it
+# lives in artifact_io; these names are re-exported for this module's readers.
+TI_CHAIN_BACKFILL_SETTING_KEY = "ti_chain_backfill"
+
+
+#: Stamped by ``_append_event`` when a row is written, so they describe that
+#: append and never the state a later event should inherit.
+_APPEND_TIME_PROVENANCE_FIELDS = frozenset({"as_of", "written_at"})
+
+
+def ti_chain_backfill_enabled() -> bool:
+    """Default-on: a marked, append-only recovery path, not a behaviour change."""
+    return bool(get_local_setting(TI_CHAIN_BACKFILL_SETTING_KEY, True))
 
 
 # Measured share of DECISIVE level tests that end in respect (held/reclaimed
@@ -181,8 +211,18 @@ def _records(rows: Any) -> list[Mapping[str, Any]]:
     return [row for row in rows if isinstance(row, Mapping)]
 
 
-def completed_m5_bars(rows: Any, *, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Normalize valid bars and exclude any M5 candle that can still form."""
+def completed_m5_bars(
+    rows: Any,
+    *,
+    now: datetime | None = None,
+    session_date: date | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize valid bars and exclude any M5 candle that can still form.
+
+    ``session_date`` selects a specific session instead of the newest one in
+    ``rows``. Live callers leave it unset; the chain sweeper sets it so a
+    multi-day fetch can complete *yesterday's* windows after a missed close.
+    """
     moment = normalize_market_local_datetime(now)
     complete: list[dict[str, Any]] = []
     for row in _records(rows):
@@ -225,8 +265,8 @@ def completed_m5_bars(rows: Any, *, now: datetime | None = None) -> list[dict[st
     complete.sort(key=lambda row: row["_start_local"])
     if not complete:
         return []
-    latest_date = complete[-1]["_start_local"].date()
-    return [row for row in complete if row["_start_local"].date() == latest_date]
+    target_date = session_date or complete[-1]["_start_local"].date()
+    return [row for row in complete if row["_start_local"].date() == target_date]
 
 
 def _score_from_probability(probability: float, neutral: float) -> float:
@@ -812,6 +852,7 @@ def _post_resolution_events(
     *,
     now: datetime | None = None,
     force_data_gap_reason: str = "",
+    capture_mode: str = CAPTURE_MODE_LIVE,
 ) -> list[dict[str, Any]]:
     resolution_raw = _parse_datetime(tracking.get("resolution_bar_close"))
     if resolution_raw is None:
@@ -883,7 +924,20 @@ def _post_resolution_events(
                 f"mae_atr_{suffix}": round(adverse, 6),
                 f"range_atr_{suffix}": round((highest - lowest) / atr, 6),
             }
-        as_of = window[-1]["bar_end"] if window else resolution_at.isoformat(timespec="seconds")
+        # Point-in-time: as_of is the moment this row's content became
+        # knowable. With bars, that is the last one that closed. With *no*
+        # bars, the absence itself is the content, and an absence is only
+        # knowable once the window has run out -- it was stamped with
+        # resolution_at, which is up to 90 minutes before anyone could have
+        # known (checkpoint review 2026-08-08 second review). window_end is
+        # that moment: the horizon target, clamped to the close for a
+        # truncated horizon whose window genuinely ends there. It is also
+        # exactly the gate this loop already waits for above.
+        as_of = (
+            window[-1]["bar_end"]
+            if window
+            else window_end.isoformat(timespec="seconds")
+        )
         followup_id = str(tracking.get("followup_id") or tracking.get("event_id") or "")
         events.append(
             {
@@ -909,6 +963,7 @@ def _post_resolution_events(
                 "actual_bar_count": actual_count,
                 "expected_bar_count": expected_count,
                 "truncated": truncated,
+                "capture_mode": str(capture_mode or CAPTURE_MODE_LIVE),
                 "data_gap": data_gap,
                 "data_gap_reason": (
                     str(force_data_gap_reason)
@@ -1058,6 +1113,7 @@ class TechnicalIntegrityMonitor:
         self.pending_followups: dict[str, dict[str, Any]] = {}
         self.followup_event_ids: set[str] = set()
         self.frozen_snapshot_markers: set[str] = set()
+        self.followup_sweep_markers: set[str] = set()
         self.latest_completed_bar_end = ""
         self._load_state()
 
@@ -1102,6 +1158,11 @@ class TechnicalIntegrityMonitor:
         self.frozen_snapshot_markers = {
             str(value)
             for value in payload.get("frozen_snapshot_markers") or []
+            if str(value)
+        }
+        self.followup_sweep_markers = {
+            str(value)
+            for value in payload.get("followup_sweep_markers") or []
             if str(value)
         }
         self.latest_completed_bar_end = str(payload.get("latest_completed_bar_end") or "")
@@ -1171,8 +1232,23 @@ class TechnicalIntegrityMonitor:
         )
         # The append-only ledger repairs a crash between event append and the
         # atomic state write. Resolved IDs suppress stale pending state.
+        #
+        # _append_event stamps as_of/written_at onto the row it writes, so a
+        # ledger row carries the *started* event's provenance. _resolve_pending
+        # copies the pending dict wholesale, so recovering it verbatim gave the
+        # later resolution the touch time as its as_of - a restart between
+        # touch and resolution produced a different row than an uninterrupted
+        # run. Dropping the append-time stamps restores the in-memory shape and
+        # lets the resolution stamp itself (pinned by the restart
+        # characterization test in tests/test_ti_chain_backfill.py).
         recovered_pending = {
-            event_id: row for event_id, row in started.items() if event_id not in resolved
+            event_id: {
+                key: value
+                for key, value in row.items()
+                if key not in _APPEND_TIME_PROVENANCE_FIELDS
+            }
+            for event_id, row in started.items()
+            if event_id not in resolved
         }
         recovered_pending.update(
             {
@@ -1213,6 +1289,7 @@ class TechnicalIntegrityMonitor:
         self.pending_followups = {}
         self.followup_event_ids = set()
         self.frozen_snapshot_markers = set()
+        self.followup_sweep_markers = set()
         self.latest_completed_bar_end = ""
         self._load_resolved_events()
 
@@ -1250,6 +1327,7 @@ class TechnicalIntegrityMonitor:
                 "pending_followups": self.pending_followups,
                 "followup_event_ids": sorted(self.followup_event_ids),
                 "frozen_snapshot_markers": sorted(self.frozen_snapshot_markers),
+                "followup_sweep_markers": sorted(self.followup_sweep_markers),
                 "latest_completed_bar_end": self.latest_completed_bar_end,
                 "code_version": COLLECTION_CODE_VERSION,
                 "updated_at": normalize_market_local_datetime().isoformat(timespec="seconds"),
@@ -1287,6 +1365,7 @@ class TechnicalIntegrityMonitor:
         *,
         now: datetime | None = None,
         force_data_gap_reason: str = "",
+        capture_mode: str = CAPTURE_MODE_LIVE,
     ) -> int:
         sym = str(symbol or "").upper()
         appended = 0
@@ -1298,6 +1377,7 @@ class TechnicalIntegrityMonitor:
                 bars,
                 now=now,
                 force_data_gap_reason=force_data_gap_reason,
+                capture_mode=capture_mode,
             )
             completed = {
                 int(value)
@@ -1364,6 +1444,160 @@ class TechnicalIntegrityMonitor:
             if appended:
                 self._save_state()
             return appended
+
+    def followup_sweep_trigger(self, *, now: datetime | None = None) -> str:
+        """Which sweep is due right now, or "" for none.
+
+        Two moments matter, both from docs/DURABILITY_CATCHUP_PLAN.md sec 2.3:
+        the close (windows that ran past it are now decidable) and startup on a
+        later day (the close was missed entirely). Each fires at most once per
+        session; the marker is persisted, so a restart does not re-spend IB
+        requests on chains that already got their honest answer.
+
+        Note the startup trigger only sees yesterday's chains while the monitor
+        is still on yesterday's session -- once today's first completed bar
+        arrives the monitor rolls over, as it always has. Running the sweep as
+        the evidence clock's first action is what keeps that window open.
+        """
+        if not self.pending_followups or not self.session_date:
+            return ""
+        moment = normalize_market_local_datetime(now)
+        window = get_market_session_window(moment)
+        trigger = ""
+        if self.session_date != window.market_date.isoformat():
+            trigger = "startup_after_missed_close"
+        elif moment >= window.close_local:
+            trigger = "close_of_day"
+        if not trigger:
+            return ""
+        if f"{self.session_date}|{trigger}" in self.followup_sweep_markers:
+            return ""
+        return trigger
+
+    def sweep_incomplete_followups(
+        self,
+        fetch_bars: Callable[[str, str], Any],
+        *,
+        now: datetime | None = None,
+        reason: str = "chain sweeper",
+        trigger: str = "",
+        retries: int = DEFAULT_RETRIES,
+        retry_budget_seconds: float = DEFAULT_RETRY_BUDGET_SECONDS,
+        sleep: Callable[[float], None] | None = None,
+    ) -> dict[str, Any]:
+        """Complete every due follow-up horizon left hanging by an outage.
+
+        A +30/60/90 window is a pure function of completed M5 bars, so it is
+        recoverable (Tier B) -- unlike a frozen snapshot, whose value is what
+        the live hierarchy said at a wall-clock moment and which stays missed
+        (Tier C, unchanged). Rows written here carry
+        ``capture_mode: "backfill"``; bars that genuinely cannot be fetched
+        still produce the existing explicit ``data_gap`` rows, so the audit
+        keeps counting them honestly instead of silently inventing evidence.
+
+        ``fetch_bars(symbol, session_date)`` returns raw M5 rows and may return
+        nothing; the sweeper never raises, because a failed sweep must leave
+        the ledger exactly as it found it.
+
+        A failed fetch is retried a bounded number of times before its gap is
+        written. The gap row *and* the per-session sweep marker are permanent -
+        the marker stops this session from ever being swept again - so
+        finalising both off a single transient hiccup turned a momentary
+        disconnect into permanently missing evidence (checkpoint review
+        2026-08-08 second review). ``retry_budget_seconds`` caps the total time
+        spent sleeping across all symbols, since this loop holds the monitor
+        lock: once spent, remaining symbols still get their one attempt.
+
+        This is deliberately *not* ``observe_followups``: that call rolls the
+        monitor onto the session of the bars it is handed, which on a next-day
+        sweep would discard the very pending chains being recovered.
+        """
+        summary: dict[str, Any] = {
+            "ran": False,
+            "trigger": str(trigger or ""),
+            "session_date": "",
+            "symbols": [],
+            "chains": 0,
+            "events": 0,
+            "data_gap_symbols": [],
+            "retry_attempts": {},
+            "reason": "",
+        }
+        if not ti_chain_backfill_enabled():
+            summary["reason"] = f"disabled by {TI_CHAIN_BACKFILL_SETTING_KEY} setting"
+            return summary
+        with self._lock:
+            session_date = self.session_date
+            if not self.pending_followups:
+                summary["reason"] = "no incomplete follow-up chains"
+                return summary
+            summary["session_date"] = session_date
+            summary["chains"] = len(self.pending_followups)
+            symbols = sorted(self.followup_symbols)
+            summary["symbols"] = symbols
+
+            try:
+                target_session = date.fromisoformat(session_date)
+            except ValueError:
+                target_session = None
+
+            appended = 0
+            data_gap_symbols: list[str] = []
+            retry_attempts: dict[str, int] = {}
+            deadline = retry_deadline(retry_budget_seconds)
+            retry_kwargs: dict[str, Any] = {}
+            if sleep is not None:
+                retry_kwargs["sleep"] = sleep
+            for symbol in symbols:
+                outcome = fetch_with_bounded_retry(
+                    lambda symbol=symbol: fetch_bars(symbol, session_date),
+                    label=f"Follow-up chain sweep fetch for {symbol} on {session_date}",
+                    retries=retries,
+                    deadline=deadline,
+                    **retry_kwargs,
+                )
+                if outcome.attempts > 1:
+                    retry_attempts[symbol] = outcome.attempts
+                rows = outcome.value
+                bars = (
+                    completed_m5_bars(rows, now=now, session_date=target_session)
+                    if rows
+                    else []
+                )
+                if bars:
+                    appended += self._process_followups(
+                        symbol,
+                        bars,
+                        now=now,
+                        capture_mode=CAPTURE_MODE_BACKFILL,
+                    )
+                else:
+                    data_gap_symbols.append(symbol)
+                    appended += self._process_followups(
+                        symbol,
+                        [],
+                        now=now,
+                        force_data_gap_reason=(
+                            f"{reason}: no completed M5 bars available for "
+                            f"{symbol} on {session_date} after "
+                            f"{outcome.attempts} attempt(s)"
+                        ),
+                        capture_mode=CAPTURE_MODE_BACKFILL,
+                    )
+            if trigger:
+                self.followup_sweep_markers.add(f"{session_date}|{trigger}")
+            self._save_state()
+            summary["ran"] = True
+            summary["trigger"] = str(trigger or "")
+            summary["events"] = appended
+            summary["data_gap_symbols"] = data_gap_symbols
+            summary["retry_attempts"] = retry_attempts
+            retried = f"; retried {len(retry_attempts)} symbol(s)" if retry_attempts else ""
+            summary["reason"] = (
+                f"appended {appended} backfilled follow-up row(s) across "
+                f"{len(symbols)} symbol(s) for {session_date}{retried}"
+            )
+            return summary
 
     @staticmethod
     def _frozen_targets(now: datetime | None = None) -> tuple[tuple[str, str, datetime], ...]:

@@ -17,8 +17,10 @@ from typing import Any, Iterable, Mapping
 from diagnostics.artifact_io import read_jsonl
 from market_session import get_market_session_window, normalize_market_local_datetime
 from technical_integrity import (
+    CAPTURE_MODE_BACKFILL,
     COLLECTION_CODE_VERSION,
     FOLLOWUP_HORIZONS_MINUTES,
+    row_capture_mode,
     technical_integrity_events_path,
 )
 from vold_recorder import vold_ledger_path
@@ -55,6 +57,38 @@ def _missing_provenance(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
                 }
             )
     return missing
+
+
+def _matured_followup_windows(
+    starts: Iterable[Mapping[str, Any]],
+    *,
+    session_open: datetime,
+    session_close: datetime,
+    now: datetime,
+) -> int:
+    """How many (chain, horizon) windows have run out by ``now``.
+
+    A window is matured once its end has passed -- the horizon target, or the
+    session close for a horizon truncated by it. That is the same boundary the
+    monitor waits for before writing the row, so it is the honest denominator
+    for "did the evidence we were owed actually arrive?".
+    """
+    matured = 0
+    for row in starts:
+        resolved_raw = str(row.get("resolution_bar_close") or "")
+        try:
+            resolved_at = normalize_market_local_datetime(
+                datetime.fromisoformat(resolved_raw)
+            )
+        except ValueError:
+            continue
+        if resolved_at < session_open:
+            continue
+        for horizon in FOLLOWUP_HORIZONS_MINUTES:
+            window_end = min(resolved_at + timedelta(minutes=horizon), session_close)
+            if now >= window_end:
+                matured += 1
+    return matured
 
 
 def _expected_completed_bars(now: datetime) -> int:
@@ -104,6 +138,9 @@ def audit_regime_collection(
     start_by_source = {
         str(row.get("source_resolution_id") or ""): row for row in starts
     }
+    backfilled_followups = sum(
+        row_capture_mode(row) == CAPTURE_MODE_BACKFILL for row in followups
+    )
     horizons_by_source: dict[str, set[int]] = {}
     for row in followups:
         source = str(row.get("source_resolution_id") or "")
@@ -140,6 +177,40 @@ def audit_regime_collection(
     for source in start_by_source:
         if source not in horizons_by_source:
             incomplete_followups[source] = list(FOLLOWUP_HORIZONS_MINUTES)
+
+    # Outcome coverage: of the follow-up windows that have run out, how many
+    # actually carry metrics. A session can be HEALTHY -- every chain closed,
+    # every gap explicitly marked -- and still hand the promotion study almost
+    # no usable outcomes, because an explicit data_gap row satisfies the
+    # completeness check while carrying no displacement/MFE/MAE at all. Both
+    # figures are reported so that state is visible rather than implied
+    # (checkpoint review 2026-08-08 second review). This is reporting only; it
+    # does not enter the blocker list or the HEALTHY verdict.
+    followup_gap_rows = [row for row in followups if bool(row.get("data_gap"))]
+    followup_gaps_by_horizon = {
+        str(horizon): sum(
+            int(row.get("horizon_minutes") or 0) == horizon for row in followup_gap_rows
+        )
+        for horizon in FOLLOWUP_HORIZONS_MINUTES
+    }
+    followup_gap_reasons = dict(
+        sorted(
+            Counter(
+                str(row.get("data_gap_reason") or "unspecified")
+                for row in followup_gap_rows
+            ).items()
+        )
+    )
+    matured_expected = _matured_followup_windows(
+        starts,
+        session_open=session_window.open_local,
+        session_close=session_window.close_local,
+        now=moment,
+    )
+    outcome_rows = len(followups) - len(followup_gap_rows)
+    outcome_coverage = (
+        round(outcome_rows / matured_expected, 4) if matured_expected else None
+    )
 
     snapshots = [
         row
@@ -263,6 +334,17 @@ def audit_regime_collection(
             },
             "truncated_count": sum(bool(row.get("truncated")) for row in followups),
             "data_gap_count": sum(bool(row.get("data_gap")) for row in followups),
+            # A HEALTHY-with-backfill session is not the same evidence as a
+            # fully-live one. What the promotion study is willing to count
+            # toward its 40-session floor is declared in the study, not here;
+            # the audit's job is only to keep the two distinguishable.
+            "backfilled_count": backfilled_followups,
+            "live_count": len(followups) - backfilled_followups,
+            "data_gap_by_horizon": followup_gaps_by_horizon,
+            "data_gap_reasons": followup_gap_reasons,
+            "outcome_count": outcome_rows,
+            "matured_window_count": matured_expected,
+            "outcome_coverage": outcome_coverage,
             "missing_tracking_starts": missing_starts,
             "incomplete_chains": incomplete_followups,
             "duplicate_event_ids": duplicate_followup_ids,
@@ -287,6 +369,9 @@ def audit_regime_collection(
             "completed_bar_count": len(breadth_bars),
             "expected_completed_bar_count": expected_breadth_bars,
             "explicit_missing_bar_count": explicit_missing_bars,
+            "backfilled_bar_count": sum(
+                row_capture_mode(row) == CAPTURE_MODE_BACKFILL for row in breadth_bars
+            ),
             "data_gap_count": len(breadth_gaps),
             "unavailable_count": len(unavailable),
             "duplicate_bar_ends": duplicate_breadth_bars,
@@ -318,7 +403,28 @@ def format_audit(report: Mapping[str, Any]) -> str:
             f"{followups['tracking_start_count']} started, "
             f"{followups['followup_event_count']} windows, "
             f"horizons={followups['horizon_counts']}, "
-            f"truncated={followups['truncated_count']}, gaps={followups['data_gap_count']}"
+            f"truncated={followups['truncated_count']}, gaps={followups['data_gap_count']}, "
+            f"live={followups['live_count']}, backfilled={followups['backfilled_count']}"
+        ),
+        (
+            "Follow-up data gaps: "
+            f"{followups['data_gap_count']} of {followups['followup_event_count']} window(s), "
+            f"by horizon={followups['data_gap_by_horizon']}"
+            + (
+                f", reasons={followups['data_gap_reasons']}"
+                if followups["data_gap_reasons"]
+                else ""
+            )
+        ),
+        (
+            "Outcome coverage: "
+            f"{followups['outcome_count']}/{followups['matured_window_count']} matured "
+            "window(s) carry metrics"
+            + (
+                f" ({followups['outcome_coverage']:.0%})"
+                if followups["outcome_coverage"] is not None
+                else " (nothing matured yet)"
+            )
         ),
         (
             "Snapshots: "
@@ -328,7 +434,8 @@ def format_audit(report: Mapping[str, Any]) -> str:
         (
             "Breadth: "
             f"{breadth['semantic_status']}, bars={breadth['completed_bar_count']}/"
-            f"{breadth['expected_completed_bar_count']}, gaps={breadth['data_gap_count']}"
+            f"{breadth['expected_completed_bar_count']}, gaps={breadth['data_gap_count']}, "
+            f"backfilled={breadth['backfilled_bar_count']}"
         ),
     ]
     if report["blockers"]:
