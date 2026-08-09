@@ -330,14 +330,57 @@ A session counts toward the five only if **all** of the following hold:
    document match the evidence package, and every excluded source carries a
    status and a reason.
 5. No `correction` row retracts that session's coverage.
+6. **The canonical set is complete by 09:00 ET** the next morning. Failed or
+   degraded attempts during the night are tolerated **only if** the ledger
+   shows automatic recovery to a canonical `ok` before 09:00 with no
+   operator intervention (Sol's rule — a transient that self-heals is the
+   repetition design working, not a failure of the week).
+7. **No market-hours inference**: no model call during RTH, and the model is
+   unloaded by 09:00 ET (spot-check `ollama ps` at least twice in the week).
+8. **No duplicate canonical output**: repeated 30-minute firings never
+   produce a second canonical set for the same session.
+9. **Journal import health is stated** in every published document's
+   data-quality section (lag, newest execution) — stalled is acceptable,
+   silent is not.
+10. **No provenance fallback**: the tracker vintage reads from
+    `data_session` all week; any fall-through to the `updated_at` heuristic
+    on a current-format payload is a defect observation.
+
+**Preconditions and one-time drills** (each performed once, any day inside
+the measurement week; the week cannot PASS without them, per the Sol 5.6
+verification review):
+
+- **Pinned checkout**: the production tree sits on one reviewed `main`
+  commit, clean, for the entire week. Any code change — committed or
+  uncommitted — in the production tree restarts the observation.
+- **Frozen-exe guard drill**: fire the desk launch task while a desk is
+  running (frozen-exe variant included); exactly one desk process, one IB
+  client set, one writer remains.
+- **Mid-session restart drill** (planned, on a quiet session): desk killed
+  and auto-relaunched; regime collection audit ends HEALTHY with nonzero
+  backfill, correct `capture_mode` and `data_session`, no reconstructed
+  frozen snapshots, and no scoring/config hash change.
+- **NAS transient**: one NAS unavailable/wake event observed or simulated;
+  the next firing recovers, the prior verified artifact is untouched, and
+  no manifest advertises a partial set.
 
 **Reset conditions.** The count returns to **zero**, not to four, on any of:
 
-- a session in the run that produced `failed`, `degraded_no_narrative`, or no
-  row at all;
-- a session covered only by a `manual_test` row;
-- a session whose attribution or coverage is later found wrong — that is, any
-  `correction` row appended against it;
+- a session with no canonical `ok` by 09:00 ET (including one covered only
+  by `manual_test`, or where failed/degraded attempts did not auto-recover);
+- a session whose attribution or coverage is later found wrong — that is,
+  any `correction` row appended against it;
+- a pseudo-session artifact (weekend/holiday keyed as a session);
+- a wrong-date narrative (stale content described as the target session);
+- any model inference during market hours;
+- a duplicate canonical artifact, or a duplicate desk instance;
+- any automatic scoring/config mutation (tuner, calibration, config hash);
+- a provenance fallback on a current-format tracker payload;
+- a permanent data gap finalized without its full retry entitlement;
+- a published citation of a non-usable source;
+- an incomplete NAS publication (partial artifact set advertised);
+- a manual corrective intervention of any kind;
+- an UNHEALTHY regime collection audit for that session;
 - any change to session identity, evidence packaging, the validator, or the
   failure policy. Changing the thing being observed restarts the observation.
 
