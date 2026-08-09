@@ -28,10 +28,21 @@ class PaintLinesButton(QToolButton):
     groupsChanged = Signal(list)
 
     def __init__(
-        self, parent: QWidget | None = None, *, prefs: PaintLinesPrefs | None = None
+        self,
+        parent: QWidget | None = None,
+        *,
+        prefs: PaintLinesPrefs | None = None,
+        compact: bool = False,
     ) -> None:
         super().__init__(parent)
         self._prefs = prefs if prefs is not None else PaintLinesPrefs()
+        if compact:
+            # The desk's embedded snapshot pane is height-starved - its legends
+            # were already put on one line to win back pixels for the candles.
+            # A flat, short button rides the legend row without taking any of
+            # them back.
+            self.setAutoRaise(True)
+            self.setMaximumHeight(22)
         self.setText("Lines")
         self.setToolTip(
             "Show or hide groups of chart lines. Saved on this machine only."

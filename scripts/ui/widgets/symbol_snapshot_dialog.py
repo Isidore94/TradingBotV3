@@ -219,7 +219,7 @@ class SymbolSnapshotWidget(QWidget):
         # One control for every line group on the chart, machine-local and
         # defaulting to all-on (A4). It sits on the D1 legend row because the
         # groups it governs are the ones the D1 legend names.
-        self.paint_lines_button = PaintLinesButton()
+        self.paint_lines_button = PaintLinesButton(compact=self._compact)
         self.paint_lines_button.groupsChanged.connect(self._on_paint_lines_changed)
         self.d1_header = QWidget()
         header_layout = QHBoxLayout(self.d1_header)
