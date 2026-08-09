@@ -822,3 +822,42 @@ def test_a_source_read_error_does_not_take_the_package_down(tmp_path):
     entry = _coverage_by_id(evidence)["daily.auto_report"]
     assert entry["status"] in {"unavailable", "invalid"}
     assert evidence["coverage"]["counts"]["usable"] == 2
+
+
+def test_a_source_capped_at_read_time_reports_its_banner_in_coverage_too(tmp_path):
+    """The banner has to reach notices, not only the content.
+
+    A .json larger than MAX_SOURCE_CHARS is shortened when it is read, before
+    the budget ever sees it. The banner went inline into the content but not
+    into ``notices``, so the coverage block listed the source as truncated with
+    nothing said about it -- observed on setups.current_tracker in the
+    2026-08-08 controlled run.
+    """
+    from ai_summary import MAX_SOURCE_CHARS, build_evidence_package
+
+    big = _touch(
+        tmp_path / "tracker.json",
+        json.dumps({"setups": {f"S{i}": {"pad": "p" * 80} for i in range(400)}}),
+    )
+    assert big.stat().st_size > MAX_SOURCE_CHARS
+
+    evidence = build_evidence_package(
+        ["setup_trackers"],
+        source_overrides={"setups.current_tracker": big},
+        session_date=SESSION,
+    )
+
+    source = _by_id(evidence)["setups.current_tracker"]
+    assert source["truncated"] is True
+    assert source["status"] == "available"
+    banner = f"[showing the first {MAX_SOURCE_CHARS} of "
+    assert any(notice.startswith(banner) for notice in source["notices"])
+    assert banner in source["content"], "and it stays inline where the model reads it"
+    # The read-cap banner is not a rejection reason.
+    assert source["status_reason"] == ""
+
+    entry = next(
+        row for row in evidence["coverage"]["truncated"]
+        if row["source_id"] == "setups.current_tracker"
+    )
+    assert any(notice.startswith(banner) for notice in entry["notices"])

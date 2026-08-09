@@ -366,12 +366,8 @@ def _read_path_content(path: Path) -> tuple[Any, bool, str, str]:
         if truncated:
             # Too large to parse from the visible slice; the text is still
             # real evidence, just cut short. Not invalid.
-            return (
-                visible + f"\n[showing the first {MAX_SOURCE_CHARS} of {len(text)} characters]",
-                True,
-                SOURCE_STATUS_AVAILABLE,
-                "",
-            )
+            banner = f"[showing the first {MAX_SOURCE_CHARS} of {len(text)} characters]"
+            return visible + "\n" + banner, True, SOURCE_STATUS_AVAILABLE, banner
         try:
             parsed = json.loads(visible)
         except json.JSONDecodeError as exc:
@@ -384,9 +380,11 @@ def _read_path_content(path: Path) -> tuple[Any, bool, str, str]:
                 "JSON document contains no records",
             )
         return _bounded(parsed), False, SOURCE_STATUS_AVAILABLE, ""
+    banner = ""
     if truncated:
-        visible += f"\n[showing the first {MAX_SOURCE_CHARS} of {len(text)} characters]"
-    return visible, truncated, SOURCE_STATUS_AVAILABLE, ""
+        banner = f"[showing the first {MAX_SOURCE_CHARS} of {len(text)} characters]"
+        visible += "\n" + banner
+    return visible, truncated, SOURCE_STATUS_AVAILABLE, banner
 
 
 def _path_source(
@@ -413,11 +411,17 @@ def _path_source(
         as_of = ""
         source_session = ""
     content, truncated, status, detail = _read_path_content(target)
-    return _source_record(
+    # For a usable source, ``detail`` is the read-cap banner rather than a
+    # rejection reason. It is already inline in the content, but it has to
+    # reach ``notices`` as well: the coverage block reports truncation from
+    # notices, and a source shortened at read time was showing up there with
+    # nothing said about it.
+    read_banner = detail if status == SOURCE_STATUS_AVAILABLE else ""
+    record = _source_record(
         source_id,
         label,
         status=status,
-        reason=detail,
+        reason="" if read_banner else detail,
         as_of=as_of,
         source_session=source_session,
         session_date=session_date,
@@ -425,6 +429,9 @@ def _path_source(
         truncated=bool(truncated),
         content=content,
     )
+    if read_banner:
+        record["notices"].append(read_banner)
+    return record
 
 
 def _source_record(
