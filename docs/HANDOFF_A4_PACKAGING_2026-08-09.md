@@ -313,10 +313,10 @@ Impossible on Linux. Unchanged expectation: exit 0 +
 
 ### 6. Trader decisions — escalated, not decided
 
-a. **A5 ownership** (gates A5): may a chart widget write
+a. **A5 ownership** (ANSWERED below; implemented as `3aa4f0b`): may a chart widget write
    `price_alerts.json`, or must arming route through the owning panel (one
    fenced connect line in `alert_center_panel.py`)? §4 above has both diffs.
-b. **d1_level_feed shared cached ai_state loader** (ask-first file): approve
+b. **d1_level_feed shared cached ai_state loader** (ANSWERED below; implemented as `904a7e8`): approve
    or keep the duplicated parse (one extra mtime-cached parse of the 38 MB
    file per ai_state write, on a worker).
 c. **A3 scope**: moot for this session — desk facts (items 2-5) were
@@ -350,6 +350,8 @@ d. **Confirm on desk first**, then decide red-level drawing with the real
 | Regression gate for both | Differential vs pristine A4-tip worktree: failed-ID lists byte-identical ⇒ no regression. Smoke 7/7. |
 | Lines-button measurement (read-only) | Themed, offscreen, 2560w and 1280w, both densities: header row 22 px with the button vs 17 px without ⇒ **5 px of chart height lost in the embedded pane; the docstring's zero-cost claim was false.** Label growth ("Lines (2 off)") costs width only — safe. |
 | Lines-button height-neutral fix | `1c79d0b`, pushed. Cap = themed font line height (16 px) + `rowChrome` QSS exemption for legibility; header delta **0** at all four themed configurations; new 4-param regression test (fails 4/4 with the exemption reverted); differential suite byte-identical; smoke 7/7. |
+| A5 click-to-arm (trader-approved 6a) | `3aa4f0b`, pushed. Routes through `AlertCenterPanel`; fenced-file diff is exactly the approved connect + `_arm_price_alert_from_level` (merge semantics = the Focus board's, including no silent re-arm of a fired side). Service injected by `trading_desk.py`; the chart never holds a service handle (tested). "Phone alert" button on the ArmBar, enabled only with a painted line selected. +5 tests. Differential byte-identical; smoke 7/7. |
+| Shared ai_state loader (trader-approved 6b) | `904a7e8`, pushed. `d1_level_feed.load_ai_state_projection` (mtime_ns-cached raw parse, per-consumer projections); `chart_levels` drops its duplicate 38MB parse; every existing test untouched and green; +3 tests incl. a one-`json.load`-for-both-consumers proof. First-read-per-process can still cost two parses until both consumers have registered (documented; keeps the import lazy so chart_levels does not pull pandas at import). Differential byte-identical; smoke 7/7. |
 
 No fence file was touched by anyone. `tests/test_packaging_spec_drift.py`
 unweakened. Nothing was merged to `main` or `testing`.
