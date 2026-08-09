@@ -438,3 +438,157 @@ def test_audit_reports_backfilled_and_live_chains_separately(tmp_path):
     # The +30 row predates the schema field, so its absence reads as live.
     assert followups["live_count"] == 1
     assert "backfilled=2" in __import__("regime_collection_audit").format_audit(report)
+
+
+# --- bounded retry before the gap becomes permanent ------------------------
+#
+# The sweep writes its data_gap rows *and* its per-session marker in the same
+# pass, and the marker is what stops the session from ever being swept again.
+# Finalising both off one failed request turned a transient broker hiccup into
+# permanently missing evidence (checkpoint review 2026-08-08 second review).
+
+
+class _Sleeps:
+    def __init__(self):
+        self.pauses: list[float] = []
+
+    def __call__(self, seconds):
+        self.pauses.append(seconds)
+
+
+def test_a_transient_fetch_failure_is_retried_and_the_chain_completes(tmp_path):
+    from technical_integrity import CAPTURE_MODE_BACKFILL
+
+    monitor, paths = _monitor_with_pending_chain(tmp_path)
+    attempts = {"n": 0}
+    sleeps = _Sleeps()
+
+    def _flaky(symbol, session_date):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("IBKR pacing violation")
+        return _followup_bars(RESOLUTION_AT, 20)
+
+    summary = monitor.sweep_incomplete_followups(
+        _flaky, now=AFTER_CLOSE, trigger="close_of_day", sleep=sleeps
+    )
+
+    assert attempts["n"] == 2
+    assert summary["retry_attempts"] == {"MU": 2}
+    assert summary["data_gap_symbols"] == []
+    followups = [
+        row for row in _rows(paths["events_path"])
+        if row["event_type"] == "post_resolution_followup"
+    ]
+    assert len(followups) == 3
+    assert all(row["data_gap"] is False for row in followups)
+    assert all(row["capture_mode"] == CAPTURE_MODE_BACKFILL for row in followups)
+
+
+def test_retries_are_bounded_and_exhaustion_still_writes_the_honest_gap(tmp_path):
+    monitor, paths = _monitor_with_pending_chain(tmp_path)
+    attempts = {"n": 0}
+    sleeps = _Sleeps()
+
+    def _broken(symbol, session_date):
+        attempts["n"] += 1
+        raise RuntimeError("IBKR disconnected")
+
+    summary = monitor.sweep_incomplete_followups(
+        _broken, now=AFTER_CLOSE, trigger="close_of_day", retries=2, sleep=sleeps
+    )
+
+    assert attempts["n"] == 3, "retries must be bounded, never an open loop"
+    assert len(sleeps.pauses) == 2, "no backoff after the final attempt"
+    assert summary["data_gap_symbols"] == ["MU"]
+
+    followups = [
+        row for row in _rows(paths["events_path"])
+        if row["event_type"] == "post_resolution_followup"
+    ]
+    assert len(followups) == 3
+    assert all(row["data_gap"] is True for row in followups)
+    # The gap is still explicit, and now says how hard the sweep tried.
+    assert all("3 attempt(s)" in row["data_gap_reason"] for row in followups)
+    # And the session is still marked, because the retries really are spent.
+    assert f"{SESSION}|close_of_day" in monitor.followup_sweep_markers
+
+
+def test_a_persistently_empty_response_is_retried_too(tmp_path):
+    # "Nothing" from a provider still catching up is indistinguishable from
+    # "this data does not exist" on a single attempt.
+    monitor, _paths = _monitor_with_pending_chain(tmp_path)
+    attempts = {"n": 0}
+
+    def _empty(symbol, session_date):
+        attempts["n"] += 1
+        return []
+
+    summary = monitor.sweep_incomplete_followups(
+        _empty, now=AFTER_CLOSE, trigger="close_of_day", sleep=_Sleeps()
+    )
+
+    assert attempts["n"] == 3
+    assert summary["data_gap_symbols"] == ["MU"]
+
+
+def test_a_spent_retry_budget_does_not_stall_the_sweep(tmp_path):
+    monitor, _paths = _monitor_with_pending_chain(tmp_path)
+    sleeps = _Sleeps()
+
+    summary = monitor.sweep_incomplete_followups(
+        lambda symbol, session_date: [],
+        now=AFTER_CLOSE,
+        trigger="close_of_day",
+        retry_budget_seconds=0.0,
+        sleep=sleeps,
+    )
+
+    # This loop holds the monitor lock, so a provider that is down for every
+    # symbol must not cost symbol-count x backoff seconds under it.
+    assert sleeps.pauses == []
+    assert summary["data_gap_symbols"] == ["MU"]
+
+
+# --- point-in-time as_of on an empty follow-up window ----------------------
+
+
+def test_an_absent_window_is_stamped_at_the_horizon_not_the_resolution():
+    from technical_integrity import _followup_tracking_event, _post_resolution_events
+
+    tracking = _followup_tracking_event(_resolution())
+    events = _post_resolution_events(
+        tracking, [], now=RESOLUTION_AT + timedelta(minutes=95)
+    )
+
+    by_horizon = {row["horizon_minutes"]: row for row in events}
+    assert set(by_horizon) == {30, 60, 90}
+    for horizon, row in by_horizon.items():
+        assert row["data_gap"] is True
+        # The absence was only knowable once the window ran out. Stamping it at
+        # resolution time backdated the finding by up to 90 minutes.
+        assert row["as_of"] == row["window_target_at"], horizon
+        assert row["as_of"] > row["resolution_bar_close"]
+
+
+def test_a_truncated_horizon_is_stamped_at_the_close_it_actually_ended_at():
+    from technical_integrity import _followup_tracking_event, _post_resolution_events
+
+    # Resolve 45 minutes before the close: +60 and +90 run past it.
+    late = datetime(2026, 7, 15, 15, 15, tzinfo=NY)
+    tracking = _followup_tracking_event(_resolution(resolved_at=late))
+    events = _post_resolution_events(tracking, [], now=late + timedelta(minutes=95))
+
+    by_horizon = {row["horizon_minutes"]: row for row in events}
+    assert by_horizon[30]["truncated"] is False
+    assert by_horizon[30]["as_of"] == by_horizon[30]["window_target_at"]
+    for horizon in (60, 90):
+        row = by_horizon[horizon]
+        assert row["truncated"] is True
+        # The window ended at the close, so that is when the absence was known;
+        # the target time is after the close and nobody could observe it there.
+        # (Stamps are market-local, i.e. this desk's clock, so compare instants.)
+        assert datetime.fromisoformat(row["as_of"]) == datetime(2026, 7, 15, 16, 0, tzinfo=NY)
+        assert datetime.fromisoformat(row["as_of"]) < datetime.fromisoformat(
+            row["window_target_at"]
+        )

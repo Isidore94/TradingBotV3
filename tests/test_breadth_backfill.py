@@ -325,3 +325,63 @@ def test_audit_counts_backfilled_breadth_bars_separately(tmp_path):
 
     assert report["breadth_recorder"]["backfilled_bar_count"] == 2
     assert "backfilled=2" in format_audit(report)
+
+# --- bounded retry before the gap becomes permanent ------------------------
+#
+# The fill writes its data_gap rows *and* the per-session marker in one pass,
+# and the marker stops the session from ever being repaired again. Finalising
+# both off one failed request turned a transient hiccup into permanently
+# missing breadth evidence (checkpoint review 2026-08-08 second review).
+
+
+def _adapter_bot(fetch):
+    from bounce_bot_lib import legacy
+
+    recorder = Mock()
+    recorder.backfill_trigger.return_value = "close_of_day"
+    recorder.session_date = SESSION
+    recorder.backfill_session_bars.return_value = {"ran": True}
+
+    bot = object.__new__(legacy.BounceBot)
+    bot._vold_recorder = recorder
+    bot._vold_contract = object()
+    bot._request_historical_contract_bars = Mock(side_effect=fetch)
+    return legacy, bot, recorder
+
+
+def test_a_transient_fetch_failure_is_retried_and_the_bars_still_arrive(monkeypatch):
+    import durability_retry
+
+    monkeypatch.setattr(durability_retry.time, "sleep", lambda seconds: None)
+    calls = {"n": 0}
+
+    def _flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("IBKR pacing violation")
+        return [_row(0), _row(5)]
+
+    legacy, bot, recorder = _adapter_bot(_flaky)
+    legacy.BounceBot._backfill_breadth_bars_if_due(bot, AFTER_CLOSE)
+
+    assert calls["n"] == 2
+    args, _kwargs = recorder.backfill_session_bars.call_args
+    assert len(args[0]) == 2, "the retried response must reach the recorder"
+
+
+def test_exhausted_retries_still_hand_the_recorder_an_honest_empty_result(monkeypatch):
+    import durability_retry
+
+    monkeypatch.setattr(durability_retry.time, "sleep", lambda seconds: None)
+    calls = {"n": 0}
+
+    def _broken(*args, **kwargs):
+        calls["n"] += 1
+        raise RuntimeError("IBKR disconnected")
+
+    legacy, bot, recorder = _adapter_bot(_broken)
+    legacy.BounceBot._backfill_breadth_bars_if_due(bot, AFTER_CLOSE)
+
+    assert calls["n"] == 3, "retries must be bounded, never an open loop"
+    args, _kwargs = recorder.backfill_session_bars.call_args
+    assert args[0] == [], "exhaustion still records the gap honestly"

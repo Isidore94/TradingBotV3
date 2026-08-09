@@ -54,6 +54,36 @@ given dataset produces — same scoring path, same data vintage discipline.
 A characterization test pins that: catch-up refresh from session N-1 bars ==
 the after-close refresh from session N-1 bars, byte-identical tracker.
 
+**Amended 2026-08-08 (checkpoint review second review — retraction).** The
+"timing-only" claim above was true of the *replay* and false of the *call*.
+Two defects, both now repaired on this branch:
+
+1. **Scoring side effects.** `backfill_setup_tracker_from_recent_sessions`
+   ends by running `run_priority_scoring_tuner(apply_changes=True)` and
+   `calibrate_expected_r_prior_anchors(persist=True)`. Both rewrite **live**
+   scoring inputs, so an unattended recovery firing minutes before a scan
+   retuned the model on its way past — which is a behaviour change, not a
+   timing change, and the characterization test could not see it because it
+   mocked both calls into silence. The function now takes
+   `run_scoring_side_effects`. The **manual GUI backfill keeps them** (the
+   trader asked for the rebuild and is watching the result); the **automatic
+   catch-up passes `False`**. The tests no longer mock the two calls away —
+   the stubs record, and the tests assert which path invoked them.
+2. **Data vintage.** `get_setup_tracker_last_update_session` read the session
+   off `updated_at`, which is the wall clock at write time. That is only the
+   data vintage while every write happens after its own session's close — the
+   exact assumption catch-up breaks. A Friday-morning catch-up rebuilt
+   Thursday's tracker and then reported *Friday* as reflected, suppressing the
+   genuine Friday refresh for the whole next session. `save_setup_tracker_payload`
+   now takes an explicit **`data_session`** — the completed session whose bars
+   produced the payload — and `update_setup_tracker_from_scan` passes the scan
+   date it evaluated, so both paths stamp the truth. `updated_at` remains the
+   fallback for legacy payloads written before the field existed.
+
+So the corrected claim is: the catch-up **replay** is timing-only and remains
+byte-pinned; the **call** used to carry global refits, and no longer does on
+the automatic path. Provenance is recorded, not inferred from a clock.
+
 **Optional preview lane (flagged, default off):** intraday scans may surface
 new candidates to a clearly-labeled preview surface (UI only, never written
 to tracker/watchlist files, never alerting) so fresh setups are visible
@@ -96,6 +126,35 @@ functions of completed M5 bars — exactly what Tier B permits.
   standard the promotion study declares (that declaration stays in the
   study, not here).
 
+**Amended 2026-08-08 (second review).** Three corrections to what shipped:
+
+- **Bounded retry before the gap is permanent.** The sweep wrote its
+  `data_gap` rows *and* its per-session sweep marker in one pass, after a
+  **single** failed historical request — and the marker is what stops the
+  session from ever being swept again. One pacing violation or momentary
+  disconnect therefore cost that session's evidence for good. The fetch now
+  retries a bounded number of times first (`scripts/durability_retry.py`;
+  default 2 retries, short backoff, every attempt logged), and a persistently
+  *empty* response counts as a failure worth retrying — on a single attempt it
+  is indistinguishable from "this data does not exist". What is written after
+  exhaustion is unchanged, and the gap reason now states how many attempts
+  were made. A whole-sweep sleep budget caps the total backoff across symbols,
+  because that loop holds the monitor lock. The same helper wraps the 2.4
+  breadth fetch, which had the identical single-attempt defect.
+- **Point-in-time `as_of` on an empty window.** A follow-up row for a window
+  with no bars was stamped `as_of = resolution_bar_close` — up to 90 minutes
+  before the absence could have been known. It is now the end of the window:
+  the horizon target, clamped to the close for a horizon truncated by it,
+  which is exactly the moment the monitor waits for before writing the row.
+- **Gaps and outcome coverage reported on their own.** A session can be
+  HEALTHY — every chain closed, every gap explicitly marked — and still hand
+  the promotion study almost no usable outcomes, because a `data_gap` row
+  satisfies the completeness check while carrying no displacement/MFE/MAE. The
+  audit now prints a dedicated follow-up data-gap line (count, by horizon,
+  reasons) and an **outcome coverage** figure: matured windows that actually
+  carry metrics over matured windows expected. Reporting only — the HEALTHY
+  verdict logic is deliberately untouched.
+
 ### 2.4 Breadth ledger (Tier B)
 
 `vold_m5.jsonl` gaps (41/78 on 8/6, 73/78+3 gaps on 8/7): the recorder
@@ -106,6 +165,13 @@ timestamps and actual contract provenance. Unfetchable bars keep explicit
 `data_gap` rows. IB pacing: backfill uses the normal historical-data path
 inside the existing single-desk budget; it is a handful of requests, not a
 scan.
+
+**Amended 2026-08-08 (second review).** As with 2.3, one failed request used
+to finalise this session's permanent gap rows and its backfill marker
+together. The fetch now goes through the shared bounded retry
+(`scripts/durability_retry.py`) first; pacing cost rises from one request to
+at most three on a failing session, and what is written after exhaustion is
+unchanged.
 
 ### 2.5 Frozen snapshots and baselines (Tier C — unchanged on purpose)
 
@@ -145,8 +211,8 @@ because step 5 was not built.
 | Invariant | Compliance |
 |---|---|
 | Completed bars only; forming bar is preview | All backfill uses completed bars; preview lane is labeled preview and writes nothing |
-| Missing data is uncertainty, never confirmation | Unfetchable bars stay `data_gap`; Tier C stays missed; backfill is marked, never silent |
-| No detector/scoring change without golden fixtures | Staleness override changes timing only; characterization test pins byte-identical tracker output for identical data vintage |
+| Missing data is uncertainty, never confirmation | Unfetchable bars stay `data_gap` — now only after bounded retry, so a transient hiccup is not recorded as permanent absence; Tier C stays missed; backfill is marked, never silent |
+| No detector/scoring change without golden fixtures | The catch-up *replay* changes timing only and is pinned byte-identical for an identical data vintage; the automatic catch-up no longer runs the scoring tuner or Expected-R prior refit at all (see 2.1 amendment) |
 | One owner per timer/thread/job | The scheduled task is the only relauncher; sweepers run inside the existing engines' own lifecycles |
 | Failed publish never destroys last verified | Backfill appends; never rewrites live rows |
 | Point-in-time research | `capture_mode` provenance keeps live vs backfill separable forever |

@@ -167,3 +167,144 @@ def test_missing_snapshot_duplicate_bar_and_incomplete_chain_are_blockers(tmp_pa
         "blockers"
     ]
     assert "breadth bars have no contract-verification event" in report["blockers"]
+
+
+# --- follow-up gaps and outcome coverage, reported on their own -----------
+#
+# A session can be HEALTHY -- every chain closed, every gap explicitly marked
+# -- and still hand the promotion study almost no usable outcomes, because an
+# explicit data_gap row satisfies the completeness check while carrying no
+# displacement/MFE/MAE at all. The audit reports both figures so that state is
+# visible; the verdict logic is deliberately unchanged (checkpoint review
+# 2026-08-08 second review).
+
+
+def _healthy_session_rows(*, gap_horizons=()):
+    """One resolved level with a full +30/60/90 chain, some windows empty."""
+    rows = [
+        {
+            **_base("level_resolved", "r1"),
+            "followup_tracking_version": "regime_infrastructure_phase1_v1",
+        },
+        {
+            **_base("post_resolution_tracking_started", "r1|followup"),
+            "source_resolution_id": "r1",
+            "resolution_bar_close": f"{DAY}T10:00:00-04:00",
+        },
+    ]
+    for horizon in (30, 60, 90):
+        is_gap = horizon in gap_horizons
+        rows.append(
+            {
+                **_base("post_resolution_followup", f"r1|followup|{horizon}"),
+                "source_resolution_id": "r1",
+                "horizon_minutes": horizon,
+                "truncated": False,
+                "data_gap": is_gap,
+                "data_gap_reason": (
+                    "chain sweeper: no completed M5 bars available for MU "
+                    f"on {DAY} after 3 attempt(s)"
+                    if is_gap
+                    else ""
+                ),
+            }
+        )
+    rows.extend(
+        [
+            {
+                **_base("frozen_intraday_snapshot", "s1030"),
+                "target_market_time": "10:30",
+            },
+            {
+                **_base("frozen_intraday_snapshot", "s1200"),
+                "target_market_time": "12:00",
+            },
+            {**_base("opening_range_baseline", "opening"), "data_gap": False},
+        ]
+    )
+    return rows
+
+
+def _audit_with(tmp_path, rows):
+    from regime_collection_audit import audit_regime_collection
+
+    technical = tmp_path / "technical.jsonl"
+    _write(technical, rows)
+    (tmp_path / "vold.jsonl").write_text("", encoding="utf-8")
+    return audit_regime_collection(
+        session_date=DAY,
+        technical_events_path=technical,
+        breadth_events_path=tmp_path / "vold.jsonl",
+        now=datetime(2026, 7, 30, 16, 30, tzinfo=NY),
+    )
+
+
+def test_full_outcome_coverage_is_reported_when_every_window_has_bars(tmp_path):
+    report = _audit_with(tmp_path, _healthy_session_rows())
+
+    followups = report["technical_followups"]
+    assert followups["matured_window_count"] == 3
+    assert followups["outcome_count"] == 3
+    assert followups["outcome_coverage"] == 1.0
+    assert followups["data_gap_by_horizon"] == {"30": 0, "60": 0, "90": 0}
+
+
+def test_healthy_with_gaps_shows_the_coverage_shortfall(tmp_path):
+    from regime_collection_audit import format_audit
+
+    report = _audit_with(tmp_path, _healthy_session_rows(gap_horizons=(60, 90)))
+
+    # The verdict logic is untouched: the chain is complete, so the empty
+    # windows raise no follow-up blocker at all. (The one blocker here is the
+    # deliberately empty breadth ledger this fixture does not populate.)
+    assert not report["technical_followups"]["incomplete_chains"]
+    assert report["blockers"] == ["breadth ledger has no completed-M5 rows"]
+
+    # ...but two thirds of its matured windows carry no outcome at all, and
+    # that is now stated rather than buried in a single "gaps=2" token.
+    followups = report["technical_followups"]
+    assert followups["matured_window_count"] == 3
+    assert followups["outcome_count"] == 1
+    assert followups["outcome_coverage"] == round(1 / 3, 4)
+    assert followups["data_gap_by_horizon"] == {"30": 0, "60": 1, "90": 1}
+    assert any("after 3 attempt(s)" in reason for reason in followups["data_gap_reasons"])
+
+    text = format_audit(report)
+    gap_line = next(line for line in text.splitlines() if line.startswith("Follow-up data gaps:"))
+    coverage_line = next(line for line in text.splitlines() if line.startswith("Outcome coverage:"))
+    assert "2 of 3 window(s)" in gap_line
+    assert "1/3 matured window(s) carry metrics (33%)" in coverage_line
+
+
+def test_nothing_matured_yet_is_not_reported_as_zero_coverage(tmp_path):
+    # Missing data is uncertainty, never confirmation: before any window has
+    # run out there is no shortfall to report, only nothing to report.
+    from regime_collection_audit import audit_regime_collection, format_audit
+
+    technical = tmp_path / "technical.jsonl"
+    _write(
+        technical,
+        [
+            {
+                **_base("level_resolved", "r1"),
+                "followup_tracking_version": "regime_infrastructure_phase1_v1",
+            },
+            {
+                **_base("post_resolution_tracking_started", "r1|followup"),
+                "source_resolution_id": "r1",
+                "resolution_bar_close": f"{DAY}T10:00:00-04:00",
+            },
+        ],
+    )
+    (tmp_path / "vold.jsonl").write_text("", encoding="utf-8")
+    report = audit_regime_collection(
+        session_date=DAY,
+        technical_events_path=technical,
+        breadth_events_path=tmp_path / "vold.jsonl",
+        now=datetime(2026, 7, 30, 10, 15, tzinfo=NY),
+    )
+
+    followups = report["technical_followups"]
+    assert followups["matured_window_count"] == 0
+    assert followups["outcome_coverage"] is None
+    assert "nothing matured yet" in format_audit(report)

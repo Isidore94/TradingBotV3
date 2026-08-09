@@ -82,6 +82,7 @@ from master_avwap_shared import (
 )
 from focus_picks import load_focus_map
 from market_internals import format_internals_line, internals_context_fields
+from durability_retry import fetch_with_bounded_retry
 from vold_recorder import (
     CONTRACT_CANDIDATES as VOLD_CONTRACT_CANDIDATES,
     VoldSessionRecorder,
@@ -8138,16 +8139,20 @@ class BounceBot(EWrapper, EClient):
         # A "1 D" request ends at this moment, so an earlier session needs a
         # wider window; the recorder then keeps only that session's bars.
         duration = "1 D" if session_date == current_session else "2 D"
-        try:
-            bars = self._request_historical_contract_bars(
+        # One failed request used to finalise this session's permanent gap rows
+        # *and* its backfill marker, so a transient hiccup cost the session's
+        # breadth evidence for good. Retry a bounded number of times first
+        # (checkpoint review 2026-08-08 second review); what is written after
+        # exhaustion is unchanged.
+        outcome = fetch_with_bounded_retry(
+            lambda: self._request_historical_contract_bars(
                 self._vold_contract,
                 duration=duration,
-            )
-        except Exception as exc:
-            logging.warning("$VOLD gap fill could not fetch %s bars: %s", duration, exc)
-            bars = []
+            ),
+            label=f"$VOLD gap fill ({duration} bars for {session_date})",
+        )
         summary = self._vold_recorder.backfill_session_bars(
-            bars,
+            outcome.value or [],
             session_date=session_date,
             now=now,
             trigger=trigger,

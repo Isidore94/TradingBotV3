@@ -29,6 +29,12 @@ from diagnostics.artifact_io import (
     CAPTURE_MODE_LIVE,
     row_capture_mode,
 )
+from durability_retry import (
+    DEFAULT_RETRIES,
+    DEFAULT_RETRY_BUDGET_SECONDS,
+    fetch_with_bounded_retry,
+    retry_deadline,
+)
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import get_diagnostics_dir, get_local_setting
 
@@ -918,7 +924,20 @@ def _post_resolution_events(
                 f"mae_atr_{suffix}": round(adverse, 6),
                 f"range_atr_{suffix}": round((highest - lowest) / atr, 6),
             }
-        as_of = window[-1]["bar_end"] if window else resolution_at.isoformat(timespec="seconds")
+        # Point-in-time: as_of is the moment this row's content became
+        # knowable. With bars, that is the last one that closed. With *no*
+        # bars, the absence itself is the content, and an absence is only
+        # knowable once the window has run out -- it was stamped with
+        # resolution_at, which is up to 90 minutes before anyone could have
+        # known (checkpoint review 2026-08-08 second review). window_end is
+        # that moment: the horizon target, clamped to the close for a
+        # truncated horizon whose window genuinely ends there. It is also
+        # exactly the gate this loop already waits for above.
+        as_of = (
+            window[-1]["bar_end"]
+            if window
+            else window_end.isoformat(timespec="seconds")
+        )
         followup_id = str(tracking.get("followup_id") or tracking.get("event_id") or "")
         events.append(
             {
@@ -1462,6 +1481,9 @@ class TechnicalIntegrityMonitor:
         now: datetime | None = None,
         reason: str = "chain sweeper",
         trigger: str = "",
+        retries: int = DEFAULT_RETRIES,
+        retry_budget_seconds: float = DEFAULT_RETRY_BUDGET_SECONDS,
+        sleep: Callable[[float], None] | None = None,
     ) -> dict[str, Any]:
         """Complete every due follow-up horizon left hanging by an outage.
 
@@ -1477,6 +1499,15 @@ class TechnicalIntegrityMonitor:
         nothing; the sweeper never raises, because a failed sweep must leave
         the ledger exactly as it found it.
 
+        A failed fetch is retried a bounded number of times before its gap is
+        written. The gap row *and* the per-session sweep marker are permanent -
+        the marker stops this session from ever being swept again - so
+        finalising both off a single transient hiccup turned a momentary
+        disconnect into permanently missing evidence (checkpoint review
+        2026-08-08 second review). ``retry_budget_seconds`` caps the total time
+        spent sleeping across all symbols, since this loop holds the monitor
+        lock: once spent, remaining symbols still get their one attempt.
+
         This is deliberately *not* ``observe_followups``: that call rolls the
         monitor onto the session of the bars it is handed, which on a next-day
         sweep would discard the very pending chains being recovered.
@@ -1489,6 +1520,7 @@ class TechnicalIntegrityMonitor:
             "chains": 0,
             "events": 0,
             "data_gap_symbols": [],
+            "retry_attempts": {},
             "reason": "",
         }
         if not ti_chain_backfill_enabled():
@@ -1511,17 +1543,22 @@ class TechnicalIntegrityMonitor:
 
             appended = 0
             data_gap_symbols: list[str] = []
+            retry_attempts: dict[str, int] = {}
+            deadline = retry_deadline(retry_budget_seconds)
+            retry_kwargs: dict[str, Any] = {}
+            if sleep is not None:
+                retry_kwargs["sleep"] = sleep
             for symbol in symbols:
-                try:
-                    rows = fetch_bars(symbol, session_date)
-                except Exception as exc:  # a broker hiccup is a gap, not a crash
-                    logging.warning(
-                        "Follow-up chain sweep could not fetch %s for %s: %s",
-                        symbol,
-                        session_date,
-                        exc,
-                    )
-                    rows = None
+                outcome = fetch_with_bounded_retry(
+                    lambda symbol=symbol: fetch_bars(symbol, session_date),
+                    label=f"Follow-up chain sweep fetch for {symbol} on {session_date}",
+                    retries=retries,
+                    deadline=deadline,
+                    **retry_kwargs,
+                )
+                if outcome.attempts > 1:
+                    retry_attempts[symbol] = outcome.attempts
+                rows = outcome.value
                 bars = (
                     completed_m5_bars(rows, now=now, session_date=target_session)
                     if rows
@@ -1542,7 +1579,8 @@ class TechnicalIntegrityMonitor:
                         now=now,
                         force_data_gap_reason=(
                             f"{reason}: no completed M5 bars available for "
-                            f"{symbol} on {session_date}"
+                            f"{symbol} on {session_date} after "
+                            f"{outcome.attempts} attempt(s)"
                         ),
                         capture_mode=CAPTURE_MODE_BACKFILL,
                     )
@@ -1553,9 +1591,11 @@ class TechnicalIntegrityMonitor:
             summary["trigger"] = str(trigger or "")
             summary["events"] = appended
             summary["data_gap_symbols"] = data_gap_symbols
+            summary["retry_attempts"] = retry_attempts
+            retried = f"; retried {len(retry_attempts)} symbol(s)" if retry_attempts else ""
             summary["reason"] = (
                 f"appended {appended} backfilled follow-up row(s) across "
-                f"{len(symbols)} symbol(s) for {session_date}"
+                f"{len(symbols)} symbol(s) for {session_date}{retried}"
             )
             return summary
 
