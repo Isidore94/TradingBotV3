@@ -69,7 +69,24 @@ hiddenimports = []
 # Deliberately NOT wrapped in try/except: a package that fails to collect here
 # is a bundle that starts and then dies at the first lazy import. Fail the
 # build loudly instead.
-for package in ("ui", "bounce_bot_lib", "master_avwap_lib", "market_prep", "diagnostics", "research_warehouse"):
+#
+# Every top-level package under scripts/ belongs in this tuple, plus the
+# root-level market_prep. tests/test_packaging_spec_drift.py asserts exactly
+# that and fails the suite when a new package appears - the list drifted five
+# packages behind the tree before that test existed.
+for package in (
+    "ui",
+    "ai_jobs",
+    "bounce_bot_lib",
+    "desk_link",
+    "diagnostics",
+    "gui_app",
+    "indicators",
+    "market_prep",
+    "market_prep_gui",
+    "master_avwap_lib",
+    "research_warehouse",
+):
     found = collect_submodules(package)
     if not found:
         raise SystemExit(f"spec error: collect_submodules({package!r}) found nothing — check sys.path above")
