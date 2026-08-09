@@ -236,7 +236,9 @@ class ChartReviewPanel(QFrame):
         self._bind_shortcuts()
         self._render_recents()
         # Same cadence and same refresh method as the existing snapshot popup.
-        # This panel owns this timer and runs it only while its page is visible.
+        # This panel owns this timer, and it runs for the panel's lifetime;
+        # _refresh_visible_chart checks isVisible() on each tick and does
+        # nothing while the page is hidden.
         self._chart_refresh_timer = QTimer(self)
         self._chart_refresh_timer.setInterval(REFRESH_INTERVAL_MS)
         self._chart_refresh_timer.timeout.connect(self._refresh_visible_chart)

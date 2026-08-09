@@ -434,6 +434,84 @@ def test_crosshair_readout_uses_the_nearest_drawn_bar_without_dataframe_work():
     assert hover_readout([], 0, "d1") is None
 
 
+def test_crosshair_items_are_lazy_and_released_when_the_chart_goes_away():
+    """No hover scene item may exist before a hover or survive a hide.
+
+    Three persistent scene items per CandleChart plus a scene-level
+    sigMouseMoved connection made the full suite segfault (SIGSEGV in 9 of 13
+    runs), because nothing ordered their native destruction against the
+    widget's. Build-on-hover / release-on-hide is what removed the hazard, so
+    both halves are pinned here: a chart nobody hovers must add nothing, and a
+    hidden chart must be back to exactly the items it was constructed with.
+    """
+    if _qt_app() is None:
+        return
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    from ui.widgets.candle_chart import CandleChart, hover_readout
+
+    app = _qt_app()
+    chart = CandleChart()
+    chart.resize(640, 420)
+    snapshot = chart_snapshot.build_m5_snapshot("TEST", _m5_bars(20))
+    chart.set_data(snapshot["bars"], snapshot["overlays"], timeframe="m5")
+    plot = chart.getPlotItem()
+
+    assert chart._hover_label is None
+    assert chart._crosshair_v is None and chart._crosshair_h is None
+    quiet_items = len(plot.items)
+
+    chart.show()
+    app.processEvents()
+    scene_position = plot.vb.mapViewToScene(
+        QPointF(7.0, chart._y(snapshot["bars"][7]["close"]))
+    )
+    # Delivered the way Qt delivers it: to the viewport, which routes into the
+    # view's mouseMoveEvent. That is the seam the scene signal used to occupy.
+    local = chart.mapFromScene(scene_position)
+    app.sendEvent(
+        chart.viewport(),
+        QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local),
+            chart.mapToGlobal(local),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+
+    assert chart._hover_label is not None
+    assert chart._hover_label.isVisible()
+    assert chart._hover_label.toPlainText() == hover_readout(
+        snapshot["bars"], 7.0, "m5"
+    )[1]
+    assert chart._crosshair_v.value() == 7
+    assert len(plot.items) == quiet_items + 3
+
+    chart.hide()
+    app.processEvents()
+    assert chart._hover_label is None
+    assert chart._crosshair_v is None and chart._crosshair_h is None
+    assert len(plot.items) == quiet_items
+
+    # Released is not disabled: the next hover on a live chart rebuilds.
+    chart.show()
+    app.processEvents()
+    chart._on_mouse_moved(scene_position)
+    assert chart._hover_label is not None
+    chart.hide()
+    assert chart._hover_label is None
+
+    # A hover with nothing to read out must not leave items behind either.
+    empty = CandleChart()
+    empty.resize(640, 420)
+    empty.set_data([], [])
+    empty._on_mouse_moved(QPointF(10.0, 10.0))
+    assert empty._hover_label is None
+
+
 def test_zero_volume_m5_legend_explains_missing_vwap():
     if _qt_app() is None:
         return

@@ -364,24 +364,19 @@ class CandleChart(pg.PlotWidget):
         plot = self.getPlotItem()
         self._candles = CandleItem()
         plot.addItem(self._candles)
-        # Crosshair/readout items are created once and moved by mouse events.
-        # They consume only the in-memory ``_bars`` list; no dataframe or I/O
-        # work is permitted on this paint-adjacent path.
-        crosshair_pen = pg.mkPen(theme.color("text_muted"), width=1, style=Qt.PenStyle.DotLine)
-        self._crosshair_v = pg.InfiniteLine(angle=90, movable=False, pen=crosshair_pen)
-        self._crosshair_h = pg.InfiniteLine(angle=0, movable=False, pen=crosshair_pen)
-        plot.addItem(self._crosshair_v, ignoreBounds=True)
-        plot.addItem(self._crosshair_h, ignoreBounds=True)
-        self._hover_label = pg.TextItem(
-            color=theme.color("text_primary"),
-            fill=pg.mkBrush(theme.color("bg_elevated")),
-            border=pg.mkPen(theme.color("border")),
-            anchor=(0, 1),
-        )
-        self._hover_label.setZValue(100)
-        plot.addItem(self._hover_label, ignoreBounds=True)
-        self._set_crosshair_visible(False)
-        self.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        # Crosshair/readout items are deliberately NOT built here. They are a
+        # hover decoration, and building them at construction gave every
+        # CandleChart in the app three extra native scene items plus a
+        # scene-level sigMouseMoved connection whose teardown order Qt does not
+        # guarantee - enough accumulated state to segfault the suite (SIGSEGV
+        # in 9 of 13 full runs; 0 of 8 without them). They are created on the
+        # first hover that has something to show and released the moment the
+        # chart is hidden or closed, so a chart nobody hovers costs nothing and
+        # never has a scene item outliving the widget that owns it. See
+        # _ensure_crosshair / _release_crosshair.
+        self._crosshair_v: pg.InfiniteLine | None = None
+        self._crosshair_h: pg.InfiniteLine | None = None
+        self._hover_label: pg.TextItem | None = None
         self._overlay_items: list[pg.PlotDataItem] = []
         # Paint-line pools, kept apart from the overlay pool: they hold
         # different primitives and a symbol switch changes their counts
@@ -740,9 +735,102 @@ class CandleChart(pg.PlotWidget):
         axis = self.getPlotItem().getAxis("bottom")
         axis.setTicks([_time_ticks(self._bars, timeframe)])
 
+    def _ensure_crosshair(self) -> bool:
+        """Build the hover decoration on demand. False means "cannot draw it".
+
+        ``_hover_label`` is assigned last and is the built/not-built sentinel,
+        so a half-finished build cannot be mistaken for a usable one.
+        """
+        if self._hover_label is not None:
+            return True
+        try:
+            plot = self.getPlotItem()
+            pen = pg.mkPen(theme.color("text_muted"), width=1, style=Qt.PenStyle.DotLine)
+            self._crosshair_v = pg.InfiniteLine(angle=90, movable=False, pen=pen)
+            self._crosshair_h = pg.InfiniteLine(angle=0, movable=False, pen=pen)
+            label = pg.TextItem(
+                color=theme.color("text_primary"),
+                fill=pg.mkBrush(theme.color("bg_elevated")),
+                border=pg.mkPen(theme.color("border")),
+                anchor=(0, 1),
+            )
+            label.setZValue(100)
+            plot.addItem(self._crosshair_v, ignoreBounds=True)
+            plot.addItem(self._crosshair_h, ignoreBounds=True)
+            plot.addItem(label, ignoreBounds=True)
+            self._hover_label = label
+        except Exception:
+            self._release_crosshair()
+            return False
+        return True
+
+    def _release_crosshair(self) -> None:
+        """Take the hover items out of the scene and forget them.
+
+        Idempotent and never raising: this runs from hide/close, which Qt can
+        deliver while the C++ side is already going away. The handles are
+        dropped BEFORE the removals so a re-entrant call - or a hover that
+        arrives mid-teardown - cannot touch an item twice or reach into memory
+        that pyqtgraph has already released. PlotItem.removeItem is itself a
+        no-op for an item it no longer holds.
+        """
+        items = (self._crosshair_v, self._crosshair_h, self._hover_label)
+        self._crosshair_v = None
+        self._crosshair_h = None
+        self._hover_label = None
+        try:
+            plot = self.getPlotItem()
+        except Exception:
+            return
+        for item in items:
+            if item is None:
+                continue
+            try:
+                plot.removeItem(item)
+            except Exception:
+                pass
+
+    def hideEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # A hidden chart cannot be hovered, so this is the natural deterministic
+        # teardown point - and the one Qt reliably delivers before the widget
+        # and its scene start coming apart. The next hover rebuilds.
+        self._release_crosshair()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._release_crosshair()
+        super().closeEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._set_crosshair_visible(False)
+        super().leaveEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Drive the readout from this widget's own event, not the scene's.
+
+        The scene's sigMouseMoved carried the crosshair before; a connection
+        into a per-widget bound method that Qt may emit while the widget is
+        being destroyed is exactly the lifetime hazard this file no longer
+        takes. GraphicsView already enables mouse tracking, so the override
+        sees the same moves the signal did.
+        """
+        super().mouseMoveEvent(event)
+        try:
+            position = event.position() if hasattr(event, "position") else event.localPos()
+            self._on_mouse_moved(self.mapToScene(position.toPoint()))
+        except Exception:
+            self._set_crosshair_visible(False)
+
     def _set_crosshair_visible(self, visible: bool) -> None:
-        for item in (self._crosshair_v, self._crosshair_h, self._hover_label):
-            item.setVisible(bool(visible))
+        items = (self._crosshair_v, self._crosshair_h, self._hover_label)
+        try:
+            for item in items:
+                if item is not None:
+                    item.setVisible(bool(visible))
+        except RuntimeError:
+            # The C++ items went away underneath us. Drop the stale handles so
+            # the next hover rebuilds instead of touching deleted memory.
+            self._release_crosshair()
 
     def _on_mouse_moved(self, scene_position) -> None:
         """Move the pure-Qt crosshair and show the nearest drawn bar."""
@@ -755,6 +843,10 @@ class CandleChart(pg.PlotWidget):
             payload = hover_readout(self._bars, view.x(), self._timeframe)
             if payload is None:
                 self._set_crosshair_visible(False)
+                return
+            # Built only now: a hover with nothing to read out - an empty chart,
+            # a move outside the plot - must not leave scene items behind.
+            if not self._ensure_crosshair():
                 return
             index, text = payload
             self._crosshair_v.setPos(index)
