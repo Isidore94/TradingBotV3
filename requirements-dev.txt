@@ -1,3 +1,4 @@
 -r requirements-gui.txt
 pytest
+pytest-timeout
 pyinstaller
