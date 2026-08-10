@@ -240,6 +240,45 @@ def test_the_uncollected_allowlist_only_names_real_packages():
     assert not unknown, f"allowlisted packages that no longer exist: {sorted(unknown)}"
 
 
+def test_the_selftest_never_demands_a_package_the_bundle_excludes():
+    """The two guards must not contradict each other.
+
+    ``scripts/selftest.py`` asserts that the frozen desk CAN import each module
+    in ``LAZY_ENGINE_MODULES``; ``PACKAGES_NOT_IN_THE_BUNDLE`` asserts that the
+    frozen desk does NOT ship certain packages. A name in both is unsatisfiable
+    by construction, and - this is the part that hurts - it is invisible to the
+    whole unfrozen suite, because a repo checkout can always import anything
+    under ``scripts/``. Only a real frozen build can collide them, and a frozen
+    build is the one thing nobody runs per commit.
+
+    That is exactly what happened on 2026-08-09: ``ai_jobs`` sat in both lists,
+    the unfrozen selftest passed 30/30 all week, and the desk's frozen run was
+    the first execution anywhere to fail. This test moves that discovery from a
+    four-minute rebuild to the normal suite.
+
+    If this fails, decide which side is right and fix THAT side - do not delete
+    the assertion. The question to answer is whether a frozen run can reach the
+    package. If it cannot, drop it from ``LAZY_ENGINE_MODULES``; if it can, move
+    it out of the exclusion list and into ``FIRST_PARTY_PACKAGES``.
+    """
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    import selftest
+
+    # LAZY_ENGINE_MODULES holds dotted module paths ("ui.services.bar_cache");
+    # the exclusion list holds top-level package names ("ai_jobs"). Compare on
+    # the root so "ai_jobs.briefs" is caught as readily as "ai_jobs".
+    demanded_roots = {name.split(".")[0] for name in selftest.LAZY_ENGINE_MODULES}
+    contradictions = demanded_roots & set(PACKAGES_NOT_IN_THE_BUNDLE)
+    assert not contradictions, (
+        "scripts/selftest.py requires the frozen exe to import packages that "
+        f"PACKAGES_NOT_IN_THE_BUNDLE deliberately keeps out of it: {sorted(contradictions)}. "
+        "These two lists cannot both be satisfied - the frozen --selftest will fail. "
+        "Reasons the packages are excluded: "
+        + "; ".join(f"{p}: {PACKAGES_NOT_IN_THE_BUNDLE[p]}" for p in sorted(contradictions))
+    )
+
+
 def test_the_spec_still_executes(spec):
     """A spec that cannot be evaluated cannot be checked - or built."""
     assert spec["_collected_packages"], "no collect_submodules calls found"

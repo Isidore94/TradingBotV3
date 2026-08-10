@@ -59,8 +59,11 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "ui.annotations.vocabulary",
     "ui.annotations.setup_claims",
     "ui.annotations.veto_cohort",
-    # the local AI batch layer
-    "ai_jobs",
+    # NOT ai_jobs: the local AI batch layer is deliberately out of the bundle
+    # (PACKAGES_NOT_IN_THE_BUNDLE in tests/test_packaging_spec_drift.py). Its
+    # only entry point is scripts/run_ai_jobs.py, a scheduled CLI run from the
+    # repo checkout, so the frozen exe cannot import it and must not be asked
+    # to. test_selftest_modules_are_actually_bundled keeps the two in step.
     # shadow/evidence engines
     "market_state",
     "greatness_monitor",

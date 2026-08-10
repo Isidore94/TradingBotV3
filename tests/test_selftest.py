@@ -68,7 +68,16 @@ def test_every_failure_is_reported_not_just_the_first():
 
 
 def test_the_engine_list_covers_the_lazily_imported_families():
-    """A shrinking list is the quiet way this check stops being worth running."""
+    """A shrinking list is the quiet way this check stops being worth running.
+
+    ``ai_jobs`` was removed from this roster on 2026-08-09 and its absence is a
+    correction, not the shrinkage this test guards against: the package is
+    deliberately excluded from the bundle (PACKAGES_NOT_IN_THE_BUNDLE in
+    tests/test_packaging_spec_drift.py), so requiring the frozen exe to import
+    it was unsatisfiable - the desk's frozen run failed on exactly that. The
+    only thing that may be dropped from this roster is a name the bundle
+    provably cannot contain; everything else stays.
+    """
     names = set(selftest.LAZY_ENGINE_MODULES)
     for expected in (
         "master_avwap",          # the scan subprocess entry
@@ -76,7 +85,6 @@ def test_the_engine_list_covers_the_lazily_imported_families():
         "market_prep",           # pre-session services
         "chart_snapshot",        # the chart path
         "chart_levels",          # A4 paint lines
-        "ai_jobs",               # the local AI batch runner
         "ui.annotations.store",  # capture
         "ui.app",                # the desk
     ):

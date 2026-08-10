@@ -84,20 +84,42 @@ Two consequences the reviewer should hold onto:
    record at all, so its chart simply has no trendline. That is correct
    behaviour, not a bug — but it means the trendline is a bonus on scanned
    names, not a dependable chart feature.
-2. **The population fraction was not measurable here.** This survey was done
-   in a container with no Drive mount and no ai_state file. Coverage is a
-   property of one file on one desk, so it is reported by a tool rather than
-   guessed:
+2. **The population fraction is now measured.** It was previously unmeasurable —
+   the survey was written in a container with no Drive mount and no ai_state
+   file. Coverage is a property of one file on one desk, so it is reported by a
+   tool rather than guessed:
 
    ```
    .venv\Scripts\python.exe scripts\d1_trendline_survey.py --list 20
    ```
 
-   It prints symbols in ai_state, how many carry a record, how many are
-   projectable, how many are fresh, and the number that actually matters —
-   **paintable today**. If that number is small enough that the line is a
-   curiosity rather than a tool, the honest response is to leave the group
-   switched off in the paint-lines control, not to loosen the gates.
+   **Desk measurement, 2026-08-09** (`C:\TradingBotData\data\runtime\master_avwap_ai_state.json`):
+
+   | metric | count | share |
+   | --- | ---: | ---: |
+   | symbols in ai_state | 1100 | — |
+   | with a trendline record | 62 | 5.6% of symbols |
+   | projectable | 62 | **100% of records** |
+   | fresh (≤ 5d) | 62 | **100% of records** |
+   | **paintable today** | **62** | **5.6% of symbols** |
+
+   Two readings, and they point the same way:
+
+   - **The gates work perfectly.** Every record that exists is both projectable
+     and fresh — 62/62 on each. Nothing is written that then fails to paint, so
+     a line that appears on a chart is always exact. There is no gate to loosen
+     and no partial-quality tier to reason about.
+   - **5.6% confirms the design, it does not indict it.** The record is written
+     only for priority candidates, so coverage tracks that population rather
+     than the watchlist. This is the "bonus on scanned names, not a dependable
+     chart feature" of point 1, quantified.
+
+   The §4 heading calls this a gap; the measurement says it is a *bound*, not a
+   defect. Because a painted line is always exact, the group stays defaulted ON:
+   the earlier "leave it switched off if the number is small" contingency was
+   written against the possibility of stale or unprojectable records, and that
+   possibility is now measured at zero. Loosening the gates remains the wrong
+   response, for the same reason as before.
 
 ## 5. What A4 does with all this
 

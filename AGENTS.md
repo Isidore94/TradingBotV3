@@ -33,7 +33,9 @@ is permanently out of scope (plan.md sec 1).
 - `review_policy.json` ranks and annotates only — it deliberately has no suppression field; do not add one.
 
 ## Tech stack + key deps
-- Python ≥3.12 (desktop runs 3.14.6), Windows-first with macOS support (`docs/MACOS_SETUP.md`; same code, no fork — platform differences live in launchers, `project_paths.py`, and `ai_credentials.py`), repo-local `.venv`.
+- Python ≥3.12 (desk `.venv` measured 3.12.13, a uv-managed CPython built 2026-08-07; the repo venv
+  has no `pip` — install with `uv pip install -r … -c constraints.txt --python .venv\Scripts\python.exe`),
+  Windows-first with macOS support (`docs/MACOS_SETUP.md`; same code, no fork — platform differences live in launchers, `project_paths.py`, and `ai_credentials.py`), repo-local `.venv`.
 - `PySide6`/`qtawesome`/`pyqtgraph` — new Trading Desk UI (`PyQt5` remains only for legacy `TickerMover.py`); Tk — legacy GUI.
 - `ibapi` — IBKR market data; `yfinance` — fallback bars; `pandas`/`pyarrow` — bar frames and arrow-backed columns.
 - `feedparser` — news RSS for market prep; `openai` — provider-neutral one-way advisory summaries (`scripts/ai_summary.py`, `market_prep/services/ai_service.py`).
@@ -69,14 +71,20 @@ rebuilding is verification only, and skipping it can never leave the tree broken
   - `launch_gui.py --selftest` (`scripts/selftest.py`) imports every lazily-loaded engine and loads
     every `__file__`-relative asset (theme.qss, the veto vocabulary), no window and no network,
     exiting non-zero with every failure named. Run it against the FROZEN exe:
-    `dist\TradingBotV3\TradingBotV3.exe --selftest`. A passing frozen selftest is what replaces
-    the trader's click-through.
+    `dist\TradingBotV3\TradingBotV3.exe --selftest`. Expect `selftest OK: 29/29 checks passed (frozen)`
+    and exit 0 — that is what replaces the trader's click-through (desk-verified 2026-08-09).
+  - The two lists must never contradict each other: a package in `PACKAGES_NOT_IN_THE_BUNDLE` cannot
+    also be in `selftest.LAZY_ENGINE_MODULES`, because the frozen exe genuinely does not contain it.
+    The unfrozen suite cannot see such a clash — a repo checkout imports anything under `scripts/` —
+    so `test_the_selftest_never_demands_a_package_the_bundle_excludes` now asserts the two are
+    disjoint. It exists because `ai_jobs` was in both, the unfrozen selftest passed 30/30 all week,
+    and the desk's first frozen run (2026-08-09) was the first execution anywhere to catch it.
   - Between them, triggers 2-4 below are now caught by the normal test run.
 - **Triggers — a change of these kinds can break the bundle, so rebuild and run the frozen selftest:**
   1. New third-party dependency (`requirements-*.txt` / `constraints.txt`) — may need hiddenimports or `collect_data_files`. **Not** covered by the guards.
   2. New non-`.py` runtime asset. The spec mirrors every `FIRST_PARTY_PACKAGES` tree plus `config/`; an asset outside those silently goes missing. *(spec-drift test catches it)*
   3. New top-level package under `scripts/` that is imported lazily — the spec's `collect_submodules` list is hardcoded. *(spec-drift test catches it)*
-  4. New dynamic import by string name (`importlib`, name-keyed panel/service lookup) in an uncollected package. *(add the module to `selftest.LAZY_ENGINE_MODULES`)*
+  4. New dynamic import by string name (`importlib`, name-keyed panel/service lookup) in an uncollected package. *(add the module to `selftest.LAZY_ENGINE_MODULES` — but only if a frozen run can actually reach it; see the disjointness rule above)*
   5. Any change touching `__file__` / `ROOT_DIR` / `sys.path` — `ROOT_DIR` is `sys._MEIPASS` when frozen. **Not** fully covered; the selftest checks the phantom-root assumption only.
 - Read `packaging/README.md` "Things that will bite you" before touching the spec or any of the above.
   The signature failure is a bundle that starts fine and dies at the first lazy import, so "it launched"

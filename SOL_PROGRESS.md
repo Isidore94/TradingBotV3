@@ -87,6 +87,121 @@ stamp; it must not duplicate the roadmap.
   `research_warehouse` from the spec fails exactly 5 of the file's 16 tests
   (both suites' package censuses and both asset sweeps), 16/16 green again
   after restoring.
+
+#### THE WINDOWS DESK GATE (2026-08-09, `fae371e` + this commit) — authoritative
+
+Taken on the trading desk itself, and **this replaces the Linux gate** as the
+number of record for the 2026-08-10 testing week. The Linux gate is retained
+above as supporting evidence only.
+
+Two runs are recorded because this commit adds a test. The first is the clean
+re-baseline of `fae371e` as received; the second is the tree as committed.
+
+| | at `fae371e` (the re-baseline) | as committed (this commit) |
+| --- | --- | --- |
+| **pytest exit code** | **0** (pytest's own, not a piped tail's) | **0** |
+| summary line | `2610 passed, 7 subtests passed in 122.62s` | `2611 passed, 7 subtests passed in 104.13s` |
+| junit `desk_report.xml` | tests **2617** · failures **0** · errors **0** · skipped **0** | tests **2618** · failures **0** · errors **0** · skipped **0** |
+| smoke | **7/7**, exit 0 | — |
+| **frozen selftest** | 1 of 30 FAILED (`import ai_jobs`) | **`selftest OK: 29/29 checks passed (frozen)`, exit 0** |
+
+The +1 is exactly the new disjointness guard; nothing else moved.
+
+**The count reconciles exactly against Linux.** Linux was 2605 passed with the
+5 win32-only tests skipped; the desk is 2610 passed with `skipped=0`. 2605 + 5 =
+2610 — the Windows-only tests ran and passed, and nothing else changed shape.
+Wall time 122s against the Linux ~90s norm is contention from the hourly
+`TradingBotV3 - Push cold data to DAS` task firing at 22:05 mid-run, not a
+regression.
+
+Environment notes, because two of them cost time:
+- The repo `.venv` **has no `pip` at all** (`pip.exe` absent, `python -m pip` →
+  `No module named pip`) — it is uv-built. Deps go in with
+  `uv pip install -r requirements-dev.txt -c constraints.txt --python .venv\Scripts\python.exe`.
+  That added exactly `duckdb==1.5.5` and `pytest-timeout==2.4.0`, upgrading and
+  removing nothing. **duckdb matters for the count**: without it,
+  `test_warehouse_queries.py` cannot run and the desk number stops being
+  comparable to Linux.
+- A stale cloud-agent worktree at `%TEMP%\TradingBotV3-sol-a3` (`382b9dd`, a
+  strict ancestor of the tip) held the branch and blocked checkout. Released
+  non-destructively: renamed to `…-sol-a3.orphan` + `git worktree prune`.
+
+**The frozen selftest earned its keep on its first desk run**, which is the
+whole reason it exists. It failed `1 of 30 — ModuleNotFoundError: No module
+named 'ai_jobs'`, exposing a contradiction between two guards that landed in the
+same 2026-08-09 merge: `scripts/selftest.py` required the frozen exe to import
+`ai_jobs`, while `PACKAGES_NOT_IN_THE_BUNDLE` deliberately excluded it (its only
+entry point is `scripts/run_ai_jobs.py`, a scheduled CLI from the repo checkout —
+which the desk's own `TradingBotV3 AI Jobs` scheduled task confirms). The
+exclusion side was adjudicated correct. Resolved in this commit:
+
+1. `ai_jobs` removed from `selftest.LAZY_ENGINE_MODULES` (30 → **29** checks),
+   with the reason recorded at the removal site.
+2. `tests/test_selftest.py`'s roster expectation updated — its anti-shrinkage
+   docstring now records that dropping a name is legitimate *only* when the
+   bundle provably cannot contain it.
+3. **New permanent guard**:
+   `test_the_selftest_never_demands_a_package_the_bundle_excludes` asserts
+   `LAZY_ENGINE_MODULES` and `PACKAGES_NOT_IN_THE_BUNDLE` are disjoint (compared
+   on the root package, so `ai_jobs.briefs` is caught as readily as `ai_jobs`).
+   Verified to fail on a deliberate reintroduction, so it is not a
+   can't-fail assertion.
+
+Why the bug survived a week of green suites is the durable lesson: **the
+unfrozen suite structurally cannot see this class of clash**, because a repo
+checkout can import anything under `scripts/`. Only a real frozen build could
+collide the two lists, and a frozen build is precisely what nobody runs per
+commit. The new test moves that discovery from a four-minute rebuild into the
+normal run.
+
+#### The two desk surveys (2026-08-09) — both standing questions answered
+
+Read-only, run against real desk state. Neither changed any code.
+
+**1. D1 trendline coverage** (`scripts\d1_trendline_survey.py --list 20`,
+against `C:\TradingBotData\data\runtime\master_avwap_ai_state.json`):
+
+| metric | count | share |
+| --- | ---: | ---: |
+| symbols in ai_state | 1100 | — |
+| with a trendline record | 62 | 5.6% of symbols |
+| projectable | 62 | **100% of records** |
+| fresh (≤ 5d) | 62 | **100% of records** |
+| **paintable today** | **62** | **5.6% of symbols** |
+
+**The gates work perfectly**: 62/62 projectable *and* 62/62 fresh, so nothing is
+written that then fails to paint — a line that appears is always exact. The 5.6%
+confirms the design rather than indicting it: the record is written only for
+priority candidates, so it is a bonus on scanned names, exactly as intended.
+**Decision: keep the paint-lines group defaulted ON.** The old "switch it off if
+coverage is small" contingency was written against the risk of stale or
+unprojectable records, and that risk now measures zero. Folded into
+`docs/D1_TRENDLINE_SURVEY.md` §4, replacing its "not measurable here" note.
+
+**2. D1 level store** (`scripts\d1_level_store_survey.py --symbol …`). Run on C
+first, then ASML and DOW to test the standing red-level hypothesis on more than
+one sample. **The hypothesis is confirmed: no red-bucket level can ever clear
+strength ≥ 1.0 — 0 of 171 across three symbols**, while green and cloud clear at
+100%. The distribution is categorical, not marginal:
+
+| symbol | store | census (green/red/cloud) | green ≥1.0 | **red ≥1.0** | cloud ≥1.0 | pre-budget | post-budget | truncated |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| C | 191 | 63 / 70 / 58 | 63/63 | **0/70** | 58/58 | 43 | 11 | 32 |
+| ASML | 154 | 64 / 50 / 40 | 64/64 | **0/50** | 40/40 | 50 | 11 | 39 |
+| DOW | 148 | 50 / 51 / 47 | 50/50 | **0/51** | 47/47 | 47 | 11 | 36 |
+
+C's full budget line, as representative: `BEFORE clutter budget 42/0/1 = 43`,
+`budget 10/6/4 = 20`, `AFTER (drawn) 10/0/1 = 11`, `truncated 32`.
+
+A second finding falls out of the same numbers: **the clutter budget reserves 6
+red slots per symbol that can never be filled**, while truncating 32-39 green
+levels. The reserved-but-unusable red allocation is dead capacity in a budget
+that is actively cutting drawable green levels.
+
+This makes the earlier "confirm on desk, then decide" call ripe — either delete
+the dead red path or give reds their own lower threshold. **Next weekend's
+packet, not the testing week**; nothing was tuned or changed here, and
+`scripts/d1_level_feed.py` is fenced.
 - Three fixes were made on this branch, each its own commit:
   - **Warehouse parquet reads** (`store.py`): `pq.read_table` builds a dataset
     around the file, so every part under `year=NNNN/` came back with a synthetic
@@ -250,7 +365,10 @@ stamp; it must not duplicate the roadmap.
     crowd of `bounce_bot_lib.legacy.run_strategy` threads parked on an Event);
     owning those is follow-up work in the tests and services that start them,
     not in conftest. **The Windows desk gate remains the authoritative one** —
-    everything above is Linux/3.12 evidence, and the desk runs 3.14.6.
+    everything above is Linux/3.12 evidence. (This line previously read "the
+    desk runs 3.14.6"; measured on the desk 2026-08-09, the repo `.venv` is
+    **3.12.13**, a uv-managed CPython built 2026-08-07. Corrected in CLAUDE.md
+    too. So desk and container agree on the minor version after all.)
 - **The suite is still not hermetic**, and that part is deliberately left for
   after the testing week: constructing the desk in a Qt test fires timers that
   make live outbound yfinance calls mid-run. Results are unaffected and the
@@ -261,6 +379,49 @@ stamp; it must not duplicate the roadmap.
   on the eve of the testing week: every candidate seam either needs an autouse
   patch of functions that other tests legitimately assert on, or a
   test-awareness check inside production startup code.
+- **Desk evidence for the above (2026-08-09 Windows re-baseline).** The desk run
+  captured the leak in the act, which pins the seam precisely for next weekend's
+  fix packet. After the summary line printed, the run emitted:
+
+  ```
+  --- Logging error ---
+  Traceback (most recent call last):
+    File "logging\__init__.py", line 1163, in emit
+      stream.write(msg + self.terminator)
+  ValueError: I/O operation on closed file.
+  Call stack:
+    File "threading.py", line 1012, in run
+      self._target(*self._args, **self._kwargs)
+    File "scripts\autopilot_core.py", line 306, in rebuild_universe_if_stale
+      result = build_universe(options_filter=DEFAULT_OPTIONS_FILTER)
+    File "scripts\universe_builder.py", line 536, in build_universe
+      history = fetch_price_history(listed, refresh=refresh)
+    File "scripts\universe_builder.py", line 298, in fetch_price_history
+      logging.info("Universe price fetch %s-%s of %s...", ...)
+  Message: 'Universe price fetch %s-%s of %s...'
+  Arguments: (401, 600, 3670)
+  ```
+
+  Four things this fixes in place:
+  1. **The exact seam.** `app.py:595-600` starts a `name="universe-self-heal"`,
+     `daemon=True` thread whose target is `core.rebuild_universe_if_stale` with
+     `force=False` — reaching the *real* `build_universe`, not a fake.
+  2. **The scale.** It was **3670 tickers in 200-ticker chunks** and had reached
+     chunk **401-600** when the process exited. This is not an incidental probe;
+     it is most of a full universe sweep against Yahoo, every full-suite run.
+  3. **It bypasses the `network` marker.** `pyproject.toml` declares the marker
+     precisely so live calls are opt-in, and this path never consults it — so
+     `pytest tests/ -q` with no marker selection still goes to the internet.
+     Any hermeticity fix should close the marker bypass, not just the noise.
+  4. **The unit tests are not the leak.** Every case in `test_autopilot_core.py`
+     injects `builder=fake_builder`; the leak is via app construction alone
+     (`conftest.py`, `test_gui_thread_gc.py`, `test_qt_focus_panel.py`,
+     `test_selftest.py`, and others build the real desk).
+
+  The logging error is the *symptom* — a daemon thread outliving pytest's
+  streams — and is harmless to the verdict: exit 0, junit `failures=0 errors=0`.
+  No stray Python process remained afterwards; the daemon dies with the process.
+  `autopilot_core.py` is a fenced detector/scoring file, so nothing was changed.
 
 ### Merged into this branch: research warehouse Phases 1-8
 
