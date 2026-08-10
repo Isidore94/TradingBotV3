@@ -122,6 +122,29 @@ def test_non_mapping_rows_are_ignored():
     assert built[0] == "Best swings (1)"
 
 
+def test_the_push_stays_quiet_before_0900():
+    """Trader call: Master AVWAP setups are not formed early in the session."""
+    from datetime import datetime
+
+    assert not core.swing_push_due(datetime(2026, 8, 10, 7, 0))
+    assert not core.swing_push_due(datetime(2026, 8, 10, 8, 59))
+    assert core.swing_push_due(datetime(2026, 8, 10, 9, 0))
+    assert core.swing_push_due(datetime(2026, 8, 10, 13, 0))
+    assert core.AUTOPILOT_SWING_PUSH_START_HOUR == 9
+
+
+def test_the_quiet_hours_are_configurable():
+    from datetime import datetime
+
+    assert core.swing_push_due(datetime(2026, 8, 10, 7, 0), start_hour=7)
+    assert not core.swing_push_due(datetime(2026, 8, 10, 9, 0), start_hour=10)
+
+
+def test_the_push_gate_is_later_than_the_report_gate():
+    """The digest must keep publishing at 07:00; only the phone waits."""
+    assert core.AUTOPILOT_SWING_PUSH_START_HOUR > core.AUTOPILOT_AWAY_REPORT_START_HOUR
+
+
 def test_the_title_survives_the_ascii_only_push_header():
     """ntfy puts the title in an HTTP header, which is latin-1 at best."""
     built = core.build_swing_push(_payload([_pick("NVDA")]))

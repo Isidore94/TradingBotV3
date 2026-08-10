@@ -44,6 +44,9 @@ _MAX_REPORT_ALERTS = 15
 # Machine-local kill switch for the swing-picks push, defaulting ON: only the
 # machine actually publishing the Away report should be phoning its picks.
 PUSH_SWINGS_SETTING = "push_away_swings"
+# Hour (desk-local, 0-23) before which the swing push stays quiet. The digest
+# still publishes hourly from 07:00; only the phone waits.
+PUSH_SWINGS_START_HOUR_SETTING = "push_away_swings_start_hour"
 
 
 def _enter_background_thread_mode() -> None:
@@ -1304,7 +1307,7 @@ class AutopilotService(QObject):
 
         threading.Thread(target=worker, name="autopilot-evening", daemon=True).start()
 
-    def _push_swing_picks(self, payload: dict) -> None:
+    def _push_swing_picks(self, payload: dict, now: datetime | None = None) -> None:
         """Phone the best swings on each VERIFIED Away publish.
 
         Tied to a verified publish rather than an attempt on purpose: the push
@@ -1324,6 +1327,15 @@ class AutopilotService(QObject):
 
             if not get_local_setting(PUSH_SWINGS_SETTING, True):
                 return
+            start_hour = get_local_setting(
+                PUSH_SWINGS_START_HOUR_SETTING, core.AUTOPILOT_SWING_PUSH_START_HOUR
+            )
+            try:
+                start_hour = int(start_hour)
+            except (TypeError, ValueError):
+                start_hour = core.AUTOPILOT_SWING_PUSH_START_HOUR
+            if not core.swing_push_due(now or datetime.now(), start_hour=start_hour):
+                return  # digest still published; the phone just stays quiet
             if not push_notify.push_configured():
                 return
             built = core.build_swing_push(payload)

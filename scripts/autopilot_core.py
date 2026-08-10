@@ -2530,6 +2530,27 @@ def build_away_operations_lines(audit: Mapping[str, Any] | None) -> dict[str, st
 AWAY_REPORT_MAX_NEAR_ROWS = 3
 
 
+# The swing PUSH starts later than the report it rides on. The digest keeps
+# publishing hourly from AUTOPILOT_AWAY_REPORT_START_HOUR (07:00); the phone
+# just stays quiet until the setups behind it are worth reading. Trader call
+# 2026-08-10: Master AVWAP setups are not meaningfully formed in the first
+# couple of hours of the session, so a 07:00/08:00 push is noise, and noise on
+# this channel costs the credibility that the urgent alerts depend on.
+AUTOPILOT_SWING_PUSH_START_HOUR = 9
+
+
+def swing_push_due(
+    now: datetime, *, start_hour: int = AUTOPILOT_SWING_PUSH_START_HOUR
+) -> bool:
+    """Whether the swing picks may be phoned at ``now`` (desk-local clock).
+
+    Suppresses the push only. The 07:00 and 08:00 publishes still write the
+    digest, so nothing stops the trader from opening it early - the picks are
+    simply not pushed at them.
+    """
+    return now.hour >= max(0, int(start_hour))
+
+
 def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str, str] | None:
     """The best Master AVWAP swing trades, compact enough for a phone push.
 
