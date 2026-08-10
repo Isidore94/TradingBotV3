@@ -326,6 +326,16 @@ class SymbolSnapshotWidget(QWidget):
                 m5_bars = self._bot.m5_chart_bars(self._symbol, max_sessions=2)
             except Exception:
                 m5_bars = []
+        # The bot's cache is only rewritten when the scan loop reaches this
+        # symbol (~28 min), so an alert reached late charts its scan-time bars.
+        # Prefer a display-only refetch when one reaches further forward; it
+        # never replaces a longer cached series with a shorter fresh one.
+        try:
+            from ui.services.chart_bar_refresh import shared_refresh_service
+
+            m5_bars = shared_refresh_service().best_bars(self._symbol, m5_bars)
+        except Exception:
+            logging.debug("Chart M5 refresh lookup failed.", exc_info=True)
         # A symbol the bot is not scanning has no M5 cache to preview today's
         # daily candle from; a separately fetched today-bar stands in. It is a
         # daily bar, so it feeds ONLY the D1 build, never the M5 pane.
@@ -586,6 +596,29 @@ class SymbolSnapshotWidget(QWidget):
             + f"{reach}</span>"
         )
 
+    @staticmethod
+    def _staleness_badge(bars) -> str:
+        """Loud age marker for M5 bars that are meaningfully behind the tape.
+
+        Returns "" when the bars are current, so a healthy chart carries no
+        extra furniture. Never raises: a legend decoration must not be able to
+        cost the trader the chart itself.
+        """
+        try:
+            from ui.services.chart_bar_refresh import STALE_AFTER, bars_age
+
+            age = bars_age(bars)
+            if age is None or age < STALE_AFTER:
+                return ""
+            minutes = int(age.total_seconds() // 60)
+            return (
+                f" &nbsp; <span style='color:{theme.color('caution')};'>"
+                f"● bars {minutes} min behind</span>"
+            )
+        except Exception:
+            logging.debug("Staleness badge failed.", exc_info=True)
+            return ""
+
     def _render_snapshots(self, d1: dict, m5: dict) -> None:
         symbol = self._symbol
         self._d1 = d1
@@ -619,11 +652,16 @@ class SymbolSnapshotWidget(QWidget):
             )
         else:
             last = m5["bars"][-1]["dt"]
-            self.m5_legend.setText(
+            legend = (
                 self.m5_legend.text()
                 + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
                 + f"last bar {last.strftime('%m/%d %H:%M')}</span>"
             )
+            # A stale chart must never be readable as a current one. The last
+            # bar time was already here, but muted and easy to skim past; an
+            # age this far behind gets said out loud instead.
+            legend += self._staleness_badge(m5["bars"])
+            self.m5_legend.setText(legend)
         self.snapshotRendered.emit(symbol)
 
     def quick_fill(self, source: str) -> float | None:

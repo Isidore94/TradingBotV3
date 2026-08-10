@@ -634,11 +634,24 @@ class AlertCenterPanel(QFrame):
         # LANDS, and the trader often reaches it minutes later - without a
         # refresh the M5 pane is missing every bar since and the D1 preview
         # candle never moves. Cheap local reads; re-renders only on change.
+        # The refetch is connected FIRST so bars that landed since the last
+        # tick are already in hand when the chart rebuilds immediately below;
+        # Qt runs same-signal slots in connection order.
+        self._watch_timer.timeout.connect(self._refresh_stale_queue_bars)
         self._watch_timer.timeout.connect(self._refresh_review_chart)
         # DESK-mode auto picks ride the same 30s tick: the staging file is a
         # cheap local read and a new pick is not latency-critical.
         self._watch_timer.timeout.connect(self._poll_auto_pick_pending)
         self._watch_timer.start()
+        # A refetch finishes off-thread; repaint the moment it lands rather
+        # than waiting up to 30s for the next tick. Qt queues this across the
+        # thread boundary because both ends are QObjects.
+        try:
+            from ui.services.chart_bar_refresh import shared_refresh_service
+
+            shared_refresh_service().barsRefreshed.connect(self._on_bars_refreshed)
+        except Exception:
+            logging.debug("Chart bar refresh signal not connected.", exc_info=True)
         # Persistent D1 level alerts poll less often: the daily-store reads
         # are mtime-cached and the evidence changes at most once per M5 bar.
         # The D1 event watches (derived-level alerts) ride the same tick.
@@ -1253,6 +1266,55 @@ class AlertCenterPanel(QFrame):
             if feed is not None:
                 return feed.payload_bot()
         return bot
+
+    def _on_bars_refreshed(self, symbol: str) -> None:
+        """Repaint when a refetch lands for the alert currently on the chart."""
+        alert = self._current_review_alert
+        if alert is None:
+            return
+        if str(symbol or "").strip().upper() != str(alert.symbol or "").strip().upper():
+            return
+        self._refresh_review_chart()
+
+    def _refresh_stale_queue_bars(self) -> None:
+        """30s tick: refetch M5 for the chart on screen and the next few queued.
+
+        The bot's cache is only rewritten when the scan loop reaches a symbol,
+        so an alert opened twenty minutes after it fired otherwise charts its
+        scan-time bars. Bounded on purpose: IB allows ~60 historical requests
+        per 10 minutes and the champion scan needs that budget, so this covers
+        the displayed alert plus a short lookahead, behind a per-symbol
+        cooldown - never the whole queue.
+
+        Display-only. The refetched bars go to the chart, never into the bot's
+        detector-facing cache (plan.md sec 5).
+        """
+        try:
+            from ui.services.chart_bar_refresh import (
+                DEFAULT_LOOKAHEAD,
+                shared_refresh_service,
+            )
+
+            symbols: list[str] = []
+            if self._current_review_alert is not None:
+                symbols.append(self._current_review_alert.symbol)
+            symbols.extend(
+                queued.symbol
+                for queued in self._review_queue[:DEFAULT_LOOKAHEAD]
+                if queued.symbol
+            )
+            if not symbols:
+                return
+            bot = self._current_bot()
+            if bot is None:
+                return
+            shared_refresh_service().refresh_if_stale(
+                symbols, lambda sym: bot.m5_chart_bars(sym, max_sessions=2), bot
+            )
+        except Exception:
+            # Display refresh only - it must never break the watch tick that
+            # shares this timer.
+            pass
 
     def _refresh_review_chart(self) -> None:
         """30s tick: keep the visible review chart on current bars.

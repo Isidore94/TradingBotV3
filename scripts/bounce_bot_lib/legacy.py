@@ -5724,6 +5724,11 @@ class BounceBot(EWrapper, EClient):
             or self.latest_bars.get(symbol)
             or []
         )
+        return self._m5_bars_as_chart_dicts(bars, max_sessions)
+
+    @staticmethod
+    def _m5_bars_as_chart_dicts(bars, max_sessions=2):
+        """Trim an IB M5 series to the last sessions as plain chart dicts."""
         if not bars:
             return []
         dates = sorted({bar.dt.date() for bar in bars})
@@ -5740,6 +5745,35 @@ class BounceBot(EWrapper, EClient):
             for bar in bars
             if bar.dt.date() in keep
         ]
+
+    def fetch_m5_chart_bars(self, symbol, max_sessions=2):
+        """Re-fetch a symbol's M5 series for the CHARTS ONLY.
+
+        ``m5_chart_bars`` reads ``latest_bars``, which the scan loop rewrites
+        only when it reaches that symbol - a ~28 minute cycle - so an alert
+        the trader opens twenty minutes after it fired charts the bars of its
+        last scan, not of now. This fetches current ones.
+
+        It deliberately does NOT write ``latest_bars``. That mapping is a
+        detector input (``_get_cached_bars`` feeds RRS off it) and the
+        research warehouse's M5 tee archives it; refreshing it from a chart
+        view would change what the champion detectors see and what gets
+        captured as evidence, which plan.md sec 5 forbids without golden
+        fixtures first. The bars are returned to the caller for display and
+        nothing here is cached.
+
+        Blocking and IB-bound - call it off the GUI thread. Returns [] rather
+        than raising when the provider says nothing.
+        """
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return []
+        raw = self.request_historical_bars(
+            symbol, "5 D", "5 mins", timeout=RRS_TIMEOUT
+        )
+        if not raw:
+            return []
+        return self._m5_bars_as_chart_dicts(_dedupe_bars(_bars_to_ib(raw)), max_sessions)
 
     @staticmethod
     def _m5_bar_completed(bar_dt, now=None):
