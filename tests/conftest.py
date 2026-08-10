@@ -31,6 +31,7 @@ the contract.
 from __future__ import annotations
 
 import atexit
+import gc
 import hashlib
 import json
 import math
@@ -101,6 +102,160 @@ def _make_multitasking_inert() -> None:
 
 
 _make_multitasking_inert()
+
+
+# ---------------------------------------------------------------------------
+# Main-thread-only garbage collection (test-harness invariant)
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS
+#
+# Automatic (threshold) garbage collection runs on whichever thread happens to
+# make the allocation that crosses gen-0's threshold, at an arbitrary point in
+# whatever that thread is doing. When such a collection frees a cycle holding
+# PySide6/shiboken wrappers, the wrapped QObject destructors run right there -
+# off the GUI thread, or re-entrantly in the middle of building a widget. Both
+# are undefined behavior in Qt, and both corrupt the heap rather than raising.
+#
+# This suite is a perfect breeding ground for it: many tests construct real
+# desk panels while scanner/bounce/chart worker threads are still alive, so
+# there is always another thread allocating and always a supply of Qt wrappers
+# in cycles.
+#
+# Production already fixed exactly this: every GUI session on 2026-07-29 died
+# with an access violation inside python314.dll while "Garbage-collecting" on a
+# worker thread, and ``ui.app.install_gui_thread_gc`` now disables automatic
+# collection and sweeps from a main-thread QTimer instead. The test harness had
+# no equivalent, so it kept the hazard the app itself had already retired. This
+# block is the harness's counterpart to that function - production keeps its
+# collections on the GUI thread with an event-loop timer, the suite keeps them
+# on the main thread at test teardown. Neither changes what the other does.
+#
+# WHAT IS DONE - deliberately the same shape as ``install_gui_thread_gc``:
+#
+# * session start: one full collect, then ``gc.disable()`` - after this no
+#   collection can be triggered by an allocation on any thread;
+# * after collection: ``gc.freeze()``, once every test module has been
+#   imported. Everything alive at that point is the permanent heap (modules,
+#   classes, the pandas/pyarrow import graph), and freezing moves it out of the
+#   generations the per-test sweeps have to walk;
+# * per test: sweep on the main thread in a teardown hook wrapper, so it runs
+#   after the test's fixtures have finalized (notably after
+#   ``_drain_chart_workers`` has joined the chart pools) and the heap is quiet.
+#   Young generation every test, the whole heap every 25th;
+# * session end: unfreeze and re-enable, so pytest plugins and atexit handlers
+#   run under the interpreter's normal rules.
+#
+# WHY GEN-0 PER TEST AND NOT A FULL SWEEP PER TEST
+#
+# Measured here, not assumed. A full ``gc.collect()`` on this suite's heap costs
+# ~85ms, and 2612 of them added ~222s to an ~85s suite (one timed full-suite run
+# came in at 340s). A gen-0 sweep costs ~1.7ms. Young-generation collection is
+# also the sweep that matters for this hazard: the Qt wrappers a test churns
+# through are gen-0 garbage, and that is exactly what production's 2-second tick
+# sweeps. Full collections every 25th test keep the older generations from
+# growing without bound while costing ~87 x 75ms over a run. Total overhead is
+# ~11s on ~85s. The threshold-GC hazard is removed by ``gc.disable()`` alone;
+# the sweep cadence only decides how much garbage waits, never which thread
+# frees it.
+#
+# WHAT THIS DOES AND DOES NOT BUY - read this before trusting a green run
+#
+# It removes one specific mechanism: a collection firing on an arbitrary thread
+# at an arbitrary allocation. It is NOT a general fix for this suite's Qt
+# lifetime problems, and the measurements say so:
+#
+#   before (10 runs, gc as the interpreter left it): 8 clean, one exit 139, one
+#     exit 134. The segfault's faulthandler traceback landed on the main thread
+#     inside ``AlertCenterPanel.__init__`` at the bare
+#     ``self.min_tier_input = QComboBox()`` allocation - a widget allocation is
+#     not a crash site, but a threshold collection triggered BY that allocation
+#     is, which is the evidence this block acts on.
+#   after (12 consecutive runs with this block): 12 clean, exit 0, junit
+#     failures=0 errors=0, 2605 passed / 5 skipped / 7 subtests every time.
+#     Wall 90-108s against an 82-92s baseline.
+#
+# But one crash was seen during a DISCARDED first attempt at this block (the
+# variant that ran a full collect after every test), and it is the reason for
+# the paragraph above. It hit ``test_qt_industry_panel`` with the main thread
+# parked in ``time.sleep(0.01)`` - a sleeping thread cannot fault on its own,
+# and automatic gc was already disabled, so that crash was NOT threshold GC. It
+# was a leaked service worker thread touching Qt concurrently. Several tests
+# leave threads running past their own teardown (the faulthandler dumps show a
+# standing crowd of ``bounce_bot_lib.legacy.run_strategy`` threads parked on an
+# Event), and nothing in this block joins them.
+#
+# So: 12/12 is a real improvement over 8/10 but it is not a proof of thread
+# safety, and a future crash here is not automatically a regression in this
+# block. The remaining work is ownership of those leaked worker threads, which
+# lives in the tests and services that start them, not in conftest.
+#
+# This is a TEST-HARNESS invariant, not a statement about production. The app
+# drives its own collections from the GUI event loop; nothing here is imported
+# by, or changes the behavior of, any production module.
+
+#: Whether the interpreter had automatic collection on when the session began.
+#: Restored verbatim at session end rather than assuming it was enabled.
+_GC_ENABLED_AT_SESSION_START = gc.isenabled()
+
+#: Sweep the whole heap every this many tests; young generation on every other.
+#: Production's timer uses 30 ticks for the same trade-off.
+_FULL_COLLECT_EVERY = 25
+
+_gc_sweeps = 0
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Take automatic collection off the table for the whole session."""
+    gc.collect()
+    gc.disable()
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Retire the import-time heap from every later sweep.
+
+    Runs after every test module has been imported, so the objects promoted
+    here are the ones that will live for the whole session anyway. Freezing
+    them is what keeps the periodic full collections affordable.
+    """
+    gc.collect()
+    gc.freeze()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item):
+    """Sweep on the main thread once the test and its fixtures are done.
+
+    A wrapper, not a plain hook: the post-yield half runs after every other
+    ``pytest_runtest_teardown`` implementation, which is what puts this sweep
+    *after* fixture finalization instead of before it. The ``finally`` keeps
+    the sweep honest when a teardown fails (``_drain_chart_workers`` raises by
+    design on a leaked worker) - a run that is already failing is exactly when
+    the next test least needs a heap full of dead Qt wrappers.
+
+    ``gc.disable()`` is re-asserted every time on purpose: collection is global
+    interpreter state, and tests legitimately turn it back on -
+    ``tests/test_gui_thread_gc.py`` calls ``gc.enable()`` in its own finally
+    while proving that ``install_gui_thread_gc`` disables it. Re-asserting here
+    means no test can hand the hazard back to the rest of the session.
+    """
+    global _gc_sweeps
+    try:
+        return (yield)
+    finally:
+        gc.disable()
+        _gc_sweeps += 1
+        if _gc_sweeps % _FULL_COLLECT_EVERY == 0:
+            gc.collect()
+        else:
+            gc.collect(0)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Give the interpreter its normal collection rules back."""
+    gc.unfreeze()
+    if _GC_ENABLED_AT_SESSION_START:
+        gc.enable()
 
 
 # ---------------------------------------------------------------------------

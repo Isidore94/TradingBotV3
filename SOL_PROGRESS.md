@@ -201,6 +201,56 @@ stamp; it must not duplicate the roadmap.
   exits 0 in **91s wall** with it and was still hung at **420s** with the one
   call commented out. No project file touched and no project function
   monkeypatched.
+- **Suite stability packet (2026-08-09/10, Linux container).** Three commits,
+  taken after the A3/A4 work exposed an intermittent hard crash in the full
+  suite — not a test failure, an interpreter death (exit 139/134), which junit
+  cannot record because the process never writes the file.
+  - `8d8d173` **crosshair lifetime** — the chart crosshair could outlive its
+    chart. This was the dominant amplifier: at `382b9dd` the suite SIGSEGV'd
+    **9 of 13 runs**, always at `test_qt_alert_center`'s `processEvents`; with
+    the fix that specific site is gone.
+  - `5fe9bca` **morning-brief refusal** — `ai_jobs/briefs.py` refuses to
+    publish a brief built from unreadable watchlists rather than shipping a
+    confidently empty one.
+  - **Main-thread-only GC in `tests/conftest.py`** (this commit) — the residual
+    ~20%. Automatic collection runs on whichever thread crosses the gen-0
+    threshold, so a sweep that frees a cycle holding PySide6 wrappers runs
+    QObject destructors on a worker thread, or re-entrantly mid-construction.
+    conftest now collects once and calls `gc.disable()` at session start,
+    `gc.freeze()` after collection (retiring the import-time heap from every
+    later sweep), sweeps **on the main thread at test teardown** — gen-0 every
+    test, full every 25th — and unfreezes/re-enables at session end. It is the
+    harness counterpart to `ui.app.install_gui_thread_gc`, which fixed exactly
+    this class of crash in the app on 2026-07-29 (access violation inside
+    python314.dll while "Garbage-collecting" on a worker thread). The teardown
+    hook is a `wrapper=True` hookimpl so the sweep lands *after* fixture
+    finalization, i.e. after `_drain_chart_workers` has joined the chart pools;
+    it re-asserts `gc.disable()` every time, because `test_gui_thread_gc.py`
+    legitimately calls `gc.enable()` in its own finally.
+  - **Cadence was measured, not guessed.** A full `gc.collect()` on this heap
+    costs ~85ms; per-test full collection added ~222s (one run clocked 340s
+    against an ~85s baseline). Gen-0 costs ~1.7ms. Hence gen-0 per test plus a
+    full sweep every 25th — ~11s of overhead total.
+  - **Gate: 12 consecutive full-suite runs, all exit 0**, junit `failures=0
+    errors=0`, identical **2605 passed / 5 skipped / 7 subtests** (2617 junit
+    cases) every run; walls 96/91/92/94/106/108/96/95/92/93/90/91s against an
+    82-92s baseline. `TZ=America/Vancouver QT_QPA_PLATFORM=offscreen`, Linux,
+    Python 3.12.3. smoke 7/7; `launch_gui.py --selftest` 30/30; the spec-drift
+    file 16/16. No test was modified, skipped or weakened, and no production
+    module was touched — the diff is additive in `tests/conftest.py` only.
+  - **Residual risk, stated honestly.** 12/12 beats 8/10 but does not prove the
+    suite is thread-safe, and **the residual crash sites were outside the A3
+    diff**, so some of this GC pressure plausibly predates this week rather
+    than arriving with it. A discarded first attempt at the GC block (full
+    collect every test) still crashed once, in `test_qt_industry_panel`, with
+    the main thread parked in `time.sleep(0.01)` and gc already disabled — a
+    sleeping thread cannot fault on its own, so that one was a leaked service
+    worker thread touching Qt concurrently, not threshold GC. Several tests
+    leave threads running past their own teardown (the dumps show a standing
+    crowd of `bounce_bot_lib.legacy.run_strategy` threads parked on an Event);
+    owning those is follow-up work in the tests and services that start them,
+    not in conftest. **The Windows desk gate remains the authoritative one** —
+    everything above is Linux/3.12 evidence, and the desk runs 3.14.6.
 - **The suite is still not hermetic**, and that part is deliberately left for
   after the testing week: constructing the desk in a Qt test fires timers that
   make live outbound yfinance calls mid-run. Results are unaffected and the
