@@ -487,3 +487,27 @@ fixture rule applies, do not merge into the testing week),
 plan record). SHA recovery record for all deleted branches: this section's
 audit ran against the ls-remote snapshot in the session scratchpad; every
 contained branch's content is reachable from 2b6db0c regardless.
+
+## 17. Closed (2026-08-09, night)
+
+Every open item this document tracked is now resolved or rehomed:
+
+- The §16 branch audit was executed from the desk: 25 contained branches
+  deleted, including `claude/a4-verify-a3-orchestrate-9c8kop` itself — this
+  document now lives on `testing-week-2026-08-10`, which contains the whole
+  A4/A5 stream via merge `06d8429`.
+- §12's desk checklist ran on 2026-08-09 night: desk gate green (junit
+  failures=0 errors=0 skipped=0), frozen selftest 29/29 (it caught and
+  adjudicated a real three-way guard contradiction on its first frozen desk
+  run — see SOL_PROGRESS), both surveys measured. §10.3/§10.4's open
+  questions are answered: trendline gates 100% effective at 5.6% designed
+  coverage (`docs/D1_TRENDLINE_SURVEY.md` §4 now carries the real numbers),
+  and the §10.4 red-level hypothesis is CONFIRMED on real stores (0 of 171).
+- §10.6's approvals (A5 through the owning panel, the shared ai_state
+  loader) shipped and are live on the testing-week branch; §13's A3 packet
+  was implemented (with the crosshair lifetime fix and suite GC discipline
+  that followed); §14's at-exit-hang caveat was resolved by the conftest
+  multitasking/GC work.
+
+The live ledger from here is SOL_PROGRESS.md on `testing-week-2026-08-10`.
+This document is historical.

@@ -423,6 +423,47 @@ packet, not the testing week**; nothing was tuned or changed here, and
   No stray Python process remained afterwards; the daemon dies with the process.
   `autopilot_core.py` is a fenced detector/scoring file, so nothing was changed.
 
+### Testing-week eve close-out (2026-08-09, night)
+
+- **Branch cleanup executed from the desk** (agent sessions were
+  permission-blocked): 25 fully-contained remote branches deleted, verified
+  zero unique commits on both the cloud and desk side independently. The
+  repo now carries exactly five: `main`, `testing-week-2026-08-10`,
+  `claude/testing-production-blockers-oek3aj` (0 unique commits — kept until
+  the week passes), `scoring-flagging-evidence-guardrails` (+1 scoring
+  commit, golden-fixture rule applies before any merge), and
+  `claude/trading-system-review-e0p8ll` (+1 doc commit, the consolidation
+  plan record). The deleted set includes
+  `claude/a4-verify-a3-orchestrate-9c8kop`, whose ledger
+  (`docs/HANDOFF_A4_PACKAGING_2026-08-09.md`) lives on in this branch.
+- **Operational state going into Monday:** `0700 Launch` scheduled task to
+  be re-armed by the trader after launch; `TradingBotV3 AI Jobs` still
+  Disabled — until it is enabled no `ai_morning_brief.txt` is produced
+  (enable before Tue for the first automatic brief; a manual
+  `run_ai_jobs.py` run any evening produces one for the next morning);
+  desk to run AWAY mode Mon-Wed, live-session tests Thu-Fri per plan.md
+  sec 6. Merge to `main` only after a sec 6 validation day passes.
+- **Queue for the next work weekend, from tonight's measured evidence —
+  nothing tuned mid-week:**
+  1. Red horizontal levels are categorically undrawable (0 of 171 clear
+     strength >= 1.0 across C/ASML/DOW while green and cloud clear at
+     100%): delete the red draw path or give reds their own threshold, and
+     retune the clutter budget — 6 forever-empty red slots are reserved
+     while 32-39 drawable greens truncate against `MAX_GREEN_HORIZONTALS =
+     10` (42-50 drawable per liquid symbol pre-budget). How many lines a
+     chart should carry is the trader's call from a week of looking.
+  2. Suite hermeticity: real-app-constructing Qt tests spawn the universe
+     self-heal thread which live-fetches ~3670 tickers through yfinance,
+     bypassing the `network` marker (desk evidence with full stack in the
+     2026-08-10 re-baseline entry above; the fix belongs in test seams and
+     partly behind fenced files).
+  3. The two decision-pending branches above.
+  4. `.gitignore` entry for `desk_report.xml`.
+- Recorded decisions from the survey evidence: the D1 trendline group stays
+  defaulted ON (62/62 records projectable and fresh; 5.6% symbol coverage
+  is the designed priority-candidate bonus, and a painted line is always
+  exact); the red-level question moved from hypothesis to confirmed fact.
+
 ### Merged into this branch: research warehouse Phases 1-8
 
 Carried in from `claude/das-warehouse-defects-2n9uql`; the entries below are
