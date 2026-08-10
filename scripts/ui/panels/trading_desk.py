@@ -5,6 +5,7 @@ import logging
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -24,6 +25,7 @@ from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
 from ui.widgets.group_tape_strip import GroupTapeStrip
+from ui.widgets.setups_toggle_button import SetupsToggleButton
 
 DESK_SPLIT_KEY = "qt_desk_split_sizes_v2"
 
@@ -113,18 +115,28 @@ class TradingDeskPanel(QWidget):
         # is installed, but created here so it is a stable mount point that
         # survives mode switches.
         self.tape_host = QWidget()
-        tape_layout = QVBoxLayout(self.tape_host)
+        tape_layout = QHBoxLayout(self.tape_host)
         tape_layout.setContentsMargins(0, 0, 0, 0)
-        tape_layout.setSpacing(0)
+        tape_layout.setSpacing(6)
         # Sector/industry strength, always visible across the desk. Fed off the
         # SAME rrsSnapshotChanged payload the Alert Center already receives -
         # no new service, thread, timer, or IB request.
         self.group_tape = GroupTapeStrip()
         self.group_tape.symbolActivated.connect(self.alert_center.chart_symbol)
         self.bounce_panel.service.rrsSnapshotChanged.connect(self.group_tape.update_groups)
-        tape_layout.addWidget(self.group_tape)
+        tape_layout.addWidget(self.group_tape, 1)
+        # The setups column opens hidden, so the way back has to live somewhere
+        # that is always on screen and independent of it. The tape row is the
+        # only full-width strip that survives a workspace<->tabs switch.
+        self.setups_toggle = SetupsToggleButton(visible=False)
+        self.setups_toggle.setupsVisibleChanged.connect(self.set_setups_visible)
+        tape_layout.addWidget(self.setups_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
         self.desk_splitter: QSplitter | None = None
         self._setups_expanded = False
+        # The desk opens with the setups column hidden: it earns its width only
+        # a few hours into the session, and the charts want it before then.
+        self._setups_visible = False
+        self._setups_restore_sizes: list[int] | None = None
 
         self._build_layout()
         self.set_mode(workspace_mode)
@@ -149,6 +161,11 @@ class TradingDeskPanel(QWidget):
         _clear_layout(self.center_layout)
         if self.workspace_mode == "tabs":
             self.alert_center.set_embedded_detail_enabled(True)
+            # Hiding the setups is a workspace-mode idea: as its own tab the
+            # column never competes with the charts for width, and a tab that
+            # refused to show itself would just look broken.
+            self.setups_toggle.setVisible(False)
+            self.master_workspace.setVisible(True)
             tabs = QTabWidget()
             tabs.addTab(self.master_workspace, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
@@ -195,6 +212,10 @@ class TradingDeskPanel(QWidget):
         self._mode_widget = body
         self.center_layout.addWidget(body)
         self._apply_desk_split()
+        # Applied after the split so the saved drag is what gets restored when
+        # the column is shown again, not a width measured while it was hidden.
+        self.setups_toggle.setVisible(True)
+        self.master_workspace.setVisible(self._setups_visible)
 
     def _show_setup_in_workspace(self, payload: dict) -> None:
         self.master_workspace.show_setups()
@@ -280,6 +301,50 @@ class TradingDeskPanel(QWidget):
         )
         desk_layout.persist_sizes(self, splitter, DESK_SPLIT_KEY)
 
+    def set_setups_visible(self, visible: bool) -> None:
+        """Show or hide the Master AVWAP half of the desk.
+
+        Hidden rather than sized to zero, for the same reason ``toggle_setups_
+        expanded`` hides the alert column: both desk columns carry an explicit
+        minimum width and the splitter is non-collapsible, so a zero size is
+        clamped straight back to that minimum.
+        """
+        visible = bool(visible)
+        # Kept in step first so an F9-driven reveal relabels the button too.
+        self.setups_toggle.set_setups_visible(visible)
+        if visible == self._setups_visible:
+            return
+        self._setups_visible = visible
+        splitter = self.desk_splitter
+        if self.workspace_mode != "workspace" or splitter is None:
+            return
+        if visible:
+            self.master_workspace.setVisible(True)
+            saved = self._setups_restore_sizes
+            if saved and sum(saved) > 0 and len(saved) == splitter.count():
+                splitter.setSizes(saved)
+            else:
+                # Deliberately not _apply_desk_split(): that also installs the
+                # preset tracker and the persist connection, so calling it on
+                # every reveal would stack a duplicate event filter and a
+                # duplicate splitterMoved handler per toggle.
+                desk_layout.apply_saved_sizes(
+                    splitter,
+                    DESK_SPLIT_KEY,
+                    desk_layout.desk_split_for(self.width() or 1640),
+                )
+            self._setups_restore_sizes = None
+        else:
+            if self._setups_expanded:
+                # The setups own the whole desk at this moment; hiding them
+                # without undoing that leaves BOTH columns invisible.
+                self.toggle_setups_expanded()
+            self._setups_restore_sizes = splitter.sizes()
+            self.master_workspace.setVisible(False)
+
+    def setups_visible(self) -> bool:
+        return self._setups_visible
+
     def toggle_setups_expanded(self) -> bool:
         """F9: give the setups table the whole desk, and back again.
 
@@ -290,6 +355,10 @@ class TradingDeskPanel(QWidget):
         splitter = self.desk_splitter
         if splitter is None:
             return False
+        if not self._setups_expanded and not self._setups_visible:
+            # F9 means "give the setups the desk", which is incoherent while
+            # they are hidden - revealing them is the honest first step.
+            self.set_setups_visible(True)
         self._setups_expanded = not self._setups_expanded
         if self._setups_expanded:
             self._collapsed_sizes = splitter.sizes()
