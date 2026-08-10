@@ -2530,6 +2530,59 @@ def build_away_operations_lines(audit: Mapping[str, Any] | None) -> dict[str, st
 AWAY_REPORT_MAX_NEAR_ROWS = 3
 
 
+def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str, str] | None:
+    """The best Master AVWAP swing trades, compact enough for a phone push.
+
+    Returns ``(title, message)``, or ``None`` when there is nothing worth
+    sending. Silence is deliberate: an hourly "no setups" push seven times a
+    session teaches the trader to swipe this channel away, and the digest in
+    ``autopilot_today.txt`` already says so for anyone who looks.
+
+    Deliberately NOT the report's own swing block. A notification shows a few
+    lines before the OS truncates it, so this carries symbol, side, expected R
+    and the key level, and drops the bucket/family detail the report has room
+    for. "Near" rows are dropped outright - the report already caps them
+    because that bucket measured -0.18R against favorites' +1.01R, and a push
+    has less room than the report, not more.
+
+    Staleness is never hidden: picks from anything but the current session say
+    so, because a stale pick presented as current is the one failure this must
+    not have (plan.md sec 5 - missing data is uncertainty, never confirmation).
+    """
+    picks = payload.get("swing_picks")
+    if not isinstance(picks, (list, tuple)):
+        return None
+    lines: list[str] = []
+    symbols: list[str] = []
+    for pick in picks:
+        if not isinstance(pick, Mapping):
+            continue
+        symbol = str(pick.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        if "near" in str(pick.get("bucket") or "").lower():
+            continue
+        side = str(pick.get("side") or "").strip().upper() or "?"
+        expected_r = pick.get("expected_r")
+        try:
+            r_text = f" {float(expected_r):.1f}R" if expected_r is not None else ""
+        except (TypeError, ValueError):
+            r_text = ""
+        level = str(pick.get("key_level") or "").strip()
+        symbols.append(symbol)
+        lines.append(
+            f"{len(symbols)}. {symbol} {side}{r_text}" + (f" @ {level}" if level else "")
+        )
+        if len(symbols) >= max(1, int(limit)):
+            break
+    if not lines:
+        return None
+    if payload.get("swing_data_current") is not True:
+        lines.append("! not from the current session - check the digest")
+    lines.append("TV: " + ",".join(symbols))
+    return f"Best swings ({len(symbols)})", "\n".join(lines)
+
+
 def render_away_report(payload: Mapping[str, Any]) -> str:
     """Phone-first digest: ONE central Drive file, best swing trades on top.
 

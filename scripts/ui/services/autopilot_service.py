@@ -41,6 +41,9 @@ _TICK_INTERVAL_MS = 30_000
 _HOURLY_REPORT_RETRY_MINUTES = 5
 _MAX_LOG_LINES = 400
 _MAX_REPORT_ALERTS = 15
+# Machine-local kill switch for the swing-picks push, defaulting ON: only the
+# machine actually publishing the Away report should be phoning its picks.
+PUSH_SWINGS_SETTING = "push_away_swings"
 
 
 def _enter_background_thread_mode() -> None:
@@ -1301,6 +1304,38 @@ class AutopilotService(QObject):
 
         threading.Thread(target=worker, name="autopilot-evening", daemon=True).start()
 
+    def _push_swing_picks(self, payload: dict) -> None:
+        """Phone the best swings on each VERIFIED Away publish.
+
+        Tied to a verified publish rather than an attempt on purpose: the push
+        carries the picks inline, so sending them while the digest on Drive is
+        stale would put two different answers in the trader's hand (plan.md
+        23.8 - last_attempt is not last_verified_success).
+
+        Normal priority. The urgent channel stays reserved for position price
+        levels, which are the only thing allowed to break through Focus; a
+        swing list that republishes hourly is not that.
+
+        Fail-quiet: the report has already published by the time this runs, so
+        a push problem is logged and never raised.
+        """
+        try:
+            from project_paths import get_local_setting
+
+            if not get_local_setting(PUSH_SWINGS_SETTING, True):
+                return
+            if not push_notify.push_configured():
+                return
+            built = core.build_swing_push(payload)
+            if built is None:
+                return  # nothing qualified; silence beats an hourly "none"
+            title, message = built
+            push_notify.send_push(
+                title, message, priority="default", tags="chart_with_upwards_trend"
+            )
+        except Exception as exc:
+            self._log(f"Swing picks push failed: {exc}")
+
     # ------------------------------------------------------------------
     # Away report
     # ------------------------------------------------------------------
@@ -1415,6 +1450,7 @@ class AutopilotService(QObject):
                 if getattr(self, "_report_publish_failing", False):
                     self._report_publish_failing = False
                     self._log("Away report publishing recovered.")
+                self._push_swing_picks(payload)
             else:
                 self._last_report_error = str(publish.get("error") or "unknown")
                 if not getattr(self, "_report_publish_failing", False):
