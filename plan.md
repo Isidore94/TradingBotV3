@@ -325,13 +325,16 @@ non-authoritative. Their analysis/cutover steps remain ordered here.
    `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4a. What remains owed: **trader answers to
    its six open questions**, then schema and tests. No digest schema may be built or
    frozen before those answers — the 2026-08-08 decision still stands.
-   *Contingency drafted 2026-08-10:* a **ticker-briefs hardening packet** (per-ticker
-   failure isolation + honest partial morning file, membership-only skip, resumable
-   per-symbol completion, per-session attempt cap) is specified in
-   `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b. It is PROPOSED only — it arms by
-   explicit trader direction after reading real overnight evidence (expected decision
-   point: the 2026-08-11 morning ledger), and arming restarts the ticker-briefs
-   five-session clock per the gate's own reset rules.
+   *Armed and built 2026-08-11:* the **ticker-briefs hardening packet**
+   (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b) was armed by the trader after the
+   first overnight run and is **implemented**: project-then-budget evidence (TB-0),
+   per-ticker failure isolation with an honest partial morning file (TB-1),
+   deterministic membership-only skip (TB-2), resumable per-symbol completion (TB-3),
+   and a per-session attempt cap (TB-4). Still owed: **live proof on the desk** — the
+   next 22:00 window must show real per-symbol evidence in the briefs, a morning file
+   whose header states the outcome, and no all-night retry grind. Per the gate's own
+   reset rules the **ticker-briefs five-session clock restarts at zero**; the
+   `ai_summary` clock continues, because its code path is untouched.
 4. **P3.4 Accumulate and audit promotion evidence.** Continue regime infrastructure
    toward 40 instrumented sessions, and SPY/Greatness toward their Section 7 floors.
    Freeze windows before inspecting outcomes.

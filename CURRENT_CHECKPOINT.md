@@ -14,10 +14,10 @@ elapsed evidence lane that can run in parallel.
 | Field | Current value |
 |---|---|
 | Roadmap phase | **P0 — validate and merge the testing-week branch** |
-| Active packet | **SCAN-WINDOW — confine BounceBot's intraday sweep to the session window** (trader-directed 2026-08-10) |
-| Scope | `scripts/autopilot_core.py`, `scripts/ui/services/autopilot_service.py`, `tests/test_bouncebot_scan_window.py`. No detector, scoring, threshold, or alert rule touched — only *when* the existing scan runs |
-| State | Implemented and green in the working tree; **needs a desk restart to take effect** and a live day to confirm (P0.3) |
-| Next action after this packet | **P0.2–P0.4** live gates, and a decision on the overnight AI-job cadence (see "Open question" below). P0.1 re-baseline is done |
+| Active packet | **TICKER-BRIEFS HARDENING — TB-0..TB-4** (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b; armed by the trader 2026-08-11 after the first overnight run) |
+| Scope | `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one additive helper in `scripts/ai_summary.py`, `tests/test_ai_ticker_briefs.py`, `tests/test_ai_jobs_runner.py`. No detector, scoring, or alert file touched; output stays advisory-only |
+| State | **Implemented and green** (2682 passed / smoke 7/7). **Live proof owed: the next 22:00 window on the desk** |
+| Next action after this packet | **P0.2–P0.4** live gates, plus the ticker-briefs morning check below. P0.1 re-baseline is done |
 | Do not start yet | Phase 1 cleanup or any Phase 2+ feature/foundation item |
 
 A newly arriving AI resumes the active packet if it is unfinished. If it is complete,
@@ -125,7 +125,40 @@ No metered API was involved in either: every unattended AI call is hardcoded
 `provider="local"` against Ollama on localhost. OpenAI and Anthropic are reached only
 from GUI buttons.
 
-### Open question — overnight AI job cadence (trader decision)
+### Resolved — overnight AI job cadence (armed and built 2026-08-11)
+
+The ticker-briefs hardening packet was **armed by the trader on 2026-08-11** after the
+first overnight run and is **built** on this branch. The question below is kept because
+its premises were partly wrong, and the correction is the useful part.
+
+**What the first repaired night (2026-08-10/11) actually showed.** `ticker_briefs`
+completed **all 95 symbols in 5,962 s — ~63 s/call**, not the ~4.75 min/call recorded
+below. There was no window overrun. Instead **every one of the 95 briefs was
+content-free**: the base evidence package was budgeted to the local ceiling *before*
+the per-symbol projection, so the per-symbol-rich sources were unfunded at 0 chars
+(`setups.current_tracker` 95,806 chars, `setups.current_tiers` 77,124,
+`setups.bounce_learning` 17,995, `market.industry_intraday_rs` 17,833) and the funded
+tables were sheared to about one row. MRVL's brief reads **"1 of 19 requested source(s)
+usable"**, the one being its own watchlist membership. That is TB-0, and it was the
+defect worth an hour and a half of GPU time to fix.
+
+**Built:** TB-0 project-then-budget; TB-1 per-ticker failure isolation with an honest
+partial morning file (`Briefed N of M. Failed: …` in the header); TB-2 deterministic
+membership-only skip; TB-3 resumable completion keyed by
+`(session_date, symbol, evidence_hash)`; TB-4 a three-attempt per-session cap with an
+identical-error early stop. `run_daily_summary` is untouched, so the two jobs now run
+**separate five-session clocks**: `ai_summary`'s continues, `ticker_briefs`' restarts
+at zero.
+
+**Live proof owed — the next 22:00 window.** In the morning check: coverage counts
+above one usable source per brief, statements citing real evidence, a morning-file
+header stating the outcome, at most three `ticker_briefs` ledger rows for the session
+(with a `terminal: true` row if it stopped early), and exactly one artifact set per
+symbol under `ai_store/briefs/<year>/<session>/tickers/<symbol>/`.
+
+<details>
+<summary>The original open question, as written on 2026-08-10 (premises now corrected
+above)</summary>
 
 The 30-minute task repeat is **not** a work cadence; it is a retry ladder, and on a
 healthy night sixteen of the seventeen firings read the ledger and exit in about a
@@ -156,6 +189,23 @@ a pointer in `plan.md` P3.3. It is PROPOSED, not authorized: the trader arms it 
 reading the 2026-08-11 morning ledger (or later five-session evidence). An arriving AI
 must not build it without that direction. This documentation pass is Markdown-only;
 the recorded automated baseline (2672 passed / smoke 7/7) is unchanged.
+
+</details>
+
+**Current baseline after the ticker-briefs hardening packet (2026-08-11):**
+
+| Check | Result |
+|---|---|
+| pytest | **2682 passed, 5 skipped, 19 subtests passed**, exit 0 (106s) |
+| smoke | **7/7**, exit 0 |
+| frozen self-test | not re-run — no packaging trigger (no new package, no new runtime asset, no new dependency) |
+
+Recorded on a Linux container (Python 3.12, `TZ=America/Vancouver`,
+`QT_QPA_PLATFORM=offscreen`); the 5 skips are the Windows-only cases the desk runs, so
+the desk figure should read **2687 passed**. Fifteen new tests cover TB-0's
+project-then-budget proof and its budget ceilings, the partial-publish header,
+membership-only skip, resume-by-evidence-hash, and the attempt cap with its terminal
+marker.
 
 ### Desk restarted onto the scan-window build — 2026-08-10 21:19
 

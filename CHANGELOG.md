@@ -1,6 +1,6 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-10** from the working copy of
+Last reconciled: **2026-08-11** from the working copy of
 `testing-week-2026-08-10`
 
 Authoritative for: **what exists and the historical sequence of revisions**
@@ -118,6 +118,11 @@ and green while its live or promotion gate remains open in `plan.md`.
 - Separate off-hours `ai_jobs` process and scheduled task, job-ledger integration,
   deterministic evidence coverage, daily advisory summary, per-ticker briefs, full
   artifacts in `ai_store`, and bounded atomic `ai_morning_brief.txt` publication.
+- Per-ticker briefs project each symbol out of a full-size base package and then
+  ration the projection to the local context window; each symbol resolves
+  independently, a symbol with no evidence beyond watchlist membership is answered
+  without a model call, completions resume by evidence hash, and the slot spends at
+  most three attempts a session.
 - Local-AI Phase 0 is complete. Phase 1 implementation is complete; its five-session
   unattended live gate remains in `plan.md`.
 
@@ -186,6 +191,58 @@ and green while its live or promotion gate remains open in `plan.md`.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
+
+### 2026-08-11 — ticker-briefs hardening packet (TB-0..TB-4)
+
+Armed by the trader after reading the first repaired overnight run
+(`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b, PROPOSED → BUILT). Advisory-only:
+nothing in this layer touches scanners, scores, watchlists, alerts, or bot state,
+and no detector, scoring, or alert file is in the diff.
+
+- **The measurement that changed the packet's premises.** `ticker_briefs` completed
+  all 95 symbols in **5,962 s — ~63 s/call**, on the repaired `gemma3:12b-tbv3ctx`.
+  The drafted premise of ~4.75 min/call and a window overrun is **obsolete**: there
+  was no overrun. The real finding was content vacuity.
+- **TB-0 — project first, budget second.** Every one of those 95 briefs was
+  content-free. `run_ticker_briefs` built one base evidence package *already*
+  budgeted to the local ceiling (22,000 chars) and projected each symbol out of that
+  starved base, so the per-symbol-rich sources had been declared unfunded at 0 chars
+  (`setups.current_tracker` 95,806, `setups.current_tiers` 77,124,
+  `setups.bounce_learning` 17,995, `market.industry_intraday_rs` 17,833) and the
+  funded tables sheared to about one row. MRVL's brief reads "1 of 19 requested
+  source(s) usable", the one being its own watchlist membership. The base now carries
+  the cloud ceiling so symbol rows survive projection, and the local budget is applied
+  to each much smaller per-symbol package through `ai_summary.ration_projected_sources`
+  — same unfunded/truncation vocabulary, same truncation tripwire on every local call.
+  `run_daily_summary` is untouched and cloud payloads stay byte-identical.
+- **TB-1 — per-ticker failure isolation and an honest partial morning file.** Each
+  symbol's inference and export is its own unit, with the daily summary's single
+  fed-back-error retry applied per symbol for the first time. The morning file
+  publishes what completed and states `Briefed N of M. Failed: SYM (reason), …`
+  before the first brief. Focus names lead the ordering, so a partial night covers
+  Focus first. `ok` only when every symbol resolved; otherwise `degraded`, which the
+  runner retries. A mid-batch window closure now publishes the partial instead of
+  losing the night; the market session remains an unconditional stop, and the
+  unreadable-watchlist refusal is unchanged.
+- **TB-2 — membership-only symbols skip the model.** A symbol whose projected package
+  holds nothing but `watchlists.membership` gets a deterministic one-line entry and no
+  artifact set, and counts as resolved.
+- **TB-3 — resumable completion.** Per-symbol completions are recorded in an
+  append-only `ticker_briefs_manifest.jsonl` under
+  `ai_store/briefs/<year>/<session>/`, keyed by `(session_date, symbol,
+  evidence_hash)`. A re-fire regenerates only what changed, ending both the
+  restart-at-symbol-1 waste and the duplicate four-file artifact sets; the morning
+  file is re-rendered from the manifest, so clearing the failures upgrades `degraded`
+  to `ok` on its own. An unreadable manifest regenerates rather than refusing.
+- **TB-4 — per-session attempt cap.** `JobSlot.max_attempts` (3 for `ticker_briefs`,
+  unlimited elsewhere) plus an identical-error early stop; on reaching either, the
+  runner writes one terminal marker — an ordinary `skipped` row carrying
+  `terminal: true`, deliberately not a new job status — and every later firing costs
+  about a second. Only `failed` and `degraded_no_narrative` rows spend an attempt, so
+  a cheap refusal from an unmounted share still self-heals, and `--force` overrides
+  the marker. This ends the 11-consecutive-failure grind of 2026-08-09/10.
+- Gate handling: separate five-session clocks. `ai_summary`'s clock continues; the
+  `ticker_briefs` clock restarts at zero. Live proof owed at the next 22:00 window.
 
 ### 2026-08-10 — testing-week usability and phone-report corrections
 

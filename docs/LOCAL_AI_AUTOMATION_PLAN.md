@@ -925,26 +925,47 @@ wrong.
 6. **Non-sessions:** does a weekend or holiday get an empty fact pack (so gaps
    are visible) or no file (so absence means "no session")?
 
-### 6.4b Ticker-briefs hardening packet (PROPOSED — contingency, drafted 2026-08-10)
+### 6.4b Ticker-briefs hardening packet (BUILT — armed by trader 2026-08-11)
 
 > Drafted at trader direction on the evening of 2026-08-10, hours before the
 > first repaired 22:00 window, so that a bad night has a ready, reviewed plan
-> instead of a 2 a.m. improvisation. **Nothing here is authorized to build.**
-> It arms only by explicit trader direction after real overnight evidence —
-> expected decision point: the 2026-08-11 morning ledger. An external
-> frontier-model review (2026-08-10) proposed overlapping changes; every claim
-> below was re-verified against the code on this branch before inclusion, and
-> the ones that did not survive verification are recorded at the end.
+> instead of a 2 a.m. improvisation. **Armed by the trader on 2026-08-11**
+> after reading the first overnight run's evidence, and built the same day
+> (TB-0 through TB-4). An external frontier-model review (2026-08-10) proposed
+> overlapping changes; every claim below was re-verified against the code on
+> this branch before inclusion, and the ones that did not survive verification
+> are recorded at the end.
+>
+> **What the first night actually proved (2026-08-10/11).** `ticker_briefs`
+> completed all 95 symbols in 5,962 s — **~63 s/call**, not the ~4.75 min/call
+> the packet was drafted against. Defect 1 below is therefore **obsolete as
+> written**: the batch fits the window comfortably and there was no overrun.
+> It is kept, struck through, because the correction is the evidence. The real
+> finding was **content vacuity**, recorded as TB-0.
 
 **Verified defects this packet repairs.** Confirmed by direct inspection of
 `scripts/ai_jobs/briefs.py` and `scripts/ai_jobs/runner.py`. The first two are
 the open defects already named in `CURRENT_CHECKPOINT.md`; the rest are their
 sharper consequences:
 
-1. **`ticker_briefs` cannot finish as scoped.** One model call per unique
-   Focus/watchlist symbol — 95 on 2026-08-10, deduplicated across all six
-   lists — at an observed ~4.75 min/call is ~7.5 hours against an 8-hour
-   window, in a slot reserving 120 minutes.
+0. **TB-0 — every brief was content-free** (found 2026-08-11, added at arming
+   time; the highest-value defect in the packet). `run_ticker_briefs` built one
+   base evidence package *already budgeted to the local ceiling*
+   (`evidence_budget_for("local")` = 22,000 chars) and then projected each
+   symbol out of that starved base. The budget pass had marked the
+   per-symbol-rich sources unfunded at 0 chars — `setups.current_tracker`
+   95,806 chars, `setups.current_tiers` 77,124, `setups.bounce_learning`
+   17,995, `market.industry_intraday_rs` 17,833 — and sheared the funded tables
+   to about one row (`showing most recent 1 of 192 rows`, `1 of 200`). By the
+   time the projection ran, the symbol was no longer in the package. The MRVL
+   brief's coverage says **"1 of 19 requested source(s) usable"**, and the one
+   usable source was `watchlists.membership`. All 95 briefs were structurally
+   like that: 5,962 s of inference describing which lists a ticker is on.
+1. ~~**`ticker_briefs` cannot finish as scoped.**~~ *(obsolete — see the note
+   above; measured at ~63 s/call, ~99 min for 95 symbols.)* One model call per
+   unique Focus/watchlist symbol — 95 on 2026-08-10, deduplicated across all
+   six lists — at an assumed ~4.75 min/call would be ~7.5 hours against an
+   8-hour window, in a slot reserving 120 minutes.
 2. **A failing job has no attempt cap.** Only `ok` is canonical, so a
    deterministic failure retries on every 30-minute firing to the end of the
    window (11 consecutive failures, ~111 minutes of inference producing
@@ -968,6 +989,28 @@ sharper consequences:
    on swing_longs" — the class of output least likely to say anything.
 
 #### Work items, ordered by expected value
+
+**TB-0 — Project first, budget second.** *(built)* For the ticker-briefs path
+only, build the base package with the **cloud** ceiling
+(`MAX_TOTAL_EVIDENCE_CHARS`) so symbol rows survive into projection —
+`_extract_ticker_content` already bounds each projected source at
+`MAX_TICKER_SOURCE_CHARS` = 16,000 — then apply the **local** budget
+(`evidence_budget_for("local", tier="medium")`) to each projected per-symbol
+package before the model call. A per-symbol package still over budget is
+rationed with the packager's own unfunded/truncation vocabulary
+(`ai_summary.ration_projected_sources`), so the truncation tripwire keeps
+holding for every local call. `run_daily_summary` is untouched: it still
+budgets its one package to the local ceiling, and cloud request payloads stay
+byte-identical. Projections copy their sources, notices included, so one
+symbol's truncation banner can never land on the base the next symbol reads.
+
+*Residual, stated honestly:* an 80,000-char base is a ceiling too. A single
+95,806-char tracker inside a four-scope package still gets a weighted share
+(~24,000 chars before surplus reallocation) and keeps its **most recent** rows,
+so a symbol whose only row is an old one can still be sheared out before
+projection. That is a large improvement over being unfunded at 0 chars, not a
+guarantee. Raising the base ceiling further is a trader decision and belongs
+with the fact-pack design (sec 6.4a), not here.
 
 **TB-1 — Per-ticker failure isolation and an honest partial morning file.**
 Wrap each symbol's inference/export in per-symbol error capture; give each
@@ -1025,24 +1068,55 @@ inside this item, not a separate mechanism.
 
 - "The built-in retry improves batch reliability" — false for `ticker_briefs`;
   only the daily summary retries. Corrected by TB-1.
-- Its ~1 min/ticker estimate — the desk-observed figure is ~4.75 min/call,
-  which is why defect 1 is a window overrun, not merely a long batch.
+- Its ~1 min/ticker estimate — rejected at drafting time against a desk-observed
+  ~4.75 min/call. **The frontier review was right and this rejection was wrong**:
+  the first repaired night measured **~63 s/call**, which is its estimate almost
+  exactly. The ~4.75 min figure came from the pre-repair model. Defect 1 is
+  therefore not a window overrun, and TB-0 — which neither review named — was
+  the defect that mattered.
 
 #### Gate interaction and scope
 
-Arming this packet changes `ticker_briefs`' failure policy, and the Phase 1
+Arming this packet changed `ticker_briefs`' failure policy, and the Phase 1
 exit gate's own reset conditions say changing the observed thing restarts the
-observation. Proposed handling, needing a trader answer at arming time: judge
-`ai_summary` and `ticker_briefs` as **separate five-session clocks** — the
-daily summary's code path is untouched by TB-1..TB-4, so its clock continues;
-the ticker-briefs clock restarts at zero on arming. Scope is
-`scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, plus tests; no
-detector, scoring, or alert file is touched, and every output remains
-advisory-only with zero influence on scanners, scores, watchlists, alerts, or
-bot state. Tests owed with the build: partial-publish header rendering, the
-unreadable-watchlist refusal unchanged, membership-only skip, resume skipping
-same-hash completions and regenerating changed-hash ones, attempt-cap
-terminal behavior, and window-closure-mid-batch publishing the partial file.
+observation. **Adopted at arming (2026-08-11):** `ai_summary` and
+`ticker_briefs` are judged on **separate five-session clocks** — the daily
+summary's code path is untouched by TB-0..TB-4, so **its clock continues**;
+the **ticker-briefs clock restarts at zero**.
+
+Scope as built: `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one
+additive helper in `scripts/ai_summary.py` (`ration_projected_sources`, called
+only from the ticker path), plus tests. No detector, scoring, or alert file is
+touched, and every output remains advisory-only with zero influence on
+scanners, scores, watchlists, alerts, or bot state.
+
+Tests landed with the build: TB-0's project-then-budget proof (the row a
+budget-first base loses, and that the same row survives the new order), every
+per-symbol package staying inside the local budget, the daily-summary
+package unchanged, projections not mutating their base, partial-publish header
+rendering, the unreadable-watchlist refusal unchanged, membership-only skip,
+resume skipping same-hash completions and regenerating changed-hash ones,
+attempt-cap and identical-error terminal behavior, cheap skips never spending
+an attempt, `--force` overriding the marker, and window-closure-mid-batch
+publishing the partial file while the market session still stops outright.
+
+**Live proof still owed:** the next 22:00 window on the desk. What to check in
+the morning — briefs whose coverage counts more than one usable source and
+whose statements cite real evidence; a morning-file header reading
+`Briefed N of M`; at most three `ticker_briefs` ledger rows for the session,
+with a `terminal` row if it stopped; and no duplicate artifact sets under
+`ai_store/briefs/<year>/<session>/tickers/<symbol>/`.
+
+**Implementation notes worth keeping.** The per-session completion manifest is
+`ai_store/briefs/<year>/<session>/ticker_briefs_manifest.jsonl`, append-only,
+newest row per symbol wins; an unreadable manifest regenerates the night
+rather than refusing it. The attempt cap is a `JobSlot.max_attempts` the runner
+enforces, and its terminal marker is an ordinary `skipped` row carrying
+`terminal: true` — deliberately **not** a new job status, because
+`RECOGNISED_JOB_STATUSES` governs what a *job* may report and this row is
+written by the runner. Only `failed` and `degraded_no_narrative` rows spend an
+attempt: a `skipped` refusal (unmounted Drive) costs about a second and must
+keep self-healing.
 
 ### 6.5 Phase exit gates (verify commands)
 
