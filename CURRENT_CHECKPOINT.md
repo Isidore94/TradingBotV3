@@ -103,10 +103,18 @@ old desktop was retired; none was a code defect:
 
 1. **Designated writer was unset** — `autopilot_today.txt` had not published since
    2026-07-30, so the whole 2026-08-10 session produced no phone digest and no swing
-   push. Fixed with `writer_role.py --designate-self` (NucBox_K8_Plus).
-   **Requires a GUI restart to take effect.**
+   push. Fixed with `writer_role.py --designate-self` (NucBox_K8_Plus). The desk was
+   restarted at 19:37 local to pick it up (new pid 17984, heartbeat live), and
+   `writer_role.py` now resolves `designated_writer / may publish True`, exit 0.
+   **Not yet proven end to end:** `hourly_away_report_slot_due` returns nothing once
+   the hour is past the session close, so no publish was due at restart time.
+   `writer_health.json` consequently still carries its pre-fix 15:18 payload — that
+   file is rewritten on a *publish attempt*, not at startup, so a stale copy here is
+   expected and is **not** evidence the fix failed.
 2. **`research_store_dir` was unset** — the warehouse was fully disabled and captured
-   nothing. Now `\\MINI-PC\Trading Bot Data\research_lake`, layout created.
+   nothing. Now `\\MINI-PC\Trading Bot Data\research_lake`, layout created, and the
+   restarted desk is the first process to run with it enabled. Capture is proven by
+   the next scan writing under the lake, not by configuration alone.
 3. **ntfy was already configured and works** — verified by test push (`ok: True`) at
    both `default` and `urgent` priority. Delivery to the iPhone banner/sound is an
    iOS-side setting and is **not yet confirmed by the trader**.
@@ -128,6 +136,21 @@ Two AI-layer caveats remain unproven and must be checked against tomorrow's ledg
   sec 6.4a. Its six open questions need trader answers before any digest code is
   written — question 1 ("what counts as winning": R at scenario close, MFE/MAE, or
   both) is a trading judgement and is the one the whole fact pack hangs on.
+
+### What the next session must confirm
+
+Four fixes are configured and unit-verified but have **not** completed a live cycle.
+None could be proven on the evening of 2026-08-10; all resolve by 09:00 on 08-11:
+
+| Fix | Proof to look for | When |
+|---|---|---|
+| Designated writer | `autopilot_today.txt.meta.json` names `NucBox_K8_Plus` with a current `verified_at` — it still names the retired `DESKTOP-IABHR62` at 2026-07-30 | 07:00 publish |
+| Swing phone push | an ntfy notification carrying numbered swings | 09:00 (push start hour) |
+| Research warehouse | new files appearing under the lake root | first scan |
+| AI jobs | `ai_jobs-20260811.log` records a completed `ai_summary` / `ticker_briefs` | 22:00-06:00 window |
+
+If the 07:00 publish does not happen, read `writer_health.json` first: it will then be
+fresh, and its `reason` names the exact gate that refused.
 
 Still open on the desk, not blocking the week:
 
