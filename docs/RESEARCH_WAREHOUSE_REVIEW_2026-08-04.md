@@ -1,5 +1,9 @@
 # Research warehouse review — Fable, 2026-08-04
 
+Document role: **historical review evidence**. The reported defects were reconciled
+through later BD entries and testing-week commits. Use `CHANGELOG.md` for implemented
+status, `plan.md` for remaining work, and this file only for the original findings.
+
 Review of branch `claude/das-warehouse-phase-1-0gis7e` (commits `26dd695`…`e1d54b9`,
 Phases 1–8 of `docs/ULTIMATE_SETUP_DATABASE_PLAN.md`). Read order followed:
 plan.md sec 5 + 12·13a → the locked plan (secs 5, 7.1, 8.3, 8.4, 14.2, 19, 23) →
@@ -463,4 +467,4 @@ the Windows suite outright (`test_a_second_build_refuses_rather_than_racing`
 terminates its own process via `os.kill(pid, 0)` → `TerminateProcess`), and
 D10 passes offline because every fake transport defines `connect(spec)`. The
 Windows/3.14 run must happen after these fixes, and its number re-baselined in
-`SOL_PROGRESS.md`.
+`CURRENT_CHECKPOINT.md`.

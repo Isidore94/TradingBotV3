@@ -1,11 +1,13 @@
 # How the test/study setups work — AI-stated understanding
 
+Document role: **active trader-review reference**, not a status or roadmap file.
+
 Companion to `SETUPS_MAJOR.md`. This states how every setup that is **measured but
 not trusted** works: the "Study (measured only)" and "Playbook research" families in
 `scripts/setup_docs.py`, and the three research harnesses that generate and grade
 them. **Purpose: Aaron reviews and corrects; corrections get folded back in.**
 
-The governing rule (plan.md Milestone 10): new setups enter only through research and
+The governing rule (plan.md Section 7 and Phase 6): new setups enter only through research and
 shadow stages, are judged on portfolio-level incremental expectancy (never on alert
 volume), and are promoted only with versioned rollback. Until then they carry no
 scoring weight — they annotate and accrue evidence.
@@ -89,7 +91,7 @@ forensics candidates go into the playbook's forward machinery next. Outputs land
 ## How a test setup becomes major (as I understand the intended path)
 
 1. Thesis + failure mode written; point-in-time features and universe defined
-   (plan.md Milestone 10 steps 1–3).
+   (plan.md Phase 6 setup-promotion path).
 2. Backfill measurement in the playbook (beats `baseline_every5`, edge in both
    regime windows) and/or forensics lift → forward study.
 3. Forward accrual in the tracker with complete candidate retention; no scoring
@@ -113,6 +115,6 @@ would keep future agents from inventing one.
 3. `post_earnings_candle_break` came in trader-specified, skipping the backfill path
    (weight parked pending tracker history). Is that the intended second entry path
    for setups — trader conviction first, measurement after? Worth writing down.
-4. Plan.md Milestone 10 lists priority families (compression-to-expansion, failed
-   breakout/reclaim, opening drive pullback, etc.) that have no study rows yet — are
-   any of these next in line for the playbook?
+4. Plan.md Phase 6 carries the one-family-at-a-time promotion program. Historical
+   candidates included compression-to-expansion, failed breakout/reclaim, and opening
+   drive pullback, but they have no study rows yet — are any next in line?

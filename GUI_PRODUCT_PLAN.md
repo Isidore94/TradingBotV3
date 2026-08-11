@@ -1,10 +1,17 @@
 # TradingBotV3 GUI, Decision Support, Journal, and AI Product Plan
 
-Status: phased implementation in progress; production-score promotion remains evidence-gated
+Document role: **historical product-design reference**. Its July phase order is
+superseded by [`plan.md`](plan.md); implemented portions are reconciled in
+[`CHANGELOG.md`](CHANGELOG.md). Keep this file for detailed rationale and acceptance
+ideas, not current status.
+
+Status at reconciliation (2026-08-10): many presentation/evidence slices described
+here are implemented; the canonical Opportunity, unified Command Center, complete
+lifecycle, and any production-score promotion remain open and evidence-gated.
 
 Audit date: 2026-07-14
 
-Scope: living product/implementation addendum. Landed items are recorded below; future items remain subordinate to plan.md.
+Scope: preserved design addendum; all future items remain subordinate to `plan.md`.
 
 ## 1. Relationship to the master roadmap
 

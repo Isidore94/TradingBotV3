@@ -1,5 +1,8 @@
 # Research warehouse ERD — first-increment datasets
 
+Document role: **active warehouse identity/read-contract reference**, subordinate to
+the locked warehouse plan and root roadmap.
+
 Phase 1 deliverable of [`docs/ULTIMATE_SETUP_DATABASE_PLAN.md`](ULTIMATE_SETUP_DATABASE_PLAN.md)
 (the locked plan; Section 7.3 requires "a small ERD with primary/foreign keys,
 cardinalities, deterministic ID algorithms, occurrence start/end/dedup rules,

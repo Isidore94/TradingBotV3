@@ -1,0 +1,351 @@
+# TradingBotV3 implemented history
+
+Last reconciled: **2026-08-10** from the working copy of
+`testing-week-2026-08-10`
+
+Authoritative for: **what exists and the historical sequence of revisions**
+
+Remaining work: [`plan.md`](plan.md)
+
+This is a curated product history, not a raw commit dump. It reconciles the former
+status sections in `plan.md`, the accumulated `CURRENT_CHECKPOINT.md` ledger, the GUI
+plans, warehouse plans/reviews, dated handoffs, and Git history. Exact current test
+counts remain in `CURRENT_CHECKPOINT.md`.
+
+The labels retain their strict meanings: `IMPLEMENTED` means code exists, `GREEN`
+means deterministic tests pass, `LIVE_VALIDATED` requires real-session evidence,
+and `PROMOTED` requires an explicit champion decision. A feature can be implemented
+and green while its live or promotion gate remains open in `plan.md`.
+
+## Current implemented inventory
+
+### Application, runtime, and data ownership
+
+- PySide6 Trading Desk launched by `launch_gui.py`, with the legacy Tk UI retained
+  as a compatibility path.
+- Main-desk single-process ownership, bounded BounceBot startup/shutdown, generation
+  guards, child-process reaping, runtime heartbeat, durable job ledger, typed retry
+  budgets, stale-run marking, and a hardened single-instance launch guard that also
+  sees the frozen executable.
+- User-selected shared home folder for operational text/JSONL/CSV artifacts;
+  machine-local settings, caches, and diagnostics under LocalAppData; a separate
+  research-lake storage class outside that home folder.
+- **No cloud sync (2026-08-10, decision 0015).** Google Drive/OneDrive were removed
+  from the system entirely. `C:\TradingBotData` keeps its path and role as a plain
+  local folder; the DAS file server `\\MINI-PC\Trading Bot Data` is the durable
+  tier, holding the research lake, the AI store, and hourly cold-pushed subtrees.
+  Documentation-only change: no path, behavior, or test changed.
+- Designated-writer authority, local kernel exclusion, fenced writer lease, atomic
+  publication, readback verification, last-good preservation, and bounded archives.
+- Main desk is the sole always-on scanner. The former mini-PC scanner and Desk Link
+  satellite topology are `RETIRED`; their code remains only pending cleanup.
+
+### Scanning, candidates, and decision support
+
+- Master AVWAP D1 swing scanning with earnings anchors, current/previous AVWAP
+  families, running-deviation bands, focus buckets, Expected-R ranking, study tags,
+  theta candidates, tracker history, and durable daily-bar storage.
+- BounceBot completed-M5 detection with session VWAP/bands, EMA and prior-day
+  levels, relative strength/weakness, regime-aware candidate discovery, tiering,
+  alerts, outcome tracking, and the day-scoped M5 Focus path.
+- CandidateRegistry foundation with provenance, source leases, transitions, atomic
+  versioned persistence, and partial shadow adoption. Full authority remains open.
+- Industry Board with one single-flight owner, hourly refresh, atomic last-good
+  snapshot, numeric sorting, freshness/Health integration, and advisory aligned
+  industry-vs-SPY plus stock-vs-primary-industry fields.
+- Auto-populate rules for both regimes, previous-day-extreme gating, DESK adoption
+  into M5 Focus, and one extension notification per Focus name/day while pullback
+  notifications stay active.
+- Focus privileges begin only beyond the previous session's directional extreme;
+  missing prior-day data grants nothing.
+- D1 Focus routes final Favorite/High Conviction upgrades while developing trigger
+  evidence remains research-only. Legacy D1 champion alerts are unchanged.
+
+### Charts, review, alerts, and phone surfaces
+
+- Chart-first review flow, current forming D1 preview, D1/M5 shared snapshot widget,
+  log scale, crosshair/OHLCV readout, source/age strip, fallback warning, cache
+  invalidation, background loading, prewarming, and stall watchdog.
+- Chart Review workspace with lookup for any symbol, hidden-by-default Setups drawer,
+  keyboard-first LIKE/veto/note/setup-claim capture, versioned veto vocabulary,
+  append-only `trader_annotations.jsonl`, and isolated forward veto cohorts.
+- Painted D1 S/R, previous-day H/L, projected trendline, SMA/EMA/AVWAP groups,
+  machine-local visibility preferences, stable level IDs, click selection, and
+  click-to-arm routed through the one `PriceAlertService` writer.
+- Chart Review annotations cannot add Focus/watchlist membership or price alerts;
+  LIKE records judgement only.
+- Visual Alert Center and review queue, chart-armed watches, persistent History,
+  structured review decisions, review scoreboard, and annotation-only/FIFO policy
+  gate.
+- Main-only price-level polling with cross-up/cross-down, one fire per arm, urgent
+  ntfy push, persistent main-desk presentation, and manual re-arm.
+- Auto modes OFF/DESK/AWAY/EVENING, honest global status, EVENING early scan and
+  briefing, and one verified `autopilot_today.txt` with safety/freshness first,
+  numbered best swings, intraday candidates, and condensed operations.
+- On 2026-08-10, best swings gained an ntfy report notification; it stays quiet when
+  the generated swing section contains no readable setups. Late-opened alerts now
+  receive current bars, and the Chart Review Setups column defaults hidden with a
+  visible restore control.
+
+### Journal, explanations, and learning
+
+- Journal schema v2 with append-only opportunity lifecycle events, idempotent broker
+  Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
+- Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
+  Move Forensics, plus an evidence-floor-aware “What’s Working” summary.
+- Review events partitioned by installation, merged/deduplicated by readers, capture
+  audits, preference scoreboard, AI-curated `review_policy.json`, and a permanent
+  no-suppression boundary.
+- Technical Integrity research hierarchy with point-in-time predictions/outcomes,
+  break pressure, calibration report, and no detector/watchlist/alert influence.
+- Regime infrastructure evidence for SPY baseline, breadth, Technical Integrity
+  follow-ups, and audit tooling. The evidence remains exploratory/non-promotable.
+
+### AI and automation
+
+- Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
+  selection, bounded preview, credential-manager storage, structured/source
+  validation, immutable evidence packages, and export-only results.
+- Config-gated local OpenAI-compatible provider through Ollama, default off; verified
+  small/medium/large model tiers on the Ryzen main desk with no market-hours
+  inference.
+- Separate off-hours `ai_jobs` process and scheduled task, job-ledger integration,
+  deterministic evidence coverage, daily advisory summary, per-ticker briefs, full
+  artifacts in `ai_store`, and bounded atomic `ai_morning_brief.txt` publication.
+- Local-AI Phase 0 is complete. Phase 1 implementation is complete; its five-session
+  unattended live gate remains in `plan.md`.
+
+### Durability and catch-up
+
+- Repeating 06:00 Pacific weekday launch task through the session, protected by the
+  existing single-instance guard.
+- Master AVWAP tracker staleness catch-up from completed prior-session D1 data with
+  explicit `data_session` vintage and no automatic scoring-tuner/prior-refit side
+  effects.
+- Technical Integrity follow-up and breadth-ledger deterministic backfill with
+  bounded retries, explicit `capture_mode`, honest gap rows, and live/backfill audit
+  separation.
+- Frozen snapshots, never-started predictions, and other Tier-C evidence remain
+  intentionally non-reconstructed.
+
+### Research warehouse
+
+- Phase 0: research-lake decision record, configuration, home-folder-path refusal, layout,
+  and disabled-by-default no-op behavior.
+- Phase 1: immutable Parquet store, four-step seal, append-only manifest authority,
+  13 frozen schemas, quarantine, compaction, retirement, and crash reconciliation.
+- Phase 2: idempotent bronze wraps, daily universe/level snapshots, and completed D1
+  projection with source hashes and watermarks.
+- Phase 3/3b: zero-extra-request M5 tee, coverage/gap rows, capped spool, capture-only
+  pacer, IB backfill transport, nightly/weekly backfill, and trickled yfinance seed.
+- Phase 4: versioned XNYS sessions and deterministic M15/M30/H1/W1 aggregation.
+- Phase 5: point-in-time daily/intraday feature snapshots and anchor instances using
+  champion calculations, including AVWAP parity at 1e-9.
+- Phase 6: deterministic occurrence/revision/episode identity and versioned swing and
+  intraday outcome simulation with costs, ambiguity bounds, partials, time stops,
+  slippage, and open/truncated states.
+- Phase 7: manifest-resolved read path and read-only Research panel; DuckDB remains
+  optional and pyarrow can answer every slice.
+- Phase 8: three-class backups, restore check, single-flight build/status CLI, job
+  ledger, and six Health tiles.
+- Defect passes repaired outcome supersession, management bounds, feature windows,
+  per-bar backfill dedupe, pacing clocks, gap semantics, session identity, compaction
+  reads, every job invoker, live tee wiring, and off-GUI-thread spool I/O.
+- Phases 0–8 are code-complete on the testing-week branch. The broker check,
+  confirmation items, and 20-session pilot remain open.
+
+### Testing, packaging, and platform
+
+- Broad pytest suite, deterministic smoke check, pytest markers, narrow Ruff gates,
+  layered requirements with constraints, and Windows/macOS path handling.
+- Provider telemetry at IBKR/Yahoo/Nasdaq boundaries with completeness contracts and
+  honest UNKNOWN until measured.
+- PyInstaller onedir spec, Qt runtime hook, asset/package drift test, lazy-engine
+  `--selftest`, and a permanent guard preventing self-test from demanding packages
+  deliberately excluded from the bundle.
+- The first Windows frozen run found and closed an `ai_jobs` bundle-roster conflict;
+  the current frozen self-test is 29/29.
+- macOS launcher, CloudStorage Drive discovery, Keychain credentials, and machine-
+  local path normalization.
+
+### Shadow challengers
+
+- Side-symmetric SPY market-state/pullback engine runs beside the legacy pause
+  detector, emits replayable evidence, and cannot affect candidates, alerts, or rank.
+- Greatness Monitor persists ordered touch/wick/close/acceptance/retest/failure/re-arm
+  transitions beside legacy D1 alerts and cannot alter the champion path.
+- Champion-invariance tests prove enabled, failing, or poisoned shadow engines leave
+  production SPY/D1 results unchanged.
+
+Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
+
+## Revision history
+
+### 2026-08-10 — testing-week usability and phone-report corrections
+
+- Chart Review opens with its Setups column hidden and exposes a restore control.
+- A newly opened alert receives current cached/fetched bars rather than scan-time bars.
+- Best swing content can trigger a phone notification after report publication, with
+  an explicit no-readable-setups quiet gate.
+- The existing live market commentary journal request was recorded as roadmap item;
+  it is not implemented.
+- Consolidated repository guidance into implemented history, a phase-gated remaining
+  roadmap, a precise current checkpoint, a classified documentation index, and a
+  non-authoritative wishlist. `CLAUDE.md`/`AGENTS.md` now mandate the read/update
+  sequence for every AI handoff.
+- **Designated writer configured on the main desk.** `autopilot_today.txt` had not
+  published since 2026-07-30 because the retired desktop was still the last recorded
+  holder and no writer was named on the mini-PC; the lease correctly fail-closed
+  rather than publishing from an unconfigured machine. Consequence: an entire Auto/Away
+  session produced no phone digest and no swing push, since the push is tied to a
+  *verified* publish. `writer_role.py --designate-self` fixed it.
+- **Research warehouse enabled.** `research_store_dir` was unset, so a full session of
+  capture was silently discarded. Now `\\MINI-PC\Trading Bot Data\research_lake`, with
+  the sec-8.2 layout created and the machine-local spool at
+  `%LOCALAPPDATA%\TradingBotV3\research_spool`.
+- **Overnight AI jobs repaired.** Three independent faults, all found by reading the
+  job ledger rather than the scheduler's hex code:
+  (a) the task ran `pythonw.exe`, a GUI-subsystem binary, and exited `0xC0000142`
+  with its stdout/stderr discarded — now a logged PowerShell wrapper
+  (`scripts/run_ai_jobs.ps1`) over console `python.exe`, with the runner's real exit
+  code propagated and both streams captured to `%LOCALAPPDATA%\TradingBotV3\logs\`;
+  `register_ai_jobs_task.ps1` updated so re-registering cannot reintroduce it;
+  (b) `ticker_briefs` had failed six consecutive nights with truncated JSON because
+  the local server capped prompts at 2,048 tokens while the app sends up to 80,000
+  chars of evidence — the medium tier now points at a derived `gemma3:12b-tbv3ctx`
+  (`num_ctx 12288`), measured at 6,147 prompt tokens against 2,051 before;
+  (c) after those failures the job then *skipped* every remaining run for reserving
+  120 min against a shrinking window, so the ledger showed skips and hid the failures.
+- **Cloud sync removed from the system (decision 0015).** Google Drive/OneDrive are no
+  longer part of the design. `C:\TradingBotData` is a plain local folder at the same
+  path; the DAS `\\MINI-PC\Trading Bot Data` is the durable tier. Decisions 0005, 0006
+  and 0014 carry superseded/amendment banners rather than being rewritten, since the
+  mechanisms they justify still exist. Documentation and comments only — 2647 tests
+  and 7/7 smoke unchanged. Known consequence: cloud sync was the only off-site copy of
+  the Class A backup set, so off-site redundancy is now an explicit open gap.
+
+### 2026-08-09 — testing-week integration, chart completion, and frozen proof
+
+- Integrated chart performance, Chart Review capture, warehouse Phases 1–8 and
+  defect repairs, A3 shared chart, A4 paint lines, A5 click-to-arm, Local-AI Phase 1
+  completion, and capture-stream hardening.
+- Added packaging spec-drift coverage and frozen self-test. The real Windows build
+  exposed the excluded-`ai_jobs` contradiction; the roster and disjointness guard
+  were corrected.
+- Desk surveys confirmed 62/62 stored trendlines projectable/fresh and 0/171 red
+  horizontal levels clearing the shared strength threshold across three symbols.
+- Recorded the Windows desk gate: 2611 passed, 7 subtests, smoke 7/7, frozen 29/29.
+
+### 2026-08-08 — single-main topology, durability, local AI, and captured judgement
+
+- Retired the Desk Link/satellite and separate mini-PC operating roles; the Ryzen
+  desk became the sole always-on scan and AI host.
+- Built and repaired durability steps 1–4, including tracker-vintage honesty,
+  bounded recovery, and frozen-process launch protection.
+- Built Local-AI Phase 0 and the scheduled Phase 1 foundation, then hardened evidence
+  budgets, missing-source reporting, session identity, and publication rules.
+- Built Chart Review decision capture, veto vocabulary/cohorts, and the workspace
+  shell; added chart background loading and stall protection.
+- Reviewed/merged packaging work and recorded the testing-week branch.
+
+### 2026-08-03 to 2026-08-04 — remote surfaces and research warehouse
+
+- Consolidated Auto/Away output into one swing-first verified phone digest and added
+  main-origin price alerts over ntfy.
+- Implemented all three Desk Link tiers, then later retired the topology on 2026-08-08.
+- Locked the Ultimate Setup Intelligence Database design and implemented warehouse
+  Phases 0–8 plus two review/defect passes.
+- Added the DAS research-lake storage class, immutable store, capture/aggregation,
+  features, occurrences/outcomes, readout, backups, Health integration, and job
+  invokers without production influence.
+
+### 2026-07-30 to 2026-08-02 — observability, live controls, and platform support
+
+- Finished Milestone-1 observability packets: champion-invariance guards, enforced
+  fixture contracts, shared diagnostics I/O, shadow coverage/retention, writer
+  coordination, honest Health, lifecycle ownership, review sharding, provider
+  telemetry, and first-session runbooks.
+- Added regime evidence collection, breadth ledger, Technical Integrity outcomes,
+  stale-tail D1 recovery, and off-GUI Health work.
+- Added DESK/AWAY/EVENING workflows, previous-day gates, chart watches, Focus review
+  actions, phone price alerts, and the flagship post-earnings candle break.
+- Added macOS setup, CloudStorage/Keychain support, machine-local path normalization,
+  UI scaling, and the now-retired Desk Link implementation.
+
+### 2026-07-22 to 2026-07-29 — chart-first desk and review learning
+
+- Added broader RS/industry measurements, market internals, recalibrated Technical
+  Integrity, and expanded Auto candidate coverage.
+- Built D1/M5 snapshot charts across setups, RS, and industry surfaces, then added
+  chart navigation, log scale, forming D1 preview, AVWAP/SMA overlays, and caching.
+- Built the visual review queue, armed chart watches, D1 Focus toggles, alert dock,
+  strength tape, and persistent D1 event alerts.
+- Added review-event capture, preference scoreboard, AI policy handoff, annotation-
+  only guidance, Focus strength board, and Phase-0 learning audits.
+- Fixed recurring Python/Qt crash paths with faulthandler and GUI-thread GC ownership.
+
+### 2026-07-10 to 2026-07-18 — runtime foundation and product trust
+
+- Restored a deterministic baseline, removed dormant defects, added smoke checks,
+  manifests, lifecycle ownership, job ledger, heartbeat, writer lease, and verified
+  Away publication.
+- Added pure SPY state, aligned RS, CandidateRegistry, and Greatness engines; wired
+  SPY and Greatness only in shadow.
+- Added trustworthy Industry Board refresh, Master opportunity dedupe, Auto-vs-user
+  environment separation, automatic Entry Assist, final-upgrade D1 Focus, novice
+  explanations, journal v2, provider-neutral A.I. Summary, and advisory industry RS.
+- Reworked day-trade evidence, RVOL, setup tiers, D1 zone/rubric feeds, and daily-
+  trend gates while retaining golden/evidence controls for behavior changes.
+
+### 2026-07-01 to 2026-07-08 — research breadth and early Auto Pilot
+
+- Expanded study/playbook families, tracker replay, industry indexes, universe
+  building, broker journal imports, and Qt Universe/Industry surfaces.
+- Added the setup encyclopedia, Bounce learning tiers, Expected-R ranking spine,
+  Alert Command Center, delayed ORB/EMA/VWAP workflows, Auto Pilot, self-healing
+  universe, outcome measurement, tracked auto watchlists, and pick feedback.
+
+### 2026-06 — durable data, Qt desk, and Focus Picks
+
+- Added durable D1/H1 stores, gap-aware delta fetching, cache warming, multi-year S/R
+  levels, industry/HTF/cloud/structure studies, and theta support improvements.
+- Began the Tk-to-PySide6 migration and built the Qt Trading Desk.
+- Added FocusPickStore, top-level Focus UI, Master/Bounce integrations, D1 upgrade
+  gates, human focus tracking, and the Human Picks tracker.
+- Adopted Google Drive as the default operational shared-home pattern.
+
+### 2026-03 to 2026-05 — unified desktop workflow
+
+- Consolidated the AVWAP and BounceBot GUIs, shared home-folder watchlists and data,
+  market-session scheduling, ranking/tracker tools, local caches, and swing lists.
+- Added the original mini-PC scheduler (retired 2026-08-08), tracker synchronization,
+  theta candidate ranking/explanations, D1 watchlist integration, and expanded Market
+  Prep/AI reporting.
+
+### 2026-02 — intraday and market-context expansion
+
+- Integrated RRS into BounceBot, configurable EMA bounce monitoring, all-symbol
+  bounce checks, sector/industry classification, earnings-gap anchors, GUI controls,
+  and anchor persistence.
+
+### 2026-01 and 2025-11/12 — initial system
+
+- Established Master AVWAP and BounceBot, earnings-anchor refresh, AVWAP cross/bounce
+  events, signal exports, yfinance fallback, grouped output, and early historical
+  evaluation/labeling/trade-outcome tooling.
+- Added moving-average and D1 summaries, TickerMover integration, trade logging, and
+  the first dependency/runtime structure.
+
+## Retired or superseded implementations
+
+- Desk Link satellite relay/control and the separate mini-PC scanner role are retired
+  as of 2026-08-08. The code remains pending a scoped cleanup.
+- H1 alerts were retired; H1 now confirms D1 tracker picks.
+- The old DESK approval queue for auto-populate was superseded by direct day-scoped
+  M5 Focus adoption.
+- The legacy shared review-event ledger is read-only; per-installation shards are the
+  current writer path.
+- The legacy Tk UI remains only for migration compatibility and is not the product
+  direction.
+- Historical plans and handoffs listed as such in `docs/README.md` are evidence, not
+  current execution authority.

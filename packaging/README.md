@@ -1,5 +1,8 @@
 # Packaging Notes
 
+Document role: **active frozen-build runbook**. Current implementation history is in
+the root `CHANGELOG.md`; rebuild triggers and verification procedure live here.
+
 The consumer build should eventually create a Windows desktop installer around
 the Qt UI.
 
@@ -11,25 +14,23 @@ the Qt UI.
 - The legacy Tk UI remains available during migration, but it should not be the
   final consumer entrypoint.
 
-## Development Build Sketch
+## Development environment
 
-Use a dev environment:
+The repo `.venv` is uv-managed and has no pip. Refresh it with:
 
 ```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+uv pip install -r requirements-dev.txt -c constraints.txt --python .venv\Scripts\python.exe
 ```
 
 Smoke the app before packaging:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\gui.py --ui qt
+.\.venv\Scripts\python.exe .\launch_gui.py
 ```
 
 ## Building The Exe
 
 ```powershell
-.\.venv\Scripts\pip.exe install pyinstaller
 .\.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm
 ```
 
@@ -41,6 +42,14 @@ bundle to a temp directory on every launch.
 
 The exe reads the same stores as the source checkout — `%LOCALAPPDATA%\TradingBotV3`
 and whatever `shared_data_dir` names — so both share one set of data.
+
+After every required rebuild, run:
+
+```powershell
+dist\TradingBotV3\TradingBotV3.exe --selftest
+```
+
+Current expected result: `selftest OK: 29/29 checks passed (frozen)`.
 
 ### Things that will bite you
 

@@ -1,5 +1,8 @@
 # Checkpoint review — 2026-08-08 (items 13b/13c build, branches A/B/C)
 
+Document role: **historical review and merge record**. Later repairs and merges are
+summarized in the root `CHANGELOG.md`; open work is reconciled in `plan.md`.
+
 Reviewer: independent checkpoint review of the three unmerged build branches
 (`durability-catchup` = A, `local-ai-phase-0` = B, `local-ai-phase-1` = C),
 conducted with direct inspection of the diffs, task scripts, and branch

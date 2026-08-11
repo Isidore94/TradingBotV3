@@ -1,6 +1,11 @@
 # TradingBotV3 — Trade Discovery, Focus, Tracking, and Learning GUI Plan
 
-**Status:** Plan-only product and implementation addendum
+**Document role:** historical detailed design reference. Its Phase 0–10 order and
+priority backlog are superseded by [`plan.md`](plan.md). Implemented work is in
+[`CHANGELOG.md`](CHANGELOG.md); the remaining canonical Opportunity, Command Center,
+delivery canary, and lifecycle requirements were carried into the current roadmap.
+
+**Status:** partially implemented; no authority over current status or execution order
 
 **Audit base:** `main` at `41eabc4`, 2026-07-28
 
@@ -78,7 +83,7 @@ The current build already contains much of the required foundation. The plan sho
 | CandidateRegistry with user-protection, source leases, typed transitions, and shadow adoption | Continue the roadmap’s dual-write and promotion sequence |
 | Legacy SPY pause and D1 wick alert champions | Preserve until their challengers pass the declared evidence gates |
 
-`SOL_PROGRESS.md` is older than the current July 28 build, so implementation planning must use current source and Git history in addition to that checkpoint file.
+The checkpoint file was older than the current July 28 build, so implementation planning had to use current source and Git history in addition to that stamp. Current checkpoint authority now lives in `CURRENT_CHECKPOINT.md`.
 
 ## 4. P0 correctness findings
 

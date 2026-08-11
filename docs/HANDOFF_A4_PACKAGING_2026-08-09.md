@@ -1,5 +1,9 @@
 # Overnight handoff — A4 paint-lines + packaging guards (2026-08-09)
 
+Document role: **historical handoff and desk-verification record**. A3–A5 and the
+packaging guards are implemented on the testing-week branch; current status is in
+`CHANGELOG.md`/`CURRENT_CHECKPOINT.md`, and remaining gates are in `plan.md`.
+
 Branch: **`claude/a4-paint-lines-packaging-nug5km`**, two commits on top of
 `origin/testing` (59128c5). See §7 for why it is not `testing` itself.
 
@@ -499,7 +503,7 @@ Every open item this document tracked is now resolved or rehomed:
 - §12's desk checklist ran on 2026-08-09 night: desk gate green (junit
   failures=0 errors=0 skipped=0), frozen selftest 29/29 (it caught and
   adjudicated a real three-way guard contradiction on its first frozen desk
-  run — see SOL_PROGRESS), both surveys measured. §10.3/§10.4's open
+  run — see CURRENT_CHECKPOINT), both surveys measured. §10.3/§10.4's open
   questions are answered: trendline gates 100% effective at 5.6% designed
   coverage (`docs/D1_TRENDLINE_SURVEY.md` §4 now carries the real numbers),
   and the §10.4 red-level hypothesis is CONFIRMED on real stores (0 of 171).
@@ -509,5 +513,5 @@ Every open item this document tracked is now resolved or rehomed:
   that followed); §14's at-exit-hang caveat was resolved by the conftest
   multitasking/GC work.
 
-The live ledger from here is SOL_PROGRESS.md on `testing-week-2026-08-10`.
+The live ledger from here is CURRENT_CHECKPOINT.md on `testing-week-2026-08-10`.
 This document is historical.

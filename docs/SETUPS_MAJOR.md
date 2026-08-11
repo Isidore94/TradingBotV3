@@ -1,5 +1,7 @@
 # How the major setups work — AI-stated understanding
 
+Document role: **active trader-review reference**, not a status or roadmap file.
+
 This is the AI's statement of how the production ("major") setups work, written from
 the code — chiefly `scripts/setup_docs.py` (the setup encyclopedia, which is kept in
 sync with the scanner/tracker), `scripts/master_avwap_lib/`, and

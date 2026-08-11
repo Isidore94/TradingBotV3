@@ -1,1935 +1,414 @@
-# TradingBotV3 Master Roadmap
+# TradingBotV3 remaining roadmap
 
-## Document status
+Last reconciled: **2026-08-10**
 
-This is the single authoritative implementation and product roadmap for TradingBotV3. It consolidates the former architecture/performance plan and the former high-conviction feature plan, then rebases the remaining work on the Sol3 implementation checkpoint.
+Authoritative for: **work that is not finished, validation gates, promotion rules,
+and execution order**
 
-Checkpoint used for this revision:
+Implemented history: [`CHANGELOG.md`](CHANGELOG.md)
 
-- Branch: `Sol3`
-- Commit: `20cefb3`
-- Date: 2026-07-11
-- Reported suite status: 802 tests passing
-- Verified repository evidence: Phase 0 foundations, most Phase 1 instrumentation, Phase 2 implementation, Packets A–D, the SPY pullback challenger, and the Greatness Monitor challenger are present in code and tests.
+Supporting-document index: [`docs/README.md`](docs/README.md)
 
-The checkpoint above is historical. As of 2026-07-30 (branch
-`milestone-1-observability`, commit `0995f51`) the verified green baseline is
-**1634 passed + 5 subtests** (pytest exit code 0, identically under
-`-W "error::pytest.PytestUnhandledThreadExceptionWarning"`) with `smoke_check.py`
-7/7; that count is the minimum green baseline. Run the suite before and after
-each implementation packet and record the exact count in the relevant commit or
-run manifest.
-
-This roadmap distinguishes four facts that must never be collapsed into one status:
-
-1. **Implemented** — code exists.
-2. **Test-green** — deterministic automated tests pass.
-3. **Live-validated** — behavior has been observed under real session, machine, provider, and storage conditions.
-4. **Promoted** — the feature is authorized to affect production suggestions or user-facing decisions.
-
-A shadow feature can be implemented and test-green without being live-validated or promoted.
-
----
+This file intentionally does not repeat the implementation history. A feature with
+code is recorded in `CHANGELOG.md`; any validation, evidence, promotion, or cleanup
+still owed remains here. Detailed specifications under `docs/` are subordinate to
+this roadmap. Section numbers 5–7 and 12 are retained deliberately so established
+runbook and decision-record references stay valid.
 
 ## 1. Mission and product boundary
 
-TradingBotV3 should be a fully automated trading decision-support system that does everything except execute orders.
-
-It should:
-
-- prepare the market before the session;
-- discover high-quality swing and day-trade candidates;
-- continuously monitor developing opportunities;
-- determine which names are proving relative strength or weakness during meaningful SPY and sector tests;
-- identify when a stock moves from “interesting” to genuinely actionable;
-- present the best opportunities in the main Qt GUI;
-- operate unattended in Auto/Away mode;
-- publish an honest, current phone report through Google Drive;
-- journal signals, decisions, and outcomes;
-- measure setup expectancy without look-ahead or selection bias;
-- help discover and validate new setups through controlled research.
-
-The application does **not** execute trades. Broker order routing, consumer distribution, and commercial shipping are outside the current roadmap. Broker data imports may remain read-only inputs to the journal.
-
-### Operating model
-
-- The main Qt GUI is the primary product and composition root.
-- Auto Mode is a central application state, not a collection of unrelated checkboxes.
-- `OFF`, `AUTO-DESK`, and `AUTO-AWAY` must remain truthful and globally visible.
-- The desk machine is the primary interactive runtime.
-- The mini-PC is an optional unattended worker, not a separate product architecture.
-- Both machines may read shared exports, but mutable shared outputs require explicit ownership.
-- Desktop and Away mode must consume the same canonical opportunity snapshot.
-- No feature may silently promote itself from research or shadow mode into production decision-making.
-
----
-
-## 2. Status vocabulary and promotion rules
-
-Use these labels in commits, the Health page, `SOL_PROGRESS.md`, and future handoffs.
-
-| Status | Meaning | May affect live suggestions? |
-|---|---|---:|
-| `PLANNED` | Designed but not implemented. | No |
-| `IMPLEMENTED` | Code exists but may lack complete tests. | No |
-| `GREEN` | Deterministic tests pass. | Only if it is preserving existing production behavior |
-| `SHADOW` | Runs on live inputs but cannot affect production output. | No |
-| `LIVE_VALIDATED` | Passed documented real-session or operational acceptance checks. | Not automatically |
-| `ADVISORY` | Visible in a clearly labeled research/advisory surface. | No loud alerts or ranking authority |
-| `PROMOTED` | Approved as the production champion with rollback available. | Yes |
-| `RETIRED` | Replaced or intentionally disabled. | No |
-
-Promotion requires all of the following:
-
-- a versioned configuration;
-- deterministic tests;
-- replayable evidence;
-- defined success and failure metrics;
-- live-session evidence across relevant regimes;
-- comparison with the current champion;
-- a rollback switch that does not require a code revert;
-- explicit approval in a commit or release note.
-
-Agreement with the legacy implementation is diagnostic, not the definition of correctness. The challenger is allowed to disagree, but the disagreement must be explainable and outcome-tested.
-
----
-
-## 3. Current Sol3 state
-
-### 3.1 Implemented and green
-
-#### Phase 0 — baseline and dormant defects
-
-- Test baseline restored to green.
-- Dormant `datetimde` defect fixed with regression coverage.
-- Duplicate top-level definition guard added.
-- Deprecated Qt proxy invalidation replaced.
-- Deterministic smoke command added.
-- Entrypoint and lazy-import hygiene improved.
-- Child processes and owned threads now have bounded shutdown behavior.
-- Dependency metadata, pytest markers, narrow lint gates, and pinned constraints exist.
-
-#### Phase 1 — core observability
-
-- Master scans emit run manifests on success and failure.
-- Phase timings and counters are recorded.
-- Bounded local history exists.
-- Strict side coercions and data-quality events are countable.
-- The in-app Health page composes runtime, Away report, shadow, registry, and
-  Industry Board freshness evidence.
-
-Still remaining from Phase 1:
-
-- stable benchmark/golden fixtures;
-- trend reporting for timings, failures, provider calls, and coverage.
-
-#### Phase 2 — unattended runtime implementation
-
-- Durable job ledger with typed states.
-- Bounded retry budgets by error class.
-- Restart replay and stale-run marking.
-- Scan-child ownership and bounded reaping.
-- Verified atomic Away report replacement.
-- Transactional Away report plus verification-metadata publication with
-  readback validation and rollback of the previous verified pair.
-- Hash readback verification and bounded report archive.
-- Honest freshness headers and last-attempt versus last-success state.
-- Swing-first phone-report ordering: the safety/freshness header remains first,
-  then current swing opportunities lead every intraday candidate section;
-  empty current-session and not-yet-scanned states are distinguished.
-- Runtime heartbeat.
-- Cross-machine writer-lease mechanism.
-- Global `OFF` / `AUTO-DESK` / `AUTO-AWAY` header and service semantics.
-
-Phase 2 is **implementation-complete**, not yet fully **live-validated**. Section 6 defines the remaining operational acceptance drills.
-
-#### Packets A–D — pure foundation engines
-
-- Runtime lifecycle and stop ownership.
-- Side-symmetric SPY market-state engine.
-- Timestamp-aligned relative-strength engine.
-- Candidate registry with source leases, provenance, transitions, and atomic versioned persistence.
-
-The registry has initial shadow adoption, but all legacy live writers have not yet migrated to authoritative sources.
-
-#### Correctness and platform work already landed
-
-- Stable digest sampling.
-- Strict `Side` parsing and counted legacy coercions.
-- Universe freshness based on the oldest required file.
-- Lazy legacy-Tk import.
-- Verified report publishing.
-- Truthful global Auto profile.
-- One single-flight Industry Board owner refreshes stale data at startup and
-  hourly, preserves last-good outputs atomically, exposes snapshot freshness in
-  Health, and supports true numeric strongest/weakest sorting.
-- Master focus rows deduplicate by opportunity thesis/anchor rather than bucket,
-  while preserving High Conviction/Favorite classification badges.
-- BounceBot starts with Auto owning the active regime and the user's selector
-  at N/A. Manual environment choices are session-only overrides recorded to an
-  append-only learning log with the contemporaneous Auto reading; selecting N/A
-  clears the override without hiding what Auto believes.
-- Entry Assist presents completed-bar automatic pullback/bounce monitoring as
-  the normal path. Strongest, weakest, and movers 30m remain on demand, while
-  manual window controls live under Advanced diagnostics.
-- D1 Focus routes final Favorite/High Conviction bucket-upgrade events only;
-  armed/level-cross triggers are labeled and logged as research-only evidence
-  and stay out of Alert Center plus Auto/Away alert summaries. The generic
-  champion D1 flag path remains unchanged.
-- DESK-mode auto-populate picks are adopted straight into the M5 Focus list
-  for the day rather than queued for one-at-a-time chart approval (trader rule
-  2026-08-05, superseding the 2026-07-31 approval queue: "quicker than adding
-  them in and then seeing their alerts"). The picks are already gated (PDH/PDL
-  break, daily trend, score >= 1.25), so the cheap direction is take-then-cull.
-  M5 Focus carries them because it is already day-scoped - the next day's first
-  store load clears the list and un-injects it from longs/shorts.txt. Focus
-  owns the watchlist line it injects, so pruning a pick stops its alerts
-  entirely; auto-populate membership deliberately does not also claim it. With
-  no Focus store present (satellite) the approval queue remains the fallback.
-- The D1 snapshot chart always ends at the session in progress, and that last
-  candle is always a preview (trader rule 2026-08-05: "I want to always see
-  the latest D1 candle as it's forming intraday"). Freshest source wins:
-  BounceBot's cached M5 aggregated into a candle, else a display-only daily
-  bar the host fetched for an unscanned symbol, else today's partial bar the
-  durable store picked up from a mid-session scan. Indicators (SMA/EMA/AVWAPE)
-  stay on completed sessions only and end in a trailing None. The fetched
-  forming bar is NEVER persisted - a half-finished session is display
-  material, never stored evidence.
-- A Focus pick flags ONE extension event per day (trader rule 2026-08-05, on a
-  pick that printed a new 20-day high and then simply stayed extended). The
-  first "the move is going" event - new 5d/20d high or low, or a close through
-  an SMA / AVWAPE / 1σ line - spends the whole extension set for that name;
-  everything after it is the same news about a name that is now extended. The
-  pullback set (15EMA reject, AVWAPE bounce, 1σ bounce) stays live, so the
-  pick can still speak when it comes back to a level. The split lives in
-  `chart_watch.D1_EXTENSION_KINDS` / `D1_PULLBACK_KINDS`.
-- On a review chart for a name the trader ALREADY holds in Focus, the primary
-  verb is "✕ Remove from Focus" (drops every bucket and side, taking the
-  focus-injected watchlist lines with it) rather than a no-op "add". Removal
-  previously existed only behind the checked-looking cross toggle, which reads
-  as a status badge, so a pick could look unremovable from its own chart.
-- A Focus pick earns its Focus PRIVILEGES - the automatic D1 interest flags,
-  the tier-gate bypass, the always-sound - only while it trades beyond the
-  previous session's extreme in its own direction: a long above yesterday's
-  high, a short below yesterday's low (trader rule 2026-08-05, the same break
-  Auto Pilot's auto-populate has required since 2026-07-31, shared through
-  `prev_day_gate.py`). Inside yesterday's range the name is not blacked out -
-  it simply competes on tier like any other, so an S-tier/PROVEN/banger bounce
-  still surfaces. The D1 event window opens at the M5 bar that breaks the
-  level, never at the session start, so the morning's events on a name still
-  inside the range are never replayed when it later breaks out. An
-  unmeasurable price or missing prior session reads as uncertainty and grants
-  nothing (sec 5).
-- Setup Tracker, Day Trade Tracker, and Move Forensics rows share deterministic
-  novice explanations that separate executable triggers from aggregate research,
-  spell out entry/invalidation/management, and expose sample-size cautions.
-- Setup Tracker leads with a plain-English, evidence-floor-aware "What's
-  Working" summary and leaves qualified lanes empty instead of backfilling them.
-- Journal schema v2 adds an append-only opportunity lifecycle ledger. Broker
-  imports create idempotent Taken/Closed events, and the GUI records structured
-  trade reviews alongside freeform notes for later daily/A.I. review.
-- A top-level A.I. Summary workspace supports ChatGPT/OpenAI and Claude/Anthropic
-  through one provider-neutral contract. The trader explicitly selects and
-  previews bounded daily/market/setup/journal/forensics/feedback evidence;
-  Windows Credential Manager stores optional saved keys. Structured output is
-  locally schema/source-reference validated, then written with its exact evidence
-  package and manifest. It is export-only and has no bot mutation path.
-- The RS Window now measures its automatic view on completed M5 bars, keeps the
-  trailing window inside the current session, declares one primary industry
-  without cherry-picking overlapping themes, and publishes sortable
-  industry-vs-SPY plus stock-vs-industry fields with member/timestamp coverage.
-  The atomic `industry_intraday_rs_snapshot_v1` artifact is available to A.I.
-  evidence/replay; RS Window, Auto Pilot, and the Drive report expose its daily
-  source-board ID and flag mismatches. These fields are explicitly advisory and
-  have no production score, alert, gate, or promotion effect.
-- Auto-populate now has corrected-expectation coverage for aggressive,
-  completed-M5 regime discovery. Bearish tape admits persistent HOD grinders
-  as longs and LOD holders during a legacy-champion SPY rebound as shorts;
-  bullish tape mirrors both rules. New pullback episodes can trigger an
-  append-preserving sweep without changing scheduled rotation or triple-VWAP
-  removal behavior; the shadow SPY engine remains non-authoritative.
-- Technical Integrity v1 is a research-only 1-10 level-respect hierarchy for
-  the BounceBot-scanned market, sectors, industries, and stocks. It observes
-  completed M5 tests of the existing VWAP/band, EMA, and prior-day levels;
-  separates integrity from bullish/bearish break pressure; publishes an atomic
-  snapshot for the always-visible Auto-regime/Technicals GUI chips plus a
-  clickable searchable hierarchy; and keeps
-  an append-only start/resolution ledger with pre-outcome probabilities. The
-  after-close wrap-up and `scripts/analyze_technical_integrity.py` produce a
-  point-in-time calibration report. The score is advisory, cannot affect any
-  detector/watchlist/alert, and cannot propose a config for review before its
-  explicit multi-session evidence floor.
-
-### 3.2 Implemented and running in shadow
-
-#### SPY pullback engine
-
-Current role:
-
-- consumes cached completed SPY M5 bars;
-- runs beside the legacy pause detector;
-- records state and agreement changes to `spy_state_shadow.jsonl`;
-- cannot change live alerts, candidates, or ranking.
-
-What it proves today:
-
-- the pure state engine can run in the live runtime;
-- state transitions and legacy disagreements can be collected safely.
-
-What it does not yet prove:
-
-- that episode timing is better than the legacy champion;
-- that live bar completeness and timezone handling are always correct;
-- that the engine improves stock selection or entries;
-- that sector and candidate RS integration is production-ready.
-
-#### Greatness Monitor
-
-Current role:
-
-- converts existing D1 trigger levels into persistent confirmation plans;
-- consumes completed intraday bars through the existing D1 evaluation path;
-- distinguishes touch, wick, close, acceptance, retest, failure, re-arm, and readiness;
-- persists candidate state across restarts;
-- records transitions to `greatness_shadow.jsonl`;
-- cannot change existing D1 alerts.
-
-What it proves today:
-
-- a wick no longer has to equal confirmation;
-- confirmation can be modeled as an ordered lifecycle;
-- failed attempts can re-arm instead of consuming the day’s trigger;
-- state can survive refreshes and restarts.
-
-What it does not yet prove:
-
-- continuous coverage independent of the legacy D1 scan cadence;
-- correct same-day plan revisions or side changes;
-- full multi-level D1 plan quality;
-- RS, sector, volume, reward/risk, freshness, and anti-chase gates;
-- superior alert precision or timeliness;
-- production-ready candidate identity and lifecycle migration.
-
-### 3.3 Not implemented or not complete
-
-- Phase 1 benchmark fixtures and trend reporting. (The Section 6.3 Health page
-  landed 2026-07-30 with the full required-check inventory and a first-class
-  UNKNOWN status. Provider request/cache-hit/throttling/failure telemetry is
-  now IMPLEMENTED + GREEN at the IBKR/Yahoo/Nasdaq boundaries with a declared
-  boundary inventory and completeness contract - partial coverage or capture
-  errors can never grade healthy - but it is NOT LIVE_VALIDATED: the Health
-  row honestly reports UNKNOWN until the first instrumented scan writes a
-  manifest.)
-- Phase 2 real-machine acceptance drills.
-- Phase 3 storage reclassification, journal migration off Drive, and OS credential storage.
-- Phase 4 provider repository, staged scanner, batching, and request coalescing.
-- Point-in-time correctness work for moving levels, history keys, backfill leakage, tracker identity, score ordering, and factor horizons.
-- Full CandidateRegistry authority over all candidate writers.
-- Production integration of SPY state and relative strength across all surfaces.
-- Greatness fast lane, complete readiness gates, mini-chart radar, and alert ladder.
-- Point-in-time research and walk-forward promotion pipeline.
-- Canonical opportunity ranking and deduplication.
-- Opportunity Command Center and unified inbox.
-- Market Prep Qt consolidation.
-- Complete journal/outcome linking and feedback loop.
-- Advanced setup research program.
-- Full CI, packaging, and consumer-grade release work.
-
----
-
-## 4. Assessment of the work so far
-
-Fable implemented the correct half first. Runtime ownership, deterministic pure engines, manifests, a ledger, atomic publication, and explicit shadow mode are prerequisites for safe feature work. Building the SPY and Greatness challengers without immediately promoting them follows the methodology required by this roadmap.
-
-The next risk is no longer lack of code. It is confusing green tests or the first interesting live examples with promotion evidence.
-
-### Important cautions
-
-#### The writer lease still needs adversarial validation
-
-A Drive-synchronized file is not automatically a distributed lock. Writer
-coordination is therefore layered, and only the first layer is an authority:
-
-- **Designated writer (authority).** An explicitly configured writer machine,
-  resolved from *machine-local* settings — never from a synchronized role file,
-  which would suffer the same convergence problem it is meant to solve. A
-  non-designated machine is a read-only secondary. An **unconfigured machine
-  fails closed**: it touches no report, metadata, or lease, and there is no
-  "first machine wins" fallback.
-- **Machine-local exclusion.** A Drive lease cannot arbitrate two processes on
-  the designated host, which see identical bytes with zero sync delay. A local
-  kernel-owned lock (named mutex plus exclusive byte-range lock) is held across
-  the whole publication transaction; both release on a hard kill rather than
-  wedging the writer.
-- **Fenced lease (defense in depth).** `FileNotFoundError` alone means "no
-  lease"; every other read/parse/validation failure blocks acquisition unless a
-  deliberately configured, time-bounded emergency override is active. Identity
-  is hostname + PID + per-process instance UUID, so hostname is never ownership
-  and an old-format lease without an instance ID is never "ours". A monotonic
-  fencing generation is enforced on the write path, and ownership is re-read
-  from disk immediately before each shared replacement.
-
-Module-level fail-closed behavior is verified by an independent adversarial
-suite (scenarios A–U) using real truncated, malformed, wrong-schema and
-unreadable lease files rather than mocked failures.
-
-Limits that remain, and are not solvable at this layer:
-
-- two machines can still each read "free" before synchronization converges;
-- a clock fast by more than the remaining TTL plus the supported grace can still
-  take over — from a lease file, "my clock is fast" and "this lease is old" are
-  the same observation;
-- a sub-millisecond window remains between the final ownership check and the
-  replacement, irreducible without a real compare-and-swap;
-- no renewal loop runs; the lease covers the publication transaction, and the
-  designated-writer configuration is the standing authority between publishes.
-
-All of the above is single-machine evidence. Until the two-machine drills in
-Section 6 pass, describe this as cross-machine writer protection, not a proof
-that clobbering is impossible.
-
-#### Shadow coverage is inherited from the champion path
-
-The Greatness hook currently runs when the legacy D1 trigger path evaluates a symbol. It therefore cannot yet prove that the proposed dedicated priority lane would have observed every confirmation on time. Add evaluation-coverage records before using absence of an event as evidence.
-
-#### Current Greatness readiness is lifecycle readiness
-
-The current readiness state is mainly based on confirmation-plan steps. The final product definition of `READY` must also include:
-
-- SPY/sector context;
-- relative strength or weakness;
-- volume/participation quality;
-- reward to the next real obstacle;
-- logical invalidation;
-- extension/no-chase state;
-- data freshness and completeness;
-- setup-specific hard risk gates.
-
-Do not route current shadow `READY` events directly into loud production alerts.
-
-#### Shadow logs must be auditable, not merely present
-
-Each shadow artifact needs:
-
-- schema and engine version;
-- configuration hash;
-- session and machine identity;
-- completed-bar timestamp and evaluation timestamp;
-- candidate/episode identity;
-- enough inputs to replay the transition;
-- coverage and error counters;
-- daily summary and retention policy.
-
-Improve the logs before accumulating weeks of evidence that cannot answer promotion questions.
-
-Status 2026-07-30: every field above is IMPLEMENTED and GREEN for both engines
-(schema/engine/config identity, run and machine identity, completed-bar vs
-evaluation timestamps, episode/candidate identity with plan revisions, coverage
-counters, crash-safe per-session summaries with checksums, and enforced
-retention that archives rather than deletes). None of it is LIVE_VALIDATED:
-the first real session rollover on this build has not happened yet, and the
-operations audit honestly reports zero finalized summaries until it does.
-
-#### W08/W09 session evidence acceptance criteria
-
-W08/W09 is **IMPLEMENTED + GREEN**, not **LIVE_VALIDATED**. Its acceptance
-contract is:
-
-- before the first row of a new session or configuration scope, atomically
-  rotate the prior active JSONL and finalize its coverage counters;
-- make rollover recovery idempotent across a crash after raw rotation but
-  before summary publication;
-- publish one atomic summary per engine, session date, and configuration with
-  engine/config/machine/timezone identity, the retained raw path and SHA-256,
-  coverage/error counters, replay-chain counts, and the enforced retention
-  policy;
-- derive SPY state observations, transition counts, and state-duration seconds,
-  plus SPY episode-chain counts; derive Greatness candidate-chain, meaningful
-  level-interaction, and confirm/fail/re-arm counts;
-- rescan retained raw bytes during audit and mark a scope incomplete when the
-  archive is missing/unreadable, malformed, checksum- or counter-inconsistent,
-  lacks coverage, records errors, has no usable evaluation, or has no
-  completed-bar evidence;
-- count a trading date once, and only as eligible when all finalized
-  configuration scopes for that date reconcile;
-- enforce bounded retention: raw evidence for 180 days and a 1 GiB budget,
-  subject to a safety floor retaining at least the newest 30 archives;
-  summaries for 365 days and a 20 MiB budget, subject to a safety floor
-  retaining at least the newest 60;
-- expose Section 7 counts as evidence progress only. Never infer manual review,
-  never promote either challenger, and never alter champion behavior.
-
-Live acceptance still requires a restarted build to cross a real
-session/configuration rollover, preserve the prior raw bytes and counters,
-start a clean active log, and reconcile the resulting summaries in the
-operations audit. Until then, the real Section 7 finalized-session counts are
-expected to remain zero.
-
----
+TradingBotV3 is a decision-support system for one trader. It prepares the market,
+discovers swing and intraday candidates, monitors them, alerts, publishes an Away
+report, records decisions and outcomes, and supports controlled research.
+
+It never places or routes orders. Broker execution, consumer distribution, and any
+automatic promotion of research output are outside the product boundary.
+
+The operating topology is now simple:
+
+- the Ryzen 7 8845HS main desk is the only always-on application and scan host;
+- `launch_gui.py` starts the PySide6 Trading Desk in Main mode;
+- the former mini-PC scanner and Desk Link satellite roles are retired and must stay
+  unused until their code is removed in a deliberate cleanup packet;
+- ntfy and the verified `autopilot_today.txt` digest are the remote surfaces;
+- there is no cloud sync (decision 0015): `C:\TradingBotData` is a plain local folder
+  and the DAS `\\MINI-PC\Trading Bot Data` is the durable storage tier;
+- the Tk GUI remains a temporary compatibility path during migration.
+
+## 2. Status vocabulary
+
+These labels must not be collapsed:
+
+| Status | Meaning | Production authority |
+|---|---|---|
+| `PLANNED` | Designed but no implementation exists. | None |
+| `IMPLEMENTED` | Code exists. | None by itself |
+| `GREEN` | Deterministic tests pass. | Only existing champion behavior |
+| `SHADOW` | Runs on live inputs but cannot affect production decisions. | None |
+| `LIVE_VALIDATED` | Passed the documented real-session or operational checks. | None by itself |
+| `ADVISORY` | Visible as labeled research or decision support. | No loud-alert, gate, or ranking authority |
+| `PROMOTED` | Explicitly approved as the production champion with rollback. | Yes |
+| `RETIRED` | Intentionally disabled or replaced. | None |
+
+Current code and test status belongs in `CHANGELOG.md`. Current branch and exact
+test counts belong in `CURRENT_CHECKPOINT.md`. Only unfinished work belongs here.
+
+## 3. Current-state summary
+
+As of the reconciliation date:
+
+- the active branch is `testing-week-2026-08-10`, not yet merged to `main`;
+- the Windows desk gate is green at 2611 tests plus 7 subtests, smoke 7/7, and
+  frozen self-test 29/29;
+- subsequent 2026-08-10 presentation and phone-report fixes have not changed the
+  recorded gate yet;
+- the warehouse Phases 0–8, Chart Review A1–A5, durability steps 1–4, and Local-AI
+  Phase 1 are implemented, but their remaining live gates below still apply;
+- legacy SPY pause detection and D1 wick alerts remain the production champions;
+- `market_state` and `greatness_monitor` remain shadow-only;
+- the research warehouse and AI outputs remain additive/read-only and advisory.
+
+See `CHANGELOG.md` for the full implemented inventory and revision history.
+
+## 4. Authority and change control
+
+When documents disagree, use this order:
+
+1. this roadmap for remaining-work order, invariants, and promotion policy;
+2. accepted decision records under `docs/decisions/`;
+3. the locked warehouse specification where it is explicitly delegated authority;
+4. active implementation specifications listed in `docs/README.md`;
+5. historical reviews, handoffs, proposals, and superseded GUI plans.
+
+Do not infer current status from a historical plan. Reconcile it through
+`CHANGELOG.md` and this file.
+
+`WISHLIST.md` is deliberately outside the authority chain. It records candidate
+integrations and deferred ideas, but it never authorizes implementation or changes
+the order below. Only an explicit trader decision may promote a wishlist item into
+this roadmap.
 
 ## 5. Non-negotiable system invariants
 
-These rules apply to every remaining phase.
-
 ### Data and time
 
-- Only completed bars may satisfy completed-bar confirmation rules.
-- All timestamps must have an explicit timezone and session interpretation.
-- Every decision must carry an `as_of` time and data-health state.
-- Market, sector, and stock comparisons must use aligned intervals.
-- Missing data is uncertainty, never silent confirmation.
-- Point-in-time research must use only information available at the simulated decision time.
+- State transitions use completed bars only. A forming bar is a labeled preview.
+- Missing or stale data is uncertainty, never confirmation.
+- Point-in-time research may use only information available at the simulated
+  decision time; timestamps carry explicit time zones.
+- Never replace `calc_anchored_vwap_bands`' running-deviation sigma formula.
 
 ### Identity and provenance
 
-- Opportunity, candidate, setup, trigger, trade, and outcome identities must be stable and distinct.
-- Every feature must record source, version, and calculation horizon.
-- Manual/pinned candidates receive attention, not an unearned model-quality boost.
-- Rescans and GUI refreshes must not erase valid lifecycle progress.
+- Stable identity must distinguish symbol, side, horizon, setup/thesis, anchor,
+  attempt, and configuration where those dimensions matter.
+- Every suggestion, alert, review, research row, and outcome must retain enough
+  provenance to reconstruct what the system knew.
+- User-entered watchlist names are never automatically removed.
 
 ### Runtime and publication
 
-- One component owns each timer, thread, process, job, and mutable export.
-- Shutdown is bounded and testable.
-- Retries are classified, bounded, and visible.
+- One component owns each timer, thread, job, mutable store, or shared export.
 - A failed publish never destroys the last verified report.
-- `OFF`, `DESK`, and `AWAY` accurately describe what work and publishing are active.
-- The GUI and phone report consume the same versioned snapshot.
+- Ambiguous ownership fails closed.
+- The single-main topology does not authorize duplicate writers.
 
 ### Research and promotion
 
-- Champion and challenger outputs remain separate until promotion.
-- Historical artifacts are immutable and versioned.
-- No tuning on the same outcomes used to claim improvement.
-- Every policy change has a baseline, shadow period, acceptance gate, and rollback.
-- Selected opportunities and rejected candidates are both retained to avoid selection bias.
+- Legacy SPY pause detection and D1 wick alerts stay champions until the Section 7
+  gates pass.
+- No detector, score, ranking, routing, or alert-behavior change lands without a
+  golden characterization fixture first.
+- Shadow, research, Technical Integrity, warehouse, review-learning, and AI outputs
+  have zero production influence until separately promoted.
+- `review_policy.json` ranks and annotates only; it has no suppression field.
+- AI is one-way and evidence-grounded. It may summarize and propose tests, never
+  mutate production state.
 
 ### Product behavior
 
-- The system may honestly recommend zero trades.
-- A high score cannot cancel a hard risk or stale-data failure.
-- A correct thesis that is too extended is `NO_CHASE`, not a top recommendation.
-- Alerts explain what changed, what remains, invalidation, and actionability.
-- No broker execution is added under this roadmap.
-
----
+- The app is decision-support only and never executes orders.
+- Honest zero-opportunity and unknown-data states are preferable to filled panels.
+- Desk, Away, alerts, journal, and AI must ultimately consume the same canonical
+  opportunity facts.
 
 ## 6. Live validation program
 
-Automated tests establish logic. Live validation establishes that clocks, feeds, files, providers, machines, session boundaries, and user workflows behave as expected.
+Automated green tests do not satisfy live gates. The active checklist is
+[`docs/FIRST_SESSION_CHECKLIST.md`](docs/FIRST_SESSION_CHECKLIST.md).
 
-### 6.1 First-session checklist
+For the first live session on a new build, record:
 
-Before the session:
+- branch/commit, machine, Python, TWS/Gateway mode, home folder, research-store
+  state, Auto profile, and market-session date;
+- full pytest exit code, smoke result, and frozen self-test when a rebuild trigger
+  applies;
+- real run manifests, heartbeat, provider telemetry, shadow logs, job ledger,
+  verified Away metadata, and capture audits;
+- GUI responsiveness, chart freshness, alert delivery, clean shutdown, and restart
+  behavior;
+- every failure or unknown as evidence, without rewriting the acceptance result.
 
-1. Confirm branch and expected commit.
-2. Confirm the worktree is clean or document intentional changes.
-3. Run the deterministic smoke command.
-4. Run the relevant focused tests; run the full suite if the baseline was not verified after the latest commit.
-5. Record engine/config versions for SPY and Greatness.
-6. Archive or rotate prior shadow logs without deleting them.
-7. Confirm free disk space and diagnostics directory writability.
-8. Start the main GUI early enough to observe premarket-to-open transitions.
-9. Confirm Auto Mode state is the one actually intended.
-10. Confirm no older TradingBot/scanner process is still running.
-
-During the session:
-
-- glance at `heartbeat.json` at open, midmorning, midday, and late day;
-- verify its timestamp advances approximately every 30 seconds under normal operation;
-- verify `current_job`, `next_job`, and `last_success` are credible;
-- verify `spy_state_shadow.jsonl` advances only on meaningful state/agreement changes;
-- verify `greatness_shadow.jsonl` records coherent transition chains;
-- note visible SPY pullbacks, false breaks, retests, and standout RS/RW names for later comparison;
-- do not tune thresholds in response to one live example;
-- record data outages, delayed bars, restarts, sleep/wake events, and manual interventions.
-
-After the session:
-
-1. Stop through the normal GUI path.
-2. Verify owned child-process count returns to zero.
-3. Verify no scanner or worker remains orphaned.
-4. Preserve the run manifest, heartbeat, job ledger, shadow logs, verified Away report metadata, and relevant market-data snapshot.
-5. Run a daily audit summarizer.
-6. Manually inspect every shadow transition during the first few sessions.
-7. Record observations without changing champion behavior.
-
-### 6.2 Phase 2 operational acceptance matrix
-
-Run destructive or disruptive drills outside important market windows.
-
-| Component | Controlled live test | Pass condition | Failure response |
-|---|---|---|---|
-| Heartbeat | Normal session, long scan, temporary provider stall, clean shutdown | Updates under normal runtime; job field explains long work; stops after process exits | Add stale/hung classification and Health alerting before relying on it remotely |
-| Job ledger | Force one transient and one permanent test failure | Retry budget respects error class; permanent failure does not loop; restart marks stale work correctly | Keep legacy scheduling champion and fix ledger semantics |
-| Child ownership | Start a scan, close GUI during work, restart app | Owned child exits within bounded grace/terminate path; no duplicate scan after restart | Treat as P0 regression |
-| Atomic publish | Simulate render error, write error, and readback mismatch | Prior verified report remains intact; status reports failure honestly | Block Away promotion |
-| Writer protection | Start Desk and mini-PC publishers nearly simultaneously | Exactly one verified writer wins; loser reports holder and does not overwrite | Change to fail-closed and strengthen coordination protocol |
-| Lease expiry | Stop holder without release, wait through controlled TTL, start second machine | Takeover occurs only after defined expiry and is visible in metadata | Fix TTL/clock/recovery design |
-| Clock skew | Compare machine clocks and simulate bounded skew | No premature takeover or indefinite lockout within supported skew | Add server-time/monotonic or explicit operator recovery |
-| Sleep/wake | Sleep current holder and resume after TTL | Ownership and report freshness remain truthful | Require reacquisition before every publish |
-| Freshness header | Stop successful work while runtime remains alive | Report says stale even though heartbeat is healthy | Fix freshness derivation |
-| Shutdown | Close during startup, scan, and idle | Timers, workers, threads, and children all end; state remains readable | P0 rollback/fix |
-
-### 6.3 Health page acceptance
-
-The Health page should expose, without opening files manually:
-
-- runtime profile and machine identity;
-- heartbeat age;
-- current and next job;
-- last attempt and last verified success per job/export;
-- job-ledger failures and exhausted retries;
-- owned process/thread counts;
-- writer-lease holder and expiry;
-- report freshness and verification state;
-- provider request, cache-hit, throttling, and failure counts;
-- universe and market-data freshness;
-- most recent scan manifest and phase timings;
-- SPY and Greatness shadow engine versions, last evaluations, coverage, and errors;
-- disk/storage warnings.
-
-The page must show `UNKNOWN` when evidence is absent. It must not convert missing telemetry into a green state.
-
----
+Physical two-machine and satellite checks from older runbooks are retired with the
+topology. Writer fencing still requires deterministic tests, but no new live
+two-machine gate blocks the single-main product.
 
 ## 7. Shadow evidence and promotion ladder
 
-### 7.1 Shared ladder
-
-Every decision engine follows this order:
-
-1. **Pure tests** — deterministic state, symmetry, persistence, and edge cases.
-2. **Replay shadow** — historical sessions with no production influence.
-3. **Live shadow** — real-time inputs, append-only evidence, no decisions.
-4. **Audit** — labeled event review and champion/challenger comparison.
-5. **Advisory UI** — clearly labeled challenger output visible to the user.
-6. **Opt-in soft alerts** — non-ranking, non-loud notifications.
-7. **Limited canary** — challenger affects a bounded surface with rollback.
-8. **Promotion** — becomes champion only after gates pass.
-
-Never jump directly from live shadow to loud alerts.
-
-### 7.2 SPY pullback engine evidence plan
-
-#### Improve logging first
-
-Add:
-
-- session ID, engine version, configuration hash, and machine ID;
-- explicit episode IDs;
-- impulse start/high/low, counter-move start, depth, stabilization, resumption, and failure timestamps;
-- completed-bar timestamp and evaluation lag;
-- stale/incomplete-bar counters;
-- legacy detector output and reason;
-- daily state-duration and transition summary;
-- sufficient feature values to replay every transition.
-
-#### Label live episodes
-
-For each meaningful SPY impulse/counter-move/resumption:
-
-- mark whether the trend premise was valid;
-- mark whether the pullback was controlled, failed, or actually reversed regime;
-- record false flips and missed episodes;
-- measure onset and resumption timing versus the legacy detector;
-- connect the episode to candidate RS/RW outcomes.
-
-#### Initial evidence floor
-
-Before advisory integration, collect at least:
-
-- ten substantially complete sessions;
-- multiple trend, chop, gap, low-volume, and reversal regimes;
-- at least 30 manually reviewed meaningful counter-move episodes in total;
-- evidence from both bullish and bearish sides, or explicitly limit the first advisory release to the validated side;
-- clean behavior across open, midday, and late-day periods;
-- no unexplained incomplete-bar or timezone transitions.
-
-These are minimum evidence floors, not automatic promotion thresholds.
-
-#### Metrics
-
-- meaningful-episode precision and recall;
-- false state-flip count;
-- median and tail transition latency;
-- stability/hysteresis under chop;
-- stale-data behavior;
-- percent of episodes with aligned stock/sector data;
-- downstream improvement in leader/laggard ranking;
-- champion/challenger disagreement outcomes.
-
-#### Promotion gate
-
-The SPY engine can enter advisory mode when transitions are reproducible, failure modes are understood, and it improves episode labeling or candidate timing without unacceptable added delay. It can become champion only after downstream ranking is replay-tested and live-canary results remain favorable.
-
-### 7.3 Greatness Monitor evidence plan
-
-#### Improve identity and coverage first
-
-Before interpreting the log statistically, add:
-
-- candidate ID including symbol, side, setup family, session, and plan version;
-- plan-revision events when D1 levels change;
-- evaluation records or daily counters for candidates checked, bars consumed, bars skipped, and reasons;
-- monitoring cadence and last complete bar per candidate;
-- source D1 trigger IDs and level provenance;
-- engine/config version and data-health state;
-- outcome linkage after each transition.
-
-The current `symbol|session_date` storage key is insufficient if a side or plan changes during the session.
-
-#### Manually audit transition chains
-
-Review:
-
-- wick through and immediate failure;
-- close through with no hold;
-- acceptance over multiple bars;
-- clean break and retest;
-- failed attempt followed by valid re-arm;
-- repeated failures reaching the attempt cap;
-- invalidation;
-- restart persistence;
-- same-day D1 plan change;
-- long/short mirror behavior;
-- late/extended confirmation.
-
-#### Initial evidence floor
-
-Before advisory cards:
-
-- review the first 25 complete candidate transition chains manually;
-- collect at least 50 meaningful level interactions;
-- include at least 20 confirm/fail/re-arm outcomes;
-- cover multiple setup families and both sides, or limit scope to validated families/sides;
-- demonstrate that shadow coverage is timely enough for the claimed cadence;
-- reproduce every reviewed event from stored bars and the recorded plan.
-
-Before any loud `READY` alert, the full gate stack in Section 11 must exist and pass replay/live-canary evaluation.
-
-#### Champion comparison
-
-For every legacy wick alert, calculate:
-
-- whether Greatness called it a test, failure, confirmation, or no event;
-- subsequent favorable and adverse excursion;
-- whether a later confirmation occurred;
-- remaining reward/risk at both alert times;
-- notification delay caused by close/accept/retest requirements;
-- whether the later alert was still actionable;
-- setup-family and market-regime context.
-
-The objective is not merely fewer alerts. It is higher precision and expectancy while preserving enough entry opportunity.
-
----
-
-## 8. Remaining roadmap: ordered milestones
-
-The following order is dependency-driven. Do not start a later milestone merely because its UI is more visible.
-
-## Milestone 1 — Finish observability and validate the runtime foundation
-
-### Work
-
-- Build the main Qt Health page described in Section 6.3.
-- Add benchmark fixtures for scan duration, provider calls, cache hits, output write time, symbol coverage, and memory.
-- Add a daily shadow/operations audit command that summarizes all three new artifacts and identifies schema, parse, timing, and coverage problems.
-- Refresh `SOL_PROGRESS.md` at each promotion checkpoint.
-- Run the Phase 2 operational acceptance matrix on the desk and mini-PC.
-- Change writer coordination to fail closed for shared mutable output unless a deliberately configured emergency override is active.
-- Document manual lease takeover and recovery.
-
-### Live testing
-
-- At least two normal full sessions.
-- One controlled long-scan session.
-- One off-hours failure/restart drill.
-- One two-machine collision, expiry, and takeover drill.
-
-### Exit gate
-
-- Health state matches source artifacts.
-- No orphan process or unbounded retry.
-- Report freshness remains truthful through failures.
-- Writer-protection limitations are resolved or explicitly bounded.
-- Baseline performance is captured and reproducible.
-
----
-
-## Milestone 2 — Supervised storage and secrets migration
-
-This phase changes live trading data and must be performed while the user is present.
-
-### Target classification
-
-#### Machine-local authoritative data
-
-- journal database;
-- job ledger;
-- run manifests and detailed diagnostics;
-- caches;
-- transient candidate state;
-- provider response cache;
-- secrets and credentials through the OS credential store.
-
-#### Shared/read-mostly exports
-
-- verified Away report;
-- optional chart contact sheet;
-- immutable dated summaries;
-- explicitly versioned configuration that is safe to synchronize.
-
-#### Never synchronized as a live database
-
-- SQLite journal write-ahead files;
-- actively mutated ledgers;
-- temporary files;
-- lock files intended for local process coordination;
-- plaintext credentials.
-
-### Migration sequence
-
-1. Inventory every state path, writer, reader, format, size, and retention policy.
-2. Classify authority and replication direction.
-3. Stop all writers.
-4. Create timestamped backups and checksums.
-5. Validate current journal integrity and row counts.
-6. Copy to the new local location; never move first.
-7. Run schema migration against the copy.
-8. Start in dual-read/old-write validation mode if practical.
-9. Compare counts, key aggregates, recent trades, screenshots/attachments, and imports.
-10. Switch authority explicitly.
-11. Keep the old store read-only through an agreed rollback window.
-12. Export immutable/sanitized summaries to Drive rather than synchronizing the live DB.
-13. Move secrets to the Windows credential store and remove plaintext fallbacks only after retrieval is verified.
-
-### Live testing
-
-- Open, search, edit, and close the journal through the GUI.
-- Import a representative broker file twice and verify idempotence.
-- Restart the application and verify the same records.
-- Simulate unavailable Drive and confirm the local journal remains fully functional.
-- Restore a backup into a temporary location and verify it is usable.
-
-### Exit gate
-
-- No authoritative database is mutated by two machines.
-- Migration reconciliation is exact or differences are explained.
-- Rollback is tested.
-- Secrets are not present in tracked files, logs, reports, or Drive exports.
-
----
-
-## Milestone 3 — Golden-result and replay harness
-
-This is the prerequisite for provider restructuring and the remaining correctness changes.
-
-### Required fixture layers
-
-#### Characterization fixtures
-
-Capture current behavior exactly, including known quirks. These protect against accidental changes during refactoring.
-
-#### Corrected expectation fixtures
-
-For each known correctness defect, create small synthetic or hand-audited cases that define the desired behavior. These make intentional differences explicit instead of silently blessing current bugs.
-
-#### Representative full-scan fixtures
-
-Include:
-
-- ordinary trend day;
-- choppy day;
-- gap/earnings-heavy day;
-- partial/missing-data case;
-- long and short candidates;
-- multiple setup families;
-- replayed Master output, tracker updates, and opportunity ranking inputs.
-
-### Fixture contract
-
-Each fixture records:
-
-- raw input hashes and acquisition times;
-- universe version;
-- configuration and feature versions;
-- provider/calendar assumptions;
-- exact `as_of` time;
-- expected outputs in stable sorted form;
-- allowed numeric tolerances;
-- intentional-difference approval notes.
-
-### Exit gate
-
-- Tests can replay a scan without network access.
-- Refactors can prove semantic equivalence.
-- Correctness fixes produce reviewed, narrow diffs.
-- Performance comparisons use the same inputs.
-
----
-
-## Milestone 4 — Provider repository and staged scanner
-
-### Architecture
-
-Create one provider/repository layer responsible for:
-
-- request normalization;
-- bounded concurrency and rate budgets;
-- retries and backoff by error class;
-- exact interval/session semantics;
-- cache keys and freshness;
-- request coalescing;
-- batching where supported;
-- response validation;
-- provenance and coverage metrics;
-- fixture/replay substitution.
-
-### Staged Master scan
-
-Use a funnel:
-
-1. Load universe and cheap daily features once.
-2. Apply liquidity, price, freshness, and coarse structure gates.
-3. Compute expensive anchors/indicators only for survivors.
-4. Run setup-family detectors on eligible subsets.
-5. Build shared opportunity features once.
-6. Rank, persist, and publish from canonical records.
-
-### Performance targets
-
-Set targets only after Milestone 1 benchmarks. Measure:
-
-- wall-clock scan time;
-- provider calls by endpoint;
-- duplicate request rate;
-- cache hit rate;
-- symbols reaching each stage;
-- feature and output time;
-- peak memory;
-- output equivalence.
-
-### Live rollout
-
-- Run legacy and staged scanners on identical snapshots.
-- Compare exact outputs with the golden harness.
-- Canary the repository beneath one low-risk scanner first.
-- Expand by provider endpoint and feature family.
-- Preserve a configuration rollback to the legacy path until multiple full sessions pass.
-
-### Exit gate
-
-- No unexplained result changes.
-- Provider calls and total runtime improve materially against the captured baseline.
-- Partial provider failures yield explicit incomplete status rather than a misleading complete scan.
-
----
-
-## Milestone 5 — Point-in-time correctness and research repair
-
-Correct historical evidence before using it to tune ranking or promote setups.
-
-### Priority order
-
-1. **Moving-level look-ahead** — reconstruct levels using only data available at each historical timestamp.
-2. **Same-day history contamination** — prevent current-day scans from masquerading as prior-day evidence.
-3. **Adaptive backfill leakage** — freeze policies and training windows before evaluating outcomes.
-4. **Tracker identity collisions** — give setup occurrences stable event IDs; stop treating repeated scans as independent samples.
-5. **Score/bucket ordering** — compute one canonical score, then assign buckets from the same versioned result.
-6. **Factor horizons** — define prediction horizon and outcome target for each factor.
-7. **Multiple testing** — account for repeated setup/factor searches and small samples.
-8. **Auto-tuning leakage** — tune on training windows, select on validation, report once on untouched test periods.
-9. **Universe/industry survivorship and freshness** — version membership and coverage point in time.
-10. **Detector semantics** — correct setup-specific direction, anchors, and expiration rules.
-
-### Data policy
-
-- Never overwrite prior research results after logic changes.
-- Version feature definitions, setup rules, outcome rules, and universe snapshots.
-- Preserve both selected and rejected candidates.
-- Separate discovery, validation, and final test periods.
-- Report sample size, missingness, turnover, and regime coverage with every performance claim.
-
-### Live testing
-
-These changes should first run as parallel research outputs. Compare live candidate deltas, but do not use live outcomes to retune the same release.
-
-### Exit gate
-
-- Historical replay is point-in-time correct.
-- Repeated observations of one setup are not counted as independent trades.
-- Every intentional change from the characterization baseline is reviewed.
-- Walk-forward results can be reproduced from immutable inputs.
-
----
-
-## Milestone 6 — Make the foundation engines authoritative
-
-### CandidateRegistry adoption
-
-Migrate writers one at a time:
-
-- open scan;
-- auto-populate;
-- D1/Master watch candidates;
-- near-extreme candidates;
-- human focus lists;
-- VWAP and expiry removals;
-- Setup Tracker lifecycle updates.
-
-Rules:
-
-- each source owns only its own lease;
-- user entries cannot be deleted by automation;
-- expiry and removal are typed transitions;
-- text files become projections/exports, not competing stores;
-- migration runs in dual-write comparison before authority switches.
-
-### SPY and RS integration
-
-After shadow evidence passes:
-
-- publish one canonical market-state snapshot;
-- publish one canonical SPY pullback episode record;
-- compute stock and sector RS/RW over aligned episode windows;
-- eliminate duplicate RS implementations across regime pause, Entry Assist, environment scan, and RS Window;
-- calculate multi-window RRS in one pass;
-- retain component scores and named penalties for explanation.
-
-### Greatness dedicated priority lane
-
-- Promote `NEAR_TRIGGER`, `TESTING_LEVEL`, and `CONFIRMING` candidates to every-completed-M5-bar monitoring.
-- Keep broad `DISCOVERED` candidates on a slower cadence.
-- Bound the fast pool by provider/runtime budget.
-- Use cached shared bars; never fetch during chart rendering.
-- Record reduced-cadence decisions when capacity is full.
-- Decouple Greatness coverage from the legacy one-wick trigger path.
-
-### Live testing
-
-- Dual-read/dual-write registry comparisons.
-- Shadow comparison of old and canonical RS on all four current surfaces.
-- Fast-lane timing measurements versus actual completed bars.
-- Restart, plan revision, side change, expiry, and capacity-limit drills.
-
-### Exit gate
-
-- One authoritative candidate lifecycle exists.
-- All surfaces agree on SPY state and RS evidence for the same snapshot.
-- Greatness evaluates near-trigger names on the promised cadence.
-- Legacy text/watchlist adapters can be removed without losing user behavior.
-
----
-
-## Milestone 7 — High-conviction readiness and canonical opportunity ranking
-
-### Canonical opportunity model
-
-Each opportunity should include:
-
-- stable opportunity and candidate IDs;
-- symbol, side, setup family, session, and thesis version;
-- discovery source and reasons;
-- ordered confirmation plan;
-- current lifecycle stage;
-- market snapshot and SPY episode ID;
-- stock-versus-SPY and stock-versus-sector evidence;
-- volume/participation evidence;
-- entry zone, invalidation, obstacle, targets, and expected R;
-- extension/actionability state;
-- readiness, confidence, and hard-gate results;
-- data freshness, coverage, and provenance;
-- alert and user-feedback history.
-
-### Greatness lifecycle
-
-```text
-DISCOVERED
-  -> DEVELOPING
-  -> NEAR_TRIGGER
-  -> TESTING_LEVEL
-  -> CONFIRMING
-  -> READY
-  -> ACTIVE / EXTENDED / EXPIRED
-
-Side paths:
-  FAILED -> REARMED
-  any valid state -> INVALIDATED
-```
-
-An hourly Master scan defines or materially revises the thesis. Incremental intraday updates advance the plan. A UI refresh or ordinary rescan must not reset it.
-
-### Independent score families
-
-Keep separate, visible components:
-
-1. Structural quality.
-2. Live confirmation.
-3. SPY/sector context.
-4. Relative strength/weakness.
-5. Participation/volume.
-6. Entry quality and tradeability.
-7. Evidence confidence.
-
-Cap contributions by family so correlated indicators do not count as independent votes.
-
-### Hard `READY` gate
-
-No candidate reaches the highest tier unless:
-
-- the structural thesis is current and valid;
-- every mandatory confirmation step passes on eligible completed data;
-- required RS/RW and volume rules pass;
-- expected reward to the next real obstacle meets the setup minimum;
-- logical invalidation is available;
-- the entry remains actionable and not extended;
-- market/sector context is not a hard conflict;
-- no stale, incomplete, event, liquidity, or other risk block is active.
-
-Scores rank candidates that pass. Scores do not cancel hard failures.
-
-### SPY pullback leader/laggard model
-
-For longs on strong days:
-
-- measure how little the stock gives back during a defined SPY pullback;
-- normalize by beta and volatility;
-- reward holding VWAP, trigger, and relevant structure;
-- prefer contracting sell volume and early resumption;
-- include sector confirmation.
-
-For shorts, invert exactly:
-
-- measure failure to bounce during a defined SPY rebound;
-- reward continued weakness below VWAP/trigger;
-- prefer weak recovery volume and early renewed downside;
-- require clean downside room and tradeability.
-
-### Ranking pipeline
-
-1. Hard eligibility and data-quality gates.
-2. Candidate deduplication and thesis merge.
-3. Setup-specific confirmation.
-4. Independent evidence-family scoring.
-5. Calibration from point-in-time walk-forward results.
-6. Portfolio controls for sector/correlation concentration.
-7. Actionability and anti-chase gate.
-8. Top-K selection with an honest empty state.
-
-### Promotion tests
-
-- precision and expectancy at `READY`;
-- precision@1 and precision@3;
-- false-confirmation rate;
-- median remaining expected R at notification;
-- adverse/favorable excursion;
-- missed-opportunity rate;
-- readiness calibration;
-- ranking churn;
-- results by setup family, side, regime, and time of day.
-
-### Exit gate
-
-- Production and replay rankings are reproducible.
-- Fewer than three qualifying trades produces fewer than three recommendations.
-- A no-chase candidate cannot rank as Ready Now.
-- Challenger improves quality without eliminating actionability.
-- A configuration switch restores the prior champion immediately.
-
----
-
-## Milestone 8 — Main GUI, Greatness Radar, and Auto/Away parity
-
-The former GUI redesign concepts are folded into this milestone.
-
-### Main application layout
-
-The main Qt GUI should provide:
-
-- global Auto Mode header;
-- Trading Desk / Top Opportunities Command Center;
-- D1 Development Radar;
-- Alert Center and transition feed;
-- RS/RW and Entry Assist views using shared evidence;
-- Setup Tracker and research views;
-- full Market Prep in Qt;
-- Journal;
-- Health page.
-
-### Top Opportunities Command Center
-
-Sections:
-
-1. **Top 3 Ready Now**
-2. **Confirming**
-3. **One Step Away**
-4. **Developing**
-5. **Failed/Rearming**
-6. **Extended/Expired**
-
-Show fewer than three Ready candidates when fewer qualify.
-
-### Candidate card
-
-Each card shows:
-
-- ticker, side, setup family, and stage;
-- levels cleared and current blocker;
-- exact next confirmation;
-- entry zone, invalidation, obstacle, target, and expected R;
-- SPY and sector test result;
-- RS/RW and volume result;
-- actionability/no-chase state;
-- readiness and confidence separately;
-- data complete-through time;
-- what changed on the last transition.
-
-### Mini-chart radar
-
-Generalize the current SPY M5 chart into a reusable symbol chart showing:
-
-- M5 candles with optional M1/M15 selection;
-- VWAP and short-term trend overlays;
-- opening range and prior-day/premarket levels;
-- D1/AVWAP/SMA/trendline confirmation zones;
-- entry, invalidation, obstacle, and target;
-- touch, close, retest, failure, and Ready markers;
-- SPY episode shading or a compact normalized RS trace.
-
-Charts must render from the shared snapshot/cache and perform no provider call during paint.
-
-### Alert ladder
-
-| Tier | Behavior |
-|---|---|
-| Board-only | Developing state changes silently |
-| Heads-up | One step away or close to the next level |
-| Testing | Interacting with the important level |
-| Confirming | Initial close occurred; waiting for acceptance/retest |
-| Ready | All hard gates pass and entry is actionable; loud alert |
-| Failure/Rearm | Quiet lifecycle update |
-| No Chase | Informational only |
-| Invalidation | Clear removal, especially for pinned names |
-
-Deduplicate by typed transition identity, not message text.
-
-### Human focus lists
-
-- Keep separate long and short focus inputs.
-- Allow quick add from Master AVWAP using side.
-- Monitor human picks closely across bounce and RS/RW evidence.
-- Preserve manual entries against automated removal.
-- Track model quality and human-selection lift separately.
-- Do not grant an objective score bonus merely because the user pinned the name.
-
-### Auto/Away parity
-
-The phone report must be a projection of the same opportunity snapshot:
-
-- Ready Now;
-- One Step Away;
-- failures, invalidations, and no-chase changes;
-- exact freshness and complete-through times;
-- entry, invalidation, obstacle, and expected R;
-- optional chart contact sheet generated from cached bars.
-
-Publish on material state/rank changes plus a heartbeat interval, using verified atomic replacement.
-
-### Live testing
-
-- GUI responsiveness with maximum fast-lane candidates.
-- Hidden chart panels do not stop monitoring.
-- No data fetch occurs from paint/render paths.
-- Setup Detail updates when a thesis version changes.
-- Desktop and Away output match candidate IDs, order, evidence, and timestamps.
-- Alert sounds and severity match lifecycle transitions.
-- User can understand why a ticker is not ready without opening another tool.
-
-### Exit gate
-
-- One main GUI provides the complete desktop workflow.
-- D1 Focus becomes a developing-opportunity product rather than a wick-cross feed.
-- The loudest alerts are rare, explained, current, and actionable.
-- Auto/Away mode presents the same truth as the desk.
-
----
-
-## Milestone 9 — Journal and learning center
-
-### Automatic linkage
-
-Link:
-
-- opportunity discovery;
-- each lifecycle transition;
-- alerts delivered;
-- user actions: took, passed, missed, late, irrelevant, useful;
-- imported trade execution records;
-- favorable/adverse excursion;
-- outcome at defined horizons;
-- screenshots or chart snapshots when retained.
-
-### Funnel measurement
-
-Measure:
-
-```text
-Discovered -> Near Trigger -> Testing -> Confirming -> Ready -> Follow-through
-```
-
-Retain candidates that never became Ready so the system can study selectivity and missed opportunities.
-
-### Personalization
-
-Keep three distinct values:
-
-- objective setup quality;
-- user relevance/preference;
-- historical fit with the user’s execution style.
-
-Personalization may reorder equally qualified candidates. It must not rewrite historical expectancy or hide hard risk failures.
-
-### Research questions
-
-- Which D1 families most often reach Ready?
-- Which prerequisite levels add useful selectivity?
-- Does a retest improve expectancy or make alerts late?
-- Which SPY pullback RS/RW patterns predict follow-through?
-- How often do wick-only alerts fail?
-- When does re-arming rescue a valid thesis?
-- Which gates reduce false alerts with the least opportunity loss?
-- Does human curation improve outcomes after controlling for setup and regime?
-
-### Exit gate
-
-- Every high-priority recommendation can be reconstructed.
-- Outcome definitions are versioned and point-in-time safe.
-- Journal operations remain fast and local if Drive is unavailable.
-- Learning reports include coverage, sample size, and uncertainty.
-
----
-
-## Milestone 10 — Controlled setup discovery program
-
-New setups enter only through research and shadow stages.
-
-The locked implementation plan for the long-term, DAS-hosted, point-in-time
-setup research warehouse is
-[`docs/ULTIMATE_SETUP_DATABASE_PLAN.md`](docs/ULTIMATE_SETUP_DATABASE_PLAN.md)
-(Fabel-reviewed revision of the 2026-08-03 draft; all decisions locked in its
-Section 23). It covers M5/M15/M30/H1/H4/D1/W1 bars; a tiered moving-average
-grid, AVWAP anchors and frozen running-deviation bands with the 1σ favorite
-zone primary; horizontal levels and trendlines; capture/pacing budgets and a
-Phase 0-8 build order; complete opportunity denominators; trade-style recipes;
-outcome paths; conditional expectancy; and a "best trade style now" advisory
-engine. Its capture phases are shadow-only additive evidence with read-only
-consumers (proposed sec 12 item 13a; insertion text in its Appendix E). It is
-subordinate to this roadmap and does not authorize ranking surfaces or
-promotion before the canonical opportunity milestones and sec 7 gates pass.
-
-Priority families:
-
-- compression-to-expansion near meaningful levels;
-- post-earnings constructive pullback;
-- failed breakout/breakdown and undercut/reclaim;
-- opening drive to first controlled pullback;
-- trend-day leader/laggard continuation;
-- multi-timeframe alignment/conflict;
-- catalyst-aware continuation and risk;
-- regime-specific swing continuation.
-
-For each setup:
-
-1. Write the thesis and failure mode.
-2. Define point-in-time features and candidate universe.
-3. Define entry, invalidation, target, expiry, and actionability.
-4. Create synthetic and replay fixtures.
-5. Run historical discovery/validation/test splits.
-6. Run live shadow with complete candidate retention.
-7. Compare against the existing opportunity portfolio.
-8. Check incremental value after correlation with existing setups.
-9. Promote only with a versioned rollback.
-
-Do not reward a setup merely for increasing alert volume. Measure portfolio-level incremental expectancy and concentration.
-
----
-
-## Milestone 11 — Platform consolidation, CI, and release engineering
-
-### Codebase modernization
-
-- Introduce a `TradingRuntime` composition root.
-- Continue extracting pure domain modules from legacy files behind adapters.
-- Centralize clocks, calendars, side parsing, paths, configuration, and snapshot publication.
-- Remove duplicate scheduler, fetch, scoring, and alert logic only after parity tests.
-- Keep expensive work outside the Qt thread.
-- Replace prefix/string routing with typed events.
-
-### CI
-
-Required lanes:
-
-- fast unit tests;
-- deterministic smoke tests;
-- golden/replay tests;
-- Qt headless integration tests;
-- lint/type gates introduced incrementally;
-- migration tests;
-- packaging/startup test;
-- optional scheduled performance regression job.
-
-### Release engineering
-
-- pin and audit dependencies;
-- document Python and OS support;
-- provide reproducible environment setup;
-- verify clean-machine startup;
-- version schema migrations and configuration;
-- provide backup/restore and rollback runbooks;
-- keep broker execution and consumer shipping deferred.
-
-### Exit gate
-
-- A clean supported machine can install, start, smoke-test, and recover the application.
-- CI blocks correctness regressions.
-- Runtime health and migrations are supportable without reading source code.
-
----
-
-## 9. Detailed Greatness Monitor requirements
-
-This section remains the product specification for the flagship high-conviction workflow.
-
-### Slow structural layer
-
-Master/D1 discovery defines:
-
-- direction and setup family;
-- daily quality and conviction;
-- AVWAP anchors and relevant daily levels;
-- ordered levels that must clear;
-- setup-specific confirmation policy;
-- invalidation;
-- obstacles and targets;
-- catalyst/event context;
-- expiration and re-arm policy.
-
-It should be recalculated only when material structural inputs change.
-
-### Fast confirmation layer
-
-Each completed intraday bar updates:
-
-- distance to next required level;
-- touch/wick/close/acceptance/retest state;
-- SPY/sector RS or RW;
-- volume participation;
-- VWAP/opening-range/short-term structure;
-- expected R and next obstacle;
-- extension/no-chase status;
-- freshness and confidence;
-- lifecycle stage.
-
-### Ordered confirmation steps
-
-Each step supports:
-
-- a level or zone;
-- side-aware comparison;
-- touch, close, acceptance, retest-hold, or rejection condition;
-- required timeframe and number of bars;
-- optional RS, volume, and market predicates;
-- mandatory versus supporting status;
-- reset, expiry, and re-arm behavior;
-- captured evidence on pass/fail.
-
-### Multi-level greatness ladder
-
-The user should see:
-
-```text
-[x] Reclaimed earnings AVWAP
-[x] Held VWAP during SPY pullback
-[>] Testing prior-day high
-[ ] Needs completed M5 close
-[ ] Needs hold/retest with positive RS
-[ ] Final actionability and reward/risk gate
-```
-
-### Failure and re-arm
-
-- A wick is a test, not a Ready event.
-- A failed first attempt records evidence without consuming the entire day.
-- Re-arm requires explicit reset time/distance and attempt limits.
-- Structural invalidation prevents re-arm.
-- Liquidity-sweep setups may interpret a failed break differently, but only through a setup-specific policy.
-- Deduplication includes candidate, plan version, step, attempt, and transition.
-
-### Actionability states
-
-- `EARLY`
-- `ACTIONABLE`
-- `LATE`
-- `NO_CHASE`
-- `RESET_WATCH`
-
-The product should celebrate a correct thesis without mislabeling a late entry as a current opportunity.
-
----
-
-## 10. Testing strategy for all remaining work
-
-### Unit tests
-
-- pure state transitions;
-- exact long/short mirrors;
-- completed/incomplete bars;
-- timestamp alignment;
-- scoring component boundaries;
-- lifecycle identity and deduplication;
-- retries, leases, and expiry;
-- migrations and serialization.
-
-### Characterization and golden tests
-
-- current scan output;
-- detector output by setup family;
-- candidate/watchlist exports;
-- Alert Center routing;
-- report contents;
-- journal queries and imports;
-- deliberate expected diffs for correctness fixes.
-
-### Integration tests
-
-- GUI/service start and bounded stop;
-- scheduler-to-ledger lifecycle;
-- provider-to-cache-to-scanner flow;
-- candidate registry dual-write migration;
-- scanner-to-opportunity-to-alert/report flow;
-- desktop/Away snapshot parity;
-- local journal with Drive unavailable.
-
-### Replay tests
-
-- wick failure followed by valid confirmation;
-- clean break and retest;
-- immediate extension after confirmation;
-- SPY strong-day pullback with leader long;
-- SPY weak-day rebound with laggard short;
-- sector-confirmed move versus isolated false move;
-- regime reversal;
-- missing/stale data;
-- no-trade session;
-- restart in the middle of a candidate lifecycle.
-
-### Research correctness tests
-
-- no future level inputs;
-- no same-day history contamination;
-- immutable training/validation/test windows;
-- stable event identity;
-- no duplicate pseudo-samples;
-- universe membership point in time;
-- outcome coverage and missingness;
-- reproducible multiple-testing controls.
-
-### Performance tests
-
-- provider calls per scan;
-- duplicate fetch count;
-- cache-hit rate;
-- time by scan stage;
-- GUI event-loop latency;
-- chart repaint load;
-- journal query latency;
-- memory and file growth;
-- bounded diagnostics retention.
-
----
-
-## 11. Success metrics
-
-### Reliability
-
-- zero orphan workers after normal shutdown;
-- zero unbounded retry loops;
-- zero silent partial report replacement;
-- zero unexplained cross-machine overwrite in controlled and live observation;
-- truthful heartbeat, freshness, and last-success state;
-- explicit incomplete status during provider/data failure.
-
-### Performance
-
-- lower Master scan wall time on identical fixtures;
-- fewer duplicate provider calls;
-- bounded memory and diagnostics growth;
-- responsive GUI under maximum supported fast-lane load;
-- reports and alerts published within their stated freshness window.
-
-### Opportunity quality
-
-- precision and expectancy at Ready;
-- precision@1 and precision@3;
-- false-confirmation rate;
-- remaining expected R at notification;
-- favorable/adverse excursion;
-- actionability and no-chase accuracy;
-- capture rate after failed attempt and re-arm;
-- stable performance across regimes and sides.
-
-### Research quality
-
-- complete provenance and replayability;
-- point-in-time-correct features;
-- candidate/outcome coverage;
-- calibrated confidence;
-- out-of-sample promotion evidence;
-- explicit sample size and uncertainty.
-
-### User usefulness
-
-- the user can identify the best current opportunities from one screen;
-- every top candidate explains “why,” “why not yet,” “what next,” and “what kills it”;
-- Auto/Away output matches the desktop;
-- alert volume falls without losing high-quality opportunity capture;
-- zero-trade days are represented honestly;
-- manual focus and model picks can be compared fairly.
-
----
-
-## 12. Immediate execution order
-
-### Now — before promoting either shadow engine
-
-1. Verify and record the 802-test baseline.
-2. Improve shadow schemas, coverage counters, version/config metadata, and daily
-   audit tooling. W08/W09 session rollups and retention are **GREEN**, pending
-   the live rollover acceptance above.
-3. Run the first-session checklist and preserve artifacts.
-4. Complete the Phase 2 two-machine and failure drills.
-5. Build the Health page.
-6. Build golden/benchmark fixtures.
-7. Keep legacy SPY and D1 alert behavior as champion.
-7a. **Desk Link Tier 1** (trader-directed insertion, 2026-08-02; numbered
-   7a so the existing 8-22 references stay stable): LAN relay
-   server on the main + view-only satellite mode with live alert chart
-   popups, per `docs/MULTI_MACHINE_DESK_PROPOSAL.md`. Decision surfaces,
-   scanners, TWS, and all shared-state writing stay on the main; satellites
-   render payloads only, so no sec 5 invariant is touched. Tier 2 (exclusive
-   control lease: satellite sign-in takes control, main locks to a relay
-   with an always-available take-back, intents journaled/acked/idempotent)
-   is also implemented at trader direction. Tier 3 full relay is implemented
-   too (RRS, entry board, status, Auto regime, live M5 bars, and the item 7b
-   price-alert stream); unknown future streams are skipped. The main Auto mode
-   now rides in the sticky snapshot and a controlling satellite can change
-   OFF/DESK/AWAY/EVENING through an idempotent intent. All tiers remain pending
-   physical two-machine validation.
-   `launch_gui.py` is the single operator entrypoint; Main/Satellite role is
-   selected in Settings and applied through a clean automatic restart so live
-   engine ownership is never hot-switched.
-   **RETIRED 2026-08-08 (trader decision):** the desk is now a single
-   always-on machine (see item 13b topology) and the satellite system is no
-   longer needed — all Desk Link tiers, the satellite role, relay streams,
-   and the pending two-machine validation are retired. The phone over ntfy
-   is the only remote surface. The implemented code stays in-repo for now;
-   removal is a future cleanup packet, and until then the satellite role
-   simply goes unused.
-7b. **Focus price alerts + phone push** (trader-directed insertion,
-   2026-08-03; numbered 7b so the existing 8-22 references stay stable):
-   basic cross-up/cross-down price levels entered on the Focus tab, pushed to
-   the phone over ntfy from the **main PC only**, and relayed so a fired alert
-   is unmissable on the main desk and on every satellite. Per
-   `docs/FOCUS_PRICE_ALERTS_PROPOSAL.md`. The engine already exists
-   (`push_notify.py`, `price_alerts.py`, `price_alert_service.py` from Evening
-   mode); this packet is surface + relay: Focus-tab entry, an explicit
-   engine-only origin rule alongside the existing shared-writer gate, a
-   `price_alert` desk stream over the existing generic `desk_stream` envelope,
-   and one shared non-activating toast on all three surfaces. A price alert is
-   a last-price crossing, never a bar-state transition, and must never feed a
-   detector, a score, or a state machine — so no sec 5 invariant is touched
-   and no golden fixtures are required. Satellite-side editing waits for the
-   Tier 2 intent channel (Phase E) rather than writing shared state. Trader
-   decisions (2026-08-03): a fired level stays disarmed until re-armed by
-   hand; every price alert pushes at ntfy `urgent` priority (dropping the
-   EVENING-vs-daytime split); every satellite beeps regardless of the control
-   lease, and the phone push fires first, independent of the relay.
-   At explicit trader direction on 2026-08-03, Phases A–D were implemented
-   before item 7a's pending live two-machine pairing validation; deterministic
-   status is **GREEN** (1806 tests + 5 subtests on merged `main` commit
-   `29435d1`, smoke 7/7), not
-   **LIVE_VALIDATED**. Phase E satellite-side edit intents remain gated until
-   the two-machine alert-delivery check passes.
-   **Retirement note 2026-08-08:** with Desk Link retired (see 7a), the
-   satellite relay/toast surfaces and the gated Phase E satellite edit
-   intents are cancelled. The product is the ntfy phone push plus the main
-   desk's own alert surfaces; the engine-only origin rule and the
-   last-price-crossing invariants stand unchanged.
-
-### Next — after initial live evidence
-
-8. Perform the supervised storage/secrets migration.
-9. Introduce the provider repository behind golden parity tests.
-10. Fix point-in-time research defects with intentional-diff fixtures.
-11. Complete CandidateRegistry live-writer adoption.
-12. Integrate canonical SPY/RS evidence in advisory/shadow mode.
-13. Decouple Greatness into its dedicated priority lane.
-13a. **Research warehouse Phases 0-8** (trader-directed insertion, 2026-08-03;
-   numbered 13a so the existing 14-18 references stay stable):
-   `docs/ULTIMATE_SETUP_DATABASE_PLAN.md`. Shadow-only additive evidence
-   capture with read-only consumers: DAS Parquet lake, M5 tee archive, derived
-   M15/M30/H1/W1 bars, tier-1 feature snapshots, two-setup occurrence/outcome
-   slice, and the 20-session pilot. Zero detector/score/ranking/alert
-   influence, hence no golden fixtures required (no champion behavior
-   changes). Main desktop is the sole lake writer; the mini-PC is excluded
-   until the client-ID/dual-scheduler reconciliation (M1) lands. The plan's
-   Sections 16-17 (best-style engine and research UI) and post-slice
-   milestones remain gated behind items 14-18 and the Section 7 promotion
-   ladder. Phase 0 landed 2026-08-03: decision record 0014 (DAS lake storage
-   class), `scripts/research_warehouse/config.py` (`research_store_dir` +
-   `TRADINGBOTV3_RESEARCH_DIR`, Drive-path refusal, lake layout bootstrap),
-   `tests/test_warehouse_config.py`. Phase 1 landed 2026-08-04 (store core):
-   `store.py` (4-step seal, per-symbol/per-partition quarantine with
-   clean-remainder publish, compaction behind one atomic manifest line,
-   `_retired/` GC that skips files in use, startup reconciliation),
-   `manifest.py` (`manifest_log.jsonl` read authority), `schemas.py` (the
-   frozen 13-table pyarrow definitions + deterministic occurrence/anchor
-   keys), `docs/RESEARCH_WAREHOUSE_ERD.md`, and the crash-matrix tests
-   (`test_warehouse_seal/manifest/quarantine/retire.py`). Phase 2 landed
-   2026-08-04 (bronze wraps + daily snapshots): `ingest_existing.py` wraps the
-   sec 19.0 inventory into `bronze_*` datasets with source hashes and offset
-   watermarks (re-run is a no-op), snapshots `universe_membership_daily` and
-   `level_state_daily` daily, and projects the durable per-symbol D1 store into
-   `bar_d1` as a wrapped read (completed sessions only); legacy writers are
-   untouched and `exploration_cohort.txt` stays empty pending trader
-   confirmation. Tests: `test_warehouse_import.py`. Phase 3 landed
-   2026-08-04 (M5 tee + coverage/gaps + spool): `bar_archive.py` archives
-   BounceBot's already-fetched in-memory M5 cache into `bar_m5` with zero
-   added provider requests (no provider client in the module), plus
-   `scan_coverage` keyed by the run manifest's `run_id` and `collection_gap`
-   rows that keep policy absence distinct from missing data; `spool.py`
-   implements the sec 8.4 GUI-writer/CLI-sealer split with the 5 GB/7-day cap
-   and fixed shedding order. Tests: `test_warehouse_tee.py`,
-   `test_warehouse_spool.py`. Still unwired: the GUI service that feeds the
-   tee each cycle (`docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` BD-20).
-   Phase 3b landed 2026-08-04 (pacer + backfill + seed): `pacer.py` meters
-   capture only — champions are counted, never delayed or queued — yields on
-   IB 162/366, asserts the client-ID allocation (1003 retired, 1010/1011), and
-   keeps capture errors away from `_IBKR_HISTORICAL_FAILURE_COUNT`;
-   `backfill.py` adds the ETH-inclusive nightly M5 job, weekly universe sweep,
-   and trickled 60-day yfinance seed, all resumable across the TWS restart;
-   `ib_capture.py` is the only socket module and its live path is still
-   unverified (BD-25). Tests: `test_warehouse_pacer.py`,
-   `test_warehouse_backfill.py`. Phase 4 landed 2026-08-04 (sessions +
-   aggregation): `exchange_calendar.py` adds a versioned XNYS rules calendar
-   (holidays, observance, 13:00 ET early closes, DST by zone) checked against
-   the published 2025-2027 calendars, and `aggregate.py` publishes
-   `trading_session` plus derived M15/M30/H1 from canonical M5 and W1 from
-   canonical D1 under explicit aggregation contracts, with stub durations,
-   PARTIAL counts, and derived-vs-native H1 boundary parity. Tests:
-   `test_warehouse_aggregate.py`. Phase 5 landed 2026-08-04 (tier-1 feature
-   snapshots): `features.py` publishes `feature_snapshot_daily`,
-   `feature_snapshot_intraday`, and `anchor_instance` with exactly the frozen
-   sec 7.1 columns, calling `calc_anchored_vwap_bands`,
-   `compute_indicator_frame`, and the champion intraday VWAP band math rather
-   than re-deriving any of them; parity is pinned to 1e-9 by a
-   contract-bearing golden fixture and snapshots are point-in-time and
-   deterministic. Tests: `test_warehouse_avwap_parity.py`,
-   `test_warehouse_features.py`. Phase 6 landed 2026-08-04 (occurrences +
-   outcomes): `occurrences.py` records detector output under the deterministic
-   occurrence key with revision-based rescan updates (100 rescans = 1 episode)
-   and `dependency_cluster_id` as the episode unit; `outcomes.py` implements
-   `house_default_v1` (net_r cost formula, STOP_FIRST primary with the
-   TARGET_FIRST bound retained, 18-session time stop, checkpoint grids,
-   MATURED derived) across the five declared recipes, with
-   `intraday_bounce_v1` gated on a linked bounce event. The tracker→detection
-   adapter is still open (BD-44). Tests: `test_warehouse_occurrence.py`,
-   `test_warehouse_outcomes.py`. Phase 7 landed 2026-08-04 (read path):
-   `queries.py` resolves every read from `manifest_log.jsonl` at query start
-   (concurrent-compaction consistency tested) and renders the raw slice
-   readout with episodes reported apart from rows; DuckDB is pinned but
-   optional and read-only; the Research tab gains a read-only warehouse panel
-   that reads only on Refresh. Tests: `test_warehouse_queries.py`,
-   `test_qt_warehouse_readout.py`. Phase 8 code landed 2026-08-04:
-   `backup.py` (3-class backup, append-only Class B, scripted restore check
-   that re-verifies manifest hashes and runs a canned query against a restored
-   copy), `cli.py` (`build`/`status`/`restore-check` with single-flight lock
-   and job-ledger registration), and `scripts/ui/services/warehouse_service.py`
-   (the six sec-18 Health tiles). Tests: `test_warehouse_restore.py`. STILL
-   OPEN: nothing calls the tee during a live session and the Health page does
-   not yet render the tiles (BD-20), so the 20-session pilot has not started
-   (BD-52).
-
-13b. **Local AI & automation program** (trader-directed insertion, 2026-08-08;
-   numbered 13b so the existing 14-18 references stay stable):
-   `docs/LOCAL_AI_AUTOMATION_PLAN.md`. The always-on Ryzen 8845HS main desk
-   becomes a local, off-hours LLM batch layer (Ollama, OpenAI-compatible
-   endpoint) behind the existing provider-neutral AI call sites
-   (`ai_summary.py`, `market_prep/services/ai_service.py`). Phased:
-   endpoint plumbing → automated AI summary + per-ticker briefs → daily
-   digest ledger (deterministic facts, LLM narration, evidence pointers,
-   append-only) → journal enrichment/scaffolding → local review-policy
-   curation behind a draft-comparison gate → periodic frontier-model
-   synthesis over digests. Everything is one-way advisory documents: zero
-   detector/score/alert/state-machine influence, so no sec 5 invariant is
-   touched and no golden fixtures are required. New `ai_store` on the file
-   server with the main desk as sole writer; Drive home folder gets only
-   small atomically-published human-facing copies; `autopilot_today.txt`
-   and the DAS lake writer lease are untouched. Hard resource rule: no
-   local inference during market hours (the box runs the full trading
-   complement); heavy models run in the off-hours window only. Any
-   synthesis finding that would change live behavior routes through the
-   sec 7 ladder like everything else.
-   **Status 2026-08-08: Phase 0 code IMPLEMENTED + GREEN**
-   (`local-ai-phase-0`; 1856 passed, 7 subtests; smoke 7/7): the `local`
-   provider in `ai_summary.py`, `base_url` support in
-   `market_prep/services/ai_service.py`, both config-gated and default-off,
-   with tests asserting the cloud request payloads are byte-identical when the
-   new settings are unset. **Phase 0 exit gate MET 2026-08-08**: Ollama 0.32.6
-   installed on the main desk, all three tiers pulled, and a real local
-   `request_ai_summary` run produced a schema-valid, evidence-grounded summary
-   (65.3 s on `gemma3:12b`). Two measured findings are recorded in the plan
-   doc: the 780M runs through Ollama's **Vulkan** backend and needs
-   `OLLAMA_IGPU_ENABLE=1` (ROCm has no gfx1103 rocblas), and stock
-   `gemma3:27b` does **not** fit the 17.4 GiB iGPU heap. All three tiers are
-   now chosen and verified — small `gemma3:4b`, medium `gemma3:12b`, large
-   `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — with the large tier's
-   revisit triggers recorded against Phase 4's existing two-week gate.
-   **Phase 1 partially landed 2026-08-08** (`local-ai-phase-1`; 1889 passed,
-   7 subtests; smoke 7/7): the new headless `scripts/ai_jobs/` package, the
-   standalone `scripts/run_ai_jobs.py` that Task Scheduler boots and that
-   exits, and the registered **TradingBotV3 AI Jobs** task (22:00–06:00 desk
-   local = 01:00–09:00 ET, repeating every 30 min, idempotent via the job
-   ledger). The scheduled advisory summary is verified end to end against
-   live evidence and publishes to the NAS `ai_store`. Deliberately a separate
-   process, not GUI-hosted: the lifecycles are opposed, and it makes the
-   no-inference-during-market-hours rule a scheduler fact. Still to build for
-   Phase 1: per-ticker briefs and the Drive morning file; its exit gate needs
-   a week of unattended mornings. Phases 2+ not started.
-
-13c. **Durability & catch-up packet** (trader-directed insertion, 2026-08-08;
-   numbered 13c so the existing 14-18 references stay stable):
-   `docs/DURABILITY_CATCHUP_PLAN.md`. Three-tier recovery design: Tier A
-   process uptime (07:00 scheduled task gains 15-minute repetition against
-   the existing single-instance guard — crashes self-heal mid-session);
-   Tier B deterministic backfill from completed bars with explicit
-   `capture_mode: "backfill"` provenance (TI follow-up chain sweeper,
-   breadth-bar backfill; appends only, never rewrites live rows); Tier C
-   never-reconstruct (frozen snapshots, opening-range baselines, and
-   never-started live predictions stay honestly missed per the Regime
-   Phase 1 runbook). Also fixes the reported Master AVWAP staleness defect:
-   the final-hour tracker gate checks wall-clock only, so a missed
-   after-close scan leaves setups stale all next day — a staleness override
-   permits catch-up refresh from **completed prior-session D1 bars only**,
-   pinned by a characterization test proving byte-identical tracker output
-   for identical data vintage (timing changes, scoring never does). Slot
-   skip-don't-pile-up stays. Motivated by the 2026-08-03 week: 3 of 4
-   sessions lost their HEALTHY regime audit to uptime, not code. Should
-   land before or alongside 13b Phases 1+ — the digest ledger and the
-   40-session evidence floor are both downstream of uptime.
-   **Status 2026-08-08: build-order steps 1-4 IMPLEMENTED + GREEN and MERGED
-   to `main`** (1901 passed, 5 subtests; smoke 7/7). Step 5, the flagged
-   intraday preview lane, is deliberately not built — it ships only on trader
-   request. Merged with the second review's repairs applied: the automatic
-   catch-up no longer runs the scoring tuner or the Expected-R prior refit
-   (the manual GUI backfill still does), the tracker stamps an explicit
-   `data_session` vintage instead of inferring one from its write clock, both
-   Tier B fetches retry a bounded number of times before their gap becomes
-   permanent, an empty follow-up window is stamped when the absence became
-   knowable, the audit reports follow-up gaps and outcome coverage on their own
-   lines, and the single-instance guard now sees the frozen build. Not
-   `LIVE_VALIDATED`: the sec 5 exit gate's mid-session restart drill (audit
-   HEALTHY with a nonzero backfill count) still needs a live session.
-
-   **Checkpoint review 2026-08-08** (`docs/CHECKPOINT_REVIEW_2026-08-08.md`):
-   13c steps 1-4 and 13b Phases 0-1(partial) are built on branches A
-   (`durability-catchup`), B (`local-ai-phase-0`), C (`local-ai-phase-1`) —
-   all unmerged. Verdict PROCEED WITH CONDITIONS; merge order A → B → C with
-   per-branch evidence conditions, two required Branch A amendments (06:00 PT
-   task start — 07:00 local misses the first 30 min of the session on a
-   Pacific desk; single-instance guard hardening onto the writer lock), the
-   40-session floor counting declaration (now recorded in the Regime Phase 1
-   runbook), and a file-scoped ask-first rule for detector-hosting files (now
-   in CLAUDE.md). Phase 2 digests, Phase 4 policy drafting, and journal
-   enrichment must NOT start until A-C are merged and the scheduler has a
-   quiet unattended week. Both required Branch A amendments are now built:
-   the task starts at 06:00 Pacific, and the guard covers the frozen build
-   (the writer lock turned out to be a per-publish lock, unheld almost all of
-   the time a desk is up, so it cannot answer "is a desk running?" — the
-   reasoning is recorded in `scripts/launch_gui_auto.ps1`).
-
-13d. **Chart Review workspace + trader decision capture** (trader-directed
-   insertion, 2026-08-08; numbered 13d so the existing 14-18 references stay
-   stable): `docs/CHART_REVIEW_WORKSPACE_PLAN.md`. A workspace the trader
-   lives in daily — maximised chart, thin capture rail, lookup box that opens
-   ANY symbol, Setups drawer hidden by default — whose purpose is the
-   **decision stream**: vetoes with a reason from a versioned picklist, likes
-   with a claimed setup, hypothetical stops, notes. Everything else in the
-   program measures outcomes; this is the only artifact that records
-   judgement, and it cannot be reconstructed after the fact. TV/TC2000 stay
-   open for deep TA — the chart only has to be good enough to keep the trader
-   in the chair, and the design constraint is capture speed: every action
-   under five seconds, keyboard-first.
-   Storage is append-only `trader_annotations.jsonl` (schema v1, extensible,
-   fields never renamed) in the shared home, desk GUI sole writer, atomic
-   bounded rows. **Analysis-only evidence: it must never mute, suppress,
-   score, gate, or alert** — the same discipline as `review_policy.json`
-   having no suppression field. The one forward hook is capture-side: vetoed
-   names accrue forward returns as cohort `human_focus_veto_<reason>` so veto
-   calibration becomes computable later.
-   **Status 2026-08-08: capture layer + workspace shell IMPLEMENTED + GREEN**
-   on `chart-review-workspace` (2158 passed, 7 subtests; smoke 7/7). Not
-   merged, not `LIVE_VALIDATED` — needs the sec 6 checklist on a live session.
-   Charts, the paint-lines toggle, and click-to-set alerts are **deliberately
-   deferred**: the chart data path is being rebuilt off the GUI thread
-   (`ui/services/chart_data_service.py`, `bar_cache.py`), and building against
-   the old synchronous loader would have created a second owner of the chart
-   data path (sec 5) and a guaranteed conflict. The annotation schema already
-   carries `ref_level_id` / `ref_level_family`, so painted-level references
-   need no schema change when that work lands.
-   Veto cohorts live in their own `veto_cohort_*` files, NOT the human-focus
-   picks CSV: that file is keyed `(trade_date, symbol, side)` with no source
-   column, so a veto row for a name that was also a focus pick that day would
-   have taken the focus row's slot and suppressed it. The single edit to
-   `human_focus_tracking.py` is additive and pinned by a characterization test
-   proving byte-identical aggregation for existing cohorts.
-
-### Then — after correctness and authoritative data paths
-
-14. Build the canonical Opportunity and ranking pipeline.
-15. Add the complete Greatness gate stack.
-16. Build the Command Center, mini-chart radar, and alert ladder.
-17. Publish the same snapshots to Auto/Away mode.
-18. Link the full lifecycle to the journal and outcome engine.
-
-### Later
-
-19. Validate and promote advanced setup families one at a time.
-20. Port remaining Market Prep functionality into Qt.
-21. Finish CI, packaging, clean-machine recovery, and release documentation.
-22. Reconsider consumer shipping or broader broker integration only after the internal product is stable; execution remains out of scope unless the product boundary is deliberately changed.
-
----
+Promotion is a separate decision from implementation and live validation. Every
+challenger requires:
+
+1. a versioned configuration and stable identity;
+2. golden/replay fixtures and a declared evidence window frozen before inspection;
+3. complete coverage and data-quality accounting;
+4. comparison with the active champion on the same inputs and outcome definition;
+5. representative live sessions across relevant regimes, sides, and day parts;
+6. explicit success, non-inferiority, and rollback criteria;
+7. a bounded canary and one-switch rollback that does not require a code revert;
+8. explicit trader approval recorded in the revision history.
+
+### SPY pullback challenger
+
+Still required before any promotion:
+
+- prove completed-bar coverage rather than scan-cycle presence;
+- label and reconcile episodes across session/config rollovers;
+- compare episode timing, false pauses, missed pauses, and downstream candidate
+  usefulness with the legacy pause detector;
+- validate timezone, staleness, and restart behavior on live artifacts;
+- integrate sector/candidate RS only as advisory evidence until its own gate passes.
+
+### Greatness challenger
+
+Still required before any promotion:
+
+- a dedicated monitoring lane independent of legacy D1 scan cadence;
+- same-day plan revision and side-change handling;
+- complete multi-level confirmation, failure, re-arm, freshness, volume, RS/sector,
+  reward/risk, and anti-chase gates;
+- transition-chain audits and outcome comparison with legacy D1 wick alerts;
+- evidence that alert precision improves without unacceptable delay or missed moves.
+
+## 8. Detailed specifications retained under `docs/`
+
+The roadmap owns priority and status. These files retain implementation detail that
+would make this file unwieldy:
+
+- research warehouse: `docs/ULTIMATE_SETUP_DATABASE_PLAN.md`,
+  `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`, and
+  `docs/RESEARCH_WAREHOUSE_ERD.md`;
+- local AI: `docs/LOCAL_AI_AUTOMATION_PLAN.md`;
+- Chart Review capture: `docs/CHART_REVIEW_WORKSPACE_PLAN.md`;
+- setup doctrine: `docs/SETUPS_MAJOR.md` and `docs/SETUPS_TEST.md`;
+- operations and packaging: the active runbooks listed in `docs/README.md`.
+
+Their old phase lists do not reorder Section 12.
+
+## 12. Remaining work, in execution order
+
+The phases below are dependency order, not a menu. `CURRENT_CHECKPOINT.md` names the
+one active item. Finish that item before moving down the list unless the trader
+explicitly redirects the work. Elapsed evidence collection may run in parallel only
+where the phase says so; it never authorizes an early promotion.
+
+| Order | Build phase | Plain-English outcome |
+|---:|---|---|
+| **0 — NOW** | Validate and merge | Prove the testing-week build on the real desk and merge it safely |
+| **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
+| **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
+| **3** | Evidence and capture | Mature warehouse/AI/shadow evidence and capture trader commentary honestly |
+| **4** | Canonical Opportunity | Build and validate one inspectable opportunity/ranking challenger |
+| **5** | Delivery and lifecycle | Make alerts and every surface agree; reconstruct the whole decision lifecycle |
+| **6** | Research payoff | Use the validated corpus to promote setups narrowly and finish the Qt product |
+| **7 — LATER** | Consolidate and ship | CI, recovery, packaging, installer, and optional read-only broker adapters |
+
+### Phase 0 — NOW: validate and merge the testing-week branch
+
+No new feature or threshold work belongs in Phase 0.
+
+1. **P0.1 Re-baseline the complete branch.** Run the full Windows suite after the
+   post-gate code commits, smoke 7/7, and the frozen self-test when a packaging
+   trigger applies. Record pytest's own exit code in `CURRENT_CHECKPOINT.md`.
+2. **P0.2 Run one complete single-main live session.** Follow
+   `docs/FIRST_SESSION_CHECKLIST.md`; preserve runtime, provider, shadow, review,
+   chart, alert, warehouse, and shutdown artifacts. Do not tune from this session.
+3. **P0.3 Validate Auto/Away and ntfy end to end.** Confirm the verified hourly
+   report, safety/freshness header, swing-first ordering, quiet empty-swing behavior,
+   best-swing phone push, late-opened chart freshness, and main-desk alert delivery.
+4. **P0.4 Validate observability rollover.** Require real provider telemetry,
+   SPY/Greatness rotation and summaries, valid per-installation review writes, and
+   honest UNKNOWN/DEGRADED grades.
+5. **P0.5 Run the durability restart drill.** Require a healthy regime audit with a
+   nonzero backfill count, no duplicate desk, no pacing conflict, and no Tier-C
+   reconstruction.
+6. **P0.6 Start the elapsed evidence clocks.** Enable Local-AI Phase 1's five clean
+   session mornings; run the warehouse broker-marked IB check, observe its live tee
+   and six Health tiles, answer the pilot-relevant confirmation items (including the
+   fixed cohort and favorite-zone definitions), and start the 20-session pilot.
+7. **P0.7 Merge to `main`.** Only after a live-validation day passes, re-run the
+   applicable gates, merge, and update all control documents.
+
+Exit gate: the branch is green, one real session is documented, the application is
+operationally safe on the single-main topology, and `main` contains the validated
+build. The Local-AI, warehouse, regime, SPY, and Greatness evidence clocks may remain
+in progress; their results gate later promotions, not the merge itself.
+
+### Phase 1 — NEXT: remove known uncertainty from the development baseline
+
+1. **P1.1 Make the test suite hermetic.** Stop Qt app tests from starting live
+   universe/yfinance work; keep explicit network/broker markers and bounded teardown.
+2. **P1.2 Resolve the measured D1 line-display defect.** After the testing week,
+   decide the red-level threshold and total clutter budget from desk evidence. Ask
+   before touching any fenced detector/scoring/alert-hosting file.
+3. **P1.3 Adjudicate pending branches.** Review the scoring/flagging branch only with
+   golden fixtures; discard or supersede obsolete documentation-only work after this
+   consolidation.
+4. **P1.4 Finish observability depth.** Add representative benchmark/golden fixtures
+   and trends for timings, provider calls, failures, coverage, and scan-stage latency.
+5. **P1.5 Do bounded repository hygiene.** Ignore generated desk JUnit output and
+   remove retired Desk Link/satellite/mini-PC code only in an explicit, fully green
+   cleanup packet. Do not mix cleanup with behavior changes.
+
+Exit gate: tests are deterministic/offline by default, the chart-level policy is
+intentional, open branches are resolved, benchmark evidence is stable, and retired
+topology code no longer confuses the supported runtime.
+
+### Phase 2 — FOUNDATION: create authoritative data paths before new ranking
+
+Each item requires parity/rollback evidence before the next authority cutover.
+
+1. **P2.1 Complete storage and secrets classification.** Preserve operational home,
+   machine-local, and research-lake boundaries; migrate remaining live databases or
+   secrets only with backup, dual-read verification, and rollback.
+2. **P2.2 Introduce the provider repository.** Centralize IBKR/Yahoo fetches, cache
+   keys, batching, request coalescing, pacing, source, and freshness behind golden
+   parity tests. Do not change champion results.
+3. **P2.3 Repair remaining point-in-time defects.** Cover moving levels, history
+   keys, backfill leakage, tracker identity, score ordering, factor horizons,
+   corporate actions, and survivorship with intentional-difference fixtures.
+4. **P2.4 Make CandidateRegistry authoritative.** Migrate every live candidate writer,
+   preserve manual names, prove expiry/restart/rollback, and retire duplicate text-
+   file authority only after parity.
+5. **P2.5 Integrate aligned SPY/sector/industry/stock RS as advisory evidence.** Expose
+   complete-through time and provenance; unpromoted fields contribute exactly zero to
+   production eligibility, score, order, sound, and delivery.
+6. **P2.6 Give Greatness a dedicated completed-bar lane.** Establish continuous
+   coverage, stable identities, revisions, and the evidence hooks required by
+   Section 7 without changing legacy D1 alerts.
+
+Exit gate: provider, point-in-time, candidate, market-state, and Greatness inputs are
+stable and reconstructable. Production still uses the legacy champions.
+
+### Phase 3 — EVIDENCE AND CAPTURE: finish what must mature over time
+
+These lanes may collect in parallel with Phase 1–2 work because they are additive and
+non-authoritative. Their analysis/cutover steps remain ordered here.
+
+1. **P3.1 Complete Chart Review live acceptance.** Verify sub-five-second capture,
+   chart provenance/fallback warnings, painted-level references, the one alert writer,
+   and zero privileges from LIKE/veto/note annotations.
+2. **P3.2 Complete warehouse live validation and the 20-session pilot.** Verify IB
+   transport, tee/tiles, gaps, pacing, storage growth, backups, and restore. Then build
+   the tracker-to-detection adapter, explicit bounce linkage, and only the additional
+   context/VWAP fields demanded by registered consumers. Keep it shadow-only.
+3. **P3.3 Complete Local-AI Phase 1, then redesign Phase 2.** After five clean
+   unattended mornings, specify deterministic fact packs, evidence budgets, schema,
+   failure behavior, and tests before writing the append-only digest format. Require
+   ten clean digest sessions before later AI phases.
+4. **P3.4 Accumulate and audit promotion evidence.** Continue regime infrastructure
+   toward 40 instrumented sessions, and SPY/Greatness toward their Section 7 floors.
+   Freeze windows before inspecting outcomes.
+5. **P3.5 Build the live market commentary journal.** First define its relationship
+   to Chart Review notes and the existing journal; then add one append-only, rapid
+   intraday capture stream and advisory nightly summarization. It never becomes a
+   detector, score, gate, or alert input.
+
+Exit gate: capture paths are live-validated, warehouse and AI gates have honest
+results, commentary is reconstructable, and promotion datasets are usable without
+look-ahead or missing-denominator ambiguity.
+
+### Phase 4 — CANONICAL OPPORTUNITY: build the challenger product
+
+1. **P4.1 Freeze the identity graph and Opportunity snapshot contract.** Separate
+   Objective Quality, Actionability Now, Expected R, and Personal Fit; make every
+   input and blocker inspectable.
+2. **P4.2 Build the canonical eligibility/ranking challenger.** Consume only the
+   authoritative Phase-2 inputs; prove every unpromoted field has zero production
+   contribution and retain a one-switch champion rollback.
+3. **P4.3 Complete the Greatness/readiness gate stack.** Add remaining reward,
+   freshness, volume, context, ordered levels, failure/re-arm, and anti-chase logic in
+   pure tests, replay, and live shadow.
+4. **P4.4 Build the advisory Command Center and Focus Workbench.** Show lifecycle
+   lanes, compact dossiers, reasons/blockers, mini charts, and honest zero-Ready days.
+5. **P4.5 Freeze and pass the ranking manifest.** Compare identical snapshots and
+   outcomes, run the bounded GUI canary, and promote projection separately from rank.
+
+Exit gate: one deterministic advisory Opportunity snapshot exists, the trader can
+use it without changing production routing, and any promoted projection/rank has
+passed its own manifest and rollback drill.
+
+### Phase 5 — DELIVERY AND LIFECYCLE: make every surface agree
+
+1. **P5.1 Build the typed delivery challenger.** Immediate, Heads-Up, Focus Changes,
+   Developing, Research, and History remain separate; deduplicate/group bursts while
+   protecting every user-armed hit.
+2. **P5.2 Freeze and pass the delivery manifest.** Canary sound/severity/routing
+   independently from ranking and retain complete History plus instant rollback.
+3. **P5.3 Project one verified snapshot everywhere.** Desk, Focus, Alert Center,
+   Auto/Away, phone report, journal, and AI must agree on snapshot/opportunity IDs,
+   stage, rank, freshness, and champion/challenger status.
+4. **P5.4 Complete lifecycle and journal linkage.** Join discovery, stages, reviews,
+   Focus/watch actions, fills, no-trades, outcomes, screenshots, MFE/MAE, planned vs
+   actual risk, and after-close reconciliation.
+5. **P5.5 Build the Learning Center and controlled universe intake.** Keep objective
+   edge, actionability, personal preference, execution, and discovery-source value
+   separate; personalization may reorder only inside declared safe bands.
+
+Exit gate: the complete decision lifecycle is reconstructable, alerts are useful and
+bounded, every surface agrees, and preference cannot change objective truth or safety.
+
+### Phase 6 — RESEARCH PAYOFF: learn and promote narrowly
+
+1. **P6.1 Complete the warehouse post-slice research tools.** Add the registered
+   setup/style readouts, Level Edge/recipe comparisons, and evidence packages only
+   after the pilot validates the corpus.
+2. **P6.2 Promote advanced setup families one at a time.** Each family requires a
+   registered question, point-in-time corpus, replay, shadow, live evidence, bounded
+   canary, approval, and rollback.
+3. **P6.3 Continue Local-AI phases in order.** Journal enrichment, review-policy draft
+   comparison, and periodic frontier synthesis remain advisory and start only after
+   their predecessor gates pass.
+4. **P6.4 Finish Market Prep migration into Qt.** Retire the Tk path only after parity,
+   operational recovery, and clean-machine proof.
+
+Exit gate: research produces trustworthy narrow improvements without leaking into
+champions, and the supported interactive product is fully Qt.
+
+### Phase 7 — LATER: consolidate and ship the internal product
+
+1. **P7.1 Complete CI and clean-machine recovery.** Cover supported Windows/macOS
+   tests, offline smoke, frozen regression, backup/restore, and operator recovery.
+2. **P7.2 Finish packaging and release polish.** Icon, version metadata, windowed
+   build decision, bundle trimming, installer, and release notes follow the frozen
+   rebuild policy.
+3. **P7.3 Revisit read-only broker adapters.** Only after the provider repository is
+   stable; execution remains permanently out of scope.
+
+Everything else stays in `WISHLIST.md` until explicitly promoted into this sequence.
 
 ## 13. Definition of done
 
 The roadmap is complete when:
 
-1. The main GUI is the reliable central runtime and Auto Mode is truthful.
-2. Desk and mini-PC can coexist without ambiguous ownership or shared-data corruption.
-3. Every scan and job is observable, bounded, and recoverable.
-4. Market data is cached, aligned, freshness-aware, and provider-efficient.
-5. Historical research is point-in-time correct and reproducible.
-6. One canonical candidate/opportunity lifecycle feeds every surface.
-7. SPY pullback and RS/RW evidence are validated and consistently applied.
-8. Greatness candidates are monitored continuously as they clear ordered levels.
-9. Loud alerts require genuine confirmation, context, reward/risk, and actionability.
-10. The Command Center may honestly show zero, one, two, or three Ready opportunities.
-11. Desktop and Away mode show the same evidence and freshness.
-12. The journal reconstructs what the bot knew and measures every stage of the funnel.
-13. New setups are promoted only through replay, shadow, live validation, and rollback-controlled canaries.
-14. The full supported test and CI suite is green.
-15. The application remains a decision-support system and performs no executions.
-
-Until all conditions are met, this document remains a living roadmap. Update statuses only when the corresponding implementation, green-test, live-validation, and promotion evidence actually exist.
+1. the single main desk is reliable, observable, recoverable, and live-validated;
+2. data is freshness-aware, point-in-time correct, provider-efficient, and owned by
+   one writer;
+3. every surface consumes one canonical opportunity lifecycle and saved snapshot;
+4. SPY/RS and Greatness behavior is promoted only after the evidence ladder passes;
+5. alerts are current, typed, deduplicated, and protect every user-armed hit;
+6. the journal reconstructs discovery, judgement, execution/no-trade, and outcome;
+7. research and AI remain reproducible, advisory, and separated from champions;
+8. new setups enter production only through fixtures, replay, shadow, live evidence,
+   canary, approval, and rollback;
+9. the supported test, smoke, packaging, and recovery gates are green; and
+10. the application remains decision-support only and performs no execution.

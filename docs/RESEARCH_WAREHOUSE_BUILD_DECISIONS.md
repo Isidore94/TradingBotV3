@@ -1,7 +1,10 @@
 # Research warehouse — builder decision log
 
+Document role: **active warehouse decision log**. It records implementation choices;
+the root `CHANGELOG.md` and `plan.md` own current status and priority.
+
 Running log of the **implementation** decisions taken while building
-[`docs/ULTIMATE_SETUP_DATABASE_PLAN.md`](ULTIMATE_SETUP_DATABASE_PLAN.md)
+[`ULTIMATE_SETUP_DATABASE_PLAN.md`](ULTIMATE_SETUP_DATABASE_PLAN.md)
 Phases 0-8. It exists so a reviewer (Sol, Fable, or the next builder) can audit
 every choice that the locked plan did not already make, without reading the
 diffs.
@@ -19,15 +22,16 @@ where a choice binds future phases. Format: decision → why → what was reject
 
 Status of the build: Phases 0-8 landed (code); the 20-session pilot is a live
 run that has not happened. Test baseline and branch live in
-[`SOL_PROGRESS.md`](../SOL_PROGRESS.md). The 2026-08-04 review
-(`docs/RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`) repaired the outcome engine
+[`CURRENT_CHECKPOINT.md`](../CURRENT_CHECKPOINT.md). The 2026-08-04 review
+([`RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`](RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md)) repaired the outcome engine
 (BD-53..BD-57) plus four mechanical defects (Windows lock probe, protected
 spool shedding, spool re-seal dedup, capture reconnect). The follow-up defect
 pass closed every remaining defect in that review — feature windowing (BD-58,
 BD-59), backfill (BD-60), build-job coverage (BD-61), and the D14-D18 edge
-cases (BD-62) — and wired the live tee (BD-63). What is left before the pilot
-is not defect work: the Windows/3.14 test run, one broker-marked IB run
-(BD-25), and the trader's confirmation-register items.
+cases (BD-62) — and wired the live tee (BD-63). The Windows Python 3.12 gate
+and optional DuckDB install are now verified on the desk. What is left before
+the pilot is not defect work: one broker-marked IB run (BD-25), live observation
+of the tee/Health path, and the trader's confirmation-register items.
 
 ---
 
@@ -883,9 +887,10 @@ to stay on pyarrow, so nothing may depend on duckdb being installed. Its
 connection is `:memory:` and disposable: no `.duckdb` file is ever created,
 shared, or treated as authoritative.
 
-**Not verified here.** The pin is declared; installing it on the Windows desk
-(Python 3.14) has not happened. If that install fails, remove the pin and stay
-on pyarrow — nothing else changes.
+**Desk verification addendum (2026-08-09).** `duckdb==1.5.5` was installed in the
+uv-managed Windows Python 3.12 desk environment and the full suite passed with the
+DuckDB query tests active. It remains optional; the pyarrow-only contract is
+unchanged.
 
 **Where.** `queries.py::query_sql` / `duckdb_available`; `requirements-dev.txt`,
 `constraints.txt`; `tests/test_warehouse_queries.py` (the duckdb test skips
@@ -1748,6 +1753,34 @@ backfill did refill that window.
 
 ---
 
+## BD-72 — The home-folder refusal survives the death of Google Drive
+
+**Decision.** `config._refuse_shared_home` is kept exactly as written now that
+`C:\TradingBotData` is a plain local folder rather than a Drive-synced one
+(decision 0015). The lake was pointed at `\\MINI-PC\Trading Bot Data\research_lake`
+on 2026-08-10; the spool stays machine-local at
+`%LOCALAPPDATA%\TradingBotV3\research_spool`.
+
+**Why.** The guard's original rationale — Drive quota, sync locks, DriveFS
+wedges — evaporated with the sync client, so it was worth asking whether the
+guard should go too. It should not. Two independent reasons survive, and either
+alone justifies it: the home folder is the *compact operational* storage class
+and a lake inside it destroys that distinction; and `push_cold_to_das.ps1`
+mirrors home-folder subtrees wholesale, so a lake living there would be copied
+to the DAS a second time, by a different mechanism, with no manifest.
+
+The spool location is not configurable and should stay that way — it is the
+local-first staging step, and putting it on the DAS would defeat its purpose of
+surviving a file-server outage.
+
+**Where.** `research_warehouse/config.py::_refuse_shared_home`,
+`research_spool_dir`; `docs/decisions/0015-no-cloud-sync-das-file-server-storage.md`.
+
+**Reopen if:** the home folder itself moves onto the DAS, or the cold-push
+script is narrowed to an explicit allowlist that could safely exclude a lake.
+
+---
+
 ## Open items for Sol / Fable
 
 Things this build deliberately left for a human decision or a live check.
@@ -1755,7 +1788,7 @@ Each is already stated in its own BD entry; this is the short list.
 
 | # | Item | Where | What is needed |
 |---|---|---|---|
-| 1 | ~~Nothing calls the tee during a live session.~~ **Wired** (BD-63, BD-70): the tee runs on a 60s timer, the build runs post-scan, and the backfill has a CLI entry point. All three are unverified on the desk — none has run against a real BounceBot or TWS. | BD-20, BD-63, BD-70 | Watch the tiles on the first live session, then start the pilot |
+| 1 | ~~Nothing calls the tee during a live session.~~ **Wired** (BD-63, BD-70): the tee runs on a 60s timer, the build runs post-scan, and the backfill has a CLI entry point. The live path still needs desk observation against real BounceBot/TWS data. | BD-20, BD-63, BD-70 | Watch the tiles on the first live session, then start the pilot |
 | 1b | **The 20-session pilot has not run** — it is a live-desk activity, not code. | BD-52 | Run it once capture is live; log the sec 5.6 measurements |
 | 2 | **`ib_capture.build_ib_transport` is unverified** — the real ibapi client has no offline test and no broker-marked live run. | BD-25 | One live run on the desk before the pilot leans on it |
 | 3 | **`exploration_cohort.txt` is empty** — the fixed 30 symbols define part of the research denominator, so no agent invented them. | BD-12 | Trader supplies the list (confirmation register item 5) |
@@ -1764,7 +1797,7 @@ Each is already stated in its own BD entry; this is the short list.
 | 6 | **DYNAMIC and EOD session VWAP are not yet captured** — only STANDARD. | BD-34 | Wrap the other two champion paths when their consumers need them |
 | 7 | **Unscheduled exchange closures** cannot come from calendar rules; they appear as sessions with no bars. | BD-26 | Add a dated override list if one ever occurs |
 | 8 | **No detector adapter yet** — `record_occurrences` takes a documented detection dict, but nothing reads the tracker/scan output and produces those dicts. Phase 6 proves the identity and outcome logic; the adapter is the remaining wiring. | BD-44 | Build the tracker→detection adapter (with Phase 2's bronze tracker wrap as the source) |
-| 10 | **DuckDB pin is unverified on Windows/3.14** — the wheel exists, the install has not been run on the desk. | BD-45 | Install once on the desktop, or drop the pin and stay on pyarrow |
+| 10 | ~~DuckDB desktop verification.~~ **Closed 2026-08-09:** `duckdb==1.5.5` was installed in the uv-managed Windows Python 3.12 environment and the full desk suite passed. | BD-45 | None; DuckDB remains optional and read-only |
 | 9 | **Bounce link is a time window** (symbol + session + ±60 min), not an explicit key. | BD-43 | Confirm the window, or add an occurrence link to the bounce ledger |
 
 ---
@@ -1778,7 +1811,9 @@ reviewer can spot-check them quickly:
    imports the warehouse package.
 2. Total no-op when `research_store_dir` is unset (`ResearchStore.open()` →
    `None`, every entry point returns early).
-3. The lake never lives inside the Drive home folder (config refuses it).
+3. The lake never lives inside the `C:\TradingBotData` home folder (config refuses
+   it). Since decision 0015 that folder is plain local storage, not Drive-synced;
+   the refusal stands on storage-class and cold-push grounds. See BD-72.
 4. Completed bars only; missing data is uncertainty, never confirmation.
 5. One owner per job; a failed publish never destroys the last verified artifact.
 6. `calc_anchored_vwap_bands` is wrapped and parity-tested, never reimplemented

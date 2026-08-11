@@ -2,7 +2,16 @@
 
 Date: 2026-08-03 (trader-directed)
 Relates to: 0005 (home-folder/mutable-state policy), 0012 (dependency pinning),
-plan.md sec 12 item 13a, docs/ULTIMATE_SETUP_DATABASE_PLAN.md
+former plan.md Section 12 item 13a, docs/ULTIMATE_SETUP_DATABASE_PLAN.md
+
+> **Storage amendment: 2026-08-10 —
+> see [0015](0015-no-cloud-sync-das-file-server-storage.md).** There is no cloud
+> drive anymore, so every "never in Drive" clause below should be read as "never
+> in the `C:\TradingBotData` home folder". **The separation itself stands**, on
+> storage-class and cold-push grounds rather than sync quota. Two consequences
+> do change: the DAS satisfies the Class B "second physical disk" requirement,
+> and the incidental off-site copy that cloud sync provided for Class A is now
+> **an open gap**, not a solved problem.
 
 ## Context
 

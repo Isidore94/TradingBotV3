@@ -1,5 +1,9 @@
 # Regime Infrastructure Phase 1 — first live-session validation
 
+Document role: **active evidence-collection runbook**. The infrastructure is
+implemented; this file owns the live audit procedure and evidence-floor accounting,
+not roadmap order. Current roadmap evidence lane: P3.4.
+
 Status: **IMPLEMENTED, NOT LIVE-VALIDATED — EXPLORATORY / NON-PROMOTABLE**
 
 This build starts data collection. It does not alter Technical Integrity scores,
@@ -10,13 +14,14 @@ declared trivial baselines.
 
 ## Before the session
 
-1. Restart the desktop GUI on `regime-infrastructure-phase1`.
+1. Restart the main-desk GUI on the intended validated branch.
 2. Confirm the application log contains a breadth-contract verification line.
    On the primary account as probed 2026-07-30, IBKR did not expose VOLD. It
    qualified `TICK-NYSE@NYSE`, conId `26718738`, as the first breadth proxy with
    usable historical M5 bars. The downgrade is logged at CRITICAL and every row
    says `proxy_kind=nyse_tick_proxy`; it is never mislabeled as true VOLD.
-3. Keep the mini-PC Auto Pilot off, per the existing single-desktop IB budget.
+3. Confirm no retired mini-PC scanner or Desk Link satellite is running; the main
+   desk owns the IB budget.
 4. Do not tune any threshold from this session.
 
 ## During the session

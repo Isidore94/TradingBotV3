@@ -1,11 +1,24 @@
 # macOS setup — Trading Desk on a Mac
 
+Document role: **active platform runbook**. Run the app in Main mode only; Desk Link
+satellite operation is retired.
+
+> **Storage amendment (2026-08-10) — decision
+> [0015](decisions/0015-no-cloud-sync-das-file-server-storage.md).** The
+> production desk no longer uses Google Drive at all: the home folder is plain
+> local storage and the DAS file server is the durable tier. The Google Drive
+> sections below therefore describe **dead configuration on the current desk**.
+> They are kept because the CloudStorage mount-discovery code still exists and
+> still works, so a Mac could still be pointed at a synced folder — but that is
+> no longer how this system is set up, and a fresh Mac should simply select a
+> local home folder and mount the file server.
+
 The desk runs the same code on macOS as on Windows: one PySide6 GUI
-(`scripts/ui/app.py`), the same scanners, the same shared Drive home folder.
+(`scripts/ui/app.py`), the same scanners, the same shared home folder.
 There is no mac fork — any change made to the main GUI or the underlying
 scripts applies to both platforms on the next `git pull`. Platform
-differences are confined to the launcher, the local-state directory, the
-credential store, and how Google Drive mounts.
+differences are confined to the launcher, the local-state directory, and the
+credential store.
 
 ## Requirements
 
@@ -35,8 +48,8 @@ Run:
 ```
 
 `launch_gui.py` is the single desktop entrypoint on every platform, including
-native-crash logging (`gui_crash.log`). Main versus satellite role is selected
-inside Settings -> Desk Link.
+native-crash logging (`gui_crash.log`). Keep the role on Main; satellite operation
+is retired.
 
 ## IBKR TWS on macOS
 
@@ -45,7 +58,7 @@ Windows (`yfinance` remains the fallback bar source). In TWS:
 
 1. **File → Global Configuration → API → Settings**
 2. Enable *ActiveX and Socket Clients*.
-3. Confirm the socket port is **7496** (live TWS default). 
+3. Confirm the socket port is **7496** (live TWS default).
 4. Keep *Read-Only API* on if you like — the bot is decision-support only
    and never places orders (plan.md sec 5).
 
@@ -93,9 +106,8 @@ dependency pins: `constraints.txt` gives macOS its own `PyQt5-Qt5` pin
 
 ## Still Windows-only
 
-- The mini-PC Auto/Away scanner's auto-shutdown (`shutdown /s`) — it logs a
-  warning and skips on other platforms; the unattended mini-PC runbook
-  (`docs/AWAY_SCANNER_RUNBOOK.md`) assumes the Windows mini-PC.
+- Task Scheduler registration for the repeating main-desk launch and Local-AI jobs.
+- PyInstaller `.exe` verification and its Windows runtime hook.
 - Windows Credential Manager storage (Keychain replaces it here).
 - The legacy background-thread priority drop in the Auto Pilot wrap-up is a
   no-op off Windows by design.

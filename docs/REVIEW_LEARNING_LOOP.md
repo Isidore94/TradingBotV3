@@ -1,5 +1,9 @@
 # Review-learning loop (Alert Center) — AI-in-the-loop by design
 
+Document role: **active behavior and evidence contract**. Current implementation
+history is in the root `CHANGELOG.md`; remaining product/promotion work is P5.5 and
+Section 7 of `plan.md`.
+
 Moved verbatim from the former standalone `AGENTS.md` (2026-08-01);
 `AGENTS.md` is now a copy of `CLAUDE.md`, which points here.
 

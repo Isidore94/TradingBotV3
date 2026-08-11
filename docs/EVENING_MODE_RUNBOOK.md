@@ -1,5 +1,8 @@
 # Auto EVENING mode - sleep-in runbook
 
+Document role: **active single-main operator runbook**. Last reconciled 2026-08-10.
+Current live-validation location: `plan.md` P0.3.
+
 Purpose: get home at 23:30, sleep past the 06:30 open, and still wake to a
 phone that guards your positions and a desk that already did the morning's
 work.
@@ -21,7 +24,7 @@ work.
 - **Morning briefing.** After the 07:30 check the briefing finalizes: market
   environment, best D1 swing setups per side (by expected R), held vs faded
   intraday picks, and any overnight price alerts. It is written to
-  `evening_briefing.txt` next to `autopilot_today.txt` on the shared Drive,
+  `evening_briefing.txt` next to `autopilot_today.txt` in the shared home folder,
   folded into the hourly phone report (EVENING publishes hourly from 07:00
   like AWAY), echoed in the Alert Center, and announced with a normal-priority
   push.
@@ -66,8 +69,8 @@ pre/post market included (01:00-17:00 local). Every triggered crossing pushes
 at urgent priority, lands in the Alert Center, and is listed in the morning
 briefing. Monitoring runs in every mode by default - untick "Monitor in every
 mode" to restrict it to EVENING. Only the main-desk alert engine monitors; the
-designated shared-store writer check remains a second guard, so satellites and
-the mini-PC never double-push one cross.
+designated shared-store writer check remains a second guard against duplicate
+processes. Satellite and mini-PC roles are retired.
 
 Protected-topic option: create/reserve the topic and an access token in ntfy,
 enter that token in the TradingBot token field, and authenticate the phone's

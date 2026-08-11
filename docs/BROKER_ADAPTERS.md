@@ -1,5 +1,8 @@
 # Broker Adapter Roadmap
 
+Document role: **deferred architecture reference**. The root `plan.md` owns timing;
+this file does not authorize order execution. Current roadmap location: P7.3.
+
 The app is IBKR-first today. Multi-broker support should be added by introducing
 a broker/provider boundary, not by scattering `if broker == ...` checks through
 the scanners and UI.
@@ -14,7 +17,8 @@ The trading engines should depend on app-owned interfaces such as:
 
 IBKR then becomes one adapter behind those interfaces. Future adapters could be
 Schwab, Tradier, Alpaca, Polygon/data-only, or CSV/manual import, depending on
-which workflows need live data, option chains, executions, or order routing.
+which read-only data and journal-import workflows are needed. Order routing remains
+outside the product boundary.
 
 ## First Interface To Extract
 

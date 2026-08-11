@@ -1,188 +1,148 @@
 # TradingBotV3
 
-## Prerequisites
-- Python 3.12+.
-- [Interactive Brokers TWS or IB Gateway](https://www.interactivebrokers.com/en/trading/ib-api.php) running locally with API access enabled on `127.0.0.1:7496`.
-- A desktop session for the GUI — Windows is the primary platform; macOS is supported (`docs/MACOS_SETUP.md`). The new consumer UI is PySide6/Qt; the Tk UI remains available during migration.
+TradingBotV3 is a private Windows-first trading decision-support desk for one trader.
+It prepares the market, scans D1 anchored-VWAP swing setups, monitors intraday M5
+bounces, surfaces alerts, publishes an Auto/Away phone report, records decisions and
+outcomes, and supports controlled research. It never places orders.
 
-Install the normal desktop dependencies (Windows):
+## Documentation
 
-```bash
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
+The documentation now has four clear entry points:
 
-macOS: run `./setup_macos.command` once (or `python3 -m venv .venv &&
-.venv/bin/python -m pip install -r requirements-gui.txt -c constraints.txt`).
-Everywhere the docs show `.venv\Scripts\python.exe`, the macOS/Linux
-equivalent is `.venv/bin/python`.
+- [`CHANGELOG.md`](CHANGELOG.md) — what is implemented and the revision history;
+- [`plan.md`](plan.md) — what remains, in order, with validation/promotion gates;
+- [`CURRENT_CHECKPOINT.md`](CURRENT_CHECKPOINT.md) — active work, current branch, and exact verification checkpoint;
+- [`WISHLIST.md`](WISHLIST.md) — candidate integrations that are not authorized work;
+- [`docs/README.md`](docs/README.md) — every runbook, specification, decision record,
+  and historical document classified by role.
 
-Dependency layers:
-- `requirements-core.txt` - headless/mini-PC engines and data services.
-- `requirements-gui.txt` - core plus desktop GUI packages.
-- `requirements-dev.txt` - GUI plus test and packaging tools.
-- `requirements.txt` - compatibility alias for the GUI install.
+## Current operating model
 
-Run scripts from the repo-local virtual environment:
+- `launch_gui.py` starts the PySide6 Trading Desk.
+- Run the app as **Main** only. Desk Link/satellite mode and the separate mini-PC
+  scanner role were retired on 2026-08-08; their remaining code is unused pending a
+  cleanup packet.
+- IBKR TWS/Gateway on `127.0.0.1:7496` is the primary market-data source; yfinance is
+  the fallback.
+- The shared home folder `C:\TradingBotData` — a plain local folder on the desk SSD —
+  stores operational watchlists, reports, and evidence logs. There is no cloud sync;
+  Google Drive/OneDrive were removed on 2026-08-10 (decision 0015).
+- Durable storage is the DAS file server at `\\MINI-PC\Trading Bot Data`. Cold, only-
+  growing subtrees are pushed to it hourly; large writes stage on local disk first.
+- Per-machine settings, replaceable caches, and diagnostics live under
+  `%LOCALAPPDATA%\TradingBotV3`.
+- Large Parquet research data lives only in the separately configured research lake on
+  the DAS, never inside the `C:\TradingBotData` home folder. With no research path
+  configured, the warehouse is disabled.
+
+## Requirements and installation
+
+- Windows 10/11 with Python 3.12+; the desk repo uses a uv-managed Python 3.12
+  environment.
+- IBKR TWS or IB Gateway with API access enabled on `127.0.0.1:7496`.
+- A desktop session for the PySide6 GUI.
+
+The existing repo `.venv` has no `pip`. Install or refresh dependencies with uv:
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\master_avwap.py
+uv pip install -r requirements-dev.txt -c constraints.txt --python .venv\Scripts\python.exe
 ```
 
-If you keep personal launcher files such as `run_python_script.ps1` or `run_master_avwap_mini_pc.cmd`, keep them local to your machine. They are intentionally not tracked in git.
+Dependency layers:
 
-## Repository Layout
-- `launch_gui.py` - the single launcher for the PySide6 Trading Desk. Main versus
-  satellite role is selected inside Settings and remembered per machine.
-- `scripts/gui.py` - compatibility launcher. Defaults to the new PySide6 UI; use `--ui tk` for the legacy Tk UI.
-- `scripts/ui/` - new consumer desktop UI.
-- `scripts/master_avwap_lib/`, `scripts/bounce_bot_lib/` - trading engines and legacy compatibility modules.
-- `market_prep/` - market prep services.
-- `docs/` - shipping, cleanup, and future broker architecture notes.
-- `packaging/` - Windows `.exe` / installer notes and future PyInstaller files.
-- `data/`, `logs/`, `output/` - legacy repo folders; current runtime files are stored under the selected home folder.
-- `longs.txt`, `shorts.txt` - Primary shared watchlists consumed by BounceBot and also scanned by Master AVWAP, stored in the selected home folder root.
-- `swinglongs.txt`, `shortswings.txt` - Master AVWAP-only swing watchlists. BounceBot does not read these files.
+- `requirements-core.txt` — headless engines and data services;
+- `requirements-gui.txt` — core plus the desktop UI;
+- `requirements-dev.txt` — GUI plus tests and packaging;
+- `requirements.txt` — compatibility alias for the GUI install;
+- `constraints.txt` — reproducible pins.
 
-For repo cleanup and shipping direction, see `docs/SHIP_READINESS.md`.
-For future multi-broker architecture, see `docs/BROKER_ADAPTERS.md`.
+For macOS, follow [`docs/MACOS_SETUP.md`](docs/MACOS_SETUP.md). The same source tree
+is used on both platforms.
 
-## Required Inputs
-- `longs.txt` - one ticker per line for long-side scanning.
-- `shorts.txt` - one ticker per line for short-side scanning.
-- `swinglongs.txt` - optional Master AVWAP-only long swing tickers.
-- `shortswings.txt` - optional Master AVWAP-only short swing tickers.
+## Launch
 
-These files should live in the selected home folder root. The app creates any missing `data`, `logs`, and `output` directories inside that home folder at runtime.
+Start TWS/Gateway first, then:
 
-## Running The Bots
-- New Qt Trading Desk UI:
+```powershell
+.venv\Scripts\python.exe launch_gui.py
+```
 
-  ```powershell
-  .\.venv\Scripts\python.exe .\launch_gui.py
-  ```
+Optional theme override:
 
-  Use **Settings -> Desk Link -> This machine runs as** to switch between the
-  main desk and the full satellite desk. The app shuts down its current service
-  owners, restarts itself through `launch_gui.py`, and remembers the role.
+```powershell
+.venv\Scripts\python.exe launch_gui.py --theme dark
+```
 
-  The older direct entrypoint also works:
+The legacy Tk UI remains available only during migration:
 
-  ```powershell
-  .\.venv\Scripts\python.exe .\scripts\gui.py
-  ```
+```powershell
+.venv\Scripts\python.exe scripts\gui.py --ui tk
+```
 
-  To force and save dark mode from the launcher:
+Do not operate `scripts/master_avwap_mini_pc.py` as a separate scanner host. It
+remains in the repository only as a scheduling/template reference.
 
-  ```powershell
-  .\.venv\Scripts\python.exe .\launch_gui.py --theme dark
-  ```
+## Required watchlists
 
-  This is the target consumer UI. It includes the themed shell, Trading Desk,
-  Master AVWAP setup table, Focus Picks with phone price alerts, BounceBot,
-  Research, Journal, and tabbed Settings panels. You can also switch between
-  Dark and Light from Settings.
+The selected shared-home root contains plain-text files with one symbol per line:
 
-### Phone price alerts and ntfy
+- `longs.txt` — shared long names for BounceBot and Master AVWAP;
+- `shorts.txt` — shared short names for BounceBot and Master AVWAP;
+- `swinglongs.txt` — optional Master AVWAP-only long swings;
+- `shortswings.txt` — optional Master AVWAP-only short swings.
 
-The easiest setup uses ntfy's hosted server; there is no home server, router
-port, or port-forwarding to configure.
+User-entered names are never automatically removed. The app creates needed runtime
+subdirectories inside the selected home.
 
-1. Install the **ntfy** app on the phone and subscribe to a long, randomly
-   generated topic name. Unprotected `ntfy.sh` topic names function as
-   passwords, so do not use a name that contains personal information or is
-   easy to guess.
-2. On the **main desk**, open **Research -> Price Alerts** and set:
-   **server** `https://ntfy.sh`, **topic** to the exact phone subscription, and
-   leave **token** blank unless the topic is protected.
-3. Click **Test Push** and confirm sound/notification delivery. On iPhone,
-   allow ntfy notifications and sounds, then allow ntfy through the Focus modes
-   you rely on (or enable Time Sensitive/Critical delivery when the installed
-   ntfy/iOS version offers it).
-4. Add actual ticker levels under **Focus Picks -> Phone Price Alerts**. Each
-   optional cross-up/cross-down side fires once, pushes at urgent priority, and
-   stays disarmed until manually re-armed.
+## Auto/Away and phone alerts
 
-Only the main desk polls and pushes. Full and mirror satellites receive the
-desktop toast and beep but cannot edit alert rows yet. For protected topics,
-create an ntfy access token and enter it in the token field; for self-hosting,
-replace the server URL with the HTTPS URL of that instance. See
-`docs/EVENING_MODE_RUNBOOK.md` for the operator checklist.
+`autopilot_today.txt` is the single verified phone-facing digest in the home folder,
+announced over ntfy. It keeps the
+safety/freshness header first, then numbered best swing trades, intraday candidates,
+and condensed operations. Only the main desk publishes it.
 
-- Daily AVWAP/previous-AVWAP engine:
+For ntfy:
 
-  ```powershell
-  .\.venv\Scripts\python.exe .\scripts\master_avwap.py
-  ```
+1. install ntfy on the phone and subscribe to a long random topic;
+2. in **Research → Price Alerts**, set the server (normally `https://ntfy.sh`),
+   topic, and optional token;
+3. send a test push and confirm phone/watch permissions;
+4. add cross-up/cross-down levels from Focus or Research.
 
-  Generates `output/master_avwap_events.txt` inside the selected home folder and writes diagnostics to `logs/trading_bot.log` there as well. Master AVWAP scans `longs.txt` / `shorts.txt` plus optional `swinglongs.txt` / `shortswings.txt`.
+Each side fires once per arm and stays disarmed until manually re-armed. Price alerts
+are last-price crossings, not setup confirmations. See
+[`docs/EVENING_MODE_RUNBOOK.md`](docs/EVENING_MODE_RUNBOOK.md) and
+[`docs/AWAY_SCANNER_RUNBOOK.md`](docs/AWAY_SCANNER_RUNBOOK.md).
 
-- Always-on mini-PC AVWAP scheduler for a shared home folder:
+## Verification
 
-  ```powershell
-  .\.venv\Scripts\python.exe .\scripts\master_avwap_mini_pc.py
-  ```
+Before every commit:
 
-  Launches the normal Master AVWAP GUI plus a dedicated `Mini PC` tab. It reuses the full `master_avwap.py` scan logic with the shared-folder watchlists, auto-runs on the default `07:00,08:00,09:00,10:00,11:00,12:00,13:00` schedule, stops at `13:30`, updates the setup tracker, and writes a phone-friendly status file to `master_avwap_mini_pc_status.txt` in the shared home-folder root. Theta plays now appear near the top of that status file.
+```powershell
+.venv\Scripts\python.exe -m pytest tests\ -q
+.venv\Scripts\python.exe scripts\smoke_check.py
+```
 
-  Useful flags:
+Check pytest's own exit code. The exact current baseline is in `CURRENT_CHECKPOINT.md`.
 
-  ```powershell
-  .\.venv\Scripts\python.exe .\scripts\master_avwap_mini_pc.py --once
-  .\.venv\Scripts\python.exe .\scripts\master_avwap_mini_pc.py --dry-run
-  .\.venv\Scripts\python.exe .\scripts\master_avwap_mini_pc.py --headless
-  .\.venv\Scripts\python.exe .\scripts\master_avwap_mini_pc.py --no-autostart
-  .\.venv\Scripts\python.exe .\scripts\master_avwap_mini_pc.py --shutdown-at-end
-  ```
+The frozen application supports a no-window, no-network engine check:
 
-  Windows Task Scheduler pattern:
-  Program/script: `C:\Users\aaron\Documents\TradingBotV3\.venv\Scripts\python.exe`
-  Add arguments: `C:\Users\aaron\Documents\TradingBotV3\scripts\master_avwap_mini_pc.py --headless`
-  Start in: `C:\Users\aaron\Documents\TradingBotV3`
+```powershell
+dist\TradingBotV3\TradingBotV3.exe --selftest
+```
 
-  Generic scheduler pattern for any repo script:
-  Program/script: `C:\Users\aaron\Documents\TradingBotV3\.venv\Scripts\python.exe`
-  Add arguments: `C:\Users\aaron\Documents\TradingBotV3\scripts\your_script.py ...`
-  Start in: `C:\Users\aaron\Documents\TradingBotV3`
+The current expected frozen result is `selftest OK: 29/29 checks passed (frozen)`.
+Read [`packaging/README.md`](packaging/README.md) before rebuilding or changing the
+spec.
 
-  The `Mini PC` tab exposes a scheduler status panel, a live preview of the phone status file, and quick access to `Change Home Folder` / `Open Home Folder`. The existing Setup Tracker tab still has the same home-folder controls too.
+## Repository layout
 
-  If you want the mini PC itself to power off after the scan window, either use `--shutdown-at-end` or create a separate `13:30` Task Scheduler action that runs `shutdown /s /t 0`.
-
-- Consolidated BounceBot + Master AVWAP GUI:
-
-  ```powershell
-  .\.venv\Scripts\python.exe .\scripts\gui.py --ui tk
-  ```
-
-  Legacy Tk GUI. Uses the same selected home folder and writes a shared-root snapshot file named `consolidated_gui_output.txt` so the current GUI outputs can be checked from the synced folder as well. The top-level `Trading` tab contains BounceBot, Master AVWAP, and expanded watchlist editors for shared `longs.txt` / `shorts.txt` plus Master AVWAP-only `swinglongs.txt` / `shortswings.txt`; Market Prep and Ticker Lookup stay in separate tabs.
-
-- Intraday 5-minute bounce detector with optional GUI:
-
-  ```powershell
-  .\.venv\Scripts\python.exe .\scripts\bounce_bot.py --use_gui
-  ```
-
-  Writes detected bouncers to `logs/bouncers.txt`, stores the structured bounce history in `data/intraday_bounces.csv`, and writes runtime diagnostics to `logs/trading_bot.log` inside the selected home folder.
-
-Ensure your IB session is connected before launching either bot so market data requests succeed.
-
-## Notes
-- The main rotating app log is `logs/trading_bot.log` in the selected home folder.
-- `logs/bouncers.txt` is the lightweight current-session bounce list.
-- `logs/rrs_strength_extremes.csv` and `logs/rrs_group_strength_extremes.csv` are data logs for RRS history.
-
-## Syncing Day-To-Day Data Across Devices
-- The app can use a per-machine home folder such as Google Drive or OneDrive for day-to-day mutable data.
-- In Auto/Away, `autopilot_today.txt` is the single verified phone-facing Drive
-  digest: safety/freshness first, then numbered best swing trades, intraday
-  opportunities, and a condensed operations tail.
-- In the GUI, open the `Master AVWAP` tab and use `Change Home Folder` to point this computer at your synced folder.
-- The home folder stores watchlists, runtime AVWAP data, reports, logs, and setup-tracker files.
-- Replaceable download caches now stay in a per-machine local cache directory so Google Drive or OneDrive stays lightweight.
-- Place `longs.txt` and `shorts.txt` in the home folder root to share primary BounceBot watchlists across devices.
-- Add `swinglongs.txt` and `shortswings.txt` in the same folder for Master AVWAP-only swing candidates.
-- Each computer can use a different local path as long as they all point to the same shared cloud folder.
-- The chosen folder is saved locally in `%LOCALAPPDATA%\TradingBotV3\local_settings.json`.
-- Restart the GUI after changing the home folder so the scripts reload from the new location.
-- Avoid running the same writer-heavy workflows from multiple devices at the same time, since JSON/CSV files can still conflict during cloud sync.
+- `launch_gui.py` — single operator launcher;
+- `scripts/ui/` — PySide6 Trading Desk;
+- `scripts/master_avwap.py` and `scripts/master_avwap_lib/` — D1 AVWAP scanner;
+- `scripts/bounce_bot.py` and `scripts/bounce_bot_lib/` — M5 bounce detector;
+- `market_prep/` — pre-session services;
+- `scripts/research_warehouse/` — disabled-by-default research lake;
+- `tests/` — deterministic, Qt, broker, network, slow, and packaging coverage;
+- `docs/` — indexed runbooks, design references, decisions, and historical records;
+- `packaging/` — PyInstaller spec and frozen-build guidance.

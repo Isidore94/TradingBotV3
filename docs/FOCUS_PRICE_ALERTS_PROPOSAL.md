@@ -1,8 +1,11 @@
 # Focus price alerts + phone push
 
-Status: **PHASES A–D IMPLEMENTED + GREEN 2026-08-03**, trader-directed
-(plan.md sec 12 item 7b); not yet live-validated. Phase E remains gated on the
-live two-machine check. Nothing here changes a detector, a score, or a champion
+Document role: **historical implemented design**. The active operator instructions
+are in `EVENING_MODE_RUNBOOK.md` and `AWAY_SCANNER_RUNBOOK.md`.
+
+Status: **MAIN-DESK + NTFY PATH IMPLEMENTED + GREEN**; not yet live-validated.
+The satellite relay and Phase E edit-intent work were cancelled when Desk Link was
+retired on 2026-08-08. Nothing here changes a detector, a score, or a champion
 path — this is a presentation + relay packet on top of machinery that already
 ships. Merged to `main` in `29435d1` together with the latest Auto/Away Drive
 packet; the combined gate is recorded below.

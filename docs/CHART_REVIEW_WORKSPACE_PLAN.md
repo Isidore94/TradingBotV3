@@ -1,9 +1,17 @@
-# Chart Review workspace + trader decision capture (plan.md item 13d)
+# Chart Review workspace + trader decision capture
 
-Status: **capture layer + workspace shell IMPLEMENTED + GREEN** on branch
-`chart-review-workspace` (suite 2158 passed, 7 subtests). The chart itself,
-the paint-lines toggle, and click-to-set price alerts are **deliberately not
-built yet** — see [Deferred](#deferred-and-why) below.
+Document role: **active contract and implementation record**, subordinate to the root
+roadmap.
+
+Historical key: this entered the former roadmap as item 13d; remaining acceptance is
+now in `plan.md` P3.1.
+
+Status (reconciled 2026-08-10): **A1–A5 IMPLEMENTED + GREEN** on
+`testing-week-2026-08-10`. The capture layer/workspace, shared D1+M5 chart,
+crosshair/OHLCV and source strip, paint-line groups with stable IDs, and click-to-arm
+through the one `PriceAlertService` writer have landed. LIKE/veto/note remains
+annotation-only and grants no Focus, watchlist, or alert privilege. Live-session
+acceptance remains open in `plan.md`.
 
 ---
 
@@ -253,29 +261,32 @@ to the reason list widget for the same reason.
 
 ---
 
-## 9. Deferred, and why
+## 9. Implementation sequence and remaining acceptance
 
 The chart data path is being rebuilt in parallel — `ui/services/chart_data_service.py`
 and `ui/services/bar_cache.py` move snapshot building off the GUI thread and
-remove a synchronous Drive read from the paint path. Building charts here
+remove a synchronous home-folder read from the paint path. Building charts here
 against the old synchronous loader would have created a **second owner of the
 chart data path** (sec 5) and a guaranteed conflict in `candle_chart.py`.
 
-Deferred until that lands:
+The sequence was:
 
 - **A3** D1 (2y+) and M5 charts, crosshair/OHLC readout, IBKR-streaming-while-
-  focused with a loud yfinance fallback banner. **Still deferred.**
+  focused with a loud yfinance fallback banner. **LANDED 2026-08-09** through the
+  shared `SymbolSnapshotWidget` worker path.
 - **A4** the paint-lines toggle (daily SMAs, D1 horizontals, D1 trendlines,
   prev-day H/L, AVWAP bands) with stable level ids and click-to-select.
   **LANDED 2026-08-09** — see below.
 - **A5** click-to-set price alert through the existing `PriceAlertService` API.
+  **LANDED 2026-08-09** by routing level selection through `AlertCenterPanel`; Chart
+  Review itself still has no independent alert writer.
 
 ### A4 as built (2026-08-09)
 
 The chart data path landed, so A4 followed it. Three new pieces and one rule:
 
 - `scripts/chart_levels.py` builds the `levels` payload — D1 horizontal S/R
-  (`hv_horizontal` + `cloud_flat` from the Drive-backed level store),
+  (`hv_horizontal` + `cloud_flat` from the home-folder level store),
   prev-day H/L (computed from the snapshot's own bars, so nothing imports
   `bounce_bot_lib`), and the projected D1 trendline.
 - `CandleChart.set_levels` draws them: an infinite horizontal line per level,
@@ -305,13 +316,13 @@ references need no schema change when A4 arrives. The chart area shows a stated
 placeholder rather than an empty frame, and the feed-provenance strip has its
 permanent slot reading `none` until a feed exists.
 
-### Packaging caveat
+### Packaging status
 
 `packaging/tradingbotv3.spec` mirrors every non-`.py` file under `scripts/ui`,
-which covers the vocabulary JSON — **but that spec exists only on the unmerged
-`integration-test` branch (commit `9037c5f`), not on `main`.** Whoever merges
-it must confirm the `datas` rule still covers `scripts/ui/**/*.json`. No spec
-edit was needed or made by this packet.
+which covers the vocabulary JSON. The spec-drift test and frozen self-test are now on
+the testing-week branch; the real desk build passed 29/29 after the bundle/self-test
+rosters were reconciled. Future asset/package changes must follow
+`packaging/README.md`.
 
 ---
 

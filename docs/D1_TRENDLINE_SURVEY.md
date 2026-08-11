@@ -1,5 +1,8 @@
 # D1 trendline accessibility survey (A4 prerequisite, 2026-08-09)
 
+Document role: **historical measurement record** supporting the implemented A4
+paint-line decision. It is not a roadmap or operator runbook.
+
 The A4 packet asked one question before any line got painted: **is the stored
 D1 trendline present often enough, fresh enough, and projectable enough to
 draw honestly?** The answer decides whether A4 paints it or records a gap.

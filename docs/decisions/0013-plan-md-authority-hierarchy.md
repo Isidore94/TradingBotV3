@@ -1,6 +1,8 @@
-# 0013 — Documentation authority hierarchy: plan.md > GUI plan > checkpoint stamps
+# 0013 — Documentation authority hierarchy: root truth > references > checkpoints
 
 Date: backfilled 2026-08-01
+
+Amended: 2026-08-10 documentation consolidation
 
 ## Context
 Multiple agents (Codex "Sol" line, Claude) work this repo in sequence; conflicting
@@ -8,14 +10,18 @@ or duplicated status docs previously drifted (a 2026-07 commit reconciled plan.m
 status claims against repository evidence).
 
 ## Decision
-`plan.md` is the single source of truth for roadmap, status vocabulary, invariants,
-and promotion policy. `GUI_TRADE_DISCOVERY_LEARNING_PLAN.md` is a subordinate
-addendum that never overrides plan.md secs 5-7 or the sec 12 order.
-`SOL_PROGRESS.md` / `GUI_LEARNING_PROGRESS.md` are small checkpoint stamps that
-must not duplicate their plans.
+`CHANGELOG.md` is the single source of truth for implemented inventory and revision
+history. `plan.md` is the single source of truth for remaining work, status
+vocabulary, invariants, execution order, and promotion policy. `docs/README.md`
+classifies all supporting documents. Detailed GUI/warehouse/AI plans are subordinate
+references and never override plan.md Sections 5–7 or the Section 12 order.
+`CURRENT_CHECKPOINT.md` is a small active-work/branch/test stamp and must not duplicate either
+root truth file. `WISHLIST.md` is non-authoritative and cannot initiate work; only a
+trader-directed promotion into `plan.md` changes the build sequence.
+`GUI_LEARNING_PROGRESS.md` is retained only as a historical pointer.
 
 ## Rationale
-Evident in the files themselves ("This file is only the... checkpoint stamp; it
-must not duplicate the roadmap", "Authority order is unchanged") and in commit
-545f475 reconciling status claims with verified evidence: duplication drifts,
-so status lives in exactly one place per program.
+The former arrangement still duplicated implemented status across `plan.md`,
+the former checkpoint ledger, and several product plans. The 2026-08-10 consolidation splits
+past and future deliberately: completed facts live once in `CHANGELOG.md`; unfinished
+gates live once in `plan.md`; transient test numbers live in `CURRENT_CHECKPOINT.md`.

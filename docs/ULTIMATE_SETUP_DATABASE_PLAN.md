@@ -1,16 +1,36 @@
 # TradingBotV3 Ultimate Setup Intelligence Database
 
+> **Storage amendment (2026-08-10) — decision
+> [0015](decisions/0015-no-cloud-sync-das-file-server-storage.md).** There is no
+> cloud drive anymore. Throughout this document, read every "Drive home folder" /
+> "Drive-synced" / "never in Drive" clause as referring to **`C:\TradingBotData`,
+> a plain local folder** on the desk SSD. The *separations* this plan specifies
+> all stand — lake off the home folder, no mutable database in either place,
+> Class B on a second physical disk — but their justification is storage-class
+> and cold-push scope, not sync quota or DriveFS wedges. Two substantive
+> changes: the DAS satisfies Class B's "second physical disk", and the off-site
+> copy that cloud sync incidentally provided for Class A is now an **open gap**.
+> The prose below is left unedited as the locked contract of record.
+
 ## Status and authority
 
-This document is the **locked, implementation-ready engineering plan** for the
-long-term research-data architecture that determines which setup and trade style
-is working best in the current market context. It supersedes the 2026-08-03
-review draft: every formerly open question is now a decision in Section 23, and
-an AI coding agent implements this plan top to bottom by following Section 19's
-Phase 0-8 build order. Section 15 governs analysis, not build order.
+Reconciliation note (2026-08-10): **Phases 0–8 are IMPLEMENTED + GREEN on
+`testing-week-2026-08-10`**, including the live tee wiring, Health tiles, repair
+passes, and real job invokers. This remains the locked architecture/contract, but its
+build-order prose is historical. Still open are live desk verification, the broker-
+marked IB transport run, trader confirmation items, the 20-session pilot, and
+post-slice work explicitly carried into the root `plan.md`.
 
-It is subordinate to the root [`plan.md`](../plan.md) and enters the roadmap as
-trader-directed Section 12 item **13a** (insertion text in Appendix E). It does
+This document was the **locked, implementation-ready engineering plan** for the
+long-term research-data architecture that determines which setup and trade style
+is working best in the current market context. It superseded the 2026-08-03 review
+draft: every formerly open question became a decision in Section 23, and Phases 0–8
+were implemented in Section 19's order. It now remains the architecture and data-
+contract reference. Section 15 governs analysis, not current roadmap order.
+
+It is subordinate to the root [`plan.md`](../plan.md). It entered the former roadmap
+as trader-directed Section 12 item **13a** (insertion text in Appendix E); remaining
+warehouse work is now consolidated under current roadmap items P0.6, P3.2, and P6.1. It does
 not authorize a detector, score, ranking, alert, or production-policy change.
 Phases 0-8 are shadow-only additive evidence capture with read-only consumers —
 zero champion influence, hence no golden fixtures are required by the capture
@@ -1816,8 +1836,8 @@ holdout status:            untouched | spent (a spent holdout is validation evid
 
 ## 16. "Best trade style now" engine (v1)
 
-Sections 16-17 are **gated behind plan.md Section 12 items 14-18** (the
-canonical opportunity/ranking pipeline), except the minimal Phase-7 Research-tab
+Sections 16-17 are **gated behind plan.md Phases 4–6** (the canonical
+opportunity/ranking pipeline and validated research payoff), except the minimal Phase-7 Research-tab
 table readout. The engine begins as a research/shadow consumer of the current
 point-in-time feature snapshot and remains advisory until promotion gates pass.
 
@@ -1913,8 +1933,8 @@ monitoring cadence, sound, suppression, or execution.
 
 ## 17. Research and trader-facing tools
 
-All tools below are **post-slice and gated behind plan.md Section 12 items
-14-18**; the only near-term deliverable is the minimal Phase-7 Research-tab
+All tools below are **post-slice and gated behind plan.md Phases 4–6**; the only
+near-term deliverable is the minimal Phase-7 Research-tab
 table readout. That readout is raw canned-query results only — counts, mean R,
 and checkpoint values for the two slice setups; shrinkage, intervals, evidence
 tiers, and the full Section 16.3 contract arrive with milestone M-E.

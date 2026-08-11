@@ -1,6 +1,10 @@
 # Local AI & Automation Plan
 
-Status: ACCEPTED into plan.md sec 12 as item 13b (trader-directed,
+Document role: **active implementation specification**, subordinate to the root
+`plan.md`. Phase status is summarized in `CHANGELOG.md`; this file retains the exact
+gates and design detail. Current roadmap locations: P0.6, P3.3, and P6.3.
+
+Historical key: accepted into the former plan.md Section 12 as item 13b (trader-directed,
 2026-08-08). **Phase 0 COMPLETE on branch `local-ai-phase-0` (2026-08-08):
 code landed, Ollama installed and benchmarked on the main desk, all three
 tiers chosen and verified, and the exit gate verified end to end. Phase 1 is
@@ -144,14 +148,16 @@ ai_store/
   logs/ai_job_ledger.jsonl          # every job: model, tokens, duration, exit
 ```
 
-- **Not in the Drive home folder** (sync churn on nightly bulk writes) and
+- **Not in the `C:\TradingBotData` home folder** (that folder is the compact
+  operational storage class, and the hourly cold push mirrors its subtrees
+  wholesale; it was Drive-synced until decision 0015) and
   **not inside the DAS lake tables** — the lake and the AI store are separate
   storage classes with separate writer components. Both components now live
   on the same main desk, which is fine: ownership is per-component, not
   per-machine, and keeping the trees separate means an AI-job bug can never
   corrupt lake data.
 - Small human-facing outputs only (morning brief, weekly retro) additionally
-  publish to the Drive home folder via the existing atomic-publish pattern:
+  publish to the home folder via the existing atomic-publish pattern:
   temp file → verify → rename; a failed publish never destroys the last
   verified copy.
 - `autopilot_today.txt` is untouched — it keeps its single verified writer.
@@ -305,7 +311,7 @@ unattended overnight jobs.
   against the local endpoint — no more manual triggering.
 - Extend to **per-ticker briefs** for the Focus list / watchlists (previously
   uneconomical against metered APIs; free locally). Published to
-  `ai_store/briefs/` + small morning file to Drive.
+  `ai_store/briefs/` + small morning file to the home folder.
 - Exit gate: **superseded 2026-08-09 — see "Phase 1 exit gate" below.** The
   original wording ("a week of mornings where the summary and briefs are
   waiting before pre-market prep with zero manual action") defined neither a
@@ -422,7 +428,7 @@ the 2026-08-08 deferral:
   job before every inference call.
 - Full validated result/evidence/manifest packages publish below
   `ai_store/briefs/<year>/<session>/tickers/<symbol>/`. Only the bounded,
-  advisory `ai_morning_brief.txt` crosses into the Drive home folder. That
+  advisory `ai_morning_brief.txt` crosses into the home folder. That
   single-writer publication is staged, byte-verified, and atomically replaced;
   a failed publication leaves the prior verified file intact.
 - Neither output is imported by detector, scoring, alert, or state-machine
@@ -639,7 +645,7 @@ ideas not yet asked for. Ordered by leverage-per-effort:
 | No detector/scoring change without golden fixtures | No detector or scoring code is touched anywhere in this plan |
 | Completed bars only; missing data is uncertainty | Digests are built post-session from completed artifacts; absent evidence is recorded as absent |
 | Watchlist names never auto-removed | No writer in this plan touches watchlists |
-| One owner per mutable export; failed publish never destroys last verified | Main desk solely owns `ai_store`; Drive copies use atomic publish; `autopilot_today.txt` and lake writers unchanged |
+| One owner per mutable export; failed publish never destroys last verified | Main desk solely owns `ai_store`; home-folder copies use atomic publish; `autopilot_today.txt` and lake writers unchanged |
 | Point-in-time research, explicit timezones | Digests are per-day, append-only, tz-explicit |
 | `review_policy.json` ranks/annotates only | Restated as a Phase 4 gate; no suppression field ever |
 
@@ -676,7 +682,7 @@ Where it conflicts with an earlier section, this section wins.
 | `ai_local_model_small` | `gemma3:4b` | high-volume classification tier |
 | `ai_local_model_medium` | `gemma3:12b` | digests, briefs, summaries |
 | `ai_local_model_large` | `gemma3:27b` | policy drafts, retros |
-| `ai_store_dir` | unset = AI store + all jobs disabled | file-server or local path; **refuse any path inside the Drive home folder**, mirroring `research_warehouse/config.py`'s refusal. A local-disk path is fine while the file server pends — implementation never blocks on server setup |
+| `ai_store_dir` | unset = AI store + all jobs disabled | file-server or local path; **refuse any path inside the `C:\TradingBotData` home folder**, mirroring `research_warehouse/config.py`'s refusal. A local-disk path is fine while the file server pends — implementation never blocks on server setup |
 | `ai_offhours_start` / `ai_offhours_end` | `"18:30"` / `"08:00"` | ET wall-clock (`zoneinfo`, `America/New_York`) job-launch window. Weekends: all day allowed. Holidays treated as normal weekdays (conservative — the window still applies). No job **launches** outside the window; a job that crosses the end finishes its current model call and stops gracefully |
 
 Model tags are starting picks; the Phase 0 benchmark may swap them by editing
@@ -707,7 +713,7 @@ these settings — never by hardcoding.
 ```
 scripts/ai_jobs/
   __init__.py
-  store.py          # ai_store_dir resolution, Drive-path refusal, layout bootstrap
+  store.py          # ai_store_dir resolution, home-folder-path refusal, layout bootstrap
   window.py         # off-hours window logic (6.1 semantics)
   ledger.py         # append-only JSONL rows → ai_store/logs/ai_job_ledger.jsonl
   runner.py         # named-slot scheduler; slot/state pattern from master_avwap_mini_pc.py
@@ -793,17 +799,32 @@ Additionally:
    question. The script stays in-repo as the slot/state scheduling template
    this plan reuses (sec 3.4); whether to delete it outright is a separate
    cleanup decision.
-2. **File server path class — DOES NOT BLOCK implementation** (sec 6.1:
-   `ai_store_dir` accepts any non-Drive path, local disk included). Still
-   open as an ops question: confirm `research_warehouse/config.py` accepts a
-   UNC/mapped file-server path for `research_store_dir`, and whether the
-   trader wants the DAS lake moved to the file server.
+2. **File server path class — RESOLVED 2026-08-10** (sec 6.1:
+   `ai_store_dir` accepts any path outside the home folder, local disk included).
+   `research_warehouse/config.py` accepts a UNC path: `research_store_dir` is now
+   `\MINI-PC\Trading Bot Dataesearch_lake`, and `ensure_lake_layout` created the
+   full sec-8.2 skeleton over SMB. The trader confirmed the DAS is the durable
+   storage tier (decision 0015), so lake and AI store both live there.
 3. **Model picks — RESOLVED BY MEASUREMENT 2026-08-08** (sec 6.1):
    `gemma3:4b` (small) and `gemma3:12b` (medium) both run 100% on the 780M.
    Stock `gemma3:27b` does not fit the 17.4 GiB Vulkan heap, so the large tier
    is `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — verified loading
    and producing schema-valid output. All three are settings, and Phase 0
    finding 2 records the revisit triggers.
+
+   **Amended 2026-08-10 by measurement, twice:**
+   (a) the medium tier is now the derived `gemma3:12b-tbv3ctx` (`FROM gemma3:12b`,
+   `PARAMETER num_ctx 12288`). The stock tag inherits the server default, which
+   measured **2,048 prompt tokens** — so every `ticker_briefs` run silently had its
+   evidence truncated and returned unterminated JSON, failing six nights running. The
+   derived model measures **6,147**. Per-model `num_ctx` is used rather than the global
+   `OLLAMA_CONTEXT_LENGTH` because one global value cannot serve both tiers here: 16384
+   fails to allocate outright, and a value large enough for briefs starves the 27B.
+   (b) the large tier **currently fails to load at all** while the desk is running —
+   `alloc_tensor_range: failed to allocate Vulkan0 buffer` — even at default context.
+   Phase 0's verification was done under different memory conditions. No large-tier job
+   is scheduled yet, so nothing regressed; but Phase 2 has no working large model on
+   this hardware until it is re-sized or run with the desk closed.
 4. **Off-hours window edges — SET BY THE TRADER 2026-08-08**: **01:00–09:00
    ET**, which is the 22:00–06:00 the trader asked for on this Pacific desk
    (Pacific is ET−3 in both DST and standard time, so the mapping is stable

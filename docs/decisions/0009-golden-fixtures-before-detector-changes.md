@@ -10,7 +10,7 @@ cannot prove that a refactor preserved exact scan output.
 ## Decision
 No detector or scoring behavior change lands without golden-result
 (characterization) fixtures first: recorded inputs with pinned expected outputs,
-plus a replay harness (plan.md Milestone 3, testing strategy sec 10).
+plus a replay harness (plan.md Sections 5 and 7 and Phase 4).
 
 ## Rationale
 Evident in plan.md: the champions' current behavior is the spec, so fixtures make

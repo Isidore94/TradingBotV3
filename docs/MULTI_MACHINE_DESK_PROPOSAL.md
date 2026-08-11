@@ -1,6 +1,11 @@
 # Multi-machine desk — design proposal (for trader review)
 
-Status: **APPROVED 2026-08-02 — Tiers 1, 2, and 3 implemented** (plan.md
+> **RETIRED 2026-08-08. Historical record only.** The product now runs on one
+> always-on main desk; ntfy and the Drive report are the remote surfaces. Do not use
+> the satellite role, relay, control lease, or two-machine rollout steps below. The
+> implemented code remains pending a deliberate cleanup packet.
+
+Historical status: **APPROVED 2026-08-02 — Tiers 1, 2, and 3 implemented** (former plan
 sec 12 item 7a, "Desk Link"); live two-machine validation pending. Tier 3
 (full relay) streams every live desk surface over the generic
 ``desk_stream`` channel: RRS snapshots, the entry-assist board, status

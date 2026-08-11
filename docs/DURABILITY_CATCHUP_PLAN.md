@@ -1,9 +1,12 @@
 # Durability & Catch-up Plan
 
-Status: ACCEPTED into plan.md sec 12 as item 13c (trader-directed,
+Document role: **implemented design record with one active live gate**. Current
+remaining-work authority is the root `plan.md`; the restart gate is P0.5.
+
+Historical key: accepted into the former plan.md Section 12 as item 13c (trader-directed,
 2026-08-08). **Steps 1-4 of sec 5 IMPLEMENTED + GREEN on branch
-`durability-catchup` (2026-08-08); step 5 (preview lane) deliberately not
-built.** Not yet `LIVE_VALIDATED`: the mid-session restart drill in the sec 5
+`durability-catchup` (2026-08-08), merged through the testing-week branch; step 5
+(preview lane) deliberately not built.** Not yet `LIVE_VALIDATED`: the mid-session restart drill in the sec 5
 exit gate still needs a live session. Subordinate to plan.md — never overrides
 secs 5-7 or the sec 12 order. Motivating evidence: the week of 2026-08-03 —
 desk never ran Monday, mid-session outage Thursday, late start Friday — cost
@@ -248,10 +251,9 @@ Exit gate per step: full suite green + smoke 7/7; for 2.3/2.4 additionally a
 session where `regime_collection_audit.py` reports HEALTHY with a nonzero
 backfill count after a deliberate mid-session restart drill. Steps 1-4 met the
 suite/smoke half on 2026-08-08 (**1876 passed, 5 subtests; smoke 7/7**); the
-restart drill is the outstanding live half. Relationship to
-item 13b (Local AI): independent code paths, but this packet should land
-**before or alongside** 13b Phases 1+ — the digest ledger and the 40-session
-evidence floor are both downstream of uptime.
+restart drill is the outstanding live half. Relationship to Local AI: the code paths
+are independent, but reliable uptime is a prerequisite for its digest ledger and for
+the 40-session evidence floor.
 
 ## 6. Implementation notes (binding — verified touchpoints)
 
