@@ -925,6 +925,125 @@ wrong.
 6. **Non-sessions:** does a weekend or holiday get an empty fact pack (so gaps
    are visible) or no file (so absence means "no session")?
 
+### 6.4b Ticker-briefs hardening packet (PROPOSED — contingency, drafted 2026-08-10)
+
+> Drafted at trader direction on the evening of 2026-08-10, hours before the
+> first repaired 22:00 window, so that a bad night has a ready, reviewed plan
+> instead of a 2 a.m. improvisation. **Nothing here is authorized to build.**
+> It arms only by explicit trader direction after real overnight evidence —
+> expected decision point: the 2026-08-11 morning ledger. An external
+> frontier-model review (2026-08-10) proposed overlapping changes; every claim
+> below was re-verified against the code on this branch before inclusion, and
+> the ones that did not survive verification are recorded at the end.
+
+**Verified defects this packet repairs.** Confirmed by direct inspection of
+`scripts/ai_jobs/briefs.py` and `scripts/ai_jobs/runner.py`. The first two are
+the open defects already named in `CURRENT_CHECKPOINT.md`; the rest are their
+sharper consequences:
+
+1. **`ticker_briefs` cannot finish as scoped.** One model call per unique
+   Focus/watchlist symbol — 95 on 2026-08-10, deduplicated across all six
+   lists — at an observed ~4.75 min/call is ~7.5 hours against an 8-hour
+   window, in a slot reserving 120 minutes.
+2. **A failing job has no attempt cap.** Only `ok` is canonical, so a
+   deterministic failure retries on every 30-minute firing to the end of the
+   window (11 consecutive failures, ~111 minutes of inference producing
+   nothing, on 2026-08-09/10).
+3. **No per-ticker error isolation.** The symbol loop in `run_ticker_briefs`
+   calls `request_ai_summary` exactly once per symbol with no try/except and
+   no retry — the daily summary's two-attempt fed-back-error loop has no
+   counterpart here. One validation failure, timeout, or mid-batch window
+   closure raises out of the entire job.
+4. **All-or-nothing morning file.** `ai_morning_brief.txt` publishes only
+   after every symbol succeeds. At 99% per-call reliability the chance all 95
+   complete is ~39%; a night that briefed 94 names publishes nothing.
+5. **Retries regenerate everything and duplicate artifacts.** Completion is
+   ledgered per job, not per symbol, so the next firing restarts at symbol 1.
+   Export filenames are wall-clock stamped (`ai_summary.export_ai_summary`),
+   so each partial attempt leaves a second full four-file artifact set for
+   every symbol it re-completed.
+6. **Membership-only symbols still get a full model call.** The projected
+   package always contains the `watchlists.membership` source, so a symbol
+   with no other evidence spends ~5 medium-tier minutes paraphrasing "it is
+   on swing_longs" — the class of output least likely to say anything.
+
+#### Work items, ordered by expected value
+
+**TB-1 — Per-ticker failure isolation and an honest partial morning file.**
+Wrap each symbol's inference/export in per-symbol error capture; give each
+call the same single fed-back-error retry the daily summary already has. The
+morning file publishes whatever completed, with the outcome stated before any
+brief: `Briefed N of M. Failed: SYM (reason), …` in the header block, so a
+partial file can never be mistaken for a complete one. Focus symbols already
+lead the ordering (`default_watchlist_paths` is Focus-first), so a partial
+night preferentially covers Focus — this subsumes the "separate Focus
+publication unit" idea. Job status is `ok` only when all symbols resolved;
+otherwise `degraded`, which the runner already retries. A mid-batch off-hours
+window closure stops inference (the hard rule is untouched) but publishes the
+honest partial file instead of losing the night; the market-session block
+remains an unconditional stop. The existing refusal when watchlists are
+unreadable-and-empty stays exactly as is.
+
+**TB-2 — Skip membership-only symbols deterministically.** If a symbol's
+projected package contains no usable source beyond `watchlists.membership`,
+do not call the model: emit a deterministic one-line morning-file entry
+("no session evidence beyond membership in swing_longs") and no ai_store
+artifact set. Counts as resolved for TB-1's N-of-M. Expected effect: tonight's
+95 calls shrink to roughly the 10–30 symbols that actually appear in reports,
+trackers, or the journal — the single largest runtime and reliability lever
+in the packet.
+
+**TB-3 — Resumable completion keyed by (session_date, symbol, evidence_hash).**
+Record per-symbol completions in a per-session manifest under
+`ai_store/briefs/<year>/<session>/`; on re-fire, skip symbols already
+completed for the same `evidence_hash` and regenerate only when the hash
+changed. Ends both the restart-at-symbol-1 waste and the duplicate artifact
+sets. The morning file is re-rendered from the manifest each time, so a
+retry that clears the failures upgrades `degraded` to `ok` naturally.
+
+**TB-4 — Per-session attempt cap.** Cap `ticker_briefs` (and any future long
+slot) at 2–3 attempts per session; on reaching the cap, record a terminal
+marker the runner respects so remaining firings skip in ~a second, the way
+no-session firings already do. Transient self-heal (NAS asleep, endpoint
+down) survives; the all-night grind does not. An identical-error early stop
+(same exception text twice → stop for the night) is an optional refinement
+inside this item, not a separate mechanism.
+
+#### Explicitly deferred — recorded so they are not re-proposed as new ideas
+
+- **Changed-only swing narration** (brief a swing name only when its state
+  changed): needs durable prior-session state and a change definition; real
+  machinery for a layer still in its first trial. Revisit after five clean
+  sessions with TB-2's filtering evidence in hand.
+- **Compact ticker-specific output schema** (~400–700 output tokens): real but
+  second-order once TB-2 removes the evidence-free calls. Fold into the
+  Phase 2 fact-pack design (sec 6.4a) rather than patching the generic schema.
+- **Parallel local inference**: rejected outright — calls would compete for
+  the same UMA/Vulkan resources; sequential stays.
+
+#### Frontier-review claims that did not survive verification
+
+- "The built-in retry improves batch reliability" — false for `ticker_briefs`;
+  only the daily summary retries. Corrected by TB-1.
+- Its ~1 min/ticker estimate — the desk-observed figure is ~4.75 min/call,
+  which is why defect 1 is a window overrun, not merely a long batch.
+
+#### Gate interaction and scope
+
+Arming this packet changes `ticker_briefs`' failure policy, and the Phase 1
+exit gate's own reset conditions say changing the observed thing restarts the
+observation. Proposed handling, needing a trader answer at arming time: judge
+`ai_summary` and `ticker_briefs` as **separate five-session clocks** — the
+daily summary's code path is untouched by TB-1..TB-4, so its clock continues;
+the ticker-briefs clock restarts at zero on arming. Scope is
+`scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, plus tests; no
+detector, scoring, or alert file is touched, and every output remains
+advisory-only with zero influence on scanners, scores, watchlists, alerts, or
+bot state. Tests owed with the build: partial-publish header rendering, the
+unreadable-watchlist refusal unchanged, membership-only skip, resume skipping
+same-hash completions and regenerating changed-hash ones, attempt-cap
+terminal behavior, and window-closure-mid-batch publishing the partial file.
+
 ### 6.5 Phase exit gates (verify commands)
 
 Every phase: `.venv\Scripts\python.exe -m pytest tests/ -q` fully green
