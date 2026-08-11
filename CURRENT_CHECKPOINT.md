@@ -14,10 +14,10 @@ elapsed evidence lane that can run in parallel.
 | Field | Current value |
 |---|---|
 | Roadmap phase | **P0 — validate and merge the testing-week branch** |
-| Active packet | **DOC-1 — documentation consolidation, AI workflow, roadmap ordering, and wishlist** |
-| Scope | Markdown, plus comment/docstring-only corrections for decision 0015 |
-| State | Complete in the working tree; awaiting trader review/commit |
-| Next action after this packet | **Commit the working tree** (control-set files `CHANGELOG.md`, `CURRENT_CHECKPOINT.md`, `WISHLIST.md` are still untracked), then **P0.2–P0.4** live gates. P0.1 re-baseline is done — see below. |
+| Active packet | **SCAN-WINDOW — confine BounceBot's intraday sweep to the session window** (trader-directed 2026-08-10) |
+| Scope | `scripts/autopilot_core.py`, `scripts/ui/services/autopilot_service.py`, `tests/test_bouncebot_scan_window.py`. No detector, scoring, threshold, or alert rule touched — only *when* the existing scan runs |
+| State | Implemented and green in the working tree; **needs a desk restart to take effect** and a live day to confirm (P0.3) |
+| Next action after this packet | **P0.2–P0.4** live gates, and a decision on the overnight AI-job cadence (see "Open question" below). P0.1 re-baseline is done |
 | Do not start yet | Phase 1 cleanup or any Phase 2+ feature/foundation item |
 
 A newly arriving AI resumes the active packet if it is unfinished. If it is complete,
@@ -97,6 +97,57 @@ staying untouched, the derivation itself (worst-case retry prompt must fit the
 context left after generation), the truncation tripwire firing/staying silent, and
 ledger usage recording.
 
+**Current baseline after the BounceBot scan-window packet (2026-08-10, late):**
+
+| Check | Result |
+|---|---|
+| pytest | **2672 passed, 19 subtests passed**, exit 0 (104s) |
+| smoke | **7/7**, exit 0 |
+| frozen self-test | not re-run — no packaging trigger (no new package, no new runtime asset, no new dependency) |
+
+Thirteen new tests in `tests/test_bouncebot_scan_window.py` cover the window bounds,
+the overnight and weekend refusals, the settings escape hatch and margin fallbacks,
+and the four service transitions that matter: the close pauses a running sweep, an
+after-hours start pauses on its first tick without needing a boundary crossing, a
+manual resume survives subsequent ticks, and a broken session lookup changes nothing.
+
+**Why this packet exists.** The trader reported the bot "running all night prompting
+the API constantly". Reading the artifacts found two independent causes, and the loud
+one was not the AI layer:
+
+1. **BounceBot swept all night** — Auto Pilot's 30-second tick re-enabled scanning
+   with no clock check, and `trading_bot.log` showed ~830-900 metric lines/hour for
+   147 symbols, about eight full sweeps an hour, continuing hours past the close with
+   IB answering `HMDS data farm connection is broken` and RRS timeouts. **Fixed here.**
+2. **`ticker_briefs` retried all night** — see the open question below. **Not fixed.**
+
+No metered API was involved in either: every unattended AI call is hardcoded
+`provider="local"` against Ollama on localhost. OpenAI and Anthropic are reached only
+from GUI buttons.
+
+### Open question — overnight AI job cadence (trader decision)
+
+The 30-minute task repeat is **not** a work cadence; it is a retry ladder, and on a
+healthy night sixteen of the seventeen firings read the ledger and exit in about a
+second. Lengthening the interval would therefore save nothing and weaken the
+self-heal. Two real defects sit behind the symptom instead:
+
+- **A failing job has no attempt cap.** Only `ok` is a canonical completion, so a
+  deterministic failure retries on every firing for the rest of the window. On the
+  night of 2026-08-09/10 `ticker_briefs` failed **11 consecutive times at 9-16 minutes
+  each — about 111 minutes of local inference that produced nothing.** A per-session
+  attempt cap (2-3) would keep the self-heal for transient faults (NAS asleep,
+  endpoint down) and end the grind.
+- **`ticker_briefs` cannot finish as scoped.** It calls the model once per unique
+  Focus/watchlist symbol — **95 today** — and publishes the morning file only after
+  every one succeeds. At the observed ~4.75 min per call that is **~7.5 hours against
+  an 8-hour window**, while the slot reserves only 120 minutes. It needs a symbol cap,
+  incremental publication, or both.
+
+Neither is fixed. Deferred deliberately: the 22:00 window on 2026-08-10 is the first
+run with the repaired `gemma3:12b-tbv3ctx` model and is the live proof the AI-jobs
+repair is owed, so the night was left alone rather than changed hours before it.
+
 Three desk misconfigurations were found and fixed by inspecting the first
 testing-week session's artifacts. All three were machine-local settings lost when the
 old desktop was retired; none was a code defect:
@@ -148,6 +199,7 @@ None could be proven on the evening of 2026-08-10; all resolve by 09:00 on 08-11
 | Swing phone push | an ntfy notification carrying numbered swings | 09:00 (push start hour) |
 | Research warehouse | new files appearing under the lake root | first scan |
 | AI jobs | `ai_jobs-20260811.log` records a completed `ai_summary` / `ticker_briefs` | 22:00-06:00 window |
+| BounceBot scan window | **Requires a desk restart first** — the running pid predates the change. Then: one "scanning resumed" line at 06:00, one "scanning paused" at 13:30, and no symbol sweep in `trading_bot.log` after it | 06:00 and 13:30 |
 
 If the 07:00 publish does not happen, read `writer_health.json` first: it will then be
 fresh, and its `reason` names the exact gate that refused.

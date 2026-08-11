@@ -161,6 +161,100 @@ def minutes_since_open(
     return (now - open_naive).total_seconds() / 60.0
 
 
+# BounceBot's intraday sweep only earns its IB traffic while the tape moves.
+# Auto Pilot used to re-enable scanning on every 30-second tick with no clock
+# check at all, so a desk left running swept ~95-150 names about eight times an
+# hour straight through the night against prices that had not changed since the
+# close (trader report 2026-08-10; measured in trading_bot.log). The window
+# below is the session plus a warm-up and a wind-down. Outside it the sweep
+# pauses; the bot object and its IB connection stay up, so the open costs no
+# reconnect and BounceBot's paused branch keeps its regime read live.
+BOUNCEBOT_SCAN_PREOPEN_MINUTES = 30
+BOUNCEBOT_SCAN_POSTCLOSE_MINUTES = 30
+BOUNCEBOT_SCAN_SESSION_ONLY_SETTING = "qt_bouncebot_scan_session_only"
+BOUNCEBOT_SCAN_PREOPEN_SETTING = "qt_bouncebot_scan_preopen_minutes"
+BOUNCEBOT_SCAN_POSTCLOSE_SETTING = "qt_bouncebot_scan_postclose_minutes"
+
+
+def _scan_margin_minutes(setting_key: str, default: int) -> int:
+    """A configured margin in minutes, clamped to something sane.
+
+    A negative margin would eat into the session itself, so it is refused
+    rather than honored; an unreadable or non-numeric value falls back to the
+    default instead of silently collapsing the window to nothing.
+    """
+    try:
+        from project_paths import get_local_setting
+
+        raw = get_local_setting(setting_key, default)
+    except Exception:
+        return default
+    try:
+        minutes = int(float(raw))
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(minutes, 12 * 60))
+
+
+def bouncebot_scan_window(
+    reference: datetime | None = None,
+    local_timezone_name: str | None = None,
+) -> tuple[datetime, datetime]:
+    """Naive local start/end of the window BounceBot's sweep may run in.
+
+    The session bounds come from `market_session`, the one source of truth for
+    them, so a timezone or early-close change moves this window with everything
+    else instead of drifting away from it.
+    """
+    session = get_market_session_window(
+        reference=reference, local_timezone_name=local_timezone_name
+    )
+    start = session.open_local.replace(tzinfo=None) - timedelta(
+        minutes=_scan_margin_minutes(
+            BOUNCEBOT_SCAN_PREOPEN_SETTING, BOUNCEBOT_SCAN_PREOPEN_MINUTES
+        )
+    )
+    end = session.close_local.replace(tzinfo=None) + timedelta(
+        minutes=_scan_margin_minutes(
+            BOUNCEBOT_SCAN_POSTCLOSE_SETTING, BOUNCEBOT_SCAN_POSTCLOSE_MINUTES
+        )
+    )
+    return start, end
+
+
+def bouncebot_scanning_due(
+    now: datetime,
+    *,
+    session_only: bool | None = None,
+    local_timezone_name: str | None = None,
+) -> tuple[bool, str]:
+    """Whether BounceBot's intraday sweep belongs on the wire right now.
+
+    Returns the verdict and a short reason fit for the Auto Pilot log. Weekends
+    are closed outright - there is no session to sweep, and the tick loop's own
+    weekend short-circuit means nothing else would ever pause a sweep that ran
+    into Friday evening.
+    """
+    if session_only is None:
+        try:
+            from project_paths import get_local_setting
+
+            session_only = bool(get_local_setting(BOUNCEBOT_SCAN_SESSION_ONLY_SETTING, True))
+        except Exception:
+            session_only = True
+    if not session_only:
+        return True, "session-only scanning is disabled; scanning around the clock"
+    if now.weekday() >= 5:
+        return False, "weekend - no session to scan"
+    start, end = bouncebot_scan_window(
+        reference=now, local_timezone_name=local_timezone_name
+    )
+    label = f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+    if start <= now <= end:
+        return True, f"inside the {label} scan window"
+    return False, f"outside the {label} scan window"
+
+
 # Hands-off default (2026-07-09, user rule "everything automatic - all I do is
 # fill longs/shorts.txt"): Auto Pilot arms itself once per weekday at/after
 # this local hour. Arming once per day means a manual OFF sticks for the rest

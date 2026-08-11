@@ -161,6 +161,10 @@ class AutopilotService(QObject):
         self._last_ib_status: str | None = None
         self._weekend_logged_date: str | None = None
         self._bot_start_deferred = False
+        #: Last observed verdict of the BounceBot scan window; None until the
+        #: first tick, so a desk started after hours pauses on that first tick
+        #: rather than waiting for the next boundary.
+        self._scan_window_open: bool | None = None
 
         if bounce_service is not None:
             bounce_service.alertReceived.connect(self._on_alert)
@@ -383,6 +387,10 @@ class AutopilotService(QObject):
         try:
             self._roll_day_state()
             now = datetime.now()
+            # Before every short-circuit below: the sweep must be stoppable on
+            # a Friday evening and while Auto Pilot is OFF, and neither of
+            # those paths reaches _ensure_bot_running.
+            self._apply_scan_window(now)
             if now.weekday() >= 5:
                 today = now.date().isoformat()
                 if self._enabled and self._weekend_logged_date != today:
@@ -506,8 +514,56 @@ class AutopilotService(QObject):
             else:
                 self._bot_start_deferred = False
                 self._log("Starting BounceBot (IB connect + intraday scanning).")
-        if not service.scanning_enabled:
+        # Only the session window may switch the sweep back on. Outside it,
+        # _apply_scan_window owns the state, so a deliberate manual resume at
+        # 21:00 is not undone by the next 30-second tick.
+        if not service.scanning_enabled and self._scanning_allowed_now():
             service.set_scanning_enabled(True)
+
+    def _scanning_allowed_now(self, now: datetime | None = None) -> bool:
+        """Fails OPEN: a session lookup this cannot answer must never be the
+        reason BounceBot sits out a trading day. Extra overnight sweeps are
+        waste; a silent daytime pause would be a missed session."""
+        try:
+            allowed, _ = core.bouncebot_scanning_due(now or datetime.now())
+        except Exception:
+            logging.exception("BounceBot scan-window check failed; leaving scanning enabled.")
+            return True
+        return allowed
+
+    def _apply_scan_window(self, now: datetime) -> None:
+        """Pause or resume BounceBot's sweep on the session boundary.
+
+        Acts only on a *transition*. Re-asserting the verdict every tick would
+        make a manual resume impossible to hold for more than 30 seconds, which
+        is the failure this method exists to correct, only inverted.
+
+        Runs before the tick's weekend and Auto-Pilot-OFF short-circuits: a
+        sweep still running on Friday evening has to be stopped by something,
+        and neither of those paths reaches _ensure_bot_running.
+        """
+        service = self._bounce_service
+        if service is None:
+            return
+        try:
+            allowed, reason = core.bouncebot_scanning_due(now)
+        except Exception:
+            logging.exception("BounceBot scan-window check failed; leaving scanning as it is.")
+            return
+        if allowed == self._scan_window_open:
+            return
+        self._scan_window_open = allowed
+        if allowed:
+            if not service.running or service.scanning_enabled:
+                return
+            service.set_scanning_enabled(True)
+            self._log(f"BounceBot scanning resumed - {reason}.")
+        elif service.scanning_enabled:
+            service.set_scanning_enabled(False)
+            self._log(
+                f"BounceBot scanning paused - {reason}. The IB connection stays up; "
+                "resume it by hand from the desk if you need an off-hours sweep."
+            )
 
     # ------------------------------------------------------------------
     # Universe freshness (sporadic activation self-heals a stale universe)

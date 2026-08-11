@@ -48,6 +48,9 @@ and green while its live or promotion gate remains open in `plan.md`.
 - BounceBot completed-M5 detection with session VWAP/bands, EMA and prior-day
   levels, relative strength/weakness, regime-aware candidate discovery, tiering,
   alerts, outcome tracking, and the day-scoped M5 Focus path.
+- BounceBot's sweep runs only inside the session window (open-30m to close+30m by
+  default, weekdays); outside it Auto Pilot pauses scanning and holds the IB
+  connection open. A manual resume survives until the next boundary.
 - CandidateRegistry foundation with provenance, source leases, transitions, atomic
   versioned persistence, and partial shadow adoption. Full authority remains open.
 - Industry Board with one single-flight owner, hourly refresh, atomic last-good
@@ -240,6 +243,27 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
   mechanisms they justify still exist. Documentation and comments only — 2647 tests
   and 7/7 smoke unchanged. Known consequence: cloud sync was the only off-site copy of
   the Class A backup set, so off-site redundancy is now an explicit open gap.
+- **BounceBot's intraday sweep is confined to the session window** (trader-directed,
+  2026-08-10). Auto Pilot re-enabled scanning on every 30-second tick with no clock
+  check of any kind, so a desk left running swept the watchlists — 95 to 150 names,
+  measured at roughly eight full sweeps an hour — straight through the night and the
+  weekend against prices frozen since the close. `bouncebot_scanning_due` now derives
+  a window from `market_session` (session ± configurable 30-minute warm-up and
+  wind-down; 06:00-13:30 on a normal Pacific session) and the sweep pauses outside it.
+  The pause is `set_scanning_enabled(False)`, whose branch in the strategy loop skips
+  `ensure_connected` and every symbol request, so the IB traffic stops while the
+  connection stays up and the open needs no reconnect. Three details are deliberate:
+  the check runs *before* the tick's weekend and Auto-Pilot-OFF short-circuits, which
+  are the paths that would otherwise let a Friday sweep run all weekend; it acts only
+  on a boundary transition, so a deliberate manual resume holds instead of being undone
+  one tick later; and it fails **open**, because an unanswerable session lookup must
+  never be the reason the bot sits out a trading day. Settings
+  `qt_bouncebot_scan_session_only` (default on),
+  `qt_bouncebot_scan_preopen_minutes`/`qt_bouncebot_scan_postclose_minutes` (default
+  30). No detector, score, threshold, or alert rule changed — only *when* the existing
+  scan runs. `SCAN_OUTSIDE_MARKET_HOURS` in `bounce_bot_lib/legacy.py` was left exactly
+  as it was: it gates per-symbol bounce *detection*, not the data fetching that
+  produces the traffic, so flipping it would have cost detection without saving requests.
 
 ### 2026-08-09 — testing-week integration, chart completion, and frozen proof
 

@@ -235,6 +235,10 @@ No new feature or threshold work belongs in Phase 0.
 3. **P0.3 Validate Auto/Away and ntfy end to end.** Confirm the verified hourly
    report, safety/freshness header, swing-first ordering, quiet empty-swing behavior,
    best-swing phone push, late-opened chart freshness, and main-desk alert delivery.
+   Also confirm the BounceBot scan window on a live day: Auto Pilot logs one resume
+   at 06:00 and one pause at 13:30, `trading_bot.log` shows no symbol sweep between
+   them and the close, and the session itself is unaffected — same alert count and
+   the same IB connection held across the boundary.
 4. **P0.4 Validate observability rollover.** Require real provider telemetry,
    SPY/Greatness rotation and summaries, valid per-installation review writes, and
    honest UNKNOWN/DEGRADED grades.
