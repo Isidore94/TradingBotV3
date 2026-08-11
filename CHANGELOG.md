@@ -85,6 +85,11 @@ and green while its live or promotion gate remains open in `plan.md`.
 - Auto modes OFF/DESK/AWAY/EVENING, honest global status, EVENING early scan and
   briefing, and one verified `autopilot_today.txt` with safety/freshness first,
   numbered best swings, intraday candidates, and condensed operations.
+- The double-click symbol snapshot popup opens at desk height (2026-08-11): its size
+  is taken from the hosting window's frame, or the screen's available area when the
+  window is not yet measurable, never smaller than the former fixed 1180x760, and is
+  centered on the desk window and clamped inside the screen. Opening geometry only —
+  a trader resize survives subsequent double-clicks.
 - On 2026-08-10, best swings gained an ntfy report notification; it stays quiet when
   the generated swing section contains no readable setups. Late-opened alerts now
   receive current bars, and the Chart Review Setups column defaults hidden with a
@@ -191,6 +196,25 @@ and green while its live or promotion gate remains open in `plan.md`.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
+
+### 2026-08-11 — symbol snapshot popup opens at desk height
+
+Trader ask: the chart popup that opens on a table double-click should use
+essentially the full vertical space the rest of the program uses. It had opened at
+a fixed 1180x760 regardless of monitor, so on the desk's screen the stacked D1 and
+M5 charts were squeezed into roughly half the available height.
+
+- `SymbolSnapshotDialog.__init__` now calls `_resize_to_desk_height()` instead of the
+  hardcoded `resize(1180, 760)`. Height comes from the hosting window's
+  `frameGeometry` (minus a title-bar allowance) when that window is visible, and from
+  the screen's `availableGeometry` otherwise; it never falls below the old 760.
+- The popup is centered horizontally on the desk window and clamped inside the
+  screen's available area, so a multi-monitor desk cannot place it off-screen.
+- Opening geometry only. The dialog is constructed once per panel and reused, so a
+  manual resize persists across subsequent double-clicks within a session.
+- Both charts already carry layout stretch 1, so the added height splits evenly
+  between D1 and M5; no chart, data, or alert code was touched.
+- Verification: full Windows suite **2687 passed, 19 subtests**, exit 0.
 
 ### 2026-08-11 — ticker-briefs hardening packet (TB-0..TB-4)
 

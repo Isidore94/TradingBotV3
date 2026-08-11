@@ -767,7 +767,7 @@ class SymbolSnapshotDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.Tool, True)
         self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.resize(1180, 760)
+        self._resize_to_desk_height()
         self.watch_host = None
         # Review-flow host (the setups panel): supplies the popup's ✕ dislike
         # and the advance-to-next-chart follow-through, so the trader can
@@ -874,6 +874,52 @@ class SymbolSnapshotDialog(QDialog):
         self._refresh_timer.setInterval(REFRESH_INTERVAL_MS)
         self._refresh_timer.timeout.connect(self._auto_refresh)
         self._refresh_timer.start()
+
+    def _resize_to_desk_height(self) -> None:
+        """Open as tall as the desk window itself (trader ask 2026-08-11).
+
+        The popup used to open at a fixed 1180x760 regardless of the monitor,
+        which on the desk's screen left the two charts squeezed into roughly
+        half the vertical space the rest of the program was using. Take the
+        height from the hosting window when there is one (so the popup matches
+        whatever the desk is currently sized to) and from the screen's
+        available area otherwise, minus a small allowance for this window's own
+        title bar - the frame is not measurable before the first show. This
+        only sets the *opening* size: a trader resize afterwards is kept,
+        because the dialog is constructed once per panel and reused.
+        """
+        width = 1180
+        height = 760
+        try:
+            parent = self.parent()
+            window = parent.window() if parent is not None else None
+        except Exception:
+            window = None
+        if window is self:
+            window = None
+        area = None
+        try:
+            screen = (window or self).screen()
+            area = screen.availableGeometry() if screen is not None else None
+        except Exception:
+            area = None
+        anchor = None
+        if area is not None:
+            height = max(height, area.height() - 60)
+            anchor = area
+        if window is not None and window.isVisible():
+            frame = window.frameGeometry()
+            if frame.height() > 200:
+                height = frame.height() - 40
+                anchor = frame
+        self.resize(width, height)
+        if anchor is not None:
+            left = anchor.center().x() - width // 2
+            top = anchor.top() + 20
+            if area is not None:
+                left = min(max(left, area.left()), max(area.left(), area.right() - width))
+                top = min(max(top, area.top()), max(area.top(), area.bottom() - height))
+            self.move(left, top)
 
     def _auto_refresh(self) -> None:
         if not self.isVisible() or not self._symbol:

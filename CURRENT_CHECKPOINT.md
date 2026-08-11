@@ -17,6 +17,7 @@ elapsed evidence lane that can run in parallel.
 | Active packet | **TICKER-BRIEFS HARDENING — TB-0..TB-4** (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b; armed by the trader 2026-08-11 after the first overnight run) |
 | Scope | `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one additive helper in `scripts/ai_summary.py`, `tests/test_ai_ticker_briefs.py`, `tests/test_ai_jobs_runner.py`. No detector, scoring, or alert file touched; output stays advisory-only |
 | State | **Integrated and green on `testing-week-2026-08-10`** (2687 passed / 19 subtests / smoke 7/7). The first Windows focused gate exposed and corrected a truncation-banner budget overrun. **Live proof owed: the next 22:00 window on the desk** |
+| Side item landed | **Snapshot popup opens at desk height** (2026-08-11, trader ask) — UI geometry only, no detector/scoring/alert file touched; baseline unchanged at 2687 passed / smoke not re-run (no non-Qt path affected) |
 | Next action after this packet | **P0.2–P0.4** live gates, plus the ticker-briefs morning check below. P0.1 re-baseline is done |
 | Do not start yet | Phase 1 cleanup or any Phase 2+ feature/foundation item |
 
