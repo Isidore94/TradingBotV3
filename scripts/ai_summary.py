@@ -1158,6 +1158,51 @@ def _apply_evidence_budget(
             source["budget_truncated"] = True
 
 
+def ration_projected_sources(
+    sources: Iterable[Mapping[str, Any]],
+    *,
+    total: int,
+    scope: str = "ticker_projection",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fund an already-assembled source list to ``total`` chars.
+
+    :func:`build_evidence_package` budgets *while* it collects; a package
+    derived from an existing one -- the per-ticker projection -- has nothing
+    left to collect and still has to fit a context window. This applies the
+    same rationing, with the same vocabulary, to a list that already exists:
+    each source is truncated with its own banner, or excluded and declared
+    ``unfunded``, exactly as it would have been on the collection path.
+
+    Sources are copied before they are touched, ``notices`` included, so a
+    projection can never mutate the base package it came from -- two symbols
+    sharing one base list would otherwise accumulate each other's banners.
+
+    Returns ``(usable, excluded_rows)``: the funded sources, and coverage rows
+    for the ones the budget could not carry.
+    """
+    working: list[dict[str, Any]] = []
+    for raw in sources:
+        source = dict(raw)
+        source["notices"] = list(raw.get("notices") or [])
+        working.append(source)
+    _apply_evidence_budget({scope: working}, total=max(0, int(total)))
+    usable = [
+        source for source in working if str(source.get("status") or "") in USABLE_SOURCE_STATUSES
+    ]
+    excluded = [
+        {
+            "source_id": str(source.get("source_id") or ""),
+            "label": str(source.get("label") or ""),
+            "scope": scope,
+            "status": str(source.get("status") or ""),
+            "reason": str(source.get("status_reason") or ""),
+        }
+        for source in working
+        if str(source.get("status") or "") not in USABLE_SOURCE_STATUSES
+    ]
+    return usable, excluded
+
+
 def build_evidence_package(
     scopes: Iterable[str],
     *,

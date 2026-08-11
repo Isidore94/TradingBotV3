@@ -393,7 +393,7 @@ def test_ledger_tokens_carry_real_usage_and_stay_silent_when_unreported(
     monkeypatch.setattr(ai_summary, "local_model", lambda tier: f"{tier}-model")
     monkeypatch.setattr(ai_summary, "build_evidence_package", lambda *a, **k: _base_evidence())
 
-    def _run(usage_per_call):
+    def _run(usage_per_call, label):
         def endpoint_mock(**kwargs):
             result = _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows")
             if usage_per_call is not None:
@@ -401,51 +401,138 @@ def test_ledger_tokens_carry_real_usage_and_stay_silent_when_unreported(
             return result
 
         monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+        # A distinct store per run: two firings against the same store would
+        # (correctly) resume from the manifest and make no calls at all.
         return briefs.run_ticker_briefs(
             session_date=SESSION,
             now=OVERNIGHT,
             watchlist_paths={"focus_longs": focus},
-            output_root=tmp_path / "ai_store" / "briefs",
+            output_root=tmp_path / label / "briefs",
             morning_path=morning,
         )
 
-    reported = _run({"prompt_tokens": 4000, "completion_tokens": 250})
+    reported = _run({"prompt_tokens": 4000, "completion_tokens": 250}, "first")
     assert reported["tokens"]["ticker_calls"] == 2
     assert reported["tokens"]["prompt_tokens"] == 8000
     assert reported["tokens"]["completion_tokens"] == 500
 
-    silent = _run(None)
-    assert silent["tokens"] == {"ticker_calls": 2}
+    silent = _run(None, "second")
+    assert silent["tokens"] == {
+        "ticker_calls": 2,
+        "tickers_resolved": 2,
+        "tickers_reused": 0,
+        "tickers_failed": 0,
+    }
 
 
-def test_the_local_briefs_are_packaged_for_the_local_context_window(tmp_path, monkeypatch):
-    """The base package every per-ticker brief is derived from must be capped.
+# ---------------------------------------------------------------------------
+# TB-0: project first, budget second
+# ---------------------------------------------------------------------------
+def _crowded_base(symbol: str = "MRVL", rows: int = 400) -> dict:
+    """A base package shaped like the real one: one huge per-symbol table.
 
-    Budgeting after the derivation would be too late: each brief inherits the
-    base, so an over-budget base truncates every one of them.
+    The live `setups.current_tracker` was 95,806 chars on 2026-08-10. The
+    target symbol's row sits near the *front*, which is where the budget's
+    keep-the-most-recent-rows rule drops it first.
     """
+    table = [
+        {"symbol": f"SYM{index:03d}", "state": "watch", "note": "x" * 180}
+        for index in range(rows)
+    ]
+    table.insert(3, {"symbol": symbol, "state": "ready", "note": "the row that matters"})
+    base = _base_evidence()
+    base["sources"] = [
+        {
+            "source_id": "setups.current_tracker",
+            "label": "Master AVWAP tracker",
+            "path": "/evidence/tracker.json",
+            "status": "available",
+            "as_of": "2026-08-11T16:00:00-04:00",
+            "notices": [],
+            "content": table,
+        }
+    ]
+    return base
+
+
+def _content_chars(evidence: dict) -> int:
+    return sum(
+        len(json.dumps(source.get("content"), sort_keys=True, default=str))
+        for source in evidence["sources"]
+    )
+
+
+def test_budgeting_the_base_first_is_what_sheared_the_symbol_out(tmp_path):
+    """The defect TB-0 repairs, stated as an executable fact.
+
+    Rationing the *base* to the local ceiling drops the front rows of a large
+    table. Every symbol living in those rows is then invisible to projection,
+    which is how all 95 briefs on 2026-08-10/11 came back content-free.
+    """
+    import ai_summary
+    from ai_jobs import briefs
+
+    base = _crowded_base()
+    starved, _excluded = ai_summary.ration_projected_sources(
+        base["sources"], total=ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+    )
+    starved_base = dict(base, sources=starved)
+
+    old_way = briefs.build_ticker_evidence(starved_base, "MRVL", [{"list": "longs"}])
+    assert briefs.is_membership_only(old_way), (
+        "budget-then-project leaves the symbol with nothing but its own membership"
+    )
+
+    new_way = briefs.build_ticker_evidence(
+        base,
+        "MRVL",
+        [{"list": "longs"}],
+        budget_chars=ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS,
+    )
+    assert not briefs.is_membership_only(new_way)
+    tracker = next(
+        row for row in new_way["sources"] if row["source_id"] == "setups.current_tracker"
+    )
+    assert {"symbol": "MRVL", "state": "ready", "note": "the row that matters"} in tracker[
+        "content"
+    ]
+
+
+def test_every_per_symbol_package_is_still_rationed_to_the_local_budget(
+    tmp_path, monkeypatch
+):
+    """Projection may not become a way around the local context window."""
     import ai_summary
     from ai_jobs import briefs, window
 
     focus = tmp_path / "focus_longs.txt"
-    focus.write_text("NVDA\n", encoding="utf-8")
+    focus.write_text("MRVL\n", encoding="utf-8")
     seen: dict = {}
+    packages: list[dict] = []
 
     def _capture(scopes, *, session_date=None, **kwargs):
         seen["budget_chars"] = kwargs.get("budget_chars")
-        return _base_evidence()
+        # Every row mentions the symbol, so the projection stays enormous and
+        # the per-symbol budget is the only thing standing between it and the
+        # model.
+        base = _crowded_base()
+        base["sources"][0]["content"] = [
+            {"symbol": "MRVL", "state": f"row-{index}", "note": "y" * 180}
+            for index in range(400)
+        ]
+        return base
 
     monkeypatch.setattr(window, "market_session_block", lambda now=None: "")
     monkeypatch.setattr(window, "in_offhours_window", lambda now=None: True)
     monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
     monkeypatch.setattr(ai_summary, "local_model", lambda tier: f"{tier}-model")
     monkeypatch.setattr(ai_summary, "build_evidence_package", _capture)
-    monkeypatch.setattr(
-        ai_summary,
-        "request_ai_summary",
-        lambda **kwargs: _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows"),
-    )
 
+    def endpoint_mock(**kwargs):
+        packages.append(kwargs["evidence"])
+        return _model_result("MRVL", "setups.current_tracker")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
     briefs.run_ticker_briefs(
         session_date=SESSION,
         now=OVERNIGHT,
@@ -454,5 +541,306 @@ def test_the_local_briefs_are_packaged_for_the_local_context_window(tmp_path, mo
         morning_path=tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME,
     )
 
+    # The base asks for the cloud ceiling so the rows survive to projection...
+    assert seen["budget_chars"] == ai_summary.MAX_TOTAL_EVIDENCE_CHARS
+    # ...and the package actually sent still fits the local one.
+    assert len(packages) == 1
+    assert _content_chars(packages[0]) <= ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+    # Rationed honestly, in the packager's own vocabulary.
+    coverage = packages[0]["coverage"]
+    assert coverage["counts"]["truncated"] >= 1
+    assert any("showing most recent" in notice for row in coverage["truncated"] for notice in row["notices"])
+
+
+def test_the_daily_summary_keeps_its_own_local_budget(tmp_path, monkeypatch):
+    """TB-0 is scoped to the ticker path; the daily brief is untouched."""
+    import ai_summary
+    from ai_jobs import briefs
+
+    seen: dict = {}
+
+    def _capture(scopes, *, session_date=None, **kwargs):
+        seen["budget_chars"] = kwargs.get("budget_chars")
+        return {"package_id": "p", "sources": [], "coverage": {"counts": {"requested": 0}}}
+
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+    monkeypatch.setattr(ai_summary, "local_model", lambda tier: f"{tier}-model")
+    monkeypatch.setattr(ai_summary, "build_evidence_package", _capture)
+    monkeypatch.setattr(ai_summary, "has_usable_sources", lambda evidence: False)
+    monkeypatch.setattr(
+        ai_summary, "degraded_result", lambda evidence, *, reason, model="": {"summary": {}}
+    )
+    monkeypatch.setattr(
+        ai_summary, "export_ai_summary", lambda result, evidence, *, output_dir: {}
+    )
+    monkeypatch.setattr(briefs, "_summary_dir", lambda session: tmp_path)
+
+    briefs.run_daily_summary(session_date=SESSION)
+
+    assert seen["budget_chars"] == ai_summary.evidence_budget_for("local", tier="medium")
     assert seen["budget_chars"] == ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
-    assert seen["budget_chars"] < ai_summary.MAX_TOTAL_EVIDENCE_CHARS
+
+
+def test_a_projection_never_mutates_the_base_it_came_from(tmp_path):
+    """Two symbols share one base list; banners must not accumulate on it."""
+    import ai_summary
+    from ai_jobs import briefs
+
+    base = _crowded_base()
+    before = json.dumps(base, sort_keys=True, default=str)
+    for symbol in ("MRVL", "SYM001"):
+        briefs.build_ticker_evidence(
+            base,
+            symbol,
+            [{"list": "longs"}],
+            budget_chars=ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS,
+        )
+    assert json.dumps(base, sort_keys=True, default=str) == before
+
+
+# ---------------------------------------------------------------------------
+# TB-1: per-ticker isolation, honest partial publication
+# ---------------------------------------------------------------------------
+def _briefs_env(monkeypatch):
+    import ai_summary
+    from ai_jobs import window
+
+    monkeypatch.setattr(window, "market_session_block", lambda now=None: "")
+    monkeypatch.setattr(window, "in_offhours_window", lambda now=None: True)
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+    monkeypatch.setattr(ai_summary, "local_model", lambda tier: f"{tier}-model")
+    monkeypatch.setattr(ai_summary, "build_evidence_package", lambda *a, **k: _base_evidence())
+    return ai_summary
+
+
+def test_one_failing_ticker_costs_its_own_brief_and_nothing_else(tmp_path, monkeypatch):
+    """94 good briefs used to be thrown away by the 95th failure."""
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\n", encoding="utf-8")
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+    attempts: list[str] = []
+
+    def endpoint_mock(**kwargs):
+        symbol = kwargs["evidence"]["brief_symbol"]
+        attempts.append(symbol)
+        if symbol == "MSFT":
+            raise ValueError("summary cited evidence that does not exist")
+        return _model_result(symbol, "setups.rows")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION,
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus},
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=morning,
+    )
+
+    # The daily summary's single fed-back-error retry now applies per symbol.
+    assert attempts == ["NVDA", "MSFT", "MSFT"]
+    assert outcome["status"] == "degraded_no_narrative"
+    assert outcome["tokens"]["tickers_failed"] == 1
+
+    text = morning.read_text(encoding="utf-8")
+    header, _, body = text.partition("## ")
+    assert "Briefed 1 of 2." in header
+    assert "Failed: MSFT (summary cited evidence that does not exist)" in header
+    assert "NVDA" in body and "## MSFT" not in text
+
+
+def test_a_window_closing_mid_batch_publishes_what_completed(tmp_path, monkeypatch):
+    """The gate is unchanged; what happens after it fires is not."""
+    from ai_jobs import briefs, window
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\n", encoding="utf-8")
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+    calls: list[str] = []
+
+    def endpoint_mock(**kwargs):
+        calls.append(kwargs["evidence"]["brief_symbol"])
+        # The window closes while the first brief is being generated.
+        monkeypatch.setattr(window, "in_offhours_window", lambda now=None: False)
+        return _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION,
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus},
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=morning,
+    )
+
+    assert calls == ["NVDA"], "no further inference after the window closed"
+    assert outcome["status"] == "degraded_no_narrative"
+    text = morning.read_text(encoding="utf-8")
+    assert "Briefed 1 of 2." in text
+    assert "Stopped early" in text and "off-hours window closed" in text
+    assert "## NVDA" in text
+
+
+def test_the_market_session_remains_an_unconditional_stop_mid_batch(tmp_path, monkeypatch):
+    """Plan sec 2 is a hard rule: the session stops the job outright."""
+    from ai_jobs import briefs, window
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\n", encoding="utf-8")
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+    morning.parent.mkdir(parents=True, exist_ok=True)
+    morning.write_text("LAST VERIFIED\n", encoding="utf-8")
+
+    def endpoint_mock(**kwargs):
+        monkeypatch.setattr(
+            window, "market_session_block", lambda now=None: "market session is live"
+        )
+        return _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+    with pytest.raises(RuntimeError, match="refused.*market session is live"):
+        briefs.run_ticker_briefs(
+            session_date=SESSION,
+            now=OVERNIGHT,
+            watchlist_paths={"focus_longs": focus},
+            output_root=tmp_path / "ai_store" / "briefs",
+            morning_path=morning,
+        )
+
+    # Nothing was published, and the completed brief is safe in the manifest
+    # for the next legitimate firing to re-render.
+    assert morning.read_text(encoding="utf-8") == "LAST VERIFIED\n"
+    manifest = briefs.brief_manifest_path(tmp_path / "ai_store" / "briefs", SESSION)
+    assert set(briefs.read_brief_manifest(manifest)) == {"NVDA"}
+
+
+# ---------------------------------------------------------------------------
+# TB-2: membership-only symbols never reach the model
+# ---------------------------------------------------------------------------
+def test_a_symbol_with_no_evidence_is_answered_without_a_model_call(tmp_path, monkeypatch):
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    swings = tmp_path / "swing_longs.txt"
+    focus.write_text("NVDA\n", encoding="utf-8")
+    swings.write_text("TSLA\n", encoding="utf-8")  # in no report, tracker, or journal
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+    calls: list[str] = []
+
+    def endpoint_mock(**kwargs):
+        calls.append(kwargs["evidence"]["brief_symbol"])
+        return _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION,
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus, "swing_longs": swings},
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=morning,
+    )
+
+    assert calls == ["NVDA"]
+    # Skipped, but resolved: the night is complete and the job is ok.
+    assert outcome["status"] == "ok"
+    assert outcome["tokens"]["ticker_calls"] == 1
+    text = morning.read_text(encoding="utf-8")
+    assert "Briefed 2 of 2." in text
+    assert "## TSLA  [swing_longs]" in text
+    assert "no session evidence beyond membership in swing_longs" in text
+    # No artifact set for a symbol nothing was said about.
+    assert not list((tmp_path / "ai_store" / "briefs").rglob("*TSLA*"))
+
+
+# ---------------------------------------------------------------------------
+# TB-3: resumable completion keyed by (session, symbol, evidence hash)
+# ---------------------------------------------------------------------------
+def test_a_retry_regenerates_only_what_changed(tmp_path, monkeypatch):
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\n", encoding="utf-8")
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+    root = tmp_path / "ai_store" / "briefs"
+    calls: list[str] = []
+    fail_msft = {"on": True}
+
+    def endpoint_mock(**kwargs):
+        symbol = kwargs["evidence"]["brief_symbol"]
+        calls.append(symbol)
+        if symbol == "MSFT" and fail_msft["on"]:
+            raise RuntimeError("local AI endpoint is unreachable")
+        return _model_result(symbol, "setups.rows")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+    first = briefs.run_ticker_briefs(
+        session_date=SESSION, now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus}, output_root=root, morning_path=morning,
+    )
+    assert first["status"] == "degraded_no_narrative"
+    assert calls == ["NVDA", "MSFT", "MSFT"]
+
+    # Second firing: NVDA's evidence is unchanged, so it is not regenerated.
+    calls.clear()
+    fail_msft["on"] = False
+    second = briefs.run_ticker_briefs(
+        session_date=SESSION, now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus}, output_root=root, morning_path=morning,
+    )
+    assert calls == ["MSFT"], "only the unresolved symbol is retried"
+    assert second["status"] == "ok"
+    assert second["tokens"] == {
+        "ticker_calls": 1,
+        "tickers_resolved": 2,
+        "tickers_reused": 1,
+        "tickers_failed": 0,
+    }
+    text = morning.read_text(encoding="utf-8")
+    assert "Briefed 2 of 2." in text and "Failed:" not in text
+    # One artifact set per symbol, not one per attempt.
+    assert len(list((root / SESSION[:4] / SESSION / "tickers" / "NVDA").glob("*_manifest.json"))) == 1
+
+    # Third firing with changed evidence: the stale brief is regenerated.
+    calls.clear()
+    changed = _base_evidence()
+    changed["sources"][0]["content"] = [
+        {"symbol": "NVDA", "setup_id": "nvda-1", "state": "triggered"},
+        {"symbol": "MSFT", "setup_id": "msft-1", "state": "watch"},
+    ]
+    monkeypatch.setattr(ai_summary, "build_evidence_package", lambda *a, **k: changed)
+    briefs.run_ticker_briefs(
+        session_date=SESSION, now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus}, output_root=root, morning_path=morning,
+    )
+    assert calls == ["NVDA"], "a changed evidence hash means a stale brief"
+
+
+def test_an_unreadable_manifest_regenerates_rather_than_refusing(tmp_path, monkeypatch):
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\n", encoding="utf-8")
+    root = tmp_path / "ai_store" / "briefs"
+    manifest = briefs.brief_manifest_path(root, SESSION)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("{ this is not json\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        ai_summary,
+        "request_ai_summary",
+        lambda **kwargs: _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows"),
+    )
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION, now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus}, output_root=root,
+        morning_path=tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME,
+    )
+    assert outcome["status"] == "ok"
+    assert outcome["tokens"]["ticker_calls"] == 1

@@ -51,6 +51,21 @@ RECOGNISED_JOB_STATUSES = frozenset(
 #: the scheduled run still happens.
 CANONICAL_COMPLETION_STATUSES = frozenset({STATUS_OK})
 
+#: What counts as *spending a session's attempt* on a job (TB-4). Only rows
+#: where the job actually ran and produced something less than a trustworthy
+#: result. ``skipped`` is deliberately absent: a window skip or a refusal to
+#: publish from an unmounted Drive costs about a second and must keep
+#: self-healing, or a transient mount fault would burn the night's whole
+#: allowance without a single model call.
+ATTEMPT_STATUSES = frozenset({STATUS_FAILED, STATUS_DEGRADED})
+
+#: Row field marking "this job is finished for this session, successfully or
+#: not; stop firing it". Carried on an ordinary ``skipped`` row rather than a
+#: new status, because the recognised-status set governs what a *job* may
+#: report and this marker is written by the runner -- adding a status a job
+#: could accidentally return would widen that vocabulary for no gain.
+TERMINAL_FIELD = "terminal"
+
 
 def ledger_path(*, create: bool = True) -> Path:
     """Where the ledger lives. ``create=False`` for read-only callers."""
@@ -143,6 +158,85 @@ def completed_jobs(session_date: str, *, path: Path | None = None) -> set[str]:
             # mis-attributed row without rewriting history.
             completed.discard(job)
     return completed
+
+
+def _rows_for(job: str, session_date: str, *, path: Path | None = None) -> list[dict[str, Any]]:
+    target = Path(path) if path is not None else ledger_path(create=False)
+    return [
+        row
+        for row in _read_rows(target)
+        if str(row.get("job") or "") == str(job)
+        and str(row.get("session_date") or "") == str(session_date)
+    ]
+
+
+def has_terminal_marker(job: str, session_date: str, *, path: Path | None = None) -> bool:
+    """Has this job already been declared finished for this session?"""
+    return any(row.get(TERMINAL_FIELD) for row in _rows_for(job, session_date, path=path))
+
+
+def attempt_rows(job: str, session_date: str, *, path: Path | None = None) -> list[dict[str, Any]]:
+    """Rows where this job actually ran and did not produce a trustworthy result."""
+    return [
+        row
+        for row in _rows_for(job, session_date, path=path)
+        if str(row.get("status") or "") in ATTEMPT_STATUSES
+    ]
+
+
+def attempt_cap_reason(
+    job: str,
+    session_date: str,
+    *,
+    max_attempts: int,
+    path: Path | None = None,
+) -> str:
+    """Why this job should stop for the session, or "" to keep trying (TB-4).
+
+    Two stopping conditions, both bounded by evidence already in the ledger:
+
+    * the session's attempt allowance is spent, and
+    * the last two attempts failed with the *identical* error, which is a
+      deterministic fault wearing the costume of a transient one. Retrying it
+      on every 30-minute firing is what turned one broken night into 11
+      consecutive failures and ~111 minutes of inference producing nothing.
+
+    The 30-minute repeat itself stays: it is a retry ladder, not a work
+    cadence, and it is what lets a sleeping NAS or a still-loading endpoint
+    self-heal.
+    """
+    rows = attempt_rows(job, session_date, path=path)
+    cap = max(0, int(max_attempts or 0))
+    if cap and len(rows) >= cap:
+        return (
+            f"{len(rows)} attempt(s) already made for {session_date}; the per-session "
+            f"cap is {cap}. Stopping rather than retrying to the end of the window"
+        )
+    errors = [str(row.get("error") or row.get("reason") or "").strip() for row in rows[-2:]]
+    if len(errors) == 2 and errors[0] and errors[0] == errors[1]:
+        return (
+            f"two consecutive attempts for {session_date} failed identically "
+            f"({errors[0][:200]}); this is deterministic, not transient"
+        )
+    return ""
+
+
+def mark_terminal(
+    *,
+    job: str,
+    session_date: str,
+    reason: str,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Record the one row that ends a job's session, the way no-session does."""
+    return record(
+        job=job,
+        status=STATUS_SKIPPED,
+        session_date=session_date,
+        reason=reason,
+        path=path,
+        extra={TERMINAL_FIELD: True},
+    )
 
 
 def mark_noncanonical(

@@ -38,6 +38,10 @@ class JobSlot:
     description: str = ""
     #: False keeps a slot registered but dormant (staged, not yet trusted).
     enabled: bool = True
+    #: Attempts this job may spend on one session before the runner declares it
+    #: finished for the night. 0 means unlimited, which is the historical
+    #: behaviour and still correct for a slot that costs seconds to retry.
+    max_attempts: int = 0
 
 
 @dataclass
@@ -208,6 +212,34 @@ def run_slots(
             logging.info("AI job %s skipped: %s", slot.name, reason)
             continue
 
+        # An exhausted session is finished for this job, and says so once. The
+        # marker is what makes every later firing cost about a second, the way
+        # a no-session firing already does; --force still overrides it, because
+        # an operator asking for a run by hand is the one case where the cap is
+        # not protecting anybody.
+        if slot.max_attempts and not force:
+            if ledger.has_terminal_marker(slot.name, session_date, path=ledger_path):
+                logging.debug(
+                    "AI job %s: already finished for %s; skipping.", slot.name, session_date
+                )
+                continue
+            cap_reason = ledger.attempt_cap_reason(
+                slot.name,
+                session_date,
+                max_attempts=slot.max_attempts,
+                path=ledger_path,
+            )
+            if cap_reason:
+                row = ledger.mark_terminal(
+                    job=slot.name,
+                    session_date=session_date,
+                    reason=cap_reason,
+                    path=ledger_path,
+                )
+                report.results.append(row)
+                logging.warning("AI job %s stopped for the session: %s", slot.name, cap_reason)
+                continue
+
         # --force is an operator convenience for the *window* -- "run it now,
         # I know it is 09:00 ET on a Sunday" -- and nothing more. It never
         # reaches the market-session block, which is a plan sec 2 hard rule:
@@ -327,5 +359,6 @@ def default_slots() -> list[JobSlot]:
             run=briefs.run_ticker_briefs,
             reserve_minutes=120.0,
             description="Medium-tier advisory briefs for Focus/watchlist tickers",
+            max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
         ),
     ]

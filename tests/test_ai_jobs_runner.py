@@ -273,6 +273,145 @@ def test_default_slate_registers_both_phase_1_jobs():
     slots = runner.default_slots()
     assert [slot.name for slot in slots] == ["ai_summary", "ticker_briefs"]
     assert all(slot.enabled for slot in slots)
+    by_name = {slot.name: slot for slot in slots}
+    # The long slot is capped; the cheap one keeps retrying all window.
+    assert by_name["ticker_briefs"].max_attempts == 3
+    assert by_name["ai_summary"].max_attempts == 0
+
+
+# ---------------------------------------------------------------------------
+# TB-4: a session's attempts are finite
+# ---------------------------------------------------------------------------
+def _capped_slot(fn, attempts=3):
+    from ai_jobs.runner import JobSlot
+
+    return JobSlot(name="ticker_briefs", run=fn, max_attempts=attempts)
+
+
+def test_a_deterministically_failing_job_stops_after_its_attempt_cap(tmp_path):
+    """11 consecutive failures and ~111 minutes of inference, once."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    runs = []
+
+    def failing(*, session_date, now):
+        runs.append(session_date)
+        raise RuntimeError(f"endpoint down (call {len(runs)})")
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        for _ in range(6):
+            runner.run_slots([_capped_slot(failing)], now=OVERNIGHT, ledger_path=led)
+
+    assert len(runs) == 3, "the cap is spent, then the job is finished for the night"
+    rows = _rows(led)
+    terminal = [row for row in rows if row.get("terminal")]
+    assert len(terminal) == 1, "the marker is recorded once, not once per firing"
+    assert terminal[0]["status"] == "skipped"
+    assert "cap is 3" in terminal[0]["reason"]
+    # Every later firing costs a ledger read and nothing else.
+    assert len(rows) == 4
+
+
+def test_two_identical_failures_end_the_night_before_the_cap(tmp_path):
+    """Same error twice is deterministic; a third try is a third wasted hour."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    runs = []
+
+    def failing(*, session_date, now):
+        runs.append(1)
+        raise RuntimeError("local AI endpoint at http://127.0.0.1:11434 is unreachable")
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        for _ in range(4):
+            runner.run_slots([_capped_slot(failing)], now=OVERNIGHT, ledger_path=led)
+
+    assert len(runs) == 2
+    terminal = [row for row in _rows(led) if row.get("terminal")]
+    assert len(terminal) == 1
+    assert "failed identically" in terminal[0]["reason"]
+
+
+def test_transient_failures_still_self_heal_within_the_cap(tmp_path):
+    """The retry ladder is the point; only the grind is being ended."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    calls = []
+
+    def flaky(*, session_date, now):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("NAS asleep")
+        return {"status": "ok", "reason": "briefed"}
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        for _ in range(3):
+            runner.run_slots([_capped_slot(flaky)], now=OVERNIGHT, ledger_path=led)
+
+    assert len(calls) == 2, "recovered, then skipped as already completed"
+    assert not [row for row in _rows(led) if row.get("terminal")]
+
+
+def test_a_cheap_skip_never_spends_an_attempt(tmp_path):
+    """An unmounted Drive must not burn the night's allowance in seconds."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    calls = []
+
+    def refusing(*, session_date, now):
+        calls.append(1)
+        if len(calls) <= 4:
+            return {"status": "skipped", "reason": "watchlists unreadable"}
+        return {"status": "ok", "reason": "briefed"}
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        for _ in range(5):
+            runner.run_slots([_capped_slot(refusing)], now=OVERNIGHT, ledger_path=led)
+
+    assert len(calls) == 5
+    assert not [row for row in _rows(led) if row.get("terminal")]
+
+
+def test_force_overrides_the_terminal_marker(tmp_path):
+    """The cap protects an unattended night, not an operator at the desk."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    runs = []
+
+    def failing(*, session_date, now):
+        runs.append(1)
+        raise RuntimeError(f"still broken {len(runs)}")
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        for _ in range(5):
+            runner.run_slots([_capped_slot(failing)], now=OVERNIGHT, ledger_path=led)
+        assert len(runs) == 3
+        runner.run_slots([_capped_slot(failing)], now=OVERNIGHT, force=True, ledger_path=led)
+
+    assert len(runs) == 4
+
+
+def test_the_cap_is_per_session(tmp_path):
+    from ai_jobs import ledger
+
+    led = tmp_path / "ledger.jsonl"
+    for _ in range(3):
+        ledger.record(
+            job="ticker_briefs", status=ledger.STATUS_FAILED, session_date="2026-08-11",
+            error="boom", path=led,
+        )
+    assert ledger.attempt_cap_reason(
+        "ticker_briefs", "2026-08-11", max_attempts=3, path=led
+    )
+    assert not ledger.attempt_cap_reason(
+        "ticker_briefs", "2026-08-12", max_attempts=3, path=led
+    )
+    assert not ledger.has_terminal_marker("ticker_briefs", "2026-08-11", path=led)
 
 
 def test_entry_point_reports_store_failure_as_exit_2():
