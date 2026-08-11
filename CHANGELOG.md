@@ -243,6 +243,18 @@ and no detector, scoring, or alert file is in the diff.
   the marker. This ends the 11-consecutive-failure grind of 2026-08-09/10.
 - Gate handling: separate five-session clocks. `ai_summary`'s clock continues; the
   `ticker_briefs` clock restarts at zero. Live proof owed at the next 22:00 window.
+- **Testing-branch integration correction.** The first focused Windows gate after
+  fast-forwarding the packet exposed that list evidence truncation measured retained
+  rows before prepending its truthful truncation banner, allowing serialized source
+  content to exceed the declared local character budget by the banner length. The
+  truncator now includes the banner in its allocation. This is an evidence-packaging
+  correction; detector, scoring, alert, and daily-summary call-site behavior remain
+  unchanged.
+- The full Windows gate also exposed a non-hermetic warehouse-tee assertion: it
+  counted unrelated background `ResearchStore.open()` calls elsewhere in the pytest
+  process although its contract concerns the capture object's own worker. The test
+  now scopes the assertion to that worker; production warehouse behavior is
+  unchanged.
 
 ### 2026-08-10 — testing-week usability and phone-report corrections
 

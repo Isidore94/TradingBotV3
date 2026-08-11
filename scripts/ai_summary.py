@@ -1062,12 +1062,15 @@ def _truncate_to_budget(content: Any, budget: int) -> tuple[Any, str]:
     if isinstance(content, list):
         total = len(content)
         kept = list(content)
-        while kept and _encoded_size(kept) > budget:
-            kept = kept[1:]  # drop oldest first
-        if len(kept) == total:
+        if _encoded_size(kept) <= budget:
             return content, ""
-        banner = f"[showing most recent {len(kept)} of {total} rows]"
-        return [banner, *kept], banner
+        while kept:
+            kept = kept[1:]  # drop oldest first
+            banner = f"[showing most recent {len(kept)} of {total} rows]"
+            if _encoded_size([banner, *kept]) <= budget:
+                return [banner, *kept], banner
+        banner = f"[showing most recent 0 of {total} rows]"
+        return [banner], banner
     encoded = json.dumps(content, sort_keys=True, default=str) if not isinstance(content, str) else content
     if len(encoded) <= budget:
         return content, ""

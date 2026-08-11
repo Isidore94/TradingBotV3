@@ -304,17 +304,20 @@ def test_submit_still_spools_through_the_spool_only_path(enabled, recording_writ
     """The work still happens - just not here. And still no lake I/O."""
     import research_warehouse.store as store_module
 
-    opened = []
+    opened_on = []
     monkeypatch.setattr(
-        store_module.ResearchStore, "open", classmethod(lambda cls, root=None: opened.append(1))
+        store_module.ResearchStore,
+        "open",
+        classmethod(lambda cls, root=None: opened_on.append(threading.current_thread())),
     )
 
     capture = WarehouseTeeCapture()
     capture.submit(_FakeBot(_cache()), now=OPEN_UTC + timedelta(minutes=20))
+    worker = capture._worker
     assert capture.wait_idle(5.0)
     capture.close()
 
-    assert opened == [], "no ResearchStore is opened on any tee thread"
+    assert worker not in opened_on, "this tee worker never opens a ResearchStore"
     assert capture.last_report is not None and capture.last_report.status == "SPOOLED"
     assert capture.rows_spooled > 0
     # The rows went through the spool writer the worker built, as bar_m5.

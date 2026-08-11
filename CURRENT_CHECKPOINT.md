@@ -16,7 +16,7 @@ elapsed evidence lane that can run in parallel.
 | Roadmap phase | **P0 — validate and merge the testing-week branch** |
 | Active packet | **TICKER-BRIEFS HARDENING — TB-0..TB-4** (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b; armed by the trader 2026-08-11 after the first overnight run) |
 | Scope | `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one additive helper in `scripts/ai_summary.py`, `tests/test_ai_ticker_briefs.py`, `tests/test_ai_jobs_runner.py`. No detector, scoring, or alert file touched; output stays advisory-only |
-| State | **Implemented and green** (2682 passed / smoke 7/7). **Live proof owed: the next 22:00 window on the desk** |
+| State | **Integrated and green on `testing-week-2026-08-10`** (2687 passed / 19 subtests / smoke 7/7). The first Windows focused gate exposed and corrected a truncation-banner budget overrun. **Live proof owed: the next 22:00 window on the desk** |
 | Next action after this packet | **P0.2–P0.4** live gates, plus the ticker-briefs morning check below. P0.1 re-baseline is done |
 | Do not start yet | Phase 1 cleanup or any Phase 2+ feature/foundation item |
 
@@ -156,6 +156,16 @@ header stating the outcome, at most three `ticker_briefs` ledger rows for the se
 (with a `terminal: true` row if it stopped early), and exactly one artifact set per
 symbol under `ai_store/briefs/<year>/<session>/tickers/<symbol>/`.
 
+**Integration correction (2026-08-11).** Fast-forwarding the hardening packet onto
+the testing branch exposed a real 27-character ceiling overrun in the first focused
+Windows run: list truncation budgeted retained rows before prepending its truncation
+banner. `_truncate_to_budget` now budgets the banner too. Focused/full verification
+is green: **74 focused tests**, **2687 full-suite tests plus 19 subtests**, and
+**smoke 7/7**, all exit 0. The full gate also exposed a test-only warehouse-tee
+hermeticity issue: its assertion observed every store open in the pytest process
+rather than the tee worker it claimed to test. The assertion is now worker-scoped;
+no warehouse runtime behavior changed.
+
 <details>
 <summary>The original open question, as written on 2026-08-10 (premises now corrected
 above)</summary>
@@ -206,6 +216,15 @@ the desk figure should read **2687 passed**. Fifteen new tests cover TB-0's
 project-then-budget proof and its budget ceilings, the partial-publish header,
 membership-only skip, resume-by-evidence-hash, and the attempt cap with its terminal
 marker.
+
+**Windows integration gate after the budget and hermeticity corrections:**
+
+| Check | Result |
+|---|---|
+| focused | **74 passed**, exit 0 |
+| pytest | **2687 passed, 19 subtests passed**, exit 0 (126s) |
+| smoke | **7/7**, exit 0 |
+| frozen self-test | not re-run — no packaging trigger |
 
 ### Desk restarted onto the scan-window build — 2026-08-10 21:19
 
