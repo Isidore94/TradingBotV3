@@ -148,6 +148,45 @@ Neither is fixed. Deferred deliberately: the 22:00 window on 2026-08-10 is the f
 run with the repaired `gemma3:12b-tbv3ctx` model and is the live proof the AI-jobs
 repair is owed, so the night was left alone rather than changed hours before it.
 
+**Contingency drafted (2026-08-10, late):** the repair plan for both defects — plus
+per-ticker failure isolation with an honest partial morning file, a deterministic
+membership-only skip, and resumable per-symbol completion — is fully specified as the
+**ticker-briefs hardening packet**, `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b, with
+a pointer in `plan.md` P3.3. It is PROPOSED, not authorized: the trader arms it after
+reading the 2026-08-11 morning ledger (or later five-session evidence). An arriving AI
+must not build it without that direction. This documentation pass is Markdown-only;
+the recorded automated baseline (2672 passed / smoke 7/7) is unchanged.
+
+### Desk restarted onto the scan-window build — 2026-08-10 21:19
+
+The desk was closed gracefully (`CloseMainWindow`, so `closeEvent` ran its panel
+shutdowns and released the writer lease) and relaunched through
+`scripts/launch_gui_auto.ps1`, the same path the 06:00 task uses. **Running pid is now
+32620** (started 21:19:22); it supersedes pid 17984 named below. Auto Pilot resumed ON
+from saved state and BounceBot started and connected to IB as before.
+
+Verified on the live desk immediately after:
+
+- `bouncebot_scan_window` resolves to **06:00-13:30** from the real machine settings,
+  with the verdict `False` at 21:20 and `True` at 09:45.
+- **Zero `Metrics ->` sweep lines in `trading_bot.log` after the restart**, watched for
+  ten minutes. The whole log went quiet at 21:19:48 after the startup sequence — 18
+  lines total, all of them start-up — against ~830-900 lines/hour beforehand.
+- Sustained CPU fell from ~57% of a core to ~17% (and that figure still includes the
+  start-up burst).
+- `heartbeat.json` stays fresh at the 30-second cadence under the new pid, so the tick
+  loop still reaches its end; `writer_role.py` still resolves
+  `designated_writer / may publish True`, so the 07:00 publish proof is unaffected.
+
+There is no "scanning paused" line in the Auto Pilot log, and that is the correct
+outcome rather than a missing one: a freshly started BounceBot begins with scanning
+already disabled, so the window gate simply never enables it and there is no state
+change to announce. The startup IB traffic that remains (`$VOLD`/TICK recorder
+contract verification) is the market-internals recorder, not the sweep.
+
+Still owed by P0.3: the two live boundary crossings (a resume at 06:00, a pause at
+13:30) and confirmation that the session itself is unchanged.
+
 Three desk misconfigurations were found and fixed by inspecting the first
 testing-week session's artifacts. All three were machine-local settings lost when the
 old desktop was retired; none was a code defect:
@@ -155,7 +194,8 @@ old desktop was retired; none was a code defect:
 1. **Designated writer was unset** — `autopilot_today.txt` had not published since
    2026-07-30, so the whole 2026-08-10 session produced no phone digest and no swing
    push. Fixed with `writer_role.py --designate-self` (NucBox_K8_Plus). The desk was
-   restarted at 19:37 local to pick it up (new pid 17984, heartbeat live), and
+   restarted at 19:37 local to pick it up (pid 17984 then; superseded by the 21:19
+   restart above — the designation is a saved setting and survives both), and
    `writer_role.py` now resolves `designated_writer / may publish True`, exit 0.
    **Not yet proven end to end:** `hourly_away_report_slot_due` returns nothing once
    the hour is past the session close, so no publish was due at restart time.
@@ -208,6 +248,12 @@ Still open on the desk, not blocking the week:
 
 - `technical_integrity_events.jsonl` is ~247 MB and is never pruned (~10 MB/session).
 - Off-site backup: cloud sync was the only off-site Class A copy (decision 0015).
+- One flaky test observed once (2026-08-10, late):
+  `test_warehouse_seal.py::test_stale_staged_files_are_quarantined_not_deleted`
+  failed in a full run, passed in isolation and on the immediate full re-run
+  (2672 passed, exit 0). Its zero-grace mtime-vs-clock comparison
+  (`store.reconcile`, `incoming_grace_seconds=0`) is timing-sensitive under
+  suite load. Candidate for the P1.1 hermeticity packet; not repaired here.
 
 ## Immediate live gates
 

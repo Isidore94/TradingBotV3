@@ -124,7 +124,11 @@ Inspect:
 - verified Away report and metadata;
 - review-event shard and annotation stream;
 - warehouse coverage/gap/backup status when enabled;
-- AI job ledger/morning artifact when its scheduled gate is active.
+- AI job ledger/morning artifact when its scheduled gate is active;
+- the BounceBot scan window: one "scanning paused" line in the Auto Pilot log at
+  close+30 (13:30 on a normal Pacific session), and no further `Metrics ->` sweep in
+  `trading_bot.log` after it. The IB connection should still be up — the pause stops
+  the sweep, not the session.
 
 Close the GUI and verify bounded, clean shutdown with no orphan process. Relaunch once
 if restart persistence is part of the packet.
