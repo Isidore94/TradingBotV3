@@ -335,6 +335,10 @@ non-authoritative. Their analysis/cutover steps remain ordered here.
    whose header states the outcome, and no all-night retry grind. Per the gate's own
    reset rules the **ticker-briefs five-session clock restarts at zero**; the
    `ai_summary` clock continues, because its code path is untouched.
+   *Queued 2026-08-11 (trader-approved, deliberately not built):* the **nightly
+   journal pull** — a third `journal_import` runner slot ahead of `ai_summary`, spec
+   in `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c. Build only after the sec 6.4b
+   live proof passes and the trader says go.
 4. **P3.4 Accumulate and audit promotion evidence.** Continue regime infrastructure
    toward 40 instrumented sessions, and SPY/Greatness toward their Section 7 floors.
    Freeze windows before inspecting outcomes.

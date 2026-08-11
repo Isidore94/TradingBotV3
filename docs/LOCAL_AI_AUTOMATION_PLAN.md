@@ -1118,6 +1118,63 @@ written by the runner. Only `failed` and `degraded_no_narrative` rows spend an
 attempt: a `skipped` refusal (unmounted Drive) costs about a second and must
 keep self-healing.
 
+### 6.4c Nightly journal pull (QUEUED — trader-approved 2026-08-11, do not build yet)
+
+> The trader approved queuing this on 2026-08-11 and explicitly deferred the
+> build ("we wont do it yet"). Do not implement it before the ticker-briefs
+> hardening packet (sec 6.4b) has its live proof and the trader says go. It is
+> recorded now so the design survives the wait.
+
+**What it is.** A third Phase 1 runner slot, `journal_import`, that pulls
+broker executions unattended each night so the nightly `ai_summary` narrates a
+journal that already contains the session's trades — today that freshness
+depends on the trader remembering the GUI Broker Sync button. The AI side
+needs zero changes: `journal_import_health` (lag, newest execution) is already
+read and published every night.
+
+**Why it is cheap.** The import path is already headless and already safe to
+repeat: `scripts/journal_runner.py` has no Qt dependency (the GUI button just
+wraps it in a thread), executions dedupe on `execution_uid` by its own
+docstring, and every pull records an import-run row win or lose. The slot
+reuses `run_journal_import_for_date` / `run_journal_backfill` as-is and
+inherits the runner's ledger idempotency, 30-minute self-heal, and the sec
+6.4b attempt cap. It is a seconds-scale network call, not inference: reserve
+~5 minutes, `max_attempts=3`.
+
+**Design decisions to honour when building:**
+
+1. **Slot order: `journal_import` runs FIRST, before `ai_summary`.** The
+   runner's slate comment says later phases append and never reorder; placing
+   this slot ahead of the summary is a deliberate, documented exception — the
+   entire point is pull-before-summarize.
+2. **IBKR path is Flex, not the socket.** The socket API returns only the
+   current session's fills, which after TWS's daily reset at ~22:00 is likely
+   nothing. The Flex Query web service (`run_journal_backfill` already
+   supports it) returns the complete statement at any hour. Nightly shape:
+   Questrade for recent days + IBKR Flex when the `journal_ibkr_flex_token` /
+   `journal_ibkr_flex_query_id` settings are configured; Questrade only
+   otherwise. The socket importer stays a desk-hours/manual path.
+3. **Questrade token rotation race, stated not solved.** The refresh flow
+   saves a new single-use refresh token on every pull. A nightly pull racing a
+   manual GUI sync could invalidate the token; at 22:00+ this is nearly
+   theoretical. Worst case is a FAILED import row and a one-time re-auth —
+   never silent corruption. Do not add locking for it.
+4. **One-writer statement.** The journal SQLite lives in the home folder and
+   the GUI also writes it. The nightly slot owns *unattended* imports; the GUI
+   button remains the manual path. A rare write collision surfaces as a
+   FAILED run and self-heals on the next firing — acceptable, documented,
+   no new locking.
+5. **A zero-execution session is a normal `ok`,** not degraded: "imported 0,
+   rebuilt N trades" is a true statement about a day the trader did not trade.
+
+**Tests owed with the build:** slot registration and ordering ahead of
+`ai_summary`; per-session idempotency through the ledger; Flex-vs-socket
+selection by settings; a FAILED import recording honestly and retrying on the
+next firing without touching prior journal rows; a zero-execution night going
+`ok`. No detector, scoring, or alert file is in scope; the journal store's
+trader-entered fields are never touched by this slot (it writes executions,
+accounts, and grouped-trade rebuilds only, exactly as the manual path does).
+
 ### 6.5 Phase exit gates (verify commands)
 
 Every phase: `.venv\Scripts\python.exe -m pytest tests/ -q` fully green

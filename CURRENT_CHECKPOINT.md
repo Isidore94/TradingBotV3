@@ -156,6 +156,23 @@ header stating the outcome, at most three `ticker_briefs` ledger rows for the se
 (with a `terminal: true` row if it stopped early), and exactly one artifact set per
 symbol under `ai_store/briefs/<year>/<session>/tickers/<symbol>/`.
 
+**Known defect, reported not yet fixed (2026-08-11 evening review).** TB-3's
+cross-firing reuse can never trigger on the desk: the projected package's
+`evidence_hash` covers `generated_at` (fresh wall clock every firing —
+`run_ticker_briefs` builds the base without passing `now`) and every source's
+`observed_at` read stamp, so identical evidence hashes differently on every firing.
+A partial night therefore re-briefs **all** symbols on retry, not just the failures,
+and duplicate artifact sets return. Bounded by TB-4 (≤3 batches) and invisible on a
+clean night; tests pass because they inject the package. Fix when directed: hash only
+stable fields (symbol, session, memberships, source ids + content).
+
+**Queued, not built (trader-approved 2026-08-11):** the **nightly journal pull** —
+a third `journal_import` runner slot ahead of `ai_summary` so the summary reads a
+journal already containing the session's trades. Spec with design decisions (Flex
+over socket at night, Questrade token-rotation race stated, one-writer statement,
+zero-execution `ok`) in `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c. Build only
+after the 6.4b live proof passes and the trader says go.
+
 **Integration correction (2026-08-11).** Fast-forwarding the hardening packet onto
 the testing branch exposed a real 27-character ceiling overrun in the first focused
 Windows run: list truncation budgeted retained rows before prepending its truncation
