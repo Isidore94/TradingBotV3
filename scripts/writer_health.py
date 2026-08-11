@@ -33,7 +33,7 @@ publication, and a success does not erase the record of the last failure. Only
 those history fields carry forward - everything describing the current attempt
 is rewritten every time.
 
-The artifact is machine-local (under the diagnostics root, not the shared Drive
+The artifact is machine-local (under the diagnostics root, not the shared
 folder) precisely because it describes *this* machine's view. Two machines each
 keep their own.
 """
@@ -103,7 +103,7 @@ _TEMPLATE: dict = {
         "file_lock": "unavailable",
         "abandoned_by_previous_owner": False,
     },
-    # Layer 3 - the Drive lease
+    # Layer 3 - the shared-export lease
     "lease_path": "",
     "lease_holder": "",
     "lease_instance_id": "",

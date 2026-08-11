@@ -2507,7 +2507,7 @@ def _read_csv_with_timeout(path: Path, timeout_sec: float, **read_csv_kwargs) ->
 
 def _seed_daily_bar_cache_from_durable(symbol: str, cache_path: Path) -> pd.DataFrame:
     # Cold start (fresh / ephemeral machine, or a quarantined corrupt cache file):
-    # seed the local L1 cache from the durable Drive store so only the delta needs
+    # seed the local L1 cache from the durable shared store so only the delta needs
     # fetching, not full history.
     durable = _load_durable_daily_bar_frame(symbol)
     if not durable.empty:
@@ -2593,7 +2593,7 @@ def _durable_daily_bar_file(symbol: str) -> Path:
 
 
 def _load_durable_daily_bar_frame(symbol: str) -> pd.DataFrame:
-    """Read the durable (Drive-backed) Parquet history; empty frame on any miss."""
+    """Read the durable shared Parquet history; empty frame on any miss."""
     try:
         path = _durable_daily_bar_file(symbol)
         if not path.exists():
@@ -2607,7 +2607,7 @@ def _load_durable_daily_bar_frame(symbol: str) -> pd.DataFrame:
 
 def _persist_durable_daily_bars(symbol: str, normalized: pd.DataFrame, previous: pd.DataFrame | None = None) -> None:
     """Mirror the merged history to the durable Parquet store, but only when it
-    actually changed (bounds Drive sync churn to genuine updates)."""
+    actually changed (bounds write churn to genuine updates)."""
     if normalized is None or getattr(normalized, "empty", True):
         return
     try:

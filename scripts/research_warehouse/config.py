@@ -2,9 +2,11 @@
 
 The lake is a new append-only storage class (decision 0014): very large
 immutable Parquet files on a trader-owned local/DAS disk. It is deliberately
-separate from the Drive-synced home folder - research bar archives would blow
-past Drive quotas and sync locks - so a configured path inside the shared home
-folder is refused, never silently accepted.
+separate from the operational home folder - that folder is for compact state and
+is mirrored wholesale to the DAS by the hourly cold push - so a configured path
+inside the shared home folder is refused, never silently accepted. (Until
+decision 0015 the home folder was Drive-synced and quota was the reason; the
+refusal outlived the sync client. See BD-72.)
 
 Resolution order mirrors the shared-store precedent in ``project_paths``:
 ``TRADINGBOTV3_RESEARCH_DIR`` environment override first, then the
@@ -21,8 +23,8 @@ RESEARCH_DIR_ENV = "TRADINGBOTV3_RESEARCH_DIR"
 RESEARCH_DIR_SETTING = "research_store_dir"
 
 # Backup targets (sec 8.5 / LD-11). Class A is the irreplaceable-small set,
-# mirrored to the Drive home folder AND a backup disk; Class B is the
-# append-only lake copy on a SECOND PHYSICAL DISK - never in Drive. Both are
+# mirrored to the home folder AND a backup disk; Class B is the append-only
+# lake copy on a SECOND PHYSICAL DISK, never alongside the lake itself. Both are
 # unset by default and the build job simply says so rather than guessing a
 # destination: a backup written somewhere nobody chose is not a backup.
 BACKUP_CLASS_A_ENV = "TRADINGBOTV3_RESEARCH_BACKUP_A"
@@ -64,7 +66,7 @@ def _refuse_shared_home(path: Path) -> None:
         raise ValueError(
             f"Research store {path} is inside the shared home folder {shared_home}. "
             "The lake is a separate storage class (decision 0014) and must never "
-            "live in the Drive-synced folder - point research_store_dir (or "
+            "live in the operational home folder - point research_store_dir (or "
             f"{RESEARCH_DIR_ENV}) at a local/DAS disk instead."
         )
 
@@ -95,7 +97,8 @@ def warehouse_enabled() -> bool:
 
 
 def research_spool_dir() -> Path:
-    """Machine-local write spool (plan sec 8.4); never on the DAS or Drive."""
+    """Machine-local write spool (plan sec 8.4); never on the DAS or in the
+    home folder - it must survive a file-server outage."""
     return Path(_paths().LOCAL_SETTINGS_DIR) / SPOOL_DIR_NAME
 
 

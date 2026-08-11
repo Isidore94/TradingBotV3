@@ -1,17 +1,18 @@
-"""Layer 1: which machine is allowed to write the shared Drive exports.
+"""Layer 1: which machine is allowed to write the shared exports.
 
 THE AUTHORITY IS EXPLICIT CONFIGURATION, NOT A RACE
 ---------------------------------------------------
-A Google Drive-synchronized file is not a compare-and-swap lock, so "whoever
-gets there first owns it" is not a safety property - it is a description of a
-race. The authority over shared mutable output is therefore a *configured*
+A shared file is not a compare-and-swap lock, so "whoever gets there first owns
+it" is not a safety property - it is a description of a race. (This was written
+when the folder was Drive-synced; the folder is plain local storage since
+decision 0015, but the reasoning holds for any shared mount.) The authority over shared mutable output is therefore a *configured*
 designated writer: one machine is named, every other machine is a read-only
 secondary that refuses to publish and says why.
 
 The configuration is deliberately **machine-local**: this module reads the
 repo's existing local-settings convention (``project_paths.get_local_setting``,
 backed by ``LOCAL_SETTINGS_FILE`` under ``%LOCALAPPDATA%``) and environment
-variables. A role file living on the shared Drive is explicitly *not* consulted,
+variables. A role file living in the shared folder is explicitly *not* consulted,
 because it would suffer exactly the sync-convergence problem it was meant to
 solve: two machines could read two different versions of "who is the writer".
 

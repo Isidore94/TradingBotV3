@@ -305,7 +305,8 @@ def get_diagnostics_dir() -> Path:
         return Path(override).expanduser()
     return CACHE_DIR.parent / "diagnostics"
 # Diagnostic app logs are per-machine and rotate (rename) frequently, which fights
-# Google Drive / OneDrive sync locks — keep them on local disk, not the shared store.
+# Kept on local disk rather than the shared store: caches are replaceable and
+# would only bloat the operational folder and the hourly cold push to the DAS.
 LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
@@ -359,7 +360,7 @@ AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
 PICK_FEEDBACK_FILE = PERSISTENT_DATA_DIR / "pick_feedback.jsonl"
 # Legacy single-writer JSONL plus the partitioned store used by current
 # builds.  New review decisions go to one file per stable machine-local
-# installation so two Drive-connected PCs never append to the same file;
+# installation so two PCs sharing the folder never append to the same file;
 # readers merge the directory with the legacy file.
 ALERT_REVIEW_EVENTS_FILE = PERSISTENT_DATA_DIR / "alert_review_events.jsonl"
 ALERT_REVIEW_EVENTS_DIR = PERSISTENT_DATA_DIR / "alert_review_events"
@@ -429,11 +430,11 @@ EARNINGS_ANCHORS_FILE = DATA_DIR / "earnings_avwap_anchors.csv"
 EARNINGS_ANCHOR_CANDIDATES_FILE = RUNTIME_DATA_DIR / "earnings_anchor_candidates.csv"
 EARNINGS_CALENDAR_HISTORY_FILE = DATA_DIR / "earnings_calendar_history.json"
 MASTER_AVWAP_LEVELS_DIR = DATA_DIR / "levels"
-# Durable, shared (Drive-backed) daily-bar history. The local machine cache under
+# Durable, shared daily-bar history in the home folder. The local machine cache under
 # CACHE_DIR is a fast L1; this is the L2 that survives cache wipes / fresh
 # machines so cold starts only fetch the delta instead of full price history.
 MASTER_AVWAP_DAILY_BARS_DIR = DATA_DIR / "daily_bars"
-# Durable, shared (Drive-backed) intraday (H1) bar history. H4 is resampled from
+# Durable, shared intraday (H1) bar history in the home folder. H4 is resampled from
 # H1, so only H1 is stored. Same L1/L2 split as the daily store.
 MASTER_AVWAP_INTRADAY_BARS_DIR = DATA_DIR / "intraday_bars"
 
@@ -445,7 +446,7 @@ EARNINGS_CALENDAR_CACHE_FILE = CACHE_DIR / "earnings_calendar_rows.json"
 YAHOO_SYMBOL_META_CACHE_FILE = CACHE_DIR / "yahoo_symbol_metadata.json"
 DAILY_BARS_CACHE_DIR = CACHE_DIR / "daily_bars"
 INTRADAY_BARS_CACHE_DIR = CACHE_DIR / "intraday_bars"
-# Chart-only feather mirror of the Drive-backed daily store, owned solely by
+# Chart-only feather mirror of the shared daily store, owned solely by
 # ui.services.bar_cache. Deliberately NOT the scanner's DAILY_BARS_CACHE_DIR
 # (CSV, different owner): the chart must be able to warm from local disk
 # without a shared mutable export gaining a second writer.
@@ -666,7 +667,7 @@ def _migrate_legacy_file(legacy_path: Path, new_path: Path) -> None:
         new_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(legacy_path), str(new_path))
     except OSError:
-        # Cloud-synced folders can briefly lock files; don't block app startup on legacy migration.
+        # Another process or AV scan can briefly lock files; don't block app startup on legacy migration.
         return
 
 

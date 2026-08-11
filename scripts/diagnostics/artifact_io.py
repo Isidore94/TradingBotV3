@@ -94,7 +94,7 @@ def diagnostics_dir() -> Path:
     """Machine-local diagnostics root (honors ``TRADINGBOT_DIAGNOSTICS_DIR``).
 
     Imported lazily, exactly like :mod:`diagnostics.run_manifest` does, because
-    importing ``project_paths`` has startup side effects (shared-drive wait,
+    importing ``project_paths`` has startup side effects (shared-store wait,
     legacy migration) that a diagnostics helper must never trigger on import.
     """
     try:

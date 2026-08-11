@@ -4,7 +4,10 @@ A DAS/RAID is capacity and availability, not backup. The classes are fixed:
 
 * **Class A - irreplaceable-small** (manifests, definitions, trader geometry,
   review events, evidence freezes): copied to the backup disk AND mirrored into
-  the Drive home folder, which buys off-site storage for free.
+  the home folder. NOTE (decision 0015): the home-folder mirror used to be
+  Drive-synced, which bought off-site storage for free. With no cloud sync
+  there is currently NO off-site copy - every mirror is on-premises. Treat an
+  off-site Class A destination as owed, not solved.
 * **Class B - the lake**: incremental copy to a second physical disk,
   **append-only** - a file missing from the source is never deleted from the
   copy, because the copy exists to survive a mistake at the source.
@@ -99,7 +102,7 @@ def _copy_tree(source: Path, target: Path, report: BackupReport) -> None:
 
 
 def backup_class_a(store: ResearchStore | None, targets, *, now: datetime | None = None) -> BackupReport:
-    """Copy the irreplaceable-small set to every target (disk + Drive mirror)."""
+    """Copy the irreplaceable-small set to every target (disk + home mirror)."""
     report = BackupReport(backup_class=CLASS_A)
     if store is None:
         report.status = "DISABLED"

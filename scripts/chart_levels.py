@@ -12,7 +12,7 @@ a style, a label, and - for the trendline - the whole projected series rather
 than one price.
 
 **Everything here is I/O and must run on a worker.** The level store lives in
-the Drive-backed home folder and the ai_state file is ~38MB; reading either
+the shared home folder and the ai_state file is ~38MB; reading either
 on the GUI thread is the exact defect chart-perf-c existed to remove. The
 only caller is :meth:`ui.services.chart_data_service.ChartDataService.
 build_snapshots`, which runs on the chart pool, and the result rides the
@@ -247,7 +247,7 @@ def _bar_index_by_date(bars: Sequence[Mapping[str, Any]]) -> dict[date, int]:
 
 
 # --------------------------------------------------------------------------
-# loaders (worker threads only - these read Drive and a 38MB JSON)
+# loaders (worker threads only - these read the home folder and a 38MB JSON)
 # --------------------------------------------------------------------------
 def _store_levels(symbol: str, levels_dir: Path) -> list[dict[str, Any]]:
     """Raw hv_horizontal + cloud_flat records for ``symbol``, mtime-cached."""

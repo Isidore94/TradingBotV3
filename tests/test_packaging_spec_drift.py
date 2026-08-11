@@ -83,6 +83,11 @@ ASSETS_NOT_IN_THE_BUNDLE = {
     "scripts/launch_gui_auto.ps1": "operator script, run from the repo by Task Scheduler.",
     "scripts/register_0700_autostart.ps1": "operator script, run by hand to register the task.",
     "scripts/register_ai_jobs_task.ps1": "operator script, run by hand to register the AI jobs task.",
+    "scripts/run_ai_jobs.ps1": (
+        "scheduled-task wrapper: Task Scheduler runs it from the repo checkout, and it "
+        "invokes the repo venv's python.exe. The frozen exe never reads it - it is not "
+        "reachable from launch_gui.py at all."
+    ),
 }
 #: The A4 suite's name for the same allowlist.
 UNBUNDLED_ASSETS = ASSETS_NOT_IN_THE_BUNDLE

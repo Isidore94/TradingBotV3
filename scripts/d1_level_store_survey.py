@@ -285,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         try:
             price_range, bar_count = _chart_price_range(symbol, int(args.sessions))
-        except Exception as exc:  # no parquet store, no pandas, no Drive
+        except Exception as exc:  # no parquet store, no pandas, no shared folder
             price_range, bar_count = None, 0
             range_note = f"daily bars unreachable ({type(exc).__name__})"
         if price_range is not None:

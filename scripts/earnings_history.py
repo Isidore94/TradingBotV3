@@ -207,7 +207,7 @@ def save_history(history: dict[str, Any], path: Path | None = None) -> Path:
     return target
 
 
-# Deferred-save support: the shared history is tens of MB on a Drive-synced
+# Deferred-save support: the shared history is tens of MB on a shared
 # folder, and several callers record rows inside per-date/per-symbol loops.
 # Without batching, every merge_events call pays a full parse + re-serialize +
 # re-upload of the file. While a deferral is active, merges edit one in-memory

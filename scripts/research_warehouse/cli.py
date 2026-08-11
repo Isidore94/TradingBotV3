@@ -275,7 +275,7 @@ def _run_backups(store: ResearchStore, stamp: datetime) -> dict:
             "message": (
                 f"no Class-B backup target: set {config.BACKUP_CLASS_B_SETTING} in "
                 f"local_settings.json (or {config.BACKUP_CLASS_B_ENV}). It must be a "
-                "second physical disk, never the Drive folder."
+                "second physical disk, never the lake's own server."
             ),
         }
     return steps

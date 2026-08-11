@@ -18,7 +18,7 @@ Runs the trading day without the trader at the desk:
 - Aggressive universe discovery: repeated completed-M5 HODs on bearish days
   seed counter-trend longs, while LOD holders during a legacy-detected SPY
   rebound seed shorts. Bullish days mirror both rules exactly.
-- A phone-digestible report written to the shared Google Drive home folder.
+- A phone-digestible report written to the shared home folder.
 
 Everything here is deliberately testable: scheduling, ranking, filtering and
 rendering are pure; the yfinance fetchers accept an injectable downloader.
@@ -2209,7 +2209,7 @@ def refresh_auto_populated_watchlists(
 # Watchlist file IO
 # ---------------------------------------------------------------------------
 def _is_shared_mutable_path(path: Path) -> bool:
-    """Does ``path`` live in the Drive-synchronized folder both machines mount?
+    """Does ``path`` live in the shared folder a second machine could mount?
 
     Scoped by directory rather than by filename so a test target, a cache copy
     or a machine-local export is never gated, and so a shared file added later
@@ -2233,7 +2233,7 @@ def shared_write_refusal(path: Path) -> str:
 
     The publication gate protected ``autopilot_today.txt`` and nothing else,
     while ``longs.txt`` / ``shorts.txt`` / ``autolongs.txt`` / ``autoshorts.txt``
-    sit in the *same* Drive folder and were rewritten by whichever machine
+    sit in the *same* shared folder and were rewritten by whichever machine
     happened to run a scheduled build. That put the plan.md sec 5 invariant
     "user-entered watchlist names are never auto-removed" at cross-machine risk:
     the merge basis is the local machine's own record of what it wrote, so a
@@ -2256,7 +2256,7 @@ def shared_write_refusal(path: Path) -> str:
     if role.may_publish:
         return ""
     return (
-        f"{Path(path).name} is shared Drive state and this machine may not write it: "
+        f"{Path(path).name} is shared state and this machine may not write it: "
         f"{role.reason}"
     )
 
@@ -2337,7 +2337,7 @@ def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
     picks accumulate a clean, separately-attributable outcome history.
 
     Gated on the configured designated writer, because these files live in the
-    same Drive folder as the report. ``False`` means nothing shared was touched;
+    same shared folder as the report. ``False`` means nothing shared was touched;
     the registry mirror is skipped too, so machine-local provenance never claims
     a rotation that did not happen.
     """
@@ -2453,13 +2453,13 @@ def _mirror_auto_picks_into_registry(longs: list[str], shorts: list[str]) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Away report (shared Google Drive digest)
+# Away report (shared home-folder digest)
 # ---------------------------------------------------------------------------
 def format_industry_snapshot_line(
     board_state: Mapping[str, Any] | None,
     intraday_state: Mapping[str, Any] | None,
 ) -> str:
-    """One truthful identity shared by Auto Pilot and its Drive report."""
+    """One truthful identity shared by Auto Pilot and its published report."""
     board = board_state if isinstance(board_state, Mapping) else {}
     intraday = intraday_state if isinstance(intraday_state, Mapping) else {}
     board_id = str(board.get("snapshot_id") or "")
@@ -2605,7 +2605,7 @@ def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str
 
 
 def render_away_report(payload: Mapping[str, Any]) -> str:
-    """Phone-first digest: ONE central Drive file, best swing trades on top.
+    """Phone-first digest: ONE central shared file, best swing trades on top.
 
     The ranked swing list is the deliverable; day-trade watchlists and
     alerts follow, and all operational/diagnostic truth is condensed into
@@ -2856,13 +2856,13 @@ def publish_away_report(
     2. **machine-local cross-process lock** - real exclusion between two
        processes on this PC, held around the lease acquisition *and* the whole
        publication transaction.
-    3. **hardened Drive lease / fencing validation** - cross-machine writer
+    3. **hardened writer lease / fencing validation** - cross-machine writer
        protection, failing closed on every state it cannot verify.
     4. render / stage locally.
     5. **re-verify ownership and fencing generation immediately before
        replacement** - a writer that was fenced off while rendering aborts. The
        check is made before the report replace *and* again before the metadata
-       replace, because both write shared Drive output.
+       replace, because both write shared output.
     6. replace report and metadata (a failure of either - including a
        ``BaseException`` such as a hard interrupt between the two - rolls both
        back, so the pair on disk never describes two different publications).
@@ -2877,7 +2877,7 @@ def publish_away_report(
     it does not close it. A writer fenced off in the sub-millisecond gap between
     the check and the replace still completes that replace and reports success.
     Closing it would need an atomic compare-and-swap across machines, which a
-    Google Drive-synchronized file does not provide. This is cross-machine
+    plain shared file does not provide. This is cross-machine
     writer protection - it makes ambiguous states fail closed and makes the
     common races visible; it is not proof that clobbering cannot happen.
 
@@ -2908,7 +2908,7 @@ def publish_away_report(
         "previous_holder": "",
     }
 
-    # --- gate 1: configured writer role (machine-local, never Drive-synced) ---
+    # --- gate 1: configured writer role (machine-local, never shared) ---
     try:
         role = resolve_writer_role()
     except Exception as exc:
@@ -3115,7 +3115,7 @@ def _publish_under_local_lock(
         result["previous_pair_disagreement"] = disagreement
         logging.error("Away report and its metadata disagree on disk: %s", disagreement)
 
-    # --- gate 3: hardened Drive lease + fencing validation ---
+    # --- gate 3: hardened writer lease + fencing validation ---
     clock_offset = _observed_clock_offset(lease_path, wl)
 
     def snapshot(**kwargs) -> None:
@@ -3237,7 +3237,7 @@ def _publish_under_local_lock(
                 handle.write(metadata_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
-            # --- gate 5c: the metadata replace writes shared Drive output too,
+            # --- gate 5c: the metadata replace writes shared output too,
             # and the last ownership check was a whole readback + hash + stage
             # ago. Re-verify here as well, so the second half of the pair is not
             # published by a writer that has since been fenced off.
@@ -3373,7 +3373,7 @@ def write_heartbeat(
     path: Path | None = None,
 ) -> Path | None:
     """Atomic heartbeat (plan.md Phase 2.8): proves the runtime is alive and
-    says what it is doing, machine-locally (not Drive-synced)."""
+    says what it is doing, machine-locally (never in the shared folder)."""
     import socket
     import tempfile
 

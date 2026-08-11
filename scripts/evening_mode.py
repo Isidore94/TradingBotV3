@@ -364,8 +364,8 @@ def briefing_summary_lines(payload: Mapping[str, Any], limit: int = 12) -> list[
 
 def write_evening_briefing_file(text: str, path: Path = EVENING_BRIEFING_FILE) -> bool:
     """Drop the rendered briefing next to autopilot_today.txt on the shared
-    store (one tap in the Drive app). Layer-1 writer role gates it like every
-    other shared export; a refusal just means the phone copy stays stale."""
+    store. Layer-1 writer role gates it like every other shared export; a
+    refusal just means the phone copy stays stale."""
     try:
         from autopilot_core import shared_write_refusal
 

@@ -1,7 +1,7 @@
 """AI store location and enablement (plan sec 3.3 / 6.1).
 
 The AI store is its own storage class: nightly bulk writes that must not churn
-the Drive-synced home folder, and must not be mixed into the DAS research lake
+the operational home folder, and must not be mixed into the DAS research lake
 either -- separate trees mean an AI-job bug can never corrupt lake data or an
 operational report. A configured path inside the shared home folder is
 therefore refused, never silently accepted.

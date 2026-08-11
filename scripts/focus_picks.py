@@ -111,7 +111,7 @@ def _write_m5_market_date(path: Path, date_text: str) -> None:
         )
         os.replace(staged, target)
     except OSError:
-        # Cloud-synced folders can briefly lock files; the stamp is best-effort
+        # Another process or AV scan can briefly lock files; the stamp is best-effort
         # (a missed write just delays the reset to the next successful one).
         pass
 
@@ -409,7 +409,7 @@ class FocusPickStore:
             tmp.write_text(json.dumps(self._membership, indent=2, sort_keys=True), encoding="utf-8")
             os.replace(tmp, self._membership_path)
         except OSError:
-            # Cloud-synced folders can briefly lock files; membership is best-effort.
+            # Another process or AV scan can briefly lock files; membership is best-effort.
             pass
 
     def membership(self) -> dict[str, dict]:

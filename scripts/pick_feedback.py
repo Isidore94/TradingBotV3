@@ -82,7 +82,7 @@ def record_pick_feedback(
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     except OSError:
-        return None  # cloud-synced folders can briefly lock files; best-effort
+        return None  # another process can briefly lock files; best-effort
     return row
 
 

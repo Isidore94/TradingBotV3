@@ -32,14 +32,25 @@ param(
 
 $taskName = "TradingBotV3 AI Jobs"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$python = Join-Path $root ".venv\Scripts\pythonw.exe"
-if (-not (Test-Path $python)) { $python = Join-Path $root ".venv\Scripts\python.exe" }
+$python = Join-Path $root ".venv\Scripts\python.exe"
 $script = Join-Path $root "scripts\run_ai_jobs.py"
+$wrapper = Join-Path $root "scripts\run_ai_jobs.ps1"
 
-if (-not (Test-Path $python)) { Write-Error "Virtual-environment Python not found: $python"; exit 1 }
-if (-not (Test-Path $script)) { Write-Error "Runner not found: $script"; exit 1 }
+if (-not (Test-Path $python))  { Write-Error "Virtual-environment Python not found: $python"; exit 1 }
+if (-not (Test-Path $script))  { Write-Error "Runner not found: $script"; exit 1 }
+if (-not (Test-Path $wrapper)) { Write-Error "Wrapper not found: $wrapper"; exit 1 }
 
-$action = New-ScheduledTaskAction -Execute $python -Argument "`"$script`"" -WorkingDirectory $root
+# The action is the WRAPPER, not the runner directly, and console python.exe is
+# resolved above rather than pythonw.exe. Both parts are deliberate (2026-08-10):
+# the task previously ran `pythonw.exe run_ai_jobs.py` and exited 0xC0000142
+# (STATUS_DLL_INIT_FAILED) at 06:00 because pythonw is a GUI-subsystem binary
+# needing a window station this task may not have, and because pythonw discards
+# stdout/stderr the failure left no message anywhere - only a hex code hours
+# later. run_ai_jobs.py imports no Qt and opens no window, so the GUI subsystem
+# bought nothing. The wrapper logs both streams and propagates the real exit code.
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$wrapper`"" `
+    -WorkingDirectory $root
 
 # Daily rather than weekly: overnight work spans midnight, and weekends are a
 # legitimate time to run (the plan opens the window all day at weekends).

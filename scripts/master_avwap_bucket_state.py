@@ -125,7 +125,7 @@ def save_bucket_state(state: dict[str, Any], path: Path = MASTER_AVWAP_BUCKET_ST
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, path)
     except OSError:
-        # Cloud-synced folders can briefly lock files; state is best-effort.
+        # Another process or AV scan can briefly lock files; state is best-effort.
         pass
 
 

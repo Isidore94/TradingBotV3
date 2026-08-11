@@ -194,7 +194,7 @@ class WatchlistRead:
 
     ``symbols`` alone cannot answer the only question the morning file needs
     answered: is an empty result a fact about the trader's lists, or a fact
-    about a Drive folder that did not mount? ``read`` and ``unreadable`` keep
+    about a shared folder that did not mount? ``read`` and ``unreadable`` keep
     those two apart, so no caller has to guess.
     """
 
@@ -224,7 +224,7 @@ def load_brief_symbols(paths: Mapping[str, Path] | None = None) -> WatchlistRead
     An unreadable list is uncertainty: it contributes no names and is never
     rewritten, repaired, or treated as evidence that a name was removed. It is
     also *reported*, because silently folding it into "no tickers" is how a
-    missing Drive turns into a published claim that the trader watches nothing.
+    missing folder turns into a published claim that the trader watches nothing.
     """
     selected = paths if paths is not None else default_watchlist_paths()
     ordered: list[str] = []
@@ -460,7 +460,7 @@ def render_morning_file(
             break
         text += section
     if omitted:
-        text += f"{omitted} additional ticker brief(s) omitted from this small Drive file; see ai_store/briefs.\n"
+        text += f"{omitted} additional ticker brief(s) omitted from this small summary file; see ai_store/briefs.\n"
     return text
 
 
@@ -483,7 +483,7 @@ def run_ticker_briefs(
     output_root: Path | None = None,
     morning_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Publish validated medium-tier briefs, then one bounded Drive file.
+    """Publish validated medium-tier briefs, then one bounded home-folder file.
 
     The runner is the sole caller/writer. The gate is repeated here, including
     before every model call, so a direct invocation or a long ticker batch can
@@ -566,7 +566,7 @@ def run_ticker_briefs(
             {"symbol": symbol, "memberships": membership_by_symbol[symbol], "result": result}
         )
 
-    # Drive sees only this bounded distillation, and only after every ticker
+    # The home folder sees only this bounded distillation, and only after every ticker
     # completed. Any exception above leaves the prior verified morning intact.
     content = render_morning_file(session_date, completed, generated_at=now)
     published = atomic_publish_morning_file(content, path=morning_path)

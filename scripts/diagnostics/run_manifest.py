@@ -2,7 +2,7 @@
 
 Every production scan writes one manifest - success or failure - so speed and
 unattended failures are measurable before they are optimized. Manifests are
-local operational data (not Drive-synced): small JSON files, newest last,
+local operational data (never the shared folder): small JSON files, newest last,
 pruned to a bounded count.
 """
 

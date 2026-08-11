@@ -8,7 +8,7 @@ Recreates the TC2000 "weekly options + quality" watchlist locally:
 2. Optionally intersect with the CBOE available-weeklys list so only names with
    weekly options survive (falls back gracefully if CBOE is unreachable).
 3. Batch-download daily history from yfinance (chunked, cached locally with a
-   max age so re-runs are cheap and Google Drive stays untouched) and apply the
+   max age so re-runs are cheap and the shared folder stays untouched) and apply the
    quality screen: price > $5, 20-day average volume > 1M shares, market cap >
    $1B, plus the trend cut of price above/below both the 100- and 200-day SMAs.
 4. Write the results to the home folder as plain watchlist files the scanners

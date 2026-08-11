@@ -2,15 +2,15 @@
 
 WHAT THIS IS, AND WHAT IT IS NOT (plan.md sec 4)
 ------------------------------------------------
-The Drive-synchronized lease in :mod:`writer_lease` is *cross-machine writer
+The shared lease in :mod:`writer_lease` is *cross-machine writer
 protection*: a shared file that names the current writer. It is **not** a
-compare-and-swap lock, and two machines can genuinely race before Google Drive
+compare-and-swap lock, and two machines can genuinely race before a shared mount
 converges. Nothing in this module changes that.
 
 What this module *does* fix is the other half of the problem, which a
 read/replace lease on a synced file cannot solve at all: **two processes on the
 designated Windows host**. The GUI, a second GUI started by accident, and a
-scheduled scan all run on one machine with one Drive mount, so they see the
+scheduled scan all run on one machine with one shared folder, so they see the
 same lease bytes with no sync delay whatsoever and can interleave a
 read-check-write. That is a local concurrency problem and it needs a local
 kernel primitive.
@@ -66,7 +66,7 @@ until somebody deletes it by hand.
   does.
 
 So a hard kill never wedges publishing. It also never lets a killed process's
-Drive lease block forever: that lease still expires on its TTL
+shared lease block forever: that lease still expires on its TTL
 (see :mod:`writer_lease`).
 
 SCOPE, HONESTLY

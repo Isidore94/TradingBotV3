@@ -25,7 +25,7 @@ class TrackerStorageControls:
         self.container = container
 
         description = (
-            "Use a Google Drive or OneDrive folder here so watchlists, reports, logs, and AVWAP tracker data stay in sync across devices. Replaceable download caches stay local on each computer so the cloud folder stays lightweight."
+            "This is where watchlists, reports, logs, and AVWAP tracker data live. Use a local folder on this machine (the desk uses C:\\TradingBotData); durable bulk storage belongs on the file server, not here. Replaceable download caches stay local on each computer so this folder stays lightweight."
         )
         ttk.Label(container, text=description, wraplength=900, justify=tk.LEFT).pack(
             anchor="w",
