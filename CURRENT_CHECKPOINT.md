@@ -169,9 +169,10 @@ Verified on the live desk immediately after:
 
 - `bouncebot_scan_window` resolves to **06:00-13:30** from the real machine settings,
   with the verdict `False` at 21:20 and `True` at 09:45.
-- **Zero `Metrics ->` sweep lines in `trading_bot.log` after the restart**, watched for
-  ten minutes. The whole log went quiet at 21:19:48 after the startup sequence — 18
-  lines total, all of them start-up — against ~830-900 lines/hour beforehand.
+- **Zero `Metrics ->` sweep lines in `trading_bot.log` after the restart**, watched to
+  fifteen minutes — the previous build would have run two full sweeps in that time.
+  The whole log went quiet at 21:19:48 after the startup sequence (18 lines total, all
+  of them start-up) against ~830-900 lines/hour beforehand.
 - Sustained CPU fell from ~57% of a core to ~17% (and that figure still includes the
   start-up burst).
 - `heartbeat.json` stays fresh at the 30-second cadence under the new pid, so the tick
