@@ -26,6 +26,7 @@ from ai_summary import (
     SCOPE_LABELS,
     build_evidence_package,
     default_model_for,
+    evidence_budget_for,
     export_ai_summary,
     local_provider_enabled,
     render_ai_summary_markdown,
@@ -281,11 +282,16 @@ class AiSummaryPanel(QFrame):
         return context
 
     def _build_evidence(self) -> dict[str, Any]:
+        # Resolved from the selected provider so the preview shows exactly what
+        # a run would send: picking Local narrows the budget to that context
+        # window, and the preview's own coverage block then names what was
+        # dropped -- which the server would otherwise cut silently.
         return build_evidence_package(
             self._selected_scopes(),
             live_context=self._live_market_context(),
             source_overrides=self.source_overrides,
             journal_store=self.journal_store,
+            budget_chars=evidence_budget_for(self._provider()),
         )
 
     def build_preview(self) -> None:

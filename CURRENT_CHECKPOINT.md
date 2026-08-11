@@ -84,6 +84,19 @@ Re-run after the decision-0015 documentation/comment pass: **2647 passed**,
 **smoke 7/7**, unchanged. That pass edited Markdown, docstrings, comments, and two
 user-facing strings only; no behavior, path, or test changed.
 
+**Current baseline after the local-AI evidence-budget packet:**
+
+| Check | Result |
+|---|---|
+| pytest | **2659 passed, 19 subtests passed**, exit 0 (104s) |
+| smoke | **7/7**, exit 0 |
+| frozen self-test | not re-run — no packaging trigger (no new package, no new runtime asset, no new dependency) |
+
+Twelve new tests cover the budget resolver and its fallbacks, the cloud ceiling
+staying untouched, the derivation itself (worst-case retry prompt must fit the
+context left after generation), the truncation tripwire firing/staying silent, and
+ledger usage recording.
+
 Three desk misconfigurations were found and fixed by inspecting the first
 testing-week session's artifacts. All three were machine-local settings lost when the
 old desktop was retired; none was a code defect:
@@ -103,18 +116,18 @@ scheduler. Details in `CHANGELOG.md`; the live proof is the 22:00 window tonight
 `%LOCALAPPDATA%\TradingBotV3\logs\ai_jobs-<date>.log` will now carry any failure.
 Two AI-layer caveats remain unproven and must be checked against tomorrow's ledger:
 
-- **Context still smaller than the app's evidence cap.** `ai_summary` allows 80,000
-  evidence chars (~20k tokens); the derived model carries ~6.1k prompt tokens. That is
-  3× the old headroom and may well be enough for a per-ticker brief, but a
-  maximum-size payload will still be truncated. If `ticker_briefs` fails again with
-  truncated JSON, lower `MAX_TOTAL_EVIDENCE_CHARS` rather than raising context further
-  — see the next point. **Not changed here:** that is a code change with test
-  implications, not a configuration fix.
-- **The large tier (27B) cannot load at all right now.** `alloc_tensor_range: failed
-  to allocate Vulkan0 buffer` on the 780M iGPU while the desk is running, even at
-  default context. Pre-existing and unrelated to this repair (no large-tier job has
-  been scheduled yet), but it means Phase 2 policy-draft/retro work has no working
-  model on this hardware until it is sized down or run with the desk closed.
+- ~~Context smaller than the evidence cap~~ — **closed the same evening.** Local
+  calls now cap evidence at `ai_local_evidence_budget_chars` (22,000) and a
+  truncation tripwire fails loudly if the server still sees less than was sent. The
+  cloud ceiling is untouched.
+- ~~The large tier cannot load~~ — **accepted and designed around.** The local large
+  tier is retired (plan sec 2); policy drafts and retros belong to the frontier
+  model. Revisit triggers recorded: Ollama Vulkan allocator work, ROCm on gfx1103,
+  or more RAM.
+- **Phase 2 design packet is PROPOSED, not approved.** `docs/LOCAL_AI_AUTOMATION_PLAN.md`
+  sec 6.4a. Its six open questions need trader answers before any digest code is
+  written — question 1 ("what counts as winning": R at scenario close, MFE/MAE, or
+  both) is a trading judgement and is the one the whole fact pack hangs on.
 
 Still open on the desk, not blocking the week:
 

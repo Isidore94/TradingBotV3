@@ -315,6 +315,12 @@ non-authoritative. Their analysis/cutover steps remain ordered here.
    unattended mornings, specify deterministic fact packs, evidence budgets, schema,
    failure behavior, and tests before writing the append-only digest format. Require
    ten clean digest sessions before later AI phases.
+   *Narrowed 2026-08-10:* evidence budgets and failure behavior are **done** — local
+   calls cap at `ai_local_evidence_budget_chars` and raise on server-side prompt
+   truncation. A fact-pack design packet is **proposed** in
+   `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4a. What remains owed: **trader answers to
+   its six open questions**, then schema and tests. No digest schema may be built or
+   frozen before those answers — the 2026-08-08 decision still stands.
 4. **P3.4 Accumulate and audit promotion evidence.** Continue regime infrastructure
    toward 40 instrumented sessions, and SPY/Greatness toward their Section 7 floors.
    Freeze windows before inspecting outcomes.
@@ -377,7 +383,10 @@ bounded, every surface agrees, and preference cannot change objective truth or s
    canary, approval, and rollback.
 3. **P6.3 Continue Local-AI phases in order.** Journal enrichment, review-policy draft
    comparison, and periodic frontier synthesis remain advisory and start only after
-   their predecessor gates pass.
+   their predecessor gates pass. *Amended 2026-08-10:* the review-policy draft
+   comparison runs frontier-vs-medium rather than local-large-vs-cloud — the local
+   large tier is retired (no 27B-class model loads beside the running desk). The
+   two-week side-by-side quality gate is unchanged.
 4. **P6.4 Finish Market Prep migration into Qt.** Retire the Tk path only after parity,
    operational recovery, and clean-machine proof.
 

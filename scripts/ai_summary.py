@@ -75,6 +75,33 @@ LOCAL_PLACEHOLDER_API_KEY = "local"
 #: free seconds; a second would just be a slower way to fail.
 LOCAL_JSON_RETRIES = 1
 
+# --- local evidence budget (2026-08-10) -------------------------------------
+#
+# A local server silently truncates a prompt that exceeds its context window,
+# and generation shares that same window. `ticker_briefs` failed six nights
+# running with "Unterminated string" because 80,000 chars of evidence were sent
+# into a 2048-token context: the model answered from a sheared prompt and ran
+# out of room mid-JSON. The evidence packager already degrades honestly when it
+# runs out of budget (unfunded statuses, most-recent-N banners, a coverage
+# block that says what was dropped) -- server-side truncation defeats all of
+# that invisibly, so the fix is to cap the evidence, not to raise the context.
+#
+# Derivation of the default, for the desk's `gemma3:12b-tbv3ctx` (num_ctx 12288):
+#
+#     12288 context
+#    -  3500 generation (the max_tokens every request sends)
+#    -  ~1000 scaffold (system instruction, schema dump, required-shape text)
+#    =  ~7800 tokens of evidence
+#    x  ~3.0 chars/token (dense JSON tokenizes worse than prose; measured
+#                         3.0-3.5, and the low end is the safe end here)
+#    =  ~23400 chars, rounded DOWN to 22000
+#
+# The rounding is deliberate headroom for the retry, which re-sends the full
+# evidence *plus* the validator's rejection text. A budget that only fits the
+# first attempt would turn every retry into the very truncation this prevents.
+LOCAL_EVIDENCE_BUDGET_SETTING_KEY = "ai_local_evidence_budget_chars"
+DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS = 22_000
+
 DEFAULT_MODELS = {
     "openai": "gpt-5.6",
     "anthropic": "claude-sonnet-5",
@@ -217,6 +244,43 @@ def local_model(tier: str = "medium") -> str:
     key = LOCAL_MODEL_SETTING_KEYS.get(tier, LOCAL_MODEL_SETTING_KEYS["medium"])
     fallback = DEFAULT_LOCAL_MODELS.get(tier, DEFAULT_LOCAL_MODELS["medium"])
     return str(get_local_setting(key, fallback) or fallback).strip()
+
+
+def local_evidence_budget_chars() -> int:
+    """Evidence ceiling for a local call, from settings (never hardcoded).
+
+    A non-positive or unparseable configured value falls back to the default
+    rather than disabling the budget: ``0`` reaching ``build_evidence_package``
+    would fund no sources at all, which looks exactly like a day with no
+    evidence -- the failure this whole budget exists to make visible.
+    """
+    raw = get_local_setting(
+        LOCAL_EVIDENCE_BUDGET_SETTING_KEY, DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+    )
+    # bool is a subclass of int, so `True` would otherwise resolve to a
+    # one-character budget -- a package that funds nothing, wearing the face of
+    # a configured value.
+    if isinstance(raw, bool):
+        return DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+    return value if value > 0 else DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+
+
+def evidence_budget_for(provider: str, tier: str = "medium") -> int:
+    """Character budget for one call site, resolved by provider.
+
+    Per-call-site rather than a lowered global: ``MAX_TOTAL_EVIDENCE_CHARS``
+    remains the cloud ceiling, so cloud request payloads stay byte-identical
+    and a local context limit never silently starves a metered model that has
+    room for far more. ``tier`` is accepted now because the tiers have
+    genuinely different context windows; only the local provider varies today.
+    """
+    if normalize_provider(provider) == "local":
+        return local_evidence_budget_chars()
+    return MAX_TOTAL_EVIDENCE_CHARS
 
 
 def default_model_for(provider: str) -> str:
@@ -1395,6 +1459,91 @@ def _local_user_prompt(evidence: Mapping[str, Any], previous_error: str = "") ->
     )
 
 
+#: Chars per token used to estimate what was SENT. Dense JSON evidence
+#: tokenizes at roughly 3.0-3.5 chars/token; the high end is the conservative
+#: choice here because it makes the estimate SMALLER, so the tripwire only
+#: fires when the server really did see far less than was sent.
+_ESTIMATED_CHARS_PER_TOKEN = 3.5
+#: Fraction of the estimate below which the prompt was demonstrably sheared.
+#: Well under 1.0 because the estimate is approximate in both directions; a
+#: server that truncates to its context window lands far below this, not near it.
+TRUNCATION_TRIPWIRE_RATIO = 0.70
+
+
+#: Provider spellings for the same two numbers. OpenAI's Responses API and
+#: Anthropic's Messages API both say input/output; the OpenAI-compatible
+#: chat-completions shape the local server speaks says prompt/completion.
+_USAGE_KEY_ALIASES = {
+    "prompt_tokens": ("prompt_tokens", "input_tokens"),
+    "completion_tokens": ("completion_tokens", "output_tokens"),
+}
+
+
+def usage_from_body(body: Mapping[str, Any]) -> dict[str, int]:
+    """Token usage from any of the three provider shapes; {} when absent.
+
+    Recorded because the ledger's sizing question ("was this night's work
+    actually cheap, and how close to the context ceiling did it run?") cannot
+    be answered from a call count, and because the
+    2026-08-10 truncation was invisible precisely for want of this number.
+    Absence is normal, not an error: some llama.cpp builds omit usage entirely.
+    """
+    usage = body.get("usage") if isinstance(body, Mapping) else None
+    if not isinstance(usage, Mapping):
+        return {}
+    recorded: dict[str, int] = {}
+    for canonical, aliases in _USAGE_KEY_ALIASES.items():
+        for alias in aliases:
+            value = usage.get(alias)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            recorded[canonical] = int(value)
+            break
+    return recorded
+
+
+def _prompt_truncation_error(payload: Mapping[str, Any], body: Mapping[str, Any]) -> str:
+    """Non-empty when the server saw materially less prompt than was sent.
+
+    A local server silently truncates a prompt longer than its context window
+    and answers from whatever survived. That produces confident output built on
+    evidence the model never saw -- worse than an error, because it validates.
+    Comparing the returned ``usage.prompt_tokens`` against what was sent turns
+    that silent shear into a named failure.
+
+    Returns "" (no error) when usage is absent: some llama.cpp builds omit it,
+    and a missing field is not evidence of truncation. Never raises -- a
+    malformed usage block must not become an exception on the success path.
+    """
+    usage = body.get("usage") if isinstance(body, Mapping) else None
+    if not isinstance(usage, Mapping):
+        return ""
+    raw = usage.get("prompt_tokens")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return ""
+    server_saw = int(raw)
+    if server_saw <= 0:
+        return ""
+    sent_chars = sum(
+        len(str(message.get("content") or ""))
+        for message in payload.get("messages", [])
+        if isinstance(message, Mapping)
+    )
+    if sent_chars <= 0:
+        return ""
+    estimated = sent_chars / _ESTIMATED_CHARS_PER_TOKEN
+    if server_saw >= estimated * TRUNCATION_TRIPWIRE_RATIO:
+        return ""
+    return (
+        f"the local server truncated the prompt: sent ~{int(estimated)} token(s) "
+        f"({sent_chars} chars), server reported seeing {server_saw}. Its context "
+        f"window is smaller than this request. Lower "
+        f"'{LOCAL_EVIDENCE_BUDGET_SETTING_KEY}' (currently "
+        f"{local_evidence_budget_chars()}) or raise the model's num_ctx -- output "
+        "generated from a sheared prompt is not trustworthy even when it validates"
+    )
+
+
 def _extract_chat_completion_text(payload: Mapping[str, Any]) -> str:
     """Text from an OpenAI-compatible chat-completions body."""
     choices = payload.get("choices")
@@ -1780,6 +1929,13 @@ def _request_local_summary(
         if status_code >= 400:
             detail = str(getattr(response, "text", "") or body)[:1000]
             raise RuntimeError(f"local request failed ({status_code}): {detail}")
+        # Checked before the text is parsed, and raised rather than retried: a
+        # retry re-sends the same evidence plus MORE text (the rejection note),
+        # so it would be truncated harder. This is a configuration fault, not a
+        # flaky model, and it must not be retried into a validated-looking answer.
+        truncated = _prompt_truncation_error(payload, body)
+        if truncated:
+            raise RuntimeError(truncated)
         text = _extract_chat_completion_text(body)
         if not text:
             raise RuntimeError("local provider returned no text content")
@@ -1843,6 +1999,10 @@ def request_ai_summary(
             "duration_seconds": round((finished - started).total_seconds(), 3),
             "evidence_package_id": evidence.get("package_id"),
             "evidence_hash": evidence.get("evidence_hash"),
+            # Real token counts when the server reports them; {} when it does
+            # not. The ledger records whichever it gets rather than inventing a
+            # number, so "unknown" stays distinguishable from "zero".
+            "usage": usage_from_body(body),
             "summary": summary,
         }
     if normalized_provider == "openai":
@@ -1913,6 +2073,7 @@ def request_ai_summary(
         "duration_seconds": round((finished - started).total_seconds(), 3),
         "evidence_package_id": evidence.get("package_id"),
         "evidence_hash": evidence.get("evidence_hash"),
+        "usage": usage_from_body(body),
         "summary": summary,
     }
 
@@ -2058,6 +2219,7 @@ def run_and_export_ai_summary(
         live_context=live_context,
         source_overrides=source_overrides,
         journal_store=journal_store,
+        budget_chars=evidence_budget_for(provider),
     )
     result = request_ai_summary(
         provider=provider,

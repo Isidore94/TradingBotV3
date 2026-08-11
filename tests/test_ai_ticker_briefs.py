@@ -368,3 +368,91 @@ def test_ai_jobs_stay_out_of_detector_scoring_and_alert_modules():
             name == "ai_jobs" or name.startswith("ai_jobs.")
             for name in _imported_modules(path)
         ), f"{path.name} must not consume advisory AI output"
+
+
+def test_ledger_tokens_carry_real_usage_and_stay_silent_when_unreported(
+    tmp_path, monkeypatch
+):
+    """A call count cannot answer "how close to the context ceiling did it run?".
+
+    That question went unanswerable on 2026-08-10, when six nights of truncated
+    prompts left no trace but a parse error. Usage is summed across the night's
+    calls, and omitted entirely when nothing reported it -- a zero would claim
+    the batch was free rather than admit the number is unknown.
+    """
+    import ai_summary
+    from ai_jobs import briefs, window
+
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\n", encoding="utf-8")
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+
+    monkeypatch.setattr(window, "market_session_block", lambda now=None: "")
+    monkeypatch.setattr(window, "in_offhours_window", lambda now=None: True)
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+    monkeypatch.setattr(ai_summary, "local_model", lambda tier: f"{tier}-model")
+    monkeypatch.setattr(ai_summary, "build_evidence_package", lambda *a, **k: _base_evidence())
+
+    def _run(usage_per_call):
+        def endpoint_mock(**kwargs):
+            result = _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows")
+            if usage_per_call is not None:
+                result["usage"] = dict(usage_per_call)
+            return result
+
+        monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+        return briefs.run_ticker_briefs(
+            session_date=SESSION,
+            now=OVERNIGHT,
+            watchlist_paths={"focus_longs": focus},
+            output_root=tmp_path / "ai_store" / "briefs",
+            morning_path=morning,
+        )
+
+    reported = _run({"prompt_tokens": 4000, "completion_tokens": 250})
+    assert reported["tokens"]["ticker_calls"] == 2
+    assert reported["tokens"]["prompt_tokens"] == 8000
+    assert reported["tokens"]["completion_tokens"] == 500
+
+    silent = _run(None)
+    assert silent["tokens"] == {"ticker_calls": 2}
+
+
+def test_the_local_briefs_are_packaged_for_the_local_context_window(tmp_path, monkeypatch):
+    """The base package every per-ticker brief is derived from must be capped.
+
+    Budgeting after the derivation would be too late: each brief inherits the
+    base, so an over-budget base truncates every one of them.
+    """
+    import ai_summary
+    from ai_jobs import briefs, window
+
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\n", encoding="utf-8")
+    seen: dict = {}
+
+    def _capture(scopes, *, session_date=None, **kwargs):
+        seen["budget_chars"] = kwargs.get("budget_chars")
+        return _base_evidence()
+
+    monkeypatch.setattr(window, "market_session_block", lambda now=None: "")
+    monkeypatch.setattr(window, "in_offhours_window", lambda now=None: True)
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+    monkeypatch.setattr(ai_summary, "local_model", lambda tier: f"{tier}-model")
+    monkeypatch.setattr(ai_summary, "build_evidence_package", _capture)
+    monkeypatch.setattr(
+        ai_summary,
+        "request_ai_summary",
+        lambda **kwargs: _model_result(kwargs["evidence"]["brief_symbol"], "setups.rows"),
+    )
+
+    briefs.run_ticker_briefs(
+        session_date=SESSION,
+        now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus},
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME,
+    )
+
+    assert seen["budget_chars"] == ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+    assert seen["budget_chars"] < ai_summary.MAX_TOTAL_EVIDENCE_CHARS

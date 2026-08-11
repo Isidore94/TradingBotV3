@@ -464,9 +464,15 @@ def test_the_brief_job_passes_its_session_into_packaging(monkeypatch, tmp_path):
             return "gemma3:12b"
 
         @staticmethod
+        def evidence_budget_for(provider, tier="medium"):
+            seen["budget_provider"] = provider
+            return 22000
+
+        @staticmethod
         def build_evidence_package(scopes, *, session_date=None, **kwargs):
             seen["scopes"] = list(scopes)
             seen["session_date"] = session_date
+            seen["budget_chars"] = kwargs.get("budget_chars")
             return {"package_id": "abc", "sources": [], "coverage": {"counts": {"requested": 0, "usable": 0}}}
 
         @staticmethod
@@ -490,6 +496,10 @@ def test_the_brief_job_passes_its_session_into_packaging(monkeypatch, tmp_path):
     assert seen["session_date"] == SESSION
     assert "setup_trackers" in seen["scopes"] and "journal_review" in seen["scopes"]
     assert outcome["status"] == "degraded_no_narrative"
+    # The job packages for the LOCAL context window, not the metered-cloud
+    # ceiling: an over-long prompt is truncated by the server in silence.
+    assert seen["budget_provider"] == "local"
+    assert seen["budget_chars"] == 22000
 
 
 # ---------------------------------------------------------------------------

@@ -69,9 +69,24 @@ Model tiering:
 | Tier | Example | Use |
 |---|---|---|
 | Small (~4B Q4) | Gemma 3 4B | high-volume classification, tagging, extraction — jobs with many small calls |
-| Medium (12-14B Q4) | Gemma 3 12B / Qwen3 14B | nightly digests, journal summaries, briefs |
-| Large (27B+ Q4, ~18GB via UMA) | Gemma 3 27B class | review-policy drafting, weekly retros — the reasoning-heavy overnight jobs |
-| Frontier (cloud, metered) | Fable 5 / best available | periodic synthesis over digests only |
+| Medium (12-14B Q4) | **`gemma3:12b-tbv3ctx`** (derived, `num_ctx 12288`) | nightly digests, journal summaries, briefs — the workhorse tier |
+| ~~Large (local)~~ | **RETIRED 2026-08-10** | see below |
+| Frontier (cloud, metered) | Fable 5 / best available | periodic synthesis over digests **plus** review-policy drafting and weekly retros |
+
+**The local large tier is retired.** It was specified as "27B+ Q4, ~18GB via UMA"
+and has now been falsified twice on this hardware: `gemma3:27b` never fit the
+17.4 GiB Vulkan heap (Phase 0 finding 2), and its Q3_K_M replacement — verified
+loading in Phase 0 — no longer loads at all beside the running desk, failing with
+`alloc_tensor_range: failed to allocate Vulkan0 buffer` at ~1 GB contiguous
+allocations on a contended UMA heap. A tier that only works when the trading desk
+is closed is not a tier on an always-on desk. Its jobs (review-policy drafting,
+weekly retros) move to the frontier row, which is cheap here precisely because
+this plan only ever sends it small digests. The `ai_local_model_large` setting key
+stays, dormant and free to keep, so a future revisit is a settings change.
+
+*Revisit triggers for a local large tier:* Ollama Vulkan allocator improvements,
+working ROCm on gfx1103, or a RAM upgrade. Until one lands, assume no local large
+model — Phase 2's redesign and Phase 4 both depend on this.
 
 ## 3. Architecture
 
@@ -570,6 +585,10 @@ That redesign has **not been done**. Concretely, for the next agent:
   written into an append-only store is expensive to take back.
 - The digest-sufficiency benchmark named in the confirmation register is part
   of that pending design, not a separate task to start early.
+- **A design packet now exists: sec 6.4a (PROPOSED, 2026-08-10).** It is a
+  proposal awaiting trader sign-off, not authority to build. Its open questions
+  must be answered first — question 1 (what counts as "winning") is a trading
+  judgement no agent should make.
 
 ### Phase 3 — Journal enrichment (trader priority #2)
 
@@ -591,8 +610,11 @@ That redesign has **not been done**. Concretely, for the next agent:
 ### Phase 4 — Review-policy curation (trader priority #3)
 
 - The `docs/REVIEW_LEARNING_LOOP.md` AI step (read review artifacts → write
-  `review_policy.json` rank/annotate output) moves to the local large model,
-  nightly.
+  `review_policy.json` rank/annotate output) moves to **the frontier model, or
+  the local medium tier**, nightly. *(Amended 2026-08-10: the local large tier
+  is retired — sec 2. The existing two-week side-by-side gate below is the
+  arbiter of which one earns the job; it was always a quality comparison, and
+  it does not care which model is on the other side.)*
 - **Validation gate before it goes live:** two weeks of local drafts written
   to `review_policy_draft.json` only, compared side-by-side against the
   cloud model's output; trader signs off on quality before the local model
@@ -680,13 +702,31 @@ Where it conflicts with an earlier section, this section wins.
 |---|---|---|
 | `ai_local_endpoint_url` | unset = local provider disabled | e.g. `http://127.0.0.1:11434/v1` |
 | `ai_local_model_small` | `gemma3:4b` | high-volume classification tier |
-| `ai_local_model_medium` | `gemma3:12b` | digests, briefs, summaries |
-| `ai_local_model_large` | `gemma3:27b` | policy drafts, retros |
+| `ai_local_model_medium` | `gemma3:12b` | digests, briefs, summaries. **Desk value: `gemma3:12b-tbv3ctx`** — see the derived-model rule below |
+| `ai_local_model_large` | `gemma3:27b` | **DORMANT** since 2026-08-10: the local large tier is retired (sec 2). The key is retained so a revisit is a settings change |
+| `ai_local_evidence_budget_chars` | `22000` | evidence ceiling for **local** calls only; `MAX_TOTAL_EVIDENCE_CHARS` (80,000) remains the cloud ceiling. Derivation: 12288 context − 3500 generation − ~1000 scaffold ≈ 7,800 evidence tokens × ~3.0 chars/token, rounded down so the **retry** (which re-sends the evidence plus the validator's rejection) still fits. A non-positive or unparseable value falls back to the default rather than funding nothing |
 | `ai_store_dir` | unset = AI store + all jobs disabled | file-server or local path; **refuse any path inside the `C:\TradingBotData` home folder**, mirroring `research_warehouse/config.py`'s refusal. A local-disk path is fine while the file server pends — implementation never blocks on server setup |
 | `ai_offhours_start` / `ai_offhours_end` | `"18:30"` / `"08:00"` | ET wall-clock (`zoneinfo`, `America/New_York`) job-launch window. Weekends: all day allowed. Holidays treated as normal weekdays (conservative — the window still applies). No job **launches** outside the window; a job that crosses the end finishes its current model call and stops gracefully |
 
 Model tags are starting picks; the Phase 0 benchmark may swap them by editing
 these settings — never by hardcoding.
+
+**Any medium- or large-tier tag MUST be a derived model with an explicit
+`num_ctx`.** A stock Ollama tag inherits the server's default context, which
+measured **2,048 prompt tokens** on this desk. That default is the root cause of
+the six-night `ticker_briefs` failure: 80,000 chars of evidence were sheared to
+2,048 tokens, the model answered from the fragment, and generation — sharing the
+same window — ran out mid-JSON, surfacing only as `Unterminated string`. Create
+the tier model explicitly:
+
+```
+FROM gemma3:12b
+PARAMETER num_ctx 12288
+```
+
+Per-model `num_ctx` rather than the global `OLLAMA_CONTEXT_LENGTH`: one global
+value cannot serve both tiers here. 16384 fails to allocate outright, and a value
+large enough for briefs starves everything else on a shared UMA heap.
 
 ### 6.2 Provider plumbing spec (Phase 0)
 
@@ -700,6 +740,14 @@ these settings — never by hardcoding.
   invalid JSON, then fail the call. The local provider needs no API key —
   use the fixed placeholder `"local"` instead of raising the missing-key
   error. Cloud branches unchanged.
+- **The local branch caps evidence to the tier's context budget
+  (`evidence_budget_for(provider)`) and verifies the returned
+  `usage.prompt_tokens` against an estimate of what was sent, raising a named
+  truncation error rather than parsing output generated from a sheared prompt.**
+  The check is skipped when the server omits `usage` (some llama.cpp builds do),
+  and the error is raised rather than retried: a retry re-sends the evidence
+  plus the rejection text, so it would truncate harder. Token usage, when
+  reported, is recorded in the job ledger.
 - `market_prep/services/ai_service.py`: when a base-URL setting is present,
   pass `base_url=` to the `OpenAI(...)` constructor and fall back to the
   `"local"` placeholder key when none is configured. Cloud path unchanged
@@ -735,7 +783,8 @@ it succeeds or not; a failed job leaves prior artifacts untouched
 > redesigned around deterministic fact packs (see the Phase 2 status note) and
 > that design is pending. Trader decision: do not build or freeze any digest
 > schema without a design packet first. Kept below only as the record of what
-> was drafted, never signed off, and never written.
+> was drafted, never signed off, and never written. **The current proposal is
+> sec 6.4a below**, itself awaiting trader sign-off.
 
 One JSON object per session day, ≤32KB hard cap, written to
 `ai_store/digests/YYYY/YYYY-MM-DD.json`:
@@ -760,6 +809,121 @@ One JSON object per session day, ≤32KB hard cap, written to
 Fields may be **added** in later versions; existing fields are never renamed,
 retyped, or removed (append-only ledger, sec 3.2). Malformed or over-cap
 output → job fails, no file written.
+
+### 6.4a Phase 2 design packet (PROPOSED — awaiting trader sign-off)
+
+> Supersedes the sec 6.4 draft. **Nothing here is frozen and no code is written.**
+> This is the design packet the 2026-08-08 trader decision requires before any
+> digest schema may be built. Field names below are illustrative of *shape*, not
+> a schema to implement; the open questions at the end must be answered first.
+
+**The problem this solves.** Phase 1's lesson was that everything trustworthy in
+the nightly output came from code and everything that needed guarding came from
+the model. The 2026-08-10 truncation made the point again: a model handed a
+sheared prompt produced confident, schema-valid output about evidence it never
+saw. So the extraction layer is the product, and narration is a garnish that
+must never be load-bearing.
+
+#### D1 — Two artifacts per session, not one
+
+| Artifact | Written by | Status when the model is unavailable |
+|---|---|---|
+| `facts/<YYYY>/<YYYY-MM-DD>.json` | code only, zero LLM | **written normally** |
+| `narration/<YYYY>/<YYYY-MM-DD>.json` | medium tier, reads only the fact pack | absent |
+
+Splitting them is the whole design. A missing narration file is a normal state,
+not a degraded one: the frontier reducer reads facts, and narration is a
+convenience for the human. It also means narration can be regenerated later —
+after a model upgrade, say — without touching an append-only fact record, and
+that a model failure can never block the day's facts from being recorded.
+
+#### D2 — Every number is computed by code and carries its own pointer
+
+No aggregate is ever produced by a model. The proposed shape for a measured
+value makes the provenance impossible to omit:
+
+```jsonc
+{"value": 1.01, "n": 1940, "source_id": "review.scoreboard",
+ "selector": "bucket=favorite_setup&window=60d", "as_of": "2026-08-10T16:05:00-07:00"}
+```
+
+`n` is mandatory. The -0.18R vs +1.01R finding that reordered the Away report was
+only actionable because both sample sizes were known; a bare average would have
+looked like a coin flip either way.
+
+#### D3 — Fields the frontier reader actually needs
+
+Sized to answer "which setups, conditions, and habits are winning" across 30–90
+digests without ever reading raw data:
+
+- **Setup performance** — per setup family and per priority bucket: n, win rate,
+  mean and median R, and a small distribution (not just the mean, which hides
+  the fat tail that makes a setup worth trading).
+- **Condition slices** — market environment (`bullish_weak` and friends, already
+  stamped on technical-integrity events), time-of-day bucket, and session
+  character. A setup that only works in one regime reads as mediocre when
+  averaged across all of them.
+- **Trader behaviour** — alerts fired vs reviewed vs acted on, decision latency,
+  veto-vocabulary counts, and SEEN/TAKEN/SKIPPED conversion. The habits half of
+  the mission lives entirely here, and none of it is a market fact.
+- **Operations** — scans completed, provider failure/fallback counts, staleness,
+  and publish outcomes. Without these, an infrastructure week reads as a bad
+  trading week; 2026-08-10 would have looked like "no setups worth pushing"
+  rather than "the writer was unconfigured".
+- **Coverage and uncertainty** — what was missing, empty, stale, or unfunded that
+  day, mirroring the evidence packager's existing honesty. A digest that cannot
+  say what it did not see is a digest a reducer will over-trust.
+
+#### D4 — Evidence pointers drill to raw records
+
+Every pointer carries `source_id`, the artifact path, a record selector, and an
+`as_of`. A pointer must survive the record moving to the DAS or into an archive
+partition, so it names a logical source and key rather than a byte offset.
+
+#### D5 — Sizing, by construction rather than by truncation
+
+- Fact pack: target ≤8 KB, hard cap ~16 KB. 90 of them is well under 1.5 MB —
+  a trivial context load for a frontier model, which is the entire point.
+- **The narrator reads the fact pack and nothing else.** That bounds its prompt
+  to the cap plus a fixed scaffold, which fits `ai_local_evidence_budget_chars`
+  (22,000) by construction. Raw sources are never fed to the narrator, so the
+  truncation class of failure cannot recur here by design, not by vigilance.
+- Over-cap output fails the job and writes nothing rather than truncating.
+
+#### D6 — Append-only, point-in-time, timezone-explicit
+
+Built only from information available that session; every timestamp carries an
+explicit offset (plan.md sec 5). A digest is never edited — a correction is a
+superseding sibling naming what it supersedes, so the history of what was
+believed on the day survives.
+
+#### D7 — No local large model
+
+Narration is medium tier or nothing (sec 2). Any design that needs a 27B-class
+local model is out of scope on this hardware.
+
+#### D8 — Rollups are a read, not a second store
+
+Weekly and monthly views are computed on demand from the fact packs. A derived
+aggregate store would be a second thing to keep in sync and a second thing to be
+wrong.
+
+#### Open questions — the trader must answer these before anything is built
+
+1. **What counts as "winning"?** R at scenario close, MFE/MAE, or both? This is
+   the single decision the whole fact pack hangs on, and it is a trading
+   judgement, not an engineering one.
+2. **Which condition slices are first-class?** Every slice multiplies the fact
+   pack; the honest starting set is small and named deliberately.
+3. **Do shadow-engine outputs belong in the digest?** They are promotion
+   evidence (plan.md sec 7) and mixing them with champion facts risks a reducer
+   treating a challenger as live.
+4. **Retention:** are narration files disposable and regenerable, or part of the
+   permanent record?
+5. **Cap:** is 16 KB the right hard cap, given it bounds how much a single day
+   can ever say?
+6. **Non-sessions:** does a weekend or holiday get an empty fact pack (so gaps
+   are visible) or no file (so absence means "no session")?
 
 ### 6.5 Phase exit gates (verify commands)
 
@@ -802,10 +966,12 @@ Additionally:
 2. **File server path class — RESOLVED 2026-08-10** (sec 6.1:
    `ai_store_dir` accepts any path outside the home folder, local disk included).
    `research_warehouse/config.py` accepts a UNC path: `research_store_dir` is now
-   `\MINI-PC\Trading Bot Dataesearch_lake`, and `ensure_lake_layout` created the
+   `\MINI-PC\Trading Bot Data
+esearch_lake`, and `ensure_lake_layout` created the
    full sec-8.2 skeleton over SMB. The trader confirmed the DAS is the durable
    storage tier (decision 0015), so lake and AI store both live there.
-3. **Model picks — RESOLVED BY MEASUREMENT 2026-08-08** (sec 6.1):
+3. **Model picks — RESOLVED BY MEASUREMENT 2026-08-08, PARTLY OVERTURNED
+   2026-08-10** (sec 6.1; see the amendment note at the end of this item):
    `gemma3:4b` (small) and `gemma3:12b` (medium) both run 100% on the 780M.
    Stock `gemma3:27b` does not fit the 17.4 GiB Vulkan heap, so the large tier
    is `hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M` — verified loading
@@ -886,6 +1052,10 @@ changed, in this layer:
   most-recent extract rather than a head slice of March watchlists; within
   `setup_trackers`, analytic sub-sources are funded before the raw tracker.
 
-Unchanged and still open: the 80,000-character evidence budget is undersized
-for a local model (a trader decision, not a repair), and the tracker file
-itself is still 762 MB.
+**Closed 2026-08-10:** the 80,000-character evidence budget is no longer used
+for local calls. `ai_local_evidence_budget_chars` (default 22,000) caps the
+local branch to its context window, and a truncation tripwire fails loudly when
+the server reports having seen materially less prompt than was sent. 80,000
+remains the cloud ceiling, so metered models are not penalised by a local limit.
+
+Still open: the tracker file itself is 762 MB.

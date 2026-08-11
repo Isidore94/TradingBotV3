@@ -57,11 +57,17 @@ class _Response:
         return self.payload
 
 
-def _chat_response(text: str, *, status_code: int = 200):
-    return _Response(
-        {"id": "chatcmpl-local", "choices": [{"message": {"role": "assistant", "content": text}}]},
-        status_code=status_code,
-    )
+def _chat_response(text: str, *, status_code: int = 200, usage: dict | None = None):
+    """A chat-completions body. ``usage`` omitted entirely unless asked for:
+    some llama.cpp builds do not report it, and the default here must stay that
+    shape so the truncation tripwire is exercised against its silent case."""
+    payload = {
+        "id": "chatcmpl-local",
+        "choices": [{"message": {"role": "assistant", "content": text}}],
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return _Response(payload, status_code=status_code)
 
 
 def _settings(**values):
@@ -163,6 +169,10 @@ class CloudPathIsUnchangedTests(unittest.TestCase):
                         ai_local_model_medium="gemma3:12b",
                         ai_local_model_small="gemma3:4b",
                         ai_local_model_large="gemma3:27b",
+                        # A deliberately tiny local budget: if it ever leaked
+                        # into the cloud path it would starve the package and
+                        # this byte-comparison would fail loudly.
+                        ai_local_evidence_budget_chars=500,
                     ):
                         _result, set_calls = self._capture(provider, evidence)
 
@@ -524,6 +534,202 @@ class MarketPrepBaseUrlTests(unittest.TestCase):
 
         self.assertEqual(ai_service._brief_source({"base_url": ENDPOINT}), "local")
         self.assertEqual(ai_service._brief_source({"base_url": ""}), "openai")
+
+
+class LocalEvidenceBudgetTests(unittest.TestCase):
+    """The evidence cap is per-call-site and never lowers the cloud ceiling.
+
+    A local server truncates an over-long prompt in silence, which defeats the
+    packager's own honest degradation. Capping the evidence is the fix; doing
+    it globally would starve metered models that have room for far more.
+    """
+
+    def test_local_budget_defaults_and_can_be_configured(self):
+        import ai_summary
+
+        with _settings():
+            self.assertEqual(
+                ai_summary.evidence_budget_for("local"),
+                ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS,
+            )
+        with _settings(ai_local_evidence_budget_chars=9000):
+            self.assertEqual(ai_summary.evidence_budget_for("local"), 9000)
+
+    def test_a_broken_budget_value_falls_back_instead_of_funding_nothing(self):
+        import ai_summary
+
+        # 0 would fund no sources at all, which looks exactly like a day with
+        # no evidence -- the failure the budget exists to make visible.
+        for broken in (0, -1, "", "lots", None, True):
+            with self.subTest(value=broken):
+                with _settings(ai_local_evidence_budget_chars=broken):
+                    self.assertEqual(
+                        ai_summary.evidence_budget_for("local"),
+                        ai_summary.DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS,
+                    )
+
+    def test_the_cloud_ceiling_is_untouched_by_the_local_budget(self):
+        import ai_summary
+
+        with _settings(ai_local_evidence_budget_chars=500):
+            for provider in ("openai", "anthropic"):
+                with self.subTest(provider=provider):
+                    self.assertEqual(
+                        ai_summary.evidence_budget_for(provider),
+                        ai_summary.MAX_TOTAL_EVIDENCE_CHARS,
+                    )
+
+    def test_the_default_budget_leaves_room_for_generation_and_the_retry(self):
+        """The derivation, asserted rather than trusted.
+
+        The retry re-sends the full evidence PLUS the validator's rejection, so
+        a budget that only fits the first attempt turns every retry into the
+        truncation it was meant to prevent. Estimated at the pessimistic
+        3.0 chars/token, the worst-case prompt must still fit the context left
+        after generation.
+        """
+        import tempfile
+
+        import ai_summary
+
+        context_window = 12288  # the desk's gemma3:12b-tbv3ctx
+        generation = 3500  # the max_tokens every request sends
+        with tempfile.TemporaryDirectory() as raw:
+            with _settings():
+                evidence = ai_summary.build_evidence_package(
+                    ["daily_report"],
+                    source_overrides=_daily_overrides(Path(raw)),
+                    budget_chars=ai_summary.evidence_budget_for("local"),
+                )
+            # A long rejection is the worst realistic retry.
+            prompt = ai_summary._local_user_prompt(evidence, "rejected: " + ("x" * 900))
+            scaffold = ai_summary._system_instruction()
+
+        estimated_tokens = (len(prompt) + len(scaffold)) / 3.0
+        self.assertLess(
+            estimated_tokens,
+            context_window - generation,
+            f"worst-case retry prompt estimates at {int(estimated_tokens)} tokens, which does "
+            f"not fit {context_window - generation} tokens of context left after generation",
+        )
+
+
+class PromptTruncationTripwireTests(unittest.TestCase):
+    """Output built from a sheared prompt validates, so it must not be parsed.
+
+    This is the failure that ran for six nights: 80,000 chars of evidence into
+    a 2048-token context produced confident JSON about evidence the model never
+    saw, and only died because the JSON itself was cut mid-string.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        import ai_summary
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        with _settings():
+            self.evidence = ai_summary.build_evidence_package(
+                ["daily_report"], source_overrides=_daily_overrides(Path(self._tmp.name))
+            )
+        self.summary_text = json.dumps(_valid_summary("daily.auto_report"))
+
+    def _run(self, usage):
+        import ai_summary
+
+        calls = []
+
+        def fake_post(url, **kwargs):
+            calls.append(kwargs)
+            return _chat_response(self.summary_text, usage=usage)
+
+        with _settings(ai_local_endpoint_url=ENDPOINT, ai_local_model_medium="gemma3:12b"):
+            result = ai_summary.request_ai_summary(
+                provider="local",
+                model="",
+                api_key="",
+                evidence=self.evidence,
+                post=fake_post,
+            )
+        return result, calls
+
+    def test_a_sheared_prompt_raises_instead_of_being_parsed(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self._run({"prompt_tokens": 12, "completion_tokens": 100})
+        message = str(caught.exception)
+        self.assertIn("truncated the prompt", message)
+        # Both numbers named: a bare "truncated" tells the operator nothing
+        # about which side to change.
+        self.assertIn("server reported seeing 12", message)
+        self.assertIn("ai_local_evidence_budget_chars", message)
+
+    def test_a_sheared_prompt_is_not_retried_into_a_valid_looking_answer(self):
+        # The retry sends MORE text, so it would truncate harder. One call only.
+        with self.assertRaises(RuntimeError):
+            _result, calls = self._run({"prompt_tokens": 5})
+        # assertRaises swallowed the return, so re-run counting calls directly.
+        import ai_summary
+
+        calls = []
+
+        def fake_post(url, **kwargs):
+            calls.append(kwargs)
+            return _chat_response(self.summary_text, usage={"prompt_tokens": 5})
+
+        with _settings(ai_local_endpoint_url=ENDPOINT):
+            with self.assertRaises(RuntimeError):
+                ai_summary.request_ai_summary(
+                    provider="local",
+                    model="",
+                    api_key="",
+                    evidence=self.evidence,
+                    post=fake_post,
+                )
+        self.assertEqual(len(calls), 1)
+
+    def test_absent_usage_is_not_treated_as_truncation(self):
+        # Some llama.cpp builds omit usage; a missing field is not evidence.
+        result, _calls = self._run(None)
+        self.assertEqual(result["status"], "validated")
+        self.assertEqual(result["usage"], {})
+
+    def test_healthy_usage_passes_and_is_recorded(self):
+        import ai_summary
+
+        sent = len(ai_summary._local_user_prompt(self.evidence)) + len(
+            ai_summary._system_instruction()
+        )
+        honest = int(sent / 3.5)
+        result, _calls = self._run({"prompt_tokens": honest, "completion_tokens": 220})
+        self.assertEqual(result["status"], "validated")
+        self.assertEqual(
+            result["usage"], {"prompt_tokens": honest, "completion_tokens": 220}
+        )
+
+    def test_malformed_usage_never_crashes_the_success_path(self):
+        for broken in ({"prompt_tokens": "many"}, {"prompt_tokens": True}, {"prompt_tokens": 0}, {}):
+            with self.subTest(usage=broken):
+                result, _calls = self._run(broken)
+                self.assertEqual(result["status"], "validated")
+
+
+class CloudUsageRecordingTests(unittest.TestCase):
+    def test_cloud_usage_is_normalized_from_input_output_token_names(self):
+        import ai_summary
+
+        # OpenAI/Anthropic say input/output; the local server says
+        # prompt/completion. The ledger should not have to know which.
+        self.assertEqual(
+            ai_summary.usage_from_body({"usage": {"input_tokens": 10, "output_tokens": 3}}),
+            {"prompt_tokens": 10, "completion_tokens": 3},
+        )
+        self.assertEqual(
+            ai_summary.usage_from_body({"usage": {"prompt_tokens": 7, "completion_tokens": 2}}),
+            {"prompt_tokens": 7, "completion_tokens": 2},
+        )
+        self.assertEqual(ai_summary.usage_from_body({}), {})
+        self.assertEqual(ai_summary.usage_from_body({"usage": "nope"}), {})
 
 
 if __name__ == "__main__":

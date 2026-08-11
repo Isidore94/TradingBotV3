@@ -79,7 +79,14 @@ def run_daily_summary(
         )
 
     model = ai_summary.local_model("medium")
-    evidence = ai_summary.build_evidence_package(list(scopes), session_date=session_date)
+    # Budgeted for the local context window, not the metered-cloud ceiling: the
+    # server truncates an over-long prompt silently, which defeats the
+    # packager's own honest degradation (see ai_summary's budget derivation).
+    evidence = ai_summary.build_evidence_package(
+        list(scopes),
+        session_date=session_date,
+        budget_chars=ai_summary.evidence_budget_for("local", tier="medium"),
+    )
     coverage = evidence.get("coverage") or {}
     counts = coverage.get("counts") or {}
     logging.info(
@@ -111,7 +118,13 @@ def run_daily_summary(
             "model": result.get("model", ""),
             "reason": reason,
             "outputs": outputs,
-            "tokens": {"duration_seconds": result.get("duration_seconds")},
+            # Real token counts when the provider reported them, so a later
+            # reader can see how close the run ran to the context ceiling
+            # instead of inferring it from a failure.
+            "tokens": {
+                "duration_seconds": result.get("duration_seconds"),
+                **(result.get("usage") or {}),
+            },
             "coverage": counts,
         }
 
@@ -172,6 +185,26 @@ def run_daily_summary(
             + (f", {counts.get('stale', 0)} stale" if counts.get("stale") else ""),
         )
     raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def _summed_usage(completed: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """Token totals across one night's per-ticker calls; {} when unreported.
+
+    Summed rather than averaged because the ledger question is "what did this
+    slot cost in total", and omitted entirely when no call reported usage --
+    a zero would claim the batch was free rather than admit it is unknown.
+    """
+    totals: dict[str, int] = {}
+    for entry in completed:
+        result = entry.get("result") if isinstance(entry, Mapping) else None
+        usage = (result or {}).get("usage") if isinstance(result, Mapping) else None
+        if not isinstance(usage, Mapping):
+            continue
+        for key, value in usage.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            totals[str(key)] = totals.get(str(key), 0) + int(value)
+    return totals
 
 
 def default_watchlist_paths() -> dict[str, Path]:
@@ -540,7 +573,13 @@ def run_ticker_briefs(
         raise RuntimeError("local AI provider is not configured; ticker briefs cannot run")
 
     model = ai_summary.local_model("medium")
-    base = ai_summary.build_evidence_package(list(scopes), session_date=session_date)
+    # Budgeted before the per-symbol packages are derived from it, so every
+    # ticker brief inherits a base that already fits the local context.
+    base = ai_summary.build_evidence_package(
+        list(scopes),
+        session_date=session_date,
+        budget_chars=ai_summary.evidence_budget_for("local", tier="medium"),
+    )
     completed: list[dict[str, Any]] = []
     outputs: list[str] = []
     for symbol in symbols:
@@ -576,5 +615,5 @@ def run_ticker_briefs(
         "model": model,
         "reason": f"{len(completed)} per-ticker brief(s) for {session_date}",
         "outputs": outputs,
-        "tokens": {"ticker_calls": len(completed)},
+        "tokens": {"ticker_calls": len(completed), **_summed_usage(completed)},
     }

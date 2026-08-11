@@ -106,9 +106,12 @@ and green while its live or promotion gate remains open in `plan.md`.
 - Provider-neutral A.I. Summary workspace for OpenAI and Anthropic, explicit evidence
   selection, bounded preview, credential-manager storage, structured/source
   validation, immutable evidence packages, and export-only results.
-- Config-gated local OpenAI-compatible provider through Ollama, default off; verified
-  small/medium/large model tiers on the Ryzen main desk with no market-hours
-  inference.
+- Config-gated local OpenAI-compatible provider through Ollama, default off; small and
+  medium model tiers verified on the Ryzen main desk with no market-hours inference.
+  The local large tier is `RETIRED` (2026-08-10): 27B-class models no longer load
+  beside the running desk on the 780M, so its jobs belong to the frontier model. Local
+  calls are capped to the tier's context window and fail loudly on server-side prompt
+  truncation.
 - Separate off-hours `ai_jobs` process and scheduled task, job-ledger integration,
   deterministic evidence coverage, daily advisory summary, per-ticker briefs, full
   artifacts in `ai_store`, and bounded atomic `ai_morning_brief.txt` publication.
@@ -216,6 +219,20 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
   (`num_ctx 12288`), measured at 6,147 prompt tokens against 2,051 before;
   (c) after those failures the job then *skipped* every remaining run for reserving
   120 min against a shrinking window, so the ledger showed skips and hid the failures.
+- **Local AI summarization made truthful about its own limits.** The evidence cap
+  is now resolved per call site (`evidence_budget_for`): local calls use
+  `ai_local_evidence_budget_chars` (default 22,000, derived from the 12288 context
+  minus generation and scaffold, with headroom for the retry), while
+  `MAX_TOTAL_EVIDENCE_CHARS` (80,000) stays the cloud ceiling — cloud request
+  payloads remain byte-identical, test-asserted. A truncation tripwire compares the
+  server's reported `usage.prompt_tokens` against what was sent and raises a named
+  error instead of parsing output built on a sheared prompt; it is silent when the
+  server omits usage, and raises rather than retries because a retry sends more.
+  Token usage now reaches the job ledger for the daily summary and per-ticker slots.
+  The local large tier is retired: 27B-class models no longer load beside the
+  running desk on the 780M, so policy drafts and retros move to the frontier model.
+  A Phase 2 design packet (sec 6.4a) is proposed and awaits trader sign-off; no
+  digest schema was built or frozen.
 - **Cloud sync removed from the system (decision 0015).** Google Drive/OneDrive are no
   longer part of the design. `C:\TradingBotData` is a plain local folder at the same
   path; the DAS `\\MINI-PC\Trading Bot Data` is the durable tier. Decisions 0005, 0006
