@@ -212,6 +212,14 @@ class DeskLinkService(QObject):
 
         def _send() -> None:
             try:
+                # AWAY is the only mode allowed to push (trader rule
+                # 2026-08-11). A control hand-back while the trader is at the
+                # desk is already on screen.
+                auto_mode = ""
+                if self._auto_mode_provider is not None:
+                    auto_mode = str(self._auto_mode_provider() or "")
+                if auto_mode.upper() != "AWAY":
+                    return
                 if push_notify.push_configured():
                     push_notify.send_push(
                         "Desk Link: main resumed control",

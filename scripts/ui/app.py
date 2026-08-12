@@ -78,6 +78,12 @@ class MainWindow(QMainWindow):
             price_alert_read_only=satellite_desk,
         )
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
+        # D1 level/event alerts -> the hourly Away phone push. The Alert Center
+        # classifies (it owns the D1 routing rules); Auto Pilot aggregates and
+        # decides whether the current mode may push at all.
+        self.trading_panel.alert_center.d1EventRecorded.connect(
+            self.autopilot_panel.service.record_d1_event
+        )
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
         # Desk Link relay (docs/MULTI_MACHINE_DESK_PROPOSAL.md Tier 1). The

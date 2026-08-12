@@ -8,7 +8,7 @@ import threading
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
@@ -47,6 +47,11 @@ PUSH_SWINGS_SETTING = "push_away_swings"
 # Hour (desk-local, 0-23) before which the swing push stays quiet. The digest
 # still publishes hourly from 07:00; only the phone waits.
 PUSH_SWINGS_START_HOUR_SETTING = "push_away_swings_start_hour"
+# Machine-local kill switch for the hourly D1 level/event push, defaulting ON.
+PUSH_D1_EVENTS_SETTING = "push_away_d1_events"
+# D1 events awaiting the next hourly push. Bounded so a runaway alert source
+# can never grow this without limit; the oldest pending events fall off first.
+_MAX_PENDING_D1_EVENTS = 200
 
 
 def _enter_background_thread_mode() -> None:
@@ -128,6 +133,9 @@ class AutopilotService(QObject):
         self._log_lines: deque[str] = deque(maxlen=_MAX_LOG_LINES)
         self._alerts_today: deque[str] = deque(maxlen=60)
         self._alerts_date = datetime.now().date().isoformat()
+        #: D1 level/event alerts seen since the last hourly D1 push. Cleared on
+        #: a sent push, so each push carries only what is new.
+        self._d1_events_pending: deque[dict[str, str]] = deque(maxlen=_MAX_PENDING_D1_EVENTS)
         self._state = self._load_state()
         try:
             from job_ledger import get_default_ledger
@@ -158,6 +166,7 @@ class AutopilotService(QObject):
         self._last_report_error = ""
         self._last_hourly_report_attempt_slot = ""
         self._last_hourly_report_attempt_at: datetime | None = None
+        self._last_d1_push_slot = ""
         self._last_ib_status: str | None = None
         self._weekend_logged_date: str | None = None
         self._bot_start_deferred = False
@@ -420,6 +429,7 @@ class AutopilotService(QObject):
             self._maybe_run_wrapup(now)
             self._maybe_run_evening_prep(now)
             self._maybe_hourly_away_report(now)
+            self._maybe_push_d1_events(now)
             core.write_heartbeat(
                 current_job=self._active_scan_slot or active_scan_label(),
                 next_job=str(self.status_snapshot().get("next_slot") or ""),
@@ -453,6 +463,9 @@ class AutopilotService(QObject):
         if self._alerts_date != today:
             self._alerts_date = today
             self._alerts_today.clear()
+            # Yesterday's unsent D1 events are not news; a push naming them at
+            # 07:00 would read as this morning's.
+            self._d1_events_pending.clear()
 
     def _maybe_auto_arm(self, now: datetime) -> None:
         from project_paths import get_local_setting
@@ -1341,17 +1354,14 @@ class AutopilotService(QObject):
                 self._evening_briefing_lines = evening_mode.briefing_summary_lines(payload)
                 final_slot = evening_mode.EVENING_STRENGTH_CHECK_SLOTS[-1]
                 if slot == final_slot and not state.get("announced_at"):
-                    # One arrival ping at normal priority - the urgent channel
-                    # stays reserved for position price levels.
+                    # Desk-side announcement only. The phone push this used to
+                    # send is retired by the trader's 2026-08-11 rule: AWAY is
+                    # the only mode that pushes, and EVENING ends with the
+                    # trader walking to this screen anyway. Research-tab price
+                    # alerts remain the one always-on phone channel.
                     state["announced_at"] = moment.strftime("%H:%M:%S")
                     summary = " | ".join(self._evening_briefing_lines[:3])
                     self._emit_info_alert(f"MORNING BRIEFING READY - {summary}", "blue")
-                    push_notify.send_push(
-                        "Morning briefing ready",
-                        "\n".join(self._evening_briefing_lines),
-                        priority="default",
-                        tags="sunrise",
-                    )
                     self._log("Morning briefing finalized after the 07:30 strength check.")
                 evening_mode.save_evening_state(state)
                 self._write_report()
@@ -1375,9 +1385,15 @@ class AutopilotService(QObject):
         levels, which are the only thing allowed to break through Focus; a
         swing list that republishes hourly is not that.
 
+        AWAY only (trader rule 2026-08-11): at the desk the trader is already
+        reading these lists on screen, so the phone copy is pure noise, and
+        noise here costs the credibility the urgent price alerts depend on.
+
         Fail-quiet: the report has already published by the time this runs, so
         a push problem is logged and never raised.
         """
+        if self.auto_mode != AUTO_PROFILE_AWAY:
+            return
         try:
             from project_paths import get_local_setting
 
@@ -1460,6 +1476,17 @@ class AutopilotService(QObject):
                         "key_level": str(getattr(row, "key_level", "") or ""),
                     }
                 )
+            # The roster is built from the FULL feed, not the ten ranked picks:
+            # "which names are favorites right now" is a membership question,
+            # and answering it from a top-ten slice would silently shorten it.
+            roster_rows = [
+                {
+                    "symbol": getattr(row, "symbol", ""),
+                    "side": getattr(row, "side", ""),
+                    "bucket": getattr(row, "bucket", "") or getattr(row, "bucket_label", ""),
+                }
+                for row in swing_rows
+            ]
             picks = [pick for pick in picks if pick["symbol"]][:10]
             payload = {
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1470,6 +1497,7 @@ class AutopilotService(QObject):
                 "longs": longs,
                 "shorts": shorts,
                 "swing_picks": picks,
+                "bucket_roster": core.build_bucket_roster(roster_rows),
                 "swing_data_current": current_session_data,
                 "swing_data_line": (
                     f"Swing data: current session {swing_data_date} ({swing_feed.get('source') or 'unknown'})"
@@ -1598,6 +1626,77 @@ class AutopilotService(QObject):
             return
         stamp = getattr(alert, "time_text", "") or datetime.now().strftime("%H:%M:%S")
         self._alerts_today.append(f"{stamp} {text}")
+
+    @Slot(object)
+    def record_d1_event(self, event) -> None:
+        """Queue one D1 level/event alert for the next hourly phone push.
+
+        Fed by the Alert Center, which is the one component that knows the
+        routing rules (which D1 alerts are actionable rather than developing
+        research, and which chart watches are D1 rather than M5). This service
+        only aggregates: it never classifies an alert itself, so the phone and
+        the D1 Focus feed can never disagree about what fired.
+
+        Deduplicated on symbol+label, so a level re-tested three times in an
+        hour is one entry. Records in every mode - the AWAY gate belongs on the
+        push, not on the collection, or a mode switch mid-session would push a
+        hole in the hour it happened to cover.
+        """
+        if isinstance(event, Mapping):
+            symbol = str(event.get("symbol") or "").strip().upper()
+            label = str(event.get("label") or "").strip()
+            time_text = str(event.get("time_text") or "").strip()
+        else:
+            symbol = str(getattr(event, "symbol", "") or "").strip().upper()
+            label = str(getattr(event, "trigger", "") or "").strip()
+            time_text = str(getattr(event, "time_text", "") or "").strip()
+        if not symbol:
+            return
+        label = label.splitlines()[0][:60] if label else ""
+        time_text = time_text or datetime.now().strftime("%H:%M:%S")
+        for pending in self._d1_events_pending:
+            if pending["symbol"] == symbol and pending["label"] == label:
+                pending["time_text"] = time_text
+                return
+        self._d1_events_pending.append(
+            {"symbol": symbol, "label": label, "time_text": time_text}
+        )
+
+    def _maybe_push_d1_events(self, now: datetime) -> None:
+        """AWAY only: phone the D1 level events that fired since the last push.
+
+        Rides the same hourly clock as the Away digest but does NOT depend on
+        it publishing: a file-server hiccup must not also cost the trader the
+        D1 events, which are the one thing here that exists nowhere else on the
+        phone. Silent when nothing fired.
+        """
+        if self.auto_mode != AUTO_PROFILE_AWAY or not self._d1_events_pending:
+            return
+        slot = f"{now.date().isoformat()}|{now.hour:02d}"
+        if getattr(self, "_last_d1_push_slot", "") == slot:
+            return
+        try:
+            from project_paths import get_local_setting
+
+            if not get_local_setting(PUSH_D1_EVENTS_SETTING, True):
+                return
+            if not push_notify.push_configured():
+                return
+            built = core.build_d1_events_push(list(self._d1_events_pending))
+            if built is None:
+                return
+            title, message = built
+            result = push_notify.send_push(
+                title, message, priority="default", tags="mag"
+            )
+            # Clear only on a delivered push: an ntfy failure must not swallow
+            # the events, and the next hour re-sends them with whatever else
+            # fired meanwhile.
+            if result.get("ok"):
+                self._last_d1_push_slot = slot
+                self._d1_events_pending.clear()
+        except Exception as exc:
+            self._log(f"D1 events push failed: {exc}")
 
     @Slot(str)
     def _on_connection_changed(self, message: str) -> None:

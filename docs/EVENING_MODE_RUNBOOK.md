@@ -26,10 +26,13 @@ work.
   intraday picks, and any overnight price alerts. It is written to
   `evening_briefing.txt` next to `autopilot_today.txt` in the shared home folder,
   folded into the hourly phone report (EVENING publishes hourly from 07:00
-  like AWAY), echoed in the Alert Center, and announced with a normal-priority
-  push.
+  like AWAY), and echoed in the Alert Center. It is **no longer pushed to the
+  phone**: since 2026-08-11 AWAY is the only mode that pushes, and EVENING ends
+  with the trader walking to this screen. The file and the desk announcement are
+  unchanged.
 - **Price alerts push at urgent priority** (see below) so a level cross can
-  wake you.
+  wake you. These are the ONE always-on phone channel: they fire in every Auto
+  mode, including OFF and EVENING, while every other ntfy push is AWAY-only.
 
 ## Night-before checklist
 

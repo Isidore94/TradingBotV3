@@ -235,6 +235,11 @@ No new feature or threshold work belongs in Phase 0.
 3. **P0.3 Validate Auto/Away and ntfy end to end.** Confirm the verified hourly
    report, safety/freshness header, swing-first ordering, quiet empty-swing behavior,
    best-swing phone push, late-opened chart freshness, and main-desk alert delivery.
+   Cover the 2026-08-11 push policy too: the swing push must carry a favorite/
+   high-conviction roster matching the Setup Tracker's rows for that hour, the D1
+   push must name only the events since the previous push, and both must be silent
+   while the desk sits in DESK or EVENING while a Research-tab price alert still
+   fires from those modes.
    Also confirm the BounceBot scan window on a live day: Auto Pilot logs one resume
    at 06:00 and one pause at 13:30, `trading_bot.log` shows no symbol sweep between
    them and the close, and the session itself is unaffected — same alert count and

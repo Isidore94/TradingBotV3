@@ -18,6 +18,7 @@ elapsed evidence lane that can run in parallel.
 | Scope | `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one additive helper in `scripts/ai_summary.py`, `tests/test_ai_ticker_briefs.py`, `tests/test_ai_jobs_runner.py`. No detector, scoring, or alert file touched; output stays advisory-only |
 | State | **Integrated and green on `testing-week-2026-08-10`** (2687 passed / 19 subtests / smoke 7/7). The first Windows focused gate exposed and corrected a truncation-banner budget overrun. **Live proof owed: the next 22:00 window on the desk** |
 | Side item landed | **Snapshot popup opens at desk height** (2026-08-11, trader ask) — UI geometry only, no detector/scoring/alert file touched; baseline unchanged at 2687 passed / smoke not re-run (no non-Qt path affected) |
+| Side item landed | **Phone push policy + two richer pushes** (2026-08-11, trader ask, design confirmed before editing per the ask-first rule) — AWAY is now the only mode that pushes (price alerts stay the always-on exception), the swing push carries the full favorite/high-conviction roster, and a second hourly push names the D1 level events since the last one. New baseline **2720 passed / 19 subtests / smoke 7/7**, both exit 0 |
 | Next action after this packet | **P0.2–P0.4** live gates, plus the ticker-briefs morning check below. P0.1 re-baseline is done |
 | Do not start yet | Phase 1 cleanup or any Phase 2+ feature/foundation item |
 
@@ -243,6 +244,27 @@ marker.
 | pytest | **2687 passed, 19 subtests passed**, exit 0 (126s) |
 | smoke | **7/7**, exit 0 |
 | frozen self-test | not re-run — no packaging trigger |
+
+**Current baseline after the phone-push policy packet (2026-08-11):**
+
+| Check | Result |
+|---|---|
+| pytest | **2720 passed, 19 subtests passed**, exit 0 (119s) |
+| smoke | **7/7**, exit 0 |
+| frozen self-test | not re-run — no packaging trigger (no new package, no new runtime asset, no new dependency) |
+
+Thirty-three new tests across `tests/test_away_push_roster_and_d1.py` (roster
+membership, bucket-spelling collapse, the honest trim marker, and the D1 push
+formatting/capping) and `tests/test_away_push_gating.py` (the AWAY-only gate on both
+pushes, once-per-hour cadence, a failed send keeping its events, the kill switch, the
+Alert Center classifier, and the panel signal firing on both D1 routing paths). Two
+existing tests were updated rather than worked around: the Desk Link reclaim push now
+declares AWAY (with a new sibling test proving it stays quiet in DESK), and the day-roll
+test asserts yesterday's unsent D1 events are cleared.
+
+**Live proof owed:** the next AWAY session — a swing push whose roster matches the
+Setup Tracker's Favorite + High Conviction rows, a D1 push naming only events from that
+hour, and silence on the swing/D1 channels while the desk sits in DESK or EVENING.
 
 ### Desk restarted onto the scan-window build — 2026-08-10 21:19
 

@@ -94,6 +94,22 @@ and green while its live or promotion gate remains open in `plan.md`.
   the generated swing section contains no readable setups. Late-opened alerts now
   receive current bars, and the Chart Review Setups column defaults hidden with a
   visible restore control.
+- Phone push policy, 2026-08-11 (trader rule): **AWAY is the only mode that pushes**,
+  and the Research/Focus price alerts are the single deliberate exception — they keep
+  their own always-on urgent channel, unchanged. The EVENING morning-briefing push and
+  the retired Desk Link control-reclaim push are now silent outside AWAY; both still
+  announce on the desk. The hourly swing push carries the **full favorite and
+  high-conviction roster** under the ranked picks, built from the whole current feed
+  rather than the top-ten slice, side-split, with `near` excluded and an explicit
+  "did not fit" marker if the message ever exceeds the ntfy size ceiling; a roster with
+  no ranked picks still sends. A **second hourly push names every stock that fired a D1
+  level or event alert since the previous one** (armed D1 levels, D1 event watches,
+  Focus D1 flags, and the scanner's ready D1 focus alerts), new-since-last-push rather
+  than cumulative, silent on an empty hour, and cleared only on a delivered push so an
+  ntfy failure never eats the events. The Alert Center classifies (it owns the D1
+  routing rules) and Auto Pilot aggregates and gates, so the phone and the D1 Focus
+  feed cannot disagree. Machine-local kill switches: `push_away_swings`,
+  `push_away_d1_events`.
 
 ### Journal, explanations, and learning
 

@@ -160,6 +160,48 @@ def is_ready_d1_alert(alert: BounceAlert) -> bool:
     return _d1_alert_prefix(alert) in _D1_READY_PREFIXES
 
 
+# Short labels for the scanner's own D1 focus alerts, so the hourly phone push
+# reads "NVDA bucket upgrade" rather than a 200-character raw alert line.
+_D1_PUSH_LABELS = {
+    "MASTER_AVWAP_D1_ZONE": "D1 zone",
+    "MASTER_AVWAP_D1_BUCKET_UPGRADE": "bucket upgrade",
+    "MASTER_AVWAP_D1_TIER_FLIP": "tier flip",
+}
+
+
+def d1_push_event(alert: BounceAlert) -> dict[str, str] | None:
+    """What the hourly D1 phone push should carry for this alert, if anything.
+
+    One classifier, here rather than in the Auto Pilot service, because this
+    module already owns which D1 alerts are actionable and which are developing
+    research. The phone therefore names exactly the events the D1 Focus feed
+    shows, and the two can never drift apart.
+    """
+    symbol = str(getattr(alert, "symbol", "") or "").strip().upper()
+    if not symbol:
+        return None
+    kind = ""
+    payload = getattr(alert, "payload", None)
+    if isinstance(payload, dict):
+        kind = str(payload.get("chart_watch_kind") or payload.get("focus_d1_kind") or "")
+    label = ""
+    if kind:
+        # Armed D1 levels and D1 event watches: the trader asked for exactly
+        # this condition, so it belongs on the phone by definition.
+        label = D1_LEVEL_KINDS.get(kind) or D1_EVENT_KINDS.get(kind) or ""
+        if not label:
+            return None
+    elif getattr(alert, "is_d1", False) and is_ready_d1_alert(alert):
+        label = _D1_PUSH_LABELS.get(_d1_alert_prefix(alert), "D1 event")
+    else:
+        return None
+    return {
+        "symbol": symbol,
+        "label": label,
+        "time_text": str(getattr(alert, "time_text", "") or ""),
+    }
+
+
 def extract_alert_tier(alert: BounceAlert) -> str:
     match = _TIER_RE.search(str(alert.raw_text or ""))
     return match.group(1).upper() if match else ""
@@ -309,6 +351,10 @@ class AlertCenterPanel(QFrame):
     statusChanged = Signal(str)
     setupRequested = Signal(dict)  # show_setup kwargs, when the embedded pane is off
     armedWatchesChanged = Signal()  # any arm/disarm, so the inventory can redraw
+    # One D1 level/event alert worth the hourly Away phone push, as the
+    # {symbol, label, time_text} dict d1_push_event builds. Emitted for every
+    # qualifying alert in every mode; Auto Pilot owns the AWAY-only gate.
+    d1EventRecorded = Signal(object)
 
     def __init__(
         self,
@@ -824,6 +870,12 @@ class AlertCenterPanel(QFrame):
             return
         if alert.symbol and alert.symbol in self._ignored_symbols:
             return
+        # Announced before any routing below, so a D1 event reaches the phone
+        # whether it lands in the D1 Focus feed or the main feed, and whichever
+        # tier gate the trader has set.
+        d1_event = d1_push_event(alert)
+        if d1_event is not None:
+            self.d1EventRecorded.emit(d1_event)
         # A Focus pick's automatic D1 interest flag belongs in the D1 Focus
         # feed (the name is already the trader's) plus the chart queue.
         if alert.tag == FOCUS_D1_EVENT_TAG:

@@ -2,6 +2,7 @@
 
 import os
 import sys
+from collections import deque
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -106,12 +107,15 @@ def test_day_roll_preserves_away_profile_and_resets_hourly_report_slot():
     service._scorecard_line = "old"
     service._alerts_date = "2000-01-01"
     service._alerts_today = []
+    service._d1_events_pending = deque([{"symbol": "NVDA", "label": "5d high", "time_text": "10:00:00"}])
     service._save_state = lambda: None
 
     service._roll_day_state()
 
     assert service._state["profile"] == AUTO_PROFILE_AWAY
     assert service._state["hourly_report_slot"] is None
+    # Yesterday's unsent D1 events must not be pushed as this morning's.
+    assert not service._d1_events_pending
 
 
 def test_report_header_renders_mode_labels():

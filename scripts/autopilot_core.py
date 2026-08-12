@@ -2645,6 +2645,107 @@ def swing_push_due(
     return now.hour >= max(0, int(start_hour))
 
 
+# The phone push carries the FULL favorite / high-conviction roster under the
+# ranked picks (trader ask 2026-08-11). The ranked five answer "what do I
+# trade now"; the roster answers "which names are live at all", which is the
+# question that otherwise costs opening the digest. Near-favorite stays out on
+# the same evidence that keeps it capped in the report: it measured -0.18R
+# against favorites' +1.01R, and a push has less room than the report, not more.
+PUSH_ROSTER_GROUPS = (("high_conviction", "HC"), ("favorite", "FAV"))
+
+# ntfy's default per-message ceiling is 4 KB. Stay under it with room to spare,
+# and when a roster genuinely does not fit, SAY a line was dropped - a silently
+# shortened list reads as a complete one, which is the failure this channel
+# cannot have (plan.md sec 5: missing data is uncertainty, never confirmation).
+PUSH_MESSAGE_MAX_CHARS = 3500
+
+
+def normalize_bucket_key(bucket: Any) -> str:
+    """Collapse a raw bucket key or its display label to one comparable token.
+
+    The same bucket reaches this module as ``high_conviction`` from the scan
+    CSV and as ``High Conviction`` from ``SetupRow.bucket_label``; both must
+    land on one key or the roster silently splits in two.
+    """
+    text = str(bucket or "").strip().lower().replace("_", " ").replace("-", " ")
+    text = " ".join(text.split())
+    if not text:
+        return ""
+    if "near" in text:
+        return "near"
+    if text.startswith("high conviction"):
+        return "high_conviction"
+    if text.startswith("favorite") or text.startswith("favourite"):
+        return "favorite"
+    return text.replace(" ", "_")
+
+
+def build_bucket_roster(rows: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, list[str]]]:
+    """Every favorite / high-conviction name in the current feed, side-split.
+
+    Order is the feed's own (already ranked), duplicates are dropped, and a
+    symbol that appears both long and short keeps both entries - that
+    disagreement is information, not noise.
+    """
+    roster: dict[str, dict[str, list[str]]] = {
+        key: {"LONG": [], "SHORT": []} for key, _short in PUSH_ROSTER_GROUPS
+    }
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        group = roster.get(normalize_bucket_key(row.get("bucket")))
+        if group is None:
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = str(row.get("side") or "").strip().upper()
+        if not symbol or side not in group:
+            continue
+        if symbol not in group[side]:
+            group[side].append(symbol)
+    return roster
+
+
+def format_roster_lines(roster: Mapping[str, Any] | None) -> list[str]:
+    """Compact push lines for the roster, one per non-empty bucket/side."""
+    lines: list[str] = []
+    for key, short in PUSH_ROSTER_GROUPS:
+        sides = roster.get(key) if isinstance(roster, Mapping) else None
+        if not isinstance(sides, Mapping):
+            continue
+        for side, side_short in (("LONG", "L"), ("SHORT", "S")):
+            symbols = [
+                str(symbol).strip().upper()
+                for symbol in (sides.get(side) or [])
+                if str(symbol).strip()
+            ]
+            if symbols:
+                lines.append(f"{short} {side_short} ({len(symbols)}): " + ",".join(symbols))
+    return lines
+
+
+def fit_push_message(lines: Iterable[str], *, limit: int = PUSH_MESSAGE_MAX_CHARS) -> str:
+    """Join push lines, dropping trailing ones only when they cannot fit.
+
+    A trimmed message always ends by saying how many lines it dropped, so a
+    short list on the phone is never mistaken for a short list in the data.
+    """
+    lines = [str(line) for line in lines]
+    message = "\n".join(lines)
+    if len(message) <= limit:
+        return message
+    kept: list[str] = []
+    for index, line in enumerate(lines):
+        # Reserve room for the widest marker this line could still need.
+        marker = f"! {len(lines) - index} more line(s) did not fit - see the digest"
+        if len("\n".join([*kept, line, marker])) > limit:
+            break
+        kept.append(line)
+    dropped = len(lines) - len(kept)
+    if not dropped:
+        return "\n".join(kept)
+    return "\n".join([*kept, f"! {dropped} more line(s) did not fit - see the digest"])
+
+
 def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str, str] | None:
     """The best Master AVWAP swing trades, compact enough for a phone push.
 
@@ -2666,7 +2767,7 @@ def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str
     """
     picks = payload.get("swing_picks")
     if not isinstance(picks, (list, tuple)):
-        return None
+        picks = ()
     lines: list[str] = []
     symbols: list[str] = []
     for pick in picks:
@@ -2690,12 +2791,65 @@ def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str
         )
         if len(symbols) >= max(1, int(limit)):
             break
-    if not lines:
+    roster_lines = format_roster_lines(payload.get("bucket_roster"))
+    if not lines and not roster_lines:
         return None
     if payload.get("swing_data_current") is not True:
         lines.append("! not from the current session - check the digest")
-    lines.append("TV: " + ",".join(symbols))
-    return f"Best swings ({len(symbols)})", "\n".join(lines)
+    if symbols:
+        lines.append("TV: " + ",".join(symbols))
+    lines.extend(roster_lines)
+    title = (
+        f"Best swings ({len(symbols)})"
+        if symbols
+        else "Favorites / high conviction"
+    )
+    return title, fit_push_message(lines)
+
+
+# D1 level events on the phone (trader ask 2026-08-11): a second hourly push
+# naming every stock that fired a D1 level or event alert since the previous
+# one. NEW-since-last-push on purpose - a cumulative list re-sent each hour
+# trains the trader to swipe the channel away, and the channel's whole value is
+# that it is worth reading.
+D1_EVENT_PUSH_MAX_SYMBOLS = 25
+
+
+def build_d1_events_push(
+    events: Iterable[Mapping[str, Any]], *, limit: int = D1_EVENT_PUSH_MAX_SYMBOLS
+) -> tuple[str, str] | None:
+    """One line per symbol that fired D1 level/event alerts, newest label last.
+
+    Returns ``None`` when nothing fired: silence is the correct hourly output
+    for an hour with no D1 events, exactly as it is for the swing push.
+    """
+    ordered: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        symbol = str(event.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        label = str(event.get("label") or "").strip()
+        entry = ordered.setdefault(symbol, {"labels": [], "time_text": ""})
+        if label and label not in entry["labels"]:
+            entry["labels"].append(label)
+        time_text = str(event.get("time_text") or "").strip()
+        if time_text:
+            entry["time_text"] = time_text
+    if not ordered:
+        return None
+    total = len(ordered)
+    lines: list[str] = []
+    for index, (symbol, entry) in enumerate(list(ordered.items())[: max(1, int(limit))], start=1):
+        labels = ", ".join(entry["labels"])
+        stamp = f" ({entry['time_text'][:5]})" if entry["time_text"] else ""
+        lines.append(f"{index}. {symbol}" + (f" {labels}" if labels else "") + stamp)
+    shown = min(total, max(1, int(limit)))
+    if total > shown:
+        lines.append(f"! {total - shown} more symbol(s) not shown - see the desk")
+    lines.append("TV: " + ",".join(list(ordered)[:shown]))
+    return f"D1 events ({total})", fit_push_message(lines)
 
 
 def render_away_report(payload: Mapping[str, Any]) -> str:

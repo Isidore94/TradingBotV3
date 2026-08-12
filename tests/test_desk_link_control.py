@@ -238,6 +238,9 @@ def test_auto_reclaim_sends_phone_push(service, monkeypatch):
         lambda title, message, **kwargs: pushes.append((title, message)),
     )
 
+    # AWAY is the only mode allowed to push at all (trader rule 2026-08-11).
+    main.set_auto_mode_source(lambda: "AWAY")
+
     satellite = _Sat(main._server.address[1], "sat-a")
     try:
         assert _pump_until(qapp, lambda: main.has_satellites and satellite.ready())
@@ -251,6 +254,34 @@ def test_auto_reclaim_sends_phone_push(service, monkeypatch):
         # A deliberate take-back must NOT page the trader's phone.
         pushes.clear()
         main.take_back_control()
+        qapp.processEvents()
+        assert pushes == []
+    finally:
+        satellite.client.stop()
+
+
+def test_auto_reclaim_stays_quiet_outside_away(service, monkeypatch):
+    """At the desk the banner is already on screen; only AWAY may push."""
+    qapp, main = service
+    import ui.services.desk_link_service as service_module
+
+    pushes: list[tuple[str, str]] = []
+    monkeypatch.setattr(service_module.push_notify, "push_configured", lambda: True)
+    monkeypatch.setattr(
+        service_module.push_notify,
+        "send_push",
+        lambda title, message, **kwargs: pushes.append((title, message)),
+    )
+    main.set_auto_mode_source(lambda: "DESK")
+
+    satellite = _Sat(main._server.address[1], "sat-a")
+    try:
+        assert _pump_until(qapp, lambda: main.has_satellites and satellite.ready())
+        satellite.client.send(protocol.TYPE_LEASE_REQUEST)
+        assert _pump_until(qapp, lambda: main.controller == "sat-a")
+
+        satellite.client.stop()
+        assert _pump_until(qapp, lambda: main.controller == "")
         qapp.processEvents()
         assert pushes == []
     finally:
