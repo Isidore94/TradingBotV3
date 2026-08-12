@@ -76,6 +76,7 @@ Check each row from real behavior:
 | Paint lines | groups toggle; level IDs persist; click-to-arm uses PriceAlertService | |
 | Price alert | actual/test push reaches ntfy; fire disarms only that side | |
 | Auto/Away | current verified digest publishes with correct section order | |
+| Phone pushes | AWAY only: swing push carries a roster matching the tracker's Favorite + High Conviction rows; D1 push names only that hour's events; DESK/EVENING/OFF push nothing while a price alert still fires | |
 | Warehouse | live tee/Health tiles advance if enabled; disabled path is a no-op | |
 | GUI | no sustained event-loop stall or main-thread I/O regression | |
 

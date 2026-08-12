@@ -29,7 +29,14 @@ The verified file order is fixed:
 Publication is transactional: the report and verification metadata are written,
 read back, and accepted together. A failed attempt preserves the last verified pair.
 The latest build may send an ntfy notification for readable best-swing content; an
-empty or unparseable swing section stays quiet.
+empty or unparseable swing section stays quiet. Since 2026-08-11 that push also
+carries the **full favorite and high-conviction roster** (side-split, `near`
+excluded, built from the whole feed rather than the ranked picks), and a **second
+hourly push** names every stock that fired a D1 level or event alert since the
+previous one — new-since-last-push, silent on an empty hour. Both are **AWAY-only**:
+DESK, EVENING, and OFF push nothing. The Research/Focus price alerts are the single
+exception and still fire from every mode at `urgent`. Machine-local kill switches:
+`push_away_swings`, `push_away_d1_events`.
 
 ## One-time setup
 

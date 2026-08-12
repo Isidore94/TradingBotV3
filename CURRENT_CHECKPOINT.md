@@ -272,6 +272,14 @@ HC longs plus the full roster — HC 12 long / 7 short, FAV 30 long / 6 short, 5
 nothing trimmed. The D1 push is NOT yet proven: its queue only fills from live alerts in
 the running desk.
 
+**Documentation close-out (2026-08-11, Markdown only).** The push policy is now stated
+where an operator or an arriving AI will actually meet it: `CLAUDE.md`/`AGENTS.md` core
+loop (with the rule that a new ntfy sender must gate on AWAY or justify itself),
+`docs/AWAY_SCANNER_RUNBOOK.md`, `docs/EVENING_MODE_RUNBOOK.md`, a `docs/FIRST_SESSION_CHECKLIST.md`
+row, and `plan.md` P0.3. No file was added, removed, or reclassified, so `docs/README.md`
+is unchanged; `WISHLIST.md` is untouched (no trader-directed idea moved). The recorded
+baseline above still stands — this pass changed no code, path, or test.
+
 ### Desk rebuilt and relaunched onto the push-policy build — 2026-08-11 20:15
 
 The frozen exe was the running desk (pid 35676, started 19:02); the python desk pid 32620
