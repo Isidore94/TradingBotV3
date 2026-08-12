@@ -251,7 +251,7 @@ marker.
 |---|---|
 | pytest | **2720 passed, 19 subtests passed**, exit 0 (119s) |
 | smoke | **7/7**, exit 0 |
-| frozen self-test | not re-run — no packaging trigger (no new package, no new runtime asset, no new dependency) |
+| frozen self-test | **29/29**, exit 0 — rebuilt at the trader's request, not by a packaging trigger |
 
 Thirty-three new tests across `tests/test_away_push_roster_and_d1.py` (roster
 membership, bucket-spelling collapse, the honest trim marker, and the D1 push
@@ -265,6 +265,21 @@ test asserts yesterday's unsent D1 events are cleared.
 **Live proof owed:** the next AWAY session — a swing push whose roster matches the
 Setup Tracker's Favorite + High Conviction rows, a D1 push naming only events from that
 hour, and silence on the swing/D1 channels while the desk sits in DESK or EVENING.
+
+**Trader-verified on the phone, 2026-08-11 20:0x.** One real push built from the live
+feed (593 rows, `data_date` 2026-08-11, source `focus`) delivered `ok: True`: five ranked
+HC longs plus the full roster — HC 12 long / 7 short, FAV 30 long / 6 short, 55 names,
+nothing trimmed. The D1 push is NOT yet proven: its queue only fills from live alerts in
+the running desk.
+
+### Desk rebuilt and relaunched onto the push-policy build — 2026-08-11 20:15
+
+The frozen exe was the running desk (pid 35676, started 19:02); the python desk pid 32620
+named earlier in this file was already gone. Rebuilt at the trader's request rather than
+on a packaging trigger: graceful `CloseMainWindow`, `pyinstaller … --noconfirm` exit 0,
+**frozen self-test 29/29 exit 0**, relaunch. **Running pid is now 2552** (started
+20:15:20), heartbeat fresh at the 30-second cadence from 20:16:05. `dist/` is gitignored,
+so the rebuild is verification only and no commit artifact.
 
 ### Desk restarted onto the scan-window build — 2026-08-10 21:19
 
