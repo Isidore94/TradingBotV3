@@ -1,6 +1,6 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-11** from the working copy of
+Last reconciled: **2026-08-12** from the working copy of
 `testing-week-2026-08-10`
 
 Authoritative for: **what exists and the historical sequence of revisions**
@@ -140,10 +140,12 @@ and green while its live or promotion gate remains open in `plan.md`.
   deterministic evidence coverage, daily advisory summary, per-ticker briefs, full
   artifacts in `ai_store`, and bounded atomic `ai_morning_brief.txt` publication.
 - Per-ticker briefs project each symbol out of a full-size base package and then
-  ration the projection to the local context window; each symbol resolves
-  independently, a symbol with no evidence beyond watchlist membership is answered
-  without a model call, completions resume by evidence hash, and the slot spends at
-  most three attempts a session.
+  ration the projection to the local context window; ticker-roster and bare-name
+  lines are discarded as non-evidence, each symbol resolves independently, a symbol
+  with no evidence beyond watchlist membership is answered without a model call,
+  completions resume on a read-stamp-independent evidence key, the morning file is
+  republished after every resolved symbol, and the slot spends at most three attempts
+  a session.
 - Local-AI Phase 0 is complete. Phase 1 implementation is complete; its five-session
   unattended live gate remains in `plan.md`.
 
@@ -212,6 +214,56 @@ and green while its live or promotion gate remains open in `plan.md`.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
+
+### 2026-08-12 — first-night repair: roster noise, resume identity, crash-safe publish
+
+The 2026-08-11 window was the ticker-briefs packet's owed live proof. It produced
+126 briefs covering 101 of 182 symbols, never published a morning file, and exposed
+three defects plus one machine fault. Advisory-only throughout: no detector,
+scoring, or alert file is in the diff.
+
+- **What the night actually did.** `ai_summary` succeeded first attempt at 22:02:53
+  (~170 s, 10 usable sources) — a clean result against the previous night's six
+  degraded rounds. `ticker_briefs` ran 22:04:33 → 01:20:08 with zero failures and
+  was killed mid-batch. `ai_morning_brief.txt` still held the 2026-08-10 file.
+- **TB-5 — a roster line is not evidence about the symbol.** `_extract_ticker_content`
+  projected a text source by keeping every *line* containing the symbol, and the
+  evidence files are human-readable reports full of copy-paste ticker blobs. Measured
+  over the real 2026-08-11 packages: **307,630 of 319,687 projected chars (96.2%)
+  were roster text**, median symbol-specific content **42 characters**, and
+  `daily.master_events` contributed 174,994 roster chars against 479 chars of real
+  content. Lines are now dropped when stripping ticker tokens and list punctuation
+  leaves ≤15% residue, and when the line is the bare symbol (Auto Pilot's `longs`
+  array is membership wearing a second hat). The residue test is deliberately not a
+  ticker count: a tier row carrying eight tickers is pure signal. Measured effect on
+  the same data — **166 model calls → 49**, projected payload 319,687 → 26,223 chars,
+  and TB-2's membership-only skip now does what sec 6.4b scoped it to do.
+- **TB-3 repaired — resume on the evidence, not on when it was read.** The manifest
+  now carries a `resume_key` hashing only symbol, session, memberships, and source
+  ids with their content. `evidence_hash` keeps its whole-package meaning for
+  artifact identity, but it covers `generated_at` and every `as_of`, so it changed on
+  every firing and the resume could never match. Manifest schema `v1` → `v2`; a row
+  without a `resume_key` is regenerated, never reused.
+- **Crash-safe publication.** The morning file is re-rendered and atomically
+  republished after every resolved symbol, carrying an explicit
+  "Run in progress at the time of writing" note that the final publish drops. A
+  publish fault is logged and never costs the batch. The market-session block still
+  suppresses publication outright — it is an unconditional stop for the whole job,
+  and the last verified file stands.
+- **Scheduled-task time limit was defeating its own concurrency guard.**
+  `ExecutionTimeLimit` was `PT2H` against an 8-hour window. On 2026-08-11 the 22:00
+  run was still briefing at 00:00, so Task Scheduler terminated its PowerShell parent
+  and marked the task not-running, letting the 00:00 repetition start a **second**
+  runner while the first instance's Python child continued. The session manifest
+  records both: from 00:01:54 the rows interleave one-for-one, instance A continuing
+  at list position 73 while instance B restarted from position 0, two 12B models
+  resident on one iGPU, and 25 symbols briefed twice. Now `PT8H` — the window itself
+  — in `scripts/register_ai_jobs_task.ps1` and on the live desk task.
+- **Machine fault, not code (trader-owned).** The desk entered Modern Standby 60
+  times during the window, 4h39m in total, including an unbroken 01:39:42 → 05:57:09.
+  That killed the run and suppressed every task firing from 01:30 to 05:30.
+- Verification: full Windows suite **2727 passed, 19 subtests**, exit 0; smoke
+  **7/7**, exit 0. Seven new tests.
 
 ### 2026-08-11 — symbol snapshot popup opens at desk height
 

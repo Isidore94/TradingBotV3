@@ -68,11 +68,22 @@ $repetition = (New-ScheduledTaskTrigger -Once -At $StartLocal `
 $trigger.Repetition = $repetition
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
+    -ExecutionTimeLimit (New-TimeSpan -Hours $DurationHours) `
     -MultipleInstances IgnoreNew
 # IgnoreNew is the skip-don't-pile-up policy in scheduler form: if a run is
 # still going when the next repetition fires, the new one is dropped rather
 # than stacked. Two runners would race the same ledger and the same endpoint.
+#
+# The time limit is the WINDOW, not a shorter guess, because a shorter one
+# silently defeats IgnoreNew. It was 2 hours until 2026-08-12. On the night of
+# 2026-08-11 the 22:00 run was still briefing at 00:00, so Task Scheduler
+# terminated its powershell parent and marked the task not-running -- which let
+# the 00:00 repetition start a SECOND runner while the first instance's python
+# child carried on. The session manifest records both: from 00:01:54 the rows
+# interleave one-for-one, instance A continuing at list position 73 while
+# instance B restarted from position 0, two 12B models resident on one iGPU,
+# and 25 symbols briefed twice. A run may legitimately last until the window
+# closes, so that is exactly how long it is allowed to live.
 
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }

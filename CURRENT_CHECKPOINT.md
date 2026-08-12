@@ -14,9 +14,9 @@ elapsed evidence lane that can run in parallel.
 | Field | Current value |
 |---|---|
 | Roadmap phase | **P0 — validate and merge the testing-week branch** |
-| Active packet | **TICKER-BRIEFS HARDENING — TB-0..TB-4** (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b; armed by the trader 2026-08-11 after the first overnight run) |
-| Scope | `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one additive helper in `scripts/ai_summary.py`, `tests/test_ai_ticker_briefs.py`, `tests/test_ai_jobs_runner.py`. No detector, scoring, or alert file touched; output stays advisory-only |
-| State | **Integrated and green on `testing-week-2026-08-10`** (2687 passed / 19 subtests / smoke 7/7). The first Windows focused gate exposed and corrected a truncation-banner budget overrun. **Live proof owed: the next 22:00 window on the desk** |
+| Active packet | **TICKER-BRIEFS HARDENING — TB-0..TB-6** (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b; armed by the trader 2026-08-11, first-night repair TB-5/TB-6 built 2026-08-12) |
+| Scope | `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one additive helper in `scripts/ai_summary.py`, `scripts/register_ai_jobs_task.ps1`, `tests/test_ai_ticker_briefs.py`, `tests/test_ai_jobs_runner.py`. No detector, scoring, or alert file touched; output stays advisory-only |
+| State | **Integrated and green on `testing-week-2026-08-10`** (2727 passed / 19 subtests / smoke 7/7, both exit 0). **Live proof owed again: the 2026-08-12 22:00 window.** The 08-11 night proved TB-0, broke on TB-3, and exposed a task time limit that defeated its own concurrency guard plus 4h39m of machine sleep |
 | Side item landed | **Snapshot popup opens at desk height** (2026-08-11, trader ask) — UI geometry only, no detector/scoring/alert file touched; baseline unchanged at 2687 passed / smoke not re-run (no non-Qt path affected) |
 | Side item landed | **Phone push policy + two richer pushes** (2026-08-11, trader ask, design confirmed before editing per the ask-first rule) — AWAY is now the only mode that pushes (price alerts stay the always-on exception), the swing push carries the full favorite/high-conviction roster, and a second hourly push names the D1 level events since the last one. New baseline **2720 passed / 19 subtests / smoke 7/7**, both exit 0 |
 | Next action after this packet | **P0.2–P0.4** live gates, plus the ticker-briefs morning check below. P0.1 re-baseline is done |
@@ -158,15 +158,16 @@ header stating the outcome, at most three `ticker_briefs` ledger rows for the se
 (with a `terminal: true` row if it stopped early), and exactly one artifact set per
 symbol under `ai_store/briefs/<year>/<session>/tickers/<symbol>/`.
 
-**Known defect, reported not yet fixed (2026-08-11 evening review).** TB-3's
-cross-firing reuse can never trigger on the desk: the projected package's
-`evidence_hash` covers `generated_at` (fresh wall clock every firing —
-`run_ticker_briefs` builds the base without passing `now`) and every source's
-`observed_at` read stamp, so identical evidence hashes differently on every firing.
-A partial night therefore re-briefs **all** symbols on retry, not just the failures,
-and duplicate artifact sets return. Bounded by TB-4 (≤3 batches) and invisible on a
-clean night; tests pass because they inject the package. Fix when directed: hash only
-stable fields (symbol, session, memberships, source ids + content).
+**~~Known defect, reported not yet fixed (2026-08-11 evening review).~~ FIXED
+2026-08-12 — and it fired live first.** TB-3's cross-firing reuse could never
+trigger on the desk: the projected package's `evidence_hash` covers `generated_at`
+and every source's read stamp, so identical evidence hashed differently on every
+firing. On the night of 2026-08-11 a second runner instance restarted from symbol 1
+and re-briefed 25 symbols, leaving 25 duplicate artifact sets on the DAS. The
+manifest now carries a `resume_key` over stable fields only (symbol, session,
+memberships, source ids + content); `evidence_hash` keeps its whole-package meaning
+for artifact identity. Manifest schema `v1` → `v2`; a row without a `resume_key` is
+regenerated, never reused.
 
 **Queued, not built (trader-approved 2026-08-11):** the **nightly journal pull** —
 a third `journal_import` runner slot ahead of `ai_summary` so the summary reads a
@@ -387,6 +388,48 @@ Still open on the desk, not blocking the week:
   (2672 passed, exit 0). Its zero-grace mtime-vs-clock comparison
   (`store.reconcile`, `incoming_grace_seconds=0`) is timing-sensitive under
   suite load. Candidate for the P1.1 hermeticity packet; not repaired here.
+
+## What the 2026-08-11 window measured, and what was repaired — 2026-08-12
+
+The packet's owed live proof ran and is **partial**. Ledger and manifest evidence:
+
+| | Result |
+|---|---|
+| `ai_summary` | **ok at 22:02:53**, first attempt, ~170 s, 10 usable sources — against six degraded rounds the night before |
+| `ticker_briefs` | **no completion row.** 126 briefs / 101 unique symbols of 182, 0 failures, 22:04:33 → 01:20:08, killed mid-batch |
+| `ai_morning_brief.txt` | **never published** — still the 2026-08-10 file, because publication happened only after the loop |
+| TB-0 | **Confirmed.** MDB's real brief: 7 of 19 usable, 0 unfunded (08-10 was 4 of 19 with 5 unfunded) |
+| TB-1 / TB-2 / TB-4 | Not exercised — 0 failures, and every membership-only name sits past list position 100 |
+| TB-3 | **Proven broken**, 25 symbols with two rows and two distinct `evidence_hash` values |
+
+Three defects and one machine fault, all now addressed except the last:
+
+1. **TB-5 — roster noise.** 96.2% of everything sent to the model (307,630 of
+   319,687 chars) was ticker name-dumps matched line-wise; median symbol-specific
+   content 42 chars; only 18 of 166 symbols had a real scan line. Fixed by a
+   residue test, not a ticker count. Measured effect: **166 model calls → 49**.
+2. **TB-3** — see the repaired entry above.
+3. **TB-6 — publication only after the loop.** Now republished after every resolved
+   symbol, with an explicit in-progress note; the market-session block still
+   suppresses publication outright.
+4. **`ExecutionTimeLimit` was `PT2H` against an 8-hour window** — it terminated the
+   22:00 run's parent at 00:00, freeing `IgnoreNew` so the 00:00 repetition started a
+   second runner while the first instance's Python child kept going. The manifest
+   shows the two interleaving one-for-one from 00:01:54. Now `PT8H` in
+   `scripts/register_ai_jobs_task.ps1` **and applied to the live desk task**.
+5. **Machine sleep — trader-owned, not code.** 60 Modern Standby transitions during
+   the window, **4h39m asleep**, including an unbroken 01:39:42 → 05:57:09 that
+   killed the run and suppressed every firing from 01:30 to 05:30. The trader is
+   raising the sleep setting. **Until that is confirmed, no overnight result is
+   evidence about the AI layer.**
+
+**The 2026-08-12 morning check.** Expect ~49 model calls against ~160 symbols (the
+rest membership-only), roughly an hour of inference rather than 3.5, exactly one
+`ticker_briefs` ledger row, a morning file dated 2026-08-12 **without** the
+in-progress note, no duplicate artifact sets, and briefs that cite `daily.market_prep`
+scan lines and `setups.tier_performance` rows rather than complaining about
+truncation. `setups.current_tracker` is a known remaining gap: it arrives as one
+JSON line, so line-based projection is still all-or-nothing for it.
 
 ## Immediate live gates
 

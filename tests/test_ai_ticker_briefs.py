@@ -844,3 +844,229 @@ def test_an_unreadable_manifest_regenerates_rather_than_refusing(tmp_path, monke
     )
     assert outcome["status"] == "ok"
     assert outcome["tokens"]["ticker_calls"] == 1
+
+
+# ---------------------------------------------------------------------------
+# TB-3 repair: resume on the evidence, not on when it was read
+# ---------------------------------------------------------------------------
+def test_the_resume_key_ignores_read_stamps_that_move_every_firing(tmp_path):
+    """The live 2026-08-11 defect: identical evidence, a different hash.
+
+    ``evidence_hash`` covers ``generated_at`` and every source's ``as_of``, and
+    ``run_ticker_briefs`` builds its base without passing ``now``. Two firings
+    over the same session therefore produced two hashes for the same evidence,
+    so the resume never matched: a second runner instance re-briefed the first
+    25 symbols from the top and left 25 duplicate artifact sets on the DAS.
+    """
+    from ai_jobs import briefs
+
+    memberships = [{"list": "longs", "path": "/home/longs.txt"}]
+    first = _base_evidence()
+    second = _base_evidence()
+    second["generated_at"] = "2026-08-12T04:30:00-04:00"  # a later firing
+    second["sources"][0]["as_of"] = "2026-08-11T16:05:00-04:00"  # re-read stamp
+
+    a = briefs.build_ticker_evidence(first, "NVDA", memberships)
+    b = briefs.build_ticker_evidence(second, "NVDA", memberships)
+
+    assert a["evidence_hash"] != b["evidence_hash"], "package identity still moves"
+    assert a["resume_key"] == b["resume_key"], "the evidence itself did not change"
+
+    changed = _base_evidence()
+    changed["sources"][0]["content"] = [{"symbol": "NVDA", "setup_id": "nvda-1", "state": "triggered"}]
+    assert briefs.build_ticker_evidence(changed, "NVDA", memberships)["resume_key"] != a["resume_key"]
+
+
+def test_a_manifest_row_without_a_resume_key_is_regenerated_not_reused(tmp_path, monkeypatch):
+    """A v1 row costs a regeneration. It must never cost a wrong skip."""
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\n", encoding="utf-8")
+    root = tmp_path / "ai_store" / "briefs"
+    manifest = briefs.brief_manifest_path(root, SESSION)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "ai_ticker_brief_manifest_v1",
+                "session_date": SESSION,
+                "symbol": "NVDA",
+                "status": briefs.BRIEF_STATUS_BRIEFED,
+                "evidence_hash": "whatever-the-old-scheme-produced",
+                "memberships": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        ai_summary,
+        "request_ai_summary",
+        lambda **kw: (calls.append(kw["evidence"]["brief_symbol"]),
+                      _model_result(kw["evidence"]["brief_symbol"], "setups.rows"))[1],
+    )
+    briefs.run_ticker_briefs(
+        session_date=SESSION, now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus}, output_root=root,
+        morning_path=tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME,
+    )
+    assert calls == ["NVDA"]
+
+
+# ---------------------------------------------------------------------------
+# TB-5: a roster line is not evidence about the symbol
+# ---------------------------------------------------------------------------
+def test_roster_lines_are_dropped_and_real_rows_are_kept():
+    """96.2% of the 2026-08-11 payload was ticker name-dumps."""
+    from ai_jobs import briefs
+
+    roster = "SE, P, OUST, ONTO, BCRX, JBL, DCH, CHYM, ARES, ENTG, MDB, BEP, AMPL"
+    tv_paste = "TV paste: SE,P,OUST,ONTO,BCRX,JBL,DCH,CHYM,ARES,ENTG,MDB"
+    events = "  LONG: A, AAPL, ABCL, ABNB, ACAD, ACGL, ADI, MDB, MDLZ, MET, MFC"
+    copy_text = '      "copy_text": "AA, ABCL, ABNB, ABSI, AEHR, MDB, MGNI, MPC, NEM",'
+    scan_line = "MDB    LONG  rs=+12.18  1d=+5.4%   5d=+15.6%  ind=IGV ind_rs=+11.14  family=general"
+    tier_row = (
+        "RBRK 2026-08-04->2026-08-11 (+19.68%); MDB 2026-08-04->2026-08-11 (+15.56%); "
+        "RGEN 2026-08-04->2026-08-11 (+10.01%); A 2026-08-04->2026-08-11 (+7.39%); "
+        "CHRW 2026-08-04->2026-08-11 (+6.24%); OI 2026-08-04->2026-08-11 (+5.67%)"
+    )
+
+    for line in (roster, tv_paste, events, copy_text):
+        assert briefs.is_roster_line(line, "MDB"), line
+    # The tier row carries eight tickers and is pure signal: a ticker-count
+    # threshold would have discarded exactly the rows worth keeping.
+    assert not briefs.is_roster_line(tier_row, "MDB")
+    assert not briefs.is_roster_line(scan_line, "MDB")
+
+    source = "\n".join([roster, tv_paste, events, copy_text, scan_line, tier_row])
+    projected = briefs._extract_ticker_content(source, "MDB")
+    assert projected == f"{scan_line}\n{tier_row}"
+
+
+def test_a_bare_name_in_a_list_does_not_defeat_the_membership_only_skip():
+    """Auto Pilot's longs array said "MDB" and nothing else."""
+    from ai_jobs import briefs
+
+    assert briefs.is_bare_membership_line('   "MDB",', "MDB")
+    assert briefs.is_bare_membership_line("MDB", "MDB")
+    assert not briefs.is_bare_membership_line("MDB LONG rs=+12.18", "MDB")
+
+    auto_state = {"autopilot_written": {"longs": ["SE", "MDB", "ABCL"]}}
+    assert briefs._extract_ticker_content(auto_state, "MDB") is None
+
+    package = briefs.build_ticker_evidence(
+        {
+            "session_date": SESSION,
+            "generated_at": "2026-08-12T02:00:00-04:00",
+            "sources": [
+                {"source_id": "market.auto_state", "label": "Auto Pilot state",
+                 "status": "available", "content": auto_state},
+            ],
+            "coverage": {"excluded": []},
+        },
+        "MDB",
+        [{"list": "longs", "path": "/home/longs.txt"}],
+    )
+    assert briefs.is_membership_only(package), "membership wearing a second hat is still membership"
+
+
+# ---------------------------------------------------------------------------
+# Crash-safe publication: a killed run still leaves the briefs it finished
+# ---------------------------------------------------------------------------
+def test_a_hard_kill_mid_batch_still_leaves_the_finished_briefs_published(
+    tmp_path, monkeypatch
+):
+    """2026-08-11: 126 briefs on the DAS, yesterday's file in the home folder.
+
+    The desk entered Modern Standby at 01:39 and the process died at symbol 101
+    of 182. Publication happened only after the loop, so nothing was published
+    at all. KeyboardInterrupt stands in for that kill: it is deliberately not
+    one of the exceptions the per-symbol handler catches.
+    """
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\n", encoding="utf-8")
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+
+    def endpoint_mock(**kwargs):
+        symbol = kwargs["evidence"]["brief_symbol"]
+        if symbol == "MSFT":
+            raise KeyboardInterrupt("the machine went to sleep")
+        return _model_result(symbol, "setups.rows")
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", endpoint_mock)
+    with pytest.raises(KeyboardInterrupt):
+        briefs.run_ticker_briefs(
+            session_date=SESSION, now=OVERNIGHT,
+            watchlist_paths={"focus_longs": focus},
+            output_root=tmp_path / "ai_store" / "briefs",
+            morning_path=morning,
+        )
+
+    text = morning.read_text(encoding="utf-8")
+    assert "## NVDA" in text, "the brief that finished before the kill is published"
+    assert "Briefed 1 of 2." in text
+    assert briefs.INCOMPLETE_RUN_NOTE in text, "and it says it was still running"
+
+
+def test_a_completed_run_does_not_claim_to_be_still_running(tmp_path, monkeypatch):
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\n", encoding="utf-8")
+    morning = tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME
+    monkeypatch.setattr(
+        ai_summary,
+        "request_ai_summary",
+        lambda **kw: _model_result(kw["evidence"]["brief_symbol"], "setups.rows"),
+    )
+    briefs.run_ticker_briefs(
+        session_date=SESSION, now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus},
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=morning,
+    )
+    text = morning.read_text(encoding="utf-8")
+    assert "Briefed 1 of 1." in text
+    assert briefs.INCOMPLETE_RUN_NOTE not in text
+
+
+def test_an_interim_publish_failure_never_costs_the_batch(tmp_path, monkeypatch):
+    """Publishing is the cheap part; inference is not. A publish fault waits."""
+    from ai_jobs import briefs
+
+    ai_summary = _briefs_env(monkeypatch)
+    focus = tmp_path / "focus_longs.txt"
+    focus.write_text("NVDA\nMSFT\n", encoding="utf-8")
+    calls: list[str] = []
+    real_publish = briefs.atomic_publish_morning_file
+    state = {"fail": True}
+
+    def flaky_publish(content, *, path=None, replace=None):
+        if state["fail"]:
+            state["fail"] = False
+            raise OSError("the home folder blinked")
+        return real_publish(content, path=path)
+
+    monkeypatch.setattr(briefs, "atomic_publish_morning_file", flaky_publish)
+    monkeypatch.setattr(
+        ai_summary,
+        "request_ai_summary",
+        lambda **kw: (calls.append(kw["evidence"]["brief_symbol"]),
+                      _model_result(kw["evidence"]["brief_symbol"], "setups.rows"))[1],
+    )
+    outcome = briefs.run_ticker_briefs(
+        session_date=SESSION, now=OVERNIGHT,
+        watchlist_paths={"focus_longs": focus},
+        output_root=tmp_path / "ai_store" / "briefs",
+        morning_path=tmp_path / "home" / briefs.MORNING_BRIEF_FILENAME,
+    )
+    assert calls == ["NVDA", "MSFT"], "both symbols were still briefed"
+    assert outcome["status"] == "ok"

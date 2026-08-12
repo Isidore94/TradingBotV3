@@ -43,7 +43,9 @@ MEMBERSHIP_SOURCE_ID = "watchlists.membership"
 #: same shape as every other evidence ledger here: the newest row for a symbol
 #: wins, and nothing is ever rewritten.
 BRIEF_MANIFEST_FILENAME = "ticker_briefs_manifest.jsonl"
-BRIEF_MANIFEST_SCHEMA = "ai_ticker_brief_manifest_v1"
+#: v2 adds ``resume_key``. A v1 row has none, and a row without one is never
+#: reused -- an older manifest costs a regeneration, never a wrong skip.
+BRIEF_MANIFEST_SCHEMA = "ai_ticker_brief_manifest_v2"
 
 BRIEF_STATUS_BRIEFED = "briefed"
 BRIEF_STATUS_MEMBERSHIP_ONLY = "membership_only"
@@ -55,6 +57,11 @@ RESOLVED_BRIEF_STATUSES = frozenset({BRIEF_STATUS_BRIEFED, BRIEF_STATUS_MEMBERSH
 #: A failure reason is a header line, not a stack trace. Long provider errors
 #: are cut here so the outcome stays readable on a phone.
 MAX_FAILURE_REASON_CHARS = 160
+
+#: Stamped on every interim publish and removed by the final one. A file
+#: carrying it is a run that was still going when it was written -- which, if
+#: the process is killed, is exactly the file the trader finds in the morning.
+INCOMPLETE_RUN_NOTE = "Run in progress at the time of writing; counts above may be incomplete."
 
 #: Attempts one session may spend on the ticker-briefs slot (TB-4). Transient
 #: faults -- NAS asleep, endpoint still loading -- still self-heal; the
@@ -313,11 +320,65 @@ def load_brief_symbols(paths: Mapping[str, Path] | None = None) -> WatchlistRead
     )
 
 
+#: A projected line that is nothing but a list of tickers matched because the
+#: symbol is one token in a copy-paste blob, not because the line says anything
+#: about it (TB-5, 2026-08-12). Measured on the 2026-08-11 packages: 96.2% of
+#: everything the model was sent -- 307,630 of 319,687 chars across 166 symbols
+#: -- was roster text, and `daily.master_events` contributed 174,994 roster
+#: chars against 479 chars of real content. The model duly spent its bullets on
+#: the packaging ("investigate why the master events data is truncated") while
+#: MDB's one real number, +15.56% over 2026-08-04..08-11, went unmentioned.
+#:
+#: The test is deliberately about *residue*, not ticker count: strip the ticker
+#: tokens and list punctuation and see whether anything is left. A tier row like
+#: "RBRK 2026-08-04->2026-08-11 (+19.68%); MDB ... (+15.56%)" carries eight
+#: tickers and is pure signal, so a count threshold alone would have discarded
+#: exactly the rows worth keeping.
+ROSTER_MIN_TICKERS = 5
+ROSTER_MAX_RESIDUE_RATIO = 0.15
+_TICKER_TOKEN = re.compile(r"[A-Z][A-Z0-9.\-]{0,9}")
+_LIST_PUNCTUATION = re.compile(r"[\s,;:\"'\[\]{}()]+")
+
+
+def is_roster_line(line: str, symbol: str) -> bool:
+    """True when the line is a ticker roster rather than a statement.
+
+    ``symbol`` is accepted for symmetry with the rest of the projection and to
+    keep the rule expressible per symbol; the residue test does not need it,
+    because a roster reads the same whichever of its names was matched.
+    """
+    stripped = str(line).strip()
+    if not stripped:
+        return False
+    if len(_TICKER_TOKEN.findall(stripped)) < ROSTER_MIN_TICKERS:
+        return False
+    residue = _LIST_PUNCTUATION.sub("", _TICKER_TOKEN.sub(" ", stripped))
+    return len(residue) <= ROSTER_MAX_RESIDUE_RATIO * len(stripped)
+
+
+def is_bare_membership_line(line: str, symbol: str) -> bool:
+    """True when the line is the symbol and nothing else.
+
+    ``"MDB"`` inside an Auto Pilot longs array is the same fact as watchlist
+    membership wearing a different hat. Counting it as evidence is what let
+    ``market.auto_state`` keep symbols out of TB-2's membership-only skip while
+    telling the model nothing it did not already have.
+    """
+    stripped = _LIST_PUNCTUATION.sub("", str(line))
+    return stripped.upper() == str(symbol).strip().upper()
+
+
 def _extract_ticker_content(content: Any, symbol: str) -> Any | None:
     """Bounded, deterministic symbol projection from one packaged source."""
     if isinstance(content, str):
         pattern = re.compile(rf"(?<![A-Z0-9.-]){re.escape(symbol)}(?![A-Z0-9.-])", re.I)
-        lines = [line for line in content.splitlines() if pattern.search(line)]
+        lines = [
+            line
+            for line in content.splitlines()
+            if pattern.search(line)
+            and not is_roster_line(line, symbol)
+            and not is_bare_membership_line(line, symbol)
+        ]
         return "\n".join(lines)[:MAX_TICKER_SOURCE_CHARS] if lines else None
     if isinstance(content, Mapping):
         direct_symbol = str(content.get("symbol") or "").strip().upper()
@@ -466,10 +527,46 @@ def build_ticker_evidence(
         "coverage": coverage,
         "safety_contract": dict(base.get("safety_contract") or {}),
     }
+    package["resume_key"] = _resume_key(symbol, package["session_date"], memberships, sources)
     canonical = json.dumps(package, sort_keys=True, separators=(",", ":"), default=str)
     package["evidence_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     package["package_id"] = package["evidence_hash"][:16]
     return package
+
+
+def _resume_key(
+    symbol: str,
+    session_date: str,
+    memberships: Sequence[Mapping[str, str]],
+    sources: Sequence[Mapping[str, Any]],
+) -> str:
+    """Identity of the *evidence*, ignoring when it happened to be read.
+
+    ``evidence_hash`` covers the whole package, and the package carries
+    ``generated_at`` plus every source's ``as_of`` read stamp. Those move on
+    every firing, so identical evidence hashed differently every time and TB-3's
+    resume could never fire on the desk -- proven live on 2026-08-11, when a
+    second runner instance re-briefed the first 25 symbols from the top and left
+    25 duplicate artifact sets on the DAS.
+
+    Only what would change the model's answer belongs here: which symbol, which
+    session, which lists it sits on, and the source ids with their content.
+    ``evidence_hash`` keeps its whole-package meaning for artifact identity.
+    """
+    payload = {
+        "symbol": str(symbol),
+        "session_date": str(session_date),
+        "memberships": sorted(str(row.get("list") or "") for row in memberships),
+        "sources": [
+            {
+                "source_id": str(source.get("source_id") or ""),
+                "content": source.get("content"),
+            }
+            for source in sources
+        ],
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def morning_brief_path() -> Path:
@@ -657,6 +754,7 @@ def _manifest_entry(
     memberships: Sequence[Mapping[str, str]],
     session_date: str,
     evidence_hash: str,
+    resume_key: str = "",
     status: str,
     reason: str = "",
     result: Mapping[str, Any] | None = None,
@@ -668,6 +766,7 @@ def _manifest_entry(
         "symbol": str(symbol),
         "status": str(status),
         "evidence_hash": str(evidence_hash),
+        "resume_key": str(resume_key),
         "reason": str(reason),
         "memberships": [dict(row) for row in memberships],
         "outputs": [str(value) for value in outputs],
@@ -792,18 +891,68 @@ def run_ticker_briefs(
     reused = 0
     early_stop = ""
 
+    def _publish_progress() -> None:
+        """Re-render and republish the morning file from what is resolved now.
+
+        The morning file used to be written once, after the loop. On
+        2026-08-11 the desk entered Modern Standby mid-batch and the process
+        died at symbol 101 of 182: 126 briefs existed on the DAS and the home
+        folder still held the previous session's file, because the publish had
+        never been reached. Publishing after every resolution costs a few
+        milliseconds against a ~70 s model call and makes a hard kill lose at
+        most the symbol in flight. A publish fault is swallowed here for the
+        same reason the final publish is verified-and-atomic: the last good
+        file is worth more than this iteration's.
+        """
+        from ai_jobs import window as _window
+
+        if _window.market_session_block():
+            # The market session is an unconditional stop for the whole job,
+            # publication included. Once it is live the run stops touching the
+            # home folder and the last verified morning file stands; the
+            # completed briefs are already in the manifest for the next
+            # legitimate firing to re-render.
+            return
+        try:
+            done = [
+                entries[name]
+                for name in symbols
+                if name in entries
+                and str(entries[name].get("status") or "") in RESOLVED_BRIEF_STATUSES
+            ]
+            failed_now = [
+                entries[name]
+                for name in symbols
+                if name in entries
+                and str(entries[name].get("status") or "") == BRIEF_STATUS_FAILED
+            ]
+            atomic_publish_morning_file(
+                render_morning_file(
+                    session_date,
+                    done,
+                    generated_at=now,
+                    failures=failed_now,
+                    total=len(symbols),
+                    notes=[INCOMPLETE_RUN_NOTE],
+                ),
+                path=morning_path,
+            )
+        except Exception:  # never let publishing cost the night's inference
+            logging.exception("Ticker briefs: interim morning-file publish failed")
+
     for symbol in symbols:
         memberships = membership_by_symbol[symbol]
         evidence = build_ticker_evidence(
             base, symbol, memberships, budget_chars=ticker_budget
         )
         evidence_hash = str(evidence.get("evidence_hash") or "")
+        resume_key = str(evidence.get("resume_key") or "")
 
         prior = recorded.get(symbol) or {}
         if (
             str(prior.get("status") or "") in RESOLVED_BRIEF_STATUSES
-            and str(prior.get("evidence_hash") or "") == evidence_hash
-            and evidence_hash
+            and str(prior.get("resume_key") or "") == resume_key
+            and resume_key
         ):
             # Same session, same symbol, same evidence: the brief that exists
             # is the brief this call would produce. Regenerating it would cost
@@ -822,11 +971,13 @@ def run_ticker_briefs(
                 memberships=memberships,
                 session_date=session_date,
                 evidence_hash=evidence_hash,
+                resume_key=resume_key,
                 status=BRIEF_STATUS_MEMBERSHIP_ONLY,
                 reason=reason,
             )
             append_brief_manifest(manifest, entry)
             entries[symbol] = entry
+            _publish_progress()
             logging.info("Ticker briefs: %s skipped without a model call (%s)", symbol, reason)
             continue
 
@@ -856,6 +1007,7 @@ def run_ticker_briefs(
         outputs.extend(exported)
         if str(entry.get("status") or "") == BRIEF_STATUS_BRIEFED:
             fresh.append(entry)
+        _publish_progress()
 
     ordered = [entries[symbol] for symbol in symbols if symbol in entries]
     resolved = [
@@ -921,6 +1073,7 @@ def _brief_one_symbol(
     import ai_summary
 
     evidence_hash = str(evidence.get("evidence_hash") or "")
+    resume_key = str(evidence.get("resume_key") or "")
     previous_error = ""
     result: dict[str, Any] | None = None
     for attempt in (1, 2):
@@ -955,6 +1108,7 @@ def _brief_one_symbol(
                 memberships=memberships,
                 session_date=session_date,
                 evidence_hash=evidence_hash,
+                resume_key=resume_key,
                 status=BRIEF_STATUS_FAILED,
                 reason=previous_error or "the model failed validation twice",
             ),
@@ -975,6 +1129,7 @@ def _brief_one_symbol(
                 memberships=memberships,
                 session_date=session_date,
                 evidence_hash=evidence_hash,
+                resume_key=resume_key,
                 status=BRIEF_STATUS_FAILED,
                 reason=f"{type(exc).__name__}: {exc}",
             ),
@@ -988,6 +1143,7 @@ def _brief_one_symbol(
             memberships=memberships,
             session_date=session_date,
             evidence_hash=evidence_hash,
+            resume_key=resume_key,
             status=BRIEF_STATUS_BRIEFED,
             result=result,
             outputs=outputs,

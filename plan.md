@@ -335,11 +335,22 @@ non-authoritative. Their analysis/cutover steps remain ordered here.
    first overnight run and is **implemented**: project-then-budget evidence (TB-0),
    per-ticker failure isolation with an honest partial morning file (TB-1),
    deterministic membership-only skip (TB-2), resumable per-symbol completion (TB-3),
-   and a per-session attempt cap (TB-4). Still owed: **live proof on the desk** — the
-   next 22:00 window must show real per-symbol evidence in the briefs, a morning file
-   whose header states the outcome, and no all-night retry grind. Per the gate's own
-   reset rules the **ticker-briefs five-session clock restarts at zero**; the
-   `ai_summary` clock continues, because its code path is untouched.
+   and a per-session attempt cap (TB-4). Per the gate's own reset rules the
+   **ticker-briefs five-session clock restarts at zero**; the `ai_summary` clock
+   continues, because its code path is untouched.
+   *First live night ran 2026-08-11 and the proof is **partial**, repaired 2026-08-12:*
+   `ai_summary` succeeded first attempt; `ticker_briefs` briefed 101 of 182 symbols
+   and was killed mid-batch, publishing no morning file. TB-0 is confirmed; TB-3 was
+   proven broken and is fixed; TB-1/TB-2/TB-4 were never exercised. Three repairs
+   landed — **TB-5** (a roster line is not evidence: 96.2% of the payload was ticker
+   name-dumps, and removing them cuts 166 model calls to 49), **TB-3's stable
+   `resume_key`**, and **TB-6** (the morning file is republished after every resolved
+   symbol, so a hard kill no longer loses the night) — plus the scheduled task's
+   `ExecutionTimeLimit`, which at `PT2H` against an 8-hour window was terminating the
+   parent and letting a second concurrent runner start.
+   **Still owed: live proof on the 2026-08-12 window**, and it is only interpretable
+   once the desk stops sleeping — 4h39m of Modern Standby, trader-owned, ended the
+   08-11 run. A night cut short by sleep is not evidence about this layer.
    *Queued 2026-08-11 (trader-approved, deliberately not built):* the **nightly
    journal pull** — a third `journal_import` runner slot ahead of `ai_summary`, spec
    in `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c. Build only after the sec 6.4b

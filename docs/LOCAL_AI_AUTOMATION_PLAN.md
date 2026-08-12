@@ -925,7 +925,7 @@ wrong.
 6. **Non-sessions:** does a weekend or holiday get an empty fact pack (so gaps
    are visible) or no file (so absence means "no session")?
 
-### 6.4b Ticker-briefs hardening packet (BUILT — armed by trader 2026-08-11)
+### 6.4b Ticker-briefs hardening packet (BUILT — armed by trader 2026-08-11; TB-5/TB-6 added 2026-08-12)
 
 > Drafted at trader direction on the evening of 2026-08-10, hours before the
 > first repaired 22:00 window, so that a bad night has a ready, reviewed plan
@@ -1051,6 +1051,64 @@ no-session firings already do. Transient self-heal (NAS asleep, endpoint
 down) survives; the all-night grind does not. An identical-error early stop
 (same exception text twice → stop for the night) is an optional refinement
 inside this item, not a separate mechanism.
+
+**TB-5 — A roster line is not evidence about the symbol.** *(built 2026-08-12,
+after the packet's first live night)* TB-0 moved the budgeting, and the usable
+source count per brief rose from 1 to a median of 3. The count was misleading.
+`_extract_ticker_content` projects a text source by keeping every **line**
+containing the symbol, and the evidence files are human-readable reports full of
+copy-paste ticker blobs, so most of what it matched was rosters: MDB "appears in"
+`daily.master_events` because MDB is one of ~300 names in a `LONG: A, AAPL, …`
+dump. Measured across all 166 briefed symbols of 2026-08-11:
+
+| | chars | share |
+|---|---:|---:|
+| Roster / name-dump lines | 307,630 | **96.2%** |
+| Everything else | 12,057 | 3.8% |
+
+Median symbol-specific content was **42 characters**, and much of even that was
+membership restated. `setups.current_tracker` — the source TB-0 was built to
+rescue — contributed **zero** symbol-specific content and 10,368 chars of pure
+roster. Only **18 of 166** symbols had a real scan line (`rs=`, `1d`, `5d`) and
+**6** a tier observation. The output followed the input: MDB's brief attributed
+its 1d/5d figures to `daily.master_events` (a roster line; the numbers are in
+`daily.market_prep`), called `setups.tier_performance` truncated, and never
+reported the one genuinely useful number it had been handed,
+`MDB 2026-08-04->2026-08-11 (+15.56%)`.
+
+The rule is about **residue, not ticker count**: strip the ticker tokens and list
+punctuation and see whether anything is left. A tier row carries eight tickers and
+is pure signal, so a count threshold would have discarded exactly the rows worth
+keeping. A bare-symbol line is dropped for the same reason TB-2 exists — Auto
+Pilot's `longs` array saying `"MDB"` is watchlist membership wearing a second hat,
+and counting it as evidence kept symbols out of the membership-only skip while
+telling the model nothing. Measured effect on the same data: **166 model calls →
+49**, projected payload 319,687 → 26,223 chars.
+
+*Residual, stated honestly:* `setups.current_tracker` arrives as a single-line
+JSON string, so line-based projection remains all-or-nothing for it — two symbols
+still receive ~5,184 chars of tracker covering mostly other names. A real fix is
+structured extraction (parse, select the symbol's setups), not a grep, and belongs
+with the sec 6.4a fact-pack design rather than here.
+
+**TB-3 repair — resume on the evidence, not on when it was read.** *(built
+2026-08-12)* The defect recorded at build time fired on the first live night. The
+manifest now carries a `resume_key` hashing only symbol, session, memberships, and
+source ids with their content; `evidence_hash` keeps its whole-package meaning for
+artifact identity. Manifest schema `v1` → `v2`, and a row without a `resume_key` is
+regenerated rather than reused — an older manifest costs a regeneration, never a
+wrong skip.
+
+**TB-6 — Publication survives a hard kill.** *(built 2026-08-12)* TB-1 made the
+morning file honest about partial nights, but it was still written once, after the
+loop. On 2026-08-11 the desk entered Modern Standby mid-batch and the process died
+at symbol 101 of 182: 126 briefs existed in the AI store and the home folder still
+held the previous session's file. The file is now re-rendered and atomically
+republished after every resolved symbol, carrying an explicit "Run in progress at
+the time of writing" note that the final publish drops. A publish fault is logged
+and never costs the batch. **The market-session block still suppresses publication
+outright** — it is an unconditional stop for the whole job, publication included,
+and the last verified file stands.
 
 #### Explicitly deferred — recorded so they are not re-proposed as new ideas
 
