@@ -41,6 +41,9 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "master_avwap",
     "master_avwap_lib.legacy",
     "master_avwap_lib.levels",
+    # the child process the frozen desk spawns for every scan. Absent from the
+    # bundle, --run-scan dies on import and the desk cannot scan at all.
+    "scan_worker",
     # the intraday detector
     "bounce_bot",
     "bounce_bot_lib.legacy",

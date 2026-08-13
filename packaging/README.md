@@ -53,6 +53,27 @@ Current expected result: `selftest OK: 29/29 checks passed (frozen)`.
 
 ### Things that will bite you
 
+- **`sys.executable` is not a Python interpreter when frozen.** It is
+  `TradingBotV3.exe`. Anything that spawns `[sys.executable, "-c", code]` hands
+  the flag and the code string to the application's own argument parser, which
+  rejects them and exits 2. This is not theoretical: it silently disabled every
+  Master AVWAP swing scan on the desk from 2026-08-12 07:30 until 2026-08-13,
+  one second after each slot fired, while BounceBot, the open scan, and the away
+  report — all in-process — kept working and the desk looked healthy. Eleven D1
+  evidence sources went stale before anyone noticed. Spawn through
+  `ui.services.scan_service.scan_worker_command()`, which chooses
+  `TradingBotV3.exe --run-scan <payload>` when frozen and the `-c` form from a
+  source checkout; both call `scan_worker.run` so the work cannot diverge from
+  the transport. **Neither packaging guard could see this** — the spec-drift test
+  inspects bundle contents and `--selftest` resolves imports, and nothing spawned
+  anything. `tests/test_scan_worker_spawn.py` now really launches a child.
+- **A rebuild cannot replace a running bundle.** Windows locks the loaded
+  `.pyd`/`.dll` files, so PyInstaller fails in `_make_clean_directory` with
+  `PermissionError: [WinError 5]` on something like
+  `_internal\charset_normalizer\md.cp312-win_amd64.pyd`. Close the desk first.
+  The partial `rmtree` left the existing bundle intact when this happened on
+  2026-08-13 (frozen selftest still 29/29 afterwards), but do not rely on that —
+  verify with `--selftest` before trusting a bundle a failed build touched.
 - **Never let a frozen run insert `<ROOT_DIR>/scripts` onto `sys.path`.**
   `ROOT_DIR` is `sys._MEIPASS` when frozen, and PyInstaller's importer claims any
   path under `_MEIPASS` even when the directory does not exist. The first-party

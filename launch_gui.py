@@ -78,6 +78,19 @@ def main() -> int:
 
         return run_selftest(verbose="--verbose" in argv or "-v" in argv)
 
+    # --run-scan is how a FROZEN desk spawns its scan child. sys.executable is
+    # TradingBotV3.exe there, so the source form (`sys.executable -c "<code>"`)
+    # reaches the app's own argument parser and exits 2 without scanning - which
+    # is precisely what silently killed every scheduled swing scan on the desk
+    # from 2026-08-12. Handled here, before argparse and before the crash log,
+    # for the same reason --selftest is: this process is not the desk.
+    if "--run-scan" in argv:
+        from scan_worker import run as run_scan_worker
+
+        index = argv.index("--run-scan")
+        payload = argv[index + 1] if index + 1 < len(argv) else None
+        return run_scan_worker(payload)
+
     _enable_crash_log()
     # This is the Qt desk's real entrypoint, not a hop through scripts/gui.py.
     # The latter remains only for legacy ``--ui tk`` compatibility.

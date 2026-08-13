@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -378,7 +379,9 @@ class ScanService(QObject):
         _release_active_scan(self)
 
 
-_SCAN_OK_MARKER = "SCAN_SUBPROCESS_OK"
+#: One definition, imported rather than restated: the worker prints it and the
+#: parent waits for it, so a drifting copy would hang every scan.
+from scan_worker import SCAN_OK_MARKER as _SCAN_OK_MARKER  # noqa: E402
 
 # Every scan subprocess this GUI spawns is registered here so shutdown can
 # reap it (plan.md P0 #5 / Phase 2.6): the marker-based early return means a
@@ -482,6 +485,35 @@ def terminate_owned_scan_processes(grace_seconds: float = 3.0) -> dict[str, int]
     return summary
 
 
+#: CLI flag the frozen application answers before its own argument parser runs,
+#: mirroring ``--selftest``. See ``launch_gui.main``.
+SCAN_WORKER_FLAG = "--run-scan"
+
+
+def scan_worker_command(payload: str) -> list[str]:
+    """Argv that runs one scan in a child process, correct for this build.
+
+    A frozen build **cannot** use ``sys.executable -c``: ``sys.executable`` is
+    ``TradingBotV3.exe``, which parses ``-c`` as its own CLI and exits 2 before
+    fetching a bar. That killed every scheduled swing scan from 2026-08-12 07:30
+    onward on the desk, silently, while everything running in-process kept
+    working (see ``scripts/scan_worker.py``).
+
+    Both forms call :func:`scan_worker.run` with the same payload, so the work
+    is identical and only the transport differs. The source form keeps ``-c``
+    rather than a script path because the child resolves ``scan_worker`` through
+    the ``PYTHONPATH`` this module already sets, which a frozen bundle has no
+    equivalent of.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, SCAN_WORKER_FLAG, payload]
+    return [
+        sys.executable,
+        "-c",
+        f"from scan_worker import run; run({payload!r})",
+    ]
+
+
 def _run_master_scan_subprocess(
     *,
     use_shared_watchlists: bool,
@@ -491,20 +523,14 @@ def _run_master_scan_subprocess(
     on_process_started: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     """Run scanner work outside the Qt process so native faults do not close the GUI."""
-    if update_setup_tracker is None:
-        run_call = f"run_master_with_shared_watchlists() if {use_shared_watchlists!r} else run_master()"
-    else:
-        run_call = (
-            "run_master(use_shared_watchlists=True, "
-            f"update_setup_tracker={bool(update_setup_tracker)!r}, "
-            "require_ib_for_setup_tracker=True)"
-        )
-    code = (
-        "import faulthandler; "
-        "faulthandler.enable(); "
-        "from master_avwap_lib.runner import run_master, run_master_with_shared_watchlists; "
-        f"{run_call}; "
-        f"print('{_SCAN_OK_MARKER}', flush=True)"
+    payload = json.dumps(
+        {
+            "use_shared_watchlists": bool(use_shared_watchlists),
+            "update_setup_tracker": (
+                None if update_setup_tracker is None else bool(update_setup_tracker)
+            ),
+        },
+        sort_keys=True,
     )
     env = os.environ.copy()
     pythonpath = str(SCRIPTS_DIR)
@@ -516,7 +542,7 @@ def _run_master_scan_subprocess(
     if trigger:
         env["TRADINGBOT_RUN_TRIGGER"] = str(trigger)
     stdout_text = _wait_for_scan_marker(
-        [sys.executable, "-c", code],
+        scan_worker_command(payload),
         cwd=str(ROOT_DIR),
         env=env,
         on_process_started=on_process_started,

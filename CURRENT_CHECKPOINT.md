@@ -389,6 +389,34 @@ Still open on the desk, not blocking the week:
   (`store.reconcile`, `incoming_grace_seconds=0`) is timing-sensitive under
   suite load. Candidate for the P1.1 hermeticity packet; not repaired here.
 
+## URGENT — the frozen desk cannot scan (found and fixed 2026-08-13)
+
+The desk switched to `dist\TradingBotV3\TradingBotV3.exe` as its daily driver on
+2026-08-12. The frozen build spawned its scan child as `sys.executable -c <code>`,
+which under PyInstaller means `TradingBotV3.exe -c …` — rejected by the app's own
+argument parser, exit 2, one second after each slot fired. **Every Master AVWAP D1
+swing scan failed from 2026-08-12 07:30 through 2026-08-13 09:00.** Last success:
+2026-08-11 13:23:59, 622 setup rows.
+
+Nothing else broke, which is why it went unnoticed: BounceBot, the 07:00 open scan,
+Auto Pilot and the away report all run in-process. The visible cost was one layer
+away — the overnight AI read 11 stale D1 sources.
+
+**Code fix is committed and green** (`scripts/scan_worker.py`,
+`scan_service.scan_worker_command`, `launch_gui --run-scan`, `selftest` roster,
+`tests/test_scan_worker_spawn.py`). **Still owed on the desk:**
+
+1. Close the running desk — a rebuild cannot replace a loaded bundle
+   (`PermissionError: [WinError 5]`; the 2026-08-13 failed attempt left the old
+   bundle intact and still 29/29, but that is luck, not a guarantee).
+2. Rebuild: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm`.
+3. Expect the frozen selftest to report **30/30**, not 29/29 — `scan_worker` was
+   added to the roster.
+4. Confirm a real slot completes: `Swing scan for slot HH:MM finished at … (N setup rows)`.
+
+Until step 4 passes, run the desk from source (`scripts/launch_gui_auto.ps1`), where
+the `-c` form is correct and scanning works.
+
 ## What the 2026-08-11 window measured, and what was repaired — 2026-08-12
 
 The packet's owed live proof ran and is **partial**. Ledger and manifest evidence:

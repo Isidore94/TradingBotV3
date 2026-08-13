@@ -215,6 +215,40 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-13 — the frozen desk could not scan
+
+Running the frozen executable as the daily driver disabled the Master AVWAP D1
+swing scan completely, for two sessions, without any visible symptom.
+
+- **The defect.** `_run_master_scan_subprocess` spawned
+  `[sys.executable, "-c", code]`. Under PyInstaller `sys.executable` is
+  `TradingBotV3.exe`, so the flag and code string reached the application's own
+  argument parser: `error: unrecognized arguments: -c import faulthandler; …`,
+  exit code 2, **one second after each slot fired** against a scan that takes
+  17-21 minutes. Every slot from 2026-08-12 07:30 through 2026-08-13 09:00
+  failed; the last successful scan was 2026-08-11 13:23:59 (622 setup rows).
+- **Why nobody saw it.** Everything that runs in-process was unaffected —
+  BounceBot alerts fired, the 07:00 open scan rebuilt the watchlists, Auto Pilot
+  wrote its reports — so the desk looked healthy. The cost surfaced one layer
+  away: the overnight AI read 11 stale D1 sources and produced briefs about
+  truncation.
+- **The fix.** New `scripts/scan_worker.py` owns the scan invocation;
+  `scan_service.scan_worker_command()` owns the transport, choosing
+  `TradingBotV3.exe --run-scan <json payload>` when frozen and the unchanged
+  `-c` form from source. `launch_gui.main` answers `--run-scan` before argparse,
+  exactly where `--selftest` is handled. Both forms call `scan_worker.run`, so
+  work and transport cannot drift apart. A malformed payload raises rather than
+  defaulting — guessing would run a different scan than the one requested,
+  including the setup-tracker write.
+- **The guard that was missing.** `tests/test_scan_worker_spawn.py` really
+  spawns a child process and waits for the completion marker, against a stub
+  scanner so it stays offline. The spec-drift test inspects bundle *contents*
+  and `--selftest` resolves *imports*; neither ever launched anything, which is
+  why both passed while the desk could not scan. `scan_worker` is also added to
+  the selftest's lazy-import roster.
+- Verification: full Windows suite **2738 passed, 19 subtests**, exit 0; smoke
+  **7/7**, exit 0. Eleven new tests.
+
 ### 2026-08-12 — first-night repair: roster noise, resume identity, crash-safe publish
 
 The 2026-08-11 window was the ticker-briefs packet's owed live proof. It produced
