@@ -404,18 +404,25 @@ away — the overnight AI read 11 stale D1 sources.
 
 **Code fix is committed and green** (`scripts/scan_worker.py`,
 `scan_service.scan_worker_command`, `launch_gui --run-scan`, `selftest` roster,
-`tests/test_scan_worker_spawn.py`). **Still owed on the desk:**
+`tests/test_scan_worker_spawn.py`), and the desk was **rebuilt 2026-08-13 11:00:25**
+after the trader closed it:
 
-1. Close the running desk — a rebuild cannot replace a loaded bundle
-   (`PermissionError: [WinError 5]`; the 2026-08-13 failed attempt left the old
-   bundle intact and still 29/29, but that is luck, not a guarantee).
-2. Rebuild: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm`.
-3. Expect the frozen selftest to report **30/30**, not 29/29 — `scan_worker` was
-   added to the roster.
-4. Confirm a real slot completes: `Swing scan for slot HH:MM finished at … (N setup rows)`.
+| Check | Result |
+|---|---|
+| pytest | **2738 passed, 19 subtests**, exit 0 |
+| smoke | **7/7**, exit 0 |
+| frozen selftest | **30/30**, exit 0 — was 29/29; `scan_worker` is the added check |
+| frozen `--run-scan` dispatch | **verified** — a deliberately malformed payload now fails inside `scan_worker.parse_payload`, where the old build answered `TradingBotV3.exe: error: unrecognized arguments: -c …` |
 
-Until step 4 passes, run the desk from source (`scripts/launch_gui_auto.ps1`), where
-the `-c` form is correct and scanning works.
+**Still owed: one real slot on the desk** — `Swing scan for slot HH:MM finished at …
+(N setup rows)` in `autopilot.log`. Nothing before that proves a full scan runs
+end to end under the frozen build; the checks above prove only that the child
+starts and reaches the scanner. Until then the fallback is running from source
+(`scripts/launch_gui_auto.ps1`), where the `-c` form is correct.
+
+Also owed once a slot passes: the D1 sources have been stale since 2026-08-11
+13:23:59, so tonight's AI window is the first that can read fresh evidence. A brief
+that still cites truncation after a good scan day means something else is wrong.
 
 ## What the 2026-08-11 window measured, and what was repaired — 2026-08-12
 
