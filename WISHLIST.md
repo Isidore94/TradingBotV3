@@ -108,3 +108,11 @@ Record the trader's decision in one small documentation packet:
 5. add that specification to `docs/README.md`;
 6. do not claim implementation in `CHANGELOG.md` until code or an operational change
    actually exists.
+
+## Trader-entered ideas — 2026-08-14
+
+1. When we choose **Not today** on an automatic M5 Focus pick, remove it from the
+   M5 Focus watchlist.
+2. Add a way to place a symbol in Focus from the Alert screen, and a way to mark
+   **I like the stock** there. Chart Review has many of these tools, but the trader
+   primarily uses the Trading Desk.
