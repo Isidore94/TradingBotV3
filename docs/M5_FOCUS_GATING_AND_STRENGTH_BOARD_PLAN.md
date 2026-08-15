@@ -264,3 +264,31 @@ slowdown is ~2.3 min of a 15-minute interval. If a live session ever shows the
 refresh overrunning, the single-flight owner means a slow pass delays the next
 one rather than overlapping it, and the cadence setting moves without a code
 change. Re-measure during market hours on the first live board session.
+
+## 11. R2.2 — the final review pass, 2026-08-15
+
+### 11.1 The drain is locked by the flip, not incidentally (item 1)
+
+R2.1 had the AWAY/EVENING → DESK flip re-measure the queue before adopting. The
+lock was incidental: if that re-measurement **failed**, the next 30-second poll
+fell through to the ordinary stored-verdict drain, and the 2-bar lag bound was
+the only thing left between a stalled feed and an adoption.
+
+Two independent mechanisms replace that:
+
+- **The barrier.** The flip records its own moment in
+  `AlertCenterPanel._desk_flip_at`, floored to the second because that is the
+  resolution `gate_checked_at` carries. `pending_pick_gate_ok(...,
+  not_before=...)` refuses any verdict stamped before it — inclusively at the
+  flip's own second, so a re-measurement finishing inside that second counts as
+  after it. Nothing measured while the desk was unattended is adoptable, by any
+  path that reaches the drain.
+- **The retry.** A failed re-measurement sets `_reverify_retry_at` and the drain
+  adopts nothing until an attempt succeeds: `FLIP_REVERIFY_RETRY_SECONDS` = 60,
+  `FLIP_REVERIFY_MAX_ATTEMPTS` = 5. Giving up after five is safe **because the
+  barrier still holds** — the ordinary 30-minute staging refresh stamps
+  post-flip verdicts and is the slower recovery. The status line distinguishes
+  "retrying" from "waiting for the next refresh", because an attempt that
+  silently stopped trying looks exactly like one that succeeded.
+
+The 2-bar lag bound remains, now as defense in depth rather than as the lock.

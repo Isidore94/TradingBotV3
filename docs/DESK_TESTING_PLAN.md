@@ -446,6 +446,17 @@ Focus gate refused 3 staged pick(s) at adoption: ABCD (measured 9 M5 bars ago (l
 
 Adopting *fewer* names than were queued is the correct outcome.
 
+**Also good, and worth knowing about:** if the re-check itself cannot reach the
+data, the status line says so —
+
+```
+Auto picks left staged - could not re-check them against the current tape (...). Retrying in 60s.
+```
+
+Nothing adopts while that is happening. It retries for about five minutes, then
+waits for the next 30-minute refresh. Picks sitting unadopted after a failed
+re-check is the *correct* outcome, not a stuck desk.
+
 **BAD** — every queued pick adopted with no refusals after a long AWAY stretch,
 or picks adopted whose charts clearly no longer qualify.
 

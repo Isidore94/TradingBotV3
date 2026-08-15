@@ -437,6 +437,38 @@ def test_adoption_refuses_a_pick_nothing_has_measured():
     )[0]
 
 
+def test_a_verdict_measured_before_the_return_to_the_desk_is_refused():
+    """The flip barrier (R2.2 item 1).
+
+    Wall-clock age and bar lag both say this verdict is fine; it is refused
+    purely because it was measured before the trader came back, which is the
+    one thing the drain must not depend on the other bounds to catch.
+    """
+    from datetime import datetime, timedelta
+
+    from autopilot_core import pending_pick_gate_ok
+
+    now = datetime(2026, 7, 2, 11, 2)
+    flip = datetime(2026, 7, 2, 11, 1)
+    verdict = {
+        "gate_state": "open",
+        "gate_reason": "ok",
+        "gate_bar_end": datetime(2026, 7, 2, 11, 0).isoformat(),
+    }
+
+    before = dict(verdict, gate_checked_at=(flip - timedelta(seconds=1)).isoformat())
+    ok, reason = pending_pick_gate_ok(before, now, not_before=flip)
+    assert not ok and "predates the return to the desk" in reason
+    assert pending_pick_gate_ok(before, now)[0], "and it passes every other bound"
+
+    # Inclusive at the flip's own second: `gate_checked_at` is stamped to the
+    # second, so a re-measurement finishing inside that second is after it.
+    same = dict(verdict, gate_checked_at=flip.isoformat(timespec="seconds"))
+    assert pending_pick_gate_ok(same, now, not_before=flip)[0]
+    after = dict(verdict, gate_checked_at=(flip + timedelta(seconds=1)).isoformat())
+    assert pending_pick_gate_ok(after, now, not_before=flip)[0]
+
+
 def test_the_verdict_window_tolerates_exactly_one_missed_refresh():
     from autopilot_core import (
         AUTO_POPULATE_REFRESH_MINUTES,

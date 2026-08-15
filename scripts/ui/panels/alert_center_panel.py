@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -107,6 +107,18 @@ MAX_D1_FEED_ITEMS = 100
 ALERT_SPLIT_KEY = "qt_alert_center_split_sizes_v2"
 # The lower row of the alert column: tab stack | Focus strength board.
 ALERT_TABS_SPLIT_KEY = "qt_alert_tabs_row_split_sizes_v1"
+
+#: How long a FAILED flip re-verification waits before trying again (R2.2).
+#: The poll itself runs every 30 s; retrying on every one of those would hammer
+#: a feed that has already failed, and the trader gains nothing from a second
+#: attempt a few seconds after the first.
+FLIP_REVERIFY_RETRY_SECONDS = 60
+#: How many consecutive failures the fast path attempts before giving up. It is
+#: bounded rather than endless because giving up is SAFE: the flip barrier keeps
+#: refusing every pre-flip verdict, and the ordinary 30-minute staging refresh
+#: re-stamps the queue with post-flip verdicts that drain normally. Five
+#: attempts is five minutes of trying before falling back to that slower path.
+FLIP_REVERIFY_MAX_ATTEMPTS = 5
 
 # D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
 # name: the scan confirmed a genuine bucket upgrade. An armed-level crossing
@@ -491,6 +503,20 @@ class AlertCenterPanel(QFrame):
         self._last_seen_auto_mode: str | None = None
         #: Single flight for the flip-triggered re-measurement.
         self._reverify_running = False
+        #: When AWAY/EVENING last flipped back to DESK, floored to the second.
+        #: The drain adopts only verdicts stamped at or after this moment, so an
+        #: unattended stretch's verdicts can never be adopted by any path (R2.2).
+        #: None on a desk that has not flipped - it drains on the ordinary
+        #: stored verdicts, which is what DESK has always done.
+        self._desk_flip_at: datetime | None = None
+        #: Set when a flip re-verification is OWED: the drain adopts nothing
+        #: until it succeeds. Carries the earliest moment the next attempt may
+        #: start, so a failure retries on a later poll instead of falling
+        #: through. None means nothing is owed.
+        self._reverify_retry_at: datetime | None = None
+        #: Consecutive failures of the owed re-verification, capped by
+        #: FLIP_REVERIFY_MAX_ATTEMPTS.
+        self._reverify_failures = 0
         # Focus-pick D1 interest flags: every Focus name is auto-watched for
         # the whole D1 event set (15EMA reject, 5d/20d extremes, SMA breaks,
         # AVWAPE touches). "SYM|kind" fires at most once per session; the
@@ -1643,7 +1669,7 @@ class AlertCenterPanel(QFrame):
         name adopted at 09:00 would alert unwatched all day. Nothing is marked
         seen on a refusal, so the whole day's picks are still pending when the
         trader flips back to DESK and the next poll adopts them together -
-        which is also where packet R2's freshness gate will go, so stale picks
+        after packet R2's freshness gate has re-checked them, so stale picks
         get dropped rather than adopted.
 
         DESK keeps immediate adoption (2026-08-05 directive): the trader is
@@ -1656,14 +1682,40 @@ class AlertCenterPanel(QFrame):
         self._last_seen_auto_mode = mode
         if mode in ("AWAY", "EVENING"):
             return
-        # The flip back to the desk. The queue may have been measured half an
-        # hour ago, so re-measure just those symbols before adopting anything
-        # (R2.1). The drain waits for that result: `_reverify_running` blocks
-        # this poll, and the worker re-enters it when the fresh verdicts land.
-        if previous in ("AWAY", "EVENING") and not self._reverify_running:
-            self._start_pending_reverify()
-            return
+        # The flip back to the desk. Two things are recorded here, and they are
+        # deliberately independent (R2.2 - the drain must be explicitly locked,
+        # not incidentally so):
+        #
+        # 1. THE BARRIER. `_desk_flip_at` is the moment the trader came back;
+        #    from here on the drain adopts only verdicts stamped at or after it.
+        #    Everything measured during the unattended stretch is therefore
+        #    unusable no matter which path reaches the drain. Floored to the
+        #    second because that is the resolution `gate_checked_at` carries -
+        #    a re-measurement finishing inside the same second as the flip
+        #    stamps that same second and must count as being after it.
+        # 2. THE OWED RE-VERIFICATION. The queue may have been measured half an
+        #    hour ago, so re-measure just those symbols before adopting anything
+        #    (R2.1). Until that succeeds the drain adopts nothing.
+        #
+        # The barrier is the lock and the re-verification is how it is cleared.
+        # The 2-bar lag bound in `pending_pick_gate_ok` still applies underneath
+        # both - defense in depth, no longer the only thing standing between a
+        # stalled feed and an adoption.
+        if previous in ("AWAY", "EVENING"):
+            self._desk_flip_at = datetime.now().replace(microsecond=0)
+            self._reverify_failures = 0
+            self._reverify_retry_at = datetime.now()
         if self._reverify_running:
+            return
+        if self._reverify_retry_at is not None:
+            # A re-verification is owed. A failed one waits out its retry delay
+            # here rather than falling through to the ordinary stored-verdict
+            # drain: those verdicts predate the flip, and "the barrier would
+            # have refused them anyway" is not a reason to try.
+            if datetime.now() < self._reverify_retry_at:
+                return
+            self._reverify_retry_at = None
+            self._start_pending_reverify()
             return
         try:
             from autopilot_core import load_auto_populate_pending_picks
@@ -1694,7 +1746,9 @@ class AlertCenterPanel(QFrame):
                 # A refusal deliberately does NOT mark the pick seen. The next
                 # refresh either re-stamps it (it qualifies again) or evicts it,
                 # so a stale verdict costs one cycle rather than the pick.
-                ok, gate_reason = self._pending_pick_gate_ok(entry)
+                ok, gate_reason = self._pending_pick_gate_ok(
+                    entry, not_before=self._desk_flip_at
+                )
                 if not ok:
                     refused.append(f"{symbol} ({gate_reason})")
                     continue
@@ -1747,10 +1801,17 @@ class AlertCenterPanel(QFrame):
         Off the GUI thread because it fetches bars. Single-flight: a second
         flip while one is running is ignored rather than stacking fetches.
 
-        A failure leaves every pick staged and adopts nothing. The next
-        periodic staging refresh will re-stamp or evict them, so the cost of a
-        bad fetch is one cycle of delay - which is cheaper than adopting a
-        breakout that stopped being one twenty minutes ago.
+        A failure leaves every pick staged and adopts nothing, then RETRIES on a
+        later poll (R2.2). It deliberately does not hand back to the ordinary
+        drain: the flip barrier would refuse those verdicts anyway, and an
+        attempt that silently stops trying looks exactly like one that
+        succeeded. After FLIP_REVERIFY_MAX_ATTEMPTS the fast path gives up and
+        the ordinary 30-minute staging refresh becomes the recovery - it stamps
+        post-flip verdicts, which the barrier accepts.
+
+        The cost of a bad fetch is therefore a delay, never a stale adoption:
+        one cycle is cheaper than a breakout that stopped being one twenty
+        minutes ago.
         """
         import threading
 
@@ -1769,19 +1830,37 @@ class AlertCenterPanel(QFrame):
                     exc_info=True,
                 )
             finally:
+                # Bookkeeping BEFORE the single-flight flag drops: a poll that
+                # sees `_reverify_running` False has to already see whether
+                # another attempt is owed, or it would drain in that gap.
+                if outcome == "ok":
+                    self._reverify_failures = 0
+                    self._reverify_retry_at = None
+                else:
+                    self._reverify_failures += 1
+                    self._reverify_retry_at = (
+                        None
+                        if self._reverify_failures >= FLIP_REVERIFY_MAX_ATTEMPTS
+                        else datetime.now()
+                        + timedelta(seconds=FLIP_REVERIFY_RETRY_SECONDS)
+                    )
                 self._reverify_running = False
             if outcome == "ok":
                 # Re-enter the poll now that the verdicts are current. Queued
                 # onto the GUI thread: everything downstream touches widgets.
                 QTimer.singleShot(0, self._poll_auto_pick_pending)
-            else:
-                QTimer.singleShot(
-                    0,
-                    lambda: self.statusChanged.emit(
-                        "Auto picks left staged - could not re-check them against the "
-                        f"current tape ({outcome}). They adopt on the next refresh."
-                    ),
+                return
+            retrying = self._reverify_retry_at is not None
+            message = (
+                "Auto picks left staged - could not re-check them against the "
+                f"current tape ({outcome}). "
+                + (
+                    f"Retrying in {FLIP_REVERIFY_RETRY_SECONDS}s."
+                    if retrying
+                    else "They adopt after the next staging refresh re-measures them."
                 )
+            )
+            QTimer.singleShot(0, lambda: self.statusChanged.emit(message))
 
         threading.Thread(target=worker, name="focus-pick-reverify", daemon=True).start()
 
@@ -1853,13 +1932,18 @@ class AlertCenterPanel(QFrame):
             )
 
     @staticmethod
-    def _pending_pick_gate_ok(entry: dict) -> tuple[bool, str]:
+    def _pending_pick_gate_ok(
+        entry: dict, *, not_before: datetime | None = None
+    ) -> tuple[bool, str]:
         """Thin wrapper so the import stays local to the poll (headless paths
-        construct this panel without `autopilot_core` on the path)."""
+        construct this panel without `autopilot_core` on the path).
+
+        `not_before` is the flip barrier: after a return to the desk, only a
+        verdict stamped at or after the flip may be adopted."""
         try:
             from autopilot_core import pending_pick_gate_ok
 
-            return pending_pick_gate_ok(entry)
+            return pending_pick_gate_ok(entry, not_before=not_before)
         except Exception:
             # Fail CLOSED: an unverifiable pick is not an approved pick.
             logging.warning("Focus gate check unavailable; refusing adoption.", exc_info=True)

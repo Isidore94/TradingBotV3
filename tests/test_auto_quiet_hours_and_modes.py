@@ -716,14 +716,28 @@ def _panel(monkeypatch, mode):
     return panel
 
 
-def _stub_reverify(panel):
+def _stub_reverify(panel, payload=None, now=None, measured=None):
     """Make the flip-triggered re-measurement synchronous for tests.
 
-    The real one fetches bars on a worker and re-enters the poll when the
-    fresh verdicts land; here it just re-enters, so the deferral is exercised
-    without threads or a network.
+    The real one fetches bars on a worker, re-stamps every queued pick it could
+    measure, evicts the ones that no longer qualify, and re-enters the poll when
+    the fresh verdicts land. This stand-in does the re-stamping half against a
+    supplied `payload` and then re-enters, so the deferral is exercised without
+    threads or a network.
+
+    `measured` names the symbols the pass could measure; anything else keeps its
+    old stamp, exactly like a symbol the real pass found no profile for
+    (`_restamp_or_evict_pending_picks` leaves those alone deliberately). That is
+    why the drain still needs its own staleness checks after a SUCCESSFUL
+    re-measurement.
     """
     def immediate():
+        if payload is not None:
+            stamp = (now or datetime.now()).isoformat(timespec="seconds")
+            for side in ("long", "short"):
+                for sym, entry in (payload.get("pending", {}).get(side) or {}).items():
+                    if measured is None or sym in measured:
+                        entry["gate_checked_at"] = stamp
         panel._reverify_running = False
         panel._poll_auto_pick_pending()
 
@@ -860,7 +874,10 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
     """R1 left this drain un-revalidated and said so; R2 closes it.
 
     A pick can sit in the queue for a whole AWAY day, so the flip back to DESK
-    adopts only what the staging refresh most recently verified.
+    adopts only what the re-measurement could verify against the current tape.
+    STALE models the symbol that pass found no profile for: a successful
+    re-measurement leaves those stamps exactly where they were, which is why the
+    drain keeps its own staleness checks.
     """
     from datetime import datetime, timedelta
 
@@ -873,38 +890,51 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
     panel._auto_pick_pending_path = tmp_path / "pending.json"
     adopted: list[str] = []
     panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]
-    monkeypatch.setattr(
-        "autopilot_core.load_auto_populate_pending_picks",
-        lambda *_a, **_k: {
-            "date": "2026-07-02",
-            "pending": {
-                "long": {
-                    "GOOD": {"reason": "PDH break", "gate_state": "open",
-                             "gate_checked_at": fresh, "gate_bar_end": current_bar},
-                    "STALE": {"reason": "PDH break", "gate_state": "open",
-                              "gate_checked_at": stale, "gate_bar_end": current_bar},
-                    "FAILED": {"reason": "PDH break", "gate_state": "closed",
-                               "gate_reason": "not above session VWAP",
-                               "gate_checked_at": fresh, "gate_bar_end": current_bar},
-                    "UNVERIFIED": {"reason": "PDH break"},
-                    "OLDBAR": {"reason": "PDH break", "gate_state": "open",
-                               "gate_checked_at": fresh,
-                               "gate_bar_end": datetime(2026, 7, 2, 10, 15).isoformat()},
-                }
-            },
+    payload = {
+        "date": "2026-07-02",
+        "pending": {
+            "long": {
+                "GOOD": {"reason": "PDH break", "gate_state": "open",
+                         "gate_checked_at": fresh, "gate_bar_end": current_bar},
+                "STALE": {"reason": "PDH break", "gate_state": "open",
+                          "gate_checked_at": stale, "gate_bar_end": current_bar},
+                "FAILED": {"reason": "PDH break", "gate_state": "closed",
+                           "gate_reason": "not above session VWAP",
+                           "gate_checked_at": fresh, "gate_bar_end": current_bar},
+                "UNVERIFIED": {"reason": "PDH break"},
+                "OLDBAR": {"reason": "PDH break", "gate_state": "open",
+                           "gate_checked_at": fresh,
+                           "gate_bar_end": datetime(2026, 7, 2, 10, 15).isoformat()},
+            }
         },
+    }
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks", lambda *_a, **_k: payload
     )
     # Freeze the clock the gate check reads by capturing the real function
-    # first, then patching the name to call it with a fixed `now`.
+    # first, then patching the name to call it with a fixed `now`. The flip
+    # barrier is forwarded rather than swallowed - dropping it here would let
+    # the panel's own barrier go untested (R2.2).
     import autopilot_core
 
     real_gate_ok = autopilot_core.pending_pick_gate_ok
     monkeypatch.setattr(
         "autopilot_core.pending_pick_gate_ok",
-        lambda entry, *_a, **_k: real_gate_ok(entry, now),
+        lambda entry, *_a, **kw: real_gate_ok(entry, now, not_before=kw.get("not_before")),
+    )
+    # The panel stamps the flip from its own clock, so freeze that too.
+    monkeypatch.setattr(
+        "ui.panels.alert_center_panel.datetime",
+        type("D", (datetime,), {"now": staticmethod(lambda: now)}),
     )
 
-    _stub_reverify(panel)
+    # Everything but STALE is re-measured on the flip; STALE keeps its old stamp.
+    _stub_reverify(
+        panel,
+        payload=payload,
+        now=now,
+        measured={"GOOD", "FAILED", "UNVERIFIED", "OLDBAR"},
+    )
 
     # Away/Evening refuse outright and mark nothing seen.
     panel._poll_auto_pick_pending()
@@ -919,6 +949,181 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
     # The refused four were not marked seen, so the next refresh can re-stamp
     # or evict them rather than the desk losing them silently.
     assert {key[2] for key in panel._auto_picks_enqueued} == {"GOOD"}
+
+
+# ---------------------------------------------------------------------------
+# The flip barrier and its retry (R2.2 item 1)
+# ---------------------------------------------------------------------------
+
+
+def _flip_harness(monkeypatch, tmp_path, clock):
+    """A panel whose flip re-verification runs for real, but synchronously.
+
+    The worker thread is executed inline and the GUI hand-back fires
+    immediately, so the REAL `_start_pending_reverify` - its failure
+    bookkeeping included - is what these tests exercise. Only the thread and
+    the timer are stand-ins.
+    """
+    import threading
+
+    panel = _panel(monkeypatch, "AWAY")
+    panel._auto_pick_pending_path = tmp_path / "pending.json"
+
+    class _Immediate:
+        def __init__(self, target=None, name=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(threading, "Thread", _Immediate)
+    monkeypatch.setattr(
+        "ui.panels.alert_center_panel.QTimer",
+        type("T", (), {"singleShot": staticmethod(lambda _ms, fn: fn())}),
+    )
+    monkeypatch.setattr(
+        "ui.panels.alert_center_panel.datetime",
+        type("D", (datetime,), {"now": staticmethod(lambda: clock["now"])}),
+    )
+    real_gate_ok = core.pending_pick_gate_ok
+    monkeypatch.setattr(
+        "autopilot_core.pending_pick_gate_ok",
+        lambda entry, *_a, **kw: real_gate_ok(
+            entry, clock["now"], not_before=kw.get("not_before")
+        ),
+    )
+    return panel
+
+
+def _one_staged_pick(staged_at, bar_end):
+    """One pick that passes every check except having been measured since the
+    trader came back. Only the flip barrier can refuse it."""
+    return {
+        "date": "2026-07-02",
+        "pending": {
+            "long": {
+                "NVDA": {
+                    "reason": "PDH break",
+                    "gate_state": "open",
+                    "gate_checked_at": staged_at.isoformat(timespec="seconds"),
+                    "gate_bar_end": bar_end.isoformat(),
+                }
+            }
+        },
+    }
+
+
+def test_a_failed_flip_reverify_retries_instead_of_draining_stale_verdicts(
+    monkeypatch, tmp_path
+):
+    """R2.2 item 1: the drain is locked by the flip, not by luck.
+
+    Before this, a failed re-measurement fell straight through to the ordinary
+    stored-verdict drain, leaving the 2-bar lag bound as the only thing between
+    a stalled feed and an adoption. Now the flip records its own moment, the
+    drain refuses anything stamped before it, and a failure waits and retries.
+    """
+    clock = {"now": datetime(2026, 7, 2, 11, 2)}
+    panel = _flip_harness(monkeypatch, tmp_path, clock)
+    adopted: list[str] = []
+    panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]
+
+    payload = _one_staged_pick(
+        clock["now"] - timedelta(minutes=20), datetime(2026, 7, 2, 11, 0)
+    )
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks", lambda *_a, **_k: payload
+    )
+
+    calls = {"n": 0}
+
+    def reverify(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("no intraday profiles for the 1 queued pick(s)")
+        payload["pending"]["long"]["NVDA"]["gate_checked_at"] = clock["now"].isoformat(
+            timespec="seconds"
+        )
+
+    monkeypatch.setattr("autopilot_core.reverify_pending_picks", reverify)
+
+    panel._poll_auto_pick_pending()
+    assert (calls["n"], adopted) == (0, []), "AWAY does not even re-measure"
+
+    # The flip: the re-measurement runs and fails.
+    monkeypatch.setattr("autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: "DESK")
+    panel._auto_mode_cached = None
+    panel._poll_auto_pick_pending()
+    assert calls["n"] == 1
+    assert adopted == [], "a failed re-check must not fall through to the stale verdict"
+
+    # The next polls adopt nothing, and do not hammer a feed that just failed.
+    clock["now"] += timedelta(seconds=30)
+    panel._poll_auto_pick_pending()
+    clock["now"] += timedelta(seconds=20)
+    panel._poll_auto_pick_pending()
+    assert (calls["n"], adopted) == (1, [])
+
+    # Past the retry delay it tries again, succeeds, and drains on the verdict
+    # measured after the trader came back.
+    clock["now"] += timedelta(seconds=20)
+    panel._poll_auto_pick_pending()
+    assert calls["n"] == 2
+    assert adopted == ["NVDA"]
+
+
+def test_the_flip_barrier_still_refuses_after_the_retries_give_up(monkeypatch, tmp_path):
+    """The retry is the fast path; the barrier is the lock.
+
+    Once the bounded retries are spent the drain runs normally again - and must
+    still refuse every verdict measured while the desk was unattended. Recovery
+    is the ordinary 30-minute staging refresh, whose stamps are post-flip.
+    """
+    from ui.panels.alert_center_panel import FLIP_REVERIFY_MAX_ATTEMPTS
+
+    clock = {"now": datetime(2026, 7, 2, 11, 2)}
+    panel = _flip_harness(monkeypatch, tmp_path, clock)
+    adopted: list[str] = []
+    panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]
+
+    payload = _one_staged_pick(
+        clock["now"] - timedelta(minutes=20), datetime(2026, 7, 2, 11, 0)
+    )
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks", lambda *_a, **_k: payload
+    )
+
+    calls = {"n": 0}
+
+    def always_fails(**_kwargs):
+        calls["n"] += 1
+        raise RuntimeError("feed down")
+
+    monkeypatch.setattr("autopilot_core.reverify_pending_picks", always_fails)
+    panel._poll_auto_pick_pending()  # AWAY, so the next poll is a real flip
+    monkeypatch.setattr("autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: "DESK")
+    panel._auto_mode_cached = None
+
+    for _ in range(FLIP_REVERIFY_MAX_ATTEMPTS + 3):
+        panel._poll_auto_pick_pending()
+        clock["now"] += timedelta(seconds=61)
+
+    assert calls["n"] == FLIP_REVERIFY_MAX_ATTEMPTS, "the fast path is bounded"
+    assert panel._reverify_retry_at is None, "and it stopped owing an attempt"
+    # The drain now runs on every poll, and still adopts nothing: the verdict
+    # predates the flip, and nothing but a new measurement can change that.
+    panel._poll_auto_pick_pending()
+    assert adopted == []
+
+    # The ordinary staging refresh is the recovery - its stamp is post-flip.
+    payload["pending"]["long"]["NVDA"]["gate_checked_at"] = clock["now"].isoformat(
+        timespec="seconds"
+    )
+    payload["pending"]["long"]["NVDA"]["gate_bar_end"] = core.latest_completed_m5_end(
+        clock["now"]
+    ).isoformat()
+    panel._poll_auto_pick_pending()
+    assert adopted == ["NVDA"]
 
 
 # ---------------------------------------------------------------------------

@@ -230,6 +230,29 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-15 — R2.2: the drain waits for a measurement taken since you came back
+
+`IMPLEMENTED` + `GREEN`. First of four items from the final external review pass.
+
+The AWAY/EVENING → DESK drain re-measured its queue before adopting, but the
+lock was incidental. If that re-measurement **failed**, the next 30-second poll
+fell straight through to the ordinary stored-verdict drain, and the only thing
+left between a stalled feed and an adoption was the 2-bar lag bound.
+
+Two independent mechanisms now, and the separation is the point:
+
+- **The barrier.** The flip records its own moment (floored to the second, the
+  resolution `gate_checked_at` carries), and adoption refuses any verdict
+  stamped before it — `pending_pick_gate_ok(..., not_before=...)`. Nothing
+  measured while the desk was unattended is adoptable by any path.
+- **The retry.** A failed re-measurement waits 60 s and tries again, up to five
+  times, instead of handing back to the drain. Giving up after that is safe
+  because the barrier still holds: the ordinary 30-minute staging refresh stamps
+  post-flip verdicts and becomes the recovery. The status line says which of the
+  two it is doing.
+
+The 2-bar lag bound stays as defense in depth rather than as the lock.
+
 ### 2026-08-15 — a Testing Plan tab, and the packaging trap it nearly walked into
 
 `IMPLEMENTED` + `GREEN`. Documentation-and-viewer work; no engine touched.

@@ -2520,6 +2520,7 @@ def pending_pick_gate_ok(
     *,
     max_age_minutes: int = FOCUS_GATE_VERDICT_MAX_AGE_MINUTES,
     max_bar_lag: int = FOCUS_GATE_MAX_BAR_LAG,
+    not_before: datetime | None = None,
 ) -> tuple[bool, str]:
     """(ok, reason) for adopting one staged pick, from its stored verdict.
 
@@ -2529,6 +2530,12 @@ def pending_pick_gate_ok(
     breakout to have completed, failed and reversed. Missing is refused for the
     same reason UNKNOWN fails everywhere else here - a pick nothing has
     measured is not a pick something has approved.
+
+    `not_before` is the caller's own barrier: the Alert Center passes the moment
+    AWAY or EVENING flipped back to DESK, so nothing measured while the desk was
+    unattended can be adopted even if some path skips the re-measurement (R2.2).
+    Compared inclusively because `gate_checked_at` is stamped to the second: a
+    re-measurement finishing inside the flip's own second is after it.
     """
     if not isinstance(entry, Mapping):
         return False, "no staged record"
@@ -2542,6 +2549,8 @@ def pending_pick_gate_ok(
         checked = datetime.fromisoformat(raw)
     except ValueError:
         return False, "unreadable gate timestamp"
+    if not_before is not None and checked < not_before:
+        return False, f"gate check predates the return to the desk ({raw})"
     moment = now or datetime.now()
     age = (moment - checked).total_seconds() / 60.0
     if age > float(max_age_minutes) or age < 0:
